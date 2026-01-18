@@ -12,7 +12,10 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "web": "node dist/index.js web",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "keywords": [
     "claude",
@@ -27,13 +30,16 @@
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
     "fastify": "^5.1.0",
+    "node-pty": "^1.1.0",
     "uuid": "^10.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@types/uuid": "^10.0.0",
+    "@vitest/coverage-v8": "^4.0.17",
     "tsx": "^4.15.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "vitest": "^4.0.17"
   },
   "engines": {
     "node": ">=18.0.0"
