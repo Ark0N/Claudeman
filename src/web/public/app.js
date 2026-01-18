@@ -507,10 +507,12 @@ class ClaudemanApp {
   async loadState() {
     try {
       const res = await fetch('/api/status');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       this.handleInit(data);
     } catch (err) {
       console.error('Failed to load state:', err);
+      this.showToast('Failed to load state: ' + err.message, 'error');
     }
   }
 
@@ -518,10 +520,12 @@ class ClaudemanApp {
   async loadCases() {
     try {
       const res = await fetch('/api/cases');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       this.cases = await res.json();
       this.renderCases();
     } catch (err) {
       console.error('Failed to load cases:', err);
+      this.showToast('Failed to load cases', 'error');
     }
   }
 
@@ -1184,12 +1188,17 @@ class ClaudemanApp {
         </div>
       `;
 
+      // Extract short working directory name
+      const workingDir = s.workingDir || '';
+      const shortDir = workingDir.split('/').pop() || workingDir;
+
       return `
         <div class="session-card ${this.activeSessionId === s.id ? 'active' : ''}" data-session="${s.id}" onclick="app.selectSession('${s.id}')">
           <div class="session-card-header">
             <div class="session-status">
               <span class="session-status-dot ${s.status}"></span>
               <span>${s.id.slice(0, 8)}</span>
+              ${shortDir ? `<span class="session-dir" title="${this.escapeHtml(workingDir)}">${this.escapeHtml(shortDir)}</span>` : ''}
             </div>
             <div class="session-actions">
               <span class="session-cost">$${(s.totalCost || 0).toFixed(4)}</span>
