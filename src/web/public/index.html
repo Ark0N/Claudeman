@@ -240,6 +240,7 @@
               <span class="font-size-display" id="fontSizeDisplay">14px</span>
               <button class="btn btn-xs" onclick="app.increaseFontSize()" title="Increase font size (Ctrl+=)">A+</button>
             </div>
+            <button class="btn btn-sm" onclick="app.copyTerminal()" title="Copy terminal output">Copy</button>
             <button class="btn btn-sm" onclick="app.clearTerminal()">Clear</button>
           </div>
         </div>
@@ -273,6 +274,73 @@
         <div class="modal-body">
           <div class="cases-grid" id="caseSelectorGrid">
             <p class="empty-state">Loading...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Help Button -->
+    <button class="help-btn" onclick="app.showHelp()" title="Keyboard shortcuts (Ctrl+?)">?</button>
+
+    <!-- Help Modal -->
+    <div class="modal" id="helpModal">
+      <div class="modal-backdrop" onclick="app.closeHelp()"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Keyboard Shortcuts</h3>
+          <button class="modal-close" onclick="app.closeHelp()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="shortcuts-list">
+            <div class="shortcut-group">
+              <h4>General</h4>
+              <div class="shortcut-row">
+                <kbd>Ctrl</kbd>+<kbd>Enter</kbd>
+                <span>Quick Start</span>
+              </div>
+              <div class="shortcut-row">
+                <kbd>Ctrl</kbd>+<kbd>K</kbd>
+                <span>Kill all sessions</span>
+              </div>
+              <div class="shortcut-row">
+                <kbd>Ctrl</kbd>+<kbd>?</kbd>
+                <span>Show this help</span>
+              </div>
+              <div class="shortcut-row">
+                <kbd>Escape</kbd>
+                <span>Close modals</span>
+              </div>
+            </div>
+            <div class="shortcut-group">
+              <h4>Terminal</h4>
+              <div class="shortcut-row">
+                <kbd>Ctrl</kbd>+<kbd>L</kbd>
+                <span>Clear terminal</span>
+              </div>
+              <div class="shortcut-row">
+                <kbd>Ctrl</kbd>+<kbd>+</kbd>
+                <span>Increase font size</span>
+              </div>
+              <div class="shortcut-row">
+                <kbd>Ctrl</kbd>+<kbd>-</kbd>
+                <span>Decrease font size</span>
+              </div>
+            </div>
+            <div class="shortcut-group">
+              <h4>Navigation</h4>
+              <div class="shortcut-row">
+                <kbd>Ctrl</kbd>+<kbd>1</kbd>
+                <span>Run tab</span>
+              </div>
+              <div class="shortcut-row">
+                <kbd>Ctrl</kbd>+<kbd>2</kbd>
+                <span>Cases tab</span>
+              </div>
+              <div class="shortcut-row">
+                <kbd>Ctrl</kbd>+<kbd>3</kbd>
+                <span>Settings tab</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>

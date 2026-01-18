@@ -158,6 +158,13 @@ class ClaudemanApp {
       // Escape to close modals
       if (e.key === 'Escape') {
         this.closeCaseSelector();
+        this.closeHelp();
+      }
+
+      // Ctrl/Cmd + ? to show help
+      if ((e.ctrlKey || e.metaKey) && (e.key === '?' || e.key === '/')) {
+        e.preventDefault();
+        this.showHelp();
       }
 
       // Ctrl/Cmd + Enter to quick start (when not in terminal)
@@ -726,6 +733,15 @@ class ClaudemanApp {
     document.getElementById('caseSelectorModal').classList.remove('active');
   }
 
+  // Help modal
+  showHelp() {
+    document.getElementById('helpModal').classList.add('active');
+  }
+
+  closeHelp() {
+    document.getElementById('helpModal').classList.remove('active');
+  }
+
   // Actions
   async startRun() {
     const prompt = document.getElementById('promptInput').value.trim();
@@ -969,6 +985,29 @@ class ClaudemanApp {
   clearTerminal() {
     this.terminal.clear();
     this.terminal.writeln('\x1b[90mTerminal cleared\x1b[0m');
+  }
+
+  // Copy terminal contents to clipboard
+  async copyTerminal() {
+    try {
+      // Get all text from terminal
+      const buffer = this.terminal.buffer.active;
+      let text = '';
+      for (let i = 0; i < buffer.length; i++) {
+        const line = buffer.getLine(i);
+        if (line) {
+          text += line.translateToString(true) + '\n';
+        }
+      }
+
+      // Strip trailing empty lines
+      text = text.replace(/\n+$/, '\n');
+
+      await navigator.clipboard.writeText(text);
+      this.showToast('Terminal output copied to clipboard', 'success');
+    } catch (err) {
+      this.showToast('Failed to copy: ' + err.message, 'error');
+    }
   }
 
   // Font size controls
