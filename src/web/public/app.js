@@ -434,14 +434,27 @@ class ClaudemanApp {
     const text = el.querySelector('span:last-child');
 
     dot.className = 'status-dot ' + status;
-    text.textContent = status === 'connected' ? 'Connected' : 'Disconnected';
 
-    // Show toast on disconnect
-    if (status === 'disconnected') {
-      this.showToast('Connection lost. Reconnecting...', 'warning');
-    } else if (status === 'connected') {
+    if (status === 'connected') {
+      text.textContent = 'Connected';
+      text.onclick = null;
+      text.style.cursor = 'default';
       this.showToast('Connected to server', 'success');
+    } else {
+      text.innerHTML = '<span>Disconnected</span> <button class="btn btn-xs" style="margin-left:0.5rem">Retry</button>';
+      text.querySelector('button').onclick = () => this.reconnectSSE();
+      this.showToast('Connection lost. Click retry to reconnect.', 'warning');
     }
+  }
+
+  // Manually reconnect SSE
+  reconnectSSE() {
+    if (this.eventSource) {
+      this.eventSource.close();
+      this.eventSource = null;
+    }
+    this.showToast('Reconnecting...', 'info');
+    this.connectSSE();
   }
 
   // Show a toast notification
@@ -1113,7 +1126,15 @@ class ClaudemanApp {
 
   // Stats
   updateStats() {
-    document.getElementById('statCost').textContent = `$${this.totalCost.toFixed(2)}`;
+    // Calculate total cost from sessions and total cost tracker
+    let sessionsCost = 0;
+    this.sessions.forEach(s => {
+      sessionsCost += s.totalCost || 0;
+    });
+    const displayCost = Math.max(this.totalCost, sessionsCost);
+
+    document.getElementById('statSessions').textContent = this.sessions.size;
+    document.getElementById('statCost').textContent = `$${displayCost.toFixed(2)}`;
     document.getElementById('statTasks').textContent = this.totalTasks;
   }
 
