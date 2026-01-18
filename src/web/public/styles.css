@@ -605,9 +605,10 @@ body {
   border-radius: 50%;
 }
 
-.session-status-dot.idle { background: var(--green); }
-.session-status-dot.busy { background: var(--yellow); animation: pulse 1.5s infinite; }
-.session-status-dot.error { background: var(--red); }
+.session-status-dot.idle { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.session-status-dot.busy { background: var(--yellow); box-shadow: 0 0 8px var(--yellow); animation: pulse 1.5s infinite; }
+.session-status-dot.error { background: var(--red); box-shadow: 0 0 6px var(--red); }
+.session-status-dot.stopped { background: var(--text-muted); }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }
@@ -681,6 +682,12 @@ body {
 .session-card.active {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3), 0 4px 12px rgba(59, 130, 246, 0.15);
+  animation: activeGlow 2s ease-in-out infinite;
+}
+
+@keyframes activeGlow {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3), 0 4px 12px rgba(59, 130, 246, 0.15); }
+  50% { box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.4), 0 4px 16px rgba(59, 130, 246, 0.25); }
 }
 
 .session-card:hover {
