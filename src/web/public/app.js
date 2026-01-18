@@ -39,6 +39,7 @@ class ClaudemanApp {
 
   init() {
     this.initTerminal();
+    this.loadFontSize();
     this.connectSSE();
     this.loadState();
     this.loadCases();
@@ -98,6 +99,7 @@ class ClaudemanApp {
     this.terminal.writeln('╠═══════════════════════════════════════════════════════════════╣');
     this.terminal.writeln('║  \x1b[0;90mCtrl+Enter\x1b[1;36m  Quick Start          \x1b[0;90mCtrl+K\x1b[1;36m  Kill All Sessions  ║');
     this.terminal.writeln('║  \x1b[0;90mCtrl+L\x1b[1;36m      Clear Terminal        \x1b[0;90mCtrl+1/2/3\x1b[1;36m  Switch Tabs  ║');
+    this.terminal.writeln('║  \x1b[0;90mCtrl++/-\x1b[1;36m    Font Size             \x1b[0;90mEscape\x1b[1;36m  Close Modals    ║');
     this.terminal.writeln('╚═══════════════════════════════════════════════════════════════╝\x1b[0m');
     this.terminal.writeln('');
 
@@ -188,6 +190,16 @@ class ClaudemanApp {
       if ((e.ctrlKey || e.metaKey) && e.key === '3') {
         e.preventDefault();
         this.switchTab('settings');
+      }
+
+      // Ctrl/Cmd + +/- for font size
+      if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
+        e.preventDefault();
+        this.increaseFontSize();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === '-') {
+        e.preventDefault();
+        this.decreaseFontSize();
       }
     });
   }
@@ -959,6 +971,39 @@ class ClaudemanApp {
     this.terminal.writeln('\x1b[90mTerminal cleared\x1b[0m');
   }
 
+  // Font size controls
+  increaseFontSize() {
+    const current = this.terminal.options.fontSize || 14;
+    const newSize = Math.min(current + 2, 24);
+    this.setFontSize(newSize);
+  }
+
+  decreaseFontSize() {
+    const current = this.terminal.options.fontSize || 14;
+    const newSize = Math.max(current - 2, 10);
+    this.setFontSize(newSize);
+  }
+
+  setFontSize(size) {
+    this.terminal.options.fontSize = size;
+    document.getElementById('fontSizeDisplay').textContent = `${size}px`;
+    this.fitAddon.fit();
+
+    // Save preference
+    localStorage.setItem('claudeman-font-size', size);
+  }
+
+  loadFontSize() {
+    const saved = localStorage.getItem('claudeman-font-size');
+    if (saved) {
+      const size = parseInt(saved, 10);
+      if (size >= 10 && size <= 24) {
+        this.terminal.options.fontSize = size;
+        document.getElementById('fontSizeDisplay').textContent = `${size}px`;
+      }
+    }
+  }
+
   // Timer
   showTimer() {
     document.getElementById('timerBanner').style.display = 'block';
@@ -1010,6 +1055,8 @@ class ClaudemanApp {
 
   startTimerUpdates() {
     setInterval(() => this.updateTimer(), 1000);
+    // Also update session durations every 30 seconds
+    setInterval(() => this.renderSessions(), 30000);
   }
 
   formatTime(ms) {
@@ -1078,8 +1125,15 @@ class ClaudemanApp {
         (terminalSize / bufferStats.maxTerminalBuffer * 100) : 0;
       const memoryClass = memoryPercent > 80 ? 'high' : memoryPercent > 50 ? 'medium' : 'low';
 
+      // Session duration
+      const duration = this.formatDuration(Date.now() - s.createdAt);
+
       const resourceHtml = `
         <div class="session-resources">
+          <div class="resource-item">
+            <span class="resource-label">⏱</span>
+            <span class="resource-value">${duration}</span>
+          </div>
           <div class="resource-item">
             <span class="resource-label">Memory:</span>
             <span class="resource-value ${memoryClass}">${this.formatBytes(totalMemory)}</span>
@@ -1216,6 +1270,23 @@ class ClaudemanApp {
     const sizes = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+
+  // Format duration in human-readable format
+  formatDuration(ms) {
+    const seconds = Math.floor(ms / 1000);
+    if (seconds < 60) return `${seconds}s`;
+
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m`;
+
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    if (hours < 24) return `${hours}h ${remainingMinutes}m`;
+
+    const days = Math.floor(hours / 24);
+    const remainingHours = hours % 24;
+    return `${days}d ${remainingHours}h`;
   }
 
   updateSessionOutput(sessionId, text) {

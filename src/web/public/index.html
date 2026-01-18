@@ -235,6 +235,11 @@
         <div class="output-header">
           <h2>Terminal</h2>
           <div class="output-actions">
+            <div class="font-controls">
+              <button class="btn btn-xs" onclick="app.decreaseFontSize()" title="Decrease font size (Ctrl+-)">A-</button>
+              <span class="font-size-display" id="fontSizeDisplay">14px</span>
+              <button class="btn btn-xs" onclick="app.increaseFontSize()" title="Increase font size (Ctrl+=)">A+</button>
+            </div>
             <button class="btn btn-sm" onclick="app.clearTerminal()">Clear</button>
           </div>
         </div>

@@ -85,6 +85,7 @@ The Quick Start button will:
 | `Ctrl+K` | Kill all sessions |
 | `Ctrl+L` | Clear terminal |
 | `Ctrl+1/2/3` | Switch tabs (Run/Cases/Settings) |
+| `Ctrl++/-` | Increase/decrease font size |
 | `Escape` | Close modals |
 
 ### CLI Usage

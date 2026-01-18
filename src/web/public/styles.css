@@ -1671,3 +1671,26 @@ input[type="checkbox"] {
   height: 1px;
   background: var(--border);
 }
+
+/* Font Controls */
+.font-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-right: 0.5rem;
+}
+
+.font-size-display {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  min-width: 32px;
+  text-align: center;
+  font-family: 'SF Mono', Monaco, monospace;
+}
+
+/* Output Actions */
+.output-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
