@@ -175,6 +175,11 @@ body {
   color: var(--text-dim);
 }
 
+.timer-started {
+  font-family: 'SF Mono', Monaco, monospace;
+  color: var(--text-muted);
+}
+
 /* Main */
 .main {
   display: grid;

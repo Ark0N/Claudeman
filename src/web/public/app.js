@@ -1073,6 +1073,12 @@ class ClaudemanApp {
   // Timer
   showTimer() {
     document.getElementById('timerBanner').style.display = 'block';
+    // Set started time
+    if (this.currentRun && this.currentRun.startedAt) {
+      const startDate = new Date(this.currentRun.startedAt);
+      const timeStr = startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      document.getElementById('timerStarted').textContent = `Started: ${timeStr}`;
+    }
     this.updateTimer();
   }
 
