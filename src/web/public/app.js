@@ -29,7 +29,18 @@ class ClaudemanApp {
     // System stats polling
     this.systemStatsInterval = null;
 
+    // DOM element cache for performance (avoid repeated getElementById calls)
+    this._elemCache = {};
+
     this.init();
+  }
+
+  // Cached element getter - avoids repeated DOM queries
+  $(id) {
+    if (!this._elemCache[id]) {
+      this._elemCache[id] = document.getElementById(id);
+    }
+    return this._elemCache[id];
   }
 
   init() {
@@ -92,24 +103,36 @@ class ClaudemanApp {
     // Welcome message
     this.showWelcome();
 
-    // Handle resize
-    window.addEventListener('resize', () => this.fitAddon && this.fitAddon.fit());
+    // Handle resize with throttling for performance
+    this._resizeTimeout = null;
+    this._lastResizeDims = null;
 
-    const resizeObserver = new ResizeObserver(() => {
-      if (this.fitAddon) {
-        this.fitAddon.fit();
-        if (this.activeSessionId) {
-          const dims = this.fitAddon.proposeDimensions();
-          if (dims) {
-            fetch(`/api/sessions/${this.activeSessionId}/resize`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ cols: dims.cols, rows: dims.rows })
-            });
+    const throttledResize = () => {
+      if (this._resizeTimeout) return;
+      this._resizeTimeout = setTimeout(() => {
+        this._resizeTimeout = null;
+        if (this.fitAddon) {
+          this.fitAddon.fit();
+          if (this.activeSessionId) {
+            const dims = this.fitAddon.proposeDimensions();
+            // Only send resize if dimensions actually changed
+            if (dims && (!this._lastResizeDims ||
+                dims.cols !== this._lastResizeDims.cols ||
+                dims.rows !== this._lastResizeDims.rows)) {
+              this._lastResizeDims = { cols: dims.cols, rows: dims.rows };
+              fetch(`/api/sessions/${this.activeSessionId}/resize`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cols: dims.cols, rows: dims.rows })
+              });
+            }
           }
         }
-      }
-    });
+      }, 100); // Throttle to 100ms
+    };
+
+    window.addEventListener('resize', throttledResize);
+    const resizeObserver = new ResizeObserver(throttledResize);
     resizeObserver.observe(container);
 
     // Handle keyboard input
@@ -291,19 +314,23 @@ class ClaudemanApp {
 
     this.eventSource.addEventListener('session:idle', (e) => {
       const data = JSON.parse(e.data);
+      console.log('[DEBUG] session:idle event for:', data.id);
       const session = this.sessions.get(data.id);
       if (session) {
         session.status = 'idle';
         this.renderSessionTabs();
+        this.sendPendingCtrlL(data.id);
       }
     });
 
     this.eventSource.addEventListener('session:working', (e) => {
       const data = JSON.parse(e.data);
+      console.log('[DEBUG] session:working event for:', data.id);
       const session = this.sessions.get(data.id);
       if (session) {
         session.status = 'busy';
         this.renderSessionTabs();
+        this.sendPendingCtrlL(data.id);
       }
     });
 
@@ -512,10 +539,10 @@ class ClaudemanApp {
   }
 
   _renderSessionTabsImmediate() {
-    const container = document.getElementById('sessionTabs');
+    const container = this.$('sessionTabs');
 
-    // Build tabs HTML
-    let html = '';
+    // Build tabs HTML using array for better string concatenation performance
+    const parts = [];
     for (const [id, session] of this.sessions) {
       const isActive = id === this.activeSessionId;
       const status = session.status || 'idle';
@@ -524,19 +551,17 @@ class ClaudemanApp {
       const taskStats = session.taskStats || { running: 0, total: 0 };
       const hasRunningTasks = taskStats.running > 0;
 
-      html += `
-        <div class="session-tab ${isActive ? 'active' : ''}" data-id="${id}" onclick="app.selectSession('${id}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${id}')">
+      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}" data-id="${id}" onclick="app.selectSession('${id}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${id}')">
           <span class="tab-status ${status}"></span>
           ${mode === 'shell' ? '<span class="tab-mode shell">sh</span>' : ''}
           <span class="tab-name" data-session-id="${id}">${this.escapeHtml(name)}</span>
           ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()">${taskStats.running}</span>` : ''}
           <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${id}')" title="Session options">&#x2699;</span>
           <span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession('${id}')">&times;</span>
-        </div>
-      `;
+        </div>`);
     }
 
-    container.innerHTML = html;
+    container.innerHTML = parts.join('');
   }
 
   getSessionName(session) {
@@ -597,7 +622,8 @@ class ClaudemanApp {
       }
 
       // Update task panel if open
-      if (document.getElementById('taskPanel').classList.contains('open')) {
+      const taskPanel = document.getElementById('taskPanel');
+      if (taskPanel && taskPanel.classList.contains('open')) {
         this.renderTaskPanel();
       }
 
@@ -824,12 +850,16 @@ class ClaudemanApp {
         // Send resize to the new session
         const dims = this.fitAddon.proposeDimensions();
         if (dims) {
-          fetch(`/api/sessions/${firstSessionId}/resize`, {
+          await fetch(`/api/sessions/${firstSessionId}/resize`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ cols: dims.cols, rows: dims.rows })
           });
         }
+        // Mark this session as needing Ctrl+L fix once Claude is running
+        this.pendingCtrlL = this.pendingCtrlL || new Set();
+        this.pendingCtrlL.add(firstSessionId);
+        console.log('[DEBUG] Marked session for pending Ctrl+L:', firstSessionId);
 
         this.loadQuickStartCases();
       }
@@ -929,7 +959,7 @@ class ClaudemanApp {
   // ========== Respawn Banner ==========
 
   showRespawnBanner() {
-    document.getElementById('respawnBanner').style.display = 'flex';
+    this.$('respawnBanner').style.display = 'flex';
     // Also show timer if there's a timed respawn
     if (this.activeSessionId && this.respawnTimers[this.activeSessionId]) {
       this.showRespawnTimer();
@@ -942,16 +972,16 @@ class ClaudemanApp {
   }
 
   hideRespawnBanner() {
-    document.getElementById('respawnBanner').style.display = 'none';
+    this.$('respawnBanner').style.display = 'none';
     this.hideRespawnTimer();
   }
 
   updateRespawnBanner(state) {
-    document.getElementById('respawnState').textContent = state.replace(/_/g, ' ');
+    this.$('respawnState').textContent = state.replace(/_/g, ' ');
   }
 
   showRespawnTimer() {
-    const timerEl = document.getElementById('respawnTimer');
+    const timerEl = this.$('respawnTimer');
     timerEl.style.display = '';
     this.updateRespawnTimer();
     // Update every second
@@ -960,7 +990,7 @@ class ClaudemanApp {
   }
 
   hideRespawnTimer() {
-    document.getElementById('respawnTimer').style.display = 'none';
+    this.$('respawnTimer').style.display = 'none';
     if (this.respawnTimerInterval) {
       clearInterval(this.respawnTimerInterval);
       this.respawnTimerInterval = null;
@@ -978,17 +1008,17 @@ class ClaudemanApp {
     const remaining = Math.max(0, timer.endAt - now);
 
     if (remaining <= 0) {
-      document.getElementById('respawnTimer').textContent = 'Time up';
+      this.$('respawnTimer').textContent = 'Time up';
       delete this.respawnTimers[this.activeSessionId];
       this.hideRespawnTimer();
       return;
     }
 
-    document.getElementById('respawnTimer').textContent = this.formatTime(remaining);
+    this.$('respawnTimer').textContent = this.formatTime(remaining);
   }
 
   updateRespawnTokens(totalTokens) {
-    const tokensEl = document.getElementById('respawnTokens');
+    const tokensEl = this.$('respawnTokens');
     if (totalTokens > 0) {
       tokensEl.style.display = '';
       tokensEl.textContent = `${(totalTokens / 1000).toFixed(1)}k tokens`;
@@ -1042,6 +1072,40 @@ class ClaudemanApp {
 
   clearTerminal() {
     this.terminal.clear();
+  }
+
+  // Send Ctrl+L to fix display for newly created sessions once Claude is running
+  sendPendingCtrlL(sessionId) {
+    console.log('[DEBUG] sendPendingCtrlL called for:', sessionId, 'pending:', this.pendingCtrlL ? [...this.pendingCtrlL] : 'none');
+    if (!this.pendingCtrlL || !this.pendingCtrlL.has(sessionId)) {
+      console.log('[DEBUG] No pending Ctrl+L for this session');
+      return;
+    }
+    this.pendingCtrlL.delete(sessionId);
+
+    // Only send if this is the active session
+    if (sessionId !== this.activeSessionId) {
+      console.log('[DEBUG] Not active session, skipping Ctrl+L');
+      return;
+    }
+
+    console.log('[DEBUG] Sending resize + Ctrl+L for session:', sessionId);
+    // Send resize + Ctrl+L to fix the display
+    const dims = this.fitAddon.proposeDimensions();
+    if (dims) {
+      fetch(`/api/sessions/${sessionId}/resize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cols: dims.cols, rows: dims.rows })
+      }).then(() => {
+        console.log('[DEBUG] Resize sent, now sending Ctrl+L');
+        fetch(`/api/sessions/${sessionId}/input`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ input: '\x0c' })
+        });
+      });
+    }
   }
 
   async copyTerminal() {
@@ -1151,7 +1215,7 @@ class ClaudemanApp {
     });
     this.totalTokens = total;
     const display = total >= 1000 ? `${(total / 1000).toFixed(1)}k` : total;
-    document.getElementById('headerTokens').textContent = `${display} tokens`;
+    this.$('headerTokens').textContent = `${display} tokens`;
   }
 
   // ========== Session Options Modal ==========
@@ -1813,18 +1877,24 @@ class ClaudemanApp {
 
   // ========== Toast ==========
 
+  // Cached toast container for performance
+  _toastContainer = null;
+
   showToast(message, type = 'info') {
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
     toast.textContent = message;
 
-    let container = document.querySelector('.toast-container');
-    if (!container) {
-      container = document.createElement('div');
-      container.className = 'toast-container';
-      document.body.appendChild(container);
+    // Cache toast container reference
+    if (!this._toastContainer) {
+      this._toastContainer = document.querySelector('.toast-container');
+      if (!this._toastContainer) {
+        this._toastContainer = document.createElement('div');
+        this._toastContainer.className = 'toast-container';
+        document.body.appendChild(this._toastContainer);
+      }
     }
-    container.appendChild(toast);
+    this._toastContainer.appendChild(toast);
 
     requestAnimationFrame(() => toast.classList.add('show'));
 
@@ -1857,10 +1927,10 @@ class ClaudemanApp {
   }
 
   updateSystemStatsDisplay(stats) {
-    const cpuEl = document.getElementById('statCpu');
-    const cpuBar = document.getElementById('statCpuBar');
-    const memEl = document.getElementById('statMem');
-    const memBar = document.getElementById('statMemBar');
+    const cpuEl = this.$('statCpu');
+    const cpuBar = this.$('statCpuBar');
+    const memEl = this.$('statMem');
+    const memBar = this.$('statMemBar');
 
     if (cpuEl && cpuBar) {
       cpuEl.textContent = `${stats.cpu}%`;
@@ -1896,11 +1966,19 @@ class ClaudemanApp {
 
   // ========== Utility ==========
 
+  // Pre-compiled HTML escape map for performance (avoids DOM element creation)
+  static _htmlEscapeMap = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  };
+  static _htmlEscapePattern = /[&<>"']/g;
+
   escapeHtml(text) {
     if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    return text.replace(ClaudemanApp._htmlEscapePattern, char => ClaudemanApp._htmlEscapeMap[char]);
   }
 }
 

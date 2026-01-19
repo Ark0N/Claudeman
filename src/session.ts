@@ -26,6 +26,10 @@ const LINE_BUFFER_FLUSH_INTERVAL = 100;
 // ^[[I (focus in), ^[[O (focus out), and the enable/disable sequences
 const FOCUS_ESCAPE_FILTER = /\x1b\[\?1004[hl]|\x1b\[[IO]/g;
 
+// Pre-compiled regex patterns for performance (avoid re-compilation on each call)
+const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*m/g;
+const TOKEN_PATTERN = /(\d+(?:\.\d+)?)\s*([kKmM])?\s*tokens/;
+
 export interface ClaudeMessage {
   type: 'system' | 'assistant' | 'user' | 'result';
   subtype?: string;
@@ -658,8 +662,8 @@ export class Session extends EventEmitter {
 
     for (const line of lines) {
       const trimmed = line.trim();
-      // Remove ANSI escape codes for JSON parsing
-      const cleanLine = trimmed.replace(/\x1b\[[0-9;]*m/g, '');
+      // Remove ANSI escape codes for JSON parsing (use pre-compiled pattern)
+      const cleanLine = trimmed.replace(ANSI_ESCAPE_PATTERN, '');
 
       if (cleanLine.startsWith('{') && cleanLine.endsWith('}')) {
         try {
@@ -716,12 +720,12 @@ export class Session extends EventEmitter {
   // Parse token count from Claude's status line in interactive mode
   // Matches patterns like "123.4k tokens", "5234 tokens", "1.2M tokens"
   private parseTokensFromStatusLine(data: string): void {
-    // Remove ANSI escape codes for cleaner parsing
-    const cleanData = data.replace(/\x1b\[[0-9;]*m/g, '');
+    // Remove ANSI escape codes for cleaner parsing (use pre-compiled pattern)
+    const cleanData = data.replace(ANSI_ESCAPE_PATTERN, '');
 
     // Match patterns: "123.4k tokens", "5234 tokens", "1.2M tokens"
     // The status line typically shows total tokens like "1.2k tokens" near the prompt
-    const tokenMatch = cleanData.match(/(\d+(?:\.\d+)?)\s*([kKmM])?\s*tokens/);
+    const tokenMatch = cleanData.match(TOKEN_PATTERN);
 
     if (tokenMatch) {
       let tokenCount = parseFloat(tokenMatch[1]);
@@ -863,10 +867,13 @@ export class Session extends EventEmitter {
     this._currentTaskId = null;
 
     // Kill the associated screen session if requested
-    if (this._screenSession && this._screenManager && killScreen) {
+    if (killScreen && this._screenManager) {
+      // Try to kill screen even if _screenSession is not set (e.g., restored sessions)
       try {
-        await this._screenManager.killScreen(this.id);
-        console.log('[Session] Killed screen session:', this._screenSession.screenName);
+        const killed = await this._screenManager.killScreen(this.id);
+        if (killed) {
+          console.log('[Session] Killed screen session for:', this.id);
+        }
       } catch (err) {
         console.error('[Session] Failed to kill screen session:', err);
       }

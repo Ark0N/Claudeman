@@ -1160,9 +1160,20 @@ export class WebServer extends EventEmitter {
     }
   }
 
+  // Optimized: send pre-formatted SSE message to a client
+  private sendSSEPreformatted(reply: FastifyReply, message: string): void {
+    try {
+      reply.raw.write(message);
+    } catch {
+      this.sseClients.delete(reply);
+    }
+  }
+
   private broadcast(event: string, data: unknown): void {
+    // Performance optimization: serialize JSON once for all clients
+    const message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const client of this.sseClients) {
-      this.sendSSE(client, event, data);
+      this.sendSSEPreformatted(client, message);
     }
   }
 
