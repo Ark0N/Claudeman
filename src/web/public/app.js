@@ -955,6 +955,7 @@ class ClaudemanApp {
         // NOW set the active session so SSE events start populating
         this.activeSessionId = firstSessionId;
         this.renderSessionTabs();
+        this.renderInnerStatePanel(); // Render Ralph panel if enabled globally
 
         // Send resize to the new session
         const dims = this.fitAddon.proposeDimensions();
