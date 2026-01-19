@@ -149,12 +149,6 @@ class ClaudemanApp {
         this.quickStart();
       }
 
-      // Ctrl/Cmd + N - new session
-      if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
-        e.preventDefault();
-        this.createNewSession();
-      }
-
       // Ctrl/Cmd + W - close active session
       if ((e.ctrlKey || e.metaKey) && e.key === 'w') {
         e.preventDefault();
@@ -637,7 +631,6 @@ class ClaudemanApp {
       this.cases = cases;
 
       const select = document.getElementById('quickStartCase');
-      const newSessionSelect = document.getElementById('newSessionCase');
 
       // Build options
       let options = '<option value="testcase">testcase</option>';
@@ -648,7 +641,6 @@ class ClaudemanApp {
       });
 
       select.innerHTML = options;
-      newSessionSelect.innerHTML = options;
 
       // Auto-select first case and update directory display
       if (cases.length > 0) {
@@ -764,56 +756,6 @@ class ClaudemanApp {
       this.terminal.focus();
     } catch (err) {
       this.terminal.writeln(`\x1b[1;31m Error: ${err.message}\x1b[0m`);
-    }
-  }
-
-  // ========== New Session ==========
-
-  createNewSession() {
-    document.getElementById('newSessionPanel').classList.add('open');
-  }
-
-  hideNewSessionPanel() {
-    document.getElementById('newSessionPanel').classList.remove('open');
-  }
-
-  async createSessionFromPanel() {
-    const caseName = document.getElementById('newSessionCase').value;
-    const customDir = document.getElementById('newSessionDir').value.trim();
-
-    this.hideNewSessionPanel();
-
-    try {
-      if (customDir) {
-        // Create session with custom directory
-        const createRes = await fetch('/api/sessions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ workingDir: customDir })
-        });
-        const createData = await createRes.json();
-        if (!createData.success) throw new Error(createData.error);
-
-        // Start interactive
-        await fetch(`/api/sessions/${createData.session.id}/interactive`, {
-          method: 'POST'
-        });
-
-        this.selectSession(createData.session.id);
-      } else {
-        // Use quick-start with case
-        const res = await fetch('/api/quick-start', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ caseName })
-        });
-        const data = await res.json();
-        if (!data.success) throw new Error(data.error);
-
-        this.selectSession(data.sessionId);
-      }
-    } catch (err) {
-      this.showToast('Failed to create session: ' + err.message, 'error');
     }
   }
 
@@ -1432,7 +1374,6 @@ class ClaudemanApp {
     this.closeAppSettings();
     this.cancelCloseSession();
     document.getElementById('respawnPanel').classList.remove('open');
-    document.getElementById('newSessionPanel').classList.remove('open');
     document.getElementById('taskPanel').classList.remove('open');
     document.getElementById('processPanel').classList.remove('open');
   }

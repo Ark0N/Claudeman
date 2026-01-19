@@ -175,30 +175,6 @@
       </div>
     </div>
 
-    <!-- New Session Panel (slide-up) -->
-    <div class="new-session-panel" id="newSessionPanel">
-      <div class="respawn-panel-header">
-        <span>New Session</span>
-        <button class="btn-close" onclick="app.hideNewSessionPanel()">&times;</button>
-      </div>
-      <div class="respawn-panel-body">
-        <div class="form-row">
-          <label>Case / Project</label>
-          <select id="newSessionCase" class="form-select">
-            <option value="testcase">testcase (default)</option>
-          </select>
-        </div>
-        <div class="form-row">
-          <label>Or specify directory</label>
-          <input type="text" id="newSessionDir" placeholder="~/projects/my-project">
-        </div>
-        <div class="form-actions">
-          <button class="btn-toolbar" onclick="app.hideNewSessionPanel()">Cancel</button>
-          <button class="btn-toolbar btn-success" onclick="app.createSessionFromPanel()">Create Session</button>
-        </div>
-      </div>
-    </div>
-
     <!-- Help Modal -->
     <div class="modal" id="helpModal">
       <div class="modal-backdrop" onclick="app.closeHelp()"></div>
@@ -210,7 +186,6 @@
         <div class="modal-body">
           <div class="shortcuts-grid">
             <div><kbd>Ctrl</kbd>+<kbd>Enter</kbd></div><div>Run Claude</div>
-            <div><kbd>Ctrl</kbd>+<kbd>N</kbd></div><div>New Session</div>
             <div><kbd>Ctrl</kbd>+<kbd>W</kbd></div><div>Close Session</div>
             <div><kbd>Ctrl</kbd>+<kbd>Tab</kbd></div><div>Next Session</div>
             <div><kbd>Ctrl</kbd>+<kbd>K</kbd></div><div>Kill All Sessions</div>
