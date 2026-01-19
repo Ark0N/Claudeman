@@ -111,12 +111,12 @@ const msg = JSON.parse(cleanLine) as ClaudeMessage;
 
 ### PTY Spawn Modes
 
-**One-shot mode** (prompt execution):
+**One-shot mode** (prompt execution with JSON output for token tracking):
 ```typescript
-pty.spawn('claude', ['-p', '--dangerously-skip-permissions', prompt], { ... })
+pty.spawn('claude', ['-p', '--dangerously-skip-permissions', '--output-format', 'stream-json', prompt], { ... })
 ```
 
-**Interactive mode** (persistent terminal):
+**Interactive mode** (persistent terminal, tokens parsed from status line):
 ```typescript
 pty.spawn('claude', ['--dangerously-skip-permissions'], { ... })
 ```
@@ -168,7 +168,11 @@ Default config (`RespawnConfig` in `src/types.ts`):
 
 ### Token Tracking & Auto-Clear
 
-Session tracks input/output tokens from Claude's JSON messages:
+Session tracks input/output tokens differently depending on mode:
+
+**One-shot mode (`runPrompt`)**: Uses `--output-format stream-json` to get JSON output with detailed token usage from `msg.message.usage.input_tokens` and `output_tokens`.
+
+**Interactive mode (`startInteractive`)**: Parses tokens from Claude's status line display (e.g., "123.4k tokens"). Since only total is shown, estimates 60/40 input/output split.
 
 ```typescript
 {
