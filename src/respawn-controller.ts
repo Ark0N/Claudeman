@@ -82,8 +82,9 @@ export class RespawnController extends EventEmitter {
   private promptDetected: boolean = false;
   private workingDetected: boolean = false;
 
-  // Terminal patterns
+  // Terminal patterns - detect when Claude is ready for input
   private readonly PROMPT_PATTERNS = [
+    '↵ send',   // Suggestion ready to send (strongest indicator of idle)
     '❯',        // Standard prompt
     '\u276f',   // Unicode variant
     '⏵',        // Claude Code prompt variant
@@ -93,7 +94,9 @@ export class RespawnController extends EventEmitter {
   private readonly WORKING_PATTERNS = [
     'Thinking', 'Writing', 'Reading', 'Running', 'Searching',
     'Editing', 'Creating', 'Deleting', 'Analyzing', 'Executing',
+    'Synthesizing', 'Brewing',  // Claude's processing indicators
     '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏',  // Spinner chars
+    '✻', '✽',  // Activity indicators (spinning star)
   ];
   private readonly CLEAR_COMPLETE_PATTERN = /conversation cleared|cleared|❯|⏵/i;
   private readonly INIT_COMPLETE_PATTERN = /initialized|analyzing|❯|⏵|CLAUDE\.md/i;
