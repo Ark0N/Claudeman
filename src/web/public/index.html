@@ -273,6 +273,25 @@
       </div>
     </div>
 
+    <!-- Close Session Confirmation Modal -->
+    <div class="modal" id="closeConfirmModal">
+      <div class="modal-backdrop" onclick="app.cancelCloseSession()"></div>
+      <div class="modal-content modal-sm">
+        <div class="modal-header">
+          <h3>Close Session?</h3>
+          <button class="modal-close" onclick="app.cancelCloseSession()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="modal-warning-text">This will terminate the Claude session and any running processes.</p>
+          <p class="modal-session-name" id="closeConfirmSessionName"></p>
+        </div>
+        <div class="form-actions">
+          <button class="btn-toolbar" onclick="app.cancelCloseSession()">Cancel</button>
+          <button class="btn-toolbar btn-danger" onclick="app.confirmCloseSession()">Close Session</button>
+        </div>
+      </div>
+    </div>
+
     <!-- App Settings Modal -->
     <div class="modal" id="appSettingsModal">
       <div class="modal-backdrop" onclick="app.closeAppSettings()"></div>

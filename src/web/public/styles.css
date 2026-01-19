@@ -745,6 +745,22 @@ body {
   max-width: 320px;
 }
 
+.modal-warning-text {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+}
+
+.modal-session-name {
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.8rem;
+  color: var(--accent-hover);
+  background: var(--bg-input);
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
 .session-dir-display {
   padding: 0.5rem 0.75rem;
   background: var(--bg-input);

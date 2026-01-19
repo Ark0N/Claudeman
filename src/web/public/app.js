@@ -13,6 +13,7 @@ class ClaudemanApp {
     this.respawnTimers = {}; // Track timed respawn timers
     this.terminalBuffers = new Map(); // Store terminal content per session
     this.editingSessionId = null; // Session being edited in options modal
+    this.pendingCloseSessionId = null; // Session pending close confirmation
 
     // Terminal write batching
     this.pendingWrites = '';
@@ -472,7 +473,7 @@ class ClaudemanApp {
           <span class="tab-name" data-session-id="${id}">${this.escapeHtml(name)}</span>
           ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()">${taskStats.running}</span>` : ''}
           <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${id}')" title="Session options">&#x2699;</span>
-          <span class="tab-close" onclick="event.stopPropagation(); app.closeSession('${id}')">&times;</span>
+          <span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession('${id}')">&times;</span>
         </div>
       `;
     }
@@ -565,6 +566,35 @@ class ClaudemanApp {
       this.renderSessionTabs();
     } catch (err) {
       this.showToast('Failed to close session', 'error');
+    }
+  }
+
+  // Request confirmation before closing a session
+  requestCloseSession(sessionId) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    this.pendingCloseSessionId = sessionId;
+
+    // Show session name in confirmation dialog
+    const name = this.getSessionName(session);
+    const sessionNameEl = document.getElementById('closeConfirmSessionName');
+    sessionNameEl.textContent = name;
+
+    document.getElementById('closeConfirmModal').classList.add('active');
+  }
+
+  cancelCloseSession() {
+    this.pendingCloseSessionId = null;
+    document.getElementById('closeConfirmModal').classList.remove('active');
+  }
+
+  async confirmCloseSession() {
+    const sessionId = this.pendingCloseSessionId;
+    this.cancelCloseSession();
+
+    if (sessionId) {
+      await this.closeSession(sessionId);
     }
   }
 
@@ -1379,6 +1409,7 @@ class ClaudemanApp {
   closeAllPanels() {
     this.closeSessionOptions();
     this.closeAppSettings();
+    this.cancelCloseSession();
     document.getElementById('respawnPanel').classList.remove('open');
     document.getElementById('newSessionPanel').classList.remove('open');
     document.getElementById('taskPanel').classList.remove('open');
