@@ -4,7 +4,7 @@ class ClaudemanApp {
     this.sessions = new Map();
     this.cases = [];
     this.currentRun = null;
-    this.totalCost = 0;
+    this.totalTokens = 0;
     this.eventSource = null;
     this.terminal = null;
     this.fitAddon = null;
@@ -12,6 +12,7 @@ class ClaudemanApp {
     this.respawnStatus = {};
     this.respawnTimers = {}; // Track timed respawn timers
     this.terminalBuffers = new Map(); // Store terminal content per session
+    this.editingSessionId = null; // Session being edited in options modal
 
     // Terminal write batching
     this.pendingWrites = '';
@@ -459,14 +460,17 @@ class ClaudemanApp {
       const isActive = id === this.activeSessionId;
       const status = session.status || 'idle';
       const name = this.getSessionName(session);
+      const mode = session.mode || 'claude';
       const taskStats = session.taskStats || { running: 0, total: 0 };
       const hasRunningTasks = taskStats.running > 0;
 
       html += `
         <div class="session-tab ${isActive ? 'active' : ''}" data-id="${id}" onclick="app.selectSession('${id}')">
           <span class="tab-status ${status}"></span>
+          ${mode === 'shell' ? '<span class="tab-mode shell">sh</span>' : ''}
           <span class="tab-name">${this.escapeHtml(name)}</span>
           ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()">${taskStats.running}</span>` : ''}
+          <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${id}')" title="Session options">&#x2699;</span>
           <span class="tab-close" onclick="event.stopPropagation(); app.closeSession('${id}')">&times;</span>
         </div>
       `;
@@ -483,6 +487,11 @@ class ClaudemanApp {
   }
 
   getSessionName(session) {
+    // Use custom name if set
+    if (session.name) {
+      return session.name;
+    }
+    // Fall back to directory name
     if (session.workingDir) {
       return session.workingDir.split('/').pop() || session.workingDir;
     }
@@ -594,10 +603,15 @@ class ClaudemanApp {
   }
 
   async quickStart() {
+    // Alias for backward compatibility
+    return this.runClaude();
+  }
+
+  async runClaude() {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
 
     this.terminal.clear();
-    this.terminal.writeln(`\x1b[1;32m Starting session in ${caseName}...\x1b[0m`);
+    this.terminal.writeln(`\x1b[1;32m Starting Claude in ${caseName}...\x1b[0m`);
     this.terminal.writeln('');
 
     try {
@@ -617,6 +631,53 @@ class ClaudemanApp {
       const dims = this.fitAddon.proposeDimensions();
       if (dims) {
         await fetch(`/api/sessions/${data.sessionId}/resize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cols: dims.cols, rows: dims.rows })
+        });
+      }
+
+      this.terminal.focus();
+    } catch (err) {
+      this.terminal.writeln(`\x1b[1;31m Error: ${err.message}\x1b[0m`);
+    }
+  }
+
+  async runShell() {
+    const caseName = document.getElementById('quickStartCase').value || 'testcase';
+
+    this.terminal.clear();
+    this.terminal.writeln(`\x1b[1;33m Starting Shell in ${caseName}...\x1b[0m`);
+    this.terminal.writeln('');
+
+    try {
+      // Get the case path
+      const caseRes = await fetch(`/api/cases/${caseName}`);
+      const caseData = await caseRes.json();
+      const workingDir = caseData.path || process.cwd();
+
+      // Create session with shell mode
+      const createRes = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workingDir, mode: 'shell' })
+      });
+      const createData = await createRes.json();
+      if (!createData.success) throw new Error(createData.error);
+
+      const sessionId = createData.session.id;
+
+      // Start shell
+      await fetch(`/api/sessions/${sessionId}/shell`, {
+        method: 'POST'
+      });
+
+      this.activeSessionId = sessionId;
+
+      // Send resize
+      const dims = this.fitAddon.proposeDimensions();
+      if (dims) {
+        await fetch(`/api/sessions/${sessionId}/resize`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ cols: dims.cols, rows: dims.rows })
@@ -1052,12 +1113,66 @@ class ClaudemanApp {
     return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
   }
 
-  // ========== Cost ==========
+  // ========== Tokens ==========
 
   updateCost() {
-    let cost = this.totalCost;
-    this.sessions.forEach(s => cost = Math.max(cost, s.totalCost || 0));
-    document.getElementById('headerCost').textContent = `$${cost.toFixed(2)}`;
+    // Now updates tokens instead of cost
+    this.updateTokens();
+  }
+
+  updateTokens() {
+    let total = 0;
+    this.sessions.forEach(s => {
+      if (s.tokens) {
+        total += s.tokens.total || 0;
+      }
+    });
+    this.totalTokens = total;
+    const display = total >= 1000 ? `${(total / 1000).toFixed(1)}k` : total;
+    document.getElementById('headerTokens').textContent = `${display} tokens`;
+  }
+
+  // ========== Session Options Modal ==========
+
+  openSessionOptions(sessionId) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    this.editingSessionId = sessionId;
+
+    document.getElementById('sessionNameInput').value = session.name || '';
+    document.getElementById('sessionModeDisplay').textContent = session.mode === 'shell' ? 'Shell' : 'Claude';
+    document.getElementById('sessionDirDisplay').textContent = session.workingDir || 'Unknown';
+    document.getElementById('sessionOptionsModal').classList.add('active');
+
+    // Focus the name input
+    setTimeout(() => document.getElementById('sessionNameInput').focus(), 100);
+  }
+
+  closeSessionOptions() {
+    this.editingSessionId = null;
+    document.getElementById('sessionOptionsModal').classList.remove('active');
+  }
+
+  async saveSessionOptions() {
+    if (!this.editingSessionId) return;
+
+    const name = document.getElementById('sessionNameInput').value.trim();
+
+    try {
+      const res = await fetch(`/api/sessions/${this.editingSessionId}/name`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+
+      this.showToast('Session renamed', 'success');
+      this.closeSessionOptions();
+    } catch (err) {
+      this.showToast('Failed to rename: ' + err.message, 'error');
+    }
   }
 
   // ========== Help Modal ==========
@@ -1071,6 +1186,7 @@ class ClaudemanApp {
   }
 
   closeAllPanels() {
+    this.closeSessionOptions();
     document.getElementById('respawnPanel').classList.remove('open');
     document.getElementById('newSessionPanel').classList.remove('open');
     document.getElementById('taskPanel').classList.remove('open');

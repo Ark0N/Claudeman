@@ -49,11 +49,15 @@ export interface SessionEvents {
   autoClear: (data: { tokens: number; threshold: number }) => void;
 }
 
+export type SessionMode = 'claude' | 'shell';
+
 export class Session extends EventEmitter {
   readonly id: string;
   readonly workingDir: string;
   readonly createdAt: number;
+  readonly mode: SessionMode;
 
+  private _name: string;
   private ptyProcess: pty.IPty | null = null;
   private _pid: number | null = null;
   private _status: SessionStatus = 'idle';
@@ -81,11 +85,13 @@ export class Session extends EventEmitter {
   private _autoClearEnabled: boolean = false;
   private _isClearing: boolean = false; // Prevent recursive clearing
 
-  constructor(config: Partial<SessionConfig> & { workingDir: string }) {
+  constructor(config: Partial<SessionConfig> & { workingDir: string; mode?: SessionMode; name?: string }) {
     super();
     this.id = config.id || uuidv4();
     this.workingDir = config.workingDir;
     this.createdAt = config.createdAt || Date.now();
+    this.mode = config.mode || 'claude';
+    this._name = config.name || '';
     this._lastActivityAt = this.createdAt;
 
     // Initialize task tracker and forward events
@@ -185,6 +191,14 @@ export class Session extends EventEmitter {
     return this._autoClearEnabled;
   }
 
+  get name(): string {
+    return this._name;
+  }
+
+  set name(value: string) {
+    this._name = value;
+  }
+
   setAutoClear(enabled: boolean, threshold?: number): void {
     this._autoClearEnabled = enabled;
     if (threshold !== undefined) {
@@ -219,6 +233,8 @@ export class Session extends EventEmitter {
   toDetailedState() {
     return {
       ...this.toState(),
+      name: this._name,
+      mode: this.mode,
       claudeSessionId: this._claudeSessionId,
       totalCost: this._totalCost,
       textOutput: this._textOutput,
@@ -328,6 +344,65 @@ export class Session extends EventEmitter {
       this._status = 'idle';
       this.emit('exit', exitCode);
     });
+  }
+
+  // Start a plain shell session (bash/zsh without Claude)
+  async startShell(): Promise<void> {
+    if (this.ptyProcess) {
+      throw new Error('Session already has a running process');
+    }
+
+    this._status = 'busy';
+    this._terminalBuffer = '';
+    this._outputBuffer = '';
+    this._textOutput = '';
+    this._errorBuffer = '';
+    this._messages = [];
+    this._lineBuffer = '';
+    this._lastActivityAt = Date.now();
+
+    // Use user's default shell or bash
+    const shell = process.env.SHELL || '/bin/bash';
+    console.log('[Session] Starting shell session with:', shell);
+
+    this.ptyProcess = pty.spawn(shell, [], {
+      name: 'xterm-256color',
+      cols: 120,
+      rows: 40,
+      cwd: this.workingDir,
+      env: { ...process.env, TERM: 'xterm-256color' },
+    });
+
+    this._pid = this.ptyProcess.pid;
+    console.log('[Session] Shell PTY spawned with PID:', this._pid);
+
+    this.ptyProcess.onData((data: string) => {
+      this._terminalBuffer += data;
+      this._lastActivityAt = Date.now();
+
+      // Trim buffer if it exceeds max size
+      if (this._terminalBuffer.length > MAX_TERMINAL_BUFFER_SIZE) {
+        this._terminalBuffer = this._terminalBuffer.slice(-TERMINAL_BUFFER_TRIM_SIZE);
+      }
+
+      this.emit('terminal', data);
+      this.emit('output', data);
+    });
+
+    this.ptyProcess.onExit(({ exitCode }) => {
+      console.log('[Session] Shell PTY exited with code:', exitCode);
+      this.ptyProcess = null;
+      this._pid = null;
+      this._status = 'idle';
+      this.emit('exit', exitCode);
+    });
+
+    // Mark as idle after a short delay (shell is ready)
+    setTimeout(() => {
+      this._status = 'idle';
+      this._isWorking = false;
+      this.emit('idle');
+    }, 500);
   }
 
   async runPrompt(prompt: string): Promise<{ result: string; cost: number }> {

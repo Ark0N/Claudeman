@@ -96,15 +96,34 @@ export class WebServer extends EventEmitter {
     this.app.get('/api/sessions', async () => this.getSessionsState());
 
     this.app.post('/api/sessions', async (req): Promise<SessionResponse> => {
-      const body = req.body as CreateSessionRequest;
+      const body = req.body as CreateSessionRequest & { mode?: 'claude' | 'shell'; name?: string };
       const workingDir = body.workingDir || process.cwd();
-      const session = new Session({ workingDir });
+      const session = new Session({
+        workingDir,
+        mode: body.mode || 'claude',
+        name: body.name || ''
+      });
 
       this.sessions.set(session.id, session);
       this.setupSessionListeners(session);
 
       this.broadcast('session:created', session.toDetailedState());
       return { success: true, session: session.toDetailedState() };
+    });
+
+    // Rename a session
+    this.app.put('/api/sessions/:id/name', async (req) => {
+      const { id } = req.params as { id: string };
+      const body = req.body as { name: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return { error: 'Session not found' };
+      }
+
+      session.name = body.name || '';
+      this.broadcast('session:updated', session.toDetailedState());
+      return { success: true, name: session.name };
     });
 
     this.app.delete('/api/sessions/:id', async (req): Promise<ApiResponse> => {
@@ -221,6 +240,28 @@ export class WebServer extends EventEmitter {
         await session.startInteractive();
         this.broadcast('session:interactive', { id });
         return { success: true, message: 'Interactive session started' };
+      } catch (err) {
+        return { error: (err as Error).message };
+      }
+    });
+
+    // Start a plain shell session (no Claude)
+    this.app.post('/api/sessions/:id/shell', async (req) => {
+      const { id } = req.params as { id: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return { error: 'Session not found' };
+      }
+
+      if (session.isBusy()) {
+        return { error: 'Session is busy' };
+      }
+
+      try {
+        await session.startShell();
+        this.broadcast('session:interactive', { id, mode: 'shell' });
+        return { success: true, message: 'Shell session started' };
       } catch (err) {
         return { error: (err as Error).message };
       }

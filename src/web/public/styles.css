@@ -180,11 +180,45 @@ body {
 .status-dot.connected { background: var(--green); }
 .status-dot.disconnected { background: var(--red); }
 
-.header-cost {
+.header-tokens {
   font-size: 0.75rem;
   font-weight: 500;
-  color: var(--green);
+  color: var(--accent-hover);
   font-family: 'SF Mono', Monaco, monospace;
+}
+
+/* Session tab gear icon */
+.session-tab .tab-gear {
+  opacity: 0;
+  padding: 0 0.2rem;
+  font-size: 0.75rem;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.session-tab:hover .tab-gear {
+  opacity: 1;
+}
+
+.session-tab .tab-gear:hover {
+  color: var(--accent-hover);
+}
+
+/* Mode indicator on session tab */
+.session-tab .tab-mode {
+  font-size: 0.6rem;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.session-tab .tab-mode.shell {
+  background: rgba(234, 179, 8, 0.2);
+  color: var(--yellow);
 }
 
 /* Timer Banner - Compact */
@@ -673,6 +707,24 @@ body {
   width: 90%;
   max-width: 400px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+
+.modal-content.modal-sm {
+  max-width: 320px;
+}
+
+.session-mode-display,
+.session-dir-display {
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  font-family: 'SF Mono', Monaco, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .modal-header {

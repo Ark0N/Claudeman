@@ -32,7 +32,7 @@
           <span class="status-dot"></span>
           <span class="status-text">Connecting</span>
         </div>
-        <div class="header-cost" id="headerCost">$0.00</div>
+        <div class="header-tokens" id="headerTokens" title="Total tokens across all sessions">0 tokens</div>
       </div>
     </header>
 
@@ -65,10 +65,13 @@
     <!-- Bottom Toolbar -->
     <footer class="toolbar">
       <div class="toolbar-left">
-        <!-- Quick Start -->
+        <!-- Run Claude -->
         <div class="toolbar-group">
-          <button class="btn-toolbar btn-primary" onclick="app.quickStart()" title="Quick Start (Ctrl+Enter)">
-            Quick Start
+          <button class="btn-toolbar btn-primary" onclick="app.runClaude()" title="Run Claude (Ctrl+Enter)">
+            Run Claude
+          </button>
+          <button class="btn-toolbar" onclick="app.runShell()" title="Run Shell">
+            Shell
           </button>
           <select id="quickStartCase" class="toolbar-select" title="Select case">
             <option value="testcase">testcase</option>
@@ -238,6 +241,35 @@
       </div>
       <div class="task-panel-body" id="taskPanelBody">
         <div class="task-empty">No background tasks</div>
+      </div>
+    </div>
+
+    <!-- Session Options Modal -->
+    <div class="modal" id="sessionOptionsModal">
+      <div class="modal-backdrop" onclick="app.closeSessionOptions()"></div>
+      <div class="modal-content modal-sm">
+        <div class="modal-header">
+          <h3>Session Options</h3>
+          <button class="modal-close" onclick="app.closeSessionOptions()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-row">
+            <label>Session Name</label>
+            <input type="text" id="sessionNameInput" placeholder="Enter session name...">
+          </div>
+          <div class="form-row">
+            <label>Mode</label>
+            <div class="session-mode-display" id="sessionModeDisplay">Claude</div>
+          </div>
+          <div class="form-row">
+            <label>Directory</label>
+            <div class="session-dir-display" id="sessionDirDisplay">/path/to/dir</div>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn-toolbar" onclick="app.closeSessionOptions()">Cancel</button>
+          <button class="btn-toolbar btn-primary" onclick="app.saveSessionOptions()">Save</button>
+        </div>
       </div>
     </div>
 
