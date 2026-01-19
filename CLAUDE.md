@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Claudeman is a Claude Code session manager with a web interface and autonomous Ralph Loop. It spawns Claude CLI processes via PTY, streams output in real-time via SSE, and supports scheduled/timed runs.
 
-**Tech Stack**: TypeScript, Node.js, Fastify, Server-Sent Events, node-pty
+**Tech Stack**: TypeScript (ES2022/NodeNext), Node.js, Fastify, Server-Sent Events, node-pty
 
 **Requirements**: Node.js 18+, Claude CLI (`claude`) installed and available in PATH
 
@@ -24,6 +24,13 @@ claudeman web                      # After npm link
 
 # NOTE: `npm run dev` runs the CLI (shows help), NOT the web server
 # You must specify the `web` subcommand to start the server
+
+# Testing
+npm run test                              # Run all tests once
+npm run test:watch                        # Watch mode
+npm run test:coverage                     # With coverage report
+npx vitest run test/session.test.ts       # Single file
+npx vitest run -t "should create session" # By pattern
 ```
 
 ## Architecture
@@ -190,159 +197,63 @@ Session tracks input/output tokens differently depending on mode:
 
 When enabled, auto-clear waits for idle state, sends `/clear`, and resets token counts.
 
-### SSE Event Catalog
+### SSE Events
 
-All events are broadcast to clients connected to `/api/events`. Event format: `{ type: string, sessionId?: string, data: any }`.
+All events broadcast to `/api/events` with format: `{ type: string, sessionId?: string, data: any }`.
 
-**Session Events:**
-| Event | Data | Description |
-|-------|------|-------------|
-| `session:created` | `{ session }` | New session created |
-| `session:deleted` | `{ id }` | Session removed |
-| `session:output` | `{ id, data }` | Parsed output line (ANSI stripped) |
-| `session:terminal` | `{ id, data }` | Raw terminal data with ANSI codes |
-| `session:message` | `{ id, message }` | Parsed Claude JSON message |
-| `session:running` | `{ id, prompt }` | Prompt execution started |
-| `session:interactive` | `{ id }` | Interactive mode started |
-| `session:completion` | `{ id, result, cost }` | Prompt completed, includes cost |
-| `session:exit` | `{ id, code }` | Session process exited |
-| `session:idle` | `{ id }` | Session is idle (prompt detected) |
-| `session:working` | `{ id }` | Session is working (activity detected) |
-| `session:updated` | `{ session }` | Session state updated |
-| `session:error` | `{ id, error }` | Session error occurred |
-| `session:autoClear` | `{ sessionId, tokens, threshold }` | Auto-clear triggered |
-
-**Task Events:**
-| Event | Data | Description |
-|-------|------|-------------|
-| `task:created` | `{ sessionId, task }` | Background task started |
-| `task:updated` | `{ sessionId, task }` | Task status updated |
-| `task:completed` | `{ sessionId, task }` | Task finished successfully |
-| `task:failed` | `{ sessionId, task, error }` | Task failed |
-
-**Respawn Controller Events:**
-| Event | Data | Description |
-|-------|------|-------------|
-| `respawn:started` | `{ sessionId, status }` | Respawn controller started |
-| `respawn:stopped` | `{ sessionId }` | Respawn controller stopped |
-| `respawn:stateChanged` | `{ sessionId, state, prevState }` | State machine transition |
-| `respawn:cycleStarted` | `{ sessionId, cycleNumber }` | New update cycle starting |
-| `respawn:cycleCompleted` | `{ sessionId, cycleNumber }` | Update cycle finished |
-| `respawn:stepSent` | `{ sessionId, step, input }` | Command sent (update/clear/init) |
-| `respawn:stepCompleted` | `{ sessionId, step }` | Command completed |
-| `respawn:configUpdated` | `{ sessionId, config }` | Configuration changed |
-| `respawn:timerStarted` | `{ sessionId, durationMinutes, endAt, startedAt }` | Timed respawn started |
-| `respawn:log` | `{ sessionId, message }` | Debug/info log message |
-| `respawn:error` | `{ sessionId, error }` | Error occurred |
-
-**Scheduled Run Events:**
-| Event | Data | Description |
-|-------|------|-------------|
-| `scheduled:created` | `{ run }` | New scheduled run created |
-| `scheduled:updated` | `{ run }` | Status/timer update |
-| `scheduled:log` | `{ id, log }` | Scheduled run log entry |
-| `scheduled:completed` | `{ run }` | Scheduled run finished |
-| `scheduled:stopped` | `{ run }` | Scheduled run stopped by user |
-
-**Case Events:**
-| Event | Data | Description |
-|-------|------|-------------|
-| `case:created` | `{ name, path }` | New case directory created |
-
-**Init Event:**
-| Event | Data | Description |
-|-------|------|-------------|
-| `init` | `{ sessions, scheduledRuns, respawnStatus, timestamp }` | Full state sent on SSE connection |
+Event categories (prefixes): `session:`, `task:`, `respawn:`, `scheduled:`, `case:`, `init`. Key events include `session:idle`, `session:working`, `session:terminal`, `session:completion`, `respawn:stateChanged`. See `src/web/server.ts` for the full event catalog.
 
 ## API Endpoints
 
-### Session Management
+REST API served by Fastify at `src/web/server.ts`. All endpoints are under `/api/`.
 
-```
-GET  /api/sessions                    # List all sessions (includes buffer stats)
-POST /api/sessions                    # Create session { workingDir, mode?, name? }
-GET  /api/sessions/:id                # Get single session details
-PUT  /api/sessions/:id/name           # Rename session { name }
-DELETE /api/sessions/:id              # Stop and remove a session (kills process + children)
-DELETE /api/sessions                  # Kill all sessions at once
-GET  /api/sessions/:id/output         # Get session output buffer
-GET  /api/sessions/:id/terminal       # Get terminal buffer (raw ANSI)
-```
+**Sessions:**
+- `GET /api/sessions` - List all sessions
+- `POST /api/sessions` - Create session `{ workingDir, mode?, name? }`
+- `GET /api/sessions/:id` - Get session details (includes bufferStats)
+- `DELETE /api/sessions/:id` - Kill and remove session
+- `DELETE /api/sessions` - Kill all sessions
+- `PUT /api/sessions/:id/name` - Rename session `{ name }`
+- `POST /api/sessions/:id/interactive` - Start interactive Claude terminal
+- `POST /api/sessions/:id/shell` - Start shell terminal (no Claude)
+- `POST /api/sessions/:id/input` - Send input to session `{ input }`
+- `POST /api/sessions/:id/resize` - Resize terminal `{ cols, rows }`
+- `GET /api/sessions/:id/terminal` - Get terminal buffer
 
-### Session Operations
+**Respawn Controller:**
+- `GET /api/sessions/:id/respawn` - Get respawn state
+- `POST /api/sessions/:id/respawn/start` - Start respawn `{ config? }`
+- `POST /api/sessions/:id/respawn/stop` - Stop respawn
+- `PUT /api/sessions/:id/respawn/config` - Update config
+- `POST /api/sessions/:id/respawn/enable` - Enable on running session `{ config?, durationMinutes? }`
+- `POST /api/sessions/:id/auto-clear` - Configure auto-clear `{ enabled, threshold? }`
 
-```
-POST /api/sessions/:id/run            # Run prompt { prompt } (one-shot mode)
-POST /api/sessions/:id/interactive    # Start interactive Claude terminal mode
-POST /api/sessions/:id/shell          # Start plain shell (bash/zsh, no Claude)
-POST /api/sessions/:id/input          # Send input to interactive session { input }
-POST /api/sessions/:id/resize         # Resize terminal { cols, rows }
-POST /api/sessions/:id/interactive-respawn  # Start interactive + respawn controller
-```
+**Cases & Quick Start:**
+- `GET /api/cases` - List cases in `~/claudeman-cases/`
+- `POST /api/cases` - Create case `{ name, description? }`
+- `GET /api/cases/:name` - Get case info
+- `POST /api/quick-start` - Create case + interactive session `{ caseName? }`
 
-### Respawn Controller
+**Scheduled Runs:**
+- `GET /api/scheduled` - List scheduled runs
+- `POST /api/scheduled` - Create scheduled run `{ prompt, workingDir?, durationMinutes }`
+- `GET /api/scheduled/:id` - Get run status
+- `DELETE /api/scheduled/:id` - Cancel run
 
-```
-GET  /api/sessions/:id/respawn        # Get respawn controller state
-POST /api/sessions/:id/respawn/start  # Start respawn controller { config? }
-POST /api/sessions/:id/respawn/stop   # Stop respawn controller
-POST /api/sessions/:id/respawn/enable # Enable respawn on existing session { config?, durationMinutes? }
-PUT  /api/sessions/:id/respawn/config # Update config { idleTimeoutMs, updatePrompt, interStepDelayMs, sendClear, sendInit }
-POST /api/sessions/:id/auto-clear     # Set auto-clear { enabled, threshold? }
-```
+**Screen Management:**
+- `GET /api/screens` - List screen sessions with stats
+- `DELETE /api/screens/:sessionId` - Kill screen session
+- `POST /api/screens/reconcile` - Clean up dead screens
+- `POST /api/screens/stats/start` - Start resource monitoring
+- `POST /api/screens/stats/stop` - Stop resource monitoring
 
-### Scheduled Runs
+**Other:**
+- `GET /api/events` - SSE stream for real-time updates
+- `GET /api/status` - Full state snapshot
+- `GET /api/settings` - Get app settings
+- `PUT /api/settings` - Update settings
 
-```
-GET  /api/scheduled                   # List all scheduled runs
-POST /api/scheduled                   # Create { prompt, workingDir, durationMinutes }
-GET  /api/scheduled/:id               # Get scheduled run details
-DELETE /api/scheduled/:id             # Cancel scheduled run
-```
-
-### Cases & Quick Start
-
-```
-GET  /api/cases                       # List case directories
-POST /api/cases                       # Create case { name, description }
-GET  /api/cases/:name                 # Get case details
-POST /api/quick-start                 # Quick start { caseName? } - creates case + interactive session
-POST /api/run                         # Quick run { prompt, workingDir } (no session management)
-```
-
-**Quick Start Response:**
-```typescript
-{
-  success: boolean;
-  sessionId?: string;    // ID of the created session
-  casePath?: string;     // Full path to the case directory
-  caseName?: string;     // Name of the case
-  error?: string;        // Error message if success is false
-}
-```
-
-### Events
-
-```
-GET  /api/events                      # SSE stream (real-time events)
-GET  /api/status                      # Full state snapshot (sessions + scheduled + respawn)
-```
-
-## Testing
-
-### Unit Tests
-
-Tests use Vitest and auto-discover `*.test.ts` files in the `test/` directory:
-
-```bash
-npm run test                              # Run all tests once
-npm run test:watch                        # Watch mode
-npm run test:coverage                     # With coverage report
-npx vitest run test/session.test.ts       # Single file
-npx vitest run -t "should create session" # By pattern
-```
-
-### E2E Testing with agent-browser
+## E2E Testing with agent-browser
 
 For UI testing, use [agent-browser](https://github.com/vercel-labs/agent-browser). A full E2E test plan is documented in `.claude/skills/e2e-test.md`.
 
@@ -356,12 +267,9 @@ npx agent-browser open http://localhost:3000
 npx agent-browser snapshot             # Get accessibility tree with element refs
 npx agent-browser click @e5            # Click by element ref
 npx agent-browser find text "Run Claude" click  # Or use semantic locators
-npx agent-browser eval "app.sessions.get(app.activeSessionId)"  # Run JS
 npx agent-browser screenshot /tmp/test.png
 npx agent-browser close
 ```
-
-**Key test areas:** Initial load, font controls (A-/A+), tab count stepper, session creation with screen wrapping, session options modal, monitor panel.
 
 ## Frontend
 
@@ -370,6 +278,11 @@ The web UI (`src/web/public/`) uses vanilla JavaScript with:
 - **xterm-addon-fit**: Auto-resize terminal to container
 - **Server-Sent Events**: Real-time updates from `/api/events`
 - **No build step**: Static files served directly by Fastify
+
+Key files:
+- `app.js` - Main application logic, SSE handling, session management
+- `index.html` - Single page with embedded styles
+- Libraries loaded from CDN (xterm.js, addons)
 
 ## Notes
 
