@@ -75,28 +75,33 @@
     <!-- Enhanced Ralph Wiggum Loop Panel -->
     <div class="ralph-panel collapsed" id="innerStatePanel" style="display: none;">
       <!-- Collapsed Summary Bar -->
-      <div class="ralph-summary" onclick="app.toggleInnerStatePanel()">
-        <div class="ralph-ring-mini" id="ralphRingMini">
-          <svg viewBox="0 0 36 36" class="ralph-ring-svg">
-            <circle class="ralph-ring-bg" cx="18" cy="18" r="15.9" />
-            <circle class="ralph-ring-progress" cx="18" cy="18" r="15.9" id="ralphRingMiniProgress" />
-          </svg>
-          <span class="ralph-ring-text" id="ralphRingMiniText">0%</span>
+      <div class="ralph-summary" id="ralphSummary">
+        <div class="ralph-summary-content" onclick="app.toggleInnerStatePanel()">
+          <div class="ralph-ring-mini" id="ralphRingMini">
+            <svg viewBox="0 0 36 36" class="ralph-ring-svg">
+              <circle class="ralph-ring-bg" cx="18" cy="18" r="15.9" />
+              <circle class="ralph-ring-progress" cx="18" cy="18" r="15.9" id="ralphRingMiniProgress" />
+            </svg>
+            <span class="ralph-ring-text" id="ralphRingMiniText">0%</span>
+          </div>
+          <div class="ralph-summary-info">
+            <span class="ralph-title">Ralph Wiggum Tracker</span>
+            <span class="ralph-status-badge" id="ralphStatusBadge">
+              <span class="ralph-status-dot"></span>
+              <span class="ralph-status-text">Idle</span>
+            </span>
+            <span class="ralph-phrase-preview" id="ralphPhrasePreview"></span>
+          </div>
+          <div class="ralph-summary-stats">
+            <span class="ralph-stat"><span class="ralph-stat-icon">&#x23F1;</span><span id="ralphStatTime">0m</span></span>
+            <span class="ralph-stat"><span class="ralph-stat-icon">&#x21BB;</span><span id="ralphStatCycles">0</span></span>
+            <span class="ralph-stat"><span class="ralph-stat-icon">&#x2713;</span><span id="ralphStatTasks">0/0</span></span>
+          </div>
+          <span class="ralph-toggle" id="ralphToggle">&#x25B6;</span>
         </div>
-        <div class="ralph-summary-info">
-          <span class="ralph-title">Ralph Wiggum Tracker</span>
-          <span class="ralph-status-badge" id="ralphStatusBadge">
-            <span class="ralph-status-dot"></span>
-            <span class="ralph-status-text">Idle</span>
-          </span>
-          <span class="ralph-phrase-preview" id="ralphPhrasePreview"></span>
+        <div class="ralph-controls">
+          <button class="btn-icon-sm" onclick="event.stopPropagation(); app.toggleRalphDetach()" title="Detach/Attach panel" id="ralphDetachBtn">&#x2197;</button>
         </div>
-        <div class="ralph-summary-stats">
-          <span class="ralph-stat"><span class="ralph-stat-icon">&#x23F1;</span><span id="ralphStatTime">0m</span></span>
-          <span class="ralph-stat"><span class="ralph-stat-icon">&#x21BB;</span><span id="ralphStatCycles">0</span></span>
-          <span class="ralph-stat"><span class="ralph-stat-icon">&#x2713;</span><span id="ralphStatTasks">0/0</span></span>
-        </div>
-        <span class="ralph-toggle" id="ralphToggle">&#x25B6;</span>
       </div>
 
       <!-- Expanded Detail View -->

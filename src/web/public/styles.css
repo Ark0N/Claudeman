@@ -457,21 +457,6 @@ body {
   position: relative;
 }
 
-/* Collapsed Summary Bar */
-.ralph-summary {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem 0.75rem;
-  cursor: pointer;
-  user-select: none;
-  transition: background 0.15s;
-}
-
-.ralph-summary:hover {
-  background: var(--bg-hover);
-}
-
 /* Mini Progress Ring (in summary) */
 .ralph-ring-mini {
   position: relative;
@@ -906,6 +891,76 @@ body {
   color: var(--text-muted);
   font-style: italic;
   padding: 0.5rem;
+}
+
+/* Ralph panel summary layout adjustments */
+.ralph-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.ralph-summary-content {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+  cursor: pointer;
+}
+
+.ralph-summary-content:hover {
+  background: var(--bg-hover);
+}
+
+.ralph-controls {
+  display: flex;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+/* Detached Ralph Panel */
+.ralph-panel.detached {
+  position: fixed;
+  top: 100px;
+  left: 100px;
+  width: 400px;
+  min-height: 200px;
+  max-height: 80vh;
+  z-index: 1000;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  background: var(--bg-card);
+  overflow: auto;
+  resize: both;
+}
+
+.ralph-panel.detached .ralph-summary {
+  cursor: move;
+  background: linear-gradient(180deg, var(--bg-hover) 0%, var(--bg-card) 100%);
+  border-bottom: 1px solid var(--border);
+  border-radius: 8px 8px 0 0;
+}
+
+.ralph-panel.detached .ralph-summary-content {
+  cursor: move;
+}
+
+.ralph-panel.detached .ralph-summary-content:hover {
+  background: transparent;
+}
+
+.ralph-panel.detached .ralph-detail {
+  max-height: none;
+  overflow: auto;
+}
+
+.ralph-panel.detached.collapsed {
+  min-height: auto;
+  height: auto;
 }
 
 /* Main - Terminal Area */

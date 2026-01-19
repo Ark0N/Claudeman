@@ -1910,6 +1910,95 @@ class ClaudemanApp {
     this.renderInnerStatePanel();
   }
 
+  toggleRalphDetach() {
+    const panel = this.$('innerStatePanel');
+    const detachBtn = this.$('ralphDetachBtn');
+
+    if (!panel) return;
+
+    if (panel.classList.contains('detached')) {
+      // Re-attach to original position
+      panel.classList.remove('detached');
+      panel.style.top = '';
+      panel.style.left = '';
+      panel.style.width = '';
+      panel.style.height = '';
+      if (detachBtn) {
+        detachBtn.innerHTML = '&#x2197;'; // Detach icon
+        detachBtn.title = 'Detach panel';
+      }
+    } else {
+      // Detach as floating window
+      panel.classList.add('detached');
+      // Expand when detaching for better visibility
+      this.innerStatePanelCollapsed = false;
+      panel.classList.remove('collapsed');
+      if (detachBtn) {
+        detachBtn.innerHTML = '&#x2199;'; // Attach icon
+        detachBtn.title = 'Attach panel';
+      }
+      // Setup drag functionality
+      this.setupRalphDrag();
+    }
+    this.renderInnerStatePanel();
+  }
+
+  setupRalphDrag() {
+    const panel = this.$('innerStatePanel');
+    const header = this.$('ralphSummary');
+
+    if (!panel || !header) return;
+
+    let isDragging = false;
+    let startX, startY, startLeft, startTop;
+
+    const onMouseDown = (e) => {
+      // Only drag from header, not from buttons or toggle
+      if (e.target.closest('button') || e.target.closest('.ralph-toggle')) return;
+      if (!panel.classList.contains('detached')) return;
+
+      isDragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      const rect = panel.getBoundingClientRect();
+      startLeft = rect.left;
+      startTop = rect.top;
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+      e.preventDefault();
+    };
+
+    const onMouseMove = (e) => {
+      if (!isDragging) return;
+
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+
+      let newLeft = startLeft + dx;
+      let newTop = startTop + dy;
+
+      // Keep within viewport bounds
+      const rect = panel.getBoundingClientRect();
+      newLeft = Math.max(0, Math.min(window.innerWidth - rect.width, newLeft));
+      newTop = Math.max(0, Math.min(window.innerHeight - rect.height, newTop));
+
+      panel.style.left = newLeft + 'px';
+      panel.style.top = newTop + 'px';
+    };
+
+    const onMouseUp = () => {
+      isDragging = false;
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+
+    // Remove existing listeners before adding new ones
+    header.removeEventListener('mousedown', header._ralphDragHandler);
+    header._ralphDragHandler = onMouseDown;
+    header.addEventListener('mousedown', onMouseDown);
+  }
+
   renderInnerStatePanel() {
     const panel = this.$('innerStatePanel');
     const toggle = this.$('ralphToggle');
