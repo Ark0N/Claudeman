@@ -50,6 +50,7 @@ class ClaudemanApp {
   init() {
     this.initTerminal();
     this.loadFontSize();
+    this.applyHeaderVisibilitySettings();
     this.connectSSE();
     this.loadState();
     this.loadQuickStartCases();
@@ -1641,6 +1642,10 @@ class ClaudemanApp {
     document.getElementById('appSettingsClaudeMdPath').value = settings.defaultClaudeMdPath || '';
     document.getElementById('appSettingsDefaultDir').value = settings.defaultWorkingDir || '';
     document.getElementById('appSettingsRalphEnabled').checked = settings.ralphTrackerEnabled ?? false;
+    // Header visibility settings (default to true/enabled)
+    document.getElementById('appSettingsShowFontControls').checked = settings.showFontControls ?? true;
+    document.getElementById('appSettingsShowSystemStats').checked = settings.showSystemStats ?? true;
+    document.getElementById('appSettingsShowTokenCount').checked = settings.showTokenCount ?? true;
     document.getElementById('appSettingsModal').classList.add('active');
   }
 
@@ -1653,10 +1658,17 @@ class ClaudemanApp {
       defaultClaudeMdPath: document.getElementById('appSettingsClaudeMdPath').value.trim(),
       defaultWorkingDir: document.getElementById('appSettingsDefaultDir').value.trim(),
       ralphTrackerEnabled: document.getElementById('appSettingsRalphEnabled').checked,
+      // Header visibility settings
+      showFontControls: document.getElementById('appSettingsShowFontControls').checked,
+      showSystemStats: document.getElementById('appSettingsShowSystemStats').checked,
+      showTokenCount: document.getElementById('appSettingsShowTokenCount').checked,
     };
 
     // Save to localStorage
     localStorage.setItem('claudeman-app-settings', JSON.stringify(settings));
+
+    // Apply header visibility immediately
+    this.applyHeaderVisibilitySettings();
 
     // Also save to server
     try {
@@ -1690,6 +1702,28 @@ class ClaudemanApp {
       console.error('Failed to load app settings:', err);
     }
     return {};
+  }
+
+  applyHeaderVisibilitySettings() {
+    const settings = this.loadAppSettingsFromStorage();
+    // Default all to true (enabled) if not set
+    const showFontControls = settings.showFontControls ?? true;
+    const showSystemStats = settings.showSystemStats ?? true;
+    const showTokenCount = settings.showTokenCount ?? true;
+
+    const fontControlsEl = document.querySelector('.header-font-controls');
+    const systemStatsEl = document.getElementById('headerSystemStats');
+    const tokenCountEl = document.getElementById('headerTokens');
+
+    if (fontControlsEl) {
+      fontControlsEl.style.display = showFontControls ? '' : 'none';
+    }
+    if (systemStatsEl) {
+      systemStatsEl.style.display = showSystemStats ? '' : 'none';
+    }
+    if (tokenCountEl) {
+      tokenCountEl.style.display = showTokenCount ? '' : 'none';
+    }
   }
 
   async loadAppSettingsFromServer() {
