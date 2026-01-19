@@ -1383,12 +1383,18 @@ class ClaudemanApp {
     const session = this.sessions.get(this.activeSessionId);
     const body = document.getElementById('backgroundTasksBody');
     const stats = document.getElementById('taskPanelStats');
+    const section = document.getElementById('backgroundTasksSection');
 
     if (!session || !session.taskTree || session.taskTree.length === 0) {
-      body.innerHTML = '<div class="task-empty">No background tasks</div>';
+      // Hide the entire section when there are no background tasks
+      if (section) section.style.display = 'none';
+      body.innerHTML = '';
       stats.textContent = '0 tasks';
       return;
     }
+
+    // Show the section when there are tasks
+    if (section) section.style.display = '';
 
     const taskStats = session.taskStats || { running: 0, completed: 0, failed: 0, total: 0 };
     stats.textContent = `${taskStats.running} running, ${taskStats.completed} done`;

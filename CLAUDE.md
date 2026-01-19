@@ -447,15 +447,6 @@ The web UI (`src/web/public/`) uses vanilla JavaScript with:
 
 ## Pending Tasks
 
-**Note to Claude: Do NOT remove or modify this section during /init. These tasks are actively being worked on by other sessions.**
+**Note to Claude: Do NOT remove or modify this section during /init. These tasks may be actively worked on by other sessions.**
 
-- [x] Remove the "New Session" tab and add a gear icon in the top right corner for app settings
-- [x] Add confirmation dialog when clicking "x" on a session tab - warn user that the screen session behind will be closed
-- [x] In settings: add option to configure a default CLAUDE.md file path that will be used for new sessions/cases
-- [x] Wrap each session in a GNU screen session - track in ~/.claudeman/screens.json with Process Monitor panel showing memory, CPU, children
-- [x] UI cleanup: Move respawn controls to session options, remove mode label, fix directory display width
-- [x] Fix terminal focus escape sequences: filter out ^[[I and ^[[O (focus in/out) ANSI codes
-- [x] Merge Process Monitor and Background Tasks into single Monitor panel
-- [x] Move font size controls (A+/A-) to header
-- [x] Restore screen sessions automatically on server restart
-- [x] Add multi-tab feature: number input (1-10) next to Run Claude to open multiple sessions at once
+- [x] Test: Monitor panel should hide "Background Tasks" section when there are no tasks (instead of showing "No background tasks" message)
