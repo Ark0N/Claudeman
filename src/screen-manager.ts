@@ -143,47 +143,61 @@ export class ScreenManager extends EventEmitter {
       return false;
     }
 
-    // First, find and kill ALL child processes of the screen session
-    // This prevents orphaned claude processes when screen quits
-    const childPids = this.getChildPids(screen.pid);
-    console.log(`[ScreenManager] Killing screen ${screen.screenName} (PID ${screen.pid}) and ${childPids.length} child processes`);
+    // Get current PID from screen -ls in case it changed
+    const currentPid = this.getScreenPid(screen.screenName) || screen.pid;
 
-    // Kill children in reverse order (deepest first) with SIGTERM then SIGKILL
-    for (const childPid of childPids.reverse()) {
-      try {
-        process.kill(childPid, 'SIGTERM');
-      } catch {
-        // Process may already be dead
+    console.log(`[ScreenManager] Killing screen ${screen.screenName} (PID ${currentPid})`);
+
+    // Strategy 1: Find and kill all child processes recursively
+    const childPids = this.getChildPids(currentPid);
+    if (childPids.length > 0) {
+      console.log(`[ScreenManager] Found ${childPids.length} child processes to kill`);
+
+      // Kill children in reverse order (deepest first) with SIGTERM
+      for (const childPid of childPids.reverse()) {
+        try {
+          process.kill(childPid, 'SIGTERM');
+        } catch {
+          // Process may already be dead
+        }
+      }
+
+      // Give processes a moment to terminate gracefully
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      // Force kill any remaining children
+      for (const childPid of childPids) {
+        try {
+          process.kill(childPid, 'SIGKILL');
+        } catch {
+          // Process already terminated
+        }
       }
     }
 
-    // Give processes a moment to terminate gracefully
-    await new Promise(resolve => setTimeout(resolve, 200));
-
-    // Force kill any remaining children
-    for (const childPid of childPids) {
-      try {
-        process.kill(childPid, 'SIGKILL');
-      } catch {
-        // Process already terminated
-      }
-    }
-
-    // Now kill the screen session itself
+    // Strategy 2: Kill the entire process group (catches any orphans we missed)
     try {
-      // Kill screen session by name
+      process.kill(-currentPid, 'SIGTERM');
+      await new Promise(resolve => setTimeout(resolve, 100));
+      process.kill(-currentPid, 'SIGKILL');
+    } catch {
+      // Process group may not exist or already terminated
+    }
+
+    // Strategy 3: Kill screen session by name
+    try {
       execSync(`screen -S ${screen.screenName} -X quit`, {
         timeout: 5000
       });
     } catch {
-      // Try killing by PID if name-based kill failed
-      try {
-        process.kill(screen.pid, 'SIGTERM');
-        await new Promise(resolve => setTimeout(resolve, 100));
-        process.kill(screen.pid, 'SIGKILL');
-      } catch {
-        // Already dead
-      }
+      // Screen may already be dead
+    }
+
+    // Strategy 4: Direct kill by PID as final fallback
+    try {
+      process.kill(currentPid, 'SIGKILL');
+    } catch {
+      // Already dead
     }
 
     this.screens.delete(sessionId);
@@ -214,11 +228,13 @@ export class ScreenManager extends EventEmitter {
     return true;
   }
 
-  // Reconcile screens - find orphaned/dead screens
-  async reconcileScreens(): Promise<{ alive: string[]; dead: string[] }> {
+  // Reconcile screens - find orphaned/dead screens AND discover unknown claudeman screens
+  async reconcileScreens(): Promise<{ alive: string[]; dead: string[]; discovered: string[] }> {
     const alive: string[] = [];
     const dead: string[] = [];
+    const discovered: string[] = [];
 
+    // First, check known screens
     for (const [sessionId, screen] of this.screens) {
       const pid = this.getScreenPid(screen.screenName);
       if (pid) {
@@ -234,11 +250,56 @@ export class ScreenManager extends EventEmitter {
       }
     }
 
-    if (dead.length > 0) {
+    // Second, discover unknown claudeman screens (prevents ghost screens)
+    try {
+      const output = execSync('screen -ls 2>/dev/null || true', {
+        encoding: 'utf-8',
+        timeout: 5000
+      });
+      // Match: "12345.claudeman-abc12345   (Detached)" or similar
+      const screenPattern = /(\d+)\.(claudeman-([a-f0-9-]+))/g;
+      let match;
+      while ((match = screenPattern.exec(output)) !== null) {
+        const pid = parseInt(match[1], 10);
+        const screenName = match[2];
+        const sessionIdFragment = match[3];
+
+        // Check if this screen is already known
+        let isKnown = false;
+        for (const screen of this.screens.values()) {
+          if (screen.screenName === screenName) {
+            isKnown = true;
+            break;
+          }
+        }
+
+        if (!isKnown) {
+          // Discovered an unknown claudeman screen - adopt it
+          const sessionId = `restored-${sessionIdFragment}`;
+          const screen: ScreenSession = {
+            sessionId,
+            screenName,
+            pid,
+            createdAt: Date.now(),
+            workingDir: process.cwd(), // Unknown, use current dir
+            mode: 'claude', // Assume claude mode
+            attached: false,
+            name: `Restored: ${screenName}`
+          };
+          this.screens.set(sessionId, screen);
+          discovered.push(sessionId);
+          console.log(`[ScreenManager] Discovered unknown screen: ${screenName} (PID ${pid})`);
+        }
+      }
+    } catch (err) {
+      console.error('[ScreenManager] Failed to discover screens:', err);
+    }
+
+    if (dead.length > 0 || discovered.length > 0) {
       this.saveScreens();
     }
 
-    return { alive, dead };
+    return { alive, dead, discovered };
   }
 
   // Get process stats for a screen

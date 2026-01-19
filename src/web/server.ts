@@ -1246,11 +1246,15 @@ export class WebServer extends EventEmitter {
 
   private async restoreScreenSessions(): Promise<void> {
     try {
-      // Reconcile screens to find which ones are still alive
-      const { alive, dead } = await this.screenManager.reconcileScreens();
+      // Reconcile screens to find which ones are still alive (also discovers unknown screens)
+      const { alive, dead, discovered } = await this.screenManager.reconcileScreens();
 
-      if (alive.length > 0) {
-        console.log(`[Server] Found ${alive.length} alive screen session(s) from previous run`);
+      if (discovered.length > 0) {
+        console.log(`[Server] Discovered ${discovered.length} unknown screen session(s)`);
+      }
+
+      if (alive.length > 0 || discovered.length > 0) {
+        console.log(`[Server] Found ${alive.length + discovered.length} alive screen session(s) from previous run`);
 
         // For each alive screen, create a Session object if it doesn't exist
         const screens = this.screenManager.getScreens();
