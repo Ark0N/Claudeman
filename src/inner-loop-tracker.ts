@@ -231,9 +231,19 @@ export class InnerLoopTracker extends EventEmitter {
    * Handle a detected completion phrase
    */
   private handleCompletionPhrase(phrase: string): void {
-    const wasActive = this._loopState.active;
+    // Only mark as completed if the loop was actually active
+    // This prevents false positives when the completion phrase appears in the prompt itself
+    if (!this._loopState.active) {
+      // Just record the expected completion phrase without marking as complete
+      if (!this._loopState.completionPhrase) {
+        this._loopState.completionPhrase = phrase;
+        this._loopState.lastActivity = Date.now();
+        this.emit('loopUpdate', this.loopState);
+      }
+      return;
+    }
 
-    // If we see a completion phrase, mark loop as completed
+    // Loop was active, this is a real completion
     this._loopState.completionPhrase = phrase;
     this._loopState.active = false;
     this._loopState.lastActivity = Date.now();
