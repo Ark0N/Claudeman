@@ -140,11 +140,22 @@ Sessions are optimized for 12-24+ hour runs with automatic buffer management:
 - Terminal buffer: 5MB max, trims to 4MB when exceeded
 - Text output: 2MB max, trims to 1.5MB when exceeded
 - Messages: 1000 max, keeps most recent 800 when exceeded
+- Line buffer: 64KB max with 100ms periodic flush (prevents unbounded growth from long lines)
+- Completed tasks: 100 max in TaskTracker (auto-removes oldest)
+- Respawn terminal buffer: 1MB max, trims to 512KB
 
 **Performance Optimizations:**
 - Server-side terminal batching at 60fps (16ms intervals)
+- SSE event batching: `session:output` at 50ms, `task:updated` at 100ms
 - Client-side requestAnimationFrame batching for smooth rendering
+- Frontend `renderSessionTabs()` debounced at 100ms
+- Parallel screen stats fetching via `Promise.all()`
+- Configurable xterm scrollback (default 5000 lines)
 - Buffer statistics available via session details for monitoring
+
+**Automatic Cleanup:**
+- Scheduled runs auto-deleted after 1 hour of completion
+- Sessions cleaned up after each scheduled run iteration (prevents leaks)
 
 **Buffer Stats Response:**
 ```typescript
@@ -249,6 +260,9 @@ REST API served by Fastify at `src/web/server.ts`. All endpoints are under `/api
 - `POST /api/screens/stats/start` - Start resource monitoring
 - `POST /api/screens/stats/stop` - Stop resource monitoring
 
+**System:**
+- `GET /api/system/stats` - Get CPU and memory usage `{ cpu, memory: { usedMB, totalMB, percent } }`
+
 **Other:**
 - `GET /api/events` - SSE stream for real-time updates
 - `GET /api/status` - Full state snapshot
@@ -277,14 +291,16 @@ npx agent-browser close
 ## Frontend
 
 The web UI (`src/web/public/`) uses vanilla JavaScript with:
-- **xterm.js**: Terminal emulator with WebGL renderer for 60fps performance
+- **xterm.js**: Terminal emulator with configurable scrollback (default 5000 lines)
 - **xterm-addon-fit**: Auto-resize terminal to container
 - **Server-Sent Events**: Real-time updates from `/api/events`
+- **System Stats**: CPU and memory usage displayed in header (2s polling)
 - **No build step**: Static files served directly by Fastify
 
 Key files:
 - `app.js` - Main application logic, SSE handling, session management
 - `index.html` - Single page with embedded styles
+- `styles.css` - All CSS styles
 - Libraries loaded from CDN (xterm.js, addons)
 
 ## Notes

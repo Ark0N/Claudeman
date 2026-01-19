@@ -1,5 +1,8 @@
 import { EventEmitter } from 'node:events';
 
+// Maximum number of completed tasks to keep in memory
+const MAX_COMPLETED_TASKS = 100;
+
 /**
  * Represents a background task spawned by Claude Code
  */
@@ -159,10 +162,52 @@ export class TaskTracker extends EventEmitter {
       } else {
         this.emit('taskCompleted', task);
       }
+
+      // Clean up old completed tasks to prevent unbounded growth
+      this.cleanupCompletedTasks();
     }
 
     // Clean up pending
     this.pendingToolUses.delete(toolUseId);
+  }
+
+  /**
+   * Remove old completed/failed tasks when exceeding the limit
+   * Keeps running tasks and the most recent completed tasks
+   */
+  private cleanupCompletedTasks(): void {
+    const completedTasks: BackgroundTask[] = [];
+
+    // Collect all completed/failed tasks
+    for (const task of this.tasks.values()) {
+      if (task.status === 'completed' || task.status === 'failed') {
+        completedTasks.push(task);
+      }
+    }
+
+    // If under limit, no cleanup needed
+    if (completedTasks.length <= MAX_COMPLETED_TASKS) {
+      return;
+    }
+
+    // Sort by end time (oldest first)
+    completedTasks.sort((a, b) => (a.endTime || 0) - (b.endTime || 0));
+
+    // Remove oldest tasks beyond the limit
+    const toRemove = completedTasks.slice(0, completedTasks.length - MAX_COMPLETED_TASKS);
+    for (const task of toRemove) {
+      // Remove from parent's children list if applicable
+      if (task.parentId) {
+        const parent = this.tasks.get(task.parentId);
+        if (parent) {
+          const childIndex = parent.children.indexOf(task.id);
+          if (childIndex !== -1) {
+            parent.children.splice(childIndex, 1);
+          }
+        }
+      }
+      this.tasks.delete(task.id);
+    }
   }
 
   private createTaskFromTerminal(agentType: string, context: string): void {

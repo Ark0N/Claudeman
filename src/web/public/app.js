@@ -1,4 +1,7 @@
 // Claudeman App - Tab-based Terminal UI
+// Default terminal scrollback (can be changed via settings)
+const DEFAULT_SCROLLBACK = 5000;
+
 class ClaudemanApp {
   constructor() {
     this.sessions = new Map();
@@ -20,6 +23,12 @@ class ClaudemanApp {
     this.pendingWrites = '';
     this.writeFrameScheduled = false;
 
+    // Render debouncing
+    this.renderSessionTabsTimeout = null;
+
+    // System stats polling
+    this.systemStatsInterval = null;
+
     this.init();
   }
 
@@ -32,9 +41,14 @@ class ClaudemanApp {
     this.setupEventListeners();
     // Show monitor panel by default
     this.toggleMonitorPanel();
+    // Start system stats polling
+    this.startSystemStatsPolling();
   }
 
   initTerminal() {
+    // Load scrollback setting from localStorage (default 5000)
+    const scrollback = parseInt(localStorage.getItem('claudeman-scrollback')) || DEFAULT_SCROLLBACK;
+
     this.terminal = new Terminal({
       theme: {
         background: '#0d0d0d',
@@ -64,7 +78,7 @@ class ClaudemanApp {
       lineHeight: 1.2,
       cursorBlink: true,
       cursorStyle: 'block',
-      scrollback: 10000,
+      scrollback: scrollback,
       allowTransparency: true,
     });
 
@@ -479,6 +493,16 @@ class ClaudemanApp {
   // ========== Session Tabs ==========
 
   renderSessionTabs() {
+    // Debounce renders at 100ms to prevent excessive DOM updates
+    if (this.renderSessionTabsTimeout) {
+      clearTimeout(this.renderSessionTabsTimeout);
+    }
+    this.renderSessionTabsTimeout = setTimeout(() => {
+      this._renderSessionTabsImmediate();
+    }, 100);
+  }
+
+  _renderSessionTabsImmediate() {
     const container = document.getElementById('sessionTabs');
 
     // Build tabs HTML
@@ -528,9 +552,17 @@ class ClaudemanApp {
     try {
       const res = await fetch(`/api/sessions/${sessionId}/terminal`);
       const data = await res.json();
-      this.terminal.clear();
+      this.terminal.reset();
       if (data.terminalBuffer) {
-        this.terminal.write(data.terminalBuffer);
+        // Strip leading ANSI escape sequences and whitespace to prevent gaps
+        // This handles:
+        // - CSI sequences: ESC [ (params) (final) - includes ? for private modes
+        // - OSC sequences: ESC ] ... BEL or ESC \
+        // - Simple sequences: ESC followed by single char
+        // - Whitespace, CR, LF
+        let cleanBuffer = data.terminalBuffer;
+        cleanBuffer = cleanBuffer.replace(/^(\x1b\[[0-9;?]*[A-Za-z@`]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\x1b[DEMNOP78>=c]|\s|\r|\n)*/g, '');
+        this.terminal.write(cleanBuffer);
       }
 
       // Send resize
@@ -1581,6 +1613,54 @@ class ClaudemanApp {
       toast.classList.remove('show');
       setTimeout(() => toast.remove(), 200);
     }, 3000);
+  }
+
+  // ========== System Stats ==========
+
+  startSystemStatsPolling() {
+    // Initial fetch
+    this.fetchSystemStats();
+
+    // Poll every 2 seconds
+    this.systemStatsInterval = setInterval(() => {
+      this.fetchSystemStats();
+    }, 2000);
+  }
+
+  async fetchSystemStats() {
+    try {
+      const res = await fetch('/api/system/stats');
+      const stats = await res.json();
+      this.updateSystemStatsDisplay(stats);
+    } catch (err) {
+      // Silently fail - system stats are not critical
+    }
+  }
+
+  updateSystemStatsDisplay(stats) {
+    const cpuEl = document.getElementById('statCpu');
+    const memEl = document.getElementById('statMem');
+
+    if (cpuEl) {
+      cpuEl.textContent = `CPU: ${stats.cpu}%`;
+      // Color based on usage
+      if (stats.cpu > 80) {
+        cpuEl.classList.add('high');
+      } else {
+        cpuEl.classList.remove('high');
+      }
+    }
+
+    if (memEl) {
+      const memGB = (stats.memory.usedMB / 1024).toFixed(1);
+      memEl.textContent = `Mem: ${memGB}GB`;
+      // Color based on usage
+      if (stats.memory.percent > 80) {
+        memEl.classList.add('high');
+      } else {
+        memEl.classList.remove('high');
+      }
+    }
   }
 
   // ========== Utility ==========

@@ -1,6 +1,11 @@
 import { EventEmitter } from 'node:events';
 import { Session } from './session.js';
 
+// Maximum terminal buffer size for respawn controller (1MB)
+const MAX_RESPAWN_BUFFER_SIZE = 1024 * 1024;
+// Keep this much when trimming (512KB)
+const RESPAWN_BUFFER_TRIM_SIZE = 512 * 1024;
+
 /**
  * Respawn sequence states
  *
@@ -182,9 +187,9 @@ export class RespawnController extends EventEmitter {
   private handleTerminalData(data: string): void {
     this.terminalBuffer += data;
 
-    // Keep buffer manageable (last 10KB)
-    if (this.terminalBuffer.length > 10240) {
-      this.terminalBuffer = this.terminalBuffer.slice(-5120);
+    // Keep buffer manageable (max 1MB, trim to 512KB)
+    if (this.terminalBuffer.length > MAX_RESPAWN_BUFFER_SIZE) {
+      this.terminalBuffer = this.terminalBuffer.slice(-RESPAWN_BUFFER_TRIM_SIZE);
     }
 
     // Filter out noise - only count meaningful data as activity

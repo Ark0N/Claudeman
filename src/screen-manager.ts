@@ -228,16 +228,19 @@ export class ScreenManager extends EventEmitter {
     }
   }
 
-  // Get all screens with stats
+  // Get all screens with stats (parallel for better performance)
   async getScreensWithStats(): Promise<ScreenSessionWithStats[]> {
-    const result: ScreenSessionWithStats[] = [];
+    const screens = Array.from(this.screens.values());
 
-    for (const screen of this.screens.values()) {
-      const stats = await this.getProcessStats(screen.sessionId);
-      result.push({ ...screen, stats: stats || undefined });
-    }
+    // Fetch all stats in parallel
+    const statsPromises = screens.map(screen => this.getProcessStats(screen.sessionId));
+    const allStats = await Promise.all(statsPromises);
 
-    return result;
+    // Combine screens with their stats
+    return screens.map((screen, i) => ({
+      ...screen,
+      stats: allStats[i] || undefined
+    }));
   }
 
   // Start periodic stats collection

@@ -17,6 +17,10 @@ const MAX_TEXT_OUTPUT_SIZE = 2 * 1024 * 1024;
 const TEXT_OUTPUT_TRIM_SIZE = 1.5 * 1024 * 1024;
 // Maximum number of Claude messages to keep in memory
 const MAX_MESSAGES = 1000;
+// Maximum line buffer size (64KB) - prevents unbounded growth for long lines
+const MAX_LINE_BUFFER_SIZE = 64 * 1024;
+// Line buffer flush interval (100ms) - forces processing of partial lines
+const LINE_BUFFER_FLUSH_INTERVAL = 100;
 
 // Filter out terminal focus escape sequences (focus in/out reports)
 // ^[[I (focus in), ^[[O (focus out), and the enable/disable sequences
@@ -77,6 +81,7 @@ export class Session extends EventEmitter {
   private _totalCost: number = 0;
   private _messages: ClaudeMessage[] = [];
   private _lineBuffer: string = '';
+  private _lineBufferFlushTimer: NodeJS.Timeout | null = null;
   private resolvePromise: ((value: { result: string; cost: number }) => void) | null = null;
   private rejectPromise: ((reason: Error) => void) | null = null;
   private _isWorking: boolean = false;
@@ -605,8 +610,34 @@ export class Session extends EventEmitter {
   private processOutput(data: string): void {
     // Try to extract JSON from output (Claude may output JSON in stream mode)
     this._lineBuffer += data;
+
+    // Prevent unbounded line buffer growth for very long lines
+    if (this._lineBuffer.length > MAX_LINE_BUFFER_SIZE) {
+      // Force flush the oversized buffer as text output
+      this._textOutput += this._lineBuffer + '\n';
+      this._lineBuffer = '';
+    }
+
+    // Start flush timer if not running (handles partial lines after 100ms)
+    if (!this._lineBufferFlushTimer && this._lineBuffer.length > 0) {
+      this._lineBufferFlushTimer = setTimeout(() => {
+        this._lineBufferFlushTimer = null;
+        if (this._lineBuffer.length > 0) {
+          // Flush partial line as text output
+          this._textOutput += this._lineBuffer;
+          this._lineBuffer = '';
+        }
+      }, LINE_BUFFER_FLUSH_INTERVAL);
+    }
+
     const lines = this._lineBuffer.split('\n');
     this._lineBuffer = lines.pop() || '';
+
+    // Clear flush timer if buffer is now empty
+    if (this._lineBuffer.length === 0 && this._lineBufferFlushTimer) {
+      clearTimeout(this._lineBufferFlushTimer);
+      this._lineBufferFlushTimer = null;
+    }
 
     for (const line of lines) {
       const trimmed = line.trim();
@@ -769,6 +800,12 @@ export class Session extends EventEmitter {
     if (this.activityTimeout) {
       clearTimeout(this.activityTimeout);
       this.activityTimeout = null;
+    }
+
+    // Clear line buffer flush timer
+    if (this._lineBufferFlushTimer) {
+      clearTimeout(this._lineBufferFlushTimer);
+      this._lineBufferFlushTimer = null;
     }
 
     if (this.ptyProcess) {

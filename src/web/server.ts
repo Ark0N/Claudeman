@@ -3,7 +3,7 @@ import fastifyStatic from '@fastify/static';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, totalmem, freemem, loadavg, cpus } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { Session, ClaudeMessage, type BackgroundTask } from '../session.js';
 import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
@@ -44,6 +44,14 @@ interface ScheduledRun {
 
 // Batch terminal data for performance - collect for 16ms (60fps) before sending
 const TERMINAL_BATCH_INTERVAL = 16;
+// Batch session:output events for 50ms
+const OUTPUT_BATCH_INTERVAL = 50;
+// Batch task:updated events for 100ms
+const TASK_UPDATE_BATCH_INTERVAL = 100;
+// Scheduled runs cleanup interval (check every 5 minutes)
+const SCHEDULED_CLEANUP_INTERVAL = 5 * 60 * 1000;
+// Completed scheduled runs max age (1 hour)
+const SCHEDULED_RUN_MAX_AGE = 60 * 60 * 1000;
 
 export class WebServer extends EventEmitter {
   private app: FastifyInstance;
@@ -58,6 +66,13 @@ export class WebServer extends EventEmitter {
   // Terminal batching for performance
   private terminalBatches: Map<string, string> = new Map();
   private terminalBatchTimer: NodeJS.Timeout | null = null;
+  // Scheduled runs cleanup timer
+  private scheduledCleanupTimer: NodeJS.Timeout | null = null;
+  // SSE event batching
+  private outputBatches: Map<string, string> = new Map();
+  private outputBatchTimer: NodeJS.Timeout | null = null;
+  private taskUpdateBatches: Map<string, BackgroundTask> = new Map();
+  private taskUpdateBatchTimer: NodeJS.Timeout | null = null;
 
   constructor(port: number = 3000) {
     super();
@@ -751,11 +766,46 @@ export class WebServer extends EventEmitter {
       this.screenManager.stopStatsCollection();
       return { success: true };
     });
+
+    // System stats endpoint for frontend header display
+    this.app.get('/api/system/stats', async () => {
+      return this.getSystemStats();
+    });
+  }
+
+  // Get system CPU and memory usage
+  private getSystemStats(): { cpu: number; memory: { usedMB: number; totalMB: number; percent: number } } {
+    try {
+      // Memory stats
+      const totalMem = totalmem();
+      const freeMem = freemem();
+      const usedMem = totalMem - freeMem;
+
+      // CPU load average (1 min) as percentage (rough approximation)
+      const load = loadavg()[0];
+      const cpuCount = cpus().length;
+      const cpuPercent = Math.min(100, Math.round((load / cpuCount) * 100));
+
+      return {
+        cpu: cpuPercent,
+        memory: {
+          usedMB: Math.round(usedMem / (1024 * 1024)),
+          totalMB: Math.round(totalMem / (1024 * 1024)),
+          percent: Math.round((usedMem / totalMem) * 100)
+        }
+      };
+    } catch {
+      return {
+        cpu: 0,
+        memory: { usedMB: 0, totalMB: 0, percent: 0 }
+      };
+    }
   }
 
   private setupSessionListeners(session: Session): void {
     session.on('output', (data) => {
-      this.broadcast('session:output', { id: session.id, data });
+      // Use batching for better performance at high throughput
+      this.batchOutputData(session.id, data);
     });
 
     session.on('terminal', (data) => {
@@ -804,7 +854,8 @@ export class WebServer extends EventEmitter {
     });
 
     session.on('taskUpdated', (task: BackgroundTask) => {
-      this.broadcast('task:updated', { sessionId: session.id, task });
+      // Use batching for better performance at high update rates
+      this.batchTaskUpdate(session.id, task);
     });
 
     session.on('taskCompleted', (task: BackgroundTask) => {
@@ -929,9 +980,10 @@ export class WebServer extends EventEmitter {
     };
 
     while (Date.now() < run.endAt && run.status === 'running') {
+      let session: Session | null = null;
       try {
         // Create a session for this iteration
-        const session = new Session({ workingDir: run.workingDir });
+        session = new Session({ workingDir: run.workingDir });
         this.sessions.set(session.id, session);
         this.setupSessionListeners(session);
         run.sessionId = session.id;
@@ -950,11 +1002,30 @@ export class WebServer extends EventEmitter {
         addLog(`Task completed. Cost: $${result.cost.toFixed(4)}. Total tasks: ${run.completedTasks}`);
         this.broadcast('scheduled:updated', run);
 
+        // Clean up the session after iteration to prevent memory leaks
+        await session.stop();
+        this.sessions.delete(session.id);
+        this.terminalBatches.delete(session.id);
+        run.sessionId = null;
+
         // Small pause between iterations
         await new Promise(r => setTimeout(r, 2000));
       } catch (err) {
         addLog(`Error: ${(err as Error).message}`);
         this.broadcast('scheduled:updated', run);
+
+        // Clean up the session on error too
+        if (session) {
+          try {
+            await session.stop();
+            this.sessions.delete(session.id);
+            this.terminalBatches.delete(session.id);
+          } catch {
+            // Ignore cleanup errors
+          }
+          run.sessionId = null;
+        }
+
         // Continue despite errors
         await new Promise(r => setTimeout(r, 5000));
       }
@@ -987,6 +1058,31 @@ export class WebServer extends EventEmitter {
 
   private getSessionsState() {
     return Array.from(this.sessions.values()).map(s => s.toDetailedState());
+  }
+
+  // Clean up old completed scheduled runs
+  private cleanupScheduledRuns(): void {
+    const now = Date.now();
+    const toDelete: string[] = [];
+
+    for (const [id, run] of this.scheduledRuns) {
+      // Only clean up completed, failed, or stopped runs
+      if (run.status !== 'running') {
+        const age = now - (run.endAt || run.startedAt);
+        if (age > SCHEDULED_RUN_MAX_AGE) {
+          toDelete.push(id);
+        }
+      }
+    }
+
+    for (const id of toDelete) {
+      this.scheduledRuns.delete(id);
+      this.broadcast('scheduled:deleted', { id });
+    }
+
+    if (toDelete.length > 0) {
+      console.log(`[Server] Cleaned up ${toDelete.length} old scheduled run(s)`);
+    }
   }
 
   private getFullState() {
@@ -1041,10 +1137,56 @@ export class WebServer extends EventEmitter {
     this.terminalBatches.clear();
   }
 
+  // Batch session:output events at 50ms for better performance
+  private batchOutputData(sessionId: string, data: string): void {
+    const existing = this.outputBatches.get(sessionId) || '';
+    this.outputBatches.set(sessionId, existing + data);
+
+    if (!this.outputBatchTimer) {
+      this.outputBatchTimer = setTimeout(() => {
+        this.flushOutputBatches();
+        this.outputBatchTimer = null;
+      }, OUTPUT_BATCH_INTERVAL);
+    }
+  }
+
+  private flushOutputBatches(): void {
+    for (const [sessionId, data] of this.outputBatches) {
+      if (data.length > 0) {
+        this.broadcast('session:output', { id: sessionId, data });
+      }
+    }
+    this.outputBatches.clear();
+  }
+
+  // Batch task:updated events at 100ms - only send latest update per session
+  private batchTaskUpdate(sessionId: string, task: BackgroundTask): void {
+    this.taskUpdateBatches.set(sessionId, task);
+
+    if (!this.taskUpdateBatchTimer) {
+      this.taskUpdateBatchTimer = setTimeout(() => {
+        this.flushTaskUpdateBatches();
+        this.taskUpdateBatchTimer = null;
+      }, TASK_UPDATE_BATCH_INTERVAL);
+    }
+  }
+
+  private flushTaskUpdateBatches(): void {
+    for (const [sessionId, task] of this.taskUpdateBatches) {
+      this.broadcast('task:updated', { sessionId, task });
+    }
+    this.taskUpdateBatches.clear();
+  }
+
   async start(): Promise<void> {
     await this.setupRoutes();
     await this.app.listen({ port: this.port, host: '0.0.0.0' });
     console.log(`Claudeman web interface running at http://localhost:${this.port}`);
+
+    // Start scheduled runs cleanup timer
+    this.scheduledCleanupTimer = setInterval(() => {
+      this.cleanupScheduledRuns();
+    }, SCHEDULED_CLEANUP_INTERVAL);
 
     // Restore screen sessions from previous run
     await this.restoreScreenSessions();
@@ -1093,12 +1235,30 @@ export class WebServer extends EventEmitter {
   }
 
   async stop(): Promise<void> {
-    // Clear batch timer
+    // Clear batch timers
     if (this.terminalBatchTimer) {
       clearTimeout(this.terminalBatchTimer);
       this.terminalBatchTimer = null;
     }
     this.terminalBatches.clear();
+
+    if (this.outputBatchTimer) {
+      clearTimeout(this.outputBatchTimer);
+      this.outputBatchTimer = null;
+    }
+    this.outputBatches.clear();
+
+    if (this.taskUpdateBatchTimer) {
+      clearTimeout(this.taskUpdateBatchTimer);
+      this.taskUpdateBatchTimer = null;
+    }
+    this.taskUpdateBatches.clear();
+
+    // Clear scheduled cleanup timer
+    if (this.scheduledCleanupTimer) {
+      clearInterval(this.scheduledCleanupTimer);
+      this.scheduledCleanupTimer = null;
+    }
 
     // Stop screen stats collection
     this.screenManager.stopStatsCollection();
