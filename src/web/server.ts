@@ -2,7 +2,7 @@ import Fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import fastifyStatic from '@fastify/static';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { Session, ClaudeMessage, type BackgroundTask } from '../session.js';
@@ -648,6 +648,36 @@ export class WebServer extends EventEmitter {
         };
       } catch (err) {
         return { success: false, error: (err as Error).message };
+      }
+    });
+
+    // ============ App Settings Endpoints ============
+    const settingsPath = join(homedir(), '.claudeman', 'settings.json');
+
+    this.app.get('/api/settings', async () => {
+      try {
+        if (existsSync(settingsPath)) {
+          const content = readFileSync(settingsPath, 'utf-8');
+          return JSON.parse(content);
+        }
+      } catch (err) {
+        console.error('Failed to read settings:', err);
+      }
+      return {};
+    });
+
+    this.app.put('/api/settings', async (req) => {
+      const settings = req.body as { defaultClaudeMdPath?: string; defaultWorkingDir?: string };
+
+      try {
+        const dir = dirname(settingsPath);
+        if (!existsSync(dir)) {
+          mkdirSync(dir, { recursive: true });
+        }
+        writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+        return { success: true };
+      } catch (err) {
+        return { error: (err as Error).message };
       }
     });
   }

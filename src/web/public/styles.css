@@ -187,6 +187,27 @@ body {
   font-family: 'SF Mono', Monaco, monospace;
 }
 
+.btn-icon-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 1rem;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+
+.btn-icon-header:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+  transform: rotate(45deg);
+}
+
 /* Session tab gear icon */
 .session-tab .tab-gear {
   opacity: 0;

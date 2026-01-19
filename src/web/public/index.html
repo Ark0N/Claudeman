@@ -33,6 +33,7 @@
           <span class="status-text">Connecting</span>
         </div>
         <div class="header-tokens" id="headerTokens" title="Total tokens across all sessions">0 tokens</div>
+        <button class="btn-icon-header" onclick="app.openAppSettings()" title="App Settings">&#x2699;</button>
       </div>
     </header>
 
@@ -268,6 +269,33 @@
         <div class="form-actions">
           <button class="btn-toolbar" onclick="app.closeSessionOptions()">Cancel</button>
           <button class="btn-toolbar btn-primary" onclick="app.saveSessionOptions()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- App Settings Modal -->
+    <div class="modal" id="appSettingsModal">
+      <div class="modal-backdrop" onclick="app.closeAppSettings()"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>App Settings</h3>
+          <button class="modal-close" onclick="app.closeAppSettings()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-row">
+            <label>Default CLAUDE.md Template Path</label>
+            <input type="text" id="appSettingsClaudeMdPath" placeholder="/path/to/CLAUDE.md template">
+            <span class="form-hint">Used when creating new cases. Leave empty for built-in template.</span>
+          </div>
+          <div class="form-row">
+            <label>Default Working Directory</label>
+            <input type="text" id="appSettingsDefaultDir" placeholder="~/projects">
+            <span class="form-hint">Default directory for new sessions.</span>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn-toolbar" onclick="app.closeAppSettings()">Cancel</button>
+          <button class="btn-toolbar btn-primary" onclick="app.saveAppSettings()">Save</button>
         </div>
       </div>
     </div>

@@ -477,7 +477,7 @@ class ClaudemanApp {
       `;
     }
 
-    // Add the "+" button
+    // Add the "+" button at the end of session tabs
     html += `
       <div class="session-tab new-tab" onclick="app.createNewSession()" title="New Session (Ctrl+N)">
         <span>+</span>
@@ -1298,6 +1298,74 @@ class ClaudemanApp {
     });
   }
 
+  // ========== App Settings Modal ==========
+
+  openAppSettings() {
+    // Load current settings
+    const settings = this.loadAppSettingsFromStorage();
+    document.getElementById('appSettingsClaudeMdPath').value = settings.defaultClaudeMdPath || '';
+    document.getElementById('appSettingsDefaultDir').value = settings.defaultWorkingDir || '';
+    document.getElementById('appSettingsModal').classList.add('active');
+  }
+
+  closeAppSettings() {
+    document.getElementById('appSettingsModal').classList.remove('active');
+  }
+
+  async saveAppSettings() {
+    const settings = {
+      defaultClaudeMdPath: document.getElementById('appSettingsClaudeMdPath').value.trim(),
+      defaultWorkingDir: document.getElementById('appSettingsDefaultDir').value.trim(),
+    };
+
+    // Save to localStorage
+    localStorage.setItem('claudeman-app-settings', JSON.stringify(settings));
+
+    // Also save to server
+    try {
+      await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings)
+      });
+      this.showToast('Settings saved', 'success');
+    } catch (err) {
+      // Server save failed but localStorage succeeded
+      this.showToast('Settings saved locally', 'warning');
+    }
+
+    this.closeAppSettings();
+  }
+
+  loadAppSettingsFromStorage() {
+    try {
+      const saved = localStorage.getItem('claudeman-app-settings');
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (err) {
+      console.error('Failed to load app settings:', err);
+    }
+    return {};
+  }
+
+  async loadAppSettingsFromServer() {
+    try {
+      const res = await fetch('/api/settings');
+      if (res.ok) {
+        const settings = await res.json();
+        // Merge with localStorage (server takes precedence)
+        const localSettings = this.loadAppSettingsFromStorage();
+        const merged = { ...localSettings, ...settings };
+        localStorage.setItem('claudeman-app-settings', JSON.stringify(merged));
+        return merged;
+      }
+    } catch (err) {
+      console.error('Failed to load settings from server:', err);
+    }
+    return this.loadAppSettingsFromStorage();
+  }
+
   // ========== Help Modal ==========
 
   showHelp() {
@@ -1310,6 +1378,7 @@ class ClaudemanApp {
 
   closeAllPanels() {
     this.closeSessionOptions();
+    this.closeAppSettings();
     document.getElementById('respawnPanel').classList.remove('open');
     document.getElementById('newSessionPanel').classList.remove('open');
     document.getElementById('taskPanel').classList.remove('open');
