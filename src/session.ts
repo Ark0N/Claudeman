@@ -129,6 +129,7 @@ export class Session extends EventEmitter {
     name?: string;
     screenManager?: ScreenManager;
     useScreen?: boolean;
+    screenSession?: ScreenSession;  // For restored sessions - pass the existing screen
   }) {
     super();
     this.id = config.id || uuidv4();
@@ -139,6 +140,7 @@ export class Session extends EventEmitter {
     this._lastActivityAt = this.createdAt;
     this._screenManager = config.screenManager || null;
     this._useScreen = config.useScreen ?? (this._screenManager !== null && ScreenManager.isScreenAvailable());
+    this._screenSession = config.screenSession || null;  // Use existing screen if provided
 
     // Initialize task tracker and forward events
     this._taskTracker = new TaskTracker();
@@ -379,14 +381,21 @@ export class Session extends EventEmitter {
 
     console.log('[Session] Starting interactive Claude session' + (this._useScreen ? ' (with screen)' : ''));
 
-    // If screen wrapping is enabled, create a screen session first
+    // If screen wrapping is enabled, create or attach to a screen session
     if (this._useScreen && this._screenManager) {
       try {
-        this._screenSession = await this._screenManager.createScreen(this.id, this.workingDir, 'claude', this._name);
-        console.log('[Session] Created screen session:', this._screenSession.screenName);
+        // Check if we already have a screen session (restored session)
+        const isRestoredSession = this._screenSession !== null;
+        if (isRestoredSession) {
+          console.log('[Session] Attaching to existing screen session:', this._screenSession.screenName);
+        } else {
+          // Create a new screen session
+          this._screenSession = await this._screenManager.createScreen(this.id, this.workingDir, 'claude', this._name);
+          console.log('[Session] Created screen session:', this._screenSession.screenName);
 
-        // Wait a moment for screen to fully start
-        await new Promise(resolve => setTimeout(resolve, 300));
+          // Wait a moment for screen to fully start
+          await new Promise(resolve => setTimeout(resolve, 300));
+        }
 
         // Attach to the screen session via PTY
         this.ptyProcess = pty.spawn('screen', [
@@ -399,12 +408,14 @@ export class Session extends EventEmitter {
           env: { ...process.env, TERM: 'xterm-256color' },
         });
 
-        // Screen creates blank space when initializing. After attaching, wait for
-        // the initial burst then clear the buffer and tell clients to clear their terminal.
-        setTimeout(() => {
-          this._terminalBuffer = '';
-          this.emit('clearTerminal');
-        }, 100);
+        // For NEW screens: clear buffer after initial burst (screen initialization noise)
+        // For RESTORED screens: don't clear - we want to see the existing output
+        if (!isRestoredSession) {
+          setTimeout(() => {
+            this._terminalBuffer = '';
+            this.emit('clearTerminal');
+          }, 100);
+        }
       } catch (err) {
         console.error('[Session] Failed to create screen session, falling back to direct PTY:', err);
         this._useScreen = false;
@@ -510,14 +521,21 @@ export class Session extends EventEmitter {
     const shell = process.env.SHELL || '/bin/bash';
     console.log('[Session] Starting shell session with:', shell + (this._useScreen ? ' (with screen)' : ''));
 
-    // If screen wrapping is enabled, create a screen session first
+    // If screen wrapping is enabled, create or attach to a screen session
     if (this._useScreen && this._screenManager) {
       try {
-        this._screenSession = await this._screenManager.createScreen(this.id, this.workingDir, 'shell', this._name);
-        console.log('[Session] Created screen session:', this._screenSession.screenName);
+        // Check if we already have a screen session (restored session)
+        const isRestoredSession = this._screenSession !== null;
+        if (isRestoredSession) {
+          console.log('[Session] Attaching to existing screen session:', this._screenSession.screenName);
+        } else {
+          // Create a new screen session
+          this._screenSession = await this._screenManager.createScreen(this.id, this.workingDir, 'shell', this._name);
+          console.log('[Session] Created screen session:', this._screenSession.screenName);
 
-        // Wait a moment for screen to fully start
-        await new Promise(resolve => setTimeout(resolve, 300));
+          // Wait a moment for screen to fully start
+          await new Promise(resolve => setTimeout(resolve, 300));
+        }
 
         // Attach to the screen session via PTY
         this.ptyProcess = pty.spawn('screen', [
@@ -530,14 +548,16 @@ export class Session extends EventEmitter {
           env: { ...process.env, TERM: 'xterm-256color' },
         });
 
-        // Screen creates blank space when initializing. After attaching, wait for
-        // the initial burst then clear by sending 'clear' command to the shell.
-        setTimeout(() => {
-          if (this.ptyProcess) {
-            this._terminalBuffer = '';
-            this.ptyProcess.write('clear\n');
-          }
-        }, 100);
+        // For NEW screens: clear by sending 'clear' command to the shell
+        // For RESTORED screens: don't clear - we want to see the existing output
+        if (!isRestoredSession) {
+          setTimeout(() => {
+            if (this.ptyProcess) {
+              this._terminalBuffer = '';
+              this.ptyProcess.write('clear\n');
+            }
+          }, 100);
+        }
       } catch (err) {
         console.error('[Session] Failed to create screen session, falling back to direct PTY:', err);
         this._useScreen = false;

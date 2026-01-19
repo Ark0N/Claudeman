@@ -1393,14 +1393,15 @@ export class WebServer extends EventEmitter {
         const screens = this.screenManager.getScreens();
         for (const screen of screens) {
           if (!this.sessions.has(screen.sessionId)) {
-            // Create a session object for this screen
+            // Create a session object for this screen with the existing screenSession
             const session = new Session({
               id: screen.sessionId,  // Preserve the original session ID
               workingDir: screen.workingDir,
               mode: screen.mode,
               name: screen.name || screen.screenName,
               screenManager: this.screenManager,
-              useScreen: true
+              useScreen: true,
+              screenSession: screen  // Pass the existing screen so startInteractive() can attach to it
             });
 
             this.sessions.set(session.id, session);

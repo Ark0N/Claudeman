@@ -633,6 +633,19 @@ class ClaudemanApp {
     this.activeSessionId = sessionId;
     this.renderSessionTabs();
 
+    // Check if this is a restored session that needs to be attached
+    const session = this.sessions.get(sessionId);
+    if (session && session.pid === null && session.status === 'idle') {
+      // This is a restored session - attach to the existing screen
+      try {
+        await fetch(`/api/sessions/${sessionId}/interactive`, { method: 'POST' });
+        // Update local session state
+        session.status = 'busy';
+      } catch (err) {
+        console.error('Failed to attach to restored session:', err);
+      }
+    }
+
     // Load terminal buffer for this session
     try {
       const res = await fetch(`/api/sessions/${sessionId}/terminal`);
