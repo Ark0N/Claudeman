@@ -498,6 +498,18 @@ class ClaudemanApp {
 
     this.eventSource.addEventListener('session:innerCompletionDetected', (e) => {
       const data = JSON.parse(e.data);
+      // Prevent duplicate notifications for the same completion
+      const completionKey = `${data.sessionId}:${data.phrase}`;
+      if (this._shownCompletions?.has(completionKey)) {
+        return;
+      }
+      if (!this._shownCompletions) {
+        this._shownCompletions = new Set();
+      }
+      this._shownCompletions.add(completionKey);
+      // Clear after 30 seconds to allow re-notification if loop restarts
+      setTimeout(() => this._shownCompletions?.delete(completionKey), 30000);
+
       this.showToast(`Loop completed: ${data.phrase}`, 'success');
       // Update inner state to mark loop as inactive
       const existing = this.innerStates.get(data.sessionId) || {};
