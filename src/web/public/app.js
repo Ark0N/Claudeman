@@ -1470,6 +1470,92 @@ class ClaudemanApp {
     this.toggleMonitorPanel();
   }
 
+  // ========== Monitor Panel Detach & Drag ==========
+
+  toggleMonitorDetach() {
+    const panel = document.getElementById('monitorPanel');
+    const detachBtn = document.getElementById('monitorDetachBtn');
+
+    if (panel.classList.contains('detached')) {
+      // Re-attach to bottom
+      panel.classList.remove('detached');
+      panel.style.top = '';
+      panel.style.left = '';
+      panel.style.width = '';
+      panel.style.height = '';
+      if (detachBtn) {
+        detachBtn.innerHTML = '&#x2197;'; // Detach icon
+        detachBtn.title = 'Detach panel';
+      }
+    } else {
+      // Detach as floating window
+      panel.classList.add('detached');
+      panel.classList.add('open'); // Ensure it's visible
+      if (detachBtn) {
+        detachBtn.innerHTML = '&#x2199;'; // Attach icon
+        detachBtn.title = 'Attach panel';
+      }
+      // Setup drag functionality
+      this.setupMonitorDrag();
+    }
+  }
+
+  setupMonitorDrag() {
+    const panel = document.getElementById('monitorPanel');
+    const header = document.getElementById('monitorPanelHeader');
+
+    if (!panel || !header) return;
+
+    let isDragging = false;
+    let startX, startY, startLeft, startTop;
+
+    const onMouseDown = (e) => {
+      // Only drag from header, not from buttons
+      if (e.target.closest('button')) return;
+      if (!panel.classList.contains('detached')) return;
+
+      isDragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      const rect = panel.getBoundingClientRect();
+      startLeft = rect.left;
+      startTop = rect.top;
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+      e.preventDefault();
+    };
+
+    const onMouseMove = (e) => {
+      if (!isDragging) return;
+
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+
+      let newLeft = startLeft + dx;
+      let newTop = startTop + dy;
+
+      // Keep within viewport bounds
+      const rect = panel.getBoundingClientRect();
+      newLeft = Math.max(0, Math.min(window.innerWidth - rect.width, newLeft));
+      newTop = Math.max(0, Math.min(window.innerHeight - rect.height, newTop));
+
+      panel.style.left = newLeft + 'px';
+      panel.style.top = newTop + 'px';
+    };
+
+    const onMouseUp = () => {
+      isDragging = false;
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+
+    // Remove existing listeners before adding new ones
+    header.removeEventListener('mousedown', header._dragHandler);
+    header._dragHandler = onMouseDown;
+    header.addEventListener('mousedown', onMouseDown);
+  }
+
   renderTaskPanel() {
     const session = this.sessions.get(this.activeSessionId);
     const body = document.getElementById('backgroundTasksBody');
@@ -1561,32 +1647,103 @@ class ClaudemanApp {
     }
   }
 
-  async killAllSessions() {
+  killAllSessions() {
     const count = this.screenSessions?.length || 0;
     if (count === 0) {
       alert('No sessions to kill');
       return;
     }
 
-    const confirmed = confirm(`Kill all ${count} session(s)? This cannot be undone.`);
-    if (!confirmed) return;
+    // Show the kill all modal
+    document.getElementById('killAllCount').textContent = count;
+    document.getElementById('killAllModal').classList.add('active');
+  }
+
+  closeKillAllModal() {
+    document.getElementById('killAllModal').classList.remove('active');
+  }
+
+  async confirmKillAll(killScreens) {
+    this.closeKillAllModal();
 
     try {
-      const res = await fetch('/api/sessions', { method: 'DELETE' });
-      const data = await res.json();
-      if (data.success) {
-        // Clear local state
+      if (killScreens) {
+        // Kill everything including screens
+        const res = await fetch('/api/sessions', { method: 'DELETE' });
+        const data = await res.json();
+        if (data.success) {
+          this.sessions.clear();
+          this.screenSessions = [];
+          this.activeSessionId = null;
+          this.renderSessionTabs();
+          this.renderScreenSessions();
+          this.terminal.clear();
+          this.terminal.reset();
+          this.toast('All sessions and screens killed', 'success');
+        }
+      } else {
+        // Just remove tabs, keep screens running
         this.sessions.clear();
-        this.screenSessions = [];
         this.activeSessionId = null;
         this.renderSessionTabs();
-        this.renderScreenSessions();
         this.terminal.clear();
         this.terminal.reset();
+        this.toast('All tabs removed, screens still running', 'info');
       }
     } catch (err) {
-      console.error('Failed to kill all sessions:', err);
-      alert('Failed to kill sessions: ' + err.message);
+      console.error('Failed to kill sessions:', err);
+      this.toast('Failed to kill sessions: ' + err.message, 'error');
+    }
+  }
+
+  // ========== Create Case Modal ==========
+
+  showCreateCaseModal() {
+    document.getElementById('newCaseName').value = '';
+    document.getElementById('newCaseDescription').value = '';
+    document.getElementById('createCaseModal').classList.add('active');
+    document.getElementById('newCaseName').focus();
+  }
+
+  closeCreateCaseModal() {
+    document.getElementById('createCaseModal').classList.remove('active');
+  }
+
+  async createCase() {
+    const name = document.getElementById('newCaseName').value.trim();
+    const description = document.getElementById('newCaseDescription').value.trim();
+
+    if (!name) {
+      this.toast('Please enter a case name', 'error');
+      return;
+    }
+
+    if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+      this.toast('Invalid name. Use only letters, numbers, hyphens, underscores.', 'error');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/cases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, description })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        this.closeCreateCaseModal();
+        this.toast(`Case "${name}" created`, 'success');
+        // Reload cases and select the new one
+        await this.loadQuickStartCases();
+        document.getElementById('quickStartCase').value = name;
+        this.updateDirDisplayForCase(name);
+      } else {
+        this.toast(data.error || 'Failed to create case', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to create case:', err);
+      this.toast('Failed to create case: ' + err.message, 'error');
     }
   }
 
@@ -1701,26 +1858,38 @@ class ClaudemanApp {
 
   updateSystemStatsDisplay(stats) {
     const cpuEl = document.getElementById('statCpu');
+    const cpuBar = document.getElementById('statCpuBar');
     const memEl = document.getElementById('statMem');
+    const memBar = document.getElementById('statMemBar');
 
-    if (cpuEl) {
-      cpuEl.textContent = `CPU: ${stats.cpu}%`;
-      // Color based on usage
+    if (cpuEl && cpuBar) {
+      cpuEl.textContent = `${stats.cpu}%`;
+      cpuBar.style.width = `${Math.min(100, stats.cpu)}%`;
+
+      // Color classes based on usage
+      cpuBar.classList.remove('medium', 'high');
+      cpuEl.classList.remove('high');
       if (stats.cpu > 80) {
+        cpuBar.classList.add('high');
         cpuEl.classList.add('high');
-      } else {
-        cpuEl.classList.remove('high');
+      } else if (stats.cpu > 50) {
+        cpuBar.classList.add('medium');
       }
     }
 
-    if (memEl) {
+    if (memEl && memBar) {
       const memGB = (stats.memory.usedMB / 1024).toFixed(1);
-      memEl.textContent = `Mem: ${memGB}GB`;
-      // Color based on usage
+      memEl.textContent = `${memGB}G`;
+      memBar.style.width = `${Math.min(100, stats.memory.percent)}%`;
+
+      // Color classes based on usage
+      memBar.classList.remove('medium', 'high');
+      memEl.classList.remove('high');
       if (stats.memory.percent > 80) {
+        memBar.classList.add('high');
         memEl.classList.add('high');
-      } else {
-        memEl.classList.remove('high');
+      } else if (stats.memory.percent > 50) {
+        memBar.classList.add('medium');
       }
     }
   }

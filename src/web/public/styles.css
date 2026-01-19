@@ -190,7 +190,7 @@ body {
 .header-system-stats {
   display: flex;
   gap: 0.75rem;
-  font-size: 0.7rem;
+  font-size: 0.65rem;
   font-family: 'SF Mono', Monaco, monospace;
   color: var(--text-dim);
   padding: 0 0.5rem;
@@ -198,11 +198,64 @@ body {
   margin-left: 0.5rem;
 }
 
-.header-system-stats span {
-  white-space: nowrap;
+.stat-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
-.header-system-stats .high {
+.stat-label {
+  color: var(--text-muted);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  min-width: 24px;
+}
+
+.stat-bar {
+  width: 40px;
+  height: 6px;
+  background: var(--bg-input);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.stat-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease, background 0.3s ease;
+}
+
+.stat-bar-cpu {
+  background: linear-gradient(90deg, var(--green) 0%, var(--green) 100%);
+}
+
+.stat-bar-cpu.medium {
+  background: linear-gradient(90deg, var(--green) 0%, var(--yellow) 100%);
+}
+
+.stat-bar-cpu.high {
+  background: linear-gradient(90deg, var(--yellow) 0%, var(--red) 100%);
+}
+
+.stat-bar-mem {
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-hover) 100%);
+}
+
+.stat-bar-mem.medium {
+  background: linear-gradient(90deg, var(--accent) 0%, var(--yellow) 100%);
+}
+
+.stat-bar-mem.high {
+  background: linear-gradient(90deg, var(--yellow) 0%, var(--red) 100%);
+}
+
+.stat-value {
+  min-width: 32px;
+  text-align: right;
+  color: var(--text-dim);
+}
+
+.stat-value.high {
   color: var(--red);
   font-weight: 500;
 }
@@ -482,6 +535,47 @@ body {
   background: var(--accent-hover);
 }
 
+/* Claude Button - Special styling */
+.btn-toolbar.btn-claude {
+  background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+  border-color: #3b82f6;
+  color: white;
+  font-weight: 500;
+  padding: 0.4rem 0.85rem;
+}
+
+.btn-toolbar.btn-claude:hover {
+  background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 100%);
+  border-color: #60a5fa;
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.4);
+}
+
+.btn-toolbar.btn-claude .btn-icon {
+  font-size: 0.9rem;
+}
+
+/* Shell Button - Special styling */
+.btn-toolbar.btn-shell {
+  background: linear-gradient(135deg, #1a2e1a 0%, #234023 100%);
+  border-color: #2d5a2d;
+  color: #8fbc8f;
+  font-weight: 500;
+}
+
+.btn-toolbar.btn-shell:hover {
+  background: linear-gradient(135deg, #234023 0%, #2d5a2d 100%);
+  border-color: #3d7a3d;
+  box-shadow: 0 0 8px rgba(34, 139, 34, 0.4);
+  color: #a8d8a8;
+}
+
+/* Button icon styling */
+.btn-toolbar .btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .btn-toolbar.btn-success {
   background: var(--green);
   border-color: var(--green);
@@ -523,12 +617,17 @@ body {
   color: var(--text);
 }
 
+/* Case select group with + button */
+.case-select-group {
+  display: flex;
+  align-items: center;
+}
+
 .toolbar-select {
   padding: 0.4rem 1.5rem 0.4rem 0.5rem;
   background: var(--bg-input);
   border: 1px solid var(--border);
-  border-left: none;
-  border-radius: 0 4px 4px 0;
+  border-radius: 4px 0 0 4px;
   color: var(--text-dim);
   font-size: 0.75rem;
   cursor: pointer;
@@ -546,6 +645,29 @@ body {
 .toolbar-select:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+.btn-case-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-left: none;
+  border-radius: 0 4px 4px 0;
+  color: var(--green);
+  font-size: 1.1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-case-add:hover {
+  background: var(--green);
+  color: white;
+  border-color: var(--green);
 }
 
 .toolbar-input {
@@ -1528,6 +1650,39 @@ kbd {
   transform: translateY(0);
 }
 
+/* Detached floating state */
+.monitor-panel.detached {
+  bottom: auto;
+  right: auto;
+  top: 100px;
+  left: calc(50% - 300px);
+  width: 600px;
+  height: 500px;
+  max-height: none;
+  border-radius: 8px;
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  transform: none;
+  resize: both;
+  overflow: hidden;
+  min-width: 350px;
+  min-height: 250px;
+}
+
+.monitor-panel.detached .monitor-panel-header {
+  cursor: move;
+  background: linear-gradient(180deg, var(--bg-hover) 0%, var(--bg-card) 100%);
+  user-select: none;
+}
+
+.monitor-panel.detached .monitor-resize-handle {
+  display: block;
+}
+
+.monitor-panel.detached .monitor-section-body {
+  max-height: none;
+}
+
 .monitor-panel-header {
   display: flex;
   align-items: center;
@@ -1549,6 +1704,30 @@ kbd {
   flex: 1;
   overflow-y: auto;
   padding: 0;
+}
+
+/* Resize handle for detached panel */
+.monitor-resize-handle {
+  display: none;
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, var(--border-light) 50%);
+  border-radius: 0 0 8px 0;
+}
+
+.monitor-resize-handle::before {
+  content: '';
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--text-muted);
+  border-bottom: 2px solid var(--text-muted);
 }
 
 .monitor-section {

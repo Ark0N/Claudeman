@@ -36,8 +36,20 @@
         </div>
         <div class="header-tokens" id="headerTokens" title="Total tokens across all sessions">0 tokens</div>
         <div class="header-system-stats" id="headerSystemStats" title="System resource usage">
-          <span class="stat-cpu" id="statCpu">CPU: --</span>
-          <span class="stat-mem" id="statMem">Mem: --</span>
+          <div class="stat-item">
+            <span class="stat-label">CPU</span>
+            <div class="stat-bar">
+              <div class="stat-bar-fill stat-bar-cpu" id="statCpuBar"></div>
+            </div>
+            <span class="stat-value" id="statCpu">--%</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">MEM</span>
+            <div class="stat-bar">
+              <div class="stat-bar-fill stat-bar-mem" id="statMemBar"></div>
+            </div>
+            <span class="stat-value" id="statMem">--</span>
+          </div>
         </div>
         <button class="btn-icon-header" onclick="app.openAppSettings()" title="App Settings">&#x2699;</button>
       </div>
@@ -74,7 +86,7 @@
       <div class="toolbar-left">
         <!-- Run Claude -->
         <div class="toolbar-group">
-          <button class="btn-toolbar btn-primary" onclick="app.runClaude()" title="Run Claude (Ctrl+Enter)">
+          <button class="btn-toolbar btn-claude" onclick="app.runClaude()" title="Run Claude (Ctrl+Enter)">
             Run Claude
           </button>
           <div class="tab-count-group" title="Number of tabs to open (1-10)">
@@ -82,12 +94,15 @@
             <input type="number" id="tabCount" class="tab-count-input" value="1" min="1" max="10" readonly>
             <button class="tab-count-btn" onclick="app.incrementTabCount()">+</button>
           </div>
-          <button class="btn-toolbar" onclick="app.runShell()" title="Run Shell">
-            Shell
+          <button class="btn-toolbar btn-shell" onclick="app.runShell()" title="Run Shell">
+            Run Shell
           </button>
-          <select id="quickStartCase" class="toolbar-select" title="Select case">
-            <option value="testcase">testcase</option>
-          </select>
+          <div class="case-select-group">
+            <select id="quickStartCase" class="toolbar-select" title="Select case">
+              <option value="testcase">testcase</option>
+            </select>
+            <button class="btn-case-add" onclick="app.showCreateCaseModal()" title="Create new case">+</button>
+          </div>
         </div>
 
         <!-- Directory -->
@@ -117,7 +132,7 @@
             <div><kbd>Ctrl</kbd>+<kbd>Enter</kbd></div><div>Run Claude</div>
             <div><kbd>Ctrl</kbd>+<kbd>W</kbd></div><div>Close Session</div>
             <div><kbd>Ctrl</kbd>+<kbd>Tab</kbd></div><div>Next Session</div>
-            <div><kbd>Ctrl</kbd>+<kbd>K</kbd></div><div>Kill All Sessions</div>
+            <div><kbd>Ctrl</kbd>+<kbd>K</kbd></div><div>Kill All Sessions + Screens</div>
             <div><kbd>Ctrl</kbd>+<kbd>L</kbd></div><div>Clear Terminal</div>
             <div><kbd>Ctrl</kbd>+<kbd>+</kbd></div><div>Increase Font</div>
             <div><kbd>Ctrl</kbd>+<kbd>-</kbd></div><div>Decrease Font</div>
@@ -130,14 +145,16 @@
 
     <!-- Monitor Panel (combined Process Monitor + Background Tasks) -->
     <div class="monitor-panel" id="monitorPanel">
-      <div class="monitor-panel-header">
+      <div class="monitor-panel-header" id="monitorPanelHeader">
         <span>Monitor</span>
         <div class="monitor-panel-actions">
-          <button class="btn-icon-sm btn-danger-sm" onclick="app.killAllSessions()" title="Kill all sessions">&#x2715;</button>
+          <button class="btn-icon-sm btn-danger-sm" onclick="app.killAllSessions()" title="Kill all sessions and their screen processes">&#x2715;</button>
           <button class="btn-icon-sm" onclick="app.reconcileScreens()" title="Refresh screens">&#x21BB;</button>
+          <button class="btn-icon-sm" onclick="app.toggleMonitorDetach()" title="Detach/Attach panel" id="monitorDetachBtn">&#x2197;</button>
           <button class="btn-icon-sm" onclick="app.toggleMonitorPanel()" title="Toggle panel" id="monitorToggleBtn">&#x25BC;</button>
         </div>
       </div>
+      <div class="monitor-resize-handle" id="monitorResizeHandle"></div>
       <div class="monitor-panel-body">
         <div class="monitor-section">
           <div class="monitor-section-header">
@@ -308,6 +325,59 @@
         <div class="form-actions">
           <button class="btn-toolbar" onclick="app.closeAppSettings()">Cancel</button>
           <button class="btn-toolbar btn-primary" onclick="app.saveAppSettings()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Create Case Modal -->
+    <div class="modal" id="createCaseModal">
+      <div class="modal-backdrop" onclick="app.closeCreateCaseModal()"></div>
+      <div class="modal-content modal-sm">
+        <div class="modal-header">
+          <h3>Create New Case</h3>
+          <button class="modal-close" onclick="app.closeCreateCaseModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-row">
+            <label>Case Name</label>
+            <input type="text" id="newCaseName" placeholder="my-project" pattern="[a-zA-Z0-9_-]+">
+            <span class="form-hint">Letters, numbers, hyphens, underscores only</span>
+          </div>
+          <div class="form-row">
+            <label>Description (optional)</label>
+            <input type="text" id="newCaseDescription" placeholder="A brief description...">
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn-toolbar" onclick="app.closeCreateCaseModal()">Cancel</button>
+          <button class="btn-toolbar btn-primary" onclick="app.createCase()">Create</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Kill All Confirmation Modal -->
+    <div class="modal" id="killAllModal">
+      <div class="modal-backdrop" onclick="app.closeKillAllModal()"></div>
+      <div class="modal-content modal-sm">
+        <div class="modal-header">
+          <h3>Kill All Sessions</h3>
+          <button class="modal-close" onclick="app.closeKillAllModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="modal-warning-text">Choose how to close <span id="killAllCount">0</span> session(s):</p>
+        </div>
+        <div class="close-options">
+          <button class="close-option" onclick="app.confirmKillAll(false)">
+            <span class="close-option-title">Remove All Tabs</span>
+            <span class="close-option-desc">Screen sessions keep running in background</span>
+          </button>
+          <button class="close-option close-option-danger" onclick="app.confirmKillAll(true)">
+            <span class="close-option-title">Kill All Claude + Screens</span>
+            <span class="close-option-desc">Terminate everything completely</span>
+          </button>
+        </div>
+        <div class="modal-footer-cancel">
+          <button class="btn-toolbar btn-sm" onclick="app.closeKillAllModal()">Cancel</button>
         </div>
       </div>
     </div>
