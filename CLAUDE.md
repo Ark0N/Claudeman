@@ -67,17 +67,17 @@ src/
 └── templates/
     └── claude-md.ts      # CLAUDE.md generator for new cases
 
-test/
-├── session.test.ts           # Core session creation, lifecycle, PTY behavior
-├── pty-interactive.test.ts   # Interactive mode, terminal input/output
-├── respawn-controller.test.ts # Respawn state machine, idle detection
-├── inner-loop-tracker.test.ts # Ralph loop and todo detection parsing
-├── quick-start.test.ts       # Quick-start API endpoint
-├── scheduled-runs.test.ts    # Timed/scheduled session runs
-├── sse-events.test.ts        # Server-Sent Events broadcasting
-├── integration-flows.test.ts # Multi-step workflow tests
-├── session-cleanup.test.ts   # Resource cleanup, buffer trimming
-└── edge-cases.test.ts        # Error handling, boundary conditions
+test/                             # All tests use vitest, ports 3101-3108
+├── session.test.ts               # Core session creation, lifecycle, PTY behavior
+├── pty-interactive.test.ts       # Interactive mode, terminal input/output
+├── respawn-controller.test.ts    # Respawn state machine, idle detection
+├── inner-loop-tracker.test.ts    # Ralph loop and todo detection parsing
+├── quick-start.test.ts           # Quick-start API endpoint
+├── scheduled-runs.test.ts        # Timed/scheduled session runs
+├── sse-events.test.ts            # Server-Sent Events broadcasting
+├── integration-flows.test.ts     # Multi-step workflow tests
+├── session-cleanup.test.ts       # Resource cleanup, buffer trimming
+└── edge-cases.test.ts            # Error handling, boundary conditions
 ```
 
 ### Data Flow
@@ -140,6 +140,9 @@ pty.spawn('claude', ['-p', '--dangerously-skip-permissions', '--output-format', 
 
 // Interactive mode (tokens parsed from status line)
 pty.spawn('claude', ['--dangerously-skip-permissions'], { ... })
+
+// Shell mode (debugging/testing - no Claude CLI)
+pty.spawn('bash', [], { ... })
 ```
 
 ### Screen Input for Ink/Claude CLI
@@ -256,6 +259,11 @@ npx agent-browser open http://localhost:3000 && npx agent-browser snapshot
 | POST | `/api/sessions/:id/interactive` | Start interactive mode |
 | POST | `/api/sessions/:id/respawn/start` | Start respawn controller |
 | POST | `/api/sessions/:id/respawn/stop` | Stop respawn controller |
+| POST | `/api/sessions/:id/respawn/enable` | Enable respawn with config + optional timer |
+| POST | `/api/sessions/:id/inner-config` | Configure Ralph Wiggum loop settings |
+| GET | `/api/sessions/:id/inner-state` | Get Ralph loop state + todos |
+| POST | `/api/sessions/:id/auto-compact` | Configure auto-compact threshold |
+| POST | `/api/sessions/:id/auto-clear` | Configure auto-clear threshold |
 | POST | `/api/quick-start` | Create case + start interactive session |
 | GET | `/api/cases` | List available cases |
 | POST | `/api/cases` | Create new case |
