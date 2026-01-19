@@ -719,9 +719,21 @@ class ClaudemanApp {
       const workingDir = caseData.path || `${process.env.HOME}/claudeman-cases/${caseName}`;
       let firstSessionId = null;
 
-      // Create multiple sessions
-      for (let i = 1; i <= tabCount; i++) {
-        const sessionName = tabCount > 1 ? `${i}-${caseName}` : caseName;
+      // Find the highest existing w-number for this case to avoid duplicates
+      let startNumber = 1;
+      for (const [, session] of this.sessions) {
+        const match = session.name && session.name.match(/^w(\d+)-/);
+        if (match) {
+          const num = parseInt(match[1]);
+          if (num >= startNumber) {
+            startNumber = num + 1;
+          }
+        }
+      }
+
+      // Create multiple sessions with unique w-numbers
+      for (let i = 0; i < tabCount; i++) {
+        const sessionName = `w${startNumber + i}-${caseName}`;
 
         // Create session
         const createRes = await fetch('/api/sessions', {
@@ -780,11 +792,24 @@ class ClaudemanApp {
       const caseData = await caseRes.json();
       const workingDir = caseData.path || process.cwd();
 
+      // Find the highest existing s-number for shells to avoid duplicates
+      let startNumber = 1;
+      for (const [, session] of this.sessions) {
+        const match = session.name && session.name.match(/^s(\d+)-/);
+        if (match) {
+          const num = parseInt(match[1]);
+          if (num >= startNumber) {
+            startNumber = num + 1;
+          }
+        }
+      }
+      const sessionName = `s${startNumber}-${caseName}`;
+
       // Create session with shell mode
       const createRes = await fetch('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workingDir, mode: 'shell' })
+        body: JSON.stringify({ workingDir, mode: 'shell', name: sessionName })
       });
       const createData = await createRes.json();
       if (!createData.success) throw new Error(createData.error);
