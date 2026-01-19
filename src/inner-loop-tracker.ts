@@ -29,6 +29,19 @@ const LOOP_START_PATTERN = /Loop started at|Starting.*loop|Ralph loop started|<p
 const ELAPSED_TIME_PATTERN = /Elapsed:\s*(\d+(?:\.\d+)?)\s*hours?/i;
 const CYCLE_PATTERN = /cycle\s*#?(\d+)|respawn cycle #(\d+)/i;
 
+// New patterns for improved Ralph detection (based on official Ralph Wiggum plugin)
+// Iteration patterns: "Iteration 5/50", "[5/50]", "iteration #5"
+const ITERATION_PATTERN = /(?:iteration|iter\.?)\s*#?(\d+)(?:\s*[\/of]\s*(\d+))?|\[(\d+)\/(\d+)\]/i;
+
+// Ralph loop start: "/ralph-loop" command or "Starting Ralph loop"
+const RALPH_START_PATTERN = /\/ralph-loop|starting ralph(?:\s+wiggum)?\s+loop|ralph loop (?:started|beginning)/i;
+
+// Max iterations: "max-iterations 50" or "maxIterations: 50" or "max_iterations=50"
+const MAX_ITERATIONS_PATTERN = /max[_-]?iterations?\s*[=:]\s*(\d+)/i;
+
+// TodoWrite tool output - detect the tool being used
+const TODOWRITE_PATTERN = /TodoWrite|todo(?:s)?\s*(?:updated|written|saved)|Todos have been modified/i;
+
 // ANSI escape code removal for cleaner parsing
 const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*m/g;
 
@@ -143,7 +156,20 @@ export class InnerLoopTracker extends EventEmitter {
    * Detect loop start and status indicators
    */
   private detectLoopStatus(line: string): void {
-    // Check for loop start
+    // Check for Ralph loop start command (/ralph-loop)
+    if (RALPH_START_PATTERN.test(line)) {
+      if (!this._loopState.active) {
+        this._loopState.active = true;
+        this._loopState.startedAt = Date.now();
+        this._loopState.cycleCount = 0;
+        this._loopState.maxIterations = null;
+        this._loopState.elapsedHours = null;
+        this._loopState.lastActivity = Date.now();
+        this.emit('loopUpdate', this.loopState);
+      }
+    }
+
+    // Check for generic loop start
     if (LOOP_START_PATTERN.test(line)) {
       // Check if this is a promise match (loop ending) vs loop start
       if (!PROMISE_PATTERN.test(line)) {
@@ -152,10 +178,45 @@ export class InnerLoopTracker extends EventEmitter {
           this._loopState.active = true;
           this._loopState.startedAt = Date.now();
           this._loopState.cycleCount = 0;
+          this._loopState.maxIterations = null;
           this._loopState.elapsedHours = null;
           this._loopState.lastActivity = Date.now();
           this.emit('loopUpdate', this.loopState);
         }
+      }
+    }
+
+    // Check for max iterations setting
+    const maxIterMatch = line.match(MAX_ITERATIONS_PATTERN);
+    if (maxIterMatch) {
+      const maxIter = parseInt(maxIterMatch[1]);
+      if (!isNaN(maxIter) && maxIter > 0) {
+        this._loopState.maxIterations = maxIter;
+        this._loopState.lastActivity = Date.now();
+        this.emit('loopUpdate', this.loopState);
+      }
+    }
+
+    // Check for iteration patterns: "Iteration 5/50", "[5/50]"
+    const iterMatch = line.match(ITERATION_PATTERN);
+    if (iterMatch) {
+      // Pattern captures: group 1&2 for "Iteration X/Y", group 3&4 for "[X/Y]"
+      const currentIter = parseInt(iterMatch[1] || iterMatch[3]);
+      const maxIter = iterMatch[2] || iterMatch[4] ? parseInt(iterMatch[2] || iterMatch[4]) : null;
+
+      if (!isNaN(currentIter)) {
+        // If not already active, start the loop
+        if (!this._loopState.active) {
+          this._loopState.active = true;
+          this._loopState.startedAt = Date.now();
+        }
+
+        this._loopState.cycleCount = currentIter;
+        if (maxIter !== null && !isNaN(maxIter)) {
+          this._loopState.maxIterations = maxIter;
+        }
+        this._loopState.lastActivity = Date.now();
+        this.emit('loopUpdate', this.loopState);
       }
     }
 
@@ -167,7 +228,7 @@ export class InnerLoopTracker extends EventEmitter {
       this.emit('loopUpdate', this.loopState);
     }
 
-    // Check for cycle count
+    // Check for cycle count (legacy pattern)
     const cycleMatch = line.match(CYCLE_PATTERN);
     if (cycleMatch) {
       const cycleNum = parseInt(cycleMatch[1] || cycleMatch[2]);
@@ -176,6 +237,12 @@ export class InnerLoopTracker extends EventEmitter {
         this._loopState.lastActivity = Date.now();
         this.emit('loopUpdate', this.loopState);
       }
+    }
+
+    // Check for TodoWrite tool usage - indicates active task tracking
+    if (TODOWRITE_PATTERN.test(line)) {
+      this._loopState.lastActivity = Date.now();
+      // Don't emit update just for activity, let todo detection handle it
     }
   }
 
@@ -321,15 +388,25 @@ export class InnerLoopTracker extends EventEmitter {
   /**
    * Mark the loop as started (can be called externally)
    */
-  startLoop(completionPhrase?: string): void {
+  startLoop(completionPhrase?: string, maxIterations?: number): void {
     this._loopState.active = true;
     this._loopState.startedAt = Date.now();
     this._loopState.cycleCount = 0;
+    this._loopState.maxIterations = maxIterations ?? null;
     this._loopState.elapsedHours = null;
     this._loopState.lastActivity = Date.now();
     if (completionPhrase) {
       this._loopState.completionPhrase = completionPhrase;
     }
+    this.emit('loopUpdate', this.loopState);
+  }
+
+  /**
+   * Update max iterations (can be called externally)
+   */
+  setMaxIterations(maxIterations: number | null): void {
+    this._loopState.maxIterations = maxIterations;
+    this._loopState.lastActivity = Date.now();
     this.emit('loopUpdate', this.loopState);
   }
 

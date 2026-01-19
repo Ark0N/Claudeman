@@ -255,6 +255,7 @@ export interface InnerLoopState {
   completionPhrase: string | null;
   startedAt: number | null;
   cycleCount: number;
+  maxIterations: number | null;
   lastActivity: number;
   elapsedHours: number | null;
 }
@@ -283,6 +284,7 @@ export function createInitialInnerLoopState(): InnerLoopState {
     completionPhrase: null,
     startedAt: null,
     cycleCount: 0,
+    maxIterations: null,
     lastActivity: Date.now(),
     elapsedHours: null,
   };

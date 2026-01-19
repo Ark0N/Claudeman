@@ -293,6 +293,7 @@ describe('InnerLoopTracker', () => {
         completionPhrase: 'RESTORED',
         startedAt: Date.now() - 1000,
         cycleCount: 5,
+        maxIterations: 50,
         lastActivity: Date.now(),
         elapsedHours: 1.5,
       };
@@ -307,7 +308,103 @@ describe('InnerLoopTracker', () => {
       expect(tracker.loopState.active).toBe(true);
       expect(tracker.loopState.completionPhrase).toBe('RESTORED');
       expect(tracker.loopState.cycleCount).toBe(5);
+      expect(tracker.loopState.maxIterations).toBe(50);
       expect(tracker.todos).toHaveLength(2);
+    });
+  });
+
+  describe('Enhanced Ralph Detection Patterns', () => {
+    it('should detect /ralph-loop command', () => {
+      const loopHandler = vi.fn();
+      tracker.on('loopUpdate', loopHandler);
+
+      tracker.processTerminalData('/ralph-loop\n');
+
+      expect(loopHandler).toHaveBeenCalled();
+      expect(tracker.loopState.active).toBe(true);
+    });
+
+    it('should detect "Starting Ralph Wiggum loop"', () => {
+      tracker.processTerminalData('Starting Ralph Wiggum loop now\n');
+      expect(tracker.loopState.active).toBe(true);
+    });
+
+    it('should detect "ralph loop started"', () => {
+      tracker.processTerminalData('ralph loop started at 10:00\n');
+      expect(tracker.loopState.active).toBe(true);
+    });
+
+    it('should detect iteration pattern "Iteration 5/50"', () => {
+      const loopHandler = vi.fn();
+      tracker.on('loopUpdate', loopHandler);
+
+      tracker.processTerminalData('Iteration 5/50\n');
+
+      expect(tracker.loopState.active).toBe(true);
+      expect(tracker.loopState.cycleCount).toBe(5);
+      expect(tracker.loopState.maxIterations).toBe(50);
+    });
+
+    it('should detect iteration pattern "[5/50]"', () => {
+      tracker.processTerminalData('[5/50] Working on task...\n');
+
+      expect(tracker.loopState.active).toBe(true);
+      expect(tracker.loopState.cycleCount).toBe(5);
+      expect(tracker.loopState.maxIterations).toBe(50);
+    });
+
+    it('should detect iteration pattern without max "Iteration 3"', () => {
+      tracker.processTerminalData('Iteration 3 - processing\n');
+
+      expect(tracker.loopState.active).toBe(true);
+      expect(tracker.loopState.cycleCount).toBe(3);
+      expect(tracker.loopState.maxIterations).toBeNull();
+    });
+
+    it('should detect max-iterations setting', () => {
+      tracker.processTerminalData('Setting max-iterations: 100\n');
+
+      expect(tracker.loopState.maxIterations).toBe(100);
+    });
+
+    it('should detect maxIterations setting', () => {
+      tracker.processTerminalData('maxIterations=75\n');
+
+      expect(tracker.loopState.maxIterations).toBe(75);
+    });
+
+    it('should detect max_iterations setting', () => {
+      tracker.processTerminalData('config: max_iterations = 25\n');
+
+      expect(tracker.loopState.maxIterations).toBe(25);
+    });
+
+    it('should detect TodoWrite tool output', () => {
+      const loopHandler = vi.fn();
+      tracker.on('loopUpdate', loopHandler);
+
+      // TodoWrite detection should update lastActivity but not emit
+      tracker.processTerminalData('TodoWrite: Todos have been modified successfully\n');
+
+      expect(tracker.loopState.lastActivity).toBeGreaterThan(0);
+    });
+  });
+
+  describe('startLoop with maxIterations', () => {
+    it('should set maxIterations when starting loop', () => {
+      tracker.startLoop('COMPLETE', 100);
+
+      expect(tracker.loopState.active).toBe(true);
+      expect(tracker.loopState.completionPhrase).toBe('COMPLETE');
+      expect(tracker.loopState.maxIterations).toBe(100);
+    });
+
+    it('should allow setting maxIterations separately', () => {
+      tracker.startLoop('TEST');
+      expect(tracker.loopState.maxIterations).toBeNull();
+
+      tracker.setMaxIterations(50);
+      expect(tracker.loopState.maxIterations).toBe(50);
     });
   });
 

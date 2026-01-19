@@ -72,13 +72,92 @@
       <button class="btn-icon-only" onclick="app.stopRespawn()" title="Stop Respawn">&#x25A0;</button>
     </div>
 
-    <!-- Inner State Panel (Ralph Loop + Todo List detection) -->
-    <div class="inner-state-panel collapsed" id="innerStatePanel" style="display: none;">
-      <div class="inner-state-header" onclick="app.toggleInnerStatePanel()">
-        <span class="inner-state-toggle" id="innerStateToggle">&#x25B6;</span>
-        <span class="inner-state-title">Inner State</span>
+    <!-- Enhanced Ralph Wiggum Loop Panel -->
+    <div class="ralph-panel collapsed" id="innerStatePanel" style="display: none;">
+      <!-- Collapsed Summary Bar -->
+      <div class="ralph-summary" onclick="app.toggleInnerStatePanel()">
+        <div class="ralph-ring-mini" id="ralphRingMini">
+          <svg viewBox="0 0 36 36" class="ralph-ring-svg">
+            <circle class="ralph-ring-bg" cx="18" cy="18" r="15.9" />
+            <circle class="ralph-ring-progress" cx="18" cy="18" r="15.9" id="ralphRingMiniProgress" />
+          </svg>
+          <span class="ralph-ring-text" id="ralphRingMiniText">0%</span>
+        </div>
+        <div class="ralph-summary-info">
+          <span class="ralph-status-badge" id="ralphStatusBadge">
+            <span class="ralph-status-dot"></span>
+            <span class="ralph-status-text">Idle</span>
+          </span>
+          <span class="ralph-phrase-preview" id="ralphPhrasePreview"></span>
+        </div>
+        <div class="ralph-summary-stats">
+          <span class="ralph-stat"><span class="ralph-stat-icon">&#x23F1;</span><span id="ralphStatTime">0m</span></span>
+          <span class="ralph-stat"><span class="ralph-stat-icon">&#x21BB;</span><span id="ralphStatCycles">0</span></span>
+          <span class="ralph-stat"><span class="ralph-stat-icon">&#x2713;</span><span id="ralphStatTasks">0/0</span></span>
+        </div>
+        <span class="ralph-toggle" id="ralphToggle">&#x25B6;</span>
       </div>
-      <div class="inner-state-content" id="innerStateContent"></div>
+
+      <!-- Expanded Detail View -->
+      <div class="ralph-detail" id="ralphDetail">
+        <div class="ralph-progress-section">
+          <!-- Large Progress Ring -->
+          <div class="ralph-ring">
+            <svg viewBox="0 0 100 100" class="ralph-ring-svg-large">
+              <defs>
+                <linearGradient id="ralphGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#3b82f6" />
+                  <stop offset="100%" stop-color="#22c55e" />
+                </linearGradient>
+              </defs>
+              <circle class="ralph-ring-track" cx="50" cy="50" r="42" />
+              <circle class="ralph-ring-fill" cx="50" cy="50" r="42" id="ralphRingProgress" />
+            </svg>
+            <div class="ralph-ring-center">
+              <div class="ralph-ring-percent" id="ralphRingPercent">0%</div>
+              <div class="ralph-ring-label">Complete</div>
+            </div>
+          </div>
+          <!-- Meta Info -->
+          <div class="ralph-meta">
+            <div class="ralph-meta-item">
+              <span class="ralph-meta-label">Waiting for</span>
+              <code id="ralphPhrase">--</code>
+            </div>
+            <div class="ralph-meta-row">
+              <div class="ralph-meta-item">
+                <span class="ralph-meta-label">Elapsed</span>
+                <span id="ralphElapsed">0m</span>
+              </div>
+              <div class="ralph-meta-item">
+                <span class="ralph-meta-label">Iterations</span>
+                <span id="ralphIterations">0</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- Task Cards -->
+        <div class="ralph-tasks-section">
+          <div class="ralph-tasks-header">
+            <span>Tasks</span>
+            <span class="ralph-tasks-count" id="ralphTasksCount">0/0</span>
+          </div>
+          <div class="ralph-tasks-grid" id="ralphTasksGrid"></div>
+        </div>
+      </div>
+
+      <!-- Completion Celebration -->
+      <div class="ralph-celebration" id="ralphCelebration">
+        <div class="ralph-celebration-content">
+          <div class="ralph-checkmark">
+            <svg viewBox="0 0 52 52">
+              <circle class="ralph-checkmark-circle" cx="26" cy="26" r="25" />
+              <path class="ralph-checkmark-check" d="M14.1 27.2l7.1 7.2 16.7-16.8" />
+            </svg>
+          </div>
+          <div class="ralph-celebration-text" id="ralphCelebrationText">Complete!</div>
+        </div>
+      </div>
     </div>
 
     <!-- Main Terminal Area -->

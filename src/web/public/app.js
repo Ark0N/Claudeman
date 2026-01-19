@@ -505,6 +505,10 @@ class ClaudemanApp {
         existing.loop.active = false;
         this.updateInnerState(data.sessionId, existing);
       }
+      // Show celebration animation if this is the active session
+      if (data.sessionId === this.activeSessionId) {
+        this.showRalphCelebration(data.phrase);
+      }
     });
   }
 
@@ -1791,7 +1795,7 @@ class ClaudemanApp {
     return result;
   }
 
-  // ========== Inner State (Ralph Loop & Todo List) ==========
+  // ========== Enhanced Ralph Wiggum Loop Panel ==========
 
   updateInnerState(sessionId, updates) {
     const existing = this.innerStates.get(sessionId) || { loop: null, todos: [] };
@@ -1811,10 +1815,9 @@ class ClaudemanApp {
 
   renderInnerStatePanel() {
     const panel = this.$('innerStatePanel');
-    const content = this.$('innerStateContent');
-    const toggle = this.$('innerStateToggle');
+    const toggle = this.$('ralphToggle');
 
-    if (!panel) return; // Panel not in DOM yet
+    if (!panel) return;
 
     const state = this.innerStates.get(this.activeSessionId);
 
@@ -1829,106 +1832,227 @@ class ClaudemanApp {
 
     panel.style.display = '';
 
+    // Calculate completion percentage
+    const todos = state?.todos || [];
+    const completed = todos.filter(t => t.status === 'completed').length;
+    const total = todos.length;
+    const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+    // Update progress rings
+    this.updateRalphRing(percent);
+
+    // Update status badge
+    this.updateRalphStatus(state?.loop);
+
+    // Update stats
+    this.updateRalphStats(state?.loop, completed, total);
+
+    // Update phrase preview
+    const phrasePreview = this.$('ralphPhrasePreview');
+    if (phrasePreview && state?.loop?.completionPhrase) {
+      phrasePreview.innerHTML = `<code>${this.escapeHtml(state.loop.completionPhrase)}</code>`;
+    } else if (phrasePreview) {
+      phrasePreview.textContent = '';
+    }
+
+    // Handle collapsed/expanded state
     if (this.innerStatePanelCollapsed) {
       panel.classList.add('collapsed');
-      toggle.innerHTML = '&#x25B6;'; // Right arrow
-      content.innerHTML = this.renderInnerStateSummary(state);
+      if (toggle) toggle.innerHTML = '&#x25B6;';
     } else {
       panel.classList.remove('collapsed');
-      toggle.innerHTML = '&#x25BC;'; // Down arrow
-      content.innerHTML = this.renderInnerStateExpanded(state);
+      if (toggle) toggle.innerHTML = '&#x25BC;';
+
+      // Update expanded view content
+      this.updateRalphExpandedView(state);
     }
   }
 
-  renderInnerStateSummary(state) {
-    const parts = [];
-
-    // Loop status
-    if (state?.loop) {
-      const loop = state.loop;
-      if (loop.active) {
-        let loopText = '🔄 Loop';
-        if (loop.completionPhrase) {
-          loopText += `: "${this.escapeHtml(loop.completionPhrase)}"`;
-        }
-        if (loop.elapsedHours !== null) {
-          loopText += ` (${loop.elapsedHours.toFixed(1)}h)`;
-        }
-        parts.push(`<span class="inner-loop-status active">${loopText}</span>`);
-      } else if (loop.completionPhrase) {
-        parts.push(`<span class="inner-loop-status completed">✓ ${this.escapeHtml(loop.completionPhrase)}</span>`);
-      }
+  updateRalphRing(percent) {
+    // Mini ring (in summary)
+    const miniProgress = this.$('ralphRingMiniProgress');
+    const miniText = this.$('ralphRingMiniText');
+    if (miniProgress) {
+      // Circumference = 2 * PI * r = 2 * PI * 15.9 ≈ 100
+      const offset = 100 - percent;
+      miniProgress.style.strokeDashoffset = offset;
+    }
+    if (miniText) {
+      miniText.textContent = `${percent}%`;
     }
 
-    // Todo summary
-    if (state?.todos?.length > 0) {
-      const completed = state.todos.filter(t => t.status === 'completed').length;
-      const total = state.todos.length;
-      const inProgress = state.todos.filter(t => t.status === 'in_progress').length;
-      let todoText = `Tasks: ${completed}/${total}`;
-      if (inProgress > 0) {
-        todoText += ` (${inProgress} in progress)`;
-      }
-      parts.push(`<span class="inner-todo-summary">${todoText}</span>`);
+    // Large ring (in expanded view)
+    const largeProgress = this.$('ralphRingProgress');
+    const largePercent = this.$('ralphRingPercent');
+    if (largeProgress) {
+      // Circumference = 2 * PI * r = 2 * PI * 42 ≈ 264
+      const offset = 264 - (264 * percent / 100);
+      largeProgress.style.strokeDashoffset = offset;
     }
-
-    return parts.join(' | ');
+    if (largePercent) {
+      largePercent.textContent = `${percent}%`;
+    }
   }
 
-  renderInnerStateExpanded(state) {
-    let html = '';
+  updateRalphStatus(loop) {
+    const badge = this.$('ralphStatusBadge');
+    const statusText = badge?.querySelector('.ralph-status-text');
+    if (!badge || !statusText) return;
 
-    // Loop details
-    if (state?.loop) {
-      const loop = state.loop;
-      html += '<div class="inner-loop-details">';
-      if (loop.active) {
-        html += `<div class="inner-loop-active">🔄 <strong>Loop Active</strong>`;
-        if (loop.completionPhrase) {
-          html += ` - waiting for: <code>${this.escapeHtml(loop.completionPhrase)}</code>`;
-        }
-        html += '</div>';
-        if (loop.elapsedHours !== null) {
-          html += `<div class="inner-loop-elapsed">Elapsed: ${loop.elapsedHours.toFixed(2)} hours</div>`;
-        }
-        if (loop.cycleCount > 0) {
-          html += `<div class="inner-loop-cycles">Cycle: #${loop.cycleCount}</div>`;
-        }
-      } else if (loop.completionPhrase) {
-        html += `<div class="inner-loop-completed">✓ Completed: <code>${this.escapeHtml(loop.completionPhrase)}</code></div>`;
-      }
-      html += '</div>';
+    badge.classList.remove('active', 'completed');
+
+    if (loop?.active) {
+      badge.classList.add('active');
+      statusText.textContent = 'Running';
+    } else if (loop?.completionPhrase && !loop?.active) {
+      badge.classList.add('completed');
+      statusText.textContent = 'Complete';
+    } else {
+      statusText.textContent = 'Idle';
     }
-
-    // Todo list
-    if (state?.todos?.length > 0) {
-      const completed = state.todos.filter(t => t.status === 'completed').length;
-      const total = state.todos.length;
-
-      html += '<div class="inner-todo-list">';
-      html += `<div class="inner-todo-header">Tasks (${completed}/${total} complete)</div>`;
-      html += '<ul class="inner-todo-items">';
-
-      for (const todo of state.todos) {
-        const icon = this.getTodoIcon(todo.status);
-        const statusClass = `todo-${todo.status.replace('_', '-')}`;
-        html += `<li class="${statusClass}">${icon} ${this.escapeHtml(todo.content)}</li>`;
-      }
-
-      html += '</ul>';
-      html += '</div>';
-    }
-
-    return html || '<div class="inner-state-empty">No inner state data</div>';
   }
 
-  getTodoIcon(status) {
+  updateRalphStats(loop, completed, total) {
+    // Time stat
+    const timeEl = this.$('ralphStatTime');
+    if (timeEl) {
+      if (loop?.elapsedHours !== null && loop?.elapsedHours !== undefined) {
+        timeEl.textContent = this.formatRalphTime(loop.elapsedHours);
+      } else if (loop?.startedAt) {
+        const hours = (Date.now() - loop.startedAt) / (1000 * 60 * 60);
+        timeEl.textContent = this.formatRalphTime(hours);
+      } else {
+        timeEl.textContent = '0m';
+      }
+    }
+
+    // Cycles stat
+    const cyclesEl = this.$('ralphStatCycles');
+    if (cyclesEl) {
+      if (loop?.maxIterations) {
+        cyclesEl.textContent = `${loop.cycleCount || 0}/${loop.maxIterations}`;
+      } else {
+        cyclesEl.textContent = String(loop?.cycleCount || 0);
+      }
+    }
+
+    // Tasks stat
+    const tasksEl = this.$('ralphStatTasks');
+    if (tasksEl) {
+      tasksEl.textContent = `${completed}/${total}`;
+    }
+  }
+
+  formatRalphTime(hours) {
+    if (hours < 0.0167) return '0m'; // < 1 minute
+    if (hours < 1) {
+      const minutes = Math.round(hours * 60);
+      return `${minutes}m`;
+    }
+    const h = Math.floor(hours);
+    const m = Math.round((hours - h) * 60);
+    if (m === 0) return `${h}h`;
+    return `${h}h ${m}m`;
+  }
+
+  updateRalphExpandedView(state) {
+    // Update phrase
+    const phraseEl = this.$('ralphPhrase');
+    if (phraseEl) {
+      phraseEl.textContent = state?.loop?.completionPhrase || '--';
+    }
+
+    // Update elapsed
+    const elapsedEl = this.$('ralphElapsed');
+    if (elapsedEl) {
+      if (state?.loop?.elapsedHours !== null && state?.loop?.elapsedHours !== undefined) {
+        elapsedEl.textContent = this.formatRalphTime(state.loop.elapsedHours);
+      } else if (state?.loop?.startedAt) {
+        const hours = (Date.now() - state.loop.startedAt) / (1000 * 60 * 60);
+        elapsedEl.textContent = this.formatRalphTime(hours);
+      } else {
+        elapsedEl.textContent = '0m';
+      }
+    }
+
+    // Update iterations
+    const iterationsEl = this.$('ralphIterations');
+    if (iterationsEl) {
+      if (state?.loop?.maxIterations) {
+        iterationsEl.textContent = `${state.loop.cycleCount || 0} / ${state.loop.maxIterations}`;
+      } else {
+        iterationsEl.textContent = String(state?.loop?.cycleCount || 0);
+      }
+    }
+
+    // Update tasks count
+    const todos = state?.todos || [];
+    const completed = todos.filter(t => t.status === 'completed').length;
+    const tasksCountEl = this.$('ralphTasksCount');
+    if (tasksCountEl) {
+      tasksCountEl.textContent = `${completed}/${todos.length}`;
+    }
+
+    // Render task cards
+    this.renderRalphTasks(todos);
+  }
+
+  renderRalphTasks(todos) {
+    const grid = this.$('ralphTasksGrid');
+    if (!grid) return;
+
+    if (todos.length === 0) {
+      grid.innerHTML = '<div class="inner-state-empty">No tasks detected</div>';
+      return;
+    }
+
+    // Sort: in_progress first, then pending, then completed
+    const sorted = [...todos].sort((a, b) => {
+      const order = { in_progress: 0, pending: 1, completed: 2 };
+      return (order[a.status] || 1) - (order[b.status] || 1);
+    });
+
+    grid.innerHTML = sorted.map(todo => {
+      const statusClass = `task-${todo.status.replace('_', '-')}`;
+      const icon = this.getRalphTaskIcon(todo.status);
+      return `
+        <div class="ralph-task-card ${statusClass}">
+          <span class="ralph-task-icon">${icon}</span>
+          <span class="ralph-task-content">${this.escapeHtml(todo.content)}</span>
+        </div>
+      `;
+    }).join('');
+  }
+
+  getRalphTaskIcon(status) {
     switch (status) {
       case 'completed': return '✓';
       case 'in_progress': return '◐';
       case 'pending':
-      default: return '☐';
+      default: return '○';
     }
+  }
+
+  showRalphCelebration(phrase) {
+    const celebration = this.$('ralphCelebration');
+    const text = this.$('ralphCelebrationText');
+    if (!celebration) return;
+
+    if (text) {
+      text.textContent = phrase ? `${phrase}` : 'Complete!';
+    }
+
+    celebration.classList.add('show');
+
+    // Auto-hide after 3 seconds
+    setTimeout(() => {
+      celebration.classList.remove('show');
+    }, 3000);
+  }
+
+  // Legacy method for backwards compatibility
+  getTodoIcon(status) {
+    return this.getRalphTaskIcon(status);
   }
 
   // ========== Screen Sessions (in Monitor Panel) ==========
