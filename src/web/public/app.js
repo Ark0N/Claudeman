@@ -506,13 +506,6 @@ class ClaudemanApp {
       `;
     }
 
-    // Add the "+" button at the end of session tabs
-    html += `
-      <div class="session-tab new-tab" onclick="app.createNewSession()" title="New Session (Ctrl+N)">
-        <span>+</span>
-      </div>
-    `;
-
     container.innerHTML = html;
   }
 
