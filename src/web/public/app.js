@@ -839,7 +839,8 @@ class ClaudemanApp {
         if (!createCaseData.success) throw new Error(createCaseData.error || 'Failed to create case');
       }
 
-      const workingDir = caseData.path || `${process.env.HOME}/claudeman-cases/${caseName}`;
+      const workingDir = caseData.path;
+      if (!workingDir) throw new Error('Case path not found');
       let firstSessionId = null;
 
       // Find the highest existing w-number for this case to avoid duplicates
@@ -928,7 +929,8 @@ class ClaudemanApp {
       // Get the case path
       const caseRes = await fetch(`/api/cases/${caseName}`);
       const caseData = await caseRes.json();
-      const workingDir = caseData.path || process.cwd();
+      const workingDir = caseData.path;
+      if (!workingDir) throw new Error('Case path not found');
 
       // Find the highest existing s-number for shells to avoid duplicates
       let startNumber = 1;
