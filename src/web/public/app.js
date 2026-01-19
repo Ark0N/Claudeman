@@ -1274,7 +1274,6 @@ class ClaudemanApp {
     this.editingSessionId = sessionId;
 
     document.getElementById('sessionNameInput').value = session.name || '';
-    document.getElementById('sessionDirDisplay').textContent = session.workingDir || 'Unknown';
 
     // Update respawn status display and buttons
     const respawnStatus = document.getElementById('sessionRespawnStatus');

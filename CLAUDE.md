@@ -53,6 +53,7 @@ src/
 ├── screen-manager.ts     # GNU screen persistence + process stats
 ├── respawn-controller.ts # Auto-respawn state machine
 ├── ralph-loop.ts         # Autonomous task assignment
+├── task.ts               # Task class implementation
 ├── task-queue.ts         # Priority queue with dependencies
 ├── task-tracker.ts       # Background task detection from terminal output
 ├── inner-loop-tracker.ts # Detect Ralph loops and todos inside Claude sessions
@@ -77,24 +78,13 @@ src/
 
 ### Key Components
 
-- **Session** (`src/session.ts`): Wraps Claude CLI as PTY subprocess. Two modes: `runPrompt(prompt)` for one-shot, `startInteractive()` for persistent terminal. Emits events: `output`, `terminal`, `message`, `completion`, `exit`, `idle`, `working`, `autoClear`, `autoCompact`, `clearTerminal`, `innerLoopUpdate`, `innerTodoUpdate`, `innerCompletionDetected`.
-
-- **RespawnController** (`src/respawn-controller.ts`): State machine that keeps sessions productive. Detects idle → sends update prompt → optionally `/clear` → optionally `/init` → optionally kickstart prompt → repeats. State flow: `WATCHING → SENDING_UPDATE → WAITING_UPDATE → SENDING_CLEAR → WAITING_CLEAR → SENDING_INIT → WAITING_INIT → MONITORING_INIT → (optional) SENDING_KICKSTART → WAITING_KICKSTART → WATCHING`
-
-- **ScreenManager** (`src/screen-manager.ts`): Wraps sessions in GNU screen for persistence across server restarts. On startup, reconciles with `screen -ls` to restore sessions and discovers unknown "ghost" screens. Uses 4-strategy kill process to prevent orphaned claude processes.
-
-- **WebServer** (`src/web/server.ts`): Fastify server with REST API (`/api/*`) + SSE (`/api/events`). Wires session events to SSE broadcast.
-
-- **InnerLoopTracker** (`src/inner-loop-tracker.ts`): Detects Ralph Wiggum loops and todo lists running inside Claude Code sessions by parsing terminal output. Emits `loopUpdate`, `todoUpdate`, `completionDetected` events. Detection patterns:
-  - Completion phrases: `<promise>PHRASE</promise>`
-  - Todo items: checkbox format (`- [ ]`/`- [x]`), indicator icons (`☐`/`◐`/`✓`), status parentheses
-  - Loop status: cycle counts, elapsed time, start/completion indicators
-
-### Session Modes
-
-- **One-Shot** (`runPrompt(prompt)`): Single prompt execution, emits completion, exits
-- **Interactive** (`startInteractive()`): Persistent PTY terminal with resize support
-- **Shell** (`startShell()`): Plain bash/zsh terminal without Claude
+| Component | File | Purpose |
+|-----------|------|---------|
+| Session | `session.ts` | PTY wrapper for Claude CLI. Modes: `runPrompt()`, `startInteractive()`, `startShell()` |
+| RespawnController | `respawn-controller.ts` | State machine: watching → update → clear → init → monitor → kickstart → repeat |
+| ScreenManager | `screen-manager.ts` | GNU screen persistence, ghost discovery, 4-strategy kill |
+| WebServer | `web/server.ts` | Fastify REST + SSE at `/api/events` |
+| InnerLoopTracker | `inner-loop-tracker.ts` | Detects `<promise>PHRASE</promise>`, todos, loop status in output |
 
 ## Code Patterns
 
@@ -137,12 +127,8 @@ pty.spawn('claude', ['--dangerously-skip-permissions'], { ... })
 
 ### Idle Detection
 
-**RespawnController** uses a hybrid approach:
-1. Primary: Looks for `↵ send` indicator (Claude's suggestion prompt)
-2. Fallback: Prompt characters (`❯`, `\u276f`, `⏵`) + timeout (10s default)
-3. Working detection: Patterns like `Thinking`, `Writing`, `Running`, etc.
-
-**Session** emits `idle` and `working` events based on prompt detection and activity timeout (2s after prompt character).
+**RespawnController**: Primary `↵ send` indicator, fallback prompt chars (`❯`, `⏵`) + 10s timeout. Working patterns: `Thinking`, `Writing`, `Running`.
+**Session**: emits `idle`/`working` events on prompt detection + 2s activity timeout.
 
 ### Token Tracking
 
@@ -151,58 +137,20 @@ pty.spawn('claude', ['--dangerously-skip-permissions'], { ... })
 
 ### Auto-Compact & Auto-Clear
 
-Sessions support automatic context management when token thresholds are reached:
+| Feature | Default Threshold | Action |
+|---------|------------------|--------|
+| Auto-Compact | 110k tokens | `/compact` with optional prompt |
+| Auto-Clear | 140k tokens | `/clear` to reset context |
 
-- **Auto-Compact** (default: 110k tokens): Sends `/compact` command with optional prompt to summarize context
-- **Auto-Clear** (default: 140k tokens): Sends `/clear` to reset context entirely
-
-Both wait for Claude to be idle before executing. Auto-compact runs first if both are enabled. Configured via `session.setAutoCompact(enabled, threshold?, prompt?)` and `session.setAutoClear(enabled, threshold?)`.
+Both wait for idle. Configure via `session.setAutoCompact()` / `session.setAutoClear()`.
 
 ### Inner Loop Tracking
 
-When Claude Code runs inside a claudeman session, it may run its own Ralph Wiggum loops or use the TodoWrite tool. The **InnerLoopTracker** parses terminal output to detect:
+Detects Ralph loops and todos inside Claude sessions. Patterns: `<promise>PHRASE</promise>`, checkbox todos (`- [ ]`/`- [x]`), icons (`☐`/`◐`/`✓`), cycle counts. API: `GET /api/sessions/:id/inner-state`. UI: collapsible panel below tabs, auto-hides when empty.
 
-**Completion Phrases:**
-```
-<promise>COMPLETE</promise>
-<promise>TIME_COMPLETE</promise>
-<promise>CUSTOM_PHRASE</promise>
-```
+### Terminal Display Fix
 
-**Todo Items (multiple formats):**
-```
-- [ ] Pending task          # Checkbox format
-- [x] Completed task
-Todo: ☐ Pending task        # Indicator format
-Todo: ◐ In progress task
-Todo: ✓ Completed task
-- Task name (in_progress)   # Status parentheses
-```
-
-**Loop Status:**
-```
-Loop started at 2024-01-15
-Elapsed: 2.5 hours
-cycle #5
-```
-
-**API Endpoint:**
-```bash
-curl localhost:3000/api/sessions/:id/inner-state
-# Returns: { loop: InnerLoopState, todos: InnerTodoItem[], todoStats: {...} }
-```
-
-**UI:** Collapsible panel below session tabs shows loop status and todo progress. Auto-hides when no inner state is detected.
-
-### Terminal Display Fix (Tab Switch & New Session)
-
-When switching tabs or creating new sessions, terminal may be rendered at wrong size. Fix sequence:
-1. Clear and reset xterm
-2. Write terminal buffer
-3. Send resize to update PTY dimensions
-4. Send Ctrl+L (`\x0c`) to trigger Claude CLI redraw
-
-Uses `pendingCtrlL` Set to track sessions needing the fix. Waits for `session:idle` or `session:working` SSE event before sending resize + Ctrl+L.
+Tab switch/new session fix: clear xterm → write buffer → resize PTY → Ctrl+L redraw. Uses `pendingCtrlL` Set, triggered on `session:idle`/`session:working` events.
 
 ### SSE Events
 
@@ -212,14 +160,11 @@ Event prefixes: `session:`, `task:`, `respawn:`, `scheduled:`, `case:`, `screen:
 
 ### Frontend (app.js)
 
-The frontend uses vanilla JS with xterm.js. Key patterns:
-- **SSE handling**: `handleSSEEvent()` switch statement dispatches all event types
-- **Tab management**: `switchToSession()` handles terminal buffer restore + resize
-- **60fps rendering**: Server batches at 16ms intervals, client uses `requestAnimationFrame`
+Vanilla JS + xterm.js. `handleSSEEvent()` dispatches events, `switchToSession()` manages tabs. 60fps: server batches 16ms, client uses `requestAnimationFrame`.
 
-### State Store Debouncing
+### State Store
 
-State writes to `~/.claudeman/state.json` are debounced (100ms) to prevent excessive disk I/O during rapid updates. The `StateStore` class batches rapid state changes and writes once after activity settles.
+Writes debounced (100ms) to `~/.claudeman/state.json`. Batches rapid changes.
 
 ## Adding New Features
 
@@ -240,27 +185,10 @@ State writes to `~/.claudeman/state.json` are debounced (100ms) to prevent exces
 
 ## Session Lifecycle & Cleanup
 
-### Session Limits
-- `MAX_CONCURRENT_SESSIONS = 50` prevents unbounded session creation
-- Limit enforced on `/api/sessions`, `/api/run`, `/api/quick-start`, and scheduled runs
-
-### Kill Process (4 Strategies)
-When killing a screen session, `killScreen()` uses multiple strategies to ensure no orphaned processes:
-1. **Child PIDs**: Recursively find and kill all child processes (SIGTERM then SIGKILL)
-2. **Process Group**: Kill entire process group (`kill -TERM -$PID`) to catch orphans
-3. **Screen Name**: `screen -S <name> -X quit` to cleanly terminate screen
-4. **Direct Kill**: SIGKILL the screen PID as final fallback
-
-### Ghost Screen Discovery
-On server startup, `reconcileScreens()` discovers unknown claudeman screens from `screen -ls` output. This prevents "ghost" screens that persist if `screens.json` is lost or corrupted.
-
-### Cleanup Function
-`cleanupSession()` in server.ts provides comprehensive cleanup:
-- Stops and removes respawn controller + listeners
-- Clears respawn timers
-- Clears terminal/output/task batches
-- Removes session event listeners
-- Stops session and kills screen
+- **Limit**: `MAX_CONCURRENT_SESSIONS = 50`
+- **Kill** (`killScreen()`): child PIDs → process group → screen quit → SIGKILL
+- **Ghost discovery**: `reconcileScreens()` finds orphaned screens on startup
+- **Cleanup** (`cleanupSession()`): stops respawn, clears buffers/timers, kills screen
 
 ## Buffer Limits
 
@@ -274,22 +202,13 @@ Long-running sessions are supported with automatic trimming:
 | Line buffer | 64KB | (flushed every 100ms) |
 | Respawn buffer | 1MB | 512KB |
 
-## E2E Testing (agent-browser)
+## E2E Testing
 
-Browser automation for testing the web UI. See README.md for full setup.
+Uses `agent-browser` for web UI automation. Full test plan: `.claude/skills/e2e-test.md`
 
 ```bash
-# Quick test sequence
-npx agent-browser open http://localhost:3000
-npx agent-browser wait --load networkidle
-npx agent-browser snapshot
-npx agent-browser find text "Run Claude" click
-npx agent-browser wait 2000
-npx agent-browser snapshot
-npx agent-browser close
+npx agent-browser open http://localhost:3000 && npx agent-browser snapshot
 ```
-
-Full test plan available at `.claude/skills/e2e-test.md`.
 
 ## API Routes Quick Reference
 

@@ -225,18 +225,18 @@ export class RespawnController extends EventEmitter {
       return;
     }
 
-    // Detect ready state (↵ send indicator) - immediate response
+    // Detect ready state (↵ send indicator)
     if (isReady) {
       this.promptDetected = true;
       this.workingDetected = false;
       this.lastActivityTime = Date.now();
       this.log('Ready indicator detected (↵ send)');
 
-      // Handle based on current state - immediate action
+      // Handle based on current state
       switch (this._state) {
         case 'watching':
-          this.clearIdleTimer();
-          this.onIdleDetected();
+          // Start idle timer instead of immediate action - gives user time to type
+          this.startIdleTimer();
           break;
         case 'waiting_update':
           this.checkUpdateComplete();
