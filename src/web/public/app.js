@@ -1797,7 +1797,7 @@ class ClaudemanApp {
       panel.style.width = '';
       panel.style.height = '';
       if (detachBtn) {
-        detachBtn.innerHTML = '&#x2197;'; // Detach icon
+        detachBtn.innerHTML = '&#x29C9;'; // Detach icon (two overlapping squares)
         detachBtn.title = 'Detach panel';
       }
     } else {
@@ -1805,7 +1805,7 @@ class ClaudemanApp {
       panel.classList.add('detached');
       panel.classList.add('open'); // Ensure it's visible
       if (detachBtn) {
-        detachBtn.innerHTML = '&#x2199;'; // Attach icon
+        detachBtn.innerHTML = '&#x229E;'; // Attach icon (squared plus - dock back)
         detachBtn.title = 'Attach panel';
       }
       // Setup drag functionality
