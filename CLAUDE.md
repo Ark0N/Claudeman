@@ -25,12 +25,13 @@ claudeman web                      # After npm link
 # GOTCHA: `npm run dev` runs CLI help, NOT the web server
 # Always use `npx tsx src/index.ts web` for development
 
-# Testing (vitest with vi.mock() - no real Claude CLI spawned)
+# Testing (vitest - tests run against WebServer, no real Claude CLI spawned)
 npm run test                              # Run all tests once
 npm run test:watch                        # Watch mode
 npm run test:coverage                     # With coverage report
 npx vitest run test/session.test.ts       # Single file
 npx vitest run -t "should create session" # By pattern
+# Tests use different ports (3101-3108) to avoid conflicts
 
 # Debugging
 screen -ls                                # List GNU screen sessions
@@ -50,6 +51,7 @@ src/
 ├── respawn-controller.ts # Auto-respawn state machine
 ├── ralph-loop.ts         # Autonomous task assignment
 ├── task-queue.ts         # Priority queue with dependencies
+├── task-tracker.ts       # Background task detection from terminal output
 ├── state-store.ts        # Persistence to ~/.claudeman/state.json
 ├── types.ts              # All TypeScript interfaces
 ├── web/
@@ -87,12 +89,27 @@ src/
 
 ## Code Patterns
 
+### Pre-compiled Regex Patterns
+
+For performance, regex patterns that are used frequently should be compiled once at module level:
+
+```typescript
+// Good - compile once
+const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*m/g;
+const TOKEN_PATTERN = /(\d+(?:\.\d+)?)\s*([kKmM])?\s*tokens/;
+
+// Bad - recompiles on each call
+function parse(line: string) {
+  return line.replace(/\x1b\[[0-9;]*m/g, '');
+}
+```
+
 ### Claude Message Parsing
 
 Claude CLI outputs newline-delimited JSON. Strip ANSI codes before parsing:
 
 ```typescript
-const cleanLine = line.replace(/\x1b\[[0-9;]*m/g, '');
+const cleanLine = line.replace(ANSI_ESCAPE_PATTERN, '');
 const msg = JSON.parse(cleanLine) as ClaudeMessage;
 // msg.type: 'system' | 'assistant' | 'user' | 'result'
 // msg.message?.content: Array<{ type: 'text', text: string }>
@@ -111,7 +128,12 @@ pty.spawn('claude', ['--dangerously-skip-permissions'], { ... })
 
 ### Idle Detection
 
-Session detects idle by watching for prompt character (`❯` or `\u276f`) and waiting 2 seconds without activity.
+**RespawnController** uses a hybrid approach:
+1. Primary: Looks for `↵ send` indicator (Claude's suggestion prompt)
+2. Fallback: Prompt characters (`❯`, `\u276f`, `⏵`) + timeout (10s default)
+3. Working detection: Patterns like `Thinking`, `Writing`, `Running`, etc.
+
+**Session** emits `idle` and `working` events based on prompt detection and activity timeout (2s after prompt character).
 
 ### Token Tracking
 
@@ -182,9 +204,20 @@ On server startup, `reconcileScreens()` discovers unknown claudeman screens from
 - Removes session event listeners
 - Stops session and kills screen
 
+## Buffer Limits
+
+Long-running sessions are supported with automatic trimming:
+
+| Buffer | Max Size | Trim To |
+|--------|----------|---------|
+| Terminal | 5MB | 4MB |
+| Text output | 2MB | 1.5MB |
+| Messages | 1000 | 800 |
+| Line buffer | 64KB | (flushed every 100ms) |
+| Respawn buffer | 1MB | 512KB |
+
 ## Notes
 
 - State persists to `~/.claudeman/state.json` and `~/.claudeman/screens.json`
 - Cases created in `~/claudeman-cases/` by default
-- Long-running sessions (12-24+ hours) supported with automatic buffer trimming (5MB terminal, 2MB text, 1000 messages max)
 - E2E testing available via agent-browser (see `.claude/skills/e2e-test.md`)
