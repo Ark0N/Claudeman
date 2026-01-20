@@ -119,6 +119,7 @@ export class Session extends EventEmitter {
   private _screenManager: ScreenManager | null = null;
   private _screenSession: ScreenSession | null = null;
   private _useScreen: boolean = false;
+  private _stripLeadingNewlines: boolean = false; // Strip leading newlines after buffer clear
 
   // Inner loop tracking (Ralph Wiggum loops and todo lists inside Claude Code)
   private _innerLoopTracker: InnerLoopTracker;
@@ -413,6 +414,7 @@ export class Session extends EventEmitter {
         if (!isRestoredSession) {
           setTimeout(() => {
             this._terminalBuffer = '';
+            this._stripLeadingNewlines = true; // Strip leading newlines from Claude's output
             this.emit('clearTerminal');
           }, 100);
         }
@@ -441,8 +443,19 @@ export class Session extends EventEmitter {
 
     this.ptyProcess.onData((rawData: string) => {
       // Filter out focus escape sequences
-      const data = rawData.replace(FOCUS_ESCAPE_FILTER, '');
+      let data = rawData.replace(FOCUS_ESCAPE_FILTER, '');
       if (!data) return; // Skip if only focus sequences
+
+      // Strip leading newlines after buffer clear (screen attach outputs blank lines)
+      if (this._stripLeadingNewlines) {
+        data = data.replace(/^[\r\n]+/, '');
+        // Clear flag once we have actual content
+        if (data.length > 0) {
+          this._stripLeadingNewlines = false;
+        } else {
+          return; // Skip empty data after stripping
+        }
+      }
 
       this._terminalBuffer += data;
       this._lastActivityAt = Date.now();
