@@ -462,6 +462,7 @@ body {
   flex-shrink: 0;
   overflow: hidden;
   position: relative;
+  overflow-anchor: none; /* Prevent scroll anchoring when expanding/collapsing */
 }
 
 /* Mini Progress Ring (in summary) */
@@ -555,23 +556,6 @@ body {
 @keyframes ralph-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.6; transform: scale(1.2); }
-}
-
-.ralph-phrase-preview {
-  color: var(--text-dim);
-  font-size: 0.7rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 200px;
-}
-
-.ralph-phrase-preview code {
-  background: var(--bg-input);
-  padding: 0.1rem 0.3rem;
-  border-radius: 2px;
-  font-family: 'SF Mono', Monaco, monospace;
-  font-size: 0.65rem;
 }
 
 /* Summary Stats */

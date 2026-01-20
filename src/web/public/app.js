@@ -265,12 +265,14 @@ class ClaudemanApp {
       const data = JSON.parse(e.data);
       this.sessions.delete(data.id);
       this.terminalBuffers.delete(data.id);
+      this.innerStates.delete(data.id);  // Clean up inner state for this session
       if (this.activeSessionId === data.id) {
         this.activeSessionId = null;
         this.terminal.clear();
         this.showWelcome();
       }
       this.renderSessionTabs();
+      this.renderInnerStatePanel();  // Update inner panel after session deleted
     });
 
     this.eventSource.addEventListener('session:terminal', (e) => {
@@ -718,6 +720,7 @@ class ClaudemanApp {
         } else {
           this.terminal.clear();
           this.showWelcome();
+          this.renderInnerStatePanel();  // Clear inner panel when no sessions
         }
       }
 
@@ -1970,8 +1973,24 @@ class ClaudemanApp {
   }
 
   toggleInnerStatePanel() {
+    // Preserve xterm scroll position to prevent jump when panel height changes
+    const xtermViewport = this.terminal?.element?.querySelector('.xterm-viewport');
+    const scrollTop = xtermViewport?.scrollTop;
+
     this.innerStatePanelCollapsed = !this.innerStatePanelCollapsed;
     this.renderInnerStatePanel();
+
+    // Restore scroll position and refit terminal after layout change
+    requestAnimationFrame(() => {
+      // Restore xterm scroll position
+      if (xtermViewport && scrollTop !== undefined) {
+        xtermViewport.scrollTop = scrollTop;
+      }
+      // Refit terminal to new container size
+      if (this.terminal && this.fitAddon) {
+        this.fitAddon.fit();
+      }
+    });
   }
 
   toggleRalphDetach() {
@@ -2098,14 +2117,6 @@ class ClaudemanApp {
 
     // Update stats
     this.updateRalphStats(state?.loop, completed, total);
-
-    // Update phrase preview
-    const phrasePreview = this.$('ralphPhrasePreview');
-    if (phrasePreview && state?.loop?.completionPhrase) {
-      phrasePreview.innerHTML = `<code>${this.escapeHtml(state.loop.completionPhrase)}</code>`;
-    } else if (phrasePreview) {
-      phrasePreview.textContent = '';
-    }
 
     // Handle collapsed/expanded state
     if (this.innerStatePanelCollapsed) {
