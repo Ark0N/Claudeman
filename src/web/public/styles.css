@@ -69,6 +69,7 @@ body {
 .session-tabs {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 2px;
   flex: 1;
   overflow-x: auto;
@@ -82,8 +83,8 @@ body {
 .session-tab {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.35rem 0.75rem;
+  gap: 0.35rem;
+  padding: 0.35rem 0.5rem;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 4px;
@@ -92,7 +93,6 @@ body {
   cursor: pointer;
   white-space: nowrap;
   transition: all 0.15s;
-  max-width: 220px;
 }
 
 .session-tab:hover {
@@ -124,15 +124,19 @@ body {
 
 .session-tab .tab-close {
   opacity: 0;
-  padding: 0 0.2rem;
+  width: 0;
+  padding: 0;
   font-size: 0.9rem;
   line-height: 1;
   color: var(--text-muted);
-  transition: opacity 0.15s;
+  overflow: hidden;
+  transition: opacity 0.15s, width 0.15s, padding 0.15s;
 }
 
 .session-tab:hover .tab-close {
   opacity: 1;
+  width: auto;
+  padding: 0 0.2rem;
 }
 
 .session-tab .tab-close:hover {
@@ -322,16 +326,20 @@ body {
 /* Session tab gear icon */
 .session-tab .tab-gear {
   opacity: 0;
-  padding: 0 0.3rem;
+  width: 0;
+  padding: 0;
   font-size: 1rem;
   line-height: 1;
   color: var(--text-muted);
   cursor: pointer;
-  transition: opacity 0.15s, transform 0.2s;
+  overflow: hidden;
+  transition: opacity 0.15s, width 0.15s, padding 0.15s, transform 0.2s;
 }
 
 .session-tab:hover .tab-gear {
   opacity: 1;
+  width: auto;
+  padding: 0 0.3rem;
 }
 
 .session-tab .tab-gear:hover {
@@ -610,31 +618,32 @@ body {
 /* Compact Progress Ring */
 .ralph-ring-compact {
   position: relative;
-  width: 60px;
-  height: 60px;
+  width: 75px;
+  height: 75px;
   flex-shrink: 0;
 }
 
 .ralph-ring-compact .ralph-ring-percent {
-  font-size: 0.9rem;
+  font-size: 0.95rem;
+  font-weight: 600;
 }
 
 .ralph-ring-compact .ralph-ring-label {
-  font-size: 0.5rem;
+  font-size: 0.55rem;
 }
 
 /* Compact Meta Info */
 .ralph-meta-compact {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
-  min-width: 120px;
+  gap: 0.25rem;
+  min-width: 100px;
 }
 
 .ralph-meta-compact .ralph-meta-item {
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
+  gap: 0;
 }
 
 .ralph-meta-compact .ralph-meta-label {
