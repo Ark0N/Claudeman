@@ -38,29 +38,35 @@ npm run test:coverage                     # With coverage report
 npx vitest run test/session.test.ts       # Single file
 npx vitest run -t "should create session" # By pattern
 
-# Test port allocation (add new tests in next available range):
-# 3099-3101: quick-start.test.ts
+# Test port allocation (integration tests spawn servers):
+# 3099: quick-start.test.ts
 # 3102: session.test.ts
-# 3105-3106: scheduled-runs.test.ts
-# 3107-3108: sse-events.test.ts
-# 3110-3112: edge-cases.test.ts
-# 3115-3116: integration-flows.test.ts
-# 3120-3121: session-cleanup.test.ts
-# (no port): respawn-controller.test.ts, inner-loop-tracker.test.ts, pty-interactive.test.ts (unit tests)
+# 3105: scheduled-runs.test.ts
+# 3107: sse-events.test.ts
+# 3110: edge-cases.test.ts
+# 3115: integration-flows.test.ts
+# 3120: session-cleanup.test.ts
+# Unit tests (no port needed): respawn-controller, inner-loop-tracker, pty-interactive
 # Next available: 3122+
 
 # Tests mock PTY - no real Claude CLI spawned
 # Test timeout: 30s (configured in vitest.config.ts)
 
-# TypeScript checking (no linter configured)
+# TypeScript checking
 npx tsc --noEmit                          # Type check without building
+# Note: No ESLint/Prettier configured - rely on TypeScript strict mode
 
 # Debugging
 screen -ls                                # List GNU screen sessions
-screen -r <name>                          # Attach to screen session
+screen -r <name>                          # Attach to screen session (Ctrl+A D to detach)
 curl localhost:3000/api/sessions          # Check active sessions
+curl localhost:3000/api/status | jq .     # Full app state including respawn
 cat ~/.claudeman/state.json | jq .        # View main state
 cat ~/.claudeman/state-inner.json | jq .  # View inner loop state
+
+# Kill stuck screen sessions
+screen -X -S <name> quit                  # Graceful quit
+pkill -f "SCREEN.*claudeman"              # Force kill all claudeman screens
 ```
 
 ## Architecture
@@ -74,7 +80,8 @@ cat ~/.claudeman/state-inner.json | jq .  # View inner loop state
 | `src/screen-manager.ts` | GNU screen persistence, ghost discovery, 4-strategy kill |
 | `src/inner-loop-tracker.ts` | Detects `<promise>PHRASE</promise>`, todos, loop status in output |
 | `src/task-tracker.ts` | Parses background task output (agent IDs, status) from Claude CLI |
-| `src/state-store.ts` | JSON persistence to `~/.claudeman/` with debounced (100ms) writes |
+| `src/session-manager.ts` | Manages session lifecycle, task assignment, and cleanup |
+| `src/state-store.ts` | JSON persistence to `~/.claudeman/` with debounced writes |
 | `src/web/server.ts` | Fastify REST API + SSE at `/api/events` |
 | `src/web/public/app.js` | Frontend: SSE handling, xterm.js, tab management |
 | `src/types.ts` | All TypeScript interfaces |
@@ -89,12 +96,21 @@ cat ~/.claudeman/state-inner.json | jq .  # View inner loop state
 ### Respawn State Machine
 
 ```
-WATCHING → SENDING_UPDATE → WAITING_UPDATE → SENDING_CLEAR → WAITING_CLEAR → SENDING_INIT → WAITING_INIT → WATCHING
-    ↑                                                                                                          |
-    └──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                 │
+▼                                                                                                 │
+WATCHING → SENDING_UPDATE → WAITING_UPDATE → SENDING_CLEAR → WAITING_CLEAR                       │
+                                                    │                                             │
+                                                    ▼                                             │
+                              SENDING_INIT → WAITING_INIT → MONITORING_INIT ──┬──────────────────┘
+                                                                              │
+                                                                              ▼ (if no work triggered)
+                                                            SENDING_KICKSTART → WAITING_KICKSTART
 ```
 
-Steps can be skipped via config (`sendClear: false`, `sendInit: false`). Idle detection triggers state transitions.
+**States**: `watching`, `sending_update`, `waiting_update`, `sending_clear`, `waiting_clear`, `sending_init`, `waiting_init`, `monitoring_init`, `sending_kickstart`, `waiting_kickstart`, `stopped`
+
+Steps can be skipped via config (`sendClear: false`, `sendInit: false`). Optional `kickstartPrompt` triggers if `/init` doesn't start work. Idle detection triggers state transitions.
 
 ### Session Modes
 
@@ -169,7 +185,7 @@ session.writeViaScreen('/init\r');
 2. Sends text first: `screen -S name -p 0 -X stuff "text"`
 3. Sends Enter separately: `screen -S name -p 0 -X stuff "$(printf '\015')"`
 
-**Why separate commands?** Claude CLI uses Ink (React for terminals) which requires text and Enter as separate `screen -X stuff` commands. Combining them doesn't work.
+**Why separate commands?** Claude CLI uses [Ink](https://github.com/vadimdemedes/ink) (React for terminals) which requires text and Enter as separate `screen -X stuff` commands. Combining them doesn't work. This is a critical implementation detail when debugging input issues.
 
 #### API Usage
 ```bash
@@ -208,15 +224,38 @@ Both wait for idle. Configure via `session.setAutoCompact()` / `session.setAutoC
 ### Inner Loop Tracking
 
 Detects Ralph loops and todos inside Claude sessions. **Disabled by default** but auto-enables when any of these patterns are detected in terminal output:
-- `/ralph-loop` command
+- `/ralph-loop:ralph-loop` command
 - `<promise>PHRASE</promise>` completion phrases
 - `TodoWrite` tool usage
 - Iteration patterns (`Iteration 5/50`, `[5/50]`)
 - Todo checkboxes (`- [ ]`/`- [x]`) or indicator icons (`☐`/`◐`/`✓`)
+- "All tasks complete" messages
+- Individual task completion signals (`Task 8 is done`)
 
 See `inner-loop-tracker.ts:shouldAutoEnable()` for detection logic.
 
-API: `GET /api/sessions/:id/inner-state`. UI: collapsible panel below tabs. Use `tracker.enable()` / `tracker.disable()` for programmatic control, or `POST /api/sessions/:id/inner-config` with `{ enabled: boolean }` via API.
+**Completion Detection**: Uses multi-strategy detection:
+- 1st occurrence of `<promise>PHRASE</promise>`: Stores as expected phrase (likely in prompt)
+- 2nd occurrence: Emits `completionDetected` event (actual completion)
+- **Bare phrase detection**: Also detects phrase without tags once expected phrase is known
+- **All complete detection**: When "All X files/tasks created/completed" detected, marks all todos complete and emits completion
+- If loop is already active (via `/ralph-loop:ralph-loop`): Emits immediately on first occurrence
+
+**Session Lifecycle**: Each session has its own independent tracker:
+- New session → Fresh tracker (no carryover)
+- Close tab → Tracker state cleared, UI panel hides
+- Switch tabs → Panel shows tracker for active session
+- `tracker.reset()` → Clears todos/state, keeps enabled status
+- `tracker.fullReset()` → Complete reset to initial state
+
+**API**:
+- `GET /api/sessions/:id/inner-state` - Get loop state and todos
+- `POST /api/sessions/:id/inner-config` - Configure tracker:
+  - `{ enabled: boolean }` - Enable/disable
+  - `{ reset: true }` - Soft reset (keep enabled)
+  - `{ reset: "full" }` - Full reset
+
+UI: Collapsible panel below tabs, shows progress ring and todo list.
 
 ### Terminal Display Fix
 
@@ -248,7 +287,17 @@ Vanilla JS + xterm.js. Key functions:
 
 ### State Store
 
-Writes debounced (100ms) to `~/.claudeman/state.json`. Batches rapid changes.
+Writes debounced to `~/.claudeman/state.json`. Batches rapid changes.
+
+### Timing Constants
+
+| Constant | Value | Location |
+|----------|-------|----------|
+| State save debounce | 500ms | `state-store.ts` |
+| Line buffer flush | 100ms | `session.ts` |
+| Terminal batch interval | 16ms | `server.ts` (60fps) |
+| Idle activity timeout | 2s | `session.ts` |
+| Respawn idle timeout | 5s default | `RespawnConfig.idleTimeoutMs` |
 
 ### TypeScript Config
 
@@ -259,10 +308,24 @@ Module resolution: NodeNext. Target: ES2022. Strict mode enabled. See `tsconfig.
 - **API endpoint**: Add types in `types.ts`, route in `server.ts:buildServer()`, use `createErrorResponse()` for errors
 - **SSE event**: Emit via `broadcast()` in server.ts, handle in `app.js:handleSSEEvent()` switch
 - **Session event**: Add to `SessionEvents` interface in `session.ts`, emit via `this.emit()`, subscribe in server.ts, handle in frontend
+- **New test file**: Create `test/<name>.test.ts`, pick unique port (next available: 3122+), add to port allocation comment above
+
+### API Error Codes
+
+Use `createErrorResponse(code, details?)` from `types.ts`:
+
+| Code | Use Case |
+|------|----------|
+| `NOT_FOUND` | Session/resource doesn't exist |
+| `INVALID_INPUT` | Bad request parameters |
+| `SESSION_BUSY` | Session is currently processing |
+| `OPERATION_FAILED` | Action couldn't complete |
+| `ALREADY_EXISTS` | Duplicate resource |
+| `INTERNAL_ERROR` | Unexpected server error |
 
 ## Session Lifecycle & Cleanup
 
-- **Limit**: `MAX_CONCURRENT_SESSIONS = 50`
+- **Limit**: Web server: `MAX_CONCURRENT_SESSIONS = 50` (`server.ts:56`), CLI default: 5 (`types.ts:DEFAULT_CONFIG`)
 - **Kill** (`killScreen()`): child PIDs → process group → screen quit → SIGKILL
 - **Ghost discovery**: `reconcileScreens()` finds orphaned screens on startup
 - **Cleanup** (`cleanupSession()`): stops respawn, clears buffers/timers, kills screen
@@ -339,6 +402,12 @@ claudeman status                     # Overall status
 | `Ctrl+?` | Show keyboard shortcuts help |
 | `Escape` | Close panels and modals |
 
+## UI Behaviors
+
+- **Auto-focus**: When only one session exists and none is active, it auto-selects
+- **Scroll preservation**: Expanding/collapsing Ralph panel preserves terminal scroll position
+- **Consistent icons**: Ralph and Monitor panels use same detach/attach icons (⧉/⊞)
+
 ## State Files
 
 | File | Purpose |
@@ -364,10 +433,11 @@ Ralph Wiggum is an autonomous loop technique that lets Claude work iteratively u
 
 **Core Pattern**: `<promise>PHRASE</promise>` - The completion signal that tells the loop to stop.
 
-**Official Plugin Commands**:
+**Skill Commands**:
 ```bash
-/ralph-loop "<prompt>" --max-iterations 50 --completion-promise "COMPLETE"
-/cancel-ralph
+/ralph-loop:ralph-loop    # Start Ralph Loop in current session
+/ralph-loop:cancel-ralph  # Cancel active Ralph Loop
+/ralph-loop:help          # Show help and usage
 ```
 
 **Best Practices** (see full guide for details):

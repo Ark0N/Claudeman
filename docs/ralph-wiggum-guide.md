@@ -73,33 +73,33 @@ while :; do cat PROMPT.md | claude ; done
 
 ### Commands
 
-#### `/ralph-loop`
+#### `/ralph-loop:ralph-loop`
 
-Start an autonomous loop.
+Start an autonomous loop in the current session.
 
 ```bash
-/ralph-loop "<prompt>" --max-iterations <n> --completion-promise "<text>"
+/ralph-loop:ralph-loop
 ```
 
-**Parameters**:
+When invoked, this skill prompts you to configure:
+- **Task prompt**: The work to be done (persists across iterations)
+- **Max iterations**: Safety limit on iterations (recommended: always set this)
+- **Completion promise**: The phrase that signals completion (e.g., `COMPLETE`)
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `<prompt>` | string | required | Task description (persists across all iterations) |
-| `--max-iterations` | integer | unlimited | Safety limit on iterations |
-| `--completion-promise` | string | none | Exact string that signals completion |
-
-**Example**:
-```bash
-/ralph-loop "Build a REST API for todos. Requirements: CRUD operations, input validation, tests. Output <promise>COMPLETE</promise> when done." --completion-promise "COMPLETE" --max-iterations 50
-```
-
-#### `/cancel-ralph`
+#### `/ralph-loop:cancel-ralph`
 
 Cancel the active Ralph loop.
 
 ```bash
-/cancel-ralph
+/ralph-loop:cancel-ralph
+```
+
+#### `/ralph-loop:help`
+
+Show help and usage information.
+
+```bash
+/ralph-loop:help
 ```
 
 ### State File
@@ -153,23 +153,37 @@ The official implementation (and Claudeman) prevents false positives when comple
 - Documentation or examples
 - Comments
 
-**Solution**: Only mark as complete if the loop was already `active` when the phrase is detected.
+**Solution**: Claudeman uses **occurrence-based detection** to distinguish prompts from actual completions:
+- **1st occurrence**: Store as expected phrase (likely in the prompt)
+- **2nd occurrence**: Emit `completionDetected` (actual completion)
+- **If loop already active**: Emit immediately (explicit loop start via `/ralph-loop:ralph-loop`)
 
 ```typescript
 // From claudeman/src/inner-loop-tracker.ts
-if (!this._loopState.active) {
-  // Just record the expected completion phrase without marking as complete
+private handleCompletionPhrase(phrase: string): void {
+  const count = (this._completionPhraseCount.get(phrase) || 0) + 1;
+  this._completionPhraseCount.set(phrase, count);
+
+  // Store phrase on first occurrence
   if (!this._loopState.completionPhrase) {
     this._loopState.completionPhrase = phrase;
+    this._loopState.lastActivity = Date.now();
+    this.emit('loopUpdate', this.loopState);
   }
-  return;
-}
 
-// Loop was active, this is a real completion
-this._loopState.completionPhrase = phrase;
-this._loopState.active = false;
-this.emit('completionDetected', phrase);
+  // Emit completion if loop is active OR this is 2nd+ occurrence
+  if (this._loopState.active || count >= 2) {
+    this._loopState.active = false;
+    this._loopState.lastActivity = Date.now();
+    this.emit('completionDetected', phrase);
+    this.emit('loopUpdate', this.loopState);
+  }
+}
 ```
+
+This approach handles both scenarios:
+1. **Explicit loop start**: User runs `/ralph-loop:ralph-loop`, loop is active, first completion phrase triggers
+2. **Implicit completion**: Phrase appears in prompt (1st), then Claude outputs it on completion (2nd)
 
 ---
 
@@ -319,7 +333,8 @@ For more sophisticated evaluation, use LLM-based hooks:
 > This cannot be overstated: always set `--max-iterations`. Autonomous loops consume tokens rapidly. A typical 50-iteration loop on a medium-sized codebase can cost $50-100+ in API usage.
 
 ```bash
-/ralph-loop "..." --max-iterations 30 --completion-promise "DONE"
+/ralph-loop:ralph-loop
+# Then configure: max-iterations=30, completion-promise="DONE"
 ```
 
 ### 2. Define Clear, Measurable Success Criteria
@@ -416,10 +431,12 @@ This creates recovery points and shows progress in git history.
 
 ```bash
 # Test with 1 iteration first
-/ralph-loop "..." --max-iterations 1
+/ralph-loop:ralph-loop
+# Configure: max-iterations=1
 
 # Then run full loop
-/ralph-loop "..." --max-iterations 50
+/ralph-loop:ralph-loop
+# Configure: max-iterations=50
 ```
 
 ### 8. Use Git for Safety
@@ -607,12 +624,35 @@ The tracker automatically enables when detecting:
 
 | Pattern | Example | Regex |
 |---------|---------|-------|
-| Ralph command | `/ralph-loop` | `/\/ralph-loop\|starting ralph/i` |
+| Ralph command | `/ralph-loop:ralph-loop` | `/\/ralph-loop\|starting ralph/i` |
 | Promise tag | `<promise>COMPLETE</promise>` | `/<promise>([^<]+)<\/promise>/` |
 | TodoWrite | `Todos have been modified` | `/TodoWrite\|todos?\s*(?:updated\|written)/i` |
 | Iteration | `Iteration 5/50` or `[5/50]` | `/(?:iteration)\s*#?(\d+)(?:\s*[\/of]\s*(\d+))?/i` |
 | Todo checkbox | `- [ ] Task` | `/^[-*]\s*\[([xX ])\]\s+(.+)$/gm` |
 | Todo indicator | `Todo: ☐ Task` | `/Todo:\s*(☐\|◐\|✓)/g` |
+| All complete | `All tasks completed` | `/all\s+tasks?\s+completed?\|all\s+done/i` |
+| Task done | `Task 8 is done` | `/task\s*#?\d+\s*(?:is\s+)?done/i` |
+
+### Completion Detection
+
+Multi-strategy detection to catch various completion signals:
+
+1. **Tagged phrase**: `<promise>PHRASE</promise>` - First occurrence stores phrase, second triggers completion
+2. **Bare phrase**: Detects phrase without tags once expected phrase is known (e.g., Claude outputs `COMPLETE` instead of `<promise>COMPLETE</promise>`)
+3. **All complete signals**: Detects "All X files/tasks created/completed" messages, marks all todos complete and emits completion
+4. **Explicit task completion**: Matches "Task N is done" patterns
+
+### Session Lifecycle
+
+Each session has its **own independent tracker**:
+
+| Action | Result |
+|--------|--------|
+| New session opened | Fresh tracker, no carryover |
+| Tab closed | Tracker state cleared, UI panel hides |
+| Switch tabs | Panel shows tracker for active session |
+| `tracker.reset()` | Clears todos/state, keeps enabled status |
+| `tracker.fullReset()` | Complete reset to initial state |
 
 ### State Structure
 
@@ -642,6 +682,16 @@ interface InnerTodoItem {
 |--------|----------|-------------|
 | GET | `/api/sessions/:id/inner-state` | Get loop state and todos |
 | POST | `/api/sessions/:id/inner-config` | Configure tracker settings |
+
+**POST `/inner-config` Options**:
+```json
+{
+  "enabled": true,           // Enable/disable tracker
+  "reset": true,             // Soft reset (clears state, keeps enabled)
+  "reset": "full",           // Full reset (clears everything)
+  "completionPhrase": "DONE" // Set expected completion phrase
+}
+```
 
 **GET Response**:
 ```json
@@ -676,9 +726,9 @@ interface InnerTodoItem {
 ### Skill Commands
 
 ```bash
-/ralph-loop          # Start Ralph loop in current session
-/cancel-ralph        # Cancel active Ralph loop
-/ralph-loop:help     # Show help for Ralph loop
+/ralph-loop:ralph-loop    # Start Ralph Loop in current session
+/ralph-loop:cancel-ralph  # Cancel active Ralph Loop
+/ralph-loop:help          # Show help and usage
 ```
 
 ---
