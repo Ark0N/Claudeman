@@ -690,23 +690,20 @@ body {
 /* Compact Tasks Section */
 .ralph-tasks-compact {
   flex: 1;
-  background: var(--bg-card);
-  border-radius: 4px;
   overflow: hidden;
-  max-height: 80px;
+  min-width: 0;
 }
 
 .ralph-tasks-compact .ralph-tasks-header {
-  padding: 0.25rem 0.5rem;
-  font-size: 0.7rem;
+  display: none;
 }
 
 .ralph-tasks-compact .ralph-tasks-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem;
-  padding: 0.25rem 0.5rem;
-  max-height: 50px;
+  gap: 0.2rem;
+  padding: 0;
+  max-height: 60px;
   overflow-y: auto;
 }
 
