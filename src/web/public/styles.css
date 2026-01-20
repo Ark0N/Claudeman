@@ -656,16 +656,15 @@ body {
 }
 
 .ralph-info-labels {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 0.15rem 0.5rem;
   flex-shrink: 0;
+  align-items: center;
 }
 
 .ralph-info-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  display: contents;
 }
 
 .ralph-info-label {
@@ -674,8 +673,7 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.3px;
   color: var(--text-muted);
-  width: 60px;
-  flex-shrink: 0;
+  text-align: right;
 }
 
 .ralph-info-unified code {
