@@ -592,12 +592,7 @@ body {
 .ralph-toggle {
   color: var(--text-dim);
   font-size: 0.6rem;
-  transition: transform 0.2s;
   flex-shrink: 0;
-}
-
-.ralph-panel:not(.collapsed) .ralph-toggle {
-  transform: rotate(90deg);
 }
 
 /* Hide detail when collapsed */
