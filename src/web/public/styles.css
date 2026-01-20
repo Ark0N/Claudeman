@@ -646,33 +646,45 @@ body {
 .ralph-meta-compact {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  min-width: 100px;
+  gap: 0.35rem;
+  min-width: 110px;
+  background: var(--bg-input);
+  padding: 0.4rem 0.5rem;
+  border-radius: 4px;
 }
 
 .ralph-meta-compact .ralph-meta-item {
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.5rem;
 }
 
 .ralph-meta-compact .ralph-meta-label {
-  font-size: 0.6rem;
+  font-size: 0.5rem;
   white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-muted);
+  width: 55px;
+  flex-shrink: 0;
 }
 
 .ralph-meta-compact code {
-  font-size: 0.55rem;
-  padding: 0.1rem 0.3rem;
-  max-width: 180px;
+  font-size: 0.6rem;
+  padding: 0.15rem 0.35rem;
+  max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  background: var(--bg-card);
+  border-radius: 3px;
 }
 
 .ralph-meta-compact span:not(.ralph-meta-label) {
-  font-size: 0.6rem;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--text);
 }
 
 /* Compact Tasks Section */
@@ -916,7 +928,7 @@ body {
 }
 
 .ralph-task-card.task-completed .ralph-task-content {
-  text-decoration: line-through;
+  color: var(--text-dim);
 }
 
 /* Empty state (legacy support) */
