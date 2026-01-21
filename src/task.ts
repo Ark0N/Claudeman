@@ -1,6 +1,18 @@
+/**
+ * @fileoverview Task model for Claude prompt execution
+ *
+ * Represents a single task (prompt) to be executed by a Claude session.
+ * Tasks support priority ordering, dependencies, and completion detection.
+ *
+ * @module task
+ */
+
 import { v4 as uuidv4 } from 'uuid';
 import { TaskDefinition, TaskState, TaskStatus } from './types.js';
 
+/**
+ * Options for creating a new task.
+ */
 export interface CreateTaskOptions {
   prompt: string;
   workingDir?: string;
@@ -10,6 +22,13 @@ export interface CreateTaskOptions {
   timeoutMs?: number;
 }
 
+/**
+ * A task representing a prompt to be executed by a Claude session.
+ *
+ * @description
+ * Tasks have a lifecycle: pending → running → completed/failed
+ * They support priority ordering and dependency chains.
+ */
 export class Task {
   readonly id: string;
   readonly prompt: string;
@@ -107,6 +126,7 @@ export class Task {
     };
   }
 
+  /** Reconstructs a Task from persisted state. */
   static fromState(state: TaskState): Task {
     const task = new Task(
       {
@@ -128,6 +148,7 @@ export class Task {
     return task;
   }
 
+  /** Assigns this task to a session and marks it as running. */
   assign(sessionId: string): void {
     if (this._status !== 'pending') {
       throw new Error(`Cannot assign task ${this.id}: status is ${this._status}`);
@@ -167,6 +188,7 @@ export class Task {
     this._error = null;
   }
 
+  /** Checks if output contains the completion phrase. */
   checkCompletion(output: string): boolean {
     if (this.completionPhrase) {
       // Check for exact completion phrase in promise tags
@@ -177,6 +199,7 @@ export class Task {
     return /<promise>[^<]+<\/promise>/.test(output);
   }
 
+  /** Returns true if the task has exceeded its timeout. */
   isTimedOut(): boolean {
     if (!this.timeoutMs || !this._startedAt) {
       return false;
