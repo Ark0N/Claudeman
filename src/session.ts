@@ -18,7 +18,6 @@
 import { EventEmitter } from 'node:events';
 import { v4 as uuidv4 } from 'uuid';
 import * as pty from 'node-pty';
-import { execSync } from 'node:child_process';
 import { SessionState, SessionStatus, SessionConfig, ScreenSession, InnerLoopState, InnerTodoItem } from './types.js';
 import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { InnerLoopTracker } from './inner-loop-tracker.js';
@@ -53,11 +52,6 @@ const MAX_LINE_BUFFER_SIZE = 64 * 1024;
 /** Line buffer flush interval (100ms) - forces processing of partial lines */
 const LINE_BUFFER_FLUSH_INTERVAL = 100;
 
-/** Default timeout for async operations in milliseconds (5 minutes) */
-const DEFAULT_ASYNC_TIMEOUT_MS = 5 * 60 * 1000;
-
-/** Timeout for interactive session startup in milliseconds (30 seconds) */
-const INTERACTIVE_START_TIMEOUT_MS = 30 * 1000;
 
 // Filter out terminal focus escape sequences (focus in/out reports)
 // ^[[I (focus in), ^[[O (focus out), and the enable/disable sequences

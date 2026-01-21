@@ -180,13 +180,8 @@ const ALL_COUNT_PATTERN = /all\s+(\d+)\s+(?:tasks?|files?|items?)/i;
  */
 const TASK_DONE_PATTERN = /(?:task|item|todo)\s*(?:#?\d+|"\s*[^"]+\s*")?\s*(?:is\s+)?(?:done|completed?|finished)|(?:completed?|done|finished)\s+(?:task|item)\s*(?:#?\d+)?|marking\s+(?:.*?\s+)?(?:as\s+)?completed?|marked\s+(?:.*?\s+)?(?:as\s+)?completed?/i;
 
-/**
- * Matches generic standalone completion signals
- * Examples: "Done!", "Completed", "Finished", "All set"
- * Note: Use with caution - high false positive potential
- * @deprecated Currently unused due to false positive risk
- */
-const COMPLETION_SIGNAL_PATTERN = /^(?:done|completed?|finished|all\s+set)!?\s*$/i;
+// Generic completion signal pattern - commented out due to false positive risk
+// const COMPLETION_SIGNAL_PATTERN = /^(?:done|completed?|finished|all\s+set)!?\s*$/i;
 
 // ---------- Utility Patterns ----------
 
@@ -712,7 +707,7 @@ export class InnerLoopTracker extends EventEmitter {
       const taskNum = parseInt(taskNumMatch[1]);
       // Find the nth todo (by order) and mark it complete
       let count = 0;
-      for (const [id, todo] of this._todos) {
+      for (const [_id, todo] of this._todos) {
         count++;
         if (count === taskNum && todo.status !== 'completed') {
           todo.status = 'completed';

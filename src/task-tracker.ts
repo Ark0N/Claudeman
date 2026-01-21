@@ -367,7 +367,7 @@ export class TaskTracker extends EventEmitter {
    * @param context - Terminal context for debugging
    * @fires taskCreated
    */
-  private createTaskFromTerminal(agentType: string, context: string): void {
+  private createTaskFromTerminal(agentType: string, _context: string): void {
     const taskId = `terminal-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const parentId = this.taskStack.length > 0 ? this.taskStack[this.taskStack.length - 1] : null;
 
