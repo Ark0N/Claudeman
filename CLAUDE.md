@@ -386,18 +386,6 @@ Long-running sessions are supported with automatic trimming:
 | Line buffer | 64KB | (flushed every 100ms) |
 | Respawn buffer | 1MB | 512KB |
 
-## E2E Testing
-
-Uses `agent-browser` for web UI automation. Full test plan: `.claude/skills/e2e-test.md`
-
-```bash
-npx agent-browser open http://localhost:3000
-npx agent-browser wait --load networkidle
-npx agent-browser snapshot
-npx agent-browser find text "Run Claude" click
-npx agent-browser close
-```
-
 ## API Routes Quick Reference
 
 | Method | Endpoint | Description |
@@ -536,11 +524,3 @@ Extended documentation is available in the `docs/` directory:
 **Claudeman Implementation**: The `InnerLoopTracker` class (`src/inner-loop-tracker.ts`) detects Ralph patterns in Claude output and tracks loop state, todos, and completion phrases. It auto-enables when Ralph-related patterns are detected.
 
 See [`docs/ralph-wiggum-guide.md`](docs/ralph-wiggum-guide.md) for full documentation on best practices, prompt templates, and troubleshooting.
-
-## Optimization Status
-
-Most critical optimizations implemented. Full details with file:line references in `.claude/optimization-todos.md`.
-
-**Key optimizations**: Buffer auto-trimming, pre-compiled regex with lastIndex resets, event debouncing (50-500ms), CSS containment, 60fps input batching, incremental DOM updates.
-
-**Remaining (low priority)**: Task lookup optimization in `task-tracker.ts`, buffer pagination API.
