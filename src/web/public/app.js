@@ -142,14 +142,42 @@ class ClaudemanApp {
     const resizeObserver = new ResizeObserver(throttledResize);
     resizeObserver.observe(container);
 
-    // Handle keyboard input
-    this.terminal.onData((data) => {
-      if (this.activeSessionId) {
+    // Handle keyboard input with batching for rapid keystrokes
+    this._pendingInput = '';
+    this._inputFlushTimeout = null;
+    this._inputFlushDelay = 16; // Flush at 60fps max
+
+    const flushInput = () => {
+      if (this._pendingInput && this.activeSessionId) {
+        const input = this._pendingInput;
+        this._pendingInput = '';
         fetch(`/api/sessions/${this.activeSessionId}/input`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ input: data })
+          body: JSON.stringify({ input })
         });
+      }
+      this._inputFlushTimeout = null;
+    };
+
+    this.terminal.onData((data) => {
+      if (this.activeSessionId) {
+        this._pendingInput += data;
+
+        // Flush immediately for control characters (Enter, Ctrl+C, etc.)
+        if (data.charCodeAt(0) < 32 || data.length > 1) {
+          if (this._inputFlushTimeout) {
+            clearTimeout(this._inputFlushTimeout);
+            this._inputFlushTimeout = null;
+          }
+          flushInput();
+          return;
+        }
+
+        // Batch regular input at 60fps
+        if (!this._inputFlushTimeout) {
+          this._inputFlushTimeout = setTimeout(flushInput, this._inputFlushDelay);
+        }
       }
     });
   }
