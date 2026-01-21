@@ -18,6 +18,12 @@ const SCREENS_FILE = join(homedir(), '.claudeman', 'screens.json');
 const INNER_STATE_FILE = join(homedir(), '.claudeman', 'state-inner.json');
 const OUTPUT_POLL_INTERVAL = 500; // Poll terminal output every 500ms
 
+interface RespawnStatus {
+  enabled: boolean;
+  state: string;
+  cycleCount: number;
+}
+
 interface SessionManagerState {
   sessions: ScreenSession[];
   activeSessionId: string | null;
@@ -25,6 +31,7 @@ interface SessionManagerState {
   terminalOutput: string;
   innerLoopState: InnerLoopState | null;
   innerTodos: InnerTodoItem[];
+  respawnStatus: RespawnStatus | null;
   refreshSessions: () => void;
   selectSession: (sessionId: string) => void;
   createSession: () => Promise<string | null>;
@@ -93,6 +100,7 @@ export function useSessionManager(): SessionManagerState {
   const [terminalOutput, setTerminalOutput] = useState<string>('');
   const [innerLoopState, setInnerLoopState] = useState<InnerLoopState | null>(null);
   const [innerTodos, setInnerTodos] = useState<InnerTodoItem[]>([]);
+  const [respawnStatus, setRespawnStatus] = useState<RespawnStatus | null>(null);
   const outputBufferRef = useRef<string>('');
 
   // Load sessions on mount and watch for changes
@@ -147,6 +155,48 @@ export function useSessionManager(): SessionManagerState {
 
     // Set up polling interval (same as output polling)
     const intervalId = setInterval(pollInnerState, OUTPUT_POLL_INTERVAL);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [activeSessionId]);
+
+  // Poll respawn status via API (when server is running)
+  useEffect(() => {
+    if (!activeSessionId) {
+      setRespawnStatus(null);
+      return;
+    }
+
+    const pollRespawnStatus = async () => {
+      try {
+        const response = await fetch(`http://localhost:3000/api/sessions/${activeSessionId}`);
+        if (response.ok) {
+          const data = await response.json() as {
+            success?: boolean;
+            session?: {
+              respawnEnabled?: boolean;
+              respawnState?: string;
+              respawnCycleCount?: number;
+            };
+          };
+          if (data.success && data.session) {
+            setRespawnStatus({
+              enabled: data.session.respawnEnabled || false,
+              state: data.session.respawnState || 'stopped',
+              cycleCount: data.session.respawnCycleCount || 0,
+            });
+          }
+        }
+      } catch {
+        // Server not running, that's ok
+        setRespawnStatus(null);
+      }
+    };
+
+    // Poll less frequently than output (every 2 seconds)
+    pollRespawnStatus();
+    const intervalId = setInterval(pollRespawnStatus, 2000);
 
     return () => {
       clearInterval(intervalId);
@@ -335,6 +385,7 @@ export function useSessionManager(): SessionManagerState {
     terminalOutput,
     innerLoopState,
     innerTodos,
+    respawnStatus,
     refreshSessions,
     selectSession,
     createSession,

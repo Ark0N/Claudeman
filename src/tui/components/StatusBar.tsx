@@ -13,9 +13,16 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import type { ScreenSession } from '../../types.js';
 
+interface RespawnStatus {
+  enabled: boolean;
+  state: string;
+  cycleCount: number;
+}
+
 interface StatusBarProps {
   session: ScreenSession | null;
   inputMode?: boolean;
+  respawnStatus?: RespawnStatus | null;
 }
 
 /**
@@ -38,7 +45,7 @@ function formatDuration(ms: number): string {
 /**
  * StatusBar component showing session information
  */
-export function StatusBar({ session, inputMode = false }: StatusBarProps): React.ReactElement {
+export function StatusBar({ session, inputMode = false, respawnStatus }: StatusBarProps): React.ReactElement {
   if (!session) {
     return (
       <Box
@@ -86,6 +93,15 @@ export function StatusBar({ session, inputMode = false }: StatusBarProps): React
           <>
             <Text> | </Text>
             <Text color="yellow" bold>INPUT MODE</Text>
+          </>
+        )}
+        {respawnStatus?.enabled && (
+          <>
+            <Text> | </Text>
+            <Text color="magenta">
+              respawn: {respawnStatus.state.replace(/_/g, ' ')}
+              {respawnStatus.cycleCount > 0 && ` (${respawnStatus.cycleCount})`}
+            </Text>
           </>
         )}
       </Box>

@@ -45,6 +45,7 @@ export function App(): React.ReactElement {
     terminalOutput,
     innerLoopState,
     innerTodos,
+    respawnStatus,
   } = useSessionManager();
 
   // Calculate terminal height based on stdout dimensions
@@ -255,7 +256,7 @@ export function App(): React.ReactElement {
         />
       )}
 
-      <StatusBar session={activeSession} />
+      <StatusBar session={activeSession} respawnStatus={respawnStatus} />
     </Box>
   );
 }
