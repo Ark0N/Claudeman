@@ -158,9 +158,6 @@ claudeman web
 # Custom port
 claudeman web -p 8080
 
-# Terminal UI (attach to sessions directly)
-claudeman tui
-
 # Development mode (no build needed)
 npx tsx src/index.ts web
 ```
