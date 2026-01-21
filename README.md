@@ -57,16 +57,29 @@ claudeman web
 
 ---
 
+## Requirements
+
+- **Node.js 18+** — ES2022 features required
+- **Claude CLI** — `claude` command must be in PATH ([Install guide](https://claude.ai/code))
+- **GNU Screen** — for session persistence (`apt install screen` or `brew install screen`)
+
+---
+
 ## Quick Start
 
 ### 1. Install
 
 ```bash
+# Clone the repository
 git clone https://github.com/yourusername/claudeman.git
 cd claudeman
+
+# Install dependencies and build
 npm install
 npm run build
-npm link  # Optional: makes 'claudeman' available globally
+
+# Optional: make 'claudeman' available globally
+npm link
 ```
 
 ### 2. Launch
@@ -156,6 +169,16 @@ Auto-enables when it detects:
 - Server batches at 16ms intervals
 - Client uses `requestAnimationFrame` for smooth rendering
 - No polling — real-time SSE for instant updates
+
+### 🚀 Performance Optimized
+
+Built for smooth operation even with multiple long-running sessions:
+
+- **CSS containment** — isolated paint operations for each component
+- **Incremental DOM updates** — only changed elements re-render
+- **Input batching** — keystrokes coalesced at 60fps
+- **Event debouncing** — reduced server load from rapid state changes
+- **Memory management** — automatic buffer trimming prevents leaks
 
 ---
 
@@ -386,7 +409,7 @@ A: Up to 20 in the UI, 50 via API.
 npm install
 npx tsx src/index.ts web    # Dev mode (no build needed)
 npm run build               # Production build
-npm test                    # Run 196 tests
+npm test                    # Run 195 tests
 npx tsc --noEmit           # Type check
 ```
 
