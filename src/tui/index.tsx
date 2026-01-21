@@ -65,7 +65,24 @@ export async function startTUI(): Promise<void> {
   // Clear the terminal for full-screen experience
   process.stdout.write('\x1b[2J\x1b[H');
 
-  const { waitUntilExit } = render(<App />);
+  const { waitUntilExit, unmount } = render(<App />);
 
-  await waitUntilExit();
+  // Handle graceful exit on SIGINT/SIGTERM
+  const cleanup = () => {
+    unmount();
+    // Restore terminal state
+    process.stdout.write('\x1b[?25h'); // Show cursor
+    process.stdout.write('\x1b[2J\x1b[H'); // Clear screen
+  };
+
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
+
+  try {
+    await waitUntilExit();
+  } finally {
+    process.off('SIGINT', cleanup);
+    process.off('SIGTERM', cleanup);
+    cleanup();
+  }
 }
