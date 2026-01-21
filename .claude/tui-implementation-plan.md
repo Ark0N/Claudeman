@@ -9,6 +9,56 @@ Build a full terminal user interface (TUI) for Claudeman that mirrors the web in
 - Create, manage, and kill sessions
 - Control respawn and Ralph loop features
 
+---
+
+## Implementation Status
+
+> Last updated: 2026-01-21
+
+### Completed Files
+
+| File | Status | Notes |
+|------|--------|-------|
+| `src/tui/index.tsx` | ✅ Done | Entry point with Ink render |
+| `src/tui/App.tsx` | ✅ Done | Main app component with state management |
+| `src/tui/components/StartScreen.tsx` | ✅ Done | Initial session discovery view |
+| `src/tui/components/TabBar.tsx` | ✅ Done | Session tabs at top |
+| `src/tui/components/TerminalView.tsx` | ✅ Done | PTY output display (renamed from Terminal.tsx) |
+| `src/tui/components/StatusBar.tsx` | ✅ Done | Bottom status bar |
+| `src/tui/components/HelpOverlay.tsx` | ✅ Done | Keyboard shortcuts help |
+| `src/tui/components/index.ts` | ✅ Done | Component exports |
+| `src/tui/hooks/useSessionManager.ts` | ✅ Done | Session management hook |
+| `src/tui/hooks/index.ts` | ✅ Done | Hook exports |
+| `src/cli.ts` | ✅ Done | `tui` command added |
+
+### Remaining Work
+
+| File | Status | Notes |
+|------|--------|-------|
+| `src/tui/components/RalphPanel.tsx` | ❌ Pending | Inner loop/todo tracking panel |
+| `src/tui/hooks/useTerminal.ts` | ❌ Pending | Terminal output handling hook |
+| `src/tui/hooks/useKeyboard.ts` | ❌ Pending | Global keyboard shortcuts hook |
+| `src/tui/store/tui-state.ts` | ❌ Pending | TUI-specific state management |
+
+### Phase Completion
+
+- [x] **Phase 1**: Foundation (entry point, main app)
+- [x] **Phase 2**: Start Screen & Session Discovery
+- [x] **Phase 3**: Tab System
+- [x] **Phase 4**: Terminal Display (basic)
+- [x] **Phase 5**: Status Bar
+- [ ] **Phase 6**: Session Management (partial - create/kill works)
+- [ ] **Phase 7**: Advanced Features (Ralph panel, respawn banner)
+
+### Usage
+
+```bash
+claudeman tui            # Start TUI
+npx tsx src/index.ts tui # Dev mode
+```
+
+---
+
 ## Technology Choice: **Ink (React for CLI)**
 
 **Why Ink over alternatives:**
