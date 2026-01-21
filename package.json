@@ -1,7 +1,7 @@
 {
   "name": "claudeman",
   "version": "1.0.0",
-  "description": "Claude Code session manager with autonomous Ralph Loop",
+  "description": "The missing control plane for Claude Code - run 20 autonomous agents with real-time monitoring and session persistence",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -15,13 +15,21 @@
     "clean": "rm -rf dist",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [
     "claude",
-    "cli",
+    "claude-code",
+    "anthropic",
+    "ai-agent",
+    "automation",
     "session-manager",
-    "automation"
+    "terminal",
+    "cli",
+    "llm",
+    "autonomous-agent",
+    "ralph-loop"
   ],
   "author": "",
   "license": "MIT",
