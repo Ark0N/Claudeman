@@ -160,6 +160,9 @@ Each item has specific file:line references and expected impact estimates.
 5. **Promise Race Condition Fix**: Added `_promptResolved` flag in session.ts to prevent double resolution
 6. **State Update Debouncing** (#10): Added `broadcastSessionStateDebounced()` in server.ts batching at 500ms intervals
 7. **withTimeout Utility**: Added exported utility for async operation protection with configurable timeouts
+8. **WebUI Render Debouncing**: Added debouncing to `renderInnerStatePanel` (50ms), `renderTaskPanel` (100ms), `renderScreenSessions` (100ms)
+9. **CSS Containment**: Added `contain` property to terminal container, session tabs, ralph panel, task panel, and modal content for paint isolation
+10. **GPU-Accelerated Animations**: Added `will-change` for animated elements, use transform-based transitions
 
 ### Commits:
 - `df91823` - fix: improve memory safety and regex pattern handling
@@ -167,3 +170,44 @@ Each item has specific file:line references and expected impact estimates.
 - `645f86e` - perf: optimize regex execution and fix promise race condition
 - `1a7c6d3` - fix: prevent memory leaks from orphaned event listeners
 - `2709d43` - perf: add session state update debouncing in server
+- `ef843bc` - docs: update optimization tracking with completed items
+- `c0688e0` - perf: optimize WebUI rendering and CSS performance
+
+---
+
+## WebUI Future Optimizations
+
+### High Priority
+
+| Optimization | File | Description | Expected Impact |
+|-------------|------|-------------|-----------------|
+| Virtual scrolling for todo lists | `app.js` | Render only visible todos for long lists | 10x improvement for 100+ todos |
+| Incremental DOM updates | `app.js` | Use DOM diffing instead of innerHTML | Reduces reflows by 50% |
+| Web Worker for JSON parsing | `app.js` | Offload SSE message parsing to worker | Smoother UI during high throughput |
+| Request coalescing | `app.js` | Batch rapid API calls (resize, input) | Fewer network requests |
+
+### Medium Priority
+
+| Optimization | File | Description | Expected Impact |
+|-------------|------|-------------|-----------------|
+| Service Worker caching | `sw.js` (new) | Cache static assets, offline support | Faster subsequent loads |
+| WebSocket upgrade | `server.ts`, `app.js` | Replace SSE with WebSocket for bidirectional | Lower latency for input |
+| IndexedDB for terminal history | `app.js` | Store large buffers in IndexedDB | Reduces memory footprint |
+| CSS custom properties for themes | `styles.css` | Dynamic theme switching | Better theming support |
+
+### Low Priority
+
+| Optimization | File | Description | Expected Impact |
+|-------------|------|-------------|-----------------|
+| Preconnect hints | `index.html` | Add preconnect for external resources | Faster initial load |
+| Code splitting | Build config | Split vendor/app bundles | Better caching |
+| Compression for SSE | `server.ts` | gzip compression for SSE stream | 50% bandwidth reduction |
+
+### Performance Metrics to Track
+
+1. **Time to First Byte (TTFB)** - Server response time
+2. **First Contentful Paint (FCP)** - Initial render time
+3. **Time to Interactive (TTI)** - When UI becomes responsive
+4. **Input Latency** - Delay between keypress and display
+5. **Frame Rate** - Target 60fps during terminal output
+6. **Memory Usage** - Monitor for leaks during long sessions
