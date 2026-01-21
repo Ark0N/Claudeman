@@ -6,7 +6,7 @@
 
 <p align="center">
   Autonomous Claude Code work while you sleep<br>
-  <em>Persistent sessions. Ralph Loop tracking. Respawn agents. Multi-Session Dashboards. Monitor Panel.</em>
+  <em>Persistent sessions, Ralph Loop tracking, Respawn agents, Multi-Session Dashboards, Monitor Panel</em>
 </p>
 
 <p align="center">
