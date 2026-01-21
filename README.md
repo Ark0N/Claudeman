@@ -1,5 +1,5 @@
 <h1 align="center">
-  🤖 Claudeman
+  🤖 <span style="color: #60a5fa;">Claudeman</span>
 </h1>
 
 <h3 align="center">Track Claude Code Sessions Better Than Ever</h3>
@@ -19,7 +19,7 @@
 ---
 
 <p align="center">
-  <img src="docs/screenshots/main-interface.png" alt="Claudeman Dashboard" width="900">
+  <img src="docs/images/claude-overview.png" alt="Claudeman Dashboard" width="900">
 </p>
 
 ---
