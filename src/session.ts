@@ -1317,9 +1317,9 @@ export class Session extends EventEmitter {
   assignTask(taskId: string): void {
     this._currentTaskId = taskId;
     this._status = 'busy';
-    this._terminalBuffer = '';
+    this._terminalBuffer.clear();
     this._outputBuffer = '';
-    this._textOutput = '';
+    this._textOutput.clear();
     this._errorBuffer = '';
     this._messages = [];
     this._lastActivityAt = Date.now();

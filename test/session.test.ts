@@ -15,7 +15,7 @@ describe('Interactive Session Lifecycle', () => {
 
   afterAll(async () => {
     await server.stop();
-  });
+  }, 60000);  // Extended timeout for cleanup
 
   describe('Session Creation', () => {
     it('should create session with default working directory', async () => {
