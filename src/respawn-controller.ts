@@ -314,6 +314,12 @@ export class RespawnController extends EventEmitter {
   /** Reference to terminal event handler (for cleanup) */
   private terminalHandler: ((data: string) => void) | null = null;
 
+  /** Timer for /clear step fallback (sends /init if no prompt detected) */
+  private clearFallbackTimer: NodeJS.Timeout | null = null;
+
+  /** Fallback timeout for /clear step (ms) - sends /init without waiting for prompt */
+  private static readonly CLEAR_FALLBACK_TIMEOUT_MS = 10000;
+
   /**
    * Patterns indicating Claude is ready for input.
    * Primary: `↵ send` (suggestion prompt)
@@ -604,6 +610,11 @@ export class RespawnController extends EventEmitter {
    */
   private checkClearComplete(): void {
     this.clearIdleTimer();
+    // Clear the fallback timer since we got prompt detection
+    if (this.clearFallbackTimer) {
+      clearTimeout(this.clearFallbackTimer);
+      this.clearFallbackTimer = null;
+    }
     this.log('/clear completed (ready indicator)');
     this.emit('stepCompleted', 'clear');
 
@@ -724,12 +735,16 @@ export class RespawnController extends EventEmitter {
     }
   }
 
-  /** Clear all timers (idle and step) */
+  /** Clear all timers (idle, step, and clear fallback) */
   private clearTimers(): void {
     this.clearIdleTimer();
     if (this.stepTimer) {
       clearTimeout(this.stepTimer);
       this.stepTimer = null;
+    }
+    if (this.clearFallbackTimer) {
+      clearTimeout(this.clearFallbackTimer);
+      this.clearFallbackTimer = null;
     }
   }
 
@@ -772,6 +787,8 @@ export class RespawnController extends EventEmitter {
 
   /**
    * Send /clear command.
+   * Starts a 10-second fallback timer - if no prompt is detected after /clear,
+   * proceeds to /init anyway (workaround for when Claude doesn't show prompt after /clear).
    * @fires stepSent - With step 'clear'
    */
   private sendClear(): void {
@@ -784,6 +801,19 @@ export class RespawnController extends EventEmitter {
       this.emit('stepSent', 'clear', '/clear');
       this.setState('waiting_clear');
       this.promptDetected = false;
+
+      // Start fallback timer - if no prompt detected after 10s, proceed to /init anyway
+      this.clearFallbackTimer = setTimeout(() => {
+        if (this._state === 'waiting_clear') {
+          this.log('/clear fallback: no prompt detected after 10s, proceeding to /init');
+          this.emit('stepCompleted', 'clear');
+          if (this.config.sendInit) {
+            this.sendInit();
+          } else {
+            this.completeCycle();
+          }
+        }
+      }, RespawnController.CLEAR_FALLBACK_TIMEOUT_MS);
     }, this.config.interStepDelayMs);
   }
 
