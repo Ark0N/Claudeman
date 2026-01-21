@@ -262,13 +262,14 @@ export class WebServer extends EventEmitter {
     // Configure inner loop (Ralph Wiggum) settings
     this.app.post('/api/sessions/:id/inner-config', async (req) => {
       const { id } = req.params as { id: string };
-      const { enabled, completionPhrase, maxIterations, maxTodos, todoExpirationMinutes, reset } = req.body as {
+      const { enabled, completionPhrase, maxIterations, maxTodos, todoExpirationMinutes, reset, disableAutoEnable } = req.body as {
         enabled?: boolean;
         completionPhrase?: string;
         maxIterations?: number;
         maxTodos?: number;
         todoExpirationMinutes?: number;
         reset?: boolean | 'full';  // true = soft reset (keep enabled), 'full' = complete reset
+        disableAutoEnable?: boolean;  // Prevent auto-enable on pattern detection
       };
       const session = this.sessions.get(id);
 
@@ -282,6 +283,15 @@ export class WebServer extends EventEmitter {
           session.innerLoopTracker.fullReset();
         } else {
           session.innerLoopTracker.reset();
+        }
+      }
+
+      // Configure auto-enable behavior
+      if (disableAutoEnable !== undefined) {
+        if (disableAutoEnable) {
+          session.innerLoopTracker.disableAutoEnable();
+        } else {
+          session.innerLoopTracker.enableAutoEnable();
         }
       }
 

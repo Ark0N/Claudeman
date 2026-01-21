@@ -280,6 +280,9 @@ export class InnerLoopTracker extends EventEmitter {
   /** Flag indicating pending loopUpdate emission */
   private _loopUpdatePending: boolean = false;
 
+  /** When true, prevents auto-enable on pattern detection */
+  private _autoEnableDisabled: boolean = false;
+
   /**
    * Creates a new InnerLoopTracker instance.
    * Starts in disabled state until Ralph patterns are detected.
@@ -287,6 +290,28 @@ export class InnerLoopTracker extends EventEmitter {
   constructor() {
     super();
     this._loopState = createInitialInnerLoopState();
+  }
+
+  /**
+   * Prevent auto-enable from pattern detection.
+   * Use this when the user has explicitly disabled the Ralph tracker.
+   */
+  disableAutoEnable(): void {
+    this._autoEnableDisabled = true;
+  }
+
+  /**
+   * Allow auto-enable from pattern detection.
+   */
+  enableAutoEnable(): void {
+    this._autoEnableDisabled = false;
+  }
+
+  /**
+   * Whether auto-enable is disabled.
+   */
+  get autoEnableDisabled(): boolean {
+    return this._autoEnableDisabled;
   }
 
   /**
@@ -500,6 +525,10 @@ export class InnerLoopTracker extends EventEmitter {
 
     // If tracker is disabled, only check for patterns that should auto-enable it
     if (!this._loopState.enabled) {
+      // Don't auto-enable if explicitly disabled by user setting
+      if (this._autoEnableDisabled) {
+        return;
+      }
       if (this.shouldAutoEnable(cleanData)) {
         this.enable();
         // Continue processing now that we're enabled
