@@ -461,21 +461,21 @@ export class InnerLoopTracker extends EventEmitter {
     }
 
     // Todo checkboxes: "- [ ] Task" or "- [x] Task"
+    // Reset lastIndex BEFORE test to ensure consistent matching with /g flag patterns
+    TODO_CHECKBOX_PATTERN.lastIndex = 0;
     if (TODO_CHECKBOX_PATTERN.test(data)) {
-      // Reset lastIndex since we're reusing the global regex
-      TODO_CHECKBOX_PATTERN.lastIndex = 0;
       return true;
     }
 
     // Todo indicator icons: "Todo: ☐", "Todo: ◐", etc.
+    TODO_INDICATOR_PATTERN.lastIndex = 0;
     if (TODO_INDICATOR_PATTERN.test(data)) {
-      TODO_INDICATOR_PATTERN.lastIndex = 0;
       return true;
     }
 
     // Claude Code native todo format: "☐ Task", "☒ Task"
+    TODO_NATIVE_PATTERN.lastIndex = 0;
     if (TODO_NATIVE_PATTERN.test(data)) {
-      TODO_NATIVE_PATTERN.lastIndex = 0;
       return true;
     }
 

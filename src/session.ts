@@ -26,6 +26,7 @@ import { ScreenManager } from './screen-manager.js';
 
 export type { BackgroundTask } from './task-tracker.js';
 export type { InnerLoopState, InnerTodoItem } from './types.js';
+export { withTimeout };
 
 // ============================================================================
 // Buffer Size Constants
@@ -51,6 +52,12 @@ const MAX_LINE_BUFFER_SIZE = 64 * 1024;
 
 /** Line buffer flush interval (100ms) - forces processing of partial lines */
 const LINE_BUFFER_FLUSH_INTERVAL = 100;
+
+/** Default timeout for async operations in milliseconds (5 minutes) */
+const DEFAULT_ASYNC_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** Timeout for interactive session startup in milliseconds (30 seconds) */
+const INTERACTIVE_START_TIMEOUT_MS = 30 * 1000;
 
 // Filter out terminal focus escape sequences (focus in/out reports)
 // ^[[I (focus in), ^[[O (focus out), and the enable/disable sequences
@@ -129,6 +136,33 @@ class BufferAccumulator {
     this.chunks = [trimmed];
     this.totalLength = trimmed.length;
   }
+}
+
+/**
+ * Wraps a promise with a timeout to prevent indefinite hangs.
+ * If the promise doesn't resolve within the timeout, rejects with TimeoutError.
+ *
+ * @param promise - The promise to wrap
+ * @param timeoutMs - Timeout in milliseconds
+ * @param operation - Description of the operation for error messages
+ * @returns Promise that resolves/rejects with the original result or timeout error
+ */
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  operation: string
+): Promise<T> {
+  let timeoutId: NodeJS.Timeout;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`${operation} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    clearTimeout(timeoutId);
+  });
 }
 
 /**
@@ -1253,6 +1287,14 @@ export class Session extends EventEmitter {
       this._lineBufferFlushTimer = null;
     }
 
+    // Immediately cleanup Promise callbacks to prevent orphaned references
+    // during the rest of stop() processing (e.g., if screen kill times out)
+    if (this.rejectPromise) {
+      this.rejectPromise(new Error('Session stopped'));
+    }
+    this.resolvePromise = null;
+    this.rejectPromise = null;
+
     if (this.ptyProcess) {
       const pid = this.ptyProcess.pid;
 
@@ -1305,12 +1347,6 @@ export class Session extends EventEmitter {
     } else if (this._screenSession && !killScreen) {
       console.log('[Session] Keeping screen session alive:', this._screenSession.screenName);
       this._screenSession = null; // Detach but don't kill
-    }
-
-    if (this.rejectPromise) {
-      this.rejectPromise(new Error('Session stopped'));
-      this.resolvePromise = null;
-      this.rejectPromise = null;
     }
   }
 
