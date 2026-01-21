@@ -470,4 +470,18 @@ program
     }
   });
 
+// TUI command
+program
+  .command('tui')
+  .description('Start the terminal user interface')
+  .action(async () => {
+    try {
+      const { startTUI } = await import('./tui/index.js');
+      await startTUI();
+    } catch (err) {
+      console.error(chalk.red(`✗ Failed to start TUI: ${(err as Error).message}`));
+      process.exit(1);
+    }
+  });
+
 export { program };

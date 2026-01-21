@@ -1,0 +1,268 @@
+/**
+ * @fileoverview useSessionManager hook
+ *
+ * Manages session state for the TUI. Connects to:
+ * - ~/.claudeman/screens.json for session discovery
+ * - ScreenManager for session operations
+ * - Session class for terminal output
+ */
+
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { existsSync, readFileSync, watchFile, unwatchFile } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
+import { execSync, spawn } from 'child_process';
+import type { ScreenSession } from '../../types.js';
+
+const SCREENS_FILE = join(homedir(), '.claudeman', 'screens.json');
+
+interface SessionManagerState {
+  sessions: ScreenSession[];
+  activeSessionId: string | null;
+  activeSession: ScreenSession | null;
+  terminalOutput: string;
+  refreshSessions: () => void;
+  selectSession: (sessionId: string) => void;
+  createSession: () => Promise<string | null>;
+  killSession: (sessionId: string) => void;
+  killAllSessions: () => void;
+  nextSession: () => void;
+  prevSession: () => void;
+  sendInput: (sessionId: string, input: string) => void;
+}
+
+/**
+ * Check if a screen session is alive
+ */
+function isScreenAlive(screenName: string): boolean {
+  try {
+    const output = execSync('screen -ls', { encoding: 'utf-8' });
+    return output.includes(screenName);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Load sessions from screens.json
+ */
+function loadSessions(): ScreenSession[] {
+  try {
+    if (!existsSync(SCREENS_FILE)) {
+      return [];
+    }
+    const data = readFileSync(SCREENS_FILE, 'utf-8');
+    const sessions: ScreenSession[] = JSON.parse(data);
+
+    // Check which sessions are alive
+    return sessions.map((session) => ({
+      ...session,
+      attached: isScreenAlive(session.screenName),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Hook for managing sessions in the TUI
+ */
+export function useSessionManager(): SessionManagerState {
+  const [sessions, setSessions] = useState<ScreenSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [terminalOutput, setTerminalOutput] = useState<string>('');
+  const outputBufferRef = useRef<string>('');
+
+  // Load sessions on mount and watch for changes
+  useEffect(() => {
+    // Initial load
+    setSessions(loadSessions());
+
+    // Watch for changes
+    const handleChange = () => {
+      setSessions(loadSessions());
+    };
+
+    try {
+      watchFile(SCREENS_FILE, { interval: 1000 }, handleChange);
+    } catch {
+      // File may not exist yet
+    }
+
+    return () => {
+      try {
+        unwatchFile(SCREENS_FILE, handleChange);
+      } catch {
+        // Ignore
+      }
+    };
+  }, []);
+
+  // Get active session
+  const activeSession = sessions.find((s) => s.sessionId === activeSessionId) || null;
+
+  // Refresh sessions manually
+  const refreshSessions = useCallback(() => {
+    setSessions(loadSessions());
+  }, []);
+
+  // Select a session
+  const selectSession = useCallback((sessionId: string) => {
+    setActiveSessionId(sessionId);
+    setTerminalOutput('');
+    outputBufferRef.current = '';
+
+    // Start capturing output from the screen session
+    const session = sessions.find((s) => s.sessionId === sessionId);
+    if (session && isScreenAlive(session.screenName)) {
+      // Use screen -X hardcopy to capture current screen content
+      try {
+        const hardcopyFile = `/tmp/claudeman-${sessionId}-hardcopy`;
+        execSync(`screen -S ${session.screenName} -X hardcopy ${hardcopyFile}`, {
+          encoding: 'utf-8',
+        });
+        if (existsSync(hardcopyFile)) {
+          const content = readFileSync(hardcopyFile, 'utf-8');
+          setTerminalOutput(content);
+          outputBufferRef.current = content;
+        }
+      } catch {
+        // Hardcopy may fail, that's ok
+      }
+    }
+  }, [sessions]);
+
+  // Create new session
+  const createSession = useCallback(async (): Promise<string | null> => {
+    try {
+      // Use the web API to create a session if server is running
+      const response = await fetch('http://localhost:3000/api/quick-start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caseName: `tui-${Date.now()}` }),
+      });
+
+      if (response.ok) {
+        const data = await response.json() as { success?: boolean; sessionId?: string };
+        if (data.success && data.sessionId) {
+          // Refresh and select new session
+          const sessionId = data.sessionId;
+          setTimeout(() => {
+            refreshSessions();
+            setActiveSessionId(sessionId);
+          }, 500);
+          return sessionId;
+        }
+      }
+
+      // Fallback: Just report that web server isn't running
+      setTerminalOutput(
+        'Web server not running. Start it with: claudeman web\n' +
+        'Then use this TUI to manage sessions.'
+      );
+      return null;
+    } catch {
+      setTerminalOutput(
+        'Cannot connect to Claudeman server.\n' +
+        'Start the server with: claudeman web\n' +
+        'Then use this TUI to manage sessions.'
+      );
+      return null;
+    }
+  }, [refreshSessions]);
+
+  // Kill a session
+  const killSession = useCallback((sessionId: string) => {
+    const session = sessions.find((s) => s.sessionId === sessionId);
+    if (!session) return;
+
+    try {
+      // Kill via screen
+      execSync(`screen -S ${session.screenName} -X quit`, { encoding: 'utf-8' });
+    } catch {
+      // May already be dead
+    }
+
+    // If this was the active session, select another
+    if (activeSessionId === sessionId) {
+      const remaining = sessions.filter((s) => s.sessionId !== sessionId);
+      if (remaining.length > 0) {
+        setActiveSessionId(remaining[0].sessionId);
+      } else {
+        setActiveSessionId(null);
+      }
+    }
+
+    // Refresh to update the list
+    setTimeout(refreshSessions, 500);
+  }, [sessions, activeSessionId, refreshSessions]);
+
+  // Kill all sessions
+  const killAllSessions = useCallback(() => {
+    for (const session of sessions) {
+      try {
+        execSync(`screen -S ${session.screenName} -X quit`, { encoding: 'utf-8' });
+      } catch {
+        // Ignore
+      }
+    }
+    setActiveSessionId(null);
+    setTimeout(refreshSessions, 500);
+  }, [sessions, refreshSessions]);
+
+  // Navigate to next session
+  const nextSession = useCallback(() => {
+    if (sessions.length === 0) return;
+    const currentIndex = sessions.findIndex((s) => s.sessionId === activeSessionId);
+    const nextIndex = (currentIndex + 1) % sessions.length;
+    selectSession(sessions[nextIndex].sessionId);
+  }, [sessions, activeSessionId, selectSession]);
+
+  // Navigate to previous session
+  const prevSession = useCallback(() => {
+    if (sessions.length === 0) return;
+    const currentIndex = sessions.findIndex((s) => s.sessionId === activeSessionId);
+    const prevIndex = currentIndex <= 0 ? sessions.length - 1 : currentIndex - 1;
+    selectSession(sessions[prevIndex].sessionId);
+  }, [sessions, activeSessionId, selectSession]);
+
+  // Send input to a session
+  const sendInput = useCallback((sessionId: string, input: string) => {
+    const session = sessions.find((s) => s.sessionId === sessionId);
+    if (!session || !isScreenAlive(session.screenName)) return;
+
+    try {
+      // Send input via screen stuff command
+      // Escape special characters for shell
+      const escaped = input.replace(/'/g, "'\\''");
+
+      if (input === '\r') {
+        // Send Enter key
+        execSync(`screen -S ${session.screenName} -p 0 -X stuff $'\\015'`, {
+          encoding: 'utf-8',
+        });
+      } else {
+        execSync(`screen -S ${session.screenName} -p 0 -X stuff '${escaped}'`, {
+          encoding: 'utf-8',
+        });
+      }
+    } catch {
+      // Input may fail if screen is not ready
+    }
+  }, [sessions]);
+
+  return {
+    sessions,
+    activeSessionId,
+    activeSession,
+    terminalOutput,
+    refreshSessions,
+    selectSession,
+    createSession,
+    killSession,
+    killAllSessions,
+    nextSession,
+    prevSession,
+    sendInput,
+  };
+}
