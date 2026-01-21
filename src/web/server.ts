@@ -48,6 +48,8 @@ const TERMINAL_BATCH_INTERVAL = 16;
 const OUTPUT_BATCH_INTERVAL = 50;
 // Batch task:updated events for 100ms
 const TASK_UPDATE_BATCH_INTERVAL = 100;
+// State update debounce interval (batch expensive toDetailedState() calls)
+const STATE_UPDATE_DEBOUNCE_INTERVAL = 500;
 // Scheduled runs cleanup interval (check every 5 minutes)
 const SCHEDULED_CLEANUP_INTERVAL = 5 * 60 * 1000;
 // Completed scheduled runs max age (1 hour)
@@ -75,6 +77,9 @@ export class WebServer extends EventEmitter {
   private outputBatchTimer: NodeJS.Timeout | null = null;
   private taskUpdateBatches: Map<string, BackgroundTask> = new Map();
   private taskUpdateBatchTimer: NodeJS.Timeout | null = null;
+  // State update batching (reduce expensive toDetailedState() serialization)
+  private stateUpdatePending: Set<string> = new Set();
+  private stateUpdateTimer: NodeJS.Timeout | null = null;
 
   constructor(port: number = 3000) {
     super();
@@ -1031,13 +1036,14 @@ export class WebServer extends EventEmitter {
 
     session.on('idle', () => {
       this.broadcast('session:idle', { id: session.id });
-      this.broadcast('session:updated', session.toDetailedState());
+      // Use debounced state update (idle can fire frequently)
+      this.broadcastSessionStateDebounced(session.id);
     });
 
-    // Background task events
+    // Background task events - use debounced state updates to reduce serialization overhead
     session.on('taskCreated', (task: BackgroundTask) => {
       this.broadcast('task:created', { sessionId: session.id, task });
-      this.broadcast('session:updated', session.toDetailedState());
+      this.broadcastSessionStateDebounced(session.id);
     });
 
     session.on('taskUpdated', (task: BackgroundTask) => {
@@ -1047,22 +1053,22 @@ export class WebServer extends EventEmitter {
 
     session.on('taskCompleted', (task: BackgroundTask) => {
       this.broadcast('task:completed', { sessionId: session.id, task });
-      this.broadcast('session:updated', session.toDetailedState());
+      this.broadcastSessionStateDebounced(session.id);
     });
 
     session.on('taskFailed', (task: BackgroundTask, error: string) => {
       this.broadcast('task:failed', { sessionId: session.id, task, error });
-      this.broadcast('session:updated', session.toDetailedState());
+      this.broadcastSessionStateDebounced(session.id);
     });
 
     session.on('autoClear', (data: { tokens: number; threshold: number }) => {
       this.broadcast('session:autoClear', { sessionId: session.id, ...data });
-      this.broadcast('session:updated', session.toDetailedState());
+      this.broadcastSessionStateDebounced(session.id);
     });
 
     session.on('autoCompact', (data: { tokens: number; threshold: number; prompt?: string }) => {
       this.broadcast('session:autoCompact', { sessionId: session.id, ...data });
-      this.broadcast('session:updated', session.toDetailedState());
+      this.broadcastSessionStateDebounced(session.id);
     });
 
     // Inner loop tracking events
@@ -1422,6 +1428,33 @@ export class WebServer extends EventEmitter {
     this.taskUpdateBatches.clear();
   }
 
+  /**
+   * Debounce expensive session:updated broadcasts.
+   * Instead of calling toDetailedState() on every event, batch requests
+   * and only serialize once per STATE_UPDATE_DEBOUNCE_INTERVAL.
+   */
+  private broadcastSessionStateDebounced(sessionId: string): void {
+    this.stateUpdatePending.add(sessionId);
+
+    if (!this.stateUpdateTimer) {
+      this.stateUpdateTimer = setTimeout(() => {
+        this.flushStateUpdates();
+        this.stateUpdateTimer = null;
+      }, STATE_UPDATE_DEBOUNCE_INTERVAL);
+    }
+  }
+
+  private flushStateUpdates(): void {
+    for (const sessionId of this.stateUpdatePending) {
+      const session = this.sessions.get(sessionId);
+      if (session) {
+        // Single expensive serialization per batch interval
+        this.broadcast('session:updated', session.toDetailedState());
+      }
+    }
+    this.stateUpdatePending.clear();
+  }
+
   async start(): Promise<void> {
     await this.setupRoutes();
     await this.app.listen({ port: this.port, host: '0.0.0.0' });
@@ -1509,6 +1542,12 @@ export class WebServer extends EventEmitter {
       this.taskUpdateBatchTimer = null;
     }
     this.taskUpdateBatches.clear();
+
+    if (this.stateUpdateTimer) {
+      clearTimeout(this.stateUpdateTimer);
+      this.stateUpdateTimer = null;
+    }
+    this.stateUpdatePending.clear();
 
     // Clear scheduled cleanup timer
     if (this.scheduledCleanupTimer) {
