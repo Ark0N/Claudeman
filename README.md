@@ -1,318 +1,171 @@
 # Claudeman
 
-A Claude Code session manager with an autonomous Ralph Loop for task assignment and monitoring.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue)](https://www.typescriptlang.org/)
+[![Tests](https://img.shields.io/badge/tests-195%20passing-success)](./test)
 
-## Features
+**A powerful Claude Code session manager with autonomous Ralph Loop for long-running AI tasks**
 
-- **Web Interface**: Beautiful, responsive web UI with interactive terminal powered by xterm.js and modern gradient styling
-- **Session Management**: Spawn and manage multiple Claude CLI sessions as PTY subprocesses with one-click kill
-- **Interactive Terminal**: Full terminal access with resize support, buffer persistence, and 60fps batched rendering
-- **Respawn Controller**: Autonomous state machine that cycles sessions (update docs → /clear → /init) with configurable prompts
-- **Enable Respawn on Existing Sessions**: Start respawn on already-running sessions without restarting
-- **Timed Respawn**: Set duration limits for respawn loops with countdown timer display
-- **Auto-Clear Context**: Automatically send /clear when token count exceeds threshold (default 100k)
-- **Token Tracking**: Real-time input/output token tracking per session
-- **Background Task Tracking**: Detect and display Claude's background tasks in a tree view
-- **Inner Loop Tracking**: Detect Ralph Wiggum loops and todo lists running inside Claude Code sessions
-- **Timed Runs**: Schedule Claude to work for a specific duration with animated live countdown
-- **Real-time Output**: Stream Claude's responses in real-time via Server-Sent Events (30 event types)
-- **Task Queue**: Priority-based task queue with dependency support
-- **Ralph Loop**: Autonomous control loop that assigns tasks to idle sessions and monitors completion
-- **Time-Aware Loops**: Extended work sessions with auto-generated follow-up tasks when minimum duration not reached
-- **Case Management**: Create project workspaces with auto-generated CLAUDE.md templates
-- **Cost Tracking**: Track total API costs across all sessions
-- **State Persistence**: All state persisted to `~/.claudeman/state.json`
-- **Long-Running Support**: Optimized for 12-24+ hour sessions with automatic buffer trimming
-- **Resource Monitoring**: Real-time memory/message usage display for each session
-- **Multi-Tab Sessions**: Open 1-10 Claude sessions at once for the same project
-- **Session Restoration**: Automatically restore screen sessions when server restarts
-- **Monitor Panel**: Combined view of screen sessions and background tasks
+Claudeman transforms Claude Code into an autonomous development powerhouse. Spawn multiple Claude CLI sessions, run them for hours with automatic context management, and let the Ralph Loop keep your AI assistant productive around the clock.
 
-## Installation
+---
 
-```bash
-npm install
-npm run build
-npm link  # Optional: make 'claudeman' available globally
-```
+## Table of Contents
+
+- [Highlights](#highlights)
+- [Quick Start](#quick-start)
+- [Screenshots](#screenshots)
+- [Features](#features)
+- [Ralph Loop](#ralph-loop)
+- [Respawn Controller](#respawn-controller)
+- [Inner Loop Tracking](#inner-loop-tracking)
+- [Token Management](#token-management)
+- [Web Interface](#web-interface)
+- [CLI Commands](#cli-commands)
+- [API Reference](#api-reference)
+- [Long-Running Sessions](#long-running-sessions)
+- [Troubleshooting](#troubleshooting)
+- [FAQ](#faq)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
+## Highlights
+
+| Feature | Description |
+|---------|-------------|
+| **Web Interface** | Beautiful terminal UI with xterm.js, 60fps rendering, multi-tab sessions |
+| **Ralph Loop** | Autonomous control loop that keeps Claude working continuously |
+| **Time-Aware Sessions** | Run Claude for specific durations ("work for 8 hours") |
+| **Auto Context** | Automatic `/clear` and `/compact` when tokens get high |
+| **Real-time Monitoring** | Track tokens, costs, memory, background tasks |
+| **Session Persistence** | Screen sessions survive server restarts |
+| **Inner Loop Tracking** | Detect Ralph loops running inside Claude Code |
+
+---
 
 ## Quick Start
 
-### Web Interface (Recommended)
+### Installation
 
 ```bash
-# Start the web interface
+git clone https://github.com/yourusername/claudeman.git
+cd claudeman
+npm install
+npm run build
+npm link  # Optional: make 'claudeman' globally available
+```
+
+### Start the Web Interface
+
+```bash
 claudeman web
-
-# Open http://localhost:3000 in your browser
+# Open http://localhost:3000
 ```
 
-The web interface provides:
-- **Quick Start Button**: One-click to create a case and start an interactive Claude session
-- **Interactive Terminal**: Full xterm.js terminal with resize support and 60fps rendering
-- **Prompt Input**: Enter prompts and optionally set a working directory
-- **Duration Timer**: Set duration in minutes for timed runs (0 = single run)
-- **Live Output**: See Claude's response in real-time as it streams
-- **Countdown**: Animated timer display with shimmer progress bar
-- **Session Monitoring**: View all active sessions with status, resource usage, and cost
-- **Kill All Button**: One-click to terminate all running sessions and their child processes
-- **Resource Display**: Real-time memory usage and message count per session
-- **Respawn Controls**: Start/stop respawn controller with configurable settings
-- **Case Management**: Create new project workspaces with CLAUDE.md templates
-- **Keyboard Shortcuts**: Quick access to common actions (Ctrl+Enter, Ctrl+K, Ctrl+L)
-- **Toast Notifications**: Non-intrusive status updates and alerts
-- **Mobile Support**: Responsive design optimized for tablets and phones
-- **Modern UI**: Gradient backgrounds, smooth animations, and polished styling
+### Your First Session
 
-#### Quick Start Button
+1. Click **"Run Claude"** or press `Ctrl+Enter`
+2. A case folder is created in `~/claudeman-cases/`
+3. An interactive Claude terminal opens
+4. Start working!
 
-The Quick Start feature reduces the typical 5-step workflow to just 1-2 steps:
+---
 
-**Before (5 steps):**
-1. Go to Cases tab
-2. Create a case
-3. Click the case
-4. Switch to Run tab
-5. Click Interactive
+## Screenshots
 
-**After (1-2 steps):**
-1. (Optional) Select a case from dropdown
-2. Click "Quick Start"
+### Main Interface
 
-The Quick Start button will:
-- Create a case folder in `~/claudeman-cases/` if it doesn't exist
-- Generate a CLAUDE.md file for the case
-- Create a new session pointed to that case directory
-- Start an interactive Claude terminal
-- Focus the terminal so you can start working immediately
+![Main Interface](docs/screenshots/main-interface.png)
 
-#### Keyboard Shortcuts
+*The Claudeman web interface with session tabs, terminal, and control panels*
 
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+Enter` | Run Claude (create case + interactive session) |
-| `Ctrl+W` | Close current session |
-| `Ctrl+Tab` | Switch to next session |
-| `Ctrl+K` | Kill all sessions |
-| `Ctrl+L` | Clear terminal |
-| `Ctrl++/-` | Increase/decrease font size |
-| `Ctrl+?` | Show keyboard shortcuts help |
-| `Escape` | Close panels and modals |
+### Session Running
 
-#### Additional Features
+![Session Running](docs/screenshots/session-running.png)
 
-- **Multi-Tab Sessions**: Number input (1-10) next to "Run Claude" opens multiple sessions at once, named `1-projectname`, `2-projectname`, etc.
-- **Monitor Panel**: Combined view of Screen Sessions and Background Tasks in one panel
-- **Session Restoration**: Screen sessions are automatically restored when the server restarts
-- **Terminal Font Controls**: Adjust font size with A+/A- buttons in header or Ctrl++/-
-- **Copy Terminal Output**: Copy all terminal content to clipboard
-- **Session Duration**: View how long each session has been running
-- **Working Directory Display**: See the project folder for each session
-- **Session Count**: Header displays total active sessions
-- **Toast Notifications**: Non-intrusive status updates and alerts
-- **Mobile Support**: Responsive design optimized for tablets and phones
-- **Help Modal**: Press ? button or Ctrl+? for keyboard shortcuts reference
-- **Reconnect Button**: Manually reconnect if connection is lost
-- **Confirmation Dialogs**: Warns before starting long timed runs (30+ minutes)
+*An active Claude session with real-time terminal output*
 
-### CLI Usage
+---
 
-```bash
-# Start a Claude session
-claudeman start --dir /path/to/project
-
-# Add tasks to the queue
-claudeman task add "Fix the bug in auth.ts"
-claudeman task add "Add tests for the API" --priority 5
-
-# Start the Ralph loop to process tasks
-claudeman ralph start
-
-# Check status
-claudeman status
-```
-
-## Commands
-
-### Web Interface
-
-```bash
-# Start web interface on default port (3000)
-claudeman web
-
-# Use a different port
-claudeman web --port 8080
-```
+## Features
 
 ### Session Management
+- Spawn multiple Claude CLI sessions as PTY subprocesses
+- Full terminal access with resize support and buffer persistence
+- One-click kill for individual sessions or all at once
+- Session restoration after server restarts via GNU screen
+
+### Autonomous Operation
+- **Respawn Controller**: State machine that cycles sessions (update → /clear → /init)
+- **Ralph Loop**: Assigns tasks to idle sessions and monitors completion
+- **Time-Aware Loops**: Auto-generate follow-up tasks when minimum duration not reached
+- **Completion Detection**: Detect `<promise>PHRASE</promise>` patterns
+
+### Context Management
+- **Token Tracking**: Real-time input/output token counts per session
+- **Auto-Compact**: Send `/compact` when tokens exceed 110k (configurable)
+- **Auto-Clear**: Send `/clear` when tokens exceed 140k (configurable)
+- **Buffer Trimming**: Automatic memory management for 12-24+ hour sessions
+
+### Monitoring
+- **Inner Loop Tracking**: Detect Ralph loops and todos inside Claude Code
+- **Background Task Tracking**: Tree view of Claude's spawned tasks
+- **Cost Tracking**: Total API costs across all sessions
+- **Resource Monitoring**: Memory usage with color-coded warnings
+
+---
+
+## Ralph Loop
+
+The **Ralph Loop** is Claudeman's signature feature - an autonomous control loop that keeps Claude working on tasks continuously.
+
+### How It Works
+
+1. **Assign task** to idle session
+2. **Monitor output** for completion signals
+3. **Detect completion** via `<promise>COMPLETE</promise>` or indicators
+4. **Mark complete**, assign next task
+5. **Auto-generate tasks** if min-time not reached and queue empty
+6. **Repeat** until all done
+
+### Starting a Ralph Loop
 
 ```bash
-# Start a new session
-claudeman session start [--dir <path>]
-claudeman start [--dir <path>]  # shorthand
-
-# Stop a session
-claudeman session stop <session-id>
-
-# List sessions
-claudeman session list
-claudeman list  # shorthand
-
-# View session output
-claudeman session logs <session-id>
-claudeman session logs <session-id> --errors  # stderr
-```
-
-### Task Management
-
-```bash
-# Add a task
-claudeman task add "<prompt>" [options]
-  --dir <path>           Working directory
-  --priority <n>         Priority (higher = processed first)
-  --completion <phrase>  Custom completion phrase to detect
-  --timeout <ms>         Task timeout in milliseconds
-
-# List tasks
-claudeman task list
-claudeman task list --status pending
-
-# View task details
-claudeman task status <task-id>
-
-# Remove a task
-claudeman task remove <task-id>
-
-# Clear tasks
-claudeman task clear              # completed tasks
-claudeman task clear --failed     # failed tasks
-claudeman task clear --all        # all tasks
-```
-
-### Ralph Loop
-
-```bash
-# Start the autonomous loop
+# Basic Ralph loop
 claudeman ralph start
-claudeman ralph start --min-hours 4      # run for at least 4 hours
-claudeman ralph start --no-auto-generate # disable auto task generation
 
-# Stop the loop
-claudeman ralph stop
+# Run for at least 4 hours
+claudeman ralph start --min-hours 4
 
-# Check loop status
-claudeman ralph status
+# Run for 8 hours without auto-generation
+claudeman ralph start --min-hours 8 --no-auto-generate
 ```
 
-### Respawn Controller (Web Interface)
+### Completion Detection
 
-The respawn controller keeps interactive sessions productive by automatically cycling through update prompts:
+The Ralph Loop detects task completion through several patterns:
 
-1. Detects when session goes idle (prompt character visible, no activity)
-2. Sends configured update prompt (default: "update all the docs and CLAUDE.md")
-3. Optionally sends `/clear` command to reset context
-4. Optionally sends `/init` to reinitialize
-5. Repeats
+| Pattern | Example |
+|---------|---------|
+| Promise tags | `<promise>COMPLETE</promise>` |
+| Custom phrases | `<promise>AUTH_REFACTOR_DONE</promise>` |
+| Common indicators | "Task completed successfully", "All done" |
+| Checkmarks | "✓ Complete", "✔ Finished" |
 
-**New Features:**
-- **Enable on Existing Sessions**: Start respawn on already-running sessions
-- **Timed Duration**: Set a duration limit (e.g., 30 minutes) after which respawn automatically stops
-- **Auto-Clear**: Automatically send /clear when token count exceeds threshold (default 100k)
-- **Configurable Steps**: Toggle /clear and /init steps independently
-
-**Configuration via API:**
-```bash
-# Start respawn with custom config
-curl -X POST localhost:3000/api/sessions/:id/respawn/start \
-  -H "Content-Type: application/json" \
-  -d '{"config": {"idleTimeoutMs": 10000, "updatePrompt": "run tests and fix issues"}}'
-
-# Enable respawn on an existing running session with duration
-curl -X POST localhost:3000/api/sessions/:id/respawn/enable \
-  -H "Content-Type: application/json" \
-  -d '{"config": {"updatePrompt": "continue working"}, "durationMinutes": 60}'
-
-# Enable auto-clear at 100k tokens
-curl -X POST localhost:3000/api/sessions/:id/auto-clear \
-  -H "Content-Type: application/json" \
-  -d '{"enabled": true, "threshold": 100000}'
-
-# Update config on running respawn
-curl -X PUT localhost:3000/api/sessions/:id/respawn/config \
-  -H "Content-Type: application/json" \
-  -d '{"updatePrompt": "refactor the API layer", "sendClear": true, "sendInit": false}'
-```
-
-**State Machine:**
-```
-WATCHING → SENDING_UPDATE → WAITING_UPDATE → SENDING_CLEAR → WAITING_CLEAR → SENDING_INIT → WAITING_INIT → WATCHING
-```
-
-**Respawn Config Options:**
-| Option | Default | Description |
-|--------|---------|-------------|
-| `idleTimeoutMs` | 5000 | Time to wait after idle before sending update |
-| `updatePrompt` | "update all docs..." | Prompt to send when idle |
-| `sendClear` | true | Send /clear after update prompt |
-| `sendInit` | true | Send /init after /clear |
-
-### Utility
+**Custom completion phrase:**
 
 ```bash
-# Overall status
-claudeman status
-
-# Reset all state (stops sessions, clears tasks)
-claudeman reset --force
+claudeman task add "Refactor the auth module" --completion "AUTH_DONE"
+# Claude outputs: <promise>AUTH_DONE</promise> when finished
 ```
 
-## Architecture
+### Time-Aware Loops
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Claudeman CLI                        │
-├─────────────────────────────────────────────────────────┤
-│  Ralph Loop Controller                                  │
-│  - Monitors all sessions                                │
-│  - Assigns tasks from queue                             │
-│  - Detects completion/failure                           │
-│  - Self-generates follow-up tasks                       │
-├─────────────────────────────────────────────────────────┤
-│  Session Manager              │  Task Queue             │
-│  - Spawn claude processes     │  - Priority queue       │
-│  - Track stdin/stdout/stderr  │  - Task definitions     │
-│  - Health monitoring          │  - Dependencies         │
-│  - Graceful shutdown          │  - Status tracking      │
-├─────────────────────────────────────────────────────────┤
-│  State Store (JSON file persistence)                    │
-│  - Sessions, tasks, logs                                │
-└─────────────────────────────────────────────────────────┘
-```
-
-## Completion Detection
-
-The Ralph Loop detects task completion by looking for:
-
-1. **Promise tags**: `<promise>COMPLETE</promise>` or custom phrases
-2. **Common indicators**: "Task completed successfully", "All tasks done", "✓ Complete"
-
-When creating tasks, you can specify a custom completion phrase:
-
-```bash
-claudeman task add "Refactor the auth module" --completion "AUTH_REFACTOR_DONE"
-```
-
-The session output will be scanned for `<promise>AUTH_REFACTOR_DONE</promise>`.
-
-## Time-Aware Loops
-
-For extended autonomous work sessions:
-
-```bash
-claudeman ralph start --min-hours 8
-```
-
-When the minimum duration hasn't been reached and all tasks are complete, the Ralph Loop will auto-generate follow-up tasks like:
+When the minimum duration hasn't been reached and all tasks complete, the Ralph Loop auto-generates follow-up tasks:
 
 - Review and optimize recently changed code
 - Add tests for uncovered code paths
@@ -320,201 +173,470 @@ When the minimum duration hasn't been reached and all tasks are complete, the Ra
 - Check for security vulnerabilities
 - Run linting and fix issues
 
+### Use Cases
+
+**Overnight Code Review**
+```bash
+claudeman ralph start --min-hours 8
+claudeman task add "Review all code in src/ for bugs and improvements"
+claudeman task add "Add missing tests for edge cases"
+# Let it run overnight
+```
+
+**Feature Implementation Sprint**
+```bash
+claudeman task add "Implement user authentication with JWT" --completion "AUTH_DONE"
+claudeman task add "Add login/logout endpoints" --completion "ENDPOINTS_DONE"
+claudeman task add "Write integration tests" --completion "TESTS_DONE"
+claudeman ralph start --min-hours 4
+```
+
+**Continuous Documentation**
+```bash
+# Start a session and enable respawn
+claudeman web
+# In web UI: Start session, enable respawn with prompt:
+# "Update documentation for any changed files, then update CLAUDE.md"
+```
+
+**Parallel Development**
+```bash
+claudeman web
+# Create 3 sessions working on different modules
+# Session 1: Frontend components
+# Session 2: Backend API
+# Session 3: Database migrations
+```
+
+---
+
+## Respawn Controller
+
+The **Respawn Controller** keeps interactive sessions productive by automatically cycling through update prompts.
+
+### State Flow
+
+**WATCHING** → **SENDING_UPDATE** → **WAITING_UPDATE** → **SENDING_CLEAR** → **WAITING_CLEAR** → **SENDING_INIT** → **WAITING_INIT** → **MONITORING_INIT** → back to **WATCHING**
+
+Optional: **SENDING_KICKSTART** → **WAITING_KICKSTART** if /init doesn't trigger work
+
+### States Explained
+
+| State | Description |
+|-------|-------------|
+| `WATCHING` | Monitoring session for idle state |
+| `SENDING_UPDATE` | Sending the update prompt |
+| `WAITING_UPDATE` | Waiting for Claude to process |
+| `SENDING_CLEAR` | Sending `/clear` command |
+| `WAITING_CLEAR` | Waiting for context to clear |
+| `SENDING_INIT` | Sending `/init` command |
+| `WAITING_INIT` | Waiting for initialization |
+| `MONITORING_INIT` | Checking if work started |
+
+### Configuration
+
+```bash
+# Start respawn with config
+curl -X POST localhost:3000/api/sessions/:id/respawn/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "config": {
+      "idleTimeoutMs": 5000,
+      "updatePrompt": "continue working on the current task",
+      "sendClear": true,
+      "sendInit": true
+    }
+  }'
+
+# Enable with timed duration (120 minutes)
+curl -X POST localhost:3000/api/sessions/:id/respawn/enable \
+  -H "Content-Type: application/json" \
+  -d '{
+    "config": {"updatePrompt": "keep improving the code"},
+    "durationMinutes": 120
+  }'
+```
+
+### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `idleTimeoutMs` | 5000 | Time to wait after idle before cycling |
+| `updatePrompt` | "update all docs..." | Prompt sent when session goes idle |
+| `sendClear` | true | Whether to send `/clear` after update |
+| `sendInit` | true | Whether to send `/init` after clear |
+| `kickstartPrompt` | null | Optional prompt if /init doesn't trigger work |
+
+---
+
 ## Inner Loop Tracking
 
-When Claude Code runs inside a claudeman session, it may run its own Ralph Wiggum loops or use the TodoWrite tool. Claudeman automatically detects and displays this internal state.
+Claudeman detects when Claude Code runs its own Ralph Wiggum loops or uses TodoWrite internally.
 
-### What's Detected
+### Detected Patterns
 
-- **Completion Phrases**: `<promise>COMPLETE</promise>`, `<promise>TIME_COMPLETE</promise>`, etc.
-- **Todo Items**: Checkbox format (`- [ ]`/`- [x]`), indicator icons (`☐`/`◐`/`✓`), status parentheses
-- **Loop Status**: Cycle counts, elapsed time, loop start/completion
+| Pattern | Example |
+|---------|---------|
+| Completion phrases | `<promise>COMPLETE</promise>` |
+| Todo checkboxes | `- [ ] Task`, `- [x] Done` |
+| Todo indicators | `☐ Pending`, `◐ In Progress`, `✓ Complete` |
+| Iteration patterns | `Iteration 5/50`, `[5/50]` |
+| Loop commands | `/ralph-loop:ralph-loop` |
+| Completion messages | "All tasks completed" |
+
+### Session-Scoped
+
+Each session has its **own independent tracker**:
+- **New session** → Fresh tracker
+- **Close tab** → Tracker state cleared
+- **Switch tabs** → Panel shows tracker for active session
 
 ### UI Display
 
-A collapsible panel appears below session tabs when inner state is detected:
-- **Collapsed**: Shows loop status and task summary (e.g., "🔄 Loop: TIME_COMPLETE (2.3h) | Tasks: 3/5")
-- **Expanded**: Shows full todo list with status indicators
+A collapsible panel shows:
+- **Collapsed**: Summary like "Loop: TIME_COMPLETE (2.3h) | Tasks: 3/5"
+- **Expanded**: Full todo list with progress ring
 
 ### API
 
 ```bash
-# Get inner state for a session
+# Get inner state
 curl localhost:3000/api/sessions/:id/inner-state
+
+# Reset tracker
+curl -X POST localhost:3000/api/sessions/:id/inner-config \
+  -H "Content-Type: application/json" \
+  -d '{"reset": true}'
 ```
 
-Returns:
-```json
-{
-  "success": true,
-  "data": {
-    "loop": { "active": true, "completionPhrase": "COMPLETE", "cycleCount": 5, "elapsedHours": 2.3 },
-    "todos": [
-      { "id": "todo-abc", "content": "Research existing code", "status": "completed" },
-      { "id": "todo-def", "content": "Implement feature", "status": "in_progress" }
-    ],
-    "todoStats": { "total": 5, "pending": 2, "inProgress": 1, "completed": 2 }
-  }
-}
+---
+
+## Token Management
+
+### Token Tracking
+
+- **Interactive mode**: Parses tokens from Claude's status line
+- **One-shot mode**: Uses `--output-format stream-json`
+- **Estimation**: 60/40 input/output split for interactive
+
+### Auto-Compact
+
+Automatically sends `/compact` when tokens exceed threshold:
+
+```bash
+curl -X POST localhost:3000/api/sessions/:id/auto-compact \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "threshold": 110000}'
 ```
+
+### Auto-Clear
+
+Automatically sends `/clear` when tokens exceed threshold:
+
+```bash
+curl -X POST localhost:3000/api/sessions/:id/auto-clear \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "threshold": 140000}'
+```
+
+| Feature | Default Threshold | Action |
+|---------|------------------|--------|
+| Auto-Compact | 110k tokens | `/compact` |
+| Auto-Clear | 140k tokens | `/clear` |
+
+---
+
+## Web Interface
+
+### Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Enter` | Create case and start session |
+| `Ctrl+W` | Close current session |
+| `Ctrl+Tab` | Switch to next session |
+| `Ctrl+K` | Kill all sessions |
+| `Ctrl+L` | Clear terminal |
+| `Ctrl++/-` | Adjust font size |
+| `Escape` | Close panels |
+
+### Multi-Tab Sessions
+
+1. Set the number (1-10) in the tab count stepper
+2. Click "Run Claude"
+3. Sessions named `1-projectname`, `2-projectname`, etc.
+
+### Monitor Panel
+
+Combined view of:
+- **Screen Sessions**: All GNU screen sessions with status
+- **Background Tasks**: Tree view of Claude's spawned tasks
+
+### UI Features
+
+- 60fps rendering with batching
+- Auto-focus for single sessions
+- Scroll preservation when expanding panels
+- Toast notifications
+- Mobile-responsive design
+
+---
+
+## CLI Commands
+
+### Sessions
+
+```bash
+claudeman start [--dir <path>]       # Start session
+claudeman list                       # List sessions
+claudeman session stop <id>          # Stop session
+claudeman session logs <id>          # View output
+```
+
+### Tasks
+
+```bash
+claudeman task add "<prompt>" [options]
+  --dir <path>           # Working directory
+  --priority <n>         # Priority (higher = first)
+  --completion <phrase>  # Completion phrase
+  --timeout <ms>         # Timeout
+
+claudeman task list [--status pending]
+claudeman task remove <id>
+claudeman task clear [--all|--failed]
+```
+
+### Ralph Loop
+
+```bash
+claudeman ralph start [--min-hours 4]
+claudeman ralph stop
+claudeman ralph status
+```
+
+### Server
+
+```bash
+claudeman web [-p 8080]
+claudeman status
+claudeman reset --force
+```
+
+---
+
+## API Reference
+
+### Sessions
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/sessions` | List sessions |
+| `POST` | `/api/sessions` | Create session |
+| `GET` | `/api/sessions/:id` | Get details |
+| `DELETE` | `/api/sessions/:id` | Delete |
+| `POST` | `/api/sessions/:id/input` | Send input |
+| `POST` | `/api/sessions/:id/resize` | Resize terminal |
+| `POST` | `/api/sessions/:id/interactive` | Start interactive |
+
+### Respawn
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/sessions/:id/respawn/start` | Start |
+| `POST` | `/api/sessions/:id/respawn/stop` | Stop |
+| `POST` | `/api/sessions/:id/respawn/enable` | Enable with timer |
+| `PUT` | `/api/sessions/:id/respawn/config` | Update config |
+
+### Inner Loop
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/sessions/:id/inner-state` | Get state |
+| `POST` | `/api/sessions/:id/inner-config` | Configure |
+
+### Auto Context
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/sessions/:id/auto-compact` | Configure |
+| `POST` | `/api/sessions/:id/auto-clear` | Configure |
+
+### Monitoring
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/events` | SSE stream |
+| `GET` | `/api/status` | Full state |
+| `GET` | `/api/screens` | Screen list |
+
+### Cases
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/cases` | List cases |
+| `POST` | `/api/cases` | Create case |
+| `POST` | `/api/quick-start` | Quick start |
+
+---
 
 ## Long-Running Sessions
 
-Claudeman is optimized for extended autonomous sessions (12-24+ hours):
+Optimized for 12-24+ hour autonomous sessions.
 
-### Buffer Management
+### Buffer Limits
 
-To prevent memory issues during long runs, buffers are automatically managed:
-- **Terminal buffer**: Max 5MB, trims to 4MB when exceeded
-- **Text output**: Max 2MB, trims to 1.5MB when exceeded
-- **Messages**: Max 1000, keeps most recent 800 when exceeded
+| Buffer | Max Size | Trim To |
+|--------|----------|---------|
+| Terminal | 5MB | 4MB |
+| Text output | 2MB | 1.5MB |
+| Messages | 1000 | 800 |
+| Line buffer | 64KB | flush 100ms |
 
-### Performance Optimizations
+### Performance
 
-- **Server-side batching**: Terminal data batched at 60fps (16ms intervals)
-- **Client-side batching**: requestAnimationFrame for smooth rendering
-- **Aggressive process cleanup**: SIGKILL with process group termination
+- Server batching at 60fps (16ms)
+- Client requestAnimationFrame batching
+- Debounced state saves (500ms)
+- Aggressive process cleanup
 
-### Resource Monitoring
+### Best Practices
 
-Each session displays real-time resource usage:
-- Memory usage (terminal + text buffers)
-- Message count
-- Color-coded warnings (green/yellow/red based on usage)
+1. Enable auto-compact (threshold below auto-clear)
+2. Use screen sessions for persistence
+3. Monitor resource usage indicators
+4. Commit frequently in Ralph loops
+5. Plan for periodic breaks
 
-### Kill Sessions
+---
 
-- Click `✕` on individual session cards to terminate
-- Click `Kill All` button in sessions panel to terminate all at once
-- Sessions are forcefully killed with SIGKILL after SIGTERM timeout
+## Troubleshooting
 
-## State Files
+### Session Won't Start
 
-State is persisted to `~/.claudeman/`:
-- `state.json` - Sessions, tasks, config
-- `state-inner.json` - Inner loop/todo state (separate file to reduce write frequency)
-- `screens.json` - Screen session metadata
-
-Main state file structure:
-
-```json
-{
-  "sessions": { ... },
-  "tasks": { ... },
-  "ralphLoop": {
-    "status": "running",
-    "startedAt": 1234567890,
-    "minDurationMs": 14400000,
-    "tasksCompleted": 5,
-    "tasksGenerated": 2
-  },
-  "config": {
-    "pollIntervalMs": 1000,
-    "defaultTimeoutMs": 300000,
-    "maxConcurrentSessions": 5
-  }
-}
+```bash
+which claude                     # Check CLI available
+claude --version                 # Check version
+screen -ls                       # Check screen sessions
+pkill -f "SCREEN.*claudeman"     # Kill stuck screens
 ```
+
+### High Memory Usage
+
+```bash
+curl localhost:3000/api/sessions/:id  # Check buffer sizes
+
+# Lower auto-clear threshold
+curl -X POST localhost:3000/api/sessions/:id/auto-clear \
+  -d '{"enabled": true, "threshold": 100000}'
+```
+
+### Respawn Not Working
+
+1. Check for `↵ send` idle indicator
+2. Verify respawn enabled via API
+3. Check respawn state is `watching`
+4. Increase `idleTimeoutMs` if needed
+
+### Screen Issues
+
+```bash
+screen -ls | grep claudeman           # List screens
+screen -X -S claudeman-<id> quit      # Kill specific
+pkill -f "SCREEN.*claudeman"          # Kill all
+```
+
+---
+
+## FAQ
+
+**Q: How long can sessions run?**
+A: 24+ hours. Buffer management keeps memory stable.
+
+**Q: Does it work with Claude Code hooks?**
+A: Yes! Claudeman spawns real Claude CLI processes.
+
+**Q: Can I run multiple sessions?**
+A: Yes, up to 50 concurrent sessions.
+
+**Q: What if the server restarts?**
+A: Screen sessions persist and auto-restore.
+
+**Q: How does token counting work?**
+A: Parses Claude's status line (e.g., "123.4k tokens").
+
+**Q: Custom completion phrases?**
+A: Yes! Use `--completion` flag or `<promise>PHRASE</promise>`.
+
+---
 
 ## Development
 
-```bash
-# Run in development mode
-npm run dev -- start
-
-# Build
-npm run build
-
-# Clean build artifacts
-npm run clean
-```
-
-## Testing
-
-### Unit Tests
+### Setup
 
 ```bash
-npm run test                              # Run all tests once
-npm run test:watch                        # Watch mode
-npm run test:coverage                     # With coverage report
-npx vitest run test/session.test.ts       # Single file
-npx vitest run -t "should create session" # By pattern
+npm install
+npx tsx src/index.ts web    # Dev mode
+npm run build               # Production
+npx tsc --noEmit            # Type check
 ```
 
-### E2E Testing with agent-browser
-
-The project uses [agent-browser](https://github.com/vercel-labs/agent-browser) for end-to-end testing of the web interface. This tool provides browser automation via accessibility tree snapshots and element references.
-
-#### Installation
+### Testing
 
 ```bash
-npm install -g agent-browser
+npm run test                # All tests (195)
+npm run test:watch          # Watch mode
+npm run test:coverage       # Coverage
+npx vitest run -t "name"    # By pattern
 ```
 
-#### Running E2E Tests
+### Test Ports
 
-1. Start the web server:
-```bash
-npm run dev
-# or
-claudeman web
-```
+| Port | Test File |
+|------|-----------|
+| 3099 | quick-start.test.ts |
+| 3102 | session.test.ts |
+| 3105 | scheduled-runs.test.ts |
+| 3107 | sse-events.test.ts |
+| 3110 | edge-cases.test.ts |
+| 3115 | integration-flows.test.ts |
+| 3120 | session-cleanup.test.ts |
 
-2. Kill any existing screen sessions (clean slate):
-```bash
-screen -ls | grep -oP '\d+\.\S+' | xargs -I{} screen -X -S {} quit 2>/dev/null || true
-```
+---
 
-3. Run tests with agent-browser:
-```bash
-# Open the app and take initial snapshot
-npx agent-browser open http://localhost:3000
-npx agent-browser wait --load networkidle
-npx agent-browser snapshot
-npx agent-browser screenshot /tmp/claudeman-test-initial.png
+## Contributing
 
-# Test font controls
-npx agent-browser find text "A-" click
-npx agent-browser find text "A+" click
+1. Fork the repository
+2. Create feature branch (`git checkout -b feature/amazing`)
+3. Write tests for new functionality
+4. Ensure tests pass (`npm test`)
+5. Commit with conventional commits (`feat:`, `fix:`, `docs:`)
+6. Open Pull Request
 
-# Test tab count stepper
-npx agent-browser find text "+" click    # Increment
-npx agent-browser find text "−" click    # Decrement
+### Code Style
 
-# Test session creation
-npx agent-browser find text "Run Claude" click
-npx agent-browser wait 2000
-npx agent-browser snapshot
+- TypeScript strict mode
+- ES2022 target, NodeNext modules
+- Pre-compile regex patterns
 
-# Test Monitor panel
-npx agent-browser find text "Monitor" click
-npx agent-browser wait 500
-npx agent-browser snapshot
+---
 
-# Cleanup
-npx agent-browser close
-```
+## License
 
-#### E2E Test Skill
+MIT License - see [LICENSE](LICENSE) for details.
 
-A skill is available at `.claude/skills/e2e-test.md` that documents the complete test plan with all test cases and expected results. Run it with Claude Code:
+---
 
-```bash
-/e2e-test
-```
+## Acknowledgments
 
-#### Key Test Areas
+- [Claude Code](https://claude.ai/code) by Anthropic
+- [xterm.js](https://xtermjs.org/) for terminal rendering
+- [Fastify](https://fastify.io/) for the web server
+- [node-pty](https://github.com/microsoft/node-pty) for PTY
+- [GNU Screen](https://www.gnu.org/software/screen/) for persistence
 
-| Area | What to Test |
-|------|--------------|
-| Initial Load | Header, tabs, font controls, connection status |
-| Font Controls | A-/A+ buttons positioned left of connection |
-| Tab Count | Stepper with −/number/+ buttons |
-| Session Creation | Tab appears, terminal shows Claude starting |
-| Session Options | Modal with respawn settings |
-| Monitor Panel | Screen sessions and background tasks display |
+---
 
-## Requirements
-
-- Node.js 18+
-- Claude CLI (`claude`) installed and available in PATH
+<p align="center">
+  Made with care for autonomous AI development
+</p>
