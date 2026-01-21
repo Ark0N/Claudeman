@@ -2365,7 +2365,9 @@ class ClaudemanApp {
     if (!grid) return;
 
     if (todos.length === 0) {
-      grid.innerHTML = '<div class="inner-state-empty">No tasks detected</div>';
+      if (grid.children.length !== 1 || !grid.querySelector('.inner-state-empty')) {
+        grid.innerHTML = '<div class="inner-state-empty">No tasks detected</div>';
+      }
       return;
     }
 
@@ -2375,16 +2377,59 @@ class ClaudemanApp {
       return (order[a.status] || 1) - (order[b.status] || 1);
     });
 
-    grid.innerHTML = sorted.map(todo => {
-      const statusClass = `task-${todo.status.replace('_', '-')}`;
-      const icon = this.getRalphTaskIcon(todo.status);
-      return `
-        <div class="ralph-task-card ${statusClass}">
-          <span class="ralph-task-icon">${icon}</span>
-          <span class="ralph-task-content">${this.escapeHtml(todo.content)}</span>
-        </div>
-      `;
-    }).join('');
+    // Incremental DOM update - reuse existing elements where possible
+    const existingCards = grid.querySelectorAll('.ralph-task-card');
+    const fragment = document.createDocumentFragment();
+    let needsRebuild = existingCards.length !== sorted.length;
+
+    // Check if we can do incremental update
+    if (!needsRebuild) {
+      // Update existing cards in place
+      sorted.forEach((todo, i) => {
+        const card = existingCards[i];
+        const statusClass = `task-${todo.status.replace('_', '-')}`;
+        const icon = this.getRalphTaskIcon(todo.status);
+
+        // Update class if changed
+        if (!card.classList.contains(statusClass)) {
+          card.className = `ralph-task-card ${statusClass}`;
+        }
+
+        // Update icon if changed
+        const iconEl = card.querySelector('.ralph-task-icon');
+        if (iconEl && iconEl.textContent !== icon) {
+          iconEl.textContent = icon;
+        }
+
+        // Update content if changed
+        const contentEl = card.querySelector('.ralph-task-content');
+        if (contentEl && contentEl.textContent !== todo.content) {
+          contentEl.textContent = todo.content;
+        }
+      });
+    } else {
+      // Full rebuild needed - use DocumentFragment for efficiency
+      sorted.forEach(todo => {
+        const card = document.createElement('div');
+        const statusClass = `task-${todo.status.replace('_', '-')}`;
+        card.className = `ralph-task-card ${statusClass}`;
+
+        const iconSpan = document.createElement('span');
+        iconSpan.className = 'ralph-task-icon';
+        iconSpan.textContent = this.getRalphTaskIcon(todo.status);
+
+        const contentSpan = document.createElement('span');
+        contentSpan.className = 'ralph-task-content';
+        contentSpan.textContent = todo.content;
+
+        card.appendChild(iconSpan);
+        card.appendChild(contentSpan);
+        fragment.appendChild(card);
+      });
+
+      grid.innerHTML = '';
+      grid.appendChild(fragment);
+    }
   }
 
   getRalphTaskIcon(status) {
