@@ -187,9 +187,9 @@ class ClaudemanApp {
     this.terminal.writeln('');
     this.terminal.writeln('\x1b[90m  Each instance opens a persistent GNU Screen session running Claude or Shell.\x1b[0m');
     this.terminal.writeln('\x1b[90m  Sessions stay alive for autonomous work, even if you close this browser.\x1b[0m');
-    this.terminal.writeln('\x1b[90m  Use the \x1b[1;37m+/-\x1b[0m\x1b[90m controls to set how many instances to launch at once.\x1b[0m');
+    this.terminal.writeln('\x1b[90m  Use the +/- controls to set how many instances to launch at once.\x1b[0m');
     this.terminal.writeln('');
-    this.terminal.writeln('\x1b[90m  Press \x1b[1;37mCtrl+Enter\x1b[0m\x1b[90m to start Claude  •  Click \x1b[1;37mRun Shell\x1b[0m\x1b[90m for a terminal\x1b[0m');
+    this.terminal.writeln('\x1b[90m  Press \x1b[1;37mCtrl+Enter\x1b[0m\x1b[90m to start Claude\x1b[0m');
     this.terminal.writeln('');
   }
 
