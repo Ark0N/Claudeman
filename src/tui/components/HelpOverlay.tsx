@@ -24,6 +24,7 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { key: '\u2191/\u2193', description: 'Navigate session list' },
       { key: 'Enter', description: 'View session in TUI' },
       { key: 'a', description: 'Attach to screen (full terminal)' },
+      { key: 'd', description: 'Delete/kill selected session' },
       { key: 'n', description: 'Create new session' },
       { key: 'r', description: 'Refresh session list' },
       { key: 'q', description: 'Quit' },

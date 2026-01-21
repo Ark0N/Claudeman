@@ -16,6 +16,7 @@ interface StartScreenProps {
   sessions: ScreenSession[];
   onSelectSession: (session: ScreenSession) => void;
   onAttachSession: (session: ScreenSession) => void;
+  onDeleteSession: (session: ScreenSession) => void;
   onCreateSession: () => void;
   onRefresh: () => void;
   onExit: () => void;
@@ -49,12 +50,20 @@ export function StartScreen({
   sessions,
   onSelectSession,
   onAttachSession,
+  onDeleteSession,
   onCreateSession,
   onRefresh,
   onExit,
 }: StartScreenProps): React.ReactElement {
   const now = Date.now();
   const [selectedIndex, setSelectedIndex] = useState(0);
+
+  // Ensure selectedIndex is valid when sessions change
+  React.useEffect(() => {
+    if (selectedIndex >= sessions.length && sessions.length > 0) {
+      setSelectedIndex(sessions.length - 1);
+    }
+  }, [sessions.length, selectedIndex]);
 
   // Handle keyboard input for navigation
   useInput((input, key) => {
@@ -77,6 +86,12 @@ export function StartScreen({
     // 'a' to attach directly to screen
     if (input === 'a' && sessions.length > 0 && sessions[selectedIndex].attached) {
       onAttachSession(sessions[selectedIndex]);
+      return;
+    }
+
+    // 'd' or 'x' to delete/kill session
+    if ((input === 'd' || input === 'x') && sessions.length > 0) {
+      onDeleteSession(sessions[selectedIndex]);
       return;
     }
   });
@@ -169,6 +184,8 @@ export function StartScreen({
             <Text> View  </Text>
             <Text color="green">[a]</Text>
             <Text> Attach  </Text>
+            <Text color="red">[d]</Text>
+            <Text> Delete  </Text>
             <Text color="green">[r]</Text>
             <Text> Refresh  </Text>
             <Text color="yellow">[q]</Text>

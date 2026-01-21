@@ -204,6 +204,11 @@ export function App(): React.ReactElement {
     return <HelpOverlay onClose={() => setShowHelp(false)} />;
   }
 
+  // Handle delete session from start screen
+  const handleDeleteSession = useCallback((session: ScreenSession) => {
+    killSession(session.sessionId);
+  }, [killSession]);
+
   // Render start screen
   if (viewMode === 'start') {
     return (
@@ -211,6 +216,7 @@ export function App(): React.ReactElement {
         sessions={sessions}
         onSelectSession={handleSelectSession}
         onAttachSession={handleAttachSession}
+        onDeleteSession={handleDeleteSession}
         onCreateSession={handleCreateSession}
         onRefresh={refreshSessions}
         onExit={exit}
