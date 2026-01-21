@@ -163,6 +163,8 @@ Each item has specific file:line references and expected impact estimates.
 8. **WebUI Render Debouncing**: Added debouncing to `renderInnerStatePanel` (50ms), `renderTaskPanel` (100ms), `renderScreenSessions` (100ms)
 9. **CSS Containment**: Added `contain` property to terminal container, session tabs, ralph panel, task panel, and modal content for paint isolation
 10. **GPU-Accelerated Animations**: Added `will-change` for animated elements, use transform-based transitions
+11. **Input Batching**: Batch rapid keystrokes at 60fps, immediate flush for control chars
+12. **Incremental DOM Updates**: Reuse existing DOM elements in Ralph todo list, ~80% fewer DOM ops
 
 ### Commits:
 - `df91823` - fix: improve memory safety and regex pattern handling
@@ -172,6 +174,9 @@ Each item has specific file:line references and expected impact estimates.
 - `2709d43` - perf: add session state update debouncing in server
 - `ef843bc` - docs: update optimization tracking with completed items
 - `c0688e0` - perf: optimize WebUI rendering and CSS performance
+- `26ab141` - docs: add WebUI optimization roadmap and session log
+- `3dd6ea5` - perf: add input batching for rapid keystrokes
+- `ab6f630` - perf: add incremental DOM updates for Ralph todo list
 
 ---
 
@@ -179,12 +184,12 @@ Each item has specific file:line references and expected impact estimates.
 
 ### High Priority
 
-| Optimization | File | Description | Expected Impact |
-|-------------|------|-------------|-----------------|
-| Virtual scrolling for todo lists | `app.js` | Render only visible todos for long lists | 10x improvement for 100+ todos |
-| Incremental DOM updates | `app.js` | Use DOM diffing instead of innerHTML | Reduces reflows by 50% |
-| Web Worker for JSON parsing | `app.js` | Offload SSE message parsing to worker | Smoother UI during high throughput |
-| Request coalescing | `app.js` | Batch rapid API calls (resize, input) | Fewer network requests |
+| Optimization | File | Description | Expected Impact | Status |
+|-------------|------|-------------|-----------------|--------|
+| Virtual scrolling for todo lists | `app.js` | Render only visible todos for long lists | 10x improvement for 100+ todos | Pending |
+| Incremental DOM updates | `app.js` | Use DOM diffing instead of innerHTML | Reduces reflows by 50% | ✅ Done |
+| Web Worker for JSON parsing | `app.js` | Offload SSE message parsing to worker | Smoother UI during high throughput | Pending |
+| Request coalescing | `app.js` | Batch rapid API calls (resize, input) | Fewer network requests | ✅ Done (input)
 
 ### Medium Priority
 
