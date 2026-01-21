@@ -125,6 +125,24 @@ export function StartScreen({
       onDeleteSession(sessions[selectedIndex]);
       return;
     }
+
+    // 'n' to create new session
+    if (input === 'n') {
+      onCreateSession();
+      return;
+    }
+
+    // 'r' to refresh session list
+    if (input === 'r') {
+      onRefresh();
+      return;
+    }
+
+    // 'q' to quit
+    if (input === 'q') {
+      onExit();
+      return;
+    }
   });
 
   return (

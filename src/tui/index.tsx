@@ -24,7 +24,6 @@
  * @see {@link ./hooks/useSessionManager.ts} for state management
  */
 
-import React from 'react';
 import { render } from 'ink';
 import { App } from './App.js';
 

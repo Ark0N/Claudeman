@@ -75,7 +75,7 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
  * @param props.onClose - Callback invoked when overlay should close
  * @returns The help overlay element
  */
-export function HelpOverlay({ onClose }: HelpOverlayProps): React.ReactElement {
+export function HelpOverlay({ onClose: _onClose }: HelpOverlayProps): React.ReactElement {
   return (
     <Box flexDirection="column" padding={2}>
       {/* Header */}

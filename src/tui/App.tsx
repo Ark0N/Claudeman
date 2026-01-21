@@ -24,8 +24,8 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Box, Text, useApp, useInput, useStdout } from 'ink';
-import { execSync, spawnSync } from 'child_process';
+import { Box, useApp, useInput, useStdout } from 'ink';
+import { spawnSync } from 'child_process';
 import { StartScreen } from './components/StartScreen.js';
 import { TabBar } from './components/TabBar.js';
 import { TerminalView } from './components/TerminalView.js';
@@ -118,21 +118,9 @@ export function App(): React.ReactElement {
       return;
     }
 
-    // Start screen specific inputs
+    // Start screen specific inputs - handled by StartScreen component
+    // Only number keys for quick session selection are handled here
     if (viewMode === 'start') {
-      if (input === 'q') {
-        exit();
-        return;
-      }
-      if (input === 'n') {
-        handleCreateSession();
-        return;
-      }
-      if (input === 'r') {
-        refreshSessions();
-        return;
-      }
-      // Number keys to select session
       const num = parseInt(input, 10);
       if (!isNaN(num) && num >= 1 && num <= sessions.length) {
         handleSelectSession(sessions[num - 1]);

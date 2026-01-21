@@ -24,7 +24,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { existsSync, readFileSync, writeFileSync, watchFile, unwatchFile, unlinkSync } from 'fs';
+import { existsSync, readFileSync, watchFile, unwatchFile, unlinkSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { execSync } from 'child_process';
