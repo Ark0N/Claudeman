@@ -81,7 +81,7 @@ curl -X POST localhost:3000/api/sessions/:id/respawn/enable \
 
 ### 🎯 Ralph / Todo Tracking
 
-Claudeman detects and tracks Ralph loops running inside Claude Code:
+Claudeman detects and tracks Ralph Loops and Todos inside Claude Code:
 
 <p align="center">
   <img src="docs/images/ralph-tracker-8tasks-44percent.png" alt="Ralph Loop Tracking" width="800">
