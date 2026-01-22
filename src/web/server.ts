@@ -1971,9 +1971,10 @@ export class WebServer extends EventEmitter {
               screenSession: screen  // Pass the existing screen so startInteractive() can attach to it
             });
 
-            // Restore auto-compact/auto-clear settings from state.json
+            // Restore ALL session settings from state.json (single source of truth)
             const savedState = this.store.getSession(screen.sessionId);
             if (savedState) {
+              // Auto-compact
               if (savedState.autoCompactEnabled !== undefined || savedState.autoCompactThreshold !== undefined) {
                 session.setAutoCompact(
                   savedState.autoCompactEnabled ?? false,
@@ -1981,68 +1982,71 @@ export class WebServer extends EventEmitter {
                   savedState.autoCompactPrompt
                 );
               }
+              // Auto-clear
               if (savedState.autoClearEnabled !== undefined || savedState.autoClearThreshold !== undefined) {
                 session.setAutoClear(
                   savedState.autoClearEnabled ?? false,
                   savedState.autoClearThreshold
                 );
               }
+              // Ralph / Todo tracker
+              if (savedState.ralphEnabled) {
+                session.ralphTracker.enable();
+                if (savedState.ralphCompletionPhrase) {
+                  session.ralphTracker.startLoop(savedState.ralphCompletionPhrase);
+                }
+                console.log(`[Server] Restored Ralph tracker for session ${session.id} (phrase: ${savedState.ralphCompletionPhrase || 'none'})`);
+              }
+              // Respawn controller
+              if (savedState.respawnEnabled && savedState.respawnConfig) {
+                try {
+                  const controller = new RespawnController(session, {
+                    idleTimeoutMs: savedState.respawnConfig.idleTimeoutMs,
+                    updatePrompt: savedState.respawnConfig.updatePrompt,
+                    interStepDelayMs: savedState.respawnConfig.interStepDelayMs,
+                    enabled: true,
+                    sendClear: savedState.respawnConfig.sendClear,
+                    sendInit: savedState.respawnConfig.sendInit,
+                    kickstartPrompt: savedState.respawnConfig.kickstartPrompt,
+                    completionConfirmMs: savedState.respawnConfig.completionConfirmMs,
+                    noOutputTimeoutMs: savedState.respawnConfig.noOutputTimeoutMs,
+                  });
+                  this.respawnControllers.set(session.id, controller);
+                  this.setupRespawnListeners(session.id, controller);
+                  controller.start();
+
+                  if (savedState.respawnConfig.durationMinutes && savedState.respawnConfig.durationMinutes > 0) {
+                    this.setupTimedRespawn(session.id, savedState.respawnConfig.durationMinutes);
+                  }
+
+                  console.log(`[Server] Restored respawn controller for session ${session.id}`);
+                } catch (err) {
+                  console.error(`[Server] Failed to restore respawn for session ${session.id}:`, err);
+                }
+              }
             }
 
-            this.sessions.set(session.id, session);
-            this.setupSessionListeners(session);
-
-            // Restore Ralph tracking state (Ralph Wiggum settings) if it was saved
-            const ralphState = this.store.getRalphState(screen.sessionId);
-            if (ralphState) {
-              session.ralphTracker.restoreState(ralphState.loop, ralphState.todos);
-              console.log(`[Server] Restored Ralph state for session ${session.id} (enabled: ${ralphState.loop.enabled})`);
-            }
-            // Also check screen.ralphEnabled as a fallback
-            if (screen.ralphEnabled && !session.ralphTracker.enabled) {
-              session.ralphTracker.enable();
-              console.log(`[Server] Enabled Ralph tracker for session ${session.id} from screen config`);
+            // Fallback: restore Ralph state from state-inner.json if not already set
+            if (!session.ralphTracker.enabled) {
+              const ralphState = this.store.getRalphState(screen.sessionId);
+              if (ralphState?.loop?.enabled) {
+                session.ralphTracker.restoreState(ralphState.loop, ralphState.todos);
+                console.log(`[Server] Restored Ralph state from inner store for session ${session.id}`);
+              }
             }
 
-            // Auto-detect completion phrase from CLAUDE.md if not already set
-            if (!session.ralphTracker.loopState.completionPhrase) {
+            // Fallback: auto-detect completion phrase from CLAUDE.md
+            if (session.ralphTracker.enabled && !session.ralphTracker.loopState.completionPhrase) {
               const claudeMdPath = join(session.workingDir, 'CLAUDE.md');
               const completionPhrase = extractCompletionPhrase(claudeMdPath);
               if (completionPhrase) {
-                session.ralphTracker.enable();
                 session.ralphTracker.startLoop(completionPhrase);
                 console.log(`[Server] Auto-detected completion phrase for session ${session.id}: ${completionPhrase}`);
               }
             }
 
-            // Restore respawn controller if it was enabled
-            if (screen.respawnConfig?.enabled) {
-              try {
-                const controller = new RespawnController(session, {
-                  idleTimeoutMs: screen.respawnConfig.idleTimeoutMs,
-                  updatePrompt: screen.respawnConfig.updatePrompt,
-                  interStepDelayMs: screen.respawnConfig.interStepDelayMs,
-                  enabled: screen.respawnConfig.enabled,
-                  sendClear: screen.respawnConfig.sendClear,
-                  sendInit: screen.respawnConfig.sendInit,
-                  kickstartPrompt: screen.respawnConfig.kickstartPrompt,
-                });
-                this.respawnControllers.set(session.id, controller);
-                this.setupRespawnListeners(session.id, controller);
-                controller.start();
-
-                // Set up timed respawn if duration was configured
-                if (screen.respawnConfig.durationMinutes && screen.respawnConfig.durationMinutes > 0) {
-                  this.setupTimedRespawn(session.id, screen.respawnConfig.durationMinutes);
-                }
-
-                console.log(`[Server] Restored respawn controller for session ${session.id}`);
-              } catch (err) {
-                console.error(`[Server] Failed to restore respawn for session ${session.id}:`, err);
-              }
-            }
-
-            // Persist full state after all restorations are applied
+            this.sessions.set(session.id, session);
+            this.setupSessionListeners(session);
             this.persistSessionState(session);
 
             // Mark it as restored (not started yet - user needs to attach)
