@@ -42,7 +42,8 @@ CLAUDEMAN_SESSION_ID=abc-123-def
 CLAUDEMAN_SCREEN_NAME=claudeman-myproject
 ```
 
-- Sessions auto-recover on startup
+- Sessions auto-recover on startup (dual redundancy: `state.json` + `screens.json`)
+- All settings (respawn, auto-compact, tokens) survive server restarts
 - Ghost session discovery finds orphaned screens
 - Claude knows it's managed (won't kill its own screen)
 
@@ -58,9 +59,10 @@ WATCHING → IDLE DETECTED → SEND UPDATE → CLEAR → INIT → CONTINUE
     └──────────────────────────────────────────────────────┘
 ```
 
-- Detects idle state via prompt indicators (`↵ send`, `❯`)
+- Multi-layer idle detection (completion messages, output silence, token stability)
 - Sends configurable update prompts to continue work
 - Auto-cycles `/clear` → `/init` for fresh context
+- Step confirmation (5s silence) between each command
 - **Keeps working even when Ralph loops stop**
 - Run for **24+ hours** completely unattended
 
@@ -236,6 +238,7 @@ flowchart TB
 
         subgraph Persistence["Persistence Layer"]
             SCR["GNU Screen Manager"]
+            SS["State Store<br/><small>state.json</small>"]
         end
 
         subgraph External["External"]
@@ -249,6 +252,7 @@ flowchart TB
     SM --> S1
     SM --> S2
     SM --> RC
+    SM --> SS
     S1 --> SCR
     S2 --> SCR
     RC --> SCR
@@ -266,6 +270,7 @@ Optimized for long-running autonomous sessions:
 | **60fps terminal** | 16ms server batching, `requestAnimationFrame` client |
 | **Memory management** | Auto-trimming buffers (2MB terminal, 1MB text) |
 | **Event debouncing** | 50-500ms on rapid state changes |
+| **State persistence** | Debounced writes, dual-redundancy recovery |
 
 ---
 

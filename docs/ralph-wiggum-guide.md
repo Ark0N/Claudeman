@@ -2,7 +2,7 @@
 
 > This document consolidates official Anthropic documentation, community best practices, and implementation details for autonomous Claude Code loops.
 
-**Last Updated**: 2026-01-20
+**Last Updated**: 2026-01-22
 **Sources**: [Official Anthropic Plugin](https://github.com/anthropics/claude-code/tree/main/plugins/ralph-wiggum), [Claude Code Docs](https://code.claude.com/docs/en/hooks), [Claude Code Best Practices](https://www.anthropic.com/engineering/claude-code-best-practices)
 
 ---

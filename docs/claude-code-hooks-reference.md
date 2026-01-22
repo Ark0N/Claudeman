@@ -2,7 +2,7 @@
 
 > Official documentation for Claude Code hooks system, extracted from [code.claude.com](https://code.claude.com/docs/en/hooks).
 
-**Last Updated**: 2026-01-20
+**Last Updated**: 2026-01-22
 **Source**: [Claude Code Hooks Documentation](https://code.claude.com/docs/en/hooks)
 
 ---

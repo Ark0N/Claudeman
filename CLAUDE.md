@@ -172,6 +172,8 @@ WATCHING → CONFIRMING_IDLE → SENDING_UPDATE → WAITING_UPDATE → SENDING_C
 
 Steps can be skipped via config (`sendClear: false`, `sendInit: false`). Optional `kickstartPrompt` triggers if `/init` doesn't start work. Multi-layer idle detection triggers state transitions.
 
+**Step confirmation**: After sending each step (update, clear, init, kickstart), the controller waits for `completionConfirmMs` (5s) of output silence before proceeding to the next step. This prevents sending commands while Claude is still processing.
+
 ### Session Modes
 
 Sessions have a `mode` property (`SessionMode` type):
@@ -402,6 +404,7 @@ Writes debounced (500ms) to `~/.claudeman/state.json`. The web server persists f
 | `autoClearEnabled`, `autoClearThreshold` | Auto-clear settings |
 | `autoCompactEnabled`, `autoCompactThreshold`, `autoCompactPrompt` | Auto-compact settings |
 | `ralphEnabled`, `ralphCompletionPhrase` | Ralph / Todo tracker state |
+| `respawnEnabled` | Whether respawn controller is currently running |
 | `respawnConfig` | Full respawn config including `durationMinutes` |
 | `totalCost`, `inputTokens`, `outputTokens` | Token and cost tracking |
 
@@ -471,6 +474,7 @@ Use `createErrorResponse(code, details?)` from `types.ts`:
 - **Ghost discovery**: `reconcileScreens()` finds orphaned screens on startup
 - **Cleanup** (`cleanupSession()`): stops respawn, clears buffers/timers, kills screen, removes from `state.json`
 - **State sync**: Every session create/delete/update calls `persistSessionState()` which writes full state (including respawn config from controller) to `state.json`
+- **Recovery on restart**: Server reads `state.json` first (has all settings), falls back to `screens.json` for any sessions not found. Settings (auto-compact, auto-clear, respawn config, Ralph state) restored to live session objects after screen reattachment.
 
 ## TUI Architecture (Ink/React)
 
@@ -604,8 +608,14 @@ Long-running sessions are supported with automatic trimming:
 - Web server creates → session added to `state.json` + `screens.json`
 - Settings change → `state.json` updated (debounced 500ms)
 - Session deleted → removed from `state.json` (screen may survive if `killScreen: false`)
-- Server shutdown → all sessions cleaned up from `state.json`, screens preserved for recovery
-- Server restart → sessions restored from `screens.json`, state rebuilt in `state.json`
+- Server shutdown → sessions preserved in `state.json` (not wiped), screens preserved in `screens.json`
+- Server restart → sessions restored from `state.json` (primary) with `screens.json` as fallback
+
+**Recovery strategy** (double redundancy):
+1. **Primary**: `state.json` retains full session state across restarts (settings, tokens, respawn config)
+2. **Fallback**: `screens.json` provides screen metadata if `state.json` is missing a session
+3. After restoration, all settings (auto-compact, auto-clear, respawn, Ralph) are re-applied to live sessions
+4. `persistSessionState()` called after all restorations complete to sync final state
 
 Cases created in `~/claudeman-cases/` by default.
 
