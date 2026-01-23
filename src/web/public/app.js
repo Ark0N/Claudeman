@@ -231,7 +231,8 @@ class ClaudemanApp {
       let offset = 0;
       const writeChunk = () => {
         if (offset >= buffer.length) {
-          resolve();
+          // Wait one more frame for xterm to finish rendering before resolving
+          requestAnimationFrame(() => resolve());
           return;
         }
 
@@ -845,6 +846,8 @@ class ClaudemanApp {
         }
         // Use chunked write for large buffers to avoid UI jank
         await this.chunkedTerminalWrite(data.terminalBuffer);
+        // Ensure terminal is scrolled to bottom after buffer load
+        this.terminal.scrollToBottom();
       }
 
       // Send resize and Ctrl+L to trigger Claude to redraw at correct size
@@ -883,6 +886,7 @@ class ClaudemanApp {
       this.renderRalphStatePanel();
 
       this.terminal.focus();
+      this.terminal.scrollToBottom();
     } catch (err) {
       console.error('Failed to load session terminal:', err);
     }
