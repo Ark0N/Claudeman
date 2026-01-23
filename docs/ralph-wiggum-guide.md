@@ -2,7 +2,7 @@
 
 > This document consolidates official Anthropic documentation, community best practices, and implementation details for autonomous Claude Code loops.
 
-**Last Updated**: 2026-01-22
+**Last Updated**: 2026-01-23
 **Sources**: [Official Anthropic Plugin](https://github.com/anthropics/claude-code/tree/main/plugins/ralph-wiggum), [Claude Code Docs](https://code.claude.com/docs/en/hooks), [Claude Code Best Practices](https://www.anthropic.com/engineering/claude-code-best-practices)
 
 ---
@@ -836,6 +836,8 @@ POST /api/sessions/:id/auto-clear
 - `src/ralph-tracker.ts` - Core detection engine
 - `src/ralph-loop.ts` - Task orchestration
 - `src/respawn-controller.ts` - Session cycling
+- `src/spawn-orchestrator.ts` - Autonomous agent lifecycle (uses RalphTracker for completion)
+- `src/spawn-detector.ts` - Detects `<spawn1337>` tags in terminal output
 - `src/types.ts` - Type definitions
 
 ---

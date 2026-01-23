@@ -14,7 +14,7 @@
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-18%2B-22c55e?style=flat-square&logo=node.js&logoColor=white" alt="Node.js 18+"></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.5-3b82f6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 5.5"></a>
   <a href="https://fastify.dev/"><img src="https://img.shields.io/badge/Fastify-5.x-1e3a5f?style=flat-square&logo=fastify&logoColor=white" alt="Fastify"></a>
-  <img src="https://img.shields.io/badge/Tests-1337%20total-22c55e?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-1426%20total-22c55e?style=flat-square" alt="Tests">
 </p>
 
 ---
@@ -102,6 +102,43 @@ Claudeman detects and tracks Ralph Loops and Todos inside Claude Code:
 - Todo progress (`4/9 complete`)
 - Progress percentage ring
 - Elapsed time
+
+---
+
+### 🤖 Spawn1337: Autonomous Agent Protocol
+
+Spawn full-power Claude agents that run independently in their own screen sessions:
+
+```
+Parent Session → <spawn1337>task.md</spawn1337>
+  → SpawnDetector parses tag
+  → Orchestrator creates agent directory
+  → Spawns Claude in its own screen session
+  → Agent works autonomously
+  → Reports result via <promise>PHRASE</promise>
+  → Parent notified via SSE
+```
+
+**Features:**
+- **Resource governance**: Budget limits (tokens + cost), timeout enforcement, graceful shutdown
+- **Agent trees**: Agents can spawn children (max depth: 3)
+- **Communication**: Filesystem-based message bus between parent and child
+- **Max 5 concurrent** agents with queuing for overflow
+
+```yaml
+# Task spec format (YAML frontmatter in .md file)
+---
+agentId: my-agent-001
+name: My Agent
+type: implement
+priority: high
+maxTokens: 150000
+maxCost: 0.50
+timeoutMinutes: 15
+completionPhrase: AGENT_DONE
+---
+Implement the feature described below...
+```
 
 ---
 
@@ -210,6 +247,16 @@ npx tsx src/index.ts web
 | `GET` | `/api/sessions/:id/ralph-state` | Get loop state + todos |
 | `POST` | `/api/sessions/:id/ralph-config` | Configure tracking |
 
+### Spawn Agents
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/spawn/agents` | List all agents |
+| `GET` | `/api/spawn/agents/:id` | Agent status + progress |
+| `GET` | `/api/spawn/agents/:id/result` | Agent result |
+| `POST` | `/api/spawn/agents/:id/message` | Send message to agent |
+| `POST` | `/api/spawn/agents/:id/cancel` | Cancel agent |
+| `POST` | `/api/spawn/trigger` | Programmatic spawn |
+
 ### Real-Time
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -234,6 +281,12 @@ flowchart TB
             S1["Session (PTY)"]
             S2["Session (PTY)"]
             RC["Respawn Controller"]
+            SO["Spawn Orchestrator"]
+        end
+
+        subgraph Detection["Detection Layer"]
+            RT["Ralph Tracker"]
+            SD["Spawn Detector"]
         end
 
         subgraph Persistence["Persistence Layer"]
@@ -243,6 +296,8 @@ flowchart TB
 
         subgraph External["External"]
             CLI["Claude CLI"]
+            A1["Agent 1<br/><small>(screen)</small>"]
+            A2["Agent 2<br/><small>(screen)</small>"]
         end
     end
 
@@ -253,6 +308,11 @@ flowchart TB
     SM --> S2
     SM --> RC
     SM --> SS
+    S1 --> RT
+    S1 --> SD
+    SD --> SO
+    SO --> A1
+    SO --> A2
     S1 --> SCR
     S2 --> SCR
     RC --> SCR
