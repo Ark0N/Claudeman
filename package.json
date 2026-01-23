@@ -5,10 +5,11 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "claudeman": "./dist/index.js"
+    "claudeman": "./dist/index.js",
+    "claudeman-mcp": "./dist/mcp-server.js"
   },
   "scripts": {
-    "build": "tsc && chmod +x dist/index.js && mkdir -p dist/web dist/templates && cp -r src/web/public dist/web/ && cp src/templates/case-template.md dist/templates/",
+    "build": "tsc && chmod +x dist/index.js dist/mcp-server.js && mkdir -p dist/web dist/templates && cp -r src/web/public dist/web/ && cp src/templates/case-template.md dist/templates/",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "web": "node dist/index.js web",
@@ -36,6 +37,7 @@
   "license": "MIT",
   "dependencies": {
     "@fastify/static": "^8.0.0",
+    "@modelcontextprotocol/sdk": "^1.25.3",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
     "fastify": "^5.1.0",
@@ -44,7 +46,8 @@
     "ink-text-input": "^6.0.0",
     "node-pty": "^1.1.0",
     "react": "^19.2.3",
-    "uuid": "^10.0.0"
+    "uuid": "^10.0.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

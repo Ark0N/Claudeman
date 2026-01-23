@@ -168,7 +168,7 @@ export class ScreenManager extends EventEmitter {
     // Create screen in detached mode with the appropriate command
     // Set CLAUDEMAN_SCREEN=1 so Claude sessions know they're running in Claudeman
     // This helps prevent Claude from attempting to kill its own screen session
-    const envVars = `CLAUDEMAN_SCREEN=1 CLAUDEMAN_SESSION_ID=${sessionId} CLAUDEMAN_SCREEN_NAME=${screenName}`;
+    const envVars = `CLAUDEMAN_SCREEN=1 CLAUDEMAN_SESSION_ID=${sessionId} CLAUDEMAN_SCREEN_NAME=${screenName} CLAUDEMAN_API_URL=${process.env.CLAUDEMAN_API_URL || 'http://localhost:3000'}`;
     const cmd = mode === 'claude'
       ? `${envVars} claude --dangerously-skip-permissions`
       : `${envVars} $SHELL`;

@@ -212,7 +212,7 @@ export interface AgentStatusReport {
   dependencyStatus: 'waiting' | 'ready' | 'n/a';
 }
 
-// ========== Tracker State (for SpawnDetector) ==========
+// ========== Tracker State (for SpawnOrchestrator) ==========
 
 export interface SpawnTrackerState {
   enabled: boolean;

@@ -1036,6 +1036,9 @@ export class WebServer extends EventEmitter {
         const claudeMd = generateClaudeMd(name, description || '', templatePath);
         writeFileSync(join(casePath, 'CLAUDE.md'), claudeMd);
 
+        // Write .mcp.json for Claude Code to discover spawn tools
+        this.writeMcpConfig(casePath);
+
         this.broadcast('case:created', { name, path: casePath });
 
         return { success: true, case: { name, path: casePath } };
@@ -1172,6 +1175,9 @@ export class WebServer extends EventEmitter {
           const templatePath = this.getDefaultClaudeMdPath();
           const claudeMd = generateClaudeMd(caseName, '', templatePath);
           writeFileSync(join(casePath, 'CLAUDE.md'), claudeMd);
+
+          // Write .mcp.json for Claude Code to discover spawn tools
+          this.writeMcpConfig(casePath);
 
           this.broadcast('case:created', { name: caseName, path: casePath });
         } catch (err) {
@@ -1636,34 +1642,6 @@ export class WebServer extends EventEmitter {
       this.broadcast('session:ralphCompletionDetected', { sessionId: session.id, phrase });
     });
 
-    // Spawn1337 protocol events
-    session.on('spawnRequested', (filePath: string) => {
-      this.spawnOrchestrator.handleSpawnRequest(
-        filePath,
-        session.id,
-        session.workingDir,
-        session.parentAgentId ? 1 : 0 // Simple depth tracking
-      ).catch(err => {
-        console.error(`[Server] Spawn request failed for session ${session.id}:`, getErrorMessage(err));
-      });
-    });
-
-    session.on('spawnStatusRequested', (agentId: string) => {
-      const status = this.spawnOrchestrator.getAgentStatus(agentId);
-      this.broadcast('spawn:statusResponse', { sessionId: session.id, agentId, status });
-    });
-
-    session.on('spawnCancelRequested', (agentId: string) => {
-      this.spawnOrchestrator.cancelAgent(agentId, 'Cancelled by parent session').catch(err => {
-        console.error(`[Server] Spawn cancel failed:`, getErrorMessage(err));
-      });
-    });
-
-    session.on('spawnMessageToChild', (agentId: string, content: string) => {
-      this.spawnOrchestrator.sendMessageToAgent(agentId, content).catch(err => {
-        console.error(`[Server] Spawn message failed:`, getErrorMessage(err));
-      });
-    });
   }
 
   private setupRespawnListeners(sessionId: string, controller: RespawnController): void {
@@ -1827,6 +1805,23 @@ export class WebServer extends EventEmitter {
       console.error('Failed to read settings:', err);
     }
     return undefined;
+  }
+
+  /**
+   * Write .mcp.json to a case directory for Claude Code to discover spawn MCP tools.
+   */
+  private writeMcpConfig(casePath: string): void {
+    const projectRoot = join(__dirname, '..', '..');
+    const mcpServerPath = join(projectRoot, 'dist', 'mcp-server.js');
+    const mcpConfig = {
+      mcpServers: {
+        'claudeman-spawn': {
+          command: 'node',
+          args: [mcpServerPath],
+        },
+      },
+    };
+    writeFileSync(join(casePath, '.mcp.json'), JSON.stringify(mcpConfig, null, 2) + '\n');
   }
 
   private async startScheduledRun(prompt: string, workingDir: string, durationMinutes: number): Promise<ScheduledRun> {
@@ -2163,6 +2158,9 @@ export class WebServer extends EventEmitter {
     await this.setupRoutes();
     await this.app.listen({ port: this.port, host: '0.0.0.0' });
     console.log(`Claudeman web interface running at http://localhost:${this.port}`);
+
+    // Set API URL for child processes (MCP server, spawned sessions)
+    process.env.CLAUDEMAN_API_URL = `http://localhost:${this.port}`;
 
     // Start scheduled runs cleanup timer
     this.scheduledCleanupTimer = setInterval(() => {
