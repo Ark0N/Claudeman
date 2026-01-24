@@ -935,7 +935,7 @@ describe('Ralph Integration Tests', () => {
       expect(data.errorCode).toBe('NOT_FOUND');
     });
 
-    it('should return error for respawn config without controller', async () => {
+    it('should save respawn config as pre-config without controller', async () => {
       const caseName = `respawn-config-none-${Date.now()}`;
       createdCases.push(caseName);
 
@@ -956,8 +956,8 @@ describe('Ralph Integration Tests', () => {
       const data = await res.json();
 
       expect(res.status).toBe(200);
-      expect(data.success).toBe(false);
-      expect(data.errorCode).toBe('NOT_FOUND');
+      expect(data.success).toBe(true);
+      expect(data.config.idleTimeoutMs).toBe(10000);
     });
   });
 

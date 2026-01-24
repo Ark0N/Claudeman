@@ -348,7 +348,7 @@ describe('CLI Command Parsing', () => {
     it('should format properly', () => {
       const help = generateHelp('test', 'Test command', ['--flag']);
       const lines = help.split('\n');
-      expect(lines[0]).toStartWith('Usage:');
+      expect(lines[0]).toMatch(/^Usage:/);
     });
   });
 

@@ -224,7 +224,7 @@ describe('Edge Cases and Error Handling', () => {
       expect(data.error).toBe('Respawn controller not found');
     });
 
-    it('should handle updating config on non-existent respawn controller', async () => {
+    it('should handle updating config on non-existent session', async () => {
       const response = await fetch(`${baseUrl}/api/sessions/non-existent/respawn/config`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -232,7 +232,7 @@ describe('Edge Cases and Error Handling', () => {
       });
       const data = await response.json();
 
-      expect(data.error).toBe('Respawn controller not found');
+      expect(data.error).toBe('Session not found');
     });
   });
 

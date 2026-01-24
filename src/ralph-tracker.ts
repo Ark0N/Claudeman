@@ -105,12 +105,12 @@ const TODO_STATUS_PATTERN = /[-*]\s*(.+?)\s+\((pending|in_progress|completed)\)/
 
 /**
  * Format 4: Claude Code native TodoWrite output
- * Matches: "☐ Task", "☒ Task", "◐ Task"
+ * Matches: "☐ Task", "☒ Task", "◐ Task", "✓ Task"
  * These appear with optional leading whitespace/brackets like "⎿  ☐ Task"
- * Capture group 1: Checkbox icon (☐=pending, ☒=completed, ◐=in_progress)
+ * Capture group 1: Checkbox icon (☐=pending, ☒=completed, ◐=in_progress, ✓=completed)
  * Capture group 2: Task content (min 3 chars, excludes checkbox icons)
  */
-const TODO_NATIVE_PATTERN = /^[\s⎿]*(☐|☒|◐)\s+([^☐☒◐\n]{3,})/gm;
+const TODO_NATIVE_PATTERN = /^[\s⎿]*(☐|☒|◐|✓)\s+([^☐☒◐✓\n]{3,})/gm;
 
 /**
  * Format 5: Claude Code checkmark-based TodoWrite output
@@ -1078,7 +1078,7 @@ export class RalphTracker extends EventEmitter {
     // Pre-compute which pattern categories might match (60-75% faster)
     const hasCheckbox = line.includes('[');
     const hasTodoIndicator = line.includes('Todo:');
-    const hasNativeCheckbox = line.includes('☐') || line.includes('☒') || line.includes('◐');
+    const hasNativeCheckbox = line.includes('☐') || line.includes('☒') || line.includes('◐') || line.includes('✓');
     const hasStatus = line.includes('(pending)') || line.includes('(in_progress)') || line.includes('(completed)');
     const hasCheckmark = line.includes('✔');
 
@@ -1417,6 +1417,27 @@ export class RalphTracker extends EventEmitter {
    */
   setMaxIterations(maxIterations: number | null): void {
     this._loopState.maxIterations = maxIterations;
+    this._loopState.lastActivity = Date.now();
+    this.emit('loopUpdate', this.loopState);
+  }
+
+  /**
+   * Configure the tracker from external state (e.g. ralph plugin config).
+   * Only updates fields that are provided, leaving others unchanged.
+   *
+   * @param config - Partial configuration to apply
+   * @fires loopUpdate - When loop state changes
+   */
+  configure(config: { enabled?: boolean; completionPhrase?: string; maxIterations?: number }): void {
+    if (config.enabled !== undefined) {
+      this._loopState.enabled = config.enabled;
+    }
+    if (config.completionPhrase !== undefined) {
+      this._loopState.completionPhrase = config.completionPhrase;
+    }
+    if (config.maxIterations !== undefined) {
+      this._loopState.maxIterations = config.maxIterations;
+    }
     this._loopState.lastActivity = Date.now();
     this.emit('loopUpdate', this.loopState);
   }

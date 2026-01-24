@@ -196,11 +196,12 @@ describe('Timing Utilities', () => {
       const fn = vi.fn().mockRejectedValue(new Error('always fails'));
 
       const promise = retryWithBackoff(fn, 2, 100);
+      const expectation = expect(promise).rejects.toThrow('always fails');
 
       await vi.advanceTimersByTimeAsync(100); // First retry
       await vi.advanceTimersByTimeAsync(200); // Second retry
 
-      await expect(promise).rejects.toThrow('always fails');
+      await expectation;
       expect(fn).toHaveBeenCalledTimes(3); // Initial + 2 retries
     });
   });
@@ -245,9 +246,9 @@ describe('Timing Utilities', () => {
       );
 
       const wrapped = withTimeout(promise, 100);
+      const expectation = expect(wrapped).rejects.toThrow('Operation timed out');
       await vi.advanceTimersByTimeAsync(100);
-
-      await expect(wrapped).rejects.toThrow('Operation timed out');
+      await expectation;
     });
 
     it('should use custom timeout message', async () => {
@@ -256,9 +257,9 @@ describe('Timing Utilities', () => {
       );
 
       const wrapped = withTimeout(promise, 100, 'Custom message');
+      const expectation = expect(wrapped).rejects.toThrow('Custom message');
       await vi.advanceTimersByTimeAsync(100);
-
-      await expect(wrapped).rejects.toThrow('Custom message');
+      await expectation;
     });
   });
 

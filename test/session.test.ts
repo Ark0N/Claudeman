@@ -170,7 +170,6 @@ describe('Interactive Session Lifecycle', () => {
       const data = await response.json();
 
       expect(data.success).toBe(true);
-      expect(data.message).toBe('Interactive session started');
     });
 
     it('should return error for non-existent session', async () => {

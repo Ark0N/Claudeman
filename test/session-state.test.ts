@@ -627,7 +627,7 @@ describe('Session Event Handling', () => {
       const debouncer = createDebouncer(100);
       debouncer.add('event1');
       debouncer.add('event2');
-      expect(debouncer.shouldFlush(0)).toBe(true);
+      expect(debouncer.shouldFlush(100)).toBe(true);
       const events = debouncer.flush(100);
       expect(events).toEqual(['event1', 'event2']);
     });

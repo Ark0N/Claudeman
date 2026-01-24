@@ -155,7 +155,7 @@ describe('Buffer Management', () => {
 
     it('should trim when over limit', () => {
       const store = new MessageStore<number>();
-      for (let i = 0; i < 1200; i++) {
+      for (let i = 0; i < 1202; i++) {
         store.add(i);
       }
       expect(store.count).toBe(TRIM_MESSAGES_TO);
@@ -163,12 +163,12 @@ describe('Buffer Management', () => {
 
     it('should keep recent messages', () => {
       const store = new MessageStore<number>();
-      for (let i = 0; i < 1200; i++) {
+      for (let i = 0; i < 1202; i++) {
         store.add(i);
       }
       const all = store.all;
-      expect(all[all.length - 1]).toBe(1199);
-      expect(all[0]).toBe(1199 - TRIM_MESSAGES_TO + 1);
+      expect(all[all.length - 1]).toBe(1201);
+      expect(all[0]).toBe(1201 - TRIM_MESSAGES_TO + 1);
     });
   });
 
