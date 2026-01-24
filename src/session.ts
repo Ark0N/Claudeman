@@ -16,6 +16,8 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { v4 as uuidv4 } from 'uuid';
 import * as pty from 'node-pty';
 import { SessionState, SessionStatus, SessionConfig, ScreenSession, RalphTrackerState, RalphTodoItem } from './types.js';
@@ -60,6 +62,61 @@ const FOCUS_ESCAPE_FILTER = /\x1b\[\?1004[hl]|\x1b\[[IO]/g;
 // Pre-compiled regex patterns for performance (avoid re-compilation on each call)
 const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*m/g;
 const TOKEN_PATTERN = /(\d+(?:\.\d+)?)\s*([kKmM])?\s*tokens/;
+
+// ============================================================================
+// Claude CLI Path Resolution
+// ============================================================================
+
+/** Common installation paths for the Claude CLI binary */
+const CLAUDE_COMMON_PATHS = [
+  `${process.env.HOME}/.local/bin/claude`,
+  `${process.env.HOME}/.claude/local/claude`,
+  '/usr/local/bin/claude',
+  '/usr/bin/claude',
+  `${process.env.HOME}/.npm-global/bin/claude`,
+  `${process.env.HOME}/bin/claude`,
+];
+
+/** Cached resolved path to the claude binary */
+let _resolvedClaudePath: string | null = null;
+
+/**
+ * Resolves the absolute path to the `claude` CLI binary.
+ *
+ * Uses `which` to find the binary in PATH first, then falls back to common
+ * installation locations. The result is cached for subsequent calls.
+ *
+ * @throws {Error} If claude CLI cannot be found in PATH or common locations
+ */
+function resolveClaudePath(): string {
+  if (_resolvedClaudePath) return _resolvedClaudePath;
+
+  // Try `which` first (respects PATH)
+  try {
+    const result = execSync('which claude', { encoding: 'utf-8', timeout: 5000 }).trim();
+    if (result && existsSync(result)) {
+      _resolvedClaudePath = result;
+      console.log('[Session] Resolved claude CLI path:', _resolvedClaudePath);
+      return _resolvedClaudePath;
+    }
+  } catch {
+    // `which` failed, try common paths
+  }
+
+  // Check common installation paths
+  for (const p of CLAUDE_COMMON_PATHS) {
+    if (existsSync(p)) {
+      _resolvedClaudePath = p;
+      console.log('[Session] Found claude CLI at common path:', _resolvedClaudePath);
+      return _resolvedClaudePath;
+    }
+  }
+
+  throw new Error(
+    'Claude CLI not found. Ensure `claude` is installed and available in PATH. ' +
+    'Checked: PATH lookup and common paths: ' + CLAUDE_COMMON_PATHS.join(', ')
+  );
+}
 
 // ============================================================================
 // Buffer Accumulator (reduces GC pressure from string concatenation)
@@ -736,7 +793,8 @@ export class Session extends EventEmitter {
 
     // Fallback to direct PTY if screen is not used
     if (!this.ptyProcess) {
-      this.ptyProcess = pty.spawn('claude', [
+      const claudePath = resolveClaudePath();
+      this.ptyProcess = pty.spawn(claudePath, [
         '--dangerously-skip-permissions'
       ], {
         name: 'xterm-256color',
@@ -1014,7 +1072,8 @@ export class Session extends EventEmitter {
         // Spawn claude in a real PTY
         console.log('[Session] Spawning PTY for claude with prompt:', prompt.substring(0, 50));
 
-        this.ptyProcess = pty.spawn('claude', [
+        const claudePath = resolveClaudePath();
+        this.ptyProcess = pty.spawn(claudePath, [
           '-p',
           '--dangerously-skip-permissions',
           '--output-format', 'stream-json',

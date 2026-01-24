@@ -21,6 +21,53 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { ScreenSession, ProcessStats, ScreenSessionWithStats, PersistedRespawnConfig, getErrorMessage } from './types.js';
 
+// ============================================================================
+// Claude CLI Path Resolution
+// ============================================================================
+
+/** Common installation paths for the Claude CLI binary */
+const CLAUDE_COMMON_PATHS = [
+  `${homedir()}/.local/bin/claude`,
+  `${homedir()}/.claude/local/claude`,
+  '/usr/local/bin/claude',
+  '/usr/bin/claude',
+  `${homedir()}/.npm-global/bin/claude`,
+  `${homedir()}/bin/claude`,
+];
+
+/** Cached resolved path to the claude binary */
+let _resolvedClaudePath: string | null = null;
+
+/**
+ * Resolves the absolute path to the `claude` CLI binary.
+ * Uses `which` first, then falls back to common installation locations.
+ */
+function resolveClaudePath(): string {
+  if (_resolvedClaudePath) return _resolvedClaudePath;
+
+  try {
+    const result = execSync('which claude', { encoding: 'utf-8', timeout: 5000 }).trim();
+    if (result && existsSync(result)) {
+      _resolvedClaudePath = result;
+      return _resolvedClaudePath;
+    }
+  } catch {
+    // `which` failed, try common paths
+  }
+
+  for (const p of CLAUDE_COMMON_PATHS) {
+    if (existsSync(p)) {
+      _resolvedClaudePath = p;
+      return _resolvedClaudePath;
+    }
+  }
+
+  throw new Error(
+    'Claude CLI not found. Ensure `claude` is installed and available in PATH. ' +
+    'Checked: PATH lookup and common paths: ' + CLAUDE_COMMON_PATHS.join(', ')
+  );
+}
+
 /** Path to persisted screen session metadata */
 const SCREENS_FILE = join(homedir(), '.claudeman', 'screens.json');
 
@@ -169,8 +216,9 @@ export class ScreenManager extends EventEmitter {
     // Set CLAUDEMAN_SCREEN=1 so Claude sessions know they're running in Claudeman
     // This helps prevent Claude from attempting to kill its own screen session
     const envVars = `CLAUDEMAN_SCREEN=1 CLAUDEMAN_SESSION_ID=${sessionId} CLAUDEMAN_SCREEN_NAME=${screenName} CLAUDEMAN_API_URL=${process.env.CLAUDEMAN_API_URL || 'http://localhost:3000'}`;
+    const claudePath = resolveClaudePath();
     const cmd = mode === 'claude'
-      ? `${envVars} claude --dangerously-skip-permissions`
+      ? `${envVars} ${claudePath} --dangerously-skip-permissions`
       : `${envVars} $SHELL`;
 
     try {
