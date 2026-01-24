@@ -6,11 +6,15 @@
  * - Server-Sent Events (SSE) for real-time updates at /api/events
  * - Static file serving for the web UI
  * - 60fps terminal streaming with batched updates
+ * - Optional HTTP Basic Auth (set CLAUDEMAN_PASSWORD in .env)
  *
  * @module web/server
  */
 
-import Fastify, { FastifyInstance, FastifyReply } from 'fastify';
+// Load environment variables from .env file (must be first)
+import 'dotenv/config';
+
+import Fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -93,6 +97,38 @@ const MAX_HOOK_DATA_SIZE = 8 * 1024;
 const CLAUDE_BANNER_PATTERN = /\x1b\[1mClaud/;
 const CTRL_L_PATTERN = /\x0c/g;
 const LEADING_WHITESPACE_PATTERN = /^[\s\r\n]+/;
+
+// HTTP Basic Auth credentials from environment
+const AUTH_PASSWORD = process.env.CLAUDEMAN_PASSWORD || '';
+const AUTH_USERNAME = process.env.CLAUDEMAN_USERNAME || 'admin';
+const AUTH_ENABLED = AUTH_PASSWORD.length > 0;
+
+/**
+ * Validates HTTP Basic Auth credentials.
+ * Returns true if auth is disabled or credentials are valid.
+ */
+function checkBasicAuth(req: FastifyRequest): boolean {
+  if (!AUTH_ENABLED) return true;
+
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Basic ')) {
+    return false;
+  }
+
+  try {
+    const base64Credentials = authHeader.slice(6);
+    const credentials = Buffer.from(base64Credentials, 'base64').toString('utf-8');
+    const [username, password] = credentials.split(':');
+
+    // Constant-time comparison to prevent timing attacks
+    const usernameMatch = username === AUTH_USERNAME;
+    const passwordMatch = password === AUTH_PASSWORD;
+
+    return usernameMatch && passwordMatch;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Sanitizes hook event data before broadcasting via SSE.
@@ -286,6 +322,18 @@ export class WebServer extends EventEmitter {
   }
 
   private async setupRoutes(): Promise<void> {
+    // HTTP Basic Auth middleware (if CLAUDEMAN_PASSWORD is set in .env)
+    if (AUTH_ENABLED) {
+      console.log('[Server] HTTP Basic Auth enabled (CLAUDEMAN_PASSWORD is set)');
+      this.app.addHook('preHandler', async (req, reply) => {
+        if (!checkBasicAuth(req)) {
+          reply.header('WWW-Authenticate', 'Basic realm="Claudeman"');
+          reply.code(401).send({ error: 'Unauthorized' });
+          return;
+        }
+      });
+    }
+
     // Serve static files
     await this.app.register(fastifyStatic, {
       root: join(__dirname, 'public'),

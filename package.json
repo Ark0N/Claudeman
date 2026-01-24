@@ -40,6 +40,7 @@
     "@modelcontextprotocol/sdk": "^1.25.3",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
+    "dotenv": "^17.2.3",
     "fastify": "^5.1.0",
     "ink": "^6.6.0",
     "ink-spinner": "^5.0.0",

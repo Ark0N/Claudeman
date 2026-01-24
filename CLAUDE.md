@@ -33,6 +33,22 @@ Claudeman is a Claude Code session manager with a web interface and autonomous R
 npm install
 ```
 
+## Authentication
+
+The web interface supports optional HTTP Basic Auth. To enable it:
+
+1. Copy `.env.example` to `.env`
+2. Set `CLAUDEMAN_PASSWORD` to your desired password
+3. Optionally set `CLAUDEMAN_USERNAME` (defaults to "admin")
+4. Restart the web server
+
+```bash
+cp .env.example .env
+# Edit .env and set CLAUDEMAN_PASSWORD=your_secure_password
+```
+
+When enabled, browsers will prompt for credentials before accessing the web interface.
+
 ## Commands
 
 **CRITICAL**: `npm run dev` runs CLI help, NOT the web server. Use `npx tsx src/index.ts web` for development.
@@ -470,6 +486,7 @@ All routes defined in `server.ts:buildServer()`. Key endpoint groups:
 
 | File | Purpose |
 |------|---------|
+| `.env` | Environment config (CLAUDEMAN_PASSWORD, CLAUDEMAN_USERNAME for HTTP Basic Auth) |
 | `~/.claudeman/state.json` | Full session state (all settings, tokens, respawn config, Ralph state), tasks, app config |
 | `~/.claudeman/state-inner.json` | Ralph loop/todo state per session (separate to reduce writes) |
 | `~/.claudeman/screens.json` | Screen session metadata (for recovery after restart) |
