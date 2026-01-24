@@ -338,8 +338,7 @@ body {
 .btn-icon-header.btn-settings {
   width: 32px;
   height: 32px;
-  font-size: 1.4rem;
-  margin-left: 0.5rem;
+  margin-left: 0;
 }
 
 .btn-icon-header.btn-sm {
@@ -2199,6 +2198,7 @@ kbd {
   height: 32px;
   font-size: 1.1rem;
   margin-left: 0.5rem;
+  margin-right: 2px;
 }
 
 .btn-icon-header.btn-notifications:hover {
