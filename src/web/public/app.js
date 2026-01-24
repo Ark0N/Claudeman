@@ -2589,6 +2589,18 @@ class ClaudemanApp {
     if (tokenCountEl) {
       tokenCountEl.style.display = showTokenCount ? '' : 'none';
     }
+
+    // Hide notification bell when notifications are disabled
+    const notifEnabled = this.notificationManager?.preferences?.enabled ?? true;
+    const notifBtn = document.querySelector('.btn-notifications');
+    if (notifBtn) {
+      notifBtn.style.display = notifEnabled ? '' : 'none';
+    }
+    // Close the drawer if notifications got disabled while it's open
+    if (!notifEnabled) {
+      const drawer = document.getElementById('notifDrawer');
+      if (drawer) drawer.classList.remove('open');
+    }
   }
 
   applyMonitorVisibility() {
