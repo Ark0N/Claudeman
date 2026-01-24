@@ -210,7 +210,7 @@ body {
 .header-right {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: 0.5rem;
   margin-left: auto;
   padding-left: 0.75rem;
   border-left: 1px solid var(--border);
@@ -2197,7 +2197,7 @@ kbd {
   width: 32px;
   height: 32px;
   font-size: 1.1rem;
-  margin-left: 0.5rem;
+  margin-left: 0;
   margin-right: 2px;
 }
 
