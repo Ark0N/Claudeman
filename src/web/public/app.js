@@ -939,6 +939,36 @@ class ClaudemanApp {
       }
     });
 
+    this.eventSource.addEventListener('respawn:aiCheckStarted', (e) => {
+      const data = JSON.parse(e.data);
+      if (data.sessionId === this.activeSessionId) {
+        document.getElementById('respawnStep').textContent = 'AI Check: Analyzing...';
+      }
+    });
+
+    this.eventSource.addEventListener('respawn:aiCheckCompleted', (e) => {
+      const data = JSON.parse(e.data);
+      if (data.sessionId === this.activeSessionId) {
+        const icon = data.verdict === 'IDLE' ? '✓' : '⏳';
+        document.getElementById('respawnStep').textContent = `AI Check: ${data.verdict} ${icon}`;
+      }
+    });
+
+    this.eventSource.addEventListener('respawn:aiCheckFailed', (e) => {
+      const data = JSON.parse(e.data);
+      if (data.sessionId === this.activeSessionId) {
+        document.getElementById('respawnStep').textContent = `AI Check: Error - ${data.error?.substring(0, 50)}`;
+      }
+    });
+
+    this.eventSource.addEventListener('respawn:aiCheckCooldown', (e) => {
+      const data = JSON.parse(e.data);
+      if (data.sessionId === this.activeSessionId && data.active) {
+        const remaining = Math.ceil((data.endsAt - Date.now()) / 1000);
+        document.getElementById('respawnStep').textContent = `AI Check: WORKING (cooldown ${remaining}s)`;
+      }
+    });
+
     // Respawn timer events
     this.eventSource.addEventListener('respawn:timerStarted', (e) => {
       const data = JSON.parse(e.data);
@@ -1903,6 +1933,26 @@ class ClaudemanApp {
       }
     } else {
       confidenceEl.style.display = 'none';
+    }
+
+    // Show AI check info if available
+    const aiCheckEl = document.getElementById('detectionAiCheck');
+    if (aiCheckEl && detection.aiCheck) {
+      const ai = detection.aiCheck;
+      let aiText = '';
+      if (ai.status === 'checking') {
+        aiText = 'AI: Analyzing...';
+      } else if (ai.status === 'cooldown' && ai.cooldownEndsAt) {
+        const remaining = Math.ceil((ai.cooldownEndsAt - Date.now()) / 1000);
+        aiText = `AI: WORKING (${remaining}s cooldown)`;
+      } else if (ai.status === 'disabled') {
+        aiText = `AI: Disabled (${ai.disabledReason || 'errors'})`;
+      } else if (ai.lastVerdict) {
+        aiText = `AI: Last=${ai.lastVerdict}`;
+        if (ai.lastCheckDurationMs) aiText += ` (${Math.round(ai.lastCheckDurationMs / 1000)}s)`;
+      }
+      aiCheckEl.textContent = aiText;
+      aiCheckEl.style.display = aiText ? '' : 'none';
     }
   }
 

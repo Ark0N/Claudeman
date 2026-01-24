@@ -815,6 +815,11 @@ export class WebServer extends EventEmitter {
         kickstartPrompt: config.kickstartPrompt ?? currentConfig?.kickstartPrompt,
         autoAcceptPrompts: config.autoAcceptPrompts ?? currentConfig?.autoAcceptPrompts ?? true,
         autoAcceptDelayMs: config.autoAcceptDelayMs ?? currentConfig?.autoAcceptDelayMs ?? 8000,
+        aiIdleCheckEnabled: config.aiIdleCheckEnabled ?? currentConfig?.aiIdleCheckEnabled ?? true,
+        aiIdleCheckModel: config.aiIdleCheckModel ?? currentConfig?.aiIdleCheckModel,
+        aiIdleCheckMaxContext: config.aiIdleCheckMaxContext ?? currentConfig?.aiIdleCheckMaxContext,
+        aiIdleCheckTimeoutMs: config.aiIdleCheckTimeoutMs ?? currentConfig?.aiIdleCheckTimeoutMs,
+        aiIdleCheckCooldownMs: config.aiIdleCheckCooldownMs ?? currentConfig?.aiIdleCheckCooldownMs,
         durationMinutes: currentConfig?.durationMinutes,
       };
       this.screenManager.updateRespawnConfig(id, merged);
@@ -1566,6 +1571,11 @@ export class WebServer extends EventEmitter {
       kickstartPrompt: config.kickstartPrompt,
       autoAcceptPrompts: config.autoAcceptPrompts,
       autoAcceptDelayMs: config.autoAcceptDelayMs,
+      aiIdleCheckEnabled: config.aiIdleCheckEnabled,
+      aiIdleCheckModel: config.aiIdleCheckModel,
+      aiIdleCheckMaxContext: config.aiIdleCheckMaxContext,
+      aiIdleCheckTimeoutMs: config.aiIdleCheckTimeoutMs,
+      aiIdleCheckCooldownMs: config.aiIdleCheckCooldownMs,
       durationMinutes,
     };
     this.screenManager.updateRespawnConfig(sessionId, persistedConfig);
@@ -1816,6 +1826,22 @@ export class WebServer extends EventEmitter {
 
     controller.on('autoAcceptSent', () => {
       this.broadcast('respawn:autoAcceptSent', { sessionId });
+    });
+
+    controller.on('aiCheckStarted', () => {
+      this.broadcast('respawn:aiCheckStarted', { sessionId });
+    });
+
+    controller.on('aiCheckCompleted', (result: { verdict: string; reasoning: string; durationMs: number }) => {
+      this.broadcast('respawn:aiCheckCompleted', { sessionId, verdict: result.verdict, reasoning: result.reasoning, durationMs: result.durationMs });
+    });
+
+    controller.on('aiCheckFailed', (error: string) => {
+      this.broadcast('respawn:aiCheckFailed', { sessionId, error });
+    });
+
+    controller.on('aiCheckCooldown', (active: boolean, endsAt: number | null) => {
+      this.broadcast('respawn:aiCheckCooldown', { sessionId, active, endsAt });
     });
 
     controller.on('log', (message: string) => {
@@ -2401,6 +2427,11 @@ export class WebServer extends EventEmitter {
                     noOutputTimeoutMs: savedState.respawnConfig.noOutputTimeoutMs,
                     autoAcceptPrompts: savedState.respawnConfig.autoAcceptPrompts ?? true,
                     autoAcceptDelayMs: savedState.respawnConfig.autoAcceptDelayMs ?? 8000,
+                    aiIdleCheckEnabled: savedState.respawnConfig.aiIdleCheckEnabled ?? true,
+                    aiIdleCheckModel: savedState.respawnConfig.aiIdleCheckModel ?? 'claude-opus-4-5-20251101',
+                    aiIdleCheckMaxContext: savedState.respawnConfig.aiIdleCheckMaxContext ?? 16000,
+                    aiIdleCheckTimeoutMs: savedState.respawnConfig.aiIdleCheckTimeoutMs ?? 90000,
+                    aiIdleCheckCooldownMs: savedState.respawnConfig.aiIdleCheckCooldownMs ?? 180000,
                   });
                   this.respawnControllers.set(session.id, controller);
                   this.setupRespawnListeners(session.id, controller);
@@ -2430,6 +2461,11 @@ export class WebServer extends EventEmitter {
                   kickstartPrompt: screen.respawnConfig.kickstartPrompt,
                   autoAcceptPrompts: screen.respawnConfig.autoAcceptPrompts ?? true,
                   autoAcceptDelayMs: screen.respawnConfig.autoAcceptDelayMs ?? 8000,
+                  aiIdleCheckEnabled: screen.respawnConfig.aiIdleCheckEnabled ?? true,
+                  aiIdleCheckModel: screen.respawnConfig.aiIdleCheckModel ?? 'claude-opus-4-5-20251101',
+                  aiIdleCheckMaxContext: screen.respawnConfig.aiIdleCheckMaxContext ?? 16000,
+                  aiIdleCheckTimeoutMs: screen.respawnConfig.aiIdleCheckTimeoutMs ?? 90000,
+                  aiIdleCheckCooldownMs: screen.respawnConfig.aiIdleCheckCooldownMs ?? 180000,
                 });
                 this.respawnControllers.set(session.id, controller);
                 this.setupRespawnListeners(session.id, controller);

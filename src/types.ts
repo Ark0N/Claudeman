@@ -211,6 +211,16 @@ export interface RespawnConfig {
   autoAcceptPrompts?: boolean;
   /** Delay before auto-accepting plan mode prompts when no output and no completion message (ms) */
   autoAcceptDelayMs?: number;
+  /** Whether AI idle check is enabled */
+  aiIdleCheckEnabled?: boolean;
+  /** Model to use for AI idle check */
+  aiIdleCheckModel?: string;
+  /** Maximum characters of terminal buffer for AI check */
+  aiIdleCheckMaxContext?: number;
+  /** Timeout for AI check in ms */
+  aiIdleCheckTimeoutMs?: number;
+  /** Cooldown after WORKING verdict in ms */
+  aiIdleCheckCooldownMs?: number;
 }
 
 /**
@@ -515,6 +525,16 @@ export interface PersistedRespawnConfig {
   autoAcceptPrompts?: boolean;
   /** Delay before auto-accepting prompts (ms) */
   autoAcceptDelayMs?: number;
+  /** Whether AI idle check is enabled */
+  aiIdleCheckEnabled?: boolean;
+  /** Model to use for AI idle check */
+  aiIdleCheckModel?: string;
+  /** Maximum characters of terminal buffer for AI check */
+  aiIdleCheckMaxContext?: number;
+  /** Timeout for AI check in ms */
+  aiIdleCheckTimeoutMs?: number;
+  /** Cooldown after WORKING verdict in ms */
+  aiIdleCheckCooldownMs?: number;
   /** Duration in minutes if timed respawn was set */
   durationMinutes?: number;
 }

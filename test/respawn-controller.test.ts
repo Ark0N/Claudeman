@@ -76,6 +76,7 @@ describe('RespawnController', () => {
       interStepDelayMs: 50,
       completionConfirmMs: 50, // Short confirmation delay for testing
       noOutputTimeoutMs: 500, // Short fallback timeout for testing
+      aiIdleCheckEnabled: false, // Disable AI check for legacy tests
     });
   });
 
@@ -614,6 +615,7 @@ describe('RespawnController State Transitions', () => {
       interStepDelayMs: 20,
       completionConfirmMs: 50, // Short confirmation for testing
       noOutputTimeoutMs: 300, // Short fallback for testing
+      aiIdleCheckEnabled: false, // Disable AI check for legacy tests
     });
   });
 
@@ -814,6 +816,7 @@ describe('RespawnController Edge Cases', () => {
       interStepDelayMs: 10,
       completionConfirmMs: 30, // Short confirmation for testing
       noOutputTimeoutMs: 200, // Short fallback for testing
+      aiIdleCheckEnabled: false,
     });
 
     expect(controller.currentCycle).toBe(0);
@@ -873,6 +876,7 @@ describe('RespawnController Edge Cases', () => {
         autoAcceptDelayMs: 100, // Short delay for testing
         completionConfirmMs: 50,
         noOutputTimeoutMs: 5000,
+        aiIdleCheckEnabled: false,
       });
 
       let autoAcceptFired = false;
@@ -899,6 +903,7 @@ describe('RespawnController Edge Cases', () => {
         autoAcceptDelayMs: 100,
         completionConfirmMs: 200, // Longer than autoAcceptDelay
         noOutputTimeoutMs: 5000,
+        aiIdleCheckEnabled: false,
       });
 
       let autoAcceptFired = false;
@@ -924,6 +929,7 @@ describe('RespawnController Edge Cases', () => {
         autoAcceptDelayMs: 100,
         completionConfirmMs: 50,
         noOutputTimeoutMs: 5000,
+        aiIdleCheckEnabled: false,
       });
 
       let autoAcceptFired = false;
@@ -946,6 +952,7 @@ describe('RespawnController Edge Cases', () => {
         autoAcceptDelayMs: 100,
         completionConfirmMs: 50,
         noOutputTimeoutMs: 5000,
+        aiIdleCheckEnabled: false,
       });
 
       let autoAcceptFired = false;
@@ -968,6 +975,7 @@ describe('RespawnController Edge Cases', () => {
         autoAcceptDelayMs: 150,
         completionConfirmMs: 50,
         noOutputTimeoutMs: 5000,
+        aiIdleCheckEnabled: false,
       });
 
       let autoAcceptFired = false;
@@ -998,6 +1006,7 @@ describe('RespawnController Edge Cases', () => {
         autoAcceptDelayMs: 100,
         completionConfirmMs: 50,
         noOutputTimeoutMs: 5000,
+        aiIdleCheckEnabled: false,
       });
 
       let autoAcceptCount = 0;
@@ -1031,6 +1040,7 @@ describe('RespawnController Edge Cases', () => {
         completionConfirmMs: 50,
         interStepDelayMs: 50,
         noOutputTimeoutMs: 5000,
+        aiIdleCheckEnabled: false,
       });
 
       let autoAcceptFired = false;
@@ -1062,6 +1072,7 @@ describe('RespawnController Edge Cases', () => {
         autoAcceptDelayMs: 100,
         completionConfirmMs: 50,
         noOutputTimeoutMs: 5000,
+        aiIdleCheckEnabled: false,
       });
 
       let autoAcceptFired = false;
@@ -1089,6 +1100,7 @@ describe('RespawnController Edge Cases', () => {
         autoAcceptDelayMs: 100,
         completionConfirmMs: 50,
         noOutputTimeoutMs: 5000,
+        aiIdleCheckEnabled: false,
       });
 
       let autoAcceptFired = false;
@@ -1114,5 +1126,233 @@ describe('RespawnController Edge Cases', () => {
       expect(autoAcceptFired).toBe(true);
       autoAcceptController.stop();
     });
+  });
+});
+
+describe('RespawnController AI Idle Check', () => {
+  let session: MockSession;
+
+  beforeEach(() => {
+    session = new MockSession();
+  });
+
+  it('should have AI idle check enabled by default', () => {
+    const controller = new RespawnController(session as unknown as Session);
+    const config = controller.getConfig();
+    expect(config.aiIdleCheckEnabled).toBe(true);
+    expect(config.aiIdleCheckModel).toBe('claude-opus-4-5-20251101');
+    expect(config.aiIdleCheckMaxContext).toBe(16000);
+    expect(config.aiIdleCheckTimeoutMs).toBe(90000);
+    expect(config.aiIdleCheckCooldownMs).toBe(180000);
+    controller.stop();
+  });
+
+  it('should include AI check state in detection status when enabled', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      aiIdleCheckEnabled: true,
+    });
+    controller.start();
+
+    const detection = controller.getDetectionStatus();
+    expect(detection.aiCheck).not.toBeNull();
+    expect(detection.aiCheck?.status).toBe('ready');
+
+    controller.stop();
+  });
+
+  it('should not include AI check state when disabled', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      aiIdleCheckEnabled: false,
+    });
+    controller.start();
+
+    const detection = controller.getDetectionStatus();
+    expect(detection.aiCheck).toBeNull();
+
+    controller.stop();
+  });
+
+  it('should transition to ai_checking state when pre-filter is met', async () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 5000,
+      aiIdleCheckEnabled: true,
+      aiIdleCheckTimeoutMs: 500, // Short timeout for test
+    });
+
+    const states: string[] = [];
+    controller.on('stateChanged', (state: string) => states.push(state));
+
+    controller.start();
+
+    // Simulate completion message
+    session.simulateCompletionMessage();
+
+    // Wait for completion confirm timer to fire and AI check to start
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    // Should have transitioned to ai_checking
+    expect(states).toContain('ai_checking');
+
+    controller.stop();
+  });
+
+  it('should cancel AI check when working patterns detected', async () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 5000,
+      aiIdleCheckEnabled: true,
+      aiIdleCheckTimeoutMs: 5000, // Long timeout so we can interrupt
+    });
+
+    controller.start();
+    session.simulateCompletionMessage();
+
+    // Wait for AI check to start
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Simulate working patterns during AI check
+    session.simulateWorking();
+
+    // Should be back to watching
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(controller.state).toBe('watching');
+
+    controller.stop();
+  });
+
+  it('should cancel AI check when substantial output arrives', async () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 5000,
+      aiIdleCheckEnabled: true,
+      aiIdleCheckTimeoutMs: 5000,
+    });
+
+    controller.start();
+    session.simulateCompletionMessage();
+
+    // Wait for AI check to start
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Simulate substantial output during AI check
+    session.simulateTerminalOutput('Some meaningful output that is more than 2 chars');
+
+    // Should be back to watching
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(controller.state).toBe('watching');
+
+    controller.stop();
+  });
+
+  it('should fall back to direct idle when AI check is disabled', async () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 5000,
+      aiIdleCheckEnabled: false,
+    });
+
+    let cycleStarted = false;
+    controller.on('respawnCycleStarted', () => {
+      cycleStarted = true;
+    });
+
+    controller.start();
+    session.simulateCompletionMessage();
+
+    // Wait for completion confirm and direct idle
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    expect(cycleStarted).toBe(true);
+    controller.stop();
+  });
+
+  it('should emit aiCheckStarted event', async () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 5000,
+      aiIdleCheckEnabled: true,
+      aiIdleCheckTimeoutMs: 500,
+    });
+
+    let aiCheckStarted = false;
+    controller.on('aiCheckStarted', () => {
+      aiCheckStarted = true;
+    });
+
+    controller.start();
+    session.simulateCompletionMessage();
+
+    await new Promise(resolve => setTimeout(resolve, 150));
+
+    expect(aiCheckStarted).toBe(true);
+    controller.stop();
+  });
+
+  it('should update AI checker config on updateConfig', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      aiIdleCheckEnabled: true,
+    });
+
+    controller.updateConfig({
+      aiIdleCheckModel: 'claude-sonnet-4-20250514',
+      aiIdleCheckCooldownMs: 60000,
+    });
+
+    const config = controller.getConfig();
+    expect(config.aiIdleCheckModel).toBe('claude-sonnet-4-20250514');
+    expect(config.aiIdleCheckCooldownMs).toBe(60000);
+    controller.stop();
+  });
+
+  it('should trigger AI check via completion message path (not requiring 3s working-absent)', async () => {
+    // The pre-filter timer requires 3s without working patterns,
+    // but the completion message path (startCompletionConfirmTimer) bypasses
+    // the working-absent check and goes directly through tryStartAiCheck.
+    const controller = new RespawnController(session as unknown as Session, {
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 5000,
+      aiIdleCheckEnabled: true,
+      aiIdleCheckTimeoutMs: 500,
+    });
+
+    const states: string[] = [];
+    controller.on('stateChanged', (state: string) => states.push(state));
+
+    controller.start();
+
+    // Completion message triggers the completion confirm timer
+    // which routes through tryStartAiCheck after silence
+    session.simulateCompletionMessage();
+
+    // Wait for completion confirm timer + AI check start
+    await new Promise(resolve => setTimeout(resolve, 150));
+
+    // Should have triggered ai_checking via completion path
+    expect(states).toContain('ai_checking');
+
+    controller.stop();
+  });
+
+  it('should handle AI check timeout gracefully', async () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 5000,
+      aiIdleCheckEnabled: true,
+      aiIdleCheckTimeoutMs: 100, // Very short timeout
+    });
+
+    const states: string[] = [];
+    controller.on('stateChanged', (state: string) => states.push(state));
+
+    controller.start();
+    session.simulateCompletionMessage();
+
+    // Wait for AI check to start and timeout
+    await new Promise(resolve => setTimeout(resolve, 300));
+
+    // Should return to watching after timeout (with cooldown)
+    expect(controller.state).toBe('watching');
+    controller.stop();
   });
 });

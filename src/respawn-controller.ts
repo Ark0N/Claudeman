@@ -36,6 +36,7 @@
 
 import { EventEmitter } from 'node:events';
 import { Session } from './session.js';
+import { AiIdleChecker, type AiCheckResult, type AiCheckState } from './ai-idle-checker.js';
 
 // ========== Configuration Constants ==========
 
@@ -100,6 +101,9 @@ export interface DetectionStatus {
   workingPatternsAbsent: boolean;
   /** Milliseconds since last working pattern */
   msSinceLastWorking: number;
+
+  /** Layer 5: AI idle check status */
+  aiCheck: AiCheckState | null;
 
   /** Overall confidence level (0-100) */
   confidenceLevel: number;
@@ -183,6 +187,8 @@ export type RespawnState =
   | 'watching'
   /** Completion message detected, waiting for output silence to confirm */
   | 'confirming_idle'
+  /** AI checker is analyzing terminal output for IDLE/WORKING verdict */
+  | 'ai_checking'
   /** About to send the update docs prompt */
   | 'sending_update'
   /** Waiting for update to complete */
@@ -289,6 +295,38 @@ export interface RespawnConfig {
    * @default 8000 (8 seconds)
    */
   autoAcceptDelayMs: number;
+
+  /**
+   * Whether AI idle check is enabled.
+   * When enabled, spawns a fresh Claude CLI to analyze terminal output
+   * and provide a definitive IDLE/WORKING verdict before starting respawn.
+   * @default true
+   */
+  aiIdleCheckEnabled: boolean;
+
+  /**
+   * Model to use for AI idle check.
+   * @default 'claude-opus-4-5-20251101'
+   */
+  aiIdleCheckModel: string;
+
+  /**
+   * Maximum characters of terminal buffer to send to AI checker.
+   * @default 16000
+   */
+  aiIdleCheckMaxContext: number;
+
+  /**
+   * Timeout for the AI check in ms.
+   * @default 90000 (90 seconds)
+   */
+  aiIdleCheckTimeoutMs: number;
+
+  /**
+   * Cooldown after WORKING verdict in ms.
+   * @default 180000 (3 minutes)
+   */
+  aiIdleCheckCooldownMs: number;
 }
 
 /**
@@ -318,6 +356,14 @@ export interface RespawnEvents {
   detectionUpdate: (status: DetectionStatus) => void;
   /** Auto-accept sent for plan mode approval */
   autoAcceptSent: () => void;
+  /** AI idle check started */
+  aiCheckStarted: () => void;
+  /** AI idle check completed with verdict */
+  aiCheckCompleted: (result: AiCheckResult) => void;
+  /** AI idle check failed */
+  aiCheckFailed: (error: string) => void;
+  /** AI idle check cooldown state changed */
+  aiCheckCooldown: (active: boolean, endsAt: number | null) => void;
   /** Error occurred */
   error: (error: Error) => void;
   /** Debug log message */
@@ -336,6 +382,11 @@ const DEFAULT_CONFIG: RespawnConfig = {
   noOutputTimeoutMs: 30000,      // 30 seconds fallback if no output at all
   autoAcceptPrompts: true,       // auto-accept plan mode prompts (not questions)
   autoAcceptDelayMs: 8000,       // 8 seconds before auto-accepting
+  aiIdleCheckEnabled: true,      // use AI to confirm idle state
+  aiIdleCheckModel: 'claude-opus-4-5-20251101',
+  aiIdleCheckMaxContext: 16000,  // ~4k tokens
+  aiIdleCheckTimeoutMs: 90000,   // 90 seconds (thinking can be slow)
+  aiIdleCheckCooldownMs: 180000, // 3 minutes after WORKING verdict
 };
 
 /**
@@ -418,6 +469,9 @@ export class RespawnController extends EventEmitter {
   /** Timer for auto-accepting plan mode prompts */
   private autoAcceptTimer: NodeJS.Timeout | null = null;
 
+  /** Timer for pre-filter silence detection (triggers AI check) */
+  private preFilterTimer: NodeJS.Timeout | null = null;
+
   /** Whether any terminal output has been received since start/last-auto-accept */
   private hasReceivedOutput: boolean = false;
 
@@ -441,6 +495,9 @@ export class RespawnController extends EventEmitter {
 
   /** Reference to terminal event handler (for cleanup) */
   private terminalHandler: ((data: string) => void) | null = null;
+
+  /** AI idle checker instance */
+  private aiChecker: AiIdleChecker;
 
   /** Timer for /clear step fallback (sends /init if no prompt detected) */
   private clearFallbackTimer: NodeJS.Timeout | null = null;
@@ -500,6 +557,33 @@ export class RespawnController extends EventEmitter {
     super();
     this.session = session;
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this.aiChecker = new AiIdleChecker(session.id, {
+      enabled: this.config.aiIdleCheckEnabled,
+      model: this.config.aiIdleCheckModel,
+      maxContextChars: this.config.aiIdleCheckMaxContext,
+      checkTimeoutMs: this.config.aiIdleCheckTimeoutMs,
+      cooldownMs: this.config.aiIdleCheckCooldownMs,
+    });
+    this.setupAiCheckerListeners();
+  }
+
+  /** Wire up AI checker events to controller events */
+  private setupAiCheckerListeners(): void {
+    this.aiChecker.on('log', (message: string) => {
+      this.log(message);
+    });
+
+    this.aiChecker.on('cooldownStarted', (endsAt: number) => {
+      this.emit('aiCheckCooldown', true, endsAt);
+    });
+
+    this.aiChecker.on('cooldownEnded', () => {
+      this.emit('aiCheckCooldown', false, null);
+    });
+
+    this.aiChecker.on('disabled', (reason: string) => {
+      this.log(`AI checker disabled: ${reason}. Falling back to noOutputTimeoutMs.`);
+    });
   }
 
   /**
@@ -557,19 +641,27 @@ export class RespawnController extends EventEmitter {
     if (this._state === 'stopped') {
       statusText = 'Controller stopped';
       waitingFor = 'Start to begin monitoring';
+    } else if (this._state === 'ai_checking') {
+      statusText = 'AI Check: Analyzing terminal output...';
+      waitingFor = 'AI verdict (IDLE or WORKING)';
     } else if (this._state === 'confirming_idle') {
       statusText = `Confirming idle (${confidence}% confidence)`;
       waitingFor = `${Math.max(0, Math.ceil((this.config.completionConfirmMs - msSinceLastOutput) / 1000))}s more silence`;
     } else if (this._state === 'watching') {
-      if (completionMessageDetected) {
+      const aiState = this.aiChecker.getState();
+      if (aiState.status === 'cooldown') {
+        const remaining = Math.ceil(this.aiChecker.getCooldownRemainingMs() / 1000);
+        statusText = `AI Check: WORKING (cooldown ${remaining}s)`;
+        waitingFor = 'Cooldown to expire';
+      } else if (completionMessageDetected) {
         statusText = 'Completion detected, confirming...';
         waitingFor = 'Output silence to confirm';
       } else if (workingPatternsAbsent && msSinceLastOutput > 5000) {
         statusText = 'No activity detected';
-        waitingFor = 'Completion message or timeout';
+        waitingFor = 'Pre-filter conditions for AI check';
       } else {
-        statusText = 'Watching for completion';
-        waitingFor = 'Completion message (for Xm Xs)';
+        statusText = 'Watching for idle signals';
+        waitingFor = 'Silence + no working patterns + tokens stable';
       }
     } else if (this._state.startsWith('waiting_') || this._state.startsWith('sending_')) {
       statusText = `Respawn step: ${this._state}`;
@@ -589,6 +681,7 @@ export class RespawnController extends EventEmitter {
       msSinceTokenChange,
       workingPatternsAbsent,
       msSinceLastWorking,
+      aiCheck: this.config.aiIdleCheckEnabled ? this.aiChecker.getState() : null,
       confidenceLevel: confidence,
       statusText,
       waitingFor,
@@ -679,10 +772,12 @@ export class RespawnController extends EventEmitter {
     this.completionMessageTime = null;
     this.hasReceivedOutput = false;
 
+    this.aiChecker.reset();
     this.setState('watching');
     this.setupTerminalListener();
     this.startDetectionUpdates();
     this.startNoOutputTimer();
+    this.startPreFilterTimer();
     if (this.config.autoAcceptPrompts) {
       this.startAutoAcceptTimer();
     }
@@ -698,6 +793,7 @@ export class RespawnController extends EventEmitter {
    */
   stop(): void {
     this.log('Stopping respawn controller');
+    this.aiChecker.cancel();
     this.clearTimers();
     this.stopDetectionUpdates();
     this.setState('stopped');
@@ -777,6 +873,7 @@ export class RespawnController extends EventEmitter {
     this.lastActivityTime = now;
     this.hasReceivedOutput = true;
     this.resetNoOutputTimer();
+    this.resetPreFilterTimer();
     this.resetAutoAcceptTimer();
 
     // Track token count (Layer 3)
@@ -800,6 +897,13 @@ export class RespawnController extends EventEmitter {
 
       // Cancel any pending step confirmation (Claude is still working)
       this.cancelStepConfirm();
+
+      // If AI check is running, cancel it (Claude is working)
+      if (this._state === 'ai_checking') {
+        this.log('Working patterns detected during AI check, cancelling');
+        this.aiChecker.cancel();
+        this.setState('watching');
+      }
 
       // If we're monitoring init and work started, go to watching (no kickstart needed)
       if (this._state === 'monitoring_init') {
@@ -842,15 +946,21 @@ export class RespawnController extends EventEmitter {
       return;
     }
 
-    // In confirming_idle state, substantial output cancels the confirmation.
+    // In confirming_idle or ai_checking state, substantial output cancels the flow.
     // This prevents false triggers when Claude pauses briefly mid-work.
-    if (this._state === 'confirming_idle') {
+    if (this._state === 'confirming_idle' || this._state === 'ai_checking') {
       // Strip ANSI escape codes to check if there's real content
       const stripped = data.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').trim();
       if (stripped.length > 2) {
-        // Real content (not just escape codes or single chars) - cancel confirmation
-        this.log(`Substantial output during confirmation ("${stripped.substring(0, 40)}..."), cancelling idle detection`);
-        this.cancelCompletionConfirm();
+        if (this._state === 'ai_checking') {
+          this.log(`Substantial output during AI check ("${stripped.substring(0, 40)}..."), cancelling`);
+          this.aiChecker.cancel();
+          this.setState('watching');
+        } else {
+          // Real content (not just escape codes or single chars) - cancel confirmation
+          this.log(`Substantial output during confirmation ("${stripped.substring(0, 40)}..."), cancelling idle detection`);
+          this.cancelCompletionConfirm();
+        }
         return;
       }
     }
@@ -1020,7 +1130,7 @@ export class RespawnController extends EventEmitter {
     }
   }
 
-  /** Clear all timers (idle, step, completion confirm, no-output, step confirm, auto-accept, and clear fallback) */
+  /** Clear all timers (idle, step, completion confirm, no-output, pre-filter, step confirm, auto-accept, and clear fallback) */
   private clearTimers(): void {
     this.clearIdleTimer();
     if (this.stepTimer) {
@@ -1042,6 +1152,10 @@ export class RespawnController extends EventEmitter {
     if (this.autoAcceptTimer) {
       clearTimeout(this.autoAcceptTimer);
       this.autoAcceptTimer = null;
+    }
+    if (this.preFilterTimer) {
+      clearTimeout(this.preFilterTimer);
+      this.preFilterTimer = null;
     }
     if (this.noOutputTimer) {
       clearTimeout(this.noOutputTimer);
@@ -1084,7 +1198,8 @@ export class RespawnController extends EventEmitter {
 
   /**
    * Start the no-output fallback timer.
-   * If no output for noOutputTimeoutMs, triggers idle detection.
+   * If no output for noOutputTimeoutMs, triggers idle detection as safety net
+   * (used when AI check is disabled or has too many errors).
    */
   private startNoOutputTimer(): void {
     if (this.noOutputTimer) {
@@ -1094,7 +1209,12 @@ export class RespawnController extends EventEmitter {
       if (this._state === 'watching' || this._state === 'confirming_idle') {
         const msSinceOutput = Date.now() - this.lastOutputTime;
         this.log(`No-output fallback triggered (${msSinceOutput}ms since last output)`);
-        this.onIdleConfirmed('no-output fallback');
+        // If AI check is disabled or errored out, go directly to idle
+        if (!this.config.aiIdleCheckEnabled || this.aiChecker.status === 'disabled') {
+          this.onIdleConfirmed('no-output fallback (AI check disabled)');
+        } else {
+          this.tryStartAiCheck('no-output fallback');
+        }
       }
     }, this.config.noOutputTimeoutMs);
   }
@@ -1105,6 +1225,123 @@ export class RespawnController extends EventEmitter {
    */
   private resetNoOutputTimer(): void {
     this.startNoOutputTimer();
+  }
+
+  // ========== Pre-Filter & AI Check Methods ==========
+
+  /**
+   * Start the pre-filter timer.
+   * Fires after completionConfirmMs of silence. When it fires, checks if
+   * all pre-filter conditions are met and starts the AI check if so.
+   * This provides an additional path to AI check even without a completion message.
+   */
+  private startPreFilterTimer(): void {
+    if (this.preFilterTimer) {
+      clearTimeout(this.preFilterTimer);
+    }
+    // Only set up pre-filter when AI check is enabled
+    if (!this.config.aiIdleCheckEnabled) return;
+
+    this.preFilterTimer = setTimeout(() => {
+      if (this._state === 'watching') {
+        const now = Date.now();
+        const msSinceOutput = now - this.lastOutputTime;
+        const msSinceWorking = now - this.lastWorkingPatternTime;
+        const msSinceTokenChange = now - this.lastTokenChangeTime;
+
+        // Check pre-filter conditions
+        const silenceMet = msSinceOutput >= this.config.completionConfirmMs;
+        const noWorkingMet = msSinceWorking >= 3000;
+        const tokensStableMet = msSinceTokenChange >= this.config.completionConfirmMs;
+
+        if (silenceMet && noWorkingMet && tokensStableMet) {
+          this.log(`Pre-filter conditions met: silence=${msSinceOutput}ms, noWorking=${msSinceWorking}ms, tokensStable=${msSinceTokenChange}ms`);
+          this.tryStartAiCheck('pre-filter');
+        }
+      }
+    }, this.config.completionConfirmMs);
+  }
+
+  /**
+   * Reset the pre-filter timer.
+   * Called whenever output is received.
+   */
+  private resetPreFilterTimer(): void {
+    this.startPreFilterTimer();
+  }
+
+  /**
+   * Attempt to start an AI idle check.
+   * Checks if AI check is enabled, not on cooldown, and not already checking.
+   * Falls back to direct idle confirmation if AI check is unavailable.
+   *
+   * @param reason - What triggered this attempt (for logging)
+   */
+  private tryStartAiCheck(reason: string): void {
+    // If AI check is disabled or errored out, fall back to direct idle confirmation
+    if (!this.config.aiIdleCheckEnabled || this.aiChecker.status === 'disabled') {
+      this.log(`AI check unavailable (${this.aiChecker.status}), confirming idle directly via: ${reason}`);
+      this.onIdleConfirmed(reason);
+      return;
+    }
+
+    // If on cooldown, don't start check - wait for cooldown to expire
+    if (this.aiChecker.isOnCooldown()) {
+      this.log(`AI check on cooldown (${Math.ceil(this.aiChecker.getCooldownRemainingMs() / 1000)}s remaining), waiting...`);
+      return;
+    }
+
+    // If already checking, don't start another
+    if (this.aiChecker.status === 'checking') {
+      this.log('AI check already in progress');
+      return;
+    }
+
+    // Start the AI check
+    this.startAiCheck(reason);
+  }
+
+  /**
+   * Start the AI idle check.
+   * Transitions to 'ai_checking' state and runs the check asynchronously.
+   *
+   * @param reason - What triggered this check (for logging)
+   */
+  private startAiCheck(reason: string): void {
+    this.setState('ai_checking');
+    this.log(`Starting AI idle check (triggered by: ${reason})`);
+    this.emit('aiCheckStarted');
+
+    // Get the terminal buffer for analysis
+    const buffer = this.terminalBuffer.value;
+
+    this.aiChecker.check(buffer).then((result) => {
+      // If state changed while checking (e.g., cancelled), ignore result
+      if (this._state !== 'ai_checking') {
+        this.log(`AI check result ignored (state is now ${this._state})`);
+        return;
+      }
+
+      if (result.verdict === 'IDLE') {
+        this.emit('aiCheckCompleted', result);
+        this.onIdleConfirmed(`ai-check: idle (${result.reasoning})`);
+      } else if (result.verdict === 'WORKING') {
+        this.emit('aiCheckCompleted', result);
+        this.setState('watching');
+        this.log(`AI check says WORKING, returning to watching with ${this.config.aiIdleCheckCooldownMs}ms cooldown`);
+      } else {
+        // ERROR verdict
+        this.emit('aiCheckFailed', result.reasoning);
+        this.setState('watching');
+      }
+    }).catch((err) => {
+      if (this._state === 'ai_checking') {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        this.emit('aiCheckFailed', errorMsg);
+        this.setState('watching');
+        this.log(`AI check error: ${errorMsg}`);
+      }
+    });
   }
 
   // ========== Auto-Accept Prompt Methods ==========
@@ -1202,7 +1439,7 @@ export class RespawnController extends EventEmitter {
 
   /**
    * Start completion confirmation timer.
-   * After completion message, waits for output silence.
+   * After completion message, waits for output silence then triggers AI check.
    */
   private startCompletionConfirmTimer(): void {
     if (this.completionConfirmTimer) {
@@ -1215,8 +1452,8 @@ export class RespawnController extends EventEmitter {
     this.completionConfirmTimer = setTimeout(() => {
       const msSinceOutput = Date.now() - this.lastOutputTime;
       if (msSinceOutput >= this.config.completionConfirmMs) {
-        this.log(`Idle confirmed: ${msSinceOutput}ms silence after completion message`);
-        this.onIdleConfirmed('completion + silence');
+        this.log(`Silence confirmed after completion message (${msSinceOutput}ms)`);
+        this.tryStartAiCheck('completion + silence');
       } else {
         // Output received during wait, stay in confirming state and re-check
         this.log(`Output received during confirmation, resetting timer`);
@@ -1318,8 +1555,8 @@ export class RespawnController extends EventEmitter {
    * @fires respawnCycleStarted
    */
   private onIdleDetected(): void {
-    // Accept both watching and confirming_idle states
-    if (this._state !== 'watching' && this._state !== 'confirming_idle') {
+    // Accept watching, confirming_idle, and ai_checking states
+    if (this._state !== 'watching' && this._state !== 'confirming_idle' && this._state !== 'ai_checking') {
       return;
     }
 
@@ -1439,6 +1676,20 @@ export class RespawnController extends EventEmitter {
    */
   updateConfig(config: Partial<RespawnConfig>): void {
     this.config = { ...this.config, ...config };
+
+    // Sync AI checker config if relevant fields changed
+    if (config.aiIdleCheckEnabled !== undefined || config.aiIdleCheckModel !== undefined ||
+        config.aiIdleCheckMaxContext !== undefined || config.aiIdleCheckTimeoutMs !== undefined ||
+        config.aiIdleCheckCooldownMs !== undefined) {
+      this.aiChecker.updateConfig({
+        enabled: this.config.aiIdleCheckEnabled,
+        model: this.config.aiIdleCheckModel,
+        maxContextChars: this.config.aiIdleCheckMaxContext,
+        checkTimeoutMs: this.config.aiIdleCheckTimeoutMs,
+        cooldownMs: this.config.aiIdleCheckCooldownMs,
+      });
+    }
+
     this.log(`Config updated: ${JSON.stringify(config)}`);
   }
 
