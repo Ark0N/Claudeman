@@ -28,7 +28,7 @@
  * - `sendClear`: Whether to send /clear after update (default: true)
  * - `sendInit`: Whether to send /init after clear (default: true)
  * - `kickstartPrompt`: Optional prompt if /init doesn't trigger work
- * - `completionConfirmMs`: Time to wait after completion message (default: 5000)
+ * - `completionConfirmMs`: Time to wait after completion message (default: 10000)
  * - `noOutputTimeoutMs`: Fallback timeout with no output at all (default: 30000)
  *
  * @module respawn-controller
@@ -54,11 +54,14 @@ const RESPAWN_BUFFER_TRIM_SIZE = 512 * 1024; // 512KB
 // ========== Constants ==========
 
 /**
- * Pattern to detect completion messages from Claude.
- * Matches "for Xh Xm Xs" time duration patterns that appear at end of work.
- * Examples: "for 2m 46s", "for 46s", "for 1h 2m 3s", "for 5m"
+ * Pattern to detect completion messages from Claude Code.
+ * Requires "Worked for" prefix to avoid false positives from bare time durations
+ * in regular text (e.g., "wait for 5s", "run for 2m").
+ *
+ * Matches: "✻ Worked for 2m 46s", "Worked for 46s", "Worked for 1h 2m 3s"
+ * Does NOT match: "wait for 5s", "run for 2m", "for 3s the system..."
  */
-const COMPLETION_TIME_PATTERN = /\bfor\s+\d+[hms](\s*\d+[hms])*/i;
+const COMPLETION_TIME_PATTERN = /\bWorked\s+for\s+\d+[hms](\s*\d+[hms])*/i;
 
 /**
  * Pattern to extract token count from Claude's status line.
@@ -257,7 +260,7 @@ export interface RespawnConfig {
   /**
    * Time to wait after completion message before confirming idle (ms).
    * After seeing "for Xm Xs" pattern, waits this long with no new output.
-   * @default 5000 (5 seconds)
+   * @default 10000 (10 seconds)
    */
   completionConfirmMs: number;
 
@@ -329,7 +332,7 @@ const DEFAULT_CONFIG: RespawnConfig = {
   enabled: true,
   sendClear: true,               // send /clear after update prompt
   sendInit: true,                // send /init after /clear
-  completionConfirmMs: 5000,     // 5 seconds of silence after completion message
+  completionConfirmMs: 10000,    // 10 seconds of silence after completion message
   noOutputTimeoutMs: 30000,      // 30 seconds fallback if no output at all
   autoAcceptPrompts: true,       // auto-accept plan mode prompts (not questions)
   autoAcceptDelayMs: 8000,       // 8 seconds before auto-accepting
@@ -357,7 +360,7 @@ const DEFAULT_CONFIG: RespawnConfig = {
  * The pattern "for Xm Xs" indicates Claude finished work and reports duration.
  *
  * Confirmation: After seeing completion message, waits for output silence.
- * If no new output for `completionConfirmMs` (default 5s), confirms idle.
+ * If no new output for `completionConfirmMs` (default 10s), confirms idle.
  *
  * Fallback: If no output at all for `noOutputTimeoutMs` (default 30s), assumes idle.
  *
@@ -377,7 +380,7 @@ const DEFAULT_CONFIG: RespawnConfig = {
  * ```typescript
  * const respawn = new RespawnController(session, {
  *   updatePrompt: 'continue working on the task',
- *   completionConfirmMs: 5000,  // Wait 5s after completion message
+ *   completionConfirmMs: 10000,  // Wait 10s after completion message
  * });
  *
  * respawn.on('respawnCycleCompleted', (cycle) => {
@@ -839,14 +842,16 @@ export class RespawnController extends EventEmitter {
       return;
     }
 
-    // In confirming_idle state, any output (except completion) resets confirmation
+    // In confirming_idle state, substantial output cancels the confirmation.
+    // This prevents false triggers when Claude pauses briefly mid-work.
     if (this._state === 'confirming_idle') {
-      // Check if enough time has passed since completion message
-      const msSinceCompletion = this.completionMessageTime ? now - this.completionMessageTime : 0;
-      if (msSinceCompletion > 1000) {
-        // New output more than 1s after completion message - might be new work
-        this.log('New output during confirmation, checking if work resumed...');
-        // Don't immediately cancel - the confirmation timer will handle it
+      // Strip ANSI escape codes to check if there's real content
+      const stripped = data.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').trim();
+      if (stripped.length > 2) {
+        // Real content (not just escape codes or single chars) - cancel confirmation
+        this.log(`Substantial output during confirmation ("${stripped.substring(0, 40)}..."), cancelling idle detection`);
+        this.cancelCompletionConfirm();
+        return;
       }
     }
 

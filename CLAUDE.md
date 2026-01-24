@@ -196,7 +196,7 @@ WATCHING → CONFIRMING_IDLE → SENDING_UPDATE → WAITING_UPDATE → SENDING_C
 
 Steps can be skipped via config (`sendClear: false`, `sendInit: false`). Optional `kickstartPrompt` triggers if `/init` doesn't start work. Multi-layer idle detection triggers state transitions.
 
-**Step confirmation**: After sending each step (update, clear, init, kickstart), the controller waits for `completionConfirmMs` (5s) of output silence before proceeding to the next step. This prevents sending commands while Claude is still processing.
+**Step confirmation**: After sending each step (update, clear, init, kickstart), the controller waits for `completionConfirmMs` (10s) of output silence before proceeding to the next step. This prevents sending commands while Claude is still processing.
 
 ### Spawn1337 Protocol (Autonomous Agents)
 
@@ -386,7 +386,7 @@ curl -X POST localhost:3000/api/sessions/:id/input \
 
 **RespawnController (Claude Code 2024+)**: Multi-layer detection with confidence scoring:
 1. **Completion message**: Primary signal - detects "for Xm Xs" time patterns (e.g., "Worked for 2m 46s")
-2. **Output silence**: Confirms idle after `completionConfirmMs` (5s) of no new output
+2. **Output silence**: Confirms idle after `completionConfirmMs` (10s) of no new output
 3. **Token stability**: Tokens haven't changed
 4. **Working patterns absent**: No `Thinking`, `Writing`, spinner chars
 
@@ -572,7 +572,7 @@ Writes debounced (500ms) to `~/.claudeman/state.json`. The web server persists f
 | Input batch interval | 16ms | `app.js` (60fps) |
 | Idle activity timeout | 2s | `session.ts` |
 | Respawn idle timeout | 10s default | `RespawnConfig.idleTimeoutMs` |
-| Respawn completion confirm | 5s | `RespawnConfig.completionConfirmMs` |
+| Respawn completion confirm | 10s | `RespawnConfig.completionConfirmMs` |
 | Respawn auto-accept delay | 8s | `RespawnConfig.autoAcceptDelayMs` |
 | Respawn no-output fallback | 30s | `RespawnConfig.noOutputTimeoutMs` |
 | Spawn event debounce | 50ms | `spawn-detector.ts` |
