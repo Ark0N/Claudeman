@@ -187,58 +187,15 @@ claudeman reset                    # Reset all state
 
 ### Respawn State Machine
 
-```
-WATCHING → CONFIRMING_IDLE → SENDING_UPDATE → WAITING_UPDATE → SENDING_CLEAR → WAITING_CLEAR
-    ↑         │ (new output)                                                         │
-    │         ↓                                                                      ▼
-    │       (reset)                         SENDING_INIT → WAITING_INIT → MONITORING_INIT
-    │                                                                              │
-    │                                                         (if no work triggered) ▼
-    └────────────────────────────────────── SENDING_KICKSTART ← WAITING_KICKSTART ◄┘
-```
+State machine for autonomous session cycling: `watching` → `confirming_idle` → `sending_update` → `waiting_update` → `sending_clear` → `waiting_clear` → `sending_init` → `waiting_init` → `monitoring_init` → (optionally) `sending_kickstart`. Steps can be skipped via config (`sendClear: false`, `sendInit: false`). After each step, waits for `completionConfirmMs` (10s) of output silence before proceeding.
 
-**States**: `watching`, `confirming_idle`, `sending_update`, `waiting_update`, `sending_clear`, `waiting_clear`, `sending_init`, `waiting_init`, `monitoring_init`, `sending_kickstart`, `waiting_kickstart`, `stopped`
-
-Steps can be skipped via config (`sendClear: false`, `sendInit: false`). Optional `kickstartPrompt` triggers if `/init` doesn't start work. Multi-layer idle detection triggers state transitions.
-
-**Step confirmation**: After sending each step (update, clear, init, kickstart), the controller waits for `completionConfirmMs` (10s) of output silence before proceeding to the next step. This prevents sending commands while Claude is still processing.
+See `docs/respawn-state-machine.md` for the full state diagram, idle detection layers, and auto-accept behavior.
 
 ### Spawn1337 Protocol (Autonomous Agents)
 
-Spawned agents are full-power Claude sessions running in their own screen sessions. They communicate via a filesystem-based message bus and signal completion via RalphTracker's `<promise>` mechanism.
+Spawned agents are full-power Claude sessions in their own screen sessions, managed via MCP tools (`spawn_agent`, `list_agents`, `get_agent_status`, `get_agent_result`, `send_agent_message`, `cancel_agent`). Max 5 concurrent, max depth 3, default timeout 30min. Agents communicate via filesystem (`spawn-comms/`) and signal completion via `<promise>PHRASE</promise>`.
 
-**Primary Interface: MCP Server** (`claudeman-mcp` binary). Claude Code calls spawn tools directly via MCP protocol, replacing the legacy terminal-tag-parsing approach (SpawnDetector).
-
-**MCP Tools:**
-- `spawn_agent` - Spawn a new autonomous agent (builds task spec from parameters)
-- `list_agents` - List all agents (active + completed + queued)
-- `get_agent_status` - Get detailed agent status + progress
-- `get_agent_result` - Read a completed agent's result
-- `send_agent_message` - Send a message to a running agent
-- `cancel_agent` - Cancel a running agent
-
-**MCP Environment Variables:**
-- `CLAUDEMAN_API_URL` - Base URL for the Claudeman API (default: `http://localhost:3000`)
-- `CLAUDEMAN_SESSION_ID` - Session ID of the calling Claude session
-
-**Protocol Flow (via MCP):**
-```
-Claude calls spawn_agent MCP tool
-  → MCP server builds task spec YAML
-  → POST /api/spawn/trigger with task spec
-  → SpawnOrchestrator creates agent directory: ~/claudeman-cases/spawn-<agentId>/
-  → Spawns interactive Claude session in screen
-  → Injects initial prompt via writeViaScreen()
-  → Agent works autonomously, writes progress to spawn-comms/
-  → RalphTracker detects <promise>PHRASE</promise> on child
-  → Orchestrator reads result.md, notifies parent via SSE
-```
-
-**Agent Directory:** `~/claudeman-cases/spawn-<agentId>/` with `CLAUDE.md`, `spawn-comms/` (task.md, progress.json, result.md, messages/), and `workspace/` (symlinked context files).
-
-**Resource Governance:** Max 5 concurrent agents, max depth 3, default timeout 30min (max 120). Budget warning at 80%, graceful shutdown at 100%, force kill at 110%.
-
-**Agent Tree:** Agents can spawn children. Sessions track `parentAgentId` and `childAgentIds`. Cancelling a parent cascades to all children.
+See `docs/spawn-protocol.md` for the full protocol flow, directory structure, resource governance, and MCP configuration.
 
 ### Session Modes
 
@@ -331,20 +288,9 @@ Two methods:
 
 ### Idle Detection
 
-**RespawnController**: Multi-layer detection with confidence scoring:
-1. **Completion message**: Primary signal - detects "Worked for Xm Xs" time patterns (requires "Worked" prefix to avoid false positives)
-2. **AI Idle Check** (enabled by default): Spawns a fresh Claude session in a screen to analyze terminal output and provide IDLE/WORKING verdict. Uses `claude-opus-4-5-20251101` by default, sends last 16k chars of terminal buffer. Timeout 90s, cooldown 3min after WORKING. Auto-disables after 3 consecutive errors.
-3. **Output silence**: Confirms idle after `completionConfirmMs` (10s) of no new output
-4. **Token stability**: Tokens haven't changed
-5. **Working patterns absent**: No `Thinking`, `Writing`, spinner chars
-
-Uses `confirming_idle` state to prevent false positives. Cancels idle confirmation if substantial output (>2 chars after ANSI stripping) arrives during the wait. Fallback: `noOutputTimeoutMs` (30s) if no output at all. AI check is triggered after the no-output fallback; if AI check is disabled/errored, falls back to direct idle confirmation.
-
-**Step Confirmation**: After sending each respawn step (update, init, kickstart), waits for `completionConfirmMs` silence before proceeding. Ensures Claude finishes processing before the next command is sent.
-
 **Session**: emits `idle`/`working` events on prompt detection + 2s activity timeout.
 
-**Auto-Accept Plan Mode** (enabled by default): After `autoAcceptDelayMs` (8s) of silence with no completion message and no `elicitation_dialog` hook signal detected, sends Enter to accept the plan. Does NOT auto-accept AskUserQuestion prompts — those are blocked via the `elicitation_dialog` notification hook which signals the respawn controller to skip auto-accept.
+**RespawnController**: Multi-layer detection (completion message → AI idle check → output silence → token stability → working pattern absence). See `docs/respawn-state-machine.md` for full details.
 
 ### Token Tracking
 
@@ -362,16 +308,7 @@ Both wait for idle. Configure via `session.setAutoCompact()` / `session.setAutoC
 
 ### Ralph / Todo Tracking
 
-Detects Ralph loops and todos inside Claude sessions. **Disabled by default** but auto-enables when any of these patterns are detected in terminal output:
-- `/ralph-loop:ralph-loop` command
-- `<promise>PHRASE</promise>` completion phrases (supports hyphens: `TESTS-PASS`, underscores: `ALL_DONE`, numbers: `TASK_123`)
-- `TodoWrite` tool usage (including checkmark format: `✔ Task #N created:`, `✔ Task #N updated: status →`)
-- Iteration patterns (`Iteration 5/50`, `[5/50]`)
-- Todo checkboxes (`- [ ]`/`- [x]`) or indicator icons (`☐`/`◐`/`✓`)
-- "All tasks complete" messages
-- Individual task completion signals (`Task 8 is done`)
-
-See `ralph-tracker.ts:shouldAutoEnable()` for detection logic.
+Detects Ralph loops and todos inside Claude sessions. **Disabled by default** but auto-enables when Ralph-related patterns are detected (promise tags, TodoWrite, iteration patterns, etc.). See `ralph-tracker.ts:shouldAutoEnable()` for the full pattern list.
 
 **Auto-Configuration from Ralph Plugin State**: When a session starts, Claudeman reads `.claude/ralph-loop.local.md` to auto-configure:
 
@@ -559,6 +496,8 @@ Placeholders replaced:
 
 ## Documentation
 
+- `docs/respawn-state-machine.md` - Respawn controller states, idle detection, auto-accept
+- `docs/spawn-protocol.md` - Spawn1337 agent protocol, MCP tools, resource governance
 - `docs/ralph-wiggum-guide.md` - Ralph Wiggum loop guide (plugin reference, prompt templates)
 - `docs/claude-code-hooks-reference.md` - Claude Code hooks documentation
 
