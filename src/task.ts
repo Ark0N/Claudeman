@@ -10,6 +10,14 @@
 import { v4 as uuidv4 } from 'uuid';
 import { TaskDefinition, TaskState, TaskStatus } from './types.js';
 
+/** Pre-compiled pattern for generic promise tag detection */
+const PROMISE_TAG_PATTERN = /<promise>[^<]+<\/promise>/;
+
+/** Escapes special regex characters in a string for safe use in RegExp constructor */
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * Options for creating a new task.
  */
@@ -45,6 +53,8 @@ export class Task {
   private _completedAt: number | null = null;
   private _output: string = '';
   private _error: string | null = null;
+  /** Pre-compiled regex for completion phrase detection (avoids re-creation per check) */
+  private readonly _completionPattern: RegExp | null;
 
   constructor(options: CreateTaskOptions, id?: string) {
     this.id = id || uuidv4();
@@ -55,6 +65,9 @@ export class Task {
     this.completionPhrase = options.completionPhrase;
     this.timeoutMs = options.timeoutMs;
     this.createdAt = Date.now();
+    this._completionPattern = options.completionPhrase
+      ? new RegExp(`<promise>${escapeRegex(options.completionPhrase)}</promise>`)
+      : null;
   }
 
   get status(): TaskStatus {
@@ -190,13 +203,11 @@ export class Task {
 
   /** Checks if output contains the completion phrase. */
   checkCompletion(output: string): boolean {
-    if (this.completionPhrase) {
-      // Check for exact completion phrase in promise tags
-      const pattern = new RegExp(`<promise>${this.completionPhrase}</promise>`);
-      return pattern.test(output);
+    if (this._completionPattern) {
+      return this._completionPattern.test(output);
     }
     // Default: check for any promise tag completion
-    return /<promise>[^<]+<\/promise>/.test(output);
+    return PROMISE_TAG_PATTERN.test(output);
   }
 
   /** Returns true if the task has exceeded its timeout. */
