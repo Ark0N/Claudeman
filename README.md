@@ -237,7 +237,7 @@ loginctl enable-linger $USER
 
 **Requirements:**
 - Node.js 18+
-- Claude CLI in PATH
+- Claude CLI installed (PATH is auto-resolved from common locations like `~/.local/bin`)
 - GNU Screen (`apt install screen` / `brew install screen`)
 
 ---

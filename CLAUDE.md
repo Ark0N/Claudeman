@@ -21,7 +21,9 @@ Claudeman is a Claude Code session manager with a web interface and autonomous R
 
 **Key Dependencies**: fastify (REST API), node-pty (PTY spawning), ink/react (TUI), xterm.js (web terminal), @modelcontextprotocol/sdk (MCP server for spawn protocol)
 
-**Requirements**: Node.js 18+, Claude CLI (`claude`) in PATH, GNU Screen (`apt install screen` / `brew install screen`)
+**Requirements**: Node.js 18+, Claude CLI (`claude`) installed, GNU Screen (`apt install screen` / `brew install screen`)
+
+> **Note**: `claude` does not need to be in the server process's PATH. Claudeman auto-discovers the binary from common install locations (`~/.local/bin`, `~/.claude/local`, `/usr/local/bin`, etc.) and augments PATH for spawned sessions.
 
 ## First-Time Setup
 
@@ -174,7 +176,7 @@ claudeman reset                    # Reset all state
 
 ### Data Flow
 
-1. **Session** spawns `claude -p --dangerously-skip-permissions` via `node-pty`
+1. **Session** spawns `claude -p --dangerously-skip-permissions` via `node-pty` (PATH augmented to include claude's install directory)
 2. PTY output is buffered, ANSI stripped, and parsed for JSON messages
 3. **WebServer** broadcasts events to SSE clients at `/api/events`
 4. Full session state (settings, tokens, respawn config, Ralph state) persists to `~/.claudeman/state.json` via **StateStore**
@@ -296,7 +298,7 @@ All Claude sessions spawned by Claudeman receive environment variables indicatin
 
 This prevents Claude from accidentally killing its own screen session. The default CLAUDE.md template includes guidance about this.
 
-**Implementation**: Set in `screen-manager.ts:createScreen()` for screen-based sessions and `session.ts:startInteractive()`/`startShell()` for PTY-only sessions.
+**Implementation**: Set in `screen-manager.ts:createScreen()` for screen-based sessions and `session.ts:startInteractive()`/`startShell()` for PTY-only sessions. Both paths also augment `PATH` with the claude binary's directory to ensure discovery in restricted environments (systemd, non-login shells).
 
 ## Code Patterns
 
@@ -329,16 +331,30 @@ const msg = JSON.parse(cleanLine) as ClaudeMessage;
 
 ### PTY Spawn Modes
 
+All PTY spawns pass `PATH: getAugmentedPath()` in the env to ensure `claude` is discoverable even when the server runs in a restricted environment (e.g., systemd). The `getAugmentedPath()` function (in `session.ts`) resolves the claude binary's directory once at startup and prepends it to PATH. The `screen-manager.ts` equivalent (`findClaudeDir()`) does the same for screen-based spawns via `export PATH="<dir>:$PATH"` in the bash command.
+
 ```typescript
 // One-shot mode (JSON output for token tracking)
-pty.spawn('claude', ['-p', '--dangerously-skip-permissions', '--output-format', 'stream-json', prompt], { ... })
+pty.spawn('claude', ['-p', '--dangerously-skip-permissions', '--output-format', 'stream-json', prompt], {
+  env: { ...process.env, PATH: getAugmentedPath(), ... }
+})
 
 // Interactive mode (tokens parsed from status line)
-pty.spawn('claude', ['--dangerously-skip-permissions'], { ... })
+pty.spawn('claude', ['--dangerously-skip-permissions'], {
+  env: { ...process.env, PATH: getAugmentedPath(), ... }
+})
 
 // Shell mode (debugging/testing - no Claude CLI)
 pty.spawn('bash', [], { ... })
 ```
+
+**PATH resolution search order** (both `session.ts` and `screen-manager.ts`):
+1. `which claude` (respects current PATH)
+2. `~/.local/bin/claude`
+3. `~/.claude/local/claude`
+4. `/usr/local/bin/claude`
+5. `~/.npm-global/bin/claude`
+6. `~/bin/claude`
 
 ### Sending Input to Sessions
 
