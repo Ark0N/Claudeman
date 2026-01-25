@@ -504,11 +504,20 @@ export class SubagentWatcher extends EventEmitter {
       // Try each line until we find a user message with text
       for (const line of lines.slice(0, 5)) {
         try {
-          const entry = JSON.parse(line) as SubagentTranscriptEntry;
+          const entry = JSON.parse(line);
           if (entry.type === 'user' && entry.message?.content) {
-            const firstContent = entry.message.content[0];
-            if (firstContent?.type === 'text' && firstContent.text) {
-              const text = firstContent.text.trim();
+            // Handle both formats: content can be a string or an array of content blocks
+            let text: string | undefined;
+            if (typeof entry.message.content === 'string') {
+              text = entry.message.content.trim();
+            } else if (Array.isArray(entry.message.content)) {
+              const firstContent = entry.message.content[0];
+              if (firstContent?.type === 'text' && firstContent.text) {
+                text = firstContent.text.trim();
+              }
+            }
+
+            if (text) {
               // Extract a useful title: first line, first sentence, or first 80 chars
               // Split on newline first
               const firstLine = text.split('\n')[0].trim();
