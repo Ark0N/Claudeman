@@ -1834,6 +1834,11 @@ export class RespawnController extends EventEmitter {
       }
 
       if (result.verdict === 'PLAN_MODE') {
+        // Don't send Enter if state changed (e.g., AI idle check started or respawn cycle began)
+        if (this._state !== 'watching') {
+          this.logAction('plan-check', `Verdict: PLAN_MODE but state is ${this._state}, not sending Enter`);
+          return;
+        }
         this.emit('planCheckCompleted', result);
         this.logAction('plan-check', 'Verdict: PLAN_MODE - sending Enter immediately');
         this.sendAutoAcceptEnter();
@@ -1861,6 +1866,25 @@ export class RespawnController extends EventEmitter {
   private sendAutoAcceptEnter(): void {
     const msSinceOutput = Date.now() - this.lastOutputTime;
     this.log(`Auto-accepting plan mode prompt (${msSinceOutput}ms silence, pre-filter + AI confirmed)`);
+
+    // Cancel any pending AI idle checks - we're about to make Claude work
+    if (this.aiChecker.status === 'checking') {
+      this.log('Cancelling AI idle check before auto-accept');
+      this.aiChecker.cancel();
+    }
+
+    // Cancel completion confirmation - auto-accept takes precedence
+    this.cancelTrackedTimer('completion-confirm', this.completionConfirmTimer, 'auto-accept');
+    this.completionConfirmTimer = null;
+    this.completionMessageTime = null;
+
+    // Ensure we're in watching state (not confirming_idle or ai_checking)
+    if (this._state !== 'watching') {
+      this.setState('watching');
+    }
+
+    this.logAction('command', 'Auto-accept: ↵ Enter (plan approved)');
+    this.emit('stepSent', 'auto-accept', '↵');
     this.session.writeViaScreen('\r');
     this.emit('autoAcceptSent');
     // Reset so we don't keep spamming Enter if Claude doesn't respond

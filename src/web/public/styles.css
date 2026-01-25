@@ -521,10 +521,10 @@ body {
 
 .respawn-action-log {
   flex: 1;
-  max-height: 60px;
+  max-height: 100px;
   overflow-y: auto;
-  font-size: 0.65rem;
-  opacity: 0.75;
+  font-size: 0.7rem;
+  opacity: 0.9;
   font-family: 'SF Mono', Monaco, monospace;
   color: var(--text-dim);
 }
@@ -558,6 +558,24 @@ body {
 
 .respawn-action-entry .action-detail {
   color: var(--text-dim);
+}
+
+/* Command entries are highlighted */
+.respawn-action-entry.action-command {
+  background: rgba(59, 130, 246, 0.15);
+  border-left: 2px solid var(--accent);
+  padding-left: 0.3rem;
+  margin: 0.15rem 0;
+}
+
+.respawn-action-entry.action-command .action-type {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.respawn-action-entry.action-command .action-detail {
+  color: var(--text);
+  font-weight: 500;
 }
 
 .respawn-indicator {

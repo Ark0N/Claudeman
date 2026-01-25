@@ -1023,6 +1023,7 @@ class ClaudemanApp {
       const { sessionId, action } = data;
       this.addActionLogEntry(sessionId, action);
       if (sessionId === this.activeSessionId) {
+        this.updateCountdownTimerDisplay(); // Show row if hidden
         this.updateActionLogDisplay();
       }
     });
@@ -2144,7 +2145,12 @@ class ClaudemanApp {
     if (!timersRow || !timersContainer) return;
 
     const timers = this.respawnCountdownTimers[this.activeSessionId];
-    if (!timers || Object.keys(timers).length === 0) {
+    const actions = this.respawnActionLogs[this.activeSessionId];
+    const hasTimers = timers && Object.keys(timers).length > 0;
+    const hasActions = actions && actions.length > 0;
+
+    // Show row if we have timers OR action log entries
+    if (!hasTimers && !hasActions) {
       timersRow.style.display = 'none';
       return;
     }
@@ -2153,21 +2159,23 @@ class ClaudemanApp {
     const now = Date.now();
     let html = '';
 
-    for (const [name, timer] of Object.entries(timers)) {
-      const remainingMs = Math.max(0, timer.endsAt - now);
-      const remainingSec = (remainingMs / 1000).toFixed(1);
-      const percent = Math.max(0, Math.min(100, (remainingMs / timer.totalMs) * 100));
+    if (hasTimers) {
+      for (const [name, timer] of Object.entries(timers)) {
+        const remainingMs = Math.max(0, timer.endsAt - now);
+        const remainingSec = (remainingMs / 1000).toFixed(1);
+        const percent = Math.max(0, Math.min(100, (remainingMs / timer.totalMs) * 100));
 
-      // Format timer name for display (replace hyphens with spaces, capitalize first letter)
-      const displayName = name.replace(/-/g, ' ').replace(/^\w/, c => c.toUpperCase());
+        // Format timer name for display (replace hyphens with spaces, capitalize first letter)
+        const displayName = name.replace(/-/g, ' ').replace(/^\w/, c => c.toUpperCase());
 
-      html += `<div class="respawn-countdown-timer" title="${timer.reason || ''}">
-        <span class="timer-name">${displayName}</span>
-        <span class="timer-value">${remainingSec}s</span>
-        <div class="respawn-timer-bar">
-          <div class="respawn-timer-progress" style="width: ${percent}%"></div>
-        </div>
-      </div>`;
+        html += `<div class="respawn-countdown-timer" title="${timer.reason || ''}">
+          <span class="timer-name">${displayName}</span>
+          <span class="timer-value">${remainingSec}s</span>
+          <div class="respawn-timer-bar">
+            <div class="respawn-timer-progress" style="width: ${percent}%"></div>
+          </div>
+        </div>`;
+      }
     }
 
     timersContainer.innerHTML = html;
@@ -2191,7 +2199,9 @@ class ClaudemanApp {
         minute: '2-digit',
         second: '2-digit'
       });
-      html += `<div class="respawn-action-entry">
+      const isCommand = action.type === 'command';
+      const extraClass = isCommand ? ' action-command' : '';
+      html += `<div class="respawn-action-entry${extraClass}">
         <span class="action-time">${time}</span>
         <span class="action-type">[${action.type}]</span>
         <span class="action-detail">${action.detail}</span>
