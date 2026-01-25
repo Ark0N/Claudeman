@@ -94,23 +94,30 @@ while [ $(date +%s) -lt $END_TIME ]; do
 
     # Parse response
     STATUS=$(echo "$RESPONSE" | jq -r '.status // "unknown"')
-    RESPAWN_ENABLED=$(echo "$RESPONSE" | jq -r '.respawnEnabled // "null"')
-    RESPAWN_STATE=$(echo "$RESPONSE" | jq -r '.respawnState // "null"')
     INPUT_TOKENS=$(echo "$RESPONSE" | jq -r '.inputTokens // 0')
     OUTPUT_TOKENS=$(echo "$RESPONSE" | jq -r '.outputTokens // 0')
     TOTAL_TOKENS=$((INPUT_TOKENS + OUTPUT_TOKENS))
 
-    # Fetch respawn controller details if enabled
+    # Always fetch respawn controller details from dedicated endpoint
+    RESPAWN_DETAILS=$(curl -sk "$API_BASE/api/sessions/$SESSION_ID/respawn" 2>/dev/null)
+    RESPAWN_ENABLED=$(echo "$RESPAWN_DETAILS" | jq -r '.enabled // false')
+    RESPAWN_STATE=$(echo "$RESPAWN_DETAILS" | jq -r '.state // "null"')
+
+    # Fetch detailed detection status if enabled
     if [ "$RESPAWN_ENABLED" = "true" ]; then
-        RESPAWN_DETAILS=$(curl -sk "$API_BASE/api/sessions/$SESSION_ID/respawn/status" 2>/dev/null)
-        RESPAWN_STATE=$(echo "$RESPAWN_DETAILS" | jq -r '.state // "unknown"')
-        DETECTION_STATUS=$(echo "$RESPAWN_DETAILS" | jq -r '.detectionStatus // {}')
-        IDLE_CONFIDENCE=$(echo "$DETECTION_STATUS" | jq -r '.idleConfidence // 0')
-        TIME_IN_STATE=$(echo "$RESPAWN_DETAILS" | jq -r '.timeInState // 0')
-        LAST_ERROR=$(echo "$RESPAWN_DETAILS" | jq -r '.lastError // "none"')
+        DETECTION_STATUS=$(echo "$RESPAWN_DETAILS" | jq -c '.detection // {}')
+        IDLE_CONFIDENCE=$(echo "$DETECTION_STATUS" | jq -r '.confidenceLevel // 0')
+        CYCLE_COUNT=$(echo "$RESPAWN_DETAILS" | jq -r '.cycleCount // 0')
+        LAST_ACTIVITY=$(echo "$RESPAWN_DETAILS" | jq -r '.lastActivityTime // 0')
+        TIME_SINCE_ACTIVITY=$(echo "$RESPAWN_DETAILS" | jq -r '.timeSinceActivity // 0')
+        STATUS_TEXT=$(echo "$DETECTION_STATUS" | jq -r '.statusText // "unknown"')
+        WAITING_FOR=$(echo "$DETECTION_STATUS" | jq -r '.waitingFor // "unknown"')
+        AI_CHECK_STATUS=$(echo "$DETECTION_STATUS" | jq -r '.aiCheck.status // "unknown"')
+        AI_LAST_VERDICT=$(echo "$DETECTION_STATUS" | jq -r '.aiCheck.lastVerdict // "none"')
+        LAST_ERROR="none"  # Respawn controller doesn't expose lastError directly
     fi
 
-    echo "[$TIMESTAMP] status=$STATUS respawn=$RESPAWN_ENABLED state=$RESPAWN_STATE tokens=$TOTAL_TOKENS" >> "$LOG_FILE"
+    echo "[$TIMESTAMP] status=$STATUS respawn=$RESPAWN_ENABLED state=$RESPAWN_STATE cycle=$CYCLE_COUNT confidence=$IDLE_CONFIDENCE tokens=$TOTAL_TOKENS" >> "$LOG_FILE"
 
     # Check 1: Respawn not enabled when it should be
     if [ "$RESPAWN_ENABLED" = "null" ] || [ "$RESPAWN_ENABLED" = "false" ]; then
@@ -135,7 +142,7 @@ Or via web UI: Open session tab -> Respawn panel -> Enable"
             if [ $STATE_STUCK_COUNT -ge 20 ]; then
                 STUCK_MINS=$((STATE_STUCK_COUNT * POLL_INTERVAL / 60))
                 log_issue "WARNING" "State stuck: $RESPAWN_STATE for ${STUCK_MINS}+ minutes" "The respawn controller has been in '$RESPAWN_STATE' state for over $STUCK_MINS minutes.
-Time in state: ${TIME_IN_STATE}ms
+Time since activity: ${TIME_SINCE_ACTIVITY}ms
 Detection status: $DETECTION_STATUS"
 
                 case "$RESPAWN_STATE" in
