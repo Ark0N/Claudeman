@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Claudeman is a Claude Code session manager with a web interface and autonomous Ralph Loop. It spawns Claude CLI processes via PTY, streams output in real-time via SSE, and supports scheduled/timed runs.
 
-**Version**: 0.1346
+**Version**: 0.1347
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 
@@ -99,9 +99,12 @@ npx vitest run -t "should create session" # By pattern
 | 3115 | integration-flows.test.ts |
 | 3120 | session-cleanup.test.ts |
 | 3125 | ralph-integration.test.ts |
-| 3127+ | Next available |
+| 3127 | respawn-integration.test.ts (reserved) |
+| 3128+ | Next available |
 
-Unit tests (no port needed): respawn-controller, ralph-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store, types, templates, ralph-config, spawn-detector, spawn-types, spawn-orchestrator, hooks-config, ai-idle-checker
+Unit tests (no port needed): respawn-controller, ralph-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store, types, templates, ralph-config, spawn-detector, spawn-types, spawn-orchestrator, hooks-config, ai-idle-checker, ai-plan-checker
+
+**Test Utilities**: `test/respawn-test-utils.ts` provides MockSession, MockAiIdleChecker, MockAiPlanChecker, time controller, state tracker, and event recorder for respawn controller testing. See `test/respawn-test-plan.md` for architecture and `test/respawn-scenarios.md` for comprehensive test scenarios.
 
 **Test Safety**: `test/setup.ts` enforces max 10 concurrent screens, performs orphan cleanup, and protects its own process tree. You can safely run tests from within a Claudeman-managed session - the cleanup will not kill your own Claude instance. The respawn-controller tests use MockSession (not real screens).
 
@@ -182,6 +185,7 @@ claudeman reset                    # Reset all state
 | `src/session.ts` | Core PTY wrapper for Claude CLI. Modes: `runPrompt()`, `startInteractive()`, `startShell()` |
 | `src/respawn-controller.ts` | State machine for autonomous session cycling |
 | `src/ai-idle-checker.ts` | Spawns fresh Claude session to analyze terminal output for IDLE/WORKING verdict |
+| `src/ai-plan-checker.ts` | Spawns fresh Claude session to detect plan mode approval prompts for auto-accept |
 | `src/screen-manager.ts` | GNU screen persistence, ghost discovery, 4-strategy kill |
 | `src/ralph-tracker.ts` | Detects `<promise>PHRASE</promise>`, todos, loop status in output |
 | `src/ralph-config.ts` | Parses `.claude/ralph-loop.local.md` and CLAUDE.md for Ralph config |
@@ -215,7 +219,7 @@ claudeman reset                    # Reset all state
 
 ### Respawn State Machine
 
-State machine for autonomous session cycling: `watching` → `confirming_idle` → `sending_update` → `waiting_update` → `sending_clear` → `waiting_clear` → `sending_init` → `waiting_init` → `monitoring_init` → (optionally) `sending_kickstart`. Steps can be skipped via config (`sendClear: false`, `sendInit: false`). After each step, waits for `completionConfirmMs` (10s) of output silence before proceeding.
+State machine for autonomous session cycling: `watching` → `confirming_idle` → `ai_checking` → `sending_update` → `waiting_update` → `sending_clear` → `waiting_clear` → `sending_init` → `waiting_init` → `monitoring_init` → (optionally) `sending_kickstart`. Steps can be skipped via config (`sendClear: false`, `sendInit: false`). After each step, waits for `completionConfirmMs` (10s) of output silence before proceeding. AI idle check uses a fresh Claude session to analyze terminal output for IDLE/WORKING verdict.
 
 See `docs/respawn-state-machine.md` for the full state diagram, idle detection layers, and auto-accept behavior.
 

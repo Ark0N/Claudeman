@@ -5,13 +5,13 @@ The respawn controller (`src/respawn-controller.ts`) manages autonomous session 
 ## State Diagram
 
 ```
-WATCHING → CONFIRMING_IDLE → SENDING_UPDATE → WAITING_UPDATE → SENDING_CLEAR → WAITING_CLEAR
-    ↑         │ (new output)                                                         │
-    │         ↓                                                                      ▼
-    │       (reset)                         SENDING_INIT → WAITING_INIT → MONITORING_INIT
-    │                                                                              │
-    │                                                         (if no work triggered) ▼
-    └────────────────────────────────────── SENDING_KICKSTART ← WAITING_KICKSTART ◄┘
+WATCHING → CONFIRMING_IDLE → AI_CHECKING → SENDING_UPDATE → WAITING_UPDATE → SENDING_CLEAR → WAITING_CLEAR
+    ↑         │ (new output)      │ (WORKING)                                              │
+    │         ↓                   ↓                                                        ▼
+    │       (reset)           (cooldown)              SENDING_INIT → WAITING_INIT → MONITORING_INIT
+    │                                                                                    │
+    │                                                           (if no work triggered)   ▼
+    └──────────────────────────────────────── SENDING_KICKSTART ← WAITING_KICKSTART ◄────┘
 ```
 
 ## States
@@ -20,6 +20,7 @@ WATCHING → CONFIRMING_IDLE → SENDING_UPDATE → WAITING_UPDATE → SENDING_C
 |-------|-------------|
 | `watching` | Monitoring session output for idle signals |
 | `confirming_idle` | Waiting to confirm session is truly idle (cancels if new output arrives) |
+| `ai_checking` | Running AI idle check to verify IDLE/WORKING status |
 | `sending_update` | About to send `/update` command |
 | `waiting_update` | Waiting for `/update` to complete (output silence) |
 | `sending_clear` | About to send `/clear` command |
@@ -55,3 +56,23 @@ Uses `confirming_idle` state to prevent false positives. Cancels idle confirmati
 ## Auto-Accept Plan Mode
 
 Enabled by default. After `autoAcceptDelayMs` (8s) of silence with no completion message and no `elicitation_dialog` hook signal detected, sends Enter to accept the plan. Does NOT auto-accept AskUserQuestion prompts - those are blocked via the `elicitation_dialog` notification hook which signals the respawn controller to skip auto-accept.
+
+## AI Plan Checker
+
+When auto-accept is about to trigger, the AI Plan Checker (`src/ai-plan-checker.ts`) can optionally verify the terminal is showing a plan mode approval prompt before sending Enter. This prevents false auto-accepts.
+
+- **Model**: `claude-opus-4-5-20251101` (same as idle checker)
+- **Max context**: 8k chars (less than idle checker since plan prompts are visible at bottom)
+- **Timeout**: 60s
+- **Verdicts**: `PLAN_MODE` (safe to auto-accept) or `NOT_PLAN_MODE` (skip auto-accept)
+- **Cooldown**: 30s after NOT_PLAN_MODE verdict
+- **Error handling**: 3 consecutive errors disables the checker
+
+Uses temp file for prompt to avoid E2BIG errors with large terminal buffers.
+
+## Test Documentation
+
+- `test/respawn-scenarios.md` - Comprehensive test scenarios for edge cases
+- `test/respawn-test-plan.md` - Test environment architecture and strategies
+- `test/respawn-test-utils.ts` - Mock utilities (MockSession, MockAiIdleChecker, MockAiPlanChecker)
+- `test/respawn-analysis.md` - Code coverage analysis and identified issues
