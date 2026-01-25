@@ -790,6 +790,16 @@ export class WebServer extends EventEmitter {
 
       controller.stop();
 
+      // Remove controller from map so persistSessionState doesn't save respawnEnabled: true
+      this.respawnControllers.delete(id);
+
+      // Clear any timed respawn
+      const timerInfo = this.respawnTimers.get(id);
+      if (timerInfo) {
+        clearTimeout(timerInfo.timer);
+        this.respawnTimers.delete(id);
+      }
+
       // Clear persisted respawn config
       this.screenManager.clearRespawnConfig(id);
 
