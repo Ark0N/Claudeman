@@ -39,7 +39,7 @@ npm install
 
 **CRITICAL**: `npm run dev` runs CLI help, NOT the web server. Use `npx tsx src/index.ts web` for development.
 
-**COM Shorthand**: When user says "COM", perform: `git add && git commit && git push && npm run build && systemctl --user restart claudeman-web`
+**COM Shorthand**: When user says "COM", perform: `git add && git commit && git push && npm run build && systemctl --user restart claudeman-web`. If version bump requested, update BOTH `package.json` AND `CLAUDE.md` (Version field below).
 
 ### Build & Clean
 
