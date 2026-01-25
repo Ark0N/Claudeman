@@ -1308,6 +1308,23 @@ class ClaudemanApp {
       }
     });
 
+    this.eventSource.addEventListener('subagent:updated', (e) => {
+      const data = JSON.parse(e.data);
+      const existing = this.subagents.get(data.agentId);
+      if (existing) {
+        // Merge updated fields (especially description)
+        Object.assign(existing, data);
+        this.subagents.set(data.agentId, existing);
+      } else {
+        this.subagents.set(data.agentId, data);
+      }
+      this.renderSubagentPanel();
+      // Update floating window if open
+      if (this.subagentWindows.has(data.agentId)) {
+        this.renderSubagentWindowContent(data.agentId);
+      }
+    });
+
     this.eventSource.addEventListener('subagent:tool_call', (e) => {
       const data = JSON.parse(e.data);
       const activity = this.subagentActivity.get(data.agentId) || [];

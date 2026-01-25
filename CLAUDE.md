@@ -21,7 +21,7 @@ When user says "COM": 1) Increment version in BOTH `package.json` AND `CLAUDE.md
 
 Claudeman is a Claude Code session manager with a web interface and autonomous Ralph Loop. It spawns Claude CLI processes via PTY, streams output in real-time via SSE, and supports scheduled/timed runs.
 
-**Version**: 0.1358 (must match `package.json`)
+**Version**: 0.1359 (must match `package.json`)
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 
@@ -102,10 +102,16 @@ npx vitest run -t "should create session" # By pattern
 | 3120 | session-cleanup.test.ts |
 | 3125 | ralph-integration.test.ts |
 | 3127 | respawn-integration.test.ts (reserved) |
+| 3130 | hooks-config.test.ts (Hook Event API) |
+| 3131 | hooks-config.test.ts (Hook Data Sanitization) |
+| 3150 | browser-e2e.test.ts (main browser tests) |
+| 3151 | browser-e2e.test.ts (SSE events tests) |
+| 3152 | browser-e2e.test.ts (hook events tests) |
+| 3153 | browser-e2e.test.ts (Ralph panel tests) |
 
-**Next available port**: 3128
+**Next available port**: 3154
 
-Unit tests (no port needed): respawn-controller, ralph-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store, types, templates, ralph-config, spawn-detector, spawn-types, spawn-orchestrator, hooks-config, ai-idle-checker, ai-plan-checker
+Unit tests (no port needed): respawn-controller, ralph-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store, types, templates, ralph-config, spawn-detector, spawn-types, spawn-orchestrator, ai-idle-checker, ai-plan-checker
 
 **Test Utilities**: `test/respawn-test-utils.ts` provides MockSession, MockAiIdleChecker, MockAiPlanChecker, time controller, state tracker, and event recorder for respawn controller testing. See `test/respawn-test-plan.md` for architecture and `test/respawn-scenarios.md` for comprehensive test scenarios.
 

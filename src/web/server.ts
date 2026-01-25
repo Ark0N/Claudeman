@@ -303,6 +303,10 @@ export class WebServer extends EventEmitter {
       this.broadcast('subagent:discovered', info);
     });
 
+    subagentWatcher.on('subagent:updated', (info: SubagentInfo) => {
+      this.broadcast('subagent:updated', info);
+    });
+
     subagentWatcher.on('subagent:tool_call', (data: SubagentToolCall) => {
       this.broadcast('subagent:tool_call', data);
     });

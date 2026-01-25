@@ -61,7 +61,7 @@ export interface SubagentTranscriptEntry {
   sessionId: string;
   message?: {
     role: string;
-    content: Array<{
+    content: string | Array<{
       type: 'text' | 'tool_use' | 'tool_result';
       text?: string;
       name?: string;
@@ -78,6 +78,7 @@ export interface SubagentTranscriptEntry {
 
 export interface SubagentEvents {
   'subagent:discovered': (info: SubagentInfo) => void;
+  'subagent:updated': (info: SubagentInfo) => void;
   'subagent:tool_call': (data: SubagentToolCall) => void;
   'subagent:progress': (data: SubagentProgress) => void;
   'subagent:message': (data: SubagentMessage) => void;
@@ -377,23 +378,40 @@ export class SubagentWatcher extends EventEmitter {
       if (entry.type === 'progress' && entry.data) {
         lines.push(this.formatProgress(entry));
       } else if (entry.type === 'assistant' && entry.message?.content) {
-        for (const content of entry.message.content) {
-          if (content.type === 'tool_use' && content.name) {
-            lines.push(this.formatToolCall(entry.timestamp, content.name, content.input || {}));
-          } else if (content.type === 'text' && content.text) {
-            const text = content.text.trim();
-            if (text.length > 0) {
-              const preview = text.length > 200 ? text.substring(0, 200) + '...' : text;
-              lines.push(`${this.formatTime(entry.timestamp)} 💬 ${preview.replace(/\n/g, ' ')}`);
+        // Handle both string and array content formats
+        if (typeof entry.message.content === 'string') {
+          const text = entry.message.content.trim();
+          if (text.length > 0) {
+            const preview = text.length > 200 ? text.substring(0, 200) + '...' : text;
+            lines.push(`${this.formatTime(entry.timestamp)} 💬 ${preview.replace(/\n/g, ' ')}`);
+          }
+        } else {
+          for (const content of entry.message.content) {
+            if (content.type === 'tool_use' && content.name) {
+              lines.push(this.formatToolCall(entry.timestamp, content.name, content.input || {}));
+            } else if (content.type === 'text' && content.text) {
+              const text = content.text.trim();
+              if (text.length > 0) {
+                const preview = text.length > 200 ? text.substring(0, 200) + '...' : text;
+                lines.push(`${this.formatTime(entry.timestamp)} 💬 ${preview.replace(/\n/g, ' ')}`);
+              }
             }
           }
         }
       } else if (entry.type === 'user' && entry.message?.content) {
-        const firstContent = entry.message.content[0];
-        if (firstContent?.type === 'text' && firstContent.text) {
-          const text = firstContent.text.trim();
+        // Handle both string and array content formats
+        if (typeof entry.message.content === 'string') {
+          const text = entry.message.content.trim();
           if (text.length < 100 && !text.includes('{')) {
             lines.push(`${this.formatTime(entry.timestamp)} 📥 User: ${text.substring(0, 80)}`);
+          }
+        } else {
+          const firstContent = entry.message.content[0];
+          if (firstContent?.type === 'text' && firstContent.text) {
+            const text = firstContent.text.trim();
+            if (text.length < 100 && !text.includes('{')) {
+              lines.push(`${this.formatTime(entry.timestamp)} 📥 User: ${text.substring(0, 80)}`);
+            }
           }
         }
       }
@@ -470,6 +488,41 @@ export class SubagentWatcher extends EventEmitter {
   }
 
   /**
+   * Extract description from agent file by finding first user message
+   */
+  private extractDescriptionFromFile(filePath: string): string | undefined {
+    try {
+      const content = readFileSync(filePath, 'utf8');
+      const lines = content.split('\n').filter((l) => l.trim());
+
+      for (const line of lines.slice(0, 5)) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.type === 'user' && entry.message?.content) {
+            let text: string | undefined;
+            if (typeof entry.message.content === 'string') {
+              text = entry.message.content.trim();
+            } else if (Array.isArray(entry.message.content)) {
+              const firstContent = entry.message.content[0];
+              if (firstContent?.type === 'text' && firstContent.text) {
+                text = firstContent.text.trim();
+              }
+            }
+            if (text) {
+              return this.extractSmartTitle(text);
+            }
+          }
+        } catch {
+          // Skip malformed lines
+        }
+      }
+    } catch {
+      // Failed to read file
+    }
+    return undefined;
+  }
+
+  /**
    * Scan for all subagent directories
    */
   private scanForSubagents(): void {
@@ -530,14 +583,20 @@ export class SubagentWatcher extends EventEmitter {
       return;
     }
 
-    // Watch for new files
+    // Watch for new files with debounce to allow content to be written
     try {
       const watcher = watch(dir, (_eventType, filename) => {
         if (filename?.endsWith('.jsonl')) {
           const filePath = join(dir, filename);
-          if (existsSync(filePath)) {
-            this.watchAgentFile(filePath, projectHash, sessionId);
-          }
+          // Wait 100ms for file content to be written before processing
+          // Even if file is empty after debounce, we still watch it - the
+          // description retry mechanisms in processEntry and the file change
+          // handler will extract description when content arrives
+          setTimeout(() => {
+            if (existsSync(filePath)) {
+              this.watchAgentFile(filePath, projectHash, sessionId);
+            }
+          }, 100);
         }
       });
 
@@ -637,6 +696,15 @@ export class SubagentWatcher extends EventEmitter {
               // Stat failed
             }
 
+            // Retry description extraction if missing (race condition fix)
+            if (!existingInfo.description) {
+              const extractedDescription = this.extractDescriptionFromFile(filePath);
+              if (extractedDescription) {
+                existingInfo.description = extractedDescription;
+                this.emit('subagent:updated', existingInfo);
+              }
+            }
+
             // Reset idle timer
             this.resetIdleTimer(agentId);
           }
@@ -666,11 +734,12 @@ export class SubagentWatcher extends EventEmitter {
       const rl = createInterface({ input: stream });
 
       rl.on('line', (line) => {
-        position += Buffer.byteLength(line, 'utf8') + 1;
+        const lineBytes = Buffer.byteLength(line, 'utf8') + 1;
 
         try {
           const entry = JSON.parse(line) as SubagentTranscriptEntry;
           this.processEntry(entry, agentId, sessionId);
+          position += lineBytes; // Only advance on successful parse
 
           // Update entry count
           const info = this.agentInfo.get(agentId);
@@ -678,7 +747,7 @@ export class SubagentWatcher extends EventEmitter {
             info.entryCount++;
           }
         } catch {
-          // Skip malformed lines
+          // Don't advance position - will retry on next change event
         }
       });
 
@@ -696,6 +765,24 @@ export class SubagentWatcher extends EventEmitter {
    * Process a transcript entry and emit appropriate events
    */
   private processEntry(entry: SubagentTranscriptEntry, agentId: string, sessionId: string): void {
+    // Check if this is first user message and description is missing
+    const info = this.agentInfo.get(agentId);
+    if (info && !info.description && entry.type === 'user' && entry.message?.content) {
+      let text: string | undefined;
+      if (typeof entry.message.content === 'string') {
+        text = entry.message.content.trim();
+      } else if (Array.isArray(entry.message.content)) {
+        const firstContent = entry.message.content[0];
+        if (firstContent?.type === 'text' && firstContent.text) {
+          text = firstContent.text.trim();
+        }
+      }
+      if (text) {
+        info.description = this.extractSmartTitle(text);
+        this.emit('subagent:updated', info);
+      }
+    }
+
     if (entry.type === 'progress' && entry.data) {
       const progress: SubagentProgress = {
         agentId,
@@ -707,50 +794,71 @@ export class SubagentWatcher extends EventEmitter {
       };
       this.emit('subagent:progress', progress);
     } else if (entry.type === 'assistant' && entry.message?.content) {
-      for (const content of entry.message.content) {
-        if (content.type === 'tool_use' && content.name) {
-          const toolCall: SubagentToolCall = {
-            agentId,
-            sessionId,
-            timestamp: entry.timestamp,
-            tool: content.name,
-            input: content.input || {},
-          };
-          this.emit('subagent:tool_call', toolCall);
-
-          // Update tool call count
-          const info = this.agentInfo.get(agentId);
-          if (info) {
-            info.toolCallCount++;
-          }
-        } else if (content.type === 'text' && content.text) {
-          const text = content.text.trim();
-          if (text.length > 0) {
-            const message: SubagentMessage = {
-              agentId,
-              sessionId,
-              timestamp: entry.timestamp,
-              role: 'assistant',
-              text: text.substring(0, 500), // Limit text length
-            };
-            this.emit('subagent:message', message);
-          }
-        }
-      }
-    } else if (entry.type === 'user' && entry.message?.content) {
-      const firstContent = entry.message.content[0];
-      if (firstContent?.type === 'text' && firstContent.text) {
-        const text = firstContent.text.trim();
-        if (text.length > 0 && text.length < 500) {
+      // Handle both string and array content formats
+      if (typeof entry.message.content === 'string') {
+        const text = entry.message.content.trim();
+        if (text.length > 0) {
           const message: SubagentMessage = {
             agentId,
             sessionId,
             timestamp: entry.timestamp,
-            role: 'user',
-            text,
+            role: 'assistant',
+            text: text.substring(0, 500),
           };
           this.emit('subagent:message', message);
         }
+      } else {
+        for (const content of entry.message.content) {
+          if (content.type === 'tool_use' && content.name) {
+            const toolCall: SubagentToolCall = {
+              agentId,
+              sessionId,
+              timestamp: entry.timestamp,
+              tool: content.name,
+              input: content.input || {},
+            };
+            this.emit('subagent:tool_call', toolCall);
+
+            // Update tool call count
+            const agentInfo = this.agentInfo.get(agentId);
+            if (agentInfo) {
+              agentInfo.toolCallCount++;
+            }
+          } else if (content.type === 'text' && content.text) {
+            const text = content.text.trim();
+            if (text.length > 0) {
+              const message: SubagentMessage = {
+                agentId,
+                sessionId,
+                timestamp: entry.timestamp,
+                role: 'assistant',
+                text: text.substring(0, 500), // Limit text length
+              };
+              this.emit('subagent:message', message);
+            }
+          }
+        }
+      }
+    } else if (entry.type === 'user' && entry.message?.content) {
+      // Handle both string and array content formats
+      let userText: string | undefined;
+      if (typeof entry.message.content === 'string') {
+        userText = entry.message.content.trim();
+      } else {
+        const firstContent = entry.message.content[0];
+        if (firstContent?.type === 'text' && firstContent.text) {
+          userText = firstContent.text.trim();
+        }
+      }
+      if (userText && userText.length > 0 && userText.length < 500) {
+        const message: SubagentMessage = {
+          agentId,
+          sessionId,
+          timestamp: entry.timestamp,
+          role: 'user',
+          text: userText,
+        };
+        this.emit('subagent:message', message);
       }
     }
   }
