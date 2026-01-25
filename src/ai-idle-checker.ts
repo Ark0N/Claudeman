@@ -153,7 +153,11 @@ export class AiIdleChecker extends EventEmitter {
   constructor(sessionId: string, config: Partial<AiIdleCheckConfig> = {}) {
     super();
     this.sessionId = sessionId;
-    this.config = { ...DEFAULT_AI_CHECK_CONFIG, ...config };
+    // Filter out undefined values to prevent overwriting defaults
+    const filteredConfig = Object.fromEntries(
+      Object.entries(config).filter(([, v]) => v !== undefined)
+    ) as Partial<AiIdleCheckConfig>;
+    this.config = { ...DEFAULT_AI_CHECK_CONFIG, ...filteredConfig };
   }
 
   /** Get the current status */
@@ -287,7 +291,11 @@ export class AiIdleChecker extends EventEmitter {
 
   /** Update configuration at runtime */
   updateConfig(config: Partial<AiIdleCheckConfig>): void {
-    this.config = { ...this.config, ...config };
+    // Filter out undefined values to prevent overwriting existing config
+    const filteredConfig = Object.fromEntries(
+      Object.entries(config).filter(([, v]) => v !== undefined)
+    ) as Partial<AiIdleCheckConfig>;
+    this.config = { ...this.config, ...filteredConfig };
     if (config.enabled === false) {
       this.disable('Disabled by config');
     } else if (config.enabled === true && this._status === 'disabled') {

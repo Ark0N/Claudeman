@@ -1582,9 +1582,19 @@ export class WebServer extends EventEmitter {
         ? Math.round((timerInfo.endAt - timerInfo.startedAt) / 60000)
         : undefined;
       state.respawnConfig = { ...config, durationMinutes };
-      state.respawnEnabled = controller.state !== 'stopped';
+      // Use config.enabled instead of controller.state - this way the respawn
+      // will be restored on server restart even if it was temporarily stopped
+      // due to errors. Intentional stops via /respawn/stop call clearRespawnConfig().
+      state.respawnEnabled = config.enabled;
     } else {
-      state.respawnEnabled = false;
+      // Don't overwrite respawnConfig if it exists in state - preserve it for restart
+      const existingState = this.store.getSession(session.id);
+      if (existingState?.respawnConfig) {
+        state.respawnConfig = existingState.respawnConfig;
+        state.respawnEnabled = existingState.respawnConfig.enabled ?? false;
+      } else {
+        state.respawnEnabled = false;
+      }
     }
     this.store.setSession(session.id, state);
   }
@@ -1664,9 +1674,17 @@ export class WebServer extends EventEmitter {
   private async _doCleanupSession(sessionId: string, killScreen: boolean): Promise<void> {
     const session = this.sessions.get(sessionId);
 
-    // Stop and remove respawn controller
+    // Stop and remove respawn controller - but save config first for restart recovery
     const controller = this.respawnControllers.get(sessionId);
     if (controller) {
+      // Save the config BEFORE removing controller, so it can be restored on restart
+      const config = controller.getConfig();
+      const timerInfo = this.respawnTimers.get(sessionId);
+      const durationMinutes = timerInfo
+        ? Math.round((timerInfo.endAt - timerInfo.startedAt) / 60000)
+        : undefined;
+      this.saveRespawnConfig(sessionId, config, durationMinutes);
+
       controller.stop();
       controller.removeAllListeners();
       this.respawnControllers.delete(sessionId);

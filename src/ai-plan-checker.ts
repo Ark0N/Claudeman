@@ -161,7 +161,11 @@ export class AiPlanChecker extends EventEmitter {
   constructor(sessionId: string, config: Partial<AiPlanCheckConfig> = {}) {
     super();
     this.sessionId = sessionId;
-    this.config = { ...DEFAULT_PLAN_CHECK_CONFIG, ...config };
+    // Filter out undefined values to prevent overwriting defaults
+    const filteredConfig = Object.fromEntries(
+      Object.entries(config).filter(([, v]) => v !== undefined)
+    ) as Partial<AiPlanCheckConfig>;
+    this.config = { ...DEFAULT_PLAN_CHECK_CONFIG, ...filteredConfig };
   }
 
   /** Get the current status */
@@ -295,7 +299,11 @@ export class AiPlanChecker extends EventEmitter {
 
   /** Update configuration at runtime */
   updateConfig(config: Partial<AiPlanCheckConfig>): void {
-    this.config = { ...this.config, ...config };
+    // Filter out undefined values to prevent overwriting existing config
+    const filteredConfig = Object.fromEntries(
+      Object.entries(config).filter(([, v]) => v !== undefined)
+    ) as Partial<AiPlanCheckConfig>;
+    this.config = { ...this.config, ...filteredConfig };
     if (config.enabled === false) {
       this.disable('Disabled by config');
     } else if (config.enabled === true && this._status === 'disabled') {
