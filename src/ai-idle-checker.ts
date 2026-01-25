@@ -268,13 +268,16 @@ export class AiIdleChecker extends EventEmitter {
     this.log('Cancelling AI check');
     this.checkCancelled = true;
 
-    // Resolve the pending promise before cleanup
+    // Clear poll/timeout timers first to prevent race condition where
+    // the poll timer fires between setting checkCancelled and cleanup
+    this.cleanupCheck();
+
+    // Resolve the pending promise after cleanup
     if (this.checkResolve) {
       this.checkResolve({ verdict: 'ERROR', reasoning: 'Cancelled', durationMs: Date.now() - this.checkStartTime });
       this.checkResolve = null;
     }
 
-    this.cleanupCheck();
     this._status = 'ready';
   }
 

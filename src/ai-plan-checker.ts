@@ -152,6 +152,7 @@ export class AiPlanChecker extends EventEmitter {
   // Active check state
   private checkScreenName: string | null = null;
   private checkTempFile: string | null = null;
+  private checkPromptFile: string | null = null;
   private checkPollTimer: NodeJS.Timeout | null = null;
   private checkTimeoutTimer: NodeJS.Timeout | null = null;
   private checkStartTime: number = 0;
@@ -276,13 +277,16 @@ export class AiPlanChecker extends EventEmitter {
     this.log('Cancelling AI plan check');
     this.checkCancelled = true;
 
-    // Resolve the pending promise before cleanup
+    // Clear poll/timeout timers first to prevent race condition where
+    // the poll timer fires between setting checkCancelled and cleanup
+    this.cleanupCheck();
+
+    // Resolve the pending promise after cleanup
     if (this.checkResolve) {
       this.checkResolve({ verdict: 'ERROR', reasoning: 'Cancelled', durationMs: Date.now() - this.checkStartTime });
       this.checkResolve = null;
     }
 
-    this.cleanupCheck();
     this._status = 'ready';
   }
 
@@ -329,21 +333,25 @@ export class AiPlanChecker extends EventEmitter {
     // Build the prompt
     const prompt = AI_PLAN_CHECK_PROMPT.replace('{TERMINAL_BUFFER}', trimmed);
 
-    // Generate temp file and screen name
+    // Generate temp files and screen name
     const shortId = this.sessionId.slice(0, 8);
     const timestamp = Date.now();
     this.checkTempFile = join(tmpdir(), `claudeman-plancheck-${shortId}-${timestamp}.txt`);
+    this.checkPromptFile = join(tmpdir(), `claudeman-plancheck-prompt-${shortId}-${timestamp}.txt`);
     this.checkScreenName = `claudeman-plancheck-${shortId}`;
 
-    // Ensure temp file exists (empty) so we can poll it
+    // Ensure output temp file exists (empty) so we can poll it
     writeFileSync(this.checkTempFile, '');
 
-    // Build the command - escape the prompt for shell
-    const escapedPrompt = prompt.replace(/'/g, "'\\''");
+    // Write prompt to file to avoid E2BIG error (argument list too long)
+    // The prompt can be 8KB+ which exceeds shell argument limits
+    writeFileSync(this.checkPromptFile, prompt);
+
+    // Build the command - read prompt from file via stdin to avoid argument size limits
     const modelArg = `--model ${this.config.model}`;
     const augmentedPath = getAugmentedPath();
-    const claudeCmd = `claude -p ${modelArg} --output-format text '${escapedPrompt}'`;
-    const fullCmd = `export PATH="${augmentedPath}"; ${claudeCmd} > "${this.checkTempFile}" 2>&1; echo "${DONE_MARKER}" >> "${this.checkTempFile}"`;
+    const claudeCmd = `cat "${this.checkPromptFile}" | claude -p ${modelArg} --output-format text`;
+    const fullCmd = `export PATH="${augmentedPath}"; ${claudeCmd} > "${this.checkTempFile}" 2>&1; echo "${DONE_MARKER}" >> "${this.checkTempFile}"; rm -f "${this.checkPromptFile}"`;
 
     // Spawn screen
     try {
@@ -447,7 +455,7 @@ export class AiPlanChecker extends EventEmitter {
       this.checkScreenName = null;
     }
 
-    // Delete temp file
+    // Delete temp files
     if (this.checkTempFile) {
       try {
         if (existsSync(this.checkTempFile)) {
@@ -457,6 +465,17 @@ export class AiPlanChecker extends EventEmitter {
         // Best effort cleanup
       }
       this.checkTempFile = null;
+    }
+
+    if (this.checkPromptFile) {
+      try {
+        if (existsSync(this.checkPromptFile)) {
+          unlinkSync(this.checkPromptFile);
+        }
+      } catch {
+        // Best effort cleanup
+      }
+      this.checkPromptFile = null;
     }
   }
 
