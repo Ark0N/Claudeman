@@ -94,6 +94,15 @@ export interface ActiveTimerInfo {
 }
 
 export interface DetectionStatus {
+  /** Layer 0: Stop hook received (highest priority - definitive signal) */
+  stopHookReceived: boolean;
+  /** Timestamp when Stop hook was received */
+  stopHookTime: number | null;
+  /** Layer 0: idle_prompt notification received (definitive signal) */
+  idlePromptReceived: boolean;
+  /** Timestamp when idle_prompt was received */
+  idlePromptTime: number | null;
+
   /** Layer 1: Completion message detected ("for Xm Xs") */
   completionMessageDetected: boolean;
   /** Timestamp when completion message was last seen */
@@ -570,6 +579,26 @@ export class RespawnController extends EventEmitter {
   /** Whether an elicitation dialog (AskUserQuestion) was detected via hook signal */
   private elicitationDetected: boolean = false;
 
+  // ========== Hook-Based Detection State (Layer 0 - Highest Priority) ==========
+
+  /** Whether a Stop hook was received (definitive idle signal from Claude Code) */
+  private stopHookReceived: boolean = false;
+
+  /** Timestamp when Stop hook was received */
+  private stopHookTime: number | null = null;
+
+  /** Whether an idle_prompt notification was received (60s+ idle signal) */
+  private idlePromptReceived: boolean = false;
+
+  /** Timestamp when idle_prompt was received */
+  private idlePromptTime: number | null = null;
+
+  /** Timer for short confirmation after hook signal (handles race conditions) */
+  private hookConfirmTimer: NodeJS.Timeout | null = null;
+
+  /** Confirmation delay after hook signal before confirming idle (ms) */
+  private static readonly HOOK_CONFIRM_DELAY_MS = 3000;
+
   /** Number of completed respawn cycles */
   private cycleCount: number = 0;
 
@@ -795,11 +824,16 @@ export class RespawnController extends EventEmitter {
     const workingPatternsAbsent = msSinceLastWorking >= 3000; // 3s without working patterns
 
     // Calculate confidence level (0-100)
+    // Hook signals are definitive (100% confidence)
     let confidence = 0;
-    if (completionMessageDetected) confidence += 40;
-    if (outputSilent) confidence += 25;
-    if (tokensStable) confidence += 20;
-    if (workingPatternsAbsent) confidence += 15;
+    if (this.stopHookReceived || this.idlePromptReceived) {
+      confidence = 100;
+    } else {
+      if (completionMessageDetected) confidence += 40;
+      if (outputSilent) confidence += 25;
+      if (tokensStable) confidence += 20;
+      if (workingPatternsAbsent) confidence += 15;
+    }
 
     // Determine status text and what we're waiting for
     let statusText: string;
@@ -808,6 +842,10 @@ export class RespawnController extends EventEmitter {
     if (this._state === 'stopped') {
       statusText = 'Controller stopped';
       waitingFor = 'Start to begin monitoring';
+    } else if (this.stopHookReceived || this.idlePromptReceived) {
+      const hookType = this.idlePromptReceived ? 'idle_prompt' : 'Stop';
+      statusText = `${hookType} hook received - confirming idle`;
+      waitingFor = 'Short confirmation (race condition check)';
     } else if (this._state === 'ai_checking') {
       statusText = 'AI Check: Analyzing terminal output...';
       waitingFor = 'AI verdict (IDLE or WORKING)';
@@ -901,6 +939,10 @@ export class RespawnController extends EventEmitter {
     }
 
     return {
+      stopHookReceived: this.stopHookReceived,
+      stopHookTime: this.stopHookTime,
+      idlePromptReceived: this.idlePromptReceived,
+      idlePromptTime: this.idlePromptTime,
       completionMessageDetected,
       completionMessageTime: this.completionMessageTime,
       outputSilent,
@@ -997,7 +1039,7 @@ export class RespawnController extends EventEmitter {
 
     this.log('Starting respawn controller (multi-layer detection)');
 
-    // Initialize all timestamps
+    // Initialize all timestamps and reset hook state
     const now = Date.now();
     this.lastActivityTime = now;
     this.lastOutputTime = now;
@@ -1005,6 +1047,7 @@ export class RespawnController extends EventEmitter {
     this.lastWorkingPatternTime = now;
     this.completionMessageTime = null;
     this.hasReceivedOutput = false;
+    this.resetHookState();
 
     // Seed the terminal buffer from the session's existing output.
     // This gives the AI checker context even if no new output arrives.
@@ -1139,8 +1182,13 @@ export class RespawnController extends EventEmitter {
       this.workingDetected = true;
       this.promptDetected = false;
       this.elicitationDetected = false; // Clear on new work cycle
+      this.resetHookState(); // Clear hook signals on new work
       this.lastWorkingPatternTime = now;
       this.clearIdleTimer();
+
+      // Cancel hook confirmation timer if running
+      this.cancelTrackedTimer('hook-confirm', this.hookConfirmTimer, 'working patterns detected');
+      this.hookConfirmTimer = null;
 
       // Cancel any pending completion confirmation
       this.cancelCompletionConfirm();
@@ -1396,7 +1444,7 @@ export class RespawnController extends EventEmitter {
     }
   }
 
-  /** Clear all timers (idle, step, completion confirm, no-output, pre-filter, step confirm, auto-accept, and clear fallback) */
+  /** Clear all timers (idle, step, completion confirm, no-output, pre-filter, step confirm, auto-accept, hook confirm, and clear fallback) */
   private clearTimers(): void {
     this.clearIdleTimer();
     if (this.stepTimer) {
@@ -1426,6 +1474,10 @@ export class RespawnController extends EventEmitter {
     if (this.noOutputTimer) {
       clearTimeout(this.noOutputTimer);
       this.noOutputTimer = null;
+    }
+    if (this.hookConfirmTimer) {
+      clearTimeout(this.hookConfirmTimer);
+      this.hookConfirmTimer = null;
     }
     // Clear all tracked timers
     this.activeTimers.clear();
@@ -1941,6 +1993,163 @@ export class RespawnController extends EventEmitter {
   }
 
   /**
+   * Signal that a Stop hook was received from Claude Code.
+   * This is a DEFINITIVE signal that Claude has finished responding.
+   * Skips AI idle check and uses a short confirmation period to handle race conditions.
+   *
+   * @fires log
+   */
+  signalStopHook(): void {
+    // Only process in states where we're watching for idle
+    if (this._state !== 'watching' && this._state !== 'confirming_idle' && this._state !== 'ai_checking') {
+      this.log(`Stop hook received but ignoring (state is ${this._state})`);
+      return;
+    }
+
+    const now = Date.now();
+    this.stopHookReceived = true;
+    this.stopHookTime = now;
+    this.logAction('hook', 'Stop hook received - definitive idle signal');
+    this.log('Stop hook received from Claude Code - definitive idle signal');
+
+    // Cancel any running AI check - we have a definitive signal
+    if (this._state === 'ai_checking') {
+      this.log('Cancelling AI check - Stop hook is definitive');
+      this.aiChecker.cancel();
+    }
+
+    // Cancel completion confirm timer - hook takes precedence
+    this.cancelTrackedTimer('completion-confirm', this.completionConfirmTimer, 'Stop hook received');
+    this.completionConfirmTimer = null;
+
+    // Cancel pre-filter timer - hook takes precedence
+    this.cancelTrackedTimer('pre-filter', this.preFilterTimer, 'Stop hook received');
+    this.preFilterTimer = null;
+
+    // Start short confirmation timer to handle race conditions
+    // (e.g., Stop hook arrives but Claude immediately starts new work)
+    this.startHookConfirmTimer('stop');
+  }
+
+  /**
+   * Signal that an idle_prompt notification was received from Claude Code.
+   * This fires after 60+ seconds of Claude waiting for user input.
+   * This is a DEFINITIVE signal that Claude is idle.
+   *
+   * @fires log
+   */
+  signalIdlePrompt(): void {
+    // Only process in states where we're watching for idle
+    if (this._state !== 'watching' && this._state !== 'confirming_idle' && this._state !== 'ai_checking') {
+      this.log(`idle_prompt received but ignoring (state is ${this._state})`);
+      return;
+    }
+
+    const now = Date.now();
+    this.idlePromptReceived = true;
+    this.idlePromptTime = now;
+    this.logAction('hook', 'idle_prompt received - 60s+ idle confirmed');
+    this.log('idle_prompt notification received - Claude has been idle for 60+ seconds');
+
+    // Cancel any running AI check - we have a definitive signal
+    if (this._state === 'ai_checking') {
+      this.log('Cancelling AI check - idle_prompt is definitive');
+      this.aiChecker.cancel();
+    }
+
+    // Cancel all other detection timers - this is definitive
+    this.cancelTrackedTimer('completion-confirm', this.completionConfirmTimer, 'idle_prompt received');
+    this.completionConfirmTimer = null;
+    this.cancelTrackedTimer('pre-filter', this.preFilterTimer, 'idle_prompt received');
+    this.preFilterTimer = null;
+    this.cancelTrackedTimer('no-output-fallback', this.noOutputTimer, 'idle_prompt received');
+    this.noOutputTimer = null;
+
+    // idle_prompt is an even stronger signal than Stop hook (60s+ idle)
+    // Skip confirmation and go directly to idle
+    this.onIdleConfirmed('idle_prompt hook (60s+ idle)');
+  }
+
+  /**
+   * Start a short confirmation timer after receiving a hook signal.
+   * This handles race conditions where a hook arrives but Claude immediately starts new work.
+   *
+   * @param hookType - Which hook triggered this ('stop' or 'idle_prompt')
+   */
+  private startHookConfirmTimer(hookType: 'stop' | 'idle_prompt'): void {
+    this.cancelTrackedTimer('hook-confirm', this.hookConfirmTimer, 'restarting');
+    this.hookConfirmTimer = null;
+
+    this.hookConfirmTimer = this.startTrackedTimer(
+      'hook-confirm',
+      RespawnController.HOOK_CONFIRM_DELAY_MS,
+      () => {
+        this.hookConfirmTimer = null;
+
+        // Verify we haven't received new output since the hook arrived
+        const hookTime = hookType === 'stop' ? this.stopHookTime : this.idlePromptTime;
+        if (hookTime && this.lastOutputTime > hookTime) {
+          // Output arrived after hook - Claude started new work
+          this.log(`Output received after ${hookType} hook, cancelling idle confirmation`);
+          this.logAction('hook', `${hookType} cancelled - new output detected`);
+          this.resetHookState();
+          this.setState('watching');
+          this.startNoOutputTimer();
+          this.startPreFilterTimer();
+          return;
+        }
+
+        // No new output - confirm idle via hook signal
+        this.logAction('hook', `${hookType} confirmed after ${RespawnController.HOOK_CONFIRM_DELAY_MS}ms`);
+        this.onIdleConfirmed(`${hookType} hook (confirmed)`);
+      },
+      `confirming ${hookType} hook`
+    );
+  }
+
+  /**
+   * Reset hook-based detection state.
+   * Called when hooks are cancelled due to new activity.
+   */
+  private resetHookState(): void {
+    this.stopHookReceived = false;
+    this.stopHookTime = null;
+    this.idlePromptReceived = false;
+    this.idlePromptTime = null;
+  }
+
+  /**
+   * Signal that the transcript indicates completion.
+   * This is a supporting signal from transcript file monitoring.
+   * Unlike hooks, this doesn't immediately trigger idle - it boosts confidence.
+   */
+  signalTranscriptComplete(): void {
+    // Transcript completion is a supporting signal, not definitive
+    // It can help reduce the confirmation time needed
+    if (this._state === 'watching') {
+      this.logAction('transcript', 'Transcript shows completion - boosting confidence');
+      this.log('Transcript completion detected - may accelerate idle detection');
+      // If we have a completion message and transcript confirms, try AI check
+      if (this.completionMessageTime !== null) {
+        this.tryStartAiCheck('transcript + completion message');
+      }
+    }
+  }
+
+  /**
+   * Signal that the transcript indicates plan mode.
+   * This helps prevent auto-accept from triggering on AskUserQuestion.
+   */
+  signalTranscriptPlanMode(): void {
+    // Plan mode from transcript = potential AskUserQuestion
+    // This is similar to elicitation detection
+    if (this._state === 'watching') {
+      this.logAction('transcript', 'Plan mode / AskUserQuestion detected');
+      this.cancelAutoAcceptTimer();
+    }
+  }
+
+  /**
    * Start completion confirmation timer.
    * After completion message, waits for output silence then triggers AI check.
    */
@@ -2183,6 +2392,14 @@ export class RespawnController extends EventEmitter {
     this.terminalBuffer.clear();
     this.promptDetected = false;
     this.workingDetected = false;
+    this.resetHookState(); // Clear hook signals for next cycle
+
+    // Restart detection timers for next cycle
+    this.startNoOutputTimer();
+    this.startPreFilterTimer();
+    if (this.config.autoAcceptPrompts) {
+      this.startAutoAcceptTimer();
+    }
   }
 
   /**

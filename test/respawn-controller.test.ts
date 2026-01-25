@@ -2531,4 +2531,158 @@ describe('RespawnController Timer Cleanup', () => {
     // Should end in stopped state without errors
     expect(controller.state).toBe('stopped');
   });
+
+});
+
+// ========== Hook-Based Detection Tests (Phase 1) ==========
+
+describe('RespawnController Hook-Based Idle Detection', () => {
+  let session: MockSession;
+  let controller: RespawnController;
+
+  beforeEach(() => {
+    session = new MockSession();
+    controller = new RespawnController(session as unknown as Session, {
+      idleTimeoutMs: 100,
+      interStepDelayMs: 50,
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 500,
+      aiIdleCheckEnabled: false,
+    });
+  });
+
+  afterEach(() => {
+    controller.stop();
+  });
+
+  it('should expose signalStopHook method', () => {
+    expect(typeof controller.signalStopHook).toBe('function');
+  });
+
+  it('should expose signalIdlePrompt method', () => {
+    expect(typeof controller.signalIdlePrompt).toBe('function');
+  });
+
+  it('should set stopHookReceived in detection status when Stop hook signaled', () => {
+    controller.start();
+    expect(controller.state).toBe('watching');
+
+    controller.signalStopHook();
+
+    const status = controller.getDetectionStatus();
+    expect(status.stopHookReceived).toBe(true);
+    expect(status.stopHookTime).not.toBeNull();
+    expect(status.confidenceLevel).toBe(100); // Hook signals are definitive
+  });
+
+  it('should include hook status in statusText when Stop hook received', () => {
+    controller.start();
+    controller.signalStopHook();
+
+    const status = controller.getDetectionStatus();
+    expect(status.statusText).toContain('Stop hook received');
+  });
+
+  it('should trigger respawn cycle after Stop hook confirmation', async () => {
+    const testController = new RespawnController(session as unknown as Session, {
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 500,
+      aiIdleCheckEnabled: false,
+    });
+
+    const cycleStarted = vi.fn();
+    testController.on('respawnCycleStarted', cycleStarted);
+
+    testController.start();
+    testController.signalStopHook();
+
+    // Wait for hook confirmation timer (3s default)
+    await new Promise(resolve => setTimeout(resolve, 3100));
+
+    expect(cycleStarted).toHaveBeenCalled();
+    testController.stop();
+  });
+
+  it('should immediately confirm idle when idle_prompt signaled (skip confirmation)', async () => {
+    const testController = new RespawnController(session as unknown as Session, {
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 500,
+      aiIdleCheckEnabled: false,
+    });
+
+    const cycleStarted = vi.fn();
+    testController.on('respawnCycleStarted', cycleStarted);
+
+    testController.start();
+    testController.signalIdlePrompt();
+
+    // idle_prompt skips confirmation and goes directly to idle
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    expect(cycleStarted).toHaveBeenCalled();
+    testController.stop();
+  });
+
+  it('should cancel Stop hook confirmation if working patterns detected', async () => {
+    const testController = new RespawnController(session as unknown as Session, {
+      completionConfirmMs: 5000, // Long enough to not interfere with test timing
+      noOutputTimeoutMs: 10000,
+      aiIdleCheckEnabled: false,
+    });
+
+    const cycleStarted = vi.fn();
+    testController.on('respawnCycleStarted', cycleStarted);
+
+    testController.start();
+    testController.signalStopHook();
+
+    // Simulate working patterns IMMEDIATELY after hook (before confirmation)
+    await new Promise(resolve => setTimeout(resolve, 100));
+    session.simulateWorking();
+
+    // Wait longer than hook confirmation delay (3s)
+    await new Promise(resolve => setTimeout(resolve, 3500));
+
+    // Cycle should NOT have started because working was detected
+    expect(cycleStarted).not.toHaveBeenCalled();
+
+    const status = testController.getDetectionStatus();
+    expect(status.stopHookReceived).toBe(false); // Reset by working detection
+    testController.stop();
+  });
+
+  it('should ignore Stop hook when not in watching state', async () => {
+    const testController = new RespawnController(session as unknown as Session, {
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 500,
+      aiIdleCheckEnabled: false,
+      sendClear: false,
+      sendInit: false,
+    });
+
+    testController.start();
+    testController.signalIdlePrompt(); // Start a cycle
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Now in sending_update state - Stop hook should be ignored
+    testController.signalStopHook();
+
+    const status = testController.getDetectionStatus();
+    expect(status.stopHookReceived).toBe(false);
+    testController.stop();
+  });
+
+  it('should have 100% confidence when hook signal is received', () => {
+    controller.start();
+
+    // Before hook - confidence should be low
+    let status = controller.getDetectionStatus();
+    expect(status.confidenceLevel).toBeLessThan(100);
+
+    // After Stop hook - confidence should be 100%
+    controller.signalStopHook();
+    status = controller.getDetectionStatus();
+    expect(status.confidenceLevel).toBe(100);
+  });
 });

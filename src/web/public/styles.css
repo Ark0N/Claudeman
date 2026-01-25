@@ -671,6 +671,31 @@ body {
   color: var(--yellow);
 }
 
+.detection-confidence.hook-confirmed {
+  background: rgba(139, 92, 246, 0.3);
+  color: var(--purple, #a78bfa);
+}
+
+.detection-hook {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  background: rgba(139, 92, 246, 0.15);
+  color: var(--purple, #a78bfa);
+}
+
+.detection-hook.hook-active {
+  background: rgba(139, 92, 246, 0.25);
+  color: var(--purple, #a78bfa);
+  font-weight: 500;
+  animation: pulse-hook 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-hook {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }

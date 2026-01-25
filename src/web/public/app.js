@@ -2153,6 +2153,19 @@ class ClaudemanApp {
     const waitingEl = this.$('detectionWaiting');
     const confidenceEl = this.$('detectionConfidence');
     const aiCheckEl = document.getElementById('detectionAiCheck');
+    const hookEl = document.getElementById('detectionHook');
+
+    // Hook-based detection indicator (highest priority signals)
+    if (hookEl) {
+      if (detection.stopHookReceived || detection.idlePromptReceived) {
+        const hookType = detection.idlePromptReceived ? 'idle_prompt' : 'Stop';
+        hookEl.textContent = `🎯 ${hookType} hook received`;
+        hookEl.className = 'detection-hook hook-active';
+        hookEl.style.display = '';
+      } else {
+        hookEl.style.display = 'none';
+      }
+    }
 
     // Simplified status - only show when meaningful
     if (detection.statusText && detection.statusText !== 'Watching...') {
@@ -2171,8 +2184,14 @@ class ClaudemanApp {
       confidenceEl.textContent = `${confidence}%`;
       confidenceEl.style.display = '';
       confidenceEl.className = 'detection-confidence';
-      if (confidence >= 60) confidenceEl.classList.add('high');
-      else if (confidence >= 30) confidenceEl.classList.add('medium');
+      // Hook signals give 100% confidence
+      if (detection.stopHookReceived || detection.idlePromptReceived) {
+        confidenceEl.classList.add('hook-confirmed');
+      } else if (confidence >= 60) {
+        confidenceEl.classList.add('high');
+      } else if (confidence >= 30) {
+        confidenceEl.classList.add('medium');
+      }
     } else {
       confidenceEl.style.display = 'none';
     }

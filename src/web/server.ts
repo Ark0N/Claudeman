@@ -28,6 +28,7 @@ import { generateClaudeMd } from '../templates/claude-md.js';
 import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
 import { writeHooksConfig } from '../hooks-config.js';
 import { subagentWatcher, type SubagentInfo, type SubagentToolCall, type SubagentProgress, type SubagentMessage } from '../subagent-watcher.js';
+import { TranscriptWatcher } from '../transcript-watcher.js';
 import { v4 as uuidv4 } from 'uuid';
 import { createRequire } from 'node:module';
 
@@ -112,7 +113,7 @@ function sanitizeHookData(data: Record<string, unknown> | undefined): Record<str
   const safeFields: Record<string, unknown> = {};
   const allowedKeys = [
     'hook_event_name', 'tool_name', 'tool_input', 'session_id',
-    'cwd', 'permission_mode', 'stop_hook_active',
+    'cwd', 'permission_mode', 'stop_hook_active', 'transcript_path',
   ];
 
   for (const key of allowedKeys) {
@@ -233,6 +234,7 @@ export class WebServer extends EventEmitter {
   private sessions: Map<string, Session> = new Map();
   private respawnControllers: Map<string, RespawnController> = new Map();
   private respawnTimers: Map<string, { timer: NodeJS.Timeout; endAt: number; startedAt: number }> = new Map();
+  private transcriptWatchers: Map<string, TranscriptWatcher> = new Map();
   private scheduledRuns: Map<string, ScheduledRun> = new Map();
   private sseClients: Set<FastifyReply> = new Set();
   private store = getStore();
@@ -1698,11 +1700,26 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
-      // Signal the respawn controller to block auto-accept for question prompts
-      if (event === 'elicitation_dialog') {
-        const controller = this.respawnControllers.get(sessionId);
-        if (controller) {
+      // Signal the respawn controller based on hook event type
+      const controller = this.respawnControllers.get(sessionId);
+      if (controller) {
+        if (event === 'elicitation_dialog') {
+          // Block auto-accept for question prompts
           controller.signalElicitation();
+        } else if (event === 'stop') {
+          // DEFINITIVE idle signal - Claude finished responding
+          controller.signalStopHook();
+        } else if (event === 'idle_prompt') {
+          // DEFINITIVE idle signal - Claude has been idle for 60+ seconds
+          controller.signalIdlePrompt();
+        }
+      }
+
+      // Start transcript watching if transcript_path is provided
+      if (data && typeof data === 'object' && 'transcript_path' in data) {
+        const transcriptPath = String(data.transcript_path);
+        if (transcriptPath) {
+          this.startTranscriptWatcher(sessionId, transcriptPath);
         }
       }
 
@@ -1711,6 +1728,63 @@ export class WebServer extends EventEmitter {
       this.broadcast(`hook:${event}`, { sessionId, timestamp: Date.now(), ...safeData });
       return { success: true };
     });
+  }
+
+  /**
+   * Start a transcript watcher for a session.
+   * Creates a new watcher or updates an existing one with the new transcript path.
+   */
+  private startTranscriptWatcher(sessionId: string, transcriptPath: string): void {
+    let watcher = this.transcriptWatchers.get(sessionId);
+
+    if (!watcher) {
+      watcher = new TranscriptWatcher();
+
+      // Wire up transcript events to the respawn controller
+      watcher.on('transcript:complete', () => {
+        const controller = this.respawnControllers.get(sessionId);
+        if (controller) {
+          controller.signalTranscriptComplete();
+        }
+        this.broadcast('transcript:complete', { sessionId, timestamp: Date.now() });
+      });
+
+      watcher.on('transcript:plan_mode', () => {
+        const controller = this.respawnControllers.get(sessionId);
+        if (controller) {
+          controller.signalTranscriptPlanMode();
+        }
+        this.broadcast('transcript:plan_mode', { sessionId, timestamp: Date.now() });
+      });
+
+      watcher.on('transcript:tool_start', (toolName: string) => {
+        this.broadcast('transcript:tool_start', { sessionId, toolName, timestamp: Date.now() });
+      });
+
+      watcher.on('transcript:tool_end', (toolName: string, isError: boolean) => {
+        this.broadcast('transcript:tool_end', { sessionId, toolName, isError, timestamp: Date.now() });
+      });
+
+      watcher.on('transcript:error', (error: Error) => {
+        console.error(`[Transcript] Error for session ${sessionId}:`, error.message);
+      });
+
+      this.transcriptWatchers.set(sessionId, watcher);
+    }
+
+    // Start or update the watcher with the transcript path
+    watcher.updatePath(transcriptPath);
+  }
+
+  /**
+   * Stop the transcript watcher for a session.
+   */
+  private stopTranscriptWatcher(sessionId: string): void {
+    const watcher = this.transcriptWatchers.get(sessionId);
+    if (watcher) {
+      watcher.stop();
+      this.transcriptWatchers.delete(sessionId);
+    }
   }
 
   /** Persists full session state including respawn config to state.json */
@@ -1851,6 +1925,9 @@ export class WebServer extends EventEmitter {
       clearTimeout(timerInfo.timer);
       this.respawnTimers.delete(sessionId);
     }
+
+    // Stop transcript watcher
+    this.stopTranscriptWatcher(sessionId);
 
     // Clear batches and pending state updates
     this.terminalBatches.delete(sessionId);
