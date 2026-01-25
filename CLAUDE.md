@@ -17,6 +17,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Claudeman is a Claude Code session manager with a web interface and autonomous Ralph Loop. It spawns Claude CLI processes via PTY, streams output in real-time via SSE, and supports scheduled/timed runs.
 
+**Version**: 0.1337
+
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 
 **Key Dependencies**: fastify (REST API), node-pty (PTY spawning), ink/react (TUI), xterm.js (web terminal), @modelcontextprotocol/sdk (MCP server for spawn protocol)
@@ -78,6 +80,8 @@ npx vitest run -t "should create session" # By pattern
 
 # Tests mock PTY - no real Claude CLI spawned
 # Test timeout: 30s (configured in vitest.config.ts)
+# Teardown timeout: 60s (ensures cleanup runs even on failures)
+# Coverage excludes: src/index.ts, src/cli.ts (entry points)
 # Global test utilities (describe/it/expect) available without imports (globals: true)
 # Tests run sequentially (fileParallelism: false) to respect screen session limits
 # Global setup (test/setup.ts) enforces max 10 concurrent screens + orphan cleanup
@@ -144,6 +148,16 @@ claudeman tui                      # Start TUI
 claudeman status                   # Overall status
 claudeman reset                    # Reset all state
 ```
+
+## Keyboard Shortcuts (Web UI)
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Enter` | Quick-start session |
+| `Ctrl+W` | Close session |
+| `Ctrl+Tab` | Next session |
+| `Ctrl+K` | Kill all sessions |
+| `Ctrl+L` | Clear terminal |
 
 ## Architecture
 
