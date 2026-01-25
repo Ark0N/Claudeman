@@ -372,6 +372,14 @@ class ClaudemanApp {
 
     // Ralph loop/todo state per session
     this.ralphStates = new Map(); // Map<sessionId, { loop, todos }>
+
+    // Subagent (Claude Code background agent) tracking
+    this.subagents = new Map(); // Map<agentId, SubagentInfo>
+    this.subagentActivity = new Map(); // Map<agentId, activity[]> - recent tool calls/progress
+    this.activeSubagentId = null; // Currently selected subagent for detail view
+    this.subagentPanelVisible = false;
+    this.subagentWindows = new Map(); // Map<agentId, { element, position }>
+    this.subagentWindowZIndex = 1000;
     this.ralphStatePanelCollapsed = true; // Default to collapsed
 
     // Tab alert states: Map<sessionId, 'action' | 'idle'>
@@ -1286,6 +1294,76 @@ class ClaudemanApp {
         message: data.reason || 'Claude has finished responding',
       });
     });
+
+    // ========== Subagent Events (Claude Code Background Agents) ==========
+
+    this.eventSource.addEventListener('subagent:discovered', (e) => {
+      const data = JSON.parse(e.data);
+      this.subagents.set(data.agentId, data);
+      this.subagentActivity.set(data.agentId, []);
+      this.renderSubagentPanel();
+      // Auto-open window for new active agents
+      if (data.status === 'active') {
+        this.openSubagentWindow(data.agentId);
+      }
+    });
+
+    this.eventSource.addEventListener('subagent:tool_call', (e) => {
+      const data = JSON.parse(e.data);
+      const activity = this.subagentActivity.get(data.agentId) || [];
+      activity.push({ type: 'tool', ...data });
+      if (activity.length > 100) activity.shift(); // Keep last 100 entries
+      this.subagentActivity.set(data.agentId, activity);
+      if (this.activeSubagentId === data.agentId) {
+        this.renderSubagentDetail();
+      }
+      this.renderSubagentPanel();
+      // Update floating window
+      if (this.subagentWindows.has(data.agentId)) {
+        this.renderSubagentWindowContent(data.agentId);
+      }
+    });
+
+    this.eventSource.addEventListener('subagent:progress', (e) => {
+      const data = JSON.parse(e.data);
+      const activity = this.subagentActivity.get(data.agentId) || [];
+      activity.push({ type: 'progress', ...data });
+      if (activity.length > 100) activity.shift();
+      this.subagentActivity.set(data.agentId, activity);
+      if (this.activeSubagentId === data.agentId) {
+        this.renderSubagentDetail();
+      }
+      // Update floating window
+      if (this.subagentWindows.has(data.agentId)) {
+        this.renderSubagentWindowContent(data.agentId);
+      }
+    });
+
+    this.eventSource.addEventListener('subagent:message', (e) => {
+      const data = JSON.parse(e.data);
+      const activity = this.subagentActivity.get(data.agentId) || [];
+      activity.push({ type: 'message', ...data });
+      if (activity.length > 100) activity.shift();
+      this.subagentActivity.set(data.agentId, activity);
+      if (this.activeSubagentId === data.agentId) {
+        this.renderSubagentDetail();
+      }
+      // Update floating window
+      if (this.subagentWindows.has(data.agentId)) {
+        this.renderSubagentWindowContent(data.agentId);
+      }
+    });
+
+    this.eventSource.addEventListener('subagent:completed', (e) => {
+      const data = JSON.parse(e.data);
+      const existing = this.subagents.get(data.agentId);
+      if (existing) {
+        existing.status = 'completed';
+        this.subagents.set(data.agentId, existing);
+      }
+      this.renderSubagentPanel();
+      this.updateSubagentWindows();
+    });
   }
 
   setConnectionStatus(status) {
@@ -1338,6 +1416,15 @@ class ClaudemanApp {
 
     this.updateCost();
     this.renderSessionTabs();
+
+    // Load subagents
+    if (data.subagents) {
+      this.subagents.clear();
+      data.subagents.forEach(s => {
+        this.subagents.set(s.agentId, s);
+      });
+      this.renderSubagentPanel();
+    }
 
     // Auto-select first session if any
     if (this.sessions.size > 0 && !this.activeSessionId) {
@@ -3712,6 +3799,396 @@ class ClaudemanApp {
   // Legacy method for backwards compatibility
   getTodoIcon(status) {
     return this.getRalphTaskIcon(status);
+  }
+
+  // ========== Subagent Panel (Claude Code Background Agents) ==========
+
+  toggleSubagentPanel() {
+    this.subagentPanelVisible = !this.subagentPanelVisible;
+    const panel = this.$('subagentPanel');
+    if (panel) {
+      panel.style.display = this.subagentPanelVisible ? 'block' : 'none';
+    }
+    if (this.subagentPanelVisible) {
+      this.renderSubagentPanel();
+    }
+  }
+
+  renderSubagentPanel() {
+    const panel = this.$('subagentPanel');
+    const list = this.$('subagentList');
+    const badge = this.$('subagentBadge');
+
+    if (!list) return;
+
+    // Update badge count
+    const activeCount = Array.from(this.subagents.values()).filter(s => s.status === 'active').length;
+    if (badge) {
+      badge.textContent = activeCount > 0 ? activeCount : '';
+      badge.style.display = activeCount > 0 ? 'inline-block' : 'none';
+    }
+
+    // If panel is not visible and there are active subagents, show indicator
+    if (!this.subagentPanelVisible && activeCount === 0) {
+      return;
+    }
+
+    // Render subagent list
+    if (this.subagents.size === 0) {
+      list.innerHTML = '<div class="subagent-empty">No background agents detected</div>';
+      return;
+    }
+
+    const html = [];
+    const sorted = Array.from(this.subagents.values()).sort((a, b) => {
+      // Active first, then by last activity
+      if (a.status === 'active' && b.status !== 'active') return -1;
+      if (b.status === 'active' && a.status !== 'active') return 1;
+      return new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime();
+    });
+
+    for (const agent of sorted) {
+      const isActive = this.activeSubagentId === agent.agentId;
+      const statusClass = agent.status === 'active' ? 'active' : agent.status === 'idle' ? 'idle' : 'completed';
+      const activity = this.subagentActivity.get(agent.agentId) || [];
+      const lastActivity = activity[activity.length - 1];
+      const lastTool = lastActivity?.type === 'tool' ? lastActivity.tool : null;
+      const hasWindow = this.subagentWindows.has(agent.agentId);
+
+      html.push(`
+        <div class="subagent-item ${statusClass} ${isActive ? 'selected' : ''}"
+             onclick="app.selectSubagent('${agent.agentId}')">
+          <div class="subagent-header">
+            <span class="subagent-icon">🤖</span>
+            <span class="subagent-id">${agent.agentId.substring(0, 7)}</span>
+            <span class="subagent-status ${statusClass}">${agent.status}</span>
+            <button class="subagent-window-btn" onclick="event.stopPropagation(); app.${hasWindow ? 'closeSubagentWindow' : 'openSubagentWindow'}('${agent.agentId}')" title="${hasWindow ? 'Close window' : 'Open in window'}">
+              ${hasWindow ? '✕' : '⧉'}
+            </button>
+          </div>
+          <div class="subagent-meta">
+            <span class="subagent-tools">${agent.toolCallCount} tools</span>
+            ${lastTool ? `<span class="subagent-last-tool">${this.getToolIcon(lastTool)} ${lastTool}</span>` : ''}
+          </div>
+        </div>
+      `);
+    }
+
+    list.innerHTML = html.join('');
+  }
+
+  selectSubagent(agentId) {
+    this.activeSubagentId = agentId;
+    this.renderSubagentPanel();
+    this.renderSubagentDetail();
+  }
+
+  renderSubagentDetail() {
+    const detail = this.$('subagentDetail');
+    if (!detail) return;
+
+    if (!this.activeSubagentId) {
+      detail.innerHTML = '<div class="subagent-empty">Select an agent to view details</div>';
+      return;
+    }
+
+    const agent = this.subagents.get(this.activeSubagentId);
+    const activity = this.subagentActivity.get(this.activeSubagentId) || [];
+
+    if (!agent) {
+      detail.innerHTML = '<div class="subagent-empty">Agent not found</div>';
+      return;
+    }
+
+    const activityHtml = activity.slice(-30).map(a => {
+      const time = new Date(a.timestamp).toLocaleTimeString();
+      if (a.type === 'tool') {
+        return `<div class="subagent-activity tool">
+          <span class="time">${time}</span>
+          <span class="icon">${this.getToolIcon(a.tool)}</span>
+          <span class="name">${a.tool}</span>
+          <span class="detail">${this.getToolDetail(a.tool, a.input)}</span>
+        </div>`;
+      } else if (a.type === 'progress') {
+        const icon = a.progressType === 'query_update' ? '⟳' : '✓';
+        return `<div class="subagent-activity progress">
+          <span class="time">${time}</span>
+          <span class="icon">${icon}</span>
+          <span class="detail">${a.query || a.progressType}</span>
+        </div>`;
+      } else if (a.type === 'message') {
+        const preview = a.text.length > 100 ? a.text.substring(0, 100) + '...' : a.text;
+        return `<div class="subagent-activity message">
+          <span class="time">${time}</span>
+          <span class="icon">💬</span>
+          <span class="detail">${this.escapeHtml(preview)}</span>
+        </div>`;
+      }
+      return '';
+    }).join('');
+
+    detail.innerHTML = `
+      <div class="subagent-detail-header">
+        <span class="subagent-id">Agent ${agent.agentId}</span>
+        <span class="subagent-status ${agent.status}">${agent.status}</span>
+        <button class="subagent-transcript-btn" onclick="app.viewSubagentTranscript('${agent.agentId}')">
+          View Full Transcript
+        </button>
+      </div>
+      <div class="subagent-detail-stats">
+        <span>Tools: ${agent.toolCallCount}</span>
+        <span>Entries: ${agent.entryCount}</span>
+        <span>Size: ${(agent.fileSize / 1024).toFixed(1)}KB</span>
+      </div>
+      <div class="subagent-activity-log">
+        ${activityHtml || '<div class="subagent-empty">No activity yet</div>'}
+      </div>
+    `;
+  }
+
+  getToolIcon(tool) {
+    const icons = {
+      WebSearch: '🔍',
+      WebFetch: '🌐',
+      Read: '📖',
+      Write: '📝',
+      Edit: '✏️',
+      Bash: '💻',
+      Glob: '📁',
+      Grep: '🔎',
+      Task: '🤖',
+    };
+    return icons[tool] || '🔧';
+  }
+
+  getToolDetail(tool, input) {
+    if (!input) return '';
+    if (tool === 'WebSearch' && input.query) return `"${input.query}"`;
+    if (tool === 'WebFetch' && input.url) return input.url;
+    if (tool === 'Read' && input.file_path) return input.file_path;
+    if ((tool === 'Write' || tool === 'Edit') && input.file_path) return input.file_path;
+    if (tool === 'Bash' && input.command) {
+      const cmd = input.command;
+      return cmd.length > 40 ? cmd.substring(0, 40) + '...' : cmd;
+    }
+    if (tool === 'Glob' && input.pattern) return input.pattern;
+    if (tool === 'Grep' && input.pattern) return input.pattern;
+    return '';
+  }
+
+  async viewSubagentTranscript(agentId) {
+    try {
+      const res = await fetch(`/api/subagents/${agentId}/transcript?format=formatted`);
+      const data = await res.json();
+
+      if (!data.success) {
+        alert('Failed to load transcript');
+        return;
+      }
+
+      // Show in a modal or new window
+      const content = data.data.formatted.join('\n');
+      const win = window.open('', '_blank', 'width=800,height=600');
+      win.document.write(`
+        <html>
+          <head>
+            <title>Subagent ${agentId} Transcript</title>
+            <style>
+              body { background: #1a1a2e; color: #eee; font-family: monospace; padding: 20px; }
+              pre { white-space: pre-wrap; word-wrap: break-word; }
+            </style>
+          </head>
+          <body>
+            <h2>Subagent ${agentId} Transcript (${data.data.entryCount} entries)</h2>
+            <pre>${this.escapeHtml(content)}</pre>
+          </body>
+        </html>
+      `);
+    } catch (err) {
+      console.error('Failed to load transcript:', err);
+      alert('Failed to load transcript: ' + err.message);
+    }
+  }
+
+  // ========== Subagent Floating Windows ==========
+
+  openSubagentWindow(agentId) {
+    // If window already exists, focus it
+    if (this.subagentWindows.has(agentId)) {
+      const existing = this.subagentWindows.get(agentId);
+      existing.element.style.zIndex = ++this.subagentWindowZIndex;
+      return;
+    }
+
+    const agent = this.subagents.get(agentId);
+    if (!agent) return;
+
+    // Calculate position (cascade from top-left)
+    const windowCount = this.subagentWindows.size;
+    const offsetX = 50 + (windowCount % 5) * 30;
+    const offsetY = 100 + (windowCount % 5) * 30;
+
+    // Create window element
+    const win = document.createElement('div');
+    win.className = 'subagent-window';
+    win.id = `subagent-window-${agentId}`;
+    win.style.left = `${offsetX}px`;
+    win.style.top = `${offsetY}px`;
+    win.style.zIndex = ++this.subagentWindowZIndex;
+
+    win.innerHTML = `
+      <div class="subagent-window-header">
+        <div class="subagent-window-title">
+          <span class="icon">🤖</span>
+          <span class="id">${agentId.substring(0, 7)}</span>
+          <span class="status ${agent.status}">${agent.status}</span>
+        </div>
+        <div class="subagent-window-actions">
+          <button onclick="app.minimizeSubagentWindow('${agentId}')" title="Minimize">─</button>
+          <button onclick="app.closeSubagentWindow('${agentId}')" title="Close">×</button>
+        </div>
+      </div>
+      <div class="subagent-window-body" id="subagent-window-body-${agentId}">
+        <div class="subagent-empty">Loading activity...</div>
+      </div>
+    `;
+
+    document.body.appendChild(win);
+
+    // Make draggable
+    this.makeWindowDraggable(win, win.querySelector('.subagent-window-header'));
+
+    // Store reference
+    this.subagentWindows.set(agentId, {
+      element: win,
+      minimized: false,
+    });
+
+    // Render content
+    this.renderSubagentWindowContent(agentId);
+
+    // Focus on click
+    win.addEventListener('mousedown', () => {
+      win.style.zIndex = ++this.subagentWindowZIndex;
+    });
+  }
+
+  closeSubagentWindow(agentId) {
+    const windowData = this.subagentWindows.get(agentId);
+    if (windowData) {
+      windowData.element.remove();
+      this.subagentWindows.delete(agentId);
+    }
+  }
+
+  minimizeSubagentWindow(agentId) {
+    const windowData = this.subagentWindows.get(agentId);
+    if (windowData) {
+      windowData.element.style.display = 'none';
+      windowData.minimized = true;
+    }
+  }
+
+  restoreSubagentWindow(agentId) {
+    const windowData = this.subagentWindows.get(agentId);
+    if (windowData) {
+      windowData.element.style.display = 'flex';
+      windowData.element.style.zIndex = ++this.subagentWindowZIndex;
+      windowData.minimized = false;
+    }
+  }
+
+  makeWindowDraggable(win, handle) {
+    let isDragging = false;
+    let startX, startY, startLeft, startTop;
+
+    handle.addEventListener('mousedown', (e) => {
+      if (e.target.tagName === 'BUTTON') return;
+      isDragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      startLeft = parseInt(win.style.left) || 0;
+      startTop = parseInt(win.style.top) || 0;
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      win.style.left = `${startLeft + dx}px`;
+      win.style.top = `${startTop + dy}px`;
+    });
+
+    document.addEventListener('mouseup', () => {
+      isDragging = false;
+    });
+  }
+
+  renderSubagentWindowContent(agentId) {
+    const body = document.getElementById(`subagent-window-body-${agentId}`);
+    if (!body) return;
+
+    const activity = this.subagentActivity.get(agentId) || [];
+
+    if (activity.length === 0) {
+      body.innerHTML = '<div class="subagent-empty">No activity yet</div>';
+      return;
+    }
+
+    const html = activity.slice(-100).map(a => {
+      const time = new Date(a.timestamp).toLocaleTimeString();
+      if (a.type === 'tool') {
+        return `<div class="activity-line">
+          <span class="time">${time}</span>
+          <span class="tool-icon">${this.getToolIcon(a.tool)}</span>
+          <span class="tool-name">${a.tool}</span>
+          <span class="tool-detail">${this.escapeHtml(this.getToolDetail(a.tool, a.input))}</span>
+        </div>`;
+      } else if (a.type === 'progress') {
+        const icon = a.progressType === 'query_update' ? '⟳' : '✓';
+        return `<div class="activity-line progress-line">
+          <span class="time">${time}</span>
+          <span class="tool-icon">${icon}</span>
+          <span class="tool-detail">${this.escapeHtml(a.query || a.progressType)}</span>
+        </div>`;
+      } else if (a.type === 'message') {
+        const preview = a.text.length > 150 ? a.text.substring(0, 150) + '...' : a.text;
+        return `<div class="message-line">
+          <span class="time">${time}</span> 💬 ${this.escapeHtml(preview)}
+        </div>`;
+      }
+      return '';
+    }).join('');
+
+    body.innerHTML = html;
+    body.scrollTop = body.scrollHeight;
+  }
+
+  // Update all open subagent windows
+  updateSubagentWindows() {
+    for (const agentId of this.subagentWindows.keys()) {
+      this.renderSubagentWindowContent(agentId);
+
+      // Update status in header
+      const agent = this.subagents.get(agentId);
+      if (agent) {
+        const statusEl = document.querySelector(`#subagent-window-${agentId} .status`);
+        if (statusEl) {
+          statusEl.className = `status ${agent.status}`;
+          statusEl.textContent = agent.status;
+        }
+      }
+    }
+  }
+
+  // Open windows for all active subagents
+  openAllActiveSubagentWindows() {
+    for (const [agentId, agent] of this.subagents) {
+      if (agent.status === 'active' && !this.subagentWindows.has(agentId)) {
+        this.openSubagentWindow(agentId);
+      }
+    }
   }
 
   // ========== Screen Sessions (in Monitor Panel) ==========

@@ -2997,3 +2997,322 @@ kbd {
     border-radius: 8px 8px 0 0;
   }
 }
+
+/* ========== Subagent Panel (Claude Code Background Agents) ========== */
+
+.subagent-container {
+  display: flex;
+  gap: 0.5rem;
+  height: 200px;
+}
+
+.subagent-list {
+  flex: 0 0 200px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  padding-right: 0.5rem;
+}
+
+.subagent-detail {
+  flex: 1;
+  overflow-y: auto;
+  padding-left: 0.5rem;
+}
+
+.subagent-empty {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  text-align: center;
+  padding: 1rem;
+}
+
+.subagent-badge {
+  background: var(--accent);
+  color: white;
+  font-size: 0.65rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 8px;
+  margin-left: 0.5rem;
+}
+
+.subagent-item {
+  padding: 0.5rem;
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  margin-bottom: 0.4rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.subagent-item:hover {
+  background: var(--bg-card);
+}
+
+.subagent-item.selected {
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+}
+
+.subagent-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.3rem;
+}
+
+.subagent-icon {
+  font-size: 0.9rem;
+}
+
+.subagent-id {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text);
+}
+
+.subagent-status {
+  font-size: 0.6rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  margin-left: auto;
+}
+
+.subagent-status.active {
+  background: var(--success);
+  color: white;
+}
+
+.subagent-status.idle {
+  background: var(--warning);
+  color: black;
+}
+
+.subagent-status.completed {
+  background: var(--text-muted);
+  color: white;
+}
+
+.subagent-window-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.1rem 0.3rem;
+  font-size: 0.75rem;
+  margin-left: auto;
+}
+
+.subagent-window-btn:hover {
+  color: var(--accent);
+}
+
+.subagent-meta {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+
+.subagent-last-tool {
+  color: var(--accent);
+}
+
+/* Subagent Detail */
+
+.subagent-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.subagent-detail-header .subagent-id {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.subagent-transcript-btn {
+  margin-left: auto;
+  font-size: 0.65rem;
+  padding: 0.2rem 0.5rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.subagent-transcript-btn:hover {
+  background: var(--bg-elevated);
+}
+
+.subagent-detail-stats {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.subagent-activity-log {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.subagent-activity {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.2rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.subagent-activity .time {
+  color: var(--text-muted);
+  flex: 0 0 60px;
+}
+
+.subagent-activity .icon {
+  flex: 0 0 20px;
+}
+
+.subagent-activity .name {
+  color: var(--accent);
+  flex: 0 0 80px;
+}
+
+.subagent-activity .detail {
+  color: var(--text-dim);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-activity.tool .icon {
+  color: var(--accent);
+}
+
+.subagent-activity.progress .icon {
+  color: var(--warning);
+}
+
+.subagent-activity.message .icon {
+  color: var(--text);
+}
+
+/* ========== Subagent Windows (Floating) ========== */
+
+.subagent-window {
+  position: fixed;
+  width: 500px;
+  height: 400px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.subagent-window-header {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  cursor: move;
+}
+
+.subagent-window-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 1;
+}
+
+.subagent-window-title .icon {
+  font-size: 1rem;
+}
+
+.subagent-window-title .id {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.subagent-window-title .status {
+  font-size: 0.6rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+}
+
+.subagent-window-title .status.active {
+  background: var(--success);
+  color: white;
+}
+
+.subagent-window-actions {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.subagent-window-actions button {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.9rem;
+}
+
+.subagent-window-actions button:hover {
+  color: var(--text);
+}
+
+.subagent-window-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.subagent-window-body .activity-line {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.15rem 0;
+}
+
+.subagent-window-body .activity-line .time {
+  color: var(--text-muted);
+  flex: 0 0 70px;
+}
+
+.subagent-window-body .activity-line .tool-icon {
+  flex: 0 0 20px;
+}
+
+.subagent-window-body .activity-line .tool-name {
+  color: var(--accent);
+  flex: 0 0 90px;
+}
+
+.subagent-window-body .activity-line .tool-detail {
+  color: var(--text-dim);
+  flex: 1;
+}
+
+.subagent-window-body .message-line {
+  padding: 0.3rem 0;
+  color: var(--text);
+}
+
+.subagent-window-body .progress-line {
+  color: var(--warning);
+  font-style: italic;
+}

@@ -27,6 +27,7 @@ import { getStore } from '../state-store.js';
 import { generateClaudeMd } from '../templates/claude-md.js';
 import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
 import { writeHooksConfig } from '../hooks-config.js';
+import { subagentWatcher, type SubagentInfo, type SubagentToolCall, type SubagentProgress, type SubagentMessage } from '../subagent-watcher.js';
 import { v4 as uuidv4 } from 'uuid';
 import { createRequire } from 'node:module';
 
@@ -288,6 +289,39 @@ export class WebServer extends EventEmitter {
     // Initialize spawn orchestrator
     this.spawnOrchestrator = new SpawnOrchestrator();
     this.setupSpawnOrchestratorListeners();
+
+    // Set up subagent watcher listeners
+    this.setupSubagentWatcherListeners();
+  }
+
+  /**
+   * Set up event listeners for subagent watcher.
+   * Broadcasts real-time subagent activity to SSE clients.
+   */
+  private setupSubagentWatcherListeners(): void {
+    subagentWatcher.on('subagent:discovered', (info: SubagentInfo) => {
+      this.broadcast('subagent:discovered', info);
+    });
+
+    subagentWatcher.on('subagent:tool_call', (data: SubagentToolCall) => {
+      this.broadcast('subagent:tool_call', data);
+    });
+
+    subagentWatcher.on('subagent:progress', (data: SubagentProgress) => {
+      this.broadcast('subagent:progress', data);
+    });
+
+    subagentWatcher.on('subagent:message', (data: SubagentMessage) => {
+      this.broadcast('subagent:message', data);
+    });
+
+    subagentWatcher.on('subagent:completed', (info: SubagentInfo) => {
+      this.broadcast('subagent:completed', info);
+    });
+
+    subagentWatcher.on('subagent:error', (error: Error, agentId?: string) => {
+      console.error(`[SubagentWatcher] Error${agentId ? ` for ${agentId}` : ''}:`, error.message);
+    });
   }
 
   private async setupRoutes(): Promise<void> {
@@ -1554,6 +1588,53 @@ export class WebServer extends EventEmitter {
       return { success: true, data: { agentId } };
     });
 
+    // ========== Subagent Monitoring (Claude Code Background Agents) ==========
+
+    // List all known subagents
+    this.app.get('/api/subagents', async (req) => {
+      const { minutes } = req.query as { minutes?: string };
+      const subagents = minutes
+        ? subagentWatcher.getRecentSubagents(parseInt(minutes, 10))
+        : subagentWatcher.getSubagents();
+      return { success: true, data: subagents };
+    });
+
+    // Get subagents for a specific session (by working directory)
+    this.app.get('/api/sessions/:id/subagents', async (req) => {
+      const { id } = req.params as { id: string };
+      const session = this.sessions.get(id);
+      if (!session) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${id} not found`);
+      }
+      const subagents = subagentWatcher.getSubagentsForSession(session.workingDir);
+      return { success: true, data: subagents };
+    });
+
+    // Get a specific subagent's info
+    this.app.get('/api/subagents/:agentId', async (req) => {
+      const { agentId } = req.params as { agentId: string };
+      const info = subagentWatcher.getSubagent(agentId);
+      if (!info) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, `Subagent ${agentId} not found`);
+      }
+      return { success: true, data: info };
+    });
+
+    // Get a subagent's transcript
+    this.app.get('/api/subagents/:agentId/transcript', async (req) => {
+      const { agentId } = req.params as { agentId: string };
+      const { limit, format } = req.query as { limit?: string; format?: 'raw' | 'formatted' };
+      const limitNum = limit ? parseInt(limit, 10) : undefined;
+      const transcript = await subagentWatcher.getTranscript(agentId, limitNum);
+
+      if (format === 'formatted') {
+        const formatted = subagentWatcher.formatTranscript(transcript);
+        return { success: true, data: { formatted, entryCount: transcript.length } };
+      }
+
+      return { success: true, data: transcript };
+    });
+
     // ========== Hook Events ==========
 
     this.app.post('/api/hook-event', async (req) => {
@@ -2314,6 +2395,7 @@ export class WebServer extends EventEmitter {
       scheduledRuns: Array.from(this.scheduledRuns.values()),
       respawnStatus,
       globalStats: this.store.getAggregateStats(activeSessionTokens),
+      subagents: subagentWatcher.getRecentSubagents(60), // Last hour of subagent activity
       timestamp: Date.now(),
     };
   }
@@ -2520,6 +2602,10 @@ export class WebServer extends EventEmitter {
 
     // Restore screen sessions from previous run
     await this.restoreScreenSessions();
+
+    // Start subagent watcher for Claude Code background agent visibility
+    subagentWatcher.start();
+    console.log('Subagent watcher started - monitoring ~/.claude/projects for background agent activity');
   }
 
   private async restoreScreenSessions(): Promise<void> {
@@ -2718,6 +2804,9 @@ export class WebServer extends EventEmitter {
 
     // Flush state store to prevent data loss from debounced saves
     this.store.flushAll();
+
+    // Stop subagent watcher
+    subagentWatcher.stop();
 
     await this.app.close();
   }
