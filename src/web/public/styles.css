@@ -3895,6 +3895,9 @@ kbd {
   padding: 0.5rem;
   font-family: var(--font-mono);
   font-size: 0.75rem;
+  background: #0a0a0a;
+  color: #00ff41;
+  text-shadow: 0 0 2px #00ff41;
 }
 
 .subagent-window-body .activity-line {
@@ -3905,23 +3908,26 @@ kbd {
 }
 
 .subagent-window-body .activity-line .time {
-  color: var(--text-dim);
+  color: #00aa30;
   flex: 0 0 auto;
   white-space: nowrap;
 }
 
 .subagent-window-body .activity-line .tool-icon {
   flex: 0 0 auto;
+  filter: brightness(1.2);
 }
 
 .subagent-window-body .activity-line .tool-name {
-  color: var(--accent);
+  color: #00ff41;
+  font-weight: bold;
   flex: 0 0 auto;
   white-space: nowrap;
+  text-shadow: 0 0 4px #00ff41;
 }
 
 .subagent-window-body .activity-line .tool-detail {
-  color: white;
+  color: #33ff66;
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3929,12 +3935,13 @@ kbd {
 
 .subagent-window-body .message-line {
   padding: 0.3rem 0;
-  color: white;
+  color: #00ff41;
 }
 
 .subagent-window-body .progress-line {
-  color: var(--warning);
+  color: #66ff99;
   font-style: italic;
+  text-shadow: 0 0 3px #66ff99;
 }
 
 /* Subagent Window Parent Tab Header */
