@@ -520,6 +520,8 @@
               Auto-refresh
             </label>
             <button class="btn-toolbar btn-sm" onclick="app.refreshRunSummary()" title="Refresh summary">&#x21BB; Refresh</button>
+            <button class="btn-toolbar btn-sm" onclick="app.exportRunSummary('json')" title="Export as JSON">Export JSON</button>
+            <button class="btn-toolbar btn-sm" onclick="app.exportRunSummary('md')" title="Export as Markdown">Export MD</button>
             <button class="btn-toolbar btn-sm" onclick="app.closeRunSummary()">Close</button>
           </div>
         </div>

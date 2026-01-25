@@ -3103,6 +3103,69 @@ class ClaudemanApp {
     if (checkbox) checkbox.checked = false;
   }
 
+  exportRunSummary(format) {
+    if (!this.runSummaryData) {
+      this.showToast('No summary data to export', 'error');
+      return;
+    }
+
+    const { stats, events, sessionName, startedAt, lastUpdatedAt } = this.runSummaryData;
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+    const filename = `run-summary-${sessionName || 'session'}-${timestamp}`;
+
+    if (format === 'json') {
+      const json = JSON.stringify(this.runSummaryData, null, 2);
+      this.downloadFile(`${filename}.json`, json, 'application/json');
+    } else if (format === 'md') {
+      const duration = lastUpdatedAt - startedAt;
+      let md = `# Run Summary: ${sessionName || 'Session'}\n\n`;
+      md += `**Duration**: ${this.formatDuration(duration)}\n`;
+      md += `**Started**: ${new Date(startedAt).toLocaleString()}\n`;
+      md += `**Last Update**: ${new Date(lastUpdatedAt).toLocaleString()}\n\n`;
+
+      md += `## Statistics\n\n`;
+      md += `| Metric | Value |\n`;
+      md += `|--------|-------|\n`;
+      md += `| Respawn Cycles | ${stats.totalRespawnCycles} |\n`;
+      md += `| Peak Tokens | ${this.formatTokens(stats.peakTokens)} |\n`;
+      md += `| Active Time | ${this.formatDuration(stats.totalTimeActiveMs)} |\n`;
+      md += `| Idle Time | ${this.formatDuration(stats.totalTimeIdleMs)} |\n`;
+      md += `| Errors | ${stats.errorCount} |\n`;
+      md += `| Warnings | ${stats.warningCount} |\n`;
+      md += `| AI Checks | ${stats.aiCheckCount} |\n`;
+      md += `| State Transitions | ${stats.stateTransitions} |\n\n`;
+
+      md += `## Event Timeline\n\n`;
+      if (events.length === 0) {
+        md += `No events recorded.\n`;
+      } else {
+        md += `| Time | Type | Severity | Title | Details |\n`;
+        md += `|------|------|----------|-------|----------|\n`;
+        for (const event of events) {
+          const time = new Date(event.timestamp).toLocaleTimeString();
+          const details = event.details ? event.details.replace(/\|/g, '\\|') : '-';
+          md += `| ${time} | ${event.type} | ${event.severity} | ${event.title} | ${details} |\n`;
+        }
+      }
+
+      this.downloadFile(`${filename}.md`, md, 'text/markdown');
+    }
+
+    this.showToast(`Exported as ${format.toUpperCase()}`, 'success');
+  }
+
+  downloadFile(filename, content, mimeType) {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   async loadRunSummary(sessionId) {
     const timeline = document.getElementById('runSummaryTimeline');
     timeline.innerHTML = '<p class="empty-message">Loading summary...</p>';
