@@ -974,6 +974,34 @@ export function createInitialRunSummaryStats(): RunSummaryStats {
   };
 }
 
+// ========== Active Bash Tool Types ==========
+
+/**
+ * Status of an active Bash tool command.
+ */
+export type ActiveBashToolStatus = 'running' | 'completed';
+
+/**
+ * Represents an active Bash tool command detected in Claude's output.
+ * Used to display clickable file paths for file-viewing commands.
+ */
+export interface ActiveBashTool {
+  /** Unique identifier for this tool invocation */
+  id: string;
+  /** The full command being executed */
+  command: string;
+  /** Extracted file paths from the command (clickable) */
+  filePaths: string[];
+  /** Timeout string if specified (e.g., "16m 0s") */
+  timeout?: string;
+  /** Timestamp when the tool started */
+  startedAt: number;
+  /** Current status */
+  status: ActiveBashToolStatus;
+  /** Session ID this tool belongs to */
+  sessionId: string;
+}
+
 // ========== Spawn1337 Protocol Re-exports ==========
 
 export type {

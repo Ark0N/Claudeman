@@ -46,10 +46,15 @@ After sending each step (update, clear, init, kickstart), the controller waits f
 ## Idle Detection (Multi-Layer)
 
 1. **Completion message**: Primary signal - detects "Worked for Xm Xs" time patterns (requires "Worked" prefix to avoid false positives)
-2. **AI Idle Check** (enabled by default): Spawns a fresh Claude session in a screen to analyze terminal output and provide IDLE/WORKING verdict. Uses `claude-opus-4-5-20251101` by default, sends last 16k chars of terminal buffer. Timeout 90s, cooldown 3min after WORKING. Auto-disables after 3 consecutive errors.
+2. **AI Idle Check** (enabled by default): Spawns a fresh Claude session in a screen to analyze terminal output and provide IDLE/WORKING verdict. Uses `claude-opus-4-5-20251101` by default, sends last 16k chars of terminal buffer. Timeout 90s, cooldown 3min after WORKING. Auto-disables after 3 consecutive errors. The AI prompt is conservative: when in doubt, it answers WORKING.
 3. **Output silence**: Confirms idle after `completionConfirmMs` (10s) of no new output
 4. **Token stability**: Tokens haven't changed
-5. **Working patterns absent**: No `Thinking`, `Writing`, spinner chars
+5. **Working patterns absent**: No `Thinking`, `Writing`, spinner chars, etc. for at least 8 seconds
+6. **Session.isWorking check**: Final safety - if the Session class reports `isWorking=true`, idle confirmation is rejected
+
+**Working Pattern Detection**:
+- Uses a rolling 300-character window to catch patterns split across PTY chunks
+- Patterns include: Thinking, Writing, Reading, Running, Searching, Editing, Creating, Deleting, Analyzing, Executing, Synthesizing, Compiling, Building, Processing, Loading, Generating, Testing, Checking, Validating, and spinner characters
 
 Uses `confirming_idle` state to prevent false positives. Cancels idle confirmation if substantial output (>2 chars after ANSI stripping) arrives during the wait. Fallback: `noOutputTimeoutMs` (30s) if no output at all. AI check is triggered after the no-output fallback; if AI check is disabled/errored, falls back to direct idle confirmation.
 

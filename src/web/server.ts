@@ -18,7 +18,8 @@ import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from 
 import { execSync } from 'node:child_process';
 import { homedir, totalmem, freemem, loadavg, cpus } from 'node:os';
 import { EventEmitter } from 'node:events';
-import { Session, ClaudeMessage, type BackgroundTask, type RalphTrackerState, type RalphTodoItem } from '../session.js';
+import { Session, ClaudeMessage, type BackgroundTask, type RalphTrackerState, type RalphTodoItem, type ActiveBashTool } from '../session.js';
+import { fileStreamManager } from '../file-stream-manager.js';
 import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
 import { SpawnOrchestrator, type SessionCreator } from '../spawn-orchestrator.js';
 import type { SpawnOrchestratorConfig } from '../spawn-types.js';
@@ -502,7 +503,14 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
-      return session.toDetailedState();
+      // Include respawn controller state if active
+      const controller = this.respawnControllers.get(id);
+      return {
+        ...session.toDetailedState(),
+        respawnEnabled: controller?.getConfig()?.enabled ?? false,
+        respawnConfig: controller?.getConfig() ?? null,
+        respawn: controller?.getStatus() ?? null,
+      };
     });
 
     this.app.get('/api/sessions/:id/output', async (req) => {
@@ -563,6 +571,101 @@ export class WebServer extends EventEmitter {
       tracker.setSessionName(session.name);
 
       return { success: true, summary: tracker.getSummary() };
+    });
+
+    // Get active Bash tools for a session (file-viewing commands)
+    this.app.get('/api/sessions/:id/active-tools', async (req) => {
+      const { id } = req.params as { id: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
+      return {
+        success: true,
+        data: {
+          tools: session.activeTools,
+        }
+      };
+    });
+
+    // Stream file content via tail -f (SSE endpoint)
+    this.app.get('/api/sessions/:id/tail-file', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const { path: filePath, lines } = req.query as { path?: string; lines?: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        reply.code(404).send({ success: false, error: 'Session not found' });
+        return;
+      }
+
+      if (!filePath) {
+        reply.code(400).send({ success: false, error: 'Missing path parameter' });
+        return;
+      }
+
+      // Set up SSE headers
+      reply.raw.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+
+      // Track stream for cleanup
+      const streamRef: { id?: string } = {};
+
+      // Create the file stream
+      const result = await fileStreamManager.createStream({
+        sessionId: id,
+        filePath,
+        workingDir: session.workingDir,
+        lines: lines ? parseInt(lines, 10) : undefined,
+        onData: (data) => {
+          // Send data as SSE event
+          reply.raw.write(`data: ${JSON.stringify({ type: 'data', content: data })}\n\n`);
+        },
+        onEnd: () => {
+          reply.raw.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+          reply.raw.end();
+        },
+        onError: (error) => {
+          reply.raw.write(`data: ${JSON.stringify({ type: 'error', error })}\n\n`);
+        },
+      });
+
+      if (!result.success) {
+        reply.raw.write(`data: ${JSON.stringify({ type: 'error', error: result.error })}\n\n`);
+        reply.raw.end();
+        return;
+      }
+
+      streamRef.id = result.streamId;
+
+      // Notify client of successful connection
+      reply.raw.write(`data: ${JSON.stringify({ type: 'connected', streamId: result.streamId, filePath })}\n\n`);
+
+      // Handle client disconnect
+      req.raw.on('close', () => {
+        if (streamRef.id) {
+          fileStreamManager.closeStream(streamRef.id);
+        }
+      });
+    });
+
+    // Close a file stream
+    this.app.delete('/api/sessions/:id/tail-file/:streamId', async (req) => {
+      const { id, streamId } = req.params as { id: string; streamId: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
+      const closed = fileStreamManager.closeStream(streamId);
+      return { success: closed };
     });
 
     // Configure Ralph (Ralph Wiggum) settings
@@ -2019,6 +2122,8 @@ export class WebServer extends EventEmitter {
       }
 
       session.removeAllListeners();
+      // Close any active file streams for this session
+      fileStreamManager.closeSessionStreams(sessionId);
       await session.stop(killScreen);
       this.sessions.delete(sessionId);
       // Only remove from state.json if we're also killing the screen.
@@ -2169,6 +2274,19 @@ export class WebServer extends EventEmitter {
       // Track in run summary
       const tracker = this.runSummaryTrackers.get(session.id);
       if (tracker) tracker.recordRalphCompletion(phrase);
+    });
+
+    // Bash tool tracking events (for clickable file paths)
+    session.on('bashToolStart', (tool: ActiveBashTool) => {
+      this.broadcast('session:bashToolStart', { sessionId: session.id, tool });
+    });
+
+    session.on('bashToolEnd', (tool: ActiveBashTool) => {
+      this.broadcast('session:bashToolEnd', { sessionId: session.id, tool });
+    });
+
+    session.on('bashToolsUpdate', (tools: ActiveBashTool[]) => {
+      this.broadcast('session:bashToolsUpdate', { sessionId: session.id, tools });
     });
 
   }
@@ -2580,7 +2698,15 @@ export class WebServer extends EventEmitter {
   }
 
   private getSessionsState() {
-    return Array.from(this.sessions.values()).map(s => s.toDetailedState());
+    return Array.from(this.sessions.values()).map(s => {
+      const controller = this.respawnControllers.get(s.id);
+      return {
+        ...s.toDetailedState(),
+        respawnEnabled: controller?.getConfig()?.enabled ?? false,
+        respawnConfig: controller?.getConfig() ?? null,
+        respawn: controller?.getStatus() ?? null,
+      };
+    });
   }
 
   // Clean up old completed scheduled runs

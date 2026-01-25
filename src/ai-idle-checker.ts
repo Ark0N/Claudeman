@@ -73,8 +73,22 @@ const VERDICT_PATTERN = /^\s*(IDLE|WORKING)\b/i;
 /** The prompt sent to the AI checker */
 const AI_CHECK_PROMPT = `Analyze this terminal output from a running Claude Code session. Determine if the session is IDLE (done working, waiting for new input) or WORKING (still actively processing).
 
-IDLE indicators: prompt character at the end, completion summary shown ("Worked for Xm Xs"), clear stopping point, no spinners, cost summary displayed
-WORKING indicators: spinner chars, "Thinking"/"Writing"/"Reading"/"Running" text, active tool execution, truncated mid-output, partial lines
+IMPORTANT: When in doubt, answer WORKING. Brief pauses between tool executions do NOT mean the session is idle. Claude may be processing or about to output more.
+
+IDLE indicators (need MULTIPLE of these to confirm idle):
+- Completion summary shown (e.g., "✻ Worked for 2m 46s", "Worked for 5s")
+- Prompt character visible at the end (❯ or similar)
+- Cost summary displayed (e.g., "$0.12 spent")
+- Clear end of output with no pending work
+
+WORKING indicators (ANY of these means WORKING):
+- Spinner characters (⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏ or similar)
+- Activity text: Thinking, Writing, Reading, Running, Searching, Editing, Creating, Deleting, Analyzing, Executing, Synthesizing, Compiling, Building, Processing, Loading, Generating, Testing, Checking, Validating
+- Tool execution in progress (commands being run)
+- Truncated or partial lines at the end
+- File operations in progress
+- Output that appears mid-stream or incomplete
+- No completion summary visible yet
 
 Terminal output (most recent at bottom):
 ---
@@ -82,7 +96,7 @@ Terminal output (most recent at bottom):
 ---
 
 Answer with EXACTLY one word on the first line: IDLE or WORKING
-Then optionally explain briefly why.`;
+If uncertain, answer WORKING. Then briefly explain why.`;
 
 // ========== AiIdleChecker Class ==========
 

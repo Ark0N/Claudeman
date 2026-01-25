@@ -21,13 +21,14 @@ import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 import * as pty from 'node-pty';
-import { SessionState, SessionStatus, SessionConfig, ScreenSession, RalphTrackerState, RalphTodoItem } from './types.js';
+import { SessionState, SessionStatus, SessionConfig, ScreenSession, RalphTrackerState, RalphTodoItem, ActiveBashTool } from './types.js';
 import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { RalphTracker } from './ralph-tracker.js';
+import { BashToolParser } from './bash-tool-parser.js';
 import { ScreenManager } from './screen-manager.js';
 
 export type { BackgroundTask } from './task-tracker.js';
-export type { RalphTrackerState, RalphTodoItem } from './types.js';
+export type { RalphTrackerState, RalphTodoItem, ActiveBashTool } from './types.js';
 export { withTimeout };
 
 // ============================================================================
@@ -292,6 +293,12 @@ export interface SessionEvents {
   ralphTodoUpdate: (todos: RalphTodoItem[]) => void;
   /** Ralph completion phrase detected */
   ralphCompletionDetected: (phrase: string) => void;
+  /** Bash tool with file paths started */
+  bashToolStart: (tool: ActiveBashTool) => void;
+  /** Bash tool completed */
+  bashToolEnd: (tool: ActiveBashTool) => void;
+  /** Active Bash tools list updated */
+  bashToolsUpdate: (tools: ActiveBashTool[]) => void;
 }
 
 /**
@@ -410,6 +417,14 @@ export class Session extends EventEmitter {
     completionDetected: (phrase: string) => void;
   } | null = null;
 
+  // Bash tool tracking (file paths for live log viewing)
+  private _bashToolParser: BashToolParser;
+  private _bashToolHandlers: {
+    toolStart: (tool: ActiveBashTool) => void;
+    toolEnd: (tool: ActiveBashTool) => void;
+    toolsUpdate: (tools: ActiveBashTool[]) => void;
+  } | null = null;
+
   constructor(config: Partial<SessionConfig> & {
     workingDir: string;
     mode?: SessionMode;
@@ -452,6 +467,17 @@ export class Session extends EventEmitter {
     this._ralphTracker.on('loopUpdate', this._ralphHandlers.loopUpdate);
     this._ralphTracker.on('todoUpdate', this._ralphHandlers.todoUpdate);
     this._ralphTracker.on('completionDetected', this._ralphHandlers.completionDetected);
+
+    // Initialize Bash tool parser and forward events (store handlers for cleanup)
+    this._bashToolParser = new BashToolParser({ sessionId: this.id });
+    this._bashToolHandlers = {
+      toolStart: (tool) => this.emit('bashToolStart', tool),
+      toolEnd: (tool) => this.emit('bashToolEnd', tool),
+      toolsUpdate: (tools) => this.emit('bashToolsUpdate', tools),
+    };
+    this._bashToolParser.on('toolStart', this._bashToolHandlers.toolStart);
+    this._bashToolParser.on('toolEnd', this._bashToolHandlers.toolEnd);
+    this._bashToolParser.on('toolsUpdate', this._bashToolHandlers.toolsUpdate);
 
   }
 
@@ -538,6 +564,15 @@ export class Session extends EventEmitter {
 
   get ralphTodoStats(): { total: number; pending: number; inProgress: number; completed: number } {
     return this._ralphTracker.getTodoStats();
+  }
+
+  // Bash tool tracking getters
+  get bashToolParser(): BashToolParser {
+    return this._bashToolParser;
+  }
+
+  get activeTools(): ActiveBashTool[] {
+    return this._bashToolParser.activeTools;
   }
 
   get parentAgentId(): string | null {
@@ -851,6 +886,9 @@ export class Session extends EventEmitter {
 
       // Forward to Ralph tracker to detect Ralph loops and todos
       this._ralphTracker.processTerminalData(data);
+
+      // Forward to Bash tool parser to detect file-viewing commands
+      this._bashToolParser.processTerminalData(data);
 
       // Parse token count from status line (e.g., "123.4k tokens" or "5234 tokens")
       this.parseTokensFromStatusLine(data);
@@ -1502,6 +1540,15 @@ export class Session extends EventEmitter {
       this._ralphTracker.off('completionDetected', this._ralphHandlers.completionDetected);
       this._ralphHandlers = null;
     }
+
+    // Remove BashToolParser handlers
+    if (this._bashToolHandlers) {
+      this._bashToolParser.off('toolStart', this._bashToolHandlers.toolStart);
+      this._bashToolParser.off('toolEnd', this._bashToolHandlers.toolEnd);
+      this._bashToolParser.off('toolsUpdate', this._bashToolHandlers.toolsUpdate);
+      this._bashToolHandlers = null;
+    }
+    this._bashToolParser.destroy();
 
   }
 

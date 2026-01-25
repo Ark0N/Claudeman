@@ -679,8 +679,27 @@ export class RespawnController extends EventEmitter {
     'Thinking', 'Writing', 'Reading', 'Running', 'Searching',
     'Editing', 'Creating', 'Deleting', 'Analyzing', 'Executing',
     'Synthesizing', 'Brewing',  // Claude's processing indicators
+    'Compiling', 'Building', 'Installing', 'Fetching', 'Downloading',
+    'Processing', 'Generating', 'Loading', 'Starting', 'Updating',
+    'Checking', 'Validating', 'Testing', 'Formatting', 'Linting',
     '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏',  // Spinner chars
+    '◐', '◓', '◑', '◒',  // Alternative spinners
+    '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷',  // Braille spinners
   ];
+
+  /**
+   * Rolling window buffer for working pattern detection.
+   * Prevents split-chunk issues where "Thinking" arrives as "Thin" + "king".
+   * Size: 300 chars should be enough to catch any split pattern.
+   */
+  private workingPatternWindow: string = '';
+  private static readonly WORKING_PATTERN_WINDOW_SIZE = 300;
+
+  /**
+   * Minimum time without working patterns before considering idle (ms).
+   * Increased from 3s to 8s to avoid false positives during tool execution gaps.
+   */
+  private static readonly MIN_WORKING_PATTERN_ABSENCE_MS = 8000;
 
   /**
    * Creates a new RespawnController.
@@ -821,7 +840,7 @@ export class RespawnController extends EventEmitter {
     const completionMessageDetected = this.completionMessageTime !== null;
     const outputSilent = msSinceLastOutput >= this.config.completionConfirmMs;
     const tokensStable = msSinceTokenChange >= this.config.completionConfirmMs;
-    const workingPatternsAbsent = msSinceLastWorking >= 3000; // 3s without working patterns
+    const workingPatternsAbsent = msSinceLastWorking >= RespawnController.MIN_WORKING_PATTERN_ABSENCE_MS;
 
     // Calculate confidence level (0-100)
     // Hook signals are definitive (100% confidence)
@@ -1176,6 +1195,42 @@ export class RespawnController extends EventEmitter {
       this.lastTokenChangeTime = now;
     }
 
+    // Detect completion message FIRST (Layer 1) - PRIMARY DETECTION
+    // Check this before working patterns because completion message indicates
+    // the work is done, even if working patterns are still in the rolling window
+    if (this.isCompletionMessage(data)) {
+      // Clear the rolling window - completion marks a transition point
+      this.clearWorkingPatternWindow();
+      this.workingDetected = false;
+      this.completionMessageTime = now;
+      this.cancelAutoAcceptTimer(); // Normal idle flow handles this
+      this.log(`Completion message detected: "${data.trim().substring(0, 50)}..."`);
+
+      // In watching state, start completion confirmation timer
+      if (this._state === 'watching') {
+        this.startCompletionConfirmTimer();
+        return;
+      }
+
+      // In waiting states, also use confirmation timer (same detection logic)
+      // This ensures we wait for Claude to finish before proceeding
+      switch (this._state) {
+        case 'waiting_update':
+          this.startStepConfirmTimer('update');
+          break;
+        case 'waiting_clear':
+          this.checkClearComplete(); // /clear is quick, no need to wait
+          break;
+        case 'waiting_init':
+          this.startStepConfirmTimer('init');
+          break;
+        case 'waiting_kickstart':
+          this.startStepConfirmTimer('kickstart');
+          break;
+      }
+      return;
+    }
+
     // Detect working patterns (Layer 4)
     const isWorking = this.hasWorkingPattern(data);
     if (isWorking) {
@@ -1214,38 +1269,6 @@ export class RespawnController extends EventEmitter {
         this.log('/init triggered work, skipping kickstart');
         this.emit('stepCompleted', 'init');
         this.completeCycle();
-      }
-      return;
-    }
-
-    // Detect completion message (Layer 1) - PRIMARY DETECTION
-    if (this.isCompletionMessage(data)) {
-      this.completionMessageTime = now;
-      this.workingDetected = false;
-      this.cancelAutoAcceptTimer(); // Normal idle flow handles this
-      this.log(`Completion message detected: "${data.trim().substring(0, 50)}..."`);
-
-      // In watching state, start completion confirmation timer
-      if (this._state === 'watching') {
-        this.startCompletionConfirmTimer();
-        return;
-      }
-
-      // In waiting states, also use confirmation timer (same detection logic)
-      // This ensures we wait for Claude to finish before proceeding
-      switch (this._state) {
-        case 'waiting_update':
-          this.startStepConfirmTimer('update');
-          break;
-        case 'waiting_clear':
-          this.checkClearComplete(); // /clear is quick, no need to wait
-          break;
-        case 'waiting_init':
-          this.startStepConfirmTimer('init');
-          break;
-        case 'waiting_kickstart':
-          this.startStepConfirmTimer('kickstart');
-          break;
       }
       return;
     }
@@ -1363,6 +1386,7 @@ export class RespawnController extends EventEmitter {
   private startMonitoringInit(): void {
     this.setState('monitoring_init');
     this.terminalBuffer.clear();
+    this.clearWorkingPatternWindow();
     this.workingDetected = false;
     this.logAction('step', 'Monitoring if /init triggered work...');
 
@@ -1404,6 +1428,7 @@ export class RespawnController extends EventEmitter {
   private sendKickstart(): void {
     this.setState('sending_kickstart');
     this.terminalBuffer.clear();
+    this.clearWorkingPatternWindow();
 
     this.stepTimer = this.startTrackedTimer(
       'step-delay',
@@ -1567,9 +1592,25 @@ export class RespawnController extends EventEmitter {
 
   /**
    * Check if data contains working patterns.
+   * Uses rolling window to catch patterns split across chunks (e.g., "Thin" + "king").
    */
   private hasWorkingPattern(data: string): boolean {
-    return this.WORKING_PATTERNS.some(pattern => data.includes(pattern));
+    // Always update the rolling window first to maintain continuity
+    this.workingPatternWindow += data;
+    if (this.workingPatternWindow.length > RespawnController.WORKING_PATTERN_WINDOW_SIZE) {
+      this.workingPatternWindow = this.workingPatternWindow.slice(-RespawnController.WORKING_PATTERN_WINDOW_SIZE);
+    }
+
+    // Check the rolling window (includes current data, catches both complete and split patterns)
+    return this.WORKING_PATTERNS.some(pattern => this.workingPatternWindow.includes(pattern));
+  }
+
+  /**
+   * Clear the working pattern rolling window.
+   * Called when starting a new detection cycle.
+   */
+  private clearWorkingPatternWindow(): void {
+    this.workingPatternWindow = '';
   }
 
   /**
@@ -1653,7 +1694,7 @@ export class RespawnController extends EventEmitter {
 
           // Check pre-filter conditions
           const silenceMet = msSinceOutput >= this.config.completionConfirmMs;
-          const noWorkingMet = msSinceWorking >= 3000;
+          const noWorkingMet = msSinceWorking >= RespawnController.MIN_WORKING_PATTERN_ABSENCE_MS;
           const tokensStableMet = msSinceTokenChange >= this.config.completionConfirmMs;
 
           if (silenceMet && noWorkingMet && tokensStableMet) {
@@ -2250,6 +2291,17 @@ export class RespawnController extends EventEmitter {
    * @param reason - What triggered the confirmation
    */
   private onIdleConfirmed(reason: string): void {
+    // Safety check: if Session thinks it's still working, don't trigger idle
+    // This catches cases where our detection missed working patterns
+    if (this.session.isWorking) {
+      this.log(`Idle confirmation rejected - Session reports isWorking=true (reason was: ${reason})`);
+      this.logAction('detection', 'Rejected: Session still working');
+      this.setState('watching');
+      this.startNoOutputTimer();
+      this.startPreFilterTimer();
+      return;
+    }
+
     this.log(`Idle confirmed via: ${reason}`);
     const status = this.getDetectionStatus();
     this.log(`Detection status: confidence=${status.confidenceLevel}%, ` +
@@ -2292,6 +2344,7 @@ export class RespawnController extends EventEmitter {
   private sendUpdateDocs(): void {
     this.setState('sending_update');
     this.terminalBuffer.clear(); // Clear buffer for fresh detection
+    this.clearWorkingPatternWindow(); // Clear rolling window
 
     this.stepTimer = this.startTrackedTimer(
       'step-delay',
@@ -2319,6 +2372,7 @@ export class RespawnController extends EventEmitter {
   private sendClear(): void {
     this.setState('sending_clear');
     this.terminalBuffer.clear();
+    this.clearWorkingPatternWindow();
 
     this.stepTimer = this.startTrackedTimer(
       'step-delay',
@@ -2361,6 +2415,7 @@ export class RespawnController extends EventEmitter {
   private sendInit(): void {
     this.setState('sending_init');
     this.terminalBuffer.clear();
+    this.clearWorkingPatternWindow();
 
     this.stepTimer = this.startTrackedTimer(
       'step-delay',
@@ -2390,6 +2445,7 @@ export class RespawnController extends EventEmitter {
     // Go back to watching state for next cycle
     this.setState('watching');
     this.terminalBuffer.clear();
+    this.clearWorkingPatternWindow(); // Clear rolling window for fresh detection
     this.promptDetected = false;
     this.workingDetected = false;
     this.resetHookState(); // Clear hook signals for next cycle
