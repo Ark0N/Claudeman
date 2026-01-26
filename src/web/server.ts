@@ -3109,6 +3109,11 @@ export class WebServer extends EventEmitter {
                   savedState.outputTokens ?? 0,
                   savedState.totalCost ?? 0
                 );
+                // Initialize lastRecordedTokens to prevent re-counting restored tokens as new daily usage
+                this.lastRecordedTokens.set(session.id, {
+                  input: savedState.inputTokens ?? 0,
+                  output: savedState.outputTokens ?? 0,
+                });
                 const totalTokens = (savedState.inputTokens ?? 0) + (savedState.outputTokens ?? 0);
                 if (totalTokens > 0) {
                   console.log(`[Server] Restored tokens for session ${session.id}: ${totalTokens} tokens, $${(savedState.totalCost ?? 0).toFixed(4)}`);
