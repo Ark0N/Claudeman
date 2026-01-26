@@ -1975,12 +1975,14 @@ class ClaudemanApp {
     }
 
     // Compact badge - shows on hover, click to pin open
+    const count = minimizedAgents.size;
+    const label = count === 1 ? 'AGENT' : `AGENTS (${count})`;
     return `
       <span class="tab-subagent-badge"
             onmouseenter="app.showSubagentDropdown(this)"
             onmouseleave="app.scheduleHideSubagentDropdown(this)"
             onclick="event.stopPropagation(); app.pinSubagentDropdown(this);">
-        <span class="subagent-label">Agent</span><span class="subagent-count">${minimizedAgents.size}</span>
+        <span class="subagent-label">${label}</span>
         <div class="subagent-dropdown" onmouseenter="app.cancelHideSubagentDropdown()" onmouseleave="app.scheduleHideSubagentDropdown(this.parentElement)">
           ${agentItems.join('')}
         </div>

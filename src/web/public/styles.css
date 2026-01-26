@@ -2977,15 +2977,8 @@ kbd {
 
 .session-tab .tab-subagent-badge .subagent-label {
   font-size: 0.55rem;
-  opacity: 0.85;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-}
-
-.session-tab .tab-subagent-badge .subagent-count {
-  font-size: 0.65rem;
   font-weight: 600;
-  line-height: 1;
+  letter-spacing: 0.03em;
 }
 
 /* Subagent Dropdown - compact, hover-triggered */
