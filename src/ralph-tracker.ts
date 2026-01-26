@@ -217,6 +217,9 @@ const TASK_DONE_PATTERN = /(?:task|item|todo)\s*(?:#?\d+|"\s*[^"]+\s*")?\s*(?:is
  */
 const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*[A-Za-z]/g;
 
+/** Maximum number of task number to content mappings to track */
+const MAX_TASK_MAPPINGS = 100;
+
 // ========== Event Types ==========
 
 /**
@@ -1159,6 +1162,7 @@ export class RalphTracker extends EventEmitter {
         const content = match[2].trim();
         if (content.length >= 5) {
           this._taskNumberToContent.set(taskNum, content);
+          this.enforceTaskMappingLimit();
           this.upsertTodo(content, 'pending');
           updated = true;
         }
@@ -1173,6 +1177,7 @@ export class RalphTracker extends EventEmitter {
           // Only register if not already known from a "created" line
           if (!this._taskNumberToContent.has(taskNum)) {
             this._taskNumberToContent.set(taskNum, content);
+            this.enforceTaskMappingLimit();
           }
           this.upsertTodo(this._taskNumberToContent.get(taskNum) || content, 'pending');
           updated = true;
@@ -1454,6 +1459,21 @@ export class RalphTracker extends EventEmitter {
     this._loopState.active = false;
     this._loopState.lastActivity = Date.now();
     this.emit('loopUpdate', this.loopState);
+  }
+
+  /**
+   * Enforce size limit on _taskNumberToContent map.
+   * Removes lowest task numbers (oldest tasks) when limit exceeded.
+   */
+  private enforceTaskMappingLimit(): void {
+    if (this._taskNumberToContent.size <= MAX_TASK_MAPPINGS) return;
+
+    // Sort keys and remove lowest (oldest) task numbers
+    const sortedKeys = Array.from(this._taskNumberToContent.keys()).sort((a, b) => a - b);
+    const keysToRemove = sortedKeys.slice(0, this._taskNumberToContent.size - MAX_TASK_MAPPINGS);
+    for (const key of keysToRemove) {
+      this._taskNumberToContent.delete(key);
+    }
   }
 
   /**

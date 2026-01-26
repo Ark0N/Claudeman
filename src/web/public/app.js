@@ -985,7 +985,11 @@ class ClaudemanApp {
     };
 
     this.eventSource.addEventListener('init', (e) => {
-      this.handleInit(JSON.parse(e.data));
+      try {
+        this.handleInit(JSON.parse(e.data));
+      } catch (err) {
+        console.error('[SSE] Failed to parse init event:', err);
+      }
     });
 
     this.eventSource.addEventListener('session:created', (e) => {

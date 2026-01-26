@@ -18,7 +18,7 @@ const CLAUDE_MD_PROMISE_PATTERN = /<promise>\s*([A-Z0-9_-]+)\s*<\/promise>/gi;
 // Pattern to parse YAML frontmatter from ralph-loop.local.md
 // Extracts key: value pairs from between --- markers
 const YAML_FRONTMATTER_PATTERN = /^---\s*\n([\s\S]*?)\n---/;
-const YAML_LINE_PATTERN = /^([a-z-]+):\s*"?([^"\n]+)"?\s*$/gm;
+const YAML_LINE_PATTERN = /^([a-zA-Z_-]+):\s*"?([^"\n]+)"?\s*$/gm;
 
 /**
  * Ralph Loop configuration from .claude/ralph-loop.local.md
@@ -91,7 +91,7 @@ export function parseRalphLoopConfigFromContent(content: string): RalphLoopConfi
 
     switch (key) {
       case 'enabled':
-        config.enabled = value === 'true';
+        config.enabled = value.toLowerCase() === 'true' || value.toLowerCase() === 'yes';
         break;
       case 'iteration':
         config.iteration = parseInt(value, 10) || 0;

@@ -798,8 +798,14 @@ export class SubagentWatcher extends EventEmitter {
 
     const agentId = basename(filePath).replace('agent-', '').replace('.jsonl', '');
 
-    // Initial info
-    const stat = statSync(filePath);
+    // Initial info - handle race condition where file may be deleted between discovery and stat
+    let stat;
+    try {
+      stat = statSync(filePath);
+    } catch {
+      // File was deleted between discovery and stat - skip this agent
+      return;
+    }
 
     // Extract description - prefer reading from parent transcript (most reliable)
     // The parent transcript has the exact Task tool call with description parameter

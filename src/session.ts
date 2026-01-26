@@ -1250,6 +1250,9 @@ export class Session extends EventEmitter {
   }
 
   private processOutput(data: string): void {
+    // Early return if session is stopped to prevent any processing or timer creation
+    if (this._isStopped) return;
+
     // Try to extract JSON from output (Claude may output JSON in stream mode)
     this._lineBuffer += data;
 
@@ -1391,14 +1394,27 @@ export class Session extends EventEmitter {
     }
   }
 
+  /** Maximum number of task descriptions to keep */
+  private static readonly MAX_TASK_DESCRIPTIONS = 100;
+
   /**
    * Remove task descriptions older than TASK_DESCRIPTION_MAX_AGE_MS.
+   * Also enforces MAX_TASK_DESCRIPTIONS size limit.
    */
   private cleanupOldTaskDescriptions(): void {
     const cutoff = Date.now() - Session.TASK_DESCRIPTION_MAX_AGE_MS;
     for (const [timestamp] of this._recentTaskDescriptions) {
       if (timestamp < cutoff) {
         this._recentTaskDescriptions.delete(timestamp);
+      }
+    }
+
+    // Enforce size limit by removing oldest entries
+    if (this._recentTaskDescriptions.size > Session.MAX_TASK_DESCRIPTIONS) {
+      const sortedKeys = Array.from(this._recentTaskDescriptions.keys()).sort((a, b) => a - b);
+      const keysToRemove = sortedKeys.slice(0, this._recentTaskDescriptions.size - Session.MAX_TASK_DESCRIPTIONS);
+      for (const key of keysToRemove) {
+        this._recentTaskDescriptions.delete(key);
       }
     }
   }

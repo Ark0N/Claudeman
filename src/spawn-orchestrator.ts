@@ -408,7 +408,8 @@ export class SpawnOrchestrator extends EventEmitter {
     try {
       const content = readFileSync(progressPath, 'utf-8');
       return JSON.parse(content) as AgentProgress;
-    } catch {
+    } catch (err) {
+      console.warn(`[spawn-orchestrator] Failed to read progress for agent ${agentId}: ${getErrorMessage(err)}`);
       return null;
     }
   }
@@ -423,26 +424,37 @@ export class SpawnOrchestrator extends EventEmitter {
     const messagesDir = join(agent.commsDir, 'messages');
     if (!existsSync(messagesDir)) return [];
 
-    const files = readdirSync(messagesDir)
-      .filter(f => f.endsWith('.md'))
-      .sort();
+    try {
+      const files = readdirSync(messagesDir)
+        .filter(f => f.endsWith('.md'))
+        .sort();
 
-    const messages: SpawnMessage[] = [];
-    for (const file of files) {
-      const match = file.match(/^(\d+)-(parent|agent)\.md$/);
-      if (!match) continue;
+      const messages: SpawnMessage[] = [];
+      for (const file of files) {
+        const match = file.match(/^(\d+)-(parent|agent)\.md$/);
+        if (!match) continue;
 
-      const content = readFileSync(join(messagesDir, file), 'utf-8');
-      messages.push({
-        sequence: parseInt(match[1]),
-        sender: match[2] as 'parent' | 'agent',
-        content,
-        sentAt: statSync(join(messagesDir, file)).mtimeMs,
-        read: true,
-      });
+        try {
+          const filePath = join(messagesDir, file);
+          const content = readFileSync(filePath, 'utf-8');
+          messages.push({
+            sequence: parseInt(match[1]),
+            sender: match[2] as 'parent' | 'agent',
+            content,
+            sentAt: statSync(filePath).mtimeMs,
+            read: true,
+          });
+        } catch (err) {
+          console.warn(`[spawn-orchestrator] Failed to read message file ${file}: ${getErrorMessage(err)}`);
+          // Continue processing other messages
+        }
+      }
+
+      return messages;
+    } catch (err) {
+      console.warn(`[spawn-orchestrator] Failed to read messages for agent ${agentId}: ${getErrorMessage(err)}`);
+      return [];
     }
-
-    return messages;
   }
 
   /**
@@ -839,8 +851,8 @@ export class SpawnOrchestrator extends EventEmitter {
     if (agent.sessionId && this._sessionCreator) {
       try {
         await this._sessionCreator.stopSession(agent.sessionId);
-      } catch {
-        // Ignore cleanup errors
+      } catch (err) {
+        console.warn(`[spawn-orchestrator] Failed to stop session for agent ${agentId}: ${getErrorMessage(err)}`);
       }
     }
 

@@ -123,11 +123,18 @@ export class StateStore {
     this.ensureDir();
     // Atomic write: write to temp file, then rename (atomic on POSIX)
     const tempPath = this.filePath + '.tmp';
+    let json: string;
     try {
-      writeFileSync(tempPath, JSON.stringify(this.state, null, 2), 'utf-8');
+      json = JSON.stringify(this.state, null, 2);
+    } catch (err) {
+      console.error('[StateStore] Failed to serialize state (circular reference or invalid data):', err);
+      throw err;
+    }
+    try {
+      writeFileSync(tempPath, json, 'utf-8');
       renameSync(tempPath, this.filePath);
     } catch (err) {
-      console.error('[StateStore] Failed to save state:', err);
+      console.error('[StateStore] Failed to write state file:', err);
       // Try to clean up temp file on error
       try {
         if (existsSync(tempPath)) {
@@ -156,7 +163,7 @@ export class StateStore {
 
   /** Returns a session state by ID, or null if not found. */
   getSession(id: string) {
-    return this.state.sessions[id] || null;
+    return this.state.sessions[id] ?? null;
   }
 
   /** Sets a session state and triggers a debounced save. */
@@ -178,7 +185,7 @@ export class StateStore {
 
   /** Returns a task state by ID, or null if not found. */
   getTask(id: string) {
-    return this.state.tasks[id] || null;
+    return this.state.tasks[id] ?? null;
   }
 
   /** Sets a task state and triggers a debounced save. */
@@ -457,11 +464,18 @@ export class StateStore {
     const data = Object.fromEntries(this.ralphStates);
     // Atomic write: write to temp file, then rename (atomic on POSIX)
     const tempPath = this.ralphStatePath + '.tmp';
+    let json: string;
     try {
-      writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf-8');
+      json = JSON.stringify(data, null, 2);
+    } catch (err) {
+      console.error('[StateStore] Failed to serialize Ralph state (circular reference or invalid data):', err);
+      throw err;
+    }
+    try {
+      writeFileSync(tempPath, json, 'utf-8');
       renameSync(tempPath, this.ralphStatePath);
     } catch (err) {
-      console.error('[StateStore] Failed to save Ralph state:', err);
+      console.error('[StateStore] Failed to write Ralph state file:', err);
       // Try to clean up temp file on error
       try {
         if (existsSync(tempPath)) {
@@ -475,7 +489,7 @@ export class StateStore {
 
   /** Returns inner state for a session, or null if not found. */
   getRalphState(sessionId: string): RalphSessionState | null {
-    return this.ralphStates.get(sessionId) || null;
+    return this.ralphStates.get(sessionId) ?? null;
   }
 
   /** Sets inner state for a session and triggers a debounced save. */
