@@ -3499,7 +3499,7 @@ class ClaudemanApp {
         md += `| Time | Type | Severity | Title | Details |\n`;
         md += `|------|------|----------|-------|----------|\n`;
         for (const event of events) {
-          const time = new Date(event.timestamp).toLocaleTimeString();
+          const time = new Date(event.timestamp).toLocaleTimeString('en-US', { hour12: false });
           const details = event.details ? event.details.replace(/\|/g, '\\|') : '-';
           md += `| ${time} | ${event.type} | ${event.severity} | ${event.title} | ${details} |\n`;
         }
@@ -3602,7 +3602,7 @@ class ClaudemanApp {
     const reversedEvents = [...events].reverse();
 
     const html = reversedEvents.map(event => {
-      const time = new Date(event.timestamp).toLocaleTimeString();
+      const time = new Date(event.timestamp).toLocaleTimeString('en-US', { hour12: false });
       const severityClass = `event-${event.severity}`;
       const icon = this.getEventIcon(event.type, event.severity);
 
@@ -5130,7 +5130,7 @@ class ClaudemanApp {
     }
 
     const activityHtml = activity.slice(-30).map(a => {
-      const time = new Date(a.timestamp).toLocaleTimeString();
+      const time = new Date(a.timestamp).toLocaleTimeString('en-US', { hour12: false });
       if (a.type === 'tool') {
         const toolDetail = this.getToolDetailExpanded(a.tool, a.input, a.fullInput, a.toolUseId);
         return `<div class="subagent-activity tool" data-tool-use-id="${a.toolUseId || ''}">
@@ -5786,7 +5786,7 @@ class ClaudemanApp {
     }
 
     const html = activity.slice(-100).map(a => {
-      const time = new Date(a.timestamp).toLocaleTimeString();
+      const time = new Date(a.timestamp).toLocaleTimeString('en-US', { hour12: false });
       if (a.type === 'tool') {
         return `<div class="activity-line">
           <span class="time">${time}</span>
