@@ -201,44 +201,33 @@ Run **20 parallel sessions** with full visibility:
 
 ---
 
-## Quick Start
+## Installation
+
+### macOS & Linux
 
 ```bash
-# Clone and build
-git clone https://github.com/Ark0N/claudeman.git
-cd claudeman
-npm install && npm run build
+curl -fsSL https://raw.githubusercontent.com/Ark0N/claudeman/master/install.sh | bash
+```
 
-# Start the web interface
-claudeman web
+### npm (alternative)
 
-# Open http://localhost:3000
+```bash
+npm install -g claudeman
+```
+
+### Requirements
+
+- Node.js 18+
+- [Claude CLI](https://docs.anthropic.com/en/docs/claude-code/getting-started) installed
+- GNU Screen (`apt install screen` / `brew install screen`)
+
+## Getting Started
+
+```bash
+claudeman web --https
+# Open https://localhost:3000
 # Press Ctrl+Enter to start your first session
 ```
-
-### More Options
-
-```bash
-# Custom port
-claudeman web -p 8080
-
-# Development mode (no build needed)
-npx tsx src/index.ts web
-
-# HTTPS (required for browser notifications)
-claudeman web --https
-
-# Run as systemd service (auto-restarts, survives logout)
-ln -sf $(pwd)/scripts/claudeman-web.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now claudeman-web
-loginctl enable-linger $USER
-```
-
-**Requirements:**
-- Node.js 18+
-- Claude CLI installed (PATH is auto-resolved from common locations like `~/.local/bin`)
-- GNU Screen (`apt install screen` / `brew install screen`)
 
 ---
 
