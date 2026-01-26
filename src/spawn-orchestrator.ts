@@ -44,6 +44,23 @@ import {
 import { generateAgentClaudeMd, buildInitialPrompt } from './spawn-claude-md.js';
 import { getErrorMessage } from './types.js';
 
+// ========== Local Constants ==========
+
+/** UUID truncation length for fallback agent IDs */
+const UUID_TRUNCATE_LENGTH = 8;
+
+/** Message sequence number padding length */
+const MESSAGE_SEQUENCE_PAD_LENGTH = 3;
+
+/** Timeout warning threshold (90% of timeout) */
+const TIMEOUT_WARNING_RATIO = 0.9;
+
+/** Budget hard limit ratio (110% - force stop) */
+const BUDGET_HARD_LIMIT_RATIO = 1.1;
+
+/** Budget soft limit ratio (100% - warning) */
+const BUDGET_SOFT_LIMIT_RATIO = 1.0;
+
 // ========== Types for integration ==========
 
 /**
@@ -170,7 +187,7 @@ export class SpawnOrchestrator extends EventEmitter {
 
     // Parse task file
     const content = readFileSync(resolvedPath, 'utf-8');
-    const fallbackId = `agent-${uuidv4().slice(0, 8)}`;
+    const fallbackId = `agent-${uuidv4().slice(0, UUID_TRUNCATE_LENGTH)}`;
     const parsed = parseTaskSpecFile(content, fallbackId);
 
     if (!parsed) {
@@ -293,7 +310,7 @@ export class SpawnOrchestrator extends EventEmitter {
     }
 
     const seq = existingMessages.length + 1;
-    const seqStr = String(seq).padStart(3, '0');
+    const seqStr = String(seq).padStart(MESSAGE_SEQUENCE_PAD_LENGTH, '0');
     const fileName = `${seqStr}-parent.md`;
 
     const message: SpawnMessage = {
@@ -466,7 +483,7 @@ export class SpawnOrchestrator extends EventEmitter {
     parentWorkingDir: string,
     parentDepth: number = 0
   ): Promise<string | null> {
-    const fallbackId = `agent-${uuidv4().slice(0, 8)}`;
+    const fallbackId = `agent-${uuidv4().slice(0, UUID_TRUNCATE_LENGTH)}`;
     const parsed = parseTaskSpecFile(taskContent, fallbackId);
     if (!parsed) return null;
 
@@ -702,7 +719,7 @@ export class SpawnOrchestrator extends EventEmitter {
     const timeoutMs = agent.task.spec.timeoutMinutes * 60 * 1000;
 
     // Warning at 90% - store timer for cleanup
-    const warningMs = timeoutMs * 0.9;
+    const warningMs = timeoutMs * TIMEOUT_WARNING_RATIO;
     agent.warningTimer = setTimeout(() => {
       if (agent.status === 'running' && this._sessionCreator && agent.sessionId) {
         this._sessionCreator.writeToSession(
@@ -728,11 +745,11 @@ export class SpawnOrchestrator extends EventEmitter {
       const tokensUsed = this._sessionCreator.getSessionTokens(agent.sessionId);
       const ratio = tokensUsed / agent.tokenBudget;
 
-      if (ratio >= 1.1) {
+      if (ratio >= BUDGET_HARD_LIMIT_RATIO) {
         // Force kill at 110%
         this.handleAgentTimeout(agent);
         return;
-      } else if (ratio >= 1.0) {
+      } else if (ratio >= BUDGET_SOFT_LIMIT_RATIO) {
         // Graceful shutdown
         this._sessionCreator.writeToSession(
           agent.sessionId,
@@ -753,10 +770,10 @@ export class SpawnOrchestrator extends EventEmitter {
       const costUsed = this._sessionCreator.getSessionCost(agent.sessionId);
       const ratio = costUsed / agent.costBudget;
 
-      if (ratio >= 1.1) {
+      if (ratio >= BUDGET_HARD_LIMIT_RATIO) {
         this.handleAgentTimeout(agent);
         return;
-      } else if (ratio >= 1.0) {
+      } else if (ratio >= BUDGET_SOFT_LIMIT_RATIO) {
         this._sessionCreator.writeToSession(
           agent.sessionId,
           'You have exceeded your cost budget. Write your result.md NOW and output your completion phrase.\r'

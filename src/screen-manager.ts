@@ -34,6 +34,28 @@ const CLAUDE_SEARCH_DIRS = [
   `${homedir()}/bin`,
 ];
 
+// ============================================================================
+// Timing Constants
+// ============================================================================
+
+/** Timeout for exec commands (5 seconds) */
+const EXEC_TIMEOUT_MS = 5000;
+
+/** Delay after screen creation (500ms) */
+const SCREEN_CREATION_WAIT_MS = 500;
+
+/** Delay after screen kill command (200ms) */
+const SCREEN_KILL_WAIT_MS = 200;
+
+/** Delay for graceful shutdown (100ms) */
+const GRACEFUL_SHUTDOWN_WAIT_MS = 100;
+
+/** Default stats collection interval (2 seconds) */
+const DEFAULT_STATS_INTERVAL_MS = 2000;
+
+/** Maximum retry attempts for carriage return (3) */
+const CR_MAX_ATTEMPTS = 3;
+
 /** Cached directory containing the claude binary */
 let _claudeDir: string | null = null;
 
@@ -45,7 +67,7 @@ function findClaudeDir(): string | null {
   if (_claudeDir !== null) return _claudeDir;
 
   try {
-    const result = execSync('which claude', { encoding: 'utf-8', timeout: 5000 }).trim();
+    const result = execSync('which claude', { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }).trim();
     if (result && existsSync(result)) {
       _claudeDir = dirname(result);
       return _claudeDir;
@@ -234,7 +256,7 @@ export class ScreenManager extends EventEmitter {
       screenProcess.unref();
 
       // Wait a moment for screen to start
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, SCREEN_CREATION_WAIT_MS));
 
       // Get the PID of the screen session
       const pid = this.getScreenPid(screenName);
@@ -276,7 +298,7 @@ export class ScreenManager extends EventEmitter {
       const escapedName = shellEscape(screenName);
       const output = execSync(`screen -ls | grep "${escapedName}"`, {
         encoding: 'utf-8',
-        timeout: 5000
+        timeout: EXEC_TIMEOUT_MS
       });
       // Output format: "12345.claudeman-abc12345	(Detached)"
       const match = output.match(/(\d+)\./);
@@ -292,7 +314,7 @@ export class ScreenManager extends EventEmitter {
     try {
       const output = execSync(`pgrep -P ${pid}`, {
         encoding: 'utf-8',
-        timeout: 5000
+        timeout: EXEC_TIMEOUT_MS
       }).trim();
       if (output) {
         for (const childPid of output.split('\n').map(p => parseInt(p, 10)).filter(p => !isNaN(p))) {
@@ -334,7 +356,7 @@ export class ScreenManager extends EventEmitter {
       }
 
       // Give processes a moment to terminate gracefully
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise(resolve => setTimeout(resolve, SCREEN_KILL_WAIT_MS));
 
       // Force kill any remaining children
       for (const childPid of childPids) {
@@ -349,7 +371,7 @@ export class ScreenManager extends EventEmitter {
     // Strategy 2: Kill the entire process group (catches any orphans we missed)
     try {
       process.kill(-currentPid, 'SIGTERM');
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, GRACEFUL_SHUTDOWN_WAIT_MS));
       process.kill(-currentPid, 'SIGKILL');
     } catch {
       // Process group may not exist or already terminated
@@ -358,7 +380,7 @@ export class ScreenManager extends EventEmitter {
     // Strategy 3: Kill screen session by name
     try {
       execSync(`screen -S ${screen.screenName} -X quit`, {
-        timeout: 5000
+        timeout: EXEC_TIMEOUT_MS
       });
     } catch {
       // Screen may already be dead
@@ -425,7 +447,7 @@ export class ScreenManager extends EventEmitter {
     try {
       const output = execSync('screen -ls 2>/dev/null || true', {
         encoding: 'utf-8',
-        timeout: 5000
+        timeout: EXEC_TIMEOUT_MS
       });
       // Match: "12345.claudeman-abc12345   (Detached)" or similar
       // Reset lastIndex since we're reusing the global regex
@@ -485,7 +507,7 @@ export class ScreenManager extends EventEmitter {
       // Get memory and CPU usage using ps
       const psOutput = execSync(
         `ps -o rss=,pcpu= -p ${screen.pid} 2>/dev/null || echo "0 0"`,
-        { encoding: 'utf-8', timeout: 5000 }
+        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
       ).trim();
 
       const [rss, cpu] = psOutput.split(/\s+/).map(x => parseFloat(x) || 0);
@@ -495,7 +517,7 @@ export class ScreenManager extends EventEmitter {
       try {
         const childOutput = execSync(
           `pgrep -P ${screen.pid} | wc -l`,
-          { encoding: 'utf-8', timeout: 5000 }
+          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
         ).trim();
         childCount = parseInt(childOutput, 10) || 0;
       } catch {
@@ -528,7 +550,7 @@ export class ScreenManager extends EventEmitter {
       // Single ps call for all PIDs
       const psOutput = execSync(
         `ps -o pid=,rss=,pcpu= -p ${pids.join(',')} 2>/dev/null || true`,
-        { encoding: 'utf-8', timeout: 5000 }
+        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
       ).trim();
 
       // Parse output - each line: "PID RSS CPU"
@@ -552,7 +574,7 @@ export class ScreenManager extends EventEmitter {
       // Batch child count query - single pgrep call
       const pgrepOutput = execSync(
         `for p in ${pids.join(' ')}; do echo "$p $(pgrep -P $p 2>/dev/null | wc -l)"; done`,
-        { encoding: 'utf-8', timeout: 5000 }
+        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
       ).trim();
 
       for (const line of pgrepOutput.split('\n')) {
@@ -582,7 +604,7 @@ export class ScreenManager extends EventEmitter {
   }
 
   // Start periodic stats collection
-  startStatsCollection(intervalMs: number = 2000): void {
+  startStatsCollection(intervalMs: number = DEFAULT_STATS_INTERVAL_MS): void {
     if (this.statsInterval) {
       clearInterval(this.statsInterval);
     }
@@ -646,7 +668,7 @@ export class ScreenManager extends EventEmitter {
   // Check if screen is available on the system
   static isScreenAvailable(): boolean {
     try {
-      execSync('which screen', { encoding: 'utf-8', timeout: 5000 });
+      execSync('which screen', { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS });
       return true;
     } catch {
       return false;
@@ -681,7 +703,7 @@ export class ScreenManager extends EventEmitter {
       // Send text first (if any)
       if (escapedText) {
         const textCmd = `screen -S ${screen.screenName} -p 0 -X stuff "${escapedText}"`;
-        execSync(textCmd, { encoding: 'utf-8', timeout: 5000 });
+        execSync(textCmd, { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS });
       }
 
       // Send carriage return separately (Enter key for Ink)
@@ -696,15 +718,15 @@ export class ScreenManager extends EventEmitter {
 
         const crCmd = `screen -S ${screen.screenName} -p 0 -X stuff "$(printf '\\015')"`;
 
-        // Try up to 3 times with increasing delays
+        // Try up to CR_MAX_ATTEMPTS times with increasing delays
         let success = false;
-        for (let attempt = 1; attempt <= 3 && !success; attempt++) {
+        for (let attempt = 1; attempt <= CR_MAX_ATTEMPTS && !success; attempt++) {
           try {
-            execSync(crCmd, { encoding: 'utf-8', timeout: 5000 });
+            execSync(crCmd, { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS });
             success = true;
           } catch (crErr) {
-            console.warn(`[ScreenManager] Carriage return attempt ${attempt}/3 failed`);
-            if (attempt < 3) {
+            console.warn(`[ScreenManager] Carriage return attempt ${attempt}/${CR_MAX_ATTEMPTS} failed`);
+            if (attempt < CR_MAX_ATTEMPTS) {
               execSync(`sleep 0.${attempt}`, { timeout: 1000 }); // 0.1s, 0.2s delays
             }
           }

@@ -1,6 +1,24 @@
 // Claudeman App - Tab-based Terminal UI
+
+// ============================================================================
+// Constants
+// ============================================================================
+
 // Default terminal scrollback (can be changed via settings)
 const DEFAULT_SCROLLBACK = 5000;
+
+// Timing constants
+const STUCK_THRESHOLD_DEFAULT_MS = 600000;  // 10 minutes - default for stuck detection
+const GROUPING_TIMEOUT_MS = 5000;           // 5 seconds - notification grouping window
+const NOTIFICATION_LIST_CAP = 100;          // Max notifications in list
+const TITLE_FLASH_INTERVAL_MS = 1500;       // Title flash rate
+const BROWSER_NOTIF_RATE_LIMIT_MS = 3000;   // Rate limit for browser notifications
+const AUTO_CLOSE_NOTIFICATION_MS = 8000;    // Auto-close browser notifications
+const THROTTLE_DELAY_MS = 100;              // General UI throttle delay
+const TERMINAL_CHUNK_SIZE = 64 * 1024;      // 64KB chunks for terminal data
+const TERMINAL_TAIL_SIZE = 256 * 1024;      // 256KB tail for initial load
+const SYNC_WAIT_TIMEOUT_MS = 50;            // Wait timeout for terminal sync
+const STATS_POLLING_INTERVAL_MS = 2000;     // System stats polling
 
 // DEC mode 2026 - Synchronized Output
 // Wrap terminal writes with these markers to prevent partial-frame flicker.
@@ -98,7 +116,7 @@ class NotificationManager {
       enabled: true,
       browserNotifications: true,
       audioAlerts: false,
-      stuckThresholdMs: 600000,
+      stuckThresholdMs: STUCK_THRESHOLD_DEFAULT_MS,
       muteCritical: false,
       muteWarning: false,
       muteInfo: false,
@@ -140,7 +158,7 @@ class NotificationManager {
       existing.notification.message = message;
       existing.notification.timestamp = Date.now();
       clearTimeout(existing.timeout);
-      existing.timeout = setTimeout(() => this.groupingMap.delete(groupKey), 5000);
+      existing.timeout = setTimeout(() => this.groupingMap.delete(groupKey), GROUPING_TIMEOUT_MS);
       this.scheduleRender();
       return;
     }
@@ -163,7 +181,7 @@ class NotificationManager {
     if (this.notifications.length > 100) this.notifications.pop();
 
     // Track for grouping
-    const timeout = setTimeout(() => this.groupingMap.delete(groupKey), 5000);
+    const timeout = setTimeout(() => this.groupingMap.delete(groupKey), GROUPING_TIMEOUT_MS);
     this.groupingMap.set(groupKey, { notification, timeout });
 
     // Update unread
@@ -236,7 +254,7 @@ class NotificationManager {
           document.title = this.titleFlashState
             ? `\u26A0\uFE0F (${this.unreadCount}) Claudeman`
             : this.originalTitle;
-        }, 1500);
+        }, TITLE_FLASH_INTERVAL_MS);
         // Set immediately
         document.title = `\u26A0\uFE0F (${this.unreadCount}) Claudeman`;
       }

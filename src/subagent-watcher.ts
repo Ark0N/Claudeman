@@ -125,6 +125,15 @@ const POLL_INTERVAL_MS = 1000; // Check for new files every second
 const LIVENESS_CHECK_MS = 10000; // Check if subagent processes are still alive every 10s
 const STALE_AGENT_MAX_AGE_MS = 24 * 60 * 60 * 1000; // Remove completed agents older than 24 hours
 
+// Display/preview length constants
+const TEXT_PREVIEW_LENGTH = 200; // Length for text previews in tool results
+const USER_TEXT_PREVIEW_LENGTH = 80; // Length for user message previews
+const SMART_TITLE_MAX_LENGTH = 45; // Max length for smart title extraction
+const MESSAGE_TEXT_LIMIT = 500; // Max length for message text content
+const COMMAND_DISPLAY_LENGTH = 60; // Max length for command display
+const INPUT_TRUNCATE_LENGTH = 100; // Max length for input value truncation
+const FILE_CONTENT_DEBOUNCE_MS = 100; // Debounce delay for file content updates
+
 // ========== SubagentWatcher Class ==========
 
 export class SubagentWatcher extends EventEmitter {
@@ -492,7 +501,7 @@ export class SubagentWatcher extends EventEmitter {
         if (typeof entry.message.content === 'string') {
           const text = entry.message.content.trim();
           if (text.length > 0) {
-            const preview = text.length > 200 ? text.substring(0, 200) + '...' : text;
+            const preview = text.length > TEXT_PREVIEW_LENGTH ? text.substring(0, TEXT_PREVIEW_LENGTH) + '...' : text;
             lines.push(`${this.formatTime(entry.timestamp)} 💬 ${preview.replace(/\n/g, ' ')}`);
           }
         } else {
@@ -502,7 +511,7 @@ export class SubagentWatcher extends EventEmitter {
             } else if (content.type === 'text' && content.text) {
               const text = content.text.trim();
               if (text.length > 0) {
-                const preview = text.length > 200 ? text.substring(0, 200) + '...' : text;
+                const preview = text.length > TEXT_PREVIEW_LENGTH ? text.substring(0, TEXT_PREVIEW_LENGTH) + '...' : text;
                 lines.push(`${this.formatTime(entry.timestamp)} 💬 ${preview.replace(/\n/g, ' ')}`);
               }
             }
@@ -513,14 +522,14 @@ export class SubagentWatcher extends EventEmitter {
         if (typeof entry.message.content === 'string') {
           const text = entry.message.content.trim();
           if (text.length < 100 && !text.includes('{')) {
-            lines.push(`${this.formatTime(entry.timestamp)} 📥 User: ${text.substring(0, 80)}`);
+            lines.push(`${this.formatTime(entry.timestamp)} 📥 User: ${text.substring(0, USER_TEXT_PREVIEW_LENGTH)}`);
           }
         } else {
           const firstContent = entry.message.content[0];
           if (firstContent?.type === 'text' && firstContent.text) {
             const text = firstContent.text.trim();
             if (text.length < 100 && !text.includes('{')) {
-              lines.push(`${this.formatTime(entry.timestamp)} 📥 User: ${text.substring(0, 80)}`);
+              lines.push(`${this.formatTime(entry.timestamp)} 📥 User: ${text.substring(0, USER_TEXT_PREVIEW_LENGTH)}`);
             }
           }
         }
@@ -544,7 +553,7 @@ export class SubagentWatcher extends EventEmitter {
    * Aims for ~40-50 chars that convey what the agent is doing
    */
   private extractSmartTitle(text: string): string {
-    const MAX_LEN = 45;
+    const MAX_LEN = SMART_TITLE_MAX_LENGTH;
 
     // Get first line/sentence
     let title = text.split('\n')[0].trim();
@@ -773,7 +782,7 @@ export class SubagentWatcher extends EventEmitter {
             if (existsSync(filePath)) {
               this.watchAgentFile(filePath, projectHash, sessionId);
             }
-          }, 100);
+          }, FILE_CONTENT_DEBOUNCE_MS);
         }
       });
 
@@ -1015,7 +1024,7 @@ export class SubagentWatcher extends EventEmitter {
             sessionId,
             timestamp: entry.timestamp,
             role: 'assistant',
-            text: text.substring(0, 500),
+            text: text.substring(0, MESSAGE_TEXT_LIMIT),
           };
           this.emit('subagent:message', message);
         }
@@ -1060,7 +1069,7 @@ export class SubagentWatcher extends EventEmitter {
               timestamp: entry.timestamp,
               toolUseId: content.tool_use_id,
               tool: toolName,
-              preview: resultContent.substring(0, 500),
+              preview: resultContent.substring(0, MESSAGE_TEXT_LIMIT),
               contentLength: resultContent.length,
               isError: content.is_error || false,
             };
@@ -1073,7 +1082,7 @@ export class SubagentWatcher extends EventEmitter {
                 sessionId,
                 timestamp: entry.timestamp,
                 role: 'assistant',
-                text: text.substring(0, 500), // Limit text length
+                text: text.substring(0, MESSAGE_TEXT_LIMIT), // Limit text length
               };
               this.emit('subagent:message', message);
             }
@@ -1110,7 +1119,7 @@ export class SubagentWatcher extends EventEmitter {
               timestamp: entry.timestamp,
               toolUseId: content.tool_use_id,
               tool: toolName,
-              preview: resultContent.substring(0, 500),
+              preview: resultContent.substring(0, MESSAGE_TEXT_LIMIT),
               contentLength: resultContent.length,
               isError: content.is_error || false,
             };
@@ -1154,9 +1163,9 @@ export class SubagentWatcher extends EventEmitter {
   private getTruncatedInput(_tool: string, input: Record<string, unknown>): Record<string, unknown> {
     const truncated: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(input)) {
-      if (typeof value === 'string' && value.length > 100) {
+      if (typeof value === 'string' && value.length > INPUT_TRUNCATE_LENGTH) {
         // Keep short preview of long strings
-        truncated[key] = value.substring(0, 100) + '...';
+        truncated[key] = value.substring(0, INPUT_TRUNCATE_LENGTH) + '...';
       } else {
         truncated[key] = value;
       }
@@ -1212,7 +1221,7 @@ export class SubagentWatcher extends EventEmitter {
       details = input.file_path as string;
     } else if (name === 'Bash' && input.command) {
       const cmd = input.command as string;
-      details = cmd.length > 60 ? cmd.substring(0, 60) + '...' : cmd;
+      details = cmd.length > COMMAND_DISPLAY_LENGTH ? cmd.substring(0, COMMAND_DISPLAY_LENGTH) + '...' : cmd;
     } else if (name === 'Glob' && input.pattern) {
       details = input.pattern as string;
     } else if (name === 'Grep' && input.pattern) {

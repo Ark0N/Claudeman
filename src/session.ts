@@ -56,6 +56,27 @@ const MAX_LINE_BUFFER_SIZE = 64 * 1024;
 /** Line buffer flush interval (100ms) - forces processing of partial lines */
 const LINE_BUFFER_FLUSH_INTERVAL = 100;
 
+// ============================================================================
+// Timing Constants
+// ============================================================================
+
+/** Timeout for exec commands like 'which claude' (5 seconds) */
+const EXEC_TIMEOUT_MS = 5000;
+
+/** Delay after screen creation before sending commands (300ms) */
+const SCREEN_STARTUP_DELAY_MS = 300;
+
+/** Delay before declaring session idle after last output (2 seconds) */
+const IDLE_DETECTION_DELAY_MS = 2000;
+
+/** Delay for auto-compact/clear retry attempts (2 seconds) */
+const AUTO_RETRY_DELAY_MS = 2000;
+
+/** Delay for auto-compact/clear initial check (1 second) */
+const AUTO_INITIAL_DELAY_MS = 1000;
+
+/** Graceful shutdown delay when stopping session (100ms) */
+const GRACEFUL_SHUTDOWN_DELAY_MS = 100;
 
 // Filter out terminal focus escape sequences (focus in/out reports)
 // ^[[I (focus in), ^[[O (focus out), and the enable/disable sequences
@@ -106,7 +127,7 @@ export function getAugmentedPath(): string {
 
   // Try `which` first (respects current PATH)
   try {
-    const result = execSync('which claude', { encoding: 'utf-8', timeout: 5000 }).trim();
+    const result = execSync('which claude', { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }).trim();
     if (result && existsSync(result)) {
       claudeDir = dirname(result);
     }
@@ -813,7 +834,7 @@ export class Session extends EventEmitter {
           console.log('[Session] Created screen session:', this._screenSession.screenName);
 
           // Wait a moment for screen to fully start
-          await new Promise(resolve => setTimeout(resolve, 300));
+          await new Promise(resolve => setTimeout(resolve, SCREEN_STARTUP_DELAY_MS));
         }
 
         // Attach to the screen session via PTY
@@ -930,7 +951,7 @@ export class Session extends EventEmitter {
             this._lastPromptTime = Date.now();
             this.emit('idle');
           }
-        }, 2000);
+        }, IDLE_DETECTION_DELAY_MS);
       }
 
       // Detect when Claude starts working (thinking, writing, etc)
@@ -1019,7 +1040,7 @@ export class Session extends EventEmitter {
           console.log('[Session] Created screen session:', this._screenSession.screenName);
 
           // Wait a moment for screen to fully start
-          await new Promise(resolve => setTimeout(resolve, 300));
+          await new Promise(resolve => setTimeout(resolve, SCREEN_STARTUP_DELAY_MS));
         }
 
         // Attach to the screen session via PTY
@@ -1559,16 +1580,16 @@ export class Session extends EventEmitter {
             }, 10000);
           }
         } else {
-          // Check again in 2 seconds
+          // Check again after delay
           if (!this._isStopped) {
-            this._autoCompactTimer = setTimeout(checkAndCompact, 2000);
+            this._autoCompactTimer = setTimeout(checkAndCompact, AUTO_RETRY_DELAY_MS);
           }
         }
       };
 
       // Start checking after a short delay
       if (!this._isStopped) {
-        this._autoCompactTimer = setTimeout(checkAndCompact, 1000);
+        this._autoCompactTimer = setTimeout(checkAndCompact, AUTO_INITIAL_DELAY_MS);
       }
     }
   }
@@ -1603,16 +1624,16 @@ export class Session extends EventEmitter {
             }, 5000);
           }
         } else {
-          // Check again in 2 seconds
+          // Check again after delay
           if (!this._isStopped) {
-            this._autoClearTimer = setTimeout(checkAndClear, 2000);
+            this._autoClearTimer = setTimeout(checkAndClear, AUTO_RETRY_DELAY_MS);
           }
         }
       };
 
       // Start checking after a short delay
       if (!this._isStopped) {
-        this._autoClearTimer = setTimeout(checkAndClear, 1000);
+        this._autoClearTimer = setTimeout(checkAndClear, AUTO_INITIAL_DELAY_MS);
       }
     }
   }
@@ -1811,7 +1832,7 @@ export class Session extends EventEmitter {
       }
 
       // Give it a moment to terminate gracefully
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, GRACEFUL_SHUTDOWN_DELAY_MS));
 
       // Force kill with SIGKILL if still alive
       try {

@@ -14,7 +14,7 @@
  * @module state-store
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { AppState, createInitialState, RalphSessionState, createInitialRalphSessionState, GlobalStats, createInitialGlobalStats, TokenStats, TokenUsageEntry } from './types.js';
@@ -138,7 +138,6 @@ export class StateStore {
       // Try to clean up temp file on error
       try {
         if (existsSync(tempPath)) {
-          const { unlinkSync } = require('node:fs');
           unlinkSync(tempPath);
         }
       } catch { /* ignore cleanup errors */ }
@@ -479,7 +478,6 @@ export class StateStore {
       // Try to clean up temp file on error
       try {
         if (existsSync(tempPath)) {
-          const { unlinkSync } = require('node:fs');
           unlinkSync(tempPath);
         }
       } catch { /* ignore cleanup errors */ }

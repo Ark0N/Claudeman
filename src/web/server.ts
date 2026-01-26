@@ -105,6 +105,14 @@ const MAX_TERMINAL_ROWS = 200;
 const MAX_SESSION_NAME_LENGTH = 128;
 // Maximum hook data size (prevents oversized SSE broadcasts)
 const MAX_HOOK_DATA_SIZE = 8 * 1024;
+// Stats collection interval (2 seconds)
+const STATS_COLLECTION_INTERVAL_MS = 2000;
+// Session limit wait time before retrying (5 seconds)
+const SESSION_LIMIT_WAIT_MS = 5000;
+// Pause between scheduled run iterations (2 seconds)
+const ITERATION_PAUSE_MS = 2000;
+// SSE batch flush threshold (number of items)
+const BATCH_FLUSH_THRESHOLD = 1024;
 // Pre-compiled regex for terminal buffer cleaning (avoids per-request compilation)
 const CLAUDE_BANNER_PATTERN = /\x1b\[1mClaud/;
 const CTRL_L_PATTERN = /\x0c/g;
@@ -1703,7 +1711,7 @@ export class WebServer extends EventEmitter {
 
     // Start stats collection
     this.app.post('/api/screens/stats/start', async () => {
-      this.screenManager.startStatsCollection(2000);
+      this.screenManager.startStatsCollection(STATS_COLLECTION_INTERVAL_MS);
       return { success: true };
     });
 
@@ -2700,7 +2708,7 @@ export class WebServer extends EventEmitter {
       // Check session limit before creating new session
       if (this.sessions.size >= MAX_CONCURRENT_SESSIONS) {
         addLog(`Waiting: maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached`);
-        await new Promise(r => setTimeout(r, 5000));
+        await new Promise(r => setTimeout(r, SESSION_LIMIT_WAIT_MS));
         continue;
       }
 
@@ -2733,7 +2741,7 @@ export class WebServer extends EventEmitter {
         run.sessionId = null;
 
         // Small pause between iterations
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, ITERATION_PAUSE_MS));
       } catch (err) {
         addLog(`Error: ${getErrorMessage(err)}`);
         this.broadcast('scheduled:updated', run);
@@ -2749,7 +2757,7 @@ export class WebServer extends EventEmitter {
         }
 
         // Continue despite errors
-        await new Promise(r => setTimeout(r, 5000));
+        await new Promise(r => setTimeout(r, SESSION_LIMIT_WAIT_MS));
       }
     }
 
@@ -2884,8 +2892,8 @@ export class WebServer extends EventEmitter {
     const newBatch = existing + data;
     this.terminalBatches.set(sessionId, newBatch);
 
-    // Flush immediately if batch is large (>1KB) for responsiveness
-    if (newBatch.length > 1024) {
+    // Flush immediately if batch is large for responsiveness
+    if (newBatch.length > BATCH_FLUSH_THRESHOLD) {
       if (this.terminalBatchTimer) {
         clearTimeout(this.terminalBatchTimer);
         this.terminalBatchTimer = null;
@@ -3222,7 +3230,7 @@ export class WebServer extends EventEmitter {
         }
 
         // Start stats collection to show screen info
-        this.screenManager.startStatsCollection(2000);
+        this.screenManager.startStatsCollection(STATS_COLLECTION_INTERVAL_MS);
       }
 
       if (dead.length > 0) {
