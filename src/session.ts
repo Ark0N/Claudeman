@@ -626,6 +626,18 @@ export class Session extends EventEmitter {
    * Called when recovering sessions after server restart.
    */
   restoreTokens(inputTokens: number, outputTokens: number, totalCost: number): void {
+    // Sanity check: reject absurdly large values (max 500k tokens per session)
+    const MAX_SESSION_TOKENS = 500_000;
+    if (inputTokens > MAX_SESSION_TOKENS || outputTokens > MAX_SESSION_TOKENS) {
+      console.warn(`[Session ${this.id}] Rejected absurd restored tokens: input=${inputTokens}, output=${outputTokens}`);
+      return;
+    }
+    // Reject negative values
+    if (inputTokens < 0 || outputTokens < 0 || totalCost < 0) {
+      console.warn(`[Session ${this.id}] Rejected negative restored tokens: input=${inputTokens}, output=${outputTokens}, cost=${totalCost}`);
+      return;
+    }
+
     this._totalInputTokens = inputTokens;
     this._totalOutputTokens = outputTokens;
     this._totalCost = totalCost;
@@ -1298,10 +1310,19 @@ export class Session extends EventEmitter {
                 this._textOutput.append(block.text);
               }
             }
-            // Track tokens from usage
+            // Track tokens from usage (with validation)
             if (msg.message.usage) {
-              this._totalInputTokens += msg.message.usage.input_tokens || 0;
-              this._totalOutputTokens += msg.message.usage.output_tokens || 0;
+              const inputDelta = msg.message.usage.input_tokens || 0;
+              const outputDelta = msg.message.usage.output_tokens || 0;
+
+              // Sanity check: max 100k tokens per message (generous limit)
+              const MAX_TOKENS_PER_MESSAGE = 100_000;
+              if (inputDelta > 0 && inputDelta <= MAX_TOKENS_PER_MESSAGE) {
+                this._totalInputTokens += inputDelta;
+              }
+              if (outputDelta > 0 && outputDelta <= MAX_TOKENS_PER_MESSAGE) {
+                this._totalOutputTokens += outputDelta;
+              }
 
               // Check if we should auto-compact or auto-clear
               this.checkAutoCompact();
@@ -1423,6 +1444,11 @@ export class Session extends EventEmitter {
 
   // Parse token count from Claude's status line in interactive mode
   // Matches patterns like "123.4k tokens", "5234 tokens", "1.2M tokens"
+  //
+  // SAFETY LIMITS:
+  // - Max tokens per session: 500k (Claude's context is ~200k)
+  // - Max delta per update: 100k (prevents sudden jumps from parsing errors)
+  // - Rejects "M" suffix values > 0.5 (500k) to prevent false matches
   private parseTokensFromStatusLine(data: string): void {
     // Quick pre-check: skip expensive regex if "token" not present (performance optimization)
     if (!data.includes('token')) return;
@@ -1442,16 +1468,37 @@ export class Session extends EventEmitter {
       if (suffix === 'k') {
         tokenCount *= 1000;
       } else if (suffix === 'm') {
+        // Safety: Reject M values that would result in > 500k tokens
+        // Claude's context window is ~200k, so anything claiming millions is likely a false match
+        if (tokenCount > 0.5) {
+          console.warn(`[Session ${this.id}] Rejected suspicious M token value: ${tokenMatch[0]} (would be ${tokenCount * 1000000} tokens)`);
+          return;
+        }
         tokenCount *= 1000000;
+      }
+
+      // Safety: Absolute maximum of 500k tokens per session
+      const MAX_SESSION_TOKENS = 500_000;
+      if (tokenCount > MAX_SESSION_TOKENS) {
+        console.warn(`[Session ${this.id}] Rejected token count exceeding max: ${tokenCount} > ${MAX_SESSION_TOKENS}`);
+        return;
       }
 
       // Only update if the new count is higher (tokens only increase within a session)
       // We use total tokens as an estimate - Claude shows combined input+output
       const currentTotal = this._totalInputTokens + this._totalOutputTokens;
       if (tokenCount > currentTotal) {
+        const delta = tokenCount - currentTotal;
+
+        // Safety: Reject suspiciously large jumps (max 100k per update)
+        const MAX_DELTA_PER_UPDATE = 100_000;
+        if (delta > MAX_DELTA_PER_UPDATE) {
+          console.warn(`[Session ${this.id}] Rejected suspicious token jump: ${currentTotal} -> ${tokenCount} (delta: ${delta})`);
+          return;
+        }
+
         // Estimate: split roughly 60% input, 40% output (common ratio)
         // This is an approximation since interactive mode doesn't give us the breakdown
-        const delta = tokenCount - currentTotal;
         this._totalInputTokens += Math.round(delta * 0.6);
         this._totalOutputTokens += Math.round(delta * 0.4);
 

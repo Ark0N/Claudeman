@@ -2167,7 +2167,7 @@ export class WebServer extends EventEmitter {
         const deltaInput = session.inputTokens - lastRecorded.input;
         const deltaOutput = session.outputTokens - lastRecorded.output;
         if (deltaInput > 0 || deltaOutput > 0) {
-          this.store.recordDailyUsage(deltaInput, deltaOutput);
+          this.store.recordDailyUsage(deltaInput, deltaOutput, sessionId);
         }
         this.lastRecordedTokens.delete(sessionId);
         console.log(`[Server] Added to global stats: ${session.inputTokens + session.outputTokens} tokens, $${session.totalCost.toFixed(4)} from session ${sessionId}`);
@@ -3036,7 +3036,7 @@ export class WebServer extends EventEmitter {
       const deltaOutput = session.outputTokens - last.output;
 
       if (deltaInput > 0 || deltaOutput > 0) {
-        this.store.recordDailyUsage(deltaInput, deltaOutput);
+        this.store.recordDailyUsage(deltaInput, deltaOutput, sessionId);
         this.lastRecordedTokens.set(sessionId, {
           input: session.inputTokens,
           output: session.outputTokens,

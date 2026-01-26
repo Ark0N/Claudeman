@@ -223,6 +223,18 @@ export class StateStore {
    * Call when a session is deleted to preserve its usage in lifetime stats.
    */
   addToGlobalStats(inputTokens: number, outputTokens: number, cost: number): void {
+    // Sanity check: reject absurdly large values (max 500k tokens per session)
+    const MAX_SESSION_TOKENS = 500_000;
+    if (inputTokens > MAX_SESSION_TOKENS || outputTokens > MAX_SESSION_TOKENS) {
+      console.warn(`[StateStore] Rejected absurd global stats: input=${inputTokens}, output=${outputTokens}`);
+      return;
+    }
+    // Reject negative values
+    if (inputTokens < 0 || outputTokens < 0 || cost < 0) {
+      console.warn(`[StateStore] Rejected negative global stats: input=${inputTokens}, output=${outputTokens}, cost=${cost}`);
+      return;
+    }
+
     const stats = this.getGlobalStats();
     stats.totalInputTokens += inputTokens;
     stats.totalOutputTokens += outputTokens;
@@ -309,17 +321,36 @@ export class StateStore {
     return inputCost + outputCost;
   }
 
+  // Track unique sessions per day for accurate session count
+  private dailySessionIds: Set<string> = new Set();
+  private dailySessionDate: string = '';
+
   /**
    * Record token usage for today.
    * Accumulates tokens to today's entry, creating it if needed.
    * @param inputTokens Input tokens to add
    * @param outputTokens Output tokens to add
+   * @param sessionId Optional session ID for unique session counting
    */
-  recordDailyUsage(inputTokens: number, outputTokens: number): void {
+  recordDailyUsage(inputTokens: number, outputTokens: number, sessionId?: string): void {
     if (inputTokens <= 0 && outputTokens <= 0) return;
+
+    // Sanity check: reject absurdly large values (max 1M tokens per recording)
+    // Claude's context window is ~200k, so 1M per recording is already very generous
+    const MAX_TOKENS_PER_RECORDING = 1_000_000;
+    if (inputTokens > MAX_TOKENS_PER_RECORDING || outputTokens > MAX_TOKENS_PER_RECORDING) {
+      console.warn(`[StateStore] Rejected absurd token values: input=${inputTokens}, output=${outputTokens}`);
+      return;
+    }
 
     const stats = this.getTokenStats();
     const today = this.getTodayDateString();
+
+    // Reset daily session tracking on date change
+    if (this.dailySessionDate !== today) {
+      this.dailySessionIds.clear();
+      this.dailySessionDate = today;
+    }
 
     // Find or create today's entry
     let todayEntry = stats.daily.find(e => e.date === today);
@@ -341,7 +372,12 @@ export class StateStore {
       todayEntry.inputTokens,
       todayEntry.outputTokens
     );
-    todayEntry.sessions += 1;
+
+    // Only increment session count for unique sessions
+    if (sessionId && !this.dailySessionIds.has(sessionId)) {
+      this.dailySessionIds.add(sessionId);
+      todayEntry.sessions = this.dailySessionIds.size;
+    }
 
     // Prune old entries (keep last 30 days)
     if (stats.daily.length > StateStore.MAX_DAILY_HISTORY) {
