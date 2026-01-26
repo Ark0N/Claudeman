@@ -1294,6 +1294,33 @@ class ClaudemanApp {
       }
     });
 
+    this.eventSource.addEventListener('respawn:blocked', (e) => {
+      const data = JSON.parse(e.data);
+      const session = this.sessions.get(data.sessionId);
+      const reasonMap = {
+        circuit_breaker_open: 'Circuit Breaker Open',
+        exit_signal: 'Exit Signal Detected',
+        status_blocked: 'Claude Reported BLOCKED',
+      };
+      const title = reasonMap[data.reason] || 'Respawn Blocked';
+      this.notificationManager?.notify({
+        urgency: 'critical',
+        category: 'respawn-blocked',
+        sessionId: data.sessionId,
+        sessionName: session?.name || data.sessionId?.slice(0, 8),
+        title,
+        message: data.details,
+      });
+      // Update respawn panel to show blocked state
+      if (data.sessionId === this.activeSessionId) {
+        const stateEl = document.getElementById('respawnStateLabel');
+        if (stateEl) {
+          stateEl.textContent = title;
+          stateEl.classList.add('respawn-blocked');
+        }
+      }
+    });
+
     this.eventSource.addEventListener('respawn:stepSent', (_e) => {
       // Step info is shown via state label (e.g., "Sending prompt", "Clearing context")
     });
@@ -3000,7 +3027,10 @@ class ClaudemanApp {
   }
 
   updateRespawnBanner(state) {
-    this.$('respawnState').textContent = this.getStateLabel(state);
+    const stateEl = this.$('respawnState');
+    stateEl.textContent = this.getStateLabel(state);
+    // Clear blocked state when state changes (resumed from blocked)
+    stateEl.classList.remove('respawn-blocked');
   }
 
   updateDetectionDisplay(detection) {
@@ -5531,10 +5561,14 @@ class ClaudemanApp {
       return;
     }
 
-    // Sort: in_progress first, then pending, then completed
+    // Sort: by priority (P0 > P1 > P2 > null), then by status (in_progress > pending > completed)
+    const priorityOrder = { 'P0': 0, 'P1': 1, 'P2': 2, null: 3 };
+    const statusOrder = { in_progress: 0, pending: 1, completed: 2 };
     const sorted = [...todos].sort((a, b) => {
-      const order = { in_progress: 0, pending: 1, completed: 2 };
-      return (order[a.status] || 1) - (order[b.status] || 1);
+      const priA = priorityOrder[a.priority] ?? 3;
+      const priB = priorityOrder[b.priority] ?? 3;
+      if (priA !== priB) return priA - priB;
+      return (statusOrder[a.status] || 1) - (statusOrder[b.status] || 1);
     });
 
     // Incremental DOM update - reuse existing elements where possible
@@ -5548,17 +5582,35 @@ class ClaudemanApp {
       sorted.forEach((todo, i) => {
         const card = existingCards[i];
         const statusClass = `task-${todo.status.replace('_', '-')}`;
+        const priorityClass = todo.priority ? `task-priority-${todo.priority.toLowerCase()}` : '';
         const icon = this.getRalphTaskIcon(todo.status);
 
         // Update class if changed
-        if (!card.classList.contains(statusClass)) {
-          card.className = `ralph-task-card ${statusClass}`;
+        const newClass = `ralph-task-card ${statusClass} ${priorityClass}`.trim();
+        if (card.className !== newClass) {
+          card.className = newClass;
         }
 
         // Update icon if changed
         const iconEl = card.querySelector('.ralph-task-icon');
         if (iconEl && iconEl.textContent !== icon) {
           iconEl.textContent = icon;
+        }
+
+        // Update priority badge
+        let badgeEl = card.querySelector('.ralph-task-priority');
+        if (todo.priority) {
+          if (!badgeEl) {
+            badgeEl = document.createElement('span');
+            badgeEl.className = `ralph-task-priority priority-${todo.priority.toLowerCase()}`;
+            card.insertBefore(badgeEl, card.querySelector('.ralph-task-content'));
+          }
+          if (badgeEl.textContent !== todo.priority) {
+            badgeEl.textContent = todo.priority;
+            badgeEl.className = `ralph-task-priority priority-${todo.priority.toLowerCase()}`;
+          }
+        } else if (badgeEl) {
+          badgeEl.remove();
         }
 
         // Update content if changed
@@ -5572,18 +5624,27 @@ class ClaudemanApp {
       sorted.forEach(todo => {
         const card = document.createElement('div');
         const statusClass = `task-${todo.status.replace('_', '-')}`;
-        card.className = `ralph-task-card ${statusClass}`;
+        const priorityClass = todo.priority ? `task-priority-${todo.priority.toLowerCase()}` : '';
+        card.className = `ralph-task-card ${statusClass} ${priorityClass}`.trim();
 
         const iconSpan = document.createElement('span');
         iconSpan.className = 'ralph-task-icon';
         iconSpan.textContent = this.getRalphTaskIcon(todo.status);
+        card.appendChild(iconSpan);
+
+        // Add priority badge if present
+        if (todo.priority) {
+          const prioritySpan = document.createElement('span');
+          prioritySpan.className = `ralph-task-priority priority-${todo.priority.toLowerCase()}`;
+          prioritySpan.textContent = todo.priority;
+          card.appendChild(prioritySpan);
+        }
 
         const contentSpan = document.createElement('span');
         contentSpan.className = 'ralph-task-content';
         contentSpan.textContent = todo.content;
-
-        card.appendChild(iconSpan);
         card.appendChild(contentSpan);
+
         fragment.appendChild(card);
       });
 

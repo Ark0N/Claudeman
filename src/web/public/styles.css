@@ -620,6 +620,17 @@ body {
   font-size: 0.7rem;
 }
 
+.respawn-state.respawn-blocked {
+  background: rgba(244, 67, 54, 0.3);
+  color: #f44336;
+  animation: respawn-blocked-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes respawn-blocked-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
 /* Respawn spacer removed - using flex layout */
 
 .respawn-cycles {
@@ -1303,6 +1314,40 @@ body {
 
 .ralph-task-card.task-completed .ralph-task-content {
   color: var(--text-dim);
+}
+
+/* Priority badges */
+.ralph-task-priority {
+  font-size: 0.55rem;
+  font-weight: 700;
+  padding: 0.1rem 0.25rem;
+  border-radius: 2px;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+.ralph-task-priority.priority-p0 {
+  background: rgba(244, 67, 54, 0.3);
+  color: #f44336;
+}
+
+.ralph-task-priority.priority-p1 {
+  background: rgba(255, 193, 7, 0.3);
+  color: #ffc107;
+}
+
+.ralph-task-priority.priority-p2 {
+  background: rgba(33, 150, 243, 0.2);
+  color: #2196f3;
+}
+
+/* Priority-based card highlighting */
+.ralph-task-card.task-priority-p0 {
+  border-left-color: #f44336;
+}
+
+.ralph-task-card.task-priority-p1:not(.task-completed) {
+  border-left-color: #ffc107;
 }
 
 /* Empty state */

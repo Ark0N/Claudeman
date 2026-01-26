@@ -719,6 +719,12 @@ export interface RalphTrackerState {
 }
 
 /**
+ * Priority levels for todo items.
+ * Matches @fix_plan.md format (P0=critical, P1=high, P2=normal).
+ */
+export type RalphTodoPriority = 'P0' | 'P1' | 'P2' | null;
+
+/**
  * A detected todo item from Claude Code output
  */
 export interface RalphTodoItem {
@@ -730,6 +736,8 @@ export interface RalphTodoItem {
   status: RalphTodoStatus;
   /** Timestamp when detected */
   detectedAt: number;
+  /** Priority level (P0=critical, P1=high, P2=normal) */
+  priority: RalphTodoPriority;
 }
 
 /**
@@ -877,14 +885,6 @@ export function createInitialCircuitBreakerStatus(): CircuitBreakerStatus {
     lastErrorMessage: null,
   };
 }
-
-// ========== Priority Todo Types ==========
-
-/**
- * Priority levels for todo items.
- * Matches @fix_plan.md format.
- */
-export type RalphTodoPriority = 'P0' | 'P1' | 'P2' | null;
 
 /**
  * Creates initial Ralph tracker state

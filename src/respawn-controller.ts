@@ -2315,6 +2315,38 @@ export class RespawnController extends EventEmitter {
       `tokensStable=${status.tokensStable}, ` +
       `noWorking=${status.workingPatternsAbsent}`);
 
+    // ========== RALPH_STATUS Integration ==========
+    // Check circuit breaker status - if OPEN, pause respawn
+    const circuitBreaker = this.session.ralphTracker.circuitBreakerStatus;
+    if (circuitBreaker.state === 'OPEN') {
+      this.log(`Respawn blocked - Circuit breaker OPEN: ${circuitBreaker.reason}`);
+      this.logAction('ralph', `Circuit breaker OPEN: ${circuitBreaker.reason}`);
+      this.emit('respawnBlocked', { reason: 'circuit_breaker_open', details: circuitBreaker.reason });
+      this.setState('watching');
+      // Don't restart timers - wait for manual reset or circuit breaker resolution
+      return;
+    }
+
+    // Check RALPH_STATUS EXIT_SIGNAL - if true, loop is complete
+    const statusBlock = this.session.ralphTracker.lastStatusBlock;
+    if (statusBlock?.exitSignal) {
+      this.log(`Respawn paused - RALPH_STATUS EXIT_SIGNAL=true`);
+      this.logAction('ralph', `Exit signal detected: ${statusBlock.recommendation || 'Task complete'}`);
+      this.emit('respawnBlocked', { reason: 'exit_signal', details: statusBlock.recommendation || 'Task complete' });
+      this.setState('watching');
+      // Don't restart timers - loop is complete
+      return;
+    }
+
+    // Check if STATUS=BLOCKED - trigger circuit breaker
+    if (statusBlock?.status === 'BLOCKED') {
+      this.log(`Respawn blocked - RALPH_STATUS reports BLOCKED`);
+      this.logAction('ralph', `Claude reported BLOCKED: ${statusBlock.recommendation || 'Needs human intervention'}`);
+      this.emit('respawnBlocked', { reason: 'status_blocked', details: statusBlock.recommendation || 'Needs human intervention' });
+      this.setState('watching');
+      return;
+    }
+
     // Reset detection state
     this.completionMessageTime = null;
     this.cancelCompletionConfirm();
@@ -2344,6 +2376,7 @@ export class RespawnController extends EventEmitter {
 
   /**
    * Send the update docs prompt (first step of cycle).
+   * Uses RALPH_STATUS RECOMMENDATION if available, otherwise falls back to configured prompt.
    * @fires stepSent - With step 'update'
    */
   private sendUpdateDocs(): void {
@@ -2356,10 +2389,21 @@ export class RespawnController extends EventEmitter {
       this.config.interStepDelayMs,
       () => {
         this.stepTimer = null;
-        const input = this.config.updatePrompt + '\r';  // \r triggers Enter in Ink/Claude CLI
-        this.logAction('command', `Sending: "${this.config.updatePrompt.substring(0, 50)}..."`);
+
+        // Use RALPH_STATUS RECOMMENDATION if available, otherwise fall back to config
+        const statusBlock = this.session.ralphTracker.lastStatusBlock;
+        let updatePrompt = this.config.updatePrompt;
+
+        if (statusBlock?.recommendation) {
+          // Append RECOMMENDATION to the update prompt for context
+          updatePrompt = `${this.config.updatePrompt}\n\nClaude's last recommendation: ${statusBlock.recommendation}`;
+          this.logAction('ralph', `Using RECOMMENDATION: ${statusBlock.recommendation.substring(0, 50)}...`);
+        }
+
+        const input = updatePrompt + '\r';  // \r triggers Enter in Ink/Claude CLI
+        this.logAction('command', `Sending: "${updatePrompt.substring(0, 50)}..."`);
         this.session.writeViaScreen(input);
-        this.emit('stepSent', 'update', this.config.updatePrompt);
+        this.emit('stepSent', 'update', updatePrompt);
         this.setState('waiting_update');
         this.promptDetected = false;
         this.workingDetected = false;

@@ -18,6 +18,7 @@ import {
   RalphTrackerState,
   RalphTodoItem,
   RalphTodoStatus,
+  RalphTodoPriority,
   RalphStatusBlock,
   RalphStatusValue,
   RalphTestsStatus,
@@ -1376,12 +1377,38 @@ export class RalphTracker extends EventEmitter {
   }
 
   /**
+   * Parse priority from todo content.
+   * Looks for patterns like: "P0:", "P1:", "P2:", "(P0)", "(P1)", "(P2)",
+   * "Critical:", "Blocker:", "High Priority:", etc.
+   *
+   * @param content - Todo content text
+   * @returns Parsed priority level or null
+   */
+  private parsePriority(content: string): RalphTodoPriority {
+    const upper = content.toUpperCase();
+
+    // Direct P0/P1/P2 patterns
+    if (/\bP0\b|^\(P0\)|:?\s*P0\s*:|\bCRITICAL\b|\bBLOCKER\b/.test(upper)) {
+      return 'P0';
+    }
+    if (/\bP1\b|^\(P1\)|:?\s*P1\s*:|\bHIGH\s*PRIORITY\b/.test(upper)) {
+      return 'P1';
+    }
+    if (/\bP2\b|^\(P2\)|:?\s*P2\s*:|\bNICE\s*TO\s*HAVE\b|\bLOW\s*PRIORITY\b/.test(upper)) {
+      return 'P2';
+    }
+
+    return null;
+  }
+
+  /**
    * Add a new todo item or update an existing one.
    *
    * Behavior:
    * - Content is cleaned (ANSI removed, whitespace collapsed)
    * - Content under 5 chars is skipped
    * - ID is generated from normalized content (stable hash)
+   * - Priority is parsed from content (P0/P1/P2, Critical, High Priority, etc.)
    * - Existing item: Updates status and timestamp
    * - New item: Adds to map, evicts oldest if at MAX_TODO_ITEMS
    *
@@ -1399,6 +1426,9 @@ export class RalphTracker extends EventEmitter {
       .trim();
     if (cleanContent.length < 5) return;  // Skip very short content
 
+    // Parse priority from content
+    const priority = this.parsePriority(cleanContent);
+
     // Generate a stable ID from normalized content
     const id = this.generateTodoId(cleanContent);
 
@@ -1407,6 +1437,8 @@ export class RalphTracker extends EventEmitter {
       // Update existing todo
       existing.status = status;
       existing.detectedAt = Date.now();
+      // Update priority if parsed (don't overwrite with null)
+      if (priority) existing.priority = priority;
     } else {
       // Add new todo
       if (this._todos.size >= MAX_TODO_ITEMS) {
@@ -1422,6 +1454,7 @@ export class RalphTracker extends EventEmitter {
         content: cleanContent,
         status,
         detectedAt: Date.now(),
+        priority,
       });
     }
   }
@@ -1699,7 +1732,11 @@ export class RalphTracker extends EventEmitter {
     };
     this._todos.clear();
     for (const todo of todos) {
-      this._todos.set(todo.id, { ...todo });
+      // Backwards compatibility: ensure priority field exists
+      this._todos.set(todo.id, {
+        ...todo,
+        priority: todo.priority ?? null,
+      });
     }
   }
 

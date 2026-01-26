@@ -2532,6 +2532,13 @@ export class WebServer extends EventEmitter {
       this.broadcast('respawn:cycleCompleted', { sessionId, cycleNumber });
     });
 
+    controller.on('respawnBlocked', (data: { reason: string; details: string }) => {
+      this.broadcast('respawn:blocked', { sessionId, reason: data.reason, details: data.details });
+      // Track in run summary (lazy lookup)
+      const tracker = getTracker();
+      if (tracker) tracker.recordWarning(`Respawn blocked: ${data.reason}`, data.details);
+    });
+
     controller.on('stepSent', (step: string, input: string) => {
       this.broadcast('respawn:stepSent', { sessionId, step, input });
     });
