@@ -497,7 +497,7 @@ TUI uses React JSX (`jsx: react-jsx`, `jsxImportSource: react`) for Ink componen
 - **Session event**: Add to `SessionEvents` interface in `session.ts`, emit via `this.emit()`, subscribe in server.ts, handle in frontend
 - **Session setting**: Add field to `SessionState` in `types.ts`, include in `session.toState()`, call `this.persistSessionState(session)` in server.ts after the change
 - **MCP tool**: Add tool definition in `mcp-server.ts` using `server.tool()`, use `apiRequest()` to call Claudeman REST API
-- **New test file**: Create `test/<name>.test.ts`, pick unique port (next available: 3127+), add to port allocation comment above
+- **New test file**: Create `test/<name>.test.ts`, pick unique port (next available: 3155), add to port allocation table above
 
 ### API Error Codes
 
