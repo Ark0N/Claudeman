@@ -665,8 +665,17 @@ class ClaudemanApp {
   registerFilePathLinkProvider() {
     const self = this;
 
+    // Debug: Track if provider is being invoked
+    let lastInvokedLine = -1;
+
     this.terminal.registerLinkProvider({
       provideLinks(bufferLineNumber, callback) {
+        // Debug logging - only log if line changed to avoid spam
+        if (bufferLineNumber !== lastInvokedLine) {
+          lastInvokedLine = bufferLineNumber;
+          console.debug('[LinkProvider] Checking line:', bufferLineNumber);
+        }
+
         const buffer = self.terminal.buffer.active;
         const line = buffer.getLine(bufferLineNumber);
 
@@ -736,9 +745,14 @@ class ClaudemanApp {
           addLink(match[1], match.index);
         }
 
+        if (links.length > 0) {
+          console.debug('[LinkProvider] Found links:', links.map(l => l.text));
+        }
         callback(links.length > 0 ? links : undefined);
       }
     });
+
+    console.log('[LinkProvider] File path link provider registered');
   }
 
   showWelcome() {

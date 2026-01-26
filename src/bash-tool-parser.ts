@@ -115,6 +115,8 @@ export interface BashToolParserConfig {
   sessionId: string;
   /** Whether the parser is enabled (default: true) */
   enabled?: boolean;
+  /** Working directory for resolving relative paths */
+  workingDir?: string;
 }
 
 // ========== BashToolParser Class ==========
@@ -140,6 +142,11 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
   private _activeTools: Map<string, ActiveBashTool> = new Map();
   private _lineBuffer: string = '';
   private _lastToolId: string | null = null;
+  private _workingDir: string;
+  private _homeDir: string;
+
+  // Track normalized paths to detect equivalents (normalized -> original)
+  private _normalizedPathMap: Map<string, string> = new Map();
 
   // Debouncing
   private _pendingUpdate: boolean = false;
@@ -149,6 +156,8 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
     super();
     this._sessionId = config.sessionId;
     this._enabled = config.enabled ?? true;
+    this._workingDir = config.workingDir || process.cwd();
+    this._homeDir = process.env.HOME || '/home/user';
   }
 
   // ========== Public Accessors ==========
@@ -168,7 +177,204 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
     return Array.from(this._activeTools.values());
   }
 
+  /** Current working directory used for path resolution */
+  get workingDir(): string {
+    return this._workingDir;
+  }
+
+  // ========== Path Normalization ==========
+
+  /**
+   * Normalize a file path to its canonical form.
+   * - Expands ~ to home directory
+   * - Resolves relative paths against working directory
+   * - Normalizes . and .. components
+   * - Removes trailing slashes
+   */
+  normalizePath(path: string): string {
+    if (!path) return '';
+
+    let normalized = path.trim();
+
+    // Expand ~ to home directory
+    if (normalized.startsWith('~/')) {
+      normalized = this._homeDir + normalized.slice(1);
+    } else if (normalized === '~') {
+      normalized = this._homeDir;
+    }
+
+    // If not absolute, resolve against working directory
+    if (!normalized.startsWith('/')) {
+      normalized = this._workingDir + '/' + normalized;
+    }
+
+    // Normalize path components (resolve . and ..)
+    const parts = normalized.split('/');
+    const stack: string[] = [];
+
+    for (const part of parts) {
+      if (part === '' || part === '.') {
+        continue;
+      } else if (part === '..') {
+        if (stack.length > 1) {
+          stack.pop();
+        }
+      } else {
+        stack.push(part);
+      }
+    }
+
+    return '/' + stack.join('/');
+  }
+
+  /**
+   * Extract just the filename from a path.
+   */
+  private getFilename(path: string): string {
+    const parts = path.split('/');
+    return parts[parts.length - 1] || '';
+  }
+
+  /**
+   * Check if a path is a "shallow root path" - an absolute path with only one
+   * component after root (e.g., /test.txt, /file.log).
+   * These are often typos where the user meant a relative path.
+   */
+  private isShallowRootPath(path: string): boolean {
+    if (!path.startsWith('/')) return false;
+    const parts = path.split('/').filter(p => p !== '');
+    return parts.length === 1;
+  }
+
+  /**
+   * Check if a path is inside (or is) the working directory.
+   */
+  isPathInWorkingDir(path: string): boolean {
+    const normalized = this.normalizePath(path);
+    return normalized.startsWith(this._workingDir + '/') || normalized === this._workingDir;
+  }
+
+  /**
+   * Smart path equivalence check.
+   * Two paths are considered equivalent if:
+   * 1. They normalize to the same path (standard case)
+   * 2. One is a "shallow root path" (e.g., /test.txt) and the other is the
+   *    same filename inside the working directory - the shallow root path
+   *    is likely a typo and they probably meant the same file.
+   */
+  pathsAreEquivalent(path1: string, path2: string): boolean {
+    const norm1 = this.normalizePath(path1);
+    const norm2 = this.normalizePath(path2);
+
+    // Standard check: exact normalized match
+    if (norm1 === norm2) return true;
+
+    // Smart check: shallow root path vs working dir path with same filename
+    const file1 = this.getFilename(norm1);
+    const file2 = this.getFilename(norm2);
+
+    if (file1 !== file2) return false; // Different filenames, can't be equivalent
+
+    const shallow1 = this.isShallowRootPath(path1);
+    const shallow2 = this.isShallowRootPath(path2);
+    const inWorkDir1 = this.isPathInWorkingDir(norm1);
+    const inWorkDir2 = this.isPathInWorkingDir(norm2);
+
+    // If one is shallow root (e.g., /test.txt) and other is in working dir
+    // with same filename, treat as equivalent (user likely made a typo)
+    if (shallow1 && inWorkDir2) return true;
+    if (shallow2 && inWorkDir1) return true;
+
+    return false;
+  }
+
+  /**
+   * Given multiple paths, deduplicate and return the "best" paths.
+   * Uses smart equivalence checking:
+   * - Standard normalization for relative vs absolute paths
+   * - Detects likely typos (e.g., /file.txt when workingDir/file.txt exists)
+   * - Prefers paths inside the working directory
+   * - Prefers longer, more explicit paths
+   */
+  deduplicatePaths(paths: string[]): string[] {
+    if (paths.length <= 1) return paths;
+
+    const result: string[] = [];
+    const seenNormalized = new Set<string>();
+
+    // Sort paths: prefer paths in working dir first, then by length (longer first)
+    const sortedPaths = [...paths].sort((a, b) => {
+      const aInWorkDir = this.isPathInWorkingDir(a);
+      const bInWorkDir = this.isPathInWorkingDir(b);
+      if (aInWorkDir && !bInWorkDir) return -1;
+      if (bInWorkDir && !aInWorkDir) return 1;
+      return b.length - a.length; // Longer paths first
+    });
+
+    for (const path of sortedPaths) {
+      const normalized = this.normalizePath(path);
+
+      // Check if we've already seen an equivalent path
+      let isDuplicate = false;
+      for (const existing of result) {
+        if (this.pathsAreEquivalent(path, existing)) {
+          isDuplicate = true;
+          break;
+        }
+      }
+
+      if (!isDuplicate && !seenNormalized.has(normalized)) {
+        result.push(path);
+        seenNormalized.add(normalized);
+      }
+    }
+
+    return result;
+  }
+
   // ========== Public Methods ==========
+
+  /**
+   * Update the working directory (e.g., when session changes directory).
+   */
+  setWorkingDir(workingDir: string): void {
+    this._workingDir = workingDir;
+  }
+
+  /**
+   * Check if a file path is already being tracked by an active tool.
+   * Uses path normalization to detect equivalent paths.
+   * For example, "/test.txt" and "/home/user/test.txt" when workingDir
+   * is "/home/user" would NOT be considered equivalent (different files),
+   * but "test.txt" and "/home/user/test.txt" WOULD be (same file).
+   */
+  isFilePathTracked(filePath: string): boolean {
+    const normalizedNew = this.normalizePath(filePath);
+
+    return Array.from(this._activeTools.values()).some(t => {
+      if (t.status !== 'running') return false;
+
+      return t.filePaths.some(existingPath => {
+        const normalizedExisting = this.normalizePath(existingPath);
+        return normalizedExisting === normalizedNew;
+      });
+    });
+  }
+
+  /**
+   * Get all tracked paths (normalized) for debugging.
+   */
+  getTrackedPaths(): { raw: string; normalized: string }[] {
+    const paths: { raw: string; normalized: string }[] = [];
+    for (const tool of this._activeTools.values()) {
+      if (tool.status === 'running') {
+        for (const path of tool.filePaths) {
+          paths.push({ raw: path, normalized: this.normalizePath(path) });
+        }
+      }
+    }
+    return paths;
+  }
 
   /**
    * Enables the parser.
@@ -189,6 +395,7 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
    */
   reset(): void {
     this._activeTools.clear();
+    this._normalizedPathMap.clear();
     this._lineBuffer = '';
     this._lastToolId = null;
     this.emitUpdate();
@@ -243,6 +450,11 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
       // Check if this is a file-viewing command
       if (this.isFileViewerCommand(command)) {
         const filePaths = this.extractFilePaths(command);
+
+        // Skip if any file path is already tracked (cross-pattern dedup)
+        if (filePaths.some(fp => this.isFilePathTracked(fp))) {
+          return;
+        }
 
         if (filePaths.length > 0) {
           const tool: ActiveBashTool = {
@@ -309,22 +521,20 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
         sessionId: this._sessionId,
       };
 
-      // Don't add duplicates (same file path within last 5 seconds)
-      const isDuplicate = Array.from(this._activeTools.values()).some(
-        t => t.filePaths.includes(filePath) && (Date.now() - t.startedAt) < 5000
-      );
-
-      if (!isDuplicate) {
-        this._activeTools.set(tool.id, tool);
-        this.emit('toolStart', tool);
-        this.scheduleUpdate();
-
-        // Auto-remove suggestions after 30 seconds
-        setTimeout(() => {
-          this._activeTools.delete(tool.id);
-          this.scheduleUpdate();
-        }, 30000);
+      // Don't add if file path already tracked (cross-pattern dedup)
+      if (this.isFilePathTracked(filePath)) {
+        return;
       }
+
+      this._activeTools.set(tool.id, tool);
+      this.emit('toolStart', tool);
+      this.scheduleUpdate();
+
+      // Auto-remove suggestions after 30 seconds
+      setTimeout(() => {
+        this._activeTools.delete(tool.id);
+        this.scheduleUpdate();
+      }, 30000);
       return;
     }
 
@@ -337,32 +547,28 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
       // Skip if it looks invalid
       if (INVALID_PATH_PATTERN.test(filePath)) continue;
 
-      // Don't add duplicates
-      const isDuplicate = Array.from(this._activeTools.values()).some(
-        t => t.filePaths.includes(filePath) && (Date.now() - t.startedAt) < 10000
-      );
+      // Skip if file path already tracked (cross-pattern dedup)
+      if (this.isFilePathTracked(filePath)) continue;
 
-      if (!isDuplicate) {
-        const tool: ActiveBashTool = {
-          id: uuidv4(),
-          command: `View: ${filePath}`,
-          filePaths: [filePath],
-          timeout: undefined,
-          startedAt: Date.now(),
-          status: 'running',
-          sessionId: this._sessionId,
-        };
+      const tool: ActiveBashTool = {
+        id: uuidv4(),
+        command: `View: ${filePath}`,
+        filePaths: [filePath],
+        timeout: undefined,
+        startedAt: Date.now(),
+        status: 'running',
+        sessionId: this._sessionId,
+      };
 
-        this._activeTools.set(tool.id, tool);
-        this.emit('toolStart', tool);
+      this._activeTools.set(tool.id, tool);
+      this.emit('toolStart', tool);
+      this.scheduleUpdate();
+
+      // Auto-remove after 60 seconds
+      setTimeout(() => {
+        this._activeTools.delete(tool.id);
         this.scheduleUpdate();
-
-        // Auto-remove after 60 seconds
-        setTimeout(() => {
-          this._activeTools.delete(tool.id);
-          this.scheduleUpdate();
-        }, 60000);
-      }
+      }, 60000);
     }
   }
 
@@ -385,9 +591,10 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
 
   /**
    * Extract file paths from a command string.
+   * Returns deduplicated paths, preferring more complete/absolute versions.
    */
   private extractFilePaths(command: string): string[] {
-    const paths: string[] = [];
+    const rawPaths: string[] = [];
     let match;
 
     // Reset regex state
@@ -409,12 +616,13 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
       // Clean up path (remove trailing punctuation)
       const cleanPath = path.replace(/[,;:]+$/, '');
 
-      if (cleanPath && !paths.includes(cleanPath)) {
-        paths.push(cleanPath);
+      if (cleanPath) {
+        rawPaths.push(cleanPath);
       }
     }
 
-    return paths;
+    // Deduplicate paths that resolve to the same file
+    return this.deduplicatePaths(rawPaths);
   }
 
   /**
@@ -454,6 +662,7 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
       this._updateTimer = null;
     }
     this._activeTools.clear();
+    this._normalizedPathMap.clear();
     this.removeAllListeners();
   }
 }

@@ -1829,6 +1829,7 @@ export class WebServer extends EventEmitter {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Subagent not found or already completed');
     });
 
+
     // ========== Hook Events ==========
 
     this.app.post('/api/hook-event', async (req) => {
@@ -3005,6 +3006,11 @@ export class WebServer extends EventEmitter {
 
   async start(): Promise<void> {
     await this.setupRoutes();
+
+    // Restore screen sessions BEFORE accepting connections
+    // This prevents race conditions where clients connect before state is ready
+    await this.restoreScreenSessions();
+
     await this.app.listen({ port: this.port, host: '0.0.0.0' });
     const protocol = this.https ? 'https' : 'http';
     console.log(`Claudeman web interface running at ${protocol}://localhost:${this.port}`);
@@ -3026,9 +3032,6 @@ export class WebServer extends EventEmitter {
     this.tokenRecordingTimer = setInterval(() => {
       this.recordPeriodicTokenUsage();
     }, 5 * 60 * 1000);
-
-    // Restore screen sessions from previous run
-    await this.restoreScreenSessions();
 
     // Start subagent watcher for Claude Code background agent visibility (if enabled)
     if (this.isSubagentTrackingEnabled()) {

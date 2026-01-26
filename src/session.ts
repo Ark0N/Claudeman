@@ -469,7 +469,7 @@ export class Session extends EventEmitter {
     this._ralphTracker.on('completionDetected', this._ralphHandlers.completionDetected);
 
     // Initialize Bash tool parser and forward events (store handlers for cleanup)
-    this._bashToolParser = new BashToolParser({ sessionId: this.id });
+    this._bashToolParser = new BashToolParser({ sessionId: this.id, workingDir: this.workingDir });
     this._bashToolHandlers = {
       toolStart: (tool) => this.emit('bashToolStart', tool),
       toolEnd: (tool) => this.emit('bashToolEnd', tool),
