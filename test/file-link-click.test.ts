@@ -255,13 +255,97 @@ describe('File Link Click Tests', () => {
     }
   }, 60000);
 
+it('should match file paths with various command patterns', () => {
+    // Unit test for pattern matching logic - runs without browser
+    // Pattern matches: tail -f /path, grep pattern /path, cat -n /path
+    const cmdPattern = /(tail|cat|head|less|grep|watch|vim|nano)\s+(?:[^\s\/]*\s+)*(\/[^\s"'<>|;&\n\x00-\x1f]+)/g;
+    const extPattern = /(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|yaml|yml|csv|xml|sh|py|ts|js))\b/g;
+    const bashPattern = /Bash\([^)]*?(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\)\n\x00-\x1f]+)/g;
+
+    // Test cmdPattern
+    const cmdTestCases = [
+      { line: 'tail -f /var/log/syslog', expected: '/var/log/syslog' },
+      { line: 'cat -n /etc/passwd', expected: '/etc/passwd' },
+      { line: 'head -100 /home/user/file.txt', expected: '/home/user/file.txt' },
+      { line: 'less /tmp/debug.log', expected: '/tmp/debug.log' },
+      { line: 'grep error /var/log/app.log', expected: '/var/log/app.log' },
+      { line: 'vim /opt/script.sh', expected: '/opt/script.sh' },
+    ];
+
+    for (const tc of cmdTestCases) {
+      cmdPattern.lastIndex = 0;
+      const match = cmdPattern.exec(tc.line);
+      expect(match, `cmdPattern should match: ${tc.line}`).not.toBeNull();
+      expect(match![2]).toBe(tc.expected);
+    }
+
+    // Test extPattern
+    const extTestCases = [
+      { line: 'Opening /tmp/test.log for reading', expected: '/tmp/test.log' },
+      { line: 'File saved to /home/user/data.json', expected: '/home/user/data.json' },
+      { line: 'Reading /var/config.yaml', expected: '/var/config.yaml' },
+      { line: 'Script at /opt/tools/run.sh', expected: '/opt/tools/run.sh' },
+    ];
+
+    for (const tc of extTestCases) {
+      extPattern.lastIndex = 0;
+      const match = extPattern.exec(tc.line);
+      expect(match, `extPattern should match: ${tc.line}`).not.toBeNull();
+      expect(match![1]).toBe(tc.expected);
+    }
+
+    // Test bashPattern
+    const bashTestCases = [
+      { line: 'Bash(tail -f /var/log/app.log)', expected: '/var/log/app.log' },
+      { line: 'Bash(cat /tmp/output.txt)', expected: '/tmp/output.txt' },
+    ];
+
+    for (const tc of bashTestCases) {
+      bashPattern.lastIndex = 0;
+      const match = bashPattern.exec(tc.line);
+      expect(match, `bashPattern should match: ${tc.line}`).not.toBeNull();
+      expect(match![1]).toBe(tc.expected);
+    }
+  });
+
+  it('should NOT match invalid or unsafe paths', () => {
+    const extPattern = /(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|yaml|yml|csv|xml|sh|py|ts|js))\b/g;
+
+    const invalidCases = [
+      'This is just text without paths',
+      './relative/path.log',  // relative path
+      'C:\\Windows\\path.log',  // windows path
+      '/usr/bin/something.log',  // /usr not in allowed prefixes
+    ];
+
+    for (const line of invalidCases) {
+      extPattern.lastIndex = 0;
+      const match = extPattern.exec(line);
+      expect(match, `extPattern should NOT match: ${line}`).toBeNull();
+    }
+  });
+
   it('should stream file content to log viewer', async () => {
     // Test the tail-file API endpoint directly
-    const sessionId = createdSessions[0] || 'test-session';
+    // First, create a session if we don't have one from browser tests
+    let sessionId = createdSessions[0];
+    if (!sessionId) {
+      const response = await fetch(`${baseUrl}/api/quick-start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caseName: 'stream-test', mode: 'shell' }),
+      });
+      const data = await response.json();
+      expect(data.success).toBe(true);
+      sessionId = data.sessionId;  // quick-start returns sessionId directly
+      createdSessions.push(sessionId);
+    }
 
     // Create an EventSource to test SSE streaming
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
+
+    let streamError: Error | null = null;
 
     try {
       const response = await fetch(
@@ -278,16 +362,24 @@ describe('File Link Click Tests', () => {
         const { value } = await reader.read();
         const text = new TextDecoder().decode(value);
         console.log('SSE stream data:', text.substring(0, 200));
-        expect(text).toContain('event:');
+        // SSE format uses "data: " prefix for messages
+        expect(text).toContain('data:');
+        // Should contain connection info or file content
+        expect(text).toContain('"type"');
         reader.releaseLock();
       }
     } catch (e: any) {
       if (e.name !== 'AbortError') {
-        throw e;
+        streamError = e;
       }
     } finally {
       clearTimeout(timeout);
       controller.abort();
+    }
+
+    // Re-throw any non-abort errors after cleanup
+    if (streamError) {
+      throw streamError;
     }
   }, 60000);
 });
