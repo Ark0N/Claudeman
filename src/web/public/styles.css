@@ -2059,6 +2059,21 @@ body {
 }
 
 /* Switch toggle for form rows */
+.form-section-header {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 1rem 0 0.5rem 0;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.form-section-header:first-child {
+  margin-top: 0;
+}
+
 .form-row-switch {
   display: flex;
   align-items: center;
@@ -2234,6 +2249,26 @@ body {
 }
 
 .settings-status.denied {
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--red);
+}
+
+/* CPU limit status indicator */
+.cpu-limit-status {
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  margin-left: 6px;
+}
+
+.cpu-limit-status.available {
+  background: rgba(34, 197, 94, 0.2);
+  color: var(--green);
+}
+
+.cpu-limit-status.unavailable {
   background: rgba(239, 68, 68, 0.2);
   color: var(--red);
 }
@@ -5331,6 +5366,281 @@ kbd {
   gap: 0.5rem;
 }
 
+/* Wizard Modal - wider layout */
+.modal-wizard {
+  width: 720px;
+  max-width: 95vw;
+}
+
+.wizard-page-compact {
+  min-height: auto;
+  padding: 0.5rem 0;
+}
+
+.wizard-step-intro {
+  text-align: center;
+  margin-bottom: 0.75rem;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
+.wizard-step-intro p {
+  margin: 0;
+}
+
+/* Wizard inline row for compact layout */
+.wizard-inline-row {
+  display: flex;
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+
+.wizard-inline-field {
+  flex: 1;
+}
+
+.wizard-inline-field-small {
+  flex: 0 0 auto;
+}
+
+.wizard-inline-field label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  margin-bottom: 0.25rem;
+}
+
+.iteration-presets-compact {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.iteration-presets-compact .iteration-preset-btn {
+  padding: 0.35rem 0.6rem;
+  font-size: 0.75rem;
+  min-width: 36px;
+}
+
+/* Plan Generation Step */
+.plan-section {
+  padding: 1rem;
+  text-align: center;
+}
+
+.plan-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+}
+
+/* Plan Loading State */
+.plan-loading-state {
+  padding: 1.5rem 1rem;
+  text-align: center;
+}
+
+.plan-loading-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.plan-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.plan-loading-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+}
+
+.plan-loading-title {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.plan-loading-time {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-family: 'SF Mono', Monaco, monospace;
+}
+
+.plan-loading-hint {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.plan-error-msg {
+  color: var(--red);
+  margin-bottom: 1rem;
+}
+
+/* Plan Options (detail level, model) */
+.plan-options {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.plan-option-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.plan-option-group label {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.plan-option-group select {
+  padding: 0.3rem 0.5rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.plan-detail-btns {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.plan-detail-btn {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.75rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.plan-detail-btn:hover {
+  border-color: var(--border-light);
+}
+
+.plan-detail-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* Plan Editor */
+.plan-editor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+.plan-editor-actions {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.plan-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 160px;
+  overflow-y: auto;
+  margin-bottom: 0.5rem;
+}
+
+.plan-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.5rem;
+  background: var(--bg-input);
+  border-radius: 4px;
+}
+
+.plan-item-checkbox {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+}
+
+.plan-item-content {
+  flex: 1;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.plan-item-content:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.plan-item-priority {
+  width: 50px;
+  flex-shrink: 0;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.2rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+}
+
+.plan-item-remove {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 0 0.2rem;
+  line-height: 1;
+}
+
+.plan-item-remove:hover {
+  color: var(--red);
+}
+
+.plan-item:has(.plan-item-checkbox:not(:checked)) {
+  opacity: 0.5;
+}
+
+.plan-item:has(.plan-item-checkbox:not(:checked)) .plan-item-content {
+  text-decoration: line-through;
+}
+
+#planEditor {
+  text-align: left;
+  padding: 0.75rem;
+}
+
+.plan-editor-footer {
+  text-align: left;
+}
+
 /* Textarea with AI Assist button */
 .textarea-with-assist {
   position: relative;
@@ -5338,7 +5648,7 @@ kbd {
 
 .textarea-with-assist textarea {
   width: 100%;
-  padding: 0.75rem;
+  padding: 0.6rem;
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -5346,7 +5656,7 @@ kbd {
   font-size: 0.85rem;
   font-family: 'SF Mono', Monaco, 'Courier New', monospace;
   resize: vertical;
-  min-height: 140px;
+  min-height: 80px;
 }
 
 .textarea-with-assist textarea:focus {

@@ -24,7 +24,7 @@ import { fileStreamManager } from '../file-stream-manager.js';
 import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
 import { SpawnOrchestrator, type SessionCreator } from '../spawn-orchestrator.js';
 import type { SpawnOrchestratorConfig } from '../spawn-types.js';
-import { ScreenManager } from '../screen-manager.js';
+import { ScreenManager, cpulimitAvailable } from '../screen-manager.js';
 import { getStore } from '../state-store.js';
 import { generateClaudeMd } from '../templates/claude-md.js';
 import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
@@ -56,6 +56,8 @@ import {
   type QuickStartResponse,
   type CaseInfo,
   type PersistedRespawnConfig,
+  type CpuLimitConfig,
+  DEFAULT_CPU_LIMIT_CONFIG,
 } from '../types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -518,12 +520,14 @@ export class WebServer extends EventEmitter {
 
       const body = req.body as CreateSessionRequest & { mode?: 'claude' | 'shell'; name?: string };
       const workingDir = body.workingDir || process.cwd();
+      const globalCpuLimit = this.getGlobalCpuLimitConfig();
       const session = new Session({
         workingDir,
         mode: body.mode || 'claude',
         name: body.name || '',
         screenManager: this.screenManager,
-        useScreen: true
+        useScreen: true,
+        cpuLimitConfig: globalCpuLimit,
       });
 
       this.sessions.set(session.id, session);
@@ -1982,11 +1986,14 @@ export class WebServer extends EventEmitter {
       }
 
       // Create a new session with the case as working directory
+      // Apply global CPU limit config if enabled in settings
+      const cpuLimitConfig = this.getGlobalCpuLimitConfig();
       const session = new Session({
         workingDir: casePath,
         screenManager: this.screenManager,
         useScreen: true,
         mode: mode,
+        cpuLimitConfig: cpuLimitConfig,
       });
 
       // Auto-detect completion phrase from CLAUDE.md BEFORE broadcasting
@@ -2045,6 +2052,106 @@ export class WebServer extends EventEmitter {
       }
     });
 
+    // Generate implementation plan from task description using Claude
+    interface GeneratePlanRequest {
+      taskDescription: string;
+      maxItems?: number;
+    }
+
+    interface PlanItem {
+      content: string;
+      priority: 'P0' | 'P1' | 'P2' | null;
+    }
+
+    this.app.post('/api/generate-plan', async (req): Promise<ApiResponse> => {
+      const { taskDescription, maxItems = 8 } = req.body as GeneratePlanRequest;
+
+      if (!taskDescription || typeof taskDescription !== 'string') {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Task description is required');
+      }
+
+      if (taskDescription.length > 10000) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Task description too long (max 10000 chars)');
+      }
+
+      const prompt = `Break down this task into ${maxItems} or fewer actionable implementation steps.
+
+TASK:
+${taskDescription}
+
+OUTPUT FORMAT:
+Return ONLY a JSON array. Each item must have:
+- content: specific, actionable step (verb phrase, 5-80 chars)
+- priority: "P0" (critical path), "P1" (standard), "P2" (nice-to-have), or null
+
+Example output:
+[{"content": "Create auth database schema", "priority": "P0"}, {"content": "Implement JWT token generation", "priority": "P1"}]
+
+RULES:
+- Start each step with a verb (Create, Implement, Add, Write, Configure, etc.)
+- Keep steps focused and achievable in one work session
+- Order by logical dependency (do first things first)
+- Use P0 sparingly for truly critical items`;
+
+      // Create temporary session for the AI call
+      const session = new Session({
+        workingDir: process.cwd(),
+        screenManager: this.screenManager,
+        useScreen: false, // No screen needed for one-shot
+        mode: 'claude',
+      });
+
+      try {
+        const { result, cost } = await session.runPrompt(prompt);
+
+        // Parse JSON from result
+        const jsonMatch = result.match(/\[[\s\S]*\]/);
+        if (!jsonMatch) {
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Failed to parse plan - no JSON array found');
+        }
+
+        let items: PlanItem[];
+        try {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (!Array.isArray(parsed)) {
+            return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Invalid response - expected array');
+          }
+
+          // Validate and normalize items
+          items = parsed.map((item: unknown, idx: number) => {
+            if (typeof item !== 'object' || item === null) {
+              return { content: `Step ${idx + 1}`, priority: null };
+            }
+            const obj = item as Record<string, unknown>;
+            const content = typeof obj.content === 'string' ? obj.content.slice(0, 200) : `Step ${idx + 1}`;
+            let priority: 'P0' | 'P1' | 'P2' | null = null;
+            if (obj.priority === 'P0' || obj.priority === 'P1' || obj.priority === 'P2') {
+              priority = obj.priority;
+            }
+            return { content, priority };
+          }).slice(0, maxItems);
+
+        } catch (parseErr) {
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Failed to parse plan JSON: ' + getErrorMessage(parseErr));
+        }
+
+        return {
+          success: true,
+          data: { items, costUsd: cost },
+        };
+
+      } catch (err) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Plan generation failed: ' + getErrorMessage(err));
+      } finally {
+        // Clean up the temporary session
+        try {
+          await session.stop();
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
+    });
+
     // ============ App Settings Endpoints ============
     const settingsPath = join(homedir(), '.claudeman', 'settings.json');
 
@@ -2084,6 +2191,64 @@ export class WebServer extends EventEmitter {
       } catch (err) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
       }
+    });
+
+    // ============ CPU Limit Endpoints ============
+
+    // Get CPU limit system status (whether cpulimit is installed)
+    this.app.get('/api/system/cpu-limit-status', async () => {
+      return {
+        success: true,
+        cpulimitAvailable: cpulimitAvailable(),
+      };
+    });
+
+    // Get CPU limit config for a session
+    this.app.get('/api/sessions/:id/cpu-limit', async (req) => {
+      const { id } = req.params as { id: string };
+      const session = this.sessions.get(id);
+      if (!session) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+      return {
+        success: true,
+        cpuLimit: session.cpuLimitConfig,
+        cpulimitAvailable: cpulimitAvailable(),
+      };
+    });
+
+    // Update CPU limit config for a session
+    // Note: Changes only apply to NEW sessions, not running ones
+    this.app.post('/api/sessions/:id/cpu-limit', async (req) => {
+      const { id } = req.params as { id: string };
+      const session = this.sessions.get(id);
+      if (!session) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
+      const body = req.body as Partial<CpuLimitConfig>;
+
+      // Validate inputs
+      if (body.niceValue !== undefined) {
+        if (typeof body.niceValue !== 'number' || body.niceValue < -20 || body.niceValue > 19) {
+          return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Nice value must be between -20 and 19');
+        }
+      }
+      if (body.cpuLimitPercent !== undefined) {
+        if (typeof body.cpuLimitPercent !== 'number' || body.cpuLimitPercent < 1 || body.cpuLimitPercent > 100) {
+          return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'CPU limit percent must be between 1 and 100');
+        }
+      }
+
+      session.setCpuLimit(body);
+      this.persistSessionState(session);
+      this.broadcast('session:updated', { session: session.toDetailedState() });
+
+      return {
+        success: true,
+        cpuLimit: session.cpuLimitConfig,
+        note: 'CPU limiting only affects newly created screen sessions, not currently running ones.',
+      };
     });
 
     // ============ Subagent Window State Endpoints ============
@@ -2955,12 +3120,14 @@ export class WebServer extends EventEmitter {
   private setupSpawnOrchestratorListeners(): void {
     const sessionCreator: SessionCreator = {
       createAgentSession: async (workingDir: string, name: string) => {
+        const globalCpuLimit = this.getGlobalCpuLimitConfig();
         const session = new Session({
           workingDir,
           screenManager: this.screenManager,
           useScreen: true,
           mode: 'claude',
           name: `spawn:${name}`,
+          cpuLimitConfig: globalCpuLimit,
         });
 
         this.sessions.set(session.id, session);
@@ -3140,6 +3307,29 @@ export class WebServer extends EventEmitter {
       }
     } catch (err) {
       console.error('Failed to read settings:', err);
+    }
+    return undefined;
+  }
+
+  // Helper to get global CPU limit config from settings
+  private getGlobalCpuLimitConfig(): CpuLimitConfig | undefined {
+    const settingsPath = join(homedir(), '.claudeman', 'settings.json');
+
+    try {
+      if (existsSync(settingsPath)) {
+        const content = readFileSync(settingsPath, 'utf-8');
+        const settings = JSON.parse(content);
+        if (settings.cpuLimit && settings.cpuLimit.enabled) {
+          return {
+            enabled: settings.cpuLimit.enabled ?? false,
+            niceValue: settings.cpuLimit.niceValue ?? DEFAULT_CPU_LIMIT_CONFIG.niceValue,
+            cpuLimitPercent: settings.cpuLimit.cpuLimitPercent ?? DEFAULT_CPU_LIMIT_CONFIG.cpuLimitPercent,
+            useCpulimitIfAvailable: settings.cpuLimit.useCpulimitIfAvailable ?? DEFAULT_CPU_LIMIT_CONFIG.useCpulimitIfAvailable,
+          };
+        }
+      }
+    } catch (err) {
+      console.error('Failed to read CPU limit settings:', err);
     }
     return undefined;
   }
@@ -3725,6 +3915,14 @@ export class WebServer extends EventEmitter {
                   session.ralphTracker.startLoop(savedState.ralphCompletionPhrase);
                 }
                 console.log(`[Server] Restored Ralph tracker for session ${session.id} (phrase: ${savedState.ralphCompletionPhrase || 'none'})`);
+              }
+              // CPU limit config
+              if (savedState.cpuLimitEnabled !== undefined) {
+                session.setCpuLimit({
+                  enabled: savedState.cpuLimitEnabled,
+                  niceValue: savedState.cpuLimitNiceValue,
+                  cpuLimitPercent: savedState.cpuLimitPercent,
+                });
               }
               // Respawn controller
               if (savedState.respawnEnabled && savedState.respawnConfig) {

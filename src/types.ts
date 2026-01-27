@@ -86,6 +86,12 @@ export interface SessionState {
   parentAgentId?: string;
   /** Child agent IDs spawned by this session */
   childAgentIds?: string[];
+  /** CPU limiting enabled */
+  cpuLimitEnabled?: boolean;
+  /** Nice value for CPU priority (-20 to 19) */
+  cpuLimitNiceValue?: number;
+  /** CPU limit percentage (1-100) */
+  cpuLimitPercent?: number;
 }
 
 // ========== Global Stats Types ==========
@@ -232,6 +238,35 @@ export interface AppState {
   /** Daily token usage statistics */
   tokenStats?: TokenStats;
 }
+
+// ========== CPU Limiting Types ==========
+
+/**
+ * Configuration for CPU limiting of Claude sessions.
+ *
+ * Uses `nice` (always available) to lower process priority and
+ * optionally `cpulimit` (if installed) for hard CPU usage limits.
+ */
+export interface CpuLimitConfig {
+  /** Whether CPU limiting is enabled */
+  enabled: boolean;
+  /** Nice value (-20 to 19, default: 10 = lower priority) */
+  niceValue: number;
+  /** CPU limit percentage (1-100, default: 80) */
+  cpuLimitPercent: number;
+  /** Whether to use cpulimit if available (default: true) */
+  useCpulimitIfAvailable: boolean;
+}
+
+/**
+ * Default CPU limit configuration
+ */
+export const DEFAULT_CPU_LIMIT_CONFIG: CpuLimitConfig = {
+  enabled: false,
+  niceValue: 10,
+  cpuLimitPercent: 80,
+  useCpulimitIfAvailable: true,
+};
 
 // ========== Respawn Controller Types ==========
 

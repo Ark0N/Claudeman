@@ -2601,6 +2601,246 @@ class ClaudemanApp {
     document.getElementById('summaryIterations').textContent =
       config.maxIterations === 0 ? 'Unlimited' : config.maxIterations;
     document.getElementById('summaryCase').textContent = config.caseName;
+
+    // Show plan status in summary if plan was generated
+    const planSummary = document.getElementById('summaryPlan');
+    if (planSummary) {
+      if (config.generatedPlan && config.generatedPlan.length > 0) {
+        const enabledCount = config.generatedPlan.filter(i => i.enabled).length;
+        planSummary.textContent = `${enabledCount} item${enabledCount !== 1 ? 's' : ''}`;
+        planSummary.parentElement.style.display = '';
+      } else {
+        planSummary.parentElement.style.display = 'none';
+      }
+    }
+  }
+
+  // ========== Plan Generation ==========
+
+  resetPlanGenerationUI() {
+    // Show initial controls, hide other states
+    document.getElementById('planGenerationControls')?.classList.remove('hidden');
+    document.getElementById('planGenerationLoading')?.classList.add('hidden');
+    document.getElementById('planGenerationError')?.classList.add('hidden');
+    document.getElementById('planEditor')?.classList.add('hidden');
+  }
+
+  async generatePlan() {
+    const config = this.ralphWizardConfig;
+
+    // Show loading state
+    document.getElementById('planGenerationControls')?.classList.add('hidden');
+    document.getElementById('planGenerationError')?.classList.add('hidden');
+    document.getElementById('planEditor')?.classList.add('hidden');
+    document.getElementById('planGenerationLoading')?.classList.remove('hidden');
+
+    try {
+      const res = await fetch('/api/generate-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskDescription: config.taskDescription,
+          maxItems: 8,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!data.success) {
+        this.showPlanError(data.error || 'Failed to generate plan');
+        return;
+      }
+
+      if (!data.data?.items || data.data.items.length === 0) {
+        this.showPlanError('No plan items generated. Try adding more detail to your task.');
+        return;
+      }
+
+      // Store plan with enabled state and IDs
+      config.generatedPlan = data.data.items.map((item, idx) => ({
+        ...item,
+        enabled: true,
+        id: `plan-${Date.now()}-${idx}`,
+      }));
+      config.planGenerated = true;
+      config.skipPlanGeneration = false;
+
+      // Show editor
+      this.renderPlanEditor();
+
+    } catch (err) {
+      console.error('Plan generation failed:', err);
+      this.showPlanError('Network error: ' + err.message);
+    }
+  }
+
+  showPlanError(message) {
+    document.getElementById('planGenerationLoading')?.classList.add('hidden');
+    document.getElementById('planGenerationControls')?.classList.add('hidden');
+    document.getElementById('planEditor')?.classList.add('hidden');
+
+    const errorEl = document.getElementById('planGenerationError');
+    const msgEl = document.getElementById('planErrorMsg');
+    if (msgEl) msgEl.textContent = message;
+    errorEl?.classList.remove('hidden');
+  }
+
+  renderPlanEditor() {
+    document.getElementById('planGenerationLoading')?.classList.add('hidden');
+    document.getElementById('planGenerationControls')?.classList.add('hidden');
+    document.getElementById('planGenerationError')?.classList.add('hidden');
+    document.getElementById('planEditor')?.classList.remove('hidden');
+
+    const list = document.getElementById('planItemsList');
+    if (!list) return;
+
+    list.innerHTML = '';
+    const items = this.ralphWizardConfig.generatedPlan || [];
+
+    items.forEach((item, index) => {
+      const row = this.renderPlanItem(item, index);
+      list.appendChild(row);
+    });
+  }
+
+  renderPlanItem(item, index) {
+    const row = document.createElement('div');
+    row.className = 'plan-item';
+    row.dataset.index = index;
+
+    row.innerHTML = `
+      <input type="checkbox" class="plan-item-checkbox" ${item.enabled ? 'checked' : ''}
+        onchange="app.togglePlanItem(${index})">
+      <input type="text" class="plan-item-content" value="${this.escapeHtml(item.content)}"
+        onchange="app.updatePlanItemContent(${index}, this.value)"
+        placeholder="Implementation step...">
+      <select class="plan-item-priority" onchange="app.updatePlanItemPriority(${index}, this.value)">
+        <option value="" ${!item.priority ? 'selected' : ''}>-</option>
+        <option value="P0" ${item.priority === 'P0' ? 'selected' : ''}>P0</option>
+        <option value="P1" ${item.priority === 'P1' ? 'selected' : ''}>P1</option>
+        <option value="P2" ${item.priority === 'P2' ? 'selected' : ''}>P2</option>
+      </select>
+      <button class="plan-item-remove" onclick="app.removePlanItem(${index})" title="Remove">&times;</button>
+    `;
+
+    return row;
+  }
+
+  escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  togglePlanItem(index) {
+    const plan = this.ralphWizardConfig.generatedPlan;
+    if (plan && plan[index]) {
+      plan[index].enabled = !plan[index].enabled;
+      this.renderPlanEditor();
+    }
+  }
+
+  updatePlanItemContent(index, value) {
+    const plan = this.ralphWizardConfig.generatedPlan;
+    if (plan && plan[index]) {
+      plan[index].content = value.trim();
+    }
+  }
+
+  updatePlanItemPriority(index, value) {
+    const plan = this.ralphWizardConfig.generatedPlan;
+    if (plan && plan[index]) {
+      plan[index].priority = value || null;
+    }
+  }
+
+  removePlanItem(index) {
+    const plan = this.ralphWizardConfig.generatedPlan;
+    if (plan) {
+      plan.splice(index, 1);
+      this.renderPlanEditor();
+    }
+  }
+
+  addPlanItem() {
+    const plan = this.ralphWizardConfig.generatedPlan || [];
+    plan.push({
+      content: '',
+      priority: null,
+      enabled: true,
+      id: `plan-${Date.now()}-new`,
+    });
+    this.ralphWizardConfig.generatedPlan = plan;
+    this.renderPlanEditor();
+
+    // Focus the new item's input
+    setTimeout(() => {
+      const list = document.getElementById('planItemsList');
+      const lastInput = list?.querySelector('.plan-item:last-child .plan-item-content');
+      lastInput?.focus();
+    }, 50);
+  }
+
+  skipPlanGeneration() {
+    this.ralphWizardConfig.skipPlanGeneration = true;
+    this.ralphWizardConfig.planGenerated = false;
+    this.ralphWizardConfig.generatedPlan = null;
+
+    // Generate preview and go to step 3
+    this.updateRalphPromptPreview();
+    this.ralphWizardStep = 3;
+    this.updateRalphWizardUI();
+  }
+
+  regeneratePlan() {
+    this.ralphWizardConfig.generatedPlan = null;
+    this.ralphWizardConfig.planGenerated = false;
+    this.generatePlan();
+  }
+
+  generateFixPlanContent(items) {
+    // Group items by priority
+    const p0Items = items.filter(i => i.priority === 'P0');
+    const p1Items = items.filter(i => i.priority === 'P1');
+    const p2Items = items.filter(i => i.priority === 'P2');
+    const noPriorityItems = items.filter(i => !i.priority);
+
+    let content = '# Implementation Plan\n\n';
+    content += `Generated: ${new Date().toISOString().slice(0, 10)}\n\n`;
+
+    if (p0Items.length > 0) {
+      content += '## Critical Path (P0)\n\n';
+      p0Items.forEach(item => {
+        content += `- [ ] ${item.content}\n`;
+      });
+      content += '\n';
+    }
+
+    if (p1Items.length > 0) {
+      content += '## Standard (P1)\n\n';
+      p1Items.forEach(item => {
+        content += `- [ ] ${item.content}\n`;
+      });
+      content += '\n';
+    }
+
+    if (p2Items.length > 0) {
+      content += '## Nice-to-Have (P2)\n\n';
+      p2Items.forEach(item => {
+        content += `- [ ] ${item.content}\n`;
+      });
+      content += '\n';
+    }
+
+    if (noPriorityItems.length > 0) {
+      content += '## Tasks\n\n';
+      noPriorityItems.forEach(item => {
+        content += `- [ ] ${item.content}\n`;
+      });
+      content += '\n';
+    }
+
+    return content;
   }
 
   async startRalphLoop() {
@@ -2652,6 +2892,22 @@ class ClaudemanApp {
           maxIterations: config.maxIterations || null,
         })
       });
+
+      // Step 2.5: Write @fix_plan.md if plan was generated
+      if (config.generatedPlan && config.generatedPlan.length > 0) {
+        const enabledItems = config.generatedPlan.filter(i => i.enabled);
+        if (enabledItems.length > 0) {
+          const planContent = this.generateFixPlanContent(enabledItems);
+          // Import the plan content
+          await fetch(`/api/sessions/${sessionId}/fix-plan/import`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: planContent })
+          });
+          // Write to disk
+          await fetch(`/api/sessions/${sessionId}/fix-plan/write`, { method: 'POST' });
+        }
+      }
 
       // Step 3: Enable respawn if requested
       if (config.enableRespawn) {
@@ -4296,6 +4552,13 @@ class ClaudemanApp {
     claudeModeSelect.onchange = () => {
       allowedToolsRow.style.display = claudeModeSelect.value === 'allowedTools' ? '' : 'none';
     };
+    // CPU Limiting settings
+    const cpuLimitSettings = settings.cpuLimit || {};
+    document.getElementById('appSettingsCpuLimitEnabled').checked = cpuLimitSettings.enabled ?? false;
+    document.getElementById('appSettingsCpuNiceValue').value = cpuLimitSettings.niceValue ?? 10;
+    document.getElementById('appSettingsCpuLimitPercent').value = cpuLimitSettings.cpuLimitPercent ?? 80;
+    // Check cpulimit availability and update status indicator
+    this.checkCpulimitAvailability();
     // Notification settings
     const notifPrefs = this.notificationManager?.preferences || {};
     document.getElementById('appSettingsNotifEnabled').checked = notifPrefs.enabled ?? true;
@@ -4357,6 +4620,13 @@ class ClaudemanApp {
       // Claude CLI settings
       claudeMode: document.getElementById('appSettingsClaudeMode').value,
       allowedTools: document.getElementById('appSettingsAllowedTools').value.trim(),
+      // CPU Limiting settings
+      cpuLimit: {
+        enabled: document.getElementById('appSettingsCpuLimitEnabled').checked,
+        niceValue: parseInt(document.getElementById('appSettingsCpuNiceValue').value) || 10,
+        cpuLimitPercent: parseInt(document.getElementById('appSettingsCpuLimitPercent').value) || 80,
+        useCpulimitIfAvailable: true,
+      },
     };
 
     // Save to localStorage
@@ -4415,6 +4685,36 @@ class ClaudemanApp {
       console.error('Failed to load app settings:', err);
     }
     return {};
+  }
+
+  // Check if cpulimit is available and update the UI status indicator
+  async checkCpulimitAvailability() {
+    const statusEl = document.getElementById('cpuLimitStatus');
+    const percentInput = document.getElementById('appSettingsCpuLimitPercent');
+    if (!statusEl) return;
+
+    try {
+      const res = await fetch('/api/system/cpu-limit-status');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.cpulimitAvailable) {
+          statusEl.textContent = '\u2713';  // Checkmark
+          statusEl.title = 'cpulimit is installed';
+          statusEl.classList.add('available');
+          statusEl.classList.remove('unavailable');
+          if (percentInput) percentInput.disabled = false;
+        } else {
+          statusEl.textContent = '\u2717';  // X mark
+          statusEl.title = 'cpulimit not installed (install with: apt install cpulimit)';
+          statusEl.classList.add('unavailable');
+          statusEl.classList.remove('available');
+          // Don't disable input, still allow setting the value for when it gets installed
+        }
+      }
+    } catch (err) {
+      statusEl.textContent = '?';
+      statusEl.title = 'Could not check cpulimit availability';
+    }
   }
 
   applyHeaderVisibilitySettings() {

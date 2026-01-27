@@ -19,7 +19,7 @@ import { spawn, execSync } from 'node:child_process';
 import { existsSync, readFileSync, mkdirSync, writeFile } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { ScreenSession, ProcessStats, ScreenSessionWithStats, PersistedRespawnConfig, getErrorMessage } from './types.js';
+import { ScreenSession, ProcessStats, ScreenSessionWithStats, PersistedRespawnConfig, getErrorMessage, CpuLimitConfig, DEFAULT_CPU_LIMIT_CONFIG } from './types.js';
 
 // ============================================================================
 // Claude CLI PATH Resolution
@@ -55,6 +55,70 @@ const DEFAULT_STATS_INTERVAL_MS = 2000;
 
 /** Maximum retry attempts for carriage return (3) */
 const CR_MAX_ATTEMPTS = 3;
+
+/** Cached result for cpulimit availability check */
+let _cpulimitAvailable: boolean | null = null;
+
+/**
+ * Checks if cpulimit is available on the system.
+ * Result is cached after the first check.
+ *
+ * @returns true if cpulimit is installed and accessible
+ */
+export function cpulimitAvailable(): boolean {
+  if (_cpulimitAvailable !== null) return _cpulimitAvailable;
+
+  try {
+    execSync('which cpulimit', { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS });
+    _cpulimitAvailable = true;
+  } catch {
+    _cpulimitAvailable = false;
+  }
+
+  return _cpulimitAvailable;
+}
+
+/**
+ * Wraps a command with CPU limiting options.
+ *
+ * Uses `nice` to set process priority and optionally `cpulimit` for
+ * hard CPU usage limits (if installed).
+ *
+ * @param cmd - The command to wrap
+ * @param config - CPU limit configuration
+ * @returns The wrapped command string
+ *
+ * @example
+ * ```typescript
+ * // With cpulimit installed:
+ * wrapWithCpuLimit('claude --dangerously-skip-permissions', { enabled: true, niceValue: 10, cpuLimitPercent: 80 })
+ * // Returns: 'cpulimit -l 80 -f -- nice -n 10 claude --dangerously-skip-permissions'
+ *
+ * // Without cpulimit:
+ * wrapWithCpuLimit('claude --dangerously-skip-permissions', { enabled: true, niceValue: 10, cpuLimitPercent: 80 })
+ * // Returns: 'nice -n 10 claude --dangerously-skip-permissions'
+ * ```
+ */
+export function wrapWithCpuLimit(cmd: string, config: CpuLimitConfig): string {
+  if (!config.enabled) return cmd;
+
+  // Clamp nice value to valid range (-20 to 19)
+  const niceValue = Math.max(-20, Math.min(19, config.niceValue));
+
+  // Clamp CPU limit to valid range (1-100)
+  const cpuLimit = Math.max(1, Math.min(100, config.cpuLimitPercent));
+
+  // Always apply nice for priority reduction
+  let wrappedCmd = `nice -n ${niceValue} ${cmd}`;
+
+  // Add cpulimit if available and requested
+  if (config.useCpulimitIfAvailable && cpulimitAvailable()) {
+    // -l: limit percentage, -f: follow forked processes
+    wrappedCmd = `cpulimit -l ${cpuLimit} -f -- ${wrappedCmd}`;
+  }
+
+  return wrappedCmd;
+}
 
 
 /** Cached directory containing the claude binary */
@@ -228,10 +292,11 @@ export class ScreenManager extends EventEmitter {
    * @param workingDir - Working directory for the screen session
    * @param mode - 'claude' for Claude CLI or 'shell' for bash
    * @param name - Optional display name for the session
+   * @param cpuLimitConfig - Optional CPU limiting configuration
    * @returns The created screen session metadata
    * @throws {Error} If screen creation fails
    */
-  async createScreen(sessionId: string, workingDir: string, mode: 'claude' | 'shell', name?: string): Promise<ScreenSession> {
+  async createScreen(sessionId: string, workingDir: string, mode: 'claude' | 'shell', name?: string, cpuLimitConfig?: CpuLimitConfig): Promise<ScreenSession> {
     const screenName = `claudeman-${sessionId.slice(0, 8)}`;
 
     // Security: Validate screenName and workingDir to prevent command injection
@@ -248,9 +313,15 @@ export class ScreenManager extends EventEmitter {
     const claudeDir = findClaudeDir();
     const pathExport = claudeDir ? `export PATH="${claudeDir}:$PATH" && ` : '';
     const envVars = `CLAUDEMAN_SCREEN=1 CLAUDEMAN_SESSION_ID=${sessionId} CLAUDEMAN_SCREEN_NAME=${screenName} CLAUDEMAN_API_URL=${process.env.CLAUDEMAN_API_URL || 'http://localhost:3000'}`;
-    const cmd = mode === 'claude'
+
+    // Base command for the mode
+    let baseCmd = mode === 'claude'
       ? `${envVars} claude --dangerously-skip-permissions`
       : `${envVars} $SHELL`;
+
+    // Apply CPU limiting if configured
+    const cpuConfig = cpuLimitConfig || DEFAULT_CPU_LIMIT_CONFIG;
+    const cmd = wrapWithCpuLimit(baseCmd, cpuConfig);
 
     try {
       // Start screen in detached mode
@@ -692,6 +763,11 @@ export class ScreenManager extends EventEmitter {
     } catch {
       return false;
     }
+  }
+
+  // Check if cpulimit is available on the system (for hard CPU limiting)
+  static isCpulimitAvailable(): boolean {
+    return cpulimitAvailable();
   }
 
   // Send input directly to screen session using screen -X stuff

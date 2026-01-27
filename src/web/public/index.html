@@ -782,6 +782,29 @@
               </label>
               <span class="form-hint">Auto-enable for new sessions (otherwise auto-enables on Ralph pattern detection)</span>
             </div>
+            <!-- CPU Limiting Section -->
+            <div class="form-section-header">CPU Limiting</div>
+            <div class="form-row form-row-switch">
+              <label>Enable CPU Limiting</label>
+              <label class="switch">
+                <input type="checkbox" id="appSettingsCpuLimitEnabled">
+                <span class="slider"></span>
+              </label>
+              <span class="form-hint">Limit CPU usage for Claude sessions (reduces system impact, only affects new sessions)</span>
+            </div>
+            <div class="form-row" id="cpuLimitNiceRow">
+              <label>Nice Value</label>
+              <input type="number" id="appSettingsCpuNiceValue" min="-20" max="19" value="10" style="width: 80px;">
+              <span class="form-hint">Process priority (-20 to 19, higher = lower priority, default: 10)</span>
+            </div>
+            <div class="form-row" id="cpuLimitPercentRow">
+              <label>CPU Limit %</label>
+              <div class="settings-item-actions">
+                <input type="number" id="appSettingsCpuLimitPercent" min="1" max="100" value="80" style="width: 80px;">
+                <span class="cpu-limit-status" id="cpuLimitStatus" title="cpulimit availability status"></span>
+              </div>
+              <span class="form-hint">Hard CPU limit (requires cpulimit installed, default: 80%)</span>
+            </div>
           </div>
           <!-- Paths Tab -->
           <div class="modal-tab-content hidden" id="settings-paths">
@@ -921,7 +944,7 @@
     <!-- Ralph Loop Wizard Modal -->
     <div class="modal" id="ralphWizardModal">
       <div class="modal-backdrop" onclick="app.closeRalphWizard()"></div>
-      <div class="modal-content modal-lg">
+      <div class="modal-content modal-wizard">
         <div class="modal-header">
           <h3>Start Ralph Loop</h3>
           <button class="modal-close" onclick="app.closeRalphWizard()">&times;</button>
@@ -931,73 +954,104 @@
         <div class="wizard-progress">
           <div class="wizard-step active" data-step="1">
             <span class="wizard-step-number">1</span>
-            <span class="wizard-step-label">Task Setup</span>
+            <span class="wizard-step-label">Describe</span>
           </div>
           <div class="wizard-step" data-step="2">
             <span class="wizard-step-number">2</span>
+            <span class="wizard-step-label">Plan</span>
+          </div>
+          <div class="wizard-step" data-step="3">
+            <span class="wizard-step-number">3</span>
             <span class="wizard-step-label">Launch</span>
           </div>
         </div>
 
         <div class="modal-body">
           <!-- Step 1: Task & Completion Setup -->
-          <div class="wizard-page" id="ralphWizardStep1">
+          <div class="wizard-page wizard-page-compact" id="ralphWizardStep1">
+            <div class="wizard-step-intro">
+              <p>Describe your task below. Claude will generate an implementation plan with testing steps.</p>
+            </div>
             <div class="form-row">
-              <label>Task Description</label>
+              <label>What do you want to build?</label>
               <div class="textarea-with-assist">
                 <textarea
                   id="ralphTaskDescription"
-                  rows="6"
-                  placeholder="Describe what you want Claude to accomplish...
-
-Example:
-Build a REST API for user authentication:
-- JWT token generation and validation
-- Login/logout endpoints
-- Password reset flow
-- Tests for all endpoints"></textarea>
+                  rows="4"
+                  placeholder="Build a REST API for user authentication with JWT tokens, login/logout endpoints, and password reset flow."></textarea>
               </div>
-              <span class="form-hint">Be specific about requirements and success criteria</span>
             </div>
 
-            <div class="form-row">
-              <label>Completion Phrase</label>
-              <div class="phrase-input-group">
-                <input type="text" id="ralphCompletionPhrase" value="COMPLETE" placeholder="COMPLETE" list="phrasesSuggestions">
-                <datalist id="phrasesSuggestions">
-                  <option value="COMPLETE">
-                  <option value="DONE">
-                  <option value="FINISHED">
-                  <option value="TESTS_PASS">
-                  <option value="ALL_TASKS_COMPLETE">
-                </datalist>
+            <div class="wizard-inline-row">
+              <div class="wizard-inline-field">
+                <label>Working Directory</label>
+                <div class="case-select-inline">
+                  <select id="ralphCaseSelect" class="form-select"></select>
+                  <button class="btn-toolbar btn-sm" onclick="app.showCreateCaseModal()">+</button>
+                </div>
               </div>
-              <span class="form-hint">Claude outputs <code>&lt;promise&gt;PHRASE&lt;/promise&gt;</code> when done</span>
+              <div class="wizard-inline-field wizard-inline-field-small">
+                <label>Iterations</label>
+                <div class="iteration-presets-compact">
+                  <button type="button" class="iteration-preset-btn active" data-iterations="10" onclick="app.selectIterationPreset(10)">10</button>
+                  <button type="button" class="iteration-preset-btn" data-iterations="25" onclick="app.selectIterationPreset(25)">25</button>
+                  <button type="button" class="iteration-preset-btn" data-iterations="50" onclick="app.selectIterationPreset(50)">50</button>
+                  <button type="button" class="iteration-preset-btn" data-iterations="0" onclick="app.selectIterationPreset(0)">&infin;</button>
+                </div>
+              </div>
+            </div>
+            <!-- Hidden completion phrase with default -->
+            <input type="hidden" id="ralphCompletionPhrase" value="COMPLETE">
+          </div>
+
+          <!-- Step 2: Plan Generation -->
+          <div class="wizard-page wizard-page-compact hidden" id="ralphWizardStep2">
+            <!-- Loading state (shown immediately) -->
+            <div id="planGenerationLoading" class="plan-loading-state">
+              <div class="plan-loading-content">
+                <div class="plan-spinner"></div>
+                <div class="plan-loading-text">
+                  <span class="plan-loading-title">Generating implementation plan...</span>
+                  <span class="plan-loading-time" id="planLoadingTime">0s</span>
+                </div>
+              </div>
+              <p class="plan-loading-hint">Claude is breaking down your task into actionable steps with tests</p>
             </div>
 
-            <div class="form-row">
-              <label>Max Iterations</label>
-              <div class="iteration-presets">
-                <button type="button" class="iteration-preset-btn active" data-iterations="10" onclick="app.selectIterationPreset(10)">10</button>
-                <button type="button" class="iteration-preset-btn" data-iterations="25" onclick="app.selectIterationPreset(25)">25</button>
-                <button type="button" class="iteration-preset-btn" data-iterations="50" onclick="app.selectIterationPreset(50)">50</button>
-                <button type="button" class="iteration-preset-btn" data-iterations="100" onclick="app.selectIterationPreset(100)">100</button>
-                <button type="button" class="iteration-preset-btn" data-iterations="0" onclick="app.selectIterationPreset(0)">&infin;</button>
+            <!-- Error state -->
+            <div id="planGenerationError" class="plan-section hidden">
+              <p class="plan-error-msg" id="planErrorMsg"></p>
+              <div class="plan-actions">
+                <button class="btn-toolbar btn-primary" onclick="app.generatePlan()">Retry</button>
+                <button class="btn-toolbar" onclick="app.skipPlanGeneration()">Skip</button>
               </div>
-              <span class="form-hint">Safety limit - loop stops after this many iterations</span>
             </div>
 
-            <div class="form-row">
-              <label>Working Directory</label>
-              <div class="case-select-inline">
-                <select id="ralphCaseSelect" class="form-select"></select>
-                <button class="btn-toolbar btn-sm" onclick="app.showCreateCaseModal()">+ New</button>
+            <!-- Editor state -->
+            <div id="planEditor" class="plan-section hidden">
+              <div class="plan-editor-header">
+                <span>Implementation Plan</span>
+                <div class="plan-editor-actions">
+                  <div class="plan-option-group">
+                    <label>Detail:</label>
+                    <div class="plan-detail-btns">
+                      <button type="button" class="plan-detail-btn" data-detail="brief" onclick="app.setPlanDetail('brief')">Brief</button>
+                      <button type="button" class="plan-detail-btn active" data-detail="standard" onclick="app.setPlanDetail('standard')">Standard</button>
+                      <button type="button" class="plan-detail-btn" data-detail="detailed" onclick="app.setPlanDetail('detailed')">Detailed</button>
+                    </div>
+                  </div>
+                  <button class="btn-toolbar btn-sm" onclick="app.regeneratePlan()">Regenerate</button>
+                </div>
+              </div>
+              <div id="planItemsList" class="plan-items-list"></div>
+              <div class="plan-editor-footer">
+                <button class="btn-toolbar btn-sm" onclick="app.addPlanItem()">+ Add Step</button>
               </div>
             </div>
           </div>
 
-          <!-- Step 2: Preview & Launch -->
-          <div class="wizard-page hidden" id="ralphWizardStep2">
+          <!-- Step 3: Preview & Launch -->
+          <div class="wizard-page hidden" id="ralphWizardStep3">
             <div class="ralph-preview-section">
               <label>Prompt Preview</label>
               <div class="ralph-prompt-preview" id="ralphPromptPreview"></div>
@@ -1015,6 +1069,10 @@ Build a REST API for user authentication:
               <div class="config-summary-row">
                 <span class="config-label">Case:</span>
                 <span id="summaryCase">testcase</span>
+              </div>
+              <div class="config-summary-row" style="display: none;">
+                <span class="config-label">Plan:</span>
+                <span id="summaryPlan">-</span>
               </div>
             </div>
 
