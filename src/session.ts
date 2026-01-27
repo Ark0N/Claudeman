@@ -1202,18 +1202,24 @@ export class Session extends EventEmitter {
    * the response.
    *
    * @param prompt - The prompt text to send to Claude
+   * @param options - Optional configuration
+   * @param options.model - Model to use ('opus', 'sonnet', or full model name). Defaults to default model.
+   * @param options.onProgress - Callback for progress updates (token count, status)
    * @returns Promise resolving to the result text and total cost in USD
    * @throws {Error} If a process is already running in this session
    *
    * @example
    * ```typescript
    * const session = new Session({ workingDir: '/project' });
-   * const { result, cost } = await session.runPrompt('Explain this code');
+   * const { result, cost } = await session.runPrompt('Explain this code', { model: 'opus' });
    * console.log(`Response: ${result}`);
    * console.log(`Cost: $${cost.toFixed(4)}`);
    * ```
    */
-  async runPrompt(prompt: string): Promise<{ result: string; cost: number }> {
+  async runPrompt(
+    prompt: string,
+    options?: { model?: string; onProgress?: (info: { tokens?: number; status?: string }) => void }
+  ): Promise<{ result: string; cost: number }> {
     return new Promise((resolve, reject) => {
       if (this.ptyProcess) {
         reject(new Error('Session already has a running process'));
@@ -1235,14 +1241,20 @@ export class Session extends EventEmitter {
 
       try {
         // Spawn claude in a real PTY
-        console.log('[Session] Spawning PTY for claude with prompt:', prompt.substring(0, 50));
+        const model = options?.model;
+        console.log('[Session] Spawning PTY for claude with prompt:', prompt.substring(0, 50), model ? `(model: ${model})` : '');
 
-        this.ptyProcess = pty.spawn('claude', [
+        const args = [
           '-p',
           '--dangerously-skip-permissions',
           '--output-format', 'stream-json',
-          prompt
-        ], {
+        ];
+        if (model) {
+          args.push('--model', model);
+        }
+        args.push(prompt);
+
+        this.ptyProcess = pty.spawn('claude', args, {
           name: 'xterm-256color',
           cols: 120,
           rows: 40,

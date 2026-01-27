@@ -5344,7 +5344,7 @@ kbd {
 
 /* Wizard Pages */
 .wizard-page {
-  min-height: 280px;
+  min-height: 180px;
 }
 
 .wizard-page.hidden {
@@ -5482,7 +5482,15 @@ kbd {
 .plan-loading-hint {
   color: var(--text-dim);
   font-size: 0.85rem;
-  margin: 0;
+  margin: 0 0 1rem 0;
+}
+
+.plan-skip-btn {
+  opacity: 0.6;
+}
+
+.plan-skip-btn:hover {
+  opacity: 1;
 }
 
 .plan-error-msg {
@@ -5744,11 +5752,11 @@ kbd {
   background: var(--bg-dark);
   border: 1px solid var(--border);
   border-radius: 4px;
-  padding: 0.75rem;
+  padding: 0.5rem 0.75rem;
   font-family: 'SF Mono', Monaco, 'Courier New', monospace;
   font-size: 0.75rem;
   color: var(--text-dim);
-  max-height: 200px;
+  max-height: 120px;
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-word;

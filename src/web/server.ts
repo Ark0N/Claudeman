@@ -2056,6 +2056,7 @@ export class WebServer extends EventEmitter {
     interface GeneratePlanRequest {
       taskDescription: string;
       maxItems?: number;
+      detailLevel?: 'brief' | 'standard' | 'detailed';
     }
 
     interface PlanItem {
@@ -2064,7 +2065,11 @@ export class WebServer extends EventEmitter {
     }
 
     this.app.post('/api/generate-plan', async (req): Promise<ApiResponse> => {
-      const { taskDescription, maxItems = 8 } = req.body as GeneratePlanRequest;
+      const {
+        taskDescription,
+        maxItems = 12,
+        detailLevel = 'standard'
+      } = req.body as GeneratePlanRequest;
 
       if (!taskDescription || typeof taskDescription !== 'string') {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Task description is required');
@@ -2074,26 +2079,86 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Task description too long (max 10000 chars)');
       }
 
-      const prompt = `Break down this task into ${maxItems} or fewer actionable implementation steps.
+      // Build sophisticated prompt based on Ralph Wiggum methodology
+      const detailConfig = {
+        brief: { minSteps: 5, maxSteps: maxItems, testDepth: 'basic' },
+        standard: { minSteps: 8, maxSteps: maxItems, testDepth: 'thorough' },
+        detailed: { minSteps: 12, maxSteps: Math.max(maxItems, 15), testDepth: 'comprehensive' },
+      };
+      const config = detailConfig[detailLevel] || detailConfig.standard;
 
-TASK:
+      const prompt = `You are an expert software architect breaking down a task into a thorough implementation plan.
+
+## TASK TO IMPLEMENT
 ${taskDescription}
 
-OUTPUT FORMAT:
-Return ONLY a JSON array. Each item must have:
-- content: specific, actionable step (verb phrase, 5-80 chars)
-- priority: "P0" (critical path), "P1" (standard), "P2" (nice-to-have), or null
+## YOUR MISSION
+Create a detailed, actionable implementation plan following Test-Driven Development (TDD) methodology.
+Think deeply about:
+- What are all the components needed?
+- What could go wrong? Add defensive steps.
+- How will we verify each part works?
+- What edge cases need handling?
 
-Example output:
-[{"content": "Create auth database schema", "priority": "P0"}, {"content": "Implement JWT token generation", "priority": "P1"}]
+## PLAN STRUCTURE (${config.minSteps}-${config.maxSteps} steps)
 
-RULES:
-- Start each step with a verb (Create, Implement, Add, Write, Configure, etc.)
-- Keep steps focused and achievable in one work session
-- Order by logical dependency (do first things first)
-- Use P0 sparingly for truly critical items`;
+Your plan MUST include these phases in order:
 
-      // Create temporary session for the AI call
+### Phase 1: Foundation & Setup
+- Project structure, dependencies, configuration
+- Database schemas, type definitions, interfaces
+
+### Phase 2: Core Implementation (TDD Cycle)
+For EACH feature:
+1. Write failing tests first (unit tests)
+2. Implement the feature
+3. Run tests, debug until passing
+4. Refactor if needed
+
+### Phase 3: Integration & Edge Cases
+- Integration tests for feature interactions
+- Edge case handling (errors, boundaries, invalid input)
+- Error messages and user feedback
+
+### Phase 4: Verification & Hardening
+- Run full test suite
+- Fix any failing tests
+- Add missing test coverage
+- Final verification that ALL requirements are met
+
+## OUTPUT FORMAT
+Return ONLY a JSON array. Each item:
+- content: specific action (verb phrase, 15-120 chars, be descriptive!)
+- priority: "P0" (critical/blocking), "P1" (required), "P2" (enhancement)
+
+## EXAMPLE OUTPUT
+[
+  {"content": "Create project structure with src/, tests/, and config directories", "priority": "P0"},
+  {"content": "Define TypeScript interfaces for User, Session, and AuthToken types", "priority": "P0"},
+  {"content": "Write failing unit tests for password hashing (valid password, empty, too short)", "priority": "P0"},
+  {"content": "Implement password hashing with bcrypt, configurable salt rounds", "priority": "P0"},
+  {"content": "Run password tests and debug until all pass", "priority": "P0"},
+  {"content": "Write failing tests for JWT token generation and validation", "priority": "P0"},
+  {"content": "Implement JWT service with access/refresh token support", "priority": "P0"},
+  {"content": "Run JWT tests and verify token expiration handling works", "priority": "P0"},
+  {"content": "Write integration tests for login flow (valid creds, invalid, locked account)", "priority": "P1"},
+  {"content": "Implement login endpoint with rate limiting and audit logging", "priority": "P1"},
+  {"content": "Add error handling for network failures and database timeouts", "priority": "P1"},
+  {"content": "Run full test suite and fix any failures", "priority": "P1"},
+  {"content": "Verify all original requirements are implemented and tested", "priority": "P1"}
+]
+
+## CRITICAL RULES
+1. EVERY implementation step should have a corresponding test step BEFORE it
+2. Include "Run tests and debug/fix" steps after implementation blocks
+3. Be SPECIFIC - not "Add tests" but "Write tests for X covering Y and Z"
+4. Think about what could fail and add defensive steps
+5. End with verification that ALL original requirements are met
+6. Use P0 for foundation and core features, P1 for required work, P2 for nice-to-have
+
+NOW: Generate the implementation plan for the task above. Think step by step.`;
+
+      // Create temporary session for the AI call using Opus 4.5 for deep reasoning
       const session = new Session({
         workingDir: process.cwd(),
         screenManager: this.screenManager,
@@ -2101,8 +2166,11 @@ RULES:
         mode: 'claude',
       });
 
+      // Use Opus 4.5 for plan generation (better reasoning)
+      const modelToUse = 'opus';
+
       try {
-        const { result, cost } = await session.runPrompt(prompt);
+        const { result, cost } = await session.runPrompt(prompt, { model: modelToUse });
 
         // Parse JSON from result
         const jsonMatch = result.match(/\[[\s\S]*\]/);

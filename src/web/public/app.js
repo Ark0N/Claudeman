@@ -2635,10 +2635,14 @@ class ClaudemanApp {
   async generatePlan() {
     const config = this.ralphWizardConfig;
 
-    // Stop any existing timer
+    // Stop any existing timers
     if (this.planLoadingTimer) {
       clearInterval(this.planLoadingTimer);
       this.planLoadingTimer = null;
+    }
+    if (this.planPhaseTimer) {
+      clearInterval(this.planPhaseTimer);
+      this.planPhaseTimer = null;
     }
 
     // Show loading state
@@ -2646,23 +2650,52 @@ class ClaudemanApp {
     document.getElementById('planEditor')?.classList.add('hidden');
     document.getElementById('planGenerationLoading')?.classList.remove('hidden');
 
-    // Start elapsed time display
+    // Animated progress phases
+    const phases = [
+      { time: 0, title: 'Starting Opus 4.5...', hint: 'Initializing deep reasoning model' },
+      { time: 3, title: 'Analyzing task requirements...', hint: 'Understanding the scope and complexity' },
+      { time: 8, title: 'Identifying components...', hint: 'Breaking down into modules and features' },
+      { time: 15, title: 'Planning TDD approach...', hint: 'Designing test-first implementation strategy' },
+      { time: 25, title: 'Generating implementation steps...', hint: 'Creating detailed action items with tests' },
+      { time: 40, title: 'Adding verification checkpoints...', hint: 'Ensuring each phase has validation' },
+      { time: 55, title: 'Reviewing for completeness...', hint: 'Checking all requirements are covered' },
+      { time: 70, title: 'Finalizing plan...', hint: 'Organizing and prioritizing steps' },
+      { time: 90, title: 'Still working...', hint: 'Complex tasks take longer - hang tight!' },
+    ];
+
+    // Start elapsed time and phase display
     this.planLoadingStartTime = Date.now();
     const timeEl = document.getElementById('planLoadingTime');
-    if (timeEl) timeEl.textContent = '0s';
+    const titleEl = document.getElementById('planLoadingTitle');
+    const hintEl = document.getElementById('planLoadingHint');
 
+    if (timeEl) timeEl.textContent = '0s';
+    if (titleEl) titleEl.textContent = phases[0].title;
+    if (hintEl) hintEl.textContent = phases[0].hint;
+
+    let currentPhaseIndex = 0;
     this.planLoadingTimer = setInterval(() => {
       const elapsed = Math.floor((Date.now() - this.planLoadingStartTime) / 1000);
       if (timeEl) timeEl.textContent = `${elapsed}s`;
+
+      // Update phase based on elapsed time
+      for (let i = phases.length - 1; i >= 0; i--) {
+        if (elapsed >= phases[i].time && i > currentPhaseIndex) {
+          currentPhaseIndex = i;
+          if (titleEl) titleEl.textContent = phases[i].title;
+          if (hintEl) hintEl.textContent = phases[i].hint;
+          break;
+        }
+      }
     }, 1000);
 
     // Determine max items based on detail level
     const detailConfig = {
-      brief: { maxItems: 5, includeTests: false },
-      standard: { maxItems: 8, includeTests: true },
-      detailed: { maxItems: 12, includeTests: true },
+      brief: { maxItems: 10 },
+      standard: { maxItems: 15 },
+      detailed: { maxItems: 20 },
     };
-    const { maxItems, includeTests } = detailConfig[config.planDetailLevel] || detailConfig.standard;
+    const { maxItems } = detailConfig[config.planDetailLevel] || detailConfig.standard;
 
     try {
       const res = await fetch('/api/generate-plan', {
@@ -2671,7 +2704,6 @@ class ClaudemanApp {
         body: JSON.stringify({
           taskDescription: config.taskDescription,
           maxItems,
-          includeTests,
           detailLevel: config.planDetailLevel,
         }),
       });
@@ -2838,6 +2870,16 @@ class ClaudemanApp {
   }
 
   skipPlanGeneration() {
+    // Stop any running timers
+    if (this.planLoadingTimer) {
+      clearInterval(this.planLoadingTimer);
+      this.planLoadingTimer = null;
+    }
+    if (this.planPhaseTimer) {
+      clearInterval(this.planPhaseTimer);
+      this.planPhaseTimer = null;
+    }
+
     this.ralphWizardConfig.skipPlanGeneration = true;
     this.ralphWizardConfig.planGenerated = false;
     this.ralphWizardConfig.generatedPlan = null;

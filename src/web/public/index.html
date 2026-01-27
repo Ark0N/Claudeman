@@ -1011,11 +1011,12 @@
               <div class="plan-loading-content">
                 <div class="plan-spinner"></div>
                 <div class="plan-loading-text">
-                  <span class="plan-loading-title">Generating implementation plan...</span>
+                  <span class="plan-loading-title" id="planLoadingTitle">Starting Opus 4.5...</span>
                   <span class="plan-loading-time" id="planLoadingTime">0s</span>
                 </div>
               </div>
-              <p class="plan-loading-hint">Claude is breaking down your task into actionable steps with tests</p>
+              <p class="plan-loading-hint" id="planLoadingHint">Initializing deep reasoning model</p>
+              <button class="btn-toolbar btn-sm plan-skip-btn" onclick="app.skipPlanGeneration()">Skip</button>
             </div>
 
             <!-- Error state -->
