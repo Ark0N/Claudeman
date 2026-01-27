@@ -38,7 +38,7 @@ Claudeman is a Claude Code session manager with a web interface and autonomous R
 
 When adding new features, always ask: "Will this maintain responsiveness with 20 sessions and 50 agent windows?"
 
-**Version**: 0.1396 (must match `package.json`)
+**Version**: 0.1397 (must match `package.json`)
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 
@@ -137,8 +137,15 @@ npx vitest run -t "should create session" # By pattern
 | 3157 | browser-agent.test.ts |
 | 3158-3160 | browser-comparison.test.ts |
 | 3180-3182 | scripts/browser-comparison.mjs (benchmark) |
+| 3183 | test/e2e/workflows/quick-start.e2e.ts |
+| 3184 | test/e2e/workflows/session-input.e2e.ts |
+| 3185 | test/e2e/workflows/session-delete.e2e.ts |
+| 3186 | test/e2e/workflows/multi-session.e2e.ts |
+| 3187 | test/e2e/workflows/agent-interactions.e2e.ts |
+| 3188 | test/e2e/workflows/input-interactions.e2e.ts |
+| 3189 | test/e2e/workflows/respawn-flow.e2e.ts |
 
-**Next available port**: 3183
+**Next available port**: 3190
 
 **Browser Testing**: Three frameworks available (Playwright, Puppeteer, Agent-Browser). See `docs/browser-testing-guide.md` for full comparison and patterns.
 
@@ -155,6 +162,91 @@ npm test -- test/browser-e2e.test.ts
 - **Recommended framework**: Playwright for most cases (auto-waiting, debugging). Puppeteer for Chrome-specific/CDP features.
 - **Required browser args**: `--no-sandbox`, `--disable-setuid-sandbox`, `--disable-dev-shm-usage`
 - **Install browsers**: `npx playwright install chromium` after npm install
+
+### E2E Test Suite
+
+Real browser-based end-to-end tests using Playwright that validate actual user workflows. These tests catch issues that unit tests miss (like the cpulimit bug that broke screen creation).
+
+**Setup**:
+```bash
+npm install                        # Install dependencies (pixelmatch, pngjs)
+npx playwright install chromium    # Install browser
+```
+
+**Running E2E Tests**:
+```bash
+npm run test:e2e                                      # Run all E2E tests
+npm run test:e2e:quick                                # Run quick-start test only (critical path)
+npx vitest run test/e2e/workflows/quick-start.e2e.ts  # Run single test file
+npx vitest run test/e2e/ -t "should create session"   # Run by pattern
+```
+
+**Test Fixtures** (`test/e2e/fixtures/`):
+
+| Fixture | Purpose |
+|---------|---------|
+| `server.fixture.ts` | `createServerFixture(port)` / `destroyServerFixture()` - Server lifecycle |
+| `browser.fixture.ts` | `createBrowserFixture()` / `destroyBrowserFixture()` - Playwright browser with required args |
+| `cleanup.fixture.ts` | `CleanupTracker` - Tracks sessions, cases, screens for cleanup |
+| `screenshot.fixture.ts` | `captureAndCompare()` - Visual regression testing with pixelmatch |
+
+**Workflow Tests** (`test/e2e/workflows/`):
+
+| Test | Port | What it validates |
+|------|------|-------------------|
+| `quick-start.e2e.ts` | 3183 | **Critical path**: click button → session created → screen created → terminal visible |
+| `session-input.e2e.ts` | 3184 | Terminal input, Ctrl+C cancel, multi-line input |
+| `session-delete.e2e.ts` | 3185 | Delete button → screen killed → UI updated |
+| `multi-session.e2e.ts` | 3186 | Multiple sessions, tab switching, Ctrl+Tab shortcut |
+| `agent-interactions.e2e.ts` | 3187 | Subagent windows, parent attachment, visibility |
+| `input-interactions.e2e.ts` | 3188 | Modals, checkboxes, Ctrl+Enter/W shortcuts |
+| `respawn-flow.e2e.ts` | 3189 | Respawn enable/start/stop via API and UI |
+| `ralph-loop.e2e.ts` | 3190 | Ralph Loop wizard: open, configure, start, verify tracker enabled |
+
+**Screenshot Validation**:
+- Baselines stored in `test/e2e/screenshots/baselines/`
+- Current screenshots in `test/e2e/screenshots/current/`
+- Diff images (on failure) in `test/e2e/screenshots/diffs/`
+- First run auto-creates baselines; subsequent runs compare
+- Default threshold: 5% pixel difference allowed
+
+**Cleanup Behavior**:
+- All test cases use `e2e-test-*` prefix for easy identification
+- `CleanupTracker.forceCleanupAll()` removes ALL `e2e-test-*` resources
+- try/finally patterns ensure cleanup even on test failures
+- `afterAll` hooks call cleanup as safety net
+
+**E2E Test Pattern** (avoids Vitest hook timeout issue):
+```typescript
+it('should create session', async () => {
+  let browser: BrowserFixture | null = null;
+  const caseName = generateCaseName('test');
+
+  try {
+    serverFixture = await createServerFixture(PORT);
+    cleanup = new CleanupTracker(serverFixture.baseUrl);
+    cleanup.trackCase(caseName);
+
+    browser = await createBrowserFixture();
+    // ... test code ...
+  } finally {
+    if (browser) await destroyBrowserFixture(browser);
+  }
+}, 90000);
+```
+
+**E2E Installation Summary**:
+
+| Component | Details |
+|-----------|---------|
+| **Test Files** | 14 TypeScript files in `test/e2e/` |
+| **Fixtures** | server, browser, cleanup, screenshot, index, pixelmatch types |
+| **Workflows** | quick-start, session-input, session-delete, multi-session, agent-interactions, input-interactions, respawn-flow |
+| **Dependencies** | `playwright`, `pixelmatch`, `pngjs`, `@types/pngjs` |
+| **Browser** | Chromium via `npx playwright install chromium` |
+| **NPM Scripts** | `npm run test:e2e` (all), `npm run test:e2e:quick` (critical path) |
+| **Ports** | 3183-3189 (see workflow tests table above) |
+| **Gitignore** | `test/e2e/screenshots/current/` and `diffs/` ignored; `baselines/` tracked |
 
 **Unit tests** (no server needed): `respawn-controller`, `ralph-tracker`, `pty-interactive`, `task-queue`, `task`, `ralph-loop`, `session-manager`, `state-store`, `types`, `templates`, `ralph-config`, `spawn-detector`, `spawn-types`, `spawn-orchestrator`, `ai-idle-checker`, `ai-plan-checker`
 
@@ -386,6 +478,45 @@ This prevents Claude from accidentally killing its own screen session. The defau
 
 ## Code Patterns
 
+### Memory Leak Prevention
+
+The frontend (`app.js`) runs for extended periods and must avoid memory leaks. Key patterns:
+
+**SSE Reconnection**: When EventSource reconnects, all event listeners are re-registered on the new instance. The old EventSource is closed, but any orphaned reconnect timeouts must be cleared:
+```javascript
+// Clear pending reconnect timeout before creating new connection
+if (this.sseReconnectTimeout) {
+  clearTimeout(this.sseReconnectTimeout);
+  this.sseReconnectTimeout = null;
+}
+```
+
+**Cleanup on Init**: When `handleInit()` is called (SSE reconnect), clear all Maps and timers that could contain stale data:
+- `idleTimers` - Clear all timeouts, then clear the Map
+- `subagentActivity`, `subagentToolResults` - Clear to remove stale agent data
+- `pendingHooks`, `tabAlerts`, `_shownCompletions` - Clear state tracking Sets
+
+**Interval Management**: Always provide a stop method for intervals:
+```javascript
+startSystemStatsPolling() {
+  this.stopSystemStatsPolling(); // Clear existing before starting
+  this.systemStatsInterval = setInterval(...);
+}
+stopSystemStatsPolling() {
+  if (this.systemStatsInterval) {
+    clearInterval(this.systemStatsInterval);
+    this.systemStatsInterval = null;
+  }
+}
+```
+
+**Session Cleanup**: When a session is deleted, clean up ALL associated resources:
+- Respawn state (`respawnStatus`, `respawnTimers`, `respawnCountdownTimers`, `respawnActionLogs`)
+- Subagent data (windows, activity, tool results)
+- Timers (idle timers, pending hooks)
+
+**Subagent Data**: Clean up activity/toolResults for completed agents after 5 minutes to prevent unbounded growth during long sessions.
+
 ### Pre-compiled Regex Patterns
 
 For performance, regex patterns that are used frequently should be compiled once at module level:
@@ -582,7 +713,7 @@ TUI uses React JSX (`jsx: react-jsx`, `jsxImportSource: react`) for Ink componen
 - **Session event**: Add to `SessionEvents` interface in `session.ts`, emit via `this.emit()`, subscribe in server.ts, handle in frontend
 - **Session setting**: Add field to `SessionState` in `types.ts`, include in `session.toState()`, call `this.persistSessionState(session)` in server.ts after the change
 - **MCP tool**: Add tool definition in `mcp-server.ts` using `server.tool()`, use `apiRequest()` to call Claudeman REST API
-- **New test file**: Create `test/<name>.test.ts`, pick unique port (next available: 3183), add to port allocation table above
+- **New test file**: Create `test/<name>.test.ts`, pick unique port (next available: 3190), add to port allocation table above
 
 ### API Error Codes
 
@@ -706,3 +837,11 @@ Placeholders replaced:
 ```
 
 The `RalphTracker` class (`src/ralph-tracker.ts`) detects Ralph patterns in Claude output and tracks loop state, todos, and completion phrases. It auto-enables when Ralph-related patterns are detected.
+
+**Ralph Loop Wizard**: The web UI wizard (`app.js:startRalphLoop()`) provides a guided setup for Ralph Loops. It:
+1. Creates/selects a case and starts a session
+2. Configures the Ralph tracker with completion phrase and max iterations
+3. Optionally generates a task plan (`@fix_plan.md`)
+4. Sends the initial prompt with iteration protocol
+
+**IMPORTANT**: The respawn controller is **disabled by default** for Ralph Loops. The "Enable Respawn" checkbox in Advanced Options is unchecked by default. Ralph Loops handle their own iteration protocol via `<promise>` tags and do not need the respawn controller's autonomous session cycling.

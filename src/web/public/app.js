@@ -493,6 +493,9 @@ class ClaudemanApp {
     // System stats polling
     this.systemStatsInterval = null;
 
+    // SSE reconnect timeout (to prevent orphaned timeouts)
+    this.sseReconnectTimeout = null;
+
     // Notification system
     this.notificationManager = new NotificationManager(this);
     this.idleTimers = new Map(); // Map<sessionId, timeout> for stuck detection
@@ -1029,6 +1032,12 @@ class ClaudemanApp {
   // ========== SSE Connection ==========
 
   connectSSE() {
+    // Clear any pending reconnect timeout to prevent duplicate connections
+    if (this.sseReconnectTimeout) {
+      clearTimeout(this.sseReconnectTimeout);
+      this.sseReconnectTimeout = null;
+    }
+
     // Close existing EventSource before creating new one to prevent duplicate connections
     if (this.eventSource) {
       this.eventSource.close();
@@ -1045,7 +1054,11 @@ class ClaudemanApp {
         this.eventSource.close();
         this.eventSource = null;
       }
-      setTimeout(() => this.connectSSE(), 3000);
+      // Clear any existing reconnect timeout before setting new one (prevents orphaned timeouts)
+      if (this.sseReconnectTimeout) {
+        clearTimeout(this.sseReconnectTimeout);
+      }
+      this.sseReconnectTimeout = setTimeout(() => this.connectSSE(), 3000);
     };
 
     this.eventSource.addEventListener('init', (e) => {
@@ -1085,13 +1098,18 @@ class ClaudemanApp {
       this.ralphStates.delete(data.id);  // Clean up ralph state for this session
       this.projectInsights.delete(data.id);  // Clean up project insights for this session
       this.closeSessionLogViewerWindows(data.id);  // Close log viewer windows for this session
-      this.closeSessionSubagentWindows(data.id);  // Close subagent windows for this session
+      this.closeSessionSubagentWindows(data.id, true);  // Close subagent windows and cleanup activity data
       // Clean up idle timer for this session
       const idleTimer = this.idleTimers.get(data.id);
       if (idleTimer) {
         clearTimeout(idleTimer);
         this.idleTimers.delete(data.id);
       }
+      // Clean up respawn state for this session
+      delete this.respawnStatus[data.id];
+      delete this.respawnTimers[data.id];
+      delete this.respawnCountdownTimers[data.id];
+      delete this.respawnActionLogs[data.id];
       if (this.activeSessionId === data.id) {
         this.activeSessionId = null;
         this.terminal.clear();
@@ -1125,7 +1143,8 @@ class ClaudemanApp {
             const cleanBuffer = termData.terminalBuffer
               .replaceAll(DEC_SYNC_START, '')
               .replaceAll(DEC_SYNC_END, '');
-            this.terminal.write(cleanBuffer);
+            // Use chunked write to avoid UI freeze with large buffers (can be 1-2MB)
+            await this.chunkedTerminalWrite(cleanBuffer);
           }
 
           // Send resize to ensure proper dimensions
@@ -1849,6 +1868,17 @@ class ClaudemanApp {
           this.saveSubagentWindowStates(); // Persist the minimized state
         }
       }
+
+      // Clean up activity/tool data for completed agents after 5 minutes
+      // This prevents memory leaks from long-running sessions with many subagents
+      setTimeout(() => {
+        const agent = this.subagents.get(data.agentId);
+        // Only clean up if agent is still completed (not restarted)
+        if (agent?.status === 'completed') {
+          this.subagentActivity.delete(data.agentId);
+          this.subagentToolResults.delete(data.agentId);
+        }
+      }, 5 * 60 * 1000); // 5 minutes
     });
   }
 
@@ -1871,6 +1901,21 @@ class ClaudemanApp {
 
     this.sessions.clear();
     this.ralphStates.clear();
+    this.terminalBuffers.clear();
+    this.projectInsights.clear();
+    // Clear all idle timers to prevent stale timers from firing
+    for (const timer of this.idleTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.idleTimers.clear();
+    // Clear pending hooks
+    this.pendingHooks.clear();
+    // Clear tab alerts
+    this.tabAlerts.clear();
+    // Clear shown completions (used for duplicate notification prevention)
+    if (this._shownCompletions) {
+      this._shownCompletions.clear();
+    }
     data.sessions.forEach(s => {
       this.sessions.set(s.id, s);
       // Load ralph state from session data
@@ -1884,7 +1929,14 @@ class ClaudemanApp {
 
     if (data.respawnStatus) {
       this.respawnStatus = data.respawnStatus;
+    } else {
+      // Clear respawn status on init if not provided (prevents stale data)
+      this.respawnStatus = {};
     }
+    // Clean up respawn state for sessions that no longer exist
+    this.respawnTimers = {};
+    this.respawnCountdownTimers = {};
+    this.respawnActionLogs = {};
 
     // Store global stats for aggregate tracking
     if (data.globalStats) {
@@ -1903,9 +1955,11 @@ class ClaudemanApp {
     this.updateCost();
     this.renderSessionTabs();
 
-    // Load subagents
+    // Load subagents - clear all related maps to prevent memory leaks on reconnect
     if (data.subagents) {
       this.subagents.clear();
+      this.subagentActivity.clear();
+      this.subagentToolResults.clear();
       data.subagents.forEach(s => {
         this.subagents.set(s.agentId, s);
       });
@@ -3098,8 +3152,8 @@ class ClaudemanApp {
   async startRalphLoop() {
     const config = this.ralphWizardConfig;
 
-    // Read advanced options
-    config.enableRespawn = document.getElementById('ralphEnableRespawn')?.checked ?? true;
+    // Read advanced options (respawn disabled by default for Ralph Loops)
+    config.enableRespawn = document.getElementById('ralphEnableRespawn')?.checked ?? false;
 
     // Close wizard
     this.closeRalphWizard();
@@ -3220,7 +3274,7 @@ class ClaudemanApp {
       // Wait for Claude CLI to be ready (shows prompt)
       // Check session status multiple times - Claude CLI can take a while to initialize
       let attempts = 0;
-      const maxAttempts = 20; // 10 seconds total
+      const maxAttempts = 30; // 15 seconds total
       let sessionReady = false;
       console.log('[RalphWizard] Waiting for session to become ready...');
       while (attempts < maxAttempts) {
@@ -3228,15 +3282,14 @@ class ClaudemanApp {
         try {
           const statusRes = await fetch(`/api/sessions/${sessionId}`);
           const statusData = await statusRes.json();
-          // Session is ready if:
-          // 1. Status is explicitly 'idle', OR
-          // 2. isWorking is false (Claude is at prompt), OR
-          // 3. Terminal buffer contains the prompt character
-          const isIdle = statusData?.status === 'idle';
-          const notWorking = statusData?.isWorking === false;
-          const hasPrompt = statusData?.terminalBuffer?.includes('❯');
-          if (isIdle || notWorking || hasPrompt) {
-            console.log(`[RalphWizard] Session ready after ${attempts + 1} attempts (idle=${isIdle}, notWorking=${notWorking}, hasPrompt=${hasPrompt})`);
+          // Session is ready ONLY when Claude CLI shows its UI:
+          // Must see prompt character '❯' OR 'tokens' status line
+          // Do NOT use isWorking=false - that fires before CLI is ready!
+          const termBuf = statusData?.terminalBuffer || '';
+          const hasPrompt = termBuf.includes('❯');
+          const hasTokensLine = termBuf.includes('tokens');
+          if (hasPrompt || hasTokensLine) {
+            console.log(`[RalphWizard] Session ready after ${attempts + 1} attempts (hasPrompt=${hasPrompt}, hasTokensLine=${hasTokensLine})`);
             sessionReady = true;
             break;
           }
@@ -3253,13 +3306,32 @@ class ClaudemanApp {
         await new Promise(r => setTimeout(r, 2000));
       }
 
-      // Send the prompt to start the loop using writeViaScreen (more reliable)
-      // Use \r for Enter (carriage return), not \n (newline)
-      console.log('[RalphWizard] Sending prompt to session...');
+      // Add delay after session ready before sending prompt
+      console.log('[RalphWizard] Adding 2s delay before sending prompt...');
+      await new Promise(r => setTimeout(r, 2000));
+
+      // Write prompt to file first (avoids screen input escaping issues)
+      console.log(`[RalphWizard] Writing prompt to @ralph_prompt.md (${fullPrompt.length} chars)...`);
+      const writeRes = await fetch(`/api/sessions/${sessionId}/ralph-prompt/write`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: fullPrompt })
+      });
+
+      if (!writeRes.ok) {
+        const errorData = await writeRes.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to write prompt file: ${writeRes.status}`);
+      }
+
+      console.log('[RalphWizard] Prompt file written, sending read command to Claude...');
+
+      // Send a simple command to Claude to read the prompt file
+      // This avoids all the escaping issues with long multi-line prompts
+      const readCommand = 'Read @ralph_prompt.md and follow the instructions. Start working immediately.\r';
       const inputRes = await fetch(`/api/sessions/${sessionId}/input`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: fullPrompt + '\r', useScreen: true })
+        body: JSON.stringify({ input: readCommand, useScreen: true })
       });
 
       if (!inputRes.ok) {
@@ -3267,9 +3339,32 @@ class ClaudemanApp {
         throw new Error(errorData.error || `Failed to send input: ${inputRes.status}`);
       }
 
-      console.log('[RalphWizard] Prompt sent successfully');
+      console.log('[RalphWizard] Read command sent, verifying it was received...');
 
-      this.showToast(`Ralph Loop started in ${config.caseName}`, 'success');
+      // Verify the prompt was actually received by checking for activity
+      let verified = false;
+      for (let verifyAttempt = 0; verifyAttempt < 15; verifyAttempt++) {
+        await new Promise(r => setTimeout(r, 1000));
+        try {
+          const verifyRes = await fetch(`/api/sessions/${sessionId}`);
+          const verifyData = await verifyRes.json();
+          if (verifyData.isWorking || verifyData.tokens?.total > 0) {
+            console.log(`[RalphWizard] Prompt verified! tokens=${verifyData.tokens?.total}`);
+            verified = true;
+            break;
+          }
+          console.log(`[RalphWizard] Verify attempt ${verifyAttempt + 1}: status=${verifyData.status}, tokens=${verifyData.tokens?.total || 0}`);
+        } catch (e) {
+          console.warn('[RalphWizard] Verify error:', e);
+        }
+      }
+
+      if (!verified) {
+        console.warn('[RalphWizard] Session may not have started yet - prompt file is at @ralph_prompt.md');
+        this.showToast('Session started - check @ralph_prompt.md if prompt not received', 'warning');
+      } else {
+        this.showToast(`Ralph Loop started in ${config.caseName}`, 'success');
+      }
 
     } catch (err) {
       console.error('Failed to start Ralph loop:', err);
@@ -7230,7 +7325,8 @@ class ClaudemanApp {
   }
 
   // Close all subagent windows for a session (fully removes them, not minimize)
-  closeSessionSubagentWindows(sessionId) {
+  // If cleanupData is true, also remove activity and toolResults data to prevent memory leaks
+  closeSessionSubagentWindows(sessionId, cleanupData = false) {
     const toClose = [];
     for (const [agentId, _windowData] of this.subagentWindows) {
       const agent = this.subagents.get(agentId);
@@ -7240,6 +7336,12 @@ class ClaudemanApp {
     }
     for (const agentId of toClose) {
       this.forceCloseSubagentWindow(agentId);
+      // Clean up activity and tool results data if requested (prevents memory leaks)
+      if (cleanupData) {
+        this.subagents.delete(agentId);
+        this.subagentActivity.delete(agentId);
+        this.subagentToolResults.delete(agentId);
+      }
     }
     // Also clean up minimized agents for this session
     this.minimizedSubagents.delete(sessionId);
@@ -8529,6 +8631,9 @@ class ClaudemanApp {
   // ========== System Stats ==========
 
   startSystemStatsPolling() {
+    // Clear any existing interval to prevent duplicates
+    this.stopSystemStatsPolling();
+
     // Initial fetch
     this.fetchSystemStats();
 
@@ -8536,6 +8641,13 @@ class ClaudemanApp {
     this.systemStatsInterval = setInterval(() => {
       this.fetchSystemStats();
     }, 2000);
+  }
+
+  stopSystemStatsPolling() {
+    if (this.systemStatsInterval) {
+      clearInterval(this.systemStatsInterval);
+      this.systemStatsInterval = null;
+    }
   }
 
   async fetchSystemStats() {

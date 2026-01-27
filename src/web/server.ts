@@ -1198,6 +1198,42 @@ export class WebServer extends EventEmitter {
       }
     });
 
+    // Write Ralph prompt to file in session's working directory
+    // This avoids screen input escaping issues with long multi-line prompts
+    this.app.post('/api/sessions/:id/ralph-prompt/write', async (req) => {
+      const { id } = req.params as { id: string };
+      const { content } = req.body as { content: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
+      const workingDir = session.workingDir;
+      if (!workingDir) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Session has no working directory');
+      }
+
+      if (!content || typeof content !== 'string') {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Content is required');
+      }
+
+      const filePath = path.join(workingDir, '@ralph_prompt.md');
+
+      try {
+        await fs.writeFile(filePath, content, 'utf-8');
+        return {
+          success: true,
+          data: {
+            filePath,
+            contentLength: content.length,
+          }
+        };
+      } catch (error) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to write file: ${error}`);
+      }
+    });
+
     // Run prompt in session
     this.app.post('/api/sessions/:id/run', async (req): Promise<ApiResponse> => {
       const { id } = req.params as { id: string };

@@ -1,6 +1,6 @@
 {
   "name": "claudeman",
-  "version": "0.1396",
+  "version": "0.1397",
   "description": "The missing control plane for Claude Code - run 20 autonomous agents with real-time monitoring and session persistence",
   "type": "module",
   "main": "dist/index.js",
@@ -19,6 +19,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:e2e": "vitest run test/e2e/",
+    "test:e2e:quick": "vitest run test/e2e/workflows/quick-start.e2e.ts",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
@@ -52,11 +54,14 @@
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "@types/pngjs": "^6.0.5",
     "@types/react": "^19.2.9",
     "@types/uuid": "^10.0.0",
     "@vitest/coverage-v8": "^4.0.18",
     "agent-browser": "^0.6.0",
+    "pixelmatch": "^6.0.0",
     "playwright": "^1.58.0",
+    "pngjs": "^7.0.0",
     "puppeteer": "^24.36.0",
     "tsx": "^4.15.0",
     "typescript": "^5.9.3",

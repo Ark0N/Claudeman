@@ -7,6 +7,10 @@ dist/
 # Test coverage
 coverage/
 
+# E2E test screenshots (keep baselines, ignore current/diffs)
+test/e2e/screenshots/current/
+test/e2e/screenshots/diffs/
+
 # Logs
 *.log
 npm-debug.log*
