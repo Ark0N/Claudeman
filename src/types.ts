@@ -86,12 +86,10 @@ export interface SessionState {
   parentAgentId?: string;
   /** Child agent IDs spawned by this session */
   childAgentIds?: string[];
-  /** CPU limiting enabled */
-  cpuLimitEnabled?: boolean;
-  /** Nice value for CPU priority (-20 to 19) */
-  cpuLimitNiceValue?: number;
-  /** CPU limit percentage (1-100) */
-  cpuLimitPercent?: number;
+  /** Nice priority enabled */
+  niceEnabled?: boolean;
+  /** Nice value (-20 to 19) */
+  niceValue?: number;
 }
 
 // ========== Global Stats Types ==========
@@ -239,33 +237,22 @@ export interface AppState {
   tokenStats?: TokenStats;
 }
 
-// ========== CPU Limiting Types ==========
+// ========== Nice Priority Types ==========
 
 /**
- * Configuration for CPU limiting of Claude sessions.
- *
- * Uses `nice` (always available) to lower process priority and
- * optionally `cpulimit` (if installed) for hard CPU usage limits.
+ * Configuration for process priority using `nice`.
+ * Lower priority reduces CPU contention with other processes.
  */
-export interface CpuLimitConfig {
-  /** Whether CPU limiting is enabled */
+export interface NiceConfig {
+  /** Whether nice priority is enabled */
   enabled: boolean;
   /** Nice value (-20 to 19, default: 10 = lower priority) */
   niceValue: number;
-  /** CPU limit percentage (1-100, default: 80) */
-  cpuLimitPercent: number;
-  /** Whether to use cpulimit if available (default: true) */
-  useCpulimitIfAvailable: boolean;
 }
 
-/**
- * Default CPU limit configuration
- */
-export const DEFAULT_CPU_LIMIT_CONFIG: CpuLimitConfig = {
+export const DEFAULT_NICE_CONFIG: NiceConfig = {
   enabled: false,
   niceValue: 10,
-  cpuLimitPercent: 80,
-  useCpulimitIfAvailable: true,
 };
 
 // ========== Respawn Controller Types ==========

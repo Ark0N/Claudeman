@@ -4886,13 +4886,10 @@ class ClaudemanApp {
     claudeModeSelect.onchange = () => {
       allowedToolsRow.style.display = claudeModeSelect.value === 'allowedTools' ? '' : 'none';
     };
-    // CPU Limiting settings
-    const cpuLimitSettings = settings.cpuLimit || {};
-    document.getElementById('appSettingsCpuLimitEnabled').checked = cpuLimitSettings.enabled ?? false;
-    document.getElementById('appSettingsCpuNiceValue').value = cpuLimitSettings.niceValue ?? 10;
-    document.getElementById('appSettingsCpuLimitPercent').value = cpuLimitSettings.cpuLimitPercent ?? 80;
-    // Check cpulimit availability and update status indicator
-    this.checkCpulimitAvailability();
+    // CPU Priority settings
+    const niceSettings = settings.nice || {};
+    document.getElementById('appSettingsNiceEnabled').checked = niceSettings.enabled ?? false;
+    document.getElementById('appSettingsNiceValue').value = niceSettings.niceValue ?? 10;
     // Notification settings
     const notifPrefs = this.notificationManager?.preferences || {};
     document.getElementById('appSettingsNotifEnabled').checked = notifPrefs.enabled ?? true;
@@ -4954,12 +4951,10 @@ class ClaudemanApp {
       // Claude CLI settings
       claudeMode: document.getElementById('appSettingsClaudeMode').value,
       allowedTools: document.getElementById('appSettingsAllowedTools').value.trim(),
-      // CPU Limiting settings
-      cpuLimit: {
-        enabled: document.getElementById('appSettingsCpuLimitEnabled').checked,
-        niceValue: parseInt(document.getElementById('appSettingsCpuNiceValue').value) || 10,
-        cpuLimitPercent: parseInt(document.getElementById('appSettingsCpuLimitPercent').value) || 80,
-        useCpulimitIfAvailable: true,
+      // CPU Priority settings
+      nice: {
+        enabled: document.getElementById('appSettingsNiceEnabled').checked,
+        niceValue: parseInt(document.getElementById('appSettingsNiceValue').value) || 10,
       },
     };
 
@@ -5019,36 +5014,6 @@ class ClaudemanApp {
       console.error('Failed to load app settings:', err);
     }
     return {};
-  }
-
-  // Check if cpulimit is available and update the UI status indicator
-  async checkCpulimitAvailability() {
-    const statusEl = document.getElementById('cpuLimitStatus');
-    const percentInput = document.getElementById('appSettingsCpuLimitPercent');
-    if (!statusEl) return;
-
-    try {
-      const res = await fetch('/api/system/cpu-limit-status');
-      if (res.ok) {
-        const data = await res.json();
-        if (data.cpulimitAvailable) {
-          statusEl.textContent = '\u2713';  // Checkmark
-          statusEl.title = 'cpulimit is installed';
-          statusEl.classList.add('available');
-          statusEl.classList.remove('unavailable');
-          if (percentInput) percentInput.disabled = false;
-        } else {
-          statusEl.textContent = '\u2717';  // X mark
-          statusEl.title = 'cpulimit not installed (install with: apt install cpulimit)';
-          statusEl.classList.add('unavailable');
-          statusEl.classList.remove('available');
-          // Don't disable input, still allow setting the value for when it gets installed
-        }
-      }
-    } catch (err) {
-      statusEl.textContent = '?';
-      statusEl.title = 'Could not check cpulimit availability';
-    }
   }
 
   applyHeaderVisibilitySettings() {

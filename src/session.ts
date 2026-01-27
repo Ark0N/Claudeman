@@ -21,7 +21,7 @@ import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 import * as pty from 'node-pty';
-import { SessionState, SessionStatus, SessionConfig, ScreenSession, RalphTrackerState, RalphTodoItem, ActiveBashTool, CpuLimitConfig, DEFAULT_CPU_LIMIT_CONFIG } from './types.js';
+import { SessionState, SessionStatus, SessionConfig, ScreenSession, RalphTrackerState, RalphTodoItem, ActiveBashTool, NiceConfig, DEFAULT_NICE_CONFIG } from './types.js';
 import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { RalphTracker } from './ralph-tracker.js';
 import { BashToolParser } from './bash-tool-parser.js';
@@ -435,8 +435,8 @@ export class Session extends EventEmitter {
   private _parentAgentId: string | null = null;
   private _childAgentIds: string[] = [];
 
-  // CPU limiting configuration
-  private _cpuLimitConfig: CpuLimitConfig = { ...DEFAULT_CPU_LIMIT_CONFIG };
+  // Nice prioritying configuration
+  private _niceConfig: NiceConfig = { ...DEFAULT_NICE_CONFIG };
 
   // Store handler references for cleanup (prevents memory leaks)
   private _taskTrackerHandlers: {
@@ -475,7 +475,7 @@ export class Session extends EventEmitter {
     screenManager?: ScreenManager;
     useScreen?: boolean;
     screenSession?: ScreenSession;  // For restored sessions - pass the existing screen
-    cpuLimitConfig?: CpuLimitConfig;  // CPU limiting configuration
+    niceConfig?: NiceConfig;  // Nice prioritying configuration
   }) {
     super();
     this.id = config.id || uuidv4();
@@ -488,9 +488,9 @@ export class Session extends EventEmitter {
     this._useScreen = config.useScreen ?? (this._screenManager !== null && ScreenManager.isScreenAvailable());
     this._screenSession = config.screenSession || null;  // Use existing screen if provided
 
-    // Apply CPU limit configuration if provided
-    if (config.cpuLimitConfig) {
-      this._cpuLimitConfig = { ...config.cpuLimitConfig };
+    // Apply Nice priority configuration if provided
+    if (config.niceConfig) {
+      this._niceConfig = { ...config.niceConfig };
     }
 
     // Initialize task tracker and forward events (store handlers for cleanup)
@@ -653,29 +653,22 @@ export class Session extends EventEmitter {
     if (idx >= 0) this._childAgentIds.splice(idx, 1);
   }
 
-  // CPU limit config getters and setters
-  get cpuLimitConfig(): CpuLimitConfig {
-    return { ...this._cpuLimitConfig };
+  // Nice priority config getters and setters
+  get niceConfig(): NiceConfig {
+    return { ...this._niceConfig };
   }
 
   /**
-   * Set CPU limit configuration.
-   * Note: This only affects new sessions; existing running processes won't be limited.
+   * Set CPU priority configuration.
+   * Note: This only affects new sessions; existing running processes won't be changed.
    */
-  setCpuLimit(config: Partial<CpuLimitConfig>): void {
+  setNice(config: Partial<NiceConfig>): void {
     if (config.enabled !== undefined) {
-      this._cpuLimitConfig.enabled = config.enabled;
+      this._niceConfig.enabled = config.enabled;
     }
     if (config.niceValue !== undefined) {
       // Clamp to valid range
-      this._cpuLimitConfig.niceValue = Math.max(-20, Math.min(19, config.niceValue));
-    }
-    if (config.cpuLimitPercent !== undefined) {
-      // Clamp to valid range
-      this._cpuLimitConfig.cpuLimitPercent = Math.max(1, Math.min(100, config.cpuLimitPercent));
-    }
-    if (config.useCpulimitIfAvailable !== undefined) {
-      this._cpuLimitConfig.useCpulimitIfAvailable = config.useCpulimitIfAvailable;
+      this._niceConfig.niceValue = Math.max(-20, Math.min(19, config.niceValue));
     }
   }
 
@@ -794,9 +787,8 @@ export class Session extends EventEmitter {
       ralphCompletionPhrase: this._ralphTracker.loopState.completionPhrase || undefined,
       parentAgentId: this._parentAgentId || undefined,
       childAgentIds: this._childAgentIds.length > 0 ? this._childAgentIds : undefined,
-      cpuLimitEnabled: this._cpuLimitConfig.enabled,
-      cpuLimitNiceValue: this._cpuLimitConfig.niceValue,
-      cpuLimitPercent: this._cpuLimitConfig.cpuLimitPercent,
+      niceEnabled: this._niceConfig.enabled,
+      niceValue: this._niceConfig.niceValue,
     };
   }
 
@@ -834,12 +826,10 @@ export class Session extends EventEmitter {
         enabled: this._autoClearEnabled,
         threshold: this._autoClearThreshold,
       },
-      // CPU limit configuration
-      cpuLimit: {
-        enabled: this._cpuLimitConfig.enabled,
-        niceValue: this._cpuLimitConfig.niceValue,
-        cpuLimitPercent: this._cpuLimitConfig.cpuLimitPercent,
-        useCpulimitIfAvailable: this._cpuLimitConfig.useCpulimitIfAvailable,
+      // CPU priority configuration
+      nice: {
+        enabled: this._niceConfig.enabled,
+        niceValue: this._niceConfig.niceValue,
       },
       // Ralph tracking state
       ralphLoop: this._ralphTracker.loopState,
@@ -890,7 +880,7 @@ export class Session extends EventEmitter {
           console.log('[Session] Attaching to existing screen session:', this._screenSession!.screenName);
         } else {
           // Create a new screen session
-          this._screenSession = await this._screenManager.createScreen(this.id, this.workingDir, 'claude', this._name, this._cpuLimitConfig);
+          this._screenSession = await this._screenManager.createScreen(this.id, this.workingDir, 'claude', this._name, this._niceConfig);
           console.log('[Session] Created screen session:', this._screenSession.screenName);
 
           // Wait a moment for screen to fully start
@@ -1103,7 +1093,7 @@ export class Session extends EventEmitter {
           console.log('[Session] Attaching to existing screen session:', this._screenSession!.screenName);
         } else {
           // Create a new screen session
-          this._screenSession = await this._screenManager.createScreen(this.id, this.workingDir, 'shell', this._name, this._cpuLimitConfig);
+          this._screenSession = await this._screenManager.createScreen(this.id, this.workingDir, 'shell', this._name, this._niceConfig);
           console.log('[Session] Created screen session:', this._screenSession.screenName);
 
           // Wait a moment for screen to fully start

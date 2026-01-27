@@ -24,7 +24,7 @@ import { fileStreamManager } from '../file-stream-manager.js';
 import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
 import { SpawnOrchestrator, type SessionCreator } from '../spawn-orchestrator.js';
 import type { SpawnOrchestratorConfig } from '../spawn-types.js';
-import { ScreenManager, cpulimitAvailable } from '../screen-manager.js';
+import { ScreenManager } from '../screen-manager.js';
 import { getStore } from '../state-store.js';
 import { generateClaudeMd } from '../templates/claude-md.js';
 import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
@@ -56,8 +56,8 @@ import {
   type QuickStartResponse,
   type CaseInfo,
   type PersistedRespawnConfig,
-  type CpuLimitConfig,
-  DEFAULT_CPU_LIMIT_CONFIG,
+  type NiceConfig,
+  DEFAULT_NICE_CONFIG,
 } from '../types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -526,14 +526,14 @@ export class WebServer extends EventEmitter {
 
       const body = req.body as CreateSessionRequest & { mode?: 'claude' | 'shell'; name?: string };
       const workingDir = body.workingDir || process.cwd();
-      const globalCpuLimit = this.getGlobalCpuLimitConfig();
+      const globalNice = this.getGlobalNiceConfig();
       const session = new Session({
         workingDir,
         mode: body.mode || 'claude',
         name: body.name || '',
         screenManager: this.screenManager,
         useScreen: true,
-        cpuLimitConfig: globalCpuLimit,
+        niceConfig: globalNice,
       });
 
       this.sessions.set(session.id, session);
@@ -2112,14 +2112,14 @@ export class WebServer extends EventEmitter {
       }
 
       // Create a new session with the case as working directory
-      // Apply global CPU limit config if enabled in settings
-      const cpuLimitConfig = this.getGlobalCpuLimitConfig();
+      // Apply global Nice priority config if enabled in settings
+      const niceConfig = this.getGlobalNiceConfig();
       const session = new Session({
         workingDir: casePath,
         screenManager: this.screenManager,
         useScreen: true,
         mode: mode,
-        cpuLimitConfig: cpuLimitConfig,
+        niceConfig: niceConfig,
       });
 
       // Auto-detect completion phrase from CLAUDE.md BEFORE broadcasting
@@ -2392,17 +2392,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       }
     });
 
-    // ============ CPU Limit Endpoints ============
+    // ============ CPU Priority Endpoints ============
 
-    // Get CPU limit system status (whether cpulimit is installed)
-    this.app.get('/api/system/cpu-limit-status', async () => {
-      return {
-        success: true,
-        cpulimitAvailable: cpulimitAvailable(),
-      };
-    });
-
-    // Get CPU limit config for a session
+    // Get Nice priority config for a session
     this.app.get('/api/sessions/:id/cpu-limit', async (req) => {
       const { id } = req.params as { id: string };
       const session = this.sessions.get(id);
@@ -2411,12 +2403,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       }
       return {
         success: true,
-        cpuLimit: session.cpuLimitConfig,
-        cpulimitAvailable: cpulimitAvailable(),
+        nice: session.niceConfig,
       };
     });
 
-    // Update CPU limit config for a session
+    // Update Nice priority config for a session
     // Note: Changes only apply to NEW sessions, not running ones
     this.app.post('/api/sessions/:id/cpu-limit', async (req) => {
       const { id } = req.params as { id: string };
@@ -2425,7 +2416,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
-      const body = req.body as Partial<CpuLimitConfig>;
+      const body = req.body as Partial<NiceConfig>;
 
       // Validate inputs
       if (body.niceValue !== undefined) {
@@ -2433,20 +2424,15 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
           return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Nice value must be between -20 and 19');
         }
       }
-      if (body.cpuLimitPercent !== undefined) {
-        if (typeof body.cpuLimitPercent !== 'number' || body.cpuLimitPercent < 1 || body.cpuLimitPercent > 100) {
-          return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'CPU limit percent must be between 1 and 100');
-        }
-      }
 
-      session.setCpuLimit(body);
+      session.setNice(body);
       this.persistSessionState(session);
       this.broadcast('session:updated', { session: session.toDetailedState() });
 
       return {
         success: true,
-        cpuLimit: session.cpuLimitConfig,
-        note: 'CPU limiting only affects newly created screen sessions, not currently running ones.',
+        nice: session.niceConfig,
+        note: 'Nice priority only affects newly created screen sessions, not currently running ones.',
       };
     });
 
@@ -3319,14 +3305,14 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   private setupSpawnOrchestratorListeners(): void {
     const sessionCreator: SessionCreator = {
       createAgentSession: async (workingDir: string, name: string) => {
-        const globalCpuLimit = this.getGlobalCpuLimitConfig();
+        const globalNice = this.getGlobalNiceConfig();
         const session = new Session({
           workingDir,
           screenManager: this.screenManager,
           useScreen: true,
           mode: 'claude',
           name: `spawn:${name}`,
-          cpuLimitConfig: globalCpuLimit,
+          niceConfig: globalNice,
         });
 
         this.sessions.set(session.id, session);
@@ -3510,25 +3496,23 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     return undefined;
   }
 
-  // Helper to get global CPU limit config from settings
-  private getGlobalCpuLimitConfig(): CpuLimitConfig | undefined {
+  // Helper to get global Nice priority config from settings
+  private getGlobalNiceConfig(): NiceConfig | undefined {
     const settingsPath = join(homedir(), '.claudeman', 'settings.json');
 
     try {
       if (existsSync(settingsPath)) {
         const content = readFileSync(settingsPath, 'utf-8');
         const settings = JSON.parse(content);
-        if (settings.cpuLimit && settings.cpuLimit.enabled) {
+        if (settings.nice && settings.nice.enabled) {
           return {
-            enabled: settings.cpuLimit.enabled ?? false,
-            niceValue: settings.cpuLimit.niceValue ?? DEFAULT_CPU_LIMIT_CONFIG.niceValue,
-            cpuLimitPercent: settings.cpuLimit.cpuLimitPercent ?? DEFAULT_CPU_LIMIT_CONFIG.cpuLimitPercent,
-            useCpulimitIfAvailable: settings.cpuLimit.useCpulimitIfAvailable ?? DEFAULT_CPU_LIMIT_CONFIG.useCpulimitIfAvailable,
+            enabled: settings.nice.enabled ?? false,
+            niceValue: settings.nice.niceValue ?? DEFAULT_NICE_CONFIG.niceValue,
           };
         }
       }
     } catch (err) {
-      console.error('Failed to read CPU limit settings:', err);
+      console.error('Failed to read Nice priority settings:', err);
     }
     return undefined;
   }
@@ -4128,12 +4112,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
                 }
                 console.log(`[Server] Restored Ralph tracker for session ${session.id} (phrase: ${savedState.ralphCompletionPhrase || 'none'})`);
               }
-              // CPU limit config
-              if (savedState.cpuLimitEnabled !== undefined) {
-                session.setCpuLimit({
-                  enabled: savedState.cpuLimitEnabled,
-                  niceValue: savedState.cpuLimitNiceValue,
-                  cpuLimitPercent: savedState.cpuLimitPercent,
+              // Nice priority config
+              if (savedState.niceEnabled !== undefined) {
+                session.setNice({
+                  enabled: savedState.niceEnabled,
+                  niceValue: savedState.niceValue,
                 });
               }
               // Respawn controller

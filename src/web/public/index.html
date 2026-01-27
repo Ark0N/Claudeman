@@ -782,28 +782,20 @@
               </label>
               <span class="form-hint">Auto-enable for new sessions (otherwise auto-enables on Ralph pattern detection)</span>
             </div>
-            <!-- CPU Limiting Section -->
-            <div class="form-section-header">CPU Limiting</div>
+            <!-- Nice Priority Section -->
+            <div class="form-section-header">Nice Priority</div>
             <div class="form-row form-row-switch">
-              <label>Enable CPU Limiting</label>
+              <label>Enable Nice Priority Reduction</label>
               <label class="switch">
-                <input type="checkbox" id="appSettingsCpuLimitEnabled">
+                <input type="checkbox" id="appSettingsNiceEnabled">
                 <span class="slider"></span>
               </label>
-              <span class="form-hint">Limit CPU usage for Claude sessions (reduces system impact, only affects new sessions)</span>
+              <span class="form-hint">Lower priority of Claude sessions (reduces system impact, only affects new sessions)</span>
             </div>
-            <div class="form-row" id="cpuLimitNiceRow">
+            <div class="form-row" id="niceValueRow">
               <label>Nice Value</label>
-              <input type="number" id="appSettingsCpuNiceValue" min="-20" max="19" value="10" style="width: 80px;">
+              <input type="number" id="appSettingsNiceValue" min="-20" max="19" value="10" style="width: 80px;">
               <span class="form-hint">Process priority (-20 to 19, higher = lower priority, default: 10)</span>
-            </div>
-            <div class="form-row" id="cpuLimitPercentRow">
-              <label>CPU Limit %</label>
-              <div class="settings-item-actions">
-                <input type="number" id="appSettingsCpuLimitPercent" min="1" max="100" value="80" style="width: 80px;">
-                <span class="cpu-limit-status" id="cpuLimitStatus" title="cpulimit availability status"></span>
-              </div>
-              <span class="form-hint">Hard CPU limit (requires cpulimit installed, default: 80%)</span>
             </div>
           </div>
           <!-- Paths Tab -->
