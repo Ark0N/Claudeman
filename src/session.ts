@@ -1006,8 +1006,14 @@ export class Session extends EventEmitter {
         // Reset activity timeout - if no activity for 2 seconds after prompt, Claude is idle
         if (this.activityTimeout) clearTimeout(this.activityTimeout);
         this.activityTimeout = setTimeout(() => {
-          if (this._isWorking) {
+          // Emit idle if either:
+          // 1. Claude was working and is now at prompt (normal case)
+          // 2. Session just started and is ready (status is 'busy' but _isWorking is false)
+          const wasWorking = this._isWorking;
+          const isInitialReady = this._status === 'busy' && !this._isWorking;
+          if (wasWorking || isInitialReady) {
             this._isWorking = false;
+            this._status = 'idle';
             this._lastPromptTime = Date.now();
             this.emit('idle');
           }
@@ -1021,6 +1027,7 @@ export class Session extends EventEmitter {
           data.includes('⠴') || data.includes('⠦') || data.includes('⠧')) {
         if (!this._isWorking) {
           this._isWorking = true;
+          this._status = 'busy';
           this.emit('working');
         }
         // Reset timeout since Claude is active

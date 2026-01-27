@@ -2467,6 +2467,9 @@ class ClaudemanApp {
       planGenerated: false,
       skipPlanGeneration: false,
       planDetailLevel: 'standard',
+      // Existing plan detection
+      existingPlan: null,       // { todos, stats, content } from @fix_plan.md
+      useExistingPlan: false,   // User chose to use existing plan
     };
 
     // Reset UI
@@ -2479,6 +2482,9 @@ class ClaudemanApp {
 
     // Reset plan generation UI
     this.resetPlanGenerationUI();
+
+    // Check for existing @fix_plan.md in selected case
+    this.checkExistingFixPlan();
 
     // Show wizard modal
     this.updateRalphWizardUI();
@@ -2510,6 +2516,121 @@ class ClaudemanApp {
     });
   }
 
+  // Check for existing @fix_plan.md in the selected case
+  async checkExistingFixPlan() {
+    const caseName = this.ralphWizardConfig.caseName;
+    if (!caseName) return;
+
+    try {
+      const res = await fetch(`/api/cases/${encodeURIComponent(caseName)}/fix-plan`);
+      const data = await res.json();
+
+      if (data.success && data.exists && data.todos?.length > 0) {
+        this.ralphWizardConfig.existingPlan = {
+          todos: data.todos,
+          stats: data.stats,
+          content: data.content,
+        };
+        this.updateExistingPlanUI();
+      } else {
+        this.ralphWizardConfig.existingPlan = null;
+        this.updateExistingPlanUI();
+      }
+    } catch (err) {
+      console.error('Failed to check for existing plan:', err);
+      this.ralphWizardConfig.existingPlan = null;
+    }
+  }
+
+  // Called when case selector changes
+  onRalphCaseChange() {
+    const caseName = document.getElementById('ralphCaseSelect')?.value;
+    if (caseName) {
+      this.ralphWizardConfig.caseName = caseName;
+      this.ralphWizardConfig.existingPlan = null;
+      this.ralphWizardConfig.useExistingPlan = false;
+      this.checkExistingFixPlan();
+    }
+  }
+
+  // Update UI to show existing plan indicator
+  updateExistingPlanUI() {
+    const existingPlanBadge = document.getElementById('existingPlanBadge');
+    const existingPlanSection = document.getElementById('existingPlanSection');
+    const plan = this.ralphWizardConfig.existingPlan;
+
+    if (existingPlanBadge) {
+      if (plan) {
+        const pending = plan.stats?.pending || 0;
+        const total = plan.stats?.total || 0;
+        existingPlanBadge.textContent = `${pending}/${total} tasks remaining`;
+        existingPlanBadge.style.display = '';
+      } else {
+        existingPlanBadge.style.display = 'none';
+      }
+    }
+
+    if (existingPlanSection) {
+      if (plan) {
+        const pending = plan.stats?.pending || 0;
+        const completed = plan.stats?.completed || 0;
+        const total = plan.stats?.total || 0;
+        existingPlanSection.innerHTML = `
+          <div class="existing-plan-card">
+            <div class="existing-plan-header">
+              <span class="existing-plan-icon">📋</span>
+              <span>Existing @fix_plan.md found</span>
+            </div>
+            <div class="existing-plan-stats">
+              <span class="stat pending">${pending} pending</span>
+              <span class="stat completed">${completed} completed</span>
+              <span class="stat total">${total} total</span>
+            </div>
+            <div class="existing-plan-actions">
+              <button class="btn-toolbar btn-primary btn-sm" onclick="app.useExistingPlan()">
+                Use Existing Plan
+              </button>
+              <button class="btn-toolbar btn-sm" onclick="app.generateNewPlan()">
+                Generate New
+              </button>
+            </div>
+          </div>
+        `;
+        existingPlanSection.classList.remove('hidden');
+      } else {
+        existingPlanSection.classList.add('hidden');
+      }
+    }
+  }
+
+  // Use the existing @fix_plan.md
+  useExistingPlan() {
+    const plan = this.ralphWizardConfig.existingPlan;
+    if (!plan) return;
+
+    // Convert existing todos to generatedPlan format (only pending items)
+    const pendingTodos = plan.todos.filter(t => t.status === 'pending' || t.status === 'in_progress');
+    this.ralphWizardConfig.generatedPlan = pendingTodos.map((todo, idx) => ({
+      content: todo.content,
+      priority: todo.priority,
+      enabled: true,
+      id: `existing-${Date.now()}-${idx}`,
+    }));
+    this.ralphWizardConfig.planGenerated = true;
+    this.ralphWizardConfig.useExistingPlan = true;
+    this.ralphWizardConfig.planCost = 0; // No cost for existing plan
+
+    this.renderPlanEditor();
+    this.updateDetailLevelButtons();
+  }
+
+  // Generate a new plan (ignore existing)
+  generateNewPlan() {
+    this.ralphWizardConfig.useExistingPlan = false;
+    document.getElementById('existingPlanSection')?.classList.add('hidden');
+    this.generatePlan();
+  }
+
   ralphWizardNext() {
     if (this.ralphWizardStep === 1) {
       // Validate step 1
@@ -2528,12 +2649,17 @@ class ClaudemanApp {
       this.ralphWizardConfig.completionPhrase = completionPhrase.toUpperCase();
       this.ralphWizardConfig.caseName = caseName;
 
-      // Move to step 2 (plan generation) and auto-start
+      // Move to step 2 (plan generation)
       this.ralphWizardStep = 2;
       this.updateRalphWizardUI();
 
-      // Auto-start plan generation
-      this.generatePlan();
+      // If there's an existing plan, show the option to use it
+      // Otherwise auto-start plan generation
+      if (this.ralphWizardConfig.existingPlan) {
+        this.updateExistingPlanUI();
+      } else {
+        this.generatePlan();
+      }
     } else if (this.ralphWizardStep === 2) {
       // Must have generated or skipped plan
       if (!this.ralphWizardConfig.planGenerated && !this.ralphWizardConfig.skipPlanGeneration) {
@@ -2584,22 +2710,31 @@ class ClaudemanApp {
   updateRalphPromptPreview() {
     const config = this.ralphWizardConfig;
     const preview = document.getElementById('ralphPromptPreview');
+    const hasPlan = config.generatedPlan && config.generatedPlan.filter(i => i.enabled).length > 0;
 
-    // Build the formatted prompt
+    // Build the formatted prompt (abbreviated for preview)
     let prompt = config.taskDescription;
-
-    // Add completion instructions
     prompt += '\n\n---\n\n';
-    prompt += '## Completion Criteria\n\n';
-    prompt += 'When ALL requirements above are complete:\n';
-    prompt += '1. Run all tests to verify\n';
-    prompt += '2. Commit your changes\n';
-    prompt += `3. Output: <promise>${config.completionPhrase}</promise>\n`;
+
+    if (hasPlan) {
+      prompt += '## Task Plan\n';
+      prompt += '📋 @fix_plan.md will be created with your task items\n\n';
+    }
+
+    prompt += '## Iteration Protocol\n';
+    prompt += '• Check previous work • Make progress • Commit changes\n\n';
+
+    prompt += '## Completion Criteria\n';
+    prompt += `Output \`<promise>${config.completionPhrase}</promise>\` when done\n\n`;
+
+    prompt += '## If Stuck\n';
+    prompt += 'Output `<promise>BLOCKED</promise>` with explanation';
 
     // Show preview with highlighting
     const highlightedPrompt = prompt
       .replace(/<promise>/g, '<span class="preview-highlight">&lt;promise&gt;')
-      .replace(/<\/promise>/g, '&lt;/promise&gt;</span>');
+      .replace(/<\/promise>/g, '&lt;/promise&gt;</span>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>');
 
     preview.innerHTML = highlightedPrompt;
 
@@ -2625,11 +2760,19 @@ class ClaudemanApp {
   // ========== Plan Generation ==========
 
   resetPlanGenerationUI() {
-    // Show initial controls, hide other states
-    document.getElementById('planGenerationControls')?.classList.remove('hidden');
+    // Hide all plan generation states
+    document.getElementById('existingPlanSection')?.classList.add('hidden');
     document.getElementById('planGenerationLoading')?.classList.add('hidden');
     document.getElementById('planGenerationError')?.classList.add('hidden');
     document.getElementById('planEditor')?.classList.add('hidden');
+
+    // Reset spinner visibility (in case it was hidden after "Done!")
+    const spinnerEl = document.querySelector('.plan-spinner');
+    if (spinnerEl) spinnerEl.style.display = '';
+
+    // Reset existing plan badge
+    const badge = document.getElementById('existingPlanBadge');
+    if (badge) badge.style.display = 'none';
   }
 
   async generatePlan() {
@@ -2645,7 +2788,8 @@ class ClaudemanApp {
       this.planPhaseTimer = null;
     }
 
-    // Show loading state
+    // Show loading state, hide other sections
+    document.getElementById('existingPlanSection')?.classList.add('hidden');
     document.getElementById('planGenerationError')?.classList.add('hidden');
     document.getElementById('planEditor')?.classList.add('hidden');
     document.getElementById('planGenerationLoading')?.classList.remove('hidden');
@@ -2689,21 +2833,12 @@ class ClaudemanApp {
       }
     }, 1000);
 
-    // Determine max items based on detail level
-    const detailConfig = {
-      brief: { maxItems: 10 },
-      standard: { maxItems: 15 },
-      detailed: { maxItems: 20 },
-    };
-    const { maxItems } = detailConfig[config.planDetailLevel] || detailConfig.standard;
-
     try {
       const res = await fetch('/api/generate-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           taskDescription: config.taskDescription,
-          maxItems,
           detailLevel: config.planDetailLevel,
         }),
       });
@@ -2726,6 +2861,17 @@ class ClaudemanApp {
         return;
       }
 
+      // Show "Done!" briefly before transitioning
+      const titleEl = document.getElementById('planLoadingTitle');
+      const hintEl = document.getElementById('planLoadingHint');
+      const spinnerEl = document.querySelector('.plan-spinner');
+      if (titleEl) titleEl.textContent = 'Done!';
+      if (hintEl) hintEl.textContent = `Generated ${data.data.items.length} steps`;
+      if (spinnerEl) spinnerEl.style.display = 'none';
+
+      // Brief pause to show "Done!" before showing editor
+      await new Promise(r => setTimeout(r, 500));
+
       // Store plan with enabled state and IDs
       config.generatedPlan = data.data.items.map((item, idx) => ({
         ...item,
@@ -2734,6 +2880,7 @@ class ClaudemanApp {
       }));
       config.planGenerated = true;
       config.skipPlanGeneration = false;
+      config.planCost = data.data.costUsd || 0;
 
       // Show editor and update detail buttons
       this.renderPlanEditor();
@@ -2784,6 +2931,13 @@ class ClaudemanApp {
 
     list.innerHTML = '';
     const items = this.ralphWizardConfig.generatedPlan || [];
+    const cost = this.ralphWizardConfig.planCost || 0;
+
+    // Update header with item count and cost
+    const statsEl = document.getElementById('planStats');
+    if (statsEl) {
+      statsEl.textContent = `${items.length} steps · $${cost.toFixed(3)}`;
+    }
 
     items.forEach((item, index) => {
       const row = this.renderPlanItem(item, index);
@@ -2950,14 +3104,46 @@ class ClaudemanApp {
     // Close wizard
     this.closeRalphWizard();
 
-    // Build the full prompt
+    // Determine if we have a task plan
+    const hasPlan = config.generatedPlan && config.generatedPlan.filter(i => i.enabled).length > 0;
+
+    // Build the full prompt following Ralph Wiggum methodology
     let fullPrompt = config.taskDescription;
     fullPrompt += '\n\n---\n\n';
+
+    // Add @fix_plan.md reference if plan was generated
+    if (hasPlan) {
+      fullPrompt += '## Task Plan\n\n';
+      fullPrompt += 'A task plan has been written to `@fix_plan.md`. Use this to track progress:\n';
+      fullPrompt += '- Reference the plan at the start of each iteration\n';
+      fullPrompt += '- Update task checkboxes as you complete items\n';
+      fullPrompt += '- Work through items in priority order (P0 > P1 > P2)\n\n';
+    }
+
+    fullPrompt += '## Iteration Protocol\n\n';
+    fullPrompt += 'This is an autonomous loop. Files from previous iterations persist. On each iteration:\n';
+    fullPrompt += '1. Check what work has already been done\n';
+    fullPrompt += '2. Make incremental progress toward completion\n';
+    fullPrompt += '3. Commit meaningful changes with descriptive messages\n\n';
+
+    fullPrompt += '## Verification\n\n';
+    fullPrompt += 'After each significant change:\n';
+    fullPrompt += '- Run tests to verify (npm test, pytest, etc.)\n';
+    fullPrompt += '- Check for type/lint errors if applicable\n';
+    fullPrompt += '- If tests fail, read the error, fix it, and retry\n\n';
+
     fullPrompt += '## Completion Criteria\n\n';
-    fullPrompt += 'When ALL requirements above are complete:\n';
-    fullPrompt += '1. Run all tests to verify\n';
-    fullPrompt += '2. Commit your changes\n';
-    fullPrompt += `3. Output: <promise>${config.completionPhrase}</promise>\n`;
+    fullPrompt += `Output \`<promise>${config.completionPhrase}</promise>\` when ALL of the following are true:\n`;
+    fullPrompt += '- All requirements from the task description are implemented\n';
+    fullPrompt += '- All tests pass\n';
+    fullPrompt += '- Changes are committed\n\n';
+
+    fullPrompt += '## If Stuck\n\n';
+    fullPrompt += 'If you encounter the same error for 3+ iterations:\n';
+    fullPrompt += '1. Document what you\'ve tried\n';
+    fullPrompt += '2. Identify the specific blocker\n';
+    fullPrompt += '3. Try an alternative approach\n';
+    fullPrompt += '4. If truly blocked, output `<promise>BLOCKED</promise>` with an explanation\n';
 
     try {
       // Step 1: Create/verify case exists and start session
@@ -2996,12 +3182,20 @@ class ClaudemanApp {
         const enabledItems = config.generatedPlan.filter(i => i.enabled);
         if (enabledItems.length > 0) {
           const planContent = this.generateFixPlanContent(enabledItems);
-          // Import the plan content
-          await fetch(`/api/sessions/${sessionId}/fix-plan/import`, {
+          // Import the plan content and get the todos back
+          const importRes = await fetch(`/api/sessions/${sessionId}/fix-plan/import`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ content: planContent })
           });
+          const importData = await importRes.json();
+
+          // Update local ralph state immediately to avoid 100% display bug
+          // (SSE event might arrive after selectSession is called)
+          if (importData.success && importData.data?.todos) {
+            this.updateRalphState(sessionId, { todos: importData.data.todos });
+          }
+
           // Write to disk
           await fetch(`/api/sessions/${sessionId}/fix-plan/write`, { method: 'POST' });
         }
@@ -3023,15 +3217,57 @@ class ClaudemanApp {
       // Step 4: Switch to session and wait for it to be ready
       await this.selectSession(sessionId);
 
-      // Wait a moment for session to be ready, then send the prompt
-      await new Promise(r => setTimeout(r, 2000));
+      // Wait for Claude CLI to be ready (shows prompt)
+      // Check session status multiple times - Claude CLI can take a while to initialize
+      let attempts = 0;
+      const maxAttempts = 20; // 10 seconds total
+      let sessionReady = false;
+      console.log('[RalphWizard] Waiting for session to become ready...');
+      while (attempts < maxAttempts) {
+        await new Promise(r => setTimeout(r, 500));
+        try {
+          const statusRes = await fetch(`/api/sessions/${sessionId}`);
+          const statusData = await statusRes.json();
+          // Session is ready if:
+          // 1. Status is explicitly 'idle', OR
+          // 2. isWorking is false (Claude is at prompt), OR
+          // 3. Terminal buffer contains the prompt character
+          const isIdle = statusData?.status === 'idle';
+          const notWorking = statusData?.isWorking === false;
+          const hasPrompt = statusData?.terminalBuffer?.includes('❯');
+          if (isIdle || notWorking || hasPrompt) {
+            console.log(`[RalphWizard] Session ready after ${attempts + 1} attempts (idle=${isIdle}, notWorking=${notWorking}, hasPrompt=${hasPrompt})`);
+            sessionReady = true;
+            break;
+          }
+        } catch (e) {
+          console.warn('[RalphWizard] Error checking session status:', e);
+        }
+        attempts++;
+      }
 
-      // Send the prompt to start the loop
-      await fetch(`/api/sessions/${sessionId}/input`, {
+      if (!sessionReady) {
+        console.warn(`[RalphWizard] Session did not become ready after ${maxAttempts} attempts, sending prompt anyway`);
+        this.showToast('Session took longer than expected to initialize, sending prompt...', 'warning');
+        // Add extra delay to give Claude CLI more time
+        await new Promise(r => setTimeout(r, 2000));
+      }
+
+      // Send the prompt to start the loop using writeViaScreen (more reliable)
+      // Use \r for Enter (carriage return), not \n (newline)
+      console.log('[RalphWizard] Sending prompt to session...');
+      const inputRes = await fetch(`/api/sessions/${sessionId}/input`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: fullPrompt + '\n' })
+        body: JSON.stringify({ input: fullPrompt + '\r', useScreen: true })
       });
+
+      if (!inputRes.ok) {
+        const errorData = await inputRes.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to send input: ${inputRes.status}`);
+      }
+
+      console.log('[RalphWizard] Prompt sent successfully');
 
       this.showToast(`Ralph Loop started in ${config.caseName}`, 'success');
 
@@ -5929,16 +6165,20 @@ class ClaudemanApp {
   }
 
   updateRalphRing(percent) {
+    // Ensure percent is a valid number between 0-100
+    const safePercent = Math.max(0, Math.min(100, Number(percent) || 0));
+
     // Mini ring (in summary)
     const miniProgress = this.$('ralphRingMiniProgress');
     const miniText = this.$('ralphRingMiniText');
     if (miniProgress) {
       // Circumference = 2 * PI * r = 2 * PI * 15.9 ≈ 100
-      const offset = 100 - percent;
+      // offset = 100 means 0% visible, offset = 0 means 100% visible
+      const offset = 100 - safePercent;
       miniProgress.style.strokeDashoffset = offset;
     }
     if (miniText) {
-      miniText.textContent = `${percent}%`;
+      miniText.textContent = `${safePercent}%`;
     }
 
     // Large ring (in expanded view)
@@ -5946,11 +6186,12 @@ class ClaudemanApp {
     const largePercent = this.$('ralphRingPercent');
     if (largeProgress) {
       // Circumference = 2 * PI * r = 2 * PI * 42 ≈ 264
-      const offset = 264 - (264 * percent / 100);
+      // offset = 264 means 0% visible, offset = 0 means 100% visible
+      const offset = 264 - (264 * safePercent / 100);
       largeProgress.style.strokeDashoffset = offset;
     }
     if (largePercent) {
-      largePercent.textContent = `${percent}%`;
+      largePercent.textContent = `${safePercent}%`;
     }
   }
 

@@ -312,12 +312,21 @@ export class ScreenManager extends EventEmitter {
     // This helps prevent Claude from attempting to kill its own screen session
     const claudeDir = findClaudeDir();
     const pathExport = claudeDir ? `export PATH="${claudeDir}:$PATH" && ` : '';
-    const envVars = `CLAUDEMAN_SCREEN=1 CLAUDEMAN_SESSION_ID=${sessionId} CLAUDEMAN_SCREEN_NAME=${screenName} CLAUDEMAN_API_URL=${process.env.CLAUDEMAN_API_URL || 'http://localhost:3000'}`;
 
-    // Base command for the mode
-    let baseCmd = mode === 'claude'
-      ? `${envVars} claude --dangerously-skip-permissions`
-      : `${envVars} $SHELL`;
+    // Environment variables must be exported, not passed inline to nice/cpulimit
+    // Using inline VAR=value before cpulimit/nice doesn't work because they try to
+    // execute VAR=value as a command
+    const envExports = [
+      'export CLAUDEMAN_SCREEN=1',
+      `export CLAUDEMAN_SESSION_ID=${sessionId}`,
+      `export CLAUDEMAN_SCREEN_NAME=${screenName}`,
+      `export CLAUDEMAN_API_URL=${process.env.CLAUDEMAN_API_URL || 'http://localhost:3000'}`,
+    ].join(' && ');
+
+    // Base command for the mode (just the executable, env vars are exported separately)
+    const baseCmd = mode === 'claude'
+      ? 'claude --dangerously-skip-permissions'
+      : '$SHELL';
 
     // Apply CPU limiting if configured
     const cpuConfig = cpuLimitConfig || DEFAULT_CPU_LIMIT_CONFIG;
@@ -325,10 +334,13 @@ export class ScreenManager extends EventEmitter {
 
     try {
       // Start screen in detached mode
+      // Order: cd to dir, export PATH, export env vars, then run command
+      const fullCmd = `cd "${workingDir}" && ${pathExport}${envExports} && ${cmd}`;
+
       const screenProcess = spawn('screen', [
         '-dmS', screenName,
         '-c', '/dev/null', // Use empty config
-        'bash', '-c', `${pathExport}cd "${workingDir}" && ${cmd}`
+        'bash', '-c', fullCmd
       ], {
         cwd: workingDir,
         detached: true,
@@ -618,54 +630,92 @@ export class ScreenManager extends EventEmitter {
   }
 
   // Get all screens with stats (batched for better performance)
+  // Now includes child process stats (the actual claude processes inside screens)
   async getScreensWithStats(): Promise<ScreenSessionWithStats[]> {
     const screens = Array.from(this.screens.values());
     if (screens.length === 0) {
       return [];
     }
 
-    // Batch all PIDs into a single ps call for better performance
-    const pids = screens.map(s => s.pid);
+    const screenPids = screens.map(s => s.pid);
     const statsMap = new Map<number, ProcessStats>();
 
     try {
-      // Single ps call for all PIDs
-      const psOutput = execSync(
-        `ps -o pid=,rss=,pcpu= -p ${pids.join(',')} 2>/dev/null || true`,
-        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-      ).trim();
+      // Step 1: Get all descendant PIDs for each screen process
+      // This captures the claude process and any children it spawns
+      const descendantMap = new Map<number, number[]>(); // screenPid -> [childPids]
 
-      // Parse output - each line: "PID RSS CPU"
-      for (const line of psOutput.split('\n')) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length >= 3) {
-          const pid = parseInt(parts[0], 10);
-          const rss = parseFloat(parts[1]) || 0;
-          const cpu = parseFloat(parts[2]) || 0;
-          if (!isNaN(pid)) {
-            statsMap.set(pid, {
-              memoryMB: Math.round(rss / 1024 * 10) / 10,
-              cpuPercent: Math.round(cpu * 10) / 10,
-              childCount: 0,
-              updatedAt: Date.now()
-            });
-          }
-        }
-      }
-
-      // Batch child count query - single pgrep call
+      // Use pgrep to get all descendants recursively for each screen
       const pgrepOutput = execSync(
-        `for p in ${pids.join(' ')}; do echo "$p $(pgrep -P $p 2>/dev/null | wc -l)"; done`,
+        `for p in ${screenPids.join(' ')}; do children=$(pgrep -P $p 2>/dev/null | tr '\\n' ','); echo "$p:$children"; done`,
         { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
       ).trim();
 
       for (const line of pgrepOutput.split('\n')) {
-        const [pidStr, countStr] = line.trim().split(/\s+/);
-        const pid = parseInt(pidStr, 10);
-        const count = parseInt(countStr, 10) || 0;
-        const stats = statsMap.get(pid);
-        if (stats) {
-          stats.childCount = count;
+        const [pidStr, childrenStr] = line.split(':');
+        const screenPid = parseInt(pidStr, 10);
+        if (!isNaN(screenPid)) {
+          const children = (childrenStr || '')
+            .split(',')
+            .map(s => parseInt(s.trim(), 10))
+            .filter(n => !isNaN(n) && n > 0);
+          descendantMap.set(screenPid, children);
+        }
+      }
+
+      // Step 2: Collect all PIDs we need stats for (screens + all their children)
+      const allPids = new Set<number>(screenPids);
+      for (const children of descendantMap.values()) {
+        for (const child of children) {
+          allPids.add(child);
+        }
+      }
+
+      // Step 3: Single ps call for ALL PIDs (screens + children)
+      const pidArray = Array.from(allPids);
+      if (pidArray.length > 0) {
+        const psOutput = execSync(
+          `ps -o pid=,rss=,pcpu= -p ${pidArray.join(',')} 2>/dev/null || true`,
+          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+        ).trim();
+
+        // Parse individual process stats
+        const processStats = new Map<number, { rss: number; cpu: number }>();
+        for (const line of psOutput.split('\n')) {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length >= 3) {
+            const pid = parseInt(parts[0], 10);
+            const rss = parseFloat(parts[1]) || 0;
+            const cpu = parseFloat(parts[2]) || 0;
+            if (!isNaN(pid)) {
+              processStats.set(pid, { rss, cpu });
+            }
+          }
+        }
+
+        // Step 4: Aggregate stats for each screen (screen + all descendants)
+        for (const screenPid of screenPids) {
+          const children = descendantMap.get(screenPid) || [];
+          const screenStats = processStats.get(screenPid) || { rss: 0, cpu: 0 };
+
+          // Sum up stats from all children
+          let totalRss = screenStats.rss;
+          let totalCpu = screenStats.cpu;
+
+          for (const childPid of children) {
+            const childStats = processStats.get(childPid);
+            if (childStats) {
+              totalRss += childStats.rss;
+              totalCpu += childStats.cpu;
+            }
+          }
+
+          statsMap.set(screenPid, {
+            memoryMB: Math.round(totalRss / 1024 * 10) / 10,
+            cpuPercent: Math.round(totalCpu * 10) / 10,
+            childCount: children.length,
+            updatedAt: Date.now()
+          });
         }
       }
     } catch {
@@ -775,8 +825,11 @@ export class ScreenManager extends EventEmitter {
   sendInput(sessionId: string, input: string): boolean {
     const screen = this.screens.get(sessionId);
     if (!screen) {
+      console.error(`[ScreenManager] sendInput failed: no screen found for session ${sessionId}. Known screens: ${Array.from(this.screens.keys()).join(', ')}`);
       return false;
     }
+
+    console.log(`[ScreenManager] sendInput to ${screen.screenName}, input length: ${input.length}, hasCarriageReturn: ${input.includes('\r')}`);
 
     // Security: Validate screenName to prevent command injection
     if (!isValidScreenName(screen.screenName)) {

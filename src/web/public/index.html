@@ -104,7 +104,7 @@
                 </linearGradient>
               </defs>
               <circle class="ralph-ring-bg" cx="18" cy="18" r="15.9" />
-              <circle class="ralph-ring-progress-mini" cx="18" cy="18" r="15.9" id="ralphRingMiniProgress" />
+              <circle class="ralph-ring-progress-mini" cx="18" cy="18" r="15.9" id="ralphRingMiniProgress" style="stroke-dashoffset: 100" />
             </svg>
             <span class="ralph-ring-text" id="ralphRingMiniText">0%</span>
           </div>
@@ -150,7 +150,7 @@
                 </linearGradient>
               </defs>
               <circle class="ralph-ring-track" cx="50" cy="50" r="42" />
-              <circle class="ralph-ring-fill" cx="50" cy="50" r="42" id="ralphRingProgress" />
+              <circle class="ralph-ring-fill" cx="50" cy="50" r="42" id="ralphRingProgress" style="stroke-dashoffset: 264" />
             </svg>
             <div class="ralph-ring-center">
               <div class="ralph-ring-percent" id="ralphRingPercent">0%</div>
@@ -984,9 +984,9 @@
 
             <div class="wizard-inline-row">
               <div class="wizard-inline-field">
-                <label>Working Directory</label>
+                <label>Working Directory <span id="existingPlanBadge" class="existing-plan-badge" style="display:none"></span></label>
                 <div class="case-select-inline">
-                  <select id="ralphCaseSelect" class="form-select"></select>
+                  <select id="ralphCaseSelect" class="form-select" onchange="app.onRalphCaseChange()"></select>
                   <button class="btn-toolbar btn-sm" onclick="app.showCreateCaseModal()">+</button>
                 </div>
               </div>
@@ -1006,8 +1006,13 @@
 
           <!-- Step 2: Plan Generation -->
           <div class="wizard-page wizard-page-compact hidden" id="ralphWizardStep2">
-            <!-- Loading state (shown immediately) -->
-            <div id="planGenerationLoading" class="plan-loading-state">
+            <!-- Existing plan detected (shown when @fix_plan.md exists) -->
+            <div id="existingPlanSection" class="plan-section hidden">
+              <!-- Content populated by app.updateExistingPlanUI() -->
+            </div>
+
+            <!-- Loading state (shown during generation) -->
+            <div id="planGenerationLoading" class="plan-loading-state hidden">
               <div class="plan-loading-content">
                 <div class="plan-spinner"></div>
                 <div class="plan-loading-text">
@@ -1031,7 +1036,7 @@
             <!-- Editor state -->
             <div id="planEditor" class="plan-section hidden">
               <div class="plan-editor-header">
-                <span>Implementation Plan</span>
+                <span>Implementation Plan <span class="plan-stats" id="planStats"></span></span>
                 <div class="plan-editor-actions">
                   <div class="plan-option-group">
                     <label>Detail:</label>

@@ -417,6 +417,12 @@ export class WebServer extends EventEmitter {
     // API Routes
     this.app.get('/api/status', async () => this.getFullState());
 
+    // Cleanup stale sessions from state file
+    this.app.post('/api/cleanup-state', async () => {
+      const cleaned = this.cleanupStaleSessions();
+      return { success: true, cleanedSessions: cleaned };
+    });
+
     // Global stats endpoint
     this.app.get('/api/stats', async () => {
       const activeSessionTokens: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }> = {};
@@ -1271,9 +1277,10 @@ export class WebServer extends EventEmitter {
     });
 
     // Send input to interactive session
+    // useScreen: true uses writeViaScreen which is more reliable for programmatic input
     this.app.post('/api/sessions/:id/input', async (req): Promise<ApiResponse> => {
       const { id } = req.params as { id: string };
-      const { input } = req.body as SessionInputRequest;
+      const { input, useScreen } = req.body as SessionInputRequest & { useScreen?: boolean };
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1289,8 +1296,21 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Input exceeds maximum length (${MAX_INPUT_LENGTH} bytes)`);
       }
 
-      session.write(inputStr);
-      return { success: true };
+      // Use writeViaScreen for programmatic input (more reliable for screen sessions)
+      let success = false;
+      if (useScreen) {
+        success = session.writeViaScreen(inputStr);
+        if (!success) {
+          console.warn(`[Server] writeViaScreen failed for session ${id}, falling back to direct write`);
+          // Fallback to direct write if screen write fails
+          session.write(inputStr);
+          success = true; // Direct write doesn't return status, assume success
+        }
+      } else {
+        session.write(inputStr);
+        success = true;
+      }
+      return { success };
     });
 
     // Resize session terminal
@@ -1939,6 +1959,112 @@ export class WebServer extends EventEmitter {
       };
     });
 
+    // Read @fix_plan.md from a case directory (for wizard to detect existing plans)
+    this.app.get('/api/cases/:name/fix-plan', async (req) => {
+      const { name } = req.params as { name: string };
+
+      // Get case path (check linked cases first, then casesDir)
+      let casePath: string | null = null;
+
+      const linkedCasesFile = join(homedir(), '.claudeman', 'linked-cases.json');
+      try {
+        if (existsSync(linkedCasesFile)) {
+          const linkedCases: Record<string, string> = JSON.parse(readFileSync(linkedCasesFile, 'utf-8'));
+          if (linkedCases[name]) {
+            casePath = linkedCases[name];
+          }
+        }
+      } catch {
+        // Ignore errors
+      }
+
+      if (!casePath) {
+        casePath = join(casesDir, name);
+      }
+
+      const fixPlanPath = join(casePath, '@fix_plan.md');
+
+      if (!existsSync(fixPlanPath)) {
+        return { success: true, exists: false, content: null, todos: [] };
+      }
+
+      try {
+        const content = readFileSync(fixPlanPath, 'utf-8');
+
+        // Parse todos from the content (similar to ralph-tracker's importFixPlanMarkdown)
+        const todos: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed'; priority: string | null }> = [];
+        const todoPattern = /^-\s*\[([ xX\-])\]\s*(.+)$/;
+        const p0HeaderPattern = /^##\s*(High Priority|Critical|P0|Critical Path)/i;
+        const p1HeaderPattern = /^##\s*(Standard|P1|Medium Priority)/i;
+        const p2HeaderPattern = /^##\s*(Nice to Have|P2|Low Priority)/i;
+        const completedHeaderPattern = /^##\s*Completed/i;
+
+        let currentPriority: string | null = null;
+        let inCompletedSection = false;
+
+        for (const line of content.split('\n')) {
+          const trimmed = line.trim();
+
+          if (p0HeaderPattern.test(trimmed)) {
+            currentPriority = 'P0';
+            inCompletedSection = false;
+            continue;
+          }
+          if (p1HeaderPattern.test(trimmed)) {
+            currentPriority = 'P1';
+            inCompletedSection = false;
+            continue;
+          }
+          if (p2HeaderPattern.test(trimmed)) {
+            currentPriority = 'P2';
+            inCompletedSection = false;
+            continue;
+          }
+          if (completedHeaderPattern.test(trimmed)) {
+            inCompletedSection = true;
+            continue;
+          }
+
+          const match = trimmed.match(todoPattern);
+          if (match) {
+            const [, checkboxState, taskContent] = match;
+            let status: 'pending' | 'in_progress' | 'completed';
+
+            if (inCompletedSection || checkboxState === 'x' || checkboxState === 'X') {
+              status = 'completed';
+            } else if (checkboxState === '-') {
+              status = 'in_progress';
+            } else {
+              status = 'pending';
+            }
+
+            todos.push({
+              content: taskContent.trim(),
+              status,
+              priority: inCompletedSection ? null : currentPriority,
+            });
+          }
+        }
+
+        const stats = {
+          total: todos.length,
+          pending: todos.filter(t => t.status === 'pending').length,
+          inProgress: todos.filter(t => t.status === 'in_progress').length,
+          completed: todos.filter(t => t.status === 'completed').length,
+        };
+
+        return {
+          success: true,
+          exists: true,
+          content,
+          todos,
+          stats,
+        };
+      } catch (err) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read @fix_plan.md: ${err}`);
+      }
+    });
+
     // Quick Start: Create case (if needed) and start interactive session in one click
     this.app.post('/api/quick-start', async (req): Promise<QuickStartResponse> => {
       // Prevent unbounded session creation
@@ -2055,7 +2181,6 @@ export class WebServer extends EventEmitter {
     // Generate implementation plan from task description using Claude
     interface GeneratePlanRequest {
       taskDescription: string;
-      maxItems?: number;
       detailLevel?: 'brief' | 'standard' | 'detailed';
     }
 
@@ -2067,7 +2192,6 @@ export class WebServer extends EventEmitter {
     this.app.post('/api/generate-plan', async (req): Promise<ApiResponse> => {
       const {
         taskDescription,
-        maxItems = 12,
         detailLevel = 'standard'
       } = req.body as GeneratePlanRequest;
 
@@ -2081,11 +2205,11 @@ export class WebServer extends EventEmitter {
 
       // Build sophisticated prompt based on Ralph Wiggum methodology
       const detailConfig = {
-        brief: { minSteps: 5, maxSteps: maxItems, testDepth: 'basic' },
-        standard: { minSteps: 8, maxSteps: maxItems, testDepth: 'thorough' },
-        detailed: { minSteps: 12, maxSteps: Math.max(maxItems, 15), testDepth: 'comprehensive' },
+        brief: { style: 'high-level milestones', testDepth: 'basic' },
+        standard: { style: 'balanced implementation steps', testDepth: 'thorough' },
+        detailed: { style: 'granular sub-tasks with full TDD coverage', testDepth: 'comprehensive' },
       };
-      const config = detailConfig[detailLevel] || detailConfig.standard;
+      const levelConfig = detailConfig[detailLevel] || detailConfig.standard;
 
       const prompt = `You are an expert software architect breaking down a task into a thorough implementation plan.
 
@@ -2095,12 +2219,18 @@ ${taskDescription}
 ## YOUR MISSION
 Create a detailed, actionable implementation plan following Test-Driven Development (TDD) methodology.
 Think deeply about:
-- What are all the components needed?
-- What could go wrong? Add defensive steps.
-- How will we verify each part works?
+- What are ALL the components, modules, and features needed?
+- What could go wrong? Add defensive steps for error handling.
+- How will we verify each part works? Tests before implementation.
 - What edge cases need handling?
+- What's the logical order of dependencies?
 
-## PLAN STRUCTURE (${config.minSteps}-${config.maxSteps} steps)
+## DETAIL LEVEL: ${detailLevel.toUpperCase()}
+Style: ${levelConfig.style}
+Generate as many steps as needed to properly cover the task - don't artificially limit yourself.
+For complex projects, this could be 30, 50, or even 100+ steps. Quality over brevity.
+
+## PLAN STRUCTURE
 
 Your plan MUST include these phases in order:
 
@@ -2197,7 +2327,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
               priority = obj.priority;
             }
             return { content, priority };
-          }).slice(0, maxItems);
+          });
+          // No artificial limit - let Claude generate what's needed
 
         } catch (parseErr) {
           return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Failed to parse plan JSON: ' + getErrorMessage(parseErr));
@@ -3594,6 +3725,16 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     }
   }
 
+  /**
+   * Cleans up stale sessions from state file that don't have active sessions.
+   * Called on startup and can be called via API endpoint.
+   * @returns Number of sessions cleaned up
+   */
+  private cleanupStaleSessions(): number {
+    const activeSessionIds = new Set(this.sessions.keys());
+    return this.store.cleanupStaleSessions(activeSessionIds);
+  }
+
   private getFullState() {
     // Build respawn status map
     const respawnStatus: Record<string, ReturnType<RespawnController['getStatus']>> = {};
@@ -3864,6 +4005,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Restore screen sessions BEFORE accepting connections
     // This prevents race conditions where clients connect before state is ready
     await this.restoreScreenSessions();
+
+    // Clean up stale sessions from state file that don't have active screens
+    this.cleanupStaleSessions();
 
     await this.app.listen({ port: this.port, host: '0.0.0.0' });
     const protocol = this.https ? 'https' : 'http';

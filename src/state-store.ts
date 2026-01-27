@@ -177,6 +177,32 @@ export class StateStore {
     this.save();
   }
 
+  /**
+   * Cleans up stale sessions from state that don't have corresponding active sessions.
+   * @param activeSessionIds - Set of currently active session IDs
+   * @returns Number of sessions cleaned up
+   */
+  cleanupStaleSessions(activeSessionIds: Set<string>): number {
+    const allSessionIds = Object.keys(this.state.sessions);
+    let cleanedCount = 0;
+
+    for (const sessionId of allSessionIds) {
+      if (!activeSessionIds.has(sessionId)) {
+        delete this.state.sessions[sessionId];
+        // Also clean up Ralph state for this session
+        this.ralphStates.delete(sessionId);
+        cleanedCount++;
+      }
+    }
+
+    if (cleanedCount > 0) {
+      console.log(`[StateStore] Cleaned up ${cleanedCount} stale session(s) from state`);
+      this.save();
+    }
+
+    return cleanedCount;
+  }
+
   /** Returns all task states keyed by task ID. */
   getTasks() {
     return this.state.tasks;
