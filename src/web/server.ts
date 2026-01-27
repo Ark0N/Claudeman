@@ -2432,6 +2432,22 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
       const orchestrator = new PlanOrchestrator(this.screenManager, process.cwd());
 
+      // Cancel orchestrator if client disconnects (user clicked Stop)
+      // Note: We use the socket's 'close' event, not req.raw.on('close') which fires
+      // when the request body is done being read (immediately after parsing).
+      let clientDisconnected = false;
+      let responseSent = false;
+      const socket = req.raw.socket;
+      const onClose = () => {
+        // Only cancel if response hasn't been sent yet (true disconnection)
+        if (!responseSent) {
+          clientDisconnected = true;
+          console.log('[API] Client disconnected during plan generation, cancelling...');
+          orchestrator.cancel().catch(() => { /* ignore */ });
+        }
+      };
+      socket.on('close', onClose);
+
       // Track progress for SSE updates
       const progressUpdates: Array<{ phase: string; detail: string; timestamp: number }> = [];
       const onProgress = (phase: string, detail: string) => {
@@ -2441,11 +2457,36 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         this.broadcast('plan:progress', update);
       };
 
+      // Broadcast plan subagent events for UI visibility
+      const onSubagent = (event: {
+        type: string;
+        agentId: string;
+        agentType: string;
+        model: string;
+        status: string;
+        detail?: string;
+        itemCount?: number;
+        durationMs?: number;
+        error?: string;
+      }) => {
+        this.broadcast('plan:subagent', event);
+      };
+
       try {
         const result: DetailedPlanResult = await orchestrator.generateDetailedPlan(
           taskDescription,
-          onProgress
+          onProgress,
+          onSubagent
         );
+
+        // Mark response as being sent and clean up listener
+        responseSent = true;
+        socket.off('close', onClose);
+
+        // If client disconnected, don't bother returning response
+        if (clientDisconnected) {
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Cancelled by client');
+        }
 
         if (!result.success) {
           return createErrorResponse(ApiErrorCode.OPERATION_FAILED, result.error || 'Plan generation failed');
@@ -2461,6 +2502,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
           },
         };
       } catch (err) {
+        responseSent = true;
+        socket.off('close', onClose);
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Detailed plan generation failed: ' + getErrorMessage(err));
       }
     });
