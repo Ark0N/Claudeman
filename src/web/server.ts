@@ -2917,6 +2917,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   private async _doCleanupSession(sessionId: string, killScreen: boolean): Promise<void> {
     const session = this.sessions.get(sessionId);
 
+    // Stop watching @fix_plan.md for this session
+    if (session) {
+      session.ralphTracker.stopWatchingFixPlan();
+    }
+
     // Kill all subagents spawned by this session
     if (session && killScreen) {
       try {
@@ -3031,6 +3036,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     const summaryTracker = new RunSummaryTracker(session.id, session.name);
     this.runSummaryTrackers.set(session.id, summaryTracker);
     summaryTracker.recordSessionStarted(session.mode, session.workingDir);
+
+    // Set working directory for Ralph tracker to auto-load @fix_plan.md
+    session.ralphTracker.setWorkingDir(session.workingDir);
 
     session.on('output', (data) => {
       // Use batching for better performance at high throughput

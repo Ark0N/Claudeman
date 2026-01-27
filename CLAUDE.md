@@ -38,7 +38,7 @@ Claudeman is a Claude Code session manager with a web interface and autonomous R
 
 When adding new features, always ask: "Will this maintain responsiveness with 20 sessions and 50 agent windows?"
 
-**Version**: 0.1398 (must match `package.json`)
+**Version**: 0.1399 (must match `package.json`)
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 
@@ -609,6 +609,14 @@ Both wait for idle. Configure via `session.setAutoCompact()` / `session.setAutoC
 ### Ralph / Todo Tracking
 
 Detects Ralph loops and todos inside Claude sessions. **Disabled by default** but auto-enables when Ralph-related patterns are detected (promise tags, TodoWrite, iteration patterns, etc.). See `ralph-tracker.ts:shouldAutoEnable()` for the full pattern list.
+
+**Auto-Loading @fix_plan.md**: When a session starts, the Ralph tracker automatically:
+1. Loads existing `@fix_plan.md` from the working directory (if present)
+2. Imports todos and shows them in the Ralph panel
+3. Watches the file for changes and reloads when modified by Claude
+4. Auto-enables the tracker if todos are found
+
+This means you can create a session in a folder with an existing `@fix_plan.md` and the tracker will immediately show and track those tasks.
 
 **Auto-Configuration from Ralph Plugin State**: When a session starts, Claudeman reads `.claude/ralph-loop.local.md` to auto-configure:
 

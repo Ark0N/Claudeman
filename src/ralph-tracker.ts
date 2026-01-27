@@ -14,6 +14,9 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { readFile } from 'node:fs/promises';
+import { existsSync, FSWatcher, watch as fsWatch } from 'node:fs';
+import { join } from 'node:path';
 import {
   RalphTrackerState,
   RalphTodoItem,
@@ -429,6 +432,18 @@ export class RalphTracker extends EventEmitter {
   /** Cumulative tasks completed across all iterations */
   private _totalTasksCompleted: number = 0;
 
+  /** Working directory for @fix_plan.md watching */
+  private _workingDir: string | null = null;
+
+  /** File watcher for @fix_plan.md */
+  private _fixPlanWatcher: FSWatcher | null = null;
+
+  /** Debounce timer for file change events */
+  private _fixPlanReloadTimer: NodeJS.Timeout | null = null;
+
+  /** Path to the @fix_plan.md file being watched */
+  private _fixPlanPath: string | null = null;
+
   /**
    * Creates a new RalphTracker instance.
    * Starts in disabled state until Ralph patterns are detected.
@@ -459,6 +474,112 @@ export class RalphTracker extends EventEmitter {
    */
   get autoEnableDisabled(): boolean {
     return this._autoEnableDisabled;
+  }
+
+  /**
+   * Set the working directory and start watching @fix_plan.md.
+   * Automatically loads existing @fix_plan.md if present.
+   * @param workingDir - The session's working directory
+   */
+  setWorkingDir(workingDir: string): void {
+    this._workingDir = workingDir;
+    this._fixPlanPath = join(workingDir, '@fix_plan.md');
+
+    // Try to load existing @fix_plan.md
+    this.loadFixPlanFromDisk();
+
+    // Start watching for changes
+    this.startWatchingFixPlan();
+  }
+
+  /**
+   * Load @fix_plan.md from disk if it exists.
+   * Called on initialization and when file changes are detected.
+   */
+  async loadFixPlanFromDisk(): Promise<number> {
+    if (!this._fixPlanPath) return 0;
+
+    try {
+      if (!existsSync(this._fixPlanPath)) {
+        return 0;
+      }
+
+      const content = await readFile(this._fixPlanPath, 'utf-8');
+      const count = this.importFixPlanMarkdown(content);
+
+      if (count > 0) {
+        // Auto-enable tracker when we have todos from @fix_plan.md
+        if (!this._loopState.enabled) {
+          this.enable();
+        }
+        console.log(`[RalphTracker] Loaded ${count} todos from @fix_plan.md`);
+      }
+
+      return count;
+    } catch (err) {
+      // File doesn't exist or can't be read - that's OK
+      console.log(`[RalphTracker] Could not load @fix_plan.md: ${err}`);
+      return 0;
+    }
+  }
+
+  /**
+   * Start watching @fix_plan.md for changes.
+   * Reloads todos when the file is modified.
+   */
+  private startWatchingFixPlan(): void {
+    if (!this._fixPlanPath || !this._workingDir) return;
+
+    // Stop existing watcher if any
+    this.stopWatchingFixPlan();
+
+    try {
+      // Only watch if the file exists
+      if (!existsSync(this._fixPlanPath)) {
+        // Watch the directory instead for file creation
+        this._fixPlanWatcher = fsWatch(this._workingDir, (_eventType, filename) => {
+          if (filename === '@fix_plan.md') {
+            this.handleFixPlanChange();
+          }
+        });
+      } else {
+        // Watch the file directly
+        this._fixPlanWatcher = fsWatch(this._fixPlanPath, () => {
+          this.handleFixPlanChange();
+        });
+      }
+    } catch (err) {
+      console.log(`[RalphTracker] Could not watch @fix_plan.md: ${err}`);
+    }
+  }
+
+  /**
+   * Handle @fix_plan.md file change with debouncing.
+   */
+  private handleFixPlanChange(): void {
+    // Debounce rapid changes (e.g., multiple writes)
+    if (this._fixPlanReloadTimer) {
+      clearTimeout(this._fixPlanReloadTimer);
+    }
+
+    this._fixPlanReloadTimer = setTimeout(() => {
+      this._fixPlanReloadTimer = null;
+      this.loadFixPlanFromDisk();
+    }, 500); // 500ms debounce
+  }
+
+  /**
+   * Stop watching @fix_plan.md.
+   */
+  stopWatchingFixPlan(): void {
+    if (this._fixPlanWatcher) {
+      this._fixPlanWatcher.close();
+      this._fixPlanWatcher = null;
+    }
+    if (this._fixPlanReloadTimer) {
+      clearTimeout(this._fixPlanReloadTimer);
+      this._fixPlanReloadTimer = null;
+    }
   }
 
   /**

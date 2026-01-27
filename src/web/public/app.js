@@ -2662,6 +2662,9 @@ class ClaudemanApp {
     const plan = this.ralphWizardConfig.existingPlan;
     if (!plan) return;
 
+    // Stop any ongoing plan generation
+    this.stopPlanGeneration();
+
     // Convert existing todos to generatedPlan format (only pending items)
     const pendingTodos = plan.todos.filter(t => t.status === 'pending' || t.status === 'in_progress');
     this.ralphWizardConfig.generatedPlan = pendingTodos.map((todo, idx) => ({
@@ -2676,6 +2679,28 @@ class ClaudemanApp {
 
     this.renderPlanEditor();
     this.updateDetailLevelButtons();
+  }
+
+  // Stop any ongoing plan generation (abort fetch, clear timers, hide spinner)
+  stopPlanGeneration() {
+    // Abort ongoing fetch
+    if (this.planGenerationAbortController) {
+      this.planGenerationAbortController.abort();
+      this.planGenerationAbortController = null;
+    }
+
+    // Clear timers
+    if (this.planLoadingTimer) {
+      clearInterval(this.planLoadingTimer);
+      this.planLoadingTimer = null;
+    }
+    if (this.planPhaseTimer) {
+      clearInterval(this.planPhaseTimer);
+      this.planPhaseTimer = null;
+    }
+
+    // Hide loading spinner
+    document.getElementById('planGenerationLoading')?.classList.add('hidden');
   }
 
   // Generate a new plan (ignore existing)
@@ -2832,15 +2857,11 @@ class ClaudemanApp {
   async generatePlan() {
     const config = this.ralphWizardConfig;
 
-    // Stop any existing timers
-    if (this.planLoadingTimer) {
-      clearInterval(this.planLoadingTimer);
-      this.planLoadingTimer = null;
-    }
-    if (this.planPhaseTimer) {
-      clearInterval(this.planPhaseTimer);
-      this.planPhaseTimer = null;
-    }
+    // Stop any existing generation first
+    this.stopPlanGeneration();
+
+    // Create abort controller for this generation
+    this.planGenerationAbortController = new AbortController();
 
     // Show loading state, hide other sections
     document.getElementById('existingPlanSection')?.classList.add('hidden');
@@ -2895,6 +2916,7 @@ class ClaudemanApp {
           taskDescription: config.taskDescription,
           detailLevel: config.planDetailLevel,
         }),
+        signal: this.planGenerationAbortController?.signal,
       });
 
       const data = await res.json();
@@ -2946,6 +2968,13 @@ class ClaudemanApp {
         clearInterval(this.planLoadingTimer);
         this.planLoadingTimer = null;
       }
+
+      // Ignore abort errors (user cancelled, e.g., clicked "Use Existing Plan")
+      if (err.name === 'AbortError') {
+        console.log('Plan generation aborted by user');
+        return;
+      }
+
       console.error('Plan generation failed:', err);
       this.showPlanError('Network error: ' + err.message);
     }
