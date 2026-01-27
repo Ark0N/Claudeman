@@ -4705,6 +4705,24 @@ kbd {
   50% { opacity: 0.9; }
 }
 
+/* Plan subagent to regular subagent connection lines (Opus → Haiku) */
+.connection-line.plan-to-subagent-line {
+  stroke: #00ff41;
+  filter: drop-shadow(0 0 4px #00ff41);
+  stroke-dasharray: 5 3;
+  animation: plan-subagent-pulse 1.2s ease-in-out infinite;
+}
+
+.connection-line.plan-to-subagent-line:hover {
+  stroke-width: 3;
+  filter: drop-shadow(0 0 8px #00ff41);
+}
+
+@keyframes plan-subagent-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
 /* ========== Project Insights Panel (Bash File Viewers) ========== */
 
 .project-insights-panel {

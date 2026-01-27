@@ -3056,7 +3056,7 @@ class ClaudemanApp {
       // Use different endpoint for detailed mode
       const endpoint = isDetailed ? '/api/generate-plan-detailed' : '/api/generate-plan';
       const body = isDetailed
-        ? { taskDescription: config.taskDescription }
+        ? { taskDescription: config.taskDescription, caseName: config.caseName }
         : { taskDescription: config.taskDescription, detailLevel: config.planDetailLevel };
 
       const res = await fetch(endpoint, {
@@ -3644,6 +3644,120 @@ class ClaudemanApp {
     }
   }
 
+  /**
+   * Find a free position for a window that doesn't overlap with existing windows.
+   * Tries positions around the wizard, avoiding all occupied spaces.
+   */
+  findFreeWindowPosition(windowWidth, windowHeight, wizardRect, preferredSide = 'right') {
+    const gap = 30;
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const minY = 60;
+    const maxY = viewportHeight - windowHeight - 10;
+
+    // Collect all occupied rectangles (plan subagent windows + regular subagent windows)
+    const occupiedRects = [];
+
+    // Add wizard rect as occupied
+    if (wizardRect) {
+      occupiedRects.push({
+        left: wizardRect.left - gap,
+        top: wizardRect.top,
+        right: wizardRect.right + gap,
+        bottom: wizardRect.bottom,
+      });
+    }
+
+    // Add existing plan subagent windows
+    for (const [, windowData] of this.planSubagents) {
+      if (windowData.element) {
+        const rect = windowData.element.getBoundingClientRect();
+        occupiedRects.push({
+          left: rect.left,
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom,
+        });
+      }
+    }
+
+    // Add regular subagent windows
+    for (const [, windowInfo] of this.subagentWindows) {
+      if (windowInfo.element && !windowInfo.hidden && !windowInfo.minimized) {
+        const rect = windowInfo.element.getBoundingClientRect();
+        occupiedRects.push({
+          left: rect.left,
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom,
+        });
+      }
+    }
+
+    // Check if a position overlaps with any occupied rectangle
+    const overlaps = (x, y) => {
+      const newRect = {
+        left: x,
+        top: y,
+        right: x + windowWidth,
+        bottom: y + windowHeight,
+      };
+      return occupiedRects.some(rect =>
+        newRect.left < rect.right &&
+        newRect.right > rect.left &&
+        newRect.top < rect.bottom &&
+        newRect.bottom > rect.top
+      );
+    };
+
+    // Try positions on preferred side first, then other side
+    const sides = preferredSide === 'right' ? ['right', 'left'] : ['left', 'right'];
+
+    for (const side of sides) {
+      // Calculate base X position for this side
+      let baseX;
+      if (wizardRect) {
+        if (side === 'right') {
+          baseX = wizardRect.right + gap;
+        } else {
+          baseX = wizardRect.left - windowWidth - gap;
+        }
+      } else {
+        baseX = side === 'right' ? viewportWidth - windowWidth - 50 : 50;
+      }
+
+      // Clamp to viewport
+      baseX = Math.max(10, Math.min(baseX, viewportWidth - windowWidth - 10));
+
+      // Try vertical positions from top to bottom
+      for (let y = minY; y <= maxY; y += windowHeight + 15) {
+        if (!overlaps(baseX, y)) {
+          return { x: baseX, y };
+        }
+      }
+
+      // If side is full, try additional columns
+      const columnOffset = side === 'right' ? windowWidth + gap : -(windowWidth + gap);
+      for (let col = 1; col <= 2; col++) {
+        const x = baseX + col * columnOffset;
+        if (x < 10 || x > viewportWidth - windowWidth - 10) continue;
+
+        for (let y = minY; y <= maxY; y += windowHeight + 15) {
+          if (!overlaps(x, y)) {
+            return { x, y };
+          }
+        }
+      }
+    }
+
+    // Fallback: cascade position
+    const fallbackOffset = this.planSubagents.size * 30;
+    return {
+      x: Math.min(50 + fallbackOffset, viewportWidth - windowWidth - 10),
+      y: Math.min(120 + fallbackOffset, maxY),
+    };
+  }
+
   createPlanSubagentWindow(agentId, agentType, model, detail) {
     if (this.planSubagents.has(agentId)) return;
 
@@ -3651,36 +3765,14 @@ class ClaudemanApp {
     const wizardContent = wizardModal?.querySelector('.modal-content');
     const wizardRect = wizardContent?.getBoundingClientRect();
 
-    // Calculate position - alternate left/right of wizard
+    // Calculate position using smart positioning that avoids overlaps
     const windowWidth = 280;
     const windowHeight = 100;
     const windowCount = this.planSubagents.size;
-    const viewportWidth = window.innerWidth;
 
-    let x, y;
-    if (wizardRect) {
-      const centerX = wizardRect.left + wizardRect.width / 2;
-      const gap = 30;
-
-      // Stack windows vertically on each side
-      const side = windowCount % 2 === 0 ? 'right' : 'left';
-      const sideIndex = Math.floor(windowCount / 2);
-
-      if (side === 'right') {
-        x = wizardRect.right + gap;
-      } else {
-        x = wizardRect.left - windowWidth - gap;
-      }
-      y = wizardRect.top + sideIndex * (windowHeight + 15);
-
-      // Clamp to viewport
-      x = Math.max(10, Math.min(x, viewportWidth - windowWidth - 10));
-      y = Math.max(60, Math.min(y, window.innerHeight - windowHeight - 10));
-    } else {
-      // Fallback positioning
-      x = 50 + windowCount * 30;
-      y = 120 + windowCount * 30;
-    }
+    // Alternate preferred side: even=right, odd=left
+    const preferredSide = windowCount % 2 === 0 ? 'right' : 'left';
+    const { x, y } = this.findFreeWindowPosition(windowWidth, windowHeight, wizardRect, preferredSide);
 
     // Create window element
     const win = document.createElement('div');
@@ -3696,6 +3788,8 @@ class ClaudemanApp {
       testing: 'TDD Specialist',
       risks: 'Risk Analyst',
       verification: 'Verification Expert',
+      execution: 'Execution Optimizer',
+      'final-review': 'Final Review',
     };
 
     const typeIcons = {
@@ -3704,6 +3798,8 @@ class ClaudemanApp {
       testing: '🧪',
       risks: '⚠️',
       verification: '✓',
+      execution: '⚡',
+      'final-review': '🔍',
     };
 
     win.innerHTML = `
@@ -7976,40 +8072,98 @@ class ClaudemanApp {
                        wizardModal.style.display !== 'none';
     const wizardContent = wizardOpen ? wizardModal.querySelector('.modal-content') : null;
 
+    // Collect visible regular subagent windows for connection logic
+    const visibleSubagentWindows = [];
     for (const [agentId, windowInfo] of this.subagentWindows) {
       if (windowInfo.minimized || windowInfo.hidden) continue;
-
-      const agent = this.subagents.get(agentId);
       const win = windowInfo.element;
       if (!win) continue;
+      visibleSubagentWindows.push({ agentId, windowInfo, win });
+    }
 
+    // Get plan subagent windows as array for distribution
+    const planSubagentArray = Array.from(this.planSubagents.entries())
+      .filter(([, data]) => data.element)
+      .map(([id, data]) => ({ id, ...data }));
+
+    for (const { agentId, windowInfo, win } of visibleSubagentWindows) {
+      const agent = this.subagents.get(agentId);
       const winRect = win.getBoundingClientRect();
 
-      // If wizard is open, draw lines from wizard to subagent windows
-      if (wizardOpen && wizardContent) {
+      // If wizard is open with plan subagents, connect regular subagents to plan subagent windows
+      if (wizardOpen && wizardContent && planSubagentArray.length > 0) {
+        // Find the nearest plan subagent window to connect to
+        let nearestPlanAgent = null;
+        let nearestDistance = Infinity;
+
+        for (const planAgent of planSubagentArray) {
+          const planRect = planAgent.element.getBoundingClientRect();
+          const planCenterX = planRect.left + planRect.width / 2;
+          const planCenterY = planRect.top + planRect.height / 2;
+          const winCenterX = winRect.left + winRect.width / 2;
+          const winCenterY = winRect.top + winRect.height / 2;
+          const distance = Math.hypot(planCenterX - winCenterX, planCenterY - winCenterY);
+
+          if (distance < nearestDistance) {
+            nearestDistance = distance;
+            nearestPlanAgent = planAgent;
+          }
+        }
+
+        if (nearestPlanAgent) {
+          const planRect = nearestPlanAgent.element.getBoundingClientRect();
+
+          // Draw line from plan subagent window to regular subagent window
+          let x1, y1, x2, y2;
+          const planCenterX = planRect.left + planRect.width / 2;
+          const winCenterX = winRect.left + winRect.width / 2;
+
+          if (winCenterX < planCenterX) {
+            // Regular window is to the left of plan window
+            x1 = planRect.left;
+            y1 = planRect.top + planRect.height / 2;
+            x2 = winRect.right;
+            y2 = winRect.top + winRect.height / 2;
+          } else {
+            // Regular window is to the right of plan window
+            x1 = planRect.right;
+            y1 = planRect.top + planRect.height / 2;
+            x2 = winRect.left;
+            y2 = winRect.top + winRect.height / 2;
+          }
+
+          // Bezier curve for smooth connection
+          const midX = (x1 + x2) / 2;
+          const path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+
+          const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          line.setAttribute('d', path);
+          line.setAttribute('class', 'connection-line plan-to-subagent-line');
+          line.setAttribute('data-agent-id', agentId);
+          line.setAttribute('data-plan-agent-id', nearestPlanAgent.id);
+          svg.appendChild(line);
+        }
+      } else if (wizardOpen && wizardContent) {
+        // Wizard open but no plan subagents - connect directly to wizard
         const wizardRect = wizardContent.getBoundingClientRect();
 
-        // Determine which side of wizard the window is on
         const winCenterX = winRect.left + winRect.width / 2;
         const wizardCenterX = wizardRect.left + wizardRect.width / 2;
 
         let x1, y1, x2, y2;
 
         if (winCenterX < wizardCenterX) {
-          // Window is on the left - connect from wizard left edge
           x1 = wizardRect.left;
           y1 = wizardRect.top + wizardRect.height / 2;
           x2 = winRect.right;
           y2 = winRect.top + winRect.height / 2;
         } else {
-          // Window is on the right - connect from wizard right edge
           x1 = wizardRect.right;
           y1 = wizardRect.top + wizardRect.height / 2;
           x2 = winRect.left;
           y2 = winRect.top + winRect.height / 2;
         }
 
-        // Bezier curve for smooth horizontal connection
         const midX = (x1 + x2) / 2;
         const path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
 

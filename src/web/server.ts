@@ -2420,7 +2420,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Generate detailed implementation plan using subagent orchestration
     // This spawns multiple specialist subagents in parallel for thorough analysis
     this.app.post('/api/generate-plan-detailed', async (req): Promise<ApiResponse> => {
-      const { taskDescription } = req.body as { taskDescription: string };
+      const { taskDescription, caseName } = req.body as { taskDescription: string; caseName?: string };
 
       if (!taskDescription || typeof taskDescription !== 'string') {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Task description is required');
@@ -2430,7 +2430,20 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Task description too long (max 10000 chars)');
       }
 
-      const orchestrator = new PlanOrchestrator(this.screenManager, process.cwd());
+      // Determine output directory for saving wizard results
+      let outputDir: string | undefined;
+      if (caseName) {
+        const casesDir = join(homedir(), 'claudeman-cases');
+        const casePath = join(casesDir, caseName);
+        // Security: Path traversal protection
+        const resolvedCase = resolve(casePath);
+        const resolvedBase = resolve(casesDir);
+        if (resolvedCase.startsWith(resolvedBase) && existsSync(casePath)) {
+          outputDir = join(casePath, 'ralph-wizard');
+        }
+      }
+
+      const orchestrator = new PlanOrchestrator(this.screenManager, process.cwd(), outputDir);
 
       // Cancel orchestrator if client disconnects (user clicked Stop)
       // Note: We use the socket's 'close' event, not req.raw.on('close') which fires

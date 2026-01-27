@@ -15,6 +15,8 @@
 
 import { Session } from './session.js';
 import { ScreenManager } from './screen-manager.js';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 // ============================================================================
 // Types
@@ -44,17 +46,17 @@ export interface PlanItem {
   /** Legacy numeric phase (1-4) */
   phase?: number;
 
-  // === NEW: Verification ===
+  // === Verification ===
   /** How to know it's done (e.g., "npm test passes", "endpoint returns 200") */
   verificationCriteria?: string;
   /** Command to run for verification (e.g., "npm test -- --grep='auth'") */
   testCommand?: string;
 
-  // === NEW: Dependencies ===
+  // === Dependencies ===
   /** IDs of tasks that must complete first */
   dependencies?: string[];
 
-  // === NEW: Execution tracking ===
+  // === Execution tracking ===
   /** Current execution status */
   status?: PlanTaskStatus;
   /** How many times attempted */
@@ -64,7 +66,7 @@ export interface PlanItem {
   /** Timestamp of completion */
   completedAt?: number;
 
-  // === NEW: Metadata ===
+  // === Metadata ===
   /** Estimated complexity */
   complexity?: 'low' | 'medium' | 'high';
   /** How to undo if needed */
@@ -77,6 +79,56 @@ export interface PlanItem {
   pairedWith?: string;
   /** Checklist items for review tasks (tddPhase: 'review') */
   reviewChecklist?: string[];
+
+  // === Claude Code Execution Optimization ===
+  /** Group ID for tasks that can run in parallel */
+  parallelGroup?: string;
+  /** Recommended Claude Code agent type */
+  agentType?: 'explore' | 'implement' | 'test' | 'review' | 'general';
+  /** Whether this task benefits from a fresh context */
+  requiresFreshContext?: boolean;
+  /** Estimated token usage for this task */
+  estimatedTokens?: number;
+  /** Recommended model for this task */
+  recommendedModel?: 'opus' | 'sonnet' | 'haiku';
+  /** Files this task will likely read */
+  inputFiles?: string[];
+  /** Files this task will likely modify */
+  outputFiles?: string[];
+}
+
+export interface ResearchResult {
+  success: boolean;
+  findings: {
+    /** External resources discovered (GitHub repos, docs, tutorials) */
+    externalResources: Array<{
+      type: 'github' | 'documentation' | 'tutorial' | 'article' | 'stackoverflow';
+      url?: string;
+      title: string;
+      relevance: string;
+      keyInsights: string[];
+    }>;
+    /** Existing codebase patterns relevant to the task */
+    codebasePatterns: Array<{
+      pattern: string;
+      location: string;
+      relevance: string;
+    }>;
+    /** Technical approach recommendations based on research */
+    technicalRecommendations: string[];
+    /** Potential challenges identified from research */
+    potentialChallenges: string[];
+    /** Libraries or tools recommended */
+    recommendedTools: Array<{
+      name: string;
+      purpose: string;
+      reason: string;
+    }>;
+  };
+  /** Enhanced task description with research context */
+  enrichedTaskDescription: string;
+  error?: string;
+  durationMs: number;
 }
 
 export interface SubagentResult {
@@ -107,17 +159,45 @@ export interface VerificationResult {
   qualityScore: number;
 }
 
+export interface ParallelGroup {
+  id: string;
+  tasks: string[];
+  rationale: string;
+  estimatedDuration?: string;
+  totalTokens?: number;
+}
+
+export interface ExecutionStrategy {
+  totalParallelGroups: number;
+  sequentialBlockers: string[];
+  freshContextPoints: string[];
+  estimatedTotalTokens: number;
+  estimatedAgentSpawns: number;
+  criticalPath: string[];
+  optimizationNotes: string[];
+}
+
+export interface ExecutionOptimizerResult {
+  optimizedPlan: PlanItem[];
+  parallelGroups: ParallelGroup[];
+  executionStrategy: ExecutionStrategy;
+}
+
 export interface DetailedPlanResult {
   success: boolean;
   items?: PlanItem[];
   costUsd?: number;
   metadata?: {
+    researchResult?: ResearchResult;
     subagentResults: SubagentResult[];
     synthesisStats: SynthesisResult['stats'];
     verificationGaps: string[];
     verificationWarnings: string[];
     qualityScore: number;
     totalDurationMs: number;
+    parallelGroups?: ParallelGroup[];
+    executionStrategy?: ExecutionStrategy;
+    finalReview?: FinalReviewResult;
   };
   error?: string;
 }
@@ -128,7 +208,7 @@ export type ProgressCallback = (phase: string, detail: string) => void;
 export interface PlanSubagentEvent {
   type: 'started' | 'progress' | 'completed' | 'failed';
   agentId: string;
-  agentType: 'requirements' | 'architecture' | 'testing' | 'risks' | 'verification';
+  agentType: 'research' | 'requirements' | 'architecture' | 'testing' | 'risks' | 'verification' | 'execution' | 'final-review';
   model: string;
   status: string;
   detail?: string;
@@ -137,20 +217,130 @@ export interface PlanSubagentEvent {
   error?: string;
 }
 
+/** Result from the final review agent */
+export interface FinalReviewResult {
+  overallAssessment: 'ready' | 'needs-revision' | 'major-issues';
+  scores: {
+    logic: number;
+    completeness: number;
+    coherence: number;
+    feasibility: number;
+    overall: number;
+  };
+  summary: string;
+  issues: Array<{
+    severity: 'warning' | 'error';
+    issue: string;
+    affectedTasks: string[];
+    suggestion: string;
+  }>;
+  missingTasks: Array<{
+    content: string;
+    reason: string;
+    insertAfter?: string;
+    priority: 'P0' | 'P1' | 'P2';
+  }>;
+  recommendations: string[];
+}
+
 export type SubagentCallback = (event: PlanSubagentEvent) => void;
 
 // ============================================================================
 // Constants
 // ============================================================================
 
+const RESEARCH_TIMEOUT_MS = 360000; // 6 minutes for research (may need web search)
 const SUBAGENT_TIMEOUT_MS = 300000; // 5 minutes per subagent (Opus needs time for complex analysis)
 const VERIFICATION_TIMEOUT_MS = 480000; // 8 minutes for verification (Opus + large plans)
+const MODEL_RESEARCH = 'opus'; // Best model for research (needs reasoning for web search)
 const MODEL_ANALYSIS = 'opus'; // Best model for thorough analysis
 const MODEL_VERIFICATION = 'opus'; // Best model for verification
 
 // ============================================================================
 // Subagent Prompts
 // ============================================================================
+
+const RESEARCH_AGENT_PROMPT = `You are a Research Specialist preparing context for an implementation task. Your job is to gather all relevant information that will help the development team succeed.
+
+## YOUR TASK
+Research and gather comprehensive context for implementing this task:
+
+## TASK DESCRIPTION
+{TASK}
+
+## INSTRUCTIONS
+Perform thorough research across multiple sources:
+
+### 1. WEB RESEARCH (CRITICAL)
+Use web search to find:
+- **GitHub repositories** that implement similar features or solve similar problems
+- **Official documentation** for any technologies, APIs, or frameworks mentioned
+- **Claude Code documentation** if the task involves Claude Code features
+- **Best practice guides** and tutorials from reputable sources
+- **Stack Overflow answers** for common implementation patterns
+
+Focus your web search on:
+- How others have solved similar problems
+- Common pitfalls and gotchas
+- Library/package recommendations
+- API usage examples
+
+### 2. CODEBASE EXPLORATION
+If the task involves modifying an existing codebase, explore it to understand:
+- Existing patterns and conventions used
+- Similar features already implemented
+- File organization and architecture
+- Test patterns and coverage
+
+### 3. TECHNICAL ANALYSIS
+Based on your research:
+- Recommend the best technical approach
+- Identify potential challenges before they become blockers
+- Suggest useful libraries or tools
+- Note any compatibility or integration concerns
+
+## OUTPUT FORMAT
+Return ONLY a JSON object:
+{
+  "externalResources": [
+    {
+      "type": "github|documentation|tutorial|article|stackoverflow",
+      "url": "https://...",
+      "title": "Resource title",
+      "relevance": "Why this is relevant to the task",
+      "keyInsights": ["Insight 1", "Insight 2"]
+    }
+  ],
+  "codebasePatterns": [
+    {
+      "pattern": "Pattern name (e.g., 'Repository pattern for data access')",
+      "location": "src/repositories/*.ts",
+      "relevance": "Why this pattern matters for the task"
+    }
+  ],
+  "technicalRecommendations": [
+    "Use approach X because...",
+    "Consider library Y for..."
+  ],
+  "potentialChallenges": [
+    "Watch out for X when implementing Y",
+    "Common gotcha: ..."
+  ],
+  "recommendedTools": [
+    {
+      "name": "library-name",
+      "purpose": "What it does",
+      "reason": "Why it's recommended for this task"
+    }
+  ],
+  "enrichedTaskDescription": "A more detailed version of the original task, enriched with context from your research. This should include specific technical details, file locations, API endpoints, library versions, etc. that will help other agents understand exactly what needs to be done."
+}
+
+CRITICAL REQUIREMENTS:
+1. ACTUALLY USE WEB SEARCH to find external resources - don't make them up
+2. Include real URLs when found via web search
+3. The enrichedTaskDescription should be 2-3x more detailed than the original
+4. Be specific - vague research is useless research`;
 
 const REQUIREMENTS_ANALYST_PROMPT = `You are a Requirements Analyst specializing in extracting all requirements from task descriptions.
 
@@ -159,6 +349,8 @@ Analyze the following task and extract ALL requirements (explicit and implicit):
 
 ## TASK DESCRIPTION
 {TASK}
+
+{RESEARCH_CONTEXT}
 
 ## INSTRUCTIONS
 1. Identify explicit requirements (directly stated)
@@ -182,6 +374,8 @@ Design the architecture for implementing this task:
 ## TASK DESCRIPTION
 {TASK}
 
+{RESEARCH_CONTEXT}
+
 ## INSTRUCTIONS
 1. Identify all modules/components needed
 2. Define interfaces between components
@@ -197,41 +391,74 @@ Return ONLY a JSON array:
 
 Generate 10-20 items. Think about the complete system architecture.`;
 
-const TESTING_SPECIALIST_PROMPT = `You are a TDD Specialist designing a comprehensive test strategy with verification criteria.
+const TESTING_SPECIALIST_PROMPT = `You are a TDD Specialist designing a comprehensive, REALISTIC test strategy.
 
 ## YOUR TASK
-Design test coverage for this task:
+Design detailed, executable test coverage for this task:
 
 ## TASK DESCRIPTION
 {TASK}
 
+{RESEARCH_CONTEXT}
+
 ## INSTRUCTIONS
-Following Test-Driven Development methodology:
-1. Design unit tests for each component
-2. Plan integration tests for feature interactions
-3. Identify edge cases and boundary conditions
-4. Consider error scenarios and failure modes
-5. For each test, specify HOW to verify it passes
+Create REALISTIC tests that would actually run in a real codebase:
+
+### 1. Unit Tests (test individual functions/methods in isolation)
+- Mock external dependencies (databases, APIs, file system)
+- Test pure logic with specific input/output examples
+- Include exact assertion values, not placeholders
+
+### 2. Integration Tests (test component interactions)
+- Test API endpoints with realistic request/response bodies
+- Test database operations with actual schema
+- Test service-to-service communication
+
+### 3. Edge Cases & Boundary Tests
+- Empty inputs, null values, undefined
+- Maximum/minimum values, overflow conditions
+- Unicode, special characters, injection attempts
+- Concurrent access, race conditions
+
+### 4. Error Scenario Tests
+- Network failures, timeouts, connection refused
+- Invalid input validation with specific error messages
+- Authorization failures, permission denied
+- Resource not found, conflict states
+
+### 5. Performance & Load Tests (where applicable)
+- Response time thresholds
+- Memory usage limits
+- Concurrent user handling
+
+## REALISTIC TEST EXAMPLE
+BAD: "Test user login" (too vague)
+GOOD: "Test POST /api/auth/login with valid email 'test@example.com' and password 'ValidPass123!' returns 200 with JWT token containing userId and exp claims, sets httpOnly cookie 'session'"
 
 ## OUTPUT FORMAT
 Return ONLY a JSON array:
 [
   {
-    "category": "unit|integration|edge-case|error|verification",
-    "content": "Write test for user login with valid credentials",
-    "rationale": "Validates happy path authentication flow",
-    "verificationCriteria": "Test passes: POST /auth/login returns 200 with JWT token",
-    "testCommand": "npm test -- --grep='login valid'",
-    "pairedImpl": "Implement login endpoint handler"
+    "category": "unit|integration|edge-case|error|e2e|performance",
+    "content": "Test POST /api/users with email 'new@test.com' creates user and returns 201 with {id, email, createdAt}",
+    "rationale": "Validates user creation happy path with all required response fields",
+    "verificationCriteria": "Response status 201, body contains id (uuid), email matches input, createdAt is valid ISO timestamp",
+    "testCommand": "npm test -- --grep='POST /api/users creates user'",
+    "testSetup": "Clear users table, seed with test data",
+    "testTeardown": "Delete created test user",
+    "pairedImpl": "Implement POST /api/users endpoint with validation and database insert",
+    "mockDependencies": ["database connection", "email service"],
+    "assertionDetails": ["status === 201", "body.id matches UUID regex", "body.email === 'new@test.com'"]
   }
 ]
 
-CRITICAL: Every test item MUST include:
-- verificationCriteria: How to know the test passes (observable outcome)
-- testCommand: The actual command to run (npm test, pytest, etc.)
-- pairedImpl: The implementation step this test validates
+CRITICAL REQUIREMENTS:
+- verificationCriteria: SPECIFIC observable outcomes with exact values
+- testCommand: Actual runnable command (npm test, pytest, vitest, etc.)
+- pairedImpl: The exact implementation step this test validates
+- assertionDetails: List of specific assertions to make
 
-Generate 12-25 items. Tests should be written BEFORE implementation.`;
+Generate 15-30 detailed test items. Tests MUST be specific enough to implement directly.`;
 
 const RISK_ANALYST_PROMPT = `You are a Risk Analyst identifying potential issues and blockers.
 
@@ -240,6 +467,8 @@ Identify risks and edge cases for this task:
 
 ## TASK DESCRIPTION
 {TASK}
+
+{RESEARCH_CONTEXT}
 
 ## INSTRUCTIONS
 1. Identify potential failure points
@@ -383,6 +612,224 @@ CRITICAL REQUIREMENTS:
 
 Be critical but constructive. A thorough review catches issues that tests miss.`;
 
+const EXECUTION_OPTIMIZER_PROMPT = `You are a Claude Code Execution Optimizer. Your job is to analyze an implementation plan and optimize it for efficient execution using Claude Code's agent system.
+
+## ORIGINAL TASK
+{TASK}
+
+## CURRENT PLAN
+{PLAN}
+
+## YOUR MISSION
+Analyze and enhance this plan for optimal Claude Code execution:
+
+### 1. PARALLEL EXECUTION GROUPS
+Identify tasks that can run simultaneously in separate agents:
+- Tasks with NO dependencies between them
+- Tasks that modify DIFFERENT files
+- Tasks that read-only operations (exploration, analysis)
+- Assign a parallelGroup ID (e.g., "parallel-1", "parallel-2") to related tasks
+
+### 2. AGENT TYPE RECOMMENDATIONS
+For each task, recommend the optimal Claude Code agent type:
+- "explore": For codebase exploration, finding files, understanding patterns
+- "implement": For writing new code, features, modifications
+- "test": For writing and running tests
+- "review": For code review, security analysis, best practices
+- "general": For mixed or unclear tasks
+
+### 3. FRESH CONTEXT RECOMMENDATIONS
+Mark tasks that benefit from a fresh context (new conversation):
+- After large file modifications (>500 lines changed)
+- When switching between unrelated features
+- After test failures that need fresh analysis
+- When accumulated context might cause confusion
+
+### 4. MODEL RECOMMENDATIONS
+Suggest the optimal model for each task:
+- "opus": Complex architecture, critical decisions, security review
+- "sonnet": Standard implementation, most coding tasks
+- "haiku": Quick exploration, simple searches, routine checks
+
+### 5. FILE SCOPE ANALYSIS
+For each task, identify:
+- inputFiles: Files the task will need to READ
+- outputFiles: Files the task will CREATE or MODIFY
+
+### 6. TOKEN ESTIMATION
+Estimate token usage for each task:
+- Small (exploration, simple changes): 5000-15000
+- Medium (feature implementation): 15000-50000
+- Large (complex features, refactoring): 50000-100000
+
+## OUTPUT FORMAT
+Return ONLY a JSON object:
+{
+  "optimizedPlan": [
+    {
+      "id": "P0-001",
+      "content": "Explore existing auth patterns in codebase",
+      "priority": "P0",
+      "tddPhase": "setup",
+      "verificationCriteria": "Documented auth patterns with file locations",
+      "dependencies": [],
+      "parallelGroup": "parallel-1",
+      "agentType": "explore",
+      "recommendedModel": "haiku",
+      "requiresFreshContext": false,
+      "estimatedTokens": 8000,
+      "inputFiles": ["src/auth/**/*.ts", "src/middleware/*.ts"],
+      "outputFiles": [],
+      "executionNotes": "Quick exploration, can run alongside P0-002"
+    },
+    {
+      "id": "P0-002",
+      "content": "Explore test patterns and fixtures",
+      "priority": "P0",
+      "tddPhase": "setup",
+      "verificationCriteria": "Understood test setup and conventions",
+      "dependencies": [],
+      "parallelGroup": "parallel-1",
+      "agentType": "explore",
+      "recommendedModel": "haiku",
+      "requiresFreshContext": false,
+      "estimatedTokens": 6000,
+      "inputFiles": ["test/**/*.test.ts", "test/fixtures/**/*"],
+      "outputFiles": [],
+      "executionNotes": "Parallel with P0-001, different file scope"
+    }
+  ],
+  "parallelGroups": [
+    {
+      "id": "parallel-1",
+      "tasks": ["P0-001", "P0-002"],
+      "rationale": "Independent exploration tasks with no file overlap",
+      "estimatedDuration": "2-3 minutes",
+      "totalTokens": 14000
+    }
+  ],
+  "executionStrategy": {
+    "totalParallelGroups": 3,
+    "sequentialBlockers": ["P0-005 blocks all P1 tasks"],
+    "freshContextPoints": ["After P0-005 (large refactor)", "After P1-003 (test failures)"],
+    "estimatedTotalTokens": 150000,
+    "estimatedAgentSpawns": 8,
+    "criticalPath": ["P0-001", "P0-003", "P0-005", "P1-001"],
+    "optimizationNotes": [
+      "Group 1 saves ~3 min by parallelizing exploration",
+      "Use haiku for 4 exploration tasks to reduce cost",
+      "Fresh context after auth refactor prevents confusion"
+    ]
+  }
+}
+
+CRITICAL REQUIREMENTS:
+1. Every task MUST have parallelGroup, agentType, recommendedModel
+2. Parallel groups MUST NOT have overlapping outputFiles
+3. Tasks in same parallelGroup MUST NOT depend on each other
+4. Preserve all existing task fields (id, content, priority, etc.)
+5. Add executionNotes explaining WHY this optimization
+
+PARALLELIZATION GUIDELINES (BE CONSERVATIVE):
+- Only parallelize tasks when you are CERTAIN they have no file conflicts
+- Prefer sequential execution for complex or risky tasks
+- Limit parallel groups to 2-3 tasks maximum per group
+- When in doubt, keep tasks sequential - correctness over speed
+- Focus parallelization on exploration/read-only tasks, not implementations
+- Never parallelize tasks that might share state or side effects`;
+
+const FINAL_REVIEW_PROMPT = `You are a Final Review Expert providing a holistic analysis of an implementation plan.
+
+## ORIGINAL TASK
+{TASK}
+
+## COMPLETE PLAN
+{PLAN}
+
+## YOUR MISSION
+Review the ENTIRE plan from a high-level perspective. You have the bird's eye view.
+
+### 1. LOGICAL FLOW ANALYSIS
+Check if the plan makes logical sense:
+- Does the order of tasks make sense?
+- Are there circular dependencies or impossible orderings?
+- Is there a clear progression from setup → implementation → testing → review?
+- Are foundation tasks (types, configs, setup) done before dependent tasks?
+
+### 2. COMPLETENESS CHECK
+Verify nothing is missing:
+- Every implementation has a corresponding test?
+- Every test has clear verification criteria?
+- Error handling and edge cases are covered?
+- Setup and teardown steps are included?
+- Documentation tasks if needed?
+
+### 3. COHERENCE VALIDATION
+Ensure the plan is internally consistent:
+- Do task descriptions match their dependencies?
+- Are file references consistent across tasks?
+- Do parallel groups actually make sense together?
+- Are priority levels justified?
+
+### 4. FEASIBILITY ASSESSMENT
+Is this plan actually achievable?
+- Are any tasks too vague to execute?
+- Are there unrealistic expectations?
+- Are there hidden complexities not addressed?
+- Is the scope creep under control?
+
+### 5. SUGGESTED IMPROVEMENTS
+Provide actionable fixes:
+- Tasks to add if missing
+- Tasks to split if too large
+- Tasks to merge if redundant
+- Order changes if needed
+- Clarifications needed
+
+## OUTPUT FORMAT
+Return ONLY a JSON object:
+{
+  "overallAssessment": "ready|needs-revision|major-issues",
+  "logicScore": 0.85,
+  "completenessScore": 0.90,
+  "coherenceScore": 0.88,
+  "feasibilityScore": 0.82,
+  "overallScore": 0.86,
+  "summary": "Brief 2-3 sentence summary of the plan quality",
+  "logicIssues": [
+    {"severity": "warning|error", "issue": "Description", "affectedTasks": ["P0-001"], "suggestion": "How to fix"}
+  ],
+  "missingTasks": [
+    {"content": "Add database migration script", "reason": "Schema changes require migration", "insertAfter": "P0-002", "priority": "P0"}
+  ],
+  "tasksToSplit": [
+    {"taskId": "P1-005", "reason": "Too complex", "splitInto": ["Implement auth logic", "Add session management"]}
+  ],
+  "tasksToMerge": [
+    {"taskIds": ["P2-001", "P2-002"], "reason": "Redundant", "mergedContent": "Combined task description"}
+  ],
+  "orderChanges": [
+    {"taskId": "P0-003", "currentPosition": 3, "suggestedPosition": 1, "reason": "Should run earlier"}
+  ],
+  "clarificationsNeeded": [
+    {"taskId": "P1-002", "issue": "Unclear which API endpoint", "question": "Is this REST or GraphQL?"}
+  ],
+  "finalRecommendations": [
+    "Start with P0 tasks in sequence for stable foundation",
+    "Consider adding integration tests after P1-004",
+    "Review security implications of auth changes"
+  ]
+}
+
+SCORING GUIDELINES:
+- 0.9+: Excellent, ready to execute
+- 0.8-0.9: Good, minor tweaks recommended
+- 0.7-0.8: Acceptable, some issues to address
+- 0.6-0.7: Needs revision before execution
+- <0.6: Major issues, significant rework needed
+
+Be thorough but constructive. The goal is to catch issues before execution, not to criticize.`;
+
 // ============================================================================
 // Main Orchestrator Class
 // ============================================================================
@@ -390,12 +837,461 @@ Be critical but constructive. A thorough review catches issues that tests miss.`
 export class PlanOrchestrator {
   private screenManager: ScreenManager;
   private workingDir: string;
+  private outputDir?: string;
   private runningSessions: Set<Session> = new Set();
   private cancelled = false;
+  private taskDescription = '';
 
-  constructor(screenManager: ScreenManager, workingDir: string = process.cwd()) {
+  constructor(screenManager: ScreenManager, workingDir: string = process.cwd(), outputDir?: string) {
     this.screenManager = screenManager;
     this.workingDir = workingDir;
+    this.outputDir = outputDir;
+  }
+
+  /**
+   * Save agent prompt and result to the output directory.
+   * Creates a folder for each agent with prompt.md and result.json files.
+   */
+  private saveAgentOutput(
+    agentType: string,
+    prompt: string,
+    result: unknown,
+    durationMs: number
+  ): void {
+    if (!this.outputDir) return;
+
+    try {
+      // Ensure output directory exists
+      if (!existsSync(this.outputDir)) {
+        mkdirSync(this.outputDir, { recursive: true });
+      }
+
+      // Create agent folder
+      const agentDir = join(this.outputDir, agentType);
+      if (!existsSync(agentDir)) {
+        mkdirSync(agentDir, { recursive: true });
+      }
+
+      // Save prompt
+      const promptPath = join(agentDir, 'prompt.md');
+      const promptContent = `# ${agentType} Agent Prompt
+
+Generated: ${new Date().toISOString()}
+Duration: ${(durationMs / 1000).toFixed(1)}s
+
+## Task Description
+${this.taskDescription}
+
+## Prompt
+${prompt}
+`;
+      writeFileSync(promptPath, promptContent, 'utf-8');
+
+      // Save result
+      const resultPath = join(agentDir, 'result.json');
+      writeFileSync(resultPath, JSON.stringify(result, null, 2), 'utf-8');
+
+      console.log(`[PlanOrchestrator] Saved ${agentType} output to ${agentDir}`);
+    } catch (err) {
+      console.error(`[PlanOrchestrator] Failed to save ${agentType} output:`, err);
+    }
+  }
+
+  /**
+   * Save the final combined plan result.
+   */
+  private saveFinalResult(result: DetailedPlanResult): void {
+    if (!this.outputDir) return;
+
+    try {
+      // Ensure output directory exists
+      if (!existsSync(this.outputDir)) {
+        mkdirSync(this.outputDir, { recursive: true });
+      }
+
+      // Save final result
+      const resultPath = join(this.outputDir, 'final-result.json');
+      writeFileSync(resultPath, JSON.stringify(result, null, 2), 'utf-8');
+
+      // Also save a human-readable summary
+      const summaryPath = join(this.outputDir, 'summary.md');
+      const summary = this.generateReadableSummary(result);
+      writeFileSync(summaryPath, summary, 'utf-8');
+
+      console.log(`[PlanOrchestrator] Saved final result to ${this.outputDir}`);
+    } catch (err) {
+      console.error('[PlanOrchestrator] Failed to save final result:', err);
+    }
+  }
+
+  /**
+   * Generate a human-readable summary of the plan.
+   */
+  private generateReadableSummary(result: DetailedPlanResult): string {
+    const lines: string[] = [
+      '# Ralph Wizard Plan Summary',
+      '',
+      `Generated: ${new Date().toISOString()}`,
+      '',
+      '## Task Description',
+      this.taskDescription,
+      '',
+    ];
+
+    if (result.metadata?.qualityScore) {
+      lines.push(`## Quality Score: ${Math.round(result.metadata.qualityScore * 100)}%`);
+      lines.push('');
+    }
+
+    // Include research findings if available
+    if (result.metadata?.researchResult?.success) {
+      const research = result.metadata.researchResult;
+      lines.push('## Research Findings');
+      lines.push('');
+
+      if (research.findings.externalResources.length > 0) {
+        lines.push('### External Resources');
+        for (const resource of research.findings.externalResources) {
+          lines.push(`- **${resource.title}** (${resource.type})`);
+          if (resource.url) lines.push(`  - URL: ${resource.url}`);
+          if (resource.keyInsights.length > 0) {
+            lines.push(`  - Insights: ${resource.keyInsights.join('; ')}`);
+          }
+        }
+        lines.push('');
+      }
+
+      if (research.findings.technicalRecommendations.length > 0) {
+        lines.push('### Technical Recommendations');
+        for (const rec of research.findings.technicalRecommendations) {
+          lines.push(`- ${rec}`);
+        }
+        lines.push('');
+      }
+
+      if (research.findings.potentialChallenges.length > 0) {
+        lines.push('### Potential Challenges');
+        for (const challenge of research.findings.potentialChallenges) {
+          lines.push(`- ${challenge}`);
+        }
+        lines.push('');
+      }
+
+      if (research.findings.recommendedTools.length > 0) {
+        lines.push('### Recommended Tools');
+        for (const tool of research.findings.recommendedTools) {
+          lines.push(`- **${tool.name}**: ${tool.purpose}`);
+        }
+        lines.push('');
+      }
+    }
+
+    if (result.metadata?.finalReview) {
+      const review = result.metadata.finalReview;
+      lines.push('## Final Review');
+      lines.push(`- Assessment: ${review.overallAssessment}`);
+      lines.push(`- Logic: ${Math.round(review.scores.logic * 100)}%`);
+      lines.push(`- Completeness: ${Math.round(review.scores.completeness * 100)}%`);
+      lines.push(`- Coherence: ${Math.round(review.scores.coherence * 100)}%`);
+      lines.push(`- Feasibility: ${Math.round(review.scores.feasibility * 100)}%`);
+      lines.push('');
+      if (review.summary) {
+        lines.push(review.summary);
+        lines.push('');
+      }
+    }
+
+    if (result.items) {
+      lines.push('## Plan Items');
+      lines.push('');
+      for (const item of result.items) {
+        const priority = item.priority || 'P1';
+        const phase = item.tddPhase ? ` [${item.tddPhase}]` : '';
+        lines.push(`### ${item.id || 'task'}: ${item.content}`);
+        lines.push(`- Priority: ${priority}${phase}`);
+        if (item.verificationCriteria) {
+          lines.push(`- Verification: ${item.verificationCriteria}`);
+        }
+        if (item.dependencies?.length) {
+          lines.push(`- Dependencies: ${item.dependencies.join(', ')}`);
+        }
+        if (item.parallelGroup) {
+          lines.push(`- Parallel Group: ${item.parallelGroup}`);
+        }
+        if (item.recommendedModel) {
+          lines.push(`- Recommended Model: ${item.recommendedModel}`);
+        }
+        lines.push('');
+      }
+    }
+
+    if (result.metadata?.executionStrategy) {
+      const strategy = result.metadata.executionStrategy;
+      lines.push('## Execution Strategy');
+      lines.push(`- Parallel Groups: ${strategy.totalParallelGroups}`);
+      lines.push(`- Estimated Agent Spawns: ${strategy.estimatedAgentSpawns}`);
+      lines.push(`- Estimated Total Tokens: ${strategy.estimatedTotalTokens?.toLocaleString()}`);
+      lines.push('');
+      if (strategy.optimizationNotes?.length) {
+        lines.push('### Optimization Notes');
+        for (const note of strategy.optimizationNotes) {
+          lines.push(`- ${note}`);
+        }
+        lines.push('');
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Format research findings as context for other agents.
+   */
+  private formatResearchContext(research: ResearchResult): string {
+    if (!research.success) return '';
+
+    const lines: string[] = [
+      '## RESEARCH FINDINGS (from prior research phase)',
+      '',
+    ];
+
+    // External resources
+    if (research.findings.externalResources.length > 0) {
+      lines.push('### External Resources Discovered');
+      for (const resource of research.findings.externalResources) {
+        lines.push(`- **${resource.title}** (${resource.type})`);
+        if (resource.url) lines.push(`  URL: ${resource.url}`);
+        lines.push(`  Relevance: ${resource.relevance}`);
+        if (resource.keyInsights.length > 0) {
+          lines.push(`  Key insights: ${resource.keyInsights.join('; ')}`);
+        }
+      }
+      lines.push('');
+    }
+
+    // Codebase patterns
+    if (research.findings.codebasePatterns.length > 0) {
+      lines.push('### Existing Codebase Patterns');
+      for (const pattern of research.findings.codebasePatterns) {
+        lines.push(`- **${pattern.pattern}** at ${pattern.location}`);
+        lines.push(`  Relevance: ${pattern.relevance}`);
+      }
+      lines.push('');
+    }
+
+    // Technical recommendations
+    if (research.findings.technicalRecommendations.length > 0) {
+      lines.push('### Technical Recommendations');
+      for (const rec of research.findings.technicalRecommendations) {
+        lines.push(`- ${rec}`);
+      }
+      lines.push('');
+    }
+
+    // Potential challenges
+    if (research.findings.potentialChallenges.length > 0) {
+      lines.push('### Potential Challenges');
+      for (const challenge of research.findings.potentialChallenges) {
+        lines.push(`- ${challenge}`);
+      }
+      lines.push('');
+    }
+
+    // Recommended tools
+    if (research.findings.recommendedTools.length > 0) {
+      lines.push('### Recommended Tools/Libraries');
+      for (const tool of research.findings.recommendedTools) {
+        lines.push(`- **${tool.name}**: ${tool.purpose} (${tool.reason})`);
+      }
+      lines.push('');
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Run the research agent to gather context before analysis.
+   */
+  private async runResearchAgent(
+    taskDescription: string,
+    onProgress?: ProgressCallback,
+    onSubagent?: SubagentCallback
+  ): Promise<ResearchResult> {
+    const agentId = `plan-research-${Date.now()}`;
+    const startTime = Date.now();
+
+    // Default result if research fails
+    const defaultResult: ResearchResult = {
+      success: false,
+      findings: {
+        externalResources: [],
+        codebasePatterns: [],
+        technicalRecommendations: [],
+        potentialChallenges: [],
+        recommendedTools: [],
+      },
+      enrichedTaskDescription: taskDescription,
+      error: 'Research skipped',
+      durationMs: 0,
+    };
+
+    // Check if already cancelled
+    if (this.cancelled) {
+      return { ...defaultResult, error: 'Cancelled' };
+    }
+
+    // Emit started event
+    onSubagent?.({
+      type: 'started',
+      agentId,
+      agentType: 'research',
+      model: MODEL_RESEARCH,
+      status: 'running',
+      detail: 'Researching external resources and codebase patterns...',
+    });
+
+    const session = new Session({
+      workingDir: this.workingDir,
+      screenManager: this.screenManager,
+      useScreen: false,
+      mode: 'claude',
+    });
+
+    // Track this session for cancellation
+    this.runningSessions.add(session);
+
+    try {
+      const prompt = RESEARCH_AGENT_PROMPT.replace('{TASK}', taskDescription);
+
+      onProgress?.('research', 'Gathering external resources and codebase context...');
+
+      const { result } = await Promise.race([
+        session.runPrompt(prompt, { model: MODEL_RESEARCH }),
+        this.timeout(RESEARCH_TIMEOUT_MS),
+      ]);
+
+      // Check if cancelled during execution
+      if (this.cancelled) {
+        onSubagent?.({
+          type: 'failed',
+          agentId,
+          agentType: 'research',
+          model: MODEL_RESEARCH,
+          status: 'cancelled',
+          error: 'Cancelled',
+          durationMs: Date.now() - startTime,
+        });
+        return { ...defaultResult, error: 'Cancelled', durationMs: Date.now() - startTime };
+      }
+
+      // Parse JSON from result
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        console.warn('[PlanOrchestrator] Research agent returned no JSON');
+        onSubagent?.({
+          type: 'completed',
+          agentId,
+          agentType: 'research',
+          model: MODEL_RESEARCH,
+          status: 'completed',
+          detail: 'Research completed with limited findings',
+          durationMs: Date.now() - startTime,
+        });
+        return { ...defaultResult, durationMs: Date.now() - startTime };
+      }
+
+      const parsed = JSON.parse(jsonMatch[0]);
+
+      // Parse external resources
+      const externalResources = (Array.isArray(parsed.externalResources) ? parsed.externalResources : []).map((r: Record<string, unknown>) => ({
+        type: (['github', 'documentation', 'tutorial', 'article', 'stackoverflow'].includes(String(r.type))
+          ? r.type : 'article') as 'github' | 'documentation' | 'tutorial' | 'article' | 'stackoverflow',
+        url: r.url ? String(r.url) : undefined,
+        title: String(r.title || 'Untitled'),
+        relevance: String(r.relevance || ''),
+        keyInsights: Array.isArray(r.keyInsights) ? r.keyInsights.map(String) : [],
+      }));
+
+      // Parse codebase patterns
+      const codebasePatterns = (Array.isArray(parsed.codebasePatterns) ? parsed.codebasePatterns : []).map((p: Record<string, unknown>) => ({
+        pattern: String(p.pattern || ''),
+        location: String(p.location || ''),
+        relevance: String(p.relevance || ''),
+      }));
+
+      // Parse other fields
+      const technicalRecommendations = Array.isArray(parsed.technicalRecommendations)
+        ? parsed.technicalRecommendations.map(String)
+        : [];
+
+      const potentialChallenges = Array.isArray(parsed.potentialChallenges)
+        ? parsed.potentialChallenges.map(String)
+        : [];
+
+      const recommendedTools = (Array.isArray(parsed.recommendedTools) ? parsed.recommendedTools : []).map((t: Record<string, unknown>) => ({
+        name: String(t.name || ''),
+        purpose: String(t.purpose || ''),
+        reason: String(t.reason || ''),
+      }));
+
+      const enrichedTaskDescription = parsed.enrichedTaskDescription
+        ? String(parsed.enrichedTaskDescription)
+        : taskDescription;
+
+      const durationMs = Date.now() - startTime;
+
+      const researchResult: ResearchResult = {
+        success: true,
+        findings: {
+          externalResources,
+          codebasePatterns,
+          technicalRecommendations,
+          potentialChallenges,
+          recommendedTools,
+        },
+        enrichedTaskDescription,
+        durationMs,
+      };
+
+      onProgress?.('research', `Research complete (${externalResources.length} resources, ${codebasePatterns.length} patterns)`);
+
+      // Emit completed event
+      onSubagent?.({
+        type: 'completed',
+        agentId,
+        agentType: 'research',
+        model: MODEL_RESEARCH,
+        status: 'completed',
+        itemCount: externalResources.length + codebasePatterns.length,
+        durationMs,
+      });
+
+      // Save research output to file
+      this.saveAgentOutput('research', prompt, { ...researchResult, rawResponse: result }, durationMs);
+
+      return researchResult;
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error('[PlanOrchestrator] Research agent failed:', errorMsg);
+      onSubagent?.({
+        type: 'failed',
+        agentId,
+        agentType: 'research',
+        model: MODEL_RESEARCH,
+        status: 'failed',
+        error: errorMsg,
+        durationMs: Date.now() - startTime,
+      });
+      return { ...defaultResult, error: errorMsg, durationMs: Date.now() - startTime };
+    } finally {
+      // Remove from tracking and clean up
+      this.runningSessions.delete(session);
+      try {
+        await session.stop();
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
   }
 
   /**
@@ -423,9 +1319,13 @@ export class PlanOrchestrator {
    * Generate a detailed implementation plan using subagent orchestration.
    *
    * Phases:
+   * 0. Research - Gather external resources and codebase context
    * 1. Spawn 4 specialist subagents in parallel for analysis
    * 2. Synthesize their outputs into a unified plan
    * 3. Run verification subagent for quality assurance
+   * 4. Ensure all impl tasks have review tasks
+   * 5. Run execution optimizer for Claude Code optimization
+   * 6. Run final review for holistic validation
    */
   async generateDetailedPlan(
     taskDescription: string,
@@ -435,10 +1335,32 @@ export class PlanOrchestrator {
     const startTime = Date.now();
     let totalCost = 0;
 
+    // Store task description for file saving
+    this.taskDescription = taskDescription;
+
     try {
-      // Phase 1: Parallel Analysis
+      // Phase 0: Research - Gather context
+      onProgress?.('research', 'Running research agent to gather context...');
+      const researchResult = await this.runResearchAgent(taskDescription, onProgress, onSubagent);
+
+      totalCost += researchResult.success ? 0.01 : 0; // Research cost estimate
+
+      // Use enriched task description if research was successful
+      const effectiveTaskDescription = researchResult.success
+        ? researchResult.enrichedTaskDescription
+        : taskDescription;
+
+      // Format research context for other agents
+      const researchContext = this.formatResearchContext(researchResult);
+
+      // Phase 1: Parallel Analysis (with research context)
       onProgress?.('parallel-analysis', 'Spawning analysis subagents...');
-      const subagentResults = await this.runParallelAnalysis(taskDescription, onProgress, onSubagent);
+      const subagentResults = await this.runParallelAnalysis(
+        effectiveTaskDescription,
+        onProgress,
+        onSubagent,
+        researchContext
+      );
 
       totalCost += subagentResults.reduce((sum, r) => sum + (r.success ? 0.002 : 0), 0); // Estimate
 
@@ -474,21 +1396,62 @@ export class PlanOrchestrator {
         onProgress?.('review-injection', `Added ${reviewsAdded} auto-review task(s)`);
       }
 
+      // Phase 5: Execution Optimization for Claude Code
+      onProgress?.('execution-optimization', 'Running execution optimizer for Claude Code...');
+      const executionResult = await this.runExecutionOptimizer(
+        taskDescription,
+        planWithReviews,
+        onProgress,
+        onSubagent
+      );
+
+      totalCost += 0.008; // Execution optimizer cost estimate
+
+      // Use optimized plan if successful, otherwise fall back to review plan
+      const optimizedPlan = executionResult.success ? executionResult.optimizedPlan : planWithReviews;
+
+      // Phase 6: Final Review - Holistic validation
+      onProgress?.('final-review', 'Running final review for holistic validation...');
+      const finalReviewResult = await this.runFinalReview(
+        taskDescription,
+        optimizedPlan,
+        onProgress,
+        onSubagent
+      );
+
+      totalCost += 0.01; // Final review cost estimate
+
+      // Apply any missing tasks from final review
+      let finalPlan = optimizedPlan;
+      if (finalReviewResult.missingTasks.length > 0) {
+        finalPlan = this.applyMissingTasks(optimizedPlan, finalReviewResult.missingTasks);
+        onProgress?.('final-review', `Added ${finalReviewResult.missingTasks.length} missing task(s)`);
+      }
+
       const totalDurationMs = Date.now() - startTime;
 
-      return {
+      const result: DetailedPlanResult = {
         success: true,
-        items: planWithReviews,
+        items: finalPlan,
         costUsd: totalCost,
         metadata: {
+          researchResult: researchResult.success ? researchResult : undefined,
           subagentResults,
           synthesisStats: synthesisResult.stats,
           verificationGaps: verificationResult.gaps,
           verificationWarnings: verificationResult.warnings,
-          qualityScore: verificationResult.qualityScore,
+          qualityScore: finalReviewResult.scores.overall || verificationResult.qualityScore,
           totalDurationMs,
+          parallelGroups: executionResult.parallelGroups,
+          executionStrategy: executionResult.executionStrategy,
+          finalReview: finalReviewResult,
         },
       };
+
+      // Save final result to output directory
+      this.saveFinalResult(result);
+
+      return result;
     } catch (err) {
       return {
         success: false,
@@ -503,16 +1466,23 @@ export class PlanOrchestrator {
   private async runParallelAnalysis(
     taskDescription: string,
     onProgress?: ProgressCallback,
-    onSubagent?: SubagentCallback
+    onSubagent?: SubagentCallback,
+    researchContext: string = ''
   ): Promise<SubagentResult[]> {
+    // Inject research context into each prompt
+    const injectContext = (prompt: string) =>
+      prompt
+        .replace('{TASK}', taskDescription)
+        .replace('{RESEARCH_CONTEXT}', researchContext || '');
+
     const subagents: Array<{
       type: SubagentResult['agentType'];
       prompt: string;
     }> = [
-      { type: 'requirements', prompt: REQUIREMENTS_ANALYST_PROMPT.replace('{TASK}', taskDescription) },
-      { type: 'architecture', prompt: ARCHITECTURE_PLANNER_PROMPT.replace('{TASK}', taskDescription) },
-      { type: 'testing', prompt: TESTING_SPECIALIST_PROMPT.replace('{TASK}', taskDescription) },
-      { type: 'risks', prompt: RISK_ANALYST_PROMPT.replace('{TASK}', taskDescription) },
+      { type: 'requirements', prompt: injectContext(REQUIREMENTS_ANALYST_PROMPT) },
+      { type: 'architecture', prompt: injectContext(ARCHITECTURE_PLANNER_PROMPT) },
+      { type: 'testing', prompt: injectContext(TESTING_SPECIALIST_PROMPT) },
+      { type: 'risks', prompt: injectContext(RISK_ANALYST_PROMPT) },
     ];
 
     // Run all subagents in parallel
@@ -648,6 +1618,8 @@ export class PlanOrchestrator {
         };
       });
 
+      const durationMs = Date.now() - startTime;
+
       onProgress?.('subagent', `${agentType} complete (${items.length} items)`);
 
       // Emit completed event
@@ -658,14 +1630,17 @@ export class PlanOrchestrator {
         model: MODEL_ANALYSIS,
         status: 'completed',
         itemCount: items.length,
-        durationMs: Date.now() - startTime,
+        durationMs,
       });
+
+      // Save agent output to file
+      this.saveAgentOutput(agentType, prompt, { items, rawResponse: result }, durationMs);
 
       return {
         agentType,
         items,
         success: true,
-        durationMs: Date.now() - startTime,
+        durationMs,
       };
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -942,6 +1917,8 @@ export class PlanOrchestrator {
         };
       });
 
+      const durationMs = Date.now() - startTime;
+
       onProgress?.('verification', `Verification complete (quality: ${Math.round((parsed.qualityScore || 0.8) * 100)}%)`);
 
       // Emit completed event
@@ -952,15 +1929,20 @@ export class PlanOrchestrator {
         model: MODEL_VERIFICATION,
         status: 'completed',
         itemCount: validatedPlan.length,
-        durationMs: Date.now() - startTime,
+        durationMs,
       });
 
-      return {
+      const verificationResult = {
         validatedPlan,
         gaps: Array.isArray(parsed.gaps) ? parsed.gaps.map(String) : [],
         warnings: Array.isArray(parsed.warnings) ? parsed.warnings.map(String) : [],
         qualityScore: typeof parsed.qualityScore === 'number' ? parsed.qualityScore : 0.8,
       };
+
+      // Save agent output to file
+      this.saveAgentOutput('verification', prompt, { ...verificationResult, rawResponse: result }, durationMs);
+
+      return verificationResult;
     } catch (err) {
       console.error('[PlanOrchestrator] Verification failed:', err);
       onSubagent?.({
@@ -1036,6 +2018,431 @@ export class PlanOrchestrator {
     }
 
     return 'Task completed successfully';
+  }
+
+  /**
+   * Run the execution optimizer to enhance the plan for Claude Code execution.
+   * Adds parallel groups, agent type recommendations, and fresh context points.
+   */
+  private async runExecutionOptimizer(
+    taskDescription: string,
+    items: PlanItem[],
+    onProgress?: ProgressCallback,
+    onSubagent?: SubagentCallback
+  ): Promise<{
+    success: boolean;
+    optimizedPlan: PlanItem[];
+    parallelGroups: ParallelGroup[];
+    executionStrategy: ExecutionStrategy;
+  }> {
+    const agentId = `plan-execution-${Date.now()}`;
+    const startTime = Date.now();
+
+    // Default fallback result
+    const defaultResult = {
+      success: false,
+      optimizedPlan: items,
+      parallelGroups: [],
+      executionStrategy: {
+        totalParallelGroups: 0,
+        sequentialBlockers: [],
+        freshContextPoints: [],
+        estimatedTotalTokens: items.length * 20000,
+        estimatedAgentSpawns: Math.ceil(items.length / 3),
+        criticalPath: items.slice(0, 5).map(i => i.id || 'unknown'),
+        optimizationNotes: ['Fallback: no optimization applied'],
+      },
+    };
+
+    // Check if already cancelled
+    if (this.cancelled) {
+      return defaultResult;
+    }
+
+    // Emit started event
+    onSubagent?.({
+      type: 'started',
+      agentId,
+      agentType: 'execution',
+      model: MODEL_VERIFICATION,
+      status: 'running',
+      detail: 'Optimizing plan for Claude Code execution...',
+    });
+
+    const session = new Session({
+      workingDir: this.workingDir,
+      screenManager: this.screenManager,
+      useScreen: false,
+      mode: 'claude',
+    });
+
+    // Track this session for cancellation
+    this.runningSessions.add(session);
+
+    try {
+      // Format plan for optimization
+      const planText = JSON.stringify(items, null, 2);
+
+      const prompt = EXECUTION_OPTIMIZER_PROMPT
+        .replace('{TASK}', taskDescription)
+        .replace('{PLAN}', planText);
+
+      onProgress?.('execution-optimization', 'Analyzing parallelization opportunities...');
+
+      const { result } = await Promise.race([
+        session.runPrompt(prompt, { model: MODEL_VERIFICATION }),
+        this.timeout(VERIFICATION_TIMEOUT_MS),
+      ]);
+
+      // Check if cancelled during execution
+      if (this.cancelled) {
+        return defaultResult;
+      }
+
+      // Parse JSON from result
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        console.warn('[PlanOrchestrator] Execution optimizer returned no JSON, using defaults');
+        onSubagent?.({
+          type: 'completed',
+          agentId,
+          agentType: 'execution',
+          model: MODEL_VERIFICATION,
+          status: 'completed',
+          detail: 'Using default execution strategy',
+          itemCount: items.length,
+          durationMs: Date.now() - startTime,
+        });
+        return defaultResult;
+      }
+
+      const parsed = JSON.parse(jsonMatch[0]);
+
+      // Parse optimized plan items
+      const optimizedPlan: PlanItem[] = (parsed.optimizedPlan || []).map((item: Record<string, unknown>, idx: number) => {
+        // Parse agent type
+        let agentType: PlanItem['agentType'];
+        if (['explore', 'implement', 'test', 'review', 'general'].includes(String(item.agentType))) {
+          agentType = item.agentType as PlanItem['agentType'];
+        }
+
+        // Parse recommended model
+        let recommendedModel: PlanItem['recommendedModel'];
+        if (['opus', 'sonnet', 'haiku'].includes(String(item.recommendedModel))) {
+          recommendedModel = item.recommendedModel as PlanItem['recommendedModel'];
+        }
+
+        // Find original item to preserve fields
+        const originalItem = items.find(i => i.id === item.id) || items[idx] || {};
+
+        return {
+          ...originalItem,
+          id: item.id ? String(item.id) : originalItem.id || `task-${idx}`,
+          content: String(item.content || originalItem.content || ''),
+          priority: item.priority as PlanItem['priority'] || originalItem.priority,
+          // Preserve existing fields
+          tddPhase: item.tddPhase as PlanItem['tddPhase'] || originalItem.tddPhase,
+          verificationCriteria: item.verificationCriteria ? String(item.verificationCriteria) : originalItem.verificationCriteria,
+          testCommand: item.testCommand ? String(item.testCommand) : originalItem.testCommand,
+          dependencies: Array.isArray(item.dependencies) ? item.dependencies.map(String) : originalItem.dependencies,
+          pairedWith: item.pairedWith ? String(item.pairedWith) : originalItem.pairedWith,
+          complexity: item.complexity as PlanItem['complexity'] || originalItem.complexity,
+          reviewChecklist: Array.isArray(item.reviewChecklist) ? item.reviewChecklist.map(String) : originalItem.reviewChecklist,
+          // New execution optimization fields
+          parallelGroup: item.parallelGroup ? String(item.parallelGroup) : undefined,
+          agentType,
+          requiresFreshContext: Boolean(item.requiresFreshContext),
+          estimatedTokens: typeof item.estimatedTokens === 'number' ? item.estimatedTokens : undefined,
+          recommendedModel,
+          inputFiles: Array.isArray(item.inputFiles) ? item.inputFiles.map(String) : undefined,
+          outputFiles: Array.isArray(item.outputFiles) ? item.outputFiles.map(String) : undefined,
+          // Preserve execution tracking
+          status: originalItem.status || 'pending' as PlanTaskStatus,
+          attempts: originalItem.attempts || 0,
+          version: originalItem.version || 1,
+        };
+      });
+
+      // Parse parallel groups
+      const parallelGroups: ParallelGroup[] = (parsed.parallelGroups || []).map((group: Record<string, unknown>) => ({
+        id: String(group.id || ''),
+        tasks: Array.isArray(group.tasks) ? group.tasks.map(String) : [],
+        rationale: String(group.rationale || ''),
+        estimatedDuration: group.estimatedDuration ? String(group.estimatedDuration) : undefined,
+        totalTokens: typeof group.totalTokens === 'number' ? group.totalTokens : undefined,
+      }));
+
+      // Parse execution strategy
+      const strategy = parsed.executionStrategy || {};
+      const executionStrategy: ExecutionStrategy = {
+        totalParallelGroups: typeof strategy.totalParallelGroups === 'number' ? strategy.totalParallelGroups : parallelGroups.length,
+        sequentialBlockers: Array.isArray(strategy.sequentialBlockers) ? strategy.sequentialBlockers.map(String) : [],
+        freshContextPoints: Array.isArray(strategy.freshContextPoints) ? strategy.freshContextPoints.map(String) : [],
+        estimatedTotalTokens: typeof strategy.estimatedTotalTokens === 'number' ? strategy.estimatedTotalTokens : optimizedPlan.length * 20000,
+        estimatedAgentSpawns: typeof strategy.estimatedAgentSpawns === 'number' ? strategy.estimatedAgentSpawns : parallelGroups.length,
+        criticalPath: Array.isArray(strategy.criticalPath) ? strategy.criticalPath.map(String) : [],
+        optimizationNotes: Array.isArray(strategy.optimizationNotes) ? strategy.optimizationNotes.map(String) : [],
+      };
+
+      const durationMs = Date.now() - startTime;
+
+      onProgress?.('execution-optimization', `Optimization complete (${parallelGroups.length} parallel groups)`);
+
+      // Emit completed event
+      onSubagent?.({
+        type: 'completed',
+        agentId,
+        agentType: 'execution',
+        model: MODEL_VERIFICATION,
+        status: 'completed',
+        itemCount: optimizedPlan.length,
+        durationMs,
+      });
+
+      const executionResult = {
+        success: true,
+        optimizedPlan,
+        parallelGroups,
+        executionStrategy,
+      };
+
+      // Save agent output to file
+      this.saveAgentOutput('execution-optimizer', prompt, { ...executionResult, rawResponse: result }, durationMs);
+
+      return executionResult;
+    } catch (err) {
+      console.error('[PlanOrchestrator] Execution optimizer failed:', err);
+      onSubagent?.({
+        type: 'failed',
+        agentId,
+        agentType: 'execution',
+        model: MODEL_VERIFICATION,
+        status: 'failed',
+        error: err instanceof Error ? err.message : String(err),
+        durationMs: Date.now() - startTime,
+      });
+      return defaultResult;
+    } finally {
+      // Remove from tracking and clean up
+      this.runningSessions.delete(session);
+      try {
+        await session.stop();
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+  }
+
+  /**
+   * Run the final review agent for holistic plan validation.
+   */
+  private async runFinalReview(
+    taskDescription: string,
+    items: PlanItem[],
+    onProgress?: ProgressCallback,
+    onSubagent?: SubagentCallback
+  ): Promise<FinalReviewResult> {
+    const agentId = `plan-final-review-${Date.now()}`;
+    const startTime = Date.now();
+
+    // Default fallback result
+    const defaultResult: FinalReviewResult = {
+      overallAssessment: 'ready',
+      scores: { logic: 0.8, completeness: 0.8, coherence: 0.8, feasibility: 0.8, overall: 0.8 },
+      summary: 'Plan review completed with default assessment.',
+      issues: [],
+      missingTasks: [],
+      recommendations: [],
+    };
+
+    // Check if already cancelled
+    if (this.cancelled) {
+      return defaultResult;
+    }
+
+    // Emit started event
+    onSubagent?.({
+      type: 'started',
+      agentId,
+      agentType: 'final-review',
+      model: MODEL_VERIFICATION,
+      status: 'running',
+      detail: 'Performing holistic plan review...',
+    });
+
+    const session = new Session({
+      workingDir: this.workingDir,
+      screenManager: this.screenManager,
+      useScreen: false,
+      mode: 'claude',
+    });
+
+    // Track this session for cancellation
+    this.runningSessions.add(session);
+
+    try {
+      // Format plan for review
+      const planText = JSON.stringify(items, null, 2);
+
+      const prompt = FINAL_REVIEW_PROMPT
+        .replace('{TASK}', taskDescription)
+        .replace('{PLAN}', planText);
+
+      onProgress?.('final-review', 'Analyzing overall plan coherence...');
+
+      const { result } = await Promise.race([
+        session.runPrompt(prompt, { model: MODEL_VERIFICATION }),
+        this.timeout(VERIFICATION_TIMEOUT_MS),
+      ]);
+
+      // Check if cancelled during execution
+      if (this.cancelled) {
+        return defaultResult;
+      }
+
+      // Parse JSON from result
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        console.warn('[PlanOrchestrator] Final review returned no JSON, using defaults');
+        onSubagent?.({
+          type: 'completed',
+          agentId,
+          agentType: 'final-review',
+          model: MODEL_VERIFICATION,
+          status: 'completed',
+          detail: 'Using default assessment',
+          itemCount: items.length,
+          durationMs: Date.now() - startTime,
+        });
+        return defaultResult;
+      }
+
+      const parsed = JSON.parse(jsonMatch[0]);
+
+      // Parse scores
+      const scores = {
+        logic: typeof parsed.logicScore === 'number' ? parsed.logicScore : 0.8,
+        completeness: typeof parsed.completenessScore === 'number' ? parsed.completenessScore : 0.8,
+        coherence: typeof parsed.coherenceScore === 'number' ? parsed.coherenceScore : 0.8,
+        feasibility: typeof parsed.feasibilityScore === 'number' ? parsed.feasibilityScore : 0.8,
+        overall: typeof parsed.overallScore === 'number' ? parsed.overallScore : 0.8,
+      };
+
+      // Parse assessment
+      let overallAssessment: FinalReviewResult['overallAssessment'] = 'ready';
+      if (parsed.overallAssessment === 'needs-revision' || parsed.overallAssessment === 'major-issues') {
+        overallAssessment = parsed.overallAssessment;
+      }
+
+      // Parse issues
+      const issues = (Array.isArray(parsed.logicIssues) ? parsed.logicIssues : []).map((issue: Record<string, unknown>) => ({
+        severity: (issue.severity === 'error' ? 'error' : 'warning') as 'warning' | 'error',
+        issue: String(issue.issue || ''),
+        affectedTasks: Array.isArray(issue.affectedTasks) ? issue.affectedTasks.map(String) : [],
+        suggestion: String(issue.suggestion || ''),
+      }));
+
+      // Parse missing tasks
+      const missingTasks = (Array.isArray(parsed.missingTasks) ? parsed.missingTasks : []).map((task: Record<string, unknown>) => ({
+        content: String(task.content || ''),
+        reason: String(task.reason || ''),
+        insertAfter: task.insertAfter ? String(task.insertAfter) : undefined,
+        priority: (['P0', 'P1', 'P2'].includes(String(task.priority)) ? task.priority : 'P1') as 'P0' | 'P1' | 'P2',
+      }));
+
+      // Parse recommendations
+      const recommendations = Array.isArray(parsed.finalRecommendations)
+        ? parsed.finalRecommendations.map(String)
+        : [];
+
+      const reviewResult: FinalReviewResult = {
+        overallAssessment,
+        scores,
+        summary: String(parsed.summary || 'Plan review completed.'),
+        issues,
+        missingTasks,
+        recommendations,
+      };
+
+      const durationMs = Date.now() - startTime;
+
+      onProgress?.('final-review', `Review complete (${overallAssessment}, score: ${Math.round(scores.overall * 100)}%)`);
+
+      // Emit completed event
+      onSubagent?.({
+        type: 'completed',
+        agentId,
+        agentType: 'final-review',
+        model: MODEL_VERIFICATION,
+        status: 'completed',
+        itemCount: items.length,
+        durationMs,
+      });
+
+      // Save agent output to file
+      this.saveAgentOutput('final-review', prompt, { ...reviewResult, rawResponse: result }, durationMs);
+
+      return reviewResult;
+    } catch (err) {
+      console.error('[PlanOrchestrator] Final review failed:', err);
+      onSubagent?.({
+        type: 'failed',
+        agentId,
+        agentType: 'final-review',
+        model: MODEL_VERIFICATION,
+        status: 'failed',
+        error: err instanceof Error ? err.message : String(err),
+        durationMs: Date.now() - startTime,
+      });
+      return defaultResult;
+    } finally {
+      // Remove from tracking and clean up
+      this.runningSessions.delete(session);
+      try {
+        await session.stop();
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+  }
+
+  /**
+   * Apply missing tasks identified by the final review.
+   */
+  private applyMissingTasks(
+    items: PlanItem[],
+    missingTasks: FinalReviewResult['missingTasks']
+  ): PlanItem[] {
+    const result = [...items];
+
+    for (const missing of missingTasks) {
+      // Find insertion point
+      let insertIndex = result.length; // Default: append at end
+      if (missing.insertAfter) {
+        const afterIndex = result.findIndex(item => item.id === missing.insertAfter);
+        if (afterIndex !== -1) {
+          insertIndex = afterIndex + 1;
+        }
+      }
+
+      // Create new task
+      const newId = `${missing.priority}-${String(result.length + 1).padStart(3, '0')}`;
+      const newTask: PlanItem = {
+        id: newId,
+        content: missing.content,
+        priority: missing.priority,
+        rationale: missing.reason,
+        status: 'pending',
+        attempts: 0,
+        version: 1,
+        source: 'final-review',
+      };
+
+      // Insert at position
+      result.splice(insertIndex, 0, newTask);
+    }
+
+    return result;
   }
 
   /**

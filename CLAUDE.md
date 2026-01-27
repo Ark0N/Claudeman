@@ -16,7 +16,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md`
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1402 (must match `package.json`)
+**Version**: 0.1403 (must match `package.json`)
 
 ## Project Overview
 
@@ -97,7 +97,7 @@ journalctl --user -u claudeman-web -f
 
 ## Testing
 
-**Port allocation**: E2E tests use centralized ports in `test/e2e/e2e.config.ts` (E2E_PORTS: 3183-3190). Unit/integration tests pick unique ports manually (up to 3157). Search `const PORT =` or `TEST_PORT` in test files to see used ports. **Next available: 3191**
+**Port allocation**: E2E tests use centralized ports in `test/e2e/e2e.config.ts` (E2E_PORTS: 3183-3190). Unit/integration tests pick unique ports manually (3099-3157). Search `const PORT =` or `TEST_PORT` in test files to see used ports. **Next available: 3192**
 
 **E2E tests**: Use Playwright. Run `npx playwright install chromium` first. See `test/e2e/fixtures/` for helpers. E2E config provides ports, timeouts, and helpers.
 
