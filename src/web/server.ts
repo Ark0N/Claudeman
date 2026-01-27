@@ -12,9 +12,10 @@
 
 import Fastify, { FastifyInstance, FastifyReply } from 'fastify';
 import fastifyStatic from '@fastify/static';
-import { join, dirname, resolve } from 'node:path';
+import path, { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from 'node:fs';
+import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { homedir, totalmem, freemem, loadavg, cpus } from 'node:os';
 import { EventEmitter } from 'node:events';
@@ -676,6 +677,226 @@ export class WebServer extends EventEmitter {
       };
     });
 
+    // Get file tree for session's working directory (File Browser)
+    this.app.get('/api/sessions/:id/files', async (req) => {
+      const { id } = req.params as { id: string };
+      const { depth, showHidden } = req.query as { depth?: string; showHidden?: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
+      const maxDepth = Math.min(parseInt(depth || '5', 10), 10);
+      const includeHidden = showHidden === 'true';
+      const workingDir = session.workingDir;
+
+      // Default excludes - large/generated directories
+      const excludeDirs = new Set(['.git', 'node_modules', 'dist', 'build', '__pycache__', '.cache', '.next', '.nuxt', 'coverage', '.venv', 'venv', '.tox', 'target', 'vendor']);
+
+      interface FileTreeNode {
+        name: string;
+        path: string;
+        type: 'file' | 'directory';
+        size?: number;
+        extension?: string;
+        children?: FileTreeNode[];
+      }
+
+      let totalFiles = 0;
+      let totalDirectories = 0;
+      let truncated = false;
+      const maxFiles = 5000;
+
+      const scanDirectory = async (dirPath: string, currentDepth: number): Promise<FileTreeNode[]> => {
+        if (currentDepth > maxDepth || totalFiles + totalDirectories > maxFiles) {
+          truncated = true;
+          return [];
+        }
+
+        try {
+          const entries = await fs.readdir(dirPath, { withFileTypes: true });
+          const nodes: FileTreeNode[] = [];
+
+          // Sort: directories first, then alphabetically
+          entries.sort((a, b) => {
+            if (a.isDirectory() && !b.isDirectory()) return -1;
+            if (!a.isDirectory() && b.isDirectory()) return 1;
+            return a.name.localeCompare(b.name);
+          });
+
+          for (const entry of entries) {
+            if (totalFiles + totalDirectories > maxFiles) {
+              truncated = true;
+              break;
+            }
+
+            // Skip hidden files unless requested
+            if (!includeHidden && entry.name.startsWith('.')) continue;
+
+            // Skip excluded directories
+            if (entry.isDirectory() && excludeDirs.has(entry.name)) continue;
+
+            const fullPath = join(dirPath, entry.name);
+            const relativePath = fullPath.slice(workingDir.length + 1);
+
+            if (entry.isDirectory()) {
+              totalDirectories++;
+              const children = await scanDirectory(fullPath, currentDepth + 1);
+              nodes.push({
+                name: entry.name,
+                path: relativePath,
+                type: 'directory',
+                children,
+              });
+            } else {
+              totalFiles++;
+              const ext = entry.name.includes('.') ? entry.name.split('.').pop()?.toLowerCase() : undefined;
+              let size: number | undefined;
+              try {
+                const stat = await fs.stat(fullPath);
+                size = stat.size;
+              } catch {
+                // Skip if can't stat
+              }
+              nodes.push({
+                name: entry.name,
+                path: relativePath,
+                type: 'file',
+                size,
+                extension: ext,
+              });
+            }
+          }
+
+          return nodes;
+        } catch (err) {
+          // Can't read directory (permission denied, etc.)
+          return [];
+        }
+      };
+
+      const tree = await scanDirectory(workingDir, 1);
+
+      return {
+        success: true,
+        data: {
+          root: workingDir,
+          tree,
+          totalFiles,
+          totalDirectories,
+          truncated,
+        }
+      };
+    });
+
+    // Get file content for preview (File Browser)
+    this.app.get('/api/sessions/:id/file-content', async (req) => {
+      const { id } = req.params as { id: string };
+      const { path: filePath, lines, raw } = req.query as { path?: string; lines?: string; raw?: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
+      if (!filePath) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter');
+      }
+
+      // Validate path is within working directory (security)
+      const fullPath = resolve(session.workingDir, filePath);
+      if (!fullPath.startsWith(session.workingDir)) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be within working directory');
+      }
+
+      try {
+        const stat = await fs.stat(fullPath);
+
+        // Check if it's a binary/media file
+        const ext = filePath.split('.').pop()?.toLowerCase() || '';
+        const binaryExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'svg', 'bmp', 'mp4', 'webm', 'mov', 'avi', 'mp3', 'wav', 'ogg', 'pdf', 'zip', 'tar', 'gz', 'exe', 'dll', 'so', 'woff', 'woff2', 'ttf', 'eot']);
+        const imageExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico']);
+        const videoExts = new Set(['mp4', 'webm', 'mov', 'avi']);
+
+        if (raw === 'true' || binaryExts.has(ext)) {
+          // Return metadata for binary files
+          return {
+            success: true,
+            data: {
+              path: filePath,
+              size: stat.size,
+              type: imageExts.has(ext) ? 'image' : videoExts.has(ext) ? 'video' : 'binary',
+              extension: ext,
+              url: `/api/sessions/${id}/file-raw?path=${encodeURIComponent(filePath)}`,
+            }
+          };
+        }
+
+        // Read text file with line limit
+        const maxLines = parseInt(lines || '500', 10);
+        const content = await fs.readFile(fullPath, 'utf-8');
+        const allLines = content.split('\n');
+        const truncatedContent = allLines.length > maxLines;
+        const displayContent = truncatedContent ? allLines.slice(0, maxLines).join('\n') : content;
+
+        return {
+          success: true,
+          data: {
+            path: filePath,
+            content: displayContent,
+            size: stat.size,
+            totalLines: allLines.length,
+            truncated: truncatedContent,
+            extension: ext,
+          }
+        };
+      } catch (err) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${getErrorMessage(err)}`);
+      }
+    });
+
+    // Serve raw file content (for images/binary files)
+    this.app.get('/api/sessions/:id/file-raw', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const { path: filePath } = req.query as { path?: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        reply.code(404).send({ success: false, error: 'Session not found' });
+        return;
+      }
+
+      if (!filePath) {
+        reply.code(400).send({ success: false, error: 'Missing path parameter' });
+        return;
+      }
+
+      // Validate path is within working directory
+      const fullPath = resolve(session.workingDir, filePath);
+      if (!fullPath.startsWith(session.workingDir)) {
+        reply.code(400).send({ success: false, error: 'Path must be within working directory' });
+        return;
+      }
+
+      try {
+        const ext = filePath.split('.').pop()?.toLowerCase() || '';
+        const mimeTypes: Record<string, string> = {
+          'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'gif': 'image/gif',
+          'webp': 'image/webp', 'svg': 'image/svg+xml', 'ico': 'image/x-icon', 'bmp': 'image/bmp',
+          'mp4': 'video/mp4', 'webm': 'video/webm', 'mov': 'video/quicktime',
+          'mp3': 'audio/mpeg', 'wav': 'audio/wav', 'ogg': 'audio/ogg',
+          'pdf': 'application/pdf', 'json': 'application/json',
+        };
+
+        const content = await fs.readFile(fullPath);
+        reply.header('Content-Type', mimeTypes[ext] || 'application/octet-stream');
+        reply.send(content);
+      } catch (err) {
+        reply.code(500).send({ success: false, error: `Failed to read file: ${getErrorMessage(err)}` });
+      }
+    });
+
     // Stream file content via tail -f (SSE endpoint)
     this.app.get('/api/sessions/:id/tail-file', async (req, reply) => {
       const { id } = req.params as { id: string };
@@ -852,6 +1073,119 @@ export class WebServer extends EventEmitter {
           exitGateMet: session.ralphTracker.exitGateMet,
         }
       };
+    });
+
+    // Generate @fix_plan.md content from todos
+    this.app.get('/api/sessions/:id/fix-plan', async (req) => {
+      const { id } = req.params as { id: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
+      const content = session.ralphTracker.generateFixPlanMarkdown();
+      return {
+        success: true,
+        data: {
+          content,
+          todoCount: session.ralphTracker.todos.length,
+        }
+      };
+    });
+
+    // Import todos from @fix_plan.md content
+    this.app.post('/api/sessions/:id/fix-plan/import', async (req) => {
+      const { id } = req.params as { id: string };
+      const { content } = req.body as { content: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
+      if (!content || typeof content !== 'string') {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Content is required');
+      }
+
+      const importedCount = session.ralphTracker.importFixPlanMarkdown(content);
+      this.persistSessionState(session);
+
+      return {
+        success: true,
+        data: {
+          importedCount,
+          todos: session.ralphTracker.todos,
+        }
+      };
+    });
+
+    // Write @fix_plan.md to session's working directory
+    this.app.post('/api/sessions/:id/fix-plan/write', async (req) => {
+      const { id } = req.params as { id: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
+      const workingDir = session.workingDir;
+      if (!workingDir) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Session has no working directory');
+      }
+
+      const content = session.ralphTracker.generateFixPlanMarkdown();
+      const filePath = path.join(workingDir, '@fix_plan.md');
+
+      try {
+        await fs.writeFile(filePath, content, 'utf-8');
+        return {
+          success: true,
+          data: {
+            filePath,
+            todoCount: session.ralphTracker.todos.length,
+          }
+        };
+      } catch (error) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to write file: ${error}`);
+      }
+    });
+
+    // Read @fix_plan.md from session's working directory and import
+    this.app.post('/api/sessions/:id/fix-plan/read', async (req) => {
+      const { id } = req.params as { id: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
+      const workingDir = session.workingDir;
+      if (!workingDir) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Session has no working directory');
+      }
+
+      const filePath = path.join(workingDir, '@fix_plan.md');
+
+      try {
+        const content = await fs.readFile(filePath, 'utf-8');
+        const importedCount = session.ralphTracker.importFixPlanMarkdown(content);
+        this.persistSessionState(session);
+
+        return {
+          success: true,
+          data: {
+            filePath,
+            importedCount,
+            todos: session.ralphTracker.todos,
+          }
+        };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          return createErrorResponse(ApiErrorCode.NOT_FOUND, '@fix_plan.md not found in working directory');
+        }
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${error}`);
+      }
     });
 
     // Run prompt in session

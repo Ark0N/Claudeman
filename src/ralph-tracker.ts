@@ -2039,4 +2039,182 @@ export class RalphTracker extends EventEmitter {
       }
     }
   }
+
+  // ========== @fix_plan.md Generation & Import ==========
+
+  /**
+   * Generate @fix_plan.md content from current todos.
+   * Groups todos by priority and status.
+   *
+   * @returns Markdown content for @fix_plan.md
+   */
+  generateFixPlanMarkdown(): string {
+    const todos = this.todos;
+    const lines: string[] = ['# Fix Plan', ''];
+
+    // Group by priority
+    const p0: RalphTodoItem[] = [];
+    const p1: RalphTodoItem[] = [];
+    const p2: RalphTodoItem[] = [];
+    const noPriority: RalphTodoItem[] = [];
+    const completed: RalphTodoItem[] = [];
+
+    for (const todo of todos) {
+      if (todo.status === 'completed') {
+        completed.push(todo);
+      } else if (todo.priority === 'P0') {
+        p0.push(todo);
+      } else if (todo.priority === 'P1') {
+        p1.push(todo);
+      } else if (todo.priority === 'P2') {
+        p2.push(todo);
+      } else {
+        noPriority.push(todo);
+      }
+    }
+
+    // High Priority (P0)
+    if (p0.length > 0) {
+      lines.push('## High Priority (P0)');
+      for (const todo of p0) {
+        const checkbox = todo.status === 'in_progress' ? '[-]' : '[ ]';
+        lines.push(`- ${checkbox} ${todo.content}`);
+      }
+      lines.push('');
+    }
+
+    // Standard (P1)
+    if (p1.length > 0) {
+      lines.push('## Standard (P1)');
+      for (const todo of p1) {
+        const checkbox = todo.status === 'in_progress' ? '[-]' : '[ ]';
+        lines.push(`- ${checkbox} ${todo.content}`);
+      }
+      lines.push('');
+    }
+
+    // Nice to Have (P2)
+    if (p2.length > 0) {
+      lines.push('## Nice to Have (P2)');
+      for (const todo of p2) {
+        const checkbox = todo.status === 'in_progress' ? '[-]' : '[ ]';
+        lines.push(`- ${checkbox} ${todo.content}`);
+      }
+      lines.push('');
+    }
+
+    // Tasks (no priority)
+    if (noPriority.length > 0) {
+      lines.push('## Tasks');
+      for (const todo of noPriority) {
+        const checkbox = todo.status === 'in_progress' ? '[-]' : '[ ]';
+        lines.push(`- ${checkbox} ${todo.content}`);
+      }
+      lines.push('');
+    }
+
+    // Completed
+    if (completed.length > 0) {
+      lines.push('## Completed');
+      for (const todo of completed) {
+        lines.push(`- [x] ${todo.content}`);
+      }
+      lines.push('');
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Parse @fix_plan.md content and import todos.
+   * Replaces current todos with imported ones.
+   *
+   * @param content - Markdown content from @fix_plan.md
+   * @returns Number of todos imported
+   */
+  importFixPlanMarkdown(content: string): number {
+    const lines = content.split('\n');
+    const newTodos: RalphTodoItem[] = [];
+    let currentPriority: RalphTodoPriority = null;
+
+    // Patterns for section headers
+    const p0HeaderPattern = /^##\s*(High Priority|Critical|P0)/i;
+    const p1HeaderPattern = /^##\s*(Standard|P1|Medium Priority)/i;
+    const p2HeaderPattern = /^##\s*(Nice to Have|P2|Low Priority)/i;
+    const completedHeaderPattern = /^##\s*Completed/i;
+    const tasksHeaderPattern = /^##\s*Tasks/i;
+
+    // Pattern for todo items
+    const todoPattern = /^-\s*\[([ x\-])\]\s*(.+)$/;
+
+    let inCompletedSection = false;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+
+      // Check for section headers
+      if (p0HeaderPattern.test(trimmed)) {
+        currentPriority = 'P0';
+        inCompletedSection = false;
+        continue;
+      }
+      if (p1HeaderPattern.test(trimmed)) {
+        currentPriority = 'P1';
+        inCompletedSection = false;
+        continue;
+      }
+      if (p2HeaderPattern.test(trimmed)) {
+        currentPriority = 'P2';
+        inCompletedSection = false;
+        continue;
+      }
+      if (completedHeaderPattern.test(trimmed)) {
+        inCompletedSection = true;
+        continue;
+      }
+      if (tasksHeaderPattern.test(trimmed)) {
+        currentPriority = null;
+        inCompletedSection = false;
+        continue;
+      }
+
+      // Parse todo item
+      const match = trimmed.match(todoPattern);
+      if (match) {
+        const [, checkboxState, content] = match;
+        let status: RalphTodoStatus;
+
+        if (inCompletedSection || checkboxState === 'x' || checkboxState === 'X') {
+          status = 'completed';
+        } else if (checkboxState === '-') {
+          status = 'in_progress';
+        } else {
+          status = 'pending';
+        }
+
+        // Parse priority from content if not in a priority section
+        const parsedPriority = inCompletedSection ? null : (currentPriority || this.parsePriority(content));
+
+        const id = this.generateTodoId(content);
+        newTodos.push({
+          id,
+          content: content.trim(),
+          status,
+          detectedAt: Date.now(),
+          priority: parsedPriority,
+        });
+      }
+    }
+
+    // Replace current todos with imported ones
+    this._todos.clear();
+    for (const todo of newTodos) {
+      this._todos.set(todo.id, todo);
+    }
+
+    // Emit update
+    this.emit('todoUpdate', this.todos);
+
+    return newTodos.length;
+  }
 }

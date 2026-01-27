@@ -122,6 +122,16 @@
           <span class="ralph-toggle" id="ralphToggle">&#x25BC;</span>
         </div>
         <div class="ralph-controls">
+          <div class="ralph-menu-container">
+            <button class="btn-icon-sm" onclick="event.stopPropagation(); app.toggleRalphMenu()" title="Fix Plan Menu" id="ralphMenuBtn">&#x2630;</button>
+            <div class="ralph-dropdown" id="ralphDropdown">
+              <button onclick="event.stopPropagation(); app.showFixPlan(); app.closeRalphMenu()">View Fix Plan</button>
+              <button onclick="event.stopPropagation(); app.writeFixPlanToFile(); app.closeRalphMenu()">Write to File</button>
+              <button onclick="event.stopPropagation(); app.importFixPlanFromFile(); app.closeRalphMenu()">Import from File</button>
+              <hr>
+              <button onclick="event.stopPropagation(); app.resetCircuitBreaker(); app.closeRalphMenu()">Reset Circuit Breaker</button>
+            </div>
+          </div>
           <button class="btn-icon-sm" onclick="event.stopPropagation(); app.toggleRalphDetach()" title="Detach/Attach panel" id="ralphDetachBtn">&#x29C9;</button>
           <button class="btn-icon-sm" onclick="event.stopPropagation(); app.closeRalphTracker()" title="Close tracker">&times;</button>
         </div>
@@ -183,6 +193,40 @@
       </div>
       <div class="project-insights-body" id="projectInsightsList"></div>
       <div class="project-insights-resize-handle"></div>
+    </div>
+
+    <!-- File Browser Panel -->
+    <div class="file-browser-panel" id="fileBrowserPanel">
+      <div class="file-browser-header">
+        <span class="file-browser-title">Files</span>
+        <div class="file-browser-actions">
+          <button class="btn-icon-sm" onclick="app.refreshFileBrowser()" title="Refresh">&#x21BB;</button>
+          <button class="btn-icon-sm" onclick="app.toggleFileBrowserExpand()" title="Expand/Collapse All" id="fileBrowserExpandBtn">&#x229E;</button>
+          <button class="btn-icon-sm" onclick="app.closeFileBrowserPanel()" title="Close">&times;</button>
+        </div>
+      </div>
+      <div class="file-browser-search">
+        <input type="text" id="fileBrowserSearch" placeholder="Filter files..." oninput="app.filterFileBrowser(this.value)">
+      </div>
+      <div class="file-browser-body" id="fileBrowserTree">
+        <div class="file-browser-empty">Select a session to view files</div>
+      </div>
+      <div class="file-browser-status" id="fileBrowserStatus"></div>
+    </div>
+
+    <!-- File Preview Overlay -->
+    <div class="file-preview-overlay" id="filePreviewOverlay">
+      <div class="file-preview-window">
+        <div class="file-preview-header">
+          <span class="file-preview-title" id="filePreviewTitle">file.ts</span>
+          <div class="file-preview-actions">
+            <button class="btn-icon-sm" onclick="app.copyFilePreviewContent()" title="Copy content">&#x2398;</button>
+            <button class="btn-icon-sm" onclick="app.closeFilePreview()" title="Close">&times;</button>
+          </div>
+        </div>
+        <div class="file-preview-body" id="filePreviewBody"></div>
+        <div class="file-preview-footer" id="filePreviewFooter"></div>
+      </div>
     </div>
 
     <!-- Bottom Toolbar -->
@@ -640,69 +684,78 @@
         <div class="modal-body">
           <!-- Display Tab -->
           <div class="modal-tab-content" id="settings-display">
-            <div class="form-row form-row-switch">
-              <label>Show Font Controls</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsShowFontControls" checked>
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Show A-/A+ font size buttons in header</span>
-            </div>
-            <div class="form-row form-row-switch">
-              <label>Show System Stats</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsShowSystemStats" checked>
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Show CPU and memory usage in header</span>
-            </div>
-            <div class="form-row form-row-switch">
-              <label>Show Token Count</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsShowTokenCount" checked>
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Show total token count in header</span>
-            </div>
-            <div class="form-row form-row-switch">
-              <label>Show Monitor Panel</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsShowMonitor" checked>
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Show Monitor panel at bottom right</span>
-            </div>
-            <div class="form-row form-row-switch">
-              <label>Enable Subagent Tracking</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsSubagentTracking" checked>
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Monitor Claude Code background agents in real-time</span>
-            </div>
-            <div class="form-row form-row-switch">
-              <label>Show Subagents Panel</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsShowSubagents" checked>
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Show the Subagents panel (independent from Monitor)</span>
-            </div>
-            <div class="form-row form-row-switch">
-              <label>Subagents for Active Tab Only</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsSubagentActiveTabOnly">
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Only show subagent windows when their parent tab is selected</span>
-            </div>
-            <div class="form-row form-row-switch">
-              <label>Show Project Insights Panel</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsShowProjectInsights" checked>
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Show active tools and file viewers in a floating panel</span>
+            <div class="settings-grid">
+              <!-- Header Displays Section -->
+              <div class="settings-section-header">Header Displays</div>
+              <div class="settings-item" title="Show A-/A+ font size buttons in header">
+                <span class="settings-item-label">Font Controls</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsShowFontControls" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item" title="Show CPU and memory usage in header">
+                <span class="settings-item-label">System Stats</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsShowSystemStats" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item" title="Show total token count in header">
+                <span class="settings-item-label">Token Count</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsShowTokenCount" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <!-- Panels Section -->
+              <div class="settings-section-header">Panels</div>
+              <div class="settings-item" title="Show Monitor panel at bottom right">
+                <span class="settings-item-label">Monitor</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsShowMonitor" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item" title="Show active tools and file viewers in a floating panel">
+                <span class="settings-item-label">Project Insights</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsShowProjectInsights" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item" title="Show file browser panel on the right side">
+                <span class="settings-item-label">File Browser</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsShowFileBrowser">
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item" title="Show the Subagents panel (independent from Monitor)">
+                <span class="settings-item-label">Subagents</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsShowSubagents" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <!-- Subagent Options Section -->
+              <div class="settings-section-header">Subagent Options</div>
+              <div class="settings-item" title="Monitor Claude Code background agents in real-time">
+                <span class="settings-item-label">Enable Tracking</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsSubagentTracking" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item" title="Only show subagent windows when their parent tab is selected">
+                <span class="settings-item-label">Active Tab Only</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsSubagentActiveTabOnly">
+                  <span class="slider"></span>
+                </label>
+              </div>
             </div>
           </div>
           <!-- Claude CLI Tab -->
@@ -745,62 +798,70 @@
           </div>
           <!-- Notifications Tab -->
           <div class="modal-tab-content hidden" id="settings-notifications">
-            <div class="form-row form-row-switch">
-              <label>Enable Notifications</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsNotifEnabled" checked>
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Master toggle for all notification layers</span>
+            <div class="settings-grid">
+              <!-- Master Control Section -->
+              <div class="settings-section-header">Master Control</div>
+              <div class="settings-item" title="Master toggle for all notification layers">
+                <span class="settings-item-label">Enable Notifications</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsNotifEnabled" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item" title="Show OS-level notifications when tab is hidden">
+                <span class="settings-item-label">Browser</span>
+                <div class="settings-item-actions">
+                  <label class="switch switch-sm">
+                    <input type="checkbox" id="appSettingsNotifBrowser">
+                    <span class="slider"></span>
+                  </label>
+                  <button class="btn-toolbar btn-sm" onclick="app.notificationManager?.requestPermission()" title="Request browser notification permission">Ask</button>
+                  <span class="settings-status" id="notifPermissionStatus">?</span>
+                </div>
+              </div>
+
+              <!-- Alerts Section -->
+              <div class="settings-section-header">Alerts</div>
+              <div class="settings-item" title="Play a short beep for critical events">
+                <span class="settings-item-label">Audio Alerts</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsNotifAudio">
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item" title="Notify when a session is idle longer than this">
+                <span class="settings-item-label">Idle Threshold</span>
+                <div class="settings-item-actions">
+                  <input type="number" id="appSettingsNotifStuckMins" class="settings-item-input" value="10" min="1" max="120">
+                  <span style="font-size: 0.65rem; color: var(--text-muted);">min</span>
+                </div>
+              </div>
+
+              <!-- Notification Levels Section -->
+              <div class="settings-section-header">Notification Levels</div>
             </div>
-            <div class="form-row form-row-switch">
-              <label>Browser Notifications</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsNotifBrowser">
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Show OS-level notifications when tab is hidden</span>
-            </div>
-            <div class="form-row">
-              <button class="btn-toolbar btn-sm" onclick="app.notificationManager?.requestPermission()">Request Permission</button>
-              <span class="form-hint" id="notifPermissionStatus">Status: unknown</span>
-            </div>
-            <div class="form-row form-row-switch">
-              <label>Audio Alerts</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsNotifAudio">
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Play a short beep for critical events</span>
-            </div>
-            <div class="form-row">
-              <label>Idle Threshold (minutes)</label>
-              <input type="number" id="appSettingsNotifStuckMins" value="10" min="1" max="120" style="width: 80px;">
-              <span class="form-hint">Notify when a session is idle longer than this</span>
-            </div>
-            <div class="form-row form-row-switch">
-              <label>Critical Notifications</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsNotifCritical" checked>
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Errors, crashes, agent failures</span>
-            </div>
-            <div class="form-row form-row-switch">
-              <label>Warning Notifications</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsNotifWarning" checked>
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Completions, budget warnings, stuck sessions</span>
-            </div>
-            <div class="form-row form-row-switch">
-              <label>Info Notifications</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsNotifInfo" checked>
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Auto-accepts, auto-clears, agent completions</span>
+            <div class="settings-grid settings-grid-3col">
+              <div class="settings-item" title="Errors, crashes, agent failures">
+                <span class="settings-item-label">Critical</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsNotifCritical" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item" title="Completions, budget warnings, stuck sessions">
+                <span class="settings-item-label">Warning</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsNotifWarning" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item" title="Auto-accepts, auto-clears, agent completions">
+                <span class="settings-item-label">Info</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsNotifInfo" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
             </div>
           </div>
         </div>

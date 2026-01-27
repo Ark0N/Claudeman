@@ -4243,10 +4243,11 @@ class ClaudemanApp {
     document.getElementById('appSettingsShowSystemStats').checked = settings.showSystemStats ?? true;
     document.getElementById('appSettingsShowTokenCount').checked = settings.showTokenCount ?? true;
     document.getElementById('appSettingsShowMonitor').checked = settings.showMonitor ?? true;
-    document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? true;
-    document.getElementById('appSettingsShowSubagents').checked = settings.showSubagents ?? true;
-    document.getElementById('appSettingsSubagentActiveTabOnly').checked = settings.subagentActiveTabOnly ?? false;
     document.getElementById('appSettingsShowProjectInsights').checked = settings.showProjectInsights ?? true;
+    document.getElementById('appSettingsShowFileBrowser').checked = settings.showFileBrowser ?? false;
+    document.getElementById('appSettingsShowSubagents').checked = settings.showSubagents ?? true;
+    document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? true;
+    document.getElementById('appSettingsSubagentActiveTabOnly').checked = settings.subagentActiveTabOnly ?? false;
     // Claude CLI settings
     const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
     const allowedToolsRow = document.getElementById('allowedToolsRow');
@@ -4266,10 +4267,14 @@ class ClaudemanApp {
     document.getElementById('appSettingsNotifCritical').checked = !notifPrefs.muteCritical;
     document.getElementById('appSettingsNotifWarning').checked = !notifPrefs.muteWarning;
     document.getElementById('appSettingsNotifInfo').checked = !notifPrefs.muteInfo;
-    // Update permission status display
+    // Update permission status display (compact format for new grid layout)
     const permStatus = document.getElementById('notifPermissionStatus');
     if (permStatus && typeof Notification !== 'undefined') {
-      permStatus.textContent = `Status: ${Notification.permission}`;
+      const perm = Notification.permission;
+      permStatus.textContent = perm === 'granted' ? '\u2713' : perm === 'denied' ? '\u2717' : '?';
+      permStatus.classList.remove('granted', 'denied');
+      if (perm === 'granted') permStatus.classList.add('granted');
+      else if (perm === 'denied') permStatus.classList.add('denied');
     }
     // Reset to first tab and wire up tab switching
     this.switchSettingsTab('settings-display');
@@ -4306,10 +4311,11 @@ class ClaudemanApp {
       showSystemStats: document.getElementById('appSettingsShowSystemStats').checked,
       showTokenCount: document.getElementById('appSettingsShowTokenCount').checked,
       showMonitor: document.getElementById('appSettingsShowMonitor').checked,
-      subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
-      showSubagents: document.getElementById('appSettingsShowSubagents').checked,
-      subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
       showProjectInsights: document.getElementById('appSettingsShowProjectInsights').checked,
+      showFileBrowser: document.getElementById('appSettingsShowFileBrowser').checked,
+      showSubagents: document.getElementById('appSettingsShowSubagents').checked,
+      subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
+      subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
       // Claude CLI settings
       claudeMode: document.getElementById('appSettingsClaudeMode').value,
       allowedTools: document.getElementById('appSettingsAllowedTools').value.trim(),
@@ -4411,6 +4417,7 @@ class ClaudemanApp {
     const settings = this.loadAppSettingsFromStorage();
     const showMonitor = settings.showMonitor ?? true;
     const showSubagents = settings.showSubagents ?? true;
+    const showFileBrowser = settings.showFileBrowser ?? false;
 
     const monitorPanel = document.getElementById('monitorPanel');
     if (monitorPanel) {
@@ -4423,6 +4430,17 @@ class ClaudemanApp {
         subagentsPanel.classList.remove('hidden');
       } else {
         subagentsPanel.classList.add('hidden');
+      }
+    }
+
+    // File browser panel visibility
+    const fileBrowserPanel = document.getElementById('fileBrowserPanel');
+    if (fileBrowserPanel) {
+      if (showFileBrowser && this.activeSessionId) {
+        fileBrowserPanel.classList.add('visible');
+        this.loadFileBrowser(this.activeSessionId);
+      } else {
+        fileBrowserPanel.classList.remove('visible');
       }
     }
   }
@@ -5138,6 +5156,187 @@ class ClaudemanApp {
     // Clear local state and hide panel
     this.ralphStates.delete(this.activeSessionId);
     this.renderRalphStatePanel();
+  }
+
+  // ========== @fix_plan.md Integration ==========
+
+  toggleRalphMenu() {
+    const dropdown = document.getElementById('ralphDropdown');
+    if (dropdown) {
+      dropdown.classList.toggle('show');
+    }
+  }
+
+  closeRalphMenu() {
+    const dropdown = document.getElementById('ralphDropdown');
+    if (dropdown) {
+      dropdown.classList.remove('show');
+    }
+  }
+
+  async resetCircuitBreaker() {
+    if (!this.activeSessionId) return;
+
+    try {
+      const response = await fetch(`/api/sessions/${this.activeSessionId}/ralph-circuit-breaker/reset`, {
+        method: 'POST',
+      });
+      const data = await response.json();
+
+      if (data.success) {
+        this.notificationManager?.notify({
+          urgency: 'info',
+          category: 'circuit-breaker',
+          title: 'Reset',
+          message: 'Circuit breaker reset to CLOSED',
+        });
+      }
+    } catch (error) {
+      console.error('Error resetting circuit breaker:', error);
+    }
+  }
+
+  /**
+   * Generate @fix_plan.md content and show in a modal.
+   */
+  async showFixPlan() {
+    if (!this.activeSessionId) return;
+
+    try {
+      const response = await fetch(`/api/sessions/${this.activeSessionId}/fix-plan`);
+      const data = await response.json();
+
+      if (!data.success) {
+        this.notificationManager?.notify({
+          urgency: 'error',
+          category: 'fix-plan',
+          title: 'Error',
+          message: data.error || 'Failed to generate fix plan',
+        });
+        return;
+      }
+
+      // Show in a modal
+      this.showFixPlanModal(data.data.content, data.data.todoCount);
+    } catch (error) {
+      console.error('Error fetching fix plan:', error);
+    }
+  }
+
+  /**
+   * Show fix plan content in a modal.
+   */
+  showFixPlanModal(content, todoCount) {
+    // Create modal if it doesn't exist
+    let modal = document.getElementById('fixPlanModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'fixPlanModal';
+      modal.className = 'modal';
+      modal.innerHTML = `
+        <div class="modal-content fix-plan-modal">
+          <div class="modal-header">
+            <h3>@fix_plan.md</h3>
+            <button class="btn-close" onclick="app.closeFixPlanModal()">&times;</button>
+          </div>
+          <div class="modal-body">
+            <textarea id="fixPlanContent" class="fix-plan-textarea" readonly></textarea>
+          </div>
+          <div class="modal-footer">
+            <span class="fix-plan-stats" id="fixPlanStats"></span>
+            <button class="btn btn-secondary" onclick="app.copyFixPlan()">Copy</button>
+            <button class="btn btn-primary" onclick="app.writeFixPlanToFile()">Write to File</button>
+            <button class="btn btn-secondary" onclick="app.closeFixPlanModal()">Close</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+    }
+
+    document.getElementById('fixPlanContent').value = content;
+    document.getElementById('fixPlanStats').textContent = `${todoCount} tasks`;
+    modal.classList.add('show');
+  }
+
+  closeFixPlanModal() {
+    const modal = document.getElementById('fixPlanModal');
+    if (modal) {
+      modal.classList.remove('show');
+    }
+  }
+
+  async copyFixPlan() {
+    const content = document.getElementById('fixPlanContent')?.value;
+    if (content) {
+      await navigator.clipboard.writeText(content);
+      this.notificationManager?.notify({
+        urgency: 'info',
+        category: 'fix-plan',
+        title: 'Copied',
+        message: 'Fix plan copied to clipboard',
+      });
+    }
+  }
+
+  async writeFixPlanToFile() {
+    if (!this.activeSessionId) return;
+
+    try {
+      const response = await fetch(`/api/sessions/${this.activeSessionId}/fix-plan/write`, {
+        method: 'POST',
+      });
+      const data = await response.json();
+
+      if (data.success) {
+        this.notificationManager?.notify({
+          urgency: 'info',
+          category: 'fix-plan',
+          title: 'Written',
+          message: `@fix_plan.md written to ${data.data.filePath}`,
+        });
+        this.closeFixPlanModal();
+      } else {
+        this.notificationManager?.notify({
+          urgency: 'error',
+          category: 'fix-plan',
+          title: 'Error',
+          message: data.error || 'Failed to write file',
+        });
+      }
+    } catch (error) {
+      console.error('Error writing fix plan:', error);
+    }
+  }
+
+  async importFixPlanFromFile() {
+    if (!this.activeSessionId) return;
+
+    try {
+      const response = await fetch(`/api/sessions/${this.activeSessionId}/fix-plan/read`, {
+        method: 'POST',
+      });
+      const data = await response.json();
+
+      if (data.success) {
+        this.notificationManager?.notify({
+          urgency: 'info',
+          category: 'fix-plan',
+          title: 'Imported',
+          message: `Imported ${data.data.importedCount} tasks from @fix_plan.md`,
+        });
+        // Refresh ralph panel
+        this.updateRalphState(this.activeSessionId, { todos: data.data.todos });
+      } else {
+        this.notificationManager?.notify({
+          urgency: 'warning',
+          category: 'fix-plan',
+          title: 'Not Found',
+          message: data.error || '@fix_plan.md not found',
+        });
+      }
+    } catch (error) {
+      console.error('Error importing fix plan:', error);
+    }
   }
 
   toggleRalphDetach() {
