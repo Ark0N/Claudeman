@@ -1088,10 +1088,10 @@ Check \`${caseDir}/ralph-wizard/research/result.json\` for:
       onProgress?.('synthesis', 'Synthesizing subagent outputs...');
       const synthesisResult = this.synthesizeResults(subagentResults);
 
-      // Phase 3: Verification
+      // Phase 3: Verification (use enriched task description from research)
       onProgress?.('verification', 'Running verification subagent...');
       const verificationResult = await this.runVerification(
-        taskDescription,
+        effectiveTaskDescription,
         synthesisResult.items,
         onProgress,
         onSubagent
@@ -1112,7 +1112,7 @@ Check \`${caseDir}/ralph-wizard/research/result.json\` for:
       try {
         onProgress?.('execution-optimization', 'Running execution optimizer for Claude Code...');
         executionResult = await this.runExecutionOptimizer(
-          taskDescription,
+          effectiveTaskDescription,
           planWithReviews,
           onProgress,
           onSubagent
@@ -1146,7 +1146,7 @@ Check \`${caseDir}/ralph-wizard/research/result.json\` for:
       try {
         onProgress?.('final-review', 'Running final review for holistic validation...');
         finalReviewResult = await this.runFinalReview(
-          taskDescription,
+          effectiveTaskDescription,
           optimizedPlan,
           onProgress,
           onSubagent
