@@ -38,20 +38,11 @@ import { EventEmitter } from 'node:events';
 import { Session } from './session.js';
 import { AiIdleChecker, type AiCheckResult, type AiCheckState } from './ai-idle-checker.js';
 import { AiPlanChecker, type AiPlanCheckResult } from './ai-plan-checker.js';
-
-// ========== Configuration Constants ==========
-
-/**
- * Maximum terminal buffer size for respawn controller.
- * Buffer is trimmed when this limit is exceeded to prevent memory issues.
- */
-const MAX_RESPAWN_BUFFER_SIZE = 1024 * 1024; // 1MB
-
-/**
- * Size to trim buffer to when MAX_RESPAWN_BUFFER_SIZE is exceeded.
- * Keeps the most recent output for pattern detection.
- */
-const RESPAWN_BUFFER_TRIM_SIZE = 512 * 1024; // 512KB
+import { BufferAccumulator } from './utils/buffer-accumulator.js';
+import {
+  MAX_RESPAWN_BUFFER_SIZE,
+  TRIM_RESPAWN_BUFFER_TO as RESPAWN_BUFFER_TRIM_SIZE,
+} from './config/buffer-limits.js';
 
 // ========== Constants ==========
 
@@ -151,57 +142,6 @@ export interface DetectionStatus {
 
   /** Next expected action */
   nextAction: string;
-}
-
-// ========== Buffer Accumulator ==========
-
-/**
- * High-performance buffer accumulator using array-based collection.
- * Reduces GC pressure by avoiding repeated string concatenation.
- */
-class BufferAccumulator {
-  private chunks: string[] = [];
-  private totalLength: number = 0;
-  private readonly maxSize: number;
-  private readonly trimSize: number;
-
-  constructor(maxSize: number, trimSize: number) {
-    this.maxSize = maxSize;
-    this.trimSize = trimSize;
-  }
-
-  append(data: string): void {
-    if (!data) return;
-    this.chunks.push(data);
-    this.totalLength += data.length;
-    if (this.totalLength > this.maxSize) {
-      this.trim();
-    }
-  }
-
-  get value(): string {
-    if (this.chunks.length === 0) return '';
-    if (this.chunks.length === 1) return this.chunks[0];
-    const result = this.chunks.join('');
-    this.chunks = [result];
-    return result;
-  }
-
-  get length(): number {
-    return this.totalLength;
-  }
-
-  clear(): void {
-    this.chunks = [];
-    this.totalLength = 0;
-  }
-
-  private trim(): void {
-    const full = this.chunks.join('');
-    const trimmed = full.slice(-this.trimSize);
-    this.chunks = [trimmed];
-    this.totalLength = trimmed.length;
-  }
 }
 
 // ========== Type Definitions ==========

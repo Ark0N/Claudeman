@@ -26,32 +26,19 @@ import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { RalphTracker } from './ralph-tracker.js';
 import { BashToolParser } from './bash-tool-parser.js';
 import { ScreenManager } from './screen-manager.js';
+import { BufferAccumulator } from './utils/buffer-accumulator.js';
+import {
+  MAX_TERMINAL_BUFFER_SIZE,
+  TRIM_TERMINAL_TO as TERMINAL_BUFFER_TRIM_SIZE,
+  MAX_TEXT_OUTPUT_SIZE,
+  TRIM_TEXT_TO as TEXT_OUTPUT_TRIM_SIZE,
+  MAX_MESSAGES,
+  MAX_LINE_BUFFER_SIZE,
+} from './config/buffer-limits.js';
 
 export type { BackgroundTask } from './task-tracker.js';
 export type { RalphTrackerState, RalphTodoItem, ActiveBashTool } from './types.js';
 export { withTimeout };
-
-// ============================================================================
-// Buffer Size Constants
-// ============================================================================
-
-/** Maximum terminal buffer size in characters (2MB) - reduced from 5MB for better render performance */
-const MAX_TERMINAL_BUFFER_SIZE = 2 * 1024 * 1024;
-
-/** When trimming terminal buffer, keep the most recent portion (1.5MB) */
-const TERMINAL_BUFFER_TRIM_SIZE = 1.5 * 1024 * 1024;
-
-/** Maximum text output buffer size (1MB) - ANSI-stripped text */
-const MAX_TEXT_OUTPUT_SIZE = 1 * 1024 * 1024;
-
-/** When trimming text output, keep the most recent portion (768KB) */
-const TEXT_OUTPUT_TRIM_SIZE = 768 * 1024;
-
-/** Maximum number of Claude JSON messages to keep in memory */
-const MAX_MESSAGES = 1000;
-
-/** Maximum line buffer size (64KB) - prevents unbounded growth for long lines */
-const MAX_LINE_BUFFER_SIZE = 64 * 1024;
 
 /** Line buffer flush interval (100ms) - forces processing of partial lines */
 const LINE_BUFFER_FLUSH_INTERVAL = 100;
@@ -153,77 +140,6 @@ export function getAugmentedPath(): string {
   }
 
   return _augmentedPath;
-}
-
-// ============================================================================
-// Buffer Accumulator (reduces GC pressure from string concatenation)
-// ============================================================================
-
-/**
- * High-performance buffer accumulator using array-based collection.
- *
- * Reduces GC pressure by avoiding repeated string concatenation (`+=`).
- * Instead, chunks are pushed to an array and joined only when needed.
- * Automatically trims when size limits are exceeded.
- */
-class BufferAccumulator {
-  private chunks: string[] = [];
-  private totalLength: number = 0;
-  private readonly maxSize: number;
-  private readonly trimSize: number;
-
-  constructor(maxSize: number, trimSize: number) {
-    this.maxSize = maxSize;
-    this.trimSize = trimSize;
-  }
-
-  /** Append data to the buffer */
-  append(data: string): void {
-    if (!data) return;
-    this.chunks.push(data);
-    this.totalLength += data.length;
-
-    // Trim if exceeded max size
-    if (this.totalLength > this.maxSize) {
-      this.trim();
-    }
-  }
-
-  /** Get the full buffer content (joins all chunks) */
-  get value(): string {
-    if (this.chunks.length === 0) return '';
-    if (this.chunks.length === 1) return this.chunks[0];
-
-    // Consolidate chunks on access
-    const result = this.chunks.join('');
-    this.chunks = [result];
-    return result;
-  }
-
-  /** Get current buffer length without joining */
-  get length(): number {
-    return this.totalLength;
-  }
-
-  /** Clear the buffer */
-  clear(): void {
-    this.chunks = [];
-    this.totalLength = 0;
-  }
-
-  /** Set buffer to a specific value */
-  set(value: string): void {
-    this.chunks = value ? [value] : [];
-    this.totalLength = value?.length || 0;
-  }
-
-  /** Trim buffer to keep only the most recent data */
-  private trim(): void {
-    const full = this.chunks.join('');
-    const trimmed = full.slice(-this.trimSize);
-    this.chunks = [trimmed];
-    this.totalLength = trimmed.length;
-  }
 }
 
 /**
