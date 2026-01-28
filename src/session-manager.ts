@@ -191,12 +191,19 @@ export class SessionManager extends EventEmitter {
 
   /**
    * Stops all active sessions.
+   * Uses Promise.allSettled to ensure all sessions are stopped even if some fail.
    */
   async stopAllSessions(): Promise<void> {
     const stopPromises = Array.from(this.sessions.keys()).map((id) =>
       this.stopSession(id)
     );
-    await Promise.all(stopPromises);
+    const results = await Promise.allSettled(stopPromises);
+    // Log any failures but don't throw - best effort cleanup
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        console.error('[SessionManager] Failed to stop session:', result.reason);
+      }
+    }
   }
 
   /**

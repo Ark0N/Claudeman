@@ -717,10 +717,10 @@ export class ScreenManager extends EventEmitter {
     } catch {
       // Fall back to individual queries if batch fails
       const statsPromises = screens.map(screen => this.getProcessStats(screen.sessionId));
-      const allStats = await Promise.all(statsPromises);
+      const results = await Promise.allSettled(statsPromises);
       return screens.map((screen, i) => ({
         ...screen,
-        stats: allStats[i] || undefined
+        stats: results[i].status === 'fulfilled' ? (results[i].value ?? undefined) : undefined
       }));
     }
 
@@ -738,8 +738,13 @@ export class ScreenManager extends EventEmitter {
     }
 
     this.statsInterval = setInterval(async () => {
-      const screensWithStats = await this.getScreensWithStats();
-      this.emit('statsUpdated', screensWithStats);
+      try {
+        const screensWithStats = await this.getScreensWithStats();
+        this.emit('statsUpdated', screensWithStats);
+      } catch (err) {
+        // Log but don't crash - stats collection is non-critical
+        console.error('[ScreenManager] Stats collection error:', err);
+      }
     }, intervalMs);
   }
 

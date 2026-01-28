@@ -1043,6 +1043,9 @@ export class RespawnController extends EventEmitter {
     this.log('Stopping respawn controller');
     this.aiChecker.cancel();
     this.planChecker.cancel();
+    // Remove event listeners from checkers to prevent memory leaks
+    this.aiChecker.removeAllListeners();
+    this.planChecker.removeAllListeners();
     this.clearTimers();
     this.stopDetectionUpdates();
     this.setState('stopped');

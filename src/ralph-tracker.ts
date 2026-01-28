@@ -931,7 +931,7 @@ export class RalphTracker extends EventEmitter {
     // Prevent unbounded line buffer growth from very long lines
     if (this._lineBuffer.length > MAX_LINE_BUFFER_SIZE) {
       // Truncate to last portion to preserve recent data
-      this._lineBuffer = this._lineBuffer.slice(-MAX_LINE_BUFFER_SIZE / 2);
+      this._lineBuffer = this._lineBuffer.slice(-Math.floor(MAX_LINE_BUFFER_SIZE / 2));
     }
 
     // Process complete lines
@@ -2614,12 +2614,14 @@ export class RalphTracker extends EventEmitter {
       recommendations.push('More tasks have failed than completed. Review approach and consider plan adjustment.');
     }
 
-    const progressPercent = Math.round((summary.completed / summary.total) * 100);
+    const progressPercent = summary.total > 0
+      ? Math.round((summary.completed / summary.total) * 100)
+      : 0;
     if (progressPercent < 20 && this._loopState.cycleCount > 10) {
       recommendations.push('Progress is slow. Consider simplifying tasks or reviewing dependencies.');
     }
 
-    if (summary.blocked > summary.total / 3) {
+    if (summary.total > 0 && summary.blocked > summary.total / 3) {
       recommendations.push('Many tasks are blocked. Review dependency chain for bottlenecks.');
     }
 

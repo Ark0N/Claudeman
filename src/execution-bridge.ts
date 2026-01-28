@@ -211,6 +211,7 @@ export class ExecutionBridge extends EventEmitter {
 
   private _pollTimer: NodeJS.Timeout | null = null;
   private _groupTimeoutTimers: Map<number, NodeJS.Timeout> = new Map();
+  private _retryTimers: Map<string, NodeJS.Timeout> = new Map();
   private _runningTasks: Map<string, { startedAt: number; sessionId?: string }> = new Map();
 
   private _history: ExecutionHistoryEntry[] = [];
@@ -232,6 +233,12 @@ export class ExecutionBridge extends EventEmitter {
     });
 
     this._scheduler.on('groupCompleted', group => {
+      // Clear the group timeout timer to prevent memory leak
+      const timer = this._groupTimeoutTimers.get(group.groupNumber);
+      if (timer) {
+        clearTimeout(timer);
+        this._groupTimeoutTimers.delete(group.groupNumber);
+      }
       this.emit('groupCompleted', {
         groupNumber: group.groupNumber,
         status: group.status,
@@ -641,12 +648,14 @@ export class ExecutionBridge extends EventEmitter {
     });
 
     if (willRetry) {
-      // Schedule retry
-      setTimeout(() => {
+      // Schedule retry with tracked timer
+      const retryTimer = setTimeout(() => {
+        this._retryTimers.delete(task.id);
         task.status = 'pending';
         task.error = undefined;
         this._runningTasks.delete(task.id);
       }, TASK_RETRY_DELAY_MS);
+      this._retryTimers.set(task.id, retryTimer);
     } else {
       // Mark as permanently failed
       this._scheduler.updateTaskStatus(task.id, 'failed', error);
@@ -666,6 +675,13 @@ export class ExecutionBridge extends EventEmitter {
 
     const groupNum = this.findTaskGroup(taskId);
     if (groupNum === null) return;
+
+    // Clear any pending retry timer for this task
+    const retryTimer = this._retryTimers.get(taskId);
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      this._retryTimers.delete(taskId);
+    }
 
     this._scheduler.updateTaskStatus(taskId, 'completed');
     this._runningTasks.delete(taskId);
@@ -789,6 +805,12 @@ export class ExecutionBridge extends EventEmitter {
       clearTimeout(timer);
     }
     this._groupTimeoutTimers.clear();
+
+    // Clear any pending retry timers
+    for (const timer of this._retryTimers.values()) {
+      clearTimeout(timer);
+    }
+    this._retryTimers.clear();
 
     this._scheduler.reset();
     this._runningTasks.clear();

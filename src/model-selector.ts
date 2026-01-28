@@ -288,6 +288,12 @@ export class ModelSelector extends EventEmitter {
       case 'opus': return 5.0;    // ~5x more expensive
       case 'sonnet': return 1.0;  // baseline
       case 'haiku': return 0.04;  // ~25x cheaper
+      default: {
+        // Exhaustive check - if new ModelTier added, this will catch it
+        const _exhaustive: never = model;
+        console.warn(`[ModelSelector] Unknown model tier: ${_exhaustive}, using sonnet multiplier`);
+        return 1.0;
+      }
     }
   }
 }
