@@ -258,7 +258,9 @@ export class ScreenManager extends EventEmitter {
 
     // Environment variables must be exported, not passed inline to nice
     // Using inline VAR=value before nice doesn't work correctly
+    // Unset COLORTERM to prevent truecolor issues - xterm.js doesn't handle inherited COLORTERM=truecolor well
     const envExports = [
+      'unset COLORTERM',
       'export CLAUDEMAN_SCREEN=1',
       `export CLAUDEMAN_SESSION_ID=${sessionId}`,
       `export CLAUDEMAN_SCREEN_NAME=${screenName}`,
