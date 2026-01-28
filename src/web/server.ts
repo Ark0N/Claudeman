@@ -616,7 +616,7 @@ export class WebServer extends EventEmitter {
       // Also update the screen name if this session has a screen
       this.screenManager.updateScreenName(id, session.name);
       this.persistSessionState(session);
-      this.broadcast('session:updated', session.toDetailedState());
+      this.broadcast('session:updated', this.getSessionStateWithRespawn(session));
       return { success: true, name: session.name };
     });
 
@@ -1337,7 +1337,7 @@ export class WebServer extends EventEmitter {
 
         await session.startInteractive();
         this.broadcast('session:interactive', { id });
-        this.broadcast('session:updated', { session: session.toDetailedState() });
+        this.broadcast('session:updated', { session: this.getSessionStateWithRespawn(session) });
 
         return { success: true };
       } catch (err) {
@@ -1361,7 +1361,7 @@ export class WebServer extends EventEmitter {
       try {
         await session.startShell();
         this.broadcast('session:interactive', { id, mode: 'shell' });
-        this.broadcast('session:updated', { session: session.toDetailedState() });
+        this.broadcast('session:updated', { session: this.getSessionStateWithRespawn(session) });
         return { success: true };
       } catch (err) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
@@ -1657,7 +1657,7 @@ export class WebServer extends EventEmitter {
         // Start interactive session
         await session.startInteractive();
         this.broadcast('session:interactive', { id });
-        this.broadcast('session:updated', { session: session.toDetailedState() });
+        this.broadcast('session:updated', { session: this.getSessionStateWithRespawn(session) });
 
         // Create and start respawn controller
         const controller = new RespawnController(session, body?.respawnConfig);
@@ -1754,7 +1754,7 @@ export class WebServer extends EventEmitter {
 
       session.setAutoClear(body.enabled, body.threshold);
       this.persistSessionState(session);
-      this.broadcast('session:updated', session.toDetailedState());
+      this.broadcast('session:updated', this.getSessionStateWithRespawn(session));
 
       return {
         success: true,
@@ -1787,7 +1787,7 @@ export class WebServer extends EventEmitter {
 
       session.setAutoCompact(body.enabled, body.threshold, body.prompt);
       this.persistSessionState(session);
-      this.broadcast('session:updated', session.toDetailedState());
+      this.broadcast('session:updated', this.getSessionStateWithRespawn(session));
 
       return {
         success: true,
@@ -2238,7 +2238,7 @@ export class WebServer extends EventEmitter {
           await session.startInteractive();
           this.broadcast('session:interactive', { id: session.id });
         }
-        this.broadcast('session:updated', { session: session.toDetailedState() });
+        this.broadcast('session:updated', { session: this.getSessionStateWithRespawn(session) });
 
         // Save lastUsedCase to settings for TUI/web sync
         try {
@@ -2878,7 +2878,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
       session.setNice(body);
       this.persistSessionState(session);
-      this.broadcast('session:updated', { session: session.toDetailedState() });
+      this.broadcast('session:updated', { session: this.getSessionStateWithRespawn(session) });
 
       return {
         success: true,
@@ -3488,7 +3488,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     session.on('completion', (result, cost) => {
       this.broadcast('session:completion', { id: session.id, result, cost });
-      this.broadcast('session:updated', session.toDetailedState());
+      this.broadcast('session:updated', this.getSessionStateWithRespawn(session));
       this.persistSessionState(session);
       // Track tokens in run summary (completion event has updated token values)
       const tracker = this.runSummaryTrackers.get(session.id);
@@ -3499,7 +3499,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       // Wrap in try/catch to ensure cleanup always happens
       try {
         this.broadcast('session:exit', { id: session.id, code });
-        this.broadcast('session:updated', session.toDetailedState());
+        this.broadcast('session:updated', this.getSessionStateWithRespawn(session));
         this.persistSessionState(session);
       } catch (err) {
         console.error(`[Server] Error broadcasting session exit for ${session.id}:`, err);
@@ -4115,16 +4115,22 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     this.broadcast('scheduled:stopped', run);
   }
 
+  /**
+   * Get session state with respawn controller info included.
+   * Use this for session:updated broadcasts to preserve respawn state on the frontend.
+   */
+  private getSessionStateWithRespawn(session: Session) {
+    const controller = this.respawnControllers.get(session.id);
+    return {
+      ...session.toDetailedState(),
+      respawnEnabled: controller?.getConfig()?.enabled ?? false,
+      respawnConfig: controller?.getConfig() ?? null,
+      respawn: controller?.getStatus() ?? null,
+    };
+  }
+
   private getSessionsState() {
-    return Array.from(this.sessions.values()).map(s => {
-      const controller = this.respawnControllers.get(s.id);
-      return {
-        ...s.toDetailedState(),
-        respawnEnabled: controller?.getConfig()?.enabled ?? false,
-        respawnConfig: controller?.getConfig() ?? null,
-        respawn: controller?.getStatus() ?? null,
-      };
-    });
+    return Array.from(this.sessions.values()).map(s => this.getSessionStateWithRespawn(s));
   }
 
   /**
@@ -4134,16 +4140,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
    */
   private getLightSessionsState() {
     return Array.from(this.sessions.values()).map(s => {
-      const controller = this.respawnControllers.get(s.id);
-      const detailed = s.toDetailedState();
+      const state = this.getSessionStateWithRespawn(s);
       return {
-        ...detailed,
+        ...state,
         // Exclude full buffers - they're fetched on-demand
         terminalBuffer: '',
         textOutput: '',
-        respawnEnabled: controller?.getConfig()?.enabled ?? false,
-        respawnConfig: controller?.getConfig() ?? null,
-        respawn: controller?.getStatus() ?? null,
       };
     });
   }
@@ -4387,7 +4389,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       const session = this.sessions.get(sessionId);
       if (session) {
         // Single expensive serialization per batch interval
-        this.broadcast('session:updated', session.toDetailedState());
+        this.broadcast('session:updated', this.getSessionStateWithRespawn(session));
       }
     }
     this.stateUpdatePending.clear();
