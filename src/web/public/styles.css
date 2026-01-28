@@ -5635,6 +5635,61 @@ kbd {
   font-weight: 600;
 }
 
+/* Wizard minimize button */
+.wizard-minimize-btn {
+  margin-right: 0.25rem;
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+/* Wizard minimized floating indicator */
+.wizard-minimized-indicator {
+  display: none;
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  z-index: 1000;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  transition: all 0.2s ease;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.wizard-minimized-indicator.visible {
+  display: flex;
+}
+
+.wizard-minimized-indicator:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-bright);
+  transform: translateX(-50%) scale(1.02);
+}
+
+.wizard-minimized-icon {
+  font-size: 1.1rem;
+  animation: spin 2s linear infinite;
+}
+
+.wizard-minimized-text {
+  font-size: 0.8rem;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.wizard-minimized-time {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  background: var(--bg-input);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+}
+
 .modal-wizard .modal-body {
   overflow-y: auto;
   flex: 1;

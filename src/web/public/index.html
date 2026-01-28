@@ -951,6 +951,7 @@
               <span class="icon">🤖</span>
               <span class="agent-count" id="wizardAgentCount">0</span>
             </button>
+            <button class="btn-icon-only wizard-minimize-btn" id="wizardMinimizeBtn" onclick="app.minimizeRalphWizard()" title="Minimize wizard">&#x2012;</button>
             <button class="modal-close" onclick="app.closeRalphWizard()">&times;</button>
           </div>
         </div>
@@ -1141,6 +1142,13 @@
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- Ralph Wizard Minimized Indicator -->
+    <div class="wizard-minimized-indicator" id="wizardMinimizedIndicator" onclick="app.restoreRalphWizard()">
+      <span class="wizard-minimized-icon">🔄</span>
+      <span class="wizard-minimized-text">Ralph Wizard</span>
+      <span class="wizard-minimized-time" id="wizardMinimizedTime">0s</span>
     </div>
 
     <!-- Kill All Confirmation Modal -->

@@ -2715,12 +2715,58 @@ class ClaudemanApp {
     // Remove agents minimized tab if exists
     this.removeAgentsMinimizedTab();
 
+    // Hide minimized indicator
+    this.hideWizardMinimizedIndicator();
+
     // Reset wizard position
     this.wizardPosition = null;
     this.planAgentsMinimized = false;
 
     // Update connection lines (wizard closed, revert to normal)
     this.updateConnectionLines();
+  }
+
+  minimizeRalphWizard() {
+    const modal = document.getElementById('ralphWizardModal');
+    modal?.classList.remove('active');
+
+    // Show the minimized indicator
+    this.showWizardMinimizedIndicator();
+  }
+
+  restoreRalphWizard() {
+    // Hide the minimized indicator
+    this.hideWizardMinimizedIndicator();
+
+    // Show the modal again
+    const modal = document.getElementById('ralphWizardModal');
+    modal?.classList.add('active');
+  }
+
+  showWizardMinimizedIndicator() {
+    const indicator = document.getElementById('wizardMinimizedIndicator');
+    if (!indicator) return;
+
+    indicator.classList.add('visible');
+
+    // Start time counter if plan generation is active
+    if (this.planLoadingStartTime) {
+      this.wizardMinimizedTimer = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - this.planLoadingStartTime) / 1000);
+        const timeEl = document.getElementById('wizardMinimizedTime');
+        if (timeEl) timeEl.textContent = `${elapsed}s`;
+      }, 1000);
+    }
+  }
+
+  hideWizardMinimizedIndicator() {
+    const indicator = document.getElementById('wizardMinimizedIndicator');
+    if (indicator) indicator.classList.remove('visible');
+
+    if (this.wizardMinimizedTimer) {
+      clearInterval(this.wizardMinimizedTimer);
+      this.wizardMinimizedTimer = null;
+    }
   }
 
   populateRalphCaseSelector() {
@@ -3296,14 +3342,41 @@ class ClaudemanApp {
         ? { taskDescription: config.taskDescription, caseName: config.caseName }
         : { taskDescription: config.taskDescription, detailLevel: config.planDetailLevel };
 
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: this.planGenerationAbortController?.signal,
-      });
+      // Retry logic for network errors
+      const maxRetries = 3;
+      let lastError = null;
+      let data = null;
 
-      const data = await res.json();
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: this.planGenerationAbortController?.signal,
+          });
+          data = await res.json();
+          break; // Success, exit retry loop
+        } catch (fetchErr) {
+          lastError = fetchErr;
+          // Don't retry if aborted
+          if (fetchErr.name === 'AbortError') throw fetchErr;
+          // Network error - retry with exponential backoff
+          console.warn(`[Plan] Fetch attempt ${attempt + 1} failed:`, fetchErr.message);
+          if (attempt < maxRetries - 1) {
+            const delay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
+            const titleEl = document.getElementById('planLoadingTitle');
+            const hintEl = document.getElementById('planLoadingHint');
+            if (titleEl) titleEl.textContent = 'Connection lost, retrying...';
+            if (hintEl) hintEl.textContent = `Attempt ${attempt + 2} of ${maxRetries} in ${delay / 1000}s`;
+            await new Promise(r => setTimeout(r, delay));
+          }
+        }
+      }
+
+      if (!data) {
+        throw lastError || new Error('Failed to fetch after retries');
+      }
 
       // Stop timer
       if (this.planLoadingTimer) {
