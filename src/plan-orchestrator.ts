@@ -986,6 +986,9 @@ ${prompt}
 
       // Update the case CLAUDE.md with research context links
       this.updateCaseClaudeMd();
+
+      // Update the project's main CLAUDE.md with Ralph Loop context
+      this.updateProjectClaudeMd();
     } catch (err) {
       console.error('[PlanOrchestrator] Failed to save final result:', err);
     }
@@ -1065,6 +1068,71 @@ Use \`/init\` to load this context, then read specific files as needed.
       console.log(`[PlanOrchestrator] Updated CLAUDE.md with research context at ${claudeMdPath}`);
     } catch (err) {
       console.error('[PlanOrchestrator] Failed to update CLAUDE.md:', err);
+    }
+  }
+
+  /**
+   * Update the project's main CLAUDE.md with Ralph Loop context.
+   * This ensures Claude instances running in the project directory know about the current task,
+   * where to find the plan files, and how to track todos.
+   */
+  private updateProjectClaudeMd(): void {
+    if (!this.outputDir || !this.workingDir) return;
+
+    try {
+      const projectClaudeMdPath = join(this.workingDir, 'CLAUDE.md');
+      const caseDir = dirname(this.outputDir);
+
+      // Build the Ralph Loop context section
+      const contextSection = `
+## Active Ralph Loop Task
+
+**Current Task**: ${this.taskDescription}
+
+**Case Folder**: \`${caseDir}\`
+
+### Key Files
+- **Plan Summary**: \`${caseDir}/ralph-wizard/summary.md\` - Human-readable plan overview
+- **Todo Items**: \`${caseDir}/ralph-wizard/final-result.json\` - Contains \`items\` array with all todo tasks
+- **Research**: \`${caseDir}/ralph-wizard/research/result.json\` - External resources and codebase patterns
+
+### How to Work on This Task
+1. Read the plan summary to understand the overall approach
+2. Check \`final-result.json\` for the todo items array - each item has \`id\`, \`title\`, \`description\`, \`priority\`
+3. Work through items in priority order (critical → high → medium → low)
+4. Use \`<promise>COMPLETION_PHRASE</promise>\` when the entire task is complete
+
+### Research Insights
+Check \`${caseDir}/ralph-wizard/research/result.json\` for:
+- External GitHub repos and documentation links to reference
+- Existing codebase patterns to follow
+- Technical recommendations from the research phase
+`;
+
+      // Read existing CLAUDE.md or create new one
+      let existingContent = '';
+      if (existsSync(projectClaudeMdPath)) {
+        existingContent = readFileSync(projectClaudeMdPath, 'utf-8');
+
+        // Remove any existing Ralph Loop section to avoid duplicates
+        const sectionStart = existingContent.indexOf('## Active Ralph Loop Task');
+        if (sectionStart !== -1) {
+          // Find the next ## heading or end of file
+          const nextSectionMatch = existingContent.slice(sectionStart + 1).match(/\n## /);
+          const sectionEnd = nextSectionMatch
+            ? sectionStart + 1 + nextSectionMatch.index!
+            : existingContent.length;
+          existingContent = existingContent.slice(0, sectionStart) + existingContent.slice(sectionEnd);
+        }
+      }
+
+      // Append the new section
+      const newContent = existingContent.trimEnd() + '\n' + contextSection;
+      writeFileSync(projectClaudeMdPath, newContent, 'utf-8');
+
+      console.log(`[PlanOrchestrator] Updated project CLAUDE.md with Ralph Loop context at ${projectClaudeMdPath}`);
+    } catch (err) {
+      console.error('[PlanOrchestrator] Failed to update project CLAUDE.md:', err);
     }
   }
 
@@ -1307,15 +1375,42 @@ Use \`/init\` to load this context, then read specific files as needed.
     try {
       const prompt = RESEARCH_AGENT_PROMPT.replace('{TASK}', taskDescription);
 
-      onProgress?.('research', 'Gathering external resources and codebase context...');
+      onProgress?.('research', 'Starting research agent (web search + codebase exploration)...');
 
-      // Periodic progress updates showing elapsed time
+      // Periodic progress updates showing elapsed time with contextual messages
+      const researchPhases = [
+        { min: 0, msg: 'Searching for relevant GitHub repos and documentation...' },
+        { min: 30, msg: 'Exploring official docs and best practice guides...' },
+        { min: 60, msg: 'Analyzing codebase patterns and conventions...' },
+        { min: 120, msg: 'Synthesizing findings and recommendations...' },
+        { min: 180, msg: 'Compiling research results (complex tasks take time)...' },
+        { min: 300, msg: 'Almost done - finalizing enriched task description...' },
+      ];
+
       const progressInterval = setInterval(() => {
         const elapsedSec = Math.floor((Date.now() - startTime) / 1000);
         const timeoutSec = Math.floor(RESEARCH_TIMEOUT_MS / 1000);
-        onProgress?.('research', `Research agent working... (${elapsedSec}s / ${timeoutSec}s timeout)`);
-        console.log(`[PlanOrchestrator] Research agent: ${elapsedSec}s elapsed (timeout: ${timeoutSec}s)`);
-      }, 30000); // Update every 30 seconds
+
+        // Find appropriate phase message based on elapsed time
+        let phaseMsg = researchPhases[0].msg;
+        for (const phase of researchPhases) {
+          if (elapsedSec >= phase.min) {
+            phaseMsg = phase.msg;
+          }
+        }
+
+        const progressMsg = `${phaseMsg} (${elapsedSec}s / ${timeoutSec}s)`;
+        onProgress?.('research', progressMsg);
+        onSubagent?.({
+          type: 'progress',
+          agentId,
+          agentType: 'research',
+          model: MODEL_RESEARCH,
+          status: 'running',
+          detail: progressMsg,
+        });
+        console.log(`[PlanOrchestrator] Research agent: ${elapsedSec}s - ${phaseMsg}`);
+      }, 15000); // Update every 15 seconds
 
       let result: string;
       try {

@@ -1163,6 +1163,25 @@ export interface ActiveBashTool {
   sessionId: string;
 }
 
+// ========== Image Watcher Types ==========
+
+/**
+ * Event emitted when a new image file is detected in a session's working directory.
+ * Used to trigger automatic image popup display in the web UI.
+ */
+export interface ImageDetectedEvent {
+  /** Claudeman session ID where the image was detected */
+  sessionId: string;
+  /** Full path to the detected image file */
+  filePath: string;
+  /** Image file name (basename) */
+  fileName: string;
+  /** Timestamp when the image was detected */
+  timestamp: number;
+  /** File size in bytes */
+  size: number;
+}
+
 // ========== Spawn1337 Protocol Re-exports ==========
 
 export type {

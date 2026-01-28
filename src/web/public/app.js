@@ -476,6 +476,10 @@ class ClaudemanApp {
     this.projectInsightsPanelVisible = false;
     this.currentSessionWorkingDir = null; // Track current session's working dir for path normalization
 
+    // Image popup windows (auto-open for detected screenshots/images)
+    this.imagePopups = new Map(); // Map<imageId, { element, sessionId, filePath }>
+    this.imagePopupZIndex = 3000;
+
     // Tab alert states: Map<sessionId, 'action' | 'idle'>
     this.tabAlerts = new Map();
 
@@ -1129,6 +1133,7 @@ class ClaudemanApp {
       this.ralphStates.delete(data.id);  // Clean up ralph state for this session
       this.projectInsights.delete(data.id);  // Clean up project insights for this session
       this.closeSessionLogViewerWindows(data.id);  // Close log viewer windows for this session
+      this.closeSessionImagePopups(data.id);  // Close image popup windows for this session
       this.closeSessionSubagentWindows(data.id, true);  // Close subagent windows and cleanup activity data
       // Clean up idle timer for this session
       const idleTimer = this.idleTimers.get(data.id);
@@ -1910,6 +1915,14 @@ class ClaudemanApp {
           this.subagentToolResults.delete(data.agentId);
         }
       }, 5 * 60 * 1000); // 5 minutes
+    });
+
+    // ========== Image Detection Events (Screenshots & Generated Images) ==========
+
+    addListener('image:detected', (e) => {
+      const data = JSON.parse(e.data);
+      console.log('[Image Detected]', data);
+      this.openImagePopup(data);
     });
 
     // Plan subagent visibility events (show Opus agents during plan generation)
@@ -9666,6 +9679,127 @@ class ClaudemanApp {
     for (const [windowId, data] of this.logViewerWindows) {
       if (data.sessionId === sessionId) {
         this.closeLogViewerWindow(windowId);
+      }
+    }
+  }
+
+  // ========== Image Popup Windows (Auto-popup for Screenshots) ==========
+
+  /**
+   * Open a popup window to display a detected image.
+   * Called automatically when image:detected SSE event is received.
+   */
+  openImagePopup(imageEvent) {
+    const { sessionId, filePath, fileName, timestamp, size } = imageEvent;
+
+    // Create unique window ID
+    const imageId = `${sessionId}-${timestamp}`;
+
+    // If window already exists for this image, focus it
+    if (this.imagePopups.has(imageId)) {
+      const existing = this.imagePopups.get(imageId);
+      existing.element.style.zIndex = ++this.imagePopupZIndex;
+      return;
+    }
+
+    // Calculate position (cascade from center, with offset for multiple popups)
+    const windowCount = this.imagePopups.size;
+    const centerX = (window.innerWidth - 600) / 2;
+    const centerY = (window.innerHeight - 500) / 2;
+    const offsetX = centerX + (windowCount % 5) * 30;
+    const offsetY = centerY + (windowCount % 5) * 30;
+
+    // Get session name for display
+    const session = this.sessions.get(sessionId);
+    const sessionName = session?.name || sessionId.substring(0, 8);
+
+    // Format file size
+    const sizeKB = (size / 1024).toFixed(1);
+
+    // Build image URL using the existing file-raw endpoint
+    const imageUrl = `/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(fileName)}`;
+
+    // Create window element
+    const win = document.createElement('div');
+    win.className = 'image-popup-window';
+    win.id = `image-popup-${imageId}`;
+    win.style.left = `${offsetX}px`;
+    win.style.top = `${offsetY}px`;
+    win.style.zIndex = ++this.imagePopupZIndex;
+
+    win.innerHTML = `
+      <div class="image-popup-header">
+        <div class="image-popup-title" title="${this.escapeHtml(filePath)}">
+          <span class="icon">🖼️</span>
+          <span class="filename">${this.escapeHtml(fileName)}</span>
+          <span class="session-badge">${this.escapeHtml(sessionName)}</span>
+          <span class="size-badge">${sizeKB} KB</span>
+        </div>
+        <div class="image-popup-actions">
+          <button onclick="app.openImageInNewTab('${imageUrl}')" title="Open in new tab">↗</button>
+          <button onclick="app.closeImagePopup('${imageId}')" title="Close">×</button>
+        </div>
+      </div>
+      <div class="image-popup-body">
+        <img src="${imageUrl}" alt="${this.escapeHtml(fileName)}"
+             onerror="this.parentElement.innerHTML='<div class=\\'image-error\\'>Failed to load image</div>'"
+             onclick="app.openImageInNewTab('${imageUrl}')" />
+      </div>
+    `;
+
+    document.body.appendChild(win);
+
+    // Make draggable
+    const dragListeners = this.makeWindowDraggable(win, win.querySelector('.image-popup-header'));
+
+    // Focus on click
+    win.addEventListener('mousedown', () => {
+      win.style.zIndex = ++this.imagePopupZIndex;
+    });
+
+    // Store reference
+    this.imagePopups.set(imageId, {
+      element: win,
+      sessionId,
+      filePath,
+      dragListeners,
+    });
+  }
+
+  /**
+   * Close an image popup window.
+   */
+  closeImagePopup(imageId) {
+    const popupData = this.imagePopups.get(imageId);
+    if (!popupData) return;
+
+    // Clean up global drag event listeners
+    if (popupData.dragListeners) {
+      document.removeEventListener('mousemove', popupData.dragListeners.move);
+      document.removeEventListener('mouseup', popupData.dragListeners.up);
+    }
+
+    // Remove element
+    popupData.element.remove();
+
+    // Remove from map
+    this.imagePopups.delete(imageId);
+  }
+
+  /**
+   * Open image in a new browser tab.
+   */
+  openImageInNewTab(url) {
+    window.open(url, '_blank');
+  }
+
+  /**
+   * Close all image popups for a session.
+   */
+  closeSessionImagePopups(sessionId) {
+    for (const [imageId, data] of this.imagePopups) {
+      if (data.sessionId === sessionId) {
+        this.closeImagePopup(imageId);
       }
     }
   }

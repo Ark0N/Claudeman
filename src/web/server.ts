@@ -30,6 +30,7 @@ import { generateClaudeMd } from '../templates/claude-md.js';
 import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
 import { writeHooksConfig } from '../hooks-config.js';
 import { subagentWatcher, type SubagentInfo, type SubagentToolCall, type SubagentProgress, type SubagentMessage, type SubagentToolResult } from '../subagent-watcher.js';
+import { imageWatcher } from '../image-watcher.js';
 import { TranscriptWatcher } from '../transcript-watcher.js';
 import { v4 as uuidv4 } from 'uuid';
 import { createRequire } from 'node:module';
@@ -58,6 +59,7 @@ import {
   type CaseInfo,
   type PersistedRespawnConfig,
   type NiceConfig,
+  type ImageDetectedEvent,
   DEFAULT_NICE_CONFIG,
 } from '../types.js';
 
@@ -345,6 +347,9 @@ export class WebServer extends EventEmitter {
 
     // Set up subagent watcher listeners
     this.setupSubagentWatcherListeners();
+
+    // Set up image watcher listeners
+    this.setupImageWatcherListeners();
   }
 
   /**
@@ -386,6 +391,20 @@ export class WebServer extends EventEmitter {
 
     subagentWatcher.on('subagent:error', (error: Error, agentId?: string) => {
       console.error(`[SubagentWatcher] Error${agentId ? ` for ${agentId}` : ''}:`, error.message);
+    });
+  }
+
+  /**
+   * Set up event listeners for image watcher.
+   * Broadcasts image detection events to SSE clients for auto-popup.
+   */
+  private setupImageWatcherListeners(): void {
+    imageWatcher.on('image:detected', (event: ImageDetectedEvent) => {
+      this.broadcast('image:detected', event);
+    });
+
+    imageWatcher.on('image:error', (error: Error, sessionId?: string) => {
+      console.error(`[ImageWatcher] Error${sessionId ? ` for ${sessionId}` : ''}:`, error.message);
     });
   }
 
@@ -3291,6 +3310,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       session.removeAllListeners();
       // Close any active file streams for this session
       fileStreamManager.closeSessionStreams(sessionId);
+      // Stop watching for images in this session's directory
+      imageWatcher.unwatchSession(sessionId);
       await session.stop(killScreen);
       this.sessions.delete(sessionId);
       // Only remove from state.json if we're also killing the screen.
@@ -3311,6 +3332,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     // Set working directory for Ralph tracker to auto-load @fix_plan.md
     session.ralphTracker.setWorkingDir(session.workingDir);
+
+    // Start watching for new images in this session's working directory
+    imageWatcher.watchSession(session.id, session.workingDir);
 
     session.on('output', (data) => {
       // Use batching for better performance at high throughput
@@ -4338,6 +4362,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     } else {
       console.log('Subagent watcher disabled by user settings');
     }
+
+    // Start image watcher for auto-popup of screenshots
+    imageWatcher.start();
+    console.log('Image watcher started - monitoring session directories for new images');
   }
 
   /**
@@ -4591,6 +4619,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     // Stop subagent watcher
     subagentWatcher.stop();
+
+    // Stop image watcher
+    imageWatcher.stop();
 
     await this.app.close();
   }

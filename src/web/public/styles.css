@@ -5282,6 +5282,124 @@ kbd {
   font-style: italic;
 }
 
+/* ========== Image Popup Windows (Auto-popup for Screenshots) ========== */
+
+.image-popup-window {
+  position: fixed;
+  width: 600px;
+  height: 500px;
+  min-width: 300px;
+  min-height: 250px;
+  max-width: 90vw;
+  max-height: 90vh;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  resize: both;
+  z-index: 3000;
+}
+
+.image-popup-header {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-input);
+  border-bottom: 1px solid var(--border);
+  cursor: move;
+}
+
+.image-popup-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.image-popup-title .icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.image-popup-title .filename {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: white;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.image-popup-title .session-badge {
+  font-size: 0.6rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: var(--accent);
+  color: white;
+  flex-shrink: 0;
+}
+
+.image-popup-title .size-badge {
+  font-size: 0.6rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  background: var(--text-muted);
+  color: white;
+  flex-shrink: 0;
+}
+
+.image-popup-actions {
+  display: flex;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
+.image-popup-actions button {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.9rem;
+}
+
+.image-popup-actions button:hover {
+  color: var(--text);
+}
+
+.image-popup-body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #1a1a1a;
+  padding: 0.5rem;
+}
+
+.image-popup-body img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+
+.image-popup-body img:hover {
+  transform: scale(1.02);
+}
+
+.image-popup-body .image-error {
+  color: var(--error);
+  font-size: 0.85rem;
+  padding: 1rem;
+  text-align: center;
+}
+
 /* ========== xterm.js Clickable Links ========== */
 
 /* Style for detected file path links in terminal */
@@ -5321,8 +5439,8 @@ kbd {
 .wizard-progress {
   display: flex;
   justify-content: center;
-  gap: 2rem;
-  padding: 0.75rem 1rem;
+  gap: 1.5rem;
+  padding: 0.5rem 0.75rem;
   background: var(--bg-dark);
   border-bottom: 1px solid var(--border);
 }
@@ -5345,15 +5463,15 @@ kbd {
 }
 
 .wizard-step-number {
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: 50%;
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-weight: 600;
 }
 
@@ -5397,11 +5515,11 @@ kbd {
   gap: 0.5rem;
 }
 
-/* Wizard Modal - wider layout with height constraints */
+/* Wizard Modal - compact layout */
 .modal-wizard {
-  width: 720px;
+  width: 480px;
   max-width: 95vw;
-  max-height: 80vh;
+  max-height: 70vh;
   display: flex;
   flex-direction: column;
 }

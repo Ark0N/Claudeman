@@ -24,7 +24,7 @@ Claudeman is a Claude Code session manager with web interface and autonomous Ral
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, node-pty, xterm.js
 
-**TypeScript Strictness**: `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns`, `noImplicitOverride`, `noFallthroughCasesInSwitch`, `allowUnreachableCode: false`
+**TypeScript Strictness** (see `tsconfig.json`): `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns`, `noImplicitOverride`, `noFallthroughCasesInSwitch`, `allowUnreachableCode: false`, `allowUnusedLabels: false`
 
 **Requirements**: Node.js 18+, Claude CLI, GNU Screen
 
@@ -111,7 +111,7 @@ journalctl --user -u claudeman-web -f
 
 **E2E tests**: Use Playwright. Run `npx playwright install chromium` first. See `test/e2e/fixtures/` for helpers. E2E config provides ports, timeouts, and helpers.
 
-**Test config**: Vitest runs with `globals: true` (no imports needed for `describe`/`it`/`expect`) and `fileParallelism: false` (files run sequentially to respect screen limits). Test timeout is 30s, teardown timeout is 60s.
+**Test config**: Vitest runs with `globals: true` (no imports needed for `describe`/`it`/`expect`) and `fileParallelism: false` (files run sequentially to respect screen limits). Unit test timeout is 30s, teardown timeout is 60s. E2E tests have longer timeouts defined in `test/e2e/e2e.config.ts` (90s test, 30s session creation).
 
 **Test safety**: `test/setup.ts` provides:
 - Screen concurrency limiter (max 10)

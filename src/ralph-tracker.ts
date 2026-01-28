@@ -510,6 +510,14 @@ export class RalphTracker extends EventEmitter {
   /** Path to the @fix_plan.md file being watched */
   private _fixPlanPath: string | null = null;
 
+  /**
+   * When @fix_plan.md is active, treat it as the source of truth for todo status.
+   * This prevents output-based detection from overriding file-based status.
+   */
+  private get isFileAuthoritative(): boolean {
+    return this._fixPlanPath !== null;
+  }
+
   // ========== Enhanced Plan Management ==========
 
   /** Current version of the plan (incremented on changes) */
@@ -1077,6 +1085,10 @@ export class RalphTracker extends EventEmitter {
    * @fires loopUpdate - If loop state changes
    */
   private detectAllTasksComplete(line: string): void {
+    // When @fix_plan.md is active, only trust the file for todo status
+    // This prevents false positives from Claude saying "all done" in conversation
+    if (this.isFileAuthoritative) return;
+
     // Only trigger if line is a clear standalone completion message
     // Avoid matching commentary like "once all tasks are complete..."
     if (!ALL_COMPLETE_PATTERN.test(line)) return;
@@ -1130,6 +1142,9 @@ export class RalphTracker extends EventEmitter {
    * Only marks a todo complete if we can match it by task number.
    */
   private detectTaskCompletion(line: string): void {
+    // When @fix_plan.md is active, only trust the file for todo status
+    if (this.isFileAuthoritative) return;
+
     if (!TASK_DONE_PATTERN.test(line)) return;
 
     // Only act on explicit task number references like "Task 8 is done"
