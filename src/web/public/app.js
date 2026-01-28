@@ -1946,6 +1946,31 @@ class ClaudemanApp {
         hintEl.textContent = data.detail;
       }
     });
+
+    // Plan generation started - store orchestrator ID for cancellation
+    addListener('plan:started', (e) => {
+      const data = JSON.parse(e.data);
+      console.log('[Plan Started]', data);
+      this.activePlanOrchestratorId = data.orchestratorId;
+    });
+
+    // Plan generation cancelled
+    addListener('plan:cancelled', (e) => {
+      const data = JSON.parse(e.data);
+      console.log('[Plan Cancelled]', data);
+      if (this.activePlanOrchestratorId === data.orchestratorId) {
+        this.activePlanOrchestratorId = null;
+      }
+    });
+
+    // Plan generation completed
+    addListener('plan:completed', (e) => {
+      const data = JSON.parse(e.data);
+      console.log('[Plan Completed]', data);
+      if (this.activePlanOrchestratorId === data.orchestratorId) {
+        this.activePlanOrchestratorId = null;
+      }
+    });
   }
 
   setConnectionStatus(status) {
@@ -2985,18 +3010,23 @@ class ClaudemanApp {
     ];
 
     const detailedPhases = [
-      { time: 0, title: 'Spawning analysis subagents...', hint: 'Starting 4 specialist agents in parallel' },
-      { time: 3, title: 'Requirements Analyst working...', hint: 'Extracting explicit and implicit requirements' },
-      { time: 6, title: 'Architecture Planner working...', hint: 'Designing modules and interfaces' },
-      { time: 9, title: 'TDD Specialist working...', hint: 'Planning test-first implementation' },
-      { time: 12, title: 'Risk Analyst working...', hint: 'Identifying edge cases and blockers' },
-      { time: 20, title: 'Subagents completing...', hint: 'Collecting analysis results' },
-      { time: 30, title: 'Synthesizing results...', hint: 'Merging and deduplicating items' },
-      { time: 40, title: 'Starting verification...', hint: 'Running quality assurance subagent' },
-      { time: 50, title: 'Assigning priorities...', hint: 'Determining P0/P1/P2 for each task' },
-      { time: 60, title: 'Checking for gaps...', hint: 'Identifying missing requirements' },
-      { time: 75, title: 'Finalizing plan...', hint: 'Preparing validated task list' },
-      { time: 90, title: 'Still working...', hint: 'Complex tasks take longer - hang tight!' },
+      // Phase 0: Research (can take up to 10 minutes for complex tasks)
+      { time: 0, title: 'Starting research agent...', hint: 'Gathering external resources and codebase context' },
+      { time: 30, title: 'Research agent working...', hint: 'Searching docs, GitHub repos, and analyzing codebase' },
+      { time: 60, title: 'Research continuing...', hint: 'Web search and codebase exploration in progress' },
+      { time: 120, title: 'Research agent deep diving...', hint: 'Complex tasks require thorough research' },
+      { time: 180, title: 'Research almost complete...', hint: 'Compiling findings and recommendations' },
+      // Phase 1: Parallel Analysis (after research completes)
+      // Note: These times are fallbacks - real-time SSE updates override them
+      { time: 300, title: 'Spawning analysis subagents...', hint: 'Starting 4 specialist agents in parallel' },
+      { time: 330, title: 'Subagents analyzing...', hint: 'Requirements, Architecture, Testing, Risk analysts working' },
+      { time: 400, title: 'Subagents completing...', hint: 'Collecting analysis results' },
+      // Phase 2+: Synthesis and verification
+      { time: 450, title: 'Synthesizing results...', hint: 'Merging and deduplicating items' },
+      { time: 500, title: 'Running verification...', hint: 'Quality assurance and priority assignment' },
+      { time: 550, title: 'Optimizing execution...', hint: 'Planning parallelization for Claude Code' },
+      { time: 600, title: 'Final review...', hint: 'Holistic validation and gap detection' },
+      { time: 660, title: 'Still working...', hint: 'Complex tasks take longer - hang tight!' },
     ];
 
     const phases = isDetailed ? detailedPhases : standardPhases;
@@ -3034,10 +3064,14 @@ class ClaudemanApp {
         const hintEl = document.getElementById('planLoadingHint');
         if (titleEl && event.data.phase) {
           const phaseLabels = {
-            'parallel-analysis': 'Running parallel analysis...',
+            'research': 'Research agent working...',
+            'parallel-analysis': 'Spawning analysis subagents...',
             'subagent': event.data.detail || 'Subagent working...',
             'synthesis': 'Synthesizing results...',
             'verification': 'Running verification...',
+            'review-injection': 'Adding review tasks...',
+            'execution-optimization': 'Optimizing for Claude Code...',
+            'final-review': 'Running final review...',
           };
           titleEl.textContent = phaseLabels[event.data.phase] || event.data.phase;
         }
@@ -3595,9 +3629,25 @@ class ClaudemanApp {
     }, 50);
   }
 
-  cancelPlanGeneration() {
+  async cancelPlanGeneration() {
     this.stopPlanGeneration();
     this.planGenerationStopped = true; // Ignore future SSE events
+
+    // Call the cancel API to stop server-side processing
+    if (this.activePlanOrchestratorId) {
+      try {
+        console.log('[Cancel] Sending cancel request for', this.activePlanOrchestratorId);
+        await fetch('/api/cancel-plan-generation', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orchestratorId: this.activePlanOrchestratorId }),
+        });
+        this.activePlanOrchestratorId = null;
+      } catch (err) {
+        console.error('[Cancel] Failed to cancel plan generation:', err);
+      }
+    }
+
     this.showToast('Plan generation stopped', 'info');
 
     // Allow user to proceed without a plan by clicking Next
@@ -3783,6 +3833,7 @@ class ClaudemanApp {
     win.style.zIndex = ++this.planSubagentWindowZIndex;
 
     const typeLabels = {
+      research: 'Research Agent',
       requirements: 'Requirements Analyst',
       architecture: 'Architecture Planner',
       testing: 'TDD Specialist',
@@ -3793,6 +3844,7 @@ class ClaudemanApp {
     };
 
     const typeIcons = {
+      research: '🔬',
       requirements: '📋',
       architecture: '🏗️',
       testing: '🧪',

@@ -307,6 +307,8 @@ export class WebServer extends EventEmitter {
   private readonly serverStartTime: number = Date.now();
   // Pending respawn start timers (for cleanup on shutdown)
   private pendingRespawnStarts: Map<string, NodeJS.Timeout> = new Map();
+  // Active plan orchestrators (for cancellation via API)
+  private activePlanOrchestrators: Map<string, PlanOrchestrator> = new Map();
   // Grace period before starting restored respawn controllers (2 minutes)
   private static readonly RESPAWN_RESTORE_GRACE_PERIOD_MS = 2 * 60 * 1000;
 
@@ -2445,21 +2447,13 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
       const orchestrator = new PlanOrchestrator(this.screenManager, process.cwd(), outputDir);
 
-      // Cancel orchestrator if client disconnects (user clicked Stop)
-      // Note: We use the socket's 'close' event, not req.raw.on('close') which fires
-      // when the request body is done being read (immediately after parsing).
-      let clientDisconnected = false;
-      let responseSent = false;
-      const socket = req.raw.socket;
-      const onClose = () => {
-        // Only cancel if response hasn't been sent yet (true disconnection)
-        if (!responseSent) {
-          clientDisconnected = true;
-          console.log('[API] Client disconnected during plan generation, cancelling...');
-          orchestrator.cancel().catch(() => { /* ignore */ });
-        }
-      };
-      socket.on('close', onClose);
+      // Store orchestrator for potential cancellation via API (not on disconnect)
+      // Plan generation continues even if browser disconnects - only explicit cancel stops it
+      const orchestratorId = `plan-${Date.now()}`;
+      this.activePlanOrchestrators.set(orchestratorId, orchestrator);
+
+      // Broadcast the orchestrator ID so frontend can cancel if needed
+      this.broadcast('plan:started', { orchestratorId });
 
       // Track progress for SSE updates
       const progressUpdates: Array<{ phase: string; detail: string; timestamp: number }> = [];
@@ -2492,14 +2486,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
           onSubagent
         );
 
-        // Mark response as being sent and clean up listener
-        responseSent = true;
-        socket.off('close', onClose);
-
-        // If client disconnected, don't bother returning response
-        if (clientDisconnected) {
-          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Cancelled by client');
-        }
+        // Clean up orchestrator from active map
+        this.activePlanOrchestrators.delete(orchestratorId);
+        this.broadcast('plan:completed', { orchestratorId, success: result.success });
 
         if (!result.success) {
           return createErrorResponse(ApiErrorCode.OPERATION_FAILED, result.error || 'Plan generation failed');
@@ -2512,13 +2501,45 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
             costUsd: result.costUsd,
             metadata: result.metadata,
             progressLog: progressUpdates,
+            orchestratorId,
           },
         };
       } catch (err) {
-        responseSent = true;
-        socket.off('close', onClose);
+        // Clean up on error too
+        this.activePlanOrchestrators.delete(orchestratorId);
+        this.broadcast('plan:completed', { orchestratorId, success: false, error: getErrorMessage(err) });
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Detailed plan generation failed: ' + getErrorMessage(err));
       }
+    });
+
+    // Cancel active plan generation
+    this.app.post('/api/cancel-plan-generation', async (req): Promise<ApiResponse> => {
+      const { orchestratorId } = req.body as { orchestratorId?: string };
+
+      // If specific orchestrator ID provided, cancel just that one
+      if (orchestratorId) {
+        const orchestrator = this.activePlanOrchestrators.get(orchestratorId);
+        if (!orchestrator) {
+          return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Plan generation not found or already completed');
+        }
+        console.log(`[API] Cancelling plan generation ${orchestratorId}`);
+        await orchestrator.cancel();
+        this.activePlanOrchestrators.delete(orchestratorId);
+        this.broadcast('plan:cancelled', { orchestratorId });
+        return { success: true, data: { cancelled: orchestratorId } };
+      }
+
+      // Otherwise cancel all active plan generations
+      const cancelled: string[] = [];
+      for (const [id, orchestrator] of this.activePlanOrchestrators) {
+        console.log(`[API] Cancelling plan generation ${id}`);
+        await orchestrator.cancel();
+        cancelled.push(id);
+        this.broadcast('plan:cancelled', { orchestratorId: id });
+      }
+      this.activePlanOrchestrators.clear();
+
+      return { success: true, data: { cancelled } };
     });
 
     // ============ Plan Management Endpoints ============

@@ -246,12 +246,76 @@ export interface FinalReviewResult {
 export type SubagentCallback = (event: PlanSubagentEvent) => void;
 
 // ============================================================================
+// JSON Repair Helper
+// ============================================================================
+
+/**
+ * Attempt to parse JSON with automatic repair for common LLM output issues.
+ * Handles: trailing commas, unescaped newlines in strings, truncated output.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function tryParseJSON(jsonString: string): { success: boolean; data?: any; error?: string } {
+  // First, try direct parse
+  try {
+    return { success: true, data: JSON.parse(jsonString) };
+  } catch (firstError) {
+    // Try repairs
+    let repaired = jsonString;
+
+    // 1. Remove trailing commas before ] or }
+    repaired = repaired.replace(/,(\s*[\]}])/g, '$1');
+
+    // 2. Fix unescaped newlines in strings (common LLM issue)
+    // Match strings and escape newlines within them
+    repaired = repaired.replace(/"([^"\\]|\\.)*"/g, (match) => {
+      return match.replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+    });
+
+    // 3. Try to close unclosed arrays/objects (truncated output)
+    const openBrackets = (repaired.match(/\[/g) || []).length;
+    const closeBrackets = (repaired.match(/\]/g) || []).length;
+    const openBraces = (repaired.match(/\{/g) || []).length;
+    const closeBraces = (repaired.match(/\}/g) || []).length;
+
+    // Add missing closing brackets
+    for (let i = 0; i < openBraces - closeBraces; i++) {
+      // Find last incomplete object and close it
+      repaired = repaired.replace(/,\s*$/, '') + '}';
+    }
+    for (let i = 0; i < openBrackets - closeBrackets; i++) {
+      repaired = repaired.replace(/,\s*$/, '') + ']';
+    }
+
+    // Try parsing repaired JSON
+    try {
+      return { success: true, data: JSON.parse(repaired) };
+    } catch (secondError) {
+      // 4. Last resort: try to extract valid items from array
+      // Find all complete objects in the array
+      const objectMatches = jsonString.match(/\{[^{}]*\}/g);
+      if (objectMatches && objectMatches.length > 0) {
+        try {
+          const items = objectMatches.map(obj => JSON.parse(obj));
+          console.warn(`[JSON Repair] Extracted ${items.length} items from malformed array`);
+          return { success: true, data: items };
+        } catch {
+          // Give up
+        }
+      }
+
+      const errMsg = firstError instanceof Error ? firstError.message : String(firstError);
+      return { success: false, error: errMsg };
+    }
+  }
+}
+
+// ============================================================================
 // Constants
 // ============================================================================
 
-const RESEARCH_TIMEOUT_MS = 360000; // 6 minutes for research (may need web search)
-const SUBAGENT_TIMEOUT_MS = 300000; // 5 minutes per subagent (Opus needs time for complex analysis)
-const VERIFICATION_TIMEOUT_MS = 480000; // 8 minutes for verification (Opus + large plans)
+const RESEARCH_TIMEOUT_MS = 600000; // 10 minutes for research (may need extensive web search)
+const SUBAGENT_TIMEOUT_MS = 480000; // 8 minutes per subagent (Opus needs time for complex analysis)
+const VERIFICATION_TIMEOUT_MS = 600000; // 10 minutes for verification (Opus + large plans)
 const MODEL_RESEARCH = 'opus'; // Best model for research (needs reasoning for web search)
 const MODEL_ANALYSIS = 'opus'; // Best model for thorough analysis
 const MODEL_VERIFICATION = 'opus'; // Best model for verification
@@ -1245,10 +1309,24 @@ Use \`/init\` to load this context, then read specific files as needed.
 
       onProgress?.('research', 'Gathering external resources and codebase context...');
 
-      const { result } = await Promise.race([
-        session.runPrompt(prompt, { model: MODEL_RESEARCH }),
-        this.timeout(RESEARCH_TIMEOUT_MS),
-      ]);
+      // Periodic progress updates showing elapsed time
+      const progressInterval = setInterval(() => {
+        const elapsedSec = Math.floor((Date.now() - startTime) / 1000);
+        const timeoutSec = Math.floor(RESEARCH_TIMEOUT_MS / 1000);
+        onProgress?.('research', `Research agent working... (${elapsedSec}s / ${timeoutSec}s timeout)`);
+        console.log(`[PlanOrchestrator] Research agent: ${elapsedSec}s elapsed (timeout: ${timeoutSec}s)`);
+      }, 30000); // Update every 30 seconds
+
+      let result: string;
+      try {
+        const response = await Promise.race([
+          session.runPrompt(prompt, { model: MODEL_RESEARCH }),
+          this.timeoutWithContext(RESEARCH_TIMEOUT_MS, 'Research agent', startTime),
+        ]);
+        result = response.result;
+      } finally {
+        clearInterval(progressInterval);
+      }
 
       // Check if cancelled during execution
       if (this.cancelled) {
@@ -1264,7 +1342,7 @@ Use \`/init\` to load this context, then read specific files as needed.
         return { ...defaultResult, error: 'Cancelled', durationMs: Date.now() - startTime };
       }
 
-      // Parse JSON from result
+      // Parse JSON from result with repair for common LLM issues
       const jsonMatch = result.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         console.warn('[PlanOrchestrator] Research agent returned no JSON');
@@ -1280,7 +1358,22 @@ Use \`/init\` to load this context, then read specific files as needed.
         return { ...defaultResult, durationMs: Date.now() - startTime };
       }
 
-      const parsed = JSON.parse(jsonMatch[0]);
+      const parseResult = tryParseJSON(jsonMatch[0]);
+      if (!parseResult.success) {
+        console.warn('[PlanOrchestrator] Research agent JSON parse failed:', parseResult.error);
+        onSubagent?.({
+          type: 'completed',
+          agentId,
+          agentType: 'research',
+          model: MODEL_RESEARCH,
+          status: 'completed',
+          detail: 'Research completed with parse issues',
+          durationMs: Date.now() - startTime,
+        });
+        return { ...defaultResult, error: parseResult.error, durationMs: Date.now() - startTime };
+      }
+
+      const parsed = parseResult.data;
 
       // Parse external resources
       const externalResources = (Array.isArray(parsed.externalResources) ? parsed.externalResources : []).map((r: Record<string, unknown>) => ({
@@ -1476,30 +1569,64 @@ Use \`/init\` to load this context, then read specific files as needed.
         onProgress?.('review-injection', `Added ${reviewsAdded} auto-review task(s)`);
       }
 
-      // Phase 5: Execution Optimization for Claude Code
-      onProgress?.('execution-optimization', 'Running execution optimizer for Claude Code...');
-      const executionResult = await this.runExecutionOptimizer(
-        taskDescription,
-        planWithReviews,
-        onProgress,
-        onSubagent
-      );
-
-      totalCost += 0.008; // Execution optimizer cost estimate
+      // Phase 5: Execution Optimization for Claude Code (optional - failures don't block plan)
+      let executionResult: Awaited<ReturnType<typeof this.runExecutionOptimizer>>;
+      try {
+        onProgress?.('execution-optimization', 'Running execution optimizer for Claude Code...');
+        executionResult = await this.runExecutionOptimizer(
+          taskDescription,
+          planWithReviews,
+          onProgress,
+          onSubagent
+        );
+        totalCost += 0.008; // Execution optimizer cost estimate
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.warn('[PlanOrchestrator] Execution optimizer failed (continuing without):', errMsg);
+        onProgress?.('execution-optimization', `Skipped (${errMsg.slice(0, 50)})`);
+        executionResult = {
+          success: false,
+          optimizedPlan: planWithReviews,
+          parallelGroups: [],
+          executionStrategy: {
+            totalParallelGroups: 0,
+            sequentialBlockers: [],
+            freshContextPoints: [],
+            estimatedTotalTokens: planWithReviews.length * 20000,
+            estimatedAgentSpawns: Math.ceil(planWithReviews.length / 3),
+            criticalPath: [],
+            optimizationNotes: [`Skipped due to error: ${errMsg}`],
+          },
+        };
+      }
 
       // Use optimized plan if successful, otherwise fall back to review plan
       const optimizedPlan = executionResult.success ? executionResult.optimizedPlan : planWithReviews;
 
-      // Phase 6: Final Review - Holistic validation
-      onProgress?.('final-review', 'Running final review for holistic validation...');
-      const finalReviewResult = await this.runFinalReview(
-        taskDescription,
-        optimizedPlan,
-        onProgress,
-        onSubagent
-      );
-
-      totalCost += 0.01; // Final review cost estimate
+      // Phase 6: Final Review - Holistic validation (optional - failures don't block plan)
+      let finalReviewResult: FinalReviewResult;
+      try {
+        onProgress?.('final-review', 'Running final review for holistic validation...');
+        finalReviewResult = await this.runFinalReview(
+          taskDescription,
+          optimizedPlan,
+          onProgress,
+          onSubagent
+        );
+        totalCost += 0.01; // Final review cost estimate
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.warn('[PlanOrchestrator] Final review failed (continuing without):', errMsg);
+        onProgress?.('final-review', `Skipped (${errMsg.slice(0, 50)})`);
+        finalReviewResult = {
+          overallAssessment: 'ready',
+          scores: { logic: 0.8, completeness: 0.8, coherence: 0.8, feasibility: 0.8, overall: 0.8 },
+          summary: `Review skipped: ${errMsg}`,
+          issues: [],
+          missingTasks: [],
+          recommendations: [],
+        };
+      }
 
       // Apply any missing tasks from final review
       let finalPlan = optimizedPlan;
@@ -1620,10 +1747,31 @@ Use \`/init\` to load this context, then read specific files as needed.
     try {
       onProgress?.('subagent', `Running ${agentType} analysis...`);
 
-      const { result } = await Promise.race([
-        session.runPrompt(prompt, { model: MODEL_ANALYSIS }),
-        this.timeout(SUBAGENT_TIMEOUT_MS),
-      ]);
+      // Periodic progress updates showing elapsed time
+      const progressInterval = setInterval(() => {
+        const elapsedSec = Math.floor((Date.now() - startTime) / 1000);
+        const timeoutSec = Math.floor(SUBAGENT_TIMEOUT_MS / 1000);
+        console.log(`[PlanOrchestrator] ${agentType} agent: ${elapsedSec}s elapsed (timeout: ${timeoutSec}s)`);
+        onSubagent?.({
+          type: 'progress',
+          agentId,
+          agentType,
+          model: MODEL_ANALYSIS,
+          status: 'running',
+          detail: `${agentType} analysis... (${elapsedSec}s / ${timeoutSec}s)`,
+        });
+      }, 30000); // Update every 30 seconds
+
+      let result: string;
+      try {
+        const response = await Promise.race([
+          session.runPrompt(prompt, { model: MODEL_ANALYSIS }),
+          this.timeoutWithContext(SUBAGENT_TIMEOUT_MS, `${agentType} agent`, startTime),
+        ]);
+        result = response.result;
+      } finally {
+        clearInterval(progressInterval);
+      }
 
       // Check if cancelled during execution
       if (this.cancelled) {
@@ -1645,7 +1793,7 @@ Use \`/init\` to load this context, then read specific files as needed.
         };
       }
 
-      // Parse JSON from result
+      // Parse JSON from result with repair for common LLM issues
       const jsonMatch = result.match(/\[[\s\S]*\]/);
       if (!jsonMatch) {
         onSubagent?.({
@@ -1666,7 +1814,28 @@ Use \`/init\` to load this context, then read specific files as needed.
         };
       }
 
-      const parsed = JSON.parse(jsonMatch[0]);
+      const parseResult = tryParseJSON(jsonMatch[0]);
+      if (!parseResult.success) {
+        console.error(`[PlanOrchestrator] ${agentType} JSON parse failed:`, parseResult.error);
+        onSubagent?.({
+          type: 'failed',
+          agentId,
+          agentType,
+          model: MODEL_ANALYSIS,
+          status: 'failed',
+          error: `JSON parse error: ${parseResult.error}`,
+          durationMs: Date.now() - startTime,
+        });
+        return {
+          agentType,
+          items: [],
+          success: false,
+          error: `JSON parse error: ${parseResult.error}`,
+          durationMs: Date.now() - startTime,
+        };
+      }
+
+      const parsed = parseResult.data;
       if (!Array.isArray(parsed)) {
         onSubagent?.({
           type: 'failed',
@@ -1930,24 +2099,51 @@ Use \`/init\` to load this context, then read specific files as needed.
 
       onProgress?.('verification', 'Validating plan quality...');
 
-      const { result } = await Promise.race([
-        session.runPrompt(prompt, { model: MODEL_VERIFICATION }),
-        this.timeout(VERIFICATION_TIMEOUT_MS),
-      ]);
+      // Periodic progress updates showing elapsed time
+      const progressInterval = setInterval(() => {
+        const elapsedSec = Math.floor((Date.now() - startTime) / 1000);
+        const timeoutSec = Math.floor(VERIFICATION_TIMEOUT_MS / 1000);
+        console.log(`[PlanOrchestrator] verification agent: ${elapsedSec}s elapsed (timeout: ${timeoutSec}s)`);
+        onSubagent?.({
+          type: 'progress',
+          agentId,
+          agentType: 'verification',
+          model: MODEL_VERIFICATION,
+          status: 'running',
+          detail: `Verifying plan... (${elapsedSec}s / ${timeoutSec}s)`,
+        });
+      }, 30000); // Update every 30 seconds
+
+      let result: string;
+      try {
+        const response = await Promise.race([
+          session.runPrompt(prompt, { model: MODEL_VERIFICATION }),
+          this.timeoutWithContext(VERIFICATION_TIMEOUT_MS, 'verification agent', startTime),
+        ]);
+        result = response.result;
+      } finally {
+        clearInterval(progressInterval);
+      }
 
       // Check if cancelled during execution
       if (this.cancelled) {
         return this.fallbackVerification(synthesizedItems);
       }
 
-      // Parse JSON from result
+      // Parse JSON from result with repair for common LLM issues
       const jsonMatch = result.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         // Fallback: return items with default priorities
         return this.fallbackVerification(synthesizedItems);
       }
 
-      const parsed = JSON.parse(jsonMatch[0]);
+      const parseResult = tryParseJSON(jsonMatch[0]);
+      if (!parseResult.success) {
+        console.warn('[PlanOrchestrator] Verification JSON parse failed:', parseResult.error);
+        return this.fallbackVerification(synthesizedItems);
+      }
+
+      const parsed = parseResult.data;
 
       const validatedPlan: PlanItem[] = (parsed.validatedPlan || []).map((item: unknown, idx: number) => {
         if (typeof item !== 'object' || item === null) {
@@ -2169,10 +2365,31 @@ Use \`/init\` to load this context, then read specific files as needed.
 
       onProgress?.('execution-optimization', 'Analyzing parallelization opportunities...');
 
-      const { result } = await Promise.race([
-        session.runPrompt(prompt, { model: MODEL_VERIFICATION }),
-        this.timeout(VERIFICATION_TIMEOUT_MS),
-      ]);
+      // Periodic progress updates showing elapsed time
+      const progressInterval = setInterval(() => {
+        const elapsedSec = Math.floor((Date.now() - startTime) / 1000);
+        const timeoutSec = Math.floor(VERIFICATION_TIMEOUT_MS / 1000);
+        console.log(`[PlanOrchestrator] execution optimizer: ${elapsedSec}s elapsed (timeout: ${timeoutSec}s)`);
+        onSubagent?.({
+          type: 'progress',
+          agentId,
+          agentType: 'execution',
+          model: MODEL_VERIFICATION,
+          status: 'running',
+          detail: `Optimizing execution... (${elapsedSec}s / ${timeoutSec}s)`,
+        });
+      }, 30000); // Update every 30 seconds
+
+      let result: string;
+      try {
+        const response = await Promise.race([
+          session.runPrompt(prompt, { model: MODEL_VERIFICATION }),
+          this.timeoutWithContext(VERIFICATION_TIMEOUT_MS, 'execution optimizer', startTime),
+        ]);
+        result = response.result;
+      } finally {
+        clearInterval(progressInterval);
+      }
 
       // Check if cancelled during execution
       if (this.cancelled) {
@@ -2196,7 +2413,13 @@ Use \`/init\` to load this context, then read specific files as needed.
         return defaultResult;
       }
 
-      const parsed = JSON.parse(jsonMatch[0]);
+      const parseResult = tryParseJSON(jsonMatch[0]);
+      if (!parseResult.success) {
+        console.warn('[PlanOrchestrator] Execution optimizer JSON parse failed:', parseResult.error);
+        return defaultResult;
+      }
+
+      const parsed = parseResult.data;
 
       // Parse optimized plan items
       const optimizedPlan: PlanItem[] = (parsed.optimizedPlan || []).map((item: Record<string, unknown>, idx: number) => {
@@ -2370,17 +2593,38 @@ Use \`/init\` to load this context, then read specific files as needed.
 
       onProgress?.('final-review', 'Analyzing overall plan coherence...');
 
-      const { result } = await Promise.race([
-        session.runPrompt(prompt, { model: MODEL_VERIFICATION }),
-        this.timeout(VERIFICATION_TIMEOUT_MS),
-      ]);
+      // Periodic progress updates showing elapsed time
+      const progressInterval = setInterval(() => {
+        const elapsedSec = Math.floor((Date.now() - startTime) / 1000);
+        const timeoutSec = Math.floor(VERIFICATION_TIMEOUT_MS / 1000);
+        console.log(`[PlanOrchestrator] final review: ${elapsedSec}s elapsed (timeout: ${timeoutSec}s)`);
+        onSubagent?.({
+          type: 'progress',
+          agentId,
+          agentType: 'final-review',
+          model: MODEL_VERIFICATION,
+          status: 'running',
+          detail: `Final review... (${elapsedSec}s / ${timeoutSec}s)`,
+        });
+      }, 30000); // Update every 30 seconds
+
+      let result: string;
+      try {
+        const response = await Promise.race([
+          session.runPrompt(prompt, { model: MODEL_VERIFICATION }),
+          this.timeoutWithContext(VERIFICATION_TIMEOUT_MS, 'final review', startTime),
+        ]);
+        result = response.result;
+      } finally {
+        clearInterval(progressInterval);
+      }
 
       // Check if cancelled during execution
       if (this.cancelled) {
         return defaultResult;
       }
 
-      // Parse JSON from result
+      // Parse JSON from result with repair for common LLM issues
       const jsonMatch = result.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         console.warn('[PlanOrchestrator] Final review returned no JSON, using defaults');
@@ -2397,7 +2641,13 @@ Use \`/init\` to load this context, then read specific files as needed.
         return defaultResult;
       }
 
-      const parsed = JSON.parse(jsonMatch[0]);
+      const parseResult = tryParseJSON(jsonMatch[0]);
+      if (!parseResult.success) {
+        console.warn('[PlanOrchestrator] Final review JSON parse failed:', parseResult.error);
+        return defaultResult;
+      }
+
+      const parsed = parseResult.data;
 
       // Parse scores
       const scores = {
@@ -2526,11 +2776,15 @@ Use \`/init\` to load this context, then read specific files as needed.
   }
 
   /**
-   * Create a timeout promise.
+   * Create a timeout promise with context about what timed out.
    */
-  private timeout(ms: number): Promise<never> {
+  private timeoutWithContext(ms: number, context: string, startTime: number): Promise<never> {
     return new Promise((_, reject) => {
-      setTimeout(() => reject(new Error(`Timeout after ${ms}ms`)), ms);
+      setTimeout(() => {
+        const elapsedSec = Math.floor((Date.now() - startTime) / 1000);
+        const timeoutSec = Math.floor(ms / 1000);
+        reject(new Error(`${context} timed out after ${elapsedSec}s (limit: ${timeoutSec}s)`));
+      }, ms);
     });
   }
 
