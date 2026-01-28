@@ -152,10 +152,13 @@ export class ImageWatcher extends EventEmitter {
           stabilityThreshold: STABILITY_THRESHOLD_MS,
           pollInterval: POLL_INTERVAL_MS,
         },
-        // Only watch files at the top level (not subdirectories)
-        depth: 0,
-        // Ignore non-image files early for performance
+        // Watch all subdirectories (images may be saved in src/, assets/, etc.)
+        // Ignore common heavy directories for performance
         ignored: (path: string) => {
+          // Skip node_modules, .git, and other heavy directories
+          if (path.includes('/node_modules/') || path.includes('/.git/') || path.includes('/dist/') || path.includes('/.next/')) {
+            return true;
+          }
           const ext = extname(path).toLowerCase();
           // Don't ignore directories (needed for watching to work)
           // Ignore files that aren't images
