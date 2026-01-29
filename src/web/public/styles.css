@@ -5957,9 +5957,9 @@ kbd {
 /* Plan Editor */
 .plan-editor-header {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 0.5rem;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
   font-weight: 500;
   font-size: 0.9rem;
 }
@@ -5974,13 +5974,15 @@ kbd {
 .plan-editor-actions {
   display: flex;
   gap: 0.35rem;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
 .plan-items-list {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  max-height: 200px;
+  max-height: 280px;
   overflow-y: auto;
   margin-bottom: 0.5rem;
 }
