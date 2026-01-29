@@ -2533,24 +2533,39 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       // Determine output directory for saving wizard results
       // Check linked cases first, then claudeman-cases
       let outputDir: string | undefined;
+      console.log(`[API] generate-plan-detailed called with caseName: "${caseName}"`);
       if (caseName) {
         let casePath: string | undefined;
 
         // First check linked cases
         const linkedCasesFile = join(homedir(), '.claudeman', 'linked-cases.json');
+        console.log(`[API] Checking linked cases file: ${linkedCasesFile}`);
         try {
           if (existsSync(linkedCasesFile)) {
             const linkedCases: Record<string, string> = JSON.parse(readFileSync(linkedCasesFile, 'utf-8'));
-            if (linkedCases[caseName] && existsSync(linkedCases[caseName])) {
-              casePath = linkedCases[caseName];
+            console.log(`[API] Linked cases:`, Object.keys(linkedCases));
+            console.log(`[API] Looking for caseName "${caseName}" in linked cases`);
+            if (linkedCases[caseName]) {
+              console.log(`[API] Found linked case path: ${linkedCases[caseName]}`);
+              if (existsSync(linkedCases[caseName])) {
+                casePath = linkedCases[caseName];
+                console.log(`[API] Path exists, using: ${casePath}`);
+              } else {
+                console.log(`[API] Path does NOT exist!`);
+              }
+            } else {
+              console.log(`[API] caseName "${caseName}" not found in linked cases`);
             }
+          } else {
+            console.log(`[API] Linked cases file does not exist`);
           }
-        } catch {
-          // Ignore linked cases errors
+        } catch (err) {
+          console.log(`[API] Error reading linked cases:`, err);
         }
 
         // Fall back to claudeman-cases directory
         if (!casePath) {
+          console.log(`[API] Falling back to claudeman-cases directory`);
           const casesDir = join(homedir(), 'claudeman-cases');
           const directPath = join(casesDir, caseName);
           // Security: Path traversal protection
@@ -2563,9 +2578,15 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
         if (casePath) {
           outputDir = join(casePath, 'ralph-wizard');
+          console.log(`[API] outputDir set to: ${outputDir}`);
+        } else {
+          console.log(`[API] WARNING: casePath is undefined, outputDir will be undefined!`);
         }
+      } else {
+        console.log(`[API] WARNING: caseName is falsy, outputDir will be undefined!`);
       }
 
+      console.log(`[API] Final outputDir: ${outputDir || 'UNDEFINED'}`);
       const orchestrator = new PlanOrchestrator(this.screenManager, process.cwd(), outputDir);
 
       // Store orchestrator for potential cancellation via API (not on disconnect)
