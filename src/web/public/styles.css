@@ -4679,23 +4679,21 @@ kbd {
 
 .connection-line {
   stroke: #00ff41;
-  stroke-width: 3;
+  stroke-width: 2.5;
   stroke-dasharray: 5 3;
   fill: none;
-  opacity: 0.9;
-  /* Multiple shadows for contrast against blurred backgrounds */
-  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.8))
-          drop-shadow(0 0 4px #00ff41)
-          drop-shadow(0 0 8px #00ff41);
+  opacity: 0.75;
+  /* Dark outline for contrast, subtle glow */
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.7))
+          drop-shadow(0 0 3px rgba(0, 255, 65, 0.5));
   transition: opacity 0.2s, stroke-width 0.2s, filter 0.2s;
 }
 
 .connection-line:hover {
-  opacity: 1;
-  stroke-width: 4;
-  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.9))
-          drop-shadow(0 0 6px #00ff41)
-          drop-shadow(0 0 12px #00ff41);
+  opacity: 0.9;
+  stroke-width: 3;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.8))
+          drop-shadow(0 0 5px rgba(0, 255, 65, 0.7));
 }
 
 .connection-line.spawning-line {
@@ -4723,25 +4721,23 @@ kbd {
 /* Plan subagent to regular subagent connection lines (Opus → Haiku) */
 .connection-line.plan-to-subagent-line {
   stroke: #00ff41;
-  stroke-width: 3;
-  /* Dark outline for contrast against blurred backgrounds */
-  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.8))
-          drop-shadow(0 0 5px #00ff41)
-          drop-shadow(0 0 10px #00ff41);
+  stroke-width: 2.5;
+  /* Dark outline for contrast, subtle glow */
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.7))
+          drop-shadow(0 0 3px rgba(0, 255, 65, 0.5));
   stroke-dasharray: 5 3;
   animation: plan-subagent-pulse 1.2s ease-in-out infinite;
 }
 
 .connection-line.plan-to-subagent-line:hover {
-  stroke-width: 4;
-  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.9))
-          drop-shadow(0 0 8px #00ff41)
-          drop-shadow(0 0 14px #00ff41);
+  stroke-width: 3;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.8))
+          drop-shadow(0 0 5px rgba(0, 255, 65, 0.7));
 }
 
 @keyframes plan-subagent-pulse {
-  0%, 100% { opacity: 0.8; }
-  50% { opacity: 1; }
+  0%, 100% { opacity: 0.65; }
+  50% { opacity: 0.85; }
 }
 
 /* ========== Project Insights Panel (Bash File Viewers) ========== */
