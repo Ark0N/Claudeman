@@ -458,11 +458,36 @@
               <input type="text" id="modalRespawnPrompt" value="update all the docs and CLAUDE.md" placeholder="Prompt to send when idle" onchange="app.autoSaveRespawnConfig()">
             </div>
 
-            <!-- Hidden inputs to preserve defaults -->
-            <input type="checkbox" id="modalRespawnSendClear" checked style="display:none">
-            <input type="checkbox" id="modalRespawnSendInit" checked style="display:none">
-            <input type="text" id="modalRespawnKickstart" value="" style="display:none">
-            <input type="checkbox" id="modalRespawnAutoAccept" checked style="display:none">
+            <div class="form-row">
+              <label>After Update Prompt</label>
+              <div class="checkbox-group-inline">
+                <label class="checkbox-inline">
+                  <input type="checkbox" id="modalRespawnSendClear" checked onchange="app.autoSaveRespawnConfig()">
+                  <span>Send /clear</span>
+                </label>
+                <label class="checkbox-inline">
+                  <input type="checkbox" id="modalRespawnSendInit" checked onchange="app.autoSaveRespawnConfig()">
+                  <span>Send /init</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <label>Kickstart Prompt</label>
+              <input type="text" id="modalRespawnKickstart" value="" placeholder="Optional: prompt if /init doesn't trigger work" onchange="app.autoSaveRespawnConfig()">
+              <span class="form-hint">Sent only when /init completes but Claude stays idle</span>
+            </div>
+
+            <div class="form-row">
+              <label>Auto-Accept Plan Mode</label>
+              <div class="checkbox-group-inline">
+                <label class="checkbox-inline">
+                  <input type="checkbox" id="modalRespawnAutoAccept" checked onchange="app.autoSaveRespawnConfig()">
+                  <span>Accept plan mode approvals</span>
+                </label>
+              </div>
+              <span class="form-hint">Presses Enter to accept plan approvals and default question options when Claude is waiting</span>
+            </div>
 
             <div class="respawn-actions">
               <button class="btn-toolbar btn-success" onclick="app.enableRespawnFromModal()" id="modalEnableRespawnBtn">Enable Respawn</button>
@@ -559,26 +584,6 @@
 
           <!-- Summary Tab Content -->
           <div class="modal-tab-content hidden" id="summary-tab">
-            <!-- Stats Cards -->
-            <div class="run-summary-stats" id="runSummaryStats">
-              <div class="stat-card">
-                <div class="stat-value" id="rsStat-cycles">0</div>
-                <div class="stat-label">Respawn Cycles</div>
-              </div>
-              <div class="stat-card">
-                <div class="stat-value" id="rsStat-tokens">0</div>
-                <div class="stat-label">Tokens Used</div>
-              </div>
-              <div class="stat-card">
-                <div class="stat-value" id="rsStat-active">0m</div>
-                <div class="stat-label">Active Time</div>
-              </div>
-              <div class="stat-card">
-                <div class="stat-value" id="rsStat-issues">0</div>
-                <div class="stat-label">Issues</div>
-              </div>
-            </div>
-
             <!-- Filter Buttons -->
             <div class="run-summary-filters">
               <button class="filter-btn active" data-filter="all" onclick="app.filterRunSummary('all')">All</button>

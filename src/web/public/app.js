@@ -6870,12 +6870,6 @@ class ClaudemanApp {
 
     const { stats, events, sessionName, startedAt, lastUpdatedAt } = this.runSummaryData;
 
-    // Update stats
-    document.getElementById('rsStat-cycles').textContent = stats.totalRespawnCycles;
-    document.getElementById('rsStat-tokens').textContent = this.formatTokens(stats.peakTokens || stats.totalTokensUsed);
-    document.getElementById('rsStat-active').textContent = this.formatDuration(stats.totalTimeActiveMs);
-    document.getElementById('rsStat-issues').textContent = stats.errorCount + stats.warningCount;
-
     // Update session info
     const duration = lastUpdatedAt - startedAt;
     document.getElementById('runSummarySessionInfo').textContent =

@@ -2492,10 +2492,6 @@ body {
   overflow: hidden;
 }
 
-#summary-tab .run-summary-stats {
-  flex-shrink: 0;
-}
-
 #summary-tab .run-summary-filters {
   flex-shrink: 0;
 }
@@ -2508,43 +2504,6 @@ body {
 
 #summary-tab .run-summary-footer {
   flex-shrink: 0;
-}
-
-.run-summary-stats {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
-}
-
-.run-summary-stats .stat-card {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.02) 0%, rgba(255, 255, 255, 0.04) 100%);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
-  padding: 0.5rem 0.625rem;
-  text-align: center;
-  transition: border-color 0.15s, background 0.15s;
-}
-
-.run-summary-stats .stat-card:hover {
-  border-color: rgba(255, 255, 255, 0.12);
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.05) 100%);
-}
-
-.run-summary-stats .stat-value {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--text);
-  font-family: 'SF Mono', Monaco, monospace;
-  letter-spacing: -0.02em;
-}
-
-.run-summary-stats .stat-label {
-  font-size: 0.65rem;
-  color: var(--text-muted);
-  margin-top: 0.125rem;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
 }
 
 .run-summary-filters {
