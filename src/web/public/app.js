@@ -466,7 +466,7 @@ class ClaudemanApp {
     this._subagentHideTimeout = null; // Timeout for hover-based dropdown hide
     this.ralphStatePanelCollapsed = true; // Default to collapsed
 
-    // Plan subagent windows (visible Opus agents during plan generation)
+    // Plan subagent windows (visible agents during plan generation)
     this.planSubagents = new Map(); // Map<agentId, { type, model, status, startTime, element, relativePos }>
     this.planSubagentWindowZIndex = 1100;
     this.planGenerationStopped = false; // Flag to ignore SSE events after Stop
@@ -641,7 +641,7 @@ class ClaudemanApp {
       fontFamily: '"Fira Code", "Cascadia Code", "JetBrains Mono", "SF Mono", Monaco, monospace',
       fontSize: 14,
       lineHeight: 1.2,
-      cursorBlink: true,
+      cursorBlink: false,
       cursorStyle: 'block',
       scrollback: scrollback,
       allowTransparency: true,
@@ -1146,6 +1146,10 @@ class ClaudemanApp {
       // This connects subagents that were waiting for the session to identify itself
       if (claudeSessionIdJustSet) {
         this.recheckOrphanSubagents();
+        // Update connection lines after DOM settles (ensure tabs are rendered)
+        requestAnimationFrame(() => {
+          this.updateConnectionLines();
+        });
       }
     });
 
@@ -1690,55 +1694,6 @@ class ClaudemanApp {
       this.handleBashToolsUpdate(data.sessionId, data.tools);
     });
 
-    // Spawn agent notification events
-    addListener('spawn:failed', (e) => {
-      const data = JSON.parse(e.data);
-      this.notificationManager?.notify({
-        urgency: 'critical',
-        category: 'spawn-failed',
-        sessionId: data.sessionId,
-        sessionName: data.agentId || 'agent',
-        title: 'Agent Failed',
-        message: `Agent "${data.agentId}" failed: ${data.reason || 'unknown'}`,
-      });
-    });
-
-    addListener('spawn:timeout', (e) => {
-      const data = JSON.parse(e.data);
-      this.notificationManager?.notify({
-        urgency: 'critical',
-        category: 'spawn-timeout',
-        sessionId: data.sessionId,
-        sessionName: data.agentId || 'agent',
-        title: 'Agent Timeout',
-        message: `Agent "${data.agentId}" exceeded time limit`,
-      });
-    });
-
-    addListener('spawn:budgetWarning', (e) => {
-      const data = JSON.parse(e.data);
-      this.notificationManager?.notify({
-        urgency: 'warning',
-        category: 'spawn-budget',
-        sessionId: data.sessionId,
-        sessionName: data.agentId || 'agent',
-        title: 'Budget Warning',
-        message: `Agent "${data.agentId}" at ${data.percent || 80}% budget`,
-      });
-    });
-
-    addListener('spawn:completed', (e) => {
-      const data = JSON.parse(e.data);
-      this.notificationManager?.notify({
-        urgency: 'info',
-        category: 'spawn-completed',
-        sessionId: data.sessionId,
-        sessionName: data.agentId || 'agent',
-        title: 'Agent Complete',
-        message: `Agent "${data.agentId}" finished successfully`,
-      });
-    });
-
     // Hook events (from Claude Code hooks system)
     // Use pendingHooks state machine to track hook events and derive tab alerts.
     // This ensures alerts persist even when session:working events fire.
@@ -1832,6 +1787,11 @@ class ClaudemanApp {
       if (data.status === 'active') {
         this.openSubagentWindow(data.agentId);
       }
+
+      // Ensure connection lines are updated after window is created and DOM settles
+      requestAnimationFrame(() => {
+        this.updateConnectionLines();
+      });
     });
 
     addListener('subagent:updated', (e) => {
@@ -7658,6 +7618,11 @@ class ClaudemanApp {
 
     this.renderSessionTabs(); // Update tab badges
     this.saveSubagentWindowStates(); // Persist corrected mappings
+
+    // Update connection lines after all windows are restored (use rAF to ensure DOM is ready)
+    requestAnimationFrame(() => {
+      this.updateConnectionLines();
+    });
   }
 
   // ========== Help Modal ==========
@@ -9425,10 +9390,19 @@ class ClaudemanApp {
    * Called when session:updated fires, in case claudeSessionId was just set.
    */
   recheckOrphanSubagents() {
+    let anyFound = false;
     for (const [agentId, agent] of this.subagents) {
       if (!agent.parentSessionId && agent.sessionId) {
+        const hadParent = agent.parentSessionId;
         this.findParentSessionForSubagent(agentId);
+        if (!hadParent && this.subagents.get(agentId)?.parentSessionId) {
+          anyFound = true;
+        }
       }
+    }
+    // Ensure connection lines are updated after all orphans are processed
+    if (anyFound) {
+      this.updateConnectionLines();
     }
   }
 

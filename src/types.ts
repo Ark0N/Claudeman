@@ -1255,24 +1255,6 @@ export interface ImageDetectedEvent {
   size: number;
 }
 
-// ========== Spawn1337 Protocol Re-exports ==========
-
-export type {
-  SpawnPriority,
-  SpawnResultDelivery,
-  SpawnStatus,
-  SpawnTaskSpec,
-  SpawnTask,
-  AgentProgress,
-  SpawnResult,
-  SpawnMessage,
-  AgentStatusReport,
-  SpawnTrackerState,
-  SpawnOrchestratorConfig,
-  AgentContext,
-  SpawnPersistedState,
-} from './spawn-types.js';
-
 // ========== Execution Bridge Re-exports ==========
 
 export type {

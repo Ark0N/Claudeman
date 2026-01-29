@@ -22,8 +22,6 @@ import { EventEmitter } from 'node:events';
 import { Session, ClaudeMessage, type BackgroundTask, type RalphTrackerState, type RalphTodoItem, type ActiveBashTool } from '../session.js';
 import { fileStreamManager } from '../file-stream-manager.js';
 import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
-import { SpawnOrchestrator, type SessionCreator } from '../spawn-orchestrator.js';
-import type { SpawnOrchestratorConfig } from '../spawn-types.js';
 import { ScreenManager } from '../screen-manager.js';
 import { getStore } from '../state-store.js';
 import { generateClaudeMd } from '../templates/claude-md.js';
@@ -307,8 +305,6 @@ export class WebServer extends EventEmitter {
   private sseHealthCheckTimer: NodeJS.Timeout | null = null;
   // Flag to prevent new timers during shutdown
   private _isStopping: boolean = false;
-  // Spawn1337 agent orchestrator
-  private spawnOrchestrator: SpawnOrchestrator;
   // Token recording for daily stats (track what's been recorded to avoid double-counting)
   private lastRecordedTokens: Map<string, { input: number; output: number }> = new Map();
   private tokenRecordingTimer: NodeJS.Timeout | null = null;
@@ -349,10 +345,6 @@ export class WebServer extends EventEmitter {
     this.screenManager.on('statsUpdated', (screens) => {
       this.broadcast('screen:statsUpdated', screens);
     });
-
-    // Initialize spawn orchestrator
-    this.spawnOrchestrator = new SpawnOrchestrator();
-    this.setupSpawnOrchestratorListeners();
 
     // Initialize execution bridge with model config from settings
     this.executionBridge = getExecutionBridge(this.loadModelConfig());
@@ -510,7 +502,6 @@ export class WebServer extends EventEmitter {
     // Returns comprehensive memory metrics for debugging memory leaks
     this.app.get('/api/debug/memory', async () => {
       const mem = process.memoryUsage();
-      const spawnState = this.spawnOrchestrator.getState();
       const subagentStats = subagentWatcher.getStats();
 
       // Calculate total Map entries for memory estimation
@@ -568,13 +559,6 @@ export class WebServer extends EventEmitter {
           pendingRespawnStarts: this.pendingRespawnStarts.size,
           subagentIdleTimers: subagentStats.idleTimerCount,
           total: this.respawnTimers.size + this.pendingRespawnStarts.size + subagentStats.idleTimerCount,
-        },
-        spawn: {
-          activeAgents: spawnState.activeCount,
-          queuedAgents: spawnState.queuedCount,
-          totalSpawned: spawnState.totalSpawned,
-          totalCompleted: spawnState.totalCompleted,
-          totalFailed: spawnState.totalFailed,
         },
         uptime: {
           seconds: Math.round(process.uptime()),
@@ -1987,9 +1971,6 @@ export class WebServer extends EventEmitter {
         const claudeMd = generateClaudeMd(name, description || '', templatePath);
         writeFileSync(join(casePath, 'CLAUDE.md'), claudeMd);
 
-        // Write .mcp.json for Claude Code to discover spawn tools
-        this.writeMcpConfig(casePath);
-
         // Write .claude/settings.local.json with hooks for desktop notifications
         writeHooksConfig(casePath);
 
@@ -2235,9 +2216,6 @@ export class WebServer extends EventEmitter {
           const templatePath = this.getDefaultClaudeMdPath();
           const claudeMd = generateClaudeMd(caseName, '', templatePath);
           writeFileSync(join(casePath, 'CLAUDE.md'), claudeMd);
-
-          // Write .mcp.json for Claude Code to discover spawn tools
-          this.writeMcpConfig(casePath);
 
           // Write .claude/settings.local.json with hooks for desktop notifications
           writeHooksConfig(casePath);
@@ -3017,93 +2995,6 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // System stats endpoint for frontend header display
     this.app.get('/api/system/stats', async () => {
       return this.getSystemStats();
-    });
-
-    // ========== Spawn1337 Agent Protocol Endpoints ==========
-
-    this.app.get('/api/spawn/agents', async () => {
-      return { success: true, data: this.spawnOrchestrator.getAllAgentStatuses() };
-    });
-
-    this.app.get('/api/spawn/agents/:agentId', async (req) => {
-      const { agentId } = req.params as { agentId: string };
-      const status = this.spawnOrchestrator.getAgentStatus(agentId);
-      if (!status) {
-        return createErrorResponse(ApiErrorCode.NOT_FOUND, `Agent ${agentId} not found`);
-      }
-      return { success: true, data: status };
-    });
-
-    this.app.get('/api/spawn/agents/:agentId/result', async (req) => {
-      const { agentId } = req.params as { agentId: string };
-      const result = this.spawnOrchestrator.readAgentResult(agentId);
-      if (!result) {
-        return createErrorResponse(ApiErrorCode.NOT_FOUND, `No result found for agent ${agentId}`);
-      }
-      return { success: true, data: result };
-    });
-
-    this.app.get('/api/spawn/agents/:agentId/progress', async (req) => {
-      const { agentId } = req.params as { agentId: string };
-      const progress = this.spawnOrchestrator.readAgentProgress(agentId);
-      return { success: true, data: progress };
-    });
-
-    this.app.get('/api/spawn/agents/:agentId/messages', async (req) => {
-      const { agentId } = req.params as { agentId: string };
-      const messages = this.spawnOrchestrator.readAgentMessages(agentId);
-      return { success: true, data: messages };
-    });
-
-    this.app.post('/api/spawn/agents/:agentId/message', async (req) => {
-      const { agentId } = req.params as { agentId: string };
-      const { content } = req.body as { content: string };
-      if (!content) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Message content is required');
-      }
-      await this.spawnOrchestrator.sendMessageToAgent(agentId, content);
-      return { success: true };
-    });
-
-    this.app.post('/api/spawn/agents/:agentId/cancel', async (req) => {
-      const { agentId } = req.params as { agentId: string };
-      const { reason } = (req.body as { reason?: string }) || {};
-      await this.spawnOrchestrator.cancelAgent(agentId, reason || 'Cancelled via API');
-      return { success: true };
-    });
-
-    this.app.delete('/api/spawn/agents/:agentId', async (req) => {
-      const { agentId } = req.params as { agentId: string };
-      await this.spawnOrchestrator.cancelAgent(agentId, 'Force killed via API');
-      return { success: true };
-    });
-
-    this.app.get('/api/spawn/status', async () => {
-      return { success: true, data: this.spawnOrchestrator.getState() };
-    });
-
-    this.app.put('/api/spawn/config', async (req) => {
-      const config = req.body as Partial<SpawnOrchestratorConfig>;
-      this.spawnOrchestrator.updateConfig(config);
-      return { success: true, data: this.spawnOrchestrator.config };
-    });
-
-    this.app.post('/api/spawn/trigger', async (req) => {
-      const { taskContent, parentSessionId, parentWorkingDir } = req.body as {
-        taskContent: string;
-        parentSessionId: string;
-        parentWorkingDir?: string;
-      };
-      if (!taskContent || !parentSessionId) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'taskContent and parentSessionId are required');
-      }
-      const session = this.sessions.get(parentSessionId);
-      const workingDir = parentWorkingDir || session?.workingDir || process.cwd();
-      const agentId = await this.spawnOrchestrator.triggerSpawn(taskContent, parentSessionId, workingDir);
-      if (!agentId) {
-        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Failed to parse task spec');
-      }
-      return { success: true, data: { agentId } };
     });
 
     // ========== Execution Bridge Endpoints ==========
@@ -3971,83 +3862,6 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     });
   }
 
-  private setupSpawnOrchestratorListeners(): void {
-    const sessionCreator: SessionCreator = {
-      createAgentSession: async (workingDir: string, name: string) => {
-        const globalNice = this.getGlobalNiceConfig();
-        const session = new Session({
-          workingDir,
-          screenManager: this.screenManager,
-          useScreen: true,
-          mode: 'claude',
-          name: `spawn:${name}`,
-          niceConfig: globalNice,
-        });
-
-        this.sessions.set(session.id, session);
-        this.store.incrementSessionsCreated();
-        this.setupSessionListeners(session);
-        session.parentAgentId = name;
-
-        await session.startInteractive();
-        this.broadcast('session:created', session.toDetailedState());
-        this.broadcast('session:interactive', { id: session.id });
-        this.persistSessionState(session);
-
-        // Configure ralph tracker for completion detection
-        session.ralphTracker.enable();
-
-        return { sessionId: session.id };
-      },
-      writeToSession: (sessionId: string, data: string) => {
-        const session = this.sessions.get(sessionId);
-        if (session) {
-          session.writeViaScreen(data);
-        }
-      },
-      getSessionTokens: (sessionId: string) => {
-        const session = this.sessions.get(sessionId);
-        return session ? session.totalTokens : 0;
-      },
-      getSessionCost: (sessionId: string) => {
-        const session = this.sessions.get(sessionId);
-        return session ? session.totalCost : 0;
-      },
-      stopSession: async (sessionId: string) => {
-        // Use cleanupSession to properly clean up all resources (respawn controllers,
-        // run summary trackers, file streams, Ralph state, etc.)
-        await this.cleanupSession(sessionId);
-      },
-      onSessionCompletion: (sessionId: string, handler: (phrase: string) => void) => {
-        const session = this.sessions.get(sessionId);
-        if (session) {
-          session.on('ralphCompletionDetected', handler);
-        }
-      },
-      removeSessionCompletionHandler: (sessionId: string, handler: (phrase: string) => void) => {
-        const session = this.sessions.get(sessionId);
-        if (session) {
-          session.off('ralphCompletionDetected', handler);
-        }
-      },
-    };
-
-    this.spawnOrchestrator.setSessionCreator(sessionCreator);
-
-    // Forward orchestrator events as SSE broadcasts
-    this.spawnOrchestrator.on('queued', (data) => this.broadcast('spawn:queued', data));
-    this.spawnOrchestrator.on('initializing', (data) => this.broadcast('spawn:initializing', data));
-    this.spawnOrchestrator.on('started', (data) => this.broadcast('spawn:started', data));
-    this.spawnOrchestrator.on('progress', (data) => this.broadcast('spawn:progress', data));
-    this.spawnOrchestrator.on('message', (data) => this.broadcast('spawn:message', data));
-    this.spawnOrchestrator.on('completed', (data) => this.broadcast('spawn:completed', data));
-    this.spawnOrchestrator.on('failed', (data) => this.broadcast('spawn:failed', data));
-    this.spawnOrchestrator.on('timeout', (data) => this.broadcast('spawn:timeout', data));
-    this.spawnOrchestrator.on('cancelled', (data) => this.broadcast('spawn:cancelled', data));
-    this.spawnOrchestrator.on('budgetWarning', (data) => this.broadcast('spawn:budgetWarning', data));
-    this.spawnOrchestrator.on('stateUpdate', (data) => this.broadcast('spawn:stateUpdate', data));
-  }
-
   /**
    * Load model configuration from settings file.
    */
@@ -4371,23 +4185,6 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       console.error('Failed to read Nice priority settings:', err);
     }
     return undefined;
-  }
-
-  /**
-   * Write .mcp.json to a case directory for Claude Code to discover spawn MCP tools.
-   */
-  private writeMcpConfig(casePath: string): void {
-    const projectRoot = join(__dirname, '..', '..');
-    const mcpServerPath = join(projectRoot, 'dist', 'mcp-server.js');
-    const mcpConfig = {
-      mcpServers: {
-        'claudeman-spawn': {
-          command: 'node',
-          args: [mcpServerPath],
-        },
-      },
-    };
-    writeFileSync(join(casePath, '.mcp.json'), JSON.stringify(mcpConfig, null, 2) + '\n');
   }
 
   private async startScheduledRun(prompt: string, workingDir: string, durationMinutes: number): Promise<ScheduledRun> {
@@ -5146,10 +4943,6 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       controller.removeAllListeners();
     }
     this.respawnControllers.clear();
-
-    // Stop spawn orchestrator and all agents
-    await this.spawnOrchestrator.stopAll();
-    this.spawnOrchestrator.removeAllListeners();
 
     // Stop all scheduled runs first (they have their own session cleanup)
     for (const [id] of this.scheduledRuns) {

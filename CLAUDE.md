@@ -16,7 +16,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md`
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1430 (must match `package.json`)
+**Version**: 0.1431 (must match `package.json`)
 
 ## Project Overview
 
@@ -56,7 +56,6 @@ journalctl --user -u claudeman-web -f
 | Binary | Purpose |
 |--------|---------|
 | `claudeman` | Main CLI and web server |
-| `claudeman-mcp` | MCP server for Claude Desktop integration |
 
 ## Architecture
 
@@ -191,7 +190,6 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | Topic | Location |
 |-------|----------|
 | **Respawn state machine** | `docs/respawn-state-machine.md` |
-| **Spawn agent protocol** | `docs/spawn-protocol.md` |
 | **Ralph Loop guide** | `docs/ralph-wiggum-guide.md` |
 | **Claude Code hooks** | `docs/claude-code-hooks-reference.md` |
 | **Browser/E2E testing** | `docs/browser-testing-guide.md` |
@@ -207,24 +205,6 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **Plan orchestrator** | `src/plan-orchestrator.ts` file header |
 | **Execution system** | `src/config/execution-limits.ts` |
 | **Agent prompts** | `src/prompts/` directory |
-
-## MCP Server Integration
-
-The `claudeman-mcp` binary provides Model Context Protocol integration for Claude Desktop:
-
-```json
-// Add to ~/.claude/claude_desktop_config.json
-{
-  "mcpServers": {
-    "claudeman-spawn": {
-      "command": "node",
-      "args": ["/path/to/claudeman/dist/mcp-server.js"]
-    }
-  }
-}
-```
-
-This enables Claude Desktop to spawn and manage agents via MCP tools.
 
 ## Scripts
 
