@@ -2730,8 +2730,31 @@ class ClaudemanApp {
     const modal = document.getElementById('ralphWizardModal');
     modal?.classList.remove('active');
 
+    // Track windows minimized due to wizard minimize (so we can restore them)
+    this.wizardMinimizedWindows = new Set();
+
+    // Minimize all plan subagent windows
+    for (const [agentId, windowData] of this.planSubagents) {
+      if (windowData.element && windowData.element.style.display !== 'none') {
+        windowData.element.style.display = 'none';
+        this.wizardMinimizedWindows.add(`plan:${agentId}`);
+      }
+    }
+
+    // Minimize all regular subagent windows
+    for (const [agentId, windowData] of this.subagentWindows) {
+      if (windowData.element && !windowData.minimized && windowData.element.style.display !== 'none') {
+        windowData.element.style.display = 'none';
+        windowData.hiddenByWizard = true;
+        this.wizardMinimizedWindows.add(`subagent:${agentId}`);
+      }
+    }
+
     // Show the minimized indicator
     this.showWizardMinimizedIndicator();
+
+    // Update connection lines (all hidden now)
+    this.updateConnectionLines();
   }
 
   restoreRalphWizard() {
@@ -2741,6 +2764,30 @@ class ClaudemanApp {
     // Show the modal again
     const modal = document.getElementById('ralphWizardModal');
     modal?.classList.add('active');
+
+    // Restore windows that were minimized due to wizard minimize
+    if (this.wizardMinimizedWindows) {
+      for (const key of this.wizardMinimizedWindows) {
+        if (key.startsWith('plan:')) {
+          const agentId = key.slice(5);
+          const windowData = this.planSubagents.get(agentId);
+          if (windowData?.element) {
+            windowData.element.style.display = '';
+          }
+        } else if (key.startsWith('subagent:')) {
+          const agentId = key.slice(9);
+          const windowData = this.subagentWindows.get(agentId);
+          if (windowData?.element && windowData.hiddenByWizard) {
+            windowData.element.style.display = '';
+            windowData.hiddenByWizard = false;
+          }
+        }
+      }
+      this.wizardMinimizedWindows.clear();
+    }
+
+    // Update connection lines
+    this.updateConnectionLines();
   }
 
   showWizardMinimizedIndicator() {
