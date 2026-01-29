@@ -431,6 +431,8 @@ class NotificationManager {
 class ClaudemanApp {
   constructor() {
     this.sessions = new Map();
+    this.sessionOrder = []; // Track tab order for drag-and-drop reordering
+    this.draggedTabId = null; // Currently dragged tab session ID
     this.cases = [];
     this.currentRun = null;
     this.totalTokens = 0;
@@ -842,14 +844,17 @@ class ClaudemanApp {
   }
 
   showWelcome() {
-    this.terminal.writeln('\x1b[1;36m  Claudeman Terminal\x1b[0m');
-    this.terminal.writeln('');
-    this.terminal.writeln('\x1b[90m  Each instance opens a persistent GNU Screen session running Claude or Shell.\x1b[0m');
-    this.terminal.writeln('\x1b[90m  Sessions stay alive for autonomous work, even if you close this browser.\x1b[0m');
-    this.terminal.writeln('\x1b[90m  Use the +/- controls to set how many instances to launch at once.\x1b[0m');
-    this.terminal.writeln('');
-    this.terminal.writeln('\x1b[90m  Press \x1b[1;37mCtrl+Enter\x1b[0m\x1b[90m to start Claude\x1b[0m');
-    this.terminal.writeln('');
+    const overlay = document.getElementById('welcomeOverlay');
+    if (overlay) {
+      overlay.classList.add('visible');
+    }
+  }
+
+  hideWelcome() {
+    const overlay = document.getElementById('welcomeOverlay');
+    if (overlay) {
+      overlay.classList.remove('visible');
+    }
   }
 
   /**
@@ -1113,6 +1118,11 @@ class ClaudemanApp {
     addListener('session:created', (e) => {
       const data = JSON.parse(e.data);
       this.sessions.set(data.id, data);
+      // Add new session to end of tab order
+      if (!this.sessionOrder.includes(data.id)) {
+        this.sessionOrder.push(data.id);
+        this.saveSessionOrder();
+      }
       this.renderSessionTabs();
       this.updateCost();
     });
@@ -1120,6 +1130,8 @@ class ClaudemanApp {
     addListener('session:updated', (e) => {
       const data = JSON.parse(e.data);
       const session = data.session || data;
+      const oldSession = this.sessions.get(session.id);
+      const claudeSessionIdJustSet = session.claudeSessionId && (!oldSession || !oldSession.claudeSessionId);
       this.sessions.set(session.id, session);
       this.renderSessionTabs();
       this.updateCost();
@@ -1130,11 +1142,22 @@ class ClaudemanApp {
       // Update parentSessionName for any subagents belonging to this session
       // (fixes stale name display after session rename)
       this.updateSubagentParentNames(session.id);
+      // If claudeSessionId was just set, re-check orphan subagents
+      // This connects subagents that were waiting for the session to identify itself
+      if (claudeSessionIdJustSet) {
+        this.recheckOrphanSubagents();
+      }
     });
 
     addListener('session:deleted', (e) => {
       const data = JSON.parse(e.data);
       this.sessions.delete(data.id);
+      // Remove from tab order
+      const orderIndex = this.sessionOrder.indexOf(data.id);
+      if (orderIndex !== -1) {
+        this.sessionOrder.splice(orderIndex, 1);
+        this.saveSessionOrder();
+      }
       this.terminalBuffers.delete(data.id);
       this.ralphStates.delete(data.id);  // Clean up ralph state for this session
       this.projectInsights.delete(data.id);  // Clean up project insights for this session
@@ -1790,7 +1813,7 @@ class ClaudemanApp {
 
     // ========== Subagent Events (Claude Code Background Agents) ==========
 
-    addListener('subagent:discovered', async (e) => {
+    addListener('subagent:discovered', (e) => {
       const data = JSON.parse(e.data);
       // Clear all old data for this agentId (in case of ID reuse)
       this.subagents.set(data.agentId, data);
@@ -1802,8 +1825,8 @@ class ClaudemanApp {
       }
       this.renderSubagentPanel();
 
-      // Find which Claudeman session owns this subagent (by working directory)
-      await this.findParentSessionForSubagent(data.agentId);
+      // Find which Claudeman session owns this subagent (direct claudeSessionId match only)
+      this.findParentSessionForSubagent(data.agentId);
 
       // Auto-open window for new active agents
       if (data.status === 'active') {
@@ -2065,6 +2088,9 @@ class ClaudemanApp {
       }
     });
 
+    // Sync sessionOrder with current sessions (preserve order, add new, remove stale)
+    this.syncSessionOrder();
+
     if (data.respawnStatus) {
       this.respawnStatus = data.respawnStatus;
     } else {
@@ -2111,10 +2137,9 @@ class ClaudemanApp {
       this.restoreSubagentWindowStates();
     }
 
-    // Auto-select first session if any
-    if (this.sessions.size > 0 && !this.activeSessionId) {
-      const firstSession = this.sessions.values().next().value;
-      this.selectSession(firstSession.id);
+    // Auto-select first session if any (use sessionOrder for user's preferred order)
+    if (this.sessionOrder.length > 0 && !this.activeSessionId) {
+      this.selectSession(this.sessionOrder[0]);
     }
   }
 
@@ -2225,11 +2250,6 @@ class ClaudemanApp {
       this._fullRenderSessionTabs();
     }
 
-    // Auto-focus: if there's exactly one session and none is active, select it
-    if (this.sessions.size === 1 && !this.activeSessionId) {
-      const [sessionId] = this.sessions.keys();
-      this.selectSession(sessionId);
-    }
   }
 
   _fullRenderSessionTabs() {
@@ -2240,8 +2260,12 @@ class ClaudemanApp {
     this.cancelHideSubagentDropdown();
 
     // Build tabs HTML using array for better string concatenation performance
+    // Iterate in sessionOrder to respect user's custom tab arrangement
     const parts = [];
-    for (const [id, session] of this.sessions) {
+    for (const id of this.sessionOrder) {
+      const session = this.sessions.get(id);
+      if (!session) continue; // Skip if session was removed
+
       const isActive = id === this.activeSessionId;
       const status = session.status || 'idle';
       const name = this.getSessionName(session);
@@ -2268,6 +2292,10 @@ class ClaudemanApp {
     }
 
     container.innerHTML = parts.join('');
+
+    // Set up drag-and-drop handlers for tab reordering
+    this.setupTabDragHandlers();
+
     // Update connection lines after tabs change (positions may have shifted)
     this.updateConnectionLines();
   }
@@ -2305,6 +2333,129 @@ class ClaudemanApp {
         </div>
       </span>
     `;
+  }
+
+  // ========== Tab Order and Drag-and-Drop ==========
+
+  // Sync sessionOrder with current sessions (preserve order for existing, add new at end)
+  syncSessionOrder() {
+    const currentIds = new Set(this.sessions.keys());
+
+    // Load saved order from localStorage
+    const savedOrder = this.loadSessionOrder();
+
+    // Start with saved order, keeping only sessions that still exist
+    const preserved = savedOrder.filter(id => currentIds.has(id));
+    const preservedSet = new Set(preserved);
+
+    // Add any new sessions at the end
+    const newSessions = [...currentIds].filter(id => !preservedSet.has(id));
+
+    this.sessionOrder = [...preserved, ...newSessions];
+  }
+
+  // Load session order from localStorage
+  loadSessionOrder() {
+    try {
+      const saved = localStorage.getItem('claudeman-session-order');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  // Save session order to localStorage
+  saveSessionOrder() {
+    try {
+      localStorage.setItem('claudeman-session-order', JSON.stringify(this.sessionOrder));
+    } catch {
+      // Ignore storage errors
+    }
+  }
+
+  // Set up drag-and-drop handlers on tab elements
+  setupTabDragHandlers() {
+    const container = this.$('sessionTabs');
+    const tabs = container.querySelectorAll('.session-tab[data-id]');
+
+    tabs.forEach(tab => {
+      tab.setAttribute('draggable', 'true');
+
+      tab.addEventListener('dragstart', (e) => {
+        this.draggedTabId = tab.dataset.id;
+        tab.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', tab.dataset.id);
+      });
+
+      tab.addEventListener('dragend', () => {
+        tab.classList.remove('dragging');
+        this.draggedTabId = null;
+        // Remove all drag-over indicators
+        container.querySelectorAll('.session-tab').forEach(t => {
+          t.classList.remove('drag-over-left', 'drag-over-right');
+        });
+      });
+
+      tab.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        if (!this.draggedTabId || this.draggedTabId === tab.dataset.id) return;
+
+        e.dataTransfer.dropEffect = 'move';
+
+        // Determine drop position based on mouse position
+        const rect = tab.getBoundingClientRect();
+        const midpoint = rect.left + rect.width / 2;
+        const isLeftHalf = e.clientX < midpoint;
+
+        // Update visual indicator
+        tab.classList.toggle('drag-over-left', isLeftHalf);
+        tab.classList.toggle('drag-over-right', !isLeftHalf);
+      });
+
+      tab.addEventListener('dragleave', () => {
+        tab.classList.remove('drag-over-left', 'drag-over-right');
+      });
+
+      tab.addEventListener('drop', (e) => {
+        e.preventDefault();
+        tab.classList.remove('drag-over-left', 'drag-over-right');
+
+        if (!this.draggedTabId || this.draggedTabId === tab.dataset.id) return;
+
+        const targetId = tab.dataset.id;
+        const draggedId = this.draggedTabId;
+
+        // Determine insertion position
+        const rect = tab.getBoundingClientRect();
+        const midpoint = rect.left + rect.width / 2;
+        const insertBefore = e.clientX < midpoint;
+
+        // Reorder sessionOrder array
+        const fromIndex = this.sessionOrder.indexOf(draggedId);
+        let toIndex = this.sessionOrder.indexOf(targetId);
+
+        if (fromIndex === -1 || toIndex === -1) return;
+
+        // Remove dragged item
+        this.sessionOrder.splice(fromIndex, 1);
+
+        // Recalculate target index after removal
+        toIndex = this.sessionOrder.indexOf(targetId);
+        if (toIndex === -1) return;
+
+        // Insert at correct position
+        if (insertBefore) {
+          this.sessionOrder.splice(toIndex, 0, draggedId);
+        } else {
+          this.sessionOrder.splice(toIndex + 1, 0, draggedId);
+        }
+
+        // Save and re-render
+        this.saveSessionOrder();
+        this._fullRenderSessionTabs();
+      });
+    });
   }
 
   // Restore a minimized subagent window
@@ -2443,6 +2594,7 @@ class ClaudemanApp {
     if (this.activeSessionId === sessionId) return;
 
     this.activeSessionId = sessionId;
+    this.hideWelcome();
     // Clear idle hooks on view, but keep action hooks until user interacts
     this.clearPendingHooks(sessionId, 'idle_prompt');
     this.renderSessionTabs();
@@ -2552,16 +2704,22 @@ class ClaudemanApp {
     try {
       await fetch(`/api/sessions/${sessionId}?killScreen=${killScreen}`, { method: 'DELETE' });
       this.sessions.delete(sessionId);
+      // Remove from tab order
+      const orderIndex = this.sessionOrder.indexOf(sessionId);
+      if (orderIndex !== -1) {
+        this.sessionOrder.splice(orderIndex, 1);
+        this.saveSessionOrder();
+      }
       this.terminalBuffers.delete(sessionId);
       this.ralphStates.delete(sessionId);
       this.clearCountdownTimers(sessionId);
 
       if (this.activeSessionId === sessionId) {
         this.activeSessionId = null;
-        // Select another session or show welcome
-        if (this.sessions.size > 0) {
-          const nextSession = this.sessions.values().next().value;
-          this.selectSession(nextSession.id);
+        // Select another session or show welcome (use sessionOrder for consistent ordering)
+        if (this.sessionOrder.length > 0 && this.sessions.size > 0) {
+          const nextSessionId = this.sessionOrder[0];
+          this.selectSession(nextSessionId);
         } else {
           this.terminal.clear();
           this.showWelcome();
@@ -2611,12 +2769,11 @@ class ClaudemanApp {
   }
 
   nextSession() {
-    const ids = Array.from(this.sessions.keys());
-    if (ids.length <= 1) return;
+    if (this.sessionOrder.length <= 1) return;
 
-    const currentIndex = ids.indexOf(this.activeSessionId);
-    const nextIndex = (currentIndex + 1) % ids.length;
-    this.selectSession(ids[nextIndex]);
+    const currentIndex = this.sessionOrder.indexOf(this.activeSessionId);
+    const nextIndex = (currentIndex + 1) % this.sessionOrder.length;
+    this.selectSession(this.sessionOrder[nextIndex]);
   }
 
   // ========== Navigation ==========
@@ -7442,14 +7599,10 @@ class ClaudemanApp {
 
     // First, discover parent sessions for all subagents to establish correct mapping
     // This is important after server restart when parentSessionId isn't set
-    const parentDiscoveryPromises = [];
     for (const [agentId, agent] of this.subagents) {
       if (!agent.parentSessionId) {
-        parentDiscoveryPromises.push(this.findParentSessionForSubagent(agentId));
+        this.findParentSessionForSubagent(agentId);
       }
-    }
-    if (parentDiscoveryPromises.length > 0) {
-      await Promise.all(parentDiscoveryPromises);
     }
 
     // Restore minimized state, but verify session mapping is correct
@@ -9239,92 +9392,50 @@ class ClaudemanApp {
 
   // ========== Subagent Parent Session Tracking ==========
 
-  async findParentSessionForSubagent(agentId) {
+  /**
+   * Find and assign the parent Claudeman session for a subagent.
+   *
+   * ROCK-SOLID MATCHING: Only uses claudeSessionId.
+   * - agent.sessionId = Claude session ID that spawned this subagent (from file path)
+   * - session.claudeSessionId = Claude session ID running in this Claudeman session
+   *
+   * If they match, the subagent belongs to that tab. No fallbacks, no heuristics.
+   * If no match is found, the subagent waits - when a session's claudeSessionId gets
+   * set (via session:updated), we re-check all orphan subagents.
+   */
+  findParentSessionForSubagent(agentId) {
     const agent = this.subagents.get(agentId);
     if (!agent) return;
 
-    // Strategy 1: Check if another subagent with the same Claude sessionId already has a parent
-    // This ensures subagents from the same Claude session go to the same Claudeman session
-    if (agent.sessionId) {
-      for (const [otherAgentId, otherAgent] of this.subagents) {
-        if (otherAgentId !== agentId &&
-            otherAgent.sessionId === agent.sessionId &&
-            otherAgent.parentSessionId &&
-            this.sessions.has(otherAgent.parentSessionId)) {
-          // Found a sibling subagent with an assigned parent
-          agent.parentSessionId = otherAgent.parentSessionId;
-          agent.parentSessionName = otherAgent.parentSessionName;
-          this.subagents.set(agentId, agent);
-          this.updateSubagentWindowParent(agentId);
-          this.updateSubagentWindowVisibility();
-          return;
-        }
-      }
-    }
+    // Can't match without a sessionId
+    if (!agent.sessionId) return;
 
-    // Strategy 2: Match by claudeSessionId (most reliable)
-    // The subagent's sessionId is the Claude session that spawned it
-    // Match this to the Claudeman session's claudeSessionId
-    if (agent.sessionId) {
-      for (const [sessionId, session] of this.sessions) {
-        if (session.claudeSessionId === agent.sessionId) {
-          agent.parentSessionId = sessionId;
-          agent.parentSessionName = this.getSessionName(session);
-          this.subagents.set(agentId, agent);
-          this.updateSubagentWindowParent(agentId);
-          this.updateSubagentWindowVisibility();
-          return;
-        }
-      }
-    }
-
-    // Strategy 3: Fall back to workingDir matching (for sessions without claudeSessionId yet)
-    const matchingSessions = [];
+    // Direct match: subagent.sessionId === session.claudeSessionId
     for (const [sessionId, session] of this.sessions) {
-      try {
-        const resp = await fetch(`/api/sessions/${sessionId}/subagents`);
-        if (!resp.ok) continue;
-        const result = await resp.json();
-        const subagents = result.data || result.subagents || [];
-        if (subagents.some(s => s.agentId === agentId)) {
-          matchingSessions.push({ sessionId, session });
-        }
-      } catch (err) {
-        // Ignore errors
+      if (session.claudeSessionId === agent.sessionId) {
+        agent.parentSessionId = sessionId;
+        agent.parentSessionName = this.getSessionName(session);
+        this.subagents.set(agentId, agent);
+        this.updateSubagentWindowParent(agentId);
+        this.updateSubagentWindowVisibility();
+        return;
       }
     }
 
-    if (matchingSessions.length === 0) {
-      // No matching session found
-      return;
-    }
+    // No match found - the session's claudeSessionId might not be set yet.
+    // When session:updated fires with claudeSessionId, we'll re-check orphans.
+  }
 
-    // If only one session matches, use it
-    let chosen = matchingSessions[0];
-
-    if (matchingSessions.length > 1) {
-      // Multiple sessions with same workingDir - prefer session with matching claudeSessionId
-      // If no match, fall back to oldest session (first created is more likely the original)
-      const byClaudeSession = matchingSessions.find(m => m.session.claudeSessionId === agent.sessionId);
-      if (byClaudeSession) {
-        chosen = byClaudeSession;
-      } else {
-        // Fall back to oldest session (not newest - oldest is more likely the original workspace)
-        matchingSessions.sort((a, b) => {
-          const aTime = new Date(a.session.createdAt || 0).getTime();
-          const bTime = new Date(b.session.createdAt || 0).getTime();
-          return aTime - bTime; // Oldest first
-        });
-        chosen = matchingSessions[0];
+  /**
+   * Re-check all orphan subagents (those without a parentSessionId) when a session updates.
+   * Called when session:updated fires, in case claudeSessionId was just set.
+   */
+  recheckOrphanSubagents() {
+    for (const [agentId, agent] of this.subagents) {
+      if (!agent.parentSessionId && agent.sessionId) {
+        this.findParentSessionForSubagent(agentId);
       }
     }
-
-    // Assign the parent
-    agent.parentSessionId = chosen.sessionId;
-    agent.parentSessionName = this.getSessionName(chosen.session);
-    this.subagents.set(agentId, agent);
-    this.updateSubagentWindowParent(agentId);
-    this.updateSubagentWindowVisibility();
   }
 
   /**
@@ -9821,7 +9932,7 @@ class ClaudemanApp {
     this.saveSubagentWindowStates();
   }
 
-  async closeSubagentWindow(agentId) {
+  closeSubagentWindow(agentId) {
     const windowData = this.subagentWindows.get(agentId);
     if (!windowData) return;
 
@@ -9830,12 +9941,11 @@ class ClaudemanApp {
     // Try to discover parent session if not already known
     // This ensures we minimize to the correct tab
     if (agent && !agent.parentSessionId) {
-      await this.findParentSessionForSubagent(agentId);
+      this.findParentSessionForSubagent(agentId);
     }
 
-    // Now get the correct parent session (re-read agent after discovery)
-    const updatedAgent = this.subagents.get(agentId);
-    const parentSessionId = updatedAgent?.parentSessionId || this.activeSessionId;
+    // Get the parent session (use active session if no parent found)
+    const parentSessionId = agent?.parentSessionId || this.activeSessionId;
 
     // Always minimize to tab (use active session if no parent found)
     windowData.element.style.display = 'none';

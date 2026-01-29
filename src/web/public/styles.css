@@ -215,6 +215,24 @@ body {
   50% { opacity: 0.4; }
 }
 
+/* Tab drag-and-drop reordering */
+.session-tab[draggable="true"] {
+  cursor: grab;
+}
+
+.session-tab.dragging {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+
+.session-tab.drag-over-left {
+  box-shadow: -2px 0 0 0 var(--accent);
+}
+
+.session-tab.drag-over-right {
+  box-shadow: 2px 0 0 0 var(--accent);
+}
+
 /* Header Right */
 .header-right {
   display: flex;
@@ -1502,6 +1520,7 @@ body {
   display: flex;
   overflow: hidden;
   background: var(--bg-dark);
+  position: relative;
 }
 
 .terminal-container {
@@ -1522,6 +1541,111 @@ body {
   background: transparent !important;
 }
 
+/* Welcome Overlay */
+.welcome-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-dark);
+  z-index: 10;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.welcome-overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.welcome-content {
+  text-align: center;
+  max-width: 500px;
+  padding: 2rem;
+}
+
+.welcome-title {
+  font-size: 1.75rem;
+  font-weight: 600;
+  color: var(--accent-hover);
+  margin-bottom: 1rem;
+  letter-spacing: -0.02em;
+}
+
+.welcome-desc {
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin-bottom: 0.5rem;
+}
+
+.welcome-actions {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  margin-top: 2rem;
+  margin-bottom: 1.5rem;
+}
+
+.welcome-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.welcome-btn-primary {
+  background: linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%);
+  border-color: #3b82f6;
+  color: #e0e7ff;
+}
+
+.welcome-btn-primary:hover {
+  background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
+  color: #fff;
+}
+
+.welcome-btn-ralph {
+  background: linear-gradient(135deg, #3d3415 0%, #4a3f1a 100%);
+  border-color: #6b5a1e;
+  color: #eab308;
+}
+
+.welcome-btn-ralph:hover {
+  background: linear-gradient(135deg, #4a3f1a 0%, #5a4d20 100%);
+  border-color: #8b7a2e;
+  box-shadow: 0 0 12px rgba(234, 179, 8, 0.4);
+  color: #fcd34d;
+}
+
+.welcome-hint {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.welcome-hint kbd {
+  display: inline-block;
+  padding: 0.15rem 0.4rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
 /* Bottom Toolbar */
 .toolbar {
   display: flex;
@@ -1539,7 +1663,7 @@ body {
 .toolbar-right {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: 0.5rem;
 }
 
 .toolbar-center {
@@ -1608,23 +1732,25 @@ body {
   background: var(--accent-hover);
 }
 
-/* Claude Button - Special styling */
+/* Claude Button - Special styling (matches welcome-btn-primary) */
 .btn-toolbar.btn-claude {
-  background: linear-gradient(135deg, #1e3a5f 0%, #3d2a5c 100%);
-  border-color: #2d4a6f;
-  color: var(--accent-hover);
-  font-weight: 700;
+  background: linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%);
+  border-color: #3b82f6;
+  color: #e0e7ff;
+  font-weight: 500;
   padding: 0.4rem 0.85rem;
+  gap: 0.4rem;
 }
 
 .btn-toolbar.btn-claude:hover {
-  background: linear-gradient(135deg, #2a4d7a 0%, #4d3a6c 100%);
-  border-color: #3d5a7f;
-  box-shadow: 0 0 12px rgba(61, 90, 127, 0.3);
+  background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
+  border-color: #3b82f6;
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
+  color: #fff;
 }
 
-.btn-toolbar.btn-claude .btn-icon {
-  font-size: 0.9rem;
+.btn-toolbar.btn-claude svg {
+  flex-shrink: 0;
 }
 
 /* Shell Button - Special styling */
@@ -1640,21 +1766,6 @@ body {
   border-color: #3d7a3d;
   box-shadow: 0 0 8px rgba(34, 139, 34, 0.4);
   color: #a8d8a8;
-}
-
-/* Ralph Loop button - golden/yellow theme */
-.btn-toolbar.btn-ralph {
-  background: linear-gradient(135deg, #3d3415 0%, #4a3f1a 100%);
-  border-color: #6b5a1e;
-  color: #eab308;
-  font-weight: 500;
-}
-
-.btn-toolbar.btn-ralph:hover {
-  background: linear-gradient(135deg, #4a3f1a 0%, #5a4d20 100%);
-  border-color: #8b7a2e;
-  box-shadow: 0 0 8px rgba(234, 179, 8, 0.4);
-  color: #fcd34d;
 }
 
 /* Button icon styling */
@@ -1779,18 +1890,19 @@ body {
   border: 1px solid var(--border);
   border-radius: 4px;
   overflow: hidden;
+  margin: 0 0.25rem;
 }
 
 .tab-count-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 28px;
+  width: 22px;
+  height: 26px;
   background: transparent;
   border: none;
   color: var(--text-dim);
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s;
@@ -1807,14 +1919,14 @@ body {
 }
 
 .tab-count-input {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 26px;
   background: transparent;
   border: none;
   border-left: 1px solid var(--border);
   border-right: 1px solid var(--border);
   color: var(--text);
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   font-weight: 600;
   text-align: center;
   font-family: 'SF Mono', Monaco, monospace;
@@ -3185,31 +3297,6 @@ kbd {
 }
 
 .header-tokens.clickable:hover {
-  color: var(--text);
-}
-
-/* Help Button */
-.help-btn {
-  position: fixed;
-  bottom: calc(var(--toolbar-height) + 0.5rem);
-  right: 0.5rem;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-  font-size: 0.85rem;
-  cursor: pointer;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s;
-}
-
-.help-btn:hover {
-  background: var(--bg-hover);
   color: var(--text);
 }
 

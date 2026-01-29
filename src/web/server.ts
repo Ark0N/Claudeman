@@ -4942,19 +4942,28 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         const screens = this.screenManager.getScreens();
         for (const screen of screens) {
           if (!this.sessions.has(screen.sessionId)) {
+            // Restore session settings from state.json (single source of truth)
+            const savedState = this.store.getSession(screen.sessionId);
+
+            // Determine the correct session name (priority: savedState > screen > screenName)
+            // This ensures renamed sessions keep their name after server restart
+            const sessionName = savedState?.name || screen.name || screen.screenName;
+
             // Create a session object for this screen with the existing screenSession
             const session = new Session({
               id: screen.sessionId,  // Preserve the original session ID
               workingDir: screen.workingDir,
               mode: screen.mode,
-              name: screen.name || screen.screenName,
+              name: sessionName,
               screenManager: this.screenManager,
               useScreen: true,
               screenSession: screen  // Pass the existing screen so startInteractive() can attach to it
             });
 
-            // Restore ALL session settings from state.json (single source of truth)
-            const savedState = this.store.getSession(screen.sessionId);
+            // Update screen name if it was a "Restored:" placeholder or doesn't match saved name
+            if (savedState?.name && screen.name !== savedState.name) {
+              this.screenManager.updateScreenName(screen.sessionId, savedState.name);
+            }
             if (savedState) {
               // Auto-compact
               if (savedState.autoCompactEnabled !== undefined || savedState.autoCompactThreshold !== undefined) {

@@ -190,6 +190,26 @@
     <!-- Main Terminal Area -->
     <main class="main">
       <div class="terminal-container" id="terminalContainer"></div>
+
+      <!-- Welcome Overlay (shown when no session active) -->
+      <div class="welcome-overlay" id="welcomeOverlay">
+        <div class="welcome-content">
+          <h1 class="welcome-title">Claudeman Terminal</h1>
+          <p class="welcome-desc">Each instance opens a persistent GNU Screen session running Claude or Shell.</p>
+          <p class="welcome-desc">Sessions stay alive for autonomous work, even if you close this browser.</p>
+          <div class="welcome-actions">
+            <button class="welcome-btn welcome-btn-primary" onclick="app.runClaude()">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run Claude
+            </button>
+            <button class="welcome-btn welcome-btn-ralph" onclick="app.showRalphWizard()">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+              Start Ralph Loop Wizard
+            </button>
+          </div>
+          <p class="welcome-hint">Or press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to start Claude</p>
+        </div>
+      </div>
     </main>
 
     <!-- Project Insights Panel (shows file-viewing Bash commands) -->
@@ -242,24 +262,22 @@
         <!-- Run Claude -->
         <div class="toolbar-group">
           <button class="btn-toolbar btn-claude" onclick="app.runClaude()" title="Run Claude (Ctrl+Enter)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             Run Claude
           </button>
           <div class="tab-count-group" title="Instance count">
-            <button class="tab-count-btn" onclick="app.decrementTabCount()" title="Instance count">−</button>
-            <input type="number" id="tabCount" class="tab-count-input" value="1" min="1" max="20" readonly title="Instance count">
-            <button class="tab-count-btn" onclick="app.incrementTabCount()" title="Instance count">+</button>
+            <button class="tab-count-btn" onclick="app.decrementTabCount()">−</button>
+            <input type="number" id="tabCount" class="tab-count-input" value="1" min="1" max="20" readonly>
+            <button class="tab-count-btn" onclick="app.incrementTabCount()">+</button>
           </div>
           <button class="btn-toolbar btn-shell" onclick="app.runShell()" title="Run Shell">
             Run Shell
           </button>
           <div class="tab-count-group" title="Instance count">
-            <button class="tab-count-btn" onclick="app.decrementShellCount()" title="Instance count">−</button>
-            <input type="number" id="shellCount" class="tab-count-input" value="1" min="1" max="20" readonly title="Instance count">
-            <button class="tab-count-btn" onclick="app.incrementShellCount()" title="Instance count">+</button>
+            <button class="tab-count-btn" onclick="app.decrementShellCount()">−</button>
+            <input type="number" id="shellCount" class="tab-count-input" value="1" min="1" max="20" readonly>
+            <button class="tab-count-btn" onclick="app.incrementShellCount()">+</button>
           </div>
-          <button class="btn-toolbar btn-ralph" onclick="app.showRalphWizard()" title="Start Ralph Loop">
-            Ralph Loop
-          </button>
           <div class="case-select-group">
             <select id="quickStartCase" class="toolbar-select" title="Select case">
               <option value="testcase">testcase</option>
@@ -1294,9 +1312,6 @@
       <div class="notif-drawer-list" id="notifList"></div>
       <div class="notif-drawer-empty" id="notifEmpty">No notifications</div>
     </div>
-
-    <!-- Help Button -->
-    <button class="help-btn" onclick="app.showHelp()" title="Keyboard shortcuts (Ctrl+?)">?</button>
 
     <!-- Token Stats Modal -->
     <div class="modal" id="tokenStatsModal">

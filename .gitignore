@@ -37,6 +37,9 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# Unfinished TUI (local development only)
+src/tui/
 .claude/
 media-assets/
 commands
