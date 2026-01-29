@@ -219,7 +219,7 @@ export type ProgressCallback = (phase: string, detail: string) => void;
 export interface PlanSubagentEvent {
   type: 'started' | 'progress' | 'completed' | 'failed';
   agentId: string;
-  agentType: 'research' | 'requirements' | 'architecture' | 'testing' | 'risks' | 'verification' | 'execution' | 'final-review';
+  agentType: 'research' | 'requirements' | 'architecture' | 'testing' | 'risks' | 'verification' | 'execution-optimizer' | 'final-review';
   model: string;
   status: string;
   detail?: string;
@@ -276,10 +276,23 @@ function tryParseJSON(jsonString: string): { success: boolean; data?: any; error
     // 1. Remove trailing commas before ] or }
     repaired = repaired.replace(/,(\s*[\]}])/g, '$1');
 
-    // 2. Fix unescaped newlines in strings (common LLM issue)
-    // Match strings and escape newlines within them
+    // 2. Fix unescaped control characters in strings (common LLM issue)
+    // JSON requires all control characters (0x00-0x1F) to be escaped
+    // Match strings and escape all control characters within them
     repaired = repaired.replace(/"([^"\\]|\\.)*"/g, (match) => {
-      return match.replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+      // Replace all control characters with their escaped forms
+      return match.replace(/[\x00-\x1F]/g, (char) => {
+        switch (char) {
+          case '\n': return '\\n';
+          case '\r': return '\\r';
+          case '\t': return '\\t';
+          case '\b': return '\\b';
+          case '\f': return '\\f';
+          default:
+            // Escape other control characters as \uXXXX
+            return '\\u' + char.charCodeAt(0).toString(16).padStart(4, '0');
+        }
+      });
     });
 
     // 3. Try to close unclosed arrays/objects (truncated output)
@@ -351,18 +364,13 @@ export class PlanOrchestrator {
     this.screenManager = screenManager;
     this.workingDir = workingDir;
     this.outputDir = outputDir;
+    console.log(`[PlanOrchestrator] Constructor called with outputDir: ${outputDir || 'UNDEFINED'}`);
   }
 
   /**
-   * Save agent prompt and result to the output directory.
-   * Creates a folder for each agent with prompt.md and result.json files.
+   * Save agent prompt immediately when agent starts (so UI can show it while running).
    */
-  private saveAgentOutput(
-    agentType: string,
-    prompt: string,
-    result: unknown,
-    durationMs: number
-  ): void {
+  private saveAgentPrompt(agentType: string, prompt: string): void {
     if (!this.outputDir) return;
 
     try {
@@ -382,6 +390,43 @@ export class PlanOrchestrator {
       const promptContent = `# ${agentType} Agent Prompt
 
 Generated: ${new Date().toISOString()}
+Status: Running...
+
+## Task Description
+${this.taskDescription}
+
+## Prompt
+${prompt}
+`;
+      writeFileSync(promptPath, promptContent, 'utf-8');
+      console.log(`[PlanOrchestrator] Saved ${agentType} prompt to ${agentDir}`);
+    } catch (err) {
+      console.error(`[PlanOrchestrator] Failed to save ${agentType} prompt:`, err);
+    }
+  }
+
+  /**
+   * Save agent result when agent completes.
+   */
+  private saveAgentResult(
+    agentType: string,
+    prompt: string,
+    result: unknown,
+    durationMs: number
+  ): void {
+    if (!this.outputDir) return;
+
+    try {
+      const agentDir = join(this.outputDir, agentType);
+      if (!existsSync(agentDir)) {
+        mkdirSync(agentDir, { recursive: true });
+      }
+
+      // Update prompt with duration
+      const promptPath = join(agentDir, 'prompt.md');
+      const promptContent = `# ${agentType} Agent Prompt
+
+Generated: ${new Date().toISOString()}
 Duration: ${(durationMs / 1000).toFixed(1)}s
 
 ## Task Description
@@ -396,10 +441,22 @@ ${prompt}
       const resultPath = join(agentDir, 'result.json');
       writeFileSync(resultPath, JSON.stringify(result, null, 2), 'utf-8');
 
-      console.log(`[PlanOrchestrator] Saved ${agentType} output to ${agentDir}`);
+      console.log(`[PlanOrchestrator] Saved ${agentType} result to ${agentDir}`);
     } catch (err) {
-      console.error(`[PlanOrchestrator] Failed to save ${agentType} output:`, err);
+      console.error(`[PlanOrchestrator] Failed to save ${agentType} result:`, err);
     }
+  }
+
+  /**
+   * Save agent prompt and result to the output directory (legacy, calls both).
+   */
+  private saveAgentOutput(
+    agentType: string,
+    prompt: string,
+    result: unknown,
+    durationMs: number
+  ): void {
+    this.saveAgentResult(agentType, prompt, result, durationMs);
   }
 
   /**
@@ -817,6 +874,9 @@ Check \`${caseDir}/ralph-wizard/research/result.json\` for:
       const prompt = RESEARCH_AGENT_PROMPT
         .replace('{TASK}', taskDescription)
         .replace('{WORKING_DIR}', this.workingDir);
+
+      // Save prompt immediately so UI can show it while running
+      this.saveAgentPrompt('research', prompt);
 
       onProgress?.('research', 'Starting research agent (local project + web search)...');
 
@@ -1272,6 +1332,9 @@ Check \`${caseDir}/ralph-wizard/research/result.json\` for:
       detail: `Analyzing ${agentType}...`,
     });
 
+    // Save prompt immediately so UI can show it while running
+    this.saveAgentPrompt(agentType, prompt);
+
     const session = new Session({
       workingDir: this.workingDir,
       screenManager: this.screenManager,
@@ -1635,6 +1698,9 @@ Check \`${caseDir}/ralph-wizard/research/result.json\` for:
         .replace('{TASK}', taskDescription)
         .replace('{PLAN}', planText);
 
+      // Save prompt immediately so UI can show it while running
+      this.saveAgentPrompt('verification', prompt);
+
       onProgress?.('verification', 'Validating plan quality...');
 
       // Periodic progress updates showing elapsed time
@@ -1877,7 +1943,7 @@ Check \`${caseDir}/ralph-wizard/research/result.json\` for:
     onSubagent?.({
       type: 'started',
       agentId,
-      agentType: 'execution',
+      agentType: 'execution-optimizer',
       model: MODEL_VERIFICATION,
       status: 'running',
       detail: 'Optimizing plan for Claude Code execution...',
@@ -1901,6 +1967,9 @@ Check \`${caseDir}/ralph-wizard/research/result.json\` for:
         .replace('{TASK}', taskDescription)
         .replace('{PLAN}', planText);
 
+      // Save prompt immediately so UI can show it while running
+      this.saveAgentPrompt('execution-optimizer', prompt);
+
       onProgress?.('execution-optimization', 'Analyzing parallelization opportunities...');
 
       // Periodic progress updates showing elapsed time
@@ -1911,7 +1980,7 @@ Check \`${caseDir}/ralph-wizard/research/result.json\` for:
         onSubagent?.({
           type: 'progress',
           agentId,
-          agentType: 'execution',
+          agentType: 'execution-optimizer',
           model: MODEL_VERIFICATION,
           status: 'running',
           detail: `Optimizing execution... (${elapsedSec}s / ${timeoutSec}s)`,
@@ -1941,7 +2010,7 @@ Check \`${caseDir}/ralph-wizard/research/result.json\` for:
         onSubagent?.({
           type: 'completed',
           agentId,
-          agentType: 'execution',
+          agentType: 'execution-optimizer',
           model: MODEL_VERIFICATION,
           status: 'completed',
           detail: 'Using default execution strategy',
@@ -2033,7 +2102,7 @@ Check \`${caseDir}/ralph-wizard/research/result.json\` for:
       onSubagent?.({
         type: 'completed',
         agentId,
-        agentType: 'execution',
+        agentType: 'execution-optimizer',
         model: MODEL_VERIFICATION,
         status: 'completed',
         itemCount: optimizedPlan.length,
@@ -2056,7 +2125,7 @@ Check \`${caseDir}/ralph-wizard/research/result.json\` for:
       onSubagent?.({
         type: 'failed',
         agentId,
-        agentType: 'execution',
+        agentType: 'execution-optimizer',
         model: MODEL_VERIFICATION,
         status: 'failed',
         error: err instanceof Error ? err.message : String(err),
@@ -2128,6 +2197,9 @@ Check \`${caseDir}/ralph-wizard/research/result.json\` for:
       const prompt = FINAL_REVIEW_PROMPT
         .replace('{TASK}', taskDescription)
         .replace('{PLAN}', planText);
+
+      // Save prompt immediately so UI can show it while running
+      this.saveAgentPrompt('final-review', prompt);
 
       onProgress?.('final-review', 'Analyzing overall plan coherence...');
 
