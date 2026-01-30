@@ -3482,6 +3482,10 @@ class ClaudemanApp {
     // Stop any existing generation first
     this.stopPlanGeneration();
 
+    // Close old plan subagent windows and clear their state
+    // This ensures clicking on prompts shows fresh data, not cached from previous runs
+    this.closePlanSubagentWindows();
+
     // Reset stopped flag to allow new SSE events
     this.planGenerationStopped = false;
 
@@ -4795,21 +4799,179 @@ class ClaudemanApp {
       return;
     }
 
+    // Get agent info from planSubagents Map
+    const agentInfo = this.planSubagents.get(agentId);
+    const isRunning = agentInfo?.status === 'running';
+    const taskDescription = this.ralphWizardConfig?.taskDescription || 'No task description available';
+
     try {
       const filePath = `${agentType}/prompt.md`;
       const res = await fetch(`/api/cases/${encodeURIComponent(caseName)}/ralph-wizard/file/${encodeURIComponent(filePath)}`);
       const data = await res.json();
 
       if (!data.success) {
-        this.showPlanFileWindow(agentType, 'prompt.md', `Error: ${data.error}`, false);
+        // File not found - show contextual message based on agent status
+        if (isRunning) {
+          const content = this.buildAgentRunningContent(agentType, agentInfo, taskDescription);
+          this.showPlanFileWindow(agentType, 'prompt.md', content, false);
+        } else {
+          // Agent completed but no prompt file - might have failed
+          const content = this.buildAgentNoPromptContent(agentType, taskDescription);
+          this.showPlanFileWindow(agentType, 'prompt.md', content, false);
+        }
         return;
       }
 
       this.showPlanFileWindow(agentType, 'prompt.md', data.data.content, false);
     } catch (err) {
       console.error('Failed to fetch prompt:', err);
-      this.showPlanFileWindow(agentType, 'prompt.md', `Error fetching prompt: ${err.message}`, false);
+      if (isRunning) {
+        const content = this.buildAgentRunningContent(agentType, agentInfo, taskDescription);
+        this.showPlanFileWindow(agentType, 'prompt.md', content, false);
+      } else {
+        this.showPlanFileWindow(agentType, 'prompt.md', `Error fetching prompt: ${err.message}`, false);
+      }
     }
+  }
+
+  buildAgentRunningContent(agentType, agentInfo, taskDescription) {
+    const typeDescriptions = {
+      research: {
+        title: 'Research Agent',
+        role: 'Gathering external resources, exploring the codebase, and identifying patterns',
+        activities: [
+          'Reading CLAUDE.md and project documentation',
+          'Exploring the codebase structure with Glob and Grep',
+          'Searching the web for relevant documentation and examples',
+          'Identifying existing patterns and conventions',
+          'Finding similar implementations to reference',
+        ],
+      },
+      requirements: {
+        title: 'Requirements Analyst',
+        role: 'Breaking down the task into concrete, actionable requirements',
+        activities: [
+          'Analyzing the task description for functional requirements',
+          'Identifying non-functional requirements (performance, security)',
+          'Detecting edge cases and error scenarios',
+          'Defining acceptance criteria for each requirement',
+        ],
+      },
+      architecture: {
+        title: 'Architecture Planner',
+        role: 'Designing the technical approach and file structure',
+        activities: [
+          'Identifying files to create or modify',
+          'Planning the module/component structure',
+          'Defining interfaces and data flow',
+          'Ensuring consistency with existing architecture',
+        ],
+      },
+      testing: {
+        title: 'TDD Specialist',
+        role: 'Planning the test-first development strategy',
+        activities: [
+          'Identifying test cases for each requirement',
+          'Planning unit, integration, and E2E tests',
+          'Defining test fixtures and mocks needed',
+          'Ensuring edge cases have test coverage',
+        ],
+      },
+      risks: {
+        title: 'Risk Analyst',
+        role: 'Identifying potential issues and mitigation strategies',
+        activities: [
+          'Analyzing potential failure points',
+          'Identifying security concerns',
+          'Flagging performance bottlenecks',
+          'Suggesting rollback strategies',
+        ],
+      },
+      verification: {
+        title: 'Verification Expert',
+        role: 'Validating plan completeness and quality',
+        activities: [
+          'Checking all requirements have implementation steps',
+          'Verifying test coverage is adequate',
+          'Ensuring dependencies are correctly ordered',
+          'Scoring plan quality and completeness',
+        ],
+      },
+      'execution-optimizer': {
+        title: 'Execution Optimizer',
+        role: 'Optimizing the plan for Claude Code execution',
+        activities: [
+          'Identifying tasks that can run in parallel',
+          'Grouping related tasks for efficiency',
+          'Marking fresh context requirements',
+          'Estimating token usage per task',
+        ],
+      },
+      'final-review': {
+        title: 'Final Reviewer',
+        role: 'Performing holistic validation of the complete plan',
+        activities: [
+          'Checking for gaps or missing steps',
+          'Validating task ordering and dependencies',
+          'Ensuring the plan is implementable',
+          'Final quality assessment',
+        ],
+      },
+    };
+
+    const info = typeDescriptions[agentType] || {
+      title: agentType,
+      role: 'Processing the task',
+      activities: ['Working on the task...'],
+    };
+
+    const elapsed = agentInfo?.startTime
+      ? Math.floor((Date.now() - agentInfo.startTime) / 1000)
+      : 0;
+    const model = agentInfo?.model || 'unknown';
+
+    let content = `# ${info.title} - Still Running\n\n`;
+    content += `⏳ **Status:** Generating... (${elapsed}s elapsed)\n`;
+    content += `🤖 **Model:** ${model}\n\n`;
+    content += `---\n\n`;
+    content += `## Role\n${info.role}\n\n`;
+    content += `## Currently Working On\n`;
+    info.activities.forEach(activity => {
+      content += `- ${activity}\n`;
+    });
+    content += `\n---\n\n`;
+    content += `## Task Being Analyzed\n\n`;
+    content += `\`\`\`\n${taskDescription}\n\`\`\`\n\n`;
+    content += `---\n\n`;
+    content += `*The full prompt will be available once the agent completes.*\n`;
+    content += `*Click again after completion to see the actual prompt that was used.*`;
+
+    return content;
+  }
+
+  buildAgentNoPromptContent(agentType, taskDescription) {
+    const typeLabels = {
+      research: 'Research Agent',
+      requirements: 'Requirements Analyst',
+      architecture: 'Architecture Planner',
+      testing: 'TDD Specialist',
+      risks: 'Risk Analyst',
+      verification: 'Verification Expert',
+      'execution-optimizer': 'Execution Optimizer',
+      'final-review': 'Final Reviewer',
+    };
+
+    let content = `# ${typeLabels[agentType] || agentType} - No Prompt Available\n\n`;
+    content += `The prompt file for this agent was not saved.\n\n`;
+    content += `This can happen if:\n`;
+    content += `- The agent failed before completing\n`;
+    content += `- The plan generation was cancelled\n`;
+    content += `- There was an error saving the output\n\n`;
+    content += `---\n\n`;
+    content += `## Task Description\n\n`;
+    content += `\`\`\`\n${taskDescription}\n\`\`\``;
+
+    return content;
   }
 
   async showPlanAgentFiles(agentId, agentType) {

@@ -564,4 +564,15 @@ export class TaskTracker extends EventEmitter {
     this.taskStack = [];
     this.pendingToolUses.clear();
   }
+
+  /**
+   * Clean up resources and release memory.
+   *
+   * Call this when the session is being destroyed to prevent memory leaks.
+   * Clears all data and removes all event listeners.
+   */
+  destroy(): void {
+    this.clear();
+    this.removeAllListeners();
+  }
 }

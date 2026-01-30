@@ -1754,6 +1754,8 @@ body {
 
 .btn-toolbar.btn-claude svg {
   flex-shrink: 0;
+  width: 12px;
+  height: 12px;
 }
 
 /* Shell Button - Special styling */
@@ -2492,6 +2494,21 @@ body {
   overflow: hidden;
 }
 
+/* Fix CSS specificity: ID selector overrides class selector, so we need this explicit rule */
+#summary-tab.hidden,
+#respawn-tab.hidden,
+#context-tab.hidden,
+#ralph-tab.hidden {
+  display: none !important;
+}
+
+/* Also hide child elements when parent tab is hidden (belt and suspenders) */
+#summary-tab.hidden .run-summary-filters,
+#summary-tab.hidden .run-summary-timeline,
+#summary-tab.hidden .run-summary-footer {
+  display: none !important;
+}
+
 #summary-tab .run-summary-filters {
   flex-shrink: 0;
 }
@@ -2958,13 +2975,35 @@ body {
   width: 60px;
 }
 
+/* Respawn header with status and actions */
+.respawn-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.respawn-header .respawn-actions {
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+/* Respawn options row - inline checkboxes */
+.respawn-options-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 0.25rem;
+}
+
 /* Respawn actions in modal */
 .respawn-actions {
   display: flex;
   gap: 0.5rem;
-  margin-top: 0.75rem;
-  padding-top: 0.75rem;
-  border-top: 1px solid var(--border);
 }
 
 .session-respawn-actions {
@@ -3003,7 +3042,89 @@ body {
 }
 
 .modal-tab-content.hidden {
-  display: none;
+  display: none !important;
+}
+
+/* Context Tab Settings Grid */
+.context-settings-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.context-setting {
+  padding: 0.875rem;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.context-setting-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.625rem;
+}
+
+.context-setting-header .checkbox-inline span {
+  font-weight: 500;
+}
+
+.context-setting-header .input-suffix-sm {
+  flex-shrink: 0;
+}
+
+.context-setting-header .input-suffix-sm input {
+  width: 70px;
+}
+
+.context-setting input[type="text"] {
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.75rem;
+}
+
+.context-setting input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.context-setting .form-hint {
+  margin-top: 0.5rem;
+}
+
+/* Ralph Limits Grid */
+.ralph-limits-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+@media (max-width: 500px) {
+  .ralph-limits-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.ralph-limits-grid .form-col input[type="number"] {
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.ralph-limits-grid .form-col .form-hint {
+  font-size: 0.6rem;
 }
 
 /* Ralph Config Actions */

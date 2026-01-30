@@ -16,7 +16,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md`
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1433 (must match `package.json`)
+**Version**: 0.1434 (must match `package.json`)
 
 ## Project Overview
 
@@ -219,3 +219,26 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 ## Deprecated Code
 
 The TUI (Terminal UI) has been removed in favor of the web interface. Files in `src/tui/` are excluded from compilation via `tsconfig.json`.
+
+## Active Ralph Loop Task
+
+**Current Task**: built out the mac os installation script for claudeman, check if there is something available in your working directory and then optimize it and make a really clean, easy, simple and fully working installation script for claudeman for mac os x
+
+**Case Folder**: `/home/arkon/claudeman-cases/claudeman`
+
+### Key Files
+- **Plan Summary**: `/home/arkon/claudeman-cases/claudeman/ralph-wizard/summary.md` - Human-readable plan overview
+- **Todo Items**: `/home/arkon/claudeman-cases/claudeman/ralph-wizard/final-result.json` - Contains `items` array with all todo tasks
+- **Research**: `/home/arkon/claudeman-cases/claudeman/ralph-wizard/research/result.json` - External resources and codebase patterns
+
+### How to Work on This Task
+1. Read the plan summary to understand the overall approach
+2. Check `final-result.json` for the todo items array - each item has `id`, `title`, `description`, `priority`
+3. Work through items in priority order (critical → high → medium → low)
+4. Use `<promise>COMPLETION_PHRASE</promise>` when the entire task is complete
+
+### Research Insights
+Check `/home/arkon/claudeman-cases/claudeman/ralph-wizard/research/result.json` for:
+- External GitHub repos and documentation links to reference
+- Existing codebase patterns to follow
+- Technical recommendations from the research phase

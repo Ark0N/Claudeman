@@ -128,6 +128,12 @@ const STALE_IDLE_MAX_AGE_MS = 4 * 60 * 60 * 1000; // Remove idle agents older th
 const STARTUP_MAX_FILE_AGE_MS = 4 * 60 * 60 * 1000; // Only load files modified in last 4 hours on startup
 const MAX_TRACKED_AGENTS = 500; // Maximum agents to track (LRU eviction when exceeded)
 
+// Internal Claude Code agent patterns to filter out (not real user-initiated subagents)
+const INTERNAL_AGENT_PATTERNS = [
+  /^\[?SUGGESTION MODE/i,  // Claude Code's internal suggestion mode
+  /^Suggest what user might/i,  // Suggestion mode prompt variant
+];
+
 // Display/preview length constants
 const TEXT_PREVIEW_LENGTH = 200; // Length for text previews in tool results
 const USER_TEXT_PREVIEW_LENGTH = 80; // Length for user message previews
@@ -154,6 +160,15 @@ export class SubagentWatcher extends EventEmitter {
 
   constructor() {
     super();
+  }
+
+  /**
+   * Check if a description matches internal Claude Code agent patterns.
+   * These are not real user-initiated subagents and should be filtered out.
+   */
+  private isInternalAgent(description: string | undefined): boolean {
+    if (!description) return false;
+    return INTERNAL_AGENT_PATTERNS.some(pattern => pattern.test(description));
   }
 
   /**
@@ -925,6 +940,11 @@ export class SubagentWatcher extends EventEmitter {
       description = this.extractDescriptionFromFile(filePath);
     }
 
+    // Skip internal Claude Code agents (e.g., suggestion mode) - not real subagents
+    if (this.isInternalAgent(description)) {
+      return;
+    }
+
     const info: SubagentInfo = {
       agentId,
       sessionId,
@@ -980,6 +1000,11 @@ export class SubagentWatcher extends EventEmitter {
                 extractedDescription = this.extractDescriptionFromFile(filePath);
               }
               if (extractedDescription) {
+                // Check if this is an internal agent - if so, remove it
+                if (this.isInternalAgent(extractedDescription)) {
+                  this.removeAgent(agentId);
+                  return;
+                }
                 existingInfo.description = extractedDescription;
                 this.emit('subagent:updated', existingInfo);
               }
@@ -1094,6 +1119,11 @@ export class SubagentWatcher extends EventEmitter {
         }
       }
       if (description) {
+        // Check if this is an internal agent - if so, remove it
+        if (this.isInternalAgent(description)) {
+          this.removeAgent(agentId);
+          return;
+        }
         info.description = description;
         this.emit('subagent:updated', info);
       }

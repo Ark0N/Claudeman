@@ -329,6 +329,10 @@ export class FileStreamManager extends EventEmitter {
     for (const streamId of this.streams.keys()) {
       this.closeStream(streamId);
     }
+
+    // Clear Maps to release references
+    this.streams.clear();
+    this.sessionStreamCounts.clear();
   }
 
   // ========== Private Methods ==========

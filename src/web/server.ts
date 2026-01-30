@@ -14,7 +14,7 @@ import Fastify, { FastifyInstance, FastifyReply } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import path, { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { homedir, totalmem, freemem, loadavg, cpus } from 'node:os';
@@ -2518,6 +2518,17 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         const resolvedBase = resolve(casesDir);
         if (resolvedCase.startsWith(resolvedBase) && existsSync(casePath)) {
           outputDir = join(casePath, 'ralph-wizard');
+
+          // Clear old ralph-wizard directory to ensure fresh prompts for each generation
+          // This prevents stale prompts from previous runs being shown when clicking on agents
+          if (existsSync(outputDir)) {
+            try {
+              rmSync(outputDir, { recursive: true, force: true });
+              console.log(`[API] Cleared old ralph-wizard directory: ${outputDir}`);
+            } catch (err) {
+              console.warn(`[API] Failed to clear ralph-wizard directory:`, err);
+            }
+          }
         }
       }
 
@@ -2665,10 +2676,16 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     });
 
     // Read a specific ralph-wizard file
-    this.app.get('/api/cases/:caseName/ralph-wizard/file/:filePath', async (req) => {
+    // Cache disabled to ensure fresh prompts when starting new plan generations
+    this.app.get('/api/cases/:caseName/ralph-wizard/file/:filePath', async (req, reply) => {
       const { caseName, filePath } = req.params as { caseName: string; filePath: string };
       const casesDir = join(homedir(), 'claudeman-cases');
       const casePath = join(casesDir, caseName);
+
+      // Prevent browser caching - prompts change between plan generations
+      reply.header('Cache-Control', 'no-store, no-cache, must-revalidate');
+      reply.header('Pragma', 'no-cache');
+      reply.header('Expires', '0');
 
       // Security: Path traversal protection for case name
       const resolvedCase = resolve(casePath);

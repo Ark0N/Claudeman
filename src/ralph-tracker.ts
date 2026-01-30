@@ -1882,6 +1882,8 @@ export class RalphTracker extends EventEmitter {
   clear(): void {
     // Clear debounce timers to prevent stale emissions after clear
     this.clearDebounceTimers();
+    // Stop fix plan file watcher to prevent memory leak
+    this.stopWatchingFixPlan();
     this._loopState = createInitialRalphTrackerState(); // This sets enabled: false
     this._todos.clear();
     this._taskNumberToContent.clear();
@@ -2764,5 +2766,21 @@ export class RalphTracker extends EventEmitter {
     const currentIteration = this._loopState.cycleCount;
     return this._checkpointIterations.includes(currentIteration) &&
            currentIteration > this._lastCheckpointIteration;
+  }
+
+  /**
+   * Clean up all resources and release memory.
+   *
+   * Call this when the session is being destroyed to prevent memory leaks.
+   * Stops file watchers, clears all timers, data, and removes event listeners.
+   */
+  destroy(): void {
+    this.clearDebounceTimers();
+    this.stopWatchingFixPlan();
+    this._todos.clear();
+    this._taskNumberToContent.clear();
+    this._completionPhraseCount.clear();
+    this._planTasks.clear();
+    this.removeAllListeners();
   }
 }

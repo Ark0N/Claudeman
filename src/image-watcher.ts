@@ -67,8 +67,11 @@ export class ImageWatcher extends EventEmitter {
   /** Map of sessionId -> working directory path */
   private sessionDirs = new Map<string, string>();
 
-  /** Debounce timers for rapid image creation */
+  /** Debounce timers for rapid image creation (keyed by filePath) */
   private debounceTimers = new Map<string, NodeJS.Timeout>();
+
+  /** Track which session owns each debounce timer (for cleanup) */
+  private timerToSession = new Map<string, string>();
 
   /** Whether the watcher is currently running */
   private _isRunning = false;
@@ -117,6 +120,7 @@ export class ImageWatcher extends EventEmitter {
       clearTimeout(timer);
     }
     this.debounceTimers.clear();
+    this.timerToSession.clear();
   }
 
   /**
@@ -199,11 +203,21 @@ export class ImageWatcher extends EventEmitter {
     }
     this.sessionDirs.delete(sessionId);
 
-    // Clear any pending debounce timer for this session
-    const timer = this.debounceTimers.get(sessionId);
-    if (timer) {
-      clearTimeout(timer);
-      this.debounceTimers.delete(sessionId);
+    // Clear any pending debounce timers for this session
+    // Collect keys first to avoid iterator invalidation during deletion
+    const toDelete: string[] = [];
+    for (const [filePath, ownerId] of this.timerToSession) {
+      if (ownerId === sessionId) {
+        toDelete.push(filePath);
+      }
+    }
+    for (const filePath of toDelete) {
+      const timer = this.debounceTimers.get(filePath);
+      if (timer) {
+        clearTimeout(timer);
+        this.debounceTimers.delete(filePath);
+      }
+      this.timerToSession.delete(filePath);
     }
   }
 
@@ -236,10 +250,12 @@ export class ImageWatcher extends EventEmitter {
 
     const timer = setTimeout(() => {
       this.debounceTimers.delete(filePath);
+      this.timerToSession.delete(filePath);
       this.emitImageDetected(sessionId, filePath);
     }, DEBOUNCE_DELAY_MS);
 
     this.debounceTimers.set(filePath, timer);
+    this.timerToSession.set(filePath, sessionId);
   }
 
   /**

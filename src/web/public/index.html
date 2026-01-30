@@ -426,15 +426,19 @@
           <div class="modal-tab-content" id="respawn-tab">
           <!-- Respawn Settings Section -->
           <div class="session-respawn-section" id="sessionRespawnSection">
-            <div class="section-divider">
+            <div class="respawn-header">
               <div class="session-respawn-status" id="sessionRespawnStatus">
                 <span class="respawn-status-indicator"></span>
                 <span class="respawn-status-text">Not active</span>
               </div>
+              <div class="respawn-actions">
+                <button class="btn-toolbar btn-success btn-sm" onclick="app.enableRespawnFromModal()" id="modalEnableRespawnBtn">Enable</button>
+                <button class="btn-toolbar btn-danger btn-sm" onclick="app.stopRespawnFromModal()" id="modalStopRespawnBtn" style="display: none;">Stop</button>
+              </div>
             </div>
 
             <div class="form-row">
-              <label>Run Duration</label>
+              <label>Duration</label>
               <div class="duration-presets">
                 <button type="button" class="duration-preset-btn" data-minutes="30" onclick="app.selectDurationPreset('30')">30m</button>
                 <button type="button" class="duration-preset-btn" data-minutes="60" onclick="app.selectDurationPreset('60')">1h</button>
@@ -450,26 +454,12 @@
                   </div>
                 </div>
               </div>
-              <span class="form-hint">How long to run the respawn loop</span>
             </div>
 
+            <div class="form-section-header">Prompts</div>
             <div class="form-row">
               <label>Update Prompt</label>
               <input type="text" id="modalRespawnPrompt" value="update all the docs and CLAUDE.md" placeholder="Prompt to send when idle" onchange="app.autoSaveRespawnConfig()">
-            </div>
-
-            <div class="form-row">
-              <label>After Update Prompt</label>
-              <div class="checkbox-group-inline">
-                <label class="checkbox-inline">
-                  <input type="checkbox" id="modalRespawnSendClear" checked onchange="app.autoSaveRespawnConfig()">
-                  <span>Send /clear</span>
-                </label>
-                <label class="checkbox-inline">
-                  <input type="checkbox" id="modalRespawnSendInit" checked onchange="app.autoSaveRespawnConfig()">
-                  <span>Send /init</span>
-                </label>
-              </div>
             </div>
 
             <div class="form-row">
@@ -478,64 +468,67 @@
               <span class="form-hint">Sent only when /init completes but Claude stays idle</span>
             </div>
 
-            <div class="form-row">
-              <label>Auto-Accept Plan Mode</label>
-              <div class="checkbox-group-inline">
-                <label class="checkbox-inline">
-                  <input type="checkbox" id="modalRespawnAutoAccept" checked onchange="app.autoSaveRespawnConfig()">
-                  <span>Accept plan mode approvals</span>
-                </label>
-              </div>
-              <span class="form-hint">Presses Enter to accept plan approvals and default question options when Claude is waiting</span>
+            <div class="form-section-header">Behavior</div>
+            <div class="respawn-options-row">
+              <label class="checkbox-inline">
+                <input type="checkbox" id="modalRespawnSendClear" checked onchange="app.autoSaveRespawnConfig()">
+                <span>Send /clear</span>
+              </label>
+              <label class="checkbox-inline">
+                <input type="checkbox" id="modalRespawnSendInit" checked onchange="app.autoSaveRespawnConfig()">
+                <span>Send /init</span>
+              </label>
+              <label class="checkbox-inline">
+                <input type="checkbox" id="modalRespawnAutoAccept" checked onchange="app.autoSaveRespawnConfig()">
+                <span>Auto-accept prompts</span>
+              </label>
             </div>
-
-            <div class="respawn-actions">
-              <button class="btn-toolbar btn-success" onclick="app.enableRespawnFromModal()" id="modalEnableRespawnBtn">Enable Respawn</button>
-              <button class="btn-toolbar btn-danger" onclick="app.stopRespawnFromModal()" id="modalStopRespawnBtn" style="display: none;">Stop Respawn</button>
-            </div>
+            <span class="form-hint">Auto-accept presses Enter for plan approvals and default question options</span>
           </div>
           </div><!-- End respawn-tab -->
 
           <!-- Context Management Tab Content -->
           <div class="modal-tab-content hidden" id="context-tab">
-            <div class="form-row">
-              <label>Auto-Compact Context</label>
-              <div class="auto-clear-row">
-                <label class="checkbox-inline">
-                  <input type="checkbox" id="modalAutoCompactEnabled" onchange="app.autoSaveAutoCompact()">
-                  <span>Enable at</span>
-                </label>
-                <div class="input-suffix input-suffix-sm">
-                  <input type="number" id="modalAutoCompactThreshold" value="110000" min="10000" max="500000" step="10000" onchange="app.autoSaveAutoCompact()">
-                  <span>tokens</span>
+            <div class="form-section-header">Token Management</div>
+            <div class="context-settings-grid">
+              <div class="context-setting">
+                <div class="context-setting-header">
+                  <label class="checkbox-inline">
+                    <input type="checkbox" id="modalAutoCompactEnabled" onchange="app.autoSaveAutoCompact()">
+                    <span>Auto-Compact</span>
+                  </label>
+                  <div class="input-suffix input-suffix-sm">
+                    <input type="number" id="modalAutoCompactThreshold" value="110000" min="10000" max="500000" step="10000" onchange="app.autoSaveAutoCompact()">
+                    <span>tokens</span>
+                  </div>
                 </div>
+                <input type="text" id="modalAutoCompactPrompt" value="" placeholder="Focus prompt (optional)" onchange="app.autoSaveAutoCompact()">
+                <span class="form-hint">Summarizes context while preserving key information</span>
               </div>
-              <input type="text" id="modalAutoCompactPrompt" value="" placeholder="Optional: focus prompt for compact" class="mt-sm" onchange="app.autoSaveAutoCompact()">
-              <span class="form-hint">Summarizes context while preserving key information</span>
+
+              <div class="context-setting">
+                <div class="context-setting-header">
+                  <label class="checkbox-inline">
+                    <input type="checkbox" id="modalAutoClearEnabled" onchange="app.autoSaveAutoClear()">
+                    <span>Auto-Clear</span>
+                  </label>
+                  <div class="input-suffix input-suffix-sm">
+                    <input type="number" id="modalAutoClearThreshold" value="140000" min="10000" max="500000" step="10000" onchange="app.autoSaveAutoClear()">
+                    <span>tokens</span>
+                  </div>
+                </div>
+                <span class="form-hint">Full context reset at threshold (use higher than compact)</span>
+              </div>
             </div>
 
-            <div class="form-row">
-              <label>Auto-Clear Context</label>
-              <div class="auto-clear-row">
-                <label class="checkbox-inline">
-                  <input type="checkbox" id="modalAutoClearEnabled" onchange="app.autoSaveAutoClear()">
-                  <span>Enable at</span>
-                </label>
-                <div class="input-suffix input-suffix-sm">
-                  <input type="number" id="modalAutoClearThreshold" value="140000" min="10000" max="500000" step="10000" onchange="app.autoSaveAutoClear()">
-                  <span>tokens</span>
-                </div>
-              </div>
-              <span class="form-hint">Completely resets context (use higher threshold than compact)</span>
-            </div>
-
+            <div class="form-section-header">File Watching</div>
             <div class="form-row form-row-switch">
               <label>Image Watcher</label>
               <label class="switch">
                 <input type="checkbox" id="modalImageWatcherEnabled" checked onchange="app.toggleSessionImageWatcher()">
                 <span class="slider"></span>
               </label>
-              <span class="form-hint">Auto-popup new images (screenshots, etc.) in this session's directory</span>
+              <span class="form-hint">Auto-popup new images (screenshots, generated files) in this session's directory</span>
             </div>
           </div><!-- End context-tab -->
 
@@ -547,34 +540,34 @@
                 <input type="checkbox" id="modalRalphEnabled">
                 <span class="slider"></span>
               </label>
-              <span class="form-hint">Enable Ralph / Todo tracker for this session (auto-detects loops and todos)</span>
+              <span class="form-hint">Auto-detects loops and todos in Claude output</span>
             </div>
 
             <div class="form-row">
               <label>Completion Phrase</label>
               <input type="text" id="modalRalphPhrase" placeholder="e.g., COMPLETE, DONE, FINISHED">
-              <span class="form-hint">The phrase Claude outputs when the loop is complete (without &lt;promise&gt; tags)</span>
+              <span class="form-hint">Phrase Claude outputs when loop is complete (without &lt;promise&gt; tags)</span>
             </div>
 
-            <div class="form-row">
-              <label>Max Iterations</label>
-              <input type="number" id="modalRalphMaxIterations" value="0" min="0" max="1000">
-              <span class="form-hint">Maximum respawn cycles (0 = unlimited)</span>
-            </div>
-
-            <div class="form-row">
-              <label>Max Todos</label>
-              <input type="number" id="modalRalphMaxTodos" value="50" min="1" max="500">
-              <span class="form-hint">Maximum todos to track per session</span>
-            </div>
-
-            <div class="form-row">
-              <label>Todo Expiration</label>
-              <div class="input-suffix input-suffix-sm">
-                <input type="number" id="modalRalphTodoExpiration" value="60" min="1" max="1440">
-                <span>min</span>
+            <div class="form-section-header">Limits</div>
+            <div class="ralph-limits-grid">
+              <div class="form-col">
+                <label>Max Iterations</label>
+                <input type="number" id="modalRalphMaxIterations" value="0" min="0" max="1000">
+                <span class="form-hint">0 = unlimited</span>
               </div>
-              <span class="form-hint">Minutes before todos auto-expire</span>
+              <div class="form-col">
+                <label>Max Todos</label>
+                <input type="number" id="modalRalphMaxTodos" value="50" min="1" max="500">
+                <span class="form-hint">Per session</span>
+              </div>
+              <div class="form-col">
+                <label>Todo Expiration</label>
+                <div class="input-suffix input-suffix-sm">
+                  <input type="number" id="modalRalphTodoExpiration" value="60" min="1" max="1440">
+                  <span>min</span>
+                </div>
+              </div>
             </div>
 
             <div class="ralph-config-actions">
@@ -1153,14 +1146,6 @@
             <details class="advanced-options">
               <summary>Advanced Options</summary>
               <div class="advanced-options-content">
-                <div class="form-row form-row-switch">
-                  <label>Auto-Start After Plan</label>
-                  <label class="switch">
-                    <input type="checkbox" id="ralphAutoStart">
-                    <span class="slider"></span>
-                  </label>
-                  <span class="form-hint">Automatically start the loop when plan generation completes</span>
-                </div>
                 <div class="form-row form-row-switch">
                   <label>Enable Respawn</label>
                   <label class="switch">

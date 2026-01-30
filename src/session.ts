@@ -80,6 +80,14 @@ const FOCUS_ESCAPE_FILTER = /\x1b\[\?1004[hl]|\x1b\[[IO]/g;
 // We look for the tool name followed by (description)
 const TASK_TOOL_PATTERN = /\b(Explore|Task|Bash|Plan|general-purpose)\(([^)]+)\)/g;
 
+// Pre-compiled patterns for hot paths (avoid regex compilation per call)
+/** Pattern to strip leading ANSI escapes and whitespace from terminal buffer */
+const LEADING_ANSI_WHITESPACE_PATTERN = /^(\x1b\[\??[\d;]*[A-Za-z]|[\s\r\n])+/;
+/** Pattern to match Ctrl+L (form feed) characters */
+const CTRL_L_PATTERN = /\x0c/g;
+/** Pattern to split by newlines (CR or LF) */
+const NEWLINE_SPLIT_PATTERN = /\r?\n/;
+
 // ============================================================================
 // Claude CLI PATH Resolution
 // ============================================================================
@@ -297,7 +305,6 @@ export class Session extends EventEmitter {
   private _currentTaskId: string | null = null;
   // Use BufferAccumulator for hot-path buffers to reduce GC pressure
   private _terminalBuffer = new BufferAccumulator(MAX_TERMINAL_BUFFER_SIZE, TERMINAL_BUFFER_TRIM_SIZE);
-  private _outputBuffer: string = '';
   private _textOutput = new BufferAccumulator(MAX_TEXT_OUTPUT_SIZE, TEXT_OUTPUT_TRIM_SIZE);
   private _errorBuffer: string = '';
   private _lastActivityAt: number;
@@ -467,10 +474,6 @@ export class Session extends EventEmitter {
 
   get terminalBuffer(): string {
     return this._terminalBuffer.value;
-  }
-
-  get outputBuffer(): string {
-    return this._outputBuffer;
   }
 
   get textOutput(): string {
@@ -787,7 +790,6 @@ export class Session extends EventEmitter {
 
     this._status = 'busy';
     this._terminalBuffer.clear();
-    this._outputBuffer = '';
     this._textOutput.clear();
     this._errorBuffer = '';
     this._messages = [];
@@ -852,7 +854,7 @@ export class Session extends EventEmitter {
               // Strip: cursor movement (\x1b[nA/B/C/D), positioning (\x1b[n;nH),
               // clear screen (\x1b[2J), scroll region (\x1b[n;nr), and whitespace
               this._terminalBuffer.set(
-                bufferValue.replace(/^(\x1b\[\??[\d;]*[A-Za-z]|[\s\r\n])+/, '')
+                bufferValue.replace(LEADING_ANSI_WHITESPACE_PATTERN, '')
               );
               // Signal client to refresh
               this.emit('clearTerminal');
@@ -916,7 +918,7 @@ export class Session extends EventEmitter {
       // Filter out focus escape sequences and Ctrl+L (form feed)
       const data = rawData
         .replace(FOCUS_ESCAPE_FILTER, '')
-        .replace(/\x0c/g, '');  // Remove Ctrl+L
+        .replace(CTRL_L_PATTERN, '');  // Remove Ctrl+L
       if (!data) return; // Skip if only filtered sequences
 
       // BufferAccumulator handles auto-trimming when max size exceeded
@@ -1033,7 +1035,6 @@ export class Session extends EventEmitter {
 
     this._status = 'busy';
     this._terminalBuffer.clear();
-    this._outputBuffer = '';
     this._textOutput.clear();
     this._errorBuffer = '';
     this._messages = [];
@@ -1198,7 +1199,6 @@ export class Session extends EventEmitter {
 
       this._status = 'busy';
       this._terminalBuffer.clear();
-      this._outputBuffer = '';
       this._textOutput.clear();
       this._errorBuffer = '';
       this._messages = [];
@@ -1433,7 +1433,7 @@ export class Session extends EventEmitter {
     if (!data.includes('(') || !data.includes(')')) return;
 
     // Split by newlines and process each line
-    const lines = data.split(/\r?\n/);
+    const lines = data.split(NEWLINE_SPLIT_PATTERN);
     for (const line of lines) {
       this.parseTaskDescriptionsFromLine(line);
     }
@@ -1803,8 +1803,11 @@ export class Session extends EventEmitter {
       this._bashToolParser.off('toolsUpdate', this._bashToolHandlers.toolsUpdate);
       this._bashToolHandlers = null;
     }
-    this._bashToolParser.destroy();
 
+    // Destroy all trackers to release memory and stop timers
+    this._bashToolParser.destroy();
+    this._taskTracker.destroy();
+    this._ralphTracker.destroy();
   }
 
   /**
@@ -1939,7 +1942,6 @@ export class Session extends EventEmitter {
     this._currentTaskId = taskId;
     this._status = 'busy';
     this._terminalBuffer.clear();
-    this._outputBuffer = '';
     this._textOutput.clear();
     this._errorBuffer = '';
     this._messages = [];
@@ -1966,7 +1968,6 @@ export class Session extends EventEmitter {
 
   clearBuffers(): void {
     this._terminalBuffer.clear();
-    this._outputBuffer = '';
     this._textOutput.clear();
     this._errorBuffer = '';
     this._messages = [];

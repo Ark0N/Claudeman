@@ -145,8 +145,11 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
   private _workingDir: string;
   private _homeDir: string;
 
-  // Track normalized paths to detect equivalents (normalized -> original)
-  private _normalizedPathMap: Map<string, string> = new Map();
+  // Track auto-remove timers for cleanup
+  private _autoRemoveTimers: Set<ReturnType<typeof setTimeout>> = new Set();
+
+  // Flag to prevent operations after destroy
+  private _destroyed: boolean = false;
 
   // Debouncing
   private _pendingUpdate: boolean = false;
@@ -395,7 +398,6 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
    */
   reset(): void {
     this._activeTools.clear();
-    this._normalizedPathMap.clear();
     this._lineBuffer = '';
     this._lastToolId = null;
     this.emitUpdate();
@@ -408,7 +410,7 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
    * @param data - Raw terminal data (may include ANSI codes)
    */
   processTerminalData(data: string): void {
-    if (!this._enabled) return;
+    if (!this._enabled || this._destroyed) return;
 
     // Append to line buffer
     this._lineBuffer += data;
@@ -496,10 +498,13 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
         this.scheduleUpdate();
 
         // Remove completed tool after a short delay to allow UI to show completion
-        setTimeout(() => {
+        const timer = setTimeout(() => {
+          this._autoRemoveTimers.delete(timer);
+          if (this._destroyed) return;
           this._activeTools.delete(tool.id);
           this.scheduleUpdate();
         }, 2000);
+        this._autoRemoveTimers.add(timer);
       }
       this._lastToolId = null;
       return;
@@ -531,10 +536,13 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
       this.scheduleUpdate();
 
       // Auto-remove suggestions after 30 seconds
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        this._autoRemoveTimers.delete(timer);
+        if (this._destroyed) return;
         this._activeTools.delete(tool.id);
         this.scheduleUpdate();
       }, 30000);
+      this._autoRemoveTimers.add(timer);
       return;
     }
 
@@ -565,10 +573,13 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
       this.scheduleUpdate();
 
       // Auto-remove after 60 seconds
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        this._autoRemoveTimers.delete(timer);
+        if (this._destroyed) return;
         this._activeTools.delete(tool.id);
         this.scheduleUpdate();
       }, 60000);
+      this._autoRemoveTimers.add(timer);
     }
   }
 
@@ -657,12 +668,17 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
    * Clean up resources.
    */
   destroy(): void {
+    this._destroyed = true;
     if (this._updateTimer) {
       clearTimeout(this._updateTimer);
       this._updateTimer = null;
     }
+    // Clear all auto-remove timers to prevent orphaned callbacks
+    for (const timer of this._autoRemoveTimers) {
+      clearTimeout(timer);
+    }
+    this._autoRemoveTimers.clear();
     this._activeTools.clear();
-    this._normalizedPathMap.clear();
     this.removeAllListeners();
   }
 }
