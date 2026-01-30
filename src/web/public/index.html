@@ -13,6 +13,8 @@
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
 </head>
 <body>
+  <!-- Skip link for keyboard users -->
+  <a href="#terminalContainer" class="skip-link">Skip to terminal</a>
   <div class="app">
     <!-- Compact Header with Session Tabs -->
     <header class="header">
@@ -21,14 +23,14 @@
       </div>
 
       <!-- Session Tabs -->
-      <div class="session-tabs" id="sessionTabs">
+      <div class="session-tabs" id="sessionTabs" role="tablist" aria-label="Session tabs">
       </div>
 
       <div class="header-right">
         <div class="header-font-controls">
-          <button class="btn-icon-header btn-sm" onclick="app.decreaseFontSize()" title="Decrease font (Ctrl+-)">A-</button>
-          <span class="font-size-display" id="fontSizeDisplay">14</span>
-          <button class="btn-icon-header btn-sm" onclick="app.increaseFontSize()" title="Increase font (Ctrl++)">A+</button>
+          <button class="btn-icon-header btn-sm" onclick="app.decreaseFontSize()" title="Decrease font (Ctrl+-)" aria-label="Decrease font size">A-</button>
+          <span class="font-size-display" id="fontSizeDisplay" aria-label="Current font size">14</span>
+          <button class="btn-icon-header btn-sm" onclick="app.increaseFontSize()" title="Increase font (Ctrl++)" aria-label="Increase font size">A+</button>
         </div>
         <div class="header-system-stats" id="headerSystemStats" title="System resource usage">
           <div class="stat-item">
@@ -46,11 +48,11 @@
             <span class="stat-value" id="statMem">--</span>
           </div>
         </div>
-        <button class="btn-icon-header btn-notifications" onclick="app.toggleNotifications()" title="Notifications">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        <button class="btn-icon-header btn-notifications" onclick="app.toggleNotifications()" title="Notifications" aria-label="Toggle notifications">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
           <span class="notification-badge" id="notifBadge" style="display:none;">0</span>
         </button>
-        <button class="btn-icon-header btn-settings" onclick="app.openAppSettings()" title="App Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+        <button class="btn-icon-header btn-settings" onclick="app.openAppSettings()" title="App Settings" aria-label="Open app settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
         <div class="header-tokens" id="headerTokens" title="Total tokens across all sessions">0 tokens</div>
       </div>
     </header>
@@ -62,7 +64,7 @@
         <div class="timer-progress"><div class="timer-progress-fill" id="timerProgress"></div></div>
         <span class="timer-meta" id="timerMeta">0 tasks | $0.00</span>
       </div>
-      <button class="btn-icon-only" onclick="app.stopCurrentRun()" title="Stop">&#x25A0;</button>
+      <button class="btn-icon-only" onclick="app.stopCurrentRun()" title="Stop" aria-label="Stop current run">&#x25A0;</button>
     </div>
 
     <!-- Respawn Banner - Compact 2-column layout -->
@@ -76,7 +78,7 @@
             <span class="respawn-cycles">#<span id="respawnCycleCount">0</span></span>
             <span class="respawn-timer" id="respawnTimer" style="display: none;"></span>
             <span class="respawn-tokens" id="respawnTokens" style="display: none;"></span>
-            <button class="btn-icon-only" onclick="app.stopRespawn()" title="Stop Respawn">&#x25A0;</button>
+            <button class="btn-icon-only" onclick="app.stopRespawn()" title="Stop Respawn" aria-label="Stop respawn">&#x25A0;</button>
           </div>
           <div class="respawn-status-row2" id="respawnStatusRow2">
             <span class="detection-hook" id="detectionHook" style="display: none;"></span>
@@ -309,7 +311,7 @@
       <div class="modal-content">
         <div class="modal-header">
           <h3>Keyboard Shortcuts</h3>
-          <button class="modal-close" onclick="app.closeHelp()">&times;</button>
+          <button class="modal-close" onclick="app.closeHelp()" aria-label="Close help">&times;</button>
         </div>
         <div class="modal-body">
           <div class="shortcuts-grid">
@@ -412,7 +414,7 @@
       <div class="modal-content">
         <div class="modal-header">
           <h3>Session Options</h3>
-          <button class="modal-close" onclick="app.closeSessionOptions()">&times;</button>
+          <button class="modal-close" onclick="app.closeSessionOptions()" aria-label="Close session options">&times;</button>
         </div>
         <!-- Modal Tabs -->
         <div class="modal-tabs">
@@ -456,6 +458,23 @@
               </div>
             </div>
 
+            <div class="form-section-header">Presets</div>
+            <div class="form-row">
+              <label>Load Preset</label>
+              <div class="preset-selector">
+                <select id="respawnPresetSelect" onchange="app.updatePresetDescription()">
+                  <option value="">-- Select preset --</option>
+                  <optgroup label="Built-in" id="builtinPresetsGroup">
+                  </optgroup>
+                  <optgroup label="Custom" id="customPresetsGroup">
+                  </optgroup>
+                </select>
+                <button type="button" class="btn btn-sm" onclick="app.loadRespawnPreset()" title="Apply preset">Apply</button>
+                <button type="button" class="btn btn-sm btn-secondary" onclick="app.saveCurrentAsPreset()" title="Save current config as preset">Save As...</button>
+              </div>
+              <p class="form-hint" id="presetDescriptionHint"></p>
+            </div>
+
             <div class="form-section-header">Respawn Cycle</div>
             <div class="form-row">
               <label>1. Update Prompt</label>
@@ -492,6 +511,37 @@
 
           <!-- Context Management Tab Content -->
           <div class="modal-tab-content hidden" id="context-tab">
+            <div class="form-section-header">Appearance</div>
+            <div class="form-row">
+              <label>Session Color</label>
+              <div class="color-picker" id="sessionColorPicker">
+                <button type="button" class="color-swatch" data-color="default" title="Default">
+                  <span class="swatch-inner" style="background: var(--bg-hover)"></span>
+                </button>
+                <button type="button" class="color-swatch" data-color="red" title="Red">
+                  <span class="swatch-inner" style="background: var(--session-red)"></span>
+                </button>
+                <button type="button" class="color-swatch" data-color="orange" title="Orange">
+                  <span class="swatch-inner" style="background: var(--session-orange)"></span>
+                </button>
+                <button type="button" class="color-swatch" data-color="yellow" title="Yellow">
+                  <span class="swatch-inner" style="background: var(--session-yellow)"></span>
+                </button>
+                <button type="button" class="color-swatch" data-color="green" title="Green">
+                  <span class="swatch-inner" style="background: var(--session-green)"></span>
+                </button>
+                <button type="button" class="color-swatch" data-color="blue" title="Blue">
+                  <span class="swatch-inner" style="background: var(--session-blue)"></span>
+                </button>
+                <button type="button" class="color-swatch" data-color="purple" title="Purple">
+                  <span class="swatch-inner" style="background: var(--session-purple)"></span>
+                </button>
+                <button type="button" class="color-swatch" data-color="pink" title="Pink">
+                  <span class="swatch-inner" style="background: var(--session-pink)"></span>
+                </button>
+              </div>
+            </div>
+
             <div class="form-section-header">Token Management</div>
             <div class="context-settings-grid">
               <div class="context-setting">
@@ -618,7 +668,7 @@
       <div class="modal-content modal-sm">
         <div class="modal-header">
           <h3>Close Session</h3>
-          <button class="modal-close" onclick="app.cancelCloseSession()">&times;</button>
+          <button class="modal-close" onclick="app.cancelCloseSession()" aria-label="Cancel close session">&times;</button>
         </div>
         <div class="modal-body">
           <p class="modal-session-name" id="closeConfirmSessionName"></p>
@@ -645,7 +695,7 @@
       <div class="modal-content modal-lg">
         <div class="modal-header">
           <h3>App Settings</h3>
-          <button class="modal-close" onclick="app.closeAppSettings()">&times;</button>
+          <button class="modal-close" onclick="app.closeAppSettings()" aria-label="Close app settings">&times;</button>
         </div>
         <div class="modal-tabs">
           <button class="modal-tab-btn active" data-tab="settings-display">Display</button>
@@ -879,6 +929,7 @@
                   <span class="settings-status" id="notifPermissionStatus">?</span>
                 </div>
               </div>
+              <span class="form-hint" style="grid-column: 1 / -1; margin-top: -8px;">For remote access, HTTPS is required. Start with: <code>claudeman web --https</code></span>
 
               <!-- Alerts Section -->
               <div class="settings-section-header">Alerts</div>
@@ -923,6 +974,52 @@
                 </label>
               </div>
             </div>
+
+            <!-- Event Type Preferences -->
+            <div class="settings-grid" style="margin-top: 12px;">
+              <div class="settings-section-header">Per-Event Settings</div>
+            </div>
+            <div class="event-type-grid">
+              <div class="event-header">Event</div>
+              <div class="event-header">On</div>
+              <div class="event-header">Browser</div>
+              <div class="event-header">Sound</div>
+
+              <div class="event-label">Permission prompts</div>
+              <input type="checkbox" id="eventPermissionEnabled" checked>
+              <input type="checkbox" id="eventPermissionBrowser" checked>
+              <input type="checkbox" id="eventPermissionAudio" checked>
+
+              <div class="event-label">Questions from Claude</div>
+              <input type="checkbox" id="eventQuestionEnabled" checked>
+              <input type="checkbox" id="eventQuestionBrowser" checked>
+              <input type="checkbox" id="eventQuestionAudio" checked>
+
+              <div class="event-label">Session idle</div>
+              <input type="checkbox" id="eventIdleEnabled" checked>
+              <input type="checkbox" id="eventIdleBrowser" checked>
+              <input type="checkbox" id="eventIdleAudio">
+
+              <div class="event-label">Response complete</div>
+              <input type="checkbox" id="eventStopEnabled" checked>
+              <input type="checkbox" id="eventStopBrowser">
+              <input type="checkbox" id="eventStopAudio">
+
+              <div class="event-label">Respawn cycles</div>
+              <input type="checkbox" id="eventRespawnEnabled" checked>
+              <input type="checkbox" id="eventRespawnBrowser">
+              <input type="checkbox" id="eventRespawnAudio">
+
+              <div class="event-label">Task complete</div>
+              <input type="checkbox" id="eventRalphEnabled" checked>
+              <input type="checkbox" id="eventRalphBrowser" checked>
+              <input type="checkbox" id="eventRalphAudio" checked>
+
+              <div class="event-label">Subagent activity</div>
+              <input type="checkbox" id="eventSubagentEnabled">
+              <input type="checkbox" id="eventSubagentBrowser">
+              <input type="checkbox" id="eventSubagentAudio">
+            </div>
           </div>
         </div>
         <div class="form-actions">
@@ -938,7 +1035,7 @@
       <div class="modal-content modal-lg">
         <div class="modal-header">
           <h3>Add Case</h3>
-          <button class="modal-close" onclick="app.closeCreateCaseModal()">&times;</button>
+          <button class="modal-close" onclick="app.closeCreateCaseModal()" aria-label="Close create case">&times;</button>
         </div>
         <div class="modal-tabs">
           <button class="modal-tab-btn active" data-tab="case-create">Create New</button>
@@ -990,7 +1087,7 @@
               <span class="agent-count" id="wizardAgentCount">0</span>
             </button>
             <button class="btn-icon-only wizard-minimize-btn" id="wizardMinimizeBtn" onclick="app.minimizeRalphWizard()" title="Minimize wizard">&#x2012;</button>
-            <button class="modal-close" onclick="app.closeRalphWizard()">&times;</button>
+            <button class="modal-close" onclick="app.closeRalphWizard()" aria-label="Close Ralph wizard">&times;</button>
           </div>
         </div>
 
@@ -1187,7 +1284,7 @@
       <div class="modal-content modal-sm">
         <div class="modal-header">
           <h3>Kill All Sessions</h3>
-          <button class="modal-close" onclick="app.closeKillAllModal()">&times;</button>
+          <button class="modal-close" onclick="app.closeKillAllModal()" aria-label="Close kill all modal">&times;</button>
         </div>
         <div class="modal-body">
           <p class="modal-warning-text">Choose how to close <span id="killAllCount">0</span> session(s):</p>
@@ -1228,7 +1325,7 @@
       <div class="modal-content token-stats-modal">
         <div class="modal-header">
           <h3>Token Usage Statistics</h3>
-          <button class="modal-close" onclick="app.closeTokenStats()">&times;</button>
+          <button class="modal-close" onclick="app.closeTokenStats()" aria-label="Close token statistics">&times;</button>
         </div>
         <div class="modal-body">
           <div class="stats-summary" id="statsSummary"></div>
@@ -1242,6 +1339,31 @@
             <div class="stats-table" id="statsTable"></div>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Save Preset Modal -->
+  <div class="modal" id="savePresetModal">
+    <div class="modal-backdrop" onclick="app.closeSavePresetModal()"></div>
+    <div class="modal-content modal-sm">
+      <div class="modal-header">
+        <h3>Save Respawn Preset</h3>
+        <button class="modal-close" onclick="app.closeSavePresetModal()" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label>Preset Name</label>
+          <input type="text" id="presetNameInput" placeholder="My Custom Preset" maxlength="30">
+        </div>
+        <div class="form-row">
+          <label>Description (optional)</label>
+          <input type="text" id="presetDescriptionInput" placeholder="When to use this preset" maxlength="100">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="app.closeSavePresetModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="app.confirmSavePreset()">Save Preset</button>
       </div>
     </div>
   </div>

@@ -140,34 +140,49 @@ find_full_session_id() {
 }
 
 # Get session name from Claudeman state or screens.json
+# Falls back to working directory basename if name is empty
 get_session_name() {
     local session_id="$1"
+    local name=""
+    local workdir=""
 
-    # First, try screens.json (array format) - it has the name field
+    # First, try screens.json (array format) - it has both name and workingDir
     if [ -f "$CLAUDEMAN_SCREENS" ]; then
-        local name
-        name=$(jq -r --arg id "$session_id" '
-            .[] | select(.sessionId | startswith($id)) | .name // empty
+        local result
+        result=$(jq -r --arg id "$session_id" '
+            .[] | select(.sessionId | startswith($id)) | "\(.name // "")\t\(.workingDir // "")"
         ' "$CLAUDEMAN_SCREENS" 2>/dev/null | head -1)
-        if [ -n "$name" ] && [ "$name" != "null" ]; then
-            echo "$name"
-            return
+        if [ -n "$result" ]; then
+            name="${result%%	*}"
+            workdir="${result#*	}"
         fi
     fi
 
-    # Try state.json with full session ID lookup
-    if [ -f "$CLAUDEMAN_STATE" ]; then
-        local name
-        name=$(jq -r --arg id "$session_id" '
-            .sessions | to_entries[] | select(.key | startswith($id)) | .value.name // empty
+    # If no name yet, try state.json
+    if [ -z "$name" ] && [ -f "$CLAUDEMAN_STATE" ]; then
+        local result
+        result=$(jq -r --arg id "$session_id" '
+            .sessions | to_entries[] | select(.key | startswith($id)) | "\(.value.name // "")\t\(.value.workingDir // "")"
         ' "$CLAUDEMAN_STATE" 2>/dev/null | head -1)
-        if [ -n "$name" ] && [ "$name" != "null" ]; then
-            echo "$name"
-            return
+        if [ -n "$result" ]; then
+            name="${result%%	*}"
+            [ -z "$workdir" ] && workdir="${result#*	}"
         fi
     fi
 
-    # Fallback: use short ID
+    # If we have a name, use it
+    if [ -n "$name" ]; then
+        echo "$name"
+        return
+    fi
+
+    # Fallback to working directory basename
+    if [ -n "$workdir" ]; then
+        echo "${workdir##*/}"
+        return
+    fi
+
+    # Last resort: use short ID
     echo "${session_id:0:8}"
 }
 
@@ -468,6 +483,7 @@ attach_screen() {
     local idx="$1"
     local pid="${SCREEN_PIDS[$idx]}"
     local name="${SCREEN_NAMES[$idx]}"
+    local state="${SCREEN_STATES[$idx]}"
 
     if [ -z "$pid" ]; then
         return 1
@@ -478,8 +494,13 @@ attach_screen() {
     echo -e "${D}(Ctrl+A D to detach)${R}"
     sleep 0.3
 
-    # Attach
-    screen -r "$pid.$name"
+    # Use -x for attached screens (multi-display mode), -r for detached
+    # -x allows joining a screen that's already attached elsewhere
+    if [[ "$state" == "Attached" ]] || [[ "$state" == "Multi" ]]; then
+        screen -x "$pid.$name"
+    else
+        screen -r "$pid.$name"
+    fi
 
     # After detach, return to chooser
     return 0

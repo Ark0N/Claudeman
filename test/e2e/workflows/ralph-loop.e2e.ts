@@ -91,9 +91,10 @@ describe('Ralph Loop Wizard E2E', () => {
     }
   }, E2E_TIMEOUTS.TEST);
 
-  it('should start Ralph Loop with claudeman-ios using initprompt.md', async () => {
+  it('should start Ralph Loop with test case using initprompt.md', async () => {
     let browser: BrowserFixture | null = null;
-    const caseName = 'claudeman-ios'; // Use existing case
+    // CRITICAL: Use e2e-test- prefix to ensure cleanup safety
+    const caseName = generateCaseName('ralph-wizard');
     const casePath = join(homedir(), 'claudeman-cases', caseName);
 
     try {
@@ -103,20 +104,14 @@ describe('Ralph Loop Wizard E2E', () => {
       if (!cleanup) {
         cleanup = new CleanupTracker(serverFixture.baseUrl);
       }
+      cleanup.trackCase(caseName);
 
-      // Read the initprompt.md from the case
-      const initPromptPath = join(casePath, 'initprompt.md');
-      let taskDescription = 'Test task for Ralph Loop';
-      if (existsSync(initPromptPath)) {
-        taskDescription = readFileSync(initPromptPath, 'utf-8').trim();
-        console.log('[RalphLoopE2E] Using initprompt.md:', taskDescription.slice(0, 100) + '...');
-      } else {
-        console.log('[RalphLoopE2E] initprompt.md not found, using default task');
-      }
+      // Use a test task description (not from a real user case)
+      const taskDescription = 'Test task for Ralph Loop E2E: implement a simple hello world function';
+      console.log('[RalphLoopE2E] Using test task:', taskDescription);
 
-      // Check if @fix_plan.md exists (for reuse)
-      const fixPlanPath = join(casePath, '@fix_plan.md');
-      const hasExistingPlan = existsSync(fixPlanPath);
+      // No existing fix plan for test case
+      const hasExistingPlan = false;
       console.log('[RalphLoopE2E] Existing @fix_plan.md:', hasExistingPlan);
 
       browser = await createBrowserFixture();
@@ -125,6 +120,29 @@ describe('Ralph Loop Wizard E2E', () => {
       await navigateTo(page, serverFixture.baseUrl);
 
       // Open Ralph wizard
+      await page.waitForSelector('.btn-ralph', { timeout: E2E_TIMEOUTS.ELEMENT_VISIBLE });
+      await clickElement(page, '.btn-ralph');
+      await page.waitForSelector('#ralphWizardModal.active', { timeout: E2E_TIMEOUTS.ELEMENT_VISIBLE });
+
+      // For test case, we need to create it first via API, then select it
+      // Create the test case via quick-start API first
+      const createRes = await fetch(`${serverFixture.baseUrl}/api/quick-start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caseName, mode: 'claude' }),
+      });
+      const createData = await createRes.json();
+      if (createData.success && createData.sessionId) {
+        cleanup.trackSession(createData.sessionId);
+        // Delete the session but keep the case (we'll use it for Ralph wizard)
+        await fetch(`${serverFixture.baseUrl}/api/sessions/${createData.sessionId}`, {
+          method: 'DELETE',
+        });
+        await page.waitForTimeout(500);
+      }
+
+      // Refresh page to pick up the new case
+      await page.reload();
       await page.waitForSelector('.btn-ralph', { timeout: E2E_TIMEOUTS.ELEMENT_VISIBLE });
       await clickElement(page, '.btn-ralph');
       await page.waitForSelector('#ralphWizardModal.active', { timeout: E2E_TIMEOUTS.ELEMENT_VISIBLE });
@@ -201,7 +219,7 @@ describe('Ralph Loop Wizard E2E', () => {
       expect(Array.isArray(sessions)).toBe(true);
       expect(sessions.length).toBeGreaterThan(0);
 
-      // Find the NEWEST session for claudeman-ios (sort by createdAt descending)
+      // Find the NEWEST session for our e2e-test case (sort by createdAt descending)
       const matchingSessions = sessions
         .filter((s: any) => s.workingDir?.includes(caseName))
         .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -213,9 +231,11 @@ describe('Ralph Loop Wizard E2E', () => {
       expect(session).toBeDefined();
       cleanup.trackSession(session.id);
 
-      // Verify screen was created
+      // Verify screen was created - note: screen name won't contain 'e2e-test' since it uses sessionId
+      // This is fine - the CleanupTracker will refuse to track it but that's OK since
+      // the session deletion via API will kill the screen anyway
       const screenName = `claudeman-${session.id.slice(0, 8)}`;
-      cleanup.trackScreen(screenName);
+      // Note: Don't track screen directly - let session deletion handle it
       const screenList = execSync('screen -ls 2>/dev/null || true', {
         encoding: 'utf-8',
         timeout: 5000,

@@ -589,6 +589,50 @@ add_to_path() {
 }
 
 # ============================================================================
+# Screen Configuration
+# ============================================================================
+
+setup_screenrc() {
+    local screenrc="$HOME/.screenrc"
+
+    # Check if screenrc already exists and has our config
+    if [[ -f "$screenrc" ]] && grep -q "mousetrack on" "$screenrc" 2>/dev/null; then
+        info "Screen configuration already set up"
+        return 0
+    fi
+
+    info "Setting up screen configuration..."
+
+    # Backup existing screenrc if it exists
+    if [[ -f "$screenrc" ]]; then
+        cp "$screenrc" "${screenrc}.backup.$(date +%Y%m%d%H%M%S)"
+        info "Backed up existing .screenrc"
+    fi
+
+    # Create or append screen config
+    cat >> "$screenrc" << 'EOF'
+
+# ============================================================================
+# Claudeman screen configuration
+# ============================================================================
+
+# Enable mouse tracking for scrolling in mobile terminals (Termius, etc.)
+mousetrack on
+
+# Increase scrollback buffer (default is 100)
+defscrollback 10000
+
+# Disable startup message
+startup_message off
+
+# Enable alternate screen (better compatibility)
+altscreen on
+EOF
+
+    success "Screen configuration saved to $screenrc"
+}
+
+# ============================================================================
 # Systemd Service Setup (Linux only)
 # ============================================================================
 
@@ -837,6 +881,12 @@ main() {
             add_to_path "$symlink_dir"
         fi
     fi
+
+    # ========================================================================
+    # Screen Configuration
+    # ========================================================================
+
+    setup_screenrc
 
     # ========================================================================
     # Systemd Service (Linux only)

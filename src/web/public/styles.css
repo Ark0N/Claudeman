@@ -336,50 +336,6 @@ body {
   border-left: 1px solid var(--border);
 }
 
-.connection-status {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.7rem;
-  color: var(--text-dim);
-}
-
-.status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--yellow);
-  flex-shrink: 0;
-}
-
-.status-dot.connected { background: var(--green); }
-.status-dot.disconnected { background: var(--red); }
-.status-dot.connecting {
-  background: var(--yellow);
-  animation: status-pulse 1.5s ease-in-out infinite;
-}
-.status-dot.reconnecting {
-  background: var(--orange, #f97316);
-  animation: status-pulse 1s ease-in-out infinite;
-}
-.status-dot.offline {
-  background: var(--text-muted);
-}
-
-@keyframes status-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.5; transform: scale(1.2); }
-}
-
-.status-freshness {
-  font-size: 0.6rem;
-  color: var(--text-dim);
-  margin-left: 2px;
-  white-space: nowrap;
-}
-.status-freshness.stale { color: var(--yellow); }
-.status-freshness.very-stale { color: var(--red); }
-
 .header-tokens {
   font-size: 0.75rem;
   font-weight: 500;

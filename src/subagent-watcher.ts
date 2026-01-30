@@ -132,7 +132,12 @@ const MAX_TRACKED_AGENTS = 500; // Maximum agents to track (LRU eviction when ex
 const INTERNAL_AGENT_PATTERNS = [
   /^\[?SUGGESTION MODE/i,  // Claude Code's internal suggestion mode
   /^Suggest what user might/i,  // Suggestion mode prompt variant
+  /^aprompt$/i,  // Internal prompt agent
+  /^a\s?prompt/i,  // Variants of internal prompt agent
 ];
+
+// Minimum description length - very short descriptions are likely internal or malformed
+const MIN_DESCRIPTION_LENGTH = 5;
 
 // Display/preview length constants
 const TEXT_PREVIEW_LENGTH = 200; // Length for text previews in tool results
@@ -165,9 +170,12 @@ export class SubagentWatcher extends EventEmitter {
   /**
    * Check if a description matches internal Claude Code agent patterns.
    * These are not real user-initiated subagents and should be filtered out.
+   * Also filters out very short descriptions that are likely internal or malformed.
    */
   private isInternalAgent(description: string | undefined): boolean {
     if (!description) return false;
+    // Filter out very short descriptions (likely internal or malformed)
+    if (description.length < MIN_DESCRIPTION_LENGTH) return true;
     return INTERNAL_AGENT_PATTERNS.some(pattern => pattern.test(description));
   }
 

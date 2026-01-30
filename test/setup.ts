@@ -6,7 +6,13 @@
  * - Tracked resource cleanup (only kills what tests create)
  * - Global beforeAll/afterAll hooks
  *
- * SAFETY: This setup ONLY cleans up resources that the test suite itself creates.
+ * CRITICAL SAFETY GUARANTEES:
+ * 1. Pre-existing screens (captured at MODULE LOAD) are NEVER killed
+ * 2. Current process screen ($CLAUDEMAN_SCREEN_NAME) is NEVER killed
+ * 3. Only screens explicitly registered via registerTestScreen() can be killed
+ * 4. All screen names must pass validation before being accepted
+ *
+ * This setup ONLY cleans up resources that the test suite itself creates.
  * It will NEVER kill Claude processes or screens that weren't spawned by tests.
  * This makes it safe to run tests from within a Claudeman-managed session.
  */
@@ -28,11 +34,96 @@ let currentScreenCount = 0;
 const screenWaiters: Array<() => void> = [];
 
 /**
+ * CRITICAL: Pre-existing screens captured at MODULE LOAD time.
+ * These screens existed before any test code ran and must NEVER be killed.
+ * This is captured immediately when the module loads, not in beforeAll.
+ */
+const preExistingScreensAtModuleLoad = new Set<string>();
+
+/** Current process's screen name - NEVER kill this */
+const CURRENT_PROCESS_SCREEN = process.env.CLAUDEMAN_SCREEN_NAME || '';
+
+// Capture pre-existing screens IMMEDIATELY when this module loads
+// This happens before any test runs, providing maximum protection
+try {
+  const output = execSync('screen -ls 2>/dev/null || true', { encoding: 'utf-8', timeout: 5000 });
+  for (const line of output.split('\n')) {
+    const match = line.match(/\d+\.([^\s]+)/);
+    if (match) {
+      preExistingScreensAtModuleLoad.add(match[1]);
+    }
+  }
+  if (preExistingScreensAtModuleLoad.size > 0 || CURRENT_PROCESS_SCREEN) {
+    console.log(`[Test Setup] MODULE LOAD: Protected ${preExistingScreensAtModuleLoad.size} pre-existing screens`);
+    if (CURRENT_PROCESS_SCREEN) {
+      console.log(`[Test Setup] MODULE LOAD: Current process screen: ${CURRENT_PROCESS_SCREEN}`);
+    }
+  }
+} catch {
+  // Ignore errors during capture
+}
+
+/**
+ * Check if a screen name matches user-created patterns (w1-*, s1-*)
+ */
+function isUserScreenPattern(screenName: string): boolean {
+  return /^[ws]\d+-/.test(screenName);
+}
+
+/**
+ * Check if a screen name looks like a test screen (contains 'test')
+ */
+function isTestScreen(screenName: string): boolean {
+  return screenName.toLowerCase().includes('test');
+}
+
+/**
+ * Check if a screen is protected and must NEVER be killed.
+ *
+ * CRITICAL: Protection is based on WHEN the screen was created:
+ * - Screens in preExistingScreensAtModuleLoad existed before tests = USER screens
+ * - Current process screen is always protected
+ * - User patterns (w1-*, s1-*) are protected as extra safety
+ */
+function isScreenProtected(screenName: string): boolean {
+  // Pre-existing screens from module load are ALWAYS protected
+  if (preExistingScreensAtModuleLoad.has(screenName)) {
+    return true;
+  }
+  // Current process's screen is protected
+  if (CURRENT_PROCESS_SCREEN && screenName === CURRENT_PROCESS_SCREEN) {
+    return true;
+  }
+  // Also protect screens from preExistingScreens set (captured in beforeAll)
+  if (preExistingScreens.has(screenName)) {
+    return true;
+  }
+  // Protect user-created screen patterns (w1-*, s1-*) as extra safety
+  if (isUserScreenPattern(screenName)) {
+    return true;
+  }
+  // Everything else can be cleaned up
+  return false;
+}
+
+/**
  * Kill only the screens that tests have registered via registerTestScreen()
+ * SAFETY: Only kills screens with 'test' in the name AND not protected
  */
 function killTrackedTestScreens(): void {
   for (const screenName of activeTestScreens) {
+    // CRITICAL: Only kill screens with explicit 'test' marker
+    if (!screenName.includes('test')) {
+      console.warn(`[Test Setup] SKIPPING: Screen ${screenName} doesn't contain 'test' - not killing`);
+      continue;
+    }
+    // Double-check protection before killing
+    if (isScreenProtected(screenName)) {
+      console.warn(`[Test Setup] BLOCKED: Refusing to kill protected screen: ${screenName}`);
+      continue;
+    }
     try {
+      console.log(`[Test Setup] Killing test screen: ${screenName}`);
       execSync(`screen -S ${screenName} -X quit 2>/dev/null || true`, { encoding: 'utf-8' });
     } catch {
       // Ignore errors
@@ -100,9 +191,15 @@ export function releaseScreenSlot(): void {
 }
 
 /**
- * Register a screen session for tracking
+ * Register a screen session for tracking.
+ * SAFETY: Protected screens will be skipped at cleanup time.
  */
 export function registerTestScreen(screenName: string): void {
+  // Warn if registering a protected screen, but allow it
+  // (protection happens at kill time, not registration time)
+  if (isScreenProtected(screenName)) {
+    console.warn(`[Test Setup] WARNING: Registering protected screen ${screenName} - will be skipped during cleanup`);
+  }
   activeTestScreens.add(screenName);
 }
 
@@ -250,4 +347,8 @@ export {
   killTrackedTestScreens,
   killTrackedTestClaudeProcesses,
   MAX_CONCURRENT_SCREENS,
+  isScreenProtected,
+  isTestScreen,
+  isUserScreenPattern,
+  preExistingScreensAtModuleLoad,
 };

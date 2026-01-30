@@ -685,8 +685,6 @@ class ClaudemanApp {
     // SSE connection status tracking
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 10;
-    this.lastDataReceived = Date.now();
-    this.freshnessInterval = null;
     this.isOnline = navigator.onLine;
 
     // Accessibility: Focus trap for modals
@@ -781,8 +779,6 @@ class ClaudemanApp {
     this.startSystemStatsPolling();
     // Setup online/offline detection
     this.setupOnlineDetection();
-    // Start freshness timer
-    this.startFreshnessTimer();
     // Load server-stored settings (async, re-applies visibility after load)
     this.loadAppSettingsFromServer().then(() => {
       this.applyHeaderVisibilitySettings();
@@ -1274,13 +1270,8 @@ class ClaudemanApp {
     // Store all event listeners for cleanup on reconnect
     const listeners = [];
     const addListener = (event, handler) => {
-      // Wrap handler to mark data received on every SSE event
-      const wrappedHandler = (e) => {
-        this.markDataReceived();
-        handler(e);
-      };
-      this.eventSource.addEventListener(event, wrappedHandler);
-      listeners.push({ event, handler: wrappedHandler });
+      this.eventSource.addEventListener(event, handler);
+      listeners.push({ event, handler });
     };
 
     // Create cleanup function to remove all listeners
@@ -1295,7 +1286,6 @@ class ClaudemanApp {
 
     this.eventSource.onopen = () => {
       this.reconnectAttempts = 0;
-      this.lastDataReceived = Date.now();
       this.setConnectionStatus('connected');
     };
     this.eventSource.onerror = () => {
@@ -2197,35 +2187,8 @@ class ClaudemanApp {
     });
   }
 
-  setConnectionStatus(status) {
-    const dot = document.querySelector('.status-dot');
-    const text = document.querySelector('.status-text');
-    if (!dot || !text) return;
-
-    dot.className = 'status-dot ' + status;
-
-    const statusLabels = {
-      connected: 'Connected',
-      connecting: 'Connecting...',
-      reconnecting: `Reconnecting (${this.reconnectAttempts}/${this.maxReconnectAttempts})`,
-      disconnected: 'Disconnected',
-      offline: 'Offline'
-    };
-    text.textContent = statusLabels[status] || status;
-
-    // Update title with more details
-    const container = document.getElementById('connectionStatus');
-    if (container) {
-      if (status === 'reconnecting') {
-        container.title = `SSE reconnecting - attempt ${this.reconnectAttempts} of ${this.maxReconnectAttempts}`;
-      } else if (status === 'disconnected') {
-        container.title = 'SSE connection lost - max reconnection attempts reached';
-      } else if (status === 'offline') {
-        container.title = 'Browser is offline - waiting for network';
-      } else {
-        container.title = 'SSE connection status';
-      }
-    }
+  setConnectionStatus(_status) {
+    // Connection status UI removed - method kept for compatibility
   }
 
   setupOnlineDetection() {
@@ -2238,62 +2201,6 @@ class ClaudemanApp {
       this.isOnline = false;
       this.setConnectionStatus('offline');
     });
-  }
-
-  startFreshnessTimer() {
-    // Clear existing interval if any
-    if (this.freshnessInterval) {
-      clearInterval(this.freshnessInterval);
-    }
-
-    // Update freshness display every second
-    this.freshnessInterval = setInterval(() => {
-      this.updateFreshnessDisplay();
-    }, 1000);
-  }
-
-  updateFreshnessDisplay() {
-    const freshnessEl = document.getElementById('statusFreshness');
-    if (!freshnessEl) return;
-
-    const dot = document.querySelector('.status-dot');
-    const isConnected = dot?.classList.contains('connected');
-
-    // Only show freshness when connected
-    if (!isConnected) {
-      freshnessEl.textContent = '';
-      freshnessEl.className = 'status-freshness';
-      return;
-    }
-
-    const elapsed = Math.floor((Date.now() - this.lastDataReceived) / 1000);
-
-    // Format the elapsed time
-    let timeText;
-    if (elapsed < 60) {
-      timeText = `${elapsed}s ago`;
-    } else if (elapsed < 3600) {
-      const mins = Math.floor(elapsed / 60);
-      timeText = `${mins}m ago`;
-    } else {
-      const hours = Math.floor(elapsed / 3600);
-      timeText = `${hours}h ago`;
-    }
-
-    freshnessEl.textContent = timeText;
-
-    // Apply staleness classes
-    freshnessEl.className = 'status-freshness';
-    if (elapsed > 30) {
-      freshnessEl.classList.add('very-stale');
-    } else if (elapsed > 10) {
-      freshnessEl.classList.add('stale');
-    }
-  }
-
-  // Call this when any SSE event is received to update lastDataReceived
-  markDataReceived() {
-    this.lastDataReceived = Date.now();
   }
 
   handleInit(data) {

@@ -108,6 +108,19 @@ export interface SessionConfig {
 }
 
 /**
+ * Available session colors for visual differentiation
+ */
+export type SessionColor =
+  | 'default'
+  | 'red'
+  | 'orange'
+  | 'yellow'
+  | 'green'
+  | 'blue'
+  | 'purple'
+  | 'pink';
+
+/**
  * Current state of a session
  */
 export interface SessionState {
@@ -163,6 +176,8 @@ export interface SessionState {
   niceEnabled?: boolean;
   /** Nice value (-20 to 19) */
   niceValue?: number;
+  /** User-assigned color for visual differentiation */
+  color?: SessionColor;
 }
 
 // ========== Global Stats Types ==========
@@ -379,6 +394,26 @@ export interface RespawnConfig {
   aiPlanCheckTimeoutMs?: number;
   /** Cooldown after NOT_PLAN_MODE verdict in ms */
   aiPlanCheckCooldownMs?: number;
+}
+
+/**
+ * Named respawn configuration preset for quick setup
+ */
+export interface RespawnPreset {
+  /** Unique preset identifier */
+  id: string;
+  /** User-friendly preset name */
+  name: string;
+  /** Description of when to use this preset */
+  description?: string;
+  /** The respawn configuration (without enabled flag) */
+  config: Omit<RespawnConfig, 'enabled'>;
+  /** Duration in minutes (optional default) */
+  durationMinutes?: number;
+  /** Whether this is a built-in preset */
+  builtIn?: boolean;
+  /** Timestamp when created */
+  createdAt: number;
 }
 
 /**
