@@ -362,6 +362,9 @@ export class Session extends EventEmitter {
   // Nice prioritying configuration
   private _niceConfig: NiceConfig = { ...DEFAULT_NICE_CONFIG };
 
+  // Session color for visual differentiation
+  private _color: import('./types.js').SessionColor = 'default';
+
   // Store handler references for cleanup (prevents memory leaks)
   private _taskTrackerHandlers: {
     taskCreated: (task: BackgroundTask) => void;
@@ -592,6 +595,18 @@ export class Session extends EventEmitter {
     }
   }
 
+  // Session color for visual differentiation
+  get color(): import('./types.js').SessionColor {
+    return this._color;
+  }
+
+  setColor(color: import('./types.js').SessionColor): void {
+    const validColors = ['default', 'red', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink'];
+    if (validColors.includes(color)) {
+      this._color = color;
+    }
+  }
+
   // Token tracking getters and setters
   get totalTokens(): number {
     return this._totalInputTokens + this._totalOutputTokens;
@@ -717,6 +732,7 @@ export class Session extends EventEmitter {
       childAgentIds: this._childAgentIds.length > 0 ? this._childAgentIds : undefined,
       niceEnabled: this._niceConfig.enabled,
       niceValue: this._niceConfig.niceValue,
+      color: this._color,
     };
   }
 
@@ -1314,6 +1330,9 @@ export class Session extends EventEmitter {
       } catch (err) {
         this._status = 'error';
         reject(err);
+        // Null callbacks to prevent memory leak (onExit won't run if spawn failed)
+        this.resolvePromise = null;
+        this.rejectPromise = null;
       }
     });
   }
@@ -1920,6 +1939,9 @@ export class Session extends EventEmitter {
     this._status = 'stopped';
     this._currentTaskId = null;
 
+    // Clear task description cache to prevent memory leak
+    this._recentTaskDescriptions.clear();
+
     // Kill the associated screen session if requested
     if (killScreen && this._screenManager) {
       // Try to kill screen even if _screenSession is not set (e.g., restored sessions)
@@ -1973,5 +1995,6 @@ export class Session extends EventEmitter {
     this._messages = [];
     this._taskTracker.clear();
     this._ralphTracker.clear();
+    this._recentTaskDescriptions.clear();
   }
 }

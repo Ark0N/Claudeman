@@ -309,6 +309,21 @@ export class WebServer extends EventEmitter {
   private activePlanOrchestrators: Map<string, PlanOrchestrator> = new Map();
   // Grace period before starting restored respawn controllers (2 minutes)
   private static readonly RESPAWN_RESTORE_GRACE_PERIOD_MS = 2 * 60 * 1000;
+  // Stored listener handlers for cleanup
+  private subagentWatcherHandlers: {
+    discovered: (info: SubagentInfo) => void;
+    updated: (info: SubagentInfo) => void;
+    toolCall: (data: SubagentToolCall) => void;
+    toolResult: (data: SubagentToolResult) => void;
+    progress: (data: SubagentProgress) => void;
+    message: (data: SubagentMessage) => void;
+    completed: (info: SubagentInfo) => void;
+    error: (error: Error, agentId?: string) => void;
+  } | null = null;
+  private imageWatcherHandlers: {
+    detected: (event: ImageDetectedEvent) => void;
+    error: (error: Error, sessionId?: string) => void;
+  } | null = null;
 
   constructor(port: number = 3000, https: boolean = false) {
     super();
@@ -353,37 +368,45 @@ export class WebServer extends EventEmitter {
    * This is more reliable than the previous timing-based correlation approach.
    */
   private setupSubagentWatcherListeners(): void {
-    subagentWatcher.on('subagent:discovered', (info: SubagentInfo) => {
-      this.broadcast('subagent:discovered', info);
-    });
+    // Store handlers for cleanup on shutdown
+    this.subagentWatcherHandlers = {
+      discovered: (info: SubagentInfo) => this.broadcast('subagent:discovered', info),
+      updated: (info: SubagentInfo) => this.broadcast('subagent:updated', info),
+      toolCall: (data: SubagentToolCall) => this.broadcast('subagent:tool_call', data),
+      toolResult: (data: SubagentToolResult) => this.broadcast('subagent:tool_result', data),
+      progress: (data: SubagentProgress) => this.broadcast('subagent:progress', data),
+      message: (data: SubagentMessage) => this.broadcast('subagent:message', data),
+      completed: (info: SubagentInfo) => this.broadcast('subagent:completed', info),
+      error: (error: Error, agentId?: string) => {
+        console.error(`[SubagentWatcher] Error${agentId ? ` for ${agentId}` : ''}:`, error.message);
+      },
+    };
 
-    subagentWatcher.on('subagent:updated', (info: SubagentInfo) => {
-      this.broadcast('subagent:updated', info);
-    });
+    subagentWatcher.on('subagent:discovered', this.subagentWatcherHandlers.discovered);
+    subagentWatcher.on('subagent:updated', this.subagentWatcherHandlers.updated);
+    subagentWatcher.on('subagent:tool_call', this.subagentWatcherHandlers.toolCall);
+    subagentWatcher.on('subagent:tool_result', this.subagentWatcherHandlers.toolResult);
+    subagentWatcher.on('subagent:progress', this.subagentWatcherHandlers.progress);
+    subagentWatcher.on('subagent:message', this.subagentWatcherHandlers.message);
+    subagentWatcher.on('subagent:completed', this.subagentWatcherHandlers.completed);
+    subagentWatcher.on('subagent:error', this.subagentWatcherHandlers.error);
+  }
 
-    subagentWatcher.on('subagent:tool_call', (data: SubagentToolCall) => {
-      this.broadcast('subagent:tool_call', data);
-    });
-
-    subagentWatcher.on('subagent:tool_result', (data: SubagentToolResult) => {
-      this.broadcast('subagent:tool_result', data);
-    });
-
-    subagentWatcher.on('subagent:progress', (data: SubagentProgress) => {
-      this.broadcast('subagent:progress', data);
-    });
-
-    subagentWatcher.on('subagent:message', (data: SubagentMessage) => {
-      this.broadcast('subagent:message', data);
-    });
-
-    subagentWatcher.on('subagent:completed', (info: SubagentInfo) => {
-      this.broadcast('subagent:completed', info);
-    });
-
-    subagentWatcher.on('subagent:error', (error: Error, agentId?: string) => {
-      console.error(`[SubagentWatcher] Error${agentId ? ` for ${agentId}` : ''}:`, error.message);
-    });
+  /**
+   * Clean up subagent watcher listeners to prevent memory leaks.
+   */
+  private cleanupSubagentWatcherListeners(): void {
+    if (this.subagentWatcherHandlers) {
+      subagentWatcher.off('subagent:discovered', this.subagentWatcherHandlers.discovered);
+      subagentWatcher.off('subagent:updated', this.subagentWatcherHandlers.updated);
+      subagentWatcher.off('subagent:tool_call', this.subagentWatcherHandlers.toolCall);
+      subagentWatcher.off('subagent:tool_result', this.subagentWatcherHandlers.toolResult);
+      subagentWatcher.off('subagent:progress', this.subagentWatcherHandlers.progress);
+      subagentWatcher.off('subagent:message', this.subagentWatcherHandlers.message);
+      subagentWatcher.off('subagent:completed', this.subagentWatcherHandlers.completed);
+      subagentWatcher.off('subagent:error', this.subagentWatcherHandlers.error);
+      this.subagentWatcherHandlers = null;
+    }
   }
 
   /**
@@ -391,13 +414,27 @@ export class WebServer extends EventEmitter {
    * Broadcasts image detection events to SSE clients for auto-popup.
    */
   private setupImageWatcherListeners(): void {
-    imageWatcher.on('image:detected', (event: ImageDetectedEvent) => {
-      this.broadcast('image:detected', event);
-    });
+    // Store handlers for cleanup on shutdown
+    this.imageWatcherHandlers = {
+      detected: (event: ImageDetectedEvent) => this.broadcast('image:detected', event),
+      error: (error: Error, sessionId?: string) => {
+        console.error(`[ImageWatcher] Error${sessionId ? ` for ${sessionId}` : ''}:`, error.message);
+      },
+    };
 
-    imageWatcher.on('image:error', (error: Error, sessionId?: string) => {
-      console.error(`[ImageWatcher] Error${sessionId ? ` for ${sessionId}` : ''}:`, error.message);
-    });
+    imageWatcher.on('image:detected', this.imageWatcherHandlers.detected);
+    imageWatcher.on('image:error', this.imageWatcherHandlers.error);
+  }
+
+  /**
+   * Clean up image watcher listeners to prevent memory leaks.
+   */
+  private cleanupImageWatcherListeners(): void {
+    if (this.imageWatcherHandlers) {
+      imageWatcher.off('image:detected', this.imageWatcherHandlers.detected);
+      imageWatcher.off('image:error', this.imageWatcherHandlers.error);
+      this.imageWatcherHandlers = null;
+    }
   }
 
   private async setupRoutes(): Promise<void> {
@@ -602,6 +639,27 @@ export class WebServer extends EventEmitter {
       this.persistSessionState(session);
       this.broadcast('session:updated', this.getSessionStateWithRespawn(session));
       return { success: true, name: session.name };
+    });
+
+    // Set session color
+    this.app.put('/api/sessions/:id/color', async (req) => {
+      const { id } = req.params as { id: string };
+      const body = req.body as { color: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
+      const validColors = ['default', 'red', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink'];
+      if (!validColors.includes(body.color)) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid color');
+      }
+
+      session.setColor(body.color as import('../types.js').SessionColor);
+      this.persistSessionState(session);
+      this.broadcast('session:updated', this.getSessionStateWithRespawn(session));
+      return { success: true, color: session.color };
     });
 
     this.app.delete('/api/sessions/:id', async (req): Promise<ApiResponse> => {
@@ -4666,6 +4724,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     // Flush state store to prevent data loss from debounced saves
     this.store.flushAll();
+
+    // Clean up watcher listeners to prevent memory leaks
+    this.cleanupSubagentWatcherListeners();
+    this.cleanupImageWatcherListeners();
 
     // Stop subagent watcher
     subagentWatcher.stop();

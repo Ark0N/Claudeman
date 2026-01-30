@@ -28,6 +28,125 @@ const STATS_POLLING_INTERVAL_MS = 2000;     // System stats polling
 const DEC_SYNC_START = '\x1b[?2026h';
 const DEC_SYNC_END = '\x1b[?2026l';
 
+// Built-in respawn configuration presets
+const BUILTIN_RESPAWN_PRESETS = [
+  {
+    id: 'quick-iteration',
+    name: 'Quick Iteration',
+    description: 'Fast cycles for active development',
+    config: {
+      idleTimeoutMs: 3000,
+      updatePrompt: 'continue',
+      interStepDelayMs: 2000,
+      sendClear: false,
+      sendInit: false,
+    },
+    durationMinutes: 60,
+    builtIn: true,
+    createdAt: 0,
+  },
+  {
+    id: 'autonomous-long',
+    name: 'Autonomous (Long)',
+    description: 'Full refresh cycles for overnight work',
+    config: {
+      idleTimeoutMs: 5000,
+      updatePrompt: 'continue working on the task',
+      interStepDelayMs: 3000,
+      sendClear: true,
+      sendInit: true,
+      kickstartPrompt: 'pick up where you left off',
+    },
+    durationMinutes: 480,
+    builtIn: true,
+    createdAt: 0,
+  },
+  {
+    id: 'careful-review',
+    name: 'Careful Review',
+    description: 'Longer pauses for human review between cycles',
+    config: {
+      idleTimeoutMs: 30000,
+      updatePrompt: 'continue if there is more work to do',
+      interStepDelayMs: 5000,
+      sendClear: false,
+      sendInit: false,
+    },
+    durationMinutes: 120,
+    builtIn: true,
+    createdAt: 0,
+  },
+];
+
+// ============================================================================
+// Accessibility: Focus Trap for Modals
+// ============================================================================
+
+/**
+ * FocusTrap - Traps keyboard focus within an element (typically a modal).
+ * Saves the previously focused element and restores focus when deactivated.
+ */
+class FocusTrap {
+  constructor(element) {
+    this.element = element;
+    this.previouslyFocused = null;
+    this.boundHandleKeydown = this.handleKeydown.bind(this);
+  }
+
+  activate() {
+    this.previouslyFocused = document.activeElement;
+    this.element.addEventListener('keydown', this.boundHandleKeydown);
+
+    // Focus first focusable element after a brief delay (for CSS transitions)
+    requestAnimationFrame(() => {
+      const focusable = this.getFocusableElements();
+      if (focusable.length) {
+        focusable[0].focus();
+      }
+    });
+  }
+
+  deactivate() {
+    this.element.removeEventListener('keydown', this.boundHandleKeydown);
+    if (this.previouslyFocused && typeof this.previouslyFocused.focus === 'function') {
+      this.previouslyFocused.focus();
+    }
+  }
+
+  getFocusableElements() {
+    const selector = [
+      'button:not([disabled]):not([tabindex="-1"])',
+      'input:not([disabled]):not([tabindex="-1"])',
+      'select:not([disabled]):not([tabindex="-1"])',
+      'textarea:not([disabled]):not([tabindex="-1"])',
+      'a[href]:not([tabindex="-1"])',
+      '[tabindex]:not([tabindex="-1"]):not([disabled])'
+    ].join(', ');
+
+    return [...this.element.querySelectorAll(selector)].filter(
+      el => el.offsetParent !== null // Exclude hidden elements
+    );
+  }
+
+  handleKeydown(e) {
+    if (e.key !== 'Tab') return;
+
+    const focusable = this.getFocusableElements();
+    if (focusable.length === 0) return;
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+}
+
 /**
  * Process data containing DEC 2026 sync markers.
  * Strips markers and returns segments that should be written atomically.
@@ -112,15 +231,31 @@ class NotificationManager {
   }
 
   loadPreferences() {
+    const defaultEventTypes = {
+      permission_prompt: { enabled: true, browser: true, audio: true },
+      elicitation_dialog: { enabled: true, browser: true, audio: true },
+      idle_prompt: { enabled: true, browser: true, audio: false },
+      stop: { enabled: true, browser: false, audio: false },
+      session_error: { enabled: true, browser: true, audio: false },
+      respawn_cycle: { enabled: true, browser: false, audio: false },
+      token_milestone: { enabled: true, browser: false, audio: false },
+      ralph_complete: { enabled: true, browser: true, audio: true },
+      subagent_spawn: { enabled: false, browser: false, audio: false },
+      subagent_complete: { enabled: false, browser: false, audio: false },
+    };
+
     const defaults = {
       enabled: true,
       browserNotifications: true,
       audioAlerts: false,
       stuckThresholdMs: STUCK_THRESHOLD_DEFAULT_MS,
+      // Legacy urgency muting (keep for backwards compat)
       muteCritical: false,
       muteWarning: false,
       muteInfo: false,
-      _version: 2,
+      // Per-event-type preferences
+      eventTypes: defaultEventTypes,
+      _version: 3,
     };
     try {
       const saved = localStorage.getItem('claudeman-notification-prefs');
@@ -130,9 +265,19 @@ class NotificationManager {
         if (!prefs._version || prefs._version < 2) {
           prefs.browserNotifications = true;
           prefs._version = 2;
+        }
+        // Migrate: v2 -> v3 adds eventTypes
+        if (prefs._version < 3) {
+          prefs.eventTypes = defaultEventTypes;
+          prefs._version = 3;
           localStorage.setItem('claudeman-notification-prefs', JSON.stringify(prefs));
         }
-        return { ...defaults, ...prefs };
+        // Merge with defaults to ensure all eventTypes exist
+        return {
+          ...defaults,
+          ...prefs,
+          eventTypes: { ...defaultEventTypes, ...prefs.eventTypes },
+        };
       }
     } catch (_e) { /* ignore */ }
     return defaults;
@@ -145,10 +290,26 @@ class NotificationManager {
   notify({ urgency, category, sessionId, sessionName, title, message }) {
     if (!this.preferences.enabled) return;
 
-    // Check urgency muting
-    if (urgency === 'critical' && this.preferences.muteCritical) return;
-    if (urgency === 'warning' && this.preferences.muteWarning) return;
-    if (urgency === 'info' && this.preferences.muteInfo) return;
+    // Check per-event-type preferences first
+    const eventPref = this.preferences.eventTypes?.[category];
+    let shouldBrowserNotify = false;
+    let shouldAudioAlert = false;
+
+    if (eventPref) {
+      // Event type found - use its specific preferences
+      if (!eventPref.enabled) return;
+      shouldBrowserNotify = eventPref.browser && this.preferences.browserNotifications;
+      shouldAudioAlert = eventPref.audio && this.preferences.audioAlerts;
+    } else {
+      // Fall back to urgency-based muting for unknown categories
+      if (urgency === 'critical' && this.preferences.muteCritical) return;
+      if (urgency === 'warning' && this.preferences.muteWarning) return;
+      if (urgency === 'info' && this.preferences.muteInfo) return;
+      // Default browser/audio behavior based on urgency
+      shouldBrowserNotify = this.preferences.browserNotifications &&
+        (urgency === 'critical' || urgency === 'warning' || !this.isTabVisible);
+      shouldAudioAlert = urgency === 'critical' && this.preferences.audioAlerts;
+    }
 
     // Grouping: same category+session within 5s updates count instead of new entry
     const groupKey = `${category}:${sessionId || 'global'}`;
@@ -194,13 +355,13 @@ class NotificationManager {
       this.updateTabTitle();
     }
 
-    // Layer 3: Browser notification (critical/warning always, info only when tab hidden)
-    if (urgency === 'critical' || urgency === 'warning' || !this.isTabVisible) {
+    // Layer 3: Browser notification
+    if (shouldBrowserNotify) {
       this.sendBrowserNotif(title, message, category, sessionId);
     }
 
-    // Layer 4: Audio alert (critical only)
-    if (urgency === 'critical' && this.preferences.audioAlerts) {
+    // Layer 4: Audio alert
+    if (shouldAudioAlert) {
       this.playAudioAlert();
     }
   }
@@ -521,6 +682,16 @@ class ClaudemanApp {
     // SSE event listener cleanup function (to prevent listener accumulation on reconnect)
     this._sseListenerCleanup = null;
 
+    // SSE connection status tracking
+    this.reconnectAttempts = 0;
+    this.maxReconnectAttempts = 10;
+    this.lastDataReceived = Date.now();
+    this.freshnessInterval = null;
+    this.isOnline = navigator.onLine;
+
+    // Accessibility: Focus trap for modals
+    this.activeFocusTrap = null;
+
     // Notification system
     this.notificationManager = new NotificationManager(this);
     this.idleTimers = new Map(); // Map<sessionId, timeout> for stuck detection
@@ -608,6 +779,10 @@ class ClaudemanApp {
     this.setupEventListeners();
     // Start system stats polling
     this.startSystemStatsPolling();
+    // Setup online/offline detection
+    this.setupOnlineDetection();
+    // Start freshness timer
+    this.startFreshnessTimer();
     // Load server-stored settings (async, re-applies visibility after load)
     this.loadAppSettingsFromServer().then(() => {
       this.applyHeaderVisibilitySettings();
@@ -1055,11 +1230,20 @@ class ClaudemanApp {
       tokenEl.classList.add('clickable');
       tokenEl.addEventListener('click', () => this.openTokenStats());
     }
+
+    // Color picker for session customization
+    this.setupColorPicker();
   }
 
   // ========== SSE Connection ==========
 
   connectSSE() {
+    // Check if browser is offline
+    if (!navigator.onLine) {
+      this.setConnectionStatus('offline');
+      return;
+    }
+
     // Clear any pending reconnect timeout to prevent duplicate connections
     if (this.sseReconnectTimeout) {
       clearTimeout(this.sseReconnectTimeout);
@@ -1078,13 +1262,25 @@ class ClaudemanApp {
       this.eventSource = null;
     }
 
+    // Show connecting state
+    if (this.reconnectAttempts === 0) {
+      this.setConnectionStatus('connecting');
+    } else {
+      this.setConnectionStatus('reconnecting');
+    }
+
     this.eventSource = new EventSource('/api/events');
 
     // Store all event listeners for cleanup on reconnect
     const listeners = [];
     const addListener = (event, handler) => {
-      this.eventSource.addEventListener(event, handler);
-      listeners.push({ event, handler });
+      // Wrap handler to mark data received on every SSE event
+      const wrappedHandler = (e) => {
+        this.markDataReceived();
+        handler(e);
+      };
+      this.eventSource.addEventListener(event, wrappedHandler);
+      listeners.push({ event, handler: wrappedHandler });
     };
 
     // Create cleanup function to remove all listeners
@@ -1097,9 +1293,18 @@ class ClaudemanApp {
       listeners.length = 0;
     };
 
-    this.eventSource.onopen = () => this.setConnectionStatus('connected');
+    this.eventSource.onopen = () => {
+      this.reconnectAttempts = 0;
+      this.lastDataReceived = Date.now();
+      this.setConnectionStatus('connected');
+    };
     this.eventSource.onerror = () => {
-      this.setConnectionStatus('disconnected');
+      this.reconnectAttempts++;
+      if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+        this.setConnectionStatus('disconnected');
+      } else {
+        this.setConnectionStatus('reconnecting');
+      }
       // Close the failed connection before scheduling reconnect
       if (this.eventSource) {
         this.eventSource.close();
@@ -1109,7 +1314,9 @@ class ClaudemanApp {
       if (this.sseReconnectTimeout) {
         clearTimeout(this.sseReconnectTimeout);
       }
-      this.sseReconnectTimeout = setTimeout(() => this.connectSSE(), 3000);
+      // Exponential backoff: 1s, 2s, 4s, ... up to 30s
+      const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 30000);
+      this.sseReconnectTimeout = setTimeout(() => this.connectSSE(), delay);
     };
 
     addListener('init', (e) => {
@@ -1993,8 +2200,100 @@ class ClaudemanApp {
   setConnectionStatus(status) {
     const dot = document.querySelector('.status-dot');
     const text = document.querySelector('.status-text');
+    if (!dot || !text) return;
+
     dot.className = 'status-dot ' + status;
-    text.textContent = status === 'connected' ? 'Connected' : 'Disconnected';
+
+    const statusLabels = {
+      connected: 'Connected',
+      connecting: 'Connecting...',
+      reconnecting: `Reconnecting (${this.reconnectAttempts}/${this.maxReconnectAttempts})`,
+      disconnected: 'Disconnected',
+      offline: 'Offline'
+    };
+    text.textContent = statusLabels[status] || status;
+
+    // Update title with more details
+    const container = document.getElementById('connectionStatus');
+    if (container) {
+      if (status === 'reconnecting') {
+        container.title = `SSE reconnecting - attempt ${this.reconnectAttempts} of ${this.maxReconnectAttempts}`;
+      } else if (status === 'disconnected') {
+        container.title = 'SSE connection lost - max reconnection attempts reached';
+      } else if (status === 'offline') {
+        container.title = 'Browser is offline - waiting for network';
+      } else {
+        container.title = 'SSE connection status';
+      }
+    }
+  }
+
+  setupOnlineDetection() {
+    window.addEventListener('online', () => {
+      this.isOnline = true;
+      this.reconnectAttempts = 0;
+      this.connectSSE();
+    });
+    window.addEventListener('offline', () => {
+      this.isOnline = false;
+      this.setConnectionStatus('offline');
+    });
+  }
+
+  startFreshnessTimer() {
+    // Clear existing interval if any
+    if (this.freshnessInterval) {
+      clearInterval(this.freshnessInterval);
+    }
+
+    // Update freshness display every second
+    this.freshnessInterval = setInterval(() => {
+      this.updateFreshnessDisplay();
+    }, 1000);
+  }
+
+  updateFreshnessDisplay() {
+    const freshnessEl = document.getElementById('statusFreshness');
+    if (!freshnessEl) return;
+
+    const dot = document.querySelector('.status-dot');
+    const isConnected = dot?.classList.contains('connected');
+
+    // Only show freshness when connected
+    if (!isConnected) {
+      freshnessEl.textContent = '';
+      freshnessEl.className = 'status-freshness';
+      return;
+    }
+
+    const elapsed = Math.floor((Date.now() - this.lastDataReceived) / 1000);
+
+    // Format the elapsed time
+    let timeText;
+    if (elapsed < 60) {
+      timeText = `${elapsed}s ago`;
+    } else if (elapsed < 3600) {
+      const mins = Math.floor(elapsed / 60);
+      timeText = `${mins}m ago`;
+    } else {
+      const hours = Math.floor(elapsed / 3600);
+      timeText = `${hours}h ago`;
+    }
+
+    freshnessEl.textContent = timeText;
+
+    // Apply staleness classes
+    freshnessEl.className = 'status-freshness';
+    if (elapsed > 30) {
+      freshnessEl.classList.add('very-stale');
+    } else if (elapsed > 10) {
+      freshnessEl.classList.add('stale');
+    }
+  }
+
+  // Call this when any SSE event is received to update lastDataReceived
+  markDataReceived() {
+    this.lastDataReceived = Date.now();
   }
 
   handleInit(data) {
@@ -2261,6 +2560,7 @@ class ClaudemanApp {
       const status = session.status || 'idle';
       const name = this.getSessionName(session);
       const mode = session.mode || 'claude';
+      const color = session.color || 'default';
       const taskStats = session.taskStats || { running: 0, total: 0 };
       const hasRunningTasks = taskStats.running > 0;
       const alertType = this.tabAlerts.get(id);
@@ -2271,14 +2571,14 @@ class ClaudemanApp {
       const minimizedCount = minimizedAgents?.size || 0;
       const subagentBadge = minimizedCount > 0 ? this.renderSubagentTabBadge(id, minimizedAgents) : '';
 
-      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}" data-id="${id}" onclick="app.selectSession('${id}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${id}')">
-          <span class="tab-status ${status}"></span>
-          ${mode === 'shell' ? '<span class="tab-mode shell">sh</span>' : ''}
+      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}" data-id="${id}" data-color="${color}" onclick="app.selectSession('${id}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${id}')" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-label="${this.escapeHtml(name)} session">
+          <span class="tab-status ${status}" aria-hidden="true"></span>
+          ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : ''}
           <span class="tab-name" data-session-id="${id}">${this.escapeHtml(name)}</span>
-          ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()">${taskStats.running}</span>` : ''}
+          ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()" aria-label="${taskStats.running} running tasks">${taskStats.running}</span>` : ''}
           ${subagentBadge}
-          <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${id}')" title="Session options">&#x2699;</span>
-          <span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession('${id}')">&times;</span>
+          <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${id}')" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span>
+          <span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession('${id}')" title="Close session" aria-label="Close session" tabindex="0">&times;</span>
         </div>`);
     }
 
@@ -2287,8 +2587,59 @@ class ClaudemanApp {
     // Set up drag-and-drop handlers for tab reordering
     this.setupTabDragHandlers();
 
+    // Set up keyboard navigation for tabs
+    this.setupTabKeyboardNavigation(container);
+
     // Update connection lines after tabs change (positions may have shifted)
     this.updateConnectionLines();
+  }
+
+  // Set up arrow key navigation for session tabs (accessibility)
+  setupTabKeyboardNavigation(container) {
+    // Remove existing listener if any to avoid duplicates
+    if (this._tabKeydownHandler) {
+      container.removeEventListener('keydown', this._tabKeydownHandler);
+    }
+
+    this._tabKeydownHandler = (e) => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter', ' '].includes(e.key)) return;
+
+      const tabs = [...container.querySelectorAll('.session-tab')];
+      const currentIndex = tabs.indexOf(document.activeElement);
+
+      // Enter or Space activates the tab
+      if ((e.key === 'Enter' || e.key === ' ') && currentIndex >= 0) {
+        e.preventDefault();
+        const sessionId = tabs[currentIndex].dataset.id;
+        this.selectSession(sessionId);
+        return;
+      }
+
+      if (currentIndex < 0) return;
+
+      let newIndex;
+      switch (e.key) {
+        case 'ArrowLeft':
+          newIndex = currentIndex > 0 ? currentIndex - 1 : tabs.length - 1;
+          break;
+        case 'ArrowRight':
+          newIndex = currentIndex < tabs.length - 1 ? currentIndex + 1 : 0;
+          break;
+        case 'Home':
+          newIndex = 0;
+          break;
+        case 'End':
+          newIndex = tabs.length - 1;
+          break;
+        default:
+          return;
+      }
+
+      e.preventDefault();
+      tabs[newIndex]?.focus();
+    };
+
+    container.addEventListener('keydown', this._tabKeydownHandler);
   }
 
   // Render subagent badge with dropdown for minimized agents on a tab
@@ -2857,6 +3208,11 @@ class ClaudemanApp {
     // Hide minimize button initially (no agents yet)
     this.updateWizardAgentCount();
 
+    // Activate focus trap (but don't auto-focus since we have specific focus below)
+    this.activeFocusTrap = new FocusTrap(modal);
+    this.activeFocusTrap.previouslyFocused = document.activeElement;
+    modal.addEventListener('keydown', this.activeFocusTrap.boundHandleKeydown);
+
     document.getElementById('ralphTaskDescription').focus();
 
     // Update connection lines to show wizard connections
@@ -2866,6 +3222,12 @@ class ClaudemanApp {
   closeRalphWizard() {
     const modal = document.getElementById('ralphWizardModal');
     modal?.classList.remove('active');
+
+    // Deactivate focus trap and restore focus
+    if (this.activeFocusTrap) {
+      this.activeFocusTrap.deactivate();
+      this.activeFocusTrap = null;
+    }
 
     // Clean up wizard drag listeners
     this.cleanupWizardDragging();
@@ -5006,7 +5368,7 @@ class ClaudemanApp {
     fm.innerHTML = `
       <div class="plan-fm-header">
         <span class="plan-fm-title">${typeLabels[agentType] || agentType} Files</span>
-        <button class="plan-fm-close" onclick="document.getElementById('planFileManager')?.remove()">&times;</button>
+        <button class="plan-fm-close" onclick="app.closePlanFileManager()">&times;</button>
       </div>
       <div class="plan-fm-body">
         <div class="plan-fm-loading">Loading files...</div>
@@ -5190,7 +5552,7 @@ class ClaudemanApp {
     win.innerHTML = `
       <div class="plan-file-window-header">
         <span class="plan-file-window-title">${typeLabels[agentType] || agentType} / ${this.escapeHtml(fileName)}</span>
-        <button class="plan-file-window-close" onclick="document.getElementById('${windowId}')?.remove()">&times;</button>
+        <button class="plan-file-window-close" onclick="app.closePlanFileWindow('${windowId}')">&times;</button>
       </div>
       <div class="plan-file-window-body">
         <pre class="plan-file-content ${isJson ? 'json' : 'markdown'}">${this.escapeHtml(content)}</pre>
@@ -5222,17 +5584,35 @@ class ClaudemanApp {
       e.preventDefault();
     });
 
-    document.addEventListener('mousemove', (e) => {
+    const moveHandler = (e) => {
       if (!isDragging) return;
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
       fm.style.left = `${Math.max(10, startLeft + dx)}px`;
       fm.style.top = `${Math.max(10, startTop + dy)}px`;
-    });
+    };
 
-    document.addEventListener('mouseup', () => {
+    const upHandler = () => {
       isDragging = false;
-    });
+    };
+
+    document.addEventListener('mousemove', moveHandler);
+    document.addEventListener('mouseup', upHandler);
+
+    // Store handlers for cleanup
+    fm._dragHandlers = { move: moveHandler, up: upHandler };
+  }
+
+  // Clean up plan file manager and remove document listeners
+  closePlanFileManager() {
+    const fm = document.getElementById('planFileManager');
+    if (fm) {
+      if (fm._dragHandlers) {
+        document.removeEventListener('mousemove', fm._dragHandlers.move);
+        document.removeEventListener('mouseup', fm._dragHandlers.up);
+      }
+      fm.remove();
+    }
   }
 
   makePlanFileWindowDraggable(win) {
@@ -5265,6 +5645,9 @@ class ClaudemanApp {
 
     document.addEventListener('mousemove', moveHandler);
     document.addEventListener('mouseup', upHandler);
+
+    // Store handlers for cleanup
+    win._dragHandlers = { move: moveHandler, up: upHandler };
   }
 
   makePlanFileWindowResizable(win) {
@@ -5282,17 +5665,39 @@ class ClaudemanApp {
       e.stopPropagation();
     });
 
-    document.addEventListener('mousemove', (e) => {
+    const moveHandler = (e) => {
       if (!isResizing) return;
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
       win.style.width = `${Math.max(300, startWidth + dx)}px`;
       win.style.height = `${Math.max(200, startHeight + dy)}px`;
-    });
+    };
 
-    document.addEventListener('mouseup', () => {
+    const upHandler = () => {
       isResizing = false;
-    });
+    };
+
+    document.addEventListener('mousemove', moveHandler);
+    document.addEventListener('mouseup', upHandler);
+
+    // Store handlers for cleanup
+    win._resizeHandlers = { move: moveHandler, up: upHandler };
+  }
+
+  // Clean up plan file window and remove document listeners
+  closePlanFileWindow(windowId) {
+    const win = document.getElementById(windowId);
+    if (win) {
+      if (win._dragHandlers) {
+        document.removeEventListener('mousemove', win._dragHandlers.move);
+        document.removeEventListener('mouseup', win._dragHandlers.up);
+      }
+      if (win._resizeHandlers) {
+        document.removeEventListener('mousemove', win._resizeHandlers.move);
+        document.removeEventListener('mouseup', win._resizeHandlers.up);
+      }
+      win.remove();
+    }
   }
 
   skipPlanGeneration() {
@@ -6611,6 +7016,18 @@ class ClaudemanApp {
     document.getElementById('modalAutoClearThreshold').value = session.autoClearThreshold ?? 140000;
     document.getElementById('modalImageWatcherEnabled').checked = session.imageWatcherEnabled ?? true;
 
+    // Initialize color picker with current session color
+    const currentColor = session.color || 'default';
+    const colorPicker = document.getElementById('sessionColorPicker');
+    colorPicker?.querySelectorAll('.color-swatch').forEach(s => {
+      s.classList.toggle('selected', s.dataset.color === currentColor);
+    });
+
+    // Initialize respawn preset dropdown
+    this.renderPresetDropdown();
+    document.getElementById('respawnPresetSelect').value = '';
+    document.getElementById('presetDescriptionHint').textContent = '';
+
     // Populate Ralph Wiggum form with current session values
     const ralphState = this.ralphStates.get(sessionId);
     this.populateRalphForm({
@@ -6619,7 +7036,12 @@ class ClaudemanApp {
       maxIterations: ralphState?.loop?.maxIterations || session.ralphLoop?.maxIterations || 0,
     });
 
-    document.getElementById('sessionOptionsModal').classList.add('active');
+    const modal = document.getElementById('sessionOptionsModal');
+    modal.classList.add('active');
+
+    // Activate focus trap
+    this.activeFocusTrap = new FocusTrap(modal);
+    this.activeFocusTrap.activate();
   }
 
   async autoSaveAutoCompact() {
@@ -6756,6 +7178,153 @@ class ClaudemanApp {
     }
   }
 
+  // ========== Respawn Presets ==========
+
+  loadRespawnPresets() {
+    const saved = localStorage.getItem('claudeman-respawn-presets');
+    const custom = saved ? JSON.parse(saved) : [];
+    return [...BUILTIN_RESPAWN_PRESETS, ...custom];
+  }
+
+  saveRespawnPresets(presets) {
+    // Only save custom presets (not built-in)
+    const custom = presets.filter(p => !p.builtIn);
+    localStorage.setItem('claudeman-respawn-presets', JSON.stringify(custom));
+  }
+
+  renderPresetDropdown() {
+    const presets = this.loadRespawnPresets();
+    const builtinGroup = document.getElementById('builtinPresetsGroup');
+    const customGroup = document.getElementById('customPresetsGroup');
+
+    if (!builtinGroup || !customGroup) return;
+
+    // Clear and repopulate
+    builtinGroup.innerHTML = '';
+    customGroup.innerHTML = '';
+
+    presets.forEach(preset => {
+      const option = document.createElement('option');
+      option.value = preset.id;
+      option.textContent = preset.name;
+      if (preset.builtIn) {
+        builtinGroup.appendChild(option);
+      } else {
+        customGroup.appendChild(option);
+      }
+    });
+  }
+
+  updatePresetDescription() {
+    const select = document.getElementById('respawnPresetSelect');
+    const hint = document.getElementById('presetDescriptionHint');
+    if (!select || !hint) return;
+
+    const presetId = select.value;
+    if (!presetId) {
+      hint.textContent = '';
+      return;
+    }
+
+    const presets = this.loadRespawnPresets();
+    const preset = presets.find(p => p.id === presetId);
+    hint.textContent = preset?.description || '';
+  }
+
+  loadRespawnPreset() {
+    const select = document.getElementById('respawnPresetSelect');
+    const presetId = select?.value;
+    if (!presetId) {
+      this.showToast('Please select a preset first', 'warning');
+      return;
+    }
+
+    const presets = this.loadRespawnPresets();
+    const preset = presets.find(p => p.id === presetId);
+    if (!preset) return;
+
+    // Populate form fields
+    document.getElementById('modalRespawnPrompt').value = preset.config.updatePrompt || '';
+    document.getElementById('modalRespawnSendClear').checked = preset.config.sendClear ?? false;
+    document.getElementById('modalRespawnSendInit').checked = preset.config.sendInit ?? false;
+    document.getElementById('modalRespawnKickstart').value = preset.config.kickstartPrompt || '';
+
+    // Set duration if available
+    if (preset.durationMinutes) {
+      this.selectDurationPreset(String(preset.durationMinutes));
+    }
+
+    // Reset select to placeholder
+    select.value = '';
+    document.getElementById('presetDescriptionHint').textContent = '';
+
+    this.showToast(`Loaded preset: ${preset.name}`, 'info');
+  }
+
+  saveCurrentAsPreset() {
+    document.getElementById('savePresetModal').classList.add('active');
+    document.getElementById('presetNameInput').value = '';
+    document.getElementById('presetDescriptionInput').value = '';
+    document.getElementById('presetNameInput').focus();
+  }
+
+  closeSavePresetModal() {
+    document.getElementById('savePresetModal').classList.remove('active');
+  }
+
+  confirmSavePreset() {
+    const name = document.getElementById('presetNameInput').value.trim();
+    if (!name) {
+      this.showToast('Please enter a preset name', 'error');
+      return;
+    }
+
+    // Get current config from form
+    const updatePrompt = document.getElementById('modalRespawnPrompt').value;
+    const sendClear = document.getElementById('modalRespawnSendClear').checked;
+    const sendInit = document.getElementById('modalRespawnSendInit').checked;
+    const kickstartPrompt = document.getElementById('modalRespawnKickstart').value.trim() || undefined;
+    const durationMinutes = this.getSelectedDuration();
+
+    const newPreset = {
+      id: 'custom-' + Date.now(),
+      name,
+      description: document.getElementById('presetDescriptionInput').value.trim() || undefined,
+      config: {
+        idleTimeoutMs: 5000, // Default
+        updatePrompt,
+        interStepDelayMs: 3000, // Default
+        sendClear,
+        sendInit,
+        kickstartPrompt,
+      },
+      durationMinutes: durationMinutes || undefined,
+      builtIn: false,
+      createdAt: Date.now(),
+    };
+
+    const presets = this.loadRespawnPresets();
+    presets.push(newPreset);
+    this.saveRespawnPresets(presets);
+    this.renderPresetDropdown();
+    this.closeSavePresetModal();
+    this.showToast(`Saved preset: ${name}`, 'success');
+  }
+
+  deletePreset(presetId) {
+    const presets = this.loadRespawnPresets();
+    const preset = presets.find(p => p.id === presetId);
+    if (!preset || preset.builtIn) {
+      this.showToast('Cannot delete built-in presets', 'warning');
+      return;
+    }
+
+    const filtered = presets.filter(p => p.id !== presetId);
+    this.saveRespawnPresets(filtered);
+    this.renderPresetDropdown();
+    this.showToast(`Deleted preset: ${preset.name}`, 'success');
+  }
+
   // Get respawn config from modal inputs
   getModalRespawnConfig() {
     const updatePrompt = document.getElementById('modalRespawnPrompt').value;
@@ -6873,6 +7442,55 @@ class ClaudemanApp {
     // Stop run summary auto-refresh if it was running
     this.stopRunSummaryAutoRefresh();
     document.getElementById('sessionOptionsModal').classList.remove('active');
+
+    // Deactivate focus trap and restore focus
+    if (this.activeFocusTrap) {
+      this.activeFocusTrap.deactivate();
+      this.activeFocusTrap = null;
+    }
+  }
+
+  setupColorPicker() {
+    const picker = document.getElementById('sessionColorPicker');
+    if (!picker) return;
+
+    picker.addEventListener('click', (e) => {
+      const swatch = e.target.closest('.color-swatch');
+      if (!swatch || !this.editingSessionId) return;
+
+      const color = swatch.dataset.color;
+      this.setSessionColor(this.editingSessionId, color);
+    });
+  }
+
+  async setSessionColor(sessionId, color) {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/color`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ color })
+      });
+
+      if (res.ok) {
+        const session = this.sessions.get(sessionId);
+        if (session) {
+          session.color = color;
+          this.renderSessionTabs();
+        }
+
+        // Update picker UI to show selection
+        const picker = document.getElementById('sessionColorPicker');
+        if (picker) {
+          picker.querySelectorAll('.color-swatch').forEach(swatch => {
+            swatch.classList.toggle('selected', swatch.dataset.color === color);
+          });
+        }
+      } else {
+        this.showToast('Failed to set session color', 'error');
+      }
+    } catch (err) {
+      this.showToast('Failed to set session color', 'error');
+    }
   }
 
   // ========== Run Summary Modal ==========
@@ -7291,6 +7909,43 @@ class ClaudemanApp {
     document.getElementById('appSettingsNotifCritical').checked = !notifPrefs.muteCritical;
     document.getElementById('appSettingsNotifWarning').checked = !notifPrefs.muteWarning;
     document.getElementById('appSettingsNotifInfo').checked = !notifPrefs.muteInfo;
+    // Per-event-type preferences
+    const eventTypes = notifPrefs.eventTypes || {};
+    // Permission prompts
+    const permPref = eventTypes.permission_prompt || {};
+    document.getElementById('eventPermissionEnabled').checked = permPref.enabled ?? true;
+    document.getElementById('eventPermissionBrowser').checked = permPref.browser ?? true;
+    document.getElementById('eventPermissionAudio').checked = permPref.audio ?? true;
+    // Questions (elicitation_dialog)
+    const questionPref = eventTypes.elicitation_dialog || {};
+    document.getElementById('eventQuestionEnabled').checked = questionPref.enabled ?? true;
+    document.getElementById('eventQuestionBrowser').checked = questionPref.browser ?? true;
+    document.getElementById('eventQuestionAudio').checked = questionPref.audio ?? true;
+    // Session idle (idle_prompt)
+    const idlePref = eventTypes.idle_prompt || {};
+    document.getElementById('eventIdleEnabled').checked = idlePref.enabled ?? true;
+    document.getElementById('eventIdleBrowser').checked = idlePref.browser ?? true;
+    document.getElementById('eventIdleAudio').checked = idlePref.audio ?? false;
+    // Response complete (stop)
+    const stopPref = eventTypes.stop || {};
+    document.getElementById('eventStopEnabled').checked = stopPref.enabled ?? true;
+    document.getElementById('eventStopBrowser').checked = stopPref.browser ?? false;
+    document.getElementById('eventStopAudio').checked = stopPref.audio ?? false;
+    // Respawn cycles
+    const respawnPref = eventTypes.respawn_cycle || {};
+    document.getElementById('eventRespawnEnabled').checked = respawnPref.enabled ?? true;
+    document.getElementById('eventRespawnBrowser').checked = respawnPref.browser ?? false;
+    document.getElementById('eventRespawnAudio').checked = respawnPref.audio ?? false;
+    // Task complete (ralph_complete)
+    const ralphPref = eventTypes.ralph_complete || {};
+    document.getElementById('eventRalphEnabled').checked = ralphPref.enabled ?? true;
+    document.getElementById('eventRalphBrowser').checked = ralphPref.browser ?? true;
+    document.getElementById('eventRalphAudio').checked = ralphPref.audio ?? true;
+    // Subagent activity (subagent_spawn and subagent_complete)
+    const subagentPref = eventTypes.subagent_spawn || {};
+    document.getElementById('eventSubagentEnabled').checked = subagentPref.enabled ?? false;
+    document.getElementById('eventSubagentBrowser').checked = subagentPref.browser ?? false;
+    document.getElementById('eventSubagentAudio').checked = subagentPref.audio ?? false;
     // Update permission status display (compact format for new grid layout)
     const permStatus = document.getElementById('notifPermissionStatus');
     if (permStatus && typeof Notification !== 'undefined') {
@@ -7307,6 +7962,10 @@ class ClaudemanApp {
       btn.onclick = () => this.switchSettingsTab(btn.dataset.tab);
     });
     modal.classList.add('active');
+
+    // Activate focus trap
+    this.activeFocusTrap = new FocusTrap(modal);
+    this.activeFocusTrap.activate();
   }
 
   switchSettingsTab(tabName) {
@@ -7323,6 +7982,12 @@ class ClaudemanApp {
 
   closeAppSettings() {
     document.getElementById('appSettingsModal').classList.remove('active');
+
+    // Deactivate focus trap and restore focus
+    if (this.activeFocusTrap) {
+      this.activeFocusTrap.deactivate();
+      this.activeFocusTrap = null;
+    }
   }
 
   async saveAppSettings() {
@@ -7363,6 +8028,60 @@ class ClaudemanApp {
       muteCritical: !document.getElementById('appSettingsNotifCritical').checked,
       muteWarning: !document.getElementById('appSettingsNotifWarning').checked,
       muteInfo: !document.getElementById('appSettingsNotifInfo').checked,
+      // Per-event-type preferences
+      eventTypes: {
+        permission_prompt: {
+          enabled: document.getElementById('eventPermissionEnabled').checked,
+          browser: document.getElementById('eventPermissionBrowser').checked,
+          audio: document.getElementById('eventPermissionAudio').checked,
+        },
+        elicitation_dialog: {
+          enabled: document.getElementById('eventQuestionEnabled').checked,
+          browser: document.getElementById('eventQuestionBrowser').checked,
+          audio: document.getElementById('eventQuestionAudio').checked,
+        },
+        idle_prompt: {
+          enabled: document.getElementById('eventIdleEnabled').checked,
+          browser: document.getElementById('eventIdleBrowser').checked,
+          audio: document.getElementById('eventIdleAudio').checked,
+        },
+        stop: {
+          enabled: document.getElementById('eventStopEnabled').checked,
+          browser: document.getElementById('eventStopBrowser').checked,
+          audio: document.getElementById('eventStopAudio').checked,
+        },
+        session_error: {
+          enabled: true,
+          browser: document.getElementById('eventPermissionBrowser').checked, // Use permission's browser setting
+          audio: false,
+        },
+        respawn_cycle: {
+          enabled: document.getElementById('eventRespawnEnabled').checked,
+          browser: document.getElementById('eventRespawnBrowser').checked,
+          audio: document.getElementById('eventRespawnAudio').checked,
+        },
+        token_milestone: {
+          enabled: true,
+          browser: false,
+          audio: false,
+        },
+        ralph_complete: {
+          enabled: document.getElementById('eventRalphEnabled').checked,
+          browser: document.getElementById('eventRalphBrowser').checked,
+          audio: document.getElementById('eventRalphAudio').checked,
+        },
+        subagent_spawn: {
+          enabled: document.getElementById('eventSubagentEnabled').checked,
+          browser: document.getElementById('eventSubagentBrowser').checked,
+          audio: document.getElementById('eventSubagentAudio').checked,
+        },
+        subagent_complete: {
+          enabled: document.getElementById('eventSubagentEnabled').checked,
+          browser: document.getElementById('eventSubagentBrowser').checked,
+          audio: document.getElementById('eventSubagentAudio').checked,
+        },
+      },
+      _version: 3,
     };
     if (this.notificationManager) {
       this.notificationManager.preferences = notifPrefsToSave;
@@ -7928,11 +8647,22 @@ class ClaudemanApp {
   // ========== Help Modal ==========
 
   showHelp() {
-    document.getElementById('helpModal').classList.add('active');
+    const modal = document.getElementById('helpModal');
+    modal.classList.add('active');
+
+    // Activate focus trap
+    this.activeFocusTrap = new FocusTrap(modal);
+    this.activeFocusTrap.activate();
   }
 
   closeHelp() {
     document.getElementById('helpModal').classList.remove('active');
+
+    // Deactivate focus trap and restore focus
+    if (this.activeFocusTrap) {
+      this.activeFocusTrap.deactivate();
+      this.activeFocusTrap = null;
+    }
   }
 
   closeAllPanels() {
@@ -10417,6 +11147,20 @@ class ClaudemanApp {
     }
     this.logViewerWindows.clear();
 
+    // Clean up plan file manager and plan file windows (drag/resize handlers)
+    this.closePlanFileManager();
+    document.querySelectorAll('.plan-file-window').forEach(win => {
+      if (win._dragHandlers) {
+        document.removeEventListener('mousemove', win._dragHandlers.move);
+        document.removeEventListener('mouseup', win._dragHandlers.up);
+      }
+      if (win._resizeHandlers) {
+        document.removeEventListener('mousemove', win._resizeHandlers.move);
+        document.removeEventListener('mouseup', win._resizeHandlers.up);
+      }
+      win.remove();
+    });
+
     // Clean up plan subagent windows (wizard agents)
     if (this.planSubagents) {
       for (const [agentId, windowData] of this.planSubagents) {
@@ -11571,11 +12315,22 @@ class ClaudemanApp {
 
     // Show the kill all modal
     document.getElementById('killAllCount').textContent = count;
-    document.getElementById('killAllModal').classList.add('active');
+    const modal = document.getElementById('killAllModal');
+    modal.classList.add('active');
+
+    // Activate focus trap
+    this.activeFocusTrap = new FocusTrap(modal);
+    this.activeFocusTrap.activate();
   }
 
   closeKillAllModal() {
     document.getElementById('killAllModal').classList.remove('active');
+
+    // Deactivate focus trap and restore focus
+    if (this.activeFocusTrap) {
+      this.activeFocusTrap.deactivate();
+      this.activeFocusTrap = null;
+    }
   }
 
   async confirmKillAll(killScreens) {
