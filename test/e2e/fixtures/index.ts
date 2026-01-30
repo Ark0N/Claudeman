@@ -23,6 +23,20 @@ export {
 } from './browser.fixture.js';
 
 export {
+  createMobileSafariFixture,
+  destroyMobileBrowserFixture,
+  tap,
+  swipe,
+  swipeHorizontal,
+  longPress,
+  getComputedStyle,
+  hasBodyClass,
+  getMinHeight,
+  type MobileBrowserFixture,
+  type MobileViewport,
+} from './mobile-browser.fixture.js';
+
+export {
   CleanupTracker,
 } from './cleanup.fixture.js';
 

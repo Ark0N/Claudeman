@@ -106,7 +106,7 @@ describe('Agent Interactions E2E', () => {
       // Track session
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      data.sessions?.forEach((s: any) => cleanup.trackSession(s.id));
+      data?.forEach((s: any) => cleanup.trackSession(s.id));
 
     } finally {
       if (browser) {
@@ -158,7 +158,7 @@ describe('Agent Interactions E2E', () => {
         // Track session
         const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
         const data = await response.json();
-        data.sessions?.forEach((s: any) => cleanup.trackSession(s.id));
+        data?.forEach((s: any) => cleanup.trackSession(s.id));
       }
 
       // Test passed - either tested minimize or session created successfully
@@ -232,7 +232,7 @@ describe('Agent Interactions E2E', () => {
       // Track sessions
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      data.sessions?.forEach((s: any) => cleanup.trackSession(s.id));
+      data?.forEach((s: any) => cleanup.trackSession(s.id));
 
     } finally {
       if (browser) {
@@ -267,7 +267,7 @@ describe('Agent Interactions E2E', () => {
       // Get session ID
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      const sessionId = data.sessions?.[data.sessions.length - 1]?.id;
+      const sessionId = data?.[data.length - 1]?.id;
 
       // Count windows before deletion
       const windowsBefore = await getElementCount(page, '.subagent-window');

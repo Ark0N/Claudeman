@@ -18,7 +18,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { beforeAll, afterAll, afterEach } from 'vitest';
+import { beforeAll, afterAll, afterEach, vi } from 'vitest';
 
 /** Maximum concurrent screen sessions allowed during tests */
 const MAX_CONCURRENT_SCREENS = 10;
@@ -314,6 +314,12 @@ beforeAll(async () => {
     preExistingScreens.add(name);
   }
   console.log(`[Test Setup] ${preExistingScreens.size} pre-existing screens preserved`);
+});
+
+afterEach(() => {
+  // Clean up mocks and timers between tests for proper isolation
+  vi.clearAllMocks();
+  vi.useRealTimers();
 });
 
 afterAll(async () => {

@@ -79,6 +79,106 @@ const BUILTIN_RESPAWN_PRESETS = [
 ];
 
 // ============================================================================
+// Mobile Detection
+// ============================================================================
+
+/**
+ * MobileDetection - Detects device type and touch capability.
+ * Updates body classes for CSS targeting.
+ */
+const MobileDetection = {
+  /** Check if device supports touch input */
+  isTouchDevice() {
+    return 'ontouchstart' in window ||
+      navigator.maxTouchPoints > 0 ||
+      (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  },
+
+  /** Check if device is iOS (iPhone, iPad, iPod) */
+  isIOS() {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  },
+
+  /** Check if browser is Safari */
+  isSafari() {
+    return /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+  },
+
+  /** Check if screen is small (phone-sized, <430px) */
+  isSmallScreen() {
+    return window.innerWidth < 430;
+  },
+
+  /** Check if screen is medium (tablet-sized, 430-768px) */
+  isMediumScreen() {
+    return window.innerWidth >= 430 && window.innerWidth < 768;
+  },
+
+  /** Get device type based on screen width */
+  getDeviceType() {
+    const width = window.innerWidth;
+    if (width < 430) return 'mobile';
+    if (width < 768) return 'tablet';
+    return 'desktop';
+  },
+
+  /** Update body classes based on device detection */
+  updateBodyClass() {
+    const body = document.body;
+    const deviceType = this.getDeviceType();
+    const isTouch = this.isTouchDevice();
+
+    // Remove existing device classes
+    body.classList.remove('device-mobile', 'device-tablet', 'device-desktop', 'touch-device', 'ios-device', 'safari-browser');
+
+    // Add current device class
+    body.classList.add(`device-${deviceType}`);
+
+    // Add touch device class if applicable
+    if (isTouch) {
+      body.classList.add('touch-device');
+    }
+
+    // Add iOS-specific class for safe area handling
+    if (this.isIOS()) {
+      body.classList.add('ios-device');
+    }
+
+    // Add Safari class for browser-specific fixes
+    if (this.isSafari()) {
+      body.classList.add('safari-browser');
+    }
+  },
+
+  /** Initialize mobile detection and set up resize listener */
+  init() {
+    this.updateBodyClass();
+    // Debounced resize handler
+    let resizeTimeout;
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(() => this.updateBodyClass(), 100);
+    });
+  }
+};
+
+/**
+ * Get unified coordinates from mouse or touch event.
+ * @param {MouseEvent|TouchEvent} e - The event
+ * @returns {{ clientX: number, clientY: number }} Coordinates
+ */
+function getEventCoords(e) {
+  if (e.touches && e.touches.length > 0) {
+    return { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY };
+  }
+  if (e.changedTouches && e.changedTouches.length > 0) {
+    return { clientX: e.changedTouches[0].clientX, clientY: e.changedTouches[0].clientY };
+  }
+  return { clientX: e.clientX, clientY: e.clientY };
+}
+
+// ============================================================================
 // Accessibility: Focus Trap for Modals
 // ============================================================================
 
@@ -773,6 +873,8 @@ class ClaudemanApp {
   }
 
   init() {
+    // Initialize mobile detection first (adds device classes to body)
+    MobileDetection.init();
     this.initTerminal();
     this.loadFontSize();
     this.applyHeaderVisibilitySettings();
@@ -4950,7 +5052,7 @@ class ClaudemanApp {
     let dragUpdateScheduled = false;
     let agentStartPositions = new Map(); // Track agent window start positions during drag
 
-    const mousedownHandler = (e) => {
+    const startHandler = (e) => {
       // Don't drag if clicking buttons
       if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
 
@@ -4962,8 +5064,9 @@ class ClaudemanApp {
         this.wizardPosition = { left: rect.left, top: rect.top };
       }
 
-      startX = e.clientX;
-      startY = e.clientY;
+      const coords = getEventCoords(e);
+      startX = coords.clientX;
+      startY = coords.clientY;
       startLeft = this.wizardPosition.left;
       startTop = this.wizardPosition.top;
 
@@ -4989,8 +5092,9 @@ class ClaudemanApp {
     const moveHandler = (e) => {
       if (!isDragging) return;
 
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
+      const coords = getEventCoords(e);
+      const dx = coords.clientX - startX;
+      const dy = coords.clientY - startY;
 
       // Constrain to viewport
       const winWidth = wizardContent.offsetWidth || 480;
@@ -5025,13 +5129,18 @@ class ClaudemanApp {
       }
     };
 
-    header.addEventListener('mousedown', mousedownHandler);
+    // Mouse events
+    header.addEventListener('mousedown', startHandler);
     document.addEventListener('mousemove', moveHandler);
     document.addEventListener('mouseup', upHandler);
+    // Touch events
+    header.addEventListener('touchstart', startHandler, { passive: false });
+    document.addEventListener('touchmove', moveHandler, { passive: false });
+    document.addEventListener('touchend', upHandler);
 
     this.wizardDragListeners = {
       header,
-      mousedown: mousedownHandler,
+      start: startHandler,
       move: moveHandler,
       up: upHandler,
     };
@@ -5039,10 +5148,15 @@ class ClaudemanApp {
 
   cleanupWizardDragging() {
     if (this.wizardDragListeners) {
-      const { header, mousedown, move, up } = this.wizardDragListeners;
-      header?.removeEventListener('mousedown', mousedown);
+      const { header, start, move, up } = this.wizardDragListeners;
+      // Mouse events
+      header?.removeEventListener('mousedown', start);
       document.removeEventListener('mousemove', move);
       document.removeEventListener('mouseup', up);
+      // Touch events
+      header?.removeEventListener('touchstart', start);
+      document.removeEventListener('touchmove', move);
+      document.removeEventListener('touchend', up);
       this.wizardDragListeners = null;
     }
   }
@@ -8908,28 +9022,32 @@ class ClaudemanApp {
     let isDragging = false;
     let startX, startY, startLeft, startTop;
 
-    const onMouseDown = (e) => {
+    const onStart = (e) => {
       // Only drag from header, not from buttons
       if (e.target.closest('button')) return;
       if (!panel.classList.contains('detached')) return;
 
       isDragging = true;
-      startX = e.clientX;
-      startY = e.clientY;
+      const coords = getEventCoords(e);
+      startX = coords.clientX;
+      startY = coords.clientY;
       const rect = panel.getBoundingClientRect();
       startLeft = rect.left;
       startTop = rect.top;
 
-      document.addEventListener('mousemove', onMouseMove);
-      document.addEventListener('mouseup', onMouseUp);
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onEnd);
+      document.addEventListener('touchmove', onMove, { passive: false });
+      document.addEventListener('touchend', onEnd);
       e.preventDefault();
     };
 
-    const onMouseMove = (e) => {
+    const onMove = (e) => {
       if (!isDragging) return;
 
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
+      const coords = getEventCoords(e);
+      const dx = coords.clientX - startX;
+      const dy = coords.clientY - startY;
 
       let newLeft = startLeft + dx;
       let newTop = startTop + dy;
@@ -8943,16 +9061,21 @@ class ClaudemanApp {
       panel.style.top = newTop + 'px';
     };
 
-    const onMouseUp = () => {
+    const onEnd = () => {
       isDragging = false;
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onEnd);
+      document.removeEventListener('touchmove', onMove);
+      document.removeEventListener('touchend', onEnd);
     };
 
     // Remove existing listeners before adding new ones
     header.removeEventListener('mousedown', header._dragHandler);
-    header._dragHandler = onMouseDown;
-    header.addEventListener('mousedown', onMouseDown);
+    header.removeEventListener('touchstart', header._touchDragHandler);
+    header._dragHandler = onStart;
+    header._touchDragHandler = onStart;
+    header.addEventListener('mousedown', onStart);
+    header.addEventListener('touchstart', onStart, { passive: false });
   }
 
   // ========== Subagents Panel Detach & Drag ==========
@@ -8994,28 +9117,32 @@ class ClaudemanApp {
     let isDragging = false;
     let startX, startY, startLeft, startTop;
 
-    const onMouseDown = (e) => {
+    const onStart = (e) => {
       // Only drag from header, not from buttons
       if (e.target.closest('button')) return;
       if (!panel.classList.contains('detached')) return;
 
       isDragging = true;
-      startX = e.clientX;
-      startY = e.clientY;
+      const coords = getEventCoords(e);
+      startX = coords.clientX;
+      startY = coords.clientY;
       const rect = panel.getBoundingClientRect();
       startLeft = rect.left;
       startTop = rect.top;
 
-      document.addEventListener('mousemove', onMouseMove);
-      document.addEventListener('mouseup', onMouseUp);
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onEnd);
+      document.addEventListener('touchmove', onMove, { passive: false });
+      document.addEventListener('touchend', onEnd);
       e.preventDefault();
     };
 
-    const onMouseMove = (e) => {
+    const onMove = (e) => {
       if (!isDragging) return;
 
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
+      const coords = getEventCoords(e);
+      const dx = coords.clientX - startX;
+      const dy = coords.clientY - startY;
 
       let newLeft = startLeft + dx;
       let newTop = startTop + dy;
@@ -9029,16 +9156,21 @@ class ClaudemanApp {
       panel.style.top = newTop + 'px';
     };
 
-    const onMouseUp = () => {
+    const onEnd = () => {
       isDragging = false;
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onEnd);
+      document.removeEventListener('touchmove', onMove);
+      document.removeEventListener('touchend', onEnd);
     };
 
     // Remove existing listeners before adding new ones
     header.removeEventListener('mousedown', header._dragHandler);
-    header._dragHandler = onMouseDown;
-    header.addEventListener('mousedown', onMouseDown);
+    header.removeEventListener('touchstart', header._touchDragHandler);
+    header._dragHandler = onStart;
+    header._touchDragHandler = onStart;
+    header.addEventListener('mousedown', onStart);
+    header.addEventListener('touchstart', onStart, { passive: false });
   }
 
   renderTaskPanel() {

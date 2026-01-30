@@ -267,7 +267,7 @@ describe('Input Interactions E2E', () => {
       // Track session
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      data.sessions?.forEach((s: any) => cleanup.trackSession(s.id));
+      data?.forEach((s: any) => cleanup.trackSession(s.id));
 
     } finally {
       if (browser) {
@@ -361,7 +361,7 @@ describe('Input Interactions E2E', () => {
       // Track session
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      data.sessions?.forEach((s: any) => cleanup.trackSession(s.id));
+      data?.forEach((s: any) => cleanup.trackSession(s.id));
 
     } finally {
       if (browser) {
@@ -408,7 +408,7 @@ describe('Input Interactions E2E', () => {
       // Track session
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      data.sessions?.forEach((s: any) => cleanup.trackSession(s.id));
+      data?.forEach((s: any) => cleanup.trackSession(s.id));
 
     } finally {
       if (browser) {

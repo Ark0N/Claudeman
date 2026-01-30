@@ -93,7 +93,7 @@ describe('Respawn Flow E2E', () => {
       // Track session
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      data.sessions?.forEach((s: any) => cleanup.trackSession(s.id));
+      data?.forEach((s: any) => cleanup.trackSession(s.id));
 
     } finally {
       if (browser) {
@@ -128,7 +128,7 @@ describe('Respawn Flow E2E', () => {
       // Get session ID
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      const session = data.sessions?.[data.sessions.length - 1];
+      const session = data?.[data.length - 1];
       cleanup.trackSession(session.id);
 
       // Enable respawn via API
@@ -181,7 +181,7 @@ describe('Respawn Flow E2E', () => {
       // Get session ID
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      const session = data.sessions?.[data.sessions.length - 1];
+      const session = data?.[data.length - 1];
       cleanup.trackSession(session.id);
 
       // Enable respawn first
@@ -256,7 +256,7 @@ describe('Respawn Flow E2E', () => {
       // Get session ID
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      const session = data.sessions?.[data.sessions.length - 1];
+      const session = data?.[data.length - 1];
       cleanup.trackSession(session.id);
 
       // Enable and start respawn
@@ -318,7 +318,7 @@ describe('Respawn Flow E2E', () => {
       // Get session ID
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      const session = data.sessions?.[data.sessions.length - 1];
+      const session = data?.[data.length - 1];
       cleanup.trackSession(session.id);
 
       // Configure auto-compact

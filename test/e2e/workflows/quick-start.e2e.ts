@@ -94,7 +94,7 @@ describe('Quick Start E2E', () => {
       // Get session ID from API
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      const session = data.sessions?.find((s: any) => s.workingDir?.includes(caseName));
+      const session = data?.find((s: any) => s.workingDir?.includes(caseName));
       expect(session).toBeDefined();
       cleanup.trackSession(session.id);
 
@@ -155,9 +155,9 @@ describe('Quick Start E2E', () => {
       // Get session from API
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      expect(data.sessions?.length).toBeGreaterThan(0);
+      expect(data?.length).toBeGreaterThan(0);
 
-      const session = data.sessions.find((s: any) => s.workingDir?.includes(caseName));
+      const session = data.find((s: any) => s.workingDir?.includes(caseName));
       expect(session).toBeDefined();
       cleanup.trackSession(session.id);
 
@@ -210,8 +210,8 @@ describe('Quick Start E2E', () => {
       // Track for cleanup
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      if (data.sessions?.length > 0) {
-        cleanup.trackSession(data.sessions[data.sessions.length - 1].id);
+      if (data?.length > 0) {
+        cleanup.trackSession(data[data.length - 1].id);
       }
 
     } finally {

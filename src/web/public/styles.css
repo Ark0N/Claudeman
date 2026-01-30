@@ -26,6 +26,15 @@
   --session-blue: #3b82f6;
   --session-purple: #a855f7;
   --session-pink: #ec4899;
+
+  /* Safe area insets for notched devices (iPhone X+, Dynamic Island) */
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-left: env(safe-area-inset-left, 0px);
+  --safe-area-right: env(safe-area-inset-right, 0px);
+
+  /* Touch target minimum (iOS Human Interface Guidelines) */
+  --touch-target-min: 44px;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -7775,4 +7784,344 @@ kbd {
 
 .advanced-options-content {
   padding-left: 0.5rem;
+}
+
+/* ============================================================================
+   Mobile & Touch Device Optimizations
+   ============================================================================ */
+
+/* Touch-friendly sizing for touch devices */
+.touch-device .btn-toolbar {
+  min-height: var(--touch-target-min);
+  min-width: var(--touch-target-min);
+}
+
+.touch-device .btn-icon-header,
+.touch-device .btn-icon-sm,
+.touch-device .btn-icon-only {
+  min-height: var(--touch-target-min);
+  min-width: var(--touch-target-min);
+}
+
+.touch-device .session-tab {
+  min-height: var(--touch-target-min);
+  padding: 0.5rem 0.75rem;
+}
+
+/* Always show close/gear buttons on touch devices (no hover) */
+.touch-device .session-tab .tab-close,
+.touch-device .session-tab .tab-gear {
+  opacity: 1;
+  width: auto;
+  padding: 0.2rem 0.4rem;
+}
+
+.touch-device .tab-count-btn {
+  min-height: var(--touch-target-min);
+  min-width: var(--touch-target-min);
+}
+
+/* ============================================================================
+   Tablet Breakpoint (430px - 768px)
+   ============================================================================ */
+@media (max-width: 768px) and (min-width: 430px) {
+  /* Safe area padding for iOS devices */
+  .ios-device .app {
+    padding-left: var(--safe-area-left);
+    padding-right: var(--safe-area-right);
+  }
+
+  /* Increase header height for better touch targets */
+  .header {
+    min-height: 48px;
+    padding: 0.5rem 0.75rem;
+  }
+
+  /* Stack panels vertically */
+  .monitor-panel,
+  .subagents-panel {
+    width: 100%;
+    max-width: 100%;
+    left: 0;
+    right: 0;
+    border-radius: 8px 8px 0 0;
+  }
+
+  /* Larger toolbar buttons */
+  .btn-toolbar {
+    padding: 0.5rem 1rem;
+    font-size: 0.8rem;
+  }
+
+  /* Session tabs horizontal scroll */
+  .session-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .session-tabs::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ============================================================================
+   Phone Breakpoint (<430px)
+   ============================================================================ */
+@media (max-width: 430px) {
+  /* Safe area padding for iOS devices */
+  .ios-device .app {
+    padding-top: var(--safe-area-top);
+    padding-left: var(--safe-area-left);
+    padding-right: var(--safe-area-right);
+  }
+
+  /* Hide header brand on phones */
+  .header-brand {
+    display: none;
+  }
+
+  /* Hide font controls on phones */
+  .header-font-controls {
+    display: none;
+  }
+
+  /* Hide system stats on phones */
+  .header-system-stats {
+    display: none;
+  }
+
+  /* Compact header */
+  .header {
+    min-height: 48px;
+    padding: 0.4rem;
+    gap: 0.25rem;
+  }
+
+  .header-right {
+    padding-left: 0.5rem;
+    gap: 0.25rem;
+  }
+
+  /* Full-width session tabs with horizontal scroll */
+  .session-tabs {
+    flex: 1;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    max-height: 56px;
+  }
+
+  .session-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .session-tab {
+    flex-shrink: 0;
+    min-height: var(--touch-target-min);
+    padding: 0.5rem 0.75rem;
+  }
+
+  /* Simplified toolbar */
+  .toolbar {
+    height: auto;
+    min-height: var(--toolbar-height);
+    padding: 0.5rem;
+    padding-bottom: calc(0.5rem + var(--safe-area-bottom));
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  /* Hide secondary toolbar groups */
+  .toolbar-center {
+    display: none;
+  }
+
+  .toolbar-left .toolbar-group:not(:first-child) {
+    display: none;
+  }
+
+  /* Full-width primary toolbar group */
+  .toolbar-left {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .toolbar-left .toolbar-group:first-child {
+    flex: 1;
+    justify-content: space-around;
+  }
+
+  /* Larger toolbar buttons for touch */
+  .btn-toolbar {
+    min-height: var(--touch-target-min);
+    padding: 0.5rem 1rem;
+    font-size: 0.85rem;
+  }
+
+  .btn-toolbar.btn-claude {
+    flex: 1;
+    justify-content: center;
+  }
+
+  /* Full-width panels */
+  .monitor-panel,
+  .subagents-panel {
+    width: 100%;
+    max-width: 100%;
+    left: 0;
+    right: 0;
+    border-radius: 8px 8px 0 0;
+  }
+
+  /* Full-screen modals on phones */
+  .modal-content {
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    max-height: 100%;
+    border-radius: 0;
+    margin: 0;
+  }
+
+  /* Modal safe area padding */
+  .ios-device .modal-content {
+    padding-top: var(--safe-area-top);
+    padding-bottom: var(--safe-area-bottom);
+  }
+
+  .modal-header {
+    padding: 1rem;
+  }
+
+  .modal-body {
+    padding: 1rem;
+    flex: 1;
+    overflow-y: auto;
+  }
+
+  .modal-footer,
+  .form-actions {
+    padding: 1rem;
+    padding-bottom: calc(1rem + var(--safe-area-bottom));
+  }
+
+  /* Terminal container safe area */
+  .ios-device .terminal-container {
+    padding-bottom: var(--safe-area-bottom);
+  }
+
+  /* Welcome overlay adjustments */
+  .welcome-content {
+    padding: 1.5rem 1rem;
+  }
+
+  .welcome-title {
+    font-size: 1.4rem;
+  }
+
+  .welcome-actions {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .welcome-btn {
+    width: 100%;
+    justify-content: center;
+    min-height: var(--touch-target-min);
+  }
+
+  /* Ralph wizard responsive */
+  .modal-wizard {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .wizard-progress {
+    padding: 0.75rem;
+  }
+
+  .wizard-step-label {
+    display: none;
+  }
+
+  /* Tab count group responsive */
+  .tab-count-group {
+    margin: 0;
+  }
+
+  .tab-count-btn {
+    min-width: var(--touch-target-min);
+    min-height: var(--touch-target-min);
+  }
+
+  /* Case select responsive */
+  .case-select-group {
+    flex: 0 0 auto;
+  }
+
+  .toolbar-select {
+    font-size: 0.8rem;
+    padding: 0.5rem 1.5rem 0.5rem 0.75rem;
+  }
+}
+
+/* ============================================================================
+   Virtual Keyboard Handling
+   ============================================================================ */
+.keyboard-visible .toolbar {
+  display: none;
+}
+
+.keyboard-visible .monitor-panel,
+.keyboard-visible .subagents-panel {
+  display: none;
+}
+
+/* Ensure terminal fills space when keyboard is visible */
+.keyboard-visible .main {
+  height: 100%;
+}
+
+/* ============================================================================
+   iOS Safari Specific Fixes
+   ============================================================================ */
+.ios-device.safari-browser {
+  /* Prevent pull-to-refresh */
+  overscroll-behavior: none;
+}
+
+.ios-device.safari-browser .terminal-container {
+  /* Prevent rubber-banding in terminal */
+  -webkit-overflow-scrolling: auto;
+}
+
+/* ============================================================================
+   Hover State Fallbacks for Touch
+   ============================================================================ */
+@media (hover: none) and (pointer: coarse) {
+  /* Remove hover-dependent UI patterns */
+  .session-tab .tab-close,
+  .session-tab .tab-gear {
+    opacity: 1;
+    width: auto;
+    padding: 0.2rem 0.4rem;
+  }
+
+  /* Simplify button hover states */
+  .btn-toolbar:hover {
+    transform: none;
+  }
+
+  .btn-icon-header:hover {
+    transform: none;
+  }
+
+  /* Show dropdown on tap instead of hover */
+  .subagent-dropdown-trigger:active + .subagent-dropdown-menu,
+  .subagent-dropdown-trigger:focus + .subagent-dropdown-menu {
+    display: block;
+  }
 }

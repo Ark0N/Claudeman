@@ -73,8 +73,8 @@ describe('Session Delete E2E', () => {
       // Get session ID
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      expect(data.sessions?.length).toBeGreaterThan(0);
-      const session = data.sessions.find((s: any) => s.workingDir?.includes(caseName));
+      expect(data?.length).toBeGreaterThan(0);
+      const session = data.find((s: any) => s.workingDir?.includes(caseName));
       expect(session).toBeDefined();
       const sessionId = session.id;
 
@@ -103,7 +103,7 @@ describe('Session Delete E2E', () => {
       // Verify API returns no sessions with that ID
       const afterResponse = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const afterData = await afterResponse.json();
-      const remainingSessions = afterData.sessions?.filter((s: any) => s.id === sessionId);
+      const remainingSessions = afterData?.filter((s: any) => s.id === sessionId);
       expect(remainingSessions?.length || 0).toBe(0);
 
     } finally {
@@ -166,7 +166,7 @@ describe('Session Delete E2E', () => {
       // Get middle session ID
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      const sessions = data.sessions || [];
+      const sessions = data || [];
       sessions.forEach((s: any) => cleanup.trackSession(s.id));
 
       // Click middle tab to make it active
@@ -227,8 +227,8 @@ describe('Session Delete E2E', () => {
       // Track for cleanup
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      if (data.sessions?.length > 0) {
-        cleanup.trackSession(data.sessions[data.sessions.length - 1].id);
+      if (data?.length > 0) {
+        cleanup.trackSession(data[data.length - 1].id);
       }
 
       // Delete session

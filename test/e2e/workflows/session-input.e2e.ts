@@ -91,8 +91,8 @@ describe('Session Input E2E', () => {
       // Track session for cleanup
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      if (data.sessions?.length > 0) {
-        cleanup.trackSession(data.sessions[data.sessions.length - 1].id);
+      if (data?.length > 0) {
+        cleanup.trackSession(data[data.length - 1].id);
       }
 
     } finally {
@@ -144,8 +144,8 @@ describe('Session Input E2E', () => {
       // Track for cleanup
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      if (data.sessions?.length > 0) {
-        cleanup.trackSession(data.sessions[data.sessions.length - 1].id);
+      if (data?.length > 0) {
+        cleanup.trackSession(data[data.length - 1].id);
       }
 
     } finally {
@@ -195,8 +195,8 @@ describe('Session Input E2E', () => {
       // Track for cleanup
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      if (data.sessions?.length > 0) {
-        cleanup.trackSession(data.sessions[data.sessions.length - 1].id);
+      if (data?.length > 0) {
+        cleanup.trackSession(data[data.length - 1].id);
       }
 
     } finally {

@@ -14,6 +14,35 @@ export const E2E_PORTS = {
   INPUT_INTERACTIONS: 3188,
   RESPAWN_FLOW: 3189,
   RALPH_LOOP: 3190,
+  MOBILE_SAFARI: 3191,
+} as const;
+
+// Mobile device viewports for responsive testing
+export const MOBILE_VIEWPORTS = {
+  // iPhone 17 Pro - 402x874 @3x
+  IPHONE_17_PRO: {
+    width: 402,
+    height: 874,
+    deviceScaleFactor: 3,
+    isMobile: true,
+    hasTouch: true,
+  },
+  // iPhone 17 Pro Max - 440x956 @3x
+  IPHONE_17_PRO_MAX: {
+    width: 440,
+    height: 956,
+    deviceScaleFactor: 3,
+    isMobile: true,
+    hasTouch: true,
+  },
+  // iPad Pro 11" - 834x1194 @2x
+  IPAD_PRO_11: {
+    width: 834,
+    height: 1194,
+    deviceScaleFactor: 2,
+    isMobile: true,
+    hasTouch: true,
+  },
 } as const;
 
 // Timeouts for various operations

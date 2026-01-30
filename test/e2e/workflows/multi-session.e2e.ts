@@ -101,7 +101,7 @@ describe('Multi-Session E2E', () => {
       // Track sessions for cleanup
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      data.sessions?.forEach((s: any) => cleanup.trackSession(s.id));
+      data?.forEach((s: any) => cleanup.trackSession(s.id));
 
     } finally {
       if (browser) {
@@ -175,7 +175,7 @@ describe('Multi-Session E2E', () => {
       // Track sessions
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      data.sessions?.forEach((s: any) => cleanup.trackSession(s.id));
+      data?.forEach((s: any) => cleanup.trackSession(s.id));
 
     } finally {
       if (browser) {
@@ -249,7 +249,7 @@ describe('Multi-Session E2E', () => {
       // Track sessions
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      data.sessions?.forEach((s: any) => cleanup.trackSession(s.id));
+      data?.forEach((s: any) => cleanup.trackSession(s.id));
 
     } finally {
       if (browser) {
@@ -298,7 +298,7 @@ describe('Multi-Session E2E', () => {
       // Track all sessions
       const response = await fetch(`${serverFixture.baseUrl}/api/sessions`);
       const data = await response.json();
-      data.sessions?.forEach((s: any) => cleanup.trackSession(s.id));
+      data?.forEach((s: any) => cleanup.trackSession(s.id));
 
       // Delete middle session
       await clickElement(page, '.session-tab:nth-child(2)');
