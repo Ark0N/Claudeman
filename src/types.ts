@@ -1255,37 +1255,6 @@ export interface ImageDetectedEvent {
   size: number;
 }
 
-// ========== Execution Bridge Re-exports ==========
+// ========== Plan Orchestrator Re-exports ==========
 
-export type {
-  ExecutionStatus,
-  ExecutionProgress,
-  TaskAssignment as ExecutionTaskAssignment,
-  PlanItem,
-  ExecutionHistoryEntry,
-} from './execution-bridge.js';
-
-export type {
-  ModelTier,
-  AgentType,
-  ExecutionMode,
-  ModelConfig,
-  ModelSelection,
-  ExecutionModeSelection,
-  TaskCharacteristics,
-} from './model-selector.js';
-
-export type {
-  GroupTaskStatus,
-  ExecutionGroupStatus,
-  GroupTask,
-  ExecutionGroup,
-  ExecutionSchedule,
-} from './group-scheduler.js';
-
-export type {
-  ContextRefreshMethod,
-  ContextRefreshStatus,
-  ContextRefreshRequest,
-  ContextRefreshResult,
-} from './context-manager.js';
+export type { PlanItem } from './plan-orchestrator.js';
