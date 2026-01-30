@@ -17,12 +17,84 @@
   --red: #ef4444;
   --header-height: 36px;
   --toolbar-height: 40px;
+
+  /* Session color palette */
+  --session-red: #ef4444;
+  --session-orange: #f97316;
+  --session-yellow: #eab308;
+  --session-green: #22c55e;
+  --session-blue: #3b82f6;
+  --session-purple: #a855f7;
+  --session-pink: #ec4899;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 /* Utility classes */
 .mt-sm { margin-top: 0.5rem; }
+
+/* ========== Accessibility: Focus Styles ========== */
+
+/* Skip link for keyboard users */
+.skip-link {
+  position: absolute;
+  top: -50px;
+  left: 8px;
+  padding: 8px 16px;
+  background: var(--accent);
+  color: white;
+  text-decoration: none;
+  border-radius: 4px;
+  z-index: 10000;
+  font-size: 0.875rem;
+  transition: top 0.2s;
+}
+.skip-link:focus {
+  top: 8px;
+}
+
+/* Global focus-visible styles for keyboard navigation */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Remove default outline for mouse users */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Button focus styles */
+button:focus-visible,
+.btn-toolbar:focus-visible,
+.btn-icon:focus-visible,
+.btn-icon-header:focus-visible,
+.btn-icon-sm:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Input focus styles */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  outline: none;
+}
+
+/* Session tab focus */
+.session-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  z-index: 1;
+}
+
+/* Modal close button focus */
+.modal-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -153,6 +225,24 @@ body {
 }
 .session-tab .tab-status.error { background: var(--red); }
 
+/* Session color coding - left border indicator */
+.session-tab[data-color="red"] { border-left: 3px solid var(--session-red); }
+.session-tab[data-color="orange"] { border-left: 3px solid var(--session-orange); }
+.session-tab[data-color="yellow"] { border-left: 3px solid var(--session-yellow); }
+.session-tab[data-color="green"] { border-left: 3px solid var(--session-green); }
+.session-tab[data-color="blue"] { border-left: 3px solid var(--session-blue); }
+.session-tab[data-color="purple"] { border-left: 3px solid var(--session-purple); }
+.session-tab[data-color="pink"] { border-left: 3px solid var(--session-pink); }
+
+/* Active tabs with color get subtle background tint */
+.session-tab.active[data-color="red"] { background: rgba(239, 68, 68, 0.1); }
+.session-tab.active[data-color="orange"] { background: rgba(249, 115, 22, 0.1); }
+.session-tab.active[data-color="yellow"] { background: rgba(234, 179, 8, 0.1); }
+.session-tab.active[data-color="green"] { background: rgba(34, 197, 94, 0.1); }
+.session-tab.active[data-color="blue"] { background: rgba(59, 130, 246, 0.1); }
+.session-tab.active[data-color="purple"] { background: rgba(168, 85, 247, 0.1); }
+.session-tab.active[data-color="pink"] { background: rgba(236, 72, 153, 0.1); }
+
 .session-tab .tab-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -259,10 +349,36 @@ body {
   height: 6px;
   border-radius: 50%;
   background: var(--yellow);
+  flex-shrink: 0;
 }
 
 .status-dot.connected { background: var(--green); }
 .status-dot.disconnected { background: var(--red); }
+.status-dot.connecting {
+  background: var(--yellow);
+  animation: status-pulse 1.5s ease-in-out infinite;
+}
+.status-dot.reconnecting {
+  background: var(--orange, #f97316);
+  animation: status-pulse 1s ease-in-out infinite;
+}
+.status-dot.offline {
+  background: var(--text-muted);
+}
+
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.2); }
+}
+
+.status-freshness {
+  font-size: 0.6rem;
+  color: var(--text-dim);
+  margin-left: 2px;
+  white-space: nowrap;
+}
+.status-freshness.stale { color: var(--yellow); }
+.status-freshness.very-stale { color: var(--red); }
 
 .header-tokens {
   font-size: 0.75rem;
@@ -2175,6 +2291,24 @@ body {
   margin-top: 0.35rem;
 }
 
+/* Preset selector */
+.preset-selector {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.preset-selector select {
+  flex: 1;
+  min-width: 0;
+}
+
+.preset-selector .btn-sm {
+  white-space: nowrap;
+  padding: 4px 8px;
+  font-size: 0.7rem;
+}
+
 /* Switch toggle for form rows */
 .form-section-header {
   font-size: 0.7rem;
@@ -2390,6 +2524,75 @@ body {
   color: var(--red);
 }
 
+/* Event Type Notification Grid */
+.event-type-grid {
+  display: grid;
+  grid-template-columns: 1fr 50px 50px 50px;
+  gap: 6px 8px;
+  align-items: center;
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--bg-dark);
+  border-radius: 4px;
+}
+
+.event-header {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  text-align: center;
+  font-weight: 500;
+}
+
+.event-header:first-child {
+  text-align: left;
+}
+
+.event-label {
+  font-size: 0.75rem;
+  color: var(--text);
+}
+
+.event-type-grid input[type="checkbox"] {
+  justify-self: center;
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+/* Session Color Picker */
+.color-picker {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.color-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background: transparent;
+  padding: 2px;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.1s;
+}
+
+.color-swatch:hover {
+  transform: scale(1.1);
+}
+
+.color-swatch.selected {
+  border-color: var(--accent);
+}
+
+.swatch-inner {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 2px;
+}
+
 .form-actions {
   display: flex;
   justify-content: flex-end;
@@ -2425,6 +2628,7 @@ body {
   z-index: 1000;
   align-items: center;
   justify-content: center;
+  contain: layout paint;
 }
 
 .modal.active {
@@ -4762,6 +4966,7 @@ kbd {
   flex-direction: column;
   overflow: hidden;
   resize: both;
+  contain: layout paint;
 }
 
 /* Resize handle indicator in bottom-right corner */
@@ -5475,6 +5680,7 @@ kbd {
   flex-direction: column;
   overflow: hidden;
   resize: both;
+  contain: layout paint;
 }
 
 .log-viewer-window-header {
@@ -5597,6 +5803,7 @@ kbd {
   overflow: hidden;
   resize: both;
   z-index: 3000;
+  contain: layout paint;
 }
 
 .image-popup-header {
@@ -6548,6 +6755,7 @@ kbd {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  contain: layout paint;
 }
 
 .plan-fm-header {
@@ -6677,6 +6885,7 @@ kbd {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  contain: layout paint;
 }
 
 .plan-file-window-header {
