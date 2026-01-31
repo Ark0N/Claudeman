@@ -8054,10 +8054,10 @@ kbd {
     height: 14px;
   }
 
-  /* Clean dark toolbar - overlaps terminal to hide Claude's status/input */
+  /* Clean dark toolbar - positioned near bottom */
   .toolbar {
     position: absolute;
-    bottom: calc(30px + var(--safe-area-bottom));
+    bottom: calc(10px + var(--safe-area-bottom));
     left: 0;
     right: 0;
     height: 40px;
