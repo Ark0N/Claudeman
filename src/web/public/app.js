@@ -185,12 +185,18 @@ function getEventCoords(e) {
 /**
  * KeyboardHandler - Simple handler to scroll inputs into view when keyboard appears.
  * Uses focusin event and scrollIntoView - keeps it simple and reliable.
+ * Also handles terminal scrolling via visualViewport API.
  */
 const KeyboardHandler = {
+  lastViewportHeight: 0,
+  keyboardVisible: false,
+
   /** Initialize keyboard handling */
   init() {
     // Only initialize on touch devices
     if (!MobileDetection.isTouchDevice()) return;
+
+    this.lastViewportHeight = window.visualViewport?.height || window.innerHeight;
 
     // Simple focus handler - scroll input into view after keyboard appears
     document.addEventListener('focusin', (e) => {
@@ -202,6 +208,44 @@ const KeyboardHandler = {
         this.scrollInputIntoView(target);
       }, 400);
     });
+
+    // Use visualViewport to detect keyboard for terminal scrolling
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', () => {
+        this.handleViewportResize();
+      });
+    }
+  },
+
+  /** Handle viewport resize (keyboard show/hide) */
+  handleViewportResize() {
+    const currentHeight = window.visualViewport?.height || window.innerHeight;
+    const heightDiff = this.lastViewportHeight - currentHeight;
+
+    // Keyboard appeared (viewport shrunk by more than 150px)
+    if (heightDiff > 150 && !this.keyboardVisible) {
+      this.keyboardVisible = true;
+      this.onKeyboardShow();
+    }
+    // Keyboard hidden (viewport grew back)
+    else if (heightDiff < -150 && this.keyboardVisible) {
+      this.keyboardVisible = false;
+    }
+
+    this.lastViewportHeight = currentHeight;
+  },
+
+  /** Called when keyboard appears */
+  onKeyboardShow() {
+    // Scroll active terminal to bottom so input line is visible
+    setTimeout(() => {
+      if (typeof app !== 'undefined' && app.activeSessionId) {
+        const sessionData = app.sessions.get(app.activeSessionId);
+        if (sessionData?.terminal) {
+          sessionData.terminal.scrollToBottom();
+        }
+      }
+    }, 100);
   },
 
   /** Check if element is an input that triggers keyboard (excludes terminal) */
