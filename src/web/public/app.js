@@ -204,9 +204,15 @@ const KeyboardHandler = {
     });
   },
 
-  /** Check if element is an input that triggers keyboard */
+  /** Check if element is an input that triggers keyboard (excludes terminal) */
   isInputElement(el) {
     if (!el) return false;
+
+    // Exclude xterm.js terminal inputs (they handle their own scroll)
+    if (el.closest('.xterm') || el.closest('.terminal-container')) {
+      return false;
+    }
+
     const tagName = el.tagName?.toLowerCase();
     // Exclude type=range, type=checkbox, type=radio (don't trigger keyboard)
     if (tagName === 'input') {
