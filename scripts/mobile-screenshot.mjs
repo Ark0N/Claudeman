@@ -58,13 +58,7 @@ async function takeScreenshots() {
     // Screenshot 2: Simulate keyboard appearing
     console.log('Simulating virtual keyboard...');
 
-    // Resize viewport to simulate keyboard taking up space
-    await page.setViewportSize({
-      width: VIEWPORT_WIDTH,
-      height: VIEWPORT_HEIGHT - KEYBOARD_HEIGHT
-    });
-
-    // Trigger the keyboard handler manually
+    // Trigger the keyboard handler manually - simulate what happens when keyboard shows
     await page.evaluate((keyboardHeight) => {
       // Add keyboard-visible class
       document.body.classList.add('keyboard-visible');
@@ -73,6 +67,20 @@ async function takeScreenshots() {
       const toolbar = document.querySelector('.toolbar');
       if (toolbar) {
         toolbar.style.transform = `translateY(${-keyboardHeight}px)`;
+      }
+
+      // Show and move accessory bar
+      const accessoryBar = document.querySelector('.keyboard-accessory-bar');
+      if (accessoryBar) {
+        accessoryBar.classList.add('visible');
+        accessoryBar.style.transform = `translateY(${-keyboardHeight}px)`;
+      }
+
+      // Shrink main content area so terminal doesn't extend behind keyboard
+      // Account for toolbar (40px) + accessory bar (44px)
+      const main = document.querySelector('.main');
+      if (main) {
+        main.style.paddingBottom = `${keyboardHeight + 94}px`;
       }
     }, KEYBOARD_HEIGHT);
 

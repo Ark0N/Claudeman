@@ -16,7 +16,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md`
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1461 (must match `package.json` for npm publish)
+**Version**: 0.1462 (must match `package.json` for npm publish)
 
 ## Project Overview
 
@@ -177,7 +177,7 @@ To change defaults, edit the `??` fallback values in `openAppSettings()` and `ap
 
 **Port allocation**: E2E tests use centralized ports in `test/e2e/e2e.config.ts`. Unit/integration tests pick unique ports manually. Search `const PORT =` or `TEST_PORT` in test files to find used ports before adding new tests.
 
-**E2E tests**: Use Playwright. Run `npx playwright install chromium` first. See `test/e2e/fixtures/` for helpers. E2E config (`test/e2e/e2e.config.ts`) provides ports (3183-3190), timeouts, and helpers.
+**E2E tests**: Use Playwright. Run `npx playwright install chromium` first. See `test/e2e/fixtures/` for helpers. E2E config (`test/e2e/e2e.config.ts`) provides ports (3183-3193), timeouts, and helpers.
 
 **Test config**: Vitest runs with `globals: true` (no imports needed for `describe`/`it`/`expect`/`vi`) and `fileParallelism: false` (files run sequentially to respect screen limits). Unit test timeout is 30s, teardown timeout is 60s. E2E tests have longer timeouts defined in `test/e2e/e2e.config.ts` (90s test, 30s session creation).
 

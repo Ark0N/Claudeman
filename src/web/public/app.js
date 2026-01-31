@@ -218,7 +218,7 @@ const KeyboardHandler = {
       });
       // Also handle scroll (iOS scrolls viewport when keyboard appears)
       window.visualViewport.addEventListener('scroll', () => {
-        this.updateToolbarPosition();
+        this.updateLayoutForKeyboard();
       });
     }
   },
@@ -241,40 +241,74 @@ const KeyboardHandler = {
       this.onKeyboardHide();
     }
 
-    this.updateToolbarPosition();
+    this.updateLayoutForKeyboard();
     this.lastViewportHeight = currentHeight;
   },
 
-  /** Update toolbar position based on visual viewport */
-  updateToolbarPosition() {
+  /** Update layout when keyboard shows/hides */
+  updateLayoutForKeyboard() {
     if (!window.visualViewport) return;
 
-    const toolbar = document.querySelector('.toolbar');
-    if (!toolbar) return;
-
-    // Only reposition on mobile
+    // Only adjust on mobile
     if (!MobileDetection.isSmallScreen() && !MobileDetection.isMediumScreen()) {
-      toolbar.style.transform = '';
+      this.resetLayout();
       return;
     }
 
+    const toolbar = document.querySelector('.toolbar');
+    const accessoryBar = document.querySelector('.keyboard-accessory-bar');
+    const main = document.querySelector('.main');
+
     if (this.keyboardVisible) {
-      // The toolbar is fixed at bottom: 0 (relative to layout viewport)
-      // We need to move it up to be at the bottom of the visual viewport
-      // Distance from visual viewport bottom to layout viewport bottom:
+      // Calculate keyboard offset
       const layoutHeight = window.innerHeight;
       const visualBottom = window.visualViewport.offsetTop + window.visualViewport.height;
-      const offsetFromBottom = layoutHeight - visualBottom;
+      const keyboardOffset = layoutHeight - visualBottom;
 
-      // Move toolbar up by this offset (negative translateY moves up)
-      toolbar.style.transform = `translateY(${-offsetFromBottom}px)`;
+      // Move toolbar up above keyboard
+      if (toolbar) {
+        toolbar.style.transform = `translateY(${-keyboardOffset}px)`;
+      }
+
+      // Move accessory bar up (it sits above toolbar)
+      if (accessoryBar) {
+        accessoryBar.style.transform = `translateY(${-keyboardOffset}px)`;
+      }
+
+      // Shrink main content area so terminal doesn't extend behind keyboard
+      // Account for keyboard height + toolbar height (40px) + accessory bar (44px)
+      if (main) {
+        main.style.paddingBottom = `${keyboardOffset + 94}px`;
+      }
     } else {
+      this.resetLayout();
+    }
+  },
+
+  /** Reset layout to normal (no keyboard) */
+  resetLayout() {
+    const toolbar = document.querySelector('.toolbar');
+    const accessoryBar = document.querySelector('.keyboard-accessory-bar');
+    const main = document.querySelector('.main');
+
+    if (toolbar) {
       toolbar.style.transform = '';
+    }
+    if (accessoryBar) {
+      accessoryBar.style.transform = '';
+    }
+    if (main) {
+      main.style.paddingBottom = '';
     }
   },
 
   /** Called when keyboard appears */
   onKeyboardShow() {
+    // Show keyboard accessory bar
+    if (typeof KeyboardAccessoryBar !== 'undefined') {
+      KeyboardAccessoryBar.show();
+    }
+
     // Scroll active terminal to bottom so input line is visible
     setTimeout(() => {
       if (typeof app !== 'undefined' && app.activeSessionId) {
@@ -288,11 +322,12 @@ const KeyboardHandler = {
 
   /** Called when keyboard hides */
   onKeyboardHide() {
-    // Reset toolbar position
-    const toolbar = document.querySelector('.toolbar');
-    if (toolbar) {
-      toolbar.style.transform = '';
+    // Hide keyboard accessory bar
+    if (typeof KeyboardAccessoryBar !== 'undefined') {
+      KeyboardAccessoryBar.hide();
     }
+
+    this.resetLayout();
   },
 
   /** Check if element is an input that triggers keyboard (excludes terminal) */
@@ -341,6 +376,155 @@ const KeyboardHandler = {
     } else {
       // For page-level - use scrollIntoView
       input.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }
+};
+
+// ============================================================================
+// Mobile Swipe Handler
+// ============================================================================
+
+/**
+ * SwipeHandler - Detects horizontal swipes on terminal to switch sessions.
+ * Only active on mobile/touch devices.
+ */
+const SwipeHandler = {
+  startX: 0,
+  startY: 0,
+  startTime: 0,
+  minSwipeDistance: 80,  // Minimum pixels for a valid swipe
+  maxSwipeTime: 300,     // Maximum ms for a swipe gesture
+  maxVerticalDrift: 100, // Max vertical movement allowed
+
+  /** Initialize swipe handling */
+  init() {
+    // Only on touch devices
+    if (!MobileDetection.isTouchDevice()) return;
+
+    const terminal = document.querySelector('.main');
+    if (!terminal) return;
+
+    terminal.addEventListener('touchstart', (e) => this.onTouchStart(e), { passive: true });
+    terminal.addEventListener('touchend', (e) => this.onTouchEnd(e), { passive: true });
+  },
+
+  onTouchStart(e) {
+    if (!e.touches || e.touches.length !== 1) return;
+    this.startX = e.touches[0].clientX;
+    this.startY = e.touches[0].clientY;
+    this.startTime = Date.now();
+  },
+
+  onTouchEnd(e) {
+    if (!e.changedTouches || e.changedTouches.length !== 1) return;
+
+    const endX = e.changedTouches[0].clientX;
+    const endY = e.changedTouches[0].clientY;
+    const elapsed = Date.now() - this.startTime;
+
+    // Check if it's a valid swipe
+    const deltaX = endX - this.startX;
+    const deltaY = Math.abs(endY - this.startY);
+
+    if (elapsed > this.maxSwipeTime) return;  // Too slow
+    if (deltaY > this.maxVerticalDrift) return;  // Too much vertical movement
+    if (Math.abs(deltaX) < this.minSwipeDistance) return;  // Too short
+
+    // Valid swipe detected
+    if (deltaX > 0) {
+      // Swipe right -> previous session
+      if (typeof app !== 'undefined') app.prevSession();
+    } else {
+      // Swipe left -> next session
+      if (typeof app !== 'undefined') app.nextSession();
+    }
+  }
+};
+
+// ============================================================================
+// Mobile Keyboard Accessory Bar
+// ============================================================================
+
+/**
+ * KeyboardAccessoryBar - Quick action buttons shown above keyboard when typing.
+ */
+const KeyboardAccessoryBar = {
+  element: null,
+
+  /** Create and inject the accessory bar */
+  init() {
+    // Only on mobile
+    if (!MobileDetection.isTouchDevice()) return;
+
+    // Create accessory bar element
+    this.element = document.createElement('div');
+    this.element.className = 'keyboard-accessory-bar';
+    this.element.innerHTML = `
+      <button class="accessory-btn" data-action="init" title="/init">/init</button>
+      <button class="accessory-btn" data-action="clear" title="/clear">/clear</button>
+      <button class="accessory-btn" data-action="compact" title="/compact">/compact</button>
+      <button class="accessory-btn accessory-btn-dismiss" data-action="dismiss" title="Dismiss keyboard">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M19 9l-7 7-7-7"/>
+        </svg>
+      </button>
+    `;
+
+    // Add click handlers
+    this.element.addEventListener('click', (e) => {
+      const btn = e.target.closest('.accessory-btn');
+      if (!btn) return;
+
+      const action = btn.dataset.action;
+      this.handleAction(action);
+    });
+
+    // Insert before toolbar
+    const toolbar = document.querySelector('.toolbar');
+    if (toolbar && toolbar.parentNode) {
+      toolbar.parentNode.insertBefore(this.element, toolbar);
+    }
+  },
+
+  /** Handle accessory button actions */
+  handleAction(action) {
+    if (typeof app === 'undefined' || !app.activeSessionId) return;
+
+    switch (action) {
+      case 'init':
+        this.confirmAndSend('/init', 'Run /init command?');
+        break;
+      case 'clear':
+        this.confirmAndSend('/clear', 'Clear conversation history?');
+        break;
+      case 'compact':
+        this.confirmAndSend('/compact', 'Compact context?');
+        break;
+      case 'dismiss':
+        // Blur active element to dismiss keyboard
+        document.activeElement?.blur();
+        break;
+    }
+  },
+
+  /** Show confirmation dialog before sending command */
+  confirmAndSend(command, message) {
+    if (confirm(message)) {
+      app.sendInput(command + '\r');
+    }
+  },
+
+  /** Show the accessory bar */
+  show() {
+    if (this.element) {
+      this.element.classList.add('visible');
+    }
+  },
+
+  /** Hide the accessory bar */
+  hide() {
+    if (this.element) {
+      this.element.classList.remove('visible');
     }
   }
 };
@@ -1051,8 +1235,10 @@ class ClaudemanApp {
   init() {
     // Initialize mobile detection first (adds device classes to body)
     MobileDetection.init();
-    // Initialize keyboard handler for mobile input visibility
+    // Initialize mobile handlers
     KeyboardHandler.init();
+    SwipeHandler.init();
+    KeyboardAccessoryBar.init();
     this.initTerminal();
     this.loadFontSize();
     this.applyHeaderVisibilitySettings();
@@ -3513,6 +3699,14 @@ class ClaudemanApp {
     const currentIndex = this.sessionOrder.indexOf(this.activeSessionId);
     const nextIndex = (currentIndex + 1) % this.sessionOrder.length;
     this.selectSession(this.sessionOrder[nextIndex]);
+  }
+
+  prevSession() {
+    if (this.sessionOrder.length <= 1) return;
+
+    const currentIndex = this.sessionOrder.indexOf(this.activeSessionId);
+    const prevIndex = (currentIndex - 1 + this.sessionOrder.length) % this.sessionOrder.length;
+    this.selectSession(this.sessionOrder[prevIndex]);
   }
 
   // ========== Navigation ==========
@@ -7417,6 +7611,20 @@ class ClaudemanApp {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(dims)
+    });
+  }
+
+  /**
+   * Send input to the active session.
+   * @param {string} input - Text to send (include \r for Enter)
+   * @returns {Promise<void>}
+   */
+  async sendInput(input) {
+    if (!this.activeSessionId) return;
+    await fetch(`/api/sessions/${this.activeSessionId}/input`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input, useScreen: true })
     });
   }
 

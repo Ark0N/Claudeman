@@ -8174,35 +8174,107 @@ kbd {
     color: #fff;
   }
 
-  /* Case selector - fills available space on left */
+  /* Hide case selector on mobile - simplified toolbar */
   .case-select-group {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    order: 1; /* Left position */
-    min-width: 0;
+    display: none !important;
   }
 
-  .toolbar-select {
-    font-size: 0.65rem !important;
-    padding: 0 1.4rem 0 0.4rem !important;
-    min-height: 26px !important;
-    max-height: 26px !important;
-    height: 26px !important;
-    line-height: 26px;
-    border-radius: 4px;
+  /* Simplified toolbar layout - just Run Claude and Run Shell */
+  .toolbar-left .toolbar-group:first-child {
+    width: 100%;
+    justify-content: center;
+    gap: 12px;
+  }
+
+  .btn-toolbar.btn-claude {
+    flex: 0 0 auto;
+    min-width: fit-content;
+    white-space: nowrap;
+    padding: 0 12px !important;
+  }
+
+  .btn-toolbar.btn-shell {
+    flex: 0 0 auto;
+    min-width: fit-content;
+    white-space: nowrap;
+    padding: 0 12px !important;
+  }
+
+  /* Keyboard Accessory Bar - quick actions above keyboard */
+  .keyboard-accessory-bar {
+    display: none;
+    position: fixed;
+    bottom: calc(var(--safe-area-bottom) + 40px); /* Above toolbar */
+    left: 0;
+    right: 0;
+    height: 44px;
     background: #1a1a1a;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    color: #e5e5e5;
-    flex: 1;
-    min-width: 0;
-    text-overflow: ellipsis;
-    overflow: hidden;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 6px 8px;
+    padding-left: calc(8px + var(--safe-area-left));
+    padding-right: calc(8px + var(--safe-area-right));
+    gap: 8px;
+    align-items: center;
+    justify-content: center;
+    z-index: 51;
+    transition: transform 0.15s ease-out;
+    will-change: transform;
   }
 
-  /* Add case button - compact */
+  .keyboard-accessory-bar.visible {
+    display: flex;
+  }
+
+  .accessory-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 6px 12px;
+    background: #2a2a2a;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    color: #e5e5e5;
+    font-size: 0.75rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+
+  .accessory-btn:active {
+    background: #3a3a3a;
+  }
+
+  .accessory-btn svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .accessory-btn-dismiss {
+    margin-left: auto;
+    padding: 6px 10px;
+    background: transparent;
+    border-color: transparent;
+    color: #888;
+  }
+
+  /* Add case button - compact (keeping for when shown via menu) */
   .btn-case-add {
+    display: none !important;
+  }
+
+  /* When keyboard is visible, also move accessory bar up */
+  .keyboard-visible .keyboard-accessory-bar.visible {
+    /* Position is handled by JS transform along with toolbar */
+  }
+
+  /* LEGACY: Hide old toolbar select (no longer used on mobile) */
+  .toolbar-select {
+    display: none !important;
+  }
+
+  /* Keep btn-case-add styling for tablet/future use */
+  .toolbar .btn-case-add {
     min-width: 26px !important;
     max-width: 26px !important;
     width: 26px !important;
