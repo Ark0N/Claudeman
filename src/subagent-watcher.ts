@@ -1327,8 +1327,14 @@ export class SubagentWatcher extends EventEmitter {
     }
 
     const timer = setTimeout(() => {
+      // Guard against race condition: agent may have been deleted before timer fires
       const info = this.agentInfo.get(agentId);
-      if (info && info.status === 'active') {
+      if (!info) {
+        // Agent was deleted - clean up timer reference
+        this.idleTimers.delete(agentId);
+        return;
+      }
+      if (info.status === 'active') {
         info.status = 'idle';
       }
     }, IDLE_TIMEOUT_MS);

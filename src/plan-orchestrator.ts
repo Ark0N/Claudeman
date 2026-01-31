@@ -394,17 +394,17 @@ export class PlanOrchestrator {
 
     this.runningSessions.add(session);
 
+    const prompt = RESEARCH_AGENT_PROMPT.replace('{TASK}', taskDescription);
+
+    // Start progress interval before try block to ensure cleanup in finally
+    const progressInterval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      onSubagent?.({ type: 'progress', agentId, agentType: 'research', model: MODEL, status: 'running', detail: `${elapsed}s elapsed` });
+    }, 30000);
+
     try {
-      const prompt = RESEARCH_AGENT_PROMPT.replace('{TASK}', taskDescription);
-
-      const progressInterval = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - startTime) / 1000);
-        onSubagent?.({ type: 'progress', agentId, agentType: 'research', model: MODEL, status: 'running', detail: `${elapsed}s elapsed` });
-      }, 30000);
-
       const { result: response } = await session.runPrompt(prompt, { model: MODEL });
 
-      clearInterval(progressInterval);
       this.runningSessions.delete(session);
 
       const durationMs = Date.now() - startTime;
@@ -446,6 +446,9 @@ export class PlanOrchestrator {
       const error = err instanceof Error ? err.message : String(err);
       onSubagent?.({ type: 'failed', agentId, agentType: 'research', model: MODEL, status: 'failed', error, durationMs });
       return { success: false, findings: { externalResources: [], codebasePatterns: [], technicalRecommendations: [], potentialChallenges: [], recommendedTools: [] }, enrichedTaskDescription: taskDescription, error, durationMs };
+    } finally {
+      // Always clear the progress interval to prevent memory leaks
+      clearInterval(progressInterval);
     }
   }
 
@@ -473,19 +476,19 @@ export class PlanOrchestrator {
 
     this.runningSessions.add(session);
 
+    const prompt = PLANNER_PROMPT
+      .replace('{TASK}', taskDescription)
+      .replace('{RESEARCH_CONTEXT}', researchContext || '');
+
+    // Start progress interval before try block to ensure cleanup in finally
+    const progressInterval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      onSubagent?.({ type: 'progress', agentId, agentType: 'planner', model: MODEL, status: 'running', detail: `${elapsed}s elapsed` });
+    }, 30000);
+
     try {
-      const prompt = PLANNER_PROMPT
-        .replace('{TASK}', taskDescription)
-        .replace('{RESEARCH_CONTEXT}', researchContext || '');
-
-      const progressInterval = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - startTime) / 1000);
-        onSubagent?.({ type: 'progress', agentId, agentType: 'planner', model: MODEL, status: 'running', detail: `${elapsed}s elapsed` });
-      }, 30000);
-
       const { result: response } = await session.runPrompt(prompt, { model: MODEL });
 
-      clearInterval(progressInterval);
       this.runningSessions.delete(session);
 
       const durationMs = Date.now() - startTime;
@@ -520,6 +523,9 @@ export class PlanOrchestrator {
       const error = err instanceof Error ? err.message : String(err);
       onSubagent?.({ type: 'failed', agentId, agentType: 'planner', model: MODEL, status: 'failed', error, durationMs });
       return { success: false, error };
+    } finally {
+      // Always clear the progress interval to prevent memory leaks
+      clearInterval(progressInterval);
     }
   }
 }

@@ -27,6 +27,7 @@ import { RalphTracker } from './ralph-tracker.js';
 import { BashToolParser } from './bash-tool-parser.js';
 import { ScreenManager } from './screen-manager.js';
 import { BufferAccumulator } from './utils/buffer-accumulator.js';
+import { LRUMap } from './utils/lru-map.js';
 import {
   ANSI_ESCAPE_PATTERN_FULL,
   TOKEN_PATTERN,
@@ -299,6 +300,10 @@ export class Session extends EventEmitter {
   readonly createdAt: number;
   readonly mode: SessionMode;
 
+  /** Maximum number of task descriptions to keep (LRUMap handles size limit automatically) */
+  private static readonly MAX_TASK_DESCRIPTIONS = 100;
+  private static readonly TASK_DESCRIPTION_MAX_AGE_MS = 30000; // Keep descriptions for 30 seconds
+
   private _name: string;
   private ptyProcess: pty.IPty | null = null;
   private _pid: number | null = null;
@@ -403,8 +408,8 @@ export class Session extends EventEmitter {
 
   // Task descriptions parsed from terminal output (e.g., "Explore(Description)")
   // Used to correlate with SubagentWatcher discoveries for better window titles
-  private _recentTaskDescriptions: Map<number, string> = new Map(); // timestamp -> description
-  private static readonly TASK_DESCRIPTION_MAX_AGE_MS = 30000; // Keep descriptions for 30 seconds
+  // Uses LRUMap for automatic eviction at MAX_TASK_DESCRIPTIONS limit
+  private _recentTaskDescriptions: LRUMap<number, string> = new LRUMap({ maxSize: Session.MAX_TASK_DESCRIPTIONS });
 
   constructor(config: Partial<SessionConfig> & {
     workingDir: string;
@@ -636,9 +641,14 @@ export class Session extends EventEmitter {
    * Called when recovering sessions after server restart.
    */
   restoreTokens(inputTokens: number, outputTokens: number, totalCost: number): void {
-    // Sanity check: reject absurdly large values
+    // Sanity check: reject absurdly large individual values
     if (inputTokens > MAX_SESSION_TOKENS || outputTokens > MAX_SESSION_TOKENS) {
       console.warn(`[Session ${this.id}] Rejected absurd restored tokens: input=${inputTokens}, output=${outputTokens}`);
+      return;
+    }
+    // Check token sum doesn't overflow MAX_SESSION_TOKENS
+    if (inputTokens + outputTokens > MAX_SESSION_TOKENS) {
+      console.warn(`[Session ${this.id}] Rejected token sum overflow: input=${inputTokens} + output=${outputTokens} = ${inputTokens + outputTokens} > ${MAX_SESSION_TOKENS}`);
       return;
     }
     // Reject negative values
@@ -668,10 +678,25 @@ export class Session extends EventEmitter {
     this._name = value;
   }
 
+  /** Minimum valid threshold for auto-clear/compact (1000 tokens) */
+  private static readonly MIN_AUTO_THRESHOLD = 1000;
+  /** Maximum valid threshold for auto-clear/compact (500k tokens) */
+  private static readonly MAX_AUTO_THRESHOLD = 500_000;
+  /** Default auto-clear threshold when invalid value provided */
+  private static readonly DEFAULT_AUTO_CLEAR_THRESHOLD = 140_000;
+  /** Default auto-compact threshold when invalid value provided */
+  private static readonly DEFAULT_AUTO_COMPACT_THRESHOLD = 110_000;
+
   setAutoClear(enabled: boolean, threshold?: number): void {
     this._autoClearEnabled = enabled;
     if (threshold !== undefined) {
-      this._autoClearThreshold = threshold;
+      // Validate threshold bounds
+      if (threshold < Session.MIN_AUTO_THRESHOLD || threshold > Session.MAX_AUTO_THRESHOLD) {
+        console.warn(`[Session ${this.id}] Invalid autoClear threshold ${threshold}, must be between ${Session.MIN_AUTO_THRESHOLD} and ${Session.MAX_AUTO_THRESHOLD}. Using default ${Session.DEFAULT_AUTO_CLEAR_THRESHOLD}.`);
+        this._autoClearThreshold = Session.DEFAULT_AUTO_CLEAR_THRESHOLD;
+      } else {
+        this._autoClearThreshold = threshold;
+      }
     }
   }
 
@@ -690,7 +715,13 @@ export class Session extends EventEmitter {
   setAutoCompact(enabled: boolean, threshold?: number, prompt?: string): void {
     this._autoCompactEnabled = enabled;
     if (threshold !== undefined) {
-      this._autoCompactThreshold = threshold;
+      // Validate threshold bounds
+      if (threshold < Session.MIN_AUTO_THRESHOLD || threshold > Session.MAX_AUTO_THRESHOLD) {
+        console.warn(`[Session ${this.id}] Invalid autoCompact threshold ${threshold}, must be between ${Session.MIN_AUTO_THRESHOLD} and ${Session.MAX_AUTO_THRESHOLD}. Using default ${Session.DEFAULT_AUTO_COMPACT_THRESHOLD}.`);
+        this._autoCompactThreshold = Session.DEFAULT_AUTO_COMPACT_THRESHOLD;
+      } else {
+        this._autoCompactThreshold = threshold;
+      }
     }
     if (prompt !== undefined) {
       this._autoCompactPrompt = prompt;
@@ -1515,32 +1546,21 @@ export class Session extends EventEmitter {
     }
   }
 
-  /** Maximum number of task descriptions to keep */
-  private static readonly MAX_TASK_DESCRIPTIONS = 100;
-
   /**
    * Remove task descriptions older than TASK_DESCRIPTION_MAX_AGE_MS.
-   * Also enforces MAX_TASK_DESCRIPTIONS size limit.
+   * Size limit is handled automatically by LRUMap eviction on set().
    */
   private cleanupOldTaskDescriptions(): void {
     const cutoff = Date.now() - Session.TASK_DESCRIPTION_MAX_AGE_MS;
-    // Collect keys to delete first, then delete (avoids modifying Map during iteration)
-    const keysToDelete: number[] = [];
-    for (const [timestamp] of this._recentTaskDescriptions) {
+    // Keys are timestamps - iterate and delete expired entries
+    // LRUMap maintains insertion order, so we can break early once we find a non-expired entry
+    for (const timestamp of this._recentTaskDescriptions.keysInOrder()) {
       if (timestamp < cutoff) {
-        keysToDelete.push(timestamp);
-      }
-    }
-    for (const key of keysToDelete) {
-      this._recentTaskDescriptions.delete(key);
-    }
-
-    // Enforce size limit by removing oldest entries
-    if (this._recentTaskDescriptions.size > Session.MAX_TASK_DESCRIPTIONS) {
-      const sortedKeys = Array.from(this._recentTaskDescriptions.keys()).sort((a, b) => a - b);
-      const keysToRemove = sortedKeys.slice(0, this._recentTaskDescriptions.size - Session.MAX_TASK_DESCRIPTIONS);
-      for (const key of keysToRemove) {
-        this._recentTaskDescriptions.delete(key);
+        this._recentTaskDescriptions.delete(timestamp);
+      } else {
+        // Keys are ordered by insertion time (which is the timestamp)
+        // Once we find a non-expired one, all subsequent are also non-expired
+        break;
       }
     }
   }

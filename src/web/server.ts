@@ -268,6 +268,35 @@ function getOrCreateSelfSignedCert(): { key: string; cert: string } {
   };
 }
 
+/** Stored listener references for session cleanup (prevents memory leaks) */
+interface SessionListenerRefs {
+  output: (data: string) => void;
+  terminal: (data: string) => void;
+  clearTerminal: () => void;
+  message: (msg: ClaudeMessage) => void;
+  error: (error: string) => void;
+  completion: (result: string, cost: number) => void;
+  exit: (code: number | null) => void;
+  working: () => void;
+  idle: () => void;
+  taskCreated: (task: BackgroundTask) => void;
+  taskUpdated: (task: BackgroundTask) => void;
+  taskCompleted: (task: BackgroundTask) => void;
+  taskFailed: (task: BackgroundTask, error: string) => void;
+  autoClear: (data: { tokens: number; threshold: number }) => void;
+  autoCompact: (data: { tokens: number; threshold: number; prompt?: string }) => void;
+  cliInfoUpdated: (data: { version?: string; model?: string; accountType?: string; latestVersion?: string }) => void;
+  ralphLoopUpdate: (state: RalphTrackerState) => void;
+  ralphTodoUpdate: (todos: RalphTodoItem[]) => void;
+  ralphCompletionDetected: (phrase: string) => void;
+  ralphStatusBlockDetected: (block: import('../types.js').RalphStatusBlock) => void;
+  ralphCircuitBreakerUpdate: (status: import('../types.js').CircuitBreakerStatus) => void;
+  ralphExitGateMet: (data: { completionIndicators: number; exitSignal: boolean }) => void;
+  bashToolStart: (tool: ActiveBashTool) => void;
+  bashToolEnd: (tool: ActiveBashTool) => void;
+  bashToolsUpdate: (tools: ActiveBashTool[]) => void;
+}
+
 export class WebServer extends EventEmitter {
   private app: FastifyInstance;
   private sessions: Map<string, Session> = new Map();
@@ -275,6 +304,8 @@ export class WebServer extends EventEmitter {
   private respawnTimers: Map<string, { timer: NodeJS.Timeout; endAt: number; startedAt: number }> = new Map();
   private runSummaryTrackers: Map<string, RunSummaryTracker> = new Map();
   private transcriptWatchers: Map<string, TranscriptWatcher> = new Map();
+  // Store session listener references for explicit cleanup (prevents memory leaks)
+  private sessionListenerRefs: Map<string, SessionListenerRefs> = new Map();
   private scheduledRuns: Map<string, ScheduledRun> = new Map();
   private sseClients: Set<FastifyReply> = new Set();
   private store = getStore();
@@ -3509,6 +3540,37 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         console.log(`[Server] Added to global stats: ${session.inputTokens + session.outputTokens} tokens, $${session.totalCost.toFixed(4)} from session ${sessionId}`);
       }
 
+      // Explicitly remove stored listeners to break closure references (prevents memory leak)
+      const listeners = this.sessionListenerRefs.get(sessionId);
+      if (listeners) {
+        session.off('output', listeners.output);
+        session.off('terminal', listeners.terminal);
+        session.off('clearTerminal', listeners.clearTerminal);
+        session.off('message', listeners.message);
+        session.off('error', listeners.error);
+        session.off('completion', listeners.completion);
+        session.off('exit', listeners.exit);
+        session.off('working', listeners.working);
+        session.off('idle', listeners.idle);
+        session.off('taskCreated', listeners.taskCreated);
+        session.off('taskUpdated', listeners.taskUpdated);
+        session.off('taskCompleted', listeners.taskCompleted);
+        session.off('taskFailed', listeners.taskFailed);
+        session.off('autoClear', listeners.autoClear);
+        session.off('autoCompact', listeners.autoCompact);
+        session.off('cliInfoUpdated', listeners.cliInfoUpdated);
+        session.off('ralphLoopUpdate', listeners.ralphLoopUpdate);
+        session.off('ralphTodoUpdate', listeners.ralphTodoUpdate);
+        session.off('ralphCompletionDetected', listeners.ralphCompletionDetected);
+        session.off('ralphStatusBlockDetected', listeners.ralphStatusBlockDetected);
+        session.off('ralphCircuitBreakerUpdate', listeners.ralphCircuitBreakerUpdate);
+        session.off('ralphExitGateMet', listeners.ralphExitGateMet);
+        session.off('bashToolStart', listeners.bashToolStart);
+        session.off('bashToolEnd', listeners.bashToolEnd);
+        session.off('bashToolsUpdate', listeners.bashToolsUpdate);
+        this.sessionListenerRefs.delete(sessionId);
+      }
+
       session.removeAllListeners();
       // Close any active file streams for this session
       fileStreamManager.closeSessionStreams(sessionId);
@@ -3540,211 +3602,244 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       imageWatcher.watchSession(session.id, session.workingDir);
     }
 
-    session.on('output', (data) => {
-      // Use batching for better performance at high throughput
-      this.batchOutputData(session.id, data);
-    });
+    // Store all listener references for explicit cleanup on session delete
+    // This prevents memory leaks from closure references keeping objects alive
+    const listeners: SessionListenerRefs = {
+      output: (data) => {
+        // Use batching for better performance at high throughput
+        this.batchOutputData(session.id, data);
+      },
 
-    session.on('terminal', (data) => {
-      // Use batching for better performance at high throughput
-      this.batchTerminalData(session.id, data);
-    });
+      terminal: (data) => {
+        // Use batching for better performance at high throughput
+        this.batchTerminalData(session.id, data);
+      },
 
-    session.on('clearTerminal', () => {
-      // Tell clients to clear their terminal (after screen attach)
-      this.broadcast('session:clearTerminal', { id: session.id });
-    });
+      clearTerminal: () => {
+        // Tell clients to clear their terminal (after screen attach)
+        this.broadcast('session:clearTerminal', { id: session.id });
+      },
 
-    session.on('message', (msg: ClaudeMessage) => {
-      this.broadcast('session:message', { id: session.id, message: msg });
-    });
+      message: (msg: ClaudeMessage) => {
+        this.broadcast('session:message', { id: session.id, message: msg });
+      },
 
-    session.on('error', (error) => {
-      this.broadcast('session:error', { id: session.id, error });
-      // Track in run summary
-      const tracker = this.runSummaryTrackers.get(session.id);
-      if (tracker) tracker.recordError('Session error', String(error));
-    });
+      error: (error) => {
+        this.broadcast('session:error', { id: session.id, error });
+        // Track in run summary
+        const tracker = this.runSummaryTrackers.get(session.id);
+        if (tracker) tracker.recordError('Session error', String(error));
+      },
 
-    session.on('completion', (result, cost) => {
-      this.broadcast('session:completion', { id: session.id, result, cost });
-      this.broadcast('session:updated', this.getSessionStateWithRespawn(session));
-      this.persistSessionState(session);
-      // Track tokens in run summary (completion event has updated token values)
-      const tracker = this.runSummaryTrackers.get(session.id);
-      if (tracker) tracker.recordTokens(session.inputTokens, session.outputTokens);
-    });
-
-    session.on('exit', (code) => {
-      // Wrap in try/catch to ensure cleanup always happens
-      try {
-        this.broadcast('session:exit', { id: session.id, code });
+      completion: (result, cost) => {
+        this.broadcast('session:completion', { id: session.id, result, cost });
         this.broadcast('session:updated', this.getSessionStateWithRespawn(session));
         this.persistSessionState(session);
-      } catch (err) {
-        console.error(`[Server] Error broadcasting session exit for ${session.id}:`, err);
-      }
+        // Track tokens in run summary (completion event has updated token values)
+        const tracker = this.runSummaryTrackers.get(session.id);
+        if (tracker) tracker.recordTokens(session.inputTokens, session.outputTokens);
+      },
 
-      // Always clean up respawn controller, even if broadcast failed
-      try {
-        const controller = this.respawnControllers.get(session.id);
-        if (controller) {
-          controller.stop();
-          controller.removeAllListeners();
-          this.respawnControllers.delete(session.id);
+      exit: (code) => {
+        // Wrap in try/catch to ensure cleanup always happens
+        try {
+          this.broadcast('session:exit', { id: session.id, code });
+          this.broadcast('session:updated', this.getSessionStateWithRespawn(session));
+          this.persistSessionState(session);
+        } catch (err) {
+          console.error(`[Server] Error broadcasting session exit for ${session.id}:`, err);
         }
-        // Also clean up the respawn timer to prevent orphaned timers
-        const timerInfo = this.respawnTimers.get(session.id);
-        if (timerInfo) {
-          clearTimeout(timerInfo.timer);
-          this.respawnTimers.delete(session.id);
+
+        // Always clean up respawn controller, even if broadcast failed
+        try {
+          const controller = this.respawnControllers.get(session.id);
+          if (controller) {
+            controller.stop();
+            controller.removeAllListeners();
+            this.respawnControllers.delete(session.id);
+          }
+          // Also clean up the respawn timer to prevent orphaned timers
+          const timerInfo = this.respawnTimers.get(session.id);
+          if (timerInfo) {
+            clearTimeout(timerInfo.timer);
+            this.respawnTimers.delete(session.id);
+          }
+        } catch (err) {
+          console.error(`[Server] Error cleaning up respawn controller for ${session.id}:`, err);
         }
-      } catch (err) {
-        console.error(`[Server] Error cleaning up respawn controller for ${session.id}:`, err);
-      }
-    });
+      },
 
-    session.on('working', () => {
-      this.broadcast('session:working', { id: session.id });
-      // Track in run summary
-      const tracker = this.runSummaryTrackers.get(session.id);
-      if (tracker) {
-        tracker.recordWorking();
-        tracker.recordTokens(session.inputTokens, session.outputTokens);
-      }
-    });
+      working: () => {
+        this.broadcast('session:working', { id: session.id });
+        // Track in run summary
+        const tracker = this.runSummaryTrackers.get(session.id);
+        if (tracker) {
+          tracker.recordWorking();
+          tracker.recordTokens(session.inputTokens, session.outputTokens);
+        }
+      },
 
-    session.on('idle', () => {
-      this.broadcast('session:idle', { id: session.id });
-      // Use debounced state update (idle can fire frequently)
-      this.broadcastSessionStateDebounced(session.id);
-      // Track in run summary
-      const tracker = this.runSummaryTrackers.get(session.id);
-      if (tracker) {
-        tracker.recordIdle();
-        tracker.recordTokens(session.inputTokens, session.outputTokens);
-      }
-    });
+      idle: () => {
+        this.broadcast('session:idle', { id: session.id });
+        // Use debounced state update (idle can fire frequently)
+        this.broadcastSessionStateDebounced(session.id);
+        // Track in run summary
+        const tracker = this.runSummaryTrackers.get(session.id);
+        if (tracker) {
+          tracker.recordIdle();
+          tracker.recordTokens(session.inputTokens, session.outputTokens);
+        }
+      },
 
-    // Background task events - use debounced state updates to reduce serialization overhead
-    session.on('taskCreated', (task: BackgroundTask) => {
-      this.broadcast('task:created', { sessionId: session.id, task });
-      this.broadcastSessionStateDebounced(session.id);
-    });
+      // Background task events - use debounced state updates to reduce serialization overhead
+      taskCreated: (task: BackgroundTask) => {
+        this.broadcast('task:created', { sessionId: session.id, task });
+        this.broadcastSessionStateDebounced(session.id);
+      },
 
-    session.on('taskUpdated', (task: BackgroundTask) => {
-      // Use batching for better performance at high update rates
-      this.batchTaskUpdate(session.id, task);
-    });
+      taskUpdated: (task: BackgroundTask) => {
+        // Use batching for better performance at high update rates
+        this.batchTaskUpdate(session.id, task);
+      },
 
-    session.on('taskCompleted', (task: BackgroundTask) => {
-      this.broadcast('task:completed', { sessionId: session.id, task });
-      this.broadcastSessionStateDebounced(session.id);
-    });
+      taskCompleted: (task: BackgroundTask) => {
+        this.broadcast('task:completed', { sessionId: session.id, task });
+        this.broadcastSessionStateDebounced(session.id);
+      },
 
-    session.on('taskFailed', (task: BackgroundTask, error: string) => {
-      this.broadcast('task:failed', { sessionId: session.id, task, error });
-      this.broadcastSessionStateDebounced(session.id);
-    });
+      taskFailed: (task: BackgroundTask, error: string) => {
+        this.broadcast('task:failed', { sessionId: session.id, task, error });
+        this.broadcastSessionStateDebounced(session.id);
+      },
 
-    session.on('autoClear', (data: { tokens: number; threshold: number }) => {
-      this.broadcast('session:autoClear', { sessionId: session.id, ...data });
-      this.broadcastSessionStateDebounced(session.id);
-      // Track in run summary
-      const tracker = this.runSummaryTrackers.get(session.id);
-      if (tracker) tracker.recordAutoClear(data.tokens, data.threshold);
-    });
+      autoClear: (data: { tokens: number; threshold: number }) => {
+        this.broadcast('session:autoClear', { sessionId: session.id, ...data });
+        this.broadcastSessionStateDebounced(session.id);
+        // Track in run summary
+        const tracker = this.runSummaryTrackers.get(session.id);
+        if (tracker) tracker.recordAutoClear(data.tokens, data.threshold);
+      },
 
-    session.on('autoCompact', (data: { tokens: number; threshold: number; prompt?: string }) => {
-      this.broadcast('session:autoCompact', { sessionId: session.id, ...data });
-      this.broadcastSessionStateDebounced(session.id);
-      // Track in run summary
-      const tracker = this.runSummaryTrackers.get(session.id);
-      if (tracker) tracker.recordAutoCompact(data.tokens, data.threshold);
-    });
+      autoCompact: (data: { tokens: number; threshold: number; prompt?: string }) => {
+        this.broadcast('session:autoCompact', { sessionId: session.id, ...data });
+        this.broadcastSessionStateDebounced(session.id);
+        // Track in run summary
+        const tracker = this.runSummaryTrackers.get(session.id);
+        if (tracker) tracker.recordAutoCompact(data.tokens, data.threshold);
+      },
 
-    // Claude Code CLI info parsed from terminal (version, model, account)
-    session.on('cliInfoUpdated', (data: { version?: string; model?: string; accountType?: string; latestVersion?: string }) => {
-      this.broadcast('session:cliInfo', { sessionId: session.id, ...data });
-      this.broadcastSessionStateDebounced(session.id);
-    });
+      // Claude Code CLI info parsed from terminal (version, model, account)
+      cliInfoUpdated: (data: { version?: string; model?: string; accountType?: string; latestVersion?: string }) => {
+        this.broadcast('session:cliInfo', { sessionId: session.id, ...data });
+        this.broadcastSessionStateDebounced(session.id);
+      },
 
-    // Ralph tracking events
-    session.on('ralphLoopUpdate', (state: RalphTrackerState) => {
-      this.broadcast('session:ralphLoopUpdate', { sessionId: session.id, state });
-      // Persist Ralph state
-      this.store.updateRalphState(session.id, { loop: state });
-    });
+      // Ralph tracking events
+      ralphLoopUpdate: (state: RalphTrackerState) => {
+        this.broadcast('session:ralphLoopUpdate', { sessionId: session.id, state });
+        // Persist Ralph state
+        this.store.updateRalphState(session.id, { loop: state });
+      },
 
-    session.on('ralphTodoUpdate', (todos: RalphTodoItem[]) => {
-      this.broadcast('session:ralphTodoUpdate', { sessionId: session.id, todos });
-      // Persist Ralph state
-      this.store.updateRalphState(session.id, { todos });
-    });
+      ralphTodoUpdate: (todos: RalphTodoItem[]) => {
+        this.broadcast('session:ralphTodoUpdate', { sessionId: session.id, todos });
+        // Persist Ralph state
+        this.store.updateRalphState(session.id, { todos });
+      },
 
-    session.on('ralphCompletionDetected', (phrase: string) => {
-      this.broadcast('session:ralphCompletionDetected', { sessionId: session.id, phrase });
-      // Track in run summary
-      const tracker = this.runSummaryTrackers.get(session.id);
-      if (tracker) tracker.recordRalphCompletion(phrase);
-    });
+      ralphCompletionDetected: (phrase: string) => {
+        this.broadcast('session:ralphCompletionDetected', { sessionId: session.id, phrase });
+        // Track in run summary
+        const tracker = this.runSummaryTrackers.get(session.id);
+        if (tracker) tracker.recordRalphCompletion(phrase);
+      },
 
-    // RALPH_STATUS block events
-    session.on('ralphStatusBlockDetected', (block: import('../types.js').RalphStatusBlock) => {
-      this.broadcast('session:ralphStatusUpdate', { sessionId: session.id, block });
-      // Track in run summary
-      const tracker = this.runSummaryTrackers.get(session.id);
-      if (tracker) {
-        tracker.addEvent(
-          block.status === 'BLOCKED' ? 'warning' : 'idle_detected',
-          block.status === 'BLOCKED' ? 'warning' : 'info',
-          `Ralph Status: ${block.status}`,
-          `Tasks: ${block.tasksCompletedThisLoop}, Files: ${block.filesModified}, Tests: ${block.testsStatus}`
-        );
-      }
-    });
+      // RALPH_STATUS block events
+      ralphStatusBlockDetected: (block: import('../types.js').RalphStatusBlock) => {
+        this.broadcast('session:ralphStatusUpdate', { sessionId: session.id, block });
+        // Track in run summary
+        const tracker = this.runSummaryTrackers.get(session.id);
+        if (tracker) {
+          tracker.addEvent(
+            block.status === 'BLOCKED' ? 'warning' : 'idle_detected',
+            block.status === 'BLOCKED' ? 'warning' : 'info',
+            `Ralph Status: ${block.status}`,
+            `Tasks: ${block.tasksCompletedThisLoop}, Files: ${block.filesModified}, Tests: ${block.testsStatus}`
+          );
+        }
+      },
 
-    session.on('ralphCircuitBreakerUpdate', (status: import('../types.js').CircuitBreakerStatus) => {
-      this.broadcast('session:circuitBreakerUpdate', { sessionId: session.id, status });
-      // Track state changes in run summary
-      const tracker = this.runSummaryTrackers.get(session.id);
-      if (tracker && status.state === 'OPEN') {
-        tracker.addEvent(
-          'warning',
-          'warning',
-          'Circuit Breaker Opened',
-          status.reason
-        );
-      }
-    });
+      ralphCircuitBreakerUpdate: (status: import('../types.js').CircuitBreakerStatus) => {
+        this.broadcast('session:circuitBreakerUpdate', { sessionId: session.id, status });
+        // Track state changes in run summary
+        const tracker = this.runSummaryTrackers.get(session.id);
+        if (tracker && status.state === 'OPEN') {
+          tracker.addEvent(
+            'warning',
+            'warning',
+            'Circuit Breaker Opened',
+            status.reason
+          );
+        }
+      },
 
-    session.on('ralphExitGateMet', (data: { completionIndicators: number; exitSignal: boolean }) => {
-      this.broadcast('session:exitGateMet', { sessionId: session.id, ...data });
-      // Track in run summary
-      const tracker = this.runSummaryTrackers.get(session.id);
-      if (tracker) {
-        tracker.addEvent(
-          'ralph_completion',
-          'success',
-          'Exit Gate Met',
-          `Indicators: ${data.completionIndicators}, EXIT_SIGNAL: ${data.exitSignal}`
-        );
-      }
-    });
+      ralphExitGateMet: (data: { completionIndicators: number; exitSignal: boolean }) => {
+        this.broadcast('session:exitGateMet', { sessionId: session.id, ...data });
+        // Track in run summary
+        const tracker = this.runSummaryTrackers.get(session.id);
+        if (tracker) {
+          tracker.addEvent(
+            'ralph_completion',
+            'success',
+            'Exit Gate Met',
+            `Indicators: ${data.completionIndicators}, EXIT_SIGNAL: ${data.exitSignal}`
+          );
+        }
+      },
 
-    // Bash tool tracking events (for clickable file paths)
-    session.on('bashToolStart', (tool: ActiveBashTool) => {
-      this.broadcast('session:bashToolStart', { sessionId: session.id, tool });
-    });
+      // Bash tool tracking events (for clickable file paths)
+      bashToolStart: (tool: ActiveBashTool) => {
+        this.broadcast('session:bashToolStart', { sessionId: session.id, tool });
+      },
 
-    session.on('bashToolEnd', (tool: ActiveBashTool) => {
-      this.broadcast('session:bashToolEnd', { sessionId: session.id, tool });
-    });
+      bashToolEnd: (tool: ActiveBashTool) => {
+        this.broadcast('session:bashToolEnd', { sessionId: session.id, tool });
+      },
 
-    session.on('bashToolsUpdate', (tools: ActiveBashTool[]) => {
-      this.broadcast('session:bashToolsUpdate', { sessionId: session.id, tools });
-    });
+      bashToolsUpdate: (tools: ActiveBashTool[]) => {
+        this.broadcast('session:bashToolsUpdate', { sessionId: session.id, tools });
+      },
+    };
 
+    // Store listener refs for cleanup
+    this.sessionListenerRefs.set(session.id, listeners);
+
+    // Attach all listeners to the session
+    session.on('output', listeners.output);
+    session.on('terminal', listeners.terminal);
+    session.on('clearTerminal', listeners.clearTerminal);
+    session.on('message', listeners.message);
+    session.on('error', listeners.error);
+    session.on('completion', listeners.completion);
+    session.on('exit', listeners.exit);
+    session.on('working', listeners.working);
+    session.on('idle', listeners.idle);
+    session.on('taskCreated', listeners.taskCreated);
+    session.on('taskUpdated', listeners.taskUpdated);
+    session.on('taskCompleted', listeners.taskCompleted);
+    session.on('taskFailed', listeners.taskFailed);
+    session.on('autoClear', listeners.autoClear);
+    session.on('autoCompact', listeners.autoCompact);
+    session.on('cliInfoUpdated', listeners.cliInfoUpdated);
+    session.on('ralphLoopUpdate', listeners.ralphLoopUpdate);
+    session.on('ralphTodoUpdate', listeners.ralphTodoUpdate);
+    session.on('ralphCompletionDetected', listeners.ralphCompletionDetected);
+    session.on('ralphStatusBlockDetected', listeners.ralphStatusBlockDetected);
+    session.on('ralphCircuitBreakerUpdate', listeners.ralphCircuitBreakerUpdate);
+    session.on('ralphExitGateMet', listeners.ralphExitGateMet);
+    session.on('bashToolStart', listeners.bashToolStart);
+    session.on('bashToolEnd', listeners.bashToolEnd);
+    session.on('bashToolsUpdate', listeners.bashToolsUpdate);
   }
 
   private setupRespawnListeners(sessionId: string, controller: RespawnController): void {

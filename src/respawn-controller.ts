@@ -1160,8 +1160,12 @@ export class RespawnController extends EventEmitter {
   private startDetectionUpdates(): void {
     this.stopDetectionUpdates();
     this.detectionUpdateTimer = setInterval(() => {
-      if (this._state !== 'stopped') {
-        this.emit('detectionUpdate', this.getDetectionStatus());
+      try {
+        if (this._state !== 'stopped') {
+          this.emit('detectionUpdate', this.getDetectionStatus());
+        }
+      } catch (err) {
+        console.error(`[RespawnController] Error in detectionUpdateTimer:`, err);
       }
     }, 500);
   }
@@ -1724,7 +1728,7 @@ export class RespawnController extends EventEmitter {
       this.hookConfirmTimer = null;
     }
     if (this.stuckStateTimer) {
-      clearTimeout(this.stuckStateTimer);
+      clearInterval(this.stuckStateTimer);
       this.stuckStateTimer = null;
     }
     // Clear all tracked timers
@@ -1743,7 +1747,7 @@ export class RespawnController extends EventEmitter {
 
     // Clear existing timer
     if (this.stuckStateTimer) {
-      clearTimeout(this.stuckStateTimer);
+      clearInterval(this.stuckStateTimer);
       this.stuckStateTimer = null;
     }
 
@@ -1751,7 +1755,11 @@ export class RespawnController extends EventEmitter {
     const checkIntervalMs = Math.min(this.config.stuckStateWarningMs, 60000); // Check every minute max
 
     this.stuckStateTimer = setInterval(() => {
-      this.checkStuckState();
+      try {
+        this.checkStuckState();
+      } catch (err) {
+        console.error(`[RespawnController] Error in stuckStateTimer:`, err);
+      }
     }, checkIntervalMs);
   }
 
