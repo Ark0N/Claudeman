@@ -8044,18 +8044,7 @@ kbd {
     display: none;
   }
 
-  /* Close button on active tab - larger for easy tapping */
-  .session-tab.active .tab-close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.85rem;
-    padding: 0.2rem 0.3rem;
-    min-width: 24px;
-    height: 24px;
-  }
-
-  /* Gear icon on active tab - smaller, less prominent */
+  /* Gear icon on active tab - smaller, pushed right */
   .session-tab.active .tab-gear {
     display: inline-flex;
     align-items: center;
@@ -8064,6 +8053,20 @@ kbd {
     padding: 0.1rem 0.2rem;
     min-width: 16px;
     height: 16px;
+    margin-left: auto;
+    margin-right: -2px;
+  }
+
+  /* Close button on active tab - larger, tight to gear */
+  .session-tab.active .tab-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    padding: 0.2rem 0.3rem;
+    min-width: 24px;
+    height: 24px;
+    margin-left: -2px;
   }
 
   /* Clean dark toolbar - positioned near bottom */
