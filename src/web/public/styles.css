@@ -15,8 +15,8 @@
   --green: #22c55e;
   --yellow: #eab308;
   --red: #ef4444;
-  --header-height: 40px;
-  --toolbar-height: 32px;
+  --header-height: 36px;
+  --toolbar-height: 40px;
 
   /* Session color palette */
   --session-red: #ef4444;
@@ -200,13 +200,13 @@ body {
 .session-tab {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.2rem 0.35rem;
+  gap: 0.35rem;
+  padding: 0.35rem 0.5rem;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 3px;
+  border-radius: 4px;
   color: var(--text-dim);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   cursor: pointer;
   white-space: nowrap;
   transition: all 0.15s;
@@ -1825,13 +1825,13 @@ body {
 .btn-toolbar {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.25rem 0.5rem;
+  gap: 0.35rem;
+  padding: 0.4rem 0.75rem;
   background: var(--bg-input);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: 4px;
   color: var(--text-dim);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   cursor: pointer;
   transition: all 0.15s;
   white-space: nowrap;
@@ -1893,6 +1893,13 @@ body {
   border-color: #3d7a3d;
   box-shadow: 0 0 8px rgba(34, 139, 34, 0.4);
   color: #a8d8a8;
+}
+
+/* Hide Run Claude and Run Shell buttons on desktop - only show on mobile */
+/* These buttons are for mobile quick access; desktop uses welcome overlay buttons */
+.btn-toolbar.btn-claude,
+.btn-toolbar.btn-shell {
+  display: none;
 }
 
 /* Button icon styling */
@@ -8101,13 +8108,13 @@ kbd {
 
   /* Clean dark toolbar - simple black/gray with white text */
   .toolbar {
-    height: 40px;
-    min-height: 40px;
-    max-height: 40px;
-    padding: 0.3rem 0.4rem;
+    height: auto;
+    min-height: 36px;
+    max-height: none;
+    padding: 0.25rem 0.4rem;
     padding-left: calc(0.4rem + var(--safe-area-left));
     padding-right: calc(0.4rem + var(--safe-area-right));
-    padding-bottom: calc(0.3rem + var(--safe-area-bottom));
+    padding-bottom: calc(0.25rem + var(--safe-area-bottom));
     flex-wrap: nowrap;
     gap: 0.3rem;
     align-items: center;
@@ -8174,8 +8181,9 @@ kbd {
     color: #fff;
   }
 
-  /* Primary action button - Run Claude */
+  /* Primary action button - Run Claude (shown on mobile only) */
   .btn-toolbar.btn-claude {
+    display: inline-flex !important; /* Override desktop hide */
     flex: 0 0 auto;
     padding: 0 0.75rem !important;
     background: var(--bg-input);
@@ -8196,8 +8204,9 @@ kbd {
     margin-right: 4px;
   }
 
-  /* Secondary action - Run Shell - right side */
+  /* Secondary action - Run Shell - right side (shown on mobile only) */
   .btn-toolbar.btn-shell {
+    display: inline-flex !important; /* Override desktop hide */
     flex: 0 0 auto;
     background: transparent;
     border: 1px solid rgba(255, 255, 255, 0.2);
@@ -8324,9 +8333,9 @@ kbd {
     padding-bottom: calc(0.75rem + var(--safe-area-bottom));
   }
 
-  /* Terminal container safe area */
-  .ios-device .terminal-container {
-    padding-bottom: var(--safe-area-bottom);
+  /* Terminal container - no safe area padding needed as toolbar handles it */
+  .terminal-container {
+    padding-bottom: 0;
   }
 
   /* Main area must fill available space */
