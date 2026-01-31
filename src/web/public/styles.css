@@ -1801,12 +1801,9 @@ body {
   user-select: none;
 }
 
-/* Header version display */
+/* Header version display - hidden */
 .header-version {
-  font-family: 'SF Mono', Monaco, monospace;
-  font-size: 0.6rem;
-  color: var(--text-muted);
-  margin-left: 0.5rem;
+  display: none;
 }
 
 .toolbar-group {
