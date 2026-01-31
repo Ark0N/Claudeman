@@ -188,6 +188,14 @@ export interface SessionState {
   color?: SessionColor;
   /** Flicker filter enabled (buffers output after screen clears) */
   flickerFilterEnabled?: boolean;
+  /** Claude Code CLI version (parsed from terminal, e.g., "2.1.27") */
+  cliVersion?: string;
+  /** Claude model in use (parsed from terminal, e.g., "Opus 4.5") */
+  cliModel?: string;
+  /** Account type (parsed from terminal, e.g., "Claude Max", "API") */
+  cliAccountType?: string;
+  /** Latest CLI version available (parsed from version check) */
+  cliLatestVersion?: string;
 }
 
 // ========== Global Stats Types ==========

@@ -3663,6 +3663,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       if (tracker) tracker.recordAutoCompact(data.tokens, data.threshold);
     });
 
+    // Claude Code CLI info parsed from terminal (version, model, account)
+    session.on('cliInfoUpdated', (data: { version?: string; model?: string; accountType?: string; latestVersion?: string }) => {
+      this.broadcast('session:cliInfo', { sessionId: session.id, ...data });
+      this.broadcastSessionStateDebounced(session.id);
+    });
+
     // Ralph tracking events
     session.on('ralphLoopUpdate', (state: RalphTrackerState) => {
       this.broadcast('session:ralphLoopUpdate', { sessionId: session.id, state });

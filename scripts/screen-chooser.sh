@@ -494,8 +494,15 @@ attach_screen() {
     echo -e "${D}(Ctrl+A D to detach)${R}"
     sleep 0.3
 
-    # Use -x for attached screens (multi-display mode), -r for detached
-    # -x allows joining a screen that's already attached elsewhere
+    # IMPORTANT: Claudeman attaches to screen via PTY with -x for streaming.
+    # Using -rd here would detach Claudeman and break terminal output.
+    #
+    # For mobile access without squeezing the desktop view:
+    # - Use the web UI from mobile Safari (responsive, works on iPhone)
+    # - The web UI at http://yourserver:3000 works great on mobile browsers
+    #
+    # If you attach via screen -x, the terminal will resize to the smallest
+    # attached client (your mobile). Use Ctrl+A D to detach when done.
     if [[ "$state" == "Attached" ]] || [[ "$state" == "Multi" ]]; then
         screen -x "$pid.$name"
     else

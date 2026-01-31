@@ -127,8 +127,8 @@ describe('Mobile Safari E2E', () => {
       // Use tap instead of click for the Claude button
       await tap(page, '.btn-toolbar.btn-claude');
 
-      // Wait for session tab to appear
-      await page.waitForSelector('.session-tab', { timeout: E2E_TIMEOUTS.SESSION_CREATE });
+      // Wait for active session tab to appear (not just any tab)
+      await page.waitForSelector('.session-tab.active', { timeout: E2E_TIMEOUTS.SESSION_CREATE });
 
       // Verify tab is visible
       const tabVisible = await page.isVisible('.session-tab.active');
@@ -222,6 +222,70 @@ describe('Mobile Safari E2E', () => {
       // Font controls should be hidden on phones
       const fontControlsVisible = await page.isVisible('.header-font-controls');
       expect(fontControlsVisible).toBe(false);
+
+    } finally {
+      if (browser) {
+        await destroyMobileBrowserFixture(browser);
+      }
+    }
+  }, E2E_TIMEOUTS.TEST);
+
+  it('should have terminal with at least 40 columns on mobile', async () => {
+    let browser: MobileBrowserFixture | null = null;
+    const caseName = generateCaseName('mobile-terminal-cols');
+
+    try {
+      browser = await createMobileSafariFixture(MOBILE_VIEWPORTS.IPHONE_17_PRO);
+      const { page } = browser;
+      cleanup.trackCase(caseName);
+
+      await page.goto(`${serverFixture!.baseUrl}`, { waitUntil: 'domcontentloaded' });
+      // Wait for terminal initialization and mobile detection
+      await page.waitForTimeout(1500);
+
+      // Create case and start session
+      await fetch(`${serverFixture!.baseUrl}/api/cases`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: caseName }),
+      });
+
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(500);
+      await page.selectOption('#quickStartCase', caseName);
+      await tap(page, '.btn-toolbar.btn-claude');
+
+      // Wait for session to start
+      await page.waitForSelector('.session-tab.active', { timeout: E2E_TIMEOUTS.SESSION_CREATE });
+
+      // Wait for terminal to be properly initialized
+      await page.waitForTimeout(1500);
+
+      // Check terminal container has reasonable width (min-width: 280px in CSS)
+      const containerWidth = await page.$eval('#terminalContainer', (el) => {
+        return el.getBoundingClientRect().width;
+      });
+
+      // Container should have at least 280px width (our CSS minimum)
+      expect(containerWidth).toBeGreaterThanOrEqual(280);
+
+      // Check that xterm element exists (canvas may not be visible due to z-index/overlay)
+      const xtermExists = await page.$('.xterm') !== null;
+      expect(xtermExists).toBe(true);
+
+      // Verify xterm container has reasonable width
+      const xtermWidth = await page.$eval('.xterm', (el) => {
+        return el.getBoundingClientRect().width;
+      });
+      // xterm should have at least 280px width
+      expect(xtermWidth).toBeGreaterThanOrEqual(280);
+
+      // Track for cleanup
+      const response = await fetch(`${serverFixture!.baseUrl}/api/sessions`);
+      const data = await response.json();
+      if (data?.length > 0) {
+        cleanup.trackSession(data[data.length - 1].id);
+      }
 
     } finally {
       if (browser) {

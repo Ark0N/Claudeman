@@ -342,6 +342,13 @@ export class Session extends EventEmitter {
   // Flicker filter setting (per-session toggle, applied on frontend)
   private _flickerFilterEnabled: boolean = false;
 
+  // Claude Code CLI info (parsed from terminal startup)
+  private _cliVersion: string = '';
+  private _cliModel: string = '';
+  private _cliAccountType: string = '';
+  private _cliLatestVersion: string = '';
+  private _cliInfoParsed: boolean = false; // Only parse once per session
+
   // Timer tracking for cleanup (prevents memory leaks)
   private _autoCompactTimer: NodeJS.Timeout | null = null;
   private _autoClearTimer: NodeJS.Timeout | null = null;
@@ -747,6 +754,10 @@ export class Session extends EventEmitter {
       niceValue: this._niceConfig.niceValue,
       color: this._color,
       flickerFilterEnabled: this._flickerFilterEnabled,
+      cliVersion: this._cliVersion || undefined,
+      cliModel: this._cliModel || undefined,
+      cliAccountType: this._cliAccountType || undefined,
+      cliLatestVersion: this._cliLatestVersion || undefined,
     };
   }
 
@@ -966,6 +977,9 @@ export class Session extends EventEmitter {
 
       // Parse token count from status line (e.g., "123.4k tokens" or "5234 tokens")
       this.parseTokensFromStatusLine(data);
+
+      // Parse Claude Code CLI info (version, model, account type) from startup
+      this.parseClaudeCodeInfo(data);
 
       // Parse task descriptions from terminal output (e.g., "Explore(Check files)")
       // This enables correlating subagent windows with their short descriptions
@@ -1633,6 +1647,80 @@ export class Session extends EventEmitter {
         this.checkAutoCompact();
         this.checkAutoClear();
       }
+    }
+  }
+
+  // Parse Claude Code CLI info from terminal startup output
+  // Extracts version, model, and account type for display in Claudeman UI
+  private parseClaudeCodeInfo(data: string): void {
+    // Only parse once per session (during startup)
+    if (this._cliInfoParsed) return;
+
+    // Quick pre-checks
+    if (!data.includes('Claude') && !data.includes('current:') && !data.includes('Opus') && !data.includes('Sonnet')) {
+      return;
+    }
+
+    const cleanData = data.replace(ANSI_ESCAPE_PATTERN_FULL, '');
+    let changed = false;
+
+    // Match "Claude Code v2.1.27" or "Claude Code vX.Y.Z"
+    if (!this._cliVersion) {
+      const versionMatch = cleanData.match(/Claude Code v(\d+\.\d+\.\d+)/);
+      if (versionMatch) {
+        this._cliVersion = versionMatch[1];
+        changed = true;
+      }
+    }
+
+    // Match model and account: "Opus 4.5 · Claude Max" or "Sonnet 4 · API"
+    // The · character separates model from account type
+    if (!this._cliModel || !this._cliAccountType) {
+      // Try various model patterns
+      const modelPatterns = [
+        /(Opus \d+(?:\.\d+)?)\s*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
+        /(Sonnet \d+(?:\.\d+)?)\s*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
+        /(Haiku \d+(?:\.\d+)?)\s*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
+      ];
+
+      for (const pattern of modelPatterns) {
+        const match = cleanData.match(pattern);
+        if (match) {
+          if (!this._cliModel) {
+            this._cliModel = match[1].trim();
+            changed = true;
+          }
+          if (!this._cliAccountType) {
+            this._cliAccountType = match[2].trim();
+            changed = true;
+          }
+          break;
+        }
+      }
+    }
+
+    // Match version check: "current: 2.1.27" and "latest: 2.1.27"
+    if (!this._cliLatestVersion) {
+      const latestMatch = cleanData.match(/latest:\s*(\d+\.\d+\.\d+)/);
+      if (latestMatch) {
+        this._cliLatestVersion = latestMatch[1];
+        changed = true;
+      }
+    }
+
+    // Mark as parsed once we have the essential info
+    if (this._cliVersion && this._cliModel) {
+      this._cliInfoParsed = true;
+    }
+
+    // Emit update if anything changed
+    if (changed) {
+      this.emit('cliInfoUpdated', {
+        version: this._cliVersion,
+        model: this._cliModel,
+        accountType: this._cliAccountType,
+        latestVersion: this._cliLatestVersion,
+      });
     }
   }
 

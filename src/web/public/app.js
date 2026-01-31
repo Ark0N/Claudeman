@@ -344,9 +344,11 @@ class NotificationManager {
       subagent_complete: { enabled: false, browser: false, audio: false },
     };
 
+    // Device-specific defaults: mobile has notifications disabled by default
+    const isMobile = MobileDetection.getDeviceType() === 'mobile';
     const defaults = {
-      enabled: true,
-      browserNotifications: true,
+      enabled: !isMobile, // Disabled on mobile by default
+      browserNotifications: !isMobile,
       audioAlerts: false,
       stuckThresholdMs: STUCK_THRESHOLD_DEFAULT_MS,
       // Legacy urgency muting (keep for backwards compat)
@@ -358,7 +360,8 @@ class NotificationManager {
       _version: 3,
     };
     try {
-      const saved = localStorage.getItem('claudeman-notification-prefs');
+      const storageKey = this.getStorageKey();
+      const saved = localStorage.getItem(storageKey);
       if (saved) {
         const prefs = JSON.parse(saved);
         // Migrate: v1 had browserNotifications defaulting to false
@@ -370,7 +373,7 @@ class NotificationManager {
         if (prefs._version < 3) {
           prefs.eventTypes = defaultEventTypes;
           prefs._version = 3;
-          localStorage.setItem('claudeman-notification-prefs', JSON.stringify(prefs));
+          localStorage.setItem(storageKey, JSON.stringify(prefs));
         }
         // Merge with defaults to ensure all eventTypes exist
         return {
@@ -383,8 +386,14 @@ class NotificationManager {
     return defaults;
   }
 
+  // Get storage key for notification prefs (device-specific)
+  getStorageKey() {
+    const isMobile = MobileDetection.getDeviceType() === 'mobile';
+    return isMobile ? 'claudeman-notification-prefs-mobile' : 'claudeman-notification-prefs';
+  }
+
   savePreferences() {
-    localStorage.setItem('claudeman-notification-prefs', JSON.stringify(this.preferences));
+    localStorage.setItem(this.getStorageKey(), JSON.stringify(this.preferences));
   }
 
   notify({ urgency, category, sessionId, sessionName, title, message }) {
@@ -923,7 +932,8 @@ class ClaudemanApp {
         brightWhite: '#ffffff',
       },
       fontFamily: '"Fira Code", "Cascadia Code", "JetBrains Mono", "SF Mono", Monaco, monospace',
-      fontSize: 14,
+      // Use smaller font on mobile to fit more columns (prevents wrapping of Claude's status line)
+      fontSize: MobileDetection.getDeviceType() === 'mobile' ? 10 : 14,
       lineHeight: 1.2,
       cursorBlink: false,
       cursorStyle: 'block',
@@ -936,7 +946,21 @@ class ClaudemanApp {
 
     const container = document.getElementById('terminalContainer');
     this.terminal.open(container);
-    this.fitAddon.fit();
+
+    // On mobile Safari, delay initial fit() to allow layout to settle
+    // This prevents 0-column terminals caused by fit() running before container is sized
+    const isMobileSafari = MobileDetection.getDeviceType() === 'mobile' &&
+                           document.body.classList.contains('safari-browser');
+    if (isMobileSafari) {
+      // Wait for layout, then fit multiple times to ensure proper sizing
+      requestAnimationFrame(() => {
+        this.fitAddon.fit();
+        // Double-check after another frame
+        requestAnimationFrame(() => this.fitAddon.fit());
+      });
+    } else {
+      this.fitAddon.fit();
+    }
 
     // Register link provider for clickable file paths in Bash tool output
     this.registerFilePathLinkProvider();
@@ -956,6 +980,10 @@ class ClaudemanApp {
     this._resizeTimeout = null;
     this._lastResizeDims = null;
 
+    // Minimum terminal dimensions to prevent vertical text wrapping
+    const MIN_COLS = 40;
+    const MIN_ROWS = 10;
+
     const throttledResize = () => {
       if (this._resizeTimeout) return;
       this._resizeTimeout = setTimeout(() => {
@@ -964,15 +992,18 @@ class ClaudemanApp {
           this.fitAddon.fit();
           if (this.activeSessionId) {
             const dims = this.fitAddon.proposeDimensions();
+            // Enforce minimum dimensions to prevent layout issues
+            const cols = dims ? Math.max(dims.cols, MIN_COLS) : MIN_COLS;
+            const rows = dims ? Math.max(dims.rows, MIN_ROWS) : MIN_ROWS;
             // Only send resize if dimensions actually changed
-            if (dims && (!this._lastResizeDims ||
-                dims.cols !== this._lastResizeDims.cols ||
-                dims.rows !== this._lastResizeDims.rows)) {
-              this._lastResizeDims = { cols: dims.cols, rows: dims.rows };
+            if (!this._lastResizeDims ||
+                cols !== this._lastResizeDims.cols ||
+                rows !== this._lastResizeDims.rows) {
+              this._lastResizeDims = { cols, rows };
               fetch(`/api/sessions/${this.activeSessionId}/resize`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cols: dims.cols, rows: dims.rows })
+                body: JSON.stringify({ cols, rows })
               });
             }
           }
@@ -1377,6 +1408,12 @@ class ClaudemanApp {
         this.clearTerminal();
       }
 
+      // Ctrl/Cmd + Shift + R - restore terminal size (after mobile squeeze)
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'R') {
+        e.preventDefault();
+        this.restoreTerminalSize();
+      }
+
       // Ctrl/Cmd + +/- - font size
       if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
         e.preventDefault();
@@ -1588,14 +1625,7 @@ class ClaudemanApp {
           }
 
           // Send resize to ensure proper dimensions
-          const dims = this.fitAddon.proposeDimensions();
-          if (dims) {
-            await fetch(`/api/sessions/${data.id}/resize`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ cols: dims.cols, rows: dims.rows })
-            });
-          }
+          await this.sendResize(data.id);
         } catch (err) {
           console.error('clearTerminal refresh failed:', err);
         }
@@ -1908,6 +1938,21 @@ class ClaudemanApp {
         title: 'Auto-Cleared',
         message: `Context reset at ${(data.tokens || 0).toLocaleString()} tokens`,
       });
+    });
+
+    // Claude Code CLI info (version, model) parsed from terminal
+    addListener('session:cliInfo', (e) => {
+      const data = JSON.parse(e.data);
+      const session = this.sessions.get(data.sessionId);
+      if (session) {
+        if (data.version) session.cliVersion = data.version;
+        if (data.model) session.cliModel = data.model;
+        if (data.accountType) session.cliAccountType = data.accountType;
+        if (data.latestVersion) session.cliLatestVersion = data.latestVersion;
+      }
+      if (data.sessionId === this.activeSessionId) {
+        this.updateCliInfoDisplay();
+      }
     });
 
     // Background task events
@@ -2644,8 +2689,14 @@ class ClaudemanApp {
 
     // Build tabs HTML using array for better string concatenation performance
     // Iterate in sessionOrder to respect user's custom tab arrangement
+    // On mobile: put active session first (only one tab visible anyway)
     const parts = [];
-    for (const id of this.sessionOrder) {
+    let tabOrder = this.sessionOrder;
+    if (MobileDetection.getDeviceType() === 'mobile' && this.activeSessionId) {
+      // Reorder to put active tab first
+      tabOrder = [this.activeSessionId, ...this.sessionOrder.filter(id => id !== this.activeSessionId)];
+    }
+    for (const id of tabOrder) {
       const session = this.sessions.get(id);
       if (!session) continue; // Skip if session was removed
 
@@ -3079,14 +3130,7 @@ class ClaudemanApp {
       }
 
       // Send resize and Ctrl+L to trigger Claude to redraw at correct size
-      const dims = this.fitAddon.proposeDimensions();
-      if (dims) {
-        await fetch(`/api/sessions/${sessionId}/resize`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cols: dims.cols, rows: dims.rows })
-        });
-      }
+      await this.sendResize(sessionId);
 
       // Update respawn banner
       if (this.respawnStatus[sessionId]) {
@@ -3119,6 +3163,9 @@ class ClaudemanApp {
         });
       }
       this.renderRalphStatePanel();
+
+      // Update CLI info bar (mobile - shows Claude version/model)
+      this.updateCliInfoDisplay();
 
       // Update project insights panel for this session
       this.renderProjectInsightsPanel();
@@ -6199,9 +6246,14 @@ class ClaudemanApp {
       // Build options - existing cases first, then testcase as fallback if not present
       let options = '';
       const hasTestcase = cases.some(c => c.name === 'testcase');
+      const isMobile = MobileDetection.getDeviceType() === 'mobile';
+      const maxNameLength = isMobile ? 8 : 20; // Truncate to 8 chars on mobile
 
       cases.forEach(c => {
-        options += `<option value="${c.name}">${c.name}</option>`;
+        const displayName = c.name.length > maxNameLength
+          ? c.name.substring(0, maxNameLength) + '…'
+          : c.name;
+        options += `<option value="${c.name}">${displayName}</option>`;
       });
 
       // Add testcase option if it doesn't exist (will be created on first run)
@@ -6459,14 +6511,14 @@ class ClaudemanApp {
         fetch(`/api/sessions/${id}/shell`, { method: 'POST' })
       ));
 
-      // Step 3: Resize all in parallel
-      const dims = this.fitAddon.proposeDimensions();
+      // Step 3: Resize all in parallel (with minimum dimension enforcement)
+      const dims = this.getTerminalDimensions();
       if (dims) {
         await Promise.all(sessionIds.map(id =>
           fetch(`/api/sessions/${id}/resize`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ cols: dims.cols, rows: dims.rows })
+            body: JSON.stringify(dims)
           })
         ));
       }
@@ -6724,6 +6776,59 @@ class ClaudemanApp {
     } else {
       tokensEl.style.display = 'none';
     }
+
+    // Also update mobile CLI info bar (shows tokens on mobile)
+    this.updateCliInfoDisplay();
+  }
+
+  // Update CLI info display (tokens, version, model - shown on mobile)
+  updateCliInfoDisplay() {
+    const infoBar = this.$('cliInfoBar');
+    if (!infoBar) return;
+
+    const session = this.sessions.get(this.activeSessionId);
+    if (!session) {
+      infoBar.style.display = 'none';
+      return;
+    }
+
+    // Build display parts - tokens first (most important on mobile)
+    let parts = [];
+
+    // Add tokens if available
+    if (session.tokens) {
+      const total = typeof session.tokens === 'object' ? session.tokens.total : session.tokens;
+      if (total > 0) {
+        parts.push(`${this.formatTokens(total)} tokens`);
+      }
+    }
+
+    // Add model (condensed)
+    if (session.cliModel) {
+      // Shorten model names for mobile: "claude-sonnet-4-20250514" -> "Sonnet 4"
+      let model = session.cliModel;
+      if (model.includes('opus')) model = 'Opus';
+      else if (model.includes('sonnet')) model = 'Sonnet';
+      else if (model.includes('haiku')) model = 'Haiku';
+      parts.push(model);
+    }
+
+    // Add version (compact format)
+    if (session.cliVersion) {
+      // Show "v2.1.27" or "v2.1.27 ↑" if update available
+      let versionStr = `v${session.cliVersion}`;
+      if (session.cliLatestVersion && session.cliLatestVersion !== session.cliVersion) {
+        versionStr += ' ↑'; // Arrow indicates update available
+      }
+      parts.push(versionStr);
+    }
+
+    if (parts.length > 0) {
+      infoBar.textContent = parts.join(' · ');
+      infoBar.style.display = '';
+    } else {
+      infoBar.style.display = 'none';
+    }
   }
 
   // ========== Countdown Timer Display Methods ==========
@@ -6924,6 +7029,41 @@ class ClaudemanApp {
     this.terminal.clear();
   }
 
+  /**
+   * Restore terminal size to match web UI dimensions.
+   * Use this after mobile screen attachment has squeezed the terminal.
+   * Sends resize to PTY and Ctrl+L to trigger Claude to redraw.
+   */
+  async restoreTerminalSize() {
+    if (!this.activeSessionId) {
+      this.showToast('No active session', 'warning');
+      return;
+    }
+
+    const dims = this.getTerminalDimensions();
+    if (!dims) {
+      this.showToast('Could not determine terminal size', 'error');
+      return;
+    }
+
+    try {
+      // Send resize to restore proper dimensions (with minimum enforcement)
+      await this.sendResize(this.activeSessionId);
+
+      // Send Ctrl+L to trigger Claude to redraw at new size
+      await fetch(`/api/sessions/${this.activeSessionId}/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input: '\x0c' })
+      });
+
+      this.showToast(`Terminal restored to ${dims.cols}x${dims.rows}`, 'success');
+    } catch (err) {
+      console.error('Failed to restore terminal size:', err);
+      this.showToast('Failed to restore terminal size', 'error');
+    }
+  }
+
   // Send Ctrl+L to fix display for newly created sessions once Claude is running
   sendPendingCtrlL(sessionId) {
     console.log('[DEBUG] sendPendingCtrlL called for:', sessionId, 'pending:', this.pendingCtrlL ? [...this.pendingCtrlL] : 'none');
@@ -6940,22 +7080,15 @@ class ClaudemanApp {
     }
 
     console.log('[DEBUG] Sending resize + Ctrl+L for session:', sessionId);
-    // Send resize + Ctrl+L to fix the display
-    const dims = this.fitAddon.proposeDimensions();
-    if (dims) {
-      fetch(`/api/sessions/${sessionId}/resize`, {
+    // Send resize + Ctrl+L to fix the display (with minimum dimension enforcement)
+    this.sendResize(sessionId).then(() => {
+      console.log('[DEBUG] Resize sent, now sending Ctrl+L');
+      fetch(`/api/sessions/${sessionId}/input`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cols: dims.cols, rows: dims.rows })
-      }).then(() => {
-        console.log('[DEBUG] Resize sent, now sending Ctrl+L');
-        fetch(`/api/sessions/${sessionId}/input`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ input: '\x0c' })
-        });
+        body: JSON.stringify({ input: '\x0c' })
       });
-    }
+    });
   }
 
   async copyTerminal() {
@@ -6999,6 +7132,37 @@ class ClaudemanApp {
         document.getElementById('fontSizeDisplay').textContent = size;
       }
     }
+  }
+
+  /**
+   * Get terminal dimensions with minimum enforcement.
+   * Prevents extremely narrow terminals that cause vertical text wrapping.
+   * @returns {{cols: number, rows: number}|null}
+   */
+  getTerminalDimensions() {
+    const MIN_COLS = 40;
+    const MIN_ROWS = 10;
+    const dims = this.fitAddon?.proposeDimensions();
+    if (!dims) return null;
+    return {
+      cols: Math.max(dims.cols, MIN_COLS),
+      rows: Math.max(dims.rows, MIN_ROWS)
+    };
+  }
+
+  /**
+   * Send resize to a session with minimum dimension enforcement.
+   * @param {string} sessionId
+   * @returns {Promise<void>}
+   */
+  async sendResize(sessionId) {
+    const dims = this.getTerminalDimensions();
+    if (!dims) return;
+    await fetch(`/api/sessions/${sessionId}/resize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(dims)
+    });
   }
 
   // ========== Timer ==========
@@ -8171,7 +8335,7 @@ class ClaudemanApp {
     };
 
     // Save to localStorage
-    localStorage.setItem('claudeman-app-settings', JSON.stringify(settings));
+    this.saveAppSettingsToStorage(settings);
 
     // Save notification preferences separately
     const notifPrefsToSave = {
@@ -8339,21 +8503,67 @@ class ClaudemanApp {
     return settings.ralphTrackerEnabled ?? false;
   }
 
+  // Get the settings storage key based on device type (mobile vs desktop)
+  getSettingsStorageKey() {
+    const isMobile = MobileDetection.getDeviceType() === 'mobile';
+    return isMobile ? 'claudeman-app-settings-mobile' : 'claudeman-app-settings';
+  }
+
+  // Get default settings based on device type
+  // Note: Notification prefs are handled separately by NotificationManager
+  getDefaultSettings() {
+    const isMobile = MobileDetection.getDeviceType() === 'mobile';
+    if (isMobile) {
+      // Mobile defaults: minimal UI for small screens
+      return {
+        // Header visibility - hide everything on mobile
+        showFontControls: false,
+        showSystemStats: false,
+        showTokenCount: false,
+        showCost: false,
+        // Panel visibility - hide panels on mobile (not enough space)
+        showMonitor: false,
+        showProjectInsights: false,
+        showFileBrowser: false,
+        showSubagents: false,
+        // Feature toggles - disable tracking features on mobile
+        subagentTrackingEnabled: false,
+        subagentActiveTabOnly: true, // Only show subagents for active tab
+        imageWatcherEnabled: false,
+        ralphTrackerEnabled: false,
+      };
+    }
+    // Desktop defaults - rely on ?? operators in apply functions
+    // This allows desktop to have different defaults without duplication
+    return {};
+  }
+
   loadAppSettingsFromStorage() {
     try {
-      const saved = localStorage.getItem('claudeman-app-settings');
+      const key = this.getSettingsStorageKey();
+      const saved = localStorage.getItem(key);
       if (saved) {
         return JSON.parse(saved);
       }
     } catch (err) {
       console.error('Failed to load app settings:', err);
     }
-    return {};
+    // Return device-specific defaults
+    return this.getDefaultSettings();
+  }
+
+  saveAppSettingsToStorage(settings) {
+    try {
+      const key = this.getSettingsStorageKey();
+      localStorage.setItem(key, JSON.stringify(settings));
+    } catch (err) {
+      console.error('Failed to save app settings:', err);
+    }
   }
 
   applyHeaderVisibilitySettings() {
     const settings = this.loadAppSettingsFromStorage();
-    // Default all to true (enabled) if not set
+    // Use stored values or fallback defaults (mobile has different defaults via getDefaultSettings)
     const showFontControls = settings.showFontControls ?? false;
     const showSystemStats = settings.showSystemStats ?? true;
     const showTokenCount = settings.showTokenCount ?? true;
@@ -8427,7 +8637,7 @@ class ClaudemanApp {
     // Save the setting
     const settings = this.loadAppSettingsFromStorage();
     settings.showMonitor = false;
-    localStorage.setItem('claudeman-app-settings', JSON.stringify(settings));
+    this.saveAppSettingsToStorage(settings);
   }
 
   closeSubagentsPanel() {
@@ -8441,7 +8651,7 @@ class ClaudemanApp {
     // Save the setting
     const settings = this.loadAppSettingsFromStorage();
     settings.showSubagents = false;
-    localStorage.setItem('claudeman-app-settings', JSON.stringify(settings));
+    this.saveAppSettingsToStorage(settings);
   }
 
   async clearAllSubagents() {
@@ -8489,7 +8699,7 @@ class ClaudemanApp {
       // Save setting
       const settings = this.loadAppSettingsFromStorage();
       settings.showSubagents = true;
-      localStorage.setItem('claudeman-app-settings', JSON.stringify(settings));
+      this.saveAppSettingsToStorage(settings);
     }
 
     // Toggle open/collapsed state
@@ -8516,11 +8726,11 @@ class ClaudemanApp {
         // Merge app settings with localStorage (server takes precedence)
         const localSettings = this.loadAppSettingsFromStorage();
         const merged = { ...localSettings, ...appSettings };
-        localStorage.setItem('claudeman-app-settings', JSON.stringify(merged));
+        this.saveAppSettingsToStorage(merged);
 
         // Apply notification prefs from server if present (only if localStorage has none)
         if (notificationPreferences && this.notificationManager) {
-          const localNotifPrefs = localStorage.getItem('claudeman-notification-prefs');
+          const localNotifPrefs = localStorage.getItem(this.notificationManager.getStorageKey());
           if (!localNotifPrefs) {
             this.notificationManager.preferences = notificationPreferences;
             this.notificationManager.savePreferences();
@@ -12122,7 +12332,7 @@ class ClaudemanApp {
     // Save setting
     const settings = this.loadAppSettingsFromStorage();
     settings.showFileBrowser = false;
-    localStorage.setItem('claudeman-app-settings', JSON.stringify(settings));
+    this.saveAppSettingsToStorage(settings);
   }
 
   async openFilePreview(filePath) {
@@ -13035,3 +13245,7 @@ class ClaudemanApp {
 
 // Initialize
 const app = new ClaudemanApp();
+
+// Expose for debugging/testing
+window.app = app;
+window.MobileDetection = MobileDetection;

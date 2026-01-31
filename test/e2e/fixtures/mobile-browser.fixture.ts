@@ -1,9 +1,10 @@
 /**
  * Mobile browser fixture for E2E tests
- * Manages Playwright WebKit browser lifecycle with mobile viewport emulation
+ * Manages Playwright browser lifecycle with mobile viewport emulation
+ * Uses Chromium with mobile emulation (WebKit requires system dependencies)
  */
 
-import { webkit, Browser, BrowserContext, Page } from 'playwright';
+import { chromium, webkit, Browser, BrowserContext, Page } from 'playwright';
 import { MOBILE_VIEWPORTS } from '../e2e.config.js';
 
 export interface MobileBrowserFixture {
@@ -21,7 +22,8 @@ export interface MobileViewport {
 }
 
 /**
- * Create and launch a mobile Safari (WebKit) browser fixture
+ * Create and launch a mobile browser fixture using Chromium with mobile emulation
+ * Falls back from WebKit to Chromium since WebKit requires system dependencies
  * Defaults to iPhone 17 Pro viewport
  * @param viewport - Optional viewport configuration (defaults to iPhone 17 Pro)
  * @returns MobileBrowserFixture with browser, context, and page
@@ -29,9 +31,26 @@ export interface MobileViewport {
 export async function createMobileSafariFixture(
   viewport: MobileViewport = MOBILE_VIEWPORTS.IPHONE_17_PRO
 ): Promise<MobileBrowserFixture> {
-  const browser = await webkit.launch({
-    headless: true,
-  });
+  // Try WebKit first, fall back to Chromium if WebKit dependencies missing
+  let browser: Browser;
+  let userAgent: string;
+
+  try {
+    browser = await webkit.launch({ headless: true });
+    userAgent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+  } catch {
+    // WebKit failed (missing dependencies), use Chromium with mobile emulation
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+      ],
+    });
+    userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
+  }
 
   const context = await browser.newContext({
     viewport: { width: viewport.width, height: viewport.height },
@@ -39,8 +58,7 @@ export async function createMobileSafariFixture(
     isMobile: viewport.isMobile,
     hasTouch: viewport.hasTouch,
     ignoreHTTPSErrors: true,
-    // Safari-like user agent
-    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
+    userAgent,
   });
 
   const page = await context.newPage();

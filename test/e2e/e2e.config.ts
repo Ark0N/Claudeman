@@ -15,6 +15,8 @@ export const E2E_PORTS = {
   RESPAWN_FLOW: 3189,
   RALPH_LOOP: 3190,
   MOBILE_SAFARI: 3191,
+  MOBILE_COMPREHENSIVE: 3192,
+  MOBILE_EDGE_CASES: 3193,
 } as const;
 
 // Mobile device viewports for responsive testing
@@ -40,6 +42,22 @@ export const MOBILE_VIEWPORTS = {
     width: 834,
     height: 1194,
     deviceScaleFactor: 2,
+    isMobile: true,
+    hasTouch: true,
+  },
+  // iPhone 17 Pro landscape (rotated)
+  IPHONE_17_PRO_LANDSCAPE: {
+    width: 874,
+    height: 402,
+    deviceScaleFactor: 3,
+    isMobile: true,
+    hasTouch: true,
+  },
+  // Galaxy Fold (folded state - narrow)
+  GALAXY_FOLD_FOLDED: {
+    width: 280,
+    height: 653,
+    deviceScaleFactor: 3,
     isMobile: true,
     hasTouch: true,
   },

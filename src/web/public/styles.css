@@ -109,7 +109,9 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   background: var(--bg-dark);
   color: var(--text);
+  /* Use dynamic viewport height for mobile browsers */
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -117,7 +119,10 @@ body {
 .app {
   display: flex;
   flex-direction: column;
+  /* Use dynamic viewport height for mobile browsers with fallbacks */
   height: 100vh;
+  height: -webkit-fill-available;
+  height: 100dvh;
 }
 
 /* Compact Header */
@@ -1602,9 +1607,29 @@ body {
 .main {
   flex: 1;
   display: flex;
+  flex-direction: column;
   overflow: hidden;
   background: var(--bg-dark);
   position: relative;
+}
+
+/* CLI Info Bar - shows tokens/version/model on mobile */
+.cli-info-bar {
+  display: none; /* Hidden by default on desktop */
+  flex-shrink: 0;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.65rem;
+  font-family: 'SF Mono', Monaco, monospace;
+  color: var(--text-muted);
+  background: linear-gradient(180deg, rgba(30, 58, 95, 0.3) 0%, rgba(20, 20, 25, 0.95) 100%);
+  border-bottom: 1px solid rgba(59, 130, 246, 0.2);
+  text-align: center;
+  letter-spacing: 0.02em;
+  /* Prevent overflow on mobile */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .terminal-container {
@@ -1614,6 +1639,8 @@ body {
   /* Performance: isolate layout and paint operations */
   contain: strict;
   will-change: contents;
+  /* Minimum width to prevent 0-column terminal on mobile */
+  min-width: 280px;
 }
 
 .terminal-container .xterm {
@@ -7831,10 +7858,74 @@ kbd {
     padding-right: var(--safe-area-right);
   }
 
-  /* Increase header height for better touch targets */
+  /* Compact header for tablet */
   .header {
-    min-height: 48px;
-    padding: 0.5rem 0.75rem;
+    min-height: 44px;
+    max-height: 64px;
+    padding: 0.35rem 0.5rem;
+  }
+
+  /* Hide some header elements on tablet for more space */
+  .header-font-controls {
+    display: none;
+  }
+
+  .header-system-stats {
+    display: none;
+  }
+
+  .header-right {
+    gap: 0.35rem;
+  }
+
+  /* Compact session tabs */
+  .session-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    max-height: 52px;
+    gap: 3px;
+  }
+
+  .session-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .session-tab {
+    padding: 0.4rem 0.6rem;
+    font-size: 0.75rem;
+    min-height: 40px;
+  }
+
+  .session-tab .tab-name {
+    max-width: 80px;
+  }
+
+  /* Compact toolbar */
+  .toolbar {
+    padding: 0.4rem 0.5rem;
+    gap: 0.4rem;
+  }
+
+  /* Hide instance count buttons on tablet too */
+  .tab-count-group {
+    display: none;
+  }
+
+  /* Compact toolbar buttons */
+  .btn-toolbar {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.8rem;
+    min-height: 40px;
+  }
+
+  .case-select-group {
+    max-width: 150px;
+  }
+
+  .toolbar-select {
+    font-size: 0.75rem;
   }
 
   /* Stack panels vertically */
@@ -7845,23 +7936,11 @@ kbd {
     left: 0;
     right: 0;
     border-radius: 8px 8px 0 0;
+    max-height: 40vh;
   }
 
-  /* Larger toolbar buttons */
-  .btn-toolbar {
-    padding: 0.5rem 1rem;
-    font-size: 0.8rem;
-  }
-
-  /* Session tabs horizontal scroll */
-  .session-tabs {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-  }
-
-  .session-tabs::-webkit-scrollbar {
+  /* Hide project insights on tablet */
+  .project-insights-panel {
     display: none;
   }
 }
@@ -7892,88 +7971,267 @@ kbd {
     display: none;
   }
 
+  /* Hide token count on phones - takes too much space */
+  .header-tokens {
+    display: none;
+  }
+
   /* Compact header */
   .header {
-    min-height: 48px;
-    padding: 0.4rem;
-    gap: 0.25rem;
+    min-height: 40px;
+    max-height: 52px; /* Tighter max height for mobile */
+    padding: 0.25rem 0.4rem;
+    gap: 0.2rem;
+    flex-shrink: 0;
+    overflow: hidden;
   }
 
   .header-right {
-    padding-left: 0.5rem;
-    gap: 0.25rem;
+    padding-left: 0.35rem;
+    gap: 0.15rem;
+    flex-shrink: 0;
+    border-left: none;
   }
 
-  /* Full-width session tabs with horizontal scroll */
+  /* Smaller header buttons on mobile */
+  .btn-icon-header {
+    width: 32px;
+    height: 32px;
+  }
+
+  .btn-icon-header.btn-settings {
+    width: 32px;
+    height: 32px;
+  }
+
+  /* App container - prevent scrolling, strict layout */
+  .app {
+    overflow: hidden;
+  }
+
+  /* Compact session tabs - horizontal scroll, smaller */
   .session-tabs {
     flex: 1;
     flex-wrap: nowrap;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
-    max-height: 56px;
+    max-height: 44px;
+    gap: 2px;
+    padding: 0.1rem 0.15rem;
   }
 
   .session-tabs::-webkit-scrollbar {
     display: none;
   }
 
+  /* Compact tabs for mobile */
   .session-tab {
     flex-shrink: 0;
-    min-height: var(--touch-target-min);
-    padding: 0.5rem 0.75rem;
+    min-height: 36px;
+    max-height: 36px;
+    padding: 0.3rem 0.5rem;
+    font-size: 0.7rem;
+    gap: 0.25rem;
+    border-radius: 3px;
   }
 
-  /* Simplified toolbar */
+  /* Smaller status indicator on mobile */
+  .session-tab .tab-status {
+    width: 5px;
+    height: 5px;
+  }
+
+  /* Truncate tab names more aggressively on mobile */
+  .session-tab .tab-name {
+    max-width: 60px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Smaller close/gear buttons on mobile tabs */
+  .session-tab .tab-close,
+  .session-tab .tab-gear {
+    font-size: 0.75rem;
+    padding: 0.1rem 0.25rem;
+  }
+
+  /* Compact toolbar - only essential buttons */
   .toolbar {
-    height: auto;
-    min-height: var(--toolbar-height);
-    padding: 0.5rem;
-    padding-bottom: calc(0.5rem + var(--safe-area-bottom));
-    flex-wrap: wrap;
-    gap: 0.5rem;
+    height: 44px;
+    min-height: 44px;
+    max-height: 44px;
+    padding: 0.4rem 0.6rem;
+    padding-bottom: calc(0.4rem + var(--safe-area-bottom));
+    flex-wrap: nowrap;
+    gap: 0.4rem;
+    align-items: center;
+    background: linear-gradient(180deg, var(--bg-card) 0%, rgba(20, 20, 25, 0.98) 100%);
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
   }
 
   /* Hide secondary toolbar groups */
   .toolbar-center {
-    display: none;
+    display: none !important;
   }
 
-  .toolbar-left .toolbar-group:not(:first-child) {
-    display: none;
+  .toolbar-right {
+    display: none !important;
   }
 
-  /* Full-width primary toolbar group */
+  /* Hide version display on mobile */
+  .version-display {
+    display: none !important;
+  }
+
+  /* Full-width primary toolbar group - left-aligned for mobile */
   .toolbar-left {
     flex: 1;
-    justify-content: center;
+    justify-content: flex-start;
+    width: 100%;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .toolbar-left .toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
   }
 
   .toolbar-left .toolbar-group:first-child {
     flex: 1;
-    justify-content: space-around;
+    justify-content: flex-start;
+    gap: 0.4rem;
+    flex-wrap: nowrap;
+    align-items: center;
   }
 
-  /* Larger toolbar buttons for touch */
+  /* Hide instance count buttons (±) on mobile - cleaner UI */
+  .tab-count-group {
+    display: none !important;
+  }
+
+  /* Sleek compact toolbar buttons for mobile */
   .btn-toolbar {
-    min-height: var(--touch-target-min);
-    padding: 0.5rem 1rem;
-    font-size: 0.85rem;
-  }
-
-  .btn-toolbar.btn-claude {
-    flex: 1;
+    min-height: 28px !important;
+    max-height: 28px !important;
+    height: 28px !important;
+    padding: 0 0.6rem !important;
+    font-size: 0.7rem !important;
+    border-radius: 6px;
+    line-height: 28px;
+    display: inline-flex;
+    align-items: center;
     justify-content: center;
+    font-weight: 500;
+    letter-spacing: 0.01em;
   }
 
-  /* Full-width panels */
+  /* Primary action button - Run Claude */
+  .btn-toolbar.btn-claude {
+    flex: 0 0 auto;
+    padding: 0 0.75rem !important;
+    background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
+    border: none;
+    box-shadow: 0 2px 4px rgba(37, 99, 235, 0.3);
+  }
+
+  .btn-toolbar.btn-claude:hover {
+    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+    box-shadow: 0 3px 8px rgba(37, 99, 235, 0.4);
+  }
+
+  .btn-toolbar.btn-claude svg {
+    width: 11px;
+    height: 11px;
+    margin-right: 4px;
+  }
+
+  /* Secondary action - Run Shell */
+  .btn-toolbar.btn-shell {
+    flex: 0 0 auto;
+    background: rgba(34, 197, 94, 0.15);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+    color: #4ade80;
+  }
+
+  .btn-toolbar.btn-shell:hover {
+    background: rgba(34, 197, 94, 0.25);
+    border-color: rgba(34, 197, 94, 0.5);
+  }
+
+  /* Compact case selector for mobile - centered in toolbar */
+  .case-select-group {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    /* Center in available space, not pushed to edge */
+    margin: 0 auto;
+  }
+
+  .toolbar-select {
+    font-size: 0.7rem !important;
+    padding: 0 1.2rem 0 0.5rem !important;
+    min-height: 28px !important;
+    max-height: 28px !important;
+    height: 28px !important;
+    line-height: 28px;
+    border-radius: 6px;
+    background: var(--bg-input);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    /* Limit width so long names don't overflow */
+    max-width: 90px;
+    text-overflow: ellipsis;
+    overflow: hidden;
+  }
+
+  /* Add case button - always visible on mobile */
+  .btn-case-add {
+    min-width: 28px !important;
+    max-width: 28px !important;
+    width: 28px !important;
+    min-height: 28px !important;
+    max-height: 28px !important;
+    height: 28px !important;
+    padding: 0 !important;
+    font-size: 1rem;
+    font-weight: bold;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    border-radius: 6px;
+    background: rgba(34, 197, 94, 0.15);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+    color: var(--success);
+  }
+
+  .btn-case-add:hover {
+    background: rgba(34, 197, 94, 0.25);
+    border-color: rgba(34, 197, 94, 0.5);
+  }
+
+  /* Full-width panels - hide on phones due to limited screen space and toolbar overlap */
   .monitor-panel,
   .subagents-panel {
+    /* Hide by default on phones - not enough screen space and overlaps toolbar */
+    display: none !important;
+  }
+
+  /* When explicitly shown via class, use proper mobile styling */
+  .monitor-panel.force-show-mobile,
+  .subagents-panel.force-show-mobile {
+    display: flex !important;
     width: 100%;
     max-width: 100%;
     left: 0;
     right: 0;
     border-radius: 8px 8px 0 0;
+    /* Position well above the mobile toolbar (44px + safe area) */
+    bottom: calc(44px + 2rem + var(--safe-area-bottom));
+    max-height: 35vh;
   }
 
   /* Full-screen modals on phones */
@@ -7993,19 +8251,23 @@ kbd {
   }
 
   .modal-header {
-    padding: 1rem;
+    padding: 0.75rem 1rem;
+  }
+
+  .modal-header h3 {
+    font-size: 1rem;
   }
 
   .modal-body {
-    padding: 1rem;
+    padding: 0.75rem 1rem;
     flex: 1;
     overflow-y: auto;
   }
 
   .modal-footer,
   .form-actions {
-    padding: 1rem;
-    padding-bottom: calc(1rem + var(--safe-area-bottom));
+    padding: 0.75rem 1rem;
+    padding-bottom: calc(0.75rem + var(--safe-area-bottom));
   }
 
   /* Terminal container safe area */
@@ -8013,24 +8275,69 @@ kbd {
     padding-bottom: var(--safe-area-bottom);
   }
 
-  /* Welcome overlay adjustments */
+  /* Main area must fill available space */
+  .main {
+    flex: 1;
+    min-height: 0; /* Allow flex item to shrink below content size */
+  }
+
+  /* Show CLI info bar on mobile (Claude version/model) */
+  .cli-info-bar {
+    display: block;
+  }
+
+  .terminal-container {
+    height: calc(100% + 45px); /* Make taller so bottom is clipped */
+    min-height: 0;
+    position: relative;
+    margin-bottom: -45px; /* Clip bottom - hides status line but keeps input visible */
+  }
+
+  /* Gradient mask at bottom to smoothly fade content into clipped area */
+  .terminal-container::after {
+    content: '';
+    position: absolute;
+    bottom: 45px; /* Position above the clipped area */
+    left: 0;
+    right: 0;
+    height: 20px;
+    background: linear-gradient(to bottom, transparent 0%, #0d0d0d 100%);
+    pointer-events: none;
+    z-index: 5;
+  }
+
+  /* Compact welcome overlay for mobile */
   .welcome-content {
-    padding: 1.5rem 1rem;
+    padding: 1rem 0.75rem;
   }
 
   .welcome-title {
-    font-size: 1.4rem;
+    font-size: 1.2rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .welcome-desc {
+    font-size: 0.8rem;
+    margin-bottom: 0.4rem;
   }
 
   .welcome-actions {
     flex-direction: column;
-    gap: 0.75rem;
+    gap: 0.5rem;
+    margin-top: 1rem;
   }
 
   .welcome-btn {
     width: 100%;
     justify-content: center;
-    min-height: var(--touch-target-min);
+    min-height: 44px;
+    padding: 0.75rem 1rem;
+    font-size: 0.85rem;
+  }
+
+  .welcome-hint {
+    font-size: 0.7rem;
+    margin-top: 0.75rem;
   }
 
   /* Ralph wizard responsive */
@@ -8040,31 +8347,53 @@ kbd {
   }
 
   .wizard-progress {
-    padding: 0.75rem;
+    padding: 0.5rem;
+  }
+
+  .wizard-step {
+    padding: 0.3rem;
+  }
+
+  .wizard-step-number {
+    width: 24px;
+    height: 24px;
+    font-size: 0.7rem;
   }
 
   .wizard-step-label {
     display: none;
   }
 
-  /* Tab count group responsive */
-  .tab-count-group {
-    margin: 0;
+  /* Respawn/Ralph panels - more compact on mobile */
+  .respawn-banner {
+    padding: 0.4rem 0.5rem;
+    font-size: 0.7rem;
   }
 
-  .tab-count-btn {
-    min-width: var(--touch-target-min);
-    min-height: var(--touch-target-min);
+  .ralph-panel {
+    font-size: 0.75rem;
   }
 
-  /* Case select responsive */
-  .case-select-group {
-    flex: 0 0 auto;
+  .ralph-summary {
+    padding: 0.4rem 0.5rem;
   }
 
-  .toolbar-select {
-    font-size: 0.8rem;
-    padding: 0.5rem 1.5rem 0.5rem 0.75rem;
+  /* Project insights panel - hide on mobile */
+  .project-insights-panel {
+    display: none !important;
+  }
+
+  /* File browser panel - hide on mobile */
+  .file-browser-panel {
+    display: none !important;
+  }
+
+  /* Notification drawer - full width on mobile */
+  .notification-drawer {
+    width: 100%;
+    max-width: 100%;
+    right: 0;
+    border-radius: 0;
   }
 }
 
