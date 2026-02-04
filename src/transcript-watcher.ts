@@ -230,6 +230,17 @@ export class TranscriptWatcher extends EventEmitter {
         }
       });
 
+      // Add error handler to prevent unhandled errors and fall back to polling
+      this.fileWatcher.on('error', (err) => {
+        this.emit('transcript:error', err as Error);
+        this.fileWatcher?.close();
+        this.fileWatcher = null;
+        // Fall back to polling on error
+        if (this._isRunning) {
+          this.startPolling();
+        }
+      });
+
       // Initial read
       this.processNewContent();
     } catch (err) {

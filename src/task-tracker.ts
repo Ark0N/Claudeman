@@ -21,6 +21,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { assertNever } from './utils/index.js';
 
 // ========== Configuration Constants ==========
 
@@ -67,6 +68,54 @@ const COMPLETE_PATTERNS = [
 ];
 
 // ========== Type Definitions ==========
+
+/**
+ * Content block for tool_use messages from Claude.
+ * Emitted when Claude invokes a tool.
+ */
+interface ClaudeToolUseBlock {
+  type: 'tool_use';
+  /** Unique identifier for this tool invocation */
+  id: string;
+  /** Name of the tool being invoked */
+  name: string;
+  /** Parameters passed to the tool */
+  input?: {
+    description?: string;
+    prompt?: string;
+    subagent_type?: string;
+    [key: string]: unknown;
+  };
+}
+
+/**
+ * Content block for tool_result messages from Claude.
+ * Emitted when a tool completes execution.
+ */
+interface ClaudeToolResultBlock {
+  type: 'tool_result';
+  /** ID of the tool_use this result corresponds to */
+  tool_use_id: string;
+  /** Whether the tool execution resulted in an error */
+  is_error?: boolean;
+  /** Result content (string or structured data) */
+  content?: string | unknown;
+}
+
+/**
+ * Union type for content blocks we care about.
+ */
+type ClaudeContentBlock = ClaudeToolUseBlock | ClaudeToolResultBlock | { type: string };
+
+/**
+ * Claude JSON message structure.
+ * This is the format Claude Code outputs for streaming events.
+ */
+interface ClaudeMessage {
+  message?: {
+    content?: ClaudeContentBlock[];
+  };
+}
 
 /**
  * Represents a background task spawned by Claude Code.
@@ -189,14 +238,14 @@ export class TaskTracker extends EventEmitter {
    * @fires taskCompleted - When a task finishes successfully
    * @fires taskFailed - When a task finishes with error
    */
-  processMessage(msg: any): void {
+  processMessage(msg: ClaudeMessage | null | undefined): void {
     if (!msg || !msg.message?.content) return;
 
     for (const block of msg.message.content) {
-      if (block.type === 'tool_use' && block.name === 'Task') {
-        this.handleTaskToolUse(block);
+      if (block.type === 'tool_use' && (block as ClaudeToolUseBlock).name === 'Task') {
+        this.handleTaskToolUse(block as ClaudeToolUseBlock);
       } else if (block.type === 'tool_result') {
-        this.handleToolResult(block);
+        this.handleToolResult(block as ClaudeToolResultBlock);
       }
     }
   }
@@ -256,7 +305,7 @@ export class TaskTracker extends EventEmitter {
    * @param block - The tool_use content block
    * @fires taskCreated
    */
-  private handleTaskToolUse(block: any): void {
+  private handleTaskToolUse(block: ClaudeToolUseBlock): void {
     const toolUseId = block.id;
     const params = block.input || {};
 
@@ -305,7 +354,7 @@ export class TaskTracker extends EventEmitter {
    * @fires taskCompleted - If result is success
    * @fires taskFailed - If result is error
    */
-  private handleToolResult(block: any): void {
+  private handleToolResult(block: ClaudeToolResultBlock): void {
     const toolUseId = block.tool_use_id;
     const task = this.tasks.get(toolUseId);
 
@@ -416,7 +465,7 @@ export class TaskTracker extends EventEmitter {
    * @fires taskCreated
    */
   private createTaskFromTerminal(agentType: string, _context: string): void {
-    const taskId = `terminal-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const taskId = `terminal-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
     const parentId = this.taskStack.length > 0 ? this.taskStack[this.taskStack.length - 1] : null;
 
     const task: BackgroundTask = {
@@ -547,6 +596,8 @@ export class TaskTracker extends EventEmitter {
         case 'running': running++; break;
         case 'completed': completed++; break;
         case 'failed': failed++; break;
+        default:
+          assertNever(task.status, `Unhandled BackgroundTask status: ${task.status}`);
       }
     }
 

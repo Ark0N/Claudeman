@@ -12,7 +12,7 @@
 
 import Fastify, { FastifyInstance, FastifyReply } from 'fastify';
 import fastifyStatic from '@fastify/static';
-import path, { join, dirname, resolve } from 'node:path';
+import path, { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import fs from 'node:fs/promises';
@@ -42,15 +42,8 @@ import {
   getErrorMessage,
   ApiErrorCode,
   createErrorResponse,
-  type CreateSessionRequest,
-  type RunPromptRequest,
-  type SessionInputRequest,
-  type ResizeRequest,
-  type CreateCaseRequest,
-  type QuickStartRequest,
   type CreateScheduledRunRequest,
   type QuickRunRequest,
-  type HookEventRequest,
   type ApiResponse,
   type SessionResponse,
   type QuickStartResponse,
@@ -60,6 +53,18 @@ import {
   type ImageDetectedEvent,
   DEFAULT_NICE_CONFIG,
 } from '../types.js';
+import {
+  CreateSessionSchema,
+  RunPromptSchema,
+  SessionInputSchema,
+  ResizeSchema,
+  CreateCaseSchema,
+  QuickStartSchema,
+  HookEventSchema,
+  ConfigUpdateSchema,
+  RespawnConfigSchema,
+} from './schemas.js';
+import { StaleExpirationMap } from '../utils/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -317,15 +322,20 @@ export class WebServer extends EventEmitter {
   // Terminal batching for performance
   private terminalBatches: Map<string, string> = new Map();
   private terminalBatchTimer: NodeJS.Timeout | null = null;
-  // Adaptive batching: track rapid events to extend batch window
-  private lastTerminalEventTime: Map<string, number> = new Map();
-  private adaptiveBatchInterval: number = TERMINAL_BATCH_INTERVAL;
+  // Adaptive batching: track rapid events to extend batch window (per-session)
+  // StaleExpirationMap auto-cleans entries for sessions that stop generating output
+  private lastTerminalEventTime: StaleExpirationMap<string, number> = new StaleExpirationMap({
+    ttlMs: 5 * 60 * 1000, // 5 minutes - auto-expire stale session timing data
+    refreshOnGet: false,   // Don't refresh on reads, only on explicit sets
+  });
+  // Per-session adaptive batch intervals (sessions with rapid output get longer batches)
+  private adaptiveBatchIntervals: Map<string, number> = new Map();
   // Scheduled runs cleanup timer
   private scheduledCleanupTimer: NodeJS.Timeout | null = null;
   // SSE event batching
   private outputBatches: Map<string, string> = new Map();
   private outputBatchTimer: NodeJS.Timeout | null = null;
-  private taskUpdateBatches: Map<string, BackgroundTask> = new Map();
+  private taskUpdateBatches: Map<string, { sessionId: string; task: BackgroundTask }> = new Map();
   private taskUpdateBatchTimer: NodeJS.Timeout | null = null;
   // State update batching (reduce expensive toDetailedState() serialization)
   private stateUpdatePending: Set<string> = new Set();
@@ -551,11 +561,12 @@ export class WebServer extends EventEmitter {
     });
 
     this.app.put('/api/config', async (req) => {
-      const body = req.body as Record<string, unknown> | null;
-      if (!body || typeof body !== 'object') {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Request body must be a JSON object');
+      // Validate request body against schema to prevent arbitrary config injection
+      const parseResult = ConfigUpdateSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Invalid config: ${parseResult.error.message}`);
       }
-      this.store.setConfig(body as Partial<ReturnType<typeof this.store.getConfig>>);
+      this.store.setConfig(parseResult.data as Partial<ReturnType<typeof this.store.getConfig>>);
       return { success: true, config: this.store.getConfig() };
     });
 
@@ -635,10 +646,14 @@ export class WebServer extends EventEmitter {
     this.app.post('/api/sessions', async (req): Promise<SessionResponse> => {
       // Prevent unbounded session creation
       if (this.sessions.size >= MAX_CONCURRENT_SESSIONS) {
-        return { success: false, error: `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached. Delete some sessions first.` };
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached. Delete some sessions first.`);
       }
 
-      const body = req.body as CreateSessionRequest & { mode?: 'claude' | 'shell'; name?: string };
+      const result = CreateSessionSchema.safeParse(req.body);
+      if (!result.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
+      }
+      const body = result.data;
       const workingDir = body.workingDir || process.cwd();
       const globalNice = this.getGlobalNiceConfig();
       const session = new Session({
@@ -705,7 +720,7 @@ export class WebServer extends EventEmitter {
       const killScreen = query.killScreen !== 'false'; // Default to true
 
       if (!this.sessions.has(id)) {
-        return { success: false, error: 'Session not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
       await this.cleanupSession(id, killScreen);
@@ -769,7 +784,7 @@ export class WebServer extends EventEmitter {
       const session = this.sessions.get(id);
 
       if (!session) {
-        return { success: false, error: 'Session not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
       return {
@@ -949,9 +964,10 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter');
       }
 
-      // Validate path is within working directory (security)
+      // Validate path is within working directory (security: proper path traversal check)
       const fullPath = resolve(session.workingDir, filePath);
-      if (!fullPath.startsWith(session.workingDir)) {
+      const relativePath = relative(session.workingDir, fullPath);
+      if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be within working directory');
       }
 
@@ -978,8 +994,15 @@ export class WebServer extends EventEmitter {
           };
         }
 
-        // Read text file with line limit
-        const maxLines = parseInt(lines || '500', 10);
+        // Validate file size before reading (DoS protection - prevent memory exhaustion)
+        const MAX_TEXT_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+        if (stat.size > MAX_TEXT_FILE_SIZE) {
+          return createErrorResponse(ApiErrorCode.INVALID_INPUT, `File too large (${Math.round(stat.size / 1024 / 1024)}MB > ${MAX_TEXT_FILE_SIZE / 1024 / 1024}MB limit)`);
+        }
+
+        // Read text file with line limit (bounded to prevent DoS)
+        const MAX_LINES_LIMIT = 10000;
+        const maxLines = Math.min(parseInt(lines || '500', 10) || 500, MAX_LINES_LIMIT);
         const content = await fs.readFile(fullPath, 'utf-8');
         const allLines = content.split('\n');
         const truncatedContent = allLines.length > maxLines;
@@ -1008,23 +1031,32 @@ export class WebServer extends EventEmitter {
       const session = this.sessions.get(id);
 
       if (!session) {
-        reply.code(404).send({ success: false, error: 'Session not found' });
+        reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found'));
         return;
       }
 
       if (!filePath) {
-        reply.code(400).send({ success: false, error: 'Missing path parameter' });
+        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
         return;
       }
 
-      // Validate path is within working directory
+      // Validate path is within working directory (security: proper path traversal check)
       const fullPath = resolve(session.workingDir, filePath);
-      if (!fullPath.startsWith(session.workingDir)) {
-        reply.code(400).send({ success: false, error: 'Path must be within working directory' });
+      const relativePath = relative(session.workingDir, fullPath);
+      if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
+        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be within working directory'));
         return;
       }
 
       try {
+        // Validate file size before reading (DoS protection - prevent memory exhaustion)
+        const MAX_RAW_FILE_SIZE = 50 * 1024 * 1024; // 50MB for raw files
+        const stat = await fs.stat(fullPath);
+        if (stat.size > MAX_RAW_FILE_SIZE) {
+          reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, `File too large (${Math.round(stat.size / 1024 / 1024)}MB > ${MAX_RAW_FILE_SIZE / 1024 / 1024}MB limit)`));
+          return;
+        }
+
         const ext = filePath.split('.').pop()?.toLowerCase() || '';
         const mimeTypes: Record<string, string> = {
           'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'gif': 'image/gif',
@@ -1038,7 +1070,7 @@ export class WebServer extends EventEmitter {
         reply.header('Content-Type', mimeTypes[ext] || 'application/octet-stream');
         reply.send(content);
       } catch (err) {
-        reply.code(500).send({ success: false, error: `Failed to read file: ${getErrorMessage(err)}` });
+        reply.code(500).send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${getErrorMessage(err)}`));
       }
     });
 
@@ -1049,12 +1081,12 @@ export class WebServer extends EventEmitter {
       const session = this.sessions.get(id);
 
       if (!session) {
-        reply.code(404).send({ success: false, error: 'Session not found' });
+        reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found'));
         return;
       }
 
       if (!filePath) {
-        reply.code(400).send({ success: false, error: 'Missing path parameter' });
+        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
         return;
       }
 
@@ -1376,7 +1408,11 @@ export class WebServer extends EventEmitter {
     // Run prompt in session
     this.app.post('/api/sessions/:id/run', async (req): Promise<ApiResponse> => {
       const { id } = req.params as { id: string };
-      const { prompt } = req.body as RunPromptRequest;
+      const result = RunPromptSchema.safeParse(req.body);
+      if (!result.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
+      }
+      const { prompt } = result.data;
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1455,15 +1491,15 @@ export class WebServer extends EventEmitter {
     // useScreen: true uses writeViaScreen which is more reliable for programmatic input
     this.app.post('/api/sessions/:id/input', async (req): Promise<ApiResponse> => {
       const { id } = req.params as { id: string };
-      const { input, useScreen } = req.body as SessionInputRequest & { useScreen?: boolean };
+      const result = SessionInputSchema.safeParse(req.body);
+      if (!result.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
+      }
+      const { input, useScreen } = result.data;
       const session = this.sessions.get(id);
 
       if (!session) {
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
-      }
-
-      if (input === undefined || input === null) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Input is required');
       }
 
       const inputStr = String(input);
@@ -1491,16 +1527,18 @@ export class WebServer extends EventEmitter {
     // Resize session terminal
     this.app.post('/api/sessions/:id/resize', async (req): Promise<ApiResponse> => {
       const { id } = req.params as { id: string };
-      const { cols, rows } = req.body as ResizeRequest;
+      const result = ResizeSchema.safeParse(req.body);
+      if (!result.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
+      }
+      const { cols, rows } = result.data;
       const session = this.sessions.get(id);
 
       if (!session) {
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
-      if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 1 || rows < 1) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'cols and rows must be positive integers');
-      }
+      // Note: Zod already validates that cols and rows are positive integers within bounds
       if (cols > MAX_TERMINAL_COLS || rows > MAX_TERMINAL_ROWS) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Terminal dimensions exceed maximum (${MAX_TERMINAL_COLS}x${MAX_TERMINAL_ROWS})`);
       }
@@ -1665,7 +1703,12 @@ export class WebServer extends EventEmitter {
     // Update respawn configuration (works with or without running controller)
     this.app.put('/api/sessions/:id/respawn/config', async (req) => {
       const { id } = req.params as { id: string };
-      const config = req.body as Partial<RespawnConfig>;
+      // Validate respawn config to prevent arbitrary field injection
+      const parseResult = RespawnConfigSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Invalid respawn config: ${parseResult.error.message}`);
+      }
+      const config = parseResult.data as Partial<RespawnConfig>;
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1993,7 +2036,7 @@ export class WebServer extends EventEmitter {
       const run = this.scheduledRuns.get(id);
 
       if (!run) {
-        return { success: false, error: 'Scheduled run not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Scheduled run not found');
       }
 
       await this.stopScheduledRun(id);
@@ -2047,31 +2090,33 @@ export class WebServer extends EventEmitter {
             }
           }
         }
-      } catch {
-        // Ignore errors reading linked cases
+      } catch (err) {
+        // Log but don't fail - linked cases are optional
+        console.warn('[Server] Failed to read linked cases:', err);
       }
 
       return cases;
     });
 
-    this.app.post('/api/cases', async (req): Promise<{ success: boolean; case?: { name: string; path: string }; error?: string }> => {
-      const { name, description } = req.body as CreateCaseRequest;
-
-      if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) {
-        return { success: false, error: 'Invalid case name. Use only letters, numbers, hyphens, underscores.' };
+    this.app.post('/api/cases', async (req): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
+      const result = CreateCaseSchema.safeParse(req.body);
+      if (!result.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
       }
+      const { name, description } = result.data;
 
       const casePath = join(casesDir, name);
 
-      // Security: Path traversal protection - ensure resolved path is within casesDir
+      // Security: Path traversal protection - use relative path check
       const resolvedPath = resolve(casePath);
       const resolvedBase = resolve(casesDir);
-      if (!resolvedPath.startsWith(resolvedBase + '/') && resolvedPath !== resolvedBase) {
-        return { success: false, error: 'Invalid case path' };
+      const relPath = relative(resolvedBase, resolvedPath);
+      if (relPath.startsWith('..') || isAbsolute(relPath)) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
       }
 
       if (existsSync(casePath)) {
-        return { success: false, error: 'Case already exists' };
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
       }
 
       try {
@@ -2088,22 +2133,22 @@ export class WebServer extends EventEmitter {
 
         this.broadcast('case:created', { name, path: casePath });
 
-        return { success: true, case: { name, path: casePath } };
+        return { success: true, data: { case: { name, path: casePath } } };
       } catch (err) {
-        return { success: false, error: getErrorMessage(err) };
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
       }
     });
 
     // Link an existing folder as a case
-    this.app.post('/api/cases/link', async (req): Promise<{ success: boolean; case?: { name: string; path: string }; error?: string }> => {
+    this.app.post('/api/cases/link', async (req): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
       const { name, path: folderPath } = req.body as { name: string; path: string };
 
       if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) {
-        return { success: false, error: 'Invalid case name. Use only letters, numbers, hyphens, underscores.' };
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name. Use only letters, numbers, hyphens, underscores.');
       }
 
       if (!folderPath) {
-        return { success: false, error: 'Folder path is required.' };
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Folder path is required.');
       }
 
       // Expand ~ to home directory
@@ -2113,13 +2158,13 @@ export class WebServer extends EventEmitter {
 
       // Validate the folder exists
       if (!existsSync(expandedPath)) {
-        return { success: false, error: `Folder not found: ${expandedPath}` };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, `Folder not found: ${expandedPath}`);
       }
 
       // Check if case name already exists in casesDir
       const casePath = join(casesDir, name);
       if (existsSync(casePath)) {
-        return { success: false, error: 'A case with this name already exists in claudeman-cases.' };
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'A case with this name already exists in claudeman-cases.');
       }
 
       // Load existing linked cases
@@ -2135,7 +2180,7 @@ export class WebServer extends EventEmitter {
 
       // Check if name is already linked
       if (linkedCases[name]) {
-        return { success: false, error: `Case "${name}" is already linked to ${linkedCases[name]}` };
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, `Case "${name}" is already linked to ${linkedCases[name]}`);
       }
 
       // Save the linked case
@@ -2147,9 +2192,9 @@ export class WebServer extends EventEmitter {
         }
         writeFileSync(linkedCasesFile, JSON.stringify(linkedCases, null, 2));
         this.broadcast('case:linked', { name, path: expandedPath });
-        return { success: true, case: { name, path: expandedPath } };
+        return { success: true, data: { case: { name, path: expandedPath } } };
       } catch (err) {
-        return { success: false, error: getErrorMessage(err) };
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
       }
     });
 
@@ -2276,12 +2321,14 @@ export class WebServer extends EventEmitter {
           }
         }
 
-        const stats = {
-          total: todos.length,
-          pending: todos.filter(t => t.status === 'pending').length,
-          inProgress: todos.filter(t => t.status === 'in_progress').length,
-          completed: todos.filter(t => t.status === 'completed').length,
-        };
+        // Calculate stats in a single pass for better performance
+        let pending = 0, inProgress = 0, completed = 0;
+        for (const t of todos) {
+          if (t.status === 'pending') pending++;
+          else if (t.status === 'in_progress') inProgress++;
+          else if (t.status === 'completed') completed++;
+        }
+        const stats = { total: todos.length, pending, inProgress, completed };
 
         return {
           success: true,
@@ -2302,19 +2349,19 @@ export class WebServer extends EventEmitter {
         return { success: false, error: `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached.` };
       }
 
-      const { caseName = 'testcase', mode = 'claude' } = req.body as QuickStartRequest;
-
-      // Validate case name
-      if (!/^[a-zA-Z0-9_-]+$/.test(caseName)) {
-        return { success: false, error: 'Invalid case name. Use only letters, numbers, hyphens, underscores.' };
+      const result = QuickStartSchema.safeParse(req.body);
+      if (!result.success) {
+        return { success: false, error: result.error.issues[0]?.message ?? 'Validation failed' };
       }
+      const { caseName = 'testcase', mode = 'claude' } = result.data;
 
       const casePath = join(casesDir, caseName);
 
-      // Security: Path traversal protection - ensure resolved path is within casesDir
+      // Security: Path traversal protection - use relative path check
       const resolvedPath = resolve(casePath);
       const resolvedBase = resolve(casesDir);
-      if (!resolvedPath.startsWith(resolvedBase + '/') && resolvedPath !== resolvedBase) {
+      const relPath = relative(resolvedBase, resolvedPath);
+      if (relPath.startsWith('..') || isAbsolute(relPath)) {
         return { success: false, error: 'Invalid case path' };
       }
 
@@ -2389,11 +2436,13 @@ export class WebServer extends EventEmitter {
             mkdirSync(dir, { recursive: true });
           }
           // Use async write to avoid blocking event loop
-          fs.writeFile(settingsFilePath, JSON.stringify(settings, null, 2)).catch(() => {
-            // Non-critical, ignore settings save errors
+          fs.writeFile(settingsFilePath, JSON.stringify(settings, null, 2)).catch((err) => {
+            // Non-critical but log for debugging
+            console.warn('[Server] Failed to save settings (lastUsedCase):', err);
           });
-        } catch {
-          // Non-critical, ignore settings save errors
+        } catch (err) {
+          // Non-critical but log for debugging
+          console.warn('[Server] Failed to prepare settings update:', err);
         }
 
         return {
@@ -2626,10 +2675,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       if (caseName) {
         const casesDir = join(homedir(), 'claudeman-cases');
         const casePath = join(casesDir, caseName);
-        // Security: Path traversal protection
+        // Security: Path traversal protection - use relative path check
         const resolvedCase = resolve(casePath);
         const resolvedBase = resolve(casesDir);
-        if (resolvedCase.startsWith(resolvedBase) && existsSync(casePath)) {
+        const relPath = relative(resolvedBase, resolvedCase);
+        if (!relPath.startsWith('..') && !isAbsolute(relPath) && existsSync(casePath)) {
           outputDir = join(casePath, 'ralph-wizard');
 
           // Clear old ralph-wizard directory to ensure fresh prompts for each generation
@@ -2748,10 +2798,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       const casesDir = join(homedir(), 'claudeman-cases');
       const casePath = join(casesDir, caseName);
 
-      // Security: Path traversal protection
+      // Security: Path traversal protection - use relative path check
       const resolvedCase = resolve(casePath);
       const resolvedBase = resolve(casesDir);
-      if (!resolvedCase.startsWith(resolvedBase)) {
+      const relPath = relative(resolvedBase, resolvedCase);
+      if (relPath.startsWith('..') || isAbsolute(relPath)) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
       }
 
@@ -2800,10 +2851,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       reply.header('Pragma', 'no-cache');
       reply.header('Expires', '0');
 
-      // Security: Path traversal protection for case name
+      // Security: Path traversal protection for case name - use relative path check
       const resolvedCase = resolve(casePath);
       const resolvedBase = resolve(casesDir);
-      if (!resolvedCase.startsWith(resolvedBase)) {
+      const relPath = relative(resolvedBase, resolvedCase);
+      if (relPath.startsWith('..') || isAbsolute(relPath)) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
       }
 
@@ -2827,13 +2879,23 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       const content = readFileSync(fullPath, 'utf-8');
       const isJson = filePath.endsWith('.json');
 
+      // Parse JSON content safely (may contain invalid JSON)
+      let parsed: unknown = null;
+      if (isJson) {
+        try {
+          parsed = JSON.parse(content);
+        } catch {
+          // Invalid JSON - return null for parsed, content still available as raw string
+        }
+      }
+
       return {
         success: true,
         data: {
           content,
           filePath: decodedPath,
           isJson,
-          parsed: isJson ? JSON.parse(content) : null,
+          parsed,
         },
       };
     });
@@ -3236,12 +3298,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // ========== Hook Events ==========
 
     this.app.post('/api/hook-event', async (req) => {
-      const { event, sessionId, data } = req.body as HookEventRequest;
-      const validEvents = ['idle_prompt', 'permission_prompt', 'elicitation_dialog', 'stop'] as const;
-      if (!event || !validEvents.includes(event as typeof validEvents[number])) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid event type');
+      const result = HookEventSchema.safeParse(req.body);
+      if (!result.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
       }
-      if (!sessionId || !this.sessions.has(sessionId)) {
+      const { event, sessionId, data } = result.data;
+      if (!this.sessions.has(sessionId)) {
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
@@ -3269,7 +3331,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       }
 
       // Sanitize forwarded data: only include known safe fields, limit size
-      const safeData = sanitizeHookData(data);
+      const safeData = sanitizeHookData(data as Record<string, unknown> | undefined);
       this.broadcast(`hook:${event}`, { sessionId, timestamp: Date.now(), ...safeData });
 
       // Track in run summary
@@ -3507,6 +3569,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     this.outputBatches.delete(sessionId);
     this.taskUpdateBatches.delete(sessionId);
     this.stateUpdatePending.delete(sessionId);
+    this.lastTerminalEventTime.delete(sessionId);
+    this.adaptiveBatchIntervals.delete(sessionId);
 
     // Reset Ralph tracker on the session before cleanup
     if (session) {
@@ -4032,6 +4096,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       console.log(`[Server] Restored respawn controller for session ${session.id} from ${source} (will start in ${Math.ceil(delayMs / 1000)}s)`);
       const timer = setTimeout(() => {
         this.pendingRespawnStarts.delete(session.id);
+        // Verify session still exists (may have been deleted during grace period)
+        if (!this.sessions.has(session.id)) {
+          console.log(`[Server] Skipping restored respawn start - session ${session.id} no longer exists`);
+          return;
+        }
         // Double-check controller still exists and is stopped
         const ctrl = this.respawnControllers.get(session.id);
         if (ctrl && ctrl.state === 'stopped') {
@@ -4112,8 +4181,16 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     this.scheduledRuns.set(id, run);
     this.broadcast('scheduled:created', run);
 
-    // Start the run loop
-    this.runScheduledLoop(id);
+    // Start the run loop (fire-and-forget with error handling)
+    this.runScheduledLoop(id).catch((err) => {
+      console.error(`[WebServer] Scheduled run ${id} failed:`, err);
+      const failedRun = this.scheduledRuns.get(id);
+      if (failedRun && failedRun.status === 'running') {
+        failedRun.status = 'stopped';
+        failedRun.logs.push(`[${new Date().toISOString()}] Error: ${err instanceof Error ? err.message : String(err)}`);
+        this.broadcast('scheduled:stopped', { id, reason: 'error' });
+      }
+    });
 
     return run;
   }
@@ -4378,21 +4455,23 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     const newBatch = existing + data;
     this.terminalBatches.set(sessionId, newBatch);
 
-    // Adaptive batching: detect rapid events and extend batch window
+    // Adaptive batching: detect rapid events and extend batch window (per-session)
     const now = Date.now();
-    const lastEvent = this.lastTerminalEventTime.get(sessionId) || 0;
+    const lastEvent = this.lastTerminalEventTime.get(sessionId) ?? 0;
     const eventGap = now - lastEvent;
     this.lastTerminalEventTime.set(sessionId, now);
 
-    // Adjust batch interval based on event frequency
+    // Adjust batch interval based on event frequency (per-session)
     // Rapid events (<10ms gap) = 50ms batch, moderate (<20ms) = 32ms, else 16ms
+    let sessionInterval: number;
     if (eventGap > 0 && eventGap < 10) {
-      this.adaptiveBatchInterval = 50;
+      sessionInterval = 50;
     } else if (eventGap > 0 && eventGap < 20) {
-      this.adaptiveBatchInterval = 32;
+      sessionInterval = 32;
     } else {
-      this.adaptiveBatchInterval = TERMINAL_BATCH_INTERVAL;
+      sessionInterval = TERMINAL_BATCH_INTERVAL;
     }
+    this.adaptiveBatchIntervals.set(sessionId, sessionInterval);
 
     // Flush immediately if batch is large for responsiveness
     if (newBatch.length > BATCH_FLUSH_THRESHOLD) {
@@ -4405,17 +4484,27 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     }
 
     // Start batch timer if not already running (uses adaptive interval)
+    // Pick the minimum interval across all pending sessions for responsiveness
     if (!this.terminalBatchTimer) {
+      const batchInterval = Math.min(
+        ...Array.from(this.adaptiveBatchIntervals.values()),
+        TERMINAL_BATCH_INTERVAL
+      );
       this.terminalBatchTimer = setTimeout(() => {
         this.flushTerminalBatches();
         this.terminalBatchTimer = null;
-        // Reset adaptive interval after flush
-        this.adaptiveBatchInterval = TERMINAL_BATCH_INTERVAL;
-      }, this.adaptiveBatchInterval);
+        // Clear per-session intervals after flush (they'll be recalculated on next event)
+        this.adaptiveBatchIntervals.clear();
+      }, batchInterval);
     }
   }
 
   private flushTerminalBatches(): void {
+    // Skip if server is stopping (timer may have been queued before stop() was called)
+    if (this._isStopping) {
+      this.terminalBatches.clear();
+      return;
+    }
     for (const [sessionId, data] of this.terminalBatches) {
       if (data.length > 0) {
         // Wrap with DEC mode 2026 synchronized output markers
@@ -4446,6 +4535,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 
   private flushOutputBatches(): void {
+    // Skip if server is stopping (timer may have been queued before stop() was called)
+    if (this._isStopping) {
+      this.outputBatches.clear();
+      return;
+    }
     for (const [sessionId, data] of this.outputBatches) {
       if (data.length > 0) {
         this.broadcast('session:output', { id: sessionId, data });
@@ -4454,12 +4548,15 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     this.outputBatches.clear();
   }
 
-  // Batch task:updated events at 100ms - only send latest update per session
+  // Batch task:updated events at 100ms - only send latest update per task
+  // Key is sessionId:taskId to avoid collisions when multiple tasks update concurrently
   private batchTaskUpdate(sessionId: string, task: BackgroundTask): void {
     // Skip if server is stopping
     if (this._isStopping) return;
 
-    this.taskUpdateBatches.set(sessionId, task);
+    // Use composite key to avoid losing updates when multiple tasks update in same batch window
+    const key = `${sessionId}:${task.id}`;
+    this.taskUpdateBatches.set(key, { sessionId, task });
 
     if (!this.taskUpdateBatchTimer) {
       this.taskUpdateBatchTimer = setTimeout(() => {
@@ -4470,7 +4567,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 
   private flushTaskUpdateBatches(): void {
-    for (const [sessionId, task] of this.taskUpdateBatches) {
+    // Skip if server is stopping (timer may have been queued before stop() was called)
+    if (this._isStopping) {
+      this.taskUpdateBatches.clear();
+      return;
+    }
+    for (const [, { sessionId, task }] of this.taskUpdateBatches) {
       this.broadcast('task:updated', { sessionId, task });
     }
     this.taskUpdateBatches.clear();
@@ -4496,6 +4598,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 
   private flushStateUpdates(): void {
+    // Skip if server is stopping (timer may have been queued before stop() was called)
+    if (this._isStopping) {
+      this.stateUpdatePending.clear();
+      return;
+    }
     for (const sessionId of this.stateUpdatePending) {
       const session = this.sessions.get(sessionId);
       if (session) {
@@ -4904,6 +5011,21 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     // Stop image watcher
     imageWatcher.stop();
+
+    // Destroy file stream manager (clears cleanup timer and kills remaining tail processes)
+    fileStreamManager.destroy();
+
+    // Clear remaining Maps that accumulate session references
+    this.respawnTimers.clear();
+    this.runSummaryTrackers.clear();
+    this.transcriptWatchers.clear();
+    this.sessionListenerRefs.clear();
+    this.scheduledRuns.clear();
+    // Dispose StaleExpirationMap (stops internal cleanup timer)
+    this.lastTerminalEventTime.dispose();
+    this.adaptiveBatchIntervals.clear();
+    this.activePlanOrchestrators.clear();
+    this.cleaningUp.clear();
 
     await this.app.close();
   }

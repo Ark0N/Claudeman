@@ -398,6 +398,55 @@ const COMPLETION_INDICATOR_PATTERNS = [
   /project\s+(?:is\s+)?(?:completed?|done|finished)/i,
 ];
 
+// ---------- Priority Detection Patterns ----------
+// Pre-compiled for performance; avoids repeated allocation in parsePriority()
+
+/** P0 (Critical) priority patterns - highest severity issues */
+const P0_PRIORITY_PATTERNS = [
+  /\bP0\b|\(P0\)|:?\s*P0\s*:/,           // Explicit P0
+  /\bCRITICAL\b/,                         // Critical keyword
+  /\bBLOCKER\b/,                          // Blocker
+  /\bURGENT\b/,                           // Urgent
+  /\bSECURITY\b/,                         // Security issues
+  /\bCRASH(?:ES|ING)?\b/,                 // Crash, crashes, crashing
+  /\bBROKEN\b/,                           // Broken
+  /\bDATA\s*LOSS\b/,                      // Data loss
+  /\bPRODUCTION\s*(?:DOWN|ISSUE|BUG)\b/,  // Production issues
+  /\bHOTFIX\b/,                           // Hotfix
+  /\bSEVERITY\s*1\b/,                     // Severity 1
+];
+
+/** P1 (High) priority patterns - important issues requiring attention */
+const P1_PRIORITY_PATTERNS = [
+  /\bP1\b|\(P1\)|:?\s*P1\s*:/,           // Explicit P1
+  /\bHIGH\s*PRIORITY\b/,                  // High priority
+  /\bIMPORTANT\b/,                        // Important
+  /\bBUG\b/,                              // Bug
+  /\bFIX\b/,                              // Fix (as task type)
+  /\bERROR\b/,                            // Error
+  /\bFAIL(?:S|ED|ING|URE)?\b/,           // Fail variants
+  /\bREGRESSION\b/,                       // Regression
+  /\bMUST\s*(?:HAVE|FIX|DO)\b/,          // Must have/fix/do
+  /\bSEVERITY\s*2\b/,                     // Severity 2
+  /\bREQUIRED\b/,                         // Required
+];
+
+/** P2 (Medium) priority patterns - lower priority improvements */
+const P2_PRIORITY_PATTERNS = [
+  /\bP2\b|\(P2\)|:?\s*P2\s*:/,           // Explicit P2
+  /\bNICE\s*TO\s*HAVE\b/,                 // Nice to have
+  /\bLOW\s*PRIORITY\b/,                   // Low priority
+  /\bREFACTOR\b/,                         // Refactor
+  /\bCLEANUP\b/,                          // Cleanup
+  /\bIMPROVE(?:MENT)?\b/,                 // Improve/Improvement
+  /\bOPTIMIZ(?:E|ATION)\b/,              // Optimize/Optimization
+  /\bCONSIDER\b/,                         // Consider
+  /\bWOULD\s*BE\s*NICE\b/,               // Would be nice
+  /\bENHANCE(?:MENT)?\b/,                 // Enhance/Enhancement
+  /\bTECH(?:NICAL)?\s*DEBT\b/,           // Tech debt
+  /\bDOCUMENT(?:ATION)?\b/,              // Documentation
+];
+
 // ========== Event Types ==========
 
 /**
@@ -553,6 +602,8 @@ export class RalphTracker extends EventEmitter {
 
   /** File watcher for @fix_plan.md */
   private _fixPlanWatcher: FSWatcher | null = null;
+  /** Error handler for FSWatcher (stored for cleanup to prevent memory leak) */
+  private _fixPlanWatcherErrorHandler: ((err: Error) => void) | null = null;
 
   /** Debounce timer for file change events */
   private _fixPlanReloadTimer: NodeJS.Timeout | null = null;
@@ -610,8 +661,8 @@ export class RalphTracker extends EventEmitter {
   /** Whether stall warning has been emitted */
   private _iterationStallWarned: boolean = false;
 
-  /** Alternate completion phrases (P1-003: multi-phrase support) */
-  private _alternateCompletionPhrases: string[] = [];
+  /** Alternate completion phrases (P1-003: multi-phrase support) - Set for O(1) lookup */
+  private _alternateCompletionPhrases: Set<string> = new Set();
 
   // ========== P1-009: Progress Estimation ==========
 
@@ -644,9 +695,9 @@ export class RalphTracker extends EventEmitter {
    * @param phrase - Additional phrase that can trigger completion
    */
   addAlternateCompletionPhrase(phrase: string): void {
-    if (!this._alternateCompletionPhrases.includes(phrase)) {
-      this._alternateCompletionPhrases.push(phrase);
-      this._loopState.alternateCompletionPhrases = [...this._alternateCompletionPhrases];
+    if (!this._alternateCompletionPhrases.has(phrase)) {
+      this._alternateCompletionPhrases.add(phrase);
+      this._loopState.alternateCompletionPhrases = Array.from(this._alternateCompletionPhrases);
       this.emit('loopUpdate', this.loopState);
     }
   }
@@ -656,10 +707,8 @@ export class RalphTracker extends EventEmitter {
    * @param phrase - Phrase to remove
    */
   removeAlternateCompletionPhrase(phrase: string): void {
-    const index = this._alternateCompletionPhrases.indexOf(phrase);
-    if (index !== -1) {
-      this._alternateCompletionPhrases.splice(index, 1);
-      this._loopState.alternateCompletionPhrases = [...this._alternateCompletionPhrases];
+    if (this._alternateCompletionPhrases.delete(phrase)) {
+      this._loopState.alternateCompletionPhrases = Array.from(this._alternateCompletionPhrases);
       this.emit('loopUpdate', this.loopState);
     }
   }
@@ -785,6 +834,15 @@ export class RalphTracker extends EventEmitter {
           this.handleFixPlanChange();
         });
       }
+      // Add error handler to prevent unhandled errors and clean up on failure
+      // Store handler reference for proper cleanup in stopWatchingFixPlan()
+      if (this._fixPlanWatcher) {
+        this._fixPlanWatcherErrorHandler = (err: Error) => {
+          console.log(`[RalphTracker] FSWatcher error for @fix_plan.md: ${err.message}`);
+          this.stopWatchingFixPlan();
+        };
+        this._fixPlanWatcher.on('error', this._fixPlanWatcherErrorHandler);
+      }
     } catch (err) {
       console.log(`[RalphTracker] Could not watch @fix_plan.md: ${err}`);
     }
@@ -810,6 +868,11 @@ export class RalphTracker extends EventEmitter {
    */
   stopWatchingFixPlan(): void {
     if (this._fixPlanWatcher) {
+      // Remove error handler before closing to prevent memory leak
+      if (this._fixPlanWatcherErrorHandler) {
+        this._fixPlanWatcher.off('error', this._fixPlanWatcherErrorHandler);
+        this._fixPlanWatcherErrorHandler = null;
+      }
       this._fixPlanWatcher.close();
       this._fixPlanWatcher = null;
     }
@@ -1448,7 +1511,8 @@ export class RalphTracker extends EventEmitter {
 
     // Check if the count matches our todo count (e.g., "All 8 files created")
     const countMatch = line.match(ALL_COUNT_PATTERN);
-    const mentionedCount = countMatch ? parseInt(countMatch[1]) : null;
+    const parsedCount = countMatch ? parseInt(countMatch[1], 10) : NaN;
+    const mentionedCount = Number.isNaN(parsedCount) ? null : parsedCount;
     const todoCount = this._todos.size;
 
     // If a count is mentioned, it should match our todo count (within reason)
@@ -1494,7 +1558,8 @@ export class RalphTracker extends EventEmitter {
     // Only act on explicit task number references like "Task 8 is done"
     const taskNumMatch = line.match(/task\s*#?(\d+)/i);
     if (taskNumMatch) {
-      const taskNum = parseInt(taskNumMatch[1]);
+      const taskNum = parseInt(taskNumMatch[1], 10);
+      if (Number.isNaN(taskNum)) return;
       // Find the nth todo (by order) and mark it complete
       let count = 0;
       for (const [_id, todo] of this._todos) {
@@ -1850,8 +1915,8 @@ export class RalphTracker extends EventEmitter {
     // Check for max iterations setting
     const maxIterMatch = line.match(MAX_ITERATIONS_PATTERN);
     if (maxIterMatch) {
-      const maxIter = parseInt(maxIterMatch[1]);
-      if (!isNaN(maxIter) && maxIter > 0) {
+      const maxIter = parseInt(maxIterMatch[1], 10);
+      if (!Number.isNaN(maxIter) && maxIter > 0) {
         this._loopState.maxIterations = maxIter;
         this._loopState.lastActivity = Date.now();
         // Use debounced emit for settings changes
@@ -1863,10 +1928,11 @@ export class RalphTracker extends EventEmitter {
     const iterMatch = line.match(ITERATION_PATTERN);
     if (iterMatch) {
       // Pattern captures: group 1&2 for "Iteration X/Y", group 3&4 for "[X/Y]"
-      const currentIter = parseInt(iterMatch[1] || iterMatch[3]);
-      const maxIter = iterMatch[2] || iterMatch[4] ? parseInt(iterMatch[2] || iterMatch[4]) : null;
+      const currentIter = parseInt(iterMatch[1] || iterMatch[3], 10);
+      const maxIterStr = iterMatch[2] || iterMatch[4];
+      const maxIter = maxIterStr ? parseInt(maxIterStr, 10) : null;
 
-      if (!isNaN(currentIter)) {
+      if (!Number.isNaN(currentIter)) {
         this.activateLoopIfNeeded();
         // Track iteration changes for stall detection
         if (currentIter !== this._lastObservedIteration) {
@@ -1892,7 +1958,7 @@ export class RalphTracker extends EventEmitter {
           }
         }
         this._loopState.cycleCount = currentIter;
-        if (maxIter !== null && !isNaN(maxIter)) {
+        if (maxIter !== null && !Number.isNaN(maxIter)) {
           this._loopState.maxIterations = maxIter;
         }
         this._loopState.lastActivity = Date.now();
@@ -1913,8 +1979,8 @@ export class RalphTracker extends EventEmitter {
     // Check for cycle count (legacy pattern)
     const cycleMatch = line.match(CYCLE_PATTERN);
     if (cycleMatch) {
-      const cycleNum = parseInt(cycleMatch[1] || cycleMatch[2]);
-      if (!isNaN(cycleNum) && cycleNum > this._loopState.cycleCount) {
+      const cycleNum = parseInt(cycleMatch[1] || cycleMatch[2], 10);
+      if (!Number.isNaN(cycleNum) && cycleNum > this._loopState.cycleCount) {
         this._loopState.cycleCount = cycleNum;
         this._loopState.lastActivity = Date.now();
         // Use debounced emit for cycle updates
@@ -2119,68 +2185,23 @@ export class RalphTracker extends EventEmitter {
   private parsePriority(content: string): RalphTodoPriority {
     const upper = content.toUpperCase();
 
-    // P0 patterns - Critical issues
-    const p0Patterns = [
-      /\bP0\b|\(P0\)|:?\s*P0\s*:/,           // Explicit P0
-      /\bCRITICAL\b/,                         // Critical keyword
-      /\bBLOCKER\b/,                          // Blocker
-      /\bURGENT\b/,                           // Urgent
-      /\bSECURITY\b/,                         // Security issues
-      /\bCRASH(?:ES|ING)?\b/,                 // Crash, crashes, crashing
-      /\bBROKEN\b/,                           // Broken
-      /\bDATA\s*LOSS\b/,                      // Data loss
-      /\bPRODUCTION\s*(?:DOWN|ISSUE|BUG)\b/,  // Production issues
-      /\bHOTFIX\b/,                           // Hotfix
-      /\bSEVERITY\s*1\b/,                     // Severity 1
-    ];
-
-    // P1 patterns - High priority issues
-    const p1Patterns = [
-      /\bP1\b|\(P1\)|:?\s*P1\s*:/,           // Explicit P1
-      /\bHIGH\s*PRIORITY\b/,                  // High priority
-      /\bIMPORTANT\b/,                        // Important
-      /\bBUG\b/,                              // Bug
-      /\bFIX\b/,                              // Fix (as task type)
-      /\bERROR\b/,                            // Error
-      /\bFAIL(?:S|ED|ING|URE)?\b/,           // Fail variants
-      /\bREGRESSION\b/,                       // Regression
-      /\bMUST\s*(?:HAVE|FIX|DO)\b/,          // Must have/fix/do
-      /\bSEVERITY\s*2\b/,                     // Severity 2
-      /\bREQUIRED\b/,                         // Required
-    ];
-
-    // P2 patterns - Lower priority
-    const p2Patterns = [
-      /\bP2\b|\(P2\)|:?\s*P2\s*:/,           // Explicit P2
-      /\bNICE\s*TO\s*HAVE\b/,                 // Nice to have
-      /\bLOW\s*PRIORITY\b/,                   // Low priority
-      /\bREFACTOR\b/,                         // Refactor
-      /\bCLEANUP\b/,                          // Cleanup
-      /\bIMPROVE(?:MENT)?\b/,                 // Improve/Improvement
-      /\bOPTIMIZ(?:E|ATION)\b/,              // Optimize/Optimization
-      /\bCONSIDER\b/,                         // Consider
-      /\bWOULD\s*BE\s*NICE\b/,               // Would be nice
-      /\bENHANCE(?:MENT)?\b/,                 // Enhance/Enhancement
-      /\bTECH(?:NICAL)?\s*DEBT\b/,           // Tech debt
-      /\bDOCUMENT(?:ATION)?\b/,              // Documentation
-    ];
-
     // Check P0 first (highest priority wins)
-    for (const pattern of p0Patterns) {
+    // Uses pre-compiled module-level patterns for performance
+    for (const pattern of P0_PRIORITY_PATTERNS) {
       if (pattern.test(upper)) {
         return 'P0';
       }
     }
 
     // Check P1
-    for (const pattern of p1Patterns) {
+    for (const pattern of P1_PRIORITY_PATTERNS) {
       if (pattern.test(upper)) {
         return 'P1';
       }
     }
 
     // Check P2
-    for (const pattern of p2Patterns) {
+    for (const pattern of P2_PRIORITY_PATTERNS) {
       if (pattern.test(upper)) {
         return 'P2';
       }
@@ -2281,12 +2302,17 @@ export class RalphTracker extends EventEmitter {
         return;
       }
 
-      // Add new todo
-      if (this._todos.size >= MAX_TODOS_PER_SESSION) {
-        // Remove oldest todo to make room
+      // Add new todo with guaranteed eviction if at capacity
+      // Use while loop to ensure we always have room (handles edge case where findOldestTodo returns undefined)
+      while (this._todos.size >= MAX_TODOS_PER_SESSION) {
         const oldest = this.findOldestTodo();
         if (oldest) {
           this._todos.delete(oldest.id);
+        } else {
+          // Safety valve: if somehow no oldest found, clear a random entry
+          const firstKey = this._todos.keys().next().value;
+          if (firstKey) this._todos.delete(firstKey);
+          else break; // Map is empty somehow, exit loop
         }
       }
 
@@ -2985,7 +3011,7 @@ export class RalphTracker extends EventEmitter {
       const tasksMatch = trimmedLine.match(RALPH_TASKS_COMPLETED_PATTERN);
       if (tasksMatch) {
         const value = parseInt(tasksMatch[1], 10);
-        if (!isNaN(value) && value >= 0) {
+        if (!Number.isNaN(value) && value >= 0) {
           block.tasksCompletedThisLoop = value;
         } else {
           parseErrors.push(`Invalid TASKS_COMPLETED_THIS_LOOP value: "${tasksMatch[1]}". Expected: non-negative integer`);
@@ -2997,7 +3023,7 @@ export class RalphTracker extends EventEmitter {
       const filesMatch = trimmedLine.match(RALPH_FILES_MODIFIED_PATTERN);
       if (filesMatch) {
         const value = parseInt(filesMatch[1], 10);
-        if (!isNaN(value) && value >= 0) {
+        if (!Number.isNaN(value) && value >= 0) {
           block.filesModified = value;
         } else {
           parseErrors.push(`Invalid FILES_MODIFIED value: "${filesMatch[1]}". Expected: non-negative integer`);

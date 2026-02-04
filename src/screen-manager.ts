@@ -136,6 +136,10 @@ function isValidPath(path: string): boolean {
       path.includes('"') || path.includes('\n') || path.includes('\r')) {
     return false;
   }
+  // Check for path traversal attempts (prevents escaping workingDir)
+  if (path.includes('..')) {
+    return false;
+  }
   return SAFE_PATH_PATTERN.test(path);
 }
 
@@ -268,8 +272,9 @@ export class ScreenManager extends EventEmitter {
     // Base command for the mode (just the executable, env vars are exported separately)
     // For Claude sessions: pass --session-id to use the SAME ID as the Claudeman session
     // This ensures subagents (discovered via file path) can be directly matched to the correct tab
+    // Note: sessionId is quoted for safety even though it should be a valid UUID
     const baseCmd = mode === 'claude'
-      ? `claude --dangerously-skip-permissions --session-id ${sessionId}`
+      ? `claude --dangerously-skip-permissions --session-id "${sessionId}"`
       : '$SHELL';
 
     // Apply nice priority if configured
@@ -355,7 +360,7 @@ export class ScreenManager extends EventEmitter {
         timeout: EXEC_TIMEOUT_MS
       }).trim();
       if (output) {
-        for (const childPid of output.split('\n').map(p => parseInt(p, 10)).filter(p => !isNaN(p))) {
+        for (const childPid of output.split('\n').map(p => parseInt(p, 10)).filter(p => !Number.isNaN(p))) {
           pids.push(childPid);
           // Recursively get grandchildren
           pids.push(...this.getChildPids(childPid));
@@ -381,7 +386,8 @@ export class ScreenManager extends EventEmitter {
   // Verify all PIDs are dead, with retry
   private async verifyProcessesDead(pids: number[], maxWaitMs: number = 1000): Promise<boolean> {
     const startTime = Date.now();
-    const checkInterval = 50;
+    // 100ms interval balances responsiveness with CPU usage (was 50ms, too aggressive)
+    const checkInterval = 100;
 
     while (Date.now() - startTime < maxWaitMs) {
       const aliveCount = pids.filter(pid => this.isProcessAlive(pid)).length;
@@ -463,7 +469,7 @@ export class ScreenManager extends EventEmitter {
 
     // Strategy 3: Kill screen session by name
     try {
-      execSync(`screen -S ${screen.screenName} -X quit`, {
+      execSync(`screen -S "${screen.screenName}" -X quit`, {
         timeout: EXEC_TIMEOUT_MS
       });
     } catch {
@@ -652,11 +658,11 @@ export class ScreenManager extends EventEmitter {
       for (const line of pgrepOutput.split('\n')) {
         const [pidStr, childrenStr] = line.split(':');
         const screenPid = parseInt(pidStr, 10);
-        if (!isNaN(screenPid)) {
+        if (!Number.isNaN(screenPid)) {
           const children = (childrenStr || '')
             .split(',')
             .map(s => parseInt(s.trim(), 10))
-            .filter(n => !isNaN(n) && n > 0);
+            .filter(n => !Number.isNaN(n) && n > 0);
           descendantMap.set(screenPid, children);
         }
       }
@@ -685,7 +691,7 @@ export class ScreenManager extends EventEmitter {
             const pid = parseInt(parts[0], 10);
             const rss = parseFloat(parts[1]) || 0;
             const cpu = parseFloat(parts[2]) || 0;
-            if (!isNaN(pid)) {
+            if (!Number.isNaN(pid)) {
               processStats.set(pid, { rss, cpu });
             }
           }
@@ -848,21 +854,24 @@ export class ScreenManager extends EventEmitter {
 
       // Send text first (if any)
       if (escapedText) {
-        const textCmd = `screen -S ${screen.screenName} -p 0 -X stuff "${escapedText}"`;
+        const textCmd = `screen -S "${screen.screenName}" -p 0 -X stuff "${escapedText}"`;
         execSync(textCmd, { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS });
       }
 
       // Send carriage return separately (Enter key for Ink)
-      // Use a synchronous sleep to ensure screen processes the text first
+      // Use synchronous delay to ensure screen processes the text first
       if (hasCarriageReturn) {
         // Delay to let screen process the text before sending Enter
         // This prevents race conditions where Enter arrives before the text is processed
         // 100ms is needed for reliability - screen's internal buffering can be slow
         if (escapedText) {
-          execSync('sleep 0.1', { timeout: 1000 });
+          // Use Atomics.wait for synchronous delay instead of shell command
+          const sharedBuffer = new SharedArrayBuffer(4);
+          const sharedArray = new Int32Array(sharedBuffer);
+          Atomics.wait(sharedArray, 0, 0, 100);
         }
 
-        const crCmd = `screen -S ${screen.screenName} -p 0 -X stuff "$(printf '\\015')"`;
+        const crCmd = `screen -S "${screen.screenName}" -p 0 -X stuff "$(printf '\\015')"`;
 
         // Try up to CR_MAX_ATTEMPTS times with increasing delays
         let success = false;
@@ -873,7 +882,11 @@ export class ScreenManager extends EventEmitter {
           } catch (crErr) {
             console.warn(`[ScreenManager] Carriage return attempt ${attempt}/${CR_MAX_ATTEMPTS} failed`);
             if (attempt < CR_MAX_ATTEMPTS) {
-              execSync(`sleep 0.${attempt}`, { timeout: 1000 }); // 0.1s, 0.2s delays
+              // Use synchronous sleep without shell command (security: avoid shell injection vectors)
+              const sleepMs = attempt * 100; // 100ms, 200ms, 300ms delays
+              const sharedBuffer = new SharedArrayBuffer(4);
+              const sharedArray = new Int32Array(sharedBuffer);
+              Atomics.wait(sharedArray, 0, 0, sleepMs);
             }
           }
         }

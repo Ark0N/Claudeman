@@ -31,6 +31,28 @@ import { EventEmitter } from 'node:events';
 import { getAugmentedPath } from './session.js';
 import { ANSI_ESCAPE_PATTERN_SIMPLE } from './utils/index.js';
 
+// ========== Security Validation ==========
+
+/**
+ * Validates that a model name is safe for shell use.
+ * Model names should only contain alphanumeric characters, hyphens, underscores, and dots.
+ */
+function isValidModelName(model: string): boolean {
+  if (!model || typeof model !== 'string') return false;
+  // Allow: alphanumeric, hyphens, underscores, dots, slashes (for model paths like claude/opus-4.5)
+  // Max length 100 to prevent abuse
+  return /^[a-zA-Z0-9._/-]+$/.test(model) && model.length <= 100;
+}
+
+/**
+ * Validates that a screen name is safe for shell use.
+ * Screen names should only contain alphanumeric characters, hyphens, and underscores.
+ */
+function isValidScreenName(screenName: string): boolean {
+  if (!screenName || typeof screenName !== 'string') return false;
+  return /^[a-zA-Z0-9_-]+$/.test(screenName) && screenName.length <= 100;
+}
+
 // ========== Types ==========
 
 /** Base configuration shared by all AI checkers */
@@ -351,6 +373,11 @@ export abstract class AiCheckerBase<
   // ========== Private Methods ==========
 
   private async runCheck(terminalBuffer: string): Promise<R> {
+    // Security: Validate model name before use in shell commands
+    if (!isValidModelName(this.config.model)) {
+      throw new Error(`Invalid model name: ${this.config.model.substring(0, 50)}`);
+    }
+
     // Prepare the terminal buffer (strip ANSI, trim to maxContextChars)
     const stripped = terminalBuffer.replace(ANSI_ESCAPE_PATTERN_SIMPLE, '');
     const trimmed = stripped.length > this.config.maxContextChars
@@ -367,6 +394,11 @@ export abstract class AiCheckerBase<
     this.checkPromptFile = join(tmpdir(), `${this.tempFilePrefix}-prompt-${shortId}-${timestamp}.txt`);
     this.checkScreenName = `${this.screenNamePrefix}${shortId}`;
 
+    // Security: Validate screen name before use in shell commands
+    if (!isValidScreenName(this.checkScreenName)) {
+      throw new Error(`Invalid screen name generated: ${this.checkScreenName.substring(0, 50)}`);
+    }
+
     // Ensure output temp file exists (empty) so we can poll it
     writeFileSync(this.checkTempFile, '');
 
@@ -375,16 +407,17 @@ export abstract class AiCheckerBase<
     writeFileSync(this.checkPromptFile, prompt);
 
     // Build the command - read prompt from file via stdin to avoid argument size limits
-    const modelArg = `--model ${this.config.model}`;
+    // Quote model name to prevent command injection (model names should be simple alphanumeric but be safe)
+    const modelArg = `--model "${this.config.model.replace(/"/g, '\\"')}"`;
     const augmentedPath = getAugmentedPath();
     const claudeCmd = `cat "${this.checkPromptFile}" | claude -p ${modelArg} --output-format text`;
     const fullCmd = `export PATH="${augmentedPath}"; ${claudeCmd} > "${this.checkTempFile}" 2>&1; echo "${this.doneMarker}" >> "${this.checkTempFile}"; rm -f "${this.checkPromptFile}"`;
 
     // Spawn screen
     try {
-      // Kill any leftover screen with this name first
+      // Kill any leftover screen with this name first (screen name already validated above)
       try {
-        execSync(`screen -X -S ${this.checkScreenName} quit 2>/dev/null`, { timeout: 3000 });
+        execSync(`screen -X -S "${this.checkScreenName}" quit 2>/dev/null`, { timeout: 3000 });
       } catch {
         // No existing screen, that's fine
       }
@@ -407,9 +440,12 @@ export abstract class AiCheckerBase<
       const startTime = this.checkStartTime;
       this.checkResolve = resolve;
 
+      // Guard flag to prevent both poll and timeout from resolving (race condition)
+      let resolved = false;
+
       this.checkPollTimer = setInterval(() => {
-        if (this.checkCancelled) {
-          // Cancel was already handled by cancel() calling resolve
+        if (this.checkCancelled || resolved) {
+          // Cancel or already resolved - stop polling
           return;
         }
 
@@ -417,19 +453,21 @@ export abstract class AiCheckerBase<
           if (!this.checkTempFile || !existsSync(this.checkTempFile)) return;
           const content = readFileSync(this.checkTempFile, 'utf-8');
           if (content.includes(this.doneMarker)) {
+            resolved = true; // Mark as resolved first to prevent timeout race
             const durationMs = Date.now() - startTime;
             const result = this.parseOutput(content, durationMs);
             this.checkResolve = null;
             resolve(result);
           }
         } catch {
-          // File might not be ready yet, keep polling
+          // File might not be ready yet or was deleted during cleanup, keep polling
         }
       }, POLL_INTERVAL_MS);
 
       // Set timeout
       this.checkTimeoutTimer = setTimeout(() => {
-        if (this._status === 'checking' && !this.checkCancelled) {
+        if (this._status === 'checking' && !this.checkCancelled && !resolved) {
+          resolved = true; // Mark as resolved first to prevent poll race
           this.checkResolve = null;
           reject(new Error(`${this.checkDescription} timed out after ${this.config.checkTimeoutMs}ms`));
         }
@@ -467,12 +505,21 @@ export abstract class AiCheckerBase<
       this.checkTimeoutTimer = null;
     }
 
-    // Kill the screen
+    // Kill the screen with fallback for stubborn processes
     if (this.checkScreenName) {
+      const screenName = this.checkScreenName;
+      // Screen name was validated before use, but still quote for defense-in-depth
       try {
-        execSync(`screen -X -S ${this.checkScreenName} quit 2>/dev/null`, { timeout: 3000 });
+        execSync(`screen -X -S "${screenName}" quit 2>/dev/null`, { timeout: 2000 });
       } catch {
-        // Screen may already be dead
+        // First attempt failed - try force kill via pkill as fallback
+        // Escape regex metacharacters in screen name to prevent pattern injection
+        const escapedName = screenName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        try {
+          execSync(`pkill -f "SCREEN.*${escapedName}" 2>/dev/null`, { timeout: 1000 });
+        } catch {
+          // Screen may already be dead or no matching process
+        }
       }
       this.checkScreenName = null;
     }

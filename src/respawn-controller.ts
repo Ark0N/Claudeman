@@ -43,6 +43,7 @@ import { BufferAccumulator } from './utils/buffer-accumulator.js';
 import {
   ANSI_ESCAPE_PATTERN_SIMPLE,
   TOKEN_PATTERN,
+  assertNever,
 } from './utils/index.js';
 import {
   MAX_RESPAWN_BUFFER_SIZE,
@@ -1323,9 +1324,14 @@ export class RespawnController extends EventEmitter {
    *
    * If in 'watching' state, immediately checks for idle condition.
    * Otherwise, continues from current state.
+   * Re-setups terminal listener if it was removed (e.g., after stop()).
    */
   resume(): void {
     this.log('Resuming respawn');
+    // Re-setup terminal listener if it was removed (robustness for stop->resume case)
+    if (!this.terminalHandler) {
+      this.setupTerminalListener();
+    }
     if (this._state === 'watching') {
       this.checkIdleAndMaybeStart();
     }
@@ -1410,6 +1416,7 @@ export class RespawnController extends EventEmitter {
 
       // In waiting states, also use confirmation timer (same detection logic)
       // This ensures we wait for Claude to finish before proceeding
+      // Note: 'watching' is already handled above and returns early
       switch (this._state) {
         case 'waiting_update':
           this.startStepConfirmTimer('update');
@@ -1423,6 +1430,19 @@ export class RespawnController extends EventEmitter {
         case 'waiting_kickstart':
           this.startStepConfirmTimer('kickstart');
           break;
+        // Non-waiting states: completion message is ignored
+        case 'confirming_idle':
+        case 'ai_checking':
+        case 'sending_update':
+        case 'sending_clear':
+        case 'sending_init':
+        case 'monitoring_init':
+        case 'sending_kickstart':
+        case 'stopped':
+          // Completion message during these states is ignored
+          break;
+        default:
+          assertNever(this._state, `Unhandled RespawnState in completion detection: ${this._state}`);
       }
       return;
     }
@@ -1512,6 +1532,19 @@ export class RespawnController extends EventEmitter {
         case 'waiting_kickstart':
           this.startStepConfirmTimer('kickstart');
           break;
+        // Non-waiting states: prompt detection is informational only
+        case 'watching':
+        case 'confirming_idle':
+        case 'ai_checking':
+        case 'sending_update':
+        case 'sending_clear':
+        case 'sending_init':
+        case 'sending_kickstart':
+        case 'stopped':
+          // Prompt detection during these states doesn't trigger action
+          break;
+        default:
+          assertNever(this._state, `Unhandled RespawnState in prompt detection: ${this._state}`);
       }
     }
   }
@@ -3243,6 +3276,12 @@ export class RespawnController extends EventEmitter {
       case 'error':
         agg.errorCycles++;
         break;
+      case 'cancelled':
+        // Cancelled cycles don't count towards any specific category
+        // but are still counted in totalCycles
+        break;
+      default:
+        assertNever(metrics.outcome, `Unhandled CycleOutcome: ${metrics.outcome}`);
     }
 
     // Recalculate averages using all recent metrics

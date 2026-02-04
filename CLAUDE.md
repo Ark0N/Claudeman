@@ -26,7 +26,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md` (verify they match with `grep version package.json && grep Version CLAUDE.md`)
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1476 (must match `package.json` for npm publish)
+**Version**: 0.1477 (must match `package.json` for npm publish)
 
 ## Project Overview
 
@@ -174,31 +174,9 @@ journalctl --user -u claudeman-web -f
 
 ## Default Settings
 
-UI defaults are optimized for minimal distraction. Set in `src/web/public/app.js` (using `??` operator).
+UI defaults are set in `src/web/public/app.js` using `??` fallbacks. To change defaults, edit `openAppSettings()` and `apply*Visibility()` functions.
 
-**Display Settings** (default values):
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `showFontControls` | `false` | Font size controls in header |
-| `showSystemStats` | `true` | CPU/memory stats in header |
-| `showTokenCount` | `true` | Token counter in header |
-| `showCost` | `false` | Cost display |
-| `showMonitor` | `true` | Monitor panel |
-| `showProjectInsights` | `false` | Project insights panel |
-| `showFileBrowser` | `false` | File browser panel |
-| `showSubagents` | `false` | Subagent windows panel |
-
-**Tracking Settings**:
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `ralphTrackerEnabled` | `false` | Ralph/Todo loop tracking |
-| `subagentTrackingEnabled` | `true` | Background agent monitoring |
-| `subagentActiveTabOnly` | `true` | Show subagents only for active session |
-| `imageWatcherEnabled` | `false` | Watch for image file creation |
-
-**Notification Defaults**: Browser notifications enabled, audio alerts disabled. Critical events (permission prompts, questions) notify by default; info events (respawn cycles, token milestones) are silent.
-
-To change defaults, edit the `??` fallback values in `openAppSettings()` and `apply*Visibility()` functions.
+**Key defaults:** Most panels hidden (monitor, subagents shown), notifications enabled (audio disabled), subagent tracking on, Ralph tracking off.
 
 ## Testing
 
@@ -231,6 +209,18 @@ curl localhost:3000/api/sessions/:id/run-summary | jq  # Session timeline
 
 **Avoid port 3000 during E2E tests** — tests use ports 3183-3193 (see `test/e2e/e2e.config.ts`).
 
+## Troubleshooting
+
+| Problem | Check | Fix |
+|---------|-------|-----|
+| Session won't start | `screen -ls` for orphans | Kill orphaned screens, check Claude CLI installed |
+| Port 3000 in use | `lsof -i :3000` | Kill conflicting process or use `--port` flag |
+| SSE not connecting | Browser console for errors | Check CORS, ensure server running |
+| Respawn not triggering | Session settings → Respawn enabled? | Enable respawn, check idle timeout config |
+| Terminal blank on tab switch | Network tab for `/api/sessions/:id/buffer` | Check session exists, restart server |
+| Tests failing on screen limits | `screen -ls \| wc -l` | Clean up test screens: `screen -ls \| grep test \| awk '{print $1}' \| xargs -I{} screen -X -S {} quit` |
+| State not persisting | `cat ~/.claudeman/state.json` | Check file permissions, disk space |
+
 ## Performance Constraints
 
 The app must stay fast with 20 sessions and 50 agent windows:
@@ -241,132 +231,17 @@ The app must stay fast with 20 sessions and 50 agent windows:
 
 ## Terminal Anti-Flicker System
 
-Claude Code uses [Ink](https://github.com/vadimdemedes/ink) (React for terminals), which redraws the entire screen on every state change. Without special handling, users see constant flickering. Claudeman implements a 6-layer anti-flicker pipeline:
+Claude Code uses Ink (React for terminals), which redraws the screen on every state change. Claudeman implements a 6-layer anti-flicker pipeline for smooth 60fps output:
 
 ```
-PTY Output → Server Batching → DEC 2026 Wrap → SSE → Client rAF → Sync Parser → xterm.js
+PTY Output → Server Batching (16-50ms) → DEC 2026 Wrap → SSE → Client rAF → xterm.js
 ```
 
-### Layer Details
+**Key functions:** `server.ts:batchTerminalData()`, `server.ts:flushTerminalBatches()`, `app.js:batchTerminalWrite()`, `app.js:extractSyncSegments()`
 
-| Layer | Location | Technique | Latency |
-|-------|----------|-----------|---------|
-| **1. Server Batching** | `server.ts:batchTerminalData()` | Adaptive 16-50ms collection window | 16-50ms |
-| **2. DEC Mode 2026** | `server.ts:flushTerminalBatches()` | Wraps with `\x1b[?2026h`...`\x1b[?2026l` | 0ms |
-| **3. SSE Broadcast** | `server.ts:broadcast()` | JSON serialize once, send to all clients | 0ms |
-| **4. Client rAF** | `app.js:batchTerminalWrite()` | `requestAnimationFrame` batching | 0-16ms |
-| **5. Sync Block Parser** | `app.js:extractSyncSegments()` | Strips DEC 2026 markers, waits for complete blocks | 0-50ms |
-| **6. Chunked Loading** | `app.js:chunkedTerminalWrite()` | 64KB/frame for large buffers | variable |
+**Typical latency:** 16-32ms. Optional per-session flicker filter adds ~50ms for problematic terminals.
 
-### Server-Side Implementation (`server.ts`)
-
-**Constants:**
-```typescript
-const TERMINAL_BATCH_INTERVAL = 16;      // Base: 60fps
-const BATCH_FLUSH_THRESHOLD = 32 * 1024; // Flush immediately if >32KB
-const DEC_SYNC_START = '\x1b[?2026h';    // Begin synchronized update
-const DEC_SYNC_END = '\x1b[?2026l';      // End synchronized update
-```
-
-**Adaptive Batching** (`batchTerminalData()`):
-- Tracks event frequency per session via `lastTerminalEventTime` Map
-- Event gap <10ms → 50ms batch window (rapid-fire Ink redraws)
-- Event gap <20ms → 32ms batch window
-- Otherwise → 16ms (60fps)
-- Flushes immediately if batch exceeds 32KB for responsiveness
-
-**Flush Logic** (`flushTerminalBatches()`):
-```typescript
-const syncData = DEC_SYNC_START + data + DEC_SYNC_END;
-this.broadcast('session:terminal', { id: sessionId, data: syncData });
-```
-
-### Client-Side Implementation (`app.js`)
-
-**batchTerminalWrite(data):**
-1. Checks if flicker filter is enabled (optional, per-session)
-2. If flicker filter active: buffers screen-clear patterns (`ESC[2J`, `ESC[H ESC[J`, `ESC[nA`)
-3. Accumulates data in `pendingWrites`
-4. Schedules `requestAnimationFrame` if not already scheduled
-5. On rAF callback: checks for incomplete sync blocks (start without end)
-6. If incomplete: waits up to 50ms via `syncWaitTimeout`
-7. Calls `flushPendingWrites()` when complete
-
-**extractSyncSegments(data):**
-- Parses DEC 2026 markers, returns array of content segments
-- Content before sync blocks returned as-is
-- Content inside sync blocks returned without markers
-- Incomplete blocks (start without end) returned with marker for next chunk
-
-**flushPendingWrites():**
-```javascript
-const segments = extractSyncSegments(this.pendingWrites);
-this.pendingWrites = '';  // Clear before writing
-for (const segment of segments) {
-  if (segment && !segment.startsWith(DEC_SYNC_START)) {
-    this.terminal.write(segment);  // Skip incomplete blocks (start with marker)
-  }
-}
-```
-Note: Segments starting with `DEC_SYNC_START` are incomplete blocks awaiting more data. These are skipped (discarded if timeout forces flush).
-
-**chunkedTerminalWrite(buffer, chunkSize=128KB):**
-- For large buffer restoration (session switch, reconnect)
-- Writes 128KB per `requestAnimationFrame` to avoid UI jank
-- Strips any embedded DEC 2026 markers from historical data
-
-**selectSession() optimizations:**
-- Starts buffer fetch immediately before other setup
-- Shows "Loading session..." indicator while fetching
-- Parallelizes session attach with buffer fetch
-- Fire-and-forget resize (doesn't block tab switch)
-
-### Optional Flicker Filter
-
-Per-session toggle via Session Settings. Adds ~50ms latency but eliminates remaining flicker on problematic terminals.
-
-**Detection patterns:**
-- `ESC[2J` — Clear entire screen
-- `ESC[H ESC[J` — Cursor home + clear to end
-- `ESC[?25l ESC[H` — Hide cursor + home (Ink pattern)
-- `ESC[nA` (n≥1) — Cursor up (Ink line redraw)
-
-When detected, buffers 50ms of subsequent output before flushing atomically.
-
-### Responsiveness Considerations
-
-**Latency sources:**
-| Source | Best Case | Worst Case | Notes |
-|--------|-----------|------------|-------|
-| Server batching | 0ms (flush) | 50ms (rapid events) | Immediate flush if >32KB |
-| Sync block wait | 0ms | 50ms | Only if marker split across packets |
-| Flicker filter | 0ms (disabled) | 50ms (enabled) | Optional per-session |
-| rAF scheduling | 0ms | 16ms | Display refresh sync |
-| **Total** | **0ms** | **~115ms** | Worst case rare in practice |
-
-**Typical latency:** 16-32ms (server batch + rAF)
-
-**Edge cases handled:**
-- Incomplete sync blocks: 50ms timeout forces flush (content discarded to prevent freeze)
-- Large buffers: Chunked writing prevents UI freeze
-- Server shutdown: Skips batching via `_isStopping` flag
-- Session switch: Clears flicker filter state, pending writes, and sync timeout (prevents cross-session data bleed)
-- SSE reconnect: `handleInit()` clears all pending write state
-
-**Trade-off:** If a sync block is split across SSE packets and the end marker doesn't arrive within 50ms, the incomplete content is discarded. This prioritizes responsiveness over completeness. In practice this is rare since the server always sends complete `SYNC_START...SYNC_END` pairs and SSE typically delivers them atomically.
-
-### Files Involved
-
-| File | Key Functions |
-|------|---------------|
-| `src/web/server.ts` | `batchTerminalData()`, `flushTerminalBatches()`, `broadcast()` |
-| `src/web/public/app.js` | `batchTerminalWrite()`, `extractSyncSegments()`, `flushPendingWrites()`, `flushFlickerBuffer()`, `chunkedTerminalWrite()` |
-
-### DEC Mode 2026 Compatibility
-
-Terminals that natively support DEC 2026 will buffer and render atomically. Terminals that don't support it ignore the escape sequences harmlessly. xterm.js doesn't support DEC 2026 natively, so the client implements its own buffering by parsing the markers.
-
-**Supporting terminals:** WezTerm, Kitty, Ghostty, iTerm2 3.5+, Windows Terminal, VSCode terminal
+See `docs/terminal-anti-flicker.md` for full implementation details (adaptive batching, DEC 2026 markers, edge cases).
 
 ## Resource Limits
 
@@ -396,6 +271,7 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **Respawn state machine** | `docs/respawn-state-machine.md` |
 | **Ralph Loop guide** | `docs/ralph-wiggum-guide.md` |
 | **Claude Code hooks** | `docs/claude-code-hooks-reference.md` |
+| **Terminal anti-flicker** | `docs/terminal-anti-flicker.md` |
 | **Browser/E2E testing** | `docs/browser-testing-guide.md` |
 | **API routes** | `src/web/server.ts:buildServer()` or README.md (full endpoint tables) |
 | **SSE events** | Search `broadcast(` in `server.ts` |

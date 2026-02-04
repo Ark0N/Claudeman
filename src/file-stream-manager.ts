@@ -169,7 +169,9 @@ export class FileStreamManager extends EventEmitter {
           error: `File too large (${Math.round(stats.size / 1024 / 1024)}MB > ${MAX_FILE_SIZE / 1024 / 1024}MB limit)`,
         };
       }
-    } catch {
+    } catch (err) {
+      const errorCode = err instanceof Error && 'code' in err ? (err as NodeJS.ErrnoException).code : 'UNKNOWN';
+      console.warn(`[FileStreamManager] Failed to stat file "${absolutePath}" (${errorCode}):`, err instanceof Error ? err.message : String(err));
       return { success: false, error: 'File not found or not accessible' };
     }
 
@@ -250,17 +252,26 @@ export class FileStreamManager extends EventEmitter {
 
     stream.active = false;
 
+    // Remove all event listeners to prevent memory leaks (closures hold references)
+    stream.process.stdout?.removeAllListeners();
+    stream.process.stderr?.removeAllListeners();
+    stream.process.removeAllListeners();
+
     // Kill the tail process
     try {
       stream.process.kill('SIGTERM');
       // Force kill after 1 second if still running
-      setTimeout(() => {
+      const forceKillTimer = setTimeout(() => {
         try {
           stream.process.kill('SIGKILL');
         } catch {
           // Already dead
         }
       }, 1000);
+      // Clear the force kill timer if process exits naturally
+      stream.process.once('exit', () => {
+        clearTimeout(forceKillTimer);
+      });
     } catch {
       // Process may have already exited
     }

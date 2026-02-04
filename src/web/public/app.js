@@ -1444,8 +1444,12 @@ class ClaudemanApp {
     };
 
     window.addEventListener('resize', throttledResize);
-    const resizeObserver = new ResizeObserver(throttledResize);
-    resizeObserver.observe(container);
+    // Store resize observer for cleanup (prevents memory leak on terminal re-init)
+    if (this.terminalResizeObserver) {
+      this.terminalResizeObserver.disconnect();
+    }
+    this.terminalResizeObserver = new ResizeObserver(throttledResize);
+    this.terminalResizeObserver.observe(container);
 
     // Handle keyboard input with batching for rapid keystrokes
     this._pendingInput = '';
@@ -1860,10 +1864,11 @@ class ClaudemanApp {
       }
     }, true); // Use capture phase to handle before terminal
 
-    // Token stats click handler
+    // Token stats click handler (with guard to prevent duplicate handlers on reconnect)
     const tokenEl = this.$('headerTokens');
-    if (tokenEl) {
+    if (tokenEl && !tokenEl._statsHandlerAttached) {
       tokenEl.classList.add('clickable');
+      tokenEl._statsHandlerAttached = true;
       tokenEl.addEventListener('click', () => this.openTokenStats());
     }
 
@@ -2912,6 +2917,18 @@ class ClaudemanApp {
     if (this.notificationManager?.titleFlashInterval) {
       clearInterval(this.notificationManager.titleFlashInterval);
       this.notificationManager.titleFlashInterval = null;
+    }
+    // Clear notification manager grouping timeouts (prevents orphaned timers)
+    if (this.notificationManager?.groupingMap) {
+      for (const { timeout } of this.notificationManager.groupingMap.values()) {
+        clearTimeout(timeout);
+      }
+      this.notificationManager.groupingMap.clear();
+    }
+    // Disconnect terminal resize observer (prevents memory leak on reconnect)
+    if (this.terminalResizeObserver) {
+      this.terminalResizeObserver.disconnect();
+      this.terminalResizeObserver = null;
     }
     // Clear any other orphaned timers
     if (this.planLoadingTimer) {

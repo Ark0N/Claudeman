@@ -253,15 +253,18 @@ export class PlanOrchestrator {
     return md;
   }
 
-  cancel(): void {
+  async cancel(): Promise<void> {
     this.cancelled = true;
+    // Stop all running sessions and await cleanup to prevent PTY process leaks
+    const stopPromises: Promise<void>[] = [];
     for (const session of this.runningSessions) {
-      try {
-        session.stop();
-      } catch (err) {
-        console.error('[PlanOrchestrator] Failed to stop session during cancel:', err);
-      }
+      stopPromises.push(
+        session.stop().catch((err) => {
+          console.error('[PlanOrchestrator] Failed to stop session during cancel:', err);
+        })
+      );
     }
+    await Promise.all(stopPromises);
     this.runningSessions.clear();
   }
 

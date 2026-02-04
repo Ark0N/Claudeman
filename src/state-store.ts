@@ -74,7 +74,9 @@ export class StateStore {
   private ensureDir(): void {
     const dir = dirname(this.filePath);
     if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
+      // Use restrictive permissions (0o700) - owner only can read/write/traverse
+      // State files may contain sensitive session data
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
   }
 
@@ -584,7 +586,7 @@ export class StateStore {
     if (!this.ralphStateDirty) {
       return;
     }
-    this.ralphStateDirty = false;
+    // Clear dirty flag only on success to enable retry on failure
     this.ensureDir();
     const data = Object.fromEntries(this.ralphStates);
     // Atomic write: write to temp file, then rename (atomic on POSIX)
@@ -594,13 +596,17 @@ export class StateStore {
       json = JSON.stringify(data, null, 2);
     } catch (err) {
       console.error('[StateStore] Failed to serialize Ralph state (circular reference or invalid data):', err);
-      throw err;
+      // Keep dirty flag true for retry - don't throw, let caller continue
+      return;
     }
     try {
       writeFileSync(tempPath, json, 'utf-8');
       renameSync(tempPath, this.ralphStatePath);
+      // Success - clear dirty flag
+      this.ralphStateDirty = false;
     } catch (err) {
       console.error('[StateStore] Failed to write Ralph state file:', err);
+      // Keep dirty flag true for retry on next save
       // Try to clean up temp file on error
       try {
         if (existsSync(tempPath)) {
@@ -609,7 +615,7 @@ export class StateStore {
       } catch (cleanupErr) {
         console.warn('[StateStore] Failed to cleanup temp file during Ralph state save error:', cleanupErr);
       }
-      throw err;
+      // Don't throw - let caller continue, retry on next save
     }
   }
 
@@ -655,8 +661,28 @@ export class StateStore {
 
   /** Flushes all pending saves (main and inner state). Call before shutdown. */
   flushAll(): void {
-    this.saveNow();
-    this.saveRalphStatesNow();
+    // Save both states, catching errors to ensure both are attempted
+    let mainError: unknown = null;
+    let ralphError: unknown = null;
+
+    try {
+      this.saveNow();
+    } catch (err) {
+      mainError = err;
+      console.error('[StateStore] Error flushing main state:', err);
+    }
+
+    try {
+      this.saveRalphStatesNow();
+    } catch (err) {
+      ralphError = err;
+      console.error('[StateStore] Error flushing Ralph state:', err);
+    }
+
+    // Log summary if any errors occurred
+    if (mainError || ralphError) {
+      console.warn('[StateStore] flushAll completed with errors - some state may not be persisted');
+    }
   }
 }
 

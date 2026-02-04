@@ -17,6 +17,7 @@ export const E2E_PORTS = {
   MOBILE_SAFARI: 3191,
   MOBILE_COMPREHENSIVE: 3192,
   MOBILE_EDGE_CASES: 3193,
+  PLAN_GENERATION: 3194,
 } as const;
 
 // Mobile device viewports for responsive testing

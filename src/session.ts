@@ -993,6 +993,11 @@ export class Session extends EventEmitter {
         .replace(CTRL_L_PATTERN, '');  // Remove Ctrl+L
       if (!data) return; // Skip if only filtered sequences
 
+      // Strip ANSI once for all downstream pattern-matching operations
+      // This avoids redundant regex operations in parseTokensFromStatusLine,
+      // parseClaudeCodeInfo, parseTaskDescriptionsFromTerminalData, and working detection
+      const cleanData = data.replace(ANSI_ESCAPE_PATTERN_FULL, '');
+
       // BufferAccumulator handles auto-trimming when max size exceeded
       this._terminalBuffer.append(data);
       this._lastActivityAt = Date.now();
@@ -1000,21 +1005,21 @@ export class Session extends EventEmitter {
       this.emit('terminal', data);
       this.emit('output', data);
 
-      // Forward to Ralph tracker to detect Ralph loops and todos
+      // Forward to Ralph tracker to detect Ralph loops and todos (handles own stripping)
       this._ralphTracker.processTerminalData(data);
 
-      // Forward to Bash tool parser to detect file-viewing commands
+      // Forward to Bash tool parser to detect file-viewing commands (handles own stripping)
       this._bashToolParser.processTerminalData(data);
 
       // Parse token count from status line (e.g., "123.4k tokens" or "5234 tokens")
-      this.parseTokensFromStatusLine(data);
+      this.parseTokensFromStatusLine(cleanData);
 
       // Parse Claude Code CLI info (version, model, account type) from startup
-      this.parseClaudeCodeInfo(data);
+      this.parseClaudeCodeInfo(cleanData);
 
       // Parse task descriptions from terminal output (e.g., "Explore(Check files)")
       // This enables correlating subagent windows with their short descriptions
-      this.parseTaskDescriptionsFromTerminalData(data);
+      this.parseTaskDescriptionsFromTerminalData(cleanData);
 
       // Detect if Claude is working or at prompt
       // The prompt line contains "❯" when waiting for input
@@ -1042,14 +1047,13 @@ export class Session extends EventEmitter {
       }
 
       // Detect when Claude starts working (thinking, writing, etc)
-      // Strip ANSI/OSC sequences to avoid false positives from window titles like "3 File Reading Task"
-      const cleanDataForWorkingCheck = data.replace(ANSI_ESCAPE_PATTERN_FULL, '');
-      if (cleanDataForWorkingCheck.includes('Thinking') || cleanDataForWorkingCheck.includes('Writing') ||
-          cleanDataForWorkingCheck.includes('Reading') || cleanDataForWorkingCheck.includes('Running') ||
-          cleanDataForWorkingCheck.includes('⠋') || cleanDataForWorkingCheck.includes('⠙') ||
-          cleanDataForWorkingCheck.includes('⠹') || cleanDataForWorkingCheck.includes('⠸') ||
-          cleanDataForWorkingCheck.includes('⠼') || cleanDataForWorkingCheck.includes('⠴') ||
-          cleanDataForWorkingCheck.includes('⠦') || cleanDataForWorkingCheck.includes('⠧')) {
+      // Using pre-cleaned data avoids false positives from window titles like "3 File Reading Task"
+      if (cleanData.includes('Thinking') || cleanData.includes('Writing') ||
+          cleanData.includes('Reading') || cleanData.includes('Running') ||
+          cleanData.includes('⠋') || cleanData.includes('⠙') ||
+          cleanData.includes('⠹') || cleanData.includes('⠸') ||
+          cleanData.includes('⠼') || cleanData.includes('⠴') ||
+          cleanData.includes('⠦') || cleanData.includes('⠧')) {
         if (!this._isWorking) {
           this._isWorking = true;
           this._status = 'busy';
@@ -1504,31 +1508,43 @@ export class Session extends EventEmitter {
   }
 
   /**
-   * Parse task descriptions from raw terminal data (may contain multiple lines).
-   * Called from interactive mode's onData handler.
+   * Parse task descriptions from terminal data (may contain multiple lines).
+   * Called from interactive mode's onData handler with ANSI-stripped data.
+   * @param cleanData - Terminal data with ANSI codes already stripped
    */
-  private parseTaskDescriptionsFromTerminalData(data: string): void {
+  private parseTaskDescriptionsFromTerminalData(cleanData: string): void {
     // Quick pre-check: skip if no parentheses present
-    if (!data.includes('(') || !data.includes(')')) return;
+    if (!cleanData.includes('(') || !cleanData.includes(')')) return;
 
-    // Split by newlines and process each line
-    const lines = data.split(NEWLINE_SPLIT_PATTERN);
+    // Split by newlines and process each line (data already ANSI-stripped)
+    const lines = cleanData.split(NEWLINE_SPLIT_PATTERN);
     for (const line of lines) {
-      this.parseTaskDescriptionsFromLine(line);
+      this.parseTaskDescriptionsDirect(line);
     }
   }
 
   /**
-   * Parse task descriptions from terminal output.
+   * Parse task descriptions from terminal output line.
    * Claude Code outputs Task tool calls as "ToolName(Description)" in the terminal.
    * We capture these descriptions to use as window titles for subagents.
+   * Called from processOutput() with potentially non-cleaned data.
    */
   private parseTaskDescriptionsFromLine(line: string): void {
     // Quick pre-check: skip expensive regex if no common tool patterns present
     if (!line.includes('(') || !line.includes(')')) return;
 
-    // Strip ANSI codes before matching - terminal output has embedded codes like [1mExplore[0m
+    // Strip ANSI codes - may still be present from processOutput() path
     const cleanLine = line.replace(ANSI_ESCAPE_PATTERN_FULL, '');
+    this.parseTaskDescriptionsDirect(cleanLine);
+  }
+
+  /**
+   * Parse task descriptions from a pre-cleaned line (no ANSI codes).
+   * Internal method used by both parseTaskDescriptionsFromTerminalData and parseTaskDescriptionsFromLine.
+   */
+  private parseTaskDescriptionsDirect(cleanLine: string): void {
+    // Quick pre-check: skip expensive regex if no common tool patterns present
+    if (!cleanLine.includes('(') || !cleanLine.includes(')')) return;
 
     // Reset regex lastIndex for global pattern
     TASK_TOOL_PATTERN.lastIndex = 0;
@@ -1611,15 +1627,13 @@ export class Session extends EventEmitter {
   // - Max tokens per session: 500k (Claude's context is ~200k)
   // - Max delta per update: 100k (prevents sudden jumps from parsing errors)
   // - Rejects "M" suffix values > 0.5 (500k) to prevent false matches
-  private parseTokensFromStatusLine(data: string): void {
+  private parseTokensFromStatusLine(cleanData: string): void {
     // Quick pre-check: skip expensive regex if "token" not present (performance optimization)
-    if (!data.includes('token')) return;
-
-    // Remove ANSI escape codes for cleaner parsing (use pre-compiled pattern)
-    const cleanData = data.replace(ANSI_ESCAPE_PATTERN_FULL, '');
+    if (!cleanData.includes('token')) return;
 
     // Match patterns: "123.4k tokens", "5234 tokens", "1.2M tokens"
     // The status line typically shows total tokens like "1.2k tokens" near the prompt
+    // Note: ANSI codes are already stripped by caller for performance
     const tokenMatch = cleanData.match(TOKEN_PATTERN);
 
     if (tokenMatch) {
@@ -1672,16 +1686,15 @@ export class Session extends EventEmitter {
 
   // Parse Claude Code CLI info from terminal startup output
   // Extracts version, model, and account type for display in Claudeman UI
-  private parseClaudeCodeInfo(data: string): void {
+  // Note: Expects cleanData with ANSI codes already stripped by caller
+  private parseClaudeCodeInfo(cleanData: string): void {
     // Only parse once per session (during startup)
     if (this._cliInfoParsed) return;
 
     // Quick pre-checks
-    if (!data.includes('Claude') && !data.includes('current:') && !data.includes('Opus') && !data.includes('Sonnet')) {
+    if (!cleanData.includes('Claude') && !cleanData.includes('current:') && !cleanData.includes('Opus') && !cleanData.includes('Sonnet')) {
       return;
     }
-
-    const cleanData = data.replace(ANSI_ESCAPE_PATTERN_FULL, '');
     let changed = false;
 
     // Match "Claude Code v2.1.27" or "Claude Code vX.Y.Z"
@@ -1921,7 +1934,8 @@ export class Session extends EventEmitter {
     this._status = 'busy';
     this._lastActivityAt = Date.now();
     this.runPrompt(input).catch(err => {
-      this.emit('error', err.message);
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      this.emit('error', errorMsg);
     });
   }
 

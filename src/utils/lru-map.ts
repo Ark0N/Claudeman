@@ -199,10 +199,15 @@ export class LRUMap<K, V> extends Map<K, V> {
     const now = Date.now();
     const cutoff = now - maxAge;
     let evicted = 0;
+    let deletedNewest = false;
 
     // Iterate from oldest to newest
     for (const [key, value] of super.entries()) {
       if (getTimestamp(value) < cutoff) {
+        // Track if we're deleting the newest key
+        if (key === this._newestKey) {
+          deletedNewest = true;
+        }
         super.delete(key);
         this.onEvict?.(key, value);
         evicted++;
@@ -210,6 +215,14 @@ export class LRUMap<K, V> extends Map<K, V> {
         // Since entries are ordered, once we find a non-expired one,
         // all subsequent entries are also non-expired
         break;
+      }
+    }
+
+    // Update _newestKey if we deleted it (find new newest from remaining entries)
+    if (deletedNewest) {
+      this._newestKey = undefined;
+      for (const k of super.keys()) {
+        this._newestKey = k; // Last one becomes newest
       }
     }
 

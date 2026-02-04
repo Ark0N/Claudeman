@@ -763,19 +763,12 @@ export interface HookEventRequest {
 // ========== API Response Types ==========
 
 /**
- * Standard API response wrapper
+ * Standard API response wrapper (discriminated union for type safety)
  * @template T Type of the data payload
  */
-export interface ApiResponse<T = unknown> {
-  /** Whether the request succeeded */
-  success: boolean;
-  /** Error message if failed */
-  error?: string;
-  /** Error code for programmatic handling */
-  errorCode?: ApiErrorCode;
-  /** Response data payload */
-  data?: T;
-}
+export type ApiResponse<T = unknown> =
+  | { success: true; data?: T }
+  | { success: false; error: string; errorCode: ApiErrorCode };
 
 /**
  * Creates a standardized error response
@@ -783,7 +776,7 @@ export interface ApiResponse<T = unknown> {
  * @param details Optional detailed error message
  * @returns Formatted error response
  */
-export function createErrorResponse(code: ApiErrorCode, details?: string): ApiResponse {
+export function createErrorResponse(code: ApiErrorCode, details?: string): ApiResponse<never> {
   return {
     success: false,
     error: details || ErrorMessages[code],

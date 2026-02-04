@@ -184,6 +184,11 @@ export class RalphLoop extends EventEmitter {
     this.tasksCompleted = 0;
     this.tasksGenerated = 0;
 
+    // Re-setup event handlers if they were cleaned up during stop()
+    if (!this.sessionEventHandlers) {
+      this.setupEventHandlers();
+    }
+
     this.store.setRalphLoopState({
       status: 'running',
       startedAt: this.startedAt,
@@ -208,6 +213,9 @@ export class RalphLoop extends EventEmitter {
       clearTimeout(this.loopTimer);
       this.loopTimer = null;
     }
+
+    // Clean up event handlers to prevent memory leaks
+    this.cleanupEventHandlers();
 
     this.store.setRalphLoopState({
       status: 'stopped',
@@ -251,10 +259,15 @@ export class RalphLoop extends EventEmitter {
 
     this.tick()
       .catch((err) => {
-        this.emit('error', err);
+        // Only emit if still running (stop() may have been called during tick())
+        if (this._status === 'running') {
+          this.emit('error', err);
+        }
       })
       .finally(() => {
-        if (this._status === 'running') {
+        // Guard: only reschedule if still running AND no timer is pending
+        // (prevents race where stop() clears timer between our check and setTimeout)
+        if (this._status === 'running' && this.loopTimer === null) {
           this.loopTimer = setTimeout(() => this.runLoop(), this.pollIntervalMs);
         }
       });
@@ -263,13 +276,13 @@ export class RalphLoop extends EventEmitter {
   private async tick(): Promise<void> {
     this.store.setRalphLoopState({ lastCheckAt: Date.now() });
 
-    // Check for timed out tasks
-    await this.checkTimeouts();
+    // Run independent checks in parallel for better performance
+    await Promise.all([
+      this.checkTimeouts(),
+      this.assignTasks(),
+    ]);
 
-    // Assign tasks to idle sessions
-    await this.assignTasks();
-
-    // Check if we should auto-generate tasks
+    // Check if we should auto-generate tasks (depends on assignment results)
     if (this.autoGenerateTasks && this.shouldGenerateTasks()) {
       await this.generateFollowUpTasks();
     }
@@ -480,3 +493,8 @@ export function destroyRalphLoop(): void {
     loopInstance = null;
   }
 }
+
+// Ensure cleanup on process exit (prevents orphaned event handlers and circular references)
+process.on('exit', () => {
+  destroyRalphLoop();
+});

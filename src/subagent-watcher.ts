@@ -12,7 +12,7 @@ import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { join, basename } from 'node:path';
 import { execSync } from 'node:child_process';
-import { PENDING_TOOL_CALL_TTL_MS } from './config/map-limits.js';
+import { PENDING_TOOL_CALL_TTL_MS, MAX_PENDING_TOOL_CALLS } from './config/map-limits.js';
 
 // ========== Types ==========
 
@@ -165,6 +165,11 @@ export class SubagentWatcher extends EventEmitter {
   // Map of agentId -> Map of toolUseId -> { toolName, timestamp } (for linking tool_result to tool_call)
   // Includes timestamp for TTL-based cleanup of orphaned entries
   private pendingToolCalls = new Map<string, Map<string, { toolName: string; timestamp: number }>>();
+  // Guard to prevent concurrent liveness checks (prevents duplicate completed events)
+  private _isCheckingLiveness = false;
+  // Store error handlers for FSWatchers to enable proper cleanup (prevent memory leaks)
+  private dirWatcherErrorHandlers = new Map<string, (error: Error) => void>();
+  private fileWatcherErrorHandlers = new Map<string, (error: Error) => void>();
 
   constructor() {
     super();
@@ -222,19 +227,29 @@ export class SubagentWatcher extends EventEmitter {
     if (this.livenessInterval) return;
 
     this.livenessInterval = setInterval(async () => {
-      for (const [agentId, info] of this.agentInfo) {
-        if (info.status === 'active' || info.status === 'idle') {
-          const alive = await this.checkSubagentAlive(agentId);
-          if (!alive) {
-            info.status = 'completed';
-            // Clean up pendingToolCalls for this agent to prevent memory leak
-            this.pendingToolCalls.delete(agentId);
-            this.emit('subagent:completed', info);
+      // Guard: prevent concurrent liveness checks (avoids duplicate completed events)
+      if (this._isCheckingLiveness) return;
+      this._isCheckingLiveness = true;
+
+      try {
+        for (const [agentId, info] of this.agentInfo) {
+          // Re-check status in case another check completed this agent
+          if (info.status === 'active' || info.status === 'idle') {
+            const alive = await this.checkSubagentAlive(agentId);
+            if (!alive && (info.status === 'active' || info.status === 'idle')) {
+              // Double-check status after async call to prevent race
+              info.status = 'completed';
+              // Clean up pendingToolCalls for this agent to prevent memory leak
+              this.pendingToolCalls.delete(agentId);
+              this.emit('subagent:completed', info);
+            }
           }
         }
+        // Periodically clean up stale completed agents (older than 24 hours)
+        this.cleanupStaleAgents();
+      } finally {
+        this._isCheckingLiveness = false;
       }
-      // Periodically clean up stale completed agents (older than 24 hours)
-      this.cleanupStaleAgents();
     }, LIVENESS_CHECK_MS);
   }
 
@@ -288,10 +303,24 @@ export class SubagentWatcher extends EventEmitter {
       this.livenessInterval = null;
     }
 
+    // Remove error handlers before closing watchers to prevent memory leak
+    for (const [filePath, handler] of this.fileWatcherErrorHandlers) {
+      const watcher = this.fileWatchers.get(filePath);
+      if (watcher) watcher.off('error', handler);
+    }
+    this.fileWatcherErrorHandlers.clear();
+
     for (const watcher of this.fileWatchers.values()) {
       watcher.close();
     }
     this.fileWatchers.clear();
+
+    // Remove error handlers before closing watchers to prevent memory leak
+    for (const [dir, handler] of this.dirWatcherErrorHandlers) {
+      const watcher = this.dirWatchers.get(dir);
+      if (watcher) watcher.off('error', handler);
+    }
+    this.dirWatcherErrorHandlers.clear();
 
     for (const watcher of this.dirWatchers.values()) {
       watcher.close();
@@ -560,7 +589,7 @@ export class SubagentWatcher extends EventEmitter {
 
       for (const pidStr of pids) {
         const pid = parseInt(pidStr, 10);
-        if (isNaN(pid)) continue;
+        if (Number.isNaN(pid)) continue;
 
         try {
           // Check /proc/{pid}/environ for session ID
@@ -899,11 +928,15 @@ export class SubagentWatcher extends EventEmitter {
       });
 
       // Handle watcher errors to prevent unhandled exceptions
-      watcher.on('error', (error) => {
+      // Store handler reference for proper cleanup
+      const errorHandler = (error: Error) => {
         this.emit('subagent:error', error instanceof Error ? error : new Error(String(error)));
+        this.dirWatcherErrorHandlers.delete(dir);
         this.dirWatchers.delete(dir);
         this.knownSubagentDirs.delete(dir);
-      });
+      };
+      watcher.on('error', errorHandler);
+      this.dirWatcherErrorHandlers.set(dir, errorHandler);
 
       this.dirWatchers.set(dir, watcher);
     } catch {
@@ -974,6 +1007,9 @@ export class SubagentWatcher extends EventEmitter {
     // Read existing content
     this.tailFile(filePath, agentId, sessionId, 0).then((position) => {
       this.filePositions.set(filePath, position);
+    }).catch((err) => {
+      // Log but don't throw - non-critical background operation
+      console.warn(`[SubagentWatcher] Failed to read initial content for ${agentId}:`, err);
     });
 
     // Watch for changes
@@ -1026,10 +1062,14 @@ export class SubagentWatcher extends EventEmitter {
       });
 
       // Handle watcher errors to prevent unhandled exceptions
-      watcher.on('error', (error) => {
+      // Store handler reference for proper cleanup
+      const errorHandler = (error: Error) => {
         this.emit('subagent:error', error instanceof Error ? error : new Error(String(error)), agentId);
+        this.fileWatcherErrorHandlers.delete(filePath);
         this.fileWatchers.delete(filePath);
-      });
+      };
+      watcher.on('error', errorHandler);
+      this.fileWatcherErrorHandlers.set(filePath, errorHandler);
 
       this.fileWatchers.set(filePath, watcher);
       this.resetIdleTimer(agentId);
@@ -1175,7 +1215,21 @@ export class SubagentWatcher extends EventEmitter {
               if (!this.pendingToolCalls.has(agentId)) {
                 this.pendingToolCalls.set(agentId, new Map());
               }
-              this.pendingToolCalls.get(agentId)!.set(content.id, {
+              const agentCalls = this.pendingToolCalls.get(agentId)!;
+              // Enforce size limit to prevent memory leak from rapid tool calls
+              if (agentCalls.size >= MAX_PENDING_TOOL_CALLS) {
+                // Evict oldest entry by timestamp
+                let oldestId: string | null = null;
+                let oldestTime = Infinity;
+                for (const [id, call] of agentCalls) {
+                  if (call.timestamp < oldestTime) {
+                    oldestTime = call.timestamp;
+                    oldestId = id;
+                  }
+                }
+                if (oldestId) agentCalls.delete(oldestId);
+              }
+              agentCalls.set(content.id, {
                 toolName: content.name,
                 timestamp: Date.now(),
               });

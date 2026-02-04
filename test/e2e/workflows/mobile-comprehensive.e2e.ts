@@ -19,9 +19,9 @@ import {
   type ServerFixture,
   type MobileBrowserFixture,
 } from '../fixtures/index.js';
-import { E2E_TIMEOUTS, MOBILE_VIEWPORTS, generateCaseName } from '../e2e.config.js';
+import { E2E_TIMEOUTS, MOBILE_VIEWPORTS, generateCaseName, E2E_PORTS } from '../e2e.config.js';
 
-const PORT = 3192;
+const PORT = E2E_PORTS.MOBILE_COMPREHENSIVE;
 let serverFixture: ServerFixture | null = null;
 let cleanup: CleanupTracker;
 

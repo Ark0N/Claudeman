@@ -33,3 +33,4 @@ export {
   fuzzyPhraseMatch,
   todoContentHash,
 } from './string-similarity.js';
+export { assertNever } from './type-safety.js';

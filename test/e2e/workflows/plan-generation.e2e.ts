@@ -22,9 +22,9 @@ import {
   type ServerFixture,
   type BrowserFixture,
 } from '../fixtures/index.js';
-import { E2E_TIMEOUTS } from '../e2e.config.js';
+import { E2E_TIMEOUTS, E2E_PORTS } from '../e2e.config.js';
 
-const PORT = 3191; // Next available port per CLAUDE.md
+const PORT = E2E_PORTS.PLAN_GENERATION;
 let serverFixture: ServerFixture | null = null;
 let cleanup: CleanupTracker;
 
