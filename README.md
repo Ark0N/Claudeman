@@ -348,51 +348,53 @@ claudeman web
 
 ---
 
-## Mobile Access (Termius/SSH)
+## Mobile — The Best Way to Use Claude Code on Your Phone
 
-**Claudeman Screens** (`sc`) is a mobile-friendly screen session chooser, optimized for Termius on iPhone.
+**Forget terminal apps.** Claudeman's web UI gives you a full Claude Code dashboard on your phone — real-time terminals, swipe navigation, smart keyboard handling, and quick commands. Just open your browser.
+
+<p align="center">
+  <img src="docs/screenshots/mobile-main.png" alt="Mobile Dashboard" width="280">
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/mobile-with-keyboard.png" alt="Mobile Keyboard" width="280">
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/mobile-toolbar-above-keyboard.png" alt="Mobile Toolbar" width="280">
+</p>
+
+### Why It's Better Than Any Terminal App
+
+| Terminal Apps | Claudeman Mobile |
+|:--------------|:-----------------|
+| Tiny text, no context | Full xterm.js terminal, responsive layout |
+| No session management | Swipe between sessions, tab badges show status |
+| No notifications | Push alerts when Claude needs approval or goes idle |
+| Manual reconnect after drops | GNU Screen persistence — sessions survive anything |
+| No agent visibility | See background agents working in real-time |
+| No token/cost tracking | Live token counts and cost per session |
+| Copy-paste slash commands | One-tap `/init`, `/clear`, `/compact` buttons |
+
+### Setup
 
 ```bash
-sc              # Interactive chooser
-sc 2            # Quick attach to session 2
-sc -l           # List sessions
-sc -h           # Help
+# Start with HTTPS for mobile access over your network
+claudeman web --https
+
+# Open on your phone: https://<your-ip>:3000
 ```
 
-**Features:**
-- Single-digit selection (1-9) for fast thumb typing
-- Color-coded status indicators (attached/detached/respawn)
-- Token count display
-- Session names from Claudeman state
-- Pagination for many sessions
-- Auto-refresh every 60 seconds
+> **Tip:** Local access on `localhost` works over plain HTTP. Use `--https` when accessing from another device on your network.
 
-**Indicators:**
-| Symbol | Meaning |
-|--------|---------|
-| `*` / `●` | Attached (someone connected) |
-| `-` / `○` | Detached (available) |
-| `R` | Respawn enabled |
-| `45k` | Token count |
+### Touch-Optimized Interface
 
-**Tip:** Detach from a screen with `Ctrl+A D`
-
----
-
-## Mobile UI
-
-Claudeman's web interface is fully optimized for mobile browsers (iPhone, Android). Access the dashboard from any device on your network using `--https` mode.
-
-### Features
-
-| Feature | Description |
+| Feature | How It Works |
 |---------|-------------|
-| **Fixed Toolbar** | Run Claude / Run Shell buttons fixed at bottom, above safe area |
-| **Smart Keyboard Handling** | Toolbar and terminal content move up when virtual keyboard appears |
-| **Swipe Navigation** | Swipe left/right on terminal to switch between sessions |
-| **Quick Commands** | Keyboard accessory bar with /init, /clear, /compact buttons |
-| **Confirmation Dialogs** | Accidental taps on commands prompt for confirmation |
-| **Touch Targets** | 44px minimum touch targets per iOS Human Interface Guidelines |
+| **Swipe Navigation** | Swipe left/right on the terminal to switch sessions (80px threshold, 300ms) |
+| **Keyboard Accessory Bar** | `/init`, `/clear`, `/compact` quick-action buttons appear above the virtual keyboard |
+| **Smart Keyboard Handling** | Toolbar and terminal shift up when the keyboard opens (uses `visualViewport` API) |
+| **Safe Area Support** | Respects iPhone notch and home indicator via `env(safe-area-inset-*)` |
+| **44px Touch Targets** | All buttons meet iOS Human Interface Guidelines minimum sizes |
+| **Confirmation Dialogs** | Destructive commands require a tap to confirm — no accidental `/clear` |
+| **Bottom Sheet Case Picker** | Slide-up modal replaces the desktop dropdown for case selection |
+| **Native Momentum Scrolling** | Terminal uses `-webkit-overflow-scrolling: touch` for buttery scroll |
 
 ### Keyboard Accessory Bar
 
@@ -400,23 +402,46 @@ When the virtual keyboard is open, a quick-action bar appears above the toolbar:
 
 | Button | Action | Confirmation |
 |--------|--------|--------------|
-| `/init` | Send /init to reinitialize context | "Run /init command?" |
-| `/clear` | Send /clear to clear conversation | "Clear conversation history?" |
-| `/compact` | Send /compact to summarize context | "Compact context?" |
+| `/init` | Reinitialize context | "Run /init command?" |
+| `/clear` | Clear conversation | "Clear conversation history?" |
+| `/compact` | Summarize context | "Compact context?" |
 | `⌄` | Dismiss keyboard | — |
 
-### Swipe Gestures
+### Mobile-Optimized Layout
 
-- **Swipe left** → Next session
-- **Swipe right** → Previous session
+The mobile UI strips away desktop complexity to keep things fast and focused:
 
-Gestures require 80px minimum horizontal movement within 300ms.
-
-### Mobile-Only Simplifications
-
-- Case selector hidden (use desktop for case management)
-- Monitor and subagent panels hidden by default
+- **Full-width terminal** with scrollable session tabs
+- Case management via bottom sheet (not desktop dropdown)
+- Monitor/subagent panels hidden by default (toggle in settings)
 - Full-screen modals for settings
+- Compact typography and spacing
+
+---
+
+### Claudeman Screens (`sc`) — Mobile SSH Alternative
+
+If you prefer SSH (via Termius, Blink, etc.), the `sc` command is a thumb-friendly screen session chooser:
+
+```bash
+sc              # Interactive chooser
+sc 2            # Quick attach to session 2
+sc -l           # List sessions
+```
+
+- **Single-digit selection** (1-9) — fast thumb typing on phone keyboards
+- **Color-coded status** — green for attached, gray for detached, `R` for respawn
+- **Token counts** displayed per session
+- **Pagination** for many sessions, auto-refresh every 60s
+
+| Symbol | Meaning |
+|--------|---------|
+| `●` / `*` | Attached (someone connected) |
+| `○` / `-` | Detached (available) |
+| `R` | Respawn enabled |
+| `45k` | Token count |
+
+**Detach:** `Ctrl+A D`
 
 ---
 

@@ -26,7 +26,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md` (verify they match with `grep version package.json && grep Version CLAUDE.md`)
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1477 (must match `package.json` for npm publish)
+**Version**: 0.1478 (must match `package.json` for npm publish)
 
 ## Project Overview
 
@@ -78,9 +78,9 @@ journalctl --user -u claudeman-web -f
 
 ## Import Conventions
 
-- **Utilities**: Import from `./utils` (re-exports all): `import { LRUMap, debounce } from './utils'`
+- **Utilities**: Import from `./utils` (re-exports all): `import { LRUMap, stripAnsi } from './utils'`
 - **Types**: Use type imports: `import type { SessionState } from './types'`
-- **Config**: Import from specific files: `import { BUFFER_LIMITS } from './config/buffer-limits'`
+- **Config**: Import from specific files: `import { MAX_TERMINAL_BUFFER_SIZE } from './config/buffer-limits'`
 
 ## Architecture
 
@@ -113,6 +113,7 @@ journalctl --user -u claudeman-web -f
 | `src/templates/claude-md.ts` | CLAUDE.md generation for new cases |
 | `src/cli.ts` | Command-line interface handlers |
 | `src/web/server.ts` | Fastify REST API + SSE at `/api/events` |
+| `src/web/schemas.ts` | Zod v4 validation schemas for API request bodies |
 | `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows |
 | `src/types.ts` | All TypeScript interfaces |
 
