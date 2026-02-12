@@ -2943,22 +2943,8 @@ class ClaudemanApp {
         sessionId: data.sessionId,
         color: data.color,
       });
-      // Upgrade any existing subagent windows for this teammate to terminal mode
-      let foundExisting = false;
-      for (const [agentId, agent] of this.subagents) {
-        const info = this.getTeammateInfo(agent);
-        if (info && info.name === data.teammateName && !this.teammateTerminals.has(agentId)) {
-          const windowData = this.subagentWindows.get(agentId);
-          if (windowData) {
-            this.initTeammateTerminal(agentId, data, windowData.element);
-            foundExisting = true;
-          }
-        }
-      }
-      // If no existing subagent window found, create a standalone teammate terminal window
-      if (!foundExisting) {
-        this.openTeammateTerminalWindow(data);
-      }
+      // Teammate pane windows are disabled — users interact with teammates
+      // directly through the main tmux split-pane terminal instead.
     });
 
     addListener('teammate:terminal', (e) => {
@@ -12021,6 +12007,13 @@ class ClaudemanApp {
   // ========== Subagent Floating Windows ==========
 
   openSubagentWindow(agentId) {
+    // Skip teammate agents — they use tmux split panes in the main terminal,
+    // not floating popup windows. Prevents false-info activity log popups.
+    const agentForTeammateCheck = this.subagents.get(agentId);
+    if (agentForTeammateCheck && this.getTeammateInfo(agentForTeammateCheck)) {
+      return;
+    }
+
     // If window already exists, focus it
     if (this.subagentWindows.has(agentId)) {
       const existing = this.subagentWindows.get(agentId);
