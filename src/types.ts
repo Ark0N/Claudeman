@@ -746,7 +746,7 @@ export interface QuickRunRequest {
 /**
  * Hook event types triggered by Claude Code's hooks system
  */
-export type HookEventType = 'idle_prompt' | 'permission_prompt' | 'elicitation_dialog' | 'stop';
+export type HookEventType = 'idle_prompt' | 'permission_prompt' | 'elicitation_dialog' | 'stop' | 'teammate_idle' | 'task_completed';
 
 /**
  * Request body for the hook-event API endpoint
@@ -1512,6 +1512,72 @@ export interface ImageDetectedEvent {
   timestamp: number;
   /** File size in bytes */
   size: number;
+}
+
+// ========== Agent Teams Types ==========
+
+/**
+ * Team configuration matching ~/.claude/teams/{name}/config.json
+ */
+export interface TeamConfig {
+  name: string;
+  description?: string;
+  createdAt: number;
+  leadAgentId: string;
+  leadSessionId: string; // Maps to Claudeman session ID
+  members: TeamMember[];
+}
+
+/**
+ * A member of an agent team (lead or teammate)
+ */
+export interface TeamMember {
+  agentId: string;       // Format: {name}@{teamName}
+  name: string;
+  agentType: 'team-lead' | 'general-purpose';
+  model?: string;
+  prompt?: string;       // Only present for teammates
+  color?: string;        // blue, green, yellow
+  backendType?: string;  // "in-process"
+  joinedAt: number;
+  tmuxPaneId?: string;
+  cwd?: string;
+}
+
+/**
+ * Team task matching ~/.claude/tasks/{team}/{N}.json
+ */
+export interface TeamTask {
+  id: string;
+  subject: string;
+  description: string;
+  activeForm?: string;
+  status: 'pending' | 'in_progress' | 'completed';
+  owner?: string;
+  blocks: string[];
+  blockedBy: string[];
+  metadata?: { _internal?: boolean };
+}
+
+/**
+ * Inbox message from ~/.claude/teams/{name}/inboxes/{member}.json
+ */
+export interface InboxMessage {
+  from: string;
+  text: string;          // Double-encoded JSON string
+  timestamp: string;
+  read: boolean;
+}
+
+/**
+ * Parsed content from an inbox message's text field
+ */
+export interface InboxMessageContent {
+  type: 'task_assignment' | 'shutdown_request' | 'shutdown_response' | 'message' | 'broadcast';
+  taskId?: string;
+  subject?: string;
+  assignedBy?: string;
+  timestamp?: string;
 }
 
 // ========== Plan Orchestrator Re-exports ==========

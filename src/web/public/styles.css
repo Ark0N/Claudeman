@@ -208,14 +208,34 @@ body {
 }
 
 .session-tab:hover {
-  background: var(--bg-hover);
+  background: rgba(34, 197, 94, 0.06);
   color: var(--text);
+  box-shadow: 0 0 8px 2px rgba(34, 197, 94, 0.2), inset 0 0 6px 1px rgba(34, 197, 94, 0.08);
+  border-color: rgba(34, 197, 94, 0.2);
+}
+
+.session-tab:active {
+  background: rgba(34, 197, 94, 0.15);
+  box-shadow: 0 0 16px 5px rgba(34, 197, 94, 0.5), 0 0 30px 10px rgba(34, 197, 94, 0.2), inset 0 0 10px 2px rgba(34, 197, 94, 0.2);
+  border-color: rgba(34, 197, 94, 0.4);
 }
 
 .session-tab.active {
   background: var(--bg-dark);
   border-color: var(--border-light);
   color: var(--text);
+}
+
+/* Tab switch feedback: bright green glow on the newly-active tab */
+.session-tab.tab-glow {
+  animation: tab-glow 1s ease-out forwards;
+}
+
+@keyframes tab-glow {
+  0%   { box-shadow: 0 0 0px 0px rgba(34, 197, 94, 0); background: transparent; }
+  10%  { box-shadow: 0 0 18px 6px rgba(34, 197, 94, 0.7), 0 0 40px 12px rgba(34, 197, 94, 0.3), inset 0 0 12px 3px rgba(34, 197, 94, 0.25); background: rgba(34, 197, 94, 0.12); }
+  30%  { box-shadow: 0 0 14px 5px rgba(34, 197, 94, 0.5), 0 0 30px 10px rgba(34, 197, 94, 0.2), inset 0 0 10px 2px rgba(34, 197, 94, 0.15); background: rgba(34, 197, 94, 0.08); }
+  100% { box-shadow: 0 0 0px 0px rgba(34, 197, 94, 0); background: transparent; }
 }
 
 .session-tab .tab-status {
@@ -343,6 +363,44 @@ body {
   margin-left: auto;
   padding-left: 0.75rem;
   border-left: 1px solid var(--border);
+}
+
+/* Connection Indicator */
+.connection-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  font-family: 'SF Mono', Monaco, monospace;
+  white-space: nowrap;
+}
+
+.connection-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.connection-dot.offline {
+  background: var(--red);
+  box-shadow: 0 0 6px var(--red);
+}
+
+.connection-dot.reconnecting {
+  background: var(--yellow);
+  animation: connection-pulse 1.5s ease-in-out infinite;
+}
+
+.connection-dot.draining {
+  background: var(--green);
+  animation: connection-pulse 0.8s ease-in-out infinite;
+}
+
+@keyframes connection-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 
 .header-tokens {
@@ -1616,6 +1674,23 @@ body {
   will-change: contents;
 }
 
+/* Tab switch feedback: green glow emerging from black */
+.tab-switch-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 100;
+  background: radial-gradient(ellipse at center, rgba(34, 197, 94, 0.12) 0%, transparent 70%);
+  box-shadow: inset 0 0 150px 60px rgba(34, 197, 94, 0.35);
+  animation: tab-switch-glow 0.7s ease-out forwards;
+}
+
+@keyframes tab-switch-glow {
+  0%   { opacity: 0; }
+  15%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
 .terminal-container .xterm {
   height: 100%;
   padding: 0;
@@ -1931,6 +2006,7 @@ body {
 .case-select-group {
   display: flex;
   align-items: center;
+  position: relative;
 }
 
 .toolbar-select {
@@ -1968,7 +2044,7 @@ body {
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-left: none;
-  border-radius: 0 4px 4px 0;
+  border-radius: 0;
   color: var(--green);
   font-size: 1.1rem;
   font-weight: 500;
@@ -1980,6 +2056,51 @@ body {
   background: var(--green);
   color: white;
   border-color: var(--green);
+}
+
+.btn-case-settings {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-left: none;
+  border-radius: 0 4px 4px 0;
+  color: var(--text-dim);
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-case-settings:hover {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.case-settings-popover {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 4px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+  width: 220px;
+  z-index: 1000;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.case-settings-popover.hidden {
+  display: none;
+}
+
+.case-settings-popover .form-hint {
+  margin-top: 0.2rem;
+  font-size: 0.6rem;
 }
 
 .toolbar-input {
@@ -4592,6 +4713,10 @@ kbd {
     display: none;
   }
 
+  .connection-text {
+    display: none;
+  }
+
   .toolbar-left .toolbar-group:not(:first-child) {
     display: none;
   }
@@ -5358,6 +5483,153 @@ kbd {
 @keyframes plan-subagent-pulse {
   0%, 100% { opacity: 0.8; }
   50% { opacity: 1; }
+}
+
+/* ========== Agent Teams (Teammate Badges + Team Tasks Panel) ========== */
+
+/* Teammate badge in subagent panel/windows */
+.teammate-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  font-weight: 600;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+
+.teammate-color-blue {
+  background: #3b82f6;
+  color: #fff;
+}
+
+.teammate-color-green {
+  background: #22c55e;
+  color: #fff;
+}
+
+.teammate-color-yellow {
+  background: #eab308;
+  color: #1a1a2e;
+}
+
+/* Teammate dot icon replacing robot emoji */
+.teammate-dot {
+  font-size: 14px;
+}
+
+.teammate-dot.teammate-color-blue { color: #3b82f6; }
+.teammate-dot.teammate-color-green { color: #22c55e; }
+.teammate-dot.teammate-color-yellow { color: #eab308; }
+
+/* Subagent items that are teammates get a subtle left border */
+.subagent-item.is-teammate {
+  border-left: 2px solid #3b82f6;
+}
+.subagent-item.is-teammate .teammate-color-green ~ * { border-left-color: #22c55e; }
+
+/* Team Tasks Panel */
+.team-tasks-panel {
+  position: fixed;
+  bottom: 50px;
+  right: 10px;
+  width: 320px;
+  max-height: 300px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 900;
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.team-tasks-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+}
+
+.team-tasks-header-text {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.team-tasks-progress {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.team-tasks-progress-bar {
+  width: 60px;
+  height: 6px;
+  background: var(--bg-primary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.team-tasks-progress-fill {
+  height: 100%;
+  background: var(--success);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.team-tasks-progress-text {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.team-tasks-list {
+  overflow-y: auto;
+  max-height: 250px;
+  padding: 4px 0;
+}
+
+.team-task-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  color: var(--text-primary);
+}
+
+.team-task-item.completed {
+  opacity: 0.6;
+}
+
+.team-task-item.in-progress .team-task-status {
+  color: var(--accent);
+}
+
+.team-task-status {
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+}
+
+.team-task-subject {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.team-task-owner {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.team-task-empty {
+  padding: 12px;
+  text-align: center;
+  color: var(--text-secondary);
 }
 
 /* ========== Project Insights Panel (Bash File Viewers) ========== */
@@ -8478,6 +8750,10 @@ kbd {
 
   /* Add case button - compact (keeping for when shown via menu) */
   .btn-case-add {
+    display: none !important;
+  }
+
+  .btn-case-settings {
     display: none !important;
   }
 

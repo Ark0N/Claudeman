@@ -19,6 +19,7 @@ export const CreateSessionSchema = z.object({
   workingDir: z.string().optional(),
   mode: z.enum(['claude', 'shell']).optional(),
   name: z.string().max(100).optional(),
+  envOverrides: z.record(z.string(), z.string()).optional(),
 });
 
 /**
@@ -76,7 +77,7 @@ export const QuickStartSchema = z.object({
  * Receives Claude Code hook events.
  */
 export const HookEventSchema = z.object({
-  event: z.enum(['permission_prompt', 'elicitation_dialog', 'idle_prompt', 'stop']),
+  event: z.enum(['permission_prompt', 'elicitation_dialog', 'idle_prompt', 'stop', 'teammate_idle', 'task_completed']),
   sessionId: z.string().min(1),
   data: z.unknown().optional(),
 });

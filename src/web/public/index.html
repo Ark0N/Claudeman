@@ -27,6 +27,10 @@
       </div>
 
       <div class="header-right">
+        <div class="connection-indicator" id="connectionIndicator" style="display: none;">
+          <span class="connection-dot" id="connectionDot"></span>
+          <span class="connection-text" id="connectionText"></span>
+        </div>
         <div class="header-font-controls">
           <button class="btn-icon-header btn-sm" onclick="app.decreaseFontSize()" title="Decrease font (Ctrl+-)" aria-label="Decrease font size">A-</button>
           <span class="font-size-display" id="fontSizeDisplay" aria-label="Current font size">14</span>
@@ -285,6 +289,14 @@
               <option value="testcase">testcase</option>
             </select>
             <button class="btn-case-add" onclick="app.showCreateCaseModal()" title="Create new case">+</button>
+            <button class="btn-case-settings" onclick="app.toggleCaseSettings()" title="Case settings">&#x2699;</button>
+            <div class="case-settings-popover hidden" id="caseSettingsPopover">
+              <label class="checkbox-inline">
+                <input type="checkbox" id="caseAgentTeams" onchange="app.onCaseSettingChanged()">
+                <span>Agent Teams</span>
+              </label>
+              <span class="form-hint">Enable experimental Agent Teams for new sessions in this case</span>
+            </div>
           </div>
           <!-- Mobile-only case button -->
           <button class="btn-toolbar btn-case-mobile" onclick="app.showMobileCasePicker()" title="Select case">
@@ -411,6 +423,20 @@
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- Team Tasks Panel -->
+    <div class="team-tasks-panel" id="teamTasksPanel" style="display: none;">
+      <div class="team-tasks-header">
+        <span class="team-tasks-header-text">Team Tasks</span>
+        <div class="team-tasks-progress">
+          <div class="team-tasks-progress-bar">
+            <div class="team-tasks-progress-fill"></div>
+          </div>
+          <span class="team-tasks-progress-text">0/0</span>
+        </div>
+      </div>
+      <div class="team-tasks-list"></div>
     </div>
 
     <!-- Session Options Modal (includes Respawn Settings) -->
@@ -836,6 +862,16 @@
                 <span class="slider"></span>
               </label>
               <span class="form-hint">Auto-enable for new sessions (otherwise auto-enables on Ralph pattern detection)</span>
+            </div>
+            <!-- Claude Permissions Section -->
+            <div class="form-section-header">Claude Permissions</div>
+            <div class="form-row form-row-switch">
+              <label>Agent Teams</label>
+              <label class="switch">
+                <input type="checkbox" id="appSettingsAgentTeams">
+                <span class="slider"></span>
+              </label>
+              <span class="form-hint">Enable experimental Agent Teams for all new Claude sessions (disabled by default)</span>
             </div>
             <!-- Nice Priority Section -->
             <div class="form-section-header">Nice Priority</div>

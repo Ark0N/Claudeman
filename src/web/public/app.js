@@ -1090,6 +1090,11 @@ class ClaudemanApp {
     // This is the SINGLE SOURCE OF TRUTH for which tab an agent window connects to.
     // Once set, never recalculated. Persisted to localStorage and server.
     this.subagentParentMap = new Map();
+
+    // Agent Teams tracking
+    this.teams = new Map(); // Map<teamName, TeamConfig>
+    this.teamTasks = new Map(); // Map<teamName, TeamTask[]>
+    this.teammateMap = new Map(); // Map<agentId-prefix, {name, color, teamName}> for quick lookup
     this.ralphStatePanelCollapsed = true; // Default to collapsed
     this.ralphClosedSessions = new Set(); // Sessions where user explicitly closed Ralph panel
 
@@ -1152,6 +1157,11 @@ class ClaudemanApp {
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 10;
     this.isOnline = navigator.onLine;
+
+    // Offline input queue
+    this._inputQueue = new Map(); // Map<sessionId, string>
+    this._inputQueueMaxBytes = 64 * 1024; // 64KB cap per session
+    this._connectionStatus = 'connected';
 
     // Accessibility: Focus trap for modals
     this.activeFocusTrap = null;
@@ -1456,18 +1466,34 @@ class ClaudemanApp {
     this._inputFlushTimeout = null;
     this._inputFlushDelay = 16; // Flush at 60fps max
 
-    const flushInput = () => {
+    const flushInput = async () => {
       if (this._pendingInput && this.activeSessionId) {
         const input = this._pendingInput;
         const sessionId = this.activeSessionId;
         this._pendingInput = '';
-        fetch(`/api/sessions/${sessionId}/input`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ input })
-        });
-        // Clear pending hooks when user sends input (they've addressed the prompt)
-        this.clearPendingHooks(sessionId);
+
+        // Queue immediately if offline
+        if (!this.isOnline || this._connectionStatus === 'disconnected') {
+          this._enqueueInput(sessionId, input);
+          this._inputFlushTimeout = null;
+          return;
+        }
+
+        try {
+          const resp = await fetch(`/api/sessions/${sessionId}/input`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ input })
+          });
+          if (!resp.ok) {
+            this._enqueueInput(sessionId, input);
+          } else {
+            // Clear pending hooks when user sends input (they've addressed the prompt)
+            this.clearPendingHooks(sessionId);
+          }
+        } catch {
+          this._enqueueInput(sessionId, input);
+        }
       }
       this._inputFlushTimeout = null;
     };
@@ -2010,6 +2036,7 @@ class ClaudemanApp {
         this.saveSessionOrder();
       }
       this.terminalBuffers.delete(data.id);
+      this._inputQueue.delete(data.id);  // Clean up queued offline input for this session
       this.ralphStates.delete(data.id);  // Clean up ralph state for this session
       this.ralphClosedSessions.delete(data.id);  // Clean up closed tracking for this session
       this.projectInsights.delete(data.id);  // Clean up project insights for this session
@@ -2778,6 +2805,44 @@ class ClaudemanApp {
       }, 5 * 60 * 1000); // 5 minutes
     });
 
+    // ========== Agent Teams Events ==========
+
+    addListener('team:created', (e) => {
+      const team = JSON.parse(e.data);
+      this.teams.set(team.name, team);
+      this.rebuildTeammateMap();
+      this.renderTeamTasksPanel();
+      this.updateSubagentWindows();
+    });
+
+    addListener('team:updated', (e) => {
+      const team = JSON.parse(e.data);
+      this.teams.set(team.name, team);
+      this.rebuildTeammateMap();
+      this.renderTeamTasksPanel();
+      this.updateSubagentWindows();
+    });
+
+    addListener('team:removed', (e) => {
+      const team = JSON.parse(e.data);
+      this.teams.delete(team.name);
+      this.teamTasks.delete(team.name);
+      this.rebuildTeammateMap();
+      this.renderTeamTasksPanel();
+      this.updateSubagentWindows();
+    });
+
+    addListener('team:task_updated', (e) => {
+      const data = JSON.parse(e.data);
+      this.teamTasks.set(data.teamName, data.tasks);
+      this.renderTeamTasksPanel();
+    });
+
+    addListener('team:inbox_message', (e) => {
+      // Inbox messages currently just trigger panel updates
+      this.renderTeamTasksPanel();
+    });
+
     // ========== Image Detection Events (Screenshots & Generated Images) ==========
 
     addListener('image:detected', (e) => {
@@ -2851,8 +2916,84 @@ class ClaudemanApp {
     });
   }
 
-  setConnectionStatus(_status) {
-    // Connection status UI removed - method kept for compatibility
+  setConnectionStatus(status) {
+    this._connectionStatus = status;
+    this._updateConnectionIndicator();
+    if (status === 'connected' && this._inputQueue.size > 0) {
+      this._drainInputQueues();
+    }
+  }
+
+  _enqueueInput(sessionId, input) {
+    const existing = this._inputQueue.get(sessionId) || '';
+    let combined = existing + input;
+    // Enforce 64KB cap — keep most recent keystrokes
+    if (combined.length > this._inputQueueMaxBytes) {
+      combined = combined.slice(combined.length - this._inputQueueMaxBytes);
+    }
+    this._inputQueue.set(sessionId, combined);
+    this._updateConnectionIndicator();
+  }
+
+  async _drainInputQueues() {
+    if (this._inputQueue.size === 0) return;
+    // Snapshot and clear
+    const queued = new Map(this._inputQueue);
+    this._inputQueue.clear();
+    this._updateConnectionIndicator();
+
+    for (const [sessionId, input] of queued) {
+      try {
+        const resp = await fetch(`/api/sessions/${sessionId}/input`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ input })
+        });
+        if (!resp.ok) {
+          this._enqueueInput(sessionId, input);
+        }
+      } catch {
+        this._enqueueInput(sessionId, input);
+      }
+    }
+    this._updateConnectionIndicator();
+  }
+
+  _updateConnectionIndicator() {
+    const indicator = this.$('connectionIndicator');
+    const dot = this.$('connectionDot');
+    const text = this.$('connectionText');
+    if (!indicator || !dot || !text) return;
+
+    let totalBytes = 0;
+    for (const v of this._inputQueue.values()) totalBytes += v.length;
+
+    const status = this._connectionStatus;
+    const hasQueue = totalBytes > 0;
+
+    // Connected with empty queue — hide
+    if ((status === 'connected' || status === 'connecting') && !hasQueue) {
+      indicator.style.display = 'none';
+      return;
+    }
+
+    indicator.style.display = 'flex';
+    dot.className = 'connection-dot';
+
+    const formatBytes = (b) => b < 1024 ? `${b}B` : `${(b / 1024).toFixed(1)}KB`;
+
+    if (status === 'connected' && hasQueue) {
+      // Draining
+      dot.classList.add('draining');
+      text.textContent = `Sending ${formatBytes(totalBytes)}...`;
+    } else if (status === 'reconnecting') {
+      dot.classList.add('reconnecting');
+      text.textContent = hasQueue ? `Reconnecting (${formatBytes(totalBytes)} queued)` : 'Reconnecting...';
+    } else {
+      // Offline or disconnected
+      dot.classList.add('offline');
+      text.textContent = hasQueue ? `Offline (${formatBytes(totalBytes)} queued)` : 'Offline';
+    }
   }
 
   setupOnlineDetection() {
@@ -3543,6 +3684,18 @@ class ClaudemanApp {
   async selectSession(sessionId) {
     if (this.activeSessionId === sessionId) return;
 
+    // Instant visual feedback — works even with no network.
+    // Appended to .main (not terminalContainer) so xterm DOM resets can't remove it.
+    const main = document.querySelector('.main');
+    if (main) {
+      const prev = main.querySelector('.tab-switch-glow');
+      if (prev) prev.remove();
+      const glow = document.createElement('div');
+      glow.className = 'tab-switch-glow';
+      glow.addEventListener('animationend', () => glow.remove(), { once: true });
+      main.appendChild(glow);
+    }
+
     // Clean up flicker filter state when switching sessions
     if (this.flickerFilterTimeout) {
       clearTimeout(this.flickerFilterTimeout);
@@ -3564,6 +3717,13 @@ class ClaudemanApp {
     // Clear idle hooks on view, but keep action hooks until user interacts
     this.clearPendingHooks(sessionId, 'idle_prompt');
     this.renderSessionTabs();
+
+    // Glow the newly-active tab
+    const activeTab = document.querySelector(`.session-tab.active[data-id="${sessionId}"]`);
+    if (activeTab) {
+      activeTab.classList.add('tab-glow');
+      activeTab.addEventListener('animationend', () => activeTab.classList.remove('tab-glow'), { once: true });
+    }
 
     // Check if this is a restored session that needs to be attached
     const session = this.sessions.get(sessionId);
@@ -6900,13 +7060,22 @@ class ClaudemanApp {
         sessionNames.push(`w${startNumber + i}-${caseName}`);
       }
 
+      // Build env overrides from global + case settings (case overrides global)
+      const caseSettings = this.getCaseSettings(caseName);
+      const globalSettings = this.loadAppSettingsFromStorage();
+      const envOverrides = {};
+      if (caseSettings.agentTeams || globalSettings.agentTeamsEnabled) {
+        envOverrides.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '1';
+      }
+      const hasEnvOverrides = Object.keys(envOverrides).length > 0;
+
       // Step 1: Create all sessions in parallel
       this.terminal.writeln(`\x1b[90m Creating ${tabCount} session(s)...\x1b[0m`);
       const createPromises = sessionNames.map(name =>
         fetch('/api/sessions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ workingDir, name })
+          body: JSON.stringify({ workingDir, name, ...(hasEnvOverrides ? { envOverrides } : {}) })
         }).then(r => r.json())
       );
       const createResults = await Promise.all(createPromises);
@@ -8716,6 +8885,8 @@ class ClaudemanApp {
     claudeModeSelect.onchange = () => {
       allowedToolsRow.style.display = claudeModeSelect.value === 'allowedTools' ? '' : 'none';
     };
+    // Claude Permissions settings
+    document.getElementById('appSettingsAgentTeams').checked = settings.agentTeamsEnabled ?? false;
     // CPU Priority settings
     const niceSettings = settings.nice || {};
     document.getElementById('appSettingsNiceEnabled').checked = niceSettings.enabled ?? false;
@@ -8832,6 +9003,8 @@ class ClaudemanApp {
       // Claude CLI settings
       claudeMode: document.getElementById('appSettingsClaudeMode').value,
       allowedTools: document.getElementById('appSettingsAllowedTools').value.trim(),
+      // Claude Permissions settings
+      agentTeamsEnabled: document.getElementById('appSettingsAgentTeams').checked,
       // CPU Priority settings
       nice: {
         enabled: document.getElementById('appSettingsNiceEnabled').checked,
@@ -11028,15 +11201,19 @@ class ClaudemanApp {
         ? `<span class="subagent-model-badge ${agent.modelShort}">${agent.modelShort}</span>`
         : '';
 
-      const displayName = agent.description || agent.agentId.substring(0, 7);
+      const teammateInfo = this.getTeammateInfo(agent);
+      const displayName = teammateInfo ? teammateInfo.name : (agent.description || agent.agentId.substring(0, 7));
+      const teammateBadge = this.getTeammateBadgeHtml(agent);
+      const agentIcon = teammateInfo ? `<span class="subagent-icon teammate-dot teammate-color-${teammateInfo.color}">●</span>` : '<span class="subagent-icon">🤖</span>';
       html.push(`
-        <div class="subagent-item ${statusClass} ${isActive ? 'selected' : ''}"
+        <div class="subagent-item ${statusClass} ${isActive ? 'selected' : ''}${teammateInfo ? ' is-teammate' : ''}"
              onclick="app.selectSubagent('${agent.agentId}')"
              ondblclick="app.openSubagentWindow('${agent.agentId}')"
              title="Double-click to open tracking window">
           <div class="subagent-header">
-            <span class="subagent-icon">🤖</span>
+            ${agentIcon}
             <span class="subagent-id" title="${this.escapeHtml(agent.description || agent.agentId)}">${this.escapeHtml(displayName.length > 40 ? displayName.substring(0, 40) + '...' : displayName)}</span>
+            ${teammateBadge}
             ${modelBadge}
             <span class="subagent-status ${statusClass}">${agent.status}</span>
             ${canKill ? `<button class="subagent-kill-btn" onclick="event.stopPropagation(); app.killSubagent('${agent.agentId}')" title="Kill agent">&#x2715;</button>` : ''}
@@ -12287,9 +12464,25 @@ class ClaudemanApp {
     // Update title/id element with description if available
     const idEl = win.querySelector('.subagent-window-title .id');
     if (idEl) {
-      const windowTitle = agent.description || agentId.substring(0, 7);
+      const teammateInfo = this.getTeammateInfo(agent);
+      const windowTitle = teammateInfo ? teammateInfo.name : (agent.description || agentId.substring(0, 7));
       const truncatedTitle = windowTitle.length > 50 ? windowTitle.substring(0, 50) + '...' : windowTitle;
       idEl.textContent = truncatedTitle;
+    }
+
+    // Add or update teammate badge
+    let tmBadge = win.querySelector('.teammate-badge');
+    const teammateInfo = this.getTeammateInfo(agent);
+    if (teammateInfo && !tmBadge) {
+      const titleContainer = win.querySelector('.subagent-window-title');
+      if (titleContainer) {
+        const badge = document.createElement('span');
+        badge.className = `teammate-badge teammate-color-${teammateInfo.color}`;
+        badge.title = `Team: ${teammateInfo.teamName}`;
+        badge.textContent = `@${teammateInfo.name}`;
+        const statusEl = titleContainer.querySelector('.status');
+        if (statusEl) statusEl.insertAdjacentElement('beforebegin', badge);
+      }
     }
 
     // Update full tooltip
@@ -12328,6 +12521,120 @@ class ClaudemanApp {
         this.openSubagentWindow(agentId);
       }
     }
+  }
+
+  // ========== Agent Teams ==========
+
+  /** Rebuild the teammate lookup map from all team configs */
+  rebuildTeammateMap() {
+    this.teammateMap.clear();
+    for (const [teamName, team] of this.teams) {
+      for (const member of team.members) {
+        if (member.agentType !== 'team-lead') {
+          // Use name as key prefix for matching subagent descriptions
+          this.teammateMap.set(member.name, {
+            name: member.name,
+            color: member.color || 'blue',
+            teamName,
+            agentId: member.agentId,
+          });
+        }
+      }
+    }
+  }
+
+  /** Check if a subagent is a teammate and return its info */
+  getTeammateInfo(agent) {
+    if (!agent?.description) return null;
+    // Teammate descriptions start with <teammate-message teammate_id=
+    const match = agent.description.match(/<teammate-message\s+teammate_id="?([^">\s]+)/);
+    if (!match) return null;
+    const teammateId = match[1];
+    // Extract name from teammate_id (format: name@teamName)
+    const name = teammateId.split('@')[0];
+    return this.teammateMap.get(name) || { name, color: 'blue', teamName: 'unknown' };
+  }
+
+  /** Get teammate badge HTML for a subagent */
+  getTeammateBadgeHtml(agent) {
+    const info = this.getTeammateInfo(agent);
+    if (!info) return '';
+    return `<span class="teammate-badge teammate-color-${info.color}" title="Team: ${this.escapeHtml(info.teamName)}">@${this.escapeHtml(info.name)}</span>`;
+  }
+
+  /** Render the team tasks panel */
+  renderTeamTasksPanel() {
+    const panel = document.getElementById('teamTasksPanel');
+    if (!panel) return;
+
+    // Find team for active session
+    let activeTeam = null;
+    let activeTeamName = null;
+    if (this.activeSessionId) {
+      for (const [name, team] of this.teams) {
+        if (team.leadSessionId === this.activeSessionId) {
+          activeTeam = team;
+          activeTeamName = name;
+          break;
+        }
+      }
+    }
+
+    if (!activeTeam) {
+      panel.style.display = 'none';
+      return;
+    }
+
+    panel.style.display = '';
+    const tasks = this.teamTasks.get(activeTeamName) || [];
+    const completed = tasks.filter(t => t.status === 'completed').length;
+    const total = tasks.length;
+    const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+    const headerEl = panel.querySelector('.team-tasks-header-text');
+    if (headerEl) {
+      const teammateCount = activeTeam.members.filter(m => m.agentType !== 'team-lead').length;
+      headerEl.textContent = `Team Tasks (${teammateCount} teammates)`;
+    }
+
+    const progressEl = panel.querySelector('.team-tasks-progress-fill');
+    if (progressEl) {
+      progressEl.style.width = `${pct}%`;
+    }
+
+    const progressText = panel.querySelector('.team-tasks-progress-text');
+    if (progressText) {
+      progressText.textContent = `${completed}/${total}`;
+    }
+
+    const listEl = panel.querySelector('.team-tasks-list');
+    if (!listEl) return;
+
+    if (tasks.length === 0) {
+      listEl.innerHTML = '<div class="team-task-empty">No tasks yet</div>';
+      return;
+    }
+
+    const html = tasks.map(task => {
+      const statusIcon = task.status === 'completed' ? '✓' : task.status === 'in_progress' ? '◉' : '○';
+      const statusClass = task.status.replace('_', '-');
+      const ownerBadge = task.owner
+        ? `<span class="team-task-owner teammate-color-${this.getTeammateColor(task.owner)}">${this.escapeHtml(task.owner)}</span>`
+        : '';
+      return `<div class="team-task-item ${statusClass}">
+        <span class="team-task-status">${statusIcon}</span>
+        <span class="team-task-subject">${this.escapeHtml(task.subject)}</span>
+        ${ownerBadge}
+      </div>`;
+    }).join('');
+
+    listEl.innerHTML = html;
+  }
+
+  /** Get teammate color by name */
+  getTeammateColor(name) {
+    const info = this.teammateMap.get(name);
+    return info?.color || 'blue';
   }
 
   // ========== Project Insights Panel (Bash Tools with Clickable File Paths) ==========
@@ -13112,6 +13419,14 @@ class ClaudemanApp {
       return;
     }
 
+    // Cap open popups at 20 — close oldest when at limit
+    const MAX_IMAGE_POPUPS = 20;
+    if (this.imagePopups.size >= MAX_IMAGE_POPUPS) {
+      // Map iteration order is insertion order, so first key is oldest
+      const oldestId = this.imagePopups.keys().next().value;
+      if (oldestId) this.closeImagePopup(oldestId);
+    }
+
     // Calculate position (cascade from center, with offset for multiple popups)
     const windowCount = this.imagePopups.size;
     const centerX = (window.innerWidth - 600) / 2;
@@ -13286,6 +13601,50 @@ class ClaudemanApp {
       console.error('Failed to kill sessions:', err);
       this.toast('Failed to kill sessions: ' + err.message, 'error');
     }
+  }
+
+  // ========== Case Settings ==========
+
+  toggleCaseSettings() {
+    const popover = document.getElementById('caseSettingsPopover');
+    if (popover.classList.contains('hidden')) {
+      // Load settings for current case
+      const caseName = document.getElementById('quickStartCase').value || 'testcase';
+      const settings = this.getCaseSettings(caseName);
+      document.getElementById('caseAgentTeams').checked = settings.agentTeams;
+      popover.classList.remove('hidden');
+
+      // Close on outside click (one-shot listener)
+      const closeHandler = (e) => {
+        if (!popover.contains(e.target) && !e.target.classList.contains('btn-case-settings')) {
+          popover.classList.add('hidden');
+          document.removeEventListener('click', closeHandler);
+        }
+      };
+      // Defer to avoid catching the current click
+      setTimeout(() => document.addEventListener('click', closeHandler), 0);
+    } else {
+      popover.classList.add('hidden');
+    }
+  }
+
+  getCaseSettings(caseName) {
+    try {
+      const stored = localStorage.getItem('caseSettings_' + caseName);
+      if (stored) return JSON.parse(stored);
+    } catch { /* ignore */ }
+    return { agentTeams: false };
+  }
+
+  saveCaseSettings(caseName, settings) {
+    localStorage.setItem('caseSettings_' + caseName, JSON.stringify(settings));
+  }
+
+  onCaseSettingChanged() {
+    const caseName = document.getElementById('quickStartCase').value || 'testcase';
+    const settings = this.getCaseSettings(caseName);
+    settings.agentTeams = document.getElementById('caseAgentTeams').checked;
+    this.saveCaseSettings(caseName, settings);
   }
 
   // ========== Create Case Modal ==========

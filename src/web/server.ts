@@ -26,7 +26,7 @@ import { ScreenManager } from '../screen-manager.js';
 import { getStore } from '../state-store.js';
 import { generateClaudeMd } from '../templates/claude-md.js';
 import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
-import { writeHooksConfig } from '../hooks-config.js';
+import { writeHooksConfig, updateCaseEnvVars } from '../hooks-config.js';
 import { subagentWatcher, type SubagentInfo, type SubagentToolCall, type SubagentProgress, type SubagentMessage, type SubagentToolResult } from '../subagent-watcher.js';
 import { imageWatcher } from '../image-watcher.js';
 import { TranscriptWatcher } from '../transcript-watcher.js';
@@ -34,6 +34,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { createRequire } from 'node:module';
 import { RunSummaryTracker } from '../run-summary.js';
 import { PlanOrchestrator, type DetailedPlanResult } from '../plan-orchestrator.js';
+import { TeamWatcher } from '../team-watcher.js';
 
 // Load version from package.json
 const require = createRequire(import.meta.url);
@@ -51,6 +52,9 @@ import {
   type PersistedRespawnConfig,
   type NiceConfig,
   type ImageDetectedEvent,
+  type TeamConfig,
+  type TeamTask,
+  type InboxMessage,
   DEFAULT_NICE_CONFIG,
 } from '../types.js';
 import {
@@ -370,6 +374,7 @@ export class WebServer extends EventEmitter {
     detected: (event: ImageDetectedEvent) => void;
     error: (error: Error, sessionId?: string) => void;
   } | null = null;
+  private teamWatcher: TeamWatcher = new TeamWatcher();
 
   constructor(port: number = 3000, https: boolean = false, testMode: boolean = false) {
     super();
@@ -482,6 +487,26 @@ export class WebServer extends EventEmitter {
       imageWatcher.off('image:error', this.imageWatcherHandlers.error);
       this.imageWatcherHandlers = null;
     }
+  }
+
+  private setupTeamWatcherListeners(): void {
+    this.teamWatcher.on('teamCreated', (team: TeamConfig) => {
+      this.broadcast('team:created', team);
+    });
+    this.teamWatcher.on('teamUpdated', (team: TeamConfig) => {
+      this.broadcast('team:updated', team);
+    });
+    this.teamWatcher.on('teamRemoved', (team: TeamConfig) => {
+      this.broadcast('team:removed', team);
+    });
+    this.teamWatcher.on('taskUpdated', (data: { teamName: string; tasks: TeamTask[] }) => {
+      // Filter out internal tasks for broadcast
+      const visibleTasks = data.tasks.filter(t => !t.metadata?._internal);
+      this.broadcast('team:task_updated', { teamName: data.teamName, tasks: visibleTasks });
+    });
+    this.teamWatcher.on('inboxMessage', (data: { teamName: string; member: string; message: InboxMessage }) => {
+      this.broadcast('team:inbox_message', data);
+    });
   }
 
   private async setupRoutes(): Promise<void> {
@@ -655,6 +680,12 @@ export class WebServer extends EventEmitter {
       }
       const body = result.data;
       const workingDir = body.workingDir || process.cwd();
+
+      // Write env overrides to .claude/settings.local.json if provided
+      if (body.envOverrides && Object.keys(body.envOverrides).length > 0) {
+        updateCaseEnvVars(workingDir, body.envOverrides);
+      }
+
       const globalNice = this.getGlobalNiceConfig();
       const session = new Session({
         workingDir,
@@ -3295,6 +3326,49 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     });
 
 
+    // ========== Agent Teams ==========
+
+    // List all active teams
+    this.app.get('/api/teams', async () => {
+      const teams = this.teamWatcher.getTeams();
+      // Enrich with session association
+      const enriched = teams.map(team => ({
+        ...team,
+        sessionExists: this.sessions.has(team.leadSessionId),
+        activeTasks: this.teamWatcher.getActiveTaskCount(team.name),
+        teammateCount: team.members.filter(m => m.agentType !== 'team-lead').length,
+      }));
+      return { success: true, data: enriched };
+    });
+
+    // Get team for a specific session
+    this.app.get('/api/sessions/:id/team', async (req) => {
+      const { id } = req.params as { id: string };
+      const team = this.teamWatcher.getTeamForSession(id);
+      if (!team) {
+        return { success: true, data: null };
+      }
+      return {
+        success: true,
+        data: {
+          ...team,
+          activeTasks: this.teamWatcher.getActiveTaskCount(team.name),
+          teammateCount: team.members.filter(m => m.agentType !== 'team-lead').length,
+        },
+      };
+    });
+
+    // Get team tasks for a session's team
+    this.app.get('/api/sessions/:id/team-tasks', async (req) => {
+      const { id } = req.params as { id: string };
+      const team = this.teamWatcher.getTeamForSession(id);
+      if (!team) {
+        return { success: true, data: [] };
+      }
+      const tasks = this.teamWatcher.getTeamTasks(team.name);
+      return { success: true, data: tasks };
+    });
+
     // ========== Hook Events ==========
 
     this.app.post('/api/hook-event', async (req) => {
@@ -3911,6 +3985,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 
   private setupRespawnListeners(sessionId: string, controller: RespawnController): void {
+    // Inject team watcher for team-aware idle detection
+    controller.setTeamWatcher(this.teamWatcher);
+
     // Helper to get tracker lazily (may not exist at setup time for restored sessions)
     const getTracker = () => this.runSummaryTrackers.get(sessionId);
 
@@ -4717,6 +4794,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     } else {
       console.log('Image watcher disabled by user settings');
     }
+
+    // Start team watcher for Agent Teams support
+    this.setupTeamWatcherListeners();
+    this.teamWatcher.start();
+    console.log('Team watcher started - monitoring ~/.claude/teams for agent team activity');
   }
 
   /**
@@ -5011,6 +5093,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     // Stop image watcher
     imageWatcher.stop();
+
+    // Stop team watcher
+    this.teamWatcher.removeAllListeners();
+    this.teamWatcher.stop();
 
     // Destroy file stream manager (clears cleanup timer and kills remaining tail processes)
     fileStreamManager.destroy();

@@ -52,8 +52,52 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
           hooks: [{ type: 'command', command: curlCmd('stop'), timeout: 10000 }],
         },
       ],
+      TeammateIdle: [
+        {
+          hooks: [{ type: 'command', command: curlCmd('teammate_idle'), timeout: 10000 }],
+        },
+      ],
+      TaskCompleted: [
+        {
+          hooks: [{ type: 'command', command: curlCmd('task_completed'), timeout: 10000 }],
+        },
+      ],
     },
   };
+}
+
+/**
+ * Updates env vars in .claude/settings.local.json for the given case path.
+ * Merges with existing env field; removes vars set to empty string.
+ */
+export function updateCaseEnvVars(casePath: string, envVars: Record<string, string>): void {
+  const claudeDir = join(casePath, '.claude');
+  if (!existsSync(claudeDir)) {
+    mkdirSync(claudeDir, { recursive: true });
+  }
+
+  const settingsPath = join(claudeDir, 'settings.local.json');
+  let existing: Record<string, unknown> = {};
+
+  if (existsSync(settingsPath)) {
+    try {
+      existing = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+    } catch {
+      existing = {};
+    }
+  }
+
+  const currentEnv = (existing.env as Record<string, string>) || {};
+  for (const [key, value] of Object.entries(envVars)) {
+    if (value) {
+      currentEnv[key] = value;
+    } else {
+      delete currentEnv[key];
+    }
+  }
+  existing.env = currentEnv;
+
+  writeFileSync(settingsPath, JSON.stringify(existing, null, 2) + '\n');
 }
 
 /**

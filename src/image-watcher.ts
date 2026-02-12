@@ -43,6 +43,12 @@ const POLL_INTERVAL_MS = 100;
 /** Debounce delay for rapid image creation (ms) */
 const DEBOUNCE_DELAY_MS = 200;
 
+/** Max images emitted per session within the burst window before throttling */
+const BURST_LIMIT = 20;
+
+/** Time window for burst detection (ms) — resets after this period of quiet */
+const BURST_WINDOW_MS = 10_000;
+
 // ========== ImageWatcher Class ==========
 
 /**
@@ -72,6 +78,9 @@ export class ImageWatcher extends EventEmitter {
 
   /** Track which session owns each debounce timer (for cleanup) */
   private timerToSession = new Map<string, string>();
+
+  /** Per-session burst tracking: sessionId -> { count, windowStart } */
+  private burstTrackers = new Map<string, { count: number; windowStart: number }>();
 
   /** Whether the watcher is currently running */
   private _isRunning = false;
@@ -121,6 +130,7 @@ export class ImageWatcher extends EventEmitter {
     }
     this.debounceTimers.clear();
     this.timerToSession.clear();
+    this.burstTrackers.clear();
   }
 
   /**
@@ -219,6 +229,7 @@ export class ImageWatcher extends EventEmitter {
       }
       this.timerToSession.delete(filePath);
     }
+    this.burstTrackers.delete(sessionId);
   }
 
   /**
@@ -242,6 +253,23 @@ export class ImageWatcher extends EventEmitter {
       return;
     }
 
+    // Burst limit: skip if too many images detected for this session in a short window
+    const now = Date.now();
+    let burst = this.burstTrackers.get(sessionId);
+    if (burst) {
+      if (now - burst.windowStart > BURST_WINDOW_MS) {
+        // Window expired, reset
+        burst = { count: 0, windowStart: now };
+        this.burstTrackers.set(sessionId, burst);
+      }
+      if (burst.count >= BURST_LIMIT) {
+        return; // Throttled — too many images in this window
+      }
+    } else {
+      burst = { count: 0, windowStart: now };
+      this.burstTrackers.set(sessionId, burst);
+    }
+
     // Debounce rapid file creation (e.g., multiple screenshots quickly)
     const existingTimer = this.debounceTimers.get(filePath);
     if (existingTimer) {
@@ -252,6 +280,9 @@ export class ImageWatcher extends EventEmitter {
       this.debounceTimers.delete(filePath);
       this.timerToSession.delete(filePath);
       this.emitImageDetected(sessionId, filePath);
+      // Increment burst count on actual emission (not on detection)
+      const b = this.burstTrackers.get(sessionId);
+      if (b) b.count++;
     }, DEBOUNCE_DELAY_MS);
 
     this.debounceTimers.set(filePath, timer);
