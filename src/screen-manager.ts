@@ -57,14 +57,10 @@ const DEFAULT_STATS_INTERVAL_MS = 2000;
 /** Maximum retry attempts for carriage return (3) */
 const CR_MAX_ATTEMPTS = 3;
 
-/**
- * Wraps a command with `nice` for priority adjustment.
- */
-export function wrapWithNice(cmd: string, config: NiceConfig): string {
-  if (!config.enabled) return cmd;
-  const niceValue = Math.max(-20, Math.min(19, config.niceValue));
-  return `nice -n ${niceValue} ${cmd}`;
-}
+// Import from shared utility (extracted to avoid cross-dependency)
+import { wrapWithNice } from './utils/nice-wrapper.js';
+// Re-export for backward compatibility
+export { wrapWithNice } from './utils/nice-wrapper.js';
 
 
 /** Cached directory containing the claude binary */

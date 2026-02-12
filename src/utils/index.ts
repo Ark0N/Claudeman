@@ -34,3 +34,4 @@ export {
   todoContentHash,
 } from './string-similarity.js';
 export { assertNever } from './type-safety.js';
+export { wrapWithNice } from './nice-wrapper.js';

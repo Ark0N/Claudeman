@@ -115,6 +115,13 @@ kill_session() {
     local mux_name=$(get_session_field $idx "muxName")
     local pid=$(get_session_field $idx "pid")
 
+    # SAFETY: Never kill own tmux session
+    local current_session=$(tmux display-message -p '#{session_name}' 2>/dev/null || echo "")
+    if [[ -n "$current_session" && "$mux_name" == "$current_session" ]]; then
+        echo -e "${RED}BLOCKED: Cannot kill own tmux session: $mux_name${NC}"
+        return 1
+    fi
+
     pkill -TERM -P $pid 2>/dev/null
     kill -TERM -$pid 2>/dev/null
     tmux kill-session -t "$mux_name" 2>/dev/null
@@ -489,8 +496,19 @@ main() {
             ;;
         kill-all)
             force_refresh
-            for ((i=CACHED_COUNT-1; i>=0; i--)); do kill_session $i; done
-            echo "All sessions killed"
+            # SAFETY: Never kill own tmux session
+            local current_session=$(tmux display-message -p '#{session_name}' 2>/dev/null || echo "")
+            local killed=0
+            for ((i=CACHED_COUNT-1; i>=0; i--)); do
+                local mux_name=$(get_session_field $i "muxName")
+                if [[ -n "$current_session" && "$mux_name" == "$current_session" ]]; then
+                    echo -e "${RED}SKIPPED: Own tmux session: $mux_name${NC}"
+                    continue
+                fi
+                kill_session $i
+                ((killed++))
+            done
+            echo "$killed sessions killed"
             ;;
         info)
             [[ -z "${2:-}" ]] && { echo "Usage: $0 info <N>"; exit 1; }

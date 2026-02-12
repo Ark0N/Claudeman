@@ -27,7 +27,7 @@ import { existsSync, readFileSync, mkdirSync, writeFile } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { ProcessStats, PersistedRespawnConfig, getErrorMessage, NiceConfig, DEFAULT_NICE_CONFIG } from './types.js';
-import { wrapWithNice } from './screen-manager.js';
+import { wrapWithNice } from './utils/nice-wrapper.js';
 import type { TerminalMultiplexer, MuxSession, MuxSessionWithStats } from './mux-interface.js';
 
 // ============================================================================
@@ -155,6 +155,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   readonly backend = 'tmux' as const;
   private sessions: Map<string, MuxSession> = new Map();
   private statsInterval: NodeJS.Timeout | null = null;
+
+  private trueColorConfigured = false;
 
   constructor() {
     super();
@@ -296,6 +298,21 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         // Non-critical — session still works with status bar
       }
 
+      // Enable 24-bit true color passthrough — without this, tmux downgrades
+      // RGB colors (like Claude's red logo) to the nearest 256-color palette entry.
+      // Server-wide option, only set once per TmuxManager lifetime to avoid duplicates.
+      if (!this.trueColorConfigured) {
+        try {
+          execSync(
+            `tmux set-option -sa terminal-overrides ",*:Tc"`,
+            { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+          );
+          this.trueColorConfigured = true;
+        } catch {
+          // Non-critical — colors will still work, just limited to 256
+        }
+      }
+
       // Get the PID of the pane process
       const pid = this.getPanePid(muxName);
       if (!pid) {
@@ -416,6 +433,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   async killSession(sessionId: string): Promise<boolean> {
     const session = this.sessions.get(sessionId);
     if (!session) {
+      return false;
+    }
+
+    // SAFETY: Never kill the tmux session we're running inside of
+    const currentMuxName = process.env.CLAUDEMAN_SCREEN_NAME;
+    if (currentMuxName && session.muxName === currentMuxName) {
+      console.error(`[TmuxManager] BLOCKED: Refusing to kill own tmux session: ${session.muxName}`);
       return false;
     }
 
