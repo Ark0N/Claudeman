@@ -463,6 +463,12 @@ const KeyboardAccessoryBar = {
       <button class="accessory-btn" data-action="init" title="/init">/init</button>
       <button class="accessory-btn" data-action="clear" title="/clear">/clear</button>
       <button class="accessory-btn" data-action="compact" title="/compact">/compact</button>
+      <button class="accessory-btn" data-action="paste" title="Paste from clipboard">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+          <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+        </svg>
+      </button>
       <button class="accessory-btn accessory-btn-dismiss" data-action="dismiss" title="Dismiss keyboard">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M19 9l-7 7-7-7"/>
@@ -500,6 +506,9 @@ const KeyboardAccessoryBar = {
       case 'compact':
         this.confirmAndSend('/compact', 'Compact context?');
         break;
+      case 'paste':
+        this.pasteFromClipboard();
+        break;
       case 'dismiss':
         // Blur active element to dismiss keyboard
         document.activeElement?.blur();
@@ -511,6 +520,20 @@ const KeyboardAccessoryBar = {
   confirmAndSend(command, message) {
     if (confirm(message)) {
       app.sendInput(command + '\r');
+    }
+  },
+
+  /** Read clipboard and send contents as input */
+  async pasteFromClipboard() {
+    if (typeof app === 'undefined' || !app.activeSessionId) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        app.sendInput(text);
+      }
+    } catch (_err) {
+      // Clipboard API may fail without secure context or permission
+      app.showToast?.('Clipboard access denied', 'error');
     }
   },
 
