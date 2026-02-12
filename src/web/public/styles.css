@@ -5530,17 +5530,34 @@ kbd {
 /* Team Tasks Panel */
 .team-tasks-panel {
   position: fixed;
-  bottom: 50px;
-  right: 10px;
-  width: 320px;
-  max-height: 300px;
-  background: var(--bg-secondary);
+  width: 360px;
+  min-width: 260px;
+  min-height: 120px;
+  max-width: 90vw;
+  max-height: 80vh;
+  background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
   z-index: 900;
   overflow: hidden;
   font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  resize: both;
+}
+
+/* Resize handle indicator */
+.team-tasks-panel::after {
+  content: '';
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  width: 12px;
+  height: 12px;
+  background: linear-gradient(135deg, transparent 50%, var(--border-light) 50%, var(--border-light) 60%, transparent 60%, transparent 70%, var(--border-light) 70%, var(--border-light) 80%, transparent 80%);
+  pointer-events: none;
+  opacity: 0.6;
 }
 
 .team-tasks-header {
@@ -5548,8 +5565,24 @@ kbd {
   align-items: center;
   justify-content: space-between;
   padding: 8px 12px;
-  background: var(--bg-tertiary);
+  background: var(--bg-input);
   border-bottom: 1px solid var(--border);
+  cursor: move;
+  gap: 8px;
+}
+
+.team-tasks-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+.team-tasks-close:hover {
+  color: var(--text);
 }
 
 .team-tasks-header-text {
@@ -5585,7 +5618,8 @@ kbd {
 
 .team-tasks-list {
   overflow-y: auto;
-  max-height: 250px;
+  flex: 1;
+  min-height: 0;
   padding: 4px 0;
 }
 

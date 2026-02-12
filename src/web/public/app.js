@@ -12004,7 +12004,8 @@ class ClaudemanApp {
         </div>`
       : '';
 
-    const windowTitle = agent.description || agentId.substring(0, 7);
+    const teammateInfo = this.getTeammateInfo(agent);
+    const windowTitle = teammateInfo ? teammateInfo.name : (agent.description || agentId.substring(0, 7));
     const truncatedTitle = windowTitle.length > 50 ? windowTitle.substring(0, 50) + '...' : windowTitle;
     const modelBadge = agent.modelShort
       ? `<span class="subagent-model-badge ${agent.modelShort}">${agent.modelShort}</span>`
@@ -12280,6 +12281,13 @@ class ClaudemanApp {
     if (this.activeFocusTrap) {
       this.activeFocusTrap.deactivate();
       this.activeFocusTrap = null;
+    }
+
+    // Clean up team tasks panel drag listeners
+    if (this.teamTasksDragListeners) {
+      document.removeEventListener('mousemove', this.teamTasksDragListeners.move);
+      document.removeEventListener('mouseup', this.teamTasksDragListeners.up);
+      this.teamTasksDragListeners = null;
     }
 
     // Clear minimized agents tracking
@@ -12585,7 +12593,23 @@ class ClaudemanApp {
       return;
     }
 
-    panel.style.display = '';
+    // Set initial position and make draggable on first show
+    const wasHidden = panel.style.display === 'none';
+    panel.style.display = 'flex';
+
+    if (wasHidden && !this.teamTasksDragListeners) {
+      // Position bottom-right
+      const panelWidth = 360;
+      const panelHeight = 300;
+      panel.style.left = `${Math.max(10, window.innerWidth - panelWidth - 20)}px`;
+      panel.style.top = `${Math.max(10, window.innerHeight - panelHeight - 70)}px`;
+      // Make draggable
+      const header = panel.querySelector('.team-tasks-header');
+      if (header) {
+        this.teamTasksDragListeners = this.makeWindowDraggable(panel, header);
+      }
+    }
+
     const tasks = this.teamTasks.get(activeTeamName) || [];
     const completed = tasks.filter(t => t.status === 'completed').length;
     const total = tasks.length;
@@ -12629,6 +12653,17 @@ class ClaudemanApp {
     }).join('');
 
     listEl.innerHTML = html;
+  }
+
+  /** Hide team tasks panel and clean up drag listeners */
+  hideTeamTasksPanel() {
+    const panel = document.getElementById('teamTasksPanel');
+    if (panel) panel.style.display = 'none';
+    if (this.teamTasksDragListeners) {
+      document.removeEventListener('mousemove', this.teamTasksDragListeners.move);
+      document.removeEventListener('mouseup', this.teamTasksDragListeners.up);
+      this.teamTasksDragListeners = null;
+    }
   }
 
   /** Get teammate color by name */
