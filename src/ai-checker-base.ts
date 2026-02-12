@@ -3,7 +3,7 @@
  *
  * Provides shared functionality for AI-powered checkers that spawn fresh Claude CLI
  * sessions to analyze terminal output. This base class handles:
- * - Screen session spawning and cleanup
+ * - Mux session spawning and cleanup
  * - Temp file management for output capture
  * - Polling for completion markers
  * - Cooldown management
@@ -11,7 +11,7 @@
  * - Event emission for state changes
  *
  * Subclasses implement:
- * - `screenNamePrefix`: Prefix for screen session names (e.g., 'claudeman-aicheck-')
+ * - `screenNamePrefix`: Prefix for mux session names (e.g., 'claudeman-aicheck-')
  * - `doneMarker`: Completion marker in output file (e.g., '__AICHECK_DONE__')
  * - `tempFilePrefix`: Prefix for temp files (e.g., 'claudeman-aicheck')
  * - `logPrefix`: Prefix for log messages (e.g., '[AiIdleChecker]')
@@ -115,7 +115,7 @@ const POLL_INTERVAL_MS = 500;
 
 /**
  * Abstract base class for AI-powered checkers.
- * Handles spawning Claude CLI in a screen session to analyze terminal output.
+ * Handles spawning Claude CLI in a mux session to analyze terminal output.
  *
  * @template V - The verdict type (e.g., 'IDLE' | 'WORKING' | 'ERROR')
  * @template C - The configuration type
@@ -154,7 +154,7 @@ export abstract class AiCheckerBase<
 
   // ========== Abstract Properties ==========
 
-  /** Prefix for screen session names (e.g., 'claudeman-aicheck-') */
+  /** Prefix for mux session names (e.g., 'claudeman-aicheck-') */
   protected abstract readonly screenNamePrefix: string;
 
   /** Marker written to temp file when check is complete */
@@ -318,7 +318,7 @@ export abstract class AiCheckerBase<
 
   /**
    * Cancel an in-progress check.
-   * Kills the screen session and cleans up.
+   * Kills the mux session and cleans up.
    */
   cancel(): void {
     if (this._status !== 'checking') return;

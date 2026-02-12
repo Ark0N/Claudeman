@@ -1149,6 +1149,10 @@ class ClaudemanApp {
     this.teams = new Map(); // Map<teamName, TeamConfig>
     this.teamTasks = new Map(); // Map<teamName, TeamTask[]>
     this.teammateMap = new Map(); // Map<agentId-prefix, {name, color, teamName}> for quick lookup
+
+    // Teammate tmux pane terminals
+    this.teammatePanesByName = new Map(); // Map<name, { paneTarget, sessionId, color }>
+    this.teammateTerminals = new Map(); // Map<agentId, { terminal, fitAddon, paneTarget, sessionId, resizeObserver }>
     this.ralphStatePanelCollapsed = true; // Default to collapsed
     this.ralphClosedSessions = new Set(); // Sessions where user explicitly closed Ralph panel
 
@@ -2103,6 +2107,23 @@ class ClaudemanApp {
       this.closeSessionLogViewerWindows(data.id);  // Close log viewer windows for this session
       this.closeSessionImagePopups(data.id);  // Close image popup windows for this session
       this.closeSessionSubagentWindows(data.id, true);  // Close subagent windows and cleanup activity data
+
+      // Clean up any agent teams associated with this session
+      for (const [teamName, team] of this.teams) {
+        if (team.leadSessionId === data.id) {
+          this.teams.delete(teamName);
+          this.teamTasks.delete(teamName);
+        }
+      }
+      // Clean up teammate pane tracking for this session
+      for (const [name, paneInfo] of this.teammatePanesByName) {
+        if (paneInfo.sessionId === data.id) {
+          this.teammatePanesByName.delete(name);
+        }
+      }
+      this.rebuildTeammateMap();
+      this.renderTeamTasksPanel();
+
       // Clean up idle timer for this session
       const idleTimer = this.idleTimers.get(data.id);
       if (idleTimer) {
@@ -2531,7 +2552,7 @@ class ClaudemanApp {
       const data = JSON.parse(e.data);
       this.screenSessions = this.screenSessions.filter(s => s.sessionId !== data.sessionId);
       this.renderScreenSessions();
-      this.showToast('Screen session died: ' + data.sessionId.slice(0, 8), 'warning');
+      this.showToast('Mux session died: ' + data.sessionId.slice(0, 8), 'warning');
     });
 
     addListener('screen:statsUpdated', (e) => {
@@ -2736,9 +2757,15 @@ class ClaudemanApp {
       // Find which Claudeman session owns this subagent (direct claudeSessionId match only)
       this.findParentSessionForSubagent(data.agentId);
 
-      // Auto-open window for new active agents
+      // Auto-open window for new active agents — but ONLY if they belong to a Claudeman session tab.
+      // Agents from external Claude sessions (not managed by Claudeman) should not pop up.
       if (data.status === 'active') {
-        this.openSubagentWindow(data.agentId);
+        const agentForCheck = this.subagents.get(data.agentId);
+        const hasMatchingTab = agentForCheck?.sessionId &&
+          Array.from(this.sessions.values()).some(s => s.claudeSessionId === agentForCheck.sessionId);
+        if (hasMatchingTab) {
+          this.openSubagentWindow(data.agentId);
+        }
       }
 
       // Ensure connection lines are updated after window is created and DOM settles
@@ -2901,6 +2928,57 @@ class ClaudemanApp {
     addListener('team:inbox_message', (e) => {
       // Inbox messages currently just trigger panel updates
       this.renderTeamTasksPanel();
+    });
+
+    // ========== Teammate Pane Events ==========
+
+    addListener('teammate:pane_available', (e) => {
+      const data = JSON.parse(e.data);
+
+      // Only show teammate pane windows if the session has a tab in Claudeman
+      if (!this.sessions.has(data.sessionId)) return;
+
+      this.teammatePanesByName.set(data.teammateName, {
+        paneTarget: data.paneTarget,
+        sessionId: data.sessionId,
+        color: data.color,
+      });
+      // Upgrade any existing subagent windows for this teammate to terminal mode
+      let foundExisting = false;
+      for (const [agentId, agent] of this.subagents) {
+        const info = this.getTeammateInfo(agent);
+        if (info && info.name === data.teammateName && !this.teammateTerminals.has(agentId)) {
+          const windowData = this.subagentWindows.get(agentId);
+          if (windowData) {
+            this.initTeammateTerminal(agentId, data, windowData.element);
+            foundExisting = true;
+          }
+        }
+      }
+      // If no existing subagent window found, create a standalone teammate terminal window
+      if (!foundExisting) {
+        this.openTeammateTerminalWindow(data);
+      }
+    });
+
+    addListener('teammate:terminal', (e) => {
+      const data = JSON.parse(e.data);
+      // Find the terminal instance for this pane
+      for (const [, termData] of this.teammateTerminals) {
+        if (termData.paneTarget === data.paneTarget && termData.sessionId === data.sessionId) {
+          // Decode base64 to Uint8Array to preserve UTF-8 multi-byte sequences
+          const binary = atob(data.data);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          if (termData.terminal) {
+            try { termData.terminal.write(bytes); } catch {}
+          } else if (termData.pendingData) {
+            // Terminal not ready yet — buffer the data
+            termData.pendingData.push(bytes);
+          }
+          break;
+        }
+      }
     });
 
     // ========== Image Detection Events (Screenshots & Generated Images) ==========
@@ -9906,7 +9984,7 @@ class ClaudemanApp {
     }
   }
 
-  // ========== Monitor Panel (combined Screen Sessions + Background Tasks) ==========
+  // ========== Monitor Panel (combined Mux Sessions + Background Tasks) ==========
 
   async toggleMonitorPanel() {
     const panel = document.getElementById('monitorPanel');
@@ -11972,6 +12050,13 @@ class ClaudemanApp {
     const agent = this.subagents.get(agentId);
     if (!agent) return;
 
+    // Only open windows for agents that belong to a Claudeman-managed session tab.
+    // Agents from external Claude sessions (not tracked by Claudeman) should not pop up.
+    if (agent.sessionId) {
+      const hasMatchingTab = Array.from(this.sessions.values()).some(s => s.claudeSessionId === agent.sessionId);
+      if (!hasMatchingTab) return;
+    }
+
     // Calculate final position - grid layout to avoid overlaps
     const windowCount = this.subagentWindows.size;
     const windowWidth = 420;
@@ -12133,8 +12218,13 @@ class ClaudemanApp {
       win.style.display = 'none';
     }
 
-    // Render content
-    this.renderSubagentWindowContent(agentId);
+    // Render content — check if this teammate has a tmux pane
+    const paneInfo = teammateInfo ? this.teammatePanesByName.get(teammateInfo.name) : null;
+    if (paneInfo) {
+      this.initTeammateTerminal(agentId, paneInfo, win);
+    } else {
+      this.renderSubagentWindowContent(agentId);
+    }
 
     // Focus on click
     win.addEventListener('mousedown', () => {
@@ -12217,7 +12307,10 @@ class ClaudemanApp {
     const toClose = [];
     for (const [agentId, _windowData] of this.subagentWindows) {
       const agent = this.subagents.get(agentId);
-      if (agent?.parentSessionId === sessionId) {
+      // Check both subagent parentSessionId and subagentParentMap
+      // (standalone pane windows use subagentParentMap, not subagents map)
+      const parentFromMap = this.subagentParentMap.get(agentId);
+      if (agent?.parentSessionId === sessionId || parentFromMap === sessionId) {
         toClose.push(agentId);
       }
     }
@@ -12228,6 +12321,7 @@ class ClaudemanApp {
         this.subagents.delete(agentId);
         this.subagentActivity.delete(agentId);
         this.subagentToolResults.delete(agentId);
+        this.subagentParentMap.delete(agentId);
       }
     }
     // Also clean up minimized agents for this session
@@ -12251,6 +12345,17 @@ class ClaudemanApp {
       windowData.element.remove();
       this.subagentWindows.delete(agentId);
     }
+    // Clean up teammate terminal if present
+    const termData = this.teammateTerminals.get(agentId);
+    if (termData) {
+      if (termData.resizeObserver) {
+        termData.resizeObserver.disconnect();
+      }
+      if (termData.terminal) {
+        try { termData.terminal.dispose(); } catch {}
+      }
+      this.teammateTerminals.delete(agentId);
+    }
   }
 
   // Clean up ALL floating windows (called during handleInit to prevent memory leaks on reconnect)
@@ -12267,6 +12372,16 @@ class ClaudemanApp {
       windowData.element.remove();
     }
     this.subagentWindows.clear();
+
+    // Clean up all teammate terminals
+    for (const [, termData] of this.teammateTerminals) {
+      if (termData.resizeObserver) termData.resizeObserver.disconnect();
+      if (termData.terminal) {
+        try { termData.terminal.dispose(); } catch {}
+      }
+    }
+    this.teammateTerminals.clear();
+    this.teammatePanesByName.clear();
 
     // Clean up all log viewer windows with their EventSources and drag listeners
     for (const [windowId, data] of this.logViewerWindows) {
@@ -12460,6 +12575,9 @@ class ClaudemanApp {
   }
 
   renderSubagentWindowContent(agentId) {
+    // Skip if this window has a live terminal (don't overwrite xterm with activity HTML)
+    if (this.teammateTerminals.has(agentId)) return;
+
     const body = document.getElementById(`subagent-window-body-${agentId}`);
     if (!body) return;
 
@@ -12592,6 +12710,249 @@ class ClaudemanApp {
   }
 
   // ========== Agent Teams ==========
+
+  /** Initialize an xterm.js terminal for a teammate's tmux pane */
+  initTeammateTerminal(agentId, paneInfo, windowElement) {
+    const body = windowElement.querySelector('.subagent-window-body');
+    if (!body) return;
+
+    // Clear the activity log content
+    body.innerHTML = '';
+    body.classList.add('teammate-terminal-body');
+    windowElement.classList.add('has-terminal');
+
+    const sessionId = paneInfo.sessionId;
+
+    // Buffer incoming terminal data until xterm is ready
+    const pendingData = [];
+    this.teammateTerminals.set(agentId, {
+      terminal: null,
+      fitAddon: null,
+      paneTarget: paneInfo.paneTarget,
+      sessionId,
+      resizeObserver: null,
+      pendingData,
+    });
+
+    // Defer terminal creation to next frame so the body element has computed dimensions
+    requestAnimationFrame(() => {
+      // Safety: if window was closed before we got here, bail out
+      if (!document.contains(body)) {
+        this.teammateTerminals.delete(agentId);
+        return;
+      }
+
+      const terminal = new Terminal({
+        theme: {
+          background: '#0d0d0d',
+          foreground: '#e0e0e0',
+          cursor: '#e0e0e0',
+          cursorAccent: '#0d0d0d',
+          selection: 'rgba(255, 255, 255, 0.3)',
+          black: '#0d0d0d',
+          red: '#ff6b6b',
+          green: '#51cf66',
+          yellow: '#ffd43b',
+          blue: '#339af0',
+          magenta: '#cc5de8',
+          cyan: '#22b8cf',
+          white: '#e0e0e0',
+          brightBlack: '#495057',
+          brightRed: '#ff8787',
+          brightGreen: '#69db7c',
+          brightYellow: '#ffe066',
+          brightBlue: '#5c7cfa',
+          brightMagenta: '#da77f2',
+          brightCyan: '#66d9e8',
+          brightWhite: '#ffffff',
+        },
+        fontFamily: '"Fira Code", "Cascadia Code", "JetBrains Mono", "SF Mono", Monaco, monospace',
+        fontSize: 12,
+        lineHeight: 1.2,
+        cursorBlink: true,
+        cursorStyle: 'block',
+        scrollback: 5000,
+        allowTransparency: true,
+      });
+
+      const fitAddon = new FitAddon.FitAddon();
+      terminal.loadAddon(fitAddon);
+
+      try {
+        terminal.open(body);
+      } catch (err) {
+        console.warn('[TeammateTerminal] Failed to open terminal:', err);
+        this.teammateTerminals.delete(agentId);
+        return;
+      }
+
+      // Wait for terminal renderer to fully initialize before any writes.
+      // xterm.js needs a few frames after open() before write() is safe.
+      setTimeout(() => {
+        try { fitAddon.fit(); } catch {}
+
+        // Fetch initial pane buffer
+        fetch(`/api/sessions/${sessionId}/teammate-pane-buffer/${encodeURIComponent(paneInfo.paneTarget)}`)
+          .then(r => r.json())
+          .then(resp => {
+            if (resp.success && resp.data?.buffer) {
+              try { terminal.write(resp.data.buffer); } catch {}
+            }
+          })
+          .catch(err => console.error('[TeammateTerminal] Failed to fetch buffer:', err));
+
+        // Flush any data that arrived while terminal was initializing
+        for (const chunk of pendingData) {
+          try { terminal.write(chunk); } catch {}
+        }
+        pendingData.length = 0;
+      }, 100);
+
+      // Forward keyboard input to the teammate's pane
+      terminal.onData((data) => {
+        fetch(`/api/sessions/${sessionId}/teammate-pane-input`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paneTarget: paneInfo.paneTarget, input: data }),
+        }).catch(err => console.error('[TeammateTerminal] Failed to send input:', err));
+      });
+
+      // Resize observer to refit terminal when window is resized
+      const resizeObserver = new ResizeObserver(() => {
+        requestAnimationFrame(() => { try { fitAddon.fit(); } catch {} });
+      });
+      resizeObserver.observe(body);
+
+      // Update the stored entry with the real terminal
+      const entry = this.teammateTerminals.get(agentId);
+      if (entry) {
+        entry.terminal = terminal;
+        entry.fitAddon = fitAddon;
+        entry.resizeObserver = resizeObserver;
+      }
+    });
+  }
+
+  /** Open a standalone terminal window for a tmux-pane teammate (no subagent entry needed) */
+  openTeammateTerminalWindow(paneData) {
+    // Only open if the session has a tab in Claudeman
+    if (!this.sessions.has(paneData.sessionId)) return;
+
+    // Use pane target as the unique ID for this window
+    const windowId = `pane-${paneData.paneTarget}`;
+
+    // If window already exists, focus it
+    if (this.subagentWindows.has(windowId)) {
+      const existing = this.subagentWindows.get(windowId);
+      if (existing.hidden) {
+        existing.element.style.display = 'flex';
+        existing.hidden = false;
+      }
+      existing.element.style.zIndex = ++this.subagentWindowZIndex;
+      if (existing.minimized) {
+        this.restoreSubagentWindow(windowId);
+      }
+      return;
+    }
+
+    // Calculate position
+    const windowCount = this.subagentWindows.size;
+    const windowWidth = 550;
+    const windowHeight = 400;
+    const gap = 20;
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const startX = 50;
+    const startY = 120;
+    const maxCols = Math.floor((viewportWidth - startX - 50) / (windowWidth + gap)) || 1;
+    const maxRows = Math.floor((viewportHeight - startY - 50) / (windowHeight + gap)) || 1;
+    const col = windowCount % maxCols;
+    const row = Math.floor(windowCount / maxCols) % maxRows;
+    let finalX = startX + col * (windowWidth + gap);
+    let finalY = startY + row * (windowHeight + gap);
+    finalX = Math.max(10, Math.min(finalX, viewportWidth - windowWidth - 10));
+    finalY = Math.max(10, Math.min(finalY, viewportHeight - windowHeight - 10));
+
+    // Color badge
+    const colorClass = paneData.color || 'blue';
+
+    // Create window element
+    const win = document.createElement('div');
+    win.className = 'subagent-window has-terminal';
+    win.id = `subagent-window-${windowId}`;
+    win.style.zIndex = ++this.subagentWindowZIndex;
+    win.style.left = `${finalX}px`;
+    win.style.top = `${finalY}px`;
+    win.style.width = `${windowWidth}px`;
+    win.style.height = `${windowHeight}px`;
+    win.innerHTML = `
+      <div class="subagent-window-header">
+        <div class="subagent-window-title" title="Teammate terminal: ${this.escapeHtml(paneData.teammateName)} (pane ${paneData.paneTarget})">
+          <span class="icon" style="color: var(--team-color-${colorClass}, #339af0)">⬤</span>
+          <span class="id">${this.escapeHtml(paneData.teammateName)}</span>
+          <span class="status running">terminal</span>
+        </div>
+        <div class="subagent-window-actions">
+          <button onclick="app.closeSubagentWindow('${windowId}')" title="Minimize to tab">─</button>
+        </div>
+      </div>
+      <div class="subagent-window-body teammate-terminal-body" id="subagent-window-body-${windowId}">
+      </div>
+    `;
+
+    document.body.appendChild(win);
+
+    // Make draggable
+    const dragListeners = this.makeWindowDraggable(win, win.querySelector('.subagent-window-header'));
+
+    // Make resizable if method exists
+    if (typeof this.makeWindowResizable === 'function') {
+      this.makeWindowResizable(win);
+    }
+
+    // Check visibility based on active session
+    const settings = this.loadAppSettingsFromStorage();
+    const activeTabOnly = settings.subagentActiveTabOnly ?? true;
+    const shouldHide = activeTabOnly && paneData.sessionId !== this.activeSessionId;
+
+    // Store reference
+    this.subagentWindows.set(windowId, {
+      element: win,
+      minimized: false,
+      hidden: shouldHide,
+      dragListeners,
+      description: `Teammate: ${paneData.teammateName}`,
+    });
+
+    // Also add to subagentParentMap for tab-based visibility
+    this.subagentParentMap.set(windowId, paneData.sessionId);
+
+    if (shouldHide) {
+      win.style.display = 'none';
+    }
+
+    // Focus on click
+    win.addEventListener('mousedown', () => {
+      win.style.zIndex = ++this.subagentWindowZIndex;
+    });
+
+    // Resize observer for connection lines
+    const resizeObserver = new ResizeObserver(() => {
+      this.updateConnectionLines();
+    });
+    resizeObserver.observe(win);
+    this.subagentWindows.get(windowId).resizeObserver = resizeObserver;
+
+    // Init the xterm.js terminal
+    this.initTeammateTerminal(windowId, paneData, win);
+
+    // Animate in
+    requestAnimationFrame(() => {
+      win.style.transition = 'transform 0.3s ease, opacity 0.3s ease';
+      win.style.transform = 'scale(1)';
+      win.style.opacity = '1';
+    });
+  }
 
   /** Rebuild the teammate lookup map from all team configs */
   rebuildTeammateMap() {
@@ -13625,7 +13986,7 @@ class ClaudemanApp {
     }
   }
 
-  // ========== Screen Sessions (in Monitor Panel) ==========
+  // ========== Mux Sessions (in Monitor Panel) ==========
 
   async loadScreens() {
     try {
@@ -13974,7 +14335,7 @@ class ClaudemanApp {
     const body = document.getElementById('screenSessionsBody');
 
     if (!this.screenSessions || this.screenSessions.length === 0) {
-      body.innerHTML = '<div class="monitor-empty">No screen sessions</div>';
+      body.innerHTML = '<div class="monitor-empty">No mux sessions</div>';
       return;
     }
 
@@ -14049,7 +14410,7 @@ class ClaudemanApp {
   }
 
   async killScreen(sessionId) {
-    if (!confirm('Kill this screen session?')) return;
+    if (!confirm('Kill this mux session?')) return;
 
     try {
       await fetch(`/api/screens/${sessionId}`, { method: 'DELETE' });

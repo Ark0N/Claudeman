@@ -52,9 +52,9 @@ Real-time desktop notifications when sessions need attention — never miss a pe
 
 ---
 
-### 💾 Persistent Screen Sessions
+### 💾 Persistent Sessions
 
-Every Claude session runs inside **GNU Screen** — sessions survive server restarts, network drops, and machine sleep.
+Every Claude session runs inside **tmux** (or GNU Screen as fallback) — sessions survive server restarts, network drops, and machine sleep.
 
 ```bash
 # Your sessions are always recoverable
@@ -63,10 +63,10 @@ CLAUDEMAN_SESSION_ID=abc-123-def
 CLAUDEMAN_SCREEN_NAME=claudeman-myproject
 ```
 
-- Sessions auto-recover on startup (dual redundancy: `state.json` + `screens.json`)
+- Sessions auto-recover on startup (dual redundancy: `state.json` + `mux-sessions.json`)
 - All settings (respawn, auto-compact, tokens) survive server restarts
-- Ghost session discovery finds orphaned screens
-- Claude knows it's managed (won't kill its own screen)
+- Ghost session discovery finds orphaned mux sessions
+- Claude knows it's managed (won't kill its own session)
 
 ---
 
@@ -203,7 +203,7 @@ Run **20 parallel sessions** with full visibility:
   <img src="docs/screenshots/multi-session-dashboard.png" alt="Multi-Session Dashboard" width="800">
 </p>
 
-**Monitor Panel** — Real-time screen session monitoring with memory, CPU, and process info:
+**Monitor Panel** — Real-time session monitoring with memory, CPU, and process info:
 
 <p align="center">
   <img src="docs/screenshots/multi-session-monitor.png" alt="Monitor Panel" width="800">
@@ -322,7 +322,7 @@ npm install -g claudeman
 
 - Node.js 18+
 - [Claude CLI](https://docs.anthropic.com/en/docs/claude-code/getting-started) installed
-- GNU Screen (`apt install screen` / `brew install screen`)
+- tmux (`apt install tmux` / `brew install tmux`) — preferred; GNU Screen as fallback (`CLAUDEMAN_MUX=screen`)
 
 ## Getting Started
 
@@ -365,7 +365,7 @@ claudeman web
 | Tiny text, no context | Full xterm.js terminal, responsive layout |
 | No session management | Swipe between sessions, tab badges show status |
 | No notifications | Push alerts when Claude needs approval or goes idle |
-| Manual reconnect after drops | GNU Screen persistence — sessions survive anything |
+| Manual reconnect after drops | tmux persistence — sessions survive anything |
 | No agent visibility | See background agents working in real-time |
 | No token/cost tracking | Live token counts and cost per session |
 | Copy-paste slash commands | One-tap `/init`, `/clear`, `/compact` buttons |
@@ -417,9 +417,9 @@ The mobile UI strips away desktop complexity to keep things fast and focused:
 
 ---
 
-### Claudeman Screens (`sc`) — Mobile SSH Alternative
+### Claudeman Sessions (`sc`) — Mobile SSH Alternative
 
-If you prefer SSH (via Termius, Blink, etc.), the `sc` command is a thumb-friendly screen session chooser:
+If you prefer SSH (via Termius, Blink, etc.), the `sc` command is a thumb-friendly session chooser:
 
 ```bash
 sc              # Interactive chooser
@@ -517,7 +517,7 @@ flowchart TB
         end
 
         subgraph Persistence["Persistence Layer"]
-            SCR["GNU Screen Manager"]
+            SCR["Mux Manager<br/><small>(tmux/screen)</small>"]
             SS["State Store<br/><small>state.json</small>"]
         end
 

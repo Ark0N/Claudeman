@@ -60,34 +60,33 @@ function commandExists(cmd) {
 }
 
 /**
- * Get install instructions for screen based on platform
+ * Get install instructions for tmux based on platform
  */
-function getScreenInstallInstructions() {
+function getTmuxInstallInstructions() {
     const os = platform();
 
     if (os === 'darwin') {
         return [
-            '    macOS: brew install screen',
+            '    macOS: brew install tmux',
         ];
     }
 
     if (os === 'linux') {
         return [
-            '    Ubuntu/Debian: sudo apt install screen',
-            '    Fedora/RHEL:   sudo dnf install screen',
-            '    Arch Linux:    sudo pacman -S screen',
-            '    Alpine:        sudo apk add screen',
+            '    Ubuntu/Debian: sudo apt install tmux',
+            '    Fedora/RHEL:   sudo dnf install tmux',
+            '    Arch Linux:    sudo pacman -S tmux',
+            '    Alpine:        sudo apk add tmux',
         ];
     }
 
     if (os === 'win32') {
         return [
             '    Windows: Use WSL (Windows Subsystem for Linux)',
-            '             GNU Screen is not available on native Windows',
         ];
     }
 
-    return ['    Please install GNU Screen for your platform'];
+    return ['    Please install tmux for your platform'];
 }
 
 // ============================================================================
@@ -117,17 +116,19 @@ if (majorVersion < MIN_NODE_VERSION) {
 }
 
 // ----------------------------------------------------------------------------
-// 2. Check if GNU Screen is installed
+// 2. Check if terminal multiplexer is installed (tmux preferred, screen fallback)
 // ----------------------------------------------------------------------------
 
-if (commandExists('screen')) {
-    console.log(colors.green('✓ GNU Screen found'));
+if (commandExists('tmux')) {
+    console.log(colors.green('✓ tmux found (preferred)'));
+} else if (commandExists('screen')) {
+    console.log(colors.green('✓ GNU Screen found') + colors.dim(' (fallback — consider installing tmux)'));
 } else {
     hasWarnings = true;
-    console.log(colors.yellow('⚠ GNU Screen not found'));
-    console.log(colors.dim('  Screen is required for session persistence.'));
+    console.log(colors.yellow('⚠ No terminal multiplexer found'));
+    console.log(colors.dim('  tmux is required for session persistence.'));
     console.log(colors.dim('  Install:'));
-    for (const instruction of getScreenInstallInstructions()) {
+    for (const instruction of getTmuxInstallInstructions()) {
         console.log(colors.dim(instruction));
     }
 }

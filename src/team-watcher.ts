@@ -9,11 +9,11 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import type { TeamConfig, TeamTask, InboxMessage } from './types.js';
+import type { TeamConfig, TeamMember, TeamTask, InboxMessage } from './types.js';
 import { LRUMap } from './utils/lru-map.js';
 
 // ========== Constants ==========
@@ -33,7 +33,7 @@ export class TeamWatcher extends EventEmitter {
   private inboxCache: LRUMap<string, InboxMessage[]> = new LRUMap({ maxSize: MAX_CACHED_TASKS });
   // Track config mtimes to avoid re-reading unchanged files
   private configMtimes: Map<string, number> = new Map();
-  private taskMtimes: Map<string, number> = new Map();
+  private taskMtimes: Map<string, string> = new Map();
   private inboxMtimes: Map<string, number> = new Map();
 
   constructor(teamsDir?: string, tasksDir?: string) {
@@ -122,6 +122,19 @@ export class TeamWatcher extends EventEmitter {
     return activeTasks > 0;
   }
 
+  /** Get teammates that have real tmux panes (not in-process) */
+  getTmuxPaneTeammates(teamName: string): Array<TeamMember & { tmuxPaneId: string }> {
+    const team = this.teams.get(teamName);
+    if (!team) return [];
+
+    return team.members
+      .filter((m): m is TeamMember & { tmuxPaneId: string } =>
+        m.agentType !== 'team-lead' &&
+        !!m.tmuxPaneId &&
+        m.tmuxPaneId !== 'in-process'
+      );
+  }
+
   /** Get count of active teammates for a session */
   getActiveTeammateCount(sessionId: string): number {
     const team = this.getTeamForSession(sessionId);
@@ -142,8 +155,6 @@ export class TeamWatcher extends EventEmitter {
   }
 
   private pollTeams(): void {
-    if (!existsSync(this.teamsDir)) return;
-
     let entries: string[];
     try {
       entries = readdirSync(this.teamsDir);
@@ -155,24 +166,25 @@ export class TeamWatcher extends EventEmitter {
 
     for (const entry of entries) {
       const configPath = join(this.teamsDir, entry, 'config.json');
-      if (!existsSync(configPath)) continue;
 
       currentTeamNames.add(entry);
 
-      // Check mtime to skip unchanged configs
+      // Check mtime to skip unchanged configs (stat instead of existsSync to avoid TOCTOU)
+      let mtime: number;
       try {
-        const mtime = statSync(configPath).mtimeMs;
-        if (this.configMtimes.get(entry) === mtime) continue;
-        this.configMtimes.set(entry, mtime);
+        mtime = statSync(configPath).mtimeMs;
       } catch {
+        // File doesn't exist or was removed between readdir and stat
         continue;
       }
+      if (this.configMtimes.get(entry) === mtime) continue;
+      this.configMtimes.set(entry, mtime);
 
       // Skip if locked
       if (this.isLocked(join(this.teamsDir, entry, 'config.json'))) continue;
 
       const config = this.readJson<TeamConfig>(configPath);
-      if (!config || !config.name) continue;
+      if (!config || !config.name || !config.leadSessionId || !Array.isArray(config.members)) continue;
 
       const existing = this.teams.get(entry);
       this.teams.set(entry, config);
@@ -198,8 +210,6 @@ export class TeamWatcher extends EventEmitter {
   }
 
   private pollTasks(): void {
-    if (!existsSync(this.tasksDir)) return;
-
     let teamDirs: string[];
     try {
       teamDirs = readdirSync(this.tasksDir);
@@ -216,16 +226,22 @@ export class TeamWatcher extends EventEmitter {
         continue;
       }
 
-      // Check combined mtime for all task files
+      // Check combined mtime for all task files (use count:max:sum to avoid collisions)
       const mtimeKey = teamName;
-      let combinedMtime = 0;
+      let mtimeSum = 0;
+      let mtimeMax = 0;
+      let mtimeCount = 0;
       for (const f of taskFiles) {
         try {
-          combinedMtime += statSync(join(teamTaskDir, f)).mtimeMs;
+          const mt = statSync(join(teamTaskDir, f)).mtimeMs;
+          mtimeSum += mt;
+          if (mt > mtimeMax) mtimeMax = mt;
+          mtimeCount++;
         } catch {
           // File may have been deleted between readdir and stat
         }
       }
+      const combinedMtime = `${mtimeCount}:${mtimeMax}:${mtimeSum}`;
       if (this.taskMtimes.get(mtimeKey) === combinedMtime) continue;
       this.taskMtimes.set(mtimeKey, combinedMtime);
 
@@ -249,7 +265,6 @@ export class TeamWatcher extends EventEmitter {
     // Inbox files live under ~/.claude/teams/{name}/inboxes/
     for (const [teamName] of this.teams.entries()) {
       const inboxDir = join(this.teamsDir, teamName, 'inboxes');
-      if (!existsSync(inboxDir)) continue;
 
       let inboxFiles: string[];
       try {
@@ -296,7 +311,7 @@ export class TeamWatcher extends EventEmitter {
   private isLocked(path: string): boolean {
     const lockDir = `${path}.lock`;
     try {
-      return existsSync(lockDir) && statSync(lockDir).isDirectory();
+      return statSync(lockDir).isDirectory();
     } catch {
       return false;
     }

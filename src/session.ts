@@ -8,8 +8,8 @@
  * 2. **Interactive mode** (`startInteractive`): Start an interactive Claude session
  * 3. **Shell mode**: Run a plain bash shell for debugging/testing
  *
- * The session can optionally run inside a GNU Screen session for persistence
- * across disconnects. It tracks tokens, costs, background tasks, and supports
+ * The session can optionally run inside a tmux session (or GNU Screen as fallback)
+ * for persistence across disconnects. It tracks tokens, costs, background tasks, and supports
  * auto-clear/auto-compact functionality when token limits are approached.
  *
  * @module session
@@ -853,7 +853,7 @@ export class Session extends EventEmitter {
    *
    * This spawns Claude CLI with `--dangerously-skip-permissions` flag in
    * interactive mode. If screen wrapping is enabled, the session runs inside
-   * a GNU Screen session for persistence across disconnects.
+   * a tmux session (or GNU Screen as fallback) for persistence across disconnects.
    *
    * @throws {Error} If a process is already running in this session
    *
@@ -1997,7 +1997,7 @@ export class Session extends EventEmitter {
   /**
    * Stops the session and cleans up resources.
    *
-   * This kills the PTY process and optionally the associated GNU Screen
+   * This kills the PTY process and optionally the associated tmux/screen
    * session. All buffers are cleared and the session is marked as stopped.
    *
    * @param killScreen - Whether to also kill the screen session (default: true)

@@ -79,7 +79,7 @@ export const QuickStartSchema = z.object({
 export const HookEventSchema = z.object({
   event: z.enum(['permission_prompt', 'elicitation_dialog', 'idle_prompt', 'stop', 'teammate_idle', 'task_completed']),
   sessionId: z.string().min(1),
-  data: z.unknown().optional(),
+  data: z.record(z.string(), z.unknown()).optional(),
 });
 
 // ========== Configuration ==========
@@ -139,4 +139,15 @@ export const SettingsUpdateSchema = z.object({
 export const SessionInputWithLimitSchema = z.object({
   input: z.string().max(100000), // 100KB max input
   useScreen: z.boolean().optional(),
+});
+
+// ========== Teammate Pane Routes ==========
+
+/**
+ * Schema for POST /api/sessions/:id/teammate-pane-input
+ * Sends keyboard input to a teammate's tmux pane.
+ */
+export const TeammatePaneInputSchema = z.object({
+  paneTarget: z.string().regex(/^(%\d+|\d+)$/, 'Invalid pane target format'),
+  input: z.string().max(100000),
 });

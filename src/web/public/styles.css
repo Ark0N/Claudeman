@@ -5317,6 +5317,20 @@ kbd {
   scroll-behavior: smooth;
 }
 
+/* Teammate terminal pane (xterm.js embedded in subagent window) */
+.subagent-window-body.teammate-terminal-body {
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+.subagent-window-body.teammate-terminal-body .xterm {
+  height: 100%;
+}
+/* Larger default size for terminal windows */
+.subagent-window.has-terminal {
+  width: 550px;
+  height: 400px;
+}
+
 /* Custom scrollbar for subagent window body */
 .subagent-window-body::-webkit-scrollbar {
   width: 6px;

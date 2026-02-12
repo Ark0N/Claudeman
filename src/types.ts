@@ -855,9 +855,9 @@ export interface CaseInfo {
 // ========== Screen Session Types ==========
 
 /**
- * GNU screen session wrapper
+ * Terminal multiplexer session wrapper.
  *
- * Claudeman uses GNU screen for session persistence across server restarts.
+ * Claudeman uses tmux (preferred) or GNU Screen (fallback) for session persistence.
  */
 /**
  * Persisted respawn configuration for screen sessions.
@@ -913,7 +913,7 @@ export interface PersistedRespawnConfig {
 export interface ScreenSession {
   /** Claudeman session ID */
   sessionId: string;
-  /** GNU screen session name (claudeman-<id>) */
+  /** Mux session name (claudeman-<id>) */
   screenName: string;
   /** Screen process PID */
   pid: number;
@@ -1512,6 +1512,25 @@ export interface ImageDetectedEvent {
   timestamp: number;
   /** File size in bytes */
   size: number;
+}
+
+// ========== Pane Types ==========
+
+/**
+ * Information about a tmux pane within a session.
+ * Used for agent team teammate pane management.
+ */
+export interface PaneInfo {
+  /** Pane ID (e.g., "%0", "%1") — immutable within a tmux session */
+  paneId: string;
+  /** Pane index within the window (0, 1, 2...) */
+  paneIndex: number;
+  /** PID of the process running in the pane */
+  panePid: number;
+  /** Pane width in columns */
+  width: number;
+  /** Pane height in rows */
+  height: number;
 }
 
 // ========== Agent Teams Types ==========

@@ -239,6 +239,10 @@ check_git() {
     command -v git &>/dev/null
 }
 
+check_tmux() {
+    command -v tmux &>/dev/null
+}
+
 check_screen() {
     command -v screen &>/dev/null
 }
@@ -386,6 +390,41 @@ install_node_suse() {
     # Use NodeSource for openSUSE
     download_to_stdout "https://rpm.nodesource.com/setup_$TARGET_NODE_VERSION.x" | run_as_root bash -
     run_as_root zypper install -y nodejs
+}
+
+install_tmux_macos() {
+    info "Installing tmux via Homebrew..."
+    brew install tmux
+}
+
+install_tmux_debian() {
+    info "Installing tmux via apt..."
+    ensure_sudo
+    run_as_root apt-get update -qq
+    run_as_root apt-get install -y -qq tmux
+}
+
+install_tmux_fedora() {
+    info "Installing tmux via dnf..."
+    ensure_sudo
+    run_as_root dnf install -y tmux
+}
+
+install_tmux_arch() {
+    info "Installing tmux via pacman..."
+    ensure_sudo
+    run_as_root pacman -Sy --noconfirm tmux
+}
+
+install_tmux_alpine() {
+    info "Installing tmux via apk..."
+    run_as_root apk add --no-cache tmux
+}
+
+install_tmux_suse() {
+    info "Installing tmux via zypper..."
+    ensure_sudo
+    run_as_root zypper install -y tmux
 }
 
 install_screen_macos() {
@@ -810,16 +849,18 @@ main() {
         die "npm is not available. Please reinstall Node.js."
     fi
 
-    # GNU Screen
-    info "Checking GNU Screen..."
-    if ! check_screen; then
-        if prompt_yes_no "GNU Screen is not installed. Install it now?"; then
-            install_dependency "screen" "$os" "$distro"
-        else
-            die "GNU Screen is required for session persistence."
-        fi
+    # Terminal multiplexer (tmux preferred, GNU Screen as fallback)
+    info "Checking terminal multiplexer..."
+    if check_tmux; then
+        success "tmux is installed (preferred)"
+    elif check_screen; then
+        success "GNU Screen is installed (fallback — consider installing tmux for better performance)"
     else
-        success "GNU Screen is installed"
+        if prompt_yes_no "tmux is not installed. Install it now?"; then
+            install_dependency "tmux" "$os" "$distro"
+        else
+            die "A terminal multiplexer (tmux or GNU Screen) is required for session persistence."
+        fi
     fi
 
     # Claude CLI (warning only)

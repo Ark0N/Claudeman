@@ -26,7 +26,7 @@ import { spawn, execSync } from 'node:child_process';
 import { existsSync, readFileSync, mkdirSync, writeFile } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { ProcessStats, PersistedRespawnConfig, getErrorMessage, NiceConfig, DEFAULT_NICE_CONFIG } from './types.js';
+import { ProcessStats, PersistedRespawnConfig, getErrorMessage, NiceConfig, DEFAULT_NICE_CONFIG, type PaneInfo } from './types.js';
 import { wrapWithNice } from './utils/nice-wrapper.js';
 import type { TerminalMultiplexer, MuxSession, MuxSessionWithStats } from './mux-interface.js';
 
@@ -104,6 +104,9 @@ const SAFE_MUX_NAME_PATTERN = /^claudeman-[a-f0-9-]+$/;
 
 /** Regex to validate working directory paths (no shell metacharacters) */
 const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_\/\-. ~]+$/;
+
+/** Regex to validate tmux pane targets (e.g., "%0", "%1", "0", "1") */
+const SAFE_PANE_TARGET_PATTERN = /^(%\d+|\d+)$/;
 
 /**
  * Validates that a session name contains only safe characters.
@@ -296,6 +299,20 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         );
       } catch {
         // Non-critical — session still works with status bar
+      }
+
+      // Enable mouse mode — allows clicking to select tmux panes when
+      // Claude Code creates agent team split panes within this session.
+      // With mouse mode, xterm.js forwards click events as escape sequences
+      // that tmux interprets for pane selection.
+      // Trade-off: text selection requires Shift+click (minor for web UI users).
+      try {
+        execSync(
+          `tmux set-option -t "${muxName}" mouse on`,
+          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+        );
+      } catch {
+        // Non-critical — pane clicking won't work but keyboard input still does
       }
 
       // Enable 24-bit true color passthrough — without this, tmux downgrades
@@ -873,6 +890,203 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       return true;
     } catch (err) {
       console.error('[TmuxManager] Failed to send input:', err);
+      return false;
+    }
+  }
+
+  // ========== Pane Methods (for Agent Team teammate panes) ==========
+
+  /**
+   * Enable mouse mode for an existing tmux session.
+   * Allows clicking to select panes in agent team split-pane layouts.
+   */
+  enableMouseMode(muxName: string): boolean {
+    if (!isValidMuxName(muxName)) {
+      console.error('[TmuxManager] Invalid session name in enableMouseMode:', muxName);
+      return false;
+    }
+
+    try {
+      execSync(
+        `tmux set-option -t "${muxName}" mouse on`,
+        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * List all panes in a tmux session.
+   * Returns structured info for each pane.
+   */
+  listPanes(muxName: string): PaneInfo[] {
+    if (!isValidMuxName(muxName)) {
+      console.error('[TmuxManager] Invalid session name in listPanes:', muxName);
+      return [];
+    }
+
+    try {
+      const output = execSync(
+        `tmux list-panes -t "${muxName}" -F '#{pane_id}:#{pane_index}:#{pane_pid}:#{pane_width}:#{pane_height}'`,
+        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+      ).trim();
+
+      return output.split('\n').map(line => {
+        const [paneId, indexStr, pidStr, widthStr, heightStr] = line.split(':');
+        return {
+          paneId,
+          paneIndex: parseInt(indexStr, 10),
+          panePid: parseInt(pidStr, 10),
+          width: parseInt(widthStr, 10),
+          height: parseInt(heightStr, 10),
+        };
+      }).filter(p => !Number.isNaN(p.paneIndex));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Send input to a specific pane within a tmux session.
+   * Uses the same literal text approach as sendInput() but targets a specific pane.
+   */
+  sendInputToPane(muxName: string, paneTarget: string, input: string): boolean {
+    if (!isValidMuxName(muxName)) {
+      console.error('[TmuxManager] Invalid session name in sendInputToPane:', muxName);
+      return false;
+    }
+    if (!SAFE_PANE_TARGET_PATTERN.test(paneTarget)) {
+      console.error('[TmuxManager] Invalid pane target:', paneTarget);
+      return false;
+    }
+
+    // Build target: sessionName.paneId (e.g., "claudeman-abc12345.%1")
+    const target = paneTarget.startsWith('%')
+      ? `${muxName}.${paneTarget}`
+      : `${muxName}.%${paneTarget}`;
+
+    try {
+      const hasCarriageReturn = input.includes('\r');
+      const textPart = input.replace(/\r/g, '').replace(/\n/g, '').trimEnd();
+
+      if (textPart && hasCarriageReturn) {
+        execSync(
+          `tmux send-keys -t ${shellescape(target)} -l ${shellescape(textPart)}`,
+          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+        );
+        execSync(
+          `tmux send-keys -t ${shellescape(target)} Enter`,
+          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+        );
+      } else if (textPart) {
+        execSync(
+          `tmux send-keys -t ${shellescape(target)} -l ${shellescape(textPart)}`,
+          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+        );
+      } else if (hasCarriageReturn) {
+        execSync(
+          `tmux send-keys -t ${shellescape(target)} Enter`,
+          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+        );
+      }
+
+      return true;
+    } catch (err) {
+      console.error('[TmuxManager] Failed to send input to pane:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Capture the current buffer of a specific pane.
+   * Returns the pane content with ANSI escape codes preserved.
+   */
+  capturePaneBuffer(muxName: string, paneTarget: string): string | null {
+    if (!isValidMuxName(muxName)) {
+      console.error('[TmuxManager] Invalid session name in capturePaneBuffer:', muxName);
+      return null;
+    }
+    if (!SAFE_PANE_TARGET_PATTERN.test(paneTarget)) {
+      console.error('[TmuxManager] Invalid pane target:', paneTarget);
+      return null;
+    }
+
+    const target = paneTarget.startsWith('%')
+      ? `${muxName}.${paneTarget}`
+      : `${muxName}.%${paneTarget}`;
+
+    try {
+      return execSync(
+        `tmux capture-pane -p -e -t ${shellescape(target)} -S -5000`,
+        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+      );
+    } catch (err) {
+      console.error('[TmuxManager] Failed to capture pane buffer:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Start piping pane output to a file using tmux pipe-pane.
+   * Only pipes output direction (-O) to avoid echoing input.
+   */
+  startPipePane(muxName: string, paneTarget: string, outputFile: string): boolean {
+    if (!isValidMuxName(muxName)) {
+      console.error('[TmuxManager] Invalid session name in startPipePane:', muxName);
+      return false;
+    }
+    if (!SAFE_PANE_TARGET_PATTERN.test(paneTarget)) {
+      console.error('[TmuxManager] Invalid pane target:', paneTarget);
+      return false;
+    }
+    if (!isValidPath(outputFile)) {
+      console.error('[TmuxManager] Invalid output file path:', outputFile);
+      return false;
+    }
+
+    const target = paneTarget.startsWith('%')
+      ? `${muxName}.${paneTarget}`
+      : `${muxName}.%${paneTarget}`;
+
+    try {
+      execSync(
+        `tmux pipe-pane -O -t ${shellescape(target)} ${shellescape('cat >> ' + outputFile)}`,
+        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+      );
+      return true;
+    } catch (err) {
+      console.error('[TmuxManager] Failed to start pipe-pane:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Stop piping pane output (calling pipe-pane with no command stops piping).
+   */
+  stopPipePane(muxName: string, paneTarget: string): boolean {
+    if (!isValidMuxName(muxName)) {
+      console.error('[TmuxManager] Invalid session name in stopPipePane:', muxName);
+      return false;
+    }
+    if (!SAFE_PANE_TARGET_PATTERN.test(paneTarget)) {
+      console.error('[TmuxManager] Invalid pane target:', paneTarget);
+      return false;
+    }
+
+    const target = paneTarget.startsWith('%')
+      ? `${muxName}.${paneTarget}`
+      : `${muxName}.%${paneTarget}`;
+
+    try {
+      execSync(
+        `tmux pipe-pane -t ${shellescape(target)}`,
+        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+      );
+      return true;
+    } catch (err) {
+      console.error('[TmuxManager] Failed to stop pipe-pane:', err);
       return false;
     }
   }
