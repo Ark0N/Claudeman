@@ -720,6 +720,13 @@ class NotificationManager {
         this.onTabVisible();
       }
     });
+    // iOS Safari: pageshow fires on back-forward cache restore (bfcache)
+    window.addEventListener('pageshow', (e) => {
+      if (e.persisted) {
+        this.isTabVisible = true;
+        this.onTabVisible();
+      }
+    });
   }
 
   loadPreferences() {
@@ -1072,6 +1079,12 @@ class NotificationManager {
     // If drawer is open, mark all as read
     if (this.isDrawerOpen) {
       this.markAllRead();
+    }
+    // Re-fit terminal and send resize to PTY so this client's dimensions win.
+    // Fixes broken layout when switching between desktop and mobile on the same session.
+    if (this.app?.fitAddon && this.app?.activeSessionId) {
+      this.app.fitAddon.fit();
+      this.app.sendResize(this.app.activeSessionId);
     }
   }
 
