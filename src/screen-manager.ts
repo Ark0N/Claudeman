@@ -26,14 +26,8 @@ import type { TerminalMultiplexer, MuxSession, MuxSessionWithStats } from './mux
 // Claude CLI PATH Resolution
 // ============================================================================
 
-/** Common directories where the Claude CLI binary may be installed */
-const CLAUDE_SEARCH_DIRS = [
-  `${homedir()}/.local/bin`,
-  `${homedir()}/.claude/local`,
-  '/usr/local/bin',
-  `${homedir()}/.npm-global/bin`,
-  `${homedir()}/bin`,
-];
+// Claude CLI PATH resolution — shared utility
+import { findClaudeDir } from './utils/claude-cli-resolver.js';
 
 // ============================================================================
 // Timing Constants
@@ -57,42 +51,17 @@ const DEFAULT_STATS_INTERVAL_MS = 2000;
 /** Maximum retry attempts for carriage return (3) */
 const CR_MAX_ATTEMPTS = 3;
 
+/**
+ * SAFETY: Test mode detection.
+ * When running under vitest, ALL screen shell commands are disabled.
+ * ScreenManager becomes a pure in-memory mock.
+ */
+const IS_TEST_MODE = !!process.env.VITEST;
+
 // Import from shared utility (extracted to avoid cross-dependency)
 import { wrapWithNice } from './utils/nice-wrapper.js';
 // Re-export for backward compatibility
 export { wrapWithNice } from './utils/nice-wrapper.js';
-
-
-/** Cached directory containing the claude binary */
-let _claudeDir: string | null = null;
-
-/**
- * Finds the directory containing the `claude` binary.
- * Returns null if not found (will rely on PATH as-is).
- */
-function findClaudeDir(): string | null {
-  if (_claudeDir !== null) return _claudeDir;
-
-  try {
-    const result = execSync('which claude', { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }).trim();
-    if (result && existsSync(result)) {
-      _claudeDir = dirname(result);
-      return _claudeDir;
-    }
-  } catch {
-    // not in PATH
-  }
-
-  for (const dir of CLAUDE_SEARCH_DIRS) {
-    if (existsSync(`${dir}/claude`)) {
-      _claudeDir = dir;
-      return _claudeDir;
-    }
-  }
-
-  _claudeDir = '';  // mark as searched, not found
-  return null;
-}
 
 /** Path to persisted screen session metadata */
 const SCREENS_FILE = join(homedir(), '.claudeman', 'screens.json');
@@ -185,11 +154,14 @@ export class ScreenManager extends EventEmitter implements TerminalMultiplexer {
 
   constructor() {
     super();
-    this.loadScreens();
+    if (!IS_TEST_MODE) {
+      this.loadScreens();
+    }
   }
 
-  // Load saved screens from disk
+  // Load saved screens from disk (NEVER called in test mode)
   private loadScreens(): void {
+    if (IS_TEST_MODE) return;
     try {
       if (existsSync(SCREENS_FILE)) {
         const content = readFileSync(SCREENS_FILE, 'utf-8');
@@ -210,6 +182,7 @@ export class ScreenManager extends EventEmitter implements TerminalMultiplexer {
    * Uses async write to avoid blocking the event loop.
    */
   private saveScreens(): void {
+    if (IS_TEST_MODE) return;
     try {
       const dir = dirname(SCREENS_FILE);
       if (!existsSync(dir)) {
@@ -243,6 +216,23 @@ export class ScreenManager extends EventEmitter implements TerminalMultiplexer {
    */
   async createScreen(sessionId: string, workingDir: string, mode: 'claude' | 'shell', name?: string, niceConfig?: NiceConfig): Promise<ScreenSession> {
     const screenName = `claudeman-${sessionId.slice(0, 8)}`;
+
+    // TEST MODE: Create in-memory only
+    if (IS_TEST_MODE) {
+      const screen: ScreenSession = {
+        sessionId,
+        screenName,
+        pid: 99999,
+        createdAt: Date.now(),
+        workingDir,
+        mode,
+        attached: false,
+        name,
+      };
+      this.screens.set(sessionId, screen);
+      this.emit('screenCreated', screen);
+      return screen;
+    }
 
     // Security: Validate screenName and workingDir to prevent command injection
     if (!isValidScreenName(screenName)) {
@@ -318,7 +308,7 @@ export class ScreenManager extends EventEmitter implements TerminalMultiplexer {
 
       this.screens.set(sessionId, screen);
       this.saveScreens();
-      this.emit('screenCreated', screen);
+      this.emit('sessionCreated', screen);
 
       return screen;
     } catch (err) {
@@ -410,6 +400,13 @@ export class ScreenManager extends EventEmitter implements TerminalMultiplexer {
       return false;
     }
 
+    // TEST MODE: Remove from memory only
+    if (IS_TEST_MODE) {
+      this.screens.delete(sessionId);
+      this.emit('screenKilled', { sessionId });
+      return true;
+    }
+
     // Get current PID from screen -ls in case it changed
     const currentPid = this.getScreenPid(screen.screenName) || screen.pid;
 
@@ -491,7 +488,7 @@ export class ScreenManager extends EventEmitter implements TerminalMultiplexer {
 
     this.screens.delete(sessionId);
     this.saveScreens();
-    this.emit('screenKilled', { sessionId });
+    this.emit('sessionKilled', { sessionId });
 
     return true;
   }
@@ -519,6 +516,15 @@ export class ScreenManager extends EventEmitter implements TerminalMultiplexer {
 
   // Reconcile screens - find orphaned/dead screens AND discover unknown claudeman screens
   async reconcileScreens(): Promise<{ alive: string[]; dead: string[]; discovered: string[] }> {
+    // TEST MODE: Return all registered as alive, never discover real ones
+    if (IS_TEST_MODE) {
+      return {
+        alive: Array.from(this.screens.keys()),
+        dead: [],
+        discovered: [],
+      };
+    }
+
     const alive: string[] = [];
     const dead: string[] = [];
     const discovered: string[] = [];
@@ -535,7 +541,7 @@ export class ScreenManager extends EventEmitter implements TerminalMultiplexer {
       } else {
         dead.push(sessionId);
         this.screens.delete(sessionId);
-        this.emit('screenDied', { sessionId });
+        this.emit('sessionDied', { sessionId });
       }
     }
 
@@ -825,6 +831,7 @@ export class ScreenManager extends EventEmitter implements TerminalMultiplexer {
   // Send input directly to screen session using screen -X stuff
   // This bypasses the attached PTY and sends input directly to the screen
   sendInput(sessionId: string, input: string): boolean {
+    if (IS_TEST_MODE) return true;
     const screen = this.screens.get(sessionId);
     if (!screen) {
       console.error(`[ScreenManager] sendInput failed: no screen found for session ${sessionId}. Known screens: ${Array.from(this.screens.keys()).join(', ')}`);

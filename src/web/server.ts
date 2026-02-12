@@ -305,6 +305,9 @@ interface SessionListenerRefs {
 }
 
 export class WebServer extends EventEmitter {
+  /** Cached CPU count — doesn't change at runtime */
+  private static readonly CPU_COUNT = cpus().length;
+
   private app: FastifyInstance;
   private sessions: Map<string, Session> = new Map();
   private respawnControllers: Map<string, RespawnController> = new Map();
@@ -315,6 +318,8 @@ export class WebServer extends EventEmitter {
   private sessionListenerRefs: Map<string, SessionListenerRefs> = new Map();
   private scheduledRuns: Map<string, ScheduledRun> = new Map();
   private sseClients: Set<FastifyReply> = new Set();
+  /** Clients with backpressure — skip writes until 'drain' fires */
+  private backpressuredClients: Set<FastifyReply> = new Set();
   private store = getStore();
   private port: number;
   private https: boolean;
@@ -385,21 +390,12 @@ export class WebServer extends EventEmitter {
     }
     this.mux = createMultiplexer();
 
-    // Set up mux event listeners (event names kept for SSE backward compat)
-    this.mux.on('screenCreated', (screen) => {
-      this.broadcast('screen:created', screen);
-    });
+    // Set up mux event listeners (SSE event names kept as screen:* for frontend compat)
     this.mux.on('sessionCreated', (session) => {
       this.broadcast('screen:created', session);
     });
-    this.mux.on('screenKilled', (data) => {
-      this.broadcast('screen:killed', data);
-    });
     this.mux.on('sessionKilled', (data) => {
       this.broadcast('screen:killed', data);
-    });
-    this.mux.on('screenDied', (data) => {
-      this.broadcast('screen:died', data);
     });
     this.mux.on('sessionDied', (data) => {
       this.broadcast('screen:died', data);
@@ -518,11 +514,12 @@ export class WebServer extends EventEmitter {
 
       req.raw.on('close', () => {
         this.sseClients.delete(reply);
+        this.backpressuredClients.delete(reply);
       });
     });
 
     // API Routes
-    this.app.get('/api/status', async () => this.getFullState());
+    this.app.get('/api/status', async () => this.getLightState());
 
     // Cleanup stale sessions from state file
     this.app.post('/api/cleanup-state', async () => {
@@ -3484,7 +3481,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
       // CPU load average (1 min) as percentage (rough approximation)
       const load = loadavg()[0];
-      const cpuCount = cpus().length;
+      const cpuCount = WebServer.CPU_COUNT;
       const cpuPercent = Math.min(100, Math.round((load / cpuCount) * 100));
 
       return {
@@ -4314,10 +4311,6 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     };
   }
 
-  private getSessionsState() {
-    return Array.from(this.sessions.values()).map(s => this.getSessionStateWithRespawn(s));
-  }
-
   /**
    * Get lightweight session state for SSE init - excludes full terminal buffers
    * to prevent browser freezes on SSE reconnect. Full buffers are fetched
@@ -4370,34 +4363,6 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     return this.store.cleanupStaleSessions(activeSessionIds);
   }
 
-  private getFullState() {
-    // Build respawn status map
-    const respawnStatus: Record<string, ReturnType<RespawnController['getStatus']>> = {};
-    for (const [sessionId, controller] of this.respawnControllers) {
-      respawnStatus[sessionId] = controller.getStatus();
-    }
-
-    // Build active sessions token map for aggregate calculation
-    const activeSessionTokens: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }> = {};
-    for (const [sessionId, session] of this.sessions) {
-      activeSessionTokens[sessionId] = {
-        inputTokens: session.inputTokens,
-        outputTokens: session.outputTokens,
-        totalCost: session.totalCost,
-      };
-    }
-
-    return {
-      version: APP_VERSION,
-      sessions: this.getSessionsState(),
-      scheduledRuns: Array.from(this.scheduledRuns.values()),
-      respawnStatus,
-      globalStats: this.store.getAggregateStats(activeSessionTokens),
-      subagents: subagentWatcher.getRecentSubagents(15), // Last 15 min - filter out stale agents from previous runs
-      timestamp: Date.now(),
-    };
-  }
-
   /**
    * Get lightweight state for SSE init - excludes full terminal buffers
    * to prevent browser freezes. Terminal buffers are fetched on-demand.
@@ -4437,11 +4402,23 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 
   // Optimized: send pre-formatted SSE message to a client
+  // Returns false if client is backpressured or dead
   private sendSSEPreformatted(reply: FastifyReply, message: string): void {
+    // Skip backpressured clients to prevent unbounded memory growth
+    if (this.backpressuredClients.has(reply)) return;
+
     try {
-      reply.raw.write(message);
+      const ok = reply.raw.write(message);
+      if (!ok) {
+        // Buffer is full — mark as backpressured, resume on drain
+        this.backpressuredClients.add(reply);
+        reply.raw.once('drain', () => {
+          this.backpressuredClients.delete(reply);
+        });
+      }
     } catch {
       this.sseClients.delete(reply);
+      this.backpressuredClients.delete(reply);
     }
   }
 
@@ -4655,6 +4632,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Remove dead clients
     for (const client of deadClients) {
       this.sseClients.delete(client);
+      this.backpressuredClients.delete(client);
     }
 
     if (deadClients.length > 0) {
@@ -4948,6 +4926,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       }
     }
     this.sseClients.clear();
+    this.backpressuredClients.clear();
 
     // Clear batch timers
     if (this.terminalBatchTimer) {

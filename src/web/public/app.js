@@ -20,6 +20,19 @@ const TERMINAL_TAIL_SIZE = 256 * 1024;      // 256KB tail for initial load
 const SYNC_WAIT_TIMEOUT_MS = 50;            // Wait timeout for terminal sync
 const STATS_POLLING_INTERVAL_MS = 2000;     // System stats polling
 
+// Z-index base values for layered floating windows
+const ZINDEX_SUBAGENT_BASE = 1000;
+const ZINDEX_PLAN_SUBAGENT_BASE = 1100;
+const ZINDEX_LOG_VIEWER_BASE = 2000;
+const ZINDEX_IMAGE_POPUP_BASE = 3000;
+
+// Subagent/floating window layout
+const WINDOW_INITIAL_TOP_PX = 120;
+const WINDOW_CASCADE_OFFSET_PX = 30;
+const WINDOW_MIN_WIDTH_PX = 200;
+const WINDOW_MIN_HEIGHT_PX = 200;
+const WINDOW_DEFAULT_WIDTH_PX = 300;
+
 // DEC mode 2026 - Synchronized Output
 // Wrap terminal writes with these markers to prevent partial-frame flicker.
 // Terminal buffers all output between markers and renders atomically.
@@ -1136,7 +1149,7 @@ class ClaudemanApp {
     this.activeSubagentId = null; // Currently selected subagent for detail view
     this.subagentPanelVisible = false;
     this.subagentWindows = new Map(); // Map<agentId, { element, position }>
-    this.subagentWindowZIndex = 1000;
+    this.subagentWindowZIndex = ZINDEX_SUBAGENT_BASE;
     this.minimizedSubagents = new Map(); // Map<sessionId, Set<agentId>> - minimized to tab
     this._subagentHideTimeout = null; // Timeout for hover-based dropdown hide
 
@@ -1150,7 +1163,7 @@ class ClaudemanApp {
 
     // Plan subagent windows (visible agents during plan generation)
     this.planSubagents = new Map(); // Map<agentId, { type, model, status, startTime, element, relativePos }>
-    this.planSubagentWindowZIndex = 1100;
+    this.planSubagentWindowZIndex = ZINDEX_PLAN_SUBAGENT_BASE;
     this.planGenerationStopped = false; // Flag to ignore SSE events after Stop
     this.planAgentsMinimized = false; // Whether agent windows are minimized to tab
 
@@ -1162,13 +1175,13 @@ class ClaudemanApp {
     // Project Insights tracking (active Bash tools with clickable file paths)
     this.projectInsights = new Map(); // Map<sessionId, ActiveBashTool[]>
     this.logViewerWindows = new Map(); // Map<windowId, { element, eventSource, filePath }>
-    this.logViewerWindowZIndex = 2000;
+    this.logViewerWindowZIndex = ZINDEX_LOG_VIEWER_BASE;
     this.projectInsightsPanelVisible = false;
     this.currentSessionWorkingDir = null; // Track current session's working dir for path normalization
 
     // Image popup windows (auto-open for detected screenshots/images)
     this.imagePopups = new Map(); // Map<imageId, { element, sessionId, filePath }>
-    this.imagePopupZIndex = 3000;
+    this.imagePopupZIndex = ZINDEX_IMAGE_POPUP_BASE;
 
     // Tab alert states: Map<sessionId, 'action' | 'idle'>
     this.tabAlerts = new Map();

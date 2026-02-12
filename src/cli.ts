@@ -503,12 +503,28 @@ program
     console.log(chalk.cyan(`Starting Claudeman web interface on port ${port}${https ? ' (HTTPS)' : ''}...`));
 
     try {
-      await startWebServer(port, https);
+      const server = await startWebServer(port, https);
       console.log(chalk.green(`\n✓ Web interface running at ${protocol}://localhost:${port}`));
       if (https) {
         console.log(chalk.yellow('  Note: Accept the self-signed certificate in your browser on first visit'));
       }
       console.log(chalk.gray('  Press Ctrl+C to stop\n'));
+
+      // Graceful shutdown handler — flush state and clean up on SIGTERM/SIGINT
+      let shuttingDown = false;
+      const shutdown = async (signal: string) => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        console.log(chalk.yellow(`\n${signal} received, shutting down gracefully...`));
+        try {
+          await server.stop();
+        } catch (err) {
+          console.error(chalk.red(`Error during shutdown: ${getErrorMessage(err)}`));
+        }
+        process.exit(0);
+      };
+      process.on('SIGTERM', () => shutdown('SIGTERM'));
+      process.on('SIGINT', () => shutdown('SIGINT'));
     } catch (err) {
       console.error(chalk.red(`✗ Failed to start web server: ${getErrorMessage(err)}`));
       process.exit(1);

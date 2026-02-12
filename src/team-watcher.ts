@@ -9,7 +9,7 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -145,19 +145,22 @@ export class TeamWatcher extends EventEmitter {
   // ========== Private Methods ==========
 
   private poll(): void {
-    try {
-      this.pollTeams();
-      this.pollTasks();
-      this.pollInboxes();
-    } catch (err) {
+    // Run async poll — errors are caught internally per method
+    this.pollAsync().catch(() => {
       // Don't crash on polling errors — filesystem may be temporarily unavailable
-    }
+    });
   }
 
-  private pollTeams(): void {
+  private async pollAsync(): Promise<void> {
+    await this.pollTeams();
+    await this.pollTasks();
+    await this.pollInboxes();
+  }
+
+  private async pollTeams(): Promise<void> {
     let entries: string[];
     try {
-      entries = readdirSync(this.teamsDir);
+      entries = await readdir(this.teamsDir);
     } catch {
       return;
     }
@@ -169,10 +172,10 @@ export class TeamWatcher extends EventEmitter {
 
       currentTeamNames.add(entry);
 
-      // Check mtime to skip unchanged configs (stat instead of existsSync to avoid TOCTOU)
+      // Check mtime to skip unchanged configs
       let mtime: number;
       try {
-        mtime = statSync(configPath).mtimeMs;
+        mtime = (await stat(configPath)).mtimeMs;
       } catch {
         // File doesn't exist or was removed between readdir and stat
         continue;
@@ -181,9 +184,9 @@ export class TeamWatcher extends EventEmitter {
       this.configMtimes.set(entry, mtime);
 
       // Skip if locked
-      if (this.isLocked(join(this.teamsDir, entry, 'config.json'))) continue;
+      if (await this.isLocked(join(this.teamsDir, entry, 'config.json'))) continue;
 
-      const config = this.readJson<TeamConfig>(configPath);
+      const config = await this.readJson<TeamConfig>(configPath);
       if (!config || !config.name || !config.leadSessionId || !Array.isArray(config.members)) continue;
 
       const existing = this.teams.get(entry);
@@ -202,6 +205,13 @@ export class TeamWatcher extends EventEmitter {
         const removed = this.teams.get(name);
         this.teams.delete(name);
         this.configMtimes.delete(name);
+        // Prune stale mtime entries for removed teams
+        this.taskMtimes.delete(name);
+        for (const key of Array.from(this.inboxMtimes.keys())) {
+          if (key.startsWith(`${name}/`)) {
+            this.inboxMtimes.delete(key);
+          }
+        }
         if (removed) {
           this.emit('teamRemoved', removed);
         }
@@ -209,10 +219,10 @@ export class TeamWatcher extends EventEmitter {
     }
   }
 
-  private pollTasks(): void {
+  private async pollTasks(): Promise<void> {
     let teamDirs: string[];
     try {
-      teamDirs = readdirSync(this.tasksDir);
+      teamDirs = await readdir(this.tasksDir);
     } catch {
       return;
     }
@@ -221,7 +231,7 @@ export class TeamWatcher extends EventEmitter {
       const teamTaskDir = join(this.tasksDir, teamName);
       let taskFiles: string[];
       try {
-        taskFiles = readdirSync(teamTaskDir).filter(f => f.endsWith('.json') && f !== '.lock');
+        taskFiles = (await readdir(teamTaskDir)).filter(f => f.endsWith('.json') && f !== '.lock');
       } catch {
         continue;
       }
@@ -233,7 +243,7 @@ export class TeamWatcher extends EventEmitter {
       let mtimeCount = 0;
       for (const f of taskFiles) {
         try {
-          const mt = statSync(join(teamTaskDir, f)).mtimeMs;
+          const mt = (await stat(join(teamTaskDir, f))).mtimeMs;
           mtimeSum += mt;
           if (mt > mtimeMax) mtimeMax = mt;
           mtimeCount++;
@@ -246,11 +256,11 @@ export class TeamWatcher extends EventEmitter {
       this.taskMtimes.set(mtimeKey, combinedMtime);
 
       // Skip if locked
-      if (this.isLocked(join(teamTaskDir, '.lock'))) continue;
+      if (await this.isLocked(join(teamTaskDir, '.lock'))) continue;
 
       const tasks: TeamTask[] = [];
       for (const f of taskFiles) {
-        const task = this.readJson<TeamTask>(join(teamTaskDir, f));
+        const task = await this.readJson<TeamTask>(join(teamTaskDir, f));
         if (task && task.id) {
           tasks.push(task);
         }
@@ -261,14 +271,14 @@ export class TeamWatcher extends EventEmitter {
     }
   }
 
-  private pollInboxes(): void {
+  private async pollInboxes(): Promise<void> {
     // Inbox files live under ~/.claude/teams/{name}/inboxes/
     for (const [teamName] of this.teams.entries()) {
       const inboxDir = join(this.teamsDir, teamName, 'inboxes');
 
       let inboxFiles: string[];
       try {
-        inboxFiles = readdirSync(inboxDir).filter(f => f.endsWith('.json'));
+        inboxFiles = (await readdir(inboxDir)).filter(f => f.endsWith('.json'));
       } catch {
         continue;
       }
@@ -280,7 +290,7 @@ export class TeamWatcher extends EventEmitter {
 
         // Check mtime
         try {
-          const mtime = statSync(filePath).mtimeMs;
+          const mtime = (await stat(filePath)).mtimeMs;
           if (this.inboxMtimes.get(cacheKey) === mtime) continue;
           this.inboxMtimes.set(cacheKey, mtime);
         } catch {
@@ -288,9 +298,9 @@ export class TeamWatcher extends EventEmitter {
         }
 
         // Skip if locked
-        if (this.isLocked(filePath)) continue;
+        if (await this.isLocked(filePath)) continue;
 
-        const messages = this.readJson<InboxMessage[]>(filePath);
+        const messages = await this.readJson<InboxMessage[]>(filePath);
         if (!Array.isArray(messages)) continue;
 
         const previous = this.inboxCache.get(cacheKey);
@@ -308,18 +318,18 @@ export class TeamWatcher extends EventEmitter {
   }
 
   /** Check for directory-based lock (mkdir atomic locking) */
-  private isLocked(path: string): boolean {
+  private async isLocked(path: string): Promise<boolean> {
     const lockDir = `${path}.lock`;
     try {
-      return statSync(lockDir).isDirectory();
+      return (await stat(lockDir)).isDirectory();
     } catch {
       return false;
     }
   }
 
-  private readJson<T>(filePath: string): T | null {
+  private async readJson<T>(filePath: string): Promise<T | null> {
     try {
-      const content = readFileSync(filePath, 'utf-8');
+      const content = await readFile(filePath, 'utf-8');
       return JSON.parse(content) as T;
     } catch {
       return null;

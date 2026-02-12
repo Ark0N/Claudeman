@@ -23,7 +23,7 @@ export interface SubagentInfo {
   projectHash: string;
   filePath: string;
   startedAt: string;
-  lastActivityAt: string;
+  lastActivityAt: number;
   status: 'active' | 'idle' | 'completed';
   toolCallCount: number;
   entryCount: number;
@@ -349,32 +349,31 @@ export class SubagentWatcher extends EventEmitter {
    */
   private cleanupStaleAgents(): void {
     const now = Date.now();
-    const agentsToDelete: string[] = [];
+    const agentsToDelete = new Set<string>();
 
     for (const [agentId, info] of this.agentInfo) {
-      const lastActivity = new Date(info.lastActivityAt).getTime();
-      const age = now - lastActivity;
+      const age = now - info.lastActivityAt;
 
       // Clean up based on status and age
       if (info.status === 'completed' && age > STALE_COMPLETED_MAX_AGE_MS) {
-        agentsToDelete.push(agentId);
+        agentsToDelete.add(agentId);
       } else if (info.status === 'idle' && age > STALE_IDLE_MAX_AGE_MS) {
-        agentsToDelete.push(agentId);
+        agentsToDelete.add(agentId);
       }
     }
 
     // Enforce max tracked agents limit (LRU eviction)
-    const currentCount = this.agentInfo.size - agentsToDelete.length;
+    const currentCount = this.agentInfo.size - agentsToDelete.size;
     if (currentCount > MAX_TRACKED_AGENTS) {
       // Sort by lastActivityAt (oldest first) and evict oldest completed/idle agents
       const sortedAgents = Array.from(this.agentInfo.entries())
-        .filter(([id]) => !agentsToDelete.includes(id))
+        .filter(([id]) => !agentsToDelete.has(id))
         .filter(([, info]) => info.status !== 'active') // Keep active agents
-        .sort((a, b) => new Date(a[1].lastActivityAt).getTime() - new Date(b[1].lastActivityAt).getTime());
+        .sort((a, b) => a[1].lastActivityAt - b[1].lastActivityAt);
 
       const toEvict = currentCount - MAX_TRACKED_AGENTS;
       for (let i = 0; i < toEvict && i < sortedAgents.length; i++) {
-        agentsToDelete.push(sortedAgents[i][0]);
+        agentsToDelete.add(sortedAgents[i][0]);
       }
     }
 
@@ -415,6 +414,7 @@ export class SubagentWatcher extends EventEmitter {
       if (watcher) {
         watcher.close();
         this.fileWatchers.delete(info.filePath);
+        this.fileWatcherErrorHandlers.delete(info.filePath);
       }
       const timer = this.idleTimers.get(agentId);
       if (timer) {
@@ -530,10 +530,8 @@ export class SubagentWatcher extends EventEmitter {
   getRecentSubagents(minutes: number = 60): SubagentInfo[] {
     const cutoff = Date.now() - minutes * 60 * 1000;
     return Array.from(this.agentInfo.values())
-      .filter((info) => new Date(info.lastActivityAt).getTime() > cutoff)
-      .sort((a, b) =>
-        new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime()
-      );
+      .filter((info) => info.lastActivityAt > cutoff)
+      .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
   }
 
   /**
@@ -999,7 +997,7 @@ export class SubagentWatcher extends EventEmitter {
       projectHash,
       filePath,
       startedAt: stat.birthtime.toISOString(),
-      lastActivityAt: stat.mtime.toISOString(),
+      lastActivityAt: stat.mtime.getTime(),
       status: 'active',
       toolCallCount: 0,
       entryCount: 0,
@@ -1031,7 +1029,7 @@ export class SubagentWatcher extends EventEmitter {
           if (existingInfo) {
             try {
               const newStat = statSync(filePath);
-              existingInfo.lastActivityAt = new Date().toISOString();
+              existingInfo.lastActivityAt = Date.now();
               existingInfo.fileSize = newStat.size;
               existingInfo.status = 'active';
             } catch {

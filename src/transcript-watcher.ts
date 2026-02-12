@@ -255,7 +255,11 @@ export class TranscriptWatcher extends EventEmitter {
 
     try {
       const stat = statSync(this.transcriptPath);
-      if (stat.size <= this.filePosition) {
+      if (stat.size < this.filePosition) {
+        // File was truncated/replaced — reset and re-read from start
+        this.filePosition = 0;
+        this.state = this.getInitialState();
+      } else if (stat.size === this.filePosition) {
         return; // No new content
       }
 

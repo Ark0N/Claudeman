@@ -22,7 +22,10 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { spawn, execSync } from 'node:child_process';
+import { spawn, execSync, exec } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execAsync = promisify(exec);
 import { existsSync, readFileSync, mkdirSync, writeFile } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -30,18 +33,8 @@ import { ProcessStats, PersistedRespawnConfig, getErrorMessage, NiceConfig, DEFA
 import { wrapWithNice } from './utils/nice-wrapper.js';
 import type { TerminalMultiplexer, MuxSession, MuxSessionWithStats } from './mux-interface.js';
 
-// ============================================================================
-// Claude CLI PATH Resolution
-// ============================================================================
-
-/** Common directories where the Claude CLI binary may be installed */
-const CLAUDE_SEARCH_DIRS = [
-  `${homedir()}/.local/bin`,
-  `${homedir()}/.claude/local`,
-  '/usr/local/bin',
-  `${homedir()}/.npm-global/bin`,
-  `${homedir()}/bin`,
-];
+// Claude CLI PATH resolution — shared utility
+import { findClaudeDir } from './utils/claude-cli-resolver.js';
 
 // ============================================================================
 // Timing Constants
@@ -62,36 +55,20 @@ const GRACEFUL_SHUTDOWN_WAIT_MS = 100;
 /** Default stats collection interval (2 seconds) */
 const DEFAULT_STATS_INTERVAL_MS = 2000;
 
-/** Cached directory containing the claude binary */
-let _claudeDir: string | null = null;
-
 /**
- * Finds the directory containing the `claude` binary.
- * Returns null if not found (will rely on PATH as-is).
+ * SAFETY: Test mode detection.
+ * When running under vitest (VITEST env var is set automatically),
+ * ALL tmux shell commands are disabled. TmuxManager becomes a pure
+ * in-memory mock that cannot interact with real tmux sessions.
+ *
+ * This makes it PHYSICALLY IMPOSSIBLE for any test to:
+ * - Kill a tmux session
+ * - Create a tmux session
+ * - Send input to a tmux session
+ * - Discover/reconcile real tmux sessions
+ * - Read/write ~/.claudeman/mux-sessions.json
  */
-function findClaudeDir(): string | null {
-  if (_claudeDir !== null) return _claudeDir;
-
-  try {
-    const result = execSync('which claude', { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }).trim();
-    if (result && existsSync(result)) {
-      _claudeDir = dirname(result);
-      return _claudeDir;
-    }
-  } catch {
-    // not in PATH
-  }
-
-  for (const dir of CLAUDE_SEARCH_DIRS) {
-    if (existsSync(`${dir}/claude`)) {
-      _claudeDir = dir;
-      return _claudeDir;
-    }
-  }
-
-  _claudeDir = '';  // mark as searched, not found
-  return null;
-}
+const IS_TEST_MODE = !!process.env.VITEST;
 
 /** Path to persisted mux session metadata */
 const MUX_SESSIONS_FILE = join(homedir(), '.claudeman', 'mux-sessions.json');
@@ -163,11 +140,15 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
   constructor() {
     super();
-    this.loadSessions();
+    if (!IS_TEST_MODE) {
+      this.loadSessions();
+    }
   }
 
-  // Load saved sessions from disk
+  // Load saved sessions from disk (NEVER called in test mode)
   private loadSessions(): void {
+    if (IS_TEST_MODE) return;
+
     try {
       if (existsSync(MUX_SESSIONS_FILE)) {
         const content = readFileSync(MUX_SESSIONS_FILE, 'utf-8');
@@ -208,9 +189,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
-   * Save sessions to disk asynchronously.
+   * Save sessions to disk asynchronously. (NEVER writes in test mode)
    */
   private saveSessions(): void {
+    if (IS_TEST_MODE) return;
+
     try {
       const dir = dirname(MUX_SESSIONS_FILE);
       if (!existsSync(dir)) {
@@ -231,6 +214,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
   /**
    * Creates a new tmux session wrapping Claude CLI or a shell.
+   * In test mode: creates an in-memory session only (no real tmux session).
    */
   async createSession(
     sessionId: string,
@@ -246,6 +230,23 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
     if (!isValidPath(workingDir)) {
       throw new Error('Invalid working directory path: contains unsafe characters');
+    }
+
+    // TEST MODE: Create in-memory session only — no real tmux session
+    if (IS_TEST_MODE) {
+      const session: MuxSession = {
+        sessionId,
+        muxName,
+        pid: 99999,
+        createdAt: Date.now(),
+        workingDir,
+        mode,
+        attached: false,
+        name,
+      };
+      this.sessions.set(sessionId, session);
+      this.emit('sessionCreated', session);
+      return session;
     }
 
     const claudeDir = findClaudeDir();
@@ -290,45 +291,27 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // Wait for tmux session to start
       await new Promise(resolve => setTimeout(resolve, TMUX_CREATION_WAIT_MS));
 
-      // Disable tmux status bar — Claudeman's web UI provides session info,
-      // and the status bar can't be copied and wastes a terminal row
-      try {
-        execSync(
-          `tmux set-option -t "${muxName}" status off`,
-          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-        );
-      } catch {
-        // Non-critical — session still works with status bar
-      }
+      // Non-critical tmux config — run in parallel to avoid blocking event loop.
+      // These configure UX niceties (no status bar, mouse mode, true color).
+      const configPromises: Promise<void>[] = [
+        // Disable tmux status bar — Claudeman's web UI provides session info
+        execAsync(`tmux set-option -t "${muxName}" status off`, { timeout: EXEC_TIMEOUT_MS })
+          .then(() => {}).catch(() => { /* Non-critical — session still works with status bar */ }),
+        // Enable mouse mode — allows clicking to select tmux panes
+        execAsync(`tmux set-option -t "${muxName}" mouse on`, { timeout: EXEC_TIMEOUT_MS })
+          .then(() => {}).catch(() => { /* Non-critical — pane clicking won't work but keyboard input still does */ }),
+      ];
 
-      // Enable mouse mode — allows clicking to select tmux panes when
-      // Claude Code creates agent team split panes within this session.
-      // With mouse mode, xterm.js forwards click events as escape sequences
-      // that tmux interprets for pane selection.
-      // Trade-off: text selection requires Shift+click (minor for web UI users).
-      try {
-        execSync(
-          `tmux set-option -t "${muxName}" mouse on`,
-          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-        );
-      } catch {
-        // Non-critical — pane clicking won't work but keyboard input still does
-      }
-
-      // Enable 24-bit true color passthrough — without this, tmux downgrades
-      // RGB colors (like Claude's red logo) to the nearest 256-color palette entry.
-      // Server-wide option, only set once per TmuxManager lifetime to avoid duplicates.
+      // Enable 24-bit true color passthrough — server-wide, set once per lifetime
       if (!this.trueColorConfigured) {
-        try {
-          execSync(
-            `tmux set-option -sa terminal-overrides ",*:Tc"`,
-            { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-          );
-          this.trueColorConfigured = true;
-        } catch {
-          // Non-critical — colors will still work, just limited to 256
-        }
+        configPromises.push(
+          execAsync(`tmux set-option -sa terminal-overrides ",*:Tc"`, { timeout: EXEC_TIMEOUT_MS })
+            .then(() => { this.trueColorConfigured = true; })
+            .catch(() => { /* Non-critical — colors limited to 256 */ })
+        );
       }
+
+      await Promise.all(configPromises);
 
       // Get the PID of the pane process
       const pid = this.getPanePid(muxName);
@@ -361,6 +344,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * Get the PID of the process running in the tmux pane.
    */
   private getPanePid(muxName: string): number | null {
+    if (IS_TEST_MODE) return 99999;
+
     if (!isValidMuxName(muxName)) {
       console.error('[TmuxManager] Invalid session name in getPanePid:', muxName);
       return null;
@@ -382,6 +367,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * Check if a tmux session exists.
    */
   private sessionExists(muxName: string): boolean {
+    if (IS_TEST_MODE) return false;
+
     try {
       execSync(`tmux has-session -t "${muxName}" 2>/dev/null`, {
         encoding: 'utf-8',
@@ -446,11 +433,19 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   /**
    * Kill a tmux session and all its child processes.
    * Uses the same 4-strategy approach as ScreenManager.
+   * In test mode: removes from memory only (no real kill).
    */
   async killSession(sessionId: string): Promise<boolean> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return false;
+    }
+
+    // TEST MODE: Remove from memory only — NEVER touch real tmux sessions
+    if (IS_TEST_MODE) {
+      this.sessions.delete(sessionId);
+      this.emit('sessionKilled', { sessionId });
+      return true;
     }
 
     // SAFETY: Never kill the tmux session we're running inside of
@@ -563,6 +558,15 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * Reconcile tracked sessions with actual running tmux sessions.
    */
   async reconcileSessions(): Promise<{ alive: string[]; dead: string[]; discovered: string[] }> {
+    // TEST MODE: Return all registered sessions as alive, never discover real ones
+    if (IS_TEST_MODE) {
+      return {
+        alive: Array.from(this.sessions.keys()),
+        dead: [],
+        discovered: [],
+      };
+    }
+
     const alive: string[] = [];
     const dead: string[] = [];
     const discovered: string[] = [];
@@ -638,6 +642,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   async getProcessStats(sessionId: string): Promise<ProcessStats | null> {
+    if (IS_TEST_MODE) return { memoryMB: 0, cpuPercent: 0, childCount: 0, updatedAt: Date.now() };
+
     const session = this.sessions.get(sessionId);
     if (!session) {
       return null;
@@ -674,6 +680,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   async getSessionsWithStats(): Promise<MuxSessionWithStats[]> {
+    if (IS_TEST_MODE) {
+      return Array.from(this.sessions.values()).map(s => ({
+        ...s,
+        stats: { memoryMB: 0, cpuPercent: 0, childCount: 0, updatedAt: Date.now() },
+      }));
+    }
+
     const sessions = Array.from(this.sessions.values());
     if (sessions.length === 0) {
       return [];
@@ -850,6 +863,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       return false;
     }
 
+    // TEST MODE: No-op — don't send input to real tmux sessions
+    if (IS_TEST_MODE) {
+      return true;
+    }
+
     console.log(`[TmuxManager] sendInput to ${session.muxName}, input length: ${input.length}, hasCarriageReturn: ${input.includes('\r')}`);
 
     if (!isValidMuxName(session.muxName)) {
@@ -901,6 +919,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * Allows clicking to select panes in agent team split-pane layouts.
    */
   enableMouseMode(muxName: string): boolean {
+    if (IS_TEST_MODE) return true;
     if (!isValidMuxName(muxName)) {
       console.error('[TmuxManager] Invalid session name in enableMouseMode:', muxName);
       return false;
@@ -922,6 +941,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * Returns structured info for each pane.
    */
   listPanes(muxName: string): PaneInfo[] {
+    if (IS_TEST_MODE) return [];
     if (!isValidMuxName(muxName)) {
       console.error('[TmuxManager] Invalid session name in listPanes:', muxName);
       return [];
@@ -953,6 +973,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * Uses the same literal text approach as sendInput() but targets a specific pane.
    */
   sendInputToPane(muxName: string, paneTarget: string, input: string): boolean {
+    if (IS_TEST_MODE) return true;
     if (!isValidMuxName(muxName)) {
       console.error('[TmuxManager] Invalid session name in sendInputToPane:', muxName);
       return false;
@@ -1004,6 +1025,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * Returns the pane content with ANSI escape codes preserved.
    */
   capturePaneBuffer(muxName: string, paneTarget: string): string | null {
+    if (IS_TEST_MODE) return '';
     if (!isValidMuxName(muxName)) {
       console.error('[TmuxManager] Invalid session name in capturePaneBuffer:', muxName);
       return null;
@@ -1033,6 +1055,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * Only pipes output direction (-O) to avoid echoing input.
    */
   startPipePane(muxName: string, paneTarget: string, outputFile: string): boolean {
+    if (IS_TEST_MODE) return true;
     if (!isValidMuxName(muxName)) {
       console.error('[TmuxManager] Invalid session name in startPipePane:', muxName);
       return false;
@@ -1066,6 +1089,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * Stop piping pane output (calling pipe-pane with no command stops piping).
    */
   stopPipePane(muxName: string, paneTarget: string): boolean {
+    if (IS_TEST_MODE) return true;
     if (!isValidMuxName(muxName)) {
       console.error('[TmuxManager] Invalid session name in stopPipePane:', muxName);
       return false;

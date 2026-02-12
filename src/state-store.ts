@@ -14,7 +14,7 @@
  * @module state-store
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync, copyFileSync } from 'node:fs';
 import { writeFile, rename, unlink, copyFile, access } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -82,23 +82,29 @@ export class StateStore {
   }
 
   private load(): AppState {
-    try {
-      if (existsSync(this.filePath)) {
-        const data = readFileSync(this.filePath, 'utf-8');
-        const parsed = JSON.parse(data) as Partial<AppState>;
-        // Merge with initial state to ensure all fields exist
-        const initial = createInitialState();
-        return {
-          ...initial,
-          ...parsed,
-          sessions: { ...parsed.sessions },
-          tasks: { ...parsed.tasks },
-          ralphLoop: { ...initial.ralphLoop, ...parsed.ralphLoop },
-          config: { ...initial.config, ...parsed.config },
-        };
+    // Try main file first, then .bak fallback
+    for (const path of [this.filePath, this.filePath + '.bak']) {
+      try {
+        if (existsSync(path)) {
+          const data = readFileSync(path, 'utf-8');
+          const parsed = JSON.parse(data) as Partial<AppState>;
+          const initial = createInitialState();
+          const result = {
+            ...initial,
+            ...parsed,
+            sessions: { ...parsed.sessions },
+            tasks: { ...parsed.tasks },
+            ralphLoop: { ...initial.ralphLoop, ...parsed.ralphLoop },
+            config: { ...initial.config, ...parsed.config },
+          };
+          if (path !== this.filePath) {
+            console.warn(`[StateStore] Recovered state from backup: ${path}`);
+          }
+          return result;
+        }
+      } catch (err) {
+        console.error(`Failed to load state from ${path}:`, err);
       }
-    } catch (err) {
-      console.error('Failed to load state, using initial state:', err);
     }
     return createInitialState();
   }
@@ -240,11 +246,10 @@ export class StateStore {
       return;
     }
 
-    // Backup via copy (skip read+parse validation — just copy the file)
+    // Backup via atomic copy (avoids reading entire file into memory)
     try {
       if (existsSync(this.filePath)) {
-        const currentContent = readFileSync(this.filePath, 'utf-8');
-        writeFileSync(backupPath, currentContent, 'utf-8');
+        copyFileSync(this.filePath, backupPath);
       }
     } catch {
       // Backup failed - continue with write

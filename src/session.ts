@@ -16,9 +16,6 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { execSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { dirname } from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 import * as pty from 'node-pty';
 import { SessionState, SessionStatus, SessionConfig, RalphTrackerState, RalphTodoItem, ActiveBashTool, NiceConfig, DEFAULT_NICE_CONFIG } from './types.js';
@@ -53,9 +50,6 @@ const LINE_BUFFER_FLUSH_INTERVAL = 100;
 // Timing Constants
 // ============================================================================
 
-/** Timeout for exec commands like 'which claude' (5 seconds) */
-const EXEC_TIMEOUT_MS = 5000;
-
 /** Delay after screen creation before sending commands (300ms) */
 const SCREEN_STARTUP_DELAY_MS = 300;
 
@@ -89,65 +83,10 @@ const CTRL_L_PATTERN = /\x0c/g;
 /** Pattern to split by newlines (CR or LF) */
 const NEWLINE_SPLIT_PATTERN = /\r?\n/;
 
-// ============================================================================
-// Claude CLI PATH Resolution
-// ============================================================================
-
-/** Common directories where the Claude CLI binary may be installed */
-const CLAUDE_SEARCH_DIRS = [
-  `${process.env.HOME}/.local/bin`,
-  `${process.env.HOME}/.claude/local`,
-  '/usr/local/bin',
-  `${process.env.HOME}/.npm-global/bin`,
-  `${process.env.HOME}/bin`,
-];
-
-/** Cached PATH string with claude's directory prepended */
-let _augmentedPath: string | null = null;
-
-/**
- * Returns a PATH string that includes the directory containing `claude`.
- *
- * Finds the claude binary (via `which` or common install locations), then
- * prepends its directory to the current PATH if not already present.
- * Result is cached for subsequent calls.
- */
-export function getAugmentedPath(): string {
-  if (_augmentedPath) return _augmentedPath;
-
-  const currentPath = process.env.PATH || '';
-  let claudeDir: string | null = null;
-
-  // Try `which` first (respects current PATH)
-  try {
-    const result = execSync('which claude', { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }).trim();
-    if (result && existsSync(result)) {
-      claudeDir = dirname(result);
-    }
-  } catch (err) {
-    // Claude not in PATH, will check common locations
-    console.warn('[Session] Claude not found via which command, checking common locations:', err instanceof Error ? err.message : err);
-  }
-
-  // Fallback: check common installation directories
-  if (!claudeDir) {
-    for (const dir of CLAUDE_SEARCH_DIRS) {
-      if (existsSync(`${dir}/claude`)) {
-        claudeDir = dir;
-        break;
-      }
-    }
-  }
-
-  if (claudeDir && !currentPath.split(':').includes(claudeDir)) {
-    _augmentedPath = `${claudeDir}:${currentPath}`;
-    console.log('[Session] Augmented PATH with claude directory:', claudeDir);
-  } else {
-    _augmentedPath = currentPath;
-  }
-
-  return _augmentedPath;
-}
+// Claude CLI PATH resolution — shared utility
+import { getAugmentedPath } from './utils/claude-cli-resolver.js';
+// Re-export for backward compatibility (ai-checker-base imports from session)
+export { getAugmentedPath } from './utils/claude-cli-resolver.js';
 
 /**
  * Wraps a promise with a timeout to prevent indefinite hangs.
@@ -1521,7 +1460,8 @@ export class Session extends EventEmitter {
 
       // Parse task descriptions from terminal output (e.g., "Explore(Description)")
       // This captures the short description from Claude Code's Task tool output
-      this.parseTaskDescriptionsFromLine(cleanLine);
+      // Use direct method since cleanLine is already ANSI-stripped (line 1460)
+      this.parseTaskDescriptionsDirect(cleanLine);
     }
     // Note: BufferAccumulator auto-trims when max size exceeded
   }
@@ -1543,23 +1483,8 @@ export class Session extends EventEmitter {
   }
 
   /**
-   * Parse task descriptions from terminal output line.
-   * Claude Code outputs Task tool calls as "ToolName(Description)" in the terminal.
-   * We capture these descriptions to use as window titles for subagents.
-   * Called from processOutput() with potentially non-cleaned data.
-   */
-  private parseTaskDescriptionsFromLine(line: string): void {
-    // Quick pre-check: skip expensive regex if no common tool patterns present
-    if (!line.includes('(') || !line.includes(')')) return;
-
-    // Strip ANSI codes - may still be present from processOutput() path
-    const cleanLine = line.replace(ANSI_ESCAPE_PATTERN_FULL, '');
-    this.parseTaskDescriptionsDirect(cleanLine);
-  }
-
-  /**
    * Parse task descriptions from a pre-cleaned line (no ANSI codes).
-   * Internal method used by both parseTaskDescriptionsFromTerminalData and parseTaskDescriptionsFromLine.
+   * Used by both processOutput() and parseTaskDescriptionsFromTerminalData().
    */
   private parseTaskDescriptionsDirect(cleanLine: string): void {
     // Quick pre-check: skip expensive regex if no common tool patterns present
@@ -2111,8 +2036,9 @@ export class Session extends EventEmitter {
     this._status = 'stopped';
     this._currentTaskId = null;
 
-    // Clear task description cache to prevent memory leak
+    // Clear task description cache and agent tree to prevent memory leak
     this._recentTaskDescriptions.clear();
+    this._childAgentIds = [];
 
     // Kill the associated mux session if requested
     if (killScreen && this._mux) {

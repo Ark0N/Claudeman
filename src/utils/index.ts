@@ -35,3 +35,4 @@ export {
 } from './string-similarity.js';
 export { assertNever } from './type-safety.js';
 export { wrapWithNice } from './nice-wrapper.js';
+export { findClaudeDir, getAugmentedPath } from './claude-cli-resolver.js';

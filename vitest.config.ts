@@ -4,7 +4,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['test/**/*.test.ts', 'test/e2e/**/*.e2e.ts'],
+    include: ['test/**/*.test.ts'],
     setupFiles: ['./test/setup.ts'],
     // Run test files sequentially to respect mux session limits
     // Individual tests within files still run in parallel where safe

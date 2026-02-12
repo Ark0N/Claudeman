@@ -1299,6 +1299,7 @@ export class RespawnController extends EventEmitter {
     this.planChecker.removeAllListeners();
     this.clearTimers();
     this.stopDetectionUpdates();
+    this.recentActions.length = 0;
     this.setState('stopped');
     if (this.terminalHandler) {
       this.session.off('terminal', this.terminalHandler);

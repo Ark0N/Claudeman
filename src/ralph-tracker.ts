@@ -1382,6 +1382,22 @@ export class RalphTracker extends EventEmitter {
    * @returns True if any Ralph-related pattern is detected
    */
   private shouldAutoEnable(data: string): boolean {
+    // Cheap pre-filter: skip the full regex battery if none of the key
+    // substrings that any pattern could match are present in the data.
+    // This avoids 12 regex tests on every PTY chunk (the common case).
+    if (
+      !data.includes('<') &&      // <promise>, TodoWrite
+      !data.includes('ralph') && !data.includes('Ralph') &&
+      !data.includes('Todo') && !data.includes('todo') &&
+      !data.includes('Iteration') && !data.includes('[') &&
+      !data.includes('\u2610') && !data.includes('\u2612') && // ☐ ☒
+      !data.includes('\u2714') && // ✔
+      !data.includes('Loop') && !data.includes('complete') &&
+      !data.includes('COMPLETE') && !data.includes('Done') && !data.includes('DONE')
+    ) {
+      return false;
+    }
+
     // Ralph loop command: /ralph-loop:ralph-loop
     if (RALPH_START_PATTERN.test(data)) {
       return true;
