@@ -524,17 +524,35 @@ const KeyboardAccessoryBar = {
   },
 
   /** Read clipboard and send contents as input */
-  async pasteFromClipboard() {
+  /** Show a paste overlay with a textarea for iOS compatibility */
+  pasteFromClipboard() {
     if (typeof app === 'undefined' || !app.activeSessionId) return;
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text) {
-        app.sendInput(text);
-      }
-    } catch (_err) {
-      // Clipboard API may fail without secure context or permission
-      app.showToast?.('Clipboard access denied', 'error');
-    }
+
+    // Create overlay
+    const overlay = document.createElement('div');
+    overlay.className = 'paste-overlay';
+    overlay.innerHTML = `
+      <div class="paste-dialog">
+        <textarea class="paste-textarea" placeholder="Long-press here and tap Paste"></textarea>
+        <div class="paste-actions">
+          <button class="paste-cancel">Cancel</button>
+          <button class="paste-send">Send</button>
+        </div>
+      </div>
+    `;
+
+    const textarea = overlay.querySelector('.paste-textarea');
+    const send = () => {
+      const text = textarea.value;
+      overlay.remove();
+      if (text) app.sendInput(text);
+    };
+    overlay.querySelector('.paste-cancel').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('.paste-send').addEventListener('click', send);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+    document.body.appendChild(overlay);
+    textarea.focus();
   },
 
   /** Show the accessory bar */
