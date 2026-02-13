@@ -1765,6 +1765,10 @@ export class RespawnController extends EventEmitter {
       clearInterval(this.stuckStateTimer);
       this.stuckStateTimer = null;
     }
+    if (this.detectionUpdateTimer) {
+      clearInterval(this.detectionUpdateTimer);
+      this.detectionUpdateTimer = null;
+    }
     // Clear all tracked timers
     this.activeTimers.clear();
   }

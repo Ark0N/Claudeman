@@ -981,6 +981,8 @@ export class RalphTracker extends EventEmitter {
     this._todos.clear();
     this._completionPhraseCount.clear();
     this._taskNumberToContent.clear();
+    this._todoStartTimes.clear();
+    this._alternateCompletionPhrases.clear();
     this._lineBuffer = '';
     // Reset all RALPH_STATUS block and circuit breaker state
     this._statusBlockBuffer = [];
@@ -2888,6 +2890,8 @@ export class RalphTracker extends EventEmitter {
     this._loopState = createInitialRalphTrackerState(); // This sets enabled: false
     this._todos.clear();
     this._taskNumberToContent.clear();
+    this._todoStartTimes.clear();
+    this._alternateCompletionPhrases.clear();
     this._lineBuffer = '';
     this._partialPromiseBuffer = '';
     this._completionPhraseCount.clear();
@@ -3838,6 +3842,8 @@ export class RalphTracker extends EventEmitter {
     this.stopIterationStallDetection();
     this._todos.clear();
     this._taskNumberToContent.clear();
+    this._todoStartTimes.clear();
+    this._alternateCompletionPhrases.clear();
     this._completionPhraseCount.clear();
     this._planTasks.clear();
     this.removeAllListeners();

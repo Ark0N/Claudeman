@@ -657,7 +657,7 @@ export class StateStore {
     const tempPath = this.ralphStatePath + '.tmp';
     let json: string;
     try {
-      json = JSON.stringify(data, null, 2);
+      json = JSON.stringify(data);
     } catch (err) {
       console.error('[StateStore] Failed to serialize Ralph state (circular reference or invalid data):', err);
       // Keep dirty flag true for retry - don't throw, let caller continue

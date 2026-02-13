@@ -352,6 +352,10 @@ export class WebServer extends EventEmitter {
   private sseHealthCheckTimer: NodeJS.Timeout | null = null;
   // Flag to prevent new timers during shutdown
   private _isStopping: boolean = false;
+  // Cached light state for SSE init (avoids rebuilding on every reconnect)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private cachedLightState: { data: Record<string, unknown>; timestamp: number } | null = null;
+  private static readonly LIGHT_STATE_CACHE_TTL_MS = 1000;
   // Token recording for daily stats (track what's been recorded to avoid double-counting)
   private lastRecordedTokens: Map<string, { input: number; output: number }> = new Map();
   private tokenRecordingTimer: NodeJS.Timeout | null = null;
@@ -684,8 +688,9 @@ export class WebServer extends EventEmitter {
       this.persistSessionState(session);
       await this.setupSessionListeners(session);
 
-      this.broadcast('session:created', session.toDetailedState());
-      return { success: true, session: session.toDetailedState() };
+      const detailedState = session.toDetailedState();
+      this.broadcast('session:created', detailedState);
+      return { success: true, session: detailedState };
     });
 
     // Rename a session
@@ -4371,6 +4376,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
    * to prevent browser freezes. Terminal buffers are fetched on-demand.
    */
   private getLightState() {
+    const now = Date.now();
+    if (this.cachedLightState && now - this.cachedLightState.timestamp < WebServer.LIGHT_STATE_CACHE_TTL_MS) {
+      return this.cachedLightState.data;
+    }
+
     const respawnStatus: Record<string, ReturnType<RespawnController['getStatus']>> = {};
     for (const [sessionId, controller] of this.respawnControllers) {
       respawnStatus[sessionId] = controller.getStatus();
@@ -4385,15 +4395,18 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       };
     }
 
-    return {
+    const result = {
       version: APP_VERSION,
       sessions: this.getLightSessionsState(),
       scheduledRuns: Array.from(this.scheduledRuns.values()),
       respawnStatus,
       globalStats: this.store.getAggregateStats(activeSessionTokens),
       subagents: subagentWatcher.getRecentSubagents(15), // 15 min to avoid stale agents
-      timestamp: Date.now(),
+      timestamp: now,
     };
+
+    this.cachedLightState = { data: result, timestamp: now };
+    return result;
   }
 
   private sendSSE(reply: FastifyReply, event: string, data: unknown): void {
@@ -4426,6 +4439,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 
   private broadcast(event: string, data: unknown): void {
+    // Invalidate light state cache on any state-changing broadcast
+    if (event.startsWith('session:') || event === 'respawn:') {
+      this.cachedLightState = null;
+    }
     // Performance optimization: serialize JSON once for all clients
     let message: string;
     try {

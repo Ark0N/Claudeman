@@ -18,7 +18,7 @@ import { LRUMap } from './utils/lru-map.js';
 
 // ========== Constants ==========
 
-const POLL_INTERVAL_MS = 3000;
+const POLL_INTERVAL_MS = 5000;
 const MAX_CACHED_TEAMS = 50;
 const MAX_CACHED_TASKS = 200;
 

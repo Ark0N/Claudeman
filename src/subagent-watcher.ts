@@ -1232,16 +1232,9 @@ export class SubagentWatcher extends EventEmitter {
               const agentCalls = this.pendingToolCalls.get(agentId)!;
               // Enforce size limit to prevent memory leak from rapid tool calls
               if (agentCalls.size >= MAX_PENDING_TOOL_CALLS) {
-                // Evict oldest entry by timestamp
-                let oldestId: string | null = null;
-                let oldestTime = Infinity;
-                for (const [id, call] of agentCalls) {
-                  if (call.timestamp < oldestTime) {
-                    oldestTime = call.timestamp;
-                    oldestId = id;
-                  }
-                }
-                if (oldestId) agentCalls.delete(oldestId);
+                // FIFO eviction: delete first (oldest) entry using Map insertion order
+                const firstKey = agentCalls.keys().next().value;
+                if (firstKey !== undefined) agentCalls.delete(firstKey);
               }
               agentCalls.set(content.id, {
                 toolName: content.name,

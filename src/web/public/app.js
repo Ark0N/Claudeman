@@ -40,6 +40,8 @@ const WINDOW_DEFAULT_WIDTH_PX = 300;
 // xterm.js doesn't support DEC 2026 natively, so we implement buffering ourselves.
 const DEC_SYNC_START = '\x1b[?2026h';
 const DEC_SYNC_END = '\x1b[?2026l';
+// Pre-compiled regex for stripping DEC 2026 markers (single pass instead of two replaceAll calls)
+const DEC_SYNC_STRIP_RE = /\x1b\[\?2026[hl]/g;
 
 // Built-in respawn configuration presets
 const BUILTIN_RESPAWN_PRESETS = [
@@ -1867,9 +1869,7 @@ class ClaudemanApp {
 
       // Strip any DEC 2026 markers that might be in the buffer
       // (from historical SSE data that was stored with markers)
-      const cleanBuffer = buffer
-        .replaceAll(DEC_SYNC_START, '')
-        .replaceAll(DEC_SYNC_END, '');
+      const cleanBuffer = buffer.replace(DEC_SYNC_STRIP_RE, '');
 
       // For small buffers, write directly
       if (cleanBuffer.length <= chunkSize) {
@@ -2157,9 +2157,7 @@ class ClaudemanApp {
           if (termData.terminalBuffer) {
             // Strip any DEC 2026 markers and write raw content
             // (markers don't help here - this is a static buffer reload, not live Ink redraws)
-            const cleanBuffer = termData.terminalBuffer
-              .replaceAll(DEC_SYNC_START, '')
-              .replaceAll(DEC_SYNC_END, '');
+            const cleanBuffer = termData.terminalBuffer.replace(DEC_SYNC_STRIP_RE, '');
             // Use chunked write to avoid UI freeze with large buffers (can be 1-2MB)
             await this.chunkedTerminalWrite(cleanBuffer);
           }
