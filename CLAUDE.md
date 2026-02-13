@@ -9,7 +9,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Dev server | `npx tsx src/index.ts web` |
 | Type check | `tsc --noEmit` |
 | Single test | `npx vitest run test/<file>.test.ts` |
-| E2E tests | `npm run test:e2e` |
 | Production | `npm run build && systemctl --user restart claudeman-web` |
 
 ## CRITICAL: Session Safety
@@ -26,7 +25,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md` (verify they match with `grep version package.json && grep Version CLAUDE.md`)
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1496 (must match `package.json` for npm publish)
+**Version**: 0.1497 (must match `package.json` for npm publish)
 
 ## Project Overview
 
@@ -59,8 +58,6 @@ npx vitest run                     # All tests
 npx vitest run test/<file>.test.ts # Single file
 npx vitest run -t "pattern"        # Tests matching name
 npm run test:coverage              # With coverage report
-npm run test:e2e                   # Browser E2E (requires: npx playwright install chromium)
-npm run test:e2e:quick             # Quick E2E (just quick-start workflow)
 
 # Production
 npm run build
@@ -73,7 +70,7 @@ journalctl --user -u claudeman-web -f
 - **`npm run dev` is NOT the web server** — it shows CLI help. Use `npx tsx src/index.ts web`
 - **Single-line prompts only** — `writeViaScreen()` sends text and Enter separately; multi-line breaks Ink
 - **Don't kill tmux sessions blindly** — Check `$CLAUDEMAN_TMUX` first; you might be inside one
-- **Port 3000 during E2E** — Tests use ports 3183-3193; don't run dev server on 3000 while testing
+- **Never run full test suite** — `npx vitest run` spawns/kills tmux sessions and will crash your Claudeman session. Run individual test files only.
 
 ## Import Conventions
 
@@ -137,7 +134,9 @@ journalctl --user -u claudeman-web -f
 |------|---------|
 | `index.ts` | Re-exports all utilities (standard import point) |
 | `lru-map.ts` | LRU eviction Map for bounded caches |
+| `nice-wrapper.ts` | Wrap commands with `nice` priority adjustment |
 | `stale-expiration-map.ts` | TTL-based Map with lazy expiration |
+| `claude-cli-resolver.ts` | Resolve Claude CLI binary across install paths |
 | `cleanup-manager.ts` | Centralized resource disposal |
 | `buffer-accumulator.ts` | Chunk accumulator with size limits |
 | `string-similarity.ts` | String matching utilities (fuzzy matching) |
@@ -191,9 +190,22 @@ UI defaults are set in `src/web/public/app.js` using `??` fallbacks. To change d
 
 ## Testing
 
-**Ports**: E2E uses 3183-3193 (see `test/e2e/e2e.config.ts`). Unit tests pick unique ports manually. Search `const PORT =` before adding new tests.
+**CRITICAL: You are running inside a Claudeman-managed tmux session.** Never run `npx vitest run` (full suite) — it spawns/kills tmux sessions and will crash your own session. Instead:
 
-**Config**: Vitest with `globals: true`, `fileParallelism: false`. Unit timeout 30s, E2E timeout 90s. E2E requires `npx playwright install chromium`.
+```bash
+# Safe: run individual test files
+npx vitest run test/<specific-file>.test.ts
+
+# Safe: run tests matching a pattern
+npx vitest run -t "pattern"
+
+# DANGEROUS from inside Claudeman — will kill your tmux session:
+# npx vitest run          ← DON'T DO THIS
+```
+
+**Ports**: Unit tests pick unique ports manually. Search `const PORT =` before adding new tests.
+
+**Config**: Vitest with `globals: true`, `fileParallelism: false`. Unit timeout 30s.
 
 **Safety**: `test/setup.ts` snapshots pre-existing tmux sessions at load time and never kills them. Only sessions registered via `registerTestTmuxSession()` get cleaned up.
 
@@ -210,8 +222,6 @@ cat ~/.claudeman/state.json | jq    # View persisted state
 curl localhost:3000/api/subagents   # List background agents
 curl localhost:3000/api/sessions/:id/run-summary | jq  # Session timeline
 ```
-
-**Avoid port 3000 during E2E tests** — tests use ports 3183-3193 (see `test/e2e/e2e.config.ts`).
 
 ## Troubleshooting
 
@@ -276,14 +286,12 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **Ralph Loop guide** | `docs/ralph-wiggum-guide.md` |
 | **Claude Code hooks** | `docs/claude-code-hooks-reference.md` |
 | **Terminal anti-flicker** | `docs/terminal-anti-flicker.md` |
-| **Browser/E2E testing** | `docs/browser-testing-guide.md` |
 | **API routes** | `src/web/server.ts:buildServer()` or README.md (full endpoint tables) |
 | **SSE events** | Search `broadcast(` in `server.ts` |
 | **CLI commands** | `claudeman --help` |
 | **Frontend patterns** | `src/web/public/app.js` (subagent windows, notifications) |
 | **Session modes** | `SessionMode` type in `src/types.ts` |
 | **Error codes** | `createErrorResponse()` in `src/types.ts` |
-| **Test fixtures** | `test/e2e/fixtures/` |
 | **Test utilities** | `test/respawn-test-utils.ts` |
 | **Memory leak patterns** | `test/memory-leak-prevention.test.ts` |
 | **Keyboard shortcuts** | README.md or App Settings in web UI |
@@ -306,6 +314,12 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | `scripts/mobile-screenshot.mjs` | Capture mobile UI screenshots |
 | `scripts/ralph-wizard-start.mjs` | Automate Ralph Loop startup via headless browser |
 | `scripts/ralph-wizard-prod.mjs` | Production Ralph wizard with HTTPS support |
+| `scripts/browser-comparison.mjs` | Compare Playwright, Puppeteer, and Agent-Browser frameworks |
+| `scripts/ralph-wizard-demo.mjs` | Demo Ralph Loop wizard via visible browser |
+| `scripts/screen-chooser.sh` | Mobile-friendly Screen session picker (`sc` alias) |
+| `scripts/screen-manager.sh` | Interactive GNU Screen session manager (deprecated) |
+| `scripts/test-links-browser.mjs` | Browser test for clickable terminal file links |
+| `scripts/test-patterns.mjs` | Test file path link detection regex patterns |
 | `scripts/watch-subagents.ts` | Real-time subagent transcript watcher (list, follow by session/agent ID) |
 | `scripts/claudeman-web.service` | systemd service file for production deployment |
 
