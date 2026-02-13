@@ -1242,6 +1242,16 @@ class ClaudemanApp {
     // Sequential input send chain — ensures keystroke ordering across async fetches
     this._inputSendChain = Promise.resolve();
 
+    // Local echo with output hold — shows typed chars instantly on high-latency connections.
+    // Instead of stripping echoed chars from Ink output (fragile), we simply hold ALL server
+    // output while typing and flush it when the user pauses. Ink's final redraw replaces
+    // any locally-echoed chars with the correct server state.
+    this._localEchoActive = false;   // Whether we have unconfirmed locally-echoed chars
+    this._localEchoCount = 0;        // Number of unconfirmed chars
+    this._localEchoHoldBuffer = [];  // Server output held during typing
+    this._localEchoFlushTimer = null; // Timer to flush after typing pause
+    this._localEchoFlushDelay = 200; // ms after last keystroke before flushing server output
+
     // Accessibility: Focus trap for modals
     this.activeFocusTrap = null;
 
@@ -1571,6 +1581,33 @@ class ClaudemanApp {
         // Patterns: \x1b[?...c (DA1), \x1b[>...c (DA2), \x1b[...R (CPR), \x1b[...n (DSR)
         if (/^\x1b\[[\?>=]?[\d;]*[cnR]$/.test(data)) return;
 
+        // Local echo: show printable chars instantly during idle state.
+        // Reduces perceived latency on remote connections (e.g., 100-300ms RTT).
+        // Server output is held while typing and flushed when user pauses.
+        const session = this.sessions.get(this.activeSessionId);
+        const isIdle = session && session.status === 'idle';
+        if (isIdle && data.length === 1) {
+          const code = data.charCodeAt(0);
+          if (code >= 32 && code < 127) {
+            // Printable ASCII — echo immediately
+            this.terminal.write(data);
+            this._localEchoActive = true;
+            this._localEchoCount++;
+            this._resetLocalEchoFlush();
+          } else if ((code === 0x7f || code === 0x08) && this._localEchoCount > 0) {
+            // Backspace — undo last local echo char
+            this.terminal.write('\b \b');
+            this._localEchoCount--;
+            if (this._localEchoCount === 0) this._localEchoActive = false;
+            this._resetLocalEchoFlush();
+          }
+        }
+
+        // Control chars (Enter, Ctrl+C) clear local echo immediately
+        if (data.charCodeAt(0) < 32 || data.length > 1) {
+          this._clearLocalEcho();
+        }
+
         this._pendingInput += data;
 
         // Flush immediately for control characters (Enter, Ctrl+C, etc.)
@@ -1717,6 +1754,15 @@ class ClaudemanApp {
   }
 
   batchTerminalWrite(data) {
+    // Local echo output hold: while user is actively typing (local echo active),
+    // buffer server output instead of writing it. This prevents Ink's intermediate
+    // redraws from overwriting locally-echoed characters. The buffer is flushed
+    // when typing pauses (200ms), giving the server time to catch up.
+    if (this._localEchoActive) {
+      this._localEchoHoldBuffer.push(data);
+      return;
+    }
+
     // Check if at bottom BEFORE adding data (captures user's scroll position)
     // Only update if not already scheduled (preserve the first check's result)
     if (!this.writeFrameScheduled) {
@@ -2250,6 +2296,10 @@ class ClaudemanApp {
       const session = this.sessions.get(data.id);
       if (session) {
         session.status = 'busy';
+        // Clear local echo — server is now generating output
+        if (data.id === this.activeSessionId) {
+          this._clearLocalEcho();
+        }
         // Only clear tab alert if no pending hooks (permission_prompt, elicitation_dialog, etc.)
         if (!this.pendingHooks.has(data.id)) {
           this.tabAlerts.delete(data.id);
@@ -2992,6 +3042,47 @@ class ClaudemanApp {
         this._enqueueInput(sessionId, input);
       }
     });
+  }
+
+  /**
+   * Reset the local echo flush timer. Called on each keystroke.
+   * After the user stops typing for _localEchoFlushDelay ms, flushes
+   * held server output to the terminal.
+   */
+  _resetLocalEchoFlush() {
+    if (this._localEchoFlushTimer) clearTimeout(this._localEchoFlushTimer);
+    this._localEchoFlushTimer = setTimeout(() => {
+      this._flushLocalEcho();
+    }, this._localEchoFlushDelay);
+  }
+
+  /**
+   * Flush held server output and clear local echo state.
+   * Called when typing pauses, session goes busy, or control char sent.
+   */
+  _flushLocalEcho() {
+    if (this._localEchoFlushTimer) {
+      clearTimeout(this._localEchoFlushTimer);
+      this._localEchoFlushTimer = null;
+    }
+    this._localEchoActive = false;
+    this._localEchoCount = 0;
+
+    // Flush all held server output through the normal write path
+    if (this._localEchoHoldBuffer.length > 0) {
+      const held = this._localEchoHoldBuffer;
+      this._localEchoHoldBuffer = [];
+      for (const chunk of held) {
+        this.batchTerminalWrite(chunk);
+      }
+    }
+  }
+
+  /**
+   * Clear local echo state immediately (on Enter, Ctrl+C, session busy).
+   */
+  _clearLocalEcho() {
+    this._flushLocalEcho();
   }
 
   _enqueueInput(sessionId, input) {
