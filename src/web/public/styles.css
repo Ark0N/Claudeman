@@ -2765,6 +2765,15 @@ body {
 
 .modal-content.modal-lg {
   max-width: 520px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-content.modal-lg > .modal-body {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 /* Mobile Case Picker - Base Styles */

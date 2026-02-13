@@ -1237,6 +1237,9 @@ class ClaudemanApp {
     this._inputQueueMaxBytes = 64 * 1024; // 64KB cap per session
     this._connectionStatus = 'connected';
 
+    // Sequential input send chain — ensures keystroke ordering across async fetches
+    this._inputSendChain = Promise.resolve();
+
     // Accessibility: Focus trap for modals
     this.activeFocusTrap = null;
 
@@ -1538,38 +1541,24 @@ class ClaudemanApp {
     // Handle keyboard input with batching for rapid keystrokes
     this._pendingInput = '';
     this._inputFlushTimeout = null;
-    this._inputFlushDelay = 16; // Flush at 60fps max
+    this._inputFlushDelay = 8; // Flush at ~120fps for snappy input
 
-    const flushInput = async () => {
+    const flushInput = () => {
+      // Clear timeout immediately so new keystrokes can schedule fresh flushes.
+      // Previously this was set AFTER the await fetch(), which meant the stale
+      // timer ID blocked new keystrokes from scheduling — serializing all input
+      // behind the previous fetch's full network round-trip.
+      this._inputFlushTimeout = null;
+
       if (this._pendingInput && this.activeSessionId) {
         const input = this._pendingInput;
         const sessionId = this.activeSessionId;
         this._pendingInput = '';
 
-        // Queue immediately if offline
-        if (!this.isOnline || this._connectionStatus === 'disconnected') {
-          this._enqueueInput(sessionId, input);
-          this._inputFlushTimeout = null;
-          return;
-        }
-
-        try {
-          const resp = await fetch(`/api/sessions/${sessionId}/input`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ input })
-          });
-          if (!resp.ok) {
-            this._enqueueInput(sessionId, input);
-          } else {
-            // Clear pending hooks when user sends input (they've addressed the prompt)
-            this.clearPendingHooks(sessionId);
-          }
-        } catch {
-          this._enqueueInput(sessionId, input);
-        }
+        // Fire-and-forget: don't block the flush cycle waiting for network.
+        // This prevents keystroke serialization behind fetch RTT.
+        this._sendInputAsync(sessionId, input);
       }
-      this._inputFlushTimeout = null;
     };
 
     this.terminal.onData((data) => {
@@ -1592,7 +1581,7 @@ class ClaudemanApp {
           return;
         }
 
-        // Batch regular input at 60fps
+        // Batch regular input at high frequency for responsiveness
         if (!this._inputFlushTimeout) {
           this._inputFlushTimeout = setTimeout(flushInput, this._inputFlushDelay);
         }
@@ -2976,6 +2965,37 @@ class ClaudemanApp {
     }
   }
 
+  /**
+   * Send input to server without blocking the keystroke flush cycle.
+   * Uses a sequential promise chain to preserve character ordering
+   * across concurrent async fetches.
+   */
+  _sendInputAsync(sessionId, input) {
+    // Queue immediately if offline
+    if (!this.isOnline || this._connectionStatus === 'disconnected') {
+      this._enqueueInput(sessionId, input);
+      return;
+    }
+
+    // Chain sends sequentially to preserve keystroke ordering
+    this._inputSendChain = this._inputSendChain.then(async () => {
+      try {
+        const resp = await fetch(`/api/sessions/${sessionId}/input`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ input })
+        });
+        if (!resp.ok) {
+          this._enqueueInput(sessionId, input);
+        } else {
+          this.clearPendingHooks(sessionId);
+        }
+      } catch {
+        this._enqueueInput(sessionId, input);
+      }
+    });
+  }
+
   _enqueueInput(sessionId, input) {
     const existing = this._inputQueue.get(sessionId) || '';
     let combined = existing + input;
@@ -3757,10 +3777,16 @@ class ClaudemanApp {
 
     // Green fade overlay — Web Animations API for reliable GPU compositing.
     // (CSS keyframe animations were invisible: black-on-black had zero contrast.)
+    const fadeCfg = this.loadAppSettingsFromStorage();
+    const fadeEnabled = fadeCfg.tabFadeEnabled ?? true;
+    const fadeInDur = fadeCfg.tabFadeInDuration ?? 250;
+    const fadeInEase = fadeCfg.tabFadeInEasing || 'ease-in';
+    const fadeOutDur = fadeCfg.tabFadeOutDuration ?? 120;
+    const fadeOutEase = fadeCfg.tabFadeOutEasing || 'ease-in';
     const main = document.querySelector('.main');
     let fade = null;
     const fadeOutPromise = new Promise(resolve => {
-      if (main) {
+      if (main && fadeEnabled) {
         const prev = main.querySelector('.tab-switch-fade');
         if (prev) prev.remove();
         fade = document.createElement('div');
@@ -3773,10 +3799,10 @@ class ClaudemanApp {
         // Web Animations API — runs on compositor thread, bypasses containment issues
         const anim = fade.animate(
           [{ opacity: 0 }, { opacity: 1 }],
-          { duration: 120, easing: 'ease-out', fill: 'forwards' }
+          { duration: fadeInDur, easing: fadeInEase, fill: 'forwards' }
         );
         anim.finished.then(resolve).catch(resolve);
-        setTimeout(resolve, 350); // safety fallback
+        setTimeout(resolve, fadeInDur + 100); // safety fallback
       } else {
         resolve();
       }
@@ -3920,7 +3946,7 @@ class ClaudemanApp {
       if (fade) {
         const revealAnim = fade.animate(
           [{ opacity: 1 }, { opacity: 0 }],
-          { duration: 120, easing: 'ease-in', fill: 'forwards' }
+          { duration: fadeOutDur, easing: fadeOutEase, fill: 'forwards' }
         );
         revealAnim.finished.then(() => fade.remove()).catch(() => fade.remove());
       }
@@ -8986,6 +9012,12 @@ class ClaudemanApp {
     document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? true;
     document.getElementById('appSettingsSubagentActiveTabOnly').checked = settings.subagentActiveTabOnly ?? true;
     document.getElementById('appSettingsImageWatcherEnabled').checked = settings.imageWatcherEnabled ?? false;
+    // Tab switch animation settings
+    document.getElementById('appSettingsTabFadeEnabled').checked = settings.tabFadeEnabled ?? true;
+    document.getElementById('appSettingsTabFadeInDuration').value = settings.tabFadeInDuration ?? 250;
+    document.getElementById('appSettingsTabFadeInEasing').value = settings.tabFadeInEasing || 'ease-in';
+    document.getElementById('appSettingsTabFadeOutDuration').value = settings.tabFadeOutDuration ?? 120;
+    document.getElementById('appSettingsTabFadeOutEasing').value = settings.tabFadeOutEasing || 'ease-in';
     // Claude CLI settings
     const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
     const allowedToolsRow = document.getElementById('allowedToolsRow');
@@ -9111,6 +9143,12 @@ class ClaudemanApp {
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
       imageWatcherEnabled: document.getElementById('appSettingsImageWatcherEnabled').checked,
+      // Tab switch animation settings
+      tabFadeEnabled: document.getElementById('appSettingsTabFadeEnabled').checked,
+      tabFadeInDuration: parseInt(document.getElementById('appSettingsTabFadeInDuration').value) || 250,
+      tabFadeInEasing: document.getElementById('appSettingsTabFadeInEasing').value || 'ease-in',
+      tabFadeOutDuration: parseInt(document.getElementById('appSettingsTabFadeOutDuration').value) || 120,
+      tabFadeOutEasing: document.getElementById('appSettingsTabFadeOutEasing').value || 'ease-in',
       // Claude CLI settings
       claudeMode: document.getElementById('appSettingsClaudeMode').value,
       allowedTools: document.getElementById('appSettingsAllowedTools').value.trim(),

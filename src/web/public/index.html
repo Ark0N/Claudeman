@@ -726,6 +726,7 @@
         </div>
         <div class="modal-tabs">
           <button class="modal-tab-btn active" data-tab="settings-display">Display</button>
+          <button class="modal-tab-btn" data-tab="settings-tab-switch">Tab-Switch</button>
           <button class="modal-tab-btn" data-tab="settings-claude">Claude CLI</button>
           <button class="modal-tab-btn" data-tab="settings-models">Models</button>
           <button class="modal-tab-btn" data-tab="settings-paths">Paths</button>
@@ -822,6 +823,53 @@
                   <input type="checkbox" id="appSettingsImageWatcherEnabled" checked>
                   <span class="slider"></span>
                 </label>
+              </div>
+            </div>
+          </div>
+          <!-- Tab-Switch Tab -->
+          <div class="modal-tab-content hidden" id="settings-tab-switch">
+            <div class="settings-grid">
+              <div class="settings-section-header">Tab Switch Animation</div>
+              <div class="settings-item" title="Green fade overlay when switching session tabs">
+                <span class="settings-item-label">Enable</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsTabFadeEnabled" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item" title="Fade-in duration in milliseconds">
+                <span class="settings-item-label">Fade In</span>
+                <div class="settings-item-actions">
+                  <input type="number" id="appSettingsTabFadeInDuration" class="settings-item-input" value="250" min="50" max="1000" step="10">
+                  <span style="font-size: 0.65rem; color: var(--text-muted);">ms</span>
+                </div>
+              </div>
+              <div class="settings-item" title="Fade-in easing curve">
+                <span class="settings-item-label">Fade In Easing</span>
+                <select id="appSettingsTabFadeInEasing" class="settings-item-input" style="width: 100px; padding: 0.25rem 0.4rem; font-size: 0.7rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 3px; color: var(--text);">
+                  <option value="linear">linear</option>
+                  <option value="ease">ease</option>
+                  <option value="ease-in">ease-in</option>
+                  <option value="ease-out">ease-out</option>
+                  <option value="ease-in-out">ease-in-out</option>
+                </select>
+              </div>
+              <div class="settings-item" title="Fade-out (reveal) duration in milliseconds">
+                <span class="settings-item-label">Fade Out</span>
+                <div class="settings-item-actions">
+                  <input type="number" id="appSettingsTabFadeOutDuration" class="settings-item-input" value="120" min="50" max="1000" step="10">
+                  <span style="font-size: 0.65rem; color: var(--text-muted);">ms</span>
+                </div>
+              </div>
+              <div class="settings-item" title="Fade-out easing curve">
+                <span class="settings-item-label">Fade Out Easing</span>
+                <select id="appSettingsTabFadeOutEasing" class="settings-item-input" style="width: 100px; padding: 0.25rem 0.4rem; font-size: 0.7rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 3px; color: var(--text);">
+                  <option value="linear">linear</option>
+                  <option value="ease">ease</option>
+                  <option value="ease-in">ease-in</option>
+                  <option value="ease-out">ease-out</option>
+                  <option value="ease-in-out">ease-in-out</option>
+                </select>
               </div>
             </div>
           </div>
