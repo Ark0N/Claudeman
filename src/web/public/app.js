@@ -15,7 +15,7 @@ const TITLE_FLASH_INTERVAL_MS = 1500;       // Title flash rate
 const BROWSER_NOTIF_RATE_LIMIT_MS = 3000;   // Rate limit for browser notifications
 const AUTO_CLOSE_NOTIFICATION_MS = 8000;    // Auto-close browser notifications
 const THROTTLE_DELAY_MS = 100;              // General UI throttle delay
-const TERMINAL_CHUNK_SIZE = 64 * 1024;      // 64KB chunks for terminal data
+const TERMINAL_CHUNK_SIZE = 128 * 1024;     // 128KB chunks for terminal data
 const TERMINAL_TAIL_SIZE = 256 * 1024;      // 256KB tail for initial load
 const SYNC_WAIT_TIMEOUT_MS = 50;            // Wait timeout for terminal sync
 const STATS_POLLING_INTERVAL_MS = 2000;     // System stats polling
@@ -1129,6 +1129,8 @@ class ClaudemanApp {
     this.terminal = null;
     this.fitAddon = null;
     this.activeSessionId = null;
+    this._initGeneration = 0;     // dedup concurrent handleInit calls
+    this._selectGeneration = 0;   // cancel stale selectSession loads
     this.respawnStatus = {};
     this.respawnTimers = {}; // Track timed respawn timers
     this.respawnCountdownTimers = {}; // { sessionId: { timerName: { endsAt, totalMs, reason } } }
@@ -1157,6 +1159,15 @@ class ClaudemanApp {
     // This is the SINGLE SOURCE OF TRUTH for which tab an agent window connects to.
     // Once set, never recalculated. Persisted to localStorage and server.
     this.subagentParentMap = new Map();
+
+    // Agent Teams tracking
+    this.teams = new Map(); // Map<teamName, TeamConfig>
+    this.teamTasks = new Map(); // Map<teamName, TeamTask[]>
+    this.teammateMap = new Map(); // Map<agentId-prefix, {name, color, teamName}> for quick lookup
+
+    // Teammate tmux pane terminals (Agent Teams feature)
+    this.teammatePanesByName = new Map(); // Map<name, { paneTarget, sessionId, color }>
+    this.teammateTerminals = new Map(); // Map<agentId, { terminal, fitAddon, paneTarget, sessionId, resizeObserver }>
 
     this.ralphStatePanelCollapsed = true; // Default to collapsed
     this.ralphClosedSessions = new Set(); // Sessions where user explicitly closed Ralph panel
@@ -1855,10 +1866,10 @@ class ClaudemanApp {
    * Write large buffer to terminal in chunks to avoid UI jank.
    * Uses requestAnimationFrame to spread work across frames.
    * @param {string} buffer - The full terminal buffer to write
-   * @param {number} chunkSize - Size of each chunk (default 64KB for smooth 60fps)
+   * @param {number} chunkSize - Size of each chunk (default 128KB for smooth 60fps)
    * @returns {Promise<void>} - Resolves when all chunks written
    */
-  chunkedTerminalWrite(buffer, chunkSize = 64 * 1024) {
+  chunkedTerminalWrite(buffer, chunkSize = TERMINAL_CHUNK_SIZE) {
     return new Promise((resolve) => {
       if (!buffer || buffer.length === 0) {
         resolve();
@@ -3050,6 +3061,8 @@ class ClaudemanApp {
   }
 
   handleInit(data) {
+    const gen = ++this._initGeneration;
+
     // Update version displays (header and toolbar)
     if (data.version) {
       const versionEl = this.$('versionDisplay');
@@ -3214,6 +3227,8 @@ class ClaudemanApp {
     // Restore previously active session (survives page reload + SSE reconnect)
     // Must always re-select because handleInit clears terminal state above.
     // Reset activeSessionId so selectSession doesn't early-return.
+    // Guard: skip if a newer handleInit has already started (race between loadState + SSE init).
+    if (gen !== this._initGeneration) return;
     const previousActiveId = this.activeSessionId;
     this.activeSessionId = null;
     if (this.sessionOrder.length > 0) {
@@ -3738,17 +3753,39 @@ class ClaudemanApp {
   async selectSession(sessionId) {
     if (this.activeSessionId === sessionId) return;
 
-    // Instant visual feedback — works even with no network.
-    // Appended to .main (not terminalContainer) so xterm DOM resets can't remove it.
+    const selectGen = ++this._selectGeneration;
+
+    // Green fade overlay — Web Animations API for reliable GPU compositing.
+    // (CSS keyframe animations were invisible: black-on-black had zero contrast.)
     const main = document.querySelector('.main');
-    if (main) {
-      const prev = main.querySelector('.tab-switch-glow');
-      if (prev) prev.remove();
-      const glow = document.createElement('div');
-      glow.className = 'tab-switch-glow';
-      glow.addEventListener('animationend', () => glow.remove(), { once: true });
-      main.appendChild(glow);
-    }
+    let fade = null;
+    const fadeOutPromise = new Promise(resolve => {
+      if (main) {
+        const prev = main.querySelector('.tab-switch-fade');
+        if (prev) prev.remove();
+        fade = document.createElement('div');
+        fade.className = 'tab-switch-fade';
+        fade.style.opacity = '0';
+        fade.style.willChange = 'opacity';
+        fade.style.transform = 'translateZ(0)'; // force own GPU layer
+        main.appendChild(fade);
+
+        // Web Animations API — runs on compositor thread, bypasses containment issues
+        const anim = fade.animate(
+          [{ opacity: 0 }, { opacity: 1 }],
+          { duration: 120, easing: 'ease-out', fill: 'forwards' }
+        );
+        anim.finished.then(resolve).catch(resolve);
+        setTimeout(resolve, 350); // safety fallback
+      } else {
+        resolve();
+      }
+    });
+
+    // Yield to browser so it paints the fade overlay at opacity 0 and starts
+    // animating BEFORE the heavy sync work below (renderSessionTabs etc).
+    await new Promise(r => requestAnimationFrame(r));
+    if (selectGen !== this._selectGeneration) return; // newer tab switch won
 
     // Clean up flicker filter state when switching sessions
     if (this.flickerFilterTimeout) {
@@ -3798,9 +3835,14 @@ class ClaudemanApp {
 
     // Load terminal buffer for this session
     // Use tail mode for faster initial load (256KB is enough for recent visible content)
+    // Fetch runs in parallel with fade-out; we wait for both before clearing terminal.
     try {
       const tailSize = 256 * 1024;
-      const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${tailSize}`);
+      const [res] = await Promise.all([
+        fetch(`/api/sessions/${sessionId}/terminal?tail=${tailSize}`),
+        fadeOutPromise,
+      ]);
+      if (selectGen !== this._selectGeneration) return; // stale — newer selectSession won
       const data = await res.json();
 
       this.terminal.clear();
@@ -3812,6 +3854,7 @@ class ClaudemanApp {
         }
         // Use chunked write for large buffers to avoid UI jank
         await this.chunkedTerminalWrite(data.terminalBuffer);
+        if (selectGen !== this._selectGeneration) return; // stale — skip post-write UI updates
         // Ensure terminal is scrolled to bottom after buffer load
         this.terminal.scrollToBottom();
       }
@@ -3872,8 +3915,18 @@ class ClaudemanApp {
 
       this.terminal.focus();
       this.terminal.scrollToBottom();
+
+      // Reveal new content — green fade dissolves out via WAAPI
+      if (fade) {
+        const revealAnim = fade.animate(
+          [{ opacity: 1 }, { opacity: 0 }],
+          { duration: 120, easing: 'ease-in', fill: 'forwards' }
+        );
+        revealAnim.finished.then(() => fade.remove()).catch(() => fade.remove());
+      }
     } catch (err) {
       console.error('Failed to load session terminal:', err);
+      if (fade) fade.remove();
     }
   }
 

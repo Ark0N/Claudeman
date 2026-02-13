@@ -830,7 +830,7 @@ export class ScreenManager extends EventEmitter implements TerminalMultiplexer {
 
   // Send input directly to screen session using screen -X stuff
   // This bypasses the attached PTY and sends input directly to the screen
-  sendInput(sessionId: string, input: string): boolean {
+  async sendInput(sessionId: string, input: string): Promise<boolean> {
     if (IS_TEST_MODE) return true;
     const screen = this.screens.get(sessionId);
     if (!screen) {

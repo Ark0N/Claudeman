@@ -1524,7 +1524,7 @@ export class WebServer extends EventEmitter {
       // Use writeViaScreen for programmatic input (more reliable for mux sessions)
       let success = false;
       if (useScreen) {
-        success = session.writeViaScreen(inputStr);
+        success = await session.writeViaScreen(inputStr);
         if (!success) {
           console.warn(`[Server] writeViaScreen failed for session ${id}, falling back to direct write`);
           // Fallback to direct write if screen write fails

@@ -1686,11 +1686,11 @@ export class RespawnController extends EventEmitter {
     this.stepTimer = this.startTrackedTimer(
       'step-delay',
       this.config.interStepDelayMs,
-      () => {
+      async () => {
         this.stepTimer = null;
         const prompt = this.config.kickstartPrompt!;
         this.logAction('command', `Sending kickstart: "${prompt.substring(0, 40)}..."`);
-        this.session.writeViaScreen(prompt + '\r');  // \r triggers key.return in Ink/Claude CLI
+        await this.session.writeViaScreen(prompt + '\r');  // \r triggers key.return in Ink/Claude CLI
         this.emit('stepSent', 'kickstart', prompt);
         this.setState('waiting_kickstart');
         this.promptDetected = false;
@@ -2451,7 +2451,7 @@ export class RespawnController extends EventEmitter {
 
     this.logAction('command', 'Auto-accept: ↵ Enter (plan approved)');
     this.emit('stepSent', 'auto-accept', '↵');
-    this.session.writeViaScreen('\r');
+    void this.session.writeViaScreen('\r');
     this.emit('autoAcceptSent');
     // Reset so we don't keep spamming Enter if Claude doesn't respond
     this.hasReceivedOutput = false;
@@ -2850,7 +2850,7 @@ export class RespawnController extends EventEmitter {
     this.stepTimer = this.startTrackedTimer(
       'step-delay',
       this.config.interStepDelayMs,
-      () => {
+      async () => {
         this.stepTimer = null;
 
         // Use RALPH_STATUS RECOMMENDATION if available, otherwise fall back to config
@@ -2865,7 +2865,7 @@ export class RespawnController extends EventEmitter {
 
         const input = updatePrompt + '\r';  // \r triggers Enter in Ink/Claude CLI
         this.logAction('command', `Sending: "${updatePrompt.substring(0, 50)}..."`);
-        this.session.writeViaScreen(input);
+        await this.session.writeViaScreen(input);
         this.emit('stepSent', 'update', updatePrompt);
         this.setState('waiting_update');
         this.promptDetected = false;
@@ -2889,10 +2889,10 @@ export class RespawnController extends EventEmitter {
     this.stepTimer = this.startTrackedTimer(
       'step-delay',
       this.config.interStepDelayMs,
-      () => {
+      async () => {
         this.stepTimer = null;
         this.logAction('command', 'Sending: /clear');
-        this.session.writeViaScreen('/clear\r');  // \r triggers Enter in Ink/Claude CLI
+        await this.session.writeViaScreen('/clear\r');  // \r triggers Enter in Ink/Claude CLI
         this.emit('stepSent', 'clear', '/clear');
         this.setState('waiting_clear');
         this.promptDetected = false;
@@ -2932,10 +2932,10 @@ export class RespawnController extends EventEmitter {
     this.stepTimer = this.startTrackedTimer(
       'step-delay',
       this.config.interStepDelayMs,
-      () => {
+      async () => {
         this.stepTimer = null;
         this.logAction('command', 'Sending: /init');
-        this.session.writeViaScreen('/init\r');  // \r triggers Enter in Ink/Claude CLI
+        await this.session.writeViaScreen('/init\r');  // \r triggers Enter in Ink/Claude CLI
         this.emit('stepSent', 'init', '/init');
         this.setState('waiting_init');
         this.promptDetected = false;

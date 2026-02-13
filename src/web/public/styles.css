@@ -1673,22 +1673,16 @@ body {
   contain: strict;
   will-change: contents;
 }
-
-/* Tab switch feedback: green glow emerging from black */
-.tab-switch-glow {
+/* Tab switch: green-tinted overlay fades in over old content, fades out to reveal new.
+   Animated via Web Animations API (not CSS keyframes) for reliable GPU compositing.
+   Green glow is visible against the dark terminal — black-on-black was imperceptible. */
+.tab-switch-fade {
   position: absolute;
   inset: 0;
   pointer-events: none;
   z-index: 100;
-  background: radial-gradient(ellipse at center, rgba(34, 197, 94, 0.12) 0%, transparent 70%);
+  background: radial-gradient(ellipse at center, rgba(20, 80, 40, 0.85) 0%, rgba(0, 5, 2, 0.97) 75%);
   box-shadow: inset 0 0 150px 60px rgba(34, 197, 94, 0.35);
-  animation: tab-switch-glow 0.7s ease-out forwards;
-}
-
-@keyframes tab-switch-glow {
-  0%   { opacity: 0; }
-  15%  { opacity: 1; }
-  100% { opacity: 0; }
 }
 
 .terminal-container .xterm {

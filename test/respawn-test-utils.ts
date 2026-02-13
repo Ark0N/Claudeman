@@ -107,7 +107,7 @@ export class MockSession extends EventEmitter {
   }
 
   /** Write via screen (used by respawn controller) */
-  writeViaScreen(data: string): boolean {
+  async writeViaScreen(data: string): Promise<boolean> {
     this.writeBuffer.push(data);
     return true;
   }

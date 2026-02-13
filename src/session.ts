@@ -382,6 +382,11 @@ export class Session extends EventEmitter {
     this.mode = config.mode || 'claude';
     this._name = config.name || '';
     this._lastActivityAt = this.createdAt;
+    // Set claudeSessionId immediately — Claudeman always passes --session-id ${this.id}
+    // to Claude CLI, so the Claude session ID always matches the Claudeman session ID.
+    // This ensures subagent matching works even for recovered sessions (where
+    // startInteractive() hasn't been called yet).
+    this._claudeSessionId = this.id;
     // Support both new (mux) and deprecated (screenManager) parameter names
     this._mux = config.mux || config.screenManager || null;
     this._useMux = config.useMux ?? config.useScreen ?? (this._mux !== null && this._mux.isAvailable());
@@ -950,10 +955,16 @@ export class Session extends EventEmitter {
         .replace(CTRL_L_PATTERN, '');  // Remove Ctrl+L
       if (!data) return; // Skip if only filtered sequences
 
-      // Strip ANSI once for all downstream pattern-matching operations
-      // This avoids redundant regex operations in parseTokensFromStatusLine,
-      // parseClaudeCodeInfo, parseTaskDescriptionsFromTerminalData, and working detection
-      const cleanData = data.replace(ANSI_ESCAPE_PATTERN_FULL, '');
+      // Lazy ANSI strip: only compute cleanData when a consumer actually needs it.
+      // During active streaming, many consumers early-exit (ralph disabled, cli info parsed,
+      // no 'token' in data, etc.), so we skip the expensive O(n) regex on most chunks.
+      let _cleanData: string | null = null;
+      const getCleanData = (): string => {
+        if (_cleanData === null) {
+          _cleanData = data.replace(ANSI_ESCAPE_PATTERN_FULL, '');
+        }
+        return _cleanData;
+      };
 
       // BufferAccumulator handles auto-trimming when max size exceeded
       this._terminalBuffer.append(data);
@@ -962,21 +973,35 @@ export class Session extends EventEmitter {
       this.emit('terminal', data);
       this.emit('output', data);
 
-      // Forward to Ralph tracker to detect Ralph loops and todos (pre-stripped)
-      this._ralphTracker.processCleanData(cleanData);
+      // Forward to Ralph tracker to detect Ralph loops and todos
+      // Ralph tracker early-exits when disabled + autoEnableDisabled, skipping ANSI strip
+      if (this._ralphTracker.enabled || !this._ralphTracker.autoEnableDisabled) {
+        this._ralphTracker.processCleanData(getCleanData());
+      }
 
-      // Forward to Bash tool parser to detect file-viewing commands (pre-stripped)
-      this._bashToolParser.processCleanData(cleanData);
+      // Forward to Bash tool parser to detect file-viewing commands
+      // Parser early-exits when disabled, skipping ANSI strip
+      if (this._bashToolParser.enabled) {
+        this._bashToolParser.processCleanData(getCleanData());
+      }
 
       // Parse token count from status line (e.g., "123.4k tokens" or "5234 tokens")
-      this.parseTokensFromStatusLine(cleanData);
+      // Pre-check on raw data: 'token' won't appear in ANSI sequences
+      if (data.includes('token')) {
+        this.parseTokensFromStatusLine(getCleanData());
+      }
 
       // Parse Claude Code CLI info (version, model, account type) from startup
-      this.parseClaudeCodeInfo(cleanData);
+      // Gated by _cliInfoParsed — only runs during first few chunks
+      if (!this._cliInfoParsed) {
+        this.parseClaudeCodeInfo(getCleanData());
+      }
 
       // Parse task descriptions from terminal output (e.g., "Explore(Check files)")
-      // This enables correlating subagent windows with their short descriptions
-      this.parseTaskDescriptionsFromTerminalData(cleanData);
+      // Pre-check on raw data: parentheses are safe to check without ANSI strip
+      if (data.includes('(') && data.includes(')')) {
+        this.parseTaskDescriptionsFromTerminalData(getCleanData());
+      }
 
       // Detect if Claude is working or at prompt
       // The prompt line contains "❯" when waiting for input
@@ -1004,13 +1029,16 @@ export class Session extends EventEmitter {
       }
 
       // Detect when Claude starts working (thinking, writing, etc)
-      // Using pre-cleaned data avoids false positives from window titles like "3 File Reading Task"
-      if (cleanData.includes('Thinking') || cleanData.includes('Writing') ||
-          cleanData.includes('Reading') || cleanData.includes('Running') ||
-          cleanData.includes('⠋') || cleanData.includes('⠙') ||
-          cleanData.includes('⠹') || cleanData.includes('⠸') ||
-          cleanData.includes('⠼') || cleanData.includes('⠴') ||
-          cleanData.includes('⠦') || cleanData.includes('⠧')) {
+      // Fast path: check spinner characters on raw data (Unicode, never in ANSI sequences)
+      const hasSpinner = data.includes('⠋') || data.includes('⠙') ||
+          data.includes('⠹') || data.includes('⠸') ||
+          data.includes('⠼') || data.includes('⠴') ||
+          data.includes('⠦') || data.includes('⠧');
+      // Slow path: check text keywords on clean data (avoids false positives from window titles)
+      const hasWorkKeyword = hasSpinner ||
+          getCleanData().includes('Thinking') || getCleanData().includes('Writing') ||
+          getCleanData().includes('Reading') || getCleanData().includes('Running');
+      if (hasWorkKeyword) {
         if (!this._isWorking) {
           this._isWorking = true;
           this._status = 'busy';
@@ -1712,7 +1740,7 @@ export class Session extends EventEmitter {
       console.log(`[Session] Auto-compact triggered: ${totalTokens} tokens >= ${this._autoCompactThreshold} threshold`);
 
       // Wait for Claude to be idle before compacting
-      const checkAndCompact = () => {
+      const checkAndCompact = async () => {
         // Check if session is still valid (not stopped) - must be first check
         if (this._isStopped) return;
         if (!this._isCompacting) return;
@@ -1725,7 +1753,7 @@ export class Session extends EventEmitter {
           const compactCmd = this._autoCompactPrompt
             ? `/compact ${this._autoCompactPrompt}\r`
             : '/compact\r';
-          this.writeViaScreen(compactCmd);
+          await this.writeViaScreen(compactCmd);
           this.emit('autoCompact', {
             tokens: totalTokens,
             threshold: this._autoCompactThreshold,
@@ -1766,7 +1794,7 @@ export class Session extends EventEmitter {
       console.log(`[Session] Auto-clear triggered: ${totalTokens} tokens >= ${this._autoClearThreshold} threshold`);
 
       // Wait for Claude to be idle before clearing
-      const checkAndClear = () => {
+      const checkAndClear = async () => {
         // Check if session is still valid (not stopped) - must be first check
         if (this._isStopped) return;
         if (!this._isClearing) return;
@@ -1776,7 +1804,7 @@ export class Session extends EventEmitter {
           if (this._isStopped) return;
 
           // Send /clear command
-          this.writeViaScreen('/clear\r');
+          await this.writeViaScreen('/clear\r');
           // Reset token counts
           this._totalInputTokens = 0;
           this._totalOutputTokens = 0;
@@ -1846,7 +1874,7 @@ export class Session extends EventEmitter {
    * session.writeViaScreen('/init\r');   // Send /init command
    * ```
    */
-  writeViaScreen(data: string): boolean {
+  async writeViaScreen(data: string): Promise<boolean> {
     if (this._mux && this._muxSession) {
       return this._mux.sendInput(this.id, data);
     }

@@ -120,17 +120,17 @@ describe('TmuxManager (unit)', () => {
       });
     });
 
-    it('should return true for registered session (no-op in test mode)', () => {
-      expect(manager.sendInput('test-id', '/clear\r')).toBe(true);
+    it('should return true for registered session (no-op in test mode)', async () => {
+      expect(await manager.sendInput('test-id', '/clear\r')).toBe(true);
     });
 
-    it('should return false for unknown session', () => {
-      expect(manager.sendInput('nonexistent', 'hello\r')).toBe(false);
+    it('should return false for unknown session', async () => {
+      expect(await manager.sendInput('nonexistent', 'hello\r')).toBe(false);
     });
 
-    it('should not call any tmux commands in test mode', () => {
+    it('should not call any tmux commands in test mode', async () => {
       mockedExecSync.mockClear();
-      manager.sendInput('test-id', 'hello\r');
+      await manager.sendInput('test-id', 'hello\r');
       const sendKeyCalls = mockedExecSync.mock.calls.filter(
         ([cmd]) => typeof cmd === 'string' && cmd.includes('send-keys')
       );

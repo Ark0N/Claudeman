@@ -123,7 +123,8 @@ export interface SubagentEvents {
 
 const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude/projects');
 const IDLE_TIMEOUT_MS = 30000; // Consider agent idle after 30s of no activity
-const POLL_INTERVAL_MS = 1000; // Check for new files every second
+const POLL_INTERVAL_MS = 1000; // Base poll interval (lightweight checks)
+const FULL_SCAN_EVERY_N_POLLS = 5; // Full directory traversal every 5th poll (5s)
 const LIVENESS_CHECK_MS = 10000; // Check if subagent processes are still alive every 10s
 const STALE_COMPLETED_MAX_AGE_MS = 60 * 60 * 1000; // Remove completed agents older than 1 hour
 const STALE_IDLE_MAX_AGE_MS = 4 * 60 * 60 * 1000; // Remove idle agents older than 4 hours
@@ -168,6 +169,8 @@ export class SubagentWatcher extends EventEmitter {
   private pendingToolCalls = new Map<string, Map<string, { toolName: string; timestamp: number }>>();
   // Guard to prevent concurrent liveness checks (prevents duplicate completed events)
   private _isCheckingLiveness = false;
+  // Counter for throttling full directory scans (only scan every FULL_SCAN_EVERY_N_POLLS)
+  private _pollCount = 0;
   // Store error handlers for FSWatchers to enable proper cleanup (prevent memory leaks)
   private dirWatcherErrorHandlers = new Map<string, (error: Error) => void>();
   private fileWatcherErrorHandlers = new Map<string, (error: Error) => void>();
@@ -208,12 +211,18 @@ export class SubagentWatcher extends EventEmitter {
     if (this._isRunning) return;
     this._isRunning = true;
 
-    // Initial scan
+    // Initial scan (always runs immediately)
+    this._pollCount = 0;
     this.scanForSubagents().catch((err) => this.emit('subagent:error', err as Error));
 
     // Periodic scan for new subagent directories
+    // Full directory traversal only every FULL_SCAN_EVERY_N_POLLS polls (~5s)
+    // FSWatchers handle known directories between full scans
     this.pollInterval = setInterval(() => {
-      this.scanForSubagents().catch((err) => this.emit('subagent:error', err as Error));
+      this._pollCount++;
+      if (this._pollCount % FULL_SCAN_EVERY_N_POLLS === 0) {
+        this.scanForSubagents().catch((err) => this.emit('subagent:error', err as Error));
+      }
     }, POLL_INTERVAL_MS);
 
     // Periodic liveness check for active subagents
@@ -338,6 +347,7 @@ export class SubagentWatcher extends EventEmitter {
     this.agentInfo.clear();
     this.knownSubagentDirs.clear();
     this.pendingToolCalls.clear();
+    this._pollCount = 0;
   }
 
   /**

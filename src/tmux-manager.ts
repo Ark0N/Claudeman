@@ -859,7 +859,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * - `Enter` key is sent as a separate argument (not a shell escape)
    * - Single command, no delay, no retry loop needed
    */
-  sendInput(sessionId: string, input: string): boolean {
+  async sendInput(sessionId: string, input: string): Promise<boolean> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       console.error(`[TmuxManager] sendInput failed: no session found for ${sessionId}. Known: ${Array.from(this.sessions.keys()).join(', ')}`);
@@ -886,25 +886,25 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         // Send text + Enter in a single command
         // -l flag = literal text (no special key interpretation)
         // 'Enter' after -l text = Enter key
-        execSync(
+        await execAsync(
           `tmux send-keys -t "${session.muxName}" -l ${shellescape(textPart)}`,
-          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+          { timeout: EXEC_TIMEOUT_MS }
         );
-        execSync(
+        await execAsync(
           `tmux send-keys -t "${session.muxName}" Enter`,
-          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+          { timeout: EXEC_TIMEOUT_MS }
         );
       } else if (textPart) {
         // Text only, no Enter
-        execSync(
+        await execAsync(
           `tmux send-keys -t "${session.muxName}" -l ${shellescape(textPart)}`,
-          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+          { timeout: EXEC_TIMEOUT_MS }
         );
       } else if (hasCarriageReturn) {
         // Enter only
-        execSync(
+        await execAsync(
           `tmux send-keys -t "${session.muxName}" Enter`,
-          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+          { timeout: EXEC_TIMEOUT_MS }
         );
       }
 

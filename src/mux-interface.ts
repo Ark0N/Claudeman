@@ -108,7 +108,7 @@ export interface TerminalMultiplexer extends EventEmitter {
    * tmux: `send-keys -l 'text' Enter` (single command, no delay)
    * screen: `stuff "text"` + 100ms delay + `stuff CR` (with retries)
    */
-  sendInput(sessionId: string, input: string): boolean;
+  sendInput(sessionId: string, input: string): Promise<boolean>;
 
   // ========== Metadata ==========
 
