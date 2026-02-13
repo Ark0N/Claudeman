@@ -3811,42 +3811,6 @@ class ClaudemanApp {
 
     const selectGen = ++this._selectGeneration;
 
-    // Green fade overlay — Web Animations API for reliable GPU compositing.
-    // (CSS keyframe animations were invisible: black-on-black had zero contrast.)
-    const fadeCfg = this.loadAppSettingsFromStorage();
-    const fadeEnabled = fadeCfg.tabFadeEnabled ?? true;
-    const fadeInDur = fadeCfg.tabFadeInDuration ?? 250;
-    const fadeInEase = fadeCfg.tabFadeInEasing || 'ease-in';
-    const fadeOutDur = fadeCfg.tabFadeOutDuration ?? 120;
-    const fadeOutEase = fadeCfg.tabFadeOutEasing || 'ease-in';
-    const main = document.querySelector('.main');
-    let fade = null;
-    const fadeOutPromise = new Promise(resolve => {
-      if (main && fadeEnabled) {
-        const prev = main.querySelector('.tab-switch-fade');
-        if (prev) prev.remove();
-        fade = document.createElement('div');
-        fade.className = 'tab-switch-fade';
-        fade.style.opacity = '0';
-        fade.style.willChange = 'opacity';
-        fade.style.transform = 'translateZ(0)'; // force own GPU layer
-        main.appendChild(fade);
-
-        // Web Animations API — runs on compositor thread, bypasses containment issues
-        const anim = fade.animate(
-          [{ opacity: 0 }, { opacity: 1 }],
-          { duration: fadeInDur, easing: fadeInEase, fill: 'forwards' }
-        );
-        anim.finished.then(resolve).catch(resolve);
-        setTimeout(resolve, fadeInDur + 100); // safety fallback
-      } else {
-        resolve();
-      }
-    });
-
-    // Yield to browser so it paints the fade overlay at opacity 0 and starts
-    // animating BEFORE the heavy sync work below (renderSessionTabs etc).
-    await new Promise(r => requestAnimationFrame(r));
     if (selectGen !== this._selectGeneration) return; // newer tab switch won
 
     // Clean up flicker filter state when switching sessions
@@ -3900,7 +3864,6 @@ class ClaudemanApp {
     // Load terminal buffer for this session
     // Show cached content instantly while fetching fresh data in background.
     // Use tail mode for faster initial load (256KB is enough for recent visible content).
-    // Fetch runs in parallel with fade-out; we wait for both before clearing terminal.
     try {
       // Instant cache restore — show previous buffer immediately while network fetch runs
       const cachedBuffer = this.terminalBufferCache.get(sessionId);
@@ -3912,10 +3875,7 @@ class ClaudemanApp {
       }
 
       const tailSize = 256 * 1024;
-      const [res] = await Promise.all([
-        fetch(`/api/sessions/${sessionId}/terminal?tail=${tailSize}`),
-        fadeOutPromise,
-      ]);
+      const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${tailSize}`);
       if (selectGen !== this._selectGeneration) return; // stale — newer selectSession won
       const data = await res.json();
 
@@ -4004,18 +3964,8 @@ class ClaudemanApp {
 
       this.terminal.focus();
       this.terminal.scrollToBottom();
-
-      // Reveal new content — green fade dissolves out via WAAPI
-      if (fade) {
-        const revealAnim = fade.animate(
-          [{ opacity: 1 }, { opacity: 0 }],
-          { duration: fadeOutDur, easing: fadeOutEase, fill: 'forwards' }
-        );
-        revealAnim.finished.then(() => fade.remove()).catch(() => fade.remove());
-      }
     } catch (err) {
       console.error('Failed to load session terminal:', err);
-      if (fade) fade.remove();
     }
   }
 
@@ -9092,12 +9042,6 @@ class ClaudemanApp {
     document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? true;
     document.getElementById('appSettingsSubagentActiveTabOnly').checked = settings.subagentActiveTabOnly ?? true;
     document.getElementById('appSettingsImageWatcherEnabled').checked = settings.imageWatcherEnabled ?? false;
-    // Tab switch animation settings
-    document.getElementById('appSettingsTabFadeEnabled').checked = settings.tabFadeEnabled ?? true;
-    document.getElementById('appSettingsTabFadeInDuration').value = settings.tabFadeInDuration ?? 250;
-    document.getElementById('appSettingsTabFadeInEasing').value = settings.tabFadeInEasing || 'ease-in';
-    document.getElementById('appSettingsTabFadeOutDuration').value = settings.tabFadeOutDuration ?? 120;
-    document.getElementById('appSettingsTabFadeOutEasing').value = settings.tabFadeOutEasing || 'ease-in';
     // Claude CLI settings
     const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
     const allowedToolsRow = document.getElementById('allowedToolsRow');
@@ -9223,12 +9167,6 @@ class ClaudemanApp {
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
       imageWatcherEnabled: document.getElementById('appSettingsImageWatcherEnabled').checked,
-      // Tab switch animation settings
-      tabFadeEnabled: document.getElementById('appSettingsTabFadeEnabled').checked,
-      tabFadeInDuration: parseInt(document.getElementById('appSettingsTabFadeInDuration').value) || 250,
-      tabFadeInEasing: document.getElementById('appSettingsTabFadeInEasing').value || 'ease-in',
-      tabFadeOutDuration: parseInt(document.getElementById('appSettingsTabFadeOutDuration').value) || 120,
-      tabFadeOutEasing: document.getElementById('appSettingsTabFadeOutEasing').value || 'ease-in',
       // Claude CLI settings
       claudeMode: document.getElementById('appSettingsClaudeMode').value,
       allowedTools: document.getElementById('appSettingsAllowedTools').value.trim(),
