@@ -3445,14 +3445,23 @@ class ClaudemanApp {
       const minimizedCount = minimizedAgents?.size || 0;
       const subagentBadge = minimizedCount > 0 ? this.renderSubagentTabBadge(id, minimizedAgents) : '';
 
+      // Extract folder name from workingDir
+      const folderName = session.workingDir ? session.workingDir.split('/').pop() || '' : '';
+      const folderTooltip = session.workingDir ? this.escapeHtml(session.workingDir) : '';
+
       parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}" data-id="${id}" data-color="${color}" onclick="app.selectSession('${id}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${id}')" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-label="${this.escapeHtml(name)} session">
-          <span class="tab-status ${status}" aria-hidden="true"></span>
-          ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : ''}
-          <span class="tab-name" data-session-id="${id}">${this.escapeHtml(name)}</span>
-          ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()" aria-label="${taskStats.running} running tasks">${taskStats.running}</span>` : ''}
-          ${subagentBadge}
-          <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${id}')" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span>
-          <span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession('${id}')" title="Close session" aria-label="Close session" tabindex="0">&times;</span>
+          <div class="tab-row-header">
+            <span class="tab-status ${status}" aria-hidden="true"></span>
+            ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : ''}
+            <span class="tab-name" data-session-id="${id}">${this.escapeHtml(name)}</span>
+            <span class="tab-actions-inline">
+              ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()" aria-label="${taskStats.running} running tasks">${taskStats.running}</span>` : ''}
+              ${subagentBadge}
+              <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${id}')" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span>
+              <span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession('${id}')" title="Close session" aria-label="Close session" tabindex="0">&times;</span>
+            </span>
+          </div>
+          ${folderName ? `<span class="tab-folder" title="${folderTooltip}"><span class="tab-folder-icon">&#128193;</span>${this.escapeHtml(folderName)}</span>` : ''}
         </div>`);
     }
 
@@ -8104,6 +8113,12 @@ class ClaudemanApp {
 
     this.editingSessionId = sessionId;
 
+    // Populate session name input
+    const sessionNameInput = document.getElementById('modalSessionName');
+    if (sessionNameInput) {
+      sessionNameInput.value = session.name || '';
+    }
+
     // Reset to Respawn tab
     this.switchOptionsTab('respawn');
 
@@ -8174,6 +8189,28 @@ class ClaudemanApp {
     // Activate focus trap
     this.activeFocusTrap = new FocusTrap(modal);
     this.activeFocusTrap.activate();
+  }
+
+  async saveSessionNameFromModal() {
+    if (!this.editingSessionId) return;
+    const input = document.getElementById('modalSessionName');
+    if (!input) return;
+    const newName = input.value.trim();
+    const session = this.sessions.get(this.editingSessionId);
+    if (!session) return;
+
+    // Skip if name hasn't changed
+    if ((session.name || '') === newName) return;
+
+    try {
+      await fetch(`/api/sessions/${this.editingSessionId}/name`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName })
+      });
+    } catch (err) {
+      this.showToast('Failed to save session name', 'error');
+    }
   }
 
   async autoSaveAutoCompact() {

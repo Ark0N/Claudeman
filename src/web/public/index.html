@@ -533,6 +533,13 @@
 
           <!-- Context Management Tab Content -->
           <div class="modal-tab-content hidden" id="context-tab">
+            <div class="form-section-header">Session</div>
+            <div class="form-row">
+              <label for="modalSessionName">Session Name</label>
+              <input type="text" id="modalSessionName" placeholder="Auto (folder name)" onblur="app.saveSessionNameFromModal()">
+              <span class="form-hint">Custom name shown in the tab. Leave empty to use folder name.</span>
+            </div>
+
             <div class="form-section-header">Appearance</div>
             <div class="form-row">
               <label>Session Color</label>
