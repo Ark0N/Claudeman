@@ -868,7 +868,7 @@ export class Session extends EventEmitter {
             cols: 120,
             rows: 40,
             cwd: this.workingDir,
-            env: { ...process.env, TERM: 'xterm-256color' },
+            env: (() => { const e: Record<string, string | undefined> = { ...process.env, TERM: 'xterm-256color' }; delete e.CLAUDECODE; return e; })(),
           });
 
           // Set claudeSessionId immediately since we passed --session-id to Claude
@@ -934,15 +934,18 @@ export class Session extends EventEmitter {
           cols: 120,
           rows: 40,
           cwd: this.workingDir,
-          env: {
-            ...process.env,
-            PATH: getAugmentedPath(),
-            TERM: 'xterm-256color',
-            // Inform Claude it's running within Claudeman (helps prevent self-termination)
-            CLAUDEMAN_SCREEN: '1',
-            CLAUDEMAN_SESSION_ID: this.id,
-            CLAUDEMAN_API_URL: process.env.CLAUDEMAN_API_URL || 'http://localhost:3000',
-          },
+          env: (() => {
+            const env: Record<string, string | undefined> = {
+              ...process.env,
+              PATH: getAugmentedPath(),
+              TERM: 'xterm-256color',
+              CLAUDEMAN_SCREEN: '1',
+              CLAUDEMAN_SESSION_ID: this.id,
+              CLAUDEMAN_API_URL: process.env.CLAUDEMAN_API_URL || 'http://localhost:3000',
+            };
+            delete env.CLAUDECODE;
+            return env;
+          })(),
         });
       } catch (spawnErr) {
         console.error('[Session] Failed to spawn Claude PTY:', spawnErr);
@@ -1146,7 +1149,7 @@ export class Session extends EventEmitter {
             cols: 120,
             rows: 40,
             cwd: this.workingDir,
-            env: { ...process.env, TERM: 'xterm-256color' },
+            env: (() => { const e: Record<string, string | undefined> = { ...process.env, TERM: 'xterm-256color' }; delete e.CLAUDECODE; return e; })(),
           });
         } catch (spawnErr) {
           console.error('[Session] Failed to spawn PTY for shell mux attachment:', spawnErr);

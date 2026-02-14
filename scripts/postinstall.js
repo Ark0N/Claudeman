@@ -6,9 +6,10 @@
  */
 
 import { execSync } from 'child_process';
-import { existsSync } from 'fs';
+import { chmodSync, existsSync } from 'fs';
 import { homedir, platform } from 'os';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 
 // ============================================================================
 // Configuration
@@ -95,6 +96,26 @@ function getTmuxInstallInstructions() {
 
 console.log(colors.bold('Claudeman postinstall check...'));
 console.log('');
+
+// ----------------------------------------------------------------------------
+// 0. Fix node-pty spawn-helper permissions (required on macOS/Linux)
+// ----------------------------------------------------------------------------
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const spawnHelperPaths = [
+    join(__dirname, '..', 'node_modules', 'node-pty', 'prebuilds', 'darwin-arm64', 'spawn-helper'),
+    join(__dirname, '..', 'node_modules', 'node-pty', 'prebuilds', 'darwin-x64', 'spawn-helper'),
+];
+
+for (const helperPath of spawnHelperPaths) {
+    if (existsSync(helperPath)) {
+        try {
+            chmodSync(helperPath, 0o755);
+        } catch {
+            // Non-critical on platforms where this path doesn't apply
+        }
+    }
+}
 
 let hasWarnings = false;
 let hasErrors = false;
