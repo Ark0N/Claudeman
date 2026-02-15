@@ -44,8 +44,6 @@ import {
   getErrorMessage,
   ApiErrorCode,
   createErrorResponse,
-  type CreateScheduledRunRequest,
-  type QuickRunRequest,
   type ApiResponse,
   type SessionResponse,
   type QuickStartResponse,
@@ -65,6 +63,24 @@ import {
   HookEventSchema,
   ConfigUpdateSchema,
   RespawnConfigSchema,
+  SessionNameSchema,
+  SessionColorSchema,
+  RalphConfigSchema,
+  FixPlanImportSchema,
+  RalphPromptWriteSchema,
+  AutoClearSchema,
+  AutoCompactSchema,
+  ImageWatcherSchema,
+  FlickerFilterSchema,
+  QuickRunSchema,
+  ScheduledRunSchema,
+  LinkCaseSchema,
+  GeneratePlanSchema,
+  GeneratePlanDetailedSchema,
+  CancelPlanSchema,
+  PlanTaskUpdateSchema,
+  PlanTaskAddSchema,
+  CpuLimitSchema,
 } from './schemas.js';
 import { StaleExpirationMap } from '../utils/index.js';
 
@@ -706,7 +722,7 @@ export class WebServer extends EventEmitter {
     // Rename a session
     this.app.put('/api/sessions/:id/name', async (req) => {
       const { id } = req.params as { id: string };
-      const body = req.body as { name: string };
+      const body = SessionNameSchema.parse(req.body);
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -725,7 +741,7 @@ export class WebServer extends EventEmitter {
     // Set session color
     this.app.put('/api/sessions/:id/color', async (req) => {
       const { id } = req.params as { id: string };
-      const body = req.body as { color: string };
+      const body = SessionColorSchema.parse(req.body);
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1184,7 +1200,7 @@ export class WebServer extends EventEmitter {
     // Configure Ralph (Ralph Wiggum) settings
     this.app.post('/api/sessions/:id/ralph-config', async (req) => {
       const { id } = req.params as { id: string };
-      const { enabled, completionPhrase, maxIterations, reset, disableAutoEnable } = req.body as {
+      const { enabled, completionPhrase, maxIterations, reset, disableAutoEnable } = RalphConfigSchema.parse(req.body) as {
         enabled?: boolean;
         completionPhrase?: string;
         maxIterations?: number;
@@ -1307,7 +1323,7 @@ export class WebServer extends EventEmitter {
     // Import todos from @fix_plan.md content
     this.app.post('/api/sessions/:id/fix-plan/import', async (req) => {
       const { id } = req.params as { id: string };
-      const { content } = req.body as { content: string };
+      const { content } = FixPlanImportSchema.parse(req.body);
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1402,7 +1418,7 @@ export class WebServer extends EventEmitter {
     // This avoids screen input escaping issues with long multi-line prompts
     this.app.post('/api/sessions/:id/ralph-prompt/write', async (req) => {
       const { id } = req.params as { id: string };
-      const { content } = req.body as { content: string };
+      const { content } = RalphPromptWriteSchema.parse(req.body);
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1665,7 +1681,7 @@ export class WebServer extends EventEmitter {
     // Start respawn controller for a session
     this.app.post('/api/sessions/:id/respawn/start', async (req) => {
       const { id } = req.params as { id: string };
-      const body = req.body as Partial<RespawnConfig> | undefined;
+      const body = req.body ? RespawnConfigSchema.parse(req.body) as Partial<RespawnConfig> : undefined;
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1792,6 +1808,8 @@ export class WebServer extends EventEmitter {
     this.app.post('/api/sessions/:id/interactive-respawn', async (req) => {
       const { id } = req.params as { id: string };
       const body = req.body as { respawnConfig?: Partial<RespawnConfig>; durationMinutes?: number } | undefined;
+      // Validate respawn config if present
+      if (body?.respawnConfig) RespawnConfigSchema.parse(body.respawnConfig);
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1848,6 +1866,8 @@ export class WebServer extends EventEmitter {
     this.app.post('/api/sessions/:id/respawn/enable', async (req) => {
       const { id } = req.params as { id: string };
       const body = req.body as { config?: Partial<RespawnConfig>; durationMinutes?: number } | undefined;
+      // Validate respawn config if present
+      if (body?.config) RespawnConfigSchema.parse(body.config);
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1894,7 +1914,7 @@ export class WebServer extends EventEmitter {
     // Set auto-clear on a session
     this.app.post('/api/sessions/:id/auto-clear', async (req) => {
       const { id } = req.params as { id: string };
-      const body = req.body as { enabled: boolean; threshold?: number };
+      const body = AutoClearSchema.parse(req.body);
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1927,7 +1947,7 @@ export class WebServer extends EventEmitter {
     // Set auto-compact on a session
     this.app.post('/api/sessions/:id/auto-compact', async (req) => {
       const { id } = req.params as { id: string };
-      const body = req.body as { enabled: boolean; threshold?: number; prompt?: string };
+      const body = AutoCompactSchema.parse(req.body);
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1961,7 +1981,7 @@ export class WebServer extends EventEmitter {
     // Toggle image watcher for a session
     this.app.post('/api/sessions/:id/image-watcher', async (req) => {
       const { id } = req.params as { id: string };
-      const body = req.body as { enabled: boolean };
+      const body = ImageWatcherSchema.parse(req.body);
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1993,7 +2013,7 @@ export class WebServer extends EventEmitter {
     // Toggle flicker filter for a session
     this.app.post('/api/sessions/:id/flicker-filter', async (req) => {
       const { id } = req.params as { id: string };
-      const body = req.body as { enabled: boolean };
+      const body = FlickerFilterSchema.parse(req.body);
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -2023,9 +2043,9 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.SESSION_BUSY, `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached`);
       }
 
-      const { prompt, workingDir } = req.body as QuickRunRequest;
+      const { prompt, workingDir } = QuickRunSchema.parse(req.body);
 
-      if (!prompt || typeof prompt !== 'string' || prompt.trim() === '') {
+      if (!prompt.trim()) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'prompt is required');
       }
       const dir = workingDir || process.cwd();
@@ -2056,9 +2076,9 @@ export class WebServer extends EventEmitter {
     });
 
     this.app.post('/api/scheduled', async (req): Promise<{ success: boolean; run: ScheduledRun }> => {
-      const { prompt, workingDir, durationMinutes } = req.body as CreateScheduledRunRequest;
+      const { prompt, workingDir, durationMinutes } = ScheduledRunSchema.parse(req.body);
 
-      const run = await this.startScheduledRun(prompt, workingDir || process.cwd(), durationMinutes);
+      const run = await this.startScheduledRun(prompt, workingDir || process.cwd(), durationMinutes ?? 60);
       return { success: true, run };
     });
 
@@ -2171,7 +2191,7 @@ export class WebServer extends EventEmitter {
 
     // Link an existing folder as a case
     this.app.post('/api/cases/link', async (req): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
-      const { name, path: folderPath } = req.body as { name: string; path: string };
+      const { name, path: folderPath } = LinkCaseSchema.parse(req.body);
 
       if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name. Use only letters, numbers, hyphens, underscores.');
@@ -2486,12 +2506,6 @@ export class WebServer extends EventEmitter {
       }
     });
 
-    // Generate implementation plan from task description using Claude
-    interface GeneratePlanRequest {
-      taskDescription: string;
-      detailLevel?: 'brief' | 'standard' | 'detailed';
-    }
-
     // Use enhanced PlanItem from orchestrator (has verification, dependencies, tracking)
     type PlanItem = import('../plan-orchestrator.js').PlanItem;
 
@@ -2499,7 +2513,7 @@ export class WebServer extends EventEmitter {
       const {
         taskDescription,
         detailLevel = 'standard'
-      } = req.body as GeneratePlanRequest;
+      } = GeneratePlanSchema.parse(req.body);
 
       if (!taskDescription || typeof taskDescription !== 'string') {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Task description is required');
@@ -2688,7 +2702,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Generate detailed implementation plan using subagent orchestration
     // This spawns multiple specialist subagents in parallel for thorough analysis
     this.app.post('/api/generate-plan-detailed', async (req): Promise<ApiResponse> => {
-      const { taskDescription, caseName } = req.body as { taskDescription: string; caseName?: string };
+      const { taskDescription, caseName } = GeneratePlanDetailedSchema.parse(req.body);
 
       if (!taskDescription || typeof taskDescription !== 'string') {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Task description is required');
@@ -2792,7 +2806,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     // Cancel active plan generation
     this.app.post('/api/cancel-plan-generation', async (req): Promise<ApiResponse> => {
-      const { orchestratorId } = req.body as { orchestratorId?: string };
+      const { orchestratorId } = CancelPlanSchema.parse(req.body);
 
       // If specific orchestrator ID provided, cancel just that one
       if (orchestratorId) {
@@ -2948,7 +2962,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Ralph tracker not available');
       }
 
-      const update = req.body as {
+      const update = PlanTaskUpdateSchema.parse(req.body) as {
         status?: 'pending' | 'in_progress' | 'completed' | 'failed' | 'blocked';
         error?: string;
         incrementAttempts?: boolean;
@@ -3032,17 +3046,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Ralph tracker not available');
       }
 
-      const task = req.body as {
-        content: string;
-        priority?: 'P0' | 'P1' | 'P2';
-        verificationCriteria?: string;
-        dependencies?: string[];
-        insertAfter?: string; // Task ID to insert after
-      };
-
-      if (!task.content) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Task content is required');
-      }
+      const task = PlanTaskAddSchema.parse(req.body);
 
       const result = tracker.addPlanTask(task);
       this.broadcast('session:planTaskAdded', { sessionId: id, task: result.task });
@@ -3130,7 +3134,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
-      const body = req.body as Partial<NiceConfig>;
+      const body = CpuLimitSchema.parse(req.body) as Partial<NiceConfig>;
 
       // Validate inputs
       if (body.niceValue !== undefined) {

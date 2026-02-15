@@ -140,3 +140,116 @@ export const SessionInputWithLimitSchema = z.object({
   input: z.string().max(100000), // 100KB max input
   useScreen: z.boolean().optional(),
 });
+
+// ========== Session Mutation Routes ==========
+
+/** PUT /api/sessions/:id/name */
+export const SessionNameSchema = z.object({
+  name: z.string().min(0).max(128),
+});
+
+/** PUT /api/sessions/:id/color */
+export const SessionColorSchema = z.object({
+  color: z.string().max(30),
+});
+
+/** POST /api/sessions/:id/ralph-config */
+export const RalphConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  completionPhrase: z.string().max(500).optional(),
+  maxIterations: z.number().int().min(0).max(10000).optional(),
+  reset: z.boolean().optional(),
+  disableAutoEnable: z.boolean().optional(),
+});
+
+/** POST /api/sessions/:id/fix-plan/import */
+export const FixPlanImportSchema = z.object({
+  content: z.string().max(500000),
+});
+
+/** POST /api/sessions/:id/ralph-prompt/write */
+export const RalphPromptWriteSchema = z.object({
+  content: z.string().max(500000),
+});
+
+/** POST /api/sessions/:id/auto-clear */
+export const AutoClearSchema = z.object({
+  enabled: z.boolean(),
+  threshold: z.number().int().min(0).max(1000000).optional(),
+});
+
+/** POST /api/sessions/:id/auto-compact */
+export const AutoCompactSchema = z.object({
+  enabled: z.boolean(),
+  threshold: z.number().int().min(0).max(1000000).optional(),
+  prompt: z.string().max(10000).optional(),
+});
+
+/** POST /api/sessions/:id/image-watcher */
+export const ImageWatcherSchema = z.object({
+  enabled: z.boolean(),
+});
+
+/** POST /api/sessions/:id/flicker-filter */
+export const FlickerFilterSchema = z.object({
+  enabled: z.boolean(),
+});
+
+/** POST /api/run */
+export const QuickRunSchema = z.object({
+  prompt: z.string().min(1).max(100000),
+  workingDir: z.string().max(1000).optional(),
+});
+
+/** POST /api/scheduled */
+export const ScheduledRunSchema = z.object({
+  prompt: z.string().min(1).max(100000),
+  workingDir: z.string().max(1000).optional(),
+  durationMinutes: z.number().int().min(1).max(14400).optional(),
+});
+
+/** POST /api/cases/link */
+export const LinkCaseSchema = z.object({
+  name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format'),
+  path: z.string().min(1).max(1000),
+});
+
+/** POST /api/generate-plan */
+export const GeneratePlanSchema = z.object({
+  taskDescription: z.string().min(1).max(100000),
+  detailLevel: z.enum(['brief', 'standard', 'detailed']).optional(),
+});
+
+/** POST /api/generate-plan-detailed */
+export const GeneratePlanDetailedSchema = z.object({
+  taskDescription: z.string().min(1).max(100000),
+  caseName: z.string().max(200).optional(),
+});
+
+/** POST /api/cancel-plan-generation */
+export const CancelPlanSchema = z.object({
+  orchestratorId: z.string().max(200).optional(),
+});
+
+/** PATCH /api/sessions/:id/plan/task/:taskId */
+export const PlanTaskUpdateSchema = z.object({
+  status: z.enum(['pending', 'in_progress', 'completed', 'failed', 'blocked']).optional(),
+  error: z.string().max(10000).optional(),
+  incrementAttempts: z.boolean().optional(),
+});
+
+/** POST /api/sessions/:id/plan/task (add task) */
+export const PlanTaskAddSchema = z.object({
+  content: z.string().min(1).max(10000),
+  priority: z.enum(['P0', 'P1', 'P2']).optional(),
+  verificationCriteria: z.string().max(10000).optional(),
+  dependencies: z.array(z.string().max(200)).optional(),
+  insertAfter: z.string().max(200).optional(),
+});
+
+/** POST /api/sessions/:id/cpu-limit */
+export const CpuLimitSchema = z.object({
+  cpuLimit: z.number().int().min(0).max(100).optional(),
+  ioClass: z.enum(['idle', 'best-effort', 'realtime']).optional(),
+  ioLevel: z.number().int().min(0).max(7).optional(),
+});

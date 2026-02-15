@@ -6,7 +6,7 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { watch, statSync, readdirSync, existsSync, readFileSync, FSWatcher } from 'node:fs';
+import { watch, existsSync, FSWatcher } from 'node:fs';
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
@@ -277,8 +277,8 @@ export class SubagentWatcher extends EventEmitter {
     // Method 2: Check if the transcript file was recently modified
     // (within the last 60 seconds - gives some buffer for slow operations)
     try {
-      const stat = statSync(info.filePath);
-      const mtime = stat.mtime.getTime();
+      const fileStat = await statAsync(info.filePath);
+      const mtime = fileStat.mtime.getTime();
       const now = Date.now();
       if (now - mtime < 60000) {
         return true;
@@ -641,7 +641,7 @@ export class SubagentWatcher extends EventEmitter {
     const entries: SubagentTranscriptEntry[] = [];
 
     try {
-      const content = readFileSync(info.filePath, 'utf8');
+      const content = await readFile(info.filePath, 'utf8');
       const lines = content.split('\n').filter((l) => l.trim());
 
       for (const line of lines) {
@@ -794,17 +794,17 @@ export class SubagentWatcher extends EventEmitter {
    * We look for this format:
    * { "type": "user", "toolUseResult": { "agentId": "xxx", "description": "..." } }
    */
-  private extractDescriptionFromParentTranscript(
+  private async extractDescriptionFromParentTranscript(
     projectHash: string,
     sessionId: string,
     agentId: string
-  ): string | undefined {
+  ): Promise<string | undefined> {
     try {
       // The parent session's transcript is at: ~/.claude/projects/{projectHash}/{sessionId}.jsonl
       const transcriptPath = join(CLAUDE_PROJECTS_DIR, projectHash, `${sessionId}.jsonl`);
-      if (!existsSync(transcriptPath)) return undefined;
+      try { await statAsync(transcriptPath); } catch { return undefined; }
 
-      const content = readFileSync(transcriptPath, 'utf8');
+      const content = await readFile(transcriptPath, 'utf8');
       const lines = content.split('\n').filter((l) => l.trim());
 
       // Look for user entry with toolUseResult containing the agentId
@@ -831,9 +831,9 @@ export class SubagentWatcher extends EventEmitter {
   /**
    * Extract description from agent file by finding first user message
    */
-  private extractDescriptionFromFile(filePath: string): string | undefined {
+  private async extractDescriptionFromFile(filePath: string): Promise<string | undefined> {
     try {
-      const content = readFileSync(filePath, 'utf8');
+      const content = await readFile(filePath, 'utf8');
       const lines = content.split('\n').filter((l) => l.trim());
 
       for (const line of lines.slice(0, 5)) {
@@ -867,7 +867,7 @@ export class SubagentWatcher extends EventEmitter {
    * Scan for all subagent directories (async to avoid blocking event loop)
    */
   private async scanForSubagents(): Promise<void> {
-    if (!existsSync(CLAUDE_PROJECTS_DIR)) return;
+    try { await statAsync(CLAUDE_PROJECTS_DIR); } catch { return; }
 
     try {
       const projects = await readdir(CLAUDE_PROJECTS_DIR);
@@ -889,8 +889,11 @@ export class SubagentWatcher extends EventEmitter {
               if (!sessionStat.isDirectory()) continue;
 
               const subagentDir = join(sessionPath, 'subagents');
-              if (existsSync(subagentDir)) {
-                this.watchSubagentDir(subagentDir, project, session);
+              try {
+                await statAsync(subagentDir);
+                await this.watchSubagentDir(subagentDir, project, session);
+              } catch {
+                // subagent dir doesn't exist - skip
               }
             } catch {
               // Skip inaccessible session directories
@@ -908,16 +911,16 @@ export class SubagentWatcher extends EventEmitter {
   /**
    * Watch a subagent directory for new/updated files
    */
-  private watchSubagentDir(dir: string, projectHash: string, sessionId: string): void {
+  private async watchSubagentDir(dir: string, projectHash: string, sessionId: string): Promise<void> {
     if (this.knownSubagentDirs.has(dir)) return;
     this.knownSubagentDirs.add(dir);
 
     // Watch existing files (initial scan - skip old files)
     try {
-      const files = readdirSync(dir);
+      const files = await readdir(dir);
       for (const file of files) {
         if (file.endsWith('.jsonl')) {
-          this.watchAgentFile(join(dir, file), projectHash, sessionId, true);
+          await this.watchAgentFile(join(dir, file), projectHash, sessionId, true);
         }
       }
     } catch {
@@ -965,7 +968,7 @@ export class SubagentWatcher extends EventEmitter {
    * @param sessionId Claude session ID
    * @param isInitialScan If true, skip files older than STARTUP_MAX_FILE_AGE_MS
    */
-  private watchAgentFile(filePath: string, projectHash: string, sessionId: string, isInitialScan: boolean = false): void {
+  private async watchAgentFile(filePath: string, projectHash: string, sessionId: string, isInitialScan: boolean = false): Promise<void> {
     if (this.fileWatchers.has(filePath)) return;
 
     const agentId = basename(filePath).replace('agent-', '').replace('.jsonl', '');
@@ -973,7 +976,7 @@ export class SubagentWatcher extends EventEmitter {
     // Initial info - handle race condition where file may be deleted between discovery and stat
     let stat;
     try {
-      stat = statSync(filePath);
+      stat = await statAsync(filePath);
     } catch {
       // File was deleted between discovery and stat - skip this agent
       return;
@@ -989,11 +992,11 @@ export class SubagentWatcher extends EventEmitter {
 
     // Extract description - prefer reading from parent transcript (most reliable)
     // The parent transcript has the exact Task tool call with description parameter
-    let description = this.extractDescriptionFromParentTranscript(projectHash, sessionId, agentId);
+    let description = await this.extractDescriptionFromParentTranscript(projectHash, sessionId, agentId);
 
     // Fallback: extract a smart title from the subagent's prompt if parent lookup failed
     if (!description) {
-      description = this.extractDescriptionFromFile(filePath);
+      description = await this.extractDescriptionFromFile(filePath);
     }
 
     // Skip internal Claude Code agents (e.g., suggestion mode) - not real subagents
@@ -1038,7 +1041,7 @@ export class SubagentWatcher extends EventEmitter {
           const existingInfo = this.agentInfo.get(agentId);
           if (existingInfo) {
             try {
-              const newStat = statSync(filePath);
+              const newStat = await statAsync(filePath);
               existingInfo.lastActivityAt = Date.now();
               existingInfo.fileSize = newStat.size;
               existingInfo.status = 'active';
@@ -1049,14 +1052,14 @@ export class SubagentWatcher extends EventEmitter {
             // Retry description extraction if missing (race condition fix)
             if (!existingInfo.description) {
               // First try parent transcript (most reliable)
-              let extractedDescription = this.extractDescriptionFromParentTranscript(
+              let extractedDescription = await this.extractDescriptionFromParentTranscript(
                 existingInfo.projectHash,
                 existingInfo.sessionId,
                 agentId
               );
               // Fallback to subagent file
               if (!extractedDescription) {
-                extractedDescription = this.extractDescriptionFromFile(filePath);
+                extractedDescription = await this.extractDescriptionFromFile(filePath);
               }
               if (extractedDescription) {
                 // Check if this is an internal agent - if so, remove it
@@ -1138,7 +1141,7 @@ export class SubagentWatcher extends EventEmitter {
   /**
    * Process a transcript entry and emit appropriate events
    */
-  private processEntry(entry: SubagentTranscriptEntry, agentId: string, sessionId: string): void {
+  private async processEntry(entry: SubagentTranscriptEntry, agentId: string, sessionId: string): Promise<void> {
     const info = this.agentInfo.get(agentId);
 
     // Extract model from assistant messages (first one sets the model)
@@ -1161,7 +1164,7 @@ export class SubagentWatcher extends EventEmitter {
     // Check if this is first user message and description is missing
     if (info && !info.description && entry.type === 'user' && entry.message?.content) {
       // First try parent transcript (most reliable)
-      let description = this.extractDescriptionFromParentTranscript(
+      let description = await this.extractDescriptionFromParentTranscript(
         info.projectHash,
         info.sessionId,
         agentId

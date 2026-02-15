@@ -525,6 +525,7 @@ program
       };
       process.on('SIGTERM', () => shutdown('SIGTERM'));
       process.on('SIGINT', () => shutdown('SIGINT'));
+      process.on('SIGHUP', () => shutdown('SIGHUP'));
     } catch (err) {
       console.error(chalk.red(`✗ Failed to start web server: ${getErrorMessage(err)}`));
       process.exit(1);

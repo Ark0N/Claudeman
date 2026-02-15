@@ -2112,33 +2112,7 @@ class ClaudemanApp {
 
     addListener('session:deleted', (e) => {
       const data = JSON.parse(e.data);
-      this.sessions.delete(data.id);
-      // Remove from tab order
-      const orderIndex = this.sessionOrder.indexOf(data.id);
-      if (orderIndex !== -1) {
-        this.sessionOrder.splice(orderIndex, 1);
-        this.saveSessionOrder();
-      }
-      this.terminalBuffers.delete(data.id);
-      this._inputQueue.delete(data.id);  // Clean up queued offline input for this session
-      this.ralphStates.delete(data.id);  // Clean up ralph state for this session
-      this.ralphClosedSessions.delete(data.id);  // Clean up closed tracking for this session
-      this.projectInsights.delete(data.id);  // Clean up project insights for this session
-      this.closeSessionLogViewerWindows(data.id);  // Close log viewer windows for this session
-      this.closeSessionImagePopups(data.id);  // Close image popup windows for this session
-      this.closeSessionSubagentWindows(data.id, true);  // Close subagent windows and cleanup activity data
-
-      // Clean up idle timer for this session
-      const idleTimer = this.idleTimers.get(data.id);
-      if (idleTimer) {
-        clearTimeout(idleTimer);
-        this.idleTimers.delete(data.id);
-      }
-      // Clean up respawn state for this session
-      delete this.respawnStatus[data.id];
-      delete this.respawnTimers[data.id];
-      delete this.respawnCountdownTimers[data.id];
-      delete this.respawnActionLogs[data.id];
+      this._cleanupSessionData(data.id);
       if (this.activeSessionId === data.id) {
         this.activeSessionId = null;
         try { localStorage.removeItem('claudeman-active-session'); } catch {}
@@ -3969,20 +3943,45 @@ class ClaudemanApp {
     }
   }
 
+  // Shared cleanup for all session data — called from both closeSession() and session:deleted handler
+  _cleanupSessionData(sessionId) {
+    this.sessions.delete(sessionId);
+    // Remove from tab order
+    const orderIndex = this.sessionOrder.indexOf(sessionId);
+    if (orderIndex !== -1) {
+      this.sessionOrder.splice(orderIndex, 1);
+      this.saveSessionOrder();
+    }
+    this.terminalBuffers.delete(sessionId);
+    this.terminalBufferCache.delete(sessionId);
+    this._inputQueue.delete(sessionId);
+    this.ralphStates.delete(sessionId);
+    this.ralphClosedSessions.delete(sessionId);
+    this.projectInsights.delete(sessionId);
+    this.pendingHooks.delete(sessionId);
+    this.tabAlerts.delete(sessionId);
+    this.clearCountdownTimers(sessionId);
+    this.closeSessionLogViewerWindows(sessionId);
+    this.closeSessionImagePopups(sessionId);
+    this.closeSessionSubagentWindows(sessionId, true);
+
+    // Clean up idle timer
+    const idleTimer = this.idleTimers.get(sessionId);
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      this.idleTimers.delete(sessionId);
+    }
+    // Clean up respawn state
+    delete this.respawnStatus[sessionId];
+    delete this.respawnTimers[sessionId];
+    delete this.respawnCountdownTimers[sessionId];
+    delete this.respawnActionLogs[sessionId];
+  }
+
   async closeSession(sessionId, killScreen = true) {
     try {
       await fetch(`/api/sessions/${sessionId}?killScreen=${killScreen}`, { method: 'DELETE' });
-      this.sessions.delete(sessionId);
-      // Remove from tab order
-      const orderIndex = this.sessionOrder.indexOf(sessionId);
-      if (orderIndex !== -1) {
-        this.sessionOrder.splice(orderIndex, 1);
-        this.saveSessionOrder();
-      }
-      this.terminalBuffers.delete(sessionId);
-      this.terminalBufferCache.delete(sessionId);
-      this.ralphStates.delete(sessionId);
-      this.clearCountdownTimers(sessionId);
+      this._cleanupSessionData(sessionId);
 
       if (this.activeSessionId === sessionId) {
         this.activeSessionId = null;
@@ -13937,10 +13936,14 @@ class ClaudemanApp {
 
   // Close all log viewer windows for a session
   closeSessionLogViewerWindows(sessionId) {
+    const toClose = [];
     for (const [windowId, data] of this.logViewerWindows) {
       if (data.sessionId === sessionId) {
-        this.closeLogViewerWindow(windowId);
+        toClose.push(windowId);
       }
+    }
+    for (const windowId of toClose) {
+      this.closeLogViewerWindow(windowId);
     }
   }
 
@@ -14067,10 +14070,14 @@ class ClaudemanApp {
    * Close all image popups for a session.
    */
   closeSessionImagePopups(sessionId) {
+    const toClose = [];
     for (const [imageId, data] of this.imagePopups) {
       if (data.sessionId === sessionId) {
-        this.closeImagePopup(imageId);
+        toClose.push(imageId);
       }
+    }
+    for (const imageId of toClose) {
+      this.closeImagePopup(imageId);
     }
   }
 
