@@ -19,13 +19,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 2. **NEVER** run `tmux kill-session`, `pkill tmux`, or `pkill claude` without confirming
 3. Use the web UI or `./scripts/tmux-manager.sh` instead of direct kill commands
 
+## CRITICAL: Always Test Before Deploying
+
+**NEVER COM without verifying your changes actually work.** For every fix:
+
+1. **Backend changes**: Hit the API endpoint with `curl` and verify the response
+2. **Frontend changes**: Use Playwright to load the page and assert the UI renders correctly. Use `waitUntil: 'domcontentloaded'` (not `networkidle` — SSE keeps the connection open). Wait 3-4s for polling/async data to populate, then check element visibility, text content, and CSS values
+3. **Only after verification passes**, proceed with COM
+
+The production server caches static files for 1 hour (`maxAge: '1h'` in `server.ts`). After deploying frontend changes, users may need a hard refresh (Ctrl+Shift+R) to see updates.
+
 ## COM Shorthand (Deployment)
 
 When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md` (verify they match with `grep version package.json && grep Version CLAUDE.md`)
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1509 (must match `package.json` for npm publish)
+**Version**: 0.1510 (must match `package.json` for npm publish)
 
 ## Project Overview
 
