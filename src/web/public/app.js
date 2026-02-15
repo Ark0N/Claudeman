@@ -14699,9 +14699,9 @@ class ClaudemanApp {
   }
 
   async fetchSystemStats() {
-    // Skip polling when monitor panel is not visible
-    const monitorPanel = document.getElementById('monitorPanel');
-    if (!monitorPanel || monitorPanel.style.display === 'none') return;
+    // Skip polling when system stats display is hidden
+    const statsEl = document.getElementById('headerSystemStats');
+    if (!statsEl || statsEl.style.display === 'none') return;
 
     try {
       const res = await fetch('/api/system/stats');
