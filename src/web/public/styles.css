@@ -92,6 +92,15 @@ textarea:focus-visible {
   outline: none;
 }
 
+/* xterm.js hidden textarea — must never show focus ring or caret */
+.xterm-helper-textarea {
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+  opacity: 0 !important;
+  caret-color: transparent !important;
+}
+
 /* Session tab focus */
 .session-tab:focus-visible {
   outline: 2px solid var(--accent);
