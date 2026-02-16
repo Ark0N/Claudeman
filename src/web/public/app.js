@@ -342,13 +342,18 @@ const KeyboardHandler = {
       KeyboardAccessoryBar.show();
     }
 
-    // Scroll active terminal to bottom so input line is visible
-    // Delay to let layout settle after keyboard resizes the viewport
+    // Refit terminal locally AND send resize to server so Claude Code (Ink)
+    // knows the actual terminal dimensions. Without this, Ink redraws at the
+    // old (larger) row count when the user types, causing content to scroll
+    // off the visible area with each keystroke.
+    // Note: the throttledResize handler still suppresses ongoing resize events
+    // while keyboard is up — this one-shot resize on open/close is sufficient.
     setTimeout(() => {
       if (typeof app !== 'undefined' && app.terminal) {
-        // Refit terminal to the now-smaller container, then scroll
         if (app.fitAddon) try { app.fitAddon.fit(); } catch {}
         app.terminal.scrollToBottom();
+        // Send resize to server so PTY dimensions match xterm
+        this._sendTerminalResize();
       }
     }, 150);
   },
@@ -362,12 +367,32 @@ const KeyboardHandler = {
 
     this.resetLayout();
 
-    // Refit terminal to the restored (larger) container to prevent black gap
+    // Refit terminal and send resize to restore original dimensions
     setTimeout(() => {
       if (typeof app !== 'undefined' && app.fitAddon) {
         try { app.fitAddon.fit(); } catch {}
+        // Send resize to server to restore full terminal size
+        this._sendTerminalResize();
       }
     }, 100);
+  },
+
+  /** Send current terminal dimensions to the server (one-shot, for keyboard open/close) */
+  _sendTerminalResize() {
+    if (typeof app === 'undefined' || !app.activeSessionId || !app.fitAddon) return;
+    try {
+      const dims = app.fitAddon.proposeDimensions();
+      if (dims) {
+        const cols = Math.max(dims.cols, 40);
+        const rows = Math.max(dims.rows, 10);
+        app._lastResizeDims = { cols, rows };
+        fetch(`/api/sessions/${app.activeSessionId}/resize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cols, rows })
+        });
+      }
+    } catch {}
   },
 
   /** Check if element is an input that triggers keyboard (excludes terminal) */
@@ -500,6 +525,16 @@ const KeyboardAccessoryBar = {
     this.element = document.createElement('div');
     this.element.className = 'keyboard-accessory-bar';
     this.element.innerHTML = `
+      <button class="accessory-btn accessory-btn-arrow" data-action="scroll-up" title="Arrow up">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M5 15l7-7 7 7"/>
+        </svg>
+      </button>
+      <button class="accessory-btn accessory-btn-arrow" data-action="scroll-down" title="Arrow down">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M19 9l-7 7-7-7"/>
+        </svg>
+      </button>
       <button class="accessory-btn" data-action="init" title="/init">/init</button>
       <button class="accessory-btn" data-action="clear" title="/clear">/clear</button>
       <button class="accessory-btn" data-action="compact" title="/compact">/compact</button>
@@ -526,8 +561,9 @@ const KeyboardAccessoryBar = {
       const action = btn.dataset.action;
       this.handleAction(action, btn);
 
-      // For double-tap buttons, refocus terminal so keyboard stays open during confirm state
-      if ((action === 'clear' || action === 'compact') && this._confirmAction) {
+      // Refocus terminal so keyboard stays open (tap blurs terminal → keyboard dismisses → toolbar shifts)
+      if ((action === 'scroll-up' || action === 'scroll-down') ||
+          ((action === 'clear' || action === 'compact') && this._confirmAction)) {
         if (typeof app !== 'undefined' && app.terminal) {
           app.terminal.focus();
         }
@@ -549,6 +585,12 @@ const KeyboardAccessoryBar = {
     if (typeof app === 'undefined' || !app.activeSessionId) return;
 
     switch (action) {
+      case 'scroll-up':
+        this.sendKey('\x1b[A');
+        break;
+      case 'scroll-down':
+        this.sendKey('\x1b[B');
+        break;
       case 'init':
         this.sendCommand('/init');
         break;
@@ -611,6 +653,18 @@ const KeyboardAccessoryBar = {
     app.sendInput(command);
     // Send Enter separately after a brief delay so Ink has time to process the text.
     setTimeout(() => app.sendInput('\r'), 120);
+  },
+
+  /** Send a special key (arrow, escape, etc.) directly to the PTY.
+   *  Bypasses tmux send-keys -l (literal mode) since escape sequences
+   *  must be written raw to be interpreted as key presses by Ink. */
+  sendKey(escapeSequence) {
+    if (!app.activeSessionId) return;
+    fetch(`/api/sessions/${app.activeSessionId}/input`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: escapeSequence })
+    });
   },
 
   /** Read clipboard and send contents as input */
@@ -1590,7 +1644,11 @@ class ClaudemanApp {
         this._resizeTimeout = null;
         if (this.fitAddon) {
           this.fitAddon.fit();
-          if (this.activeSessionId) {
+          // Skip server resize while mobile keyboard is visible — sending SIGWINCH
+          // causes Ink to re-render at the new row count, garbling terminal output.
+          // Local fit() still runs so xterm knows the viewport size for scrolling.
+          const keyboardUp = typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible;
+          if (this.activeSessionId && !keyboardUp) {
             const dims = this.fitAddon.proposeDimensions();
             // Enforce minimum dimensions to prevent layout issues
             const cols = dims ? Math.max(dims.cols, MIN_COLS) : MIN_COLS;

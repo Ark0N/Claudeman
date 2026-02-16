@@ -526,6 +526,17 @@
     height: 14px;
   }
 
+  .accessory-btn-arrow {
+    padding: 6px 10px;
+    background: #1e3a5f;
+    border-color: rgba(59, 130, 246, 0.3);
+    color: #93c5fd;
+  }
+
+  .accessory-btn-arrow:active {
+    background: #2563eb;
+  }
+
   .accessory-btn-dismiss {
     margin-left: auto;
     padding: 6px 10px;
