@@ -226,7 +226,7 @@
     display: none !important;
   }
 
-  /* Mobile app settings gear in toolbar - next to Run Claude */
+  /* Mobile app settings gear in toolbar - far right */
   .btn-settings-mobile {
     display: inline-flex !important;
     align-items: center;
@@ -237,9 +237,11 @@
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 4px;
     color: #9ca3af;
+    font-size: 0.85rem;
     cursor: pointer;
     flex-shrink: 0;
-    order: 1; /* Right after Run Claude */
+    order: 4; /* Far right */
+    position: relative;
   }
 
   .btn-settings-mobile svg {
@@ -371,19 +373,23 @@
 
   /* Toolbar layout */
   .toolbar-left {
-    flex: 0 0 auto;
+    flex: 1 1 0;
+    min-width: 0;
     align-items: center;
     gap: 0.3rem;
   }
 
   .toolbar-left .toolbar-group {
     display: flex;
+    flex: 1 1 0;
+    min-width: 0;
     align-items: center;
     gap: 0.3rem;
   }
 
   .toolbar-left .toolbar-group:first-child {
-    flex: 1;
+    flex: 1 1 0;
+    min-width: 0;
     justify-content: space-between;
     gap: 0.3rem;
     flex-wrap: nowrap;
@@ -457,7 +463,6 @@
   /* Simplified toolbar layout - Run Claude, Shell, and Case */
   .toolbar-left .toolbar-group:first-child {
     width: 100%;
-    justify-content: center;
     gap: 8px;
   }
 
@@ -477,19 +482,24 @@
 
   /* Mobile case button - visible on mobile */
   .btn-toolbar.btn-case-mobile {
-    display: inline-flex !important;
-    flex: 0 0 auto;
-    min-width: fit-content;
-    white-space: nowrap;
+    display: flex !important;
+    flex: 1 1 0 !important;
+    min-width: 0;
     padding: 0 8px !important;
     order: 2; /* Between Run Claude and Run Shell */
+    overflow: hidden;
+    justify-content: center;
+    gap: 4px;
   }
 
   .btn-toolbar.btn-case-mobile #mobileCaseName {
-    max-width: 50px;
+    max-width: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  /* Mobile case settings gear button */
+  /* Mobile case settings gear button - next to Run Claude */
   .btn-case-settings-mobile {
     display: inline-flex !important;
     align-items: center;
@@ -500,11 +510,9 @@
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 4px;
     color: #9ca3af;
-    font-size: 0.85rem;
     cursor: pointer;
-    order: 3;
     flex-shrink: 0;
-    position: relative;
+    order: 1; /* Next to Run Claude */
   }
 
   .btn-case-settings-mobile:active {

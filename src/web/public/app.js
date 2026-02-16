@@ -14598,11 +14598,8 @@ class ClaudemanApp {
   updateMobileCaseLabel(caseName) {
     const label = document.getElementById('mobileCaseName');
     if (label) {
-      // Truncate for mobile display
-      const maxLen = 6;
-      label.textContent = caseName.length > maxLen
-        ? caseName.substring(0, maxLen) + '…'
-        : caseName;
+      // Let CSS handle truncation via text-overflow: ellipsis
+      label.textContent = caseName;
     }
   }
 
