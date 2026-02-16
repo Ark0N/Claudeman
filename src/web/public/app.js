@@ -1472,6 +1472,15 @@ class ClaudemanApp {
     this.loadState();
     this.loadQuickStartCases();
     this.setupEventListeners();
+    // Mobile settings gear: non-passive touchstart to prevent keyboard dismiss
+    const settingsBtn = document.querySelector('.btn-settings-mobile');
+    if (settingsBtn) {
+      settingsBtn.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        app.openAppSettings();
+      }, { passive: false });
+    }
     // Start system stats polling
     this.startSystemStatsPolling();
     // Setup online/offline detection
@@ -14351,6 +14360,39 @@ class ClaudemanApp {
     const settings = this.getCaseSettings(caseName);
     settings.agentTeams = document.getElementById('caseAgentTeams').checked;
     this.saveCaseSettings(caseName, settings);
+    // Sync mobile checkbox
+    const mobileCheckbox = document.getElementById('caseAgentTeamsMobile');
+    if (mobileCheckbox) mobileCheckbox.checked = settings.agentTeams;
+  }
+
+  toggleCaseSettingsMobile() {
+    const popover = document.getElementById('caseSettingsPopoverMobile');
+    if (popover.classList.contains('hidden')) {
+      const caseName = document.getElementById('quickStartCase').value || 'testcase';
+      const settings = this.getCaseSettings(caseName);
+      document.getElementById('caseAgentTeamsMobile').checked = settings.agentTeams;
+      popover.classList.remove('hidden');
+
+      const closeHandler = (e) => {
+        if (!popover.contains(e.target) && !e.target.classList.contains('btn-case-settings-mobile')) {
+          popover.classList.add('hidden');
+          document.removeEventListener('click', closeHandler);
+        }
+      };
+      setTimeout(() => document.addEventListener('click', closeHandler), 0);
+    } else {
+      popover.classList.add('hidden');
+    }
+  }
+
+  onCaseSettingChangedMobile() {
+    const caseName = document.getElementById('quickStartCase').value || 'testcase';
+    const settings = this.getCaseSettings(caseName);
+    settings.agentTeams = document.getElementById('caseAgentTeamsMobile').checked;
+    this.saveCaseSettings(caseName, settings);
+    // Sync desktop checkbox
+    const desktopCheckbox = document.getElementById('caseAgentTeams');
+    if (desktopCheckbox) desktopCheckbox.checked = settings.agentTeams;
   }
 
   // ========== Create Case Modal ==========

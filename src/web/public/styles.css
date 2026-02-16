@@ -1932,6 +1932,11 @@ body {
   color: #a8d8a8;
 }
 
+/* Mobile app settings gear - hidden on desktop, shown on mobile */
+.btn-settings-mobile {
+  display: none;
+}
+
 /* Mobile case button - hidden on desktop, shown on mobile */
 .btn-toolbar.btn-case-mobile {
   display: none;
@@ -1955,6 +1960,19 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Mobile case settings gear - hidden on desktop */
+.btn-case-settings-mobile {
+  display: none;
+}
+
+.case-settings-popover-mobile {
+  display: none;
+}
+
+.case-settings-popover-mobile.hidden {
+  display: none;
 }
 
 /* Button icon styling */
@@ -8553,6 +8571,62 @@ kbd {
 
   .btn-toolbar.btn-case-mobile #mobileCaseName {
     max-width: 50px;
+  }
+
+  /* Mobile case settings gear button */
+  .btn-case-settings-mobile {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    color: #9ca3af;
+    font-size: 0.85rem;
+    cursor: pointer;
+    order: 3;
+    flex-shrink: 0;
+    position: relative;
+  }
+
+  .btn-case-settings-mobile:active {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+  }
+
+  .case-settings-popover-mobile {
+    position: fixed;
+    bottom: calc(var(--safe-area-bottom) + 46px);
+    left: 8px;
+    right: 8px;
+    background: #1e1e1e;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 0.6rem 0.75rem;
+    z-index: 1000;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    display: block;
+  }
+
+  .case-settings-popover-mobile.hidden {
+    display: none !important;
+  }
+
+  .case-settings-popover-mobile .checkbox-inline {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    color: #e5e7eb;
+  }
+
+  .case-settings-popover-mobile .form-hint {
+    display: block;
+    margin-top: 0.2rem;
+    font-size: 0.6rem;
+    color: #6b7280;
   }
 
   /* Keyboard Accessory Bar - quick actions above keyboard */
