@@ -9436,7 +9436,7 @@ class ClaudemanApp {
         // Default model
         const defaultModelEl = document.getElementById('appSettingsDefaultModel');
         if (defaultModelEl) {
-          defaultModelEl.value = config.defaultModel || 'sonnet';
+          defaultModelEl.value = config.defaultModel || 'opus';
         }
         // Show recommendations
         const showRecsEl = document.getElementById('appSettingsShowModelRecommendations');
@@ -9475,7 +9475,7 @@ class ClaudemanApp {
     if (reviewEl?.value) agentTypeOverrides.review = reviewEl.value;
 
     const config = {
-      defaultModel: defaultModelEl?.value || 'sonnet',
+      defaultModel: defaultModelEl?.value || 'opus',
       showRecommendations: showRecsEl?.checked ?? true,
       agentTypeOverrides,
     };
@@ -12286,59 +12286,76 @@ class ClaudemanApp {
 
     // Calculate final position - grid layout to avoid overlaps
     const windowCount = this.subagentWindows.size;
-    const windowWidth = 420;
-    const windowHeight = 350;
+    const isMobile = MobileDetection.getDeviceType() === 'mobile';
+    const windowWidth = isMobile ? window.innerWidth : 420;
+    const windowHeight = isMobile ? Math.round(window.innerHeight * 0.4) : 350;
     const gap = 20;
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
 
-    // Check if Ralph wizard modal is open - if so, position windows on the sides
-    const wizardModal = document.getElementById('ralphWizardModal');
-    const wizardOpen = wizardModal?.classList.contains('active');
+    let finalX = 0;
+    let finalY = 0;
 
-    let startX, startY, maxCols;
-
-    if (wizardOpen) {
-      // Wizard is ~720px wide, centered. Position windows on left/right sides
-      const wizardWidth = 720;
-      const centerX = viewportWidth / 2;
-      const wizardLeft = centerX - wizardWidth / 2;
-      const wizardRight = centerX + wizardWidth / 2;
-
-      // Alternate between left and right sides of the wizard
-      const leftSideSpace = wizardLeft - 20;
-      const rightSideSpace = viewportWidth - wizardRight - 20;
-
-      if (windowCount % 2 === 0 && rightSideSpace >= windowWidth) {
-        // Even windows go to the right
-        startX = wizardRight + 20;
-        maxCols = Math.floor(rightSideSpace / (windowWidth + gap)) || 1;
-      } else if (leftSideSpace >= windowWidth) {
-        // Odd windows go to the left
-        startX = Math.max(10, wizardLeft - windowWidth - 20);
-        maxCols = 1; // Usually only room for 1 column on left
-      } else {
-        // Not enough side space, use right side
-        startX = wizardRight + 20;
-        maxCols = 1;
+    if (isMobile) {
+      // Mobile: CSS handles full-width bottom-sheet positioning via .subagent-window rules.
+      // Only one window visible at a time on mobile — new window replaces the old.
+      // Minimize all existing windows first so only the latest is visible.
+      for (const [existingId, existingData] of this.subagentWindows) {
+        if (!existingData.minimized) {
+          this.minimizeSubagentWindow(existingId);
+        }
       }
-      startY = 80; // Start higher when wizard is open
+      finalX = 0;
+      finalY = viewportHeight - windowHeight - 40; // toolbar height
     } else {
-      // Normal positioning
-      startX = 50;
-      startY = 120;
-      maxCols = Math.floor((viewportWidth - startX - 50) / (windowWidth + gap)) || 1;
+      // Check if Ralph wizard modal is open - if so, position windows on the sides
+      const wizardModal = document.getElementById('ralphWizardModal');
+      const wizardOpen = wizardModal?.classList.contains('active');
+
+      let startX, startY, maxCols;
+
+      if (wizardOpen) {
+        // Wizard is ~720px wide, centered. Position windows on left/right sides
+        const wizardWidth = 720;
+        const centerX = viewportWidth / 2;
+        const wizardLeft = centerX - wizardWidth / 2;
+        const wizardRight = centerX + wizardWidth / 2;
+
+        // Alternate between left and right sides of the wizard
+        const leftSideSpace = wizardLeft - 20;
+        const rightSideSpace = viewportWidth - wizardRight - 20;
+
+        if (windowCount % 2 === 0 && rightSideSpace >= windowWidth) {
+          // Even windows go to the right
+          startX = wizardRight + 20;
+          maxCols = Math.floor(rightSideSpace / (windowWidth + gap)) || 1;
+        } else if (leftSideSpace >= windowWidth) {
+          // Odd windows go to the left
+          startX = Math.max(10, wizardLeft - windowWidth - 20);
+          maxCols = 1; // Usually only room for 1 column on left
+        } else {
+          // Not enough side space, use right side
+          startX = wizardRight + 20;
+          maxCols = 1;
+        }
+        startY = 80; // Start higher when wizard is open
+      } else {
+        // Normal positioning
+        startX = 50;
+        startY = 120;
+        maxCols = Math.floor((viewportWidth - startX - 50) / (windowWidth + gap)) || 1;
+      }
+
+      const maxRows = Math.floor((viewportHeight - startY - 50) / (windowHeight + gap)) || 1;
+      const col = windowCount % maxCols;
+      const row = Math.floor(windowCount / maxCols) % maxRows; // Wrap rows to stay in viewport
+      finalX = startX + col * (windowWidth + gap);
+      finalY = startY + row * (windowHeight + gap);
+
+      // Ensure window stays within viewport bounds
+      finalX = Math.max(10, Math.min(finalX, viewportWidth - windowWidth - 10));
+      finalY = Math.max(10, Math.min(finalY, viewportHeight - windowHeight - 10));
     }
-
-    const maxRows = Math.floor((viewportHeight - startY - 50) / (windowHeight + gap)) || 1;
-    const col = windowCount % maxCols;
-    const row = Math.floor(windowCount / maxCols) % maxRows; // Wrap rows to stay in viewport
-    let finalX = startX + col * (windowWidth + gap);
-    let finalY = startY + row * (windowHeight + gap);
-
-    // Ensure window stays within viewport bounds
-    finalX = Math.max(10, Math.min(finalX, viewportWidth - windowWidth - 10));
-    finalY = Math.max(10, Math.min(finalY, viewportHeight - windowHeight - 10));
 
     // Get parent session from PERSISTENT map (THE source of truth for tab connections)
     const parentSessionId = this.subagentParentMap.get(agentId) || agent.parentSessionId;
@@ -12378,7 +12395,8 @@ class ClaudemanApp {
 
     const teammateInfo = this.getTeammateInfo(agent);
     const windowTitle = teammateInfo ? teammateInfo.name : (agent.description || agentId.substring(0, 7));
-    const truncatedTitle = windowTitle.length > 50 ? windowTitle.substring(0, 50) + '...' : windowTitle;
+    const maxTitleLen = isMobile ? 30 : 50;
+    const truncatedTitle = windowTitle.length > maxTitleLen ? windowTitle.substring(0, maxTitleLen) + '...' : windowTitle;
     const modelBadge = agent.modelShort
       ? `<span class="subagent-model-badge ${agent.modelShort}">${agent.modelShort}</span>`
       : '';
@@ -12401,23 +12419,25 @@ class ClaudemanApp {
     `;
 
     // If we have a parent tab, start window at tab position for spawn animation
-    if (parentTab) {
+    // On mobile, skip spawn animation — CSS handles bottom-sheet positioning
+    if (parentTab && !isMobile) {
       const tabRect = parentTab.getBoundingClientRect();
       win.style.left = `${tabRect.left}px`;
       win.style.top = `${tabRect.bottom}px`;
       win.style.transform = 'scale(0.3)';
       win.style.opacity = '0';
       win.classList.add('spawning');
-    } else {
-      // No parent tab, just position normally
+    } else if (!isMobile) {
+      // No parent tab, just position normally (desktop/tablet)
       win.style.left = `${finalX}px`;
       win.style.top = `${finalY}px`;
     }
+    // On mobile: CSS positions via fixed bottom-sheet rules, no inline positioning needed
 
     document.body.appendChild(win);
 
-    // Make draggable (returns listener refs for cleanup)
-    const dragListeners = this.makeWindowDraggable(win, win.querySelector('.subagent-window-header'));
+    // Make draggable (returns listener refs for cleanup) — skip on mobile (bottom-sheet)
+    const dragListeners = isMobile ? null : this.makeWindowDraggable(win, win.querySelector('.subagent-window-header'));
 
     // Check if this window should be visible based on settings
     // Use the PERSISTENT parent map for accurate tab-based visibility
@@ -12467,8 +12487,8 @@ class ClaudemanApp {
     // Store observer for cleanup
     this.subagentWindows.get(agentId).resizeObserver = resizeObserver;
 
-    // Animate to final position if spawning from tab
-    if (parentTab) {
+    // Animate to final position if spawning from tab (desktop only)
+    if (parentTab && !isMobile) {
       requestAnimationFrame(() => {
         win.style.transition = 'all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)';
         win.style.left = `${finalX}px`;
@@ -12484,7 +12504,7 @@ class ClaudemanApp {
         }, 400);
       });
     } else {
-      // No animation, just update connection lines
+      // No animation (mobile uses CSS positioning), just update connection lines
       this.updateConnectionLines();
     }
 

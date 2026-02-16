@@ -3126,6 +3126,47 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       }
     });
 
+    // ============ Model Configuration Endpoints ============
+
+    this.app.get('/api/execution/model-config', async () => {
+      try {
+        const content = await fs.readFile(settingsPath, 'utf-8');
+        const settings = JSON.parse(content);
+        return { success: true, data: settings.modelConfig || {} };
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          console.error('Failed to read model config:', err);
+        }
+        return { success: true, data: {} };
+      }
+    });
+
+    this.app.put('/api/execution/model-config', async (req) => {
+      const modelConfig = req.body as Record<string, unknown>;
+
+      try {
+        let settings: Record<string, unknown> = {};
+        try {
+          const content = await fs.readFile(settingsPath, 'utf-8');
+          settings = JSON.parse(content);
+        } catch {
+          // File doesn't exist yet, start fresh
+        }
+
+        settings.modelConfig = modelConfig;
+
+        const dir = dirname(settingsPath);
+        if (!existsSync(dir)) {
+          mkdirSync(dir, { recursive: true });
+        }
+        writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+
+        return { success: true };
+      } catch (err) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+      }
+    });
+
     // ============ CPU Priority Endpoints ============
 
     // Get Nice priority config for a session
