@@ -17,6 +17,8 @@
        'defer' preserves execution order (xterm loads before fit addon). -->
   <script defer src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <!-- Synchronous mobile detection — runs before first paint to prevent panel flash -->
+  <script>if(window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024))document.documentElement.classList.add('mobile-init');</script>
 </head>
 <body>
   <!-- Skip link for keyboard users -->

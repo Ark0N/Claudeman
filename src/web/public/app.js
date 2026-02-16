@@ -1468,6 +1468,9 @@ class ClaudemanApp {
     this.loadFontSize();
     this.applyHeaderVisibilitySettings();
     this.applyMonitorVisibility();
+    // Remove mobile-init class now that JS has applied visibility settings.
+    // The inline <script> in <head> added this to prevent flash-of-content on mobile.
+    document.documentElement.classList.remove('mobile-init');
     this.connectSSE();
     this.loadState();
     this.loadQuickStartCases();

@@ -5,6 +5,22 @@
    ============================================================================ */
 
 /* ============================================================================
+   Mobile Init Flash Prevention
+   Hides elements that are off by default on mobile BEFORE JS runs.
+   The inline <script> in <head> adds .mobile-init to <html> synchronously.
+   app.init() removes .mobile-init after applying visibility settings.
+   ============================================================================ */
+html.mobile-init .header-font-controls,
+html.mobile-init .header-system-stats,
+html.mobile-init .header-tokens,
+html.mobile-init .monitor-panel,
+html.mobile-init .subagents-panel,
+html.mobile-init .project-insights-panel,
+html.mobile-init .file-browser-panel {
+  display: none !important;
+}
+
+/* ============================================================================
    Tablet Breakpoint (430px - 768px)
    ============================================================================ */
 @media (max-width: 768px) and (min-width: 430px) {
