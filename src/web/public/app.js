@@ -9427,6 +9427,7 @@ class ClaudemanApp {
 
     // Apply header visibility immediately
     this.applyHeaderVisibilitySettings();
+    this._updateTokensImmediate();  // Re-render token display (picks up showCost change)
     this.applyMonitorVisibility();
     this.renderProjectInsightsPanel();  // Re-render to apply visibility setting
     this.updateSubagentWindowVisibility();  // Apply subagent window visibility setting
@@ -9631,6 +9632,11 @@ class ClaudemanApp {
     const monitorPanel = document.getElementById('monitorPanel');
     if (monitorPanel) {
       monitorPanel.style.display = showMonitor ? '' : 'none';
+      if (showMonitor) {
+        monitorPanel.classList.add('open');
+      } else {
+        monitorPanel.classList.remove('open');
+      }
     }
 
     const subagentsPanel = document.getElementById('subagentsPanel');

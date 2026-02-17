@@ -281,7 +281,7 @@ export class Session extends EventEmitter {
   private _isCompacting: boolean = false; // Prevent recursive compacting
 
   // Image watcher setting (per-session toggle)
-  private _imageWatcherEnabled: boolean = true;
+  private _imageWatcherEnabled: boolean = false;
 
   // Flicker filter setting (per-session toggle, applied on frontend)
   private _flickerFilterEnabled: boolean = false;

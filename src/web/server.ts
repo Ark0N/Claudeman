@@ -3092,7 +3092,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         if (!existsSync(dir)) {
           mkdirSync(dir, { recursive: true });
         }
-        writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+        let existing: Record<string, unknown> = {};
+        try { existing = JSON.parse(readFileSync(settingsPath, 'utf-8')); } catch { /* ignore */ }
+        const merged = { ...existing, ...settings };
+        writeFileSync(settingsPath, JSON.stringify(merged, null, 2));
 
         // Handle subagent tracking toggle dynamically
         const subagentEnabled = settings.subagentTrackingEnabled ?? true;
@@ -3105,7 +3108,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         }
 
         // Handle image watcher toggle dynamically
-        const imageWatcherEnabled = settings.imageWatcherEnabled ?? true;
+        const imageWatcherEnabled = settings.imageWatcherEnabled ?? false;
         if (imageWatcherEnabled && !imageWatcher.isRunning()) {
           imageWatcher.start();
           // Re-watch all active sessions that have image watcher enabled
@@ -4956,21 +4959,21 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 
   /**
-   * Check if image watcher is enabled in settings (default: true)
+   * Check if image watcher is enabled in settings (default: false)
    */
   private async isImageWatcherEnabled(): Promise<boolean> {
     const settingsPath = join(homedir(), '.claudeman', 'settings.json');
     try {
       const content = await fs.readFile(settingsPath, 'utf-8');
       const settings = JSON.parse(content);
-      // Default to true if not explicitly set
-      return settings.imageWatcherEnabled ?? true;
+      // Default to false if not explicitly set (matches UI default)
+      return settings.imageWatcherEnabled ?? false;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
         console.error('Failed to read image watcher setting:', err);
       }
     }
-    return true; // Default enabled
+    return false; // Default disabled (matches UI default)
   }
 
   private async restoreScreenSessions(): Promise<void> {
