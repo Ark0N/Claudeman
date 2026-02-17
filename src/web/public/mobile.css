@@ -1155,6 +1155,7 @@ html.mobile-init .file-browser-panel {
 
   .form-row input[type="text"],
   .form-row input[type="number"],
+  .form-row textarea,
   .form-row .form-select,
   .form-row select {
     font-size: 0.75rem;

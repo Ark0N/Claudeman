@@ -511,7 +511,7 @@
             <div class="form-section-header">Respawn Cycle</div>
             <div class="form-row">
               <label>1. Update Prompt</label>
-              <input type="text" id="modalRespawnPrompt" value="update all the docs and CLAUDE.md" placeholder="Prompt to send when idle" onchange="app.autoSaveRespawnConfig()">
+              <textarea id="modalRespawnPrompt" rows="3" placeholder="Prompt to send when idle" onchange="app.autoSaveRespawnConfig()" style="resize: vertical; min-height: 60px;">update all the docs and CLAUDE.md</textarea>
             </div>
 
             <div class="respawn-options-row" style="margin: 8px 0;">
@@ -527,7 +527,7 @@
 
             <div class="form-row">
               <label>4. Kickstart Prompt</label>
-              <input type="text" id="modalRespawnKickstart" value="" placeholder="Optional: prompt if /init doesn't trigger work" onchange="app.autoSaveRespawnConfig()">
+              <textarea id="modalRespawnKickstart" rows="2" placeholder="Optional: prompt if /init doesn't trigger work" onchange="app.autoSaveRespawnConfig()" style="resize: vertical; min-height: 40px;"></textarea>
               <span class="form-hint">Sent only when /init completes but Claude stays idle</span>
             </div>
 

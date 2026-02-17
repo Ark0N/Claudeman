@@ -46,48 +46,67 @@ const DEC_SYNC_STRIP_RE = /\x1b\[\?2026[hl]/g;
 // Built-in respawn configuration presets
 const BUILTIN_RESPAWN_PRESETS = [
   {
-    id: 'quick-iteration',
-    name: 'Quick Iteration',
-    description: 'Fast cycles for active development',
+    id: 'solo-work',
+    name: 'Solo',
+    description: 'Claude working alone — fast respawn cycles',
     config: {
       idleTimeoutMs: 3000,
       updatePrompt: 'continue',
       interStepDelayMs: 2000,
       sendClear: false,
       sendInit: false,
+      autoAcceptPrompts: true,
     },
     durationMinutes: 60,
     builtIn: true,
     createdAt: 0,
   },
   {
-    id: 'autonomous-long',
-    name: 'Autonomous (Long)',
-    description: 'Full refresh cycles for overnight work',
+    id: 'subagent-workflow',
+    name: 'Subagents',
+    description: 'Lead session with Task tool subagents — longer idle tolerance',
     config: {
-      idleTimeoutMs: 5000,
-      updatePrompt: 'continue working on the task',
+      idleTimeoutMs: 45000,
+      updatePrompt: 'check on your running subagents and continue coordinating their work. If all subagents have finished, summarize their results and proceed with the next step.',
       interStepDelayMs: 3000,
-      sendClear: true,
-      sendInit: true,
-      kickstartPrompt: 'pick up where you left off',
+      sendClear: false,
+      sendInit: false,
+      autoAcceptPrompts: true,
+    },
+    durationMinutes: 240,
+    builtIn: true,
+    createdAt: 0,
+  },
+  {
+    id: 'team-lead',
+    name: 'Team',
+    description: 'Leading an agent team via TeamCreate — tolerates long silences',
+    config: {
+      idleTimeoutMs: 90000,
+      updatePrompt: 'check on your teammates by reviewing the task list and any messages in your inbox. Assign new tasks if teammates are idle, or continue coordinating the team effort.',
+      interStepDelayMs: 5000,
+      sendClear: false,
+      sendInit: false,
+      autoAcceptPrompts: true,
     },
     durationMinutes: 480,
     builtIn: true,
     createdAt: 0,
   },
   {
-    id: 'careful-review',
-    name: 'Careful Review',
-    description: 'Longer pauses for human review between cycles',
+    id: 'overnight-autonomous',
+    name: 'Overnight',
+    description: 'Unattended overnight runs with full context reset between cycles',
     config: {
-      idleTimeoutMs: 30000,
-      updatePrompt: 'continue if there is more work to do',
-      interStepDelayMs: 5000,
-      sendClear: false,
-      sendInit: false,
+      idleTimeoutMs: 10000,
+      updatePrompt: 'summarize what you accomplished so far and write key progress notes to CLAUDE.md, then continue working on the task.',
+      interStepDelayMs: 3000,
+      sendClear: true,
+      sendInit: true,
+      kickstartPrompt: 'read CLAUDE.md for context on what was accomplished in previous cycles, then pick up where you left off.',
+      autoAcceptPrompts: true,
     },
-    durationMinutes: 120,
+    durationMinutes: 480,
     builtIn: true,
     createdAt: 0,
   },
@@ -8552,6 +8571,7 @@ class ClaudemanApp {
     document.getElementById('modalRespawnSendClear').checked = preset.config.sendClear ?? false;
     document.getElementById('modalRespawnSendInit').checked = preset.config.sendInit ?? false;
     document.getElementById('modalRespawnKickstart').value = preset.config.kickstartPrompt || '';
+    document.getElementById('modalRespawnAutoAccept').checked = preset.config.autoAcceptPrompts ?? true;
 
     // Set duration if available
     if (preset.durationMinutes) {

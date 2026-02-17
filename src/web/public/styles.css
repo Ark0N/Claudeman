@@ -2319,6 +2319,7 @@ body {
 
 .form-row input[type="text"],
 .form-row input[type="number"],
+.form-row textarea,
 .form-select {
   width: 100%;
   padding: 0.5rem 0.75rem;
@@ -2327,9 +2328,11 @@ body {
   border-radius: 4px;
   color: var(--text);
   font-size: 0.8rem;
+  font-family: inherit;
 }
 
 .form-row input:focus,
+.form-row textarea:focus,
 .form-select:focus {
   outline: none;
   border-color: var(--accent);
@@ -2433,12 +2436,34 @@ body {
 .preset-selector select {
   flex: 1;
   min-width: 0;
+  padding: 0.4rem 0.5rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.75rem;
+}
+
+.preset-selector select:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .preset-selector .btn-sm {
   white-space: nowrap;
   padding: 4px 8px;
   font-size: 0.7rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.preset-selector .btn-sm:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-light);
 }
 
 /* Switch toggle for form rows */
