@@ -283,6 +283,9 @@
             <input type="number" id="tabCount" class="tab-count-input" value="1" min="1" max="20" readonly>
             <button class="tab-count-btn" onclick="app.incrementTabCount()">+</button>
           </div>
+          <button class="btn-toolbar btn-stop" onclick="app.stopClaude()" title="Stop (Ctrl+C)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+          </button>
           <button class="btn-toolbar btn-shell" onclick="app.runShell()" title="Run Shell">
             Run Shell
           </button>

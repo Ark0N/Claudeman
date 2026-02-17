@@ -642,7 +642,7 @@ const KeyboardAccessoryBar = {
     this._confirmAction = action;
     if (btn) {
       btn.classList.add('confirming');
-      btn.dataset.origText = btn.textContent;
+      btn.dataset.origHtml = btn.innerHTML;
       btn.textContent = 'Tap again';
     }
     this._confirmTimer = setTimeout(() => this.clearConfirm(), 2000);
@@ -656,9 +656,9 @@ const KeyboardAccessoryBar = {
     }
     if (this._confirmAction && this.element) {
       const btn = this.element.querySelector(`[data-action="${this._confirmAction}"]`);
-      if (btn && btn.dataset.origText) {
-        btn.textContent = btn.dataset.origText;
-        delete btn.dataset.origText;
+      if (btn && btn.dataset.origHtml) {
+        btn.innerHTML = btn.dataset.origHtml;
+        delete btn.dataset.origHtml;
       }
       if (btn) btn.classList.remove('confirming');
     }
@@ -7435,6 +7435,41 @@ class ClaudemanApp {
       this.terminal.focus();
     } catch (err) {
       this.terminal.writeln(`\x1b[1;31m Error: ${err.message}\x1b[0m`);
+    }
+  }
+
+  /** Send Ctrl+C to the active session to stop the current operation.
+   *  Requires double-tap: first tap turns button amber, second tap within 2s sends Ctrl+C. */
+  stopClaude() {
+    if (!this.activeSessionId) return;
+    const btn = document.querySelector('.btn-toolbar.btn-stop');
+    if (!btn) return;
+
+    if (this._stopConfirmTimer) {
+      // Second tap — send Ctrl+C
+      clearTimeout(this._stopConfirmTimer);
+      this._stopConfirmTimer = null;
+      btn.innerHTML = btn.dataset.origHtml;
+      delete btn.dataset.origHtml;
+      btn.classList.remove('confirming');
+      fetch(`/api/sessions/${this.activeSessionId}/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input: '\x03' })
+      });
+    } else {
+      // First tap — enter confirm state
+      btn.dataset.origHtml = btn.innerHTML;
+      btn.textContent = 'Tap again';
+      btn.classList.add('confirming');
+      this._stopConfirmTimer = setTimeout(() => {
+        this._stopConfirmTimer = null;
+        if (btn.dataset.origHtml) {
+          btn.innerHTML = btn.dataset.origHtml;
+          delete btn.dataset.origHtml;
+        }
+        btn.classList.remove('confirming');
+      }, 2000);
     }
   }
 

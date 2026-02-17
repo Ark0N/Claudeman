@@ -1932,6 +1932,36 @@ body {
   color: #a8d8a8;
 }
 
+/* Stop button - hidden on desktop, shown on mobile */
+.btn-toolbar.btn-stop {
+  display: none;
+  background: linear-gradient(135deg, #5a1a1a 0%, #7f1d1d 100%);
+  border-color: #dc2626;
+  color: #fca5a5;
+  font-weight: 500;
+}
+
+.btn-toolbar.btn-stop:hover {
+  background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%);
+  border-color: #ef4444;
+  box-shadow: 0 0 8px rgba(220, 38, 38, 0.4);
+  color: #fff;
+}
+
+.btn-toolbar.btn-stop svg {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+}
+
+.btn-toolbar.btn-stop.confirming {
+  background: linear-gradient(135deg, #6b4f00 0%, #856200 100%);
+  border-color: #b8860b;
+  color: #ffd54f;
+  font-size: 0.65rem;
+  white-space: nowrap;
+}
+
 /* Mobile app settings gear - hidden on desktop, shown on mobile */
 .btn-settings-mobile {
   display: none;

@@ -324,7 +324,7 @@ html.mobile-init .file-browser-panel {
     font-size: 0.85rem;
     cursor: pointer;
     flex-shrink: 0;
-    order: 4; /* Far right */
+    order: 5; /* Far right */
     position: relative;
   }
 
@@ -502,20 +502,20 @@ html.mobile-init .file-browser-panel {
     color: #fff;
   }
 
-  /* Primary action button - Run Claude */
+  /* Primary action button - Run Claude (matches arrow button blue) */
   .btn-toolbar.btn-claude {
     flex: 0 0 auto;
     padding: 0 0.75rem !important;
-    background: var(--bg-input);
-    border: 1px solid var(--border-light);
-    color: var(--text);
+    background: #1e3a5f;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    color: #93c5fd;
     font-weight: 500;
   }
 
   .btn-toolbar.btn-claude:hover,
   .btn-toolbar.btn-claude:active {
-    background: var(--bg-hover);
-    border-color: var(--accent);
+    background: #2563eb;
+    border-color: rgba(59, 130, 246, 0.5);
   }
 
   .btn-toolbar.btn-claude svg {
@@ -524,13 +524,28 @@ html.mobile-init .file-browser-panel {
     margin-right: 4px;
   }
 
+  /* Stop button - visible on mobile, icon-only */
+  .btn-toolbar.btn-stop {
+    display: flex !important;
+    flex: 0 0 auto;
+    padding: 0 8px !important;
+    min-width: unset;
+    order: 3; /* Left of Run Shell */
+  }
+
+  .btn-toolbar.btn-stop svg {
+    width: 10px;
+    height: 10px;
+    margin-right: 0;
+  }
+
   /* Secondary action - Run Shell - right side */
   .btn-toolbar.btn-shell {
     flex: 0 0 auto;
     background: transparent;
     border: 1px solid rgba(255, 255, 255, 0.2);
     color: #9ca3af;
-    order: 3; /* Right position */
+    order: 4; /* Right position */
   }
 
   .btn-toolbar.btn-shell:hover,
@@ -707,7 +722,6 @@ html.mobile-init .file-browser-panel {
   }
 
   .accessory-btn-dismiss {
-    margin-left: auto;
     padding: 8px 14px;
     background: #2a2a2a;
     border: 1.5px solid rgba(255, 255, 255, 0.25);
