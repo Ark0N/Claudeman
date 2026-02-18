@@ -10,8 +10,8 @@
   <!-- DNS preconnect for CDN — saves ~100ms on first load -->
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
-  <link rel="stylesheet" href="styles.css">
-  <link rel="stylesheet" href="mobile.css">
+  <link rel="stylesheet" href="styles.css?v=0.1533">
+  <link rel="stylesheet" href="mobile.css?v=0.1533">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
   <!-- Defer CDN scripts — they no longer block initial HTML parsing/paint.
        'defer' preserves execution order (xterm loads before fit addon). -->
@@ -1474,6 +1474,6 @@
     <!-- Lines drawn dynamically -->
   </svg>
 
-  <script defer src="app.js"></script>
+  <script defer src="app.js?v=0.1533"></script>
 </body>
 </html>
