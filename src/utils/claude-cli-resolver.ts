@@ -10,7 +10,7 @@
 
 import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
 /** Timeout for exec commands (5 seconds) */
@@ -77,8 +77,8 @@ export function getAugmentedPath(): string {
   const currentPath = process.env.PATH || '';
   const claudeDir = findClaudeDir();
 
-  if (claudeDir && !currentPath.split(':').includes(claudeDir)) {
-    _augmentedPath = `${claudeDir}:${currentPath}`;
+  if (claudeDir && !currentPath.split(delimiter).includes(claudeDir)) {
+    _augmentedPath = `${claudeDir}${delimiter}${currentPath}`;
     return _augmentedPath;
   }
 

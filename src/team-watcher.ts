@@ -35,6 +35,8 @@ export class TeamWatcher extends EventEmitter {
   private configMtimes: Map<string, number> = new Map();
   private taskMtimes: Map<string, string> = new Map();
   private inboxMtimes: Map<string, number> = new Map();
+  // Reverse index: sessionId → teamName for O(1) lookup
+  private sessionToTeam: Map<string, string> = new Map();
 
   constructor(teamsDir?: string, tasksDir?: string) {
     super();
@@ -60,6 +62,7 @@ export class TeamWatcher extends EventEmitter {
     this.configMtimes.clear();
     this.taskMtimes.clear();
     this.inboxMtimes.clear();
+    this.sessionToTeam.clear();
   }
 
   /** Get all discovered teams */
@@ -69,10 +72,12 @@ export class TeamWatcher extends EventEmitter {
 
   /** Get team associated with a Claudeman session (matched by leadSessionId) */
   getTeamForSession(sessionId: string): TeamConfig | undefined {
-    for (const team of this.teams.values()) {
-      if (team.leadSessionId === sessionId) {
-        return team;
-      }
+    const teamName = this.sessionToTeam.get(sessionId);
+    if (teamName) {
+      const team = this.teams.get(teamName);
+      if (team) return team;
+      // Stale reverse index entry — clean up
+      this.sessionToTeam.delete(sessionId);
     }
     return undefined;
   }
@@ -191,6 +196,11 @@ export class TeamWatcher extends EventEmitter {
 
       const existing = this.teams.get(entry);
       this.teams.set(entry, config);
+      // Maintain reverse index
+      if (existing && existing.leadSessionId !== config.leadSessionId) {
+        this.sessionToTeam.delete(existing.leadSessionId);
+      }
+      this.sessionToTeam.set(config.leadSessionId, entry);
 
       if (existing) {
         this.emit('teamUpdated', config);
@@ -205,6 +215,10 @@ export class TeamWatcher extends EventEmitter {
         const removed = this.teams.get(name);
         this.teams.delete(name);
         this.configMtimes.delete(name);
+        // Clean up reverse index
+        if (removed) {
+          this.sessionToTeam.delete(removed.leadSessionId);
+        }
         // Prune stale mtime entries for removed teams
         this.taskMtimes.delete(name);
         for (const key of Array.from(this.inboxMtimes.keys())) {
@@ -229,31 +243,24 @@ export class TeamWatcher extends EventEmitter {
 
     for (const teamName of teamDirs) {
       const teamTaskDir = join(this.tasksDir, teamName);
+
+      // Use directory mtime as a cheap change indicator (single stat instead of N)
+      const mtimeKey = teamName;
+      try {
+        const dirStat = await stat(teamTaskDir);
+        const dirMtime = `${dirStat.mtimeMs}`;
+        if (this.taskMtimes.get(mtimeKey) === dirMtime) continue;
+        this.taskMtimes.set(mtimeKey, dirMtime);
+      } catch {
+        continue;
+      }
+
       let taskFiles: string[];
       try {
         taskFiles = (await readdir(teamTaskDir)).filter(f => f.endsWith('.json') && f !== '.lock');
       } catch {
         continue;
       }
-
-      // Check combined mtime for all task files (use count:max:sum to avoid collisions)
-      const mtimeKey = teamName;
-      let mtimeSum = 0;
-      let mtimeMax = 0;
-      let mtimeCount = 0;
-      for (const f of taskFiles) {
-        try {
-          const mt = (await stat(join(teamTaskDir, f))).mtimeMs;
-          mtimeSum += mt;
-          if (mt > mtimeMax) mtimeMax = mt;
-          mtimeCount++;
-        } catch {
-          // File may have been deleted between readdir and stat
-        }
-      }
-      const combinedMtime = `${mtimeCount}:${mtimeMax}:${mtimeSum}`;
-      if (this.taskMtimes.get(mtimeKey) === combinedMtime) continue;
-      this.taskMtimes.set(mtimeKey, combinedMtime);
 
       // Skip if locked
       if (await this.isLocked(join(teamTaskDir, '.lock'))) continue;
@@ -306,11 +313,11 @@ export class TeamWatcher extends EventEmitter {
         const previous = this.inboxCache.get(cacheKey);
         this.inboxCache.set(cacheKey, messages);
 
-        // Emit new messages (ones not in previous cache)
-        const prevCount = previous?.length || 0;
-        if (messages.length > prevCount) {
-          for (let i = prevCount; i < messages.length; i++) {
-            this.emit('inboxMessage', { teamName, member: memberName, message: messages[i] });
+        // Emit new messages — compare by timestamp to handle deletions/reordering
+        const prevTimestamps = new Set(previous?.map(m => m.timestamp) || []);
+        for (const msg of messages) {
+          if (!prevTimestamps.has(msg.timestamp)) {
+            this.emit('inboxMessage', { teamName, member: memberName, message: msg });
           }
         }
       }

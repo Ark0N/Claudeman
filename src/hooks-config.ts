@@ -8,7 +8,8 @@
  * config is static per case directory.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { HookEventType } from './types.js';
@@ -70,21 +71,19 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
  * Updates env vars in .claude/settings.local.json for the given case path.
  * Merges with existing env field; removes vars set to empty string.
  */
-export function updateCaseEnvVars(casePath: string, envVars: Record<string, string>): void {
+export async function updateCaseEnvVars(casePath: string, envVars: Record<string, string>): Promise<void> {
   const claudeDir = join(casePath, '.claude');
   if (!existsSync(claudeDir)) {
-    mkdirSync(claudeDir, { recursive: true });
+    await mkdir(claudeDir, { recursive: true });
   }
 
   const settingsPath = join(claudeDir, 'settings.local.json');
   let existing: Record<string, unknown> = {};
 
-  if (existsSync(settingsPath)) {
-    try {
-      existing = JSON.parse(readFileSync(settingsPath, 'utf-8'));
-    } catch {
-      existing = {};
-    }
+  try {
+    existing = JSON.parse(await readFile(settingsPath, 'utf-8'));
+  } catch {
+    existing = {};
   }
 
   const currentEnv = (existing.env as Record<string, string>) || {};
@@ -97,33 +96,31 @@ export function updateCaseEnvVars(casePath: string, envVars: Record<string, stri
   }
   existing.env = currentEnv;
 
-  writeFileSync(settingsPath, JSON.stringify(existing, null, 2) + '\n');
+  await writeFile(settingsPath, JSON.stringify(existing, null, 2) + '\n');
 }
 
 /**
  * Writes hooks config to .claude/settings.local.json in the given case path.
  * Merges with existing file content, only touching the `hooks` key.
  */
-export function writeHooksConfig(casePath: string): void {
+export async function writeHooksConfig(casePath: string): Promise<void> {
   const claudeDir = join(casePath, '.claude');
   if (!existsSync(claudeDir)) {
-    mkdirSync(claudeDir, { recursive: true });
+    await mkdir(claudeDir, { recursive: true });
   }
 
   const settingsPath = join(claudeDir, 'settings.local.json');
   let existing: Record<string, unknown> = {};
 
-  if (existsSync(settingsPath)) {
-    try {
-      existing = JSON.parse(readFileSync(settingsPath, 'utf-8'));
-    } catch {
-      // If file is malformed, start fresh
-      existing = {};
-    }
+  try {
+    existing = JSON.parse(await readFile(settingsPath, 'utf-8'));
+  } catch {
+    // If file is malformed or doesn't exist, start fresh
+    existing = {};
   }
 
   const hooksConfig = generateHooksConfig();
   const merged = { ...existing, ...hooksConfig };
 
-  writeFileSync(settingsPath, JSON.stringify(merged, null, 2) + '\n');
+  await writeFile(settingsPath, JSON.stringify(merged, null, 2) + '\n');
 }

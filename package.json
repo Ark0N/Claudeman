@@ -1,9 +1,10 @@
 {
   "name": "claudeman",
-  "version": "0.1527",
+  "version": "0.1528",
   "description": "The missing control plane for Claude Code - run 20 autonomous agents with real-time monitoring and session persistence",
   "type": "module",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "bin": {
     "claudeman": "./dist/index.js"
   },
@@ -33,7 +34,7 @@
     "autonomous-agent",
     "ralph-loop"
   ],
-  "author": "",
+  "author": "arkon",
   "license": "MIT",
   "dependencies": {
     "@fastify/compress": "^8.3.1",

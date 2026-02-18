@@ -190,10 +190,19 @@ const MobileDetection = {
     this.updateBodyClass();
     // Debounced resize handler
     let resizeTimeout;
-    window.addEventListener('resize', () => {
+    this._resizeHandler = () => {
       clearTimeout(resizeTimeout);
       resizeTimeout = setTimeout(() => this.updateBodyClass(), 100);
-    });
+    };
+    window.addEventListener('resize', this._resizeHandler);
+  },
+
+  /** Remove event listeners */
+  cleanup() {
+    if (this._resizeHandler) {
+      window.removeEventListener('resize', this._resizeHandler);
+      this._resizeHandler = null;
+    }
   }
 };
 
@@ -235,7 +244,7 @@ const KeyboardHandler = {
     this.lastViewportHeight = this.initialViewportHeight;
 
     // Simple focus handler - scroll input into view after keyboard appears
-    document.addEventListener('focusin', (e) => {
+    this._focusinHandler = (e) => {
       const target = e.target;
       if (!this.isInputElement(target)) return;
 
@@ -243,17 +252,36 @@ const KeyboardHandler = {
       setTimeout(() => {
         this.scrollInputIntoView(target);
       }, 400);
-    });
+    };
+    document.addEventListener('focusin', this._focusinHandler);
 
     // Use visualViewport to detect keyboard and reposition toolbar
     if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', () => {
+      this._viewportResizeHandler = () => {
         this.handleViewportResize();
-      });
-      // Also handle scroll (iOS scrolls viewport when keyboard appears)
-      window.visualViewport.addEventListener('scroll', () => {
+      };
+      this._viewportScrollHandler = () => {
         this.updateLayoutForKeyboard();
-      });
+      };
+      window.visualViewport.addEventListener('resize', this._viewportResizeHandler);
+      // Also handle scroll (iOS scrolls viewport when keyboard appears)
+      window.visualViewport.addEventListener('scroll', this._viewportScrollHandler);
+    }
+  },
+
+  /** Remove event listeners */
+  cleanup() {
+    if (this._focusinHandler) {
+      document.removeEventListener('focusin', this._focusinHandler);
+      this._focusinHandler = null;
+    }
+    if (this._viewportResizeHandler && window.visualViewport) {
+      window.visualViewport.removeEventListener('resize', this._viewportResizeHandler);
+      this._viewportResizeHandler = null;
+    }
+    if (this._viewportScrollHandler && window.visualViewport) {
+      window.visualViewport.removeEventListener('scroll', this._viewportScrollHandler);
+      this._viewportScrollHandler = null;
     }
   },
 
@@ -375,6 +403,9 @@ const KeyboardHandler = {
         this._sendTerminalResize();
       }
     }, 150);
+
+    // Reposition subagent windows to stack from bottom (above keyboard)
+    if (typeof app !== 'undefined') app.relayoutMobileSubagentWindows();
   },
 
   /** Called when keyboard hides */
@@ -395,6 +426,9 @@ const KeyboardHandler = {
         this._sendTerminalResize();
       }
     }, 100);
+
+    // Reposition subagent windows to stack from top (below header)
+    if (typeof app !== 'undefined') app.relayoutMobileSubagentWindows();
   },
 
   /** Send current terminal dimensions to the server (one-shot, for keyboard open/close) */
@@ -410,7 +444,7 @@ const KeyboardHandler = {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ cols, rows })
-        });
+        }).catch(() => {});
       }
     } catch {}
   },
@@ -684,7 +718,7 @@ const KeyboardAccessoryBar = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ input: escapeSequence })
-    });
+    }).catch(() => {});
   },
 
   /** Read clipboard and send contents as input */
@@ -1089,7 +1123,7 @@ class NotificationManager {
       const readClass = n.read ? '' : ' unread';
       const countLabel = n.count > 1 ? `<span class="notif-item-count">&times;${n.count}</span>` : '';
       const sessionChip = n.sessionName ? `<span class="notif-item-session">${this.escapeHtml(n.sessionName)}</span>` : '';
-      return `<div class="notif-item ${urgencyClass}${readClass}" data-notif-id="${n.id}" data-session-id="${n.sessionId || ''}" onclick="app.notificationManager.clickNotification('${n.id}')">
+      return `<div class="notif-item ${urgencyClass}${readClass}" data-notif-id="${n.id}" data-session-id="${n.sessionId || ''}" onclick="app.notificationManager.clickNotification('${this.escapeHtml(n.id)}')">
         <div class="notif-item-header">
           <span class="notif-item-title">${this.escapeHtml(n.title)}${countLabel}</span>
           <span class="notif-item-time">${this.relativeTime(n.timestamp)}</span>
@@ -1719,7 +1753,7 @@ class ClaudemanApp {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ cols, rows })
-              });
+              }).catch(() => {});
             }
           }
         }
@@ -3014,7 +3048,7 @@ class ClaudemanApp {
       const data = JSON.parse(e.data);
       const activity = this.subagentActivity.get(data.agentId) || [];
       activity.push({ type: 'tool', ...data });
-      if (activity.length > 100) activity.shift(); // Keep last 100 entries
+      if (activity.length > 50) activity.shift(); // Keep last 50 entries
       this.subagentActivity.set(data.agentId, activity);
       if (this.activeSubagentId === data.agentId) {
         this.renderSubagentDetail();
@@ -3030,7 +3064,7 @@ class ClaudemanApp {
       const data = JSON.parse(e.data);
       const activity = this.subagentActivity.get(data.agentId) || [];
       activity.push({ type: 'progress', ...data });
-      if (activity.length > 100) activity.shift();
+      if (activity.length > 50) activity.shift();
       this.subagentActivity.set(data.agentId, activity);
       if (this.activeSubagentId === data.agentId) {
         this.renderSubagentDetail();
@@ -3045,7 +3079,7 @@ class ClaudemanApp {
       const data = JSON.parse(e.data);
       const activity = this.subagentActivity.get(data.agentId) || [];
       activity.push({ type: 'message', ...data });
-      if (activity.length > 100) activity.shift();
+      if (activity.length > 50) activity.shift();
       this.subagentActivity.set(data.agentId, activity);
       if (this.activeSubagentId === data.agentId) {
         this.renderSubagentDetail();
@@ -3058,16 +3092,21 @@ class ClaudemanApp {
 
     addListener('subagent:tool_result', (e) => {
       const data = JSON.parse(e.data);
-      // Store tool result by toolUseId for later lookup
+      // Store tool result by toolUseId for later lookup (cap at 50 per agent)
       if (!this.subagentToolResults.has(data.agentId)) {
         this.subagentToolResults.set(data.agentId, new Map());
       }
-      this.subagentToolResults.get(data.agentId).set(data.toolUseId, data);
+      const resultsMap = this.subagentToolResults.get(data.agentId);
+      resultsMap.set(data.toolUseId, data);
+      if (resultsMap.size > 50) {
+        const oldest = resultsMap.keys().next().value;
+        resultsMap.delete(oldest);
+      }
 
       // Add to activity stream
       const activity = this.subagentActivity.get(data.agentId) || [];
       activity.push({ type: 'tool_result', ...data });
-      if (activity.length > 100) activity.shift();
+      if (activity.length > 50) activity.shift();
       this.subagentActivity.set(data.agentId, activity);
 
       if (this.activeSubagentId === data.agentId) {
@@ -3373,6 +3412,12 @@ class ClaudemanApp {
     this.writeFrameScheduled = false;
     // Clear pending hooks
     this.pendingHooks.clear();
+    // Clear subagent activity/results maps (prevents leaks if data.subagents is missing)
+    this.subagentActivity.clear();
+    this.subagentToolResults.clear();
+    // Clean up mobile/keyboard handlers before potential re-init
+    MobileDetection.cleanup();
+    KeyboardHandler.cleanup();
     // Clear tab alerts
     this.tabAlerts.clear();
     // Clear shown completions (used for duplicate notification prevention)
@@ -3674,14 +3719,14 @@ class ClaudemanApp {
       const minimizedCount = minimizedAgents?.size || 0;
       const subagentBadge = minimizedCount > 0 ? this.renderSubagentTabBadge(id, minimizedAgents) : '';
 
-      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}" data-id="${id}" data-color="${color}" onclick="app.selectSession('${id}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${id}')" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-label="${this.escapeHtml(name)} session">
+      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}" data-id="${id}" data-color="${color}" onclick="app.selectSession('${this.escapeHtml(id)}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${this.escapeHtml(id)}')" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-label="${this.escapeHtml(name)} session">
           <span class="tab-status ${status}" aria-hidden="true"></span>
           ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : ''}
           <span class="tab-name" data-session-id="${id}">${this.escapeHtml(name)}</span>
           ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()" aria-label="${taskStats.running} running tasks">${taskStats.running}</span>` : ''}
           ${subagentBadge}
-          <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${id}')" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span>
-          <span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession('${id}')" title="Close session" aria-label="Close session" tabindex="0">&times;</span>
+          <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${this.escapeHtml(id)}')" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span>
+          <span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession('${this.escapeHtml(id)}')" title="Close session" aria-label="Close session" tabindex="0">&times;</span>
         </div>`);
     }
 
@@ -3756,10 +3801,10 @@ class ClaudemanApp {
       const truncatedName = displayName.length > 25 ? displayName.substring(0, 25) + '…' : displayName;
       const statusClass = agent?.status || 'idle';
       agentItems.push(`
-        <div class="subagent-dropdown-item" onclick="event.stopPropagation(); app.restoreMinimizedSubagent('${agentId}', '${sessionId}')" title="Click to restore">
+        <div class="subagent-dropdown-item" onclick="event.stopPropagation(); app.restoreMinimizedSubagent('${this.escapeHtml(agentId)}', '${this.escapeHtml(sessionId)}')" title="Click to restore">
           <span class="subagent-dropdown-status ${statusClass}"></span>
           <span class="subagent-dropdown-name">${this.escapeHtml(truncatedName)}</span>
-          <span class="subagent-dropdown-close" onclick="event.stopPropagation(); app.permanentlyCloseMinimizedSubagent('${agentId}', '${sessionId}')" title="Dismiss">&times;</span>
+          <span class="subagent-dropdown-close" onclick="event.stopPropagation(); app.permanentlyCloseMinimizedSubagent('${this.escapeHtml(agentId)}', '${this.escapeHtml(sessionId)}')" title="Dismiss">&times;</span>
         </div>
       `);
     }
@@ -6680,7 +6725,7 @@ class ClaudemanApp {
       });
 
     } catch (err) {
-      body.innerHTML = `<div class="plan-fm-error">Error: ${err.message}</div>`;
+      body.innerHTML = `<div class="plan-fm-error">Error: ${this.escapeHtml(err.message)}</div>`;
     }
   }
 
@@ -6767,7 +6812,7 @@ class ClaudemanApp {
     win.innerHTML = `
       <div class="plan-file-window-header">
         <span class="plan-file-window-title">${typeLabels[agentType] || agentType} / ${this.escapeHtml(fileName)}</span>
-        <button class="plan-file-window-close" onclick="app.closePlanFileWindow('${windowId}')">&times;</button>
+        <button class="plan-file-window-close" onclick="app.closePlanFileWindow('${this.escapeHtml(windowId)}')">&times;</button>
       </div>
       <div class="plan-file-window-body">
         <pre class="plan-file-content ${isJson ? 'json' : 'markdown'}">${this.escapeHtml(content)}</pre>
@@ -8175,23 +8220,18 @@ class ClaudemanApp {
 
   // Send Ctrl+L to fix display for newly created sessions once Claude is running
   sendPendingCtrlL(sessionId) {
-    console.log('[DEBUG] sendPendingCtrlL called for:', sessionId, 'pending:', this.pendingCtrlL ? [...this.pendingCtrlL] : 'none');
     if (!this.pendingCtrlL || !this.pendingCtrlL.has(sessionId)) {
-      console.log('[DEBUG] No pending Ctrl+L for this session');
       return;
     }
     this.pendingCtrlL.delete(sessionId);
 
     // Only send if this is the active session
     if (sessionId !== this.activeSessionId) {
-      console.log('[DEBUG] Not active session, skipping Ctrl+L');
       return;
     }
 
-    console.log('[DEBUG] Sending resize + Ctrl+L for session:', sessionId);
     // Send resize + Ctrl+L to fix the display (with minimum dimension enforcement)
     this.sendResize(sessionId).then(() => {
-      console.log('[DEBUG] Resize sent, now sending Ctrl+L');
       fetch(`/api/sessions/${sessionId}/input`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -9071,7 +9111,7 @@ class ClaudemanApp {
       const data = await response.json();
 
       if (!data.success) {
-        timeline.innerHTML = `<p class="empty-message">Failed to load summary: ${data.error}</p>`;
+        timeline.innerHTML = `<p class="empty-message">Failed to load summary: ${this.escapeHtml(data.error)}</p>`;
         return;
       }
 
@@ -10008,7 +10048,7 @@ class ClaudemanApp {
           if (!agent) continue; // Agent no longer exists
 
           // Skip completed or old agents
-          const agentStartTime = agent.startedAt ? new Date(agent.startedAt).getTime() : 0;
+          const agentStartTime = agent.startedAt || 0;
           if (agent.status === 'completed' || agentStartTime < cutoffTime) continue;
 
           // Use the PERSISTENT parent map (THE source of truth)
@@ -10038,7 +10078,7 @@ class ClaudemanApp {
     for (const { agentId, position } of (states.open || [])) {
       const agent = this.subagents.get(agentId);
       // Only restore window if agent exists, is recent, and is still active/idle
-      const agentAge = agent?.startedAt ? now - new Date(agent.startedAt).getTime() : Infinity;
+      const agentAge = agent?.startedAt ? now - agent.startedAt : Infinity;
       if (agent && agent.status !== 'completed' && agentAge < maxAgeMs) {
         this.openSubagentWindow(agentId);
         // Restore position if saved (with viewport bounds check)
@@ -10132,11 +10172,10 @@ class ClaudemanApp {
       }
     }
 
-    // Populate the map
+    // Populate the map (prune stale entries: require both session and agent to exist)
     if (mapData && typeof mapData === 'object') {
       for (const [agentId, sessionId] of Object.entries(mapData)) {
-        // Only keep associations for sessions that still exist
-        if (this.sessions.has(sessionId)) {
+        if (this.sessions.has(sessionId) && this.subagents.has(agentId)) {
           this.subagentParentMap.set(agentId, sessionId);
         }
       }
@@ -11688,7 +11727,7 @@ class ClaudemanApp {
       // Active first, then by last activity
       if (a.status === 'active' && b.status !== 'active') return -1;
       if (b.status === 'active' && a.status !== 'active') return 1;
-      return new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime();
+      return (b.lastActivityAt || 0) - (a.lastActivityAt || 0);
     });
 
     for (const agent of sorted) {
@@ -11709,8 +11748,8 @@ class ClaudemanApp {
       const agentIcon = teammateInfo ? `<span class="subagent-icon teammate-dot teammate-color-${teammateInfo.color}">●</span>` : '<span class="subagent-icon">🤖</span>';
       html.push(`
         <div class="subagent-item ${statusClass} ${isActive ? 'selected' : ''}${teammateInfo ? ' is-teammate' : ''}"
-             onclick="app.selectSubagent('${agent.agentId}')"
-             ondblclick="app.openSubagentWindow('${agent.agentId}')"
+             onclick="app.selectSubagent('${this.escapeHtml(agent.agentId)}')"
+             ondblclick="app.openSubagentWindow('${this.escapeHtml(agent.agentId)}')"
              title="Double-click to open tracking window">
           <div class="subagent-header">
             ${agentIcon}
@@ -11718,8 +11757,8 @@ class ClaudemanApp {
             ${teammateBadge}
             ${modelBadge}
             <span class="subagent-status ${statusClass}">${agent.status}</span>
-            ${canKill ? `<button class="subagent-kill-btn" onclick="event.stopPropagation(); app.killSubagent('${agent.agentId}')" title="Kill agent">&#x2715;</button>` : ''}
-            <button class="subagent-window-btn" onclick="event.stopPropagation(); app.${hasWindow ? 'closeSubagentWindow' : 'openSubagentWindow'}('${agent.agentId}')" title="${hasWindow ? 'Close window' : 'Open in window'}">
+            ${canKill ? `<button class="subagent-kill-btn" onclick="event.stopPropagation(); app.killSubagent('${this.escapeHtml(agent.agentId)}')" title="Kill agent">&#x2715;</button>` : ''}
+            <button class="subagent-window-btn" onclick="event.stopPropagation(); app.${hasWindow ? 'closeSubagentWindow' : 'openSubagentWindow'}('${this.escapeHtml(agent.agentId)}')" title="${hasWindow ? 'Close window' : 'Open in window'}">
               ${hasWindow ? '✕' : '⧉'}
             </button>
           </div>
@@ -11766,7 +11805,7 @@ class ClaudemanApp {
           <span class="icon">${this.getToolIcon(a.tool)}</span>
           <span class="name">${a.tool}</span>
           <span class="detail">${toolDetail.primary}</span>
-          ${toolDetail.hasMore ? `<button class="tool-expand-btn" onclick="app.toggleToolParams('${a.toolUseId}')">▶</button>` : ''}
+          ${toolDetail.hasMore ? `<button class="tool-expand-btn" onclick="app.toggleToolParams('${this.escapeHtml(a.toolUseId)}')">▶</button>` : ''}
           ${toolDetail.hasMore ? `<div class="tool-params-expanded" id="tool-params-${a.toolUseId}" style="display:none;"><pre>${this.escapeHtml(JSON.stringify(a.fullInput || a.input, null, 2))}</pre></div>` : ''}
         </div>`;
       } else if (a.type === 'tool_result') {
@@ -11815,7 +11854,7 @@ class ClaudemanApp {
         <span class="subagent-id" title="${this.escapeHtml(agent.description || agent.agentId)}">${this.escapeHtml(detailTitle.length > 60 ? detailTitle.substring(0, 60) + '...' : detailTitle)}</span>
         ${modelBadge}
         <span class="subagent-status ${agent.status}">${agent.status}</span>
-        <button class="subagent-transcript-btn" onclick="app.viewSubagentTranscript('${agent.agentId}')">
+        <button class="subagent-transcript-btn" onclick="app.viewSubagentTranscript('${this.escapeHtml(agent.agentId)}')">
           View Full Transcript
         </button>
       </div>
@@ -12148,7 +12187,7 @@ class ClaudemanApp {
       parentDiv.dataset.parentSession = parentSessionId;
       parentDiv.innerHTML = `
         <span class="parent-label">from</span>
-        <span class="parent-name" onclick="app.selectSession('${parentSessionId}')">${this.escapeHtml(parentName)}</span>
+        <span class="parent-name" onclick="app.selectSession('${this.escapeHtml(parentSessionId)}')">${this.escapeHtml(parentName)}</span>
       `;
       header.insertAdjacentElement('afterend', parentDiv);
     }
@@ -12397,6 +12436,8 @@ class ClaudemanApp {
     }
     // Update connection lines after visibility changes
     this.updateConnectionLines();
+    // Restack mobile windows after visibility changes
+    this.relayoutMobileSubagentWindows();
   }
 
   // ========== Subagent Floating Windows ==========
@@ -12453,16 +12494,24 @@ class ClaudemanApp {
     let finalY = 0;
 
     if (isMobile) {
-      // Mobile: stack compact cards above toolbar. Count visible (non-minimized) windows.
+      // Mobile: stack compact cards. Count visible (non-minimized) windows.
       let visibleCount = 0;
       for (const [, data] of this.subagentWindows) {
         if (!data.minimized && !data.hidden) visibleCount++;
       }
-      const toolbarHeight = 40;
-      // Stack from bottom: first card just above toolbar, next above that, etc.
-      const bottomOffset = toolbarHeight + visibleCount * (mobileCardHeight + mobileCardGap);
       finalX = 4;
-      finalY = viewportHeight - bottomOffset - mobileCardHeight;
+      const keyboardUp = typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible;
+      if (keyboardUp) {
+        // Keyboard visible: stack from bottom above toolbar
+        const toolbarHeight = 40;
+        const bottomOffset = toolbarHeight + visibleCount * (mobileCardHeight + mobileCardGap);
+        finalY = viewportHeight - bottomOffset - mobileCardHeight;
+      } else {
+        // Keyboard hidden: stack from top below header with spacing
+        const headerHeight = document.querySelector('.header')?.offsetHeight || 36;
+        const topStart = headerHeight + 8;
+        finalY = topStart + visibleCount * (mobileCardHeight + mobileCardGap);
+      }
     } else {
       // Check if Ralph wizard modal is open - if so, position windows on the sides
       const wizardModal = document.getElementById('ralphWizardModal');
@@ -12545,7 +12594,7 @@ class ClaudemanApp {
     const parentHeader = parentSessionId && parentSessionName
       ? `<div class="subagent-window-parent" data-parent-session="${parentSessionId}">
           <span class="parent-label">from</span>
-          <span class="parent-name" onclick="app.selectSession('${parentSessionId}')">${this.escapeHtml(parentSessionName)}</span>
+          <span class="parent-name" onclick="app.selectSession('${this.escapeHtml(parentSessionId)}')">${this.escapeHtml(parentSessionName)}</span>
         </div>`
       : '';
 
@@ -12565,7 +12614,7 @@ class ClaudemanApp {
           <span class="status ${agent.status}">${agent.status}</span>
         </div>
         <div class="subagent-window-actions">
-          <button onclick="app.closeSubagentWindow('${agentId}')" title="Minimize to tab">─</button>
+          <button onclick="app.closeSubagentWindow('${this.escapeHtml(agentId)}')" title="Minimize to tab">─</button>
         </div>
       </div>
       ${parentHeader}
@@ -12576,14 +12625,9 @@ class ClaudemanApp {
 
     // If we have a parent tab, start window at tab position for spawn animation
     if (isMobile) {
-      // Mobile: position as stacked card via inline bottom offset
-      let visibleCount = 0;
-      for (const [, data] of this.subagentWindows) {
-        if (!data.minimized && !data.hidden) visibleCount++;
-      }
-      const bottomPx = 40 + visibleCount * (mobileCardHeight + mobileCardGap);
-      win.style.bottom = `${bottomPx}px`;
-      win.style.top = 'auto';
+      // Mobile: position using top (keyboard-aware positioning calculated above)
+      win.style.top = `${finalY}px`;
+      win.style.bottom = 'auto';
     } else if (parentTab) {
       const tabRect = parentTab.getBoundingClientRect();
       win.style.left = `${tabRect.left}px`;
@@ -12709,6 +12753,34 @@ class ClaudemanApp {
     // Persist the state change
     this.saveSubagentWindowStates();
     this.updateConnectionLines();
+    // Restack remaining visible mobile windows to fill the gap
+    this.relayoutMobileSubagentWindows();
+  }
+
+  /** Reposition all visible mobile subagent windows (called on keyboard show/hide). */
+  relayoutMobileSubagentWindows() {
+    if (MobileDetection.getDeviceType() !== 'mobile') return;
+    const mobileCardHeight = 110;
+    const mobileCardGap = 4;
+    const keyboardUp = typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible;
+    let idx = 0;
+    for (const [, data] of this.subagentWindows) {
+      if (data.minimized || data.hidden) continue;
+      const el = data.element;
+      if (keyboardUp) {
+        // Stack from bottom above toolbar
+        const bottomPx = 40 + idx * (mobileCardHeight + mobileCardGap);
+        el.style.bottom = `${bottomPx}px`;
+        el.style.top = 'auto';
+      } else {
+        // Stack from top below header
+        const headerHeight = document.querySelector('.header')?.offsetHeight || 36;
+        const topPx = headerHeight + 8 + idx * (mobileCardHeight + mobileCardGap);
+        el.style.top = `${topPx}px`;
+        el.style.bottom = 'auto';
+      }
+      idx++;
+    }
   }
 
   // Close all subagent windows for a session (fully removes them, not minimize)
@@ -12951,6 +13023,8 @@ class ClaudemanApp {
       }
       windowData.minimized = false;
       this.updateConnectionLines();
+      // Restack all visible mobile windows so restored ones don't overlap
+      this.relayoutMobileSubagentWindows();
     }
   }
 
@@ -13385,7 +13459,7 @@ class ClaudemanApp {
           <span class="status running">terminal</span>
         </div>
         <div class="subagent-window-actions">
-          <button onclick="app.closeSubagentWindow('${windowId}')" title="Minimize to tab">─</button>
+          <button onclick="app.closeSubagentWindow('${this.escapeHtml(windowId)}')" title="Minimize to tab">─</button>
         </div>
       </div>
       <div class="subagent-window-body teammate-terminal-body" id="subagent-window-body-${windowId}">
@@ -13881,7 +13955,7 @@ class ClaudemanApp {
         const fileName = path.split('/').pop();
         html.push(`
             <span class="project-insight-filepath"
-                  onclick="app.openLogViewerWindow('${this.escapeHtml(path)}', '${tool.sessionId}')"
+                  onclick="app.openLogViewerWindow('${this.escapeHtml(path)}', '${this.escapeHtml(tool.sessionId)}')"
                   title="${this.escapeHtml(path)}">${this.escapeHtml(fileName)}</span>
         `);
       }
@@ -13939,7 +14013,7 @@ class ClaudemanApp {
       }
     } catch (err) {
       console.error('Failed to load file browser:', err);
-      treeEl.innerHTML = `<div class="file-browser-empty">Failed to load files: ${err.message}</div>`;
+      treeEl.innerHTML = `<div class="file-browser-empty">Failed to load files: ${this.escapeHtml(err.message)}</div>`;
     }
   }
 
@@ -14143,7 +14217,7 @@ class ClaudemanApp {
       }
     } catch (err) {
       console.error('Failed to preview file:', err);
-      bodyEl.innerHTML = `<div class="binary-message">Error: ${err.message}</div>`;
+      bodyEl.innerHTML = `<div class="binary-message">Error: ${this.escapeHtml(err.message)}</div>`;
     }
   }
 
@@ -14250,7 +14324,7 @@ class ClaudemanApp {
           <span class="status streaming">streaming</span>
         </div>
         <div class="log-viewer-window-actions">
-          <button onclick="app.closeLogViewerWindow('${windowId}')" title="Close">×</button>
+          <button onclick="app.closeLogViewerWindow('${this.escapeHtml(windowId)}')" title="Close">×</button>
         </div>
       </div>
       <div class="log-viewer-window-body" id="log-viewer-body-${windowId}">
@@ -14419,14 +14493,14 @@ class ClaudemanApp {
           <span class="size-badge">${sizeKB} KB</span>
         </div>
         <div class="image-popup-actions">
-          <button onclick="app.openImageInNewTab('${imageUrl}')" title="Open in new tab">↗</button>
-          <button onclick="app.closeImagePopup('${imageId}')" title="Close">×</button>
+          <button onclick="app.openImageInNewTab('${this.escapeHtml(imageUrl)}')" title="Open in new tab">↗</button>
+          <button onclick="app.closeImagePopup('${this.escapeHtml(imageId)}')" title="Close">×</button>
         </div>
       </div>
       <div class="image-popup-body">
         <img src="${imageUrl}" alt="${this.escapeHtml(fileName)}"
              onerror="this.parentElement.innerHTML='<div class=\\'image-error\\'>Failed to load image</div>'"
-             onclick="app.openImageInNewTab('${imageUrl}')" />
+             onclick="app.openImageInNewTab('${this.escapeHtml(imageUrl)}')" />
       </div>
     `;
 
@@ -14923,7 +14997,7 @@ class ClaudemanApp {
             </div>
           </div>
           <div class="process-actions">
-            <button class="btn-toolbar btn-sm btn-danger" onclick="app.killScreen('${screen.sessionId}')" title="Kill tmux session">Kill</button>
+            <button class="btn-toolbar btn-sm btn-danger" onclick="app.killScreen('${this.escapeHtml(screen.sessionId)}')" title="Kill tmux session">Kill</button>
           </div>
         </div>
       `;
@@ -14966,7 +15040,7 @@ class ClaudemanApp {
             </div>
           </div>
           <div class="process-actions">
-            ${agent.status !== 'completed' ? `<button class="btn-toolbar btn-sm btn-danger" onclick="app.killSubagent('${agent.agentId}')" title="Kill agent">Kill</button>` : ''}
+            ${agent.status !== 'completed' ? `<button class="btn-toolbar btn-sm btn-danger" onclick="app.killSubagent('${this.escapeHtml(agent.agentId)}')" title="Kill agent">Kill</button>` : ''}
           </div>
         </div>
       `;

@@ -56,7 +56,7 @@ import {
 import {
   CreateSessionSchema,
   RunPromptSchema,
-  SessionInputSchema,
+  SessionInputWithLimitSchema,
   ResizeSchema,
   CreateCaseSchema,
   QuickStartSchema,
@@ -81,6 +81,12 @@ import {
   PlanTaskUpdateSchema,
   PlanTaskAddSchema,
   CpuLimitSchema,
+  SettingsUpdateSchema,
+  ModelConfigUpdateSchema,
+  SubagentWindowStatesSchema,
+  SubagentParentMapSchema,
+  InteractiveRespawnSchema,
+  RespawnEnableSchema,
 } from './schemas.js';
 import { StaleExpirationMap } from '../utils/index.js';
 
@@ -349,7 +355,7 @@ export class WebServer extends EventEmitter {
   private testMode: boolean;
   private mux: TerminalMultiplexer;
   // Terminal batching for performance
-  private terminalBatches: Map<string, string> = new Map();
+  private terminalBatches: Map<string, string[]> = new Map();
   private terminalBatchTimer: NodeJS.Timeout | null = null;
   // Adaptive batching: track rapid events to extend batch window (per-session)
   // StaleExpirationMap auto-cleans entries for sessions that stop generating output
@@ -536,6 +542,16 @@ export class WebServer extends EventEmitter {
       threshold: 1024,
     });
 
+    // Security headers on every response
+    this.app.addHook('onRequest', (_req, reply, done) => {
+      reply.header('X-Content-Type-Options', 'nosniff');
+      reply.header('X-Frame-Options', 'SAMEORIGIN');
+      if (this.https) {
+        reply.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+      }
+      done();
+    });
+
     // Serve static files with caching headers for immutable CDN-like assets
     await this.app.register(fastifyStatic, {
       root: join(__dirname, 'public'),
@@ -712,7 +728,7 @@ export class WebServer extends EventEmitter {
 
       // Write env overrides to .claude/settings.local.json if provided
       if (body.envOverrides && Object.keys(body.envOverrides).length > 0) {
-        updateCaseEnvVars(workingDir, body.envOverrides);
+        await updateCaseEnvVars(workingDir, body.envOverrides);
       }
 
       const globalNice = await this.getGlobalNiceConfig();
@@ -738,7 +754,11 @@ export class WebServer extends EventEmitter {
     // Rename a session
     this.app.put('/api/sessions/:id/name', async (req) => {
       const { id } = req.params as { id: string };
-      const body = SessionNameSchema.parse(req.body);
+      const result = SessionNameSchema.safeParse(req.body);
+      if (!result.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+      }
+      const body = result.data;
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -757,7 +777,11 @@ export class WebServer extends EventEmitter {
     // Set session color
     this.app.put('/api/sessions/:id/color', async (req) => {
       const { id } = req.params as { id: string };
-      const body = SessionColorSchema.parse(req.body);
+      const result = SessionColorSchema.safeParse(req.body);
+      if (!result.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+      }
+      const body = result.data;
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1216,12 +1240,16 @@ export class WebServer extends EventEmitter {
     // Configure Ralph (Ralph Wiggum) settings
     this.app.post('/api/sessions/:id/ralph-config', async (req) => {
       const { id } = req.params as { id: string };
-      const { enabled, completionPhrase, maxIterations, reset, disableAutoEnable } = RalphConfigSchema.parse(req.body) as {
+      const ralphResult = RalphConfigSchema.safeParse(req.body);
+      if (!ralphResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+      }
+      const { enabled, completionPhrase, maxIterations, reset, disableAutoEnable } = ralphResult.data as {
         enabled?: boolean;
         completionPhrase?: string;
         maxIterations?: number;
-        reset?: boolean | 'full';  // true = soft reset (keep enabled), 'full' = complete reset
-        disableAutoEnable?: boolean;  // Prevent auto-enable on pattern detection
+        reset?: boolean | 'full';
+        disableAutoEnable?: boolean;
       };
       const session = this.sessions.get(id);
 
@@ -1339,15 +1367,15 @@ export class WebServer extends EventEmitter {
     // Import todos from @fix_plan.md content
     this.app.post('/api/sessions/:id/fix-plan/import', async (req) => {
       const { id } = req.params as { id: string };
-      const { content } = FixPlanImportSchema.parse(req.body);
+      const importResult = FixPlanImportSchema.safeParse(req.body);
+      if (!importResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+      }
+      const { content } = importResult.data;
       const session = this.sessions.get(id);
 
       if (!session) {
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
-      }
-
-      if (!content || typeof content !== 'string') {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Content is required');
       }
 
       const importedCount = session.ralphTracker.importFixPlanMarkdown(content);
@@ -1434,7 +1462,11 @@ export class WebServer extends EventEmitter {
     // This avoids screen input escaping issues with long multi-line prompts
     this.app.post('/api/sessions/:id/ralph-prompt/write', async (req) => {
       const { id } = req.params as { id: string };
-      const { content } = RalphPromptWriteSchema.parse(req.body);
+      const promptResult = RalphPromptWriteSchema.safeParse(req.body);
+      if (!promptResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+      }
+      const { content } = promptResult.data;
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1444,10 +1476,6 @@ export class WebServer extends EventEmitter {
       const workingDir = session.workingDir;
       if (!workingDir) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Session has no working directory');
-      }
-
-      if (!content || typeof content !== 'string') {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Content is required');
       }
 
       const filePath = path.join(workingDir, '@ralph_prompt.md');
@@ -1552,7 +1580,7 @@ export class WebServer extends EventEmitter {
     // useScreen: true uses writeViaScreen which is more reliable for programmatic input
     this.app.post('/api/sessions/:id/input', async (req): Promise<ApiResponse> => {
       const { id } = req.params as { id: string };
-      const result = SessionInputSchema.safeParse(req.body);
+      const result = SessionInputWithLimitSchema.safeParse(req.body);
       if (!result.success) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
       }
@@ -1697,7 +1725,14 @@ export class WebServer extends EventEmitter {
     // Start respawn controller for a session
     this.app.post('/api/sessions/:id/respawn/start', async (req) => {
       const { id } = req.params as { id: string };
-      const body = req.body ? RespawnConfigSchema.parse(req.body) as Partial<RespawnConfig> : undefined;
+      let body: Partial<RespawnConfig> | undefined;
+      if (req.body) {
+        const result = RespawnConfigSchema.safeParse(req.body);
+        if (!result.success) {
+          return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid respawn config');
+        }
+        body = result.data as Partial<RespawnConfig>;
+      }
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1823,9 +1858,11 @@ export class WebServer extends EventEmitter {
     // Start interactive session WITH respawn enabled
     this.app.post('/api/sessions/:id/interactive-respawn', async (req) => {
       const { id } = req.params as { id: string };
-      const body = req.body as { respawnConfig?: Partial<RespawnConfig>; durationMinutes?: number } | undefined;
-      // Validate respawn config if present
-      if (body?.respawnConfig) RespawnConfigSchema.parse(body.respawnConfig);
+      const irResult = req.body ? InteractiveRespawnSchema.safeParse(req.body) : { success: true as const, data: {} };
+      if (!irResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+      }
+      const body = irResult.data as { respawnConfig?: Partial<RespawnConfig>; durationMinutes?: number };
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1881,9 +1918,11 @@ export class WebServer extends EventEmitter {
     // Enable respawn on an EXISTING interactive session
     this.app.post('/api/sessions/:id/respawn/enable', async (req) => {
       const { id } = req.params as { id: string };
-      const body = req.body as { config?: Partial<RespawnConfig>; durationMinutes?: number } | undefined;
-      // Validate respawn config if present
-      if (body?.config) RespawnConfigSchema.parse(body.config);
+      const reResult = req.body ? RespawnEnableSchema.safeParse(req.body) : { success: true as const, data: {} };
+      if (!reResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+      }
+      const body = reResult.data as { config?: Partial<RespawnConfig>; durationMinutes?: number };
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1930,19 +1969,15 @@ export class WebServer extends EventEmitter {
     // Set auto-clear on a session
     this.app.post('/api/sessions/:id/auto-clear', async (req) => {
       const { id } = req.params as { id: string };
-      const body = AutoClearSchema.parse(req.body);
+      const acResult = AutoClearSchema.safeParse(req.body);
+      if (!acResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+      }
+      const body = acResult.data;
       const session = this.sessions.get(id);
 
       if (!session) {
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
-      }
-
-      if (body.enabled === undefined) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'enabled field is required');
-      }
-
-      if (body.threshold !== undefined && (typeof body.threshold !== 'number' || body.threshold < 0)) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'threshold must be a positive number');
       }
 
       session.setAutoClear(body.enabled, body.threshold);
@@ -1963,19 +1998,15 @@ export class WebServer extends EventEmitter {
     // Set auto-compact on a session
     this.app.post('/api/sessions/:id/auto-compact', async (req) => {
       const { id } = req.params as { id: string };
-      const body = AutoCompactSchema.parse(req.body);
+      const compactResult = AutoCompactSchema.safeParse(req.body);
+      if (!compactResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+      }
+      const body = compactResult.data;
       const session = this.sessions.get(id);
 
       if (!session) {
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
-      }
-
-      if (body.enabled === undefined) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'enabled field is required');
-      }
-
-      if (body.threshold !== undefined && (typeof body.threshold !== 'number' || body.threshold < 0)) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'threshold must be a positive number');
       }
 
       session.setAutoCompact(body.enabled, body.threshold, body.prompt);
@@ -1997,15 +2028,15 @@ export class WebServer extends EventEmitter {
     // Toggle image watcher for a session
     this.app.post('/api/sessions/:id/image-watcher', async (req) => {
       const { id } = req.params as { id: string };
-      const body = ImageWatcherSchema.parse(req.body);
+      const iwResult = ImageWatcherSchema.safeParse(req.body);
+      if (!iwResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+      }
+      const body = iwResult.data;
       const session = this.sessions.get(id);
 
       if (!session) {
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
-      }
-
-      if (body.enabled === undefined) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'enabled field is required');
       }
 
       if (body.enabled) {
@@ -2029,15 +2060,15 @@ export class WebServer extends EventEmitter {
     // Toggle flicker filter for a session
     this.app.post('/api/sessions/:id/flicker-filter', async (req) => {
       const { id } = req.params as { id: string };
-      const body = FlickerFilterSchema.parse(req.body);
+      const ffResult = FlickerFilterSchema.safeParse(req.body);
+      if (!ffResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+      }
+      const body = ffResult.data;
       const session = this.sessions.get(id);
 
       if (!session) {
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
-      }
-
-      if (body.enabled === undefined) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'enabled field is required');
       }
 
       session.flickerFilterEnabled = body.enabled;
@@ -2059,7 +2090,11 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.SESSION_BUSY, `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached`);
       }
 
-      const { prompt, workingDir } = QuickRunSchema.parse(req.body);
+      const qrResult = QuickRunSchema.safeParse(req.body);
+      if (!qrResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+      }
+      const { prompt, workingDir } = qrResult.data;
 
       if (!prompt.trim()) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'prompt is required');
@@ -2091,8 +2126,12 @@ export class WebServer extends EventEmitter {
       return Array.from(this.scheduledRuns.values());
     });
 
-    this.app.post('/api/scheduled', async (req): Promise<{ success: boolean; run: ScheduledRun }> => {
-      const { prompt, workingDir, durationMinutes } = ScheduledRunSchema.parse(req.body);
+    this.app.post('/api/scheduled', async (req): Promise<{ success: boolean; run: ScheduledRun } | ApiResponse<never>> => {
+      const srResult = ScheduledRunSchema.safeParse(req.body);
+      if (!srResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+      }
+      const { prompt, workingDir, durationMinutes } = srResult.data;
 
       const run = await this.startScheduledRun(prompt, workingDir || process.cwd(), durationMinutes ?? 60);
       return { success: true, run };
@@ -2128,8 +2167,8 @@ export class WebServer extends EventEmitter {
       const cases: CaseInfo[] = [];
 
       // Get cases from casesDir
-      if (existsSync(casesDir)) {
-        const entries = readdirSync(casesDir, { withFileTypes: true });
+      try {
+        const entries = await fs.readdir(casesDir, { withFileTypes: true });
         for (const e of entries) {
           if (e.isDirectory()) {
             cases.push({
@@ -2139,6 +2178,8 @@ export class WebServer extends EventEmitter {
             });
           }
         }
+      } catch {
+        // casesDir may not exist yet
       }
 
       // Get linked cases
@@ -2195,7 +2236,7 @@ export class WebServer extends EventEmitter {
         writeFileSync(join(casePath, 'CLAUDE.md'), claudeMd);
 
         // Write .claude/settings.local.json with hooks for desktop notifications
-        writeHooksConfig(casePath);
+        await writeHooksConfig(casePath);
 
         this.broadcast('case:created', { name, path: casePath });
 
@@ -2207,15 +2248,11 @@ export class WebServer extends EventEmitter {
 
     // Link an existing folder as a case
     this.app.post('/api/cases/link', async (req): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
-      const { name, path: folderPath } = LinkCaseSchema.parse(req.body);
-
-      if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name. Use only letters, numbers, hyphens, underscores.');
+      const lcResult = LinkCaseSchema.safeParse(req.body);
+      if (!lcResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
       }
-
-      if (!folderPath) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Folder path is required.');
-      }
+      const { name, path: folderPath } = lcResult.data;
 
       // Expand ~ to home directory
       const expandedPath = folderPath.startsWith('~')
@@ -2256,7 +2293,7 @@ export class WebServer extends EventEmitter {
         if (!existsSync(claudemanDir)) {
           mkdirSync(claudemanDir, { recursive: true });
         }
-        writeFileSync(linkedCasesFile, JSON.stringify(linkedCases, null, 2));
+        await fs.writeFile(linkedCasesFile, JSON.stringify(linkedCases, null, 2));
         this.broadcast('case:linked', { name, path: expandedPath });
         return { success: true, data: { case: { name, path: expandedPath } } };
       } catch (err) {
@@ -2408,12 +2445,12 @@ export class WebServer extends EventEmitter {
     this.app.post('/api/quick-start', async (req): Promise<QuickStartResponse> => {
       // Prevent unbounded session creation
       if (this.sessions.size >= MAX_CONCURRENT_SESSIONS) {
-        return { success: false, error: `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached.` };
+        return createErrorResponse(ApiErrorCode.SESSION_BUSY, `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached.`);
       }
 
       const result = QuickStartSchema.safeParse(req.body);
       if (!result.success) {
-        return { success: false, error: result.error.issues[0]?.message ?? 'Validation failed' };
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
       }
       const { caseName = 'testcase', mode = 'claude' } = result.data;
 
@@ -2424,7 +2461,7 @@ export class WebServer extends EventEmitter {
       const resolvedBase = resolve(casesDir);
       const relPath = relative(resolvedBase, resolvedPath);
       if (relPath.startsWith('..') || isAbsolute(relPath)) {
-        return { success: false, error: 'Invalid case path' };
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
       }
 
       // Create case folder and CLAUDE.md if it doesn't exist
@@ -2439,11 +2476,11 @@ export class WebServer extends EventEmitter {
           writeFileSync(join(casePath, 'CLAUDE.md'), claudeMd);
 
           // Write .claude/settings.local.json with hooks for desktop notifications
-          writeHooksConfig(casePath);
+          await writeHooksConfig(casePath);
 
           this.broadcast('case:created', { name: caseName, path: casePath });
         } catch (err) {
-          return { success: false, error: `Failed to create case: ${getErrorMessage(err)}` };
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create case: ${getErrorMessage(err)}`);
         }
       }
 
@@ -2518,7 +2555,7 @@ export class WebServer extends EventEmitter {
       } catch (err) {
         // Clean up session on error to prevent orphaned resources
         await this.cleanupSession(session.id);
-        return { success: false, error: getErrorMessage(err) };
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
       }
     });
 
@@ -2526,18 +2563,14 @@ export class WebServer extends EventEmitter {
     type PlanItem = import('../plan-orchestrator.js').PlanItem;
 
     this.app.post('/api/generate-plan', async (req): Promise<ApiResponse> => {
+      const gpResult = GeneratePlanSchema.safeParse(req.body);
+      if (!gpResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+      }
       const {
         taskDescription,
         detailLevel = 'standard'
-      } = GeneratePlanSchema.parse(req.body);
-
-      if (!taskDescription || typeof taskDescription !== 'string') {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Task description is required');
-      }
-
-      if (taskDescription.length > 10000) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Task description too long (max 10000 chars)');
-      }
+      } = gpResult.data;
 
       // Build sophisticated prompt based on Ralph Wiggum methodology
       const detailConfig = {
@@ -2718,15 +2751,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Generate detailed implementation plan using subagent orchestration
     // This spawns multiple specialist subagents in parallel for thorough analysis
     this.app.post('/api/generate-plan-detailed', async (req): Promise<ApiResponse> => {
-      const { taskDescription, caseName } = GeneratePlanDetailedSchema.parse(req.body);
-
-      if (!taskDescription || typeof taskDescription !== 'string') {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Task description is required');
+      const gpdResult = GeneratePlanDetailedSchema.safeParse(req.body);
+      if (!gpdResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
       }
-
-      if (taskDescription.length > 10000) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Task description too long (max 10000 chars)');
-      }
+      const { taskDescription, caseName } = gpdResult.data;
 
       // Determine output directory for saving wizard results
       let outputDir: string | undefined;
@@ -2822,7 +2851,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     // Cancel active plan generation
     this.app.post('/api/cancel-plan-generation', async (req): Promise<ApiResponse> => {
-      const { orchestratorId } = CancelPlanSchema.parse(req.body);
+      const cpResult = CancelPlanSchema.safeParse(req.body);
+      if (!cpResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+      }
+      const { orchestratorId } = cpResult.data;
 
       // If specific orchestrator ID provided, cancel just that one
       if (orchestratorId) {
@@ -2978,7 +3011,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Ralph tracker not available');
       }
 
-      const update = PlanTaskUpdateSchema.parse(req.body) as {
+      const ptuResult = PlanTaskUpdateSchema.safeParse(req.body);
+      if (!ptuResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+      }
+      const update = ptuResult.data as {
         status?: 'pending' | 'in_progress' | 'completed' | 'failed' | 'blocked';
         error?: string;
         incrementAttempts?: boolean;
@@ -3062,7 +3099,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Ralph tracker not available');
       }
 
-      const task = PlanTaskAddSchema.parse(req.body);
+      const ptaResult = PlanTaskAddSchema.safeParse(req.body);
+      if (!ptaResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+      }
+      const task = ptaResult.data;
 
       const result = tracker.addPlanTask(task);
       this.broadcast('session:planTaskAdded', { sessionId: id, task: result.task });
@@ -3085,7 +3126,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     });
 
     this.app.put('/api/settings', async (req) => {
-      const settings = req.body as Record<string, unknown>;
+      const settingsResult = SettingsUpdateSchema.safeParse(req.body);
+      if (!settingsResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid settings');
+      }
+      const settings = settingsResult.data as Record<string, unknown>;
 
       try {
         const dir = dirname(settingsPath);
@@ -3093,9 +3138,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
           mkdirSync(dir, { recursive: true });
         }
         let existing: Record<string, unknown> = {};
-        try { existing = JSON.parse(readFileSync(settingsPath, 'utf-8')); } catch { /* ignore */ }
+        try { existing = JSON.parse(await fs.readFile(settingsPath, 'utf-8')); } catch { /* ignore */ }
         const merged = { ...existing, ...settings };
-        writeFileSync(settingsPath, JSON.stringify(merged, null, 2));
+        await fs.writeFile(settingsPath, JSON.stringify(merged, null, 2));
 
         // Handle subagent tracking toggle dynamically
         const subagentEnabled = settings.subagentTrackingEnabled ?? true;
@@ -3145,7 +3190,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     });
 
     this.app.put('/api/execution/model-config', async (req) => {
-      const modelConfig = req.body as Record<string, unknown>;
+      const mcResult = ModelConfigUpdateSchema.safeParse(req.body);
+      if (!mcResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid model config');
+      }
+      const modelConfig = mcResult.data as Record<string, unknown>;
 
       try {
         let settings: Record<string, unknown> = {};
@@ -3162,7 +3211,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         if (!existsSync(dir)) {
           mkdirSync(dir, { recursive: true });
         }
-        writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+        await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2));
 
         return { success: true };
       } catch (err) {
@@ -3194,14 +3243,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
-      const body = CpuLimitSchema.parse(req.body) as Partial<NiceConfig>;
-
-      // Validate inputs
-      if (body.niceValue !== undefined) {
-        if (typeof body.niceValue !== 'number' || body.niceValue < -20 || body.niceValue > 19) {
-          return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Nice value must be between -20 and 19');
-        }
+      const clResult = CpuLimitSchema.safeParse(req.body);
+      if (!clResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
       }
+      const body = clResult.data as Partial<NiceConfig>;
 
       session.setNice(body);
       this.persistSessionState(session);
@@ -3231,13 +3277,17 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     });
 
     this.app.put('/api/subagent-window-states', async (req) => {
-      const states = req.body as Record<string, unknown>;
+      const swResult = SubagentWindowStatesSchema.safeParse(req.body);
+      if (!swResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid window states');
+      }
+      const states = swResult.data as Record<string, unknown>;
       try {
         const dir = dirname(windowStatesPath);
         if (!existsSync(dir)) {
           mkdirSync(dir, { recursive: true });
         }
-        writeFileSync(windowStatesPath, JSON.stringify(states, null, 2));
+        await fs.writeFile(windowStatesPath, JSON.stringify(states, null, 2));
         return { success: true };
       } catch (err) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
@@ -3262,13 +3312,17 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     });
 
     this.app.put('/api/subagent-parents', async (req) => {
-      const parentMap = req.body as Record<string, string>;
+      const spResult = SubagentParentMapSchema.safeParse(req.body);
+      if (!spResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid parent map');
+      }
+      const parentMap = spResult.data;
       try {
         const dir = dirname(parentMapPath);
         if (!existsSync(dir)) {
           mkdirSync(dir, { recursive: true });
         }
-        writeFileSync(parentMapPath, JSON.stringify(parentMap, null, 2));
+        await fs.writeFile(parentMapPath, JSON.stringify(parentMap, null, 2));
         return { success: true };
       } catch (err) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
@@ -3517,7 +3571,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
       const filename = `screenshot_${timestamp}${ext}`;
       const filepath = join(SCREENSHOTS_DIR, filename);
-      writeFileSync(filepath, filePart.data);
+      await fs.writeFile(filepath, filePart.data);
 
       return { success: true, path: filepath, filename };
     });
@@ -4669,9 +4723,13 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Skip if server is stopping
     if (this._isStopping) return;
 
-    const existing = this.terminalBatches.get(sessionId) || '';
-    const newBatch = existing + data;
-    this.terminalBatches.set(sessionId, newBatch);
+    let chunks = this.terminalBatches.get(sessionId);
+    if (!chunks) {
+      chunks = [];
+      this.terminalBatches.set(sessionId, chunks);
+    }
+    chunks.push(data);
+    const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
 
     // Adaptive batching: detect rapid events and extend batch window (per-session)
     const now = Date.now();
@@ -4696,7 +4754,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     }
 
     // Flush immediately if batch is large for responsiveness
-    if (newBatch.length > BATCH_FLUSH_THRESHOLD) {
+    if (totalLength > BATCH_FLUSH_THRESHOLD) {
       if (this.terminalBatchTimer) {
         clearTimeout(this.terminalBatchTimer);
         this.terminalBatchTimer = null;
@@ -4724,8 +4782,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       this.terminalBatches.clear();
       return;
     }
-    for (const [sessionId, data] of this.terminalBatches) {
-      if (data.length > 0) {
+    for (const [sessionId, chunks] of this.terminalBatches) {
+      if (chunks.length > 0) {
+        // Join chunks only at flush time (avoids O(n^2) string concatenation in batchTerminalData)
+        const data = chunks.join('');
         // Wrap with DEC mode 2026 synchronized output markers
         // Terminal buffers all output between markers and renders atomically,
         // eliminating partial-frame flicker from Ink's full-screen redraws.

@@ -141,6 +141,7 @@ const EVENT_DEBOUNCE_MS = 50;
  * Prevents unbounded growth if many unique phrases are seen.
  */
 const MAX_COMPLETION_PHRASE_ENTRIES = 50;
+const MAX_PLAN_HISTORY = 10;
 
 /**
  * Common/generic completion phrases that may cause false positives.
@@ -3711,7 +3712,7 @@ export class RalphTracker extends EventEmitter {
     });
 
     // Limit history size
-    if (this._planHistory.length > 10) {
+    if (this._planHistory.length > MAX_PLAN_HISTORY) {
       this._planHistory.shift();
     }
   }
@@ -3846,6 +3847,11 @@ export class RalphTracker extends EventEmitter {
     this._alternateCompletionPhrases.clear();
     this._completionPhraseCount.clear();
     this._planTasks.clear();
+    this._completionTimes.length = 0;
+    this._lineBuffer = '';
+    this._partialPromiseBuffer = '';
+    this._statusBlockBuffer.length = 0;
+    this._planHistory.length = 0;
     this.removeAllListeners();
   }
 }

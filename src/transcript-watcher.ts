@@ -101,6 +101,7 @@ export class TranscriptWatcher extends EventEmitter {
   private pollInterval: NodeJS.Timeout | null = null;
   private filePosition: number = 0;
   private _isRunning: boolean = false;
+  private _isProcessing: boolean = false;
   private state: TranscriptState = this.getInitialState();
 
   constructor() {
@@ -252,6 +253,8 @@ export class TranscriptWatcher extends EventEmitter {
 
   private async processNewContent(): Promise<void> {
     if (!this.transcriptPath || !this._isRunning) return;
+    if (this._isProcessing) return; // Guard against concurrent calls
+    this._isProcessing = true;
 
     try {
       const stat = statSync(this.transcriptPath);
@@ -275,6 +278,8 @@ export class TranscriptWatcher extends EventEmitter {
       }
     } catch (err) {
       this.emit('transcript:error', err as Error);
+    } finally {
+      this._isProcessing = false;
     }
   }
 
@@ -286,38 +291,54 @@ export class TranscriptWatcher extends EventEmitter {
       }
 
       const entries: TranscriptEntry[] = [];
-      const stream = createReadStream(this.transcriptPath, {
+      // Read raw buffer to detect actual line endings (LF vs CRLF)
+      const transcriptPath = this.transcriptPath;
+      let rawChunks: Buffer[] = [];
+      const rawStream = createReadStream(transcriptPath, {
         start: this.filePosition,
-        encoding: 'utf-8',
       });
+      rawStream.on('data', (chunk: Buffer | string) => rawChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      rawStream.on('end', () => {
+        // Detect if file uses CRLF
+        const raw = Buffer.concat(rawChunks);
+        rawChunks = []; // Free memory
+        const hasCRLF = raw.includes(0x0d); // 0x0d = \r
+        const lineEndingSize = hasCRLF ? 2 : 1;
 
-      const rl = createInterface({
-        input: stream,
-        crlfDelay: Infinity,
+        const stream = createReadStream(transcriptPath, {
+          start: this.filePosition,
+          encoding: 'utf-8',
+        });
+
+        const rl = createInterface({
+          input: stream,
+          crlfDelay: Infinity,
+        });
+
+        let bytesRead = this.filePosition;
+
+        rl.on('line', (line) => {
+          bytesRead += Buffer.byteLength(line, 'utf-8') + lineEndingSize;
+
+          if (!line.trim()) return;
+
+          try {
+            const entry = JSON.parse(line) as TranscriptEntry;
+            entries.push(entry);
+          } catch {
+            // Skip malformed lines
+          }
+        });
+
+        rl.on('close', () => {
+          this.filePosition = bytesRead;
+          resolve(entries);
+        });
+
+        rl.on('error', reject);
+        stream.on('error', reject);
       });
-
-      let bytesRead = this.filePosition;
-
-      rl.on('line', (line) => {
-        bytesRead += Buffer.byteLength(line, 'utf-8') + 1; // +1 for newline
-
-        if (!line.trim()) return;
-
-        try {
-          const entry = JSON.parse(line) as TranscriptEntry;
-          entries.push(entry);
-        } catch {
-          // Skip malformed lines
-        }
-      });
-
-      rl.on('close', () => {
-        this.filePosition = bytesRead;
-        resolve(entries);
-      });
-
-      rl.on('error', reject);
-      stream.on('error', reject);
+      rawStream.on('error', reject);
     });
   }
 

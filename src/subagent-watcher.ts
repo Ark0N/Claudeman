@@ -949,6 +949,7 @@ export class SubagentWatcher extends EventEmitter {
       // Store handler reference for proper cleanup
       const errorHandler = (error: Error) => {
         this.emit('subagent:error', error instanceof Error ? error : new Error(String(error)));
+        watcher.close();
         this.dirWatcherErrorHandlers.delete(dir);
         this.dirWatchers.delete(dir);
         this.knownSubagentDirs.delete(dir);
@@ -1019,6 +1020,21 @@ export class SubagentWatcher extends EventEmitter {
       description,
     };
 
+    // Enforce MAX_TRACKED_AGENTS during insertion — evict oldest inactive agent
+    if (this.agentInfo.size >= MAX_TRACKED_AGENTS) {
+      let oldestId: string | null = null;
+      let oldestTime = Infinity;
+      for (const [id, existing] of this.agentInfo) {
+        if (existing.status !== 'active' && existing.lastActivityAt < oldestTime) {
+          oldestTime = existing.lastActivityAt;
+          oldestId = id;
+        }
+      }
+      if (oldestId) {
+        this.removeAgent(oldestId);
+      }
+    }
+
     this.agentInfo.set(agentId, info);
     this.emit('subagent:discovered', info);
 
@@ -1083,6 +1099,7 @@ export class SubagentWatcher extends EventEmitter {
       // Store handler reference for proper cleanup
       const errorHandler = (error: Error) => {
         this.emit('subagent:error', error instanceof Error ? error : new Error(String(error)), agentId);
+        watcher.close();
         this.fileWatcherErrorHandlers.delete(filePath);
         this.fileWatchers.delete(filePath);
       };
@@ -1113,11 +1130,13 @@ export class SubagentWatcher extends EventEmitter {
 
       rl.on('line', (line) => {
         const lineBytes = Buffer.byteLength(line, 'utf8') + 1;
+        position += lineBytes; // Always advance past the line
 
         try {
           const entry = JSON.parse(line) as SubagentTranscriptEntry;
-          this.processEntry(entry, agentId, sessionId);
-          position += lineBytes; // Only advance on successful parse
+          this.processEntry(entry, agentId, sessionId).catch(() => {
+            // processEntry failure is non-critical
+          });
 
           // Update entry count
           const info = this.agentInfo.get(agentId);
@@ -1125,7 +1144,7 @@ export class SubagentWatcher extends EventEmitter {
             info.entryCount++;
           }
         } catch {
-          // Don't advance position - will retry on next change event
+          // Malformed JSON line — skip it
         }
       });
 

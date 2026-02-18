@@ -94,23 +94,28 @@ export const RespawnConfigSchema = z.object({
   interStepDelayMs: z.number().int().min(100).max(60000).optional(),
   enabled: z.boolean().optional(),
   sendClear: z.boolean().optional(),
-  sendUpdate: z.boolean().optional(),
   sendInit: z.boolean().optional(),
-  sendKickstart: z.boolean().optional(),
   kickstartPrompt: z.string().max(10000).optional(),
-  aiIdleCheckEnabled: z.boolean().optional(),
-  aiIdleCheckTimeoutMs: z.number().int().min(10000).max(300000).optional(),
-  aiIdleCheckModel: z.string().max(100).optional(),
   completionConfirmMs: z.number().int().min(1000).max(60000).optional(),
   noOutputTimeoutMs: z.number().int().min(5000).max(600000).optional(),
-  maxIterations: z.number().int().min(0).max(10000).optional(),
-  stuckStateWarningMs: z.number().int().min(60000).max(3600000).optional(),
-  autoAcceptEnabled: z.boolean().optional(),
+  autoAcceptPrompts: z.boolean().optional(),
   autoAcceptDelayMs: z.number().int().min(1000).max(60000).optional(),
-  planModeEnabled: z.boolean().optional(),
-  planCheckTimeoutMs: z.number().int().min(10000).max(300000).optional(),
-  planCheckModel: z.string().max(100).optional(),
-}).strict();
+  aiIdleCheckEnabled: z.boolean().optional(),
+  aiIdleCheckModel: z.string().max(100).optional(),
+  aiIdleCheckMaxContext: z.number().int().min(1000).max(500000).optional(),
+  aiIdleCheckTimeoutMs: z.number().int().min(10000).max(300000).optional(),
+  aiIdleCheckCooldownMs: z.number().int().min(1000).max(300000).optional(),
+  aiPlanCheckEnabled: z.boolean().optional(),
+  aiPlanCheckModel: z.string().max(100).optional(),
+  aiPlanCheckMaxContext: z.number().int().min(1000).max(500000).optional(),
+  aiPlanCheckTimeoutMs: z.number().int().min(10000).max(300000).optional(),
+  aiPlanCheckCooldownMs: z.number().int().min(1000).max(300000).optional(),
+  adaptiveTimingEnabled: z.boolean().optional(),
+  adaptiveMinConfirmMs: z.number().int().min(1000).max(60000).optional(),
+  adaptiveMaxConfirmMs: z.number().int().min(1000).max(600000).optional(),
+  skipClearWhenLowContext: z.boolean().optional(),
+  skipClearThresholdPercent: z.number().int().min(0).max(100).optional(),
+});
 
 /**
  * Schema for PUT /api/config
@@ -252,4 +257,28 @@ export const CpuLimitSchema = z.object({
   cpuLimit: z.number().int().min(0).max(100).optional(),
   ioClass: z.enum(['idle', 'best-effort', 'realtime']).optional(),
   ioLevel: z.number().int().min(0).max(7).optional(),
+});
+
+/** PUT /api/execution/model-config */
+export const ModelConfigUpdateSchema = z.record(z.string(), z.unknown());
+
+/** PUT /api/subagent-window-states */
+export const SubagentWindowStatesSchema = z.object({
+  minimized: z.record(z.string(), z.boolean()).optional(),
+  open: z.array(z.string()).optional(),
+}).passthrough();
+
+/** PUT /api/subagent-parents */
+export const SubagentParentMapSchema = z.record(z.string(), z.string());
+
+/** POST /api/sessions/:id/interactive-respawn */
+export const InteractiveRespawnSchema = z.object({
+  respawnConfig: RespawnConfigSchema.optional(),
+  durationMinutes: z.number().int().min(1).max(14400).optional(),
+});
+
+/** POST /api/sessions/:id/respawn/enable */
+export const RespawnEnableSchema = z.object({
+  config: RespawnConfigSchema.optional(),
+  durationMinutes: z.number().int().min(1).max(14400).optional(),
 });
