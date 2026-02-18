@@ -9408,7 +9408,7 @@ class ClaudemanApp {
     document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? defaults.subagentTrackingEnabled ?? true;
     document.getElementById('appSettingsSubagentActiveTabOnly').checked = settings.subagentActiveTabOnly ?? defaults.subagentActiveTabOnly ?? true;
     document.getElementById('appSettingsImageWatcherEnabled').checked = settings.imageWatcherEnabled ?? defaults.imageWatcherEnabled ?? false;
-    document.getElementById('appSettingsTabTwoRows').checked = settings.tabTwoRows ?? defaults.tabTwoRows ?? true;
+    document.getElementById('appSettingsTabTwoRows').checked = settings.tabTwoRows ?? defaults.tabTwoRows ?? false;
     // Claude CLI settings
     const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
     const allowedToolsRow = document.getElementById('allowedToolsRow');
@@ -9821,10 +9821,10 @@ class ClaudemanApp {
   applyTabWrapSettings() {
     const settings = this.loadAppSettingsFromStorage();
     const defaults = this.getDefaultSettings();
-    const twoRows = settings.tabTwoRows ?? defaults.tabTwoRows ?? true;
+    const twoRows = settings.tabTwoRows ?? defaults.tabTwoRows ?? false;
     const tabsEl = document.getElementById('sessionTabs');
     if (tabsEl) {
-      tabsEl.classList.toggle('tabs-single-row', !twoRows);
+      tabsEl.classList.toggle('tabs-two-rows', twoRows);
     }
   }
 

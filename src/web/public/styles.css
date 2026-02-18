@@ -173,21 +173,21 @@ body {
 .session-tabs {
   display: flex;
   align-items: flex-start;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px 2px;
   flex: 1;
-  overflow-y: auto;
-  max-height: 120px;
+  overflow-x: auto;
+  overflow-y: hidden;
   padding: 0.15rem 0.25rem;
   /* Performance: isolate layout recalculations */
   contain: layout;
 }
 
-.session-tabs.tabs-single-row {
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  overflow-y: hidden;
-  max-height: none;
+.session-tabs.tabs-two-rows {
+  flex-wrap: wrap;
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-height: 120px;
 }
 
 .session-tabs::-webkit-scrollbar {
