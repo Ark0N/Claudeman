@@ -4224,9 +4224,11 @@ kbd {
   transition: transform 0.1s, background 0.15s;
 }
 
-.session-tab .tab-subagent-badge:hover {
-  background: var(--accent-hover);
-  transform: scale(1.05);
+@media (hover: hover) {
+  .session-tab .tab-subagent-badge:hover {
+    background: var(--accent-hover);
+    transform: scale(1.05);
+  }
 }
 
 .session-tab .tab-subagent-badge .subagent-label {
@@ -4278,8 +4280,33 @@ kbd {
   transition: background 0.1s;
 }
 
-.subagent-dropdown-item:hover {
-  background: var(--bg-hover);
+/* Hover styles only for devices with real hover (mouse/trackpad).
+   On iOS Safari, :hover triggers a "double-tap" requirement — first tap activates
+   hover state, second tap fires click. Guarding with @media(hover:hover) avoids this. */
+@media (hover: hover) {
+  .subagent-dropdown-item:hover {
+    background: var(--bg-hover);
+  }
+  .subagent-dropdown-item:hover .subagent-dropdown-name {
+    color: var(--accent-hover);
+  }
+  .subagent-dropdown-item:hover .subagent-dropdown-close {
+    opacity: 0.6;
+  }
+  .subagent-dropdown-close:hover {
+    opacity: 1;
+    color: var(--red);
+  }
+}
+
+/* Touch devices: show active state on tap instead of hover */
+@media (hover: none) {
+  .subagent-dropdown-item:active {
+    background: var(--bg-hover);
+  }
+  .subagent-dropdown-close {
+    opacity: 0.6; /* Always visible on touch (no hover to reveal) */
+  }
 }
 
 /* Status dot instead of text label */
@@ -4313,10 +4340,6 @@ kbd {
   white-space: nowrap;
 }
 
-.subagent-dropdown-item:hover .subagent-dropdown-name {
-  color: var(--accent-hover);
-}
-
 .subagent-dropdown-close {
   font-size: 0.9rem;
   color: var(--text-muted);
@@ -4324,15 +4347,6 @@ kbd {
   padding: 0 2px;
   opacity: 0;
   transition: opacity 0.1s, color 0.1s;
-}
-
-.subagent-dropdown-item:hover .subagent-dropdown-close {
-  opacity: 0.6;
-}
-
-.subagent-dropdown-close:hover {
-  opacity: 1;
-  color: var(--red);
 }
 
 /* Task Panel */

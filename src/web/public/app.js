@@ -4062,6 +4062,21 @@ class ClaudemanApp {
     const dropdown = document.querySelector('.subagent-dropdown.open');
     if (!dropdown) {
       this.showSubagentDropdown(badgeEl);
+      // On mobile/touch, pin immediately so onmouseleave doesn't close it
+      const openedDropdown = document.querySelector('.subagent-dropdown.open');
+      if (openedDropdown) {
+        openedDropdown.classList.add('pinned');
+        const closeHandler = (e) => {
+          if (!badgeEl.contains(e.target) && !openedDropdown.contains(e.target)) {
+            openedDropdown.classList.remove('open', 'pinned');
+            if (openedDropdown._originalParent) {
+              openedDropdown._originalParent.appendChild(openedDropdown);
+            }
+            document.removeEventListener('click', closeHandler);
+          }
+        };
+        setTimeout(() => document.addEventListener('click', closeHandler), 0);
+      }
       return;
     }
     dropdown.classList.toggle('pinned');
@@ -9766,7 +9781,7 @@ class ClaudemanApp {
         showMonitor: false,
         showProjectInsights: false,
         showFileBrowser: false,
-        showSubagents: true,
+        showSubagents: false,
         // Feature toggles - keep tracking on even on mobile
         subagentTrackingEnabled: true,
         subagentActiveTabOnly: true, // Only show subagents for active tab
