@@ -6,9 +6,10 @@
  */
 
 import { execSync } from 'child_process';
-import { existsSync } from 'fs';
+import { chmodSync, existsSync } from 'fs';
 import { homedir, platform } from 'os';
 import { join } from 'path';
+import { createRequire } from 'module';
 
 // ============================================================================
 // Configuration
@@ -113,6 +114,38 @@ if (majorVersion < MIN_NODE_VERSION) {
     hasErrors = true;
 } else {
     console.log(colors.green(`✓ Node.js v${nodeVersion}`) + colors.dim(` (meets >=v${MIN_NODE_VERSION} requirement)`));
+}
+
+// ----------------------------------------------------------------------------
+// 1b. Fix node-pty spawn-helper permissions (macOS posix_spawnp fix)
+// ----------------------------------------------------------------------------
+
+try {
+    const require = createRequire(import.meta.url);
+    const ptyPath = join(require.resolve('node-pty'), '..');
+    const spawnHelper = join(ptyPath, 'build', 'Release', 'spawn-helper');
+    if (existsSync(spawnHelper)) {
+        chmodSync(spawnHelper, 0o755);
+        console.log(colors.green('✓ node-pty spawn-helper permissions fixed'));
+    }
+} catch {
+    // Non-critical — only affects macOS with prebuilt binaries
+}
+
+// ----------------------------------------------------------------------------
+// 1c. Rebuild node-pty from source for Node.js 22+ compatibility
+// ----------------------------------------------------------------------------
+
+if (majorVersion >= 22) {
+    try {
+        console.log(colors.dim('  Rebuilding node-pty from source for Node.js 22+...'));
+        execSync('npm rebuild node-pty --build-from-source', { stdio: 'pipe', timeout: 120000 });
+        console.log(colors.green('✓ node-pty rebuilt from source'));
+    } catch {
+        hasWarnings = true;
+        console.log(colors.yellow('⚠ Failed to rebuild node-pty from source'));
+        console.log(colors.dim('  You may need to run: npm rebuild node-pty --build-from-source'));
+    }
 }
 
 // ----------------------------------------------------------------------------

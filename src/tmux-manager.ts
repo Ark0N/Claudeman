@@ -257,6 +257,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const pathExport = claudeDir ? `export PATH="${claudeDir}:$PATH" && ` : '';
 
     const envExports = [
+      'unset CLAUDECODE',
+      'unset COLORTERM',
       'export CLAUDEMAN_SCREEN=1',
       `export CLAUDEMAN_SESSION_ID=${sessionId}`,
       `export CLAUDEMAN_SCREEN_NAME=${muxName}`,

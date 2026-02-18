@@ -284,9 +284,37 @@ body {
 .session-tab.active[data-color="purple"] { background: rgba(168, 85, 247, 0.1); }
 .session-tab.active[data-color="pink"] { background: rgba(236, 72, 153, 0.1); }
 
+.session-tab .tab-info {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.session-tab .tab-name-row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
 .session-tab .tab-name {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.session-tab .tab-folder {
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+@media (max-width: 768px) {
+  .session-tab .tab-folder {
+    display: none;
+  }
 }
 
 .session-tab .tab-close {
@@ -2785,7 +2813,7 @@ body {
   justify-content: flex-end;
   gap: 0.5rem;
   margin-top: 1rem;
-  padding-top: 0.75rem;
+  padding: 0.75rem;
   border-top: 1px solid var(--border);
 }
 
@@ -2846,7 +2874,7 @@ body {
 }
 
 .modal-content.modal-lg {
-  max-width: 520px;
+  max-width: 540px;
   max-height: 85vh;
   display: flex;
   flex-direction: column;

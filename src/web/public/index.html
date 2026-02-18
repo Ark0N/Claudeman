@@ -549,6 +549,11 @@
           <div class="modal-tab-content hidden" id="context-tab">
             <div class="form-section-header">Appearance</div>
             <div class="form-row">
+              <label>Session Name</label>
+              <input type="text" id="modalSessionName" maxlength="128" placeholder="Auto (directory name)" onblur="app.saveSessionName()">
+              <span class="form-hint">Custom name shown in the tab (right-click tab to rename inline)</span>
+            </div>
+            <div class="form-row">
               <label>Session Color</label>
               <div class="color-picker" id="sessionColorPicker">
                 <button type="button" class="color-swatch" data-color="default" title="Default">

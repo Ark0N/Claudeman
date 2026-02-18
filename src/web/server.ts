@@ -542,6 +542,22 @@ export class WebServer extends EventEmitter {
       threshold: 1024,
     });
 
+    // Optional HTTP Basic Auth (set CLAUDEMAN_PASSWORD env var to enable)
+    const authPassword = process.env.CLAUDEMAN_PASSWORD;
+    if (authPassword) {
+      const authUsername = process.env.CLAUDEMAN_USERNAME || 'admin';
+      const expectedHeader = 'Basic ' + Buffer.from(`${authUsername}:${authPassword}`).toString('base64');
+      this.app.addHook('onRequest', (req, reply, done) => {
+        const auth = req.headers.authorization;
+        if (auth === expectedHeader) {
+          done();
+          return;
+        }
+        reply.header('WWW-Authenticate', 'Basic realm="Claudeman"');
+        reply.code(401).send('Unauthorized');
+      });
+    }
+
     // Security headers on every response
     this.app.addHook('onRequest', (_req, reply, done) => {
       reply.header('X-Content-Type-Options', 'nosniff');
@@ -2887,7 +2903,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     this.app.get('/api/cases/:caseName/ralph-wizard/files', async (req) => {
       const { caseName } = req.params as { caseName: string };
       const casesDir = join(homedir(), 'claudeman-cases');
-      const casePath = join(casesDir, caseName);
+      let casePath = join(casesDir, caseName);
 
       // Security: Path traversal protection - use relative path check
       const resolvedCase = resolve(casePath);
@@ -2895,6 +2911,19 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       const relPath = relative(resolvedBase, resolvedCase);
       if (relPath.startsWith('..') || isAbsolute(relPath)) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
+      }
+
+      // Check linked cases if path doesn't exist
+      if (!existsSync(casePath)) {
+        const linkedCasesFile = join(homedir(), '.claudeman', 'linked-cases.json');
+        try {
+          const linkedCases: Record<string, string> = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
+          if (linkedCases[caseName]) {
+            casePath = linkedCases[caseName];
+          }
+        } catch {
+          // No linked cases file
+        }
       }
 
       const wizardDir = join(casePath, 'ralph-wizard');
@@ -2935,7 +2964,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     this.app.get('/api/cases/:caseName/ralph-wizard/file/:filePath', async (req, reply) => {
       const { caseName, filePath } = req.params as { caseName: string; filePath: string };
       const casesDir = join(homedir(), 'claudeman-cases');
-      const casePath = join(casesDir, caseName);
+      let casePath = join(casesDir, caseName);
 
       // Prevent browser caching - prompts change between plan generations
       reply.header('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -2948,6 +2977,19 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       const relPath = relative(resolvedBase, resolvedCase);
       if (relPath.startsWith('..') || isAbsolute(relPath)) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
+      }
+
+      // Check linked cases if path doesn't exist
+      if (!existsSync(casePath)) {
+        const linkedCasesFile = join(homedir(), '.claudeman', 'linked-cases.json');
+        try {
+          const linkedCases: Record<string, string> = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
+          if (linkedCases[caseName]) {
+            casePath = linkedCases[caseName];
+          }
+        } catch {
+          // No linked cases file
+        }
       }
 
       const wizardDir = join(casePath, 'ralph-wizard');
@@ -2974,13 +3016,30 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       }
       const isJson = filePath.endsWith('.json');
 
-      // Parse JSON content safely (may contain invalid JSON)
+      // Parse JSON content safely (may contain invalid JSON or unescaped control characters)
       let parsed: unknown = null;
       if (isJson) {
         try {
           parsed = JSON.parse(content);
         } catch {
-          // Invalid JSON - return null for parsed, content still available as raw string
+          // Try repairing common JSON issues (unescaped control characters, trailing commas)
+          try {
+            let repaired = content;
+            // Fix trailing commas before closing brackets
+            repaired = repaired.replace(/,(\s*[\]}])/g, '$1');
+            // Fix unescaped control characters within JSON strings
+            repaired = repaired.replace(/"([^"\\]|\\.)*"/g, (match) => {
+              return match
+                .replace(/\n/g, '\\n')
+                .replace(/\r/g, '\\r')
+                .replace(/\t/g, '\\t')
+                // eslint-disable-next-line no-control-regex
+                .replace(/[\x00-\x1f]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+            });
+            parsed = JSON.parse(repaired);
+          } catch {
+            // Still invalid - return null for parsed, content available as raw string
+          }
         }
       }
 

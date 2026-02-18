@@ -869,7 +869,7 @@ export class Session extends EventEmitter {
             cols: 120,
             rows: 40,
             cwd: this.workingDir,
-            env: { ...process.env, TERM: 'xterm-256color' },
+            env: { ...process.env, TERM: 'xterm-256color', COLORTERM: undefined, CLAUDECODE: undefined },
           });
 
           // Set claudeSessionId immediately since we passed --session-id to Claude
@@ -939,6 +939,8 @@ export class Session extends EventEmitter {
             ...process.env,
             PATH: getAugmentedPath(),
             TERM: 'xterm-256color',
+            COLORTERM: undefined,
+            CLAUDECODE: undefined,
             // Inform Claude it's running within Claudeman (helps prevent self-termination)
             CLAUDEMAN_SCREEN: '1',
             CLAUDEMAN_SESSION_ID: this.id,
@@ -1147,7 +1149,7 @@ export class Session extends EventEmitter {
             cols: 120,
             rows: 40,
             cwd: this.workingDir,
-            env: { ...process.env, TERM: 'xterm-256color' },
+            env: { ...process.env, TERM: 'xterm-256color', COLORTERM: undefined, CLAUDECODE: undefined },
           });
         } catch (spawnErr) {
           console.error('[Session] Failed to spawn PTY for shell mux attachment:', spawnErr);
@@ -1293,6 +1295,7 @@ export class Session extends EventEmitter {
 
         const args = [
           '-p',
+          '--verbose',
           '--dangerously-skip-permissions',
           '--output-format', 'stream-json',
         ];
@@ -1311,6 +1314,8 @@ export class Session extends EventEmitter {
               ...process.env,
               PATH: getAugmentedPath(),
               TERM: 'xterm-256color',
+              COLORTERM: undefined,
+              CLAUDECODE: undefined,
               // Inform Claude it's running within Claudeman
               CLAUDEMAN_SCREEN: '1',
               CLAUDEMAN_SESSION_ID: this.id,

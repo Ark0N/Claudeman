@@ -3719,10 +3719,19 @@ class ClaudemanApp {
       const minimizedCount = minimizedAgents?.size || 0;
       const subagentBadge = minimizedCount > 0 ? this.renderSubagentTabBadge(id, minimizedAgents) : '';
 
-      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}" data-id="${id}" data-color="${color}" onclick="app.selectSession('${this.escapeHtml(id)}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${this.escapeHtml(id)}')" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-label="${this.escapeHtml(name)} session">
+      // Show folder name if session has a custom name (to still show the directory context)
+      const folderName = session.workingDir ? session.workingDir.split('/').pop() || '' : '';
+      const showFolder = session.name && folderName && folderName !== name;
+
+      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}" data-id="${id}" data-color="${color}" onclick="app.selectSession('${this.escapeHtml(id)}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${this.escapeHtml(id)}')" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-label="${this.escapeHtml(name)} session" ${session.workingDir ? `title="${this.escapeHtml(session.workingDir)}"` : ''}>
           <span class="tab-status ${status}" aria-hidden="true"></span>
-          ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : ''}
-          <span class="tab-name" data-session-id="${id}">${this.escapeHtml(name)}</span>
+          <span class="tab-info">
+            <span class="tab-name-row">
+              ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : ''}
+              <span class="tab-name" data-session-id="${id}">${this.escapeHtml(name)}</span>
+            </span>
+            ${showFolder ? `<span class="tab-folder">\u{1F4C1} ${this.escapeHtml(folderName)}</span>` : ''}
+          </span>
           ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()" aria-label="${taskStats.running} running tasks">${taskStats.running}</span>` : ''}
           ${subagentBadge}
           <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${this.escapeHtml(id)}')" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span>
@@ -8482,6 +8491,9 @@ class ClaudemanApp {
     document.getElementById('modalImageWatcherEnabled').checked = session.imageWatcherEnabled ?? true;
     document.getElementById('modalFlickerFilterEnabled').checked = session.flickerFilterEnabled ?? false;
 
+    // Populate session name input
+    document.getElementById('modalSessionName').value = session.name || '';
+
     // Initialize color picker with current session color
     const currentColor = session.color || 'default';
     const colorPicker = document.getElementById('sessionColorPicker');
@@ -8508,6 +8520,20 @@ class ClaudemanApp {
     // Activate focus trap
     this.activeFocusTrap = new FocusTrap(modal);
     this.activeFocusTrap.activate();
+  }
+
+  async saveSessionName() {
+    if (!this.editingSessionId) return;
+    const name = document.getElementById('modalSessionName').value.trim();
+    try {
+      await fetch(`/api/sessions/${this.editingSessionId}/name`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+    } catch (err) {
+      this.showToast('Failed to save session name: ' + err.message, 'error');
+    }
   }
 
   async autoSaveAutoCompact() {
