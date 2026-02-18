@@ -1340,6 +1340,7 @@ class ClaudemanApp {
     this.fitAddon = null;
     this.activeSessionId = null;
     this._initGeneration = 0;     // dedup concurrent handleInit calls
+    this._initFallbackTimer = null; // fallback timer if SSE init doesn't arrive
     this._selectGeneration = 0;   // cancel stale selectSession loads
     this.respawnStatus = {};
     this.respawnTimers = {}; // Track timed respawn timers
@@ -1551,8 +1552,13 @@ class ClaudemanApp {
     // The inline <script> in <head> added this to prevent flash-of-content on mobile.
     document.documentElement.classList.remove('mobile-init');
     this.connectSSE();
-    this.loadState();
-    this.loadQuickStartCases();
+    // Only fetch state if SSE init event hasn't arrived within 3s (avoids duplicate handleInit)
+    this._initFallbackTimer = setTimeout(() => {
+      if (this._initGeneration === 0) this.loadState();
+    }, 3000);
+    // Share a single settings fetch between both consumers
+    const settingsPromise = fetch('/api/settings').then(r => r.ok ? r.json() : null).catch(() => null);
+    this.loadQuickStartCases(null, settingsPromise);
     this.setupEventListeners();
     // Mobile settings gear: non-passive touchstart to prevent keyboard dismiss
     const settingsBtn = document.querySelector('.btn-settings-mobile');
@@ -1563,12 +1569,11 @@ class ClaudemanApp {
         app.openAppSettings();
       }, { passive: false });
     }
-    // Start system stats polling
-    this.startSystemStatsPolling();
+    // System stats polling deferred until sessions exist (started in handleInit/session:created)
     // Setup online/offline detection
     this.setupOnlineDetection();
     // Load server-stored settings (async, re-applies visibility after load)
-    this.loadAppSettingsFromServer().then(() => {
+    this.loadAppSettingsFromServer(settingsPromise).then(() => {
       this.applyHeaderVisibilitySettings();
       this.applyTabWrapSettings();
       this.applyMonitorVisibility();
@@ -2308,6 +2313,8 @@ class ClaudemanApp {
       }
       this.renderSessionTabs();
       this.updateCost();
+      // Start stats polling when first session appears
+      if (this.sessions.size === 1) this.startSystemStatsPolling();
     });
 
     addListener('session:updated', (e) => {
@@ -2348,6 +2355,8 @@ class ClaudemanApp {
       this.renderSessionTabs();
       this.renderRalphStatePanel();  // Update ralph panel after session deleted
       this.renderProjectInsightsPanel();  // Update project insights panel after session deleted
+      // Stop stats polling when no sessions remain
+      if (this.sessions.size === 0) this.stopSystemStatsPolling();
     });
 
     addListener('session:terminal', (e) => {
@@ -3370,6 +3379,11 @@ class ClaudemanApp {
   }
 
   handleInit(data) {
+    // Clear the init fallback timer since we got data
+    if (this._initFallbackTimer) {
+      clearTimeout(this._initFallbackTimer);
+      this._initFallbackTimer = null;
+    }
     const gen = ++this._initGeneration;
 
     // Update version displays (header and toolbar)
@@ -3497,6 +3511,13 @@ class ClaudemanApp {
 
     this.updateCost();
     this.renderSessionTabs();
+
+    // Start/stop system stats polling based on session count
+    if (this.sessions.size > 0) {
+      this.startSystemStatsPolling();
+    } else {
+      this.stopSystemStatsPolling();
+    }
 
     // CRITICAL: Clean up all floating windows before loading new subagents
     // This prevents memory leaks from ResizeObservers, EventSources, and DOM elements
@@ -7334,22 +7355,20 @@ class ClaudemanApp {
 
   // ========== Quick Start ==========
 
-  async loadQuickStartCases(selectCaseName = null) {
+  async loadQuickStartCases(selectCaseName = null, settingsPromise = null) {
     try {
-      // Load settings to get lastUsedCase
+      // Load settings to get lastUsedCase (reuse shared promise if provided)
       let lastUsedCase = null;
       try {
-        const settingsRes = await fetch('/api/settings');
-        if (settingsRes.ok) {
-          const settings = await settingsRes.json();
+        const settings = settingsPromise ? await settingsPromise : await fetch('/api/settings').then(r => r.ok ? r.json() : null);
+        if (settings) {
           lastUsedCase = settings.lastUsedCase || null;
         }
       } catch {
         // Ignore settings load errors
       }
 
-      // Add cache-busting to ensure fresh data
-      const res = await fetch('/api/cases?_t=' + Date.now());
+      const res = await fetch('/api/cases');
       const cases = await res.json();
       this.cases = cases;
       console.log('[loadQuickStartCases] Loaded cases:', cases.map(c => c.name), 'lastUsedCase:', lastUsedCase);
@@ -9967,11 +9986,10 @@ class ClaudemanApp {
     }
   }
 
-  async loadAppSettingsFromServer() {
+  async loadAppSettingsFromServer(settingsPromise = null) {
     try {
-      const res = await fetch('/api/settings');
-      if (res.ok) {
-        const settings = await res.json();
+      const settings = settingsPromise ? await settingsPromise : await fetch('/api/settings').then(r => r.ok ? r.json() : null);
+      if (settings) {
         // Extract notification prefs before merging app settings
         const { notificationPreferences, ...appSettings } = settings;
         // Filter out display settings — these are device-specific (mobile vs desktop)
