@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 
+# Vendored frontend deps (generated from node_modules by postinstall/build)
+src/web/public/vendor/
+
 # Test coverage
 coverage/
 

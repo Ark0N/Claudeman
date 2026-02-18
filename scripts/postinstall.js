@@ -207,6 +207,38 @@ if (claudeFound) {
 }
 
 // ----------------------------------------------------------------------------
+// 4. Copy xterm vendor files for dev mode (src/web/public/vendor/)
+// ----------------------------------------------------------------------------
+
+try {
+    const require = createRequire(import.meta.url);
+    const xtermDir = join(require.resolve('xterm'), '..', '..');
+    const fitDir = join(require.resolve('xterm-addon-fit'), '..', '..');
+    const vendorDir = join(import.meta.dirname, '..', 'src', 'web', 'public', 'vendor');
+
+    const { mkdirSync, copyFileSync } = await import('fs');
+    mkdirSync(vendorDir, { recursive: true });
+    copyFileSync(join(xtermDir, 'css', 'xterm.css'), join(vendorDir, 'xterm.css'));
+
+    // Minify xterm JS for dev vendor dir (npm packages don't ship .min.js)
+    try {
+        execSync(`npx esbuild "${join(xtermDir, 'lib', 'xterm.js')}" --minify --outfile="${join(vendorDir, 'xterm.min.js')}"`, { stdio: 'pipe' });
+        execSync(`npx esbuild "${join(fitDir, 'lib', 'xterm-addon-fit.js')}" --minify --outfile="${join(vendorDir, 'xterm-addon-fit.min.js')}"`, { stdio: 'pipe' });
+        console.log(colors.green('✓ xterm vendor files copied to src/web/public/vendor/'));
+    } catch {
+        // Fallback: copy unminified
+        copyFileSync(join(xtermDir, 'lib', 'xterm.js'), join(vendorDir, 'xterm.min.js'));
+        copyFileSync(join(fitDir, 'lib', 'xterm-addon-fit.js'), join(vendorDir, 'xterm-addon-fit.min.js'));
+        console.log(colors.green('✓ xterm vendor files copied') + colors.dim(' (unminified — esbuild not available)'));
+    }
+} catch (err) {
+    hasWarnings = true;
+    console.log(colors.yellow('⚠ Failed to copy xterm vendor files'));
+    console.log(colors.dim(`  ${err.message}`));
+    console.log(colors.dim('  Dev server may fail to load xterm.js — run: npm run build'));
+}
+
+// ----------------------------------------------------------------------------
 // Print Summary and Next Steps
 // ----------------------------------------------------------------------------
 

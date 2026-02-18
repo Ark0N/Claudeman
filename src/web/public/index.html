@@ -5,23 +5,42 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="Claude Code session manager with web interface">
   <meta name="theme-color" content="#0a0a0a">
+  <meta name="google" content="notranslate">
   <title>Claudeman</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2360a5fa'/%3E%3Cstop offset='100%25' stop-color='%233b82f6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='6' fill='%230a0a0a'/%3E%3Cpath d='M18 4L8 18h6l-2 10 10-14h-6z' fill='url(%23g)'/%3E%3C/svg%3E">
-  <!-- DNS preconnect for CDN — saves ~100ms on first load -->
-  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-  <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
   <link rel="stylesheet" href="styles.css?v=0.1536">
   <link rel="stylesheet" href="mobile.css?v=0.1536" media="(max-width: 1023px)">
-  <link rel="preload" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
-  <noscript><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css"></noscript>
-  <!-- Defer CDN scripts — they no longer block initial HTML parsing/paint.
+  <!-- xterm.css loaded async — terminal won't display until xterm.js runs anyway -->
+  <link rel="preload" href="vendor/xterm.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="vendor/xterm.css"></noscript>
+  <!-- Self-hosted xterm.js — eliminates CDN DNS/TLS latency (~100ms).
        'defer' preserves execution order (xterm loads before fit addon). -->
-  <script defer src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <script defer src="vendor/xterm.min.js"></script>
+  <script defer src="vendor/xterm-addon-fit.min.js"></script>
   <!-- Synchronous mobile detection — runs before first paint to prevent panel flash -->
   <script>if(window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024))document.documentElement.classList.add('mobile-init');</script>
+  <!-- Inline critical CSS for instant skeleton paint (before styles.css loads) -->
+  <style>
+    .loading-skeleton{display:flex;flex-direction:column;height:100vh;background:#0a0a0a}
+    .skeleton-header{height:40px;background:#111;border-bottom:1px solid #1a1a2e;display:flex;align-items:center;padding:0 12px}
+    .skeleton-brand{color:#60a5fa;font-size:14px;font-weight:600;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;opacity:.7}
+    .skeleton-tabs{display:flex;gap:4px;margin-left:16px}
+    .skeleton-tab{width:80px;height:24px;background:#1a1a2e;border-radius:4px}
+    .skeleton-terminal{flex:1;background:#0d0d0d}
+    .skeleton-toolbar{height:32px;background:#111;border-top:1px solid #1a1a2e}
+    .app-loaded .loading-skeleton{display:none}
+  </style>
 </head>
 <body>
+  <!-- Loading skeleton — visible instantly before CSS/JS loads, hidden by app-loaded class -->
+  <div class="loading-skeleton">
+    <div class="skeleton-header">
+      <span class="skeleton-brand">Claudeman</span>
+      <div class="skeleton-tabs"><div class="skeleton-tab"></div></div>
+    </div>
+    <div class="skeleton-terminal"></div>
+    <div class="skeleton-toolbar"></div>
+  </div>
   <!-- Skip link for keyboard users -->
   <a href="#terminalContainer" class="skip-link">Skip to terminal</a>
   <div class="app">

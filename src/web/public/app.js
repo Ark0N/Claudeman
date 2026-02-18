@@ -1543,14 +1543,17 @@ class ClaudemanApp {
     KeyboardHandler.init();
     SwipeHandler.init();
     KeyboardAccessoryBar.init();
-    this.initTerminal();
-    this.loadFontSize();
     this.applyHeaderVisibilitySettings();
     this.applyTabWrapSettings();
     this.applyMonitorVisibility();
     // Remove mobile-init class now that JS has applied visibility settings.
     // The inline <script> in <head> added this to prevent flash-of-content on mobile.
     document.documentElement.classList.remove('mobile-init');
+    // Defer heavy terminal canvas creation to next frame — lets browser paint header/skeleton first
+    requestAnimationFrame(() => {
+      this.initTerminal();
+      this.loadFontSize();
+    });
     this.connectSSE();
     // Only fetch state if SSE init event hasn't arrived within 3s (avoids duplicate handleInit)
     this._initFallbackTimer = setTimeout(() => {
@@ -1578,6 +1581,8 @@ class ClaudemanApp {
       this.applyTabWrapSettings();
       this.applyMonitorVisibility();
     });
+    // Hide loading skeleton now that the app shell is ready
+    document.body.classList.add('app-loaded');
   }
 
   initTerminal() {
@@ -3431,9 +3436,11 @@ class ClaudemanApp {
     // Clear subagent activity/results maps (prevents leaks if data.subagents is missing)
     this.subagentActivity.clear();
     this.subagentToolResults.clear();
-    // Clean up mobile/keyboard handlers before potential re-init
+    // Clean up mobile/keyboard handlers and re-init (prevents listener accumulation on reconnect)
     MobileDetection.cleanup();
     KeyboardHandler.cleanup();
+    MobileDetection.init();
+    KeyboardHandler.init();
     // Clear tab alerts
     this.tabAlerts.clear();
     // Clear shown completions (used for duplicate notification prevention)

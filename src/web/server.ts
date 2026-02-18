@@ -593,12 +593,12 @@ export class WebServer extends EventEmitter {
       done();
     });
 
-    // Serve static files with caching headers for immutable CDN-like assets
+    // Serve static files — versioned assets (?v=X) are immutable, cache aggressively
     await this.app.register(fastifyStatic, {
       root: join(__dirname, 'public'),
       prefix: '/',
-      // Cache static assets for 1 hour (they change on deploy, not during session)
-      maxAge: '1h',
+      maxAge: '1y',
+      immutable: true,
     });
 
     // SSE endpoint for real-time updates
