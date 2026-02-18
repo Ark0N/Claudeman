@@ -1075,6 +1075,11 @@ html.mobile-init .file-browser-panel {
     overflow-y: auto;
   }
 
+  /* When keyboard opens in case modal, let body grow taller */
+  .keyboard-visible #createCaseModal .modal-body {
+    max-height: 60vh;
+  }
+
   /* Mobile Case Picker - Mobile-specific overrides */
   .mobile-case-picker .modal-backdrop {
     background: rgba(0, 0, 0, 0.5);
@@ -1126,6 +1131,98 @@ html.mobile-init .file-browser-panel {
     font-size: 0.65rem;
     white-space: nowrap;
     flex-shrink: 0;
+  }
+
+  /* ---- Case Modal: Mobile Touch Optimizations ---- */
+
+  /* Larger tab buttons for case modal - easy to tap */
+  #createCaseModal .modal-tabs {
+    gap: 0.5rem;
+    padding: 0.5rem 1rem 0.75rem;
+  }
+
+  #createCaseModal .modal-tab-btn {
+    flex: 1;
+    min-height: 44px;
+    padding: 0.6rem 1rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+    border-radius: 8px;
+    justify-content: center;
+    text-align: center;
+  }
+
+  /* Touch-friendly form inputs in case modal */
+  #createCaseModal .form-row {
+    margin-bottom: 1rem;
+  }
+
+  #createCaseModal .form-row label {
+    font-size: 0.8rem;
+    margin-bottom: 0.4rem;
+    font-weight: 500;
+    color: #e5e7eb;
+  }
+
+  #createCaseModal .form-row input[type="text"] {
+    min-height: 44px;
+    font-size: 16px; /* Prevents iOS zoom on focus */
+    padding: 0.5rem 0.75rem;
+    border-radius: 8px;
+  }
+
+  #createCaseModal .form-row .form-hint {
+    font-size: 0.65rem;
+    margin-top: 0.35rem;
+    line-height: 1.4;
+  }
+
+  /* Touch-friendly action buttons in case modal */
+  #createCaseModal .form-actions {
+    padding: 0.75rem 1rem;
+    padding-bottom: calc(0.75rem + var(--safe-area-bottom));
+    gap: 0.75rem;
+  }
+
+  #createCaseModal .form-actions .btn-toolbar {
+    min-height: 44px !important;
+    max-height: 44px !important;
+    height: 44px !important;
+    font-size: 0.85rem !important;
+    font-weight: 500;
+    border-radius: 8px;
+  }
+
+  /* Loading state for submit button */
+  #caseModalSubmit.loading {
+    opacity: 0.6;
+    pointer-events: none;
+  }
+
+  /* Smooth open animation for case modal from mobile picker */
+  #createCaseModal.from-mobile .modal-content {
+    animation: caseModalSlideUp 0.25s ease-out;
+  }
+
+  @keyframes caseModalSlideUp {
+    from {
+      transform: translateY(30px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+
+  /* Mobile case picker - larger create button (override btn-toolbar !important) */
+  .btn-case-create-mobile {
+    min-height: 48px !important;
+    max-height: 48px !important;
+    height: 48px !important;
+    font-size: 0.85rem !important;
+    font-weight: 500;
+    border-radius: 10px;
   }
 
   /* Settings grid - single column on phones */

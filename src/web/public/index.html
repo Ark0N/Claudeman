@@ -1110,25 +1110,25 @@
           <div class="modal-tab-content" id="case-create">
             <div class="form-row">
               <label>Case Name</label>
-              <input type="text" id="newCaseName" placeholder="my-project" pattern="[a-zA-Z0-9_-]+">
+              <input type="text" id="newCaseName" placeholder="my-project" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
               <span class="form-hint">Letters, numbers, hyphens, underscores only. Created in ~/claudeman-cases/</span>
             </div>
             <div class="form-row">
               <label>Description (optional)</label>
-              <input type="text" id="newCaseDescription" placeholder="A brief description...">
+              <input type="text" id="newCaseDescription" placeholder="A brief description..." autocomplete="off">
             </div>
           </div>
           <!-- Link Existing Tab -->
           <div class="modal-tab-content hidden" id="case-link">
             <div class="form-row">
               <label>Case Name</label>
-              <input type="text" id="linkCaseName" placeholder="my-project" pattern="[a-zA-Z0-9_-]+">
+              <input type="text" id="linkCaseName" placeholder="my-project" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
               <span class="form-hint">Name to identify this case in Claudeman</span>
             </div>
             <div class="form-row">
               <label>Folder Path</label>
-              <input type="text" id="linkCasePath" placeholder="/home/user/projects/my-project">
-              <span class="form-hint">Absolute path to an existing project folder</span>
+              <input type="text" id="linkCasePath" placeholder="/home/user/projects/my-project" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+              <span class="form-hint">Absolute path to an existing project folder, e.g. /home/you/my-project</span>
             </div>
           </div>
         </div>

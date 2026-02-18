@@ -14575,6 +14575,17 @@ class ClaudemanApp {
     modal.querySelectorAll('.modal-tabs .modal-tab-btn').forEach(btn => {
       btn.onclick = () => this.switchCaseModalTab(btn.dataset.tab);
     });
+    // Scroll-into-view on focus for mobile keyboard visibility
+    modal.querySelectorAll('input[type="text"]').forEach(input => {
+      if (!input._mobileScrollWired) {
+        input._mobileScrollWired = true;
+        input.addEventListener('focus', () => {
+          if (window.innerWidth <= 430) {
+            setTimeout(() => input.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
+          }
+        });
+      }
+    });
     modal.classList.add('active');
     document.getElementById('newCaseName').focus();
   }
@@ -14606,10 +14617,19 @@ class ClaudemanApp {
   }
 
   async submitCaseModal() {
-    if (this.caseModalTab === 'case-create') {
-      await this.createCase();
-    } else {
-      await this.linkCase();
+    const btn = document.getElementById('caseModalSubmit');
+    const originalText = btn.textContent;
+    btn.classList.add('loading');
+    btn.textContent = this.caseModalTab === 'case-create' ? 'Creating...' : 'Linking...';
+    try {
+      if (this.caseModalTab === 'case-create') {
+        await this.createCase();
+      } else {
+        await this.linkCase();
+      }
+    } finally {
+      btn.classList.remove('loading');
+      btn.textContent = originalText;
     }
   }
 
@@ -14771,8 +14791,12 @@ class ClaudemanApp {
   showCreateCaseFromMobile() {
     // Close mobile picker first
     this.closeMobileCasePicker();
-    // Open the create case modal
+    // Open the create case modal with slide-up animation
     this.showCreateCaseModal();
+    const modal = document.getElementById('createCaseModal');
+    modal.classList.add('from-mobile');
+    // Remove animation class after it plays
+    setTimeout(() => modal.classList.remove('from-mobile'), 300);
   }
 
   renderScreenSessions() {
