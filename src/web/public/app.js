@@ -1454,8 +1454,8 @@ class ClaudemanApp {
 
     // No local echo — let PTY/Ink handle all character echoing.
     // Local echo was removed because it's fundamentally incompatible with Ink's
-    // terminal management (caused "typing visible below" bug where locally-echoed
-    // chars leaked onto Ink's status bar rows).
+    // terminal management (causes chars to leak onto Ink's status bar rows below the prompt,
+    // even when only echoing during idle state).
 
     // Accessibility: Focus trap for modals
     this.activeFocusTrap = null;
@@ -4142,7 +4142,6 @@ class ClaudemanApp {
     }
     this.pendingWrites = [];
     this.writeFrameScheduled = false;
-
     this.activeSessionId = sessionId;
     try { localStorage.setItem('claudeman-active-session', sessionId); } catch {}
     this.hideWelcome();
@@ -9431,7 +9430,7 @@ class ClaudemanApp {
     document.getElementById('appSettingsShowMonitor').checked = settings.showMonitor ?? defaults.showMonitor ?? true;
     document.getElementById('appSettingsShowProjectInsights').checked = settings.showProjectInsights ?? defaults.showProjectInsights ?? false;
     document.getElementById('appSettingsShowFileBrowser').checked = settings.showFileBrowser ?? defaults.showFileBrowser ?? false;
-    document.getElementById('appSettingsShowSubagents').checked = settings.showSubagents ?? defaults.showSubagents ?? false;
+    document.getElementById('appSettingsShowSubagents').checked = settings.showSubagents ?? defaults.showSubagents ?? true;
     document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? defaults.subagentTrackingEnabled ?? true;
     document.getElementById('appSettingsSubagentActiveTabOnly').checked = settings.subagentActiveTabOnly ?? defaults.subagentActiveTabOnly ?? true;
     document.getElementById('appSettingsImageWatcherEnabled').checked = settings.imageWatcherEnabled ?? defaults.imageWatcherEnabled ?? false;
@@ -9767,9 +9766,9 @@ class ClaudemanApp {
         showMonitor: false,
         showProjectInsights: false,
         showFileBrowser: false,
-        showSubagents: false,
-        // Feature toggles - disable tracking features on mobile
-        subagentTrackingEnabled: false,
+        showSubagents: true,
+        // Feature toggles - keep tracking on even on mobile
+        subagentTrackingEnabled: true,
         subagentActiveTabOnly: true, // Only show subagents for active tab
         imageWatcherEnabled: false,
         ralphTrackerEnabled: false,
@@ -9870,7 +9869,7 @@ class ClaudemanApp {
     const settings = this.loadAppSettingsFromStorage();
     const defaults = this.getDefaultSettings();
     const showMonitor = settings.showMonitor ?? defaults.showMonitor ?? true;
-    const showSubagents = settings.showSubagents ?? defaults.showSubagents ?? false;
+    const showSubagents = settings.showSubagents ?? defaults.showSubagents ?? true;
     const showFileBrowser = settings.showFileBrowser ?? defaults.showFileBrowser ?? false;
 
     const monitorPanel = document.getElementById('monitorPanel');
