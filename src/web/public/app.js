@@ -861,9 +861,13 @@ class LocalEchoOverlay {
         // Opaque background so overlay covers old buffer text underneath.
         // xterm.js applies bg via internal rendering, not CSS — use theme option.
         this.overlay.style.backgroundColor = terminal.options?.theme?.background || '#0d0d0d';
+        // Persistent text node so _cursor span survives _render() updates
+        this._textNode = document.createTextNode('');
+        this.overlay.appendChild(this._textNode);
         // Block cursor matching Claude Code's idle prompt cursor
         this._cursor = document.createElement('span');
         this._cursor.style.cssText = 'display:inline-block;vertical-align:top';
+        this.overlay.appendChild(this._cursor);
         screen.appendChild(this.overlay);
         this.pendingText = '';
         this._storageKey = 'claudeman_local_echo_pending';
@@ -926,10 +930,7 @@ class LocalEchoOverlay {
     clear() {
         this.pendingText = '';
         this._persist();
-        this.overlay.textContent = '';
-        if (this._cursor.parentNode === this.overlay) {
-            this.overlay.removeChild(this._cursor);
-        }
+        this._textNode.textContent = '';
         this.overlay.style.display = 'none';
     }
 
@@ -958,12 +959,11 @@ class LocalEchoOverlay {
             // Cover any subpixel seam above overlay with matching box-shadow
             const bg = this.overlay.style.backgroundColor;
             this.overlay.style.boxShadow = `0 -1px 0 0 ${bg}`;
-            this.overlay.textContent = this.pendingText;
+            this._textNode.textContent = this.pendingText;
             // Block cursor: full cell width & height, matching Claude Code's cursor color
             this._cursor.style.width = cellW + 'px';
             this._cursor.style.height = cellH + 'px';
             this._cursor.style.backgroundColor = this.terminal.options?.theme?.cursor || '#e0e0e0';
-            this.overlay.appendChild(this._cursor);
             this.overlay.style.display = '';
         } catch {
             this.clear();
@@ -2183,27 +2183,36 @@ class ClaudemanApp {
     const session = this.activeSessionId ? this.sessions.get(this.activeSessionId) : null;
     const flickerFilterEnabled = session?.flickerFilterEnabled ?? false;
 
-    // Flicker filter: detect screen clear and cursor-up patterns and buffer output
+    // Always buffer Ink's cursor-up redraws regardless of flicker filter setting.
+    // Ink's status bar updates use cursor-up + erase-line + rewrite, which can split
+    // across render frames causing old/new status text to overlap (garbled output).
+    // Buffering for 50ms ensures the full redraw arrives atomically.
+    const hasCursorUpRedraw = /\x1b\[\d{1,2}A/.test(data);
+    if (hasCursorUpRedraw || (this.flickerFilterActive && !flickerFilterEnabled)) {
+      this.flickerFilterActive = true;
+      this.flickerFilterBuffer += data;
+
+      if (this.flickerFilterTimeout) {
+        clearTimeout(this.flickerFilterTimeout);
+      }
+      this.flickerFilterTimeout = setTimeout(() => {
+        this.flickerFilterTimeout = null;
+        this.flushFlickerBuffer();
+      }, SYNC_WAIT_TIMEOUT_MS); // 50ms buffer window
+
+      return;
+    }
+
+    // Opt-in flicker filter: also buffer screen clear patterns
     if (flickerFilterEnabled) {
-      // Detect Ink's redraw patterns:
-      // - ESC[2J (clear entire screen)
-      // - ESC[H ESC[J (cursor home + clear to end)
-      // - ESC[?25l ESC[H (hide cursor + home - common Ink pattern)
-      // - ESC[nA (cursor up n lines - Ink's line redraw pattern)
       const hasScreenClear = data.includes('\x1b[2J') ||
                              data.includes('\x1b[H\x1b[J') ||
                              (data.includes('\x1b[H') && data.includes('\x1b[?25l'));
 
-      // Detect cursor-up patterns (ESC[nA where n >= 2) - indicates Ink redrawing multiple lines
-      // Use regex to find ESC[nA where n is 2 or more digits
-      const hasCursorUpRedraw = /\x1b\[\d{1,2}A/.test(data);
-
-      if (hasScreenClear || hasCursorUpRedraw) {
-        // Redraw pattern detected - activate flicker filter
+      if (hasScreenClear) {
         this.flickerFilterActive = true;
         this.flickerFilterBuffer += data;
 
-        // Clear any existing timeout and set a new one
         if (this.flickerFilterTimeout) {
           clearTimeout(this.flickerFilterTimeout);
         }
@@ -2212,13 +2221,12 @@ class ClaudemanApp {
           this.flushFlickerBuffer();
         }, SYNC_WAIT_TIMEOUT_MS); // 50ms buffer window
 
-        return; // Don't process normally, wait for buffer window
+        return;
       }
 
       if (this.flickerFilterActive) {
-        // Filter is active, accumulate data
         this.flickerFilterBuffer += data;
-        return; // Continue buffering
+        return;
       }
     }
 
@@ -2313,9 +2321,15 @@ class ClaudemanApp {
 
     // Write all segments in a single batch (atomic within this frame)
     // xterm.js internally batches multiple write() calls within same frame
+    // Never discard content from incomplete sync blocks — xterm.js doesn't support
+    // DEC 2026 natively anyway, so strip the marker and write content regardless.
+    // Discarding causes real data loss (including Ink's erase-line escapes).
     for (const segment of segments) {
-      if (segment && !segment.startsWith(DEC_SYNC_START)) {
-        this.terminal.write(segment);
+      if (segment) {
+        const content = segment.startsWith(DEC_SYNC_START)
+          ? segment.slice(DEC_SYNC_START.length)
+          : segment;
+        if (content) this.terminal.write(content);
       }
     }
 
