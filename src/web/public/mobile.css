@@ -1431,16 +1431,16 @@ html.mobile-init .file-browser-panel {
     font-size: 0.45rem;
   }
 
-  /* Subagent dropdown - full width bottom sheet on mobile */
+  /* Subagent dropdown - full width near badge on mobile (JS sets top from badge position) */
   .subagent-dropdown {
     position: fixed !important;
     left: 8px !important;
     right: 8px !important;
-    bottom: calc(40px + var(--safe-area-bottom) + 8px) !important;
-    top: auto !important;
+    bottom: auto !important;
     min-width: auto !important;
     max-width: none !important;
     border-radius: 8px;
+    transform: none !important;
   }
 }
 

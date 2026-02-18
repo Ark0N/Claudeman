@@ -12854,6 +12854,8 @@ class ClaudemanApp {
     for (const [, data] of this.subagentWindows) {
       if (data.minimized || data.hidden) continue;
       const el = data.element;
+      // Reset left to proper position (drag may have set an arbitrary value)
+      el.style.left = '4px';
       if (keyboardUp) {
         // Stack from bottom above toolbar
         const bottomPx = 40 + idx * (mobileCardHeight + mobileCardGap);
