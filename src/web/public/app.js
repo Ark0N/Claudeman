@@ -846,28 +846,23 @@ class FocusTrap {
 class LocalEchoOverlay {
     constructor(terminal) {
         this.terminal = terminal;
-        this.overlay = document.createElement('span');
-        this.overlay.style.cssText = 'position:absolute;z-index:7;pointer-events:none;white-space:pre;font-kerning:none;overflow:hidden;display:none';
-        this.overlay.style.fontFamily = terminal.options.fontFamily;
-        this.overlay.style.fontSize = terminal.options.fontSize + 'px';
-        this.overlay.style.fontWeight = terminal.options.fontWeight || 'normal';
-        // Match letter-spacing and colors from xterm-rows for DPR compensation
+        // Container: positioned at prompt row, holds per-line child divs
+        this.overlay = document.createElement('div');
+        this.overlay.style.cssText = 'position:absolute;z-index:7;pointer-events:none;display:none';
         const screen = terminal.element.querySelector('.xterm-screen');
+        // Cache font/color styles for line divs
+        this._fontFamily = terminal.options.fontFamily;
+        this._fontSize = terminal.options.fontSize + 'px';
+        this._fontWeight = terminal.options.fontWeight || 'normal';
+        this._bg = terminal.options?.theme?.background || '#0d0d0d';
+        this._color = '';
+        this._letterSpacing = '';
         const rows = terminal.element.querySelector('.xterm-rows');
         if (rows) {
-            this.overlay.style.letterSpacing = getComputedStyle(rows).letterSpacing;
-            this.overlay.style.color = getComputedStyle(rows).color;
+            const cs = getComputedStyle(rows);
+            this._letterSpacing = cs.letterSpacing;
+            this._color = cs.color;
         }
-        // Opaque background so overlay covers old buffer text underneath.
-        // xterm.js applies bg via internal rendering, not CSS — use theme option.
-        this.overlay.style.backgroundColor = terminal.options?.theme?.background || '#0d0d0d';
-        // Persistent text node so _cursor span survives _render() updates
-        this._textNode = document.createTextNode('');
-        this.overlay.appendChild(this._textNode);
-        // Block cursor matching Claude Code's idle prompt cursor
-        this._cursor = document.createElement('span');
-        this._cursor.style.cssText = 'display:inline-block;vertical-align:top';
-        this.overlay.appendChild(this._cursor);
         screen.appendChild(this.overlay);
         this.pendingText = '';
         this._storageKey = 'claudeman_local_echo_pending';
@@ -930,8 +925,28 @@ class LocalEchoOverlay {
     clear() {
         this.pendingText = '';
         this._persist();
-        this._textNode.textContent = '';
+        this._lastRenderKey = '';
+        this.overlay.innerHTML = '';
         this.overlay.style.display = 'none';
+    }
+
+    // Create a styled line div with opaque background
+    _makeLine(text, leftPx, topPx, widthPx, cellH) {
+        const el = document.createElement('div');
+        el.style.cssText = `position:absolute;white-space:pre;font-kerning:none;overflow:hidden;pointer-events:none`;
+        el.style.fontFamily = this._fontFamily;
+        el.style.fontSize = this._fontSize;
+        el.style.fontWeight = this._fontWeight;
+        el.style.letterSpacing = this._letterSpacing;
+        el.style.color = this._color;
+        el.style.backgroundColor = this._bg;
+        el.style.left = leftPx + 'px';
+        el.style.top = topPx + 'px';
+        el.style.width = widthPx + 'px';
+        el.style.height = cellH + 'px';
+        el.style.lineHeight = cellH + 'px';
+        el.textContent = text;
+        return el;
     }
 
     _render() {
@@ -947,23 +962,59 @@ class LocalEchoOverlay {
             const dims = this.terminal._core._renderService.dimensions;
             const cellW = dims.css.cell.width;
             const cellH = dims.css.cell.height;
+            const totalCols = this.terminal.cols;
             // Position right after "❯ " (prompt col + 2)
-            const col = prompt.col + 2;
-            const leftPx = col * cellW;
-            this.overlay.style.left = leftPx + 'px';
+            const startCol = Math.min(prompt.col + 2, totalCols - 1);
+            const firstLineCols = Math.max(1, totalCols - startCol);
+
+            // Skip redundant re-renders (e.g. from flushPendingWrites at 60fps)
+            const renderKey = `${this.pendingText.length}:${prompt.row}:${prompt.col}:${totalCols}`;
+            if (renderKey === this._lastRenderKey && this.overlay.style.display !== 'none') return;
+            this._lastRenderKey = renderKey;
+
+            // Split text into visual lines matching terminal character-wrap behavior
+            // Line 0: starts after prompt, fits (totalCols - startCol) chars
+            // Line 1+: starts at col 0, fits totalCols chars each
+            const lines = [];
+            let remaining = this.pendingText;
+            lines.push(remaining.slice(0, firstLineCols));
+            remaining = remaining.slice(firstLineCols);
+            while (remaining.length > 0) {
+                lines.push(remaining.slice(0, totalCols));
+                remaining = remaining.slice(totalCols);
+            }
+
+            // Position overlay container at prompt row
+            this.overlay.style.left = '0px';
             this.overlay.style.top = (prompt.row * cellH) + 'px';
-            this.overlay.style.height = cellH + 'px';
-            this.overlay.style.lineHeight = cellH + 'px';
-            // Extend to right edge to cover old buffer text with opaque bg
-            this.overlay.style.width = (this.terminal.cols * cellW - leftPx) + 'px';
-            // Cover any subpixel seam above overlay with matching box-shadow
-            const bg = this.overlay.style.backgroundColor;
-            this.overlay.style.boxShadow = `0 -1px 0 0 ${bg}`;
-            this._textNode.textContent = this.pendingText;
-            // Block cursor: full cell width & height, matching Claude Code's cursor color
-            this._cursor.style.width = cellW + 'px';
-            this._cursor.style.height = cellH + 'px';
-            this._cursor.style.backgroundColor = this.terminal.options?.theme?.cursor || '#e0e0e0';
+            // Cover any subpixel seam above first line
+            this.overlay.style.boxShadow = `0 -1px 0 0 ${this._bg}`;
+
+            // Build line elements — recreate on each render (typically 1-3 divs, negligible cost)
+            this.overlay.innerHTML = '';
+            const fullWidthPx = totalCols * cellW;
+            for (let i = 0; i < lines.length; i++) {
+                const leftPx = i === 0 ? startCol * cellW : 0;
+                const widthPx = i === 0 ? (fullWidthPx - leftPx) : fullWidthPx;
+                const topPx = i * cellH;
+                this.overlay.appendChild(this._makeLine(lines[i], leftPx, topPx, widthPx, cellH));
+            }
+
+            // Block cursor at end of last line
+            const lastLine = lines[lines.length - 1];
+            const lastLineLeft = lines.length === 1 ? startCol : 0;
+            const cursorCol = lastLineLeft + lastLine.length;
+            if (cursorCol < totalCols) {
+                const cursor = document.createElement('span');
+                cursor.style.cssText = 'position:absolute;display:inline-block';
+                cursor.style.left = (cursorCol * cellW) + 'px';
+                cursor.style.top = ((lines.length - 1) * cellH) + 'px';
+                cursor.style.width = cellW + 'px';
+                cursor.style.height = cellH + 'px';
+                cursor.style.backgroundColor = this.terminal.options?.theme?.cursor || '#e0e0e0';
+                this.overlay.appendChild(cursor);
+            }
+
             this.overlay.style.display = '';
         } catch {
             this.clear();
