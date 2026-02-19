@@ -987,8 +987,7 @@ class LocalEchoOverlay {
             // Position overlay container at prompt row
             this.overlay.style.left = '0px';
             this.overlay.style.top = (prompt.row * cellH) + 'px';
-            // Cover any subpixel seam above first line
-            this.overlay.style.boxShadow = `0 -1px 0 0 ${this._bg}`;
+            this.overlay.style.boxShadow = 'none';
 
             // Build line elements — recreate on each render (typically 1-3 divs, negligible cost)
             this.overlay.innerHTML = '';
@@ -997,7 +996,10 @@ class LocalEchoOverlay {
                 const leftPx = i === 0 ? startCol * cellW : 0;
                 const widthPx = i === 0 ? (fullWidthPx - leftPx) : fullWidthPx;
                 const topPx = i * cellH;
-                this.overlay.appendChild(this._makeLine(lines[i], leftPx, topPx, widthPx, cellH));
+                const lineEl = this._makeLine(lines[i], leftPx, topPx, widthPx, cellH);
+                // Cover subpixel seam above first line only
+                if (i === 0) lineEl.style.boxShadow = `0 -1px 0 0 ${this._bg}`;
+                this.overlay.appendChild(lineEl);
             }
 
             // Block cursor at end of last line
