@@ -9822,6 +9822,7 @@ class ClaudemanApp {
     document.getElementById('appSettingsShowSystemStats').checked = settings.showSystemStats ?? defaults.showSystemStats ?? true;
     document.getElementById('appSettingsShowTokenCount').checked = settings.showTokenCount ?? defaults.showTokenCount ?? true;
     document.getElementById('appSettingsShowCost').checked = settings.showCost ?? defaults.showCost ?? false;
+    document.getElementById('appSettingsShowLifecycleLog').checked = settings.showLifecycleLog ?? defaults.showLifecycleLog ?? true;
     document.getElementById('appSettingsShowMonitor').checked = settings.showMonitor ?? defaults.showMonitor ?? true;
     document.getElementById('appSettingsShowProjectInsights').checked = settings.showProjectInsights ?? defaults.showProjectInsights ?? false;
     document.getElementById('appSettingsShowFileBrowser').checked = settings.showFileBrowser ?? defaults.showFileBrowser ?? false;
@@ -10046,6 +10047,7 @@ class ClaudemanApp {
       showSystemStats: document.getElementById('appSettingsShowSystemStats').checked,
       showTokenCount: document.getElementById('appSettingsShowTokenCount').checked,
       showCost: document.getElementById('appSettingsShowCost').checked,
+      showLifecycleLog: document.getElementById('appSettingsShowLifecycleLog').checked,
       showMonitor: document.getElementById('appSettingsShowMonitor').checked,
       showProjectInsights: document.getElementById('appSettingsShowProjectInsights').checked,
       showFileBrowser: document.getElementById('appSettingsShowFileBrowser').checked,
@@ -10324,6 +10326,13 @@ class ClaudemanApp {
     }
     if (tokenCountEl) {
       tokenCountEl.style.display = showTokenCount ? '' : 'none';
+    }
+
+    // Hide lifecycle log button when setting is disabled
+    const showLifecycleLog = settings.showLifecycleLog ?? defaults.showLifecycleLog ?? true;
+    const lifecycleBtn = document.querySelector('.btn-lifecycle-log');
+    if (lifecycleBtn) {
+      lifecycleBtn.style.display = showLifecycleLog ? '' : 'none';
     }
 
     // Hide notification bell when notifications are disabled
