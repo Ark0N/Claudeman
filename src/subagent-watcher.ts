@@ -171,6 +171,9 @@ export class SubagentWatcher extends EventEmitter {
   private _isCheckingLiveness = false;
   // Counter for throttling full directory scans (only scan every FULL_SCAN_EVERY_N_POLLS)
   private _pollCount = 0;
+  // Short-lived cache for parsed parent transcript descriptions (TTL: 5s)
+  // Key: "{projectHash}/{sessionId}", Value: { descriptions: Map<agentId, description>, timestamp }
+  private parentDescriptionCache = new Map<string, { descriptions: Map<string, string>; timestamp: number }>();
   // Store error handlers for FSWatchers to enable proper cleanup (prevent memory leaks)
   private dirWatcherErrorHandlers = new Map<string, (error: Error) => void>();
   private fileWatcherErrorHandlers = new Map<string, (error: Error) => void>();
@@ -243,16 +246,23 @@ export class SubagentWatcher extends EventEmitter {
       this._isCheckingLiveness = true;
 
       try {
-        for (const [agentId, info] of this.agentInfo) {
+        // Run pgrep ONCE and collect all claude process info
+        const pidMap = await this.getClaudePids();
+
+        for (const [_agentId, info] of this.agentInfo) {
           // Re-check status in case another check completed this agent
           if (info.status === 'active' || info.status === 'idle') {
-            const alive = await this.checkSubagentAlive(agentId);
-            if (!alive && (info.status === 'active' || info.status === 'idle')) {
-              // Double-check status after async call to prevent race
-              info.status = 'completed';
-              // Clean up pendingToolCalls for this agent to prevent memory leak
-              this.pendingToolCalls.delete(agentId);
-              this.emit('subagent:completed', info);
+            const alive = this.checkSubagentAliveFromPidMap(info, pidMap);
+            // If process not found, fall back to file mtime check
+            if (!alive) {
+              const fileAlive = await this.checkSubagentFileAlive(info);
+              if (!fileAlive && (info.status === 'active' || info.status === 'idle')) {
+                // Double-check status after async call to prevent race
+                info.status = 'completed';
+                // Clean up pendingToolCalls for this agent to prevent memory leak
+                this.pendingToolCalls.delete(info.agentId);
+                this.emit('subagent:completed', info);
+              }
             }
           }
         }
@@ -265,18 +275,55 @@ export class SubagentWatcher extends EventEmitter {
   }
 
   /**
-   * Check if a subagent process is still running
+   * Run pgrep once and read /proc info for all Claude PIDs in parallel.
+   * Returns a Map of pid -> { environ, cmdline } for all running claude processes.
    */
-  private async checkSubagentAlive(agentId: string): Promise<boolean> {
-    const info = this.agentInfo.get(agentId);
-    if (!info) return false;
+  private async getClaudePids(): Promise<Map<number, { environ: string; cmdline: string }>> {
+    const result = new Map<number, { environ: string; cmdline: string }>();
+    try {
+      const pgrepOutput = await new Promise<string>((resolve, reject) => {
+        execFile('pgrep', ['-f', 'claude'], { encoding: 'utf8' }, (err, stdout) => {
+          if (err) return reject(err);
+          resolve(stdout);
+        });
+      });
+      const pids = pgrepOutput.trim().split('\n').filter(Boolean).map(s => parseInt(s, 10)).filter(n => !Number.isNaN(n));
 
-    // Method 1: Check if the process is still running
-    const pid = await this.findSubagentProcess(info.sessionId);
-    if (pid !== null) return true;
+      // Read /proc for all PIDs in parallel
+      await Promise.all(pids.map(async (pid) => {
+        let environ = '';
+        let cmdline = '';
+        try { environ = await readFile(`/proc/${pid}/environ`, 'utf8'); } catch { /* skip */ }
+        try { cmdline = await readFile(`/proc/${pid}/cmdline`, 'utf8'); } catch { /* skip */ }
+        if (environ || cmdline) {
+          result.set(pid, { environ, cmdline });
+        }
+      }));
+    } catch {
+      // pgrep returns non-zero if no matches
+    }
+    return result;
+  }
 
-    // Method 2: Check if the transcript file was recently modified
-    // (within the last 60 seconds - gives some buffer for slow operations)
+  /**
+   * Check if a subagent is alive using the pre-fetched pid map (no process spawning).
+   */
+  private checkSubagentAliveFromPidMap(
+    info: SubagentInfo,
+    pidMap: Map<number, { environ: string; cmdline: string }>
+  ): boolean {
+    for (const [_pid, procInfo] of pidMap) {
+      if (procInfo.environ.includes(info.sessionId) || procInfo.cmdline.includes(info.sessionId)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Check if a subagent's transcript file was recently modified (fallback for process check).
+   */
+  private async checkSubagentFileAlive(info: SubagentInfo): Promise<boolean> {
     try {
       const fileStat = await statAsync(info.filePath);
       const mtime = fileStat.mtime.getTime();
@@ -287,7 +334,6 @@ export class SubagentWatcher extends EventEmitter {
     } catch {
       // File doesn't exist or can't be read
     }
-
     return false;
   }
 
@@ -348,6 +394,7 @@ export class SubagentWatcher extends EventEmitter {
     this.agentInfo.clear();
     this.knownSubagentDirs.clear();
     this.pendingToolCalls.clear();
+    this.parentDescriptionCache.clear();
     this._pollCount = 0;
   }
 
@@ -800,6 +847,15 @@ export class SubagentWatcher extends EventEmitter {
     sessionId: string,
     agentId: string
   ): Promise<string | undefined> {
+    const cacheKey = `${projectHash}/${sessionId}`;
+    const CACHE_TTL_MS = 5000;
+
+    // Check cache first (covers burst of simultaneous agent discoveries)
+    const cached = this.parentDescriptionCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS) {
+      return cached.descriptions.get(agentId);
+    }
+
     try {
       // The parent session's transcript is at: ~/.claude/projects/{projectHash}/{sessionId}.jsonl
       const transcriptPath = join(CLAUDE_PROJECTS_DIR, projectHash, `${sessionId}.jsonl`);
@@ -808,21 +864,25 @@ export class SubagentWatcher extends EventEmitter {
       const content = await readFile(transcriptPath, 'utf8');
       const lines = content.split('\n').filter((l) => l.trim());
 
-      // Look for user entry with toolUseResult containing the agentId
+      // Parse ALL toolUseResult entries into a Map and cache them
+      const descriptions = new Map<string, string>();
       for (const line of lines) {
         try {
           const entry = JSON.parse(line);
           if (
             entry.type === 'user' &&
-            entry.toolUseResult?.agentId === agentId &&
+            entry.toolUseResult?.agentId &&
             entry.toolUseResult?.description
           ) {
-            return entry.toolUseResult.description;
+            descriptions.set(entry.toolUseResult.agentId, entry.toolUseResult.description);
           }
         } catch {
           // Skip malformed lines
         }
       }
+
+      this.parentDescriptionCache.set(cacheKey, { descriptions, timestamp: Date.now() });
+      return descriptions.get(agentId);
     } catch {
       // Failed to read transcript
     }
@@ -834,30 +894,43 @@ export class SubagentWatcher extends EventEmitter {
    */
   private async extractDescriptionFromFile(filePath: string): Promise<string | undefined> {
     try {
-      const content = await readFile(filePath, 'utf8');
-      const lines = content.split('\n').filter((l) => l.trim());
+      // Only read the first 8KB — more than enough for 5 JSONL lines
+      const stream = createReadStream(filePath, { end: 8191 });
+      const rl = createInterface({ input: stream });
 
-      for (const line of lines.slice(0, 5)) {
-        try {
-          const entry = JSON.parse(line);
-          if (entry.type === 'user' && entry.message?.content) {
-            let text: string | undefined;
-            if (typeof entry.message.content === 'string') {
-              text = entry.message.content.trim();
-            } else if (Array.isArray(entry.message.content)) {
-              const firstContent = entry.message.content[0];
-              if (firstContent?.type === 'text' && firstContent.text) {
-                text = firstContent.text.trim();
+      return await new Promise<string | undefined>((resolve) => {
+        let lineCount = 0;
+        let resolved = false;
+        rl.on('line', (line) => {
+          if (resolved || lineCount >= 5) { rl.close(); stream.destroy(); return; }
+          lineCount++;
+          if (!line.trim()) return;
+          try {
+            const entry = JSON.parse(line);
+            if (entry.type === 'user' && entry.message?.content) {
+              let text: string | undefined;
+              if (typeof entry.message.content === 'string') {
+                text = entry.message.content.trim();
+              } else if (Array.isArray(entry.message.content)) {
+                const firstContent = entry.message.content[0];
+                if (firstContent?.type === 'text' && firstContent.text) {
+                  text = firstContent.text.trim();
+                }
+              }
+              if (text) {
+                resolved = true;
+                rl.close();
+                stream.destroy();
+                resolve(this.extractSmartTitle(text));
               }
             }
-            if (text) {
-              return this.extractSmartTitle(text);
-            }
+          } catch {
+            // Skip malformed lines
           }
-        } catch {
-          // Skip malformed lines
-        }
-      }
+        });
+        rl.on('close', () => { if (!resolved) resolve(undefined); });
+        rl.on('error', () => { if (!resolved) resolve(undefined); });
+      });
     } catch {
       // Failed to read file
     }
