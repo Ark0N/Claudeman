@@ -2626,8 +2626,11 @@ class ClaudemanApp {
       if (this.sseReconnectTimeout) {
         clearTimeout(this.sseReconnectTimeout);
       }
-      // Exponential backoff: 1s, 2s, 4s, ... up to 30s
-      const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 30000);
+      // Exponential backoff: 200ms, 500ms, 1s, 2s, 4s, ... up to 30s
+      // Fast first retry (200ms) for server-restart case (COM deploy),
+      // then ramp up for real network issues.
+      const delay = this.reconnectAttempts <= 1 ? 200
+        : Math.min(500 * Math.pow(2, this.reconnectAttempts - 2), 30000);
       this.sseReconnectTimeout = setTimeout(() => this.connectSSE(), delay);
     };
 
