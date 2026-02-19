@@ -970,6 +970,12 @@ class LocalEchoOverlay {
         }
     }
 
+    // Re-render overlay at current prompt position without clearing pending text.
+    // Used after terminal resets/redraws that move the prompt.
+    rerender() {
+        if (this.pendingText) this._render();
+    }
+
     get hasPending() { return this.pendingText.length > 0; }
 
     dispose() {
@@ -2337,6 +2343,12 @@ class ClaudemanApp {
     if (this._wasAtBottomBeforeWrite) {
       this.terminal.scrollToBottom();
     }
+
+    // Re-position local echo overlay after terminal writes — Ink redraws can
+    // move the ❯ prompt to a different row, making the overlay invisible.
+    if (this._localEchoOverlay?.hasPending) {
+      this._localEchoOverlay.rerender();
+    }
   }
 
   /**
@@ -2646,6 +2658,8 @@ class ClaudemanApp {
           this.terminal.reset();
           await this.chunkedTerminalWrite(data.terminalBuffer);
           this.terminal.scrollToBottom();
+          // Re-position local echo overlay at new prompt location
+          this._localEchoOverlay?.rerender();
         }
       } catch (err) {
         console.error('needsRefresh reload failed:', err);
@@ -2672,6 +2686,8 @@ class ClaudemanApp {
 
           // Send resize to ensure proper dimensions
           await this.sendResize(data.id);
+          // Re-position local echo overlay at new prompt location
+          this._localEchoOverlay?.rerender();
         } catch (err) {
           console.error('clearTerminal refresh failed:', err);
         }
@@ -3717,8 +3733,10 @@ class ClaudemanApp {
     this.writeFrameScheduled = false;
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
-    // Clear local echo overlay on SSE reconnect (re-enable via _updateLocalEchoState)
-    this._localEchoOverlay?.clear();
+    // Preserve local echo overlay text across SSE reconnect — just hide until
+    // terminal buffer reloads and prompt is visible again.  _render() re-scans
+    // for the ❯ prompt on every call, so rerender() after buffer load repositions it.
+    this._localEchoOverlay?.rerender();
     // Clear pending hooks
     this.pendingHooks.clear();
     // Clear subagent activity/results maps (prevents leaks if data.subagents is missing)
@@ -3864,6 +3882,8 @@ class ClaudemanApp {
     // Guard: skip if a newer handleInit has already started (race between loadState + SSE init).
     if (gen !== this._initGeneration) return;
     const previousActiveId = this.activeSessionId;
+    // Save local echo pending text before selectSession clears it
+    const savedEchoText = this._localEchoOverlay?.pendingText || '';
     this.activeSessionId = null;
     if (this.sessionOrder.length > 0) {
       // Priority: current active > localStorage > first session
@@ -3876,6 +3896,14 @@ class ClaudemanApp {
       } else {
         this.selectSession(this.sessionOrder[0]);
       }
+    }
+    // Restore local echo text that was cleared by selectSession during SSE reconnect.
+    // selectSession loads the terminal buffer, so we schedule rerender after it settles.
+    if (savedEchoText && this._localEchoOverlay) {
+      this._localEchoOverlay.pendingText = savedEchoText;
+      this._localEchoOverlay._persist();
+      // Delay rerender until buffer load completes and prompt is visible
+      setTimeout(() => this._localEchoOverlay?.rerender(), 500);
     }
   }
 

@@ -35,7 +35,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md` (verify they match with `grep version package.json && grep Version CLAUDE.md`)
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1551 (must match `package.json` for npm publish)
+**Version**: 0.1552 (must match `package.json` for npm publish)
 
 ## Project Overview
 
@@ -124,13 +124,13 @@ journalctl --user -u claudeman-web -f
 | `src/file-stream-manager.ts` | Manages `tail -f` processes for live log viewing |
 | `src/plan-orchestrator.ts` | Multi-agent plan generation with research and planning phases |
 | `src/prompts/index.ts` | Barrel export for all agent prompts |
-| `src/prompts/*.ts` | Agent prompts (research-agent, code-reviewer, planner) |
+| `src/prompts/*.ts` | Agent prompts (research-agent, planner) |
 | `src/templates/claude-md.ts` | CLAUDE.md generation for new cases |
 | `src/cli.ts` | Command-line interface handlers |
-| `src/web/server.ts` | Fastify REST API + SSE at `/api/events` (~90 routes) |
+| `src/web/server.ts` | Fastify REST API + SSE at `/api/events` (~99 routes) |
 | `src/web/schemas.ts` | Zod v4 validation schemas with path/env security allowlists |
 | `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows, mobile support (~16K lines) |
-| `src/types.ts` | All TypeScript interfaces (~100 types, ~1500 lines) |
+| `src/types.ts` | All TypeScript interfaces (~100 types, ~1400 lines) |
 
 **Large files** (>50KB): `app.js`, `ralph-tracker.ts`, `respawn-controller.ts`, `session.ts`, `subagent-watcher.ts` — these contain complex state machines; read `docs/respawn-state-machine.md` before modifying.
 
@@ -232,7 +232,7 @@ The frontend is a single 16K-line vanilla JS file with these key systems:
 
 ### API Route Categories
 
-~90 routes in `server.ts:buildServer()`. Key groups:
+~99 routes in `server.ts:buildServer()`. Key groups:
 
 | Group | Prefix | Count | Key endpoints |
 |-------|--------|-------|---------------|
@@ -294,6 +294,8 @@ npx vitest run -t "pattern"
 **Safety**: `test/setup.ts` snapshots pre-existing tmux sessions at load time and never kills them. Only sessions registered via `registerTestTmuxSession()` get cleaned up.
 
 **Respawn tests**: Use MockSession from `test/respawn-test-utils.ts` to avoid spawning real Claude processes.
+
+**Mobile tests**: Separate Playwright-based suite in `mobile-test/` with 135 device profiles. Run via `npx vitest run --config mobile-test/vitest.config.ts`. See `mobile-test/README.md`.
 
 ## Screenshots ("sc")
 
@@ -402,6 +404,9 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **Mobile testing** | `docs/mobile-testing-report.md` |
 | **Run summary design** | `docs/run-summary-plan.md` |
 | **Performance audit** | `docs/perf-audit-first-load.md` |
+| **First-load optimization** | `docs/first-load-optimization-plan.md` |
+| **Dead code audit** | `docs/cleanup-findings.md` |
+| **Mobile test suite** | `mobile-test/README.md` |
 
 ## Scripts
 
