@@ -3999,7 +3999,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     const session = this.sessions.get(sessionId);
     const lifecycleLog = getLifecycleLog();
     lifecycleLog.log({
-      event: 'deleted',
+      event: killMux ? 'deleted' : 'detached',
       sessionId,
       name: session?.name,
       mode: session?.mode,
@@ -5522,14 +5522,48 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       Array.from(this.scheduledRuns.keys()).map(id => this.stopScheduledRun(id))
     );
 
-    // Properly clean up all remaining sessions in parallel (removes listeners, clears state, etc.)
-    // Don't kill mux sessions on server stop - they can be reattached on restart
-    // Use Promise.race with a 30s timeout to prevent shutdown from hanging indefinitely
-    const sessionCleanup = Promise.allSettled(
-      Array.from(this.sessions.keys()).map(id => this.cleanupSession(id, false, 'server_shutdown'))
-    );
-    const shutdownTimeout = new Promise<void>(resolve => setTimeout(resolve, 30_000));
-    await Promise.race([sessionCleanup, shutdownTimeout]);
+    // On server shutdown, DO NOT call cleanupSession — it tears down session state,
+    // removes listeners, kills PTY processes, and broadcasts session:deleted.
+    // Instead, just persist current state and let the PTY die naturally when process exits.
+    // The tmux sessions survive independently, and restoreMuxSessions() will find them on restart.
+    for (const [sessionId, session] of this.sessions) {
+      // Persist final state so recovery has up-to-date tokens, ralph state, etc.
+      this._persistSessionStateNow(session);
+      // Remove listeners to avoid spurious events during teardown
+      const listeners = this.sessionListenerRefs.get(sessionId);
+      if (listeners) {
+        session.off('terminal', listeners.terminal);
+        session.off('clearTerminal', listeners.clearTerminal);
+        session.off('message', listeners.message);
+        session.off('error', listeners.error);
+        session.off('completion', listeners.completion);
+        session.off('exit', listeners.exit);
+        session.off('working', listeners.working);
+        session.off('idle', listeners.idle);
+        session.off('taskCreated', listeners.taskCreated);
+        session.off('taskUpdated', listeners.taskUpdated);
+        session.off('taskCompleted', listeners.taskCompleted);
+        session.off('taskFailed', listeners.taskFailed);
+        session.off('autoClear', listeners.autoClear);
+        session.off('autoCompact', listeners.autoCompact);
+        session.off('cliInfoUpdated', listeners.cliInfoUpdated);
+        session.off('ralphLoopUpdate', listeners.ralphLoopUpdate);
+        session.off('ralphTodoUpdate', listeners.ralphTodoUpdate);
+        session.off('ralphCompletionDetected', listeners.ralphCompletionDetected);
+        session.off('ralphStatusBlockDetected', listeners.ralphStatusBlockDetected);
+        session.off('ralphCircuitBreakerUpdate', listeners.ralphCircuitBreakerUpdate);
+        session.off('ralphExitGateMet', listeners.ralphExitGateMet);
+        session.off('bashToolStart', listeners.bashToolStart);
+        session.off('bashToolEnd', listeners.bashToolEnd);
+        session.off('bashToolsUpdate', listeners.bashToolsUpdate);
+        this.sessionListenerRefs.delete(sessionId);
+      }
+      session.removeAllListeners();
+      // Close file streams and image watchers (these are server-side resources)
+      fileStreamManager.closeSessionStreams(sessionId);
+      imageWatcher.unwatchSession(sessionId);
+    }
+    // Don't delete sessions from the map or state.json — recovery needs them
 
     // Flush state store to prevent data loss from debounced saves
     this.store.flushAll();

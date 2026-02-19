@@ -2055,40 +2055,46 @@ export class Session extends EventEmitter {
     this.cleanupTrackerListeners();
 
     if (this.ptyProcess) {
-      const pid = this.ptyProcess.pid;
+      if (killMux) {
+        // Full kill: SIGTERM → wait → SIGKILL the PTY and its children
+        const pid = this.ptyProcess.pid;
 
-      // First try graceful SIGTERM
-      try {
-        this.ptyProcess.kill();
-      } catch (err) {
-        console.warn('[Session] Failed to send SIGTERM to PTY process (may already be dead):', err);
-      }
-
-      // Give it a moment to terminate gracefully
-      await new Promise(resolve => setTimeout(resolve, GRACEFUL_SHUTDOWN_DELAY_MS));
-
-      // Force kill with SIGKILL if still alive
-      try {
-        if (pid) {
-          process.kill(pid, 'SIGKILL');
+        // First try graceful SIGTERM
+        try {
+          this.ptyProcess.kill();
+        } catch (err) {
+          console.warn('[Session] Failed to send SIGTERM to PTY process (may already be dead):', err);
         }
-      } catch (err) {
-        console.warn('[Session] Failed to send SIGKILL to process (already terminated):', err);
-      }
 
-      // Also try to kill any child processes in the process group
-      try {
-        if (pid) {
-          process.kill(-pid, 'SIGKILL');
+        // Give it a moment to terminate gracefully
+        await new Promise(resolve => setTimeout(resolve, GRACEFUL_SHUTDOWN_DELAY_MS));
+
+        // Force kill with SIGKILL if still alive
+        try {
+          if (pid) {
+            process.kill(pid, 'SIGKILL');
+          }
+        } catch (err) {
+          console.warn('[Session] Failed to send SIGKILL to process (already terminated):', err);
         }
-      } catch (err) {
-        console.warn('[Session] Failed to send SIGKILL to process group (may not exist):', err);
+
+        // Also try to kill any child processes in the process group
+        try {
+          if (pid) {
+            process.kill(-pid, 'SIGKILL');
+          }
+        } catch (err) {
+          console.warn('[Session] Failed to send SIGKILL to process group (may not exist):', err);
+        }
+      } else {
+        // Server shutdown: just detach — the process lives on inside tmux
+        console.log('[Session] Detaching from PTY (server shutdown) — mux session preserved');
       }
 
       this.ptyProcess = null;
     }
     this._pid = null;
-    this._status = 'stopped';
+    this._status = killMux ? 'stopped' : 'idle';
     this._currentTaskId = null;
 
     // Clear task description cache and agent tree to prevent memory leak
