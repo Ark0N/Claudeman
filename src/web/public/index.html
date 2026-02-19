@@ -8,8 +8,8 @@
   <meta name="google" content="notranslate">
   <title>Claudeman</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2360a5fa'/%3E%3Cstop offset='100%25' stop-color='%233b82f6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='6' fill='%230a0a0a'/%3E%3Cpath d='M18 4L8 18h6l-2 10 10-14h-6z' fill='url(%23g)'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="styles.css?v=0.1536">
-  <link rel="stylesheet" href="mobile.css?v=0.1536" media="(max-width: 1023px)">
+  <link rel="stylesheet" href="styles.css?v=0.1556">
+  <link rel="stylesheet" href="mobile.css?v=0.1556" media="(max-width: 1023px)">
   <!-- xterm.css loaded async — terminal won't display until xterm.js runs anyway -->
   <link rel="preload" href="vendor/xterm.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
   <noscript><link rel="stylesheet" href="vendor/xterm.css"></noscript>
@@ -84,7 +84,7 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
           <span class="notification-badge" id="notifBadge" style="display:none;">0</span>
         </button>
-        <button class="btn-icon-header" onclick="app.openLifecycleLog()" title="Session Lifecycle Log" aria-label="Open session lifecycle log" style="font-size:14px;opacity:0.7">&#x1F4CB;</button>
+        <button class="btn-icon-header btn-lifecycle-log" onclick="app.openLifecycleLog()" title="Session Lifecycle Log" aria-label="Open session lifecycle log"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></button>
         <button class="btn-icon-header btn-settings" onclick="app.openAppSettings()" title="App Settings" aria-label="Open app settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
         <div class="header-tokens" id="headerTokens" title="Total tokens across all sessions">0 tokens</div>
       </div>
@@ -1501,17 +1501,13 @@
     </div>
   </div>
 
-  <!-- Session Lifecycle Audit Log Modal -->
-  <div class="modal" id="lifecycleModal">
-    <div class="modal-backdrop" onclick="app.closeLifecycleLog()"></div>
-    <div class="modal-content modal-lg">
-      <div class="modal-header">
-        <h3>Session Lifecycle Log</h3>
-        <button class="modal-close" onclick="app.closeLifecycleLog()" aria-label="Close lifecycle log">&times;</button>
-      </div>
-      <div class="modal-body" style="max-height:70vh;overflow:auto;padding:8px">
-        <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
-          <select id="lifecycleFilterEvent" style="background:#1a1a2e;color:#e0e0e0;border:1px solid #333;border-radius:4px;padding:4px 8px;font-size:12px">
+  <!-- Session Lifecycle Audit Log (floating window) -->
+  <div id="lifecycleWindow" style="display:none;position:fixed;z-index:2000;top:60px;left:50%;transform:translateX(-50%);width:900px;max-width:95vw;min-width:400px;min-height:250px;height:520px;background:#111;border:1px solid #333;border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,0.6);resize:both;overflow:hidden">
+    <div id="lifecycleWindowHeader" style="display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:#1a1a2e;border-bottom:1px solid #333;cursor:move;user-select:none;border-radius:8px 8px 0 0">
+      <span style="color:#e0e0e0;font-size:13px;font-weight:600">Session Lifecycle Log</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <div style="display:flex;gap:6px;flex-wrap:nowrap">
+          <select id="lifecycleFilterEvent" style="background:#0d0d0d;color:#e0e0e0;border:1px solid #444;border-radius:4px;padding:2px 6px;font-size:11px">
             <option value="">All Events</option>
             <option value="created">Created</option>
             <option value="started">Started</option>
@@ -1523,23 +1519,26 @@
             <option value="server_started">Server Started</option>
             <option value="server_stopped">Server Stopped</option>
           </select>
-          <input id="lifecycleFilterSession" type="text" placeholder="Filter by session ID..." style="background:#1a1a2e;color:#e0e0e0;border:1px solid #333;border-radius:4px;padding:4px 8px;font-size:12px;flex:1;min-width:120px">
-          <button class="btn btn-sm btn-secondary" onclick="app.loadLifecycleLog()" style="font-size:12px;padding:4px 10px">Refresh</button>
+          <input id="lifecycleFilterSession" type="text" placeholder="Session ID..." style="background:#0d0d0d;color:#e0e0e0;border:1px solid #444;border-radius:4px;padding:2px 6px;font-size:11px;width:120px">
+          <button onclick="app.loadLifecycleLog()" style="background:#333;color:#ccc;border:1px solid #444;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer">Refresh</button>
         </div>
-        <table id="lifecycleTable" style="width:100%;border-collapse:collapse;font-size:12px;font-family:monospace">
-          <thead>
-            <tr style="color:#888;text-align:left;border-bottom:1px solid #333">
-              <th style="padding:4px 8px">Time</th>
-              <th style="padding:4px 8px">Event</th>
-              <th style="padding:4px 8px">Session</th>
-              <th style="padding:4px 8px">Reason</th>
-              <th style="padding:4px 8px">Extra</th>
-            </tr>
-          </thead>
-          <tbody id="lifecycleTableBody"></tbody>
-        </table>
-        <div id="lifecycleEmpty" style="color:#666;text-align:center;padding:20px;display:none">No lifecycle entries found</div>
+        <button onclick="app.closeLifecycleLog()" style="background:none;border:none;color:#888;font-size:18px;cursor:pointer;padding:0 4px;line-height:1" aria-label="Close">&times;</button>
       </div>
+    </div>
+    <div style="overflow:auto;height:calc(100% - 36px);padding:4px 0">
+      <table id="lifecycleTable" style="width:100%;border-collapse:collapse;font-size:12px;font-family:monospace">
+        <thead>
+          <tr style="color:#888;text-align:left;border-bottom:1px solid #333;position:sticky;top:0;background:#111">
+            <th style="padding:4px 8px">Time</th>
+            <th style="padding:4px 8px">Event</th>
+            <th style="padding:4px 8px">Session</th>
+            <th style="padding:4px 8px">Reason</th>
+            <th style="padding:4px 8px">Extra</th>
+          </tr>
+        </thead>
+        <tbody id="lifecycleTableBody"></tbody>
+      </table>
+      <div id="lifecycleEmpty" style="color:#666;text-align:center;padding:20px;display:none">No lifecycle entries found</div>
     </div>
   </div>
 
@@ -1548,6 +1547,6 @@
     <!-- Lines drawn dynamically -->
   </svg>
 
-  <script defer src="app.js?v=0.1536"></script>
+  <script defer src="app.js?v=0.1556"></script>
 </body>
 </html>

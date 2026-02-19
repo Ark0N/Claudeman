@@ -308,8 +308,9 @@ html.mobile-init .file-browser-panel {
     height: 12px;
   }
 
-  /* Hide header settings gear on mobile - moved to toolbar */
-  .btn-icon-header.btn-settings {
+  /* Hide header settings gear and lifecycle log on mobile - settings moved to toolbar */
+  .btn-icon-header.btn-settings,
+  .btn-icon-header.btn-lifecycle-log {
     display: none !important;
   }
 

@@ -22,6 +22,7 @@ const PROJECT_ROOT = join(__dirname, '..');
 const PUBLIC_DIR = join(PROJECT_ROOT, 'src', 'web', 'public');
 const PORT = 3199;
 const VIEWPORT = { width: 1280, height: 720 };
+const DEVICE_SCALE_FACTOR = 1;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -117,10 +118,10 @@ function makeSession(id, name, mode, status, extra = {}) {
     niceValue: 10,
     color: 'default',
     flickerFilterEnabled: false,
-    cliVersion: '2.1.14',
-    cliModel: 'Opus 4.5',
+    cliVersion: '2.1.47',
+    cliModel: 'Opus 4.6',
     cliAccountType: 'Claude Max',
-    cliLatestVersion: '2.1.14',
+    cliLatestVersion: '2.1.47',
     messageCount: mode === 'claude' ? 15 : 0,
     isWorking: status === 'busy',
     lastPromptTime: Date.now() - 30000,
@@ -298,7 +299,7 @@ function buildInitPayload(sessions, subagents = []) {
   }
 
   return {
-    version: '0.1540',
+    version: '0.1556',
     sessions,
     scheduledRuns: [],
     respawnStatus,
@@ -333,8 +334,8 @@ const DIM = '\x1b[2m';
 // Claude Code init banner (matching the overview screenshot)
 const TERMINAL_INIT = [
   '',
-  `  ${RED}████${RST}    ${BOLD}Claude Code${RST} v2.1.14`,
-  `  ${RED}████${RST}    ${GRY}Opus 4.5${RST} ${DIM}·${RST} ${GRY}Claude Max${RST}`,
+  `  ${RED}████${RST}    ${BOLD}Claude Code${RST} v2.1.47`,
+  `  ${RED}████${RST}    ${GRY}Opus 4.6${RST} ${DIM}·${RST} ${GRY}Claude Max${RST}`,
   `  ${RED}██${RST} ${RED}██${RST}    ${GRY}~/claudeman-cases/testcase${RST}`,
   '',
   '',
@@ -343,7 +344,7 @@ const TERMINAL_INIT = [
   '',
   `${YEL}»»${RST} ${BOLD}bypass permissions on${RST} ${GRY}(shift+tab to cycle)${RST}`,
   `                                                                                                           ${BOLD}0 tokens${RST}`,
-  `                                                                                   ${GRY}current: 2.1.14${RST} ${DIM}·${RST} ${GRY}latest: 2.1.14${RST}`,
+  `                                                                                   ${GRY}current: 2.1.47${RST} ${DIM}·${RST} ${GRY}latest: 2.1.47${RST}`,
 ].join('\r\n');
 
 // Claude working output (for multi-session-dashboard / subagent-spawn)
@@ -380,7 +381,7 @@ const TERMINAL_WORKING = [
   `────────────────────────────────────────────────────────────────────────────────────────────────────────────────`,
   `  ${YEL}»»${RST} ${BOLD}bypass permissions on${RST} ${GRY}(shift+tab to cycle)${RST}`,
   `                                                                                                     ${BOLD}28163 tokens${RST}`,
-  `                                                                                   ${GRY}current: 2.1.14${RST} ${DIM}·${RST} ${GRY}latest: 2.1.14${RST}`,
+  `                                                                                   ${GRY}current: 2.1.47${RST} ${DIM}·${RST} ${GRY}latest: 2.1.47${RST}`,
 ].join('\r\n');
 
 // Ralph terminal content (matching ralph-tracker screenshot)
@@ -412,7 +413,7 @@ const TERMINAL_RALPH = [
   `────────────────────────────────────────────────────────────────────────────────────────────────────────────────`,
   `  ${YEL}»»${RST} ${BOLD}bypass permissions on${RST} ${GRY}(shift+tab to cycle)${RST}`,
   `                                                                                                    ${BOLD}37267 tokens${RST}`,
-  `                                                                                   ${GRY}current: 2.1.14${RST} ${DIM}·${RST} ${GRY}latest: 2.1.14${RST}`,
+  `                                                                                   ${GRY}current: 2.1.47${RST} ${DIM}·${RST} ${GRY}latest: 2.1.47${RST}`,
 ].join('\r\n');
 
 // Subagent window content (tool call activity)
@@ -470,7 +471,7 @@ const TERMINAL_SUBAGENT = [
   '',
   '',
   `  ${YEL}»»${RST} ${BOLD}bypass permissions on${RST} ${GRY}(shift+tab to cycle)${RST}`,
-  `                                                                                   ${GRY}current: 2.1.14${RST} ${DIM}·${RST} ${GRY}latest: 2.1.14${RST}`,
+  `                                                                                   ${GRY}current: 2.1.47${RST} ${DIM}·${RST} ${GRY}latest: 2.1.47${RST}`,
 ].join('\r\n');
 
 // ─── Route Interceptors ──────────────────────────────────────────────────────
@@ -589,7 +590,8 @@ async function setupRoutes(page, initPayload, terminalContent) {
  */
 async function injectState(page, initPayload, terminalContent, activeSessionId) {
   // Wait for app to be ready
-  await page.waitForFunction(() => window.app && window.app.terminal, { timeout: 10000 });
+  await page.waitForFunction(() => window.app && window.app.terminal, { timeout: 15000 });
+  await sleep(1000);
 
   // Cancel the SSE fallback timer and inject state directly
   await page.evaluate((payload) => {
@@ -603,7 +605,7 @@ async function injectState(page, initPayload, terminalContent, activeSessionId) 
     app.handleInit(payload);
   }, initPayload);
 
-  await sleep(500);
+  await sleep(1500);
 
   // Select the target session (this triggers terminal fetch via our mocked route)
   if (activeSessionId) {
@@ -611,7 +613,7 @@ async function injectState(page, initPayload, terminalContent, activeSessionId) 
       window.app.activeSessionId = null; // Force re-select
       window.app.selectSession(sid);
     }, activeSessionId);
-    await sleep(800);
+    await sleep(2000);
   }
 
   // Write terminal content directly as backup (in case fetch didn't work)
@@ -630,11 +632,25 @@ async function injectState(page, initPayload, terminalContent, activeSessionId) 
     }
   }, terminalContent);
 
+  await sleep(1000);
+
   // Clean up UI elements that look wrong in screenshots
   await page.evaluate(() => {
-    // Hide connection indicator (SSE is blocked so it shows "Reconnecting...")
+    // Kill SSE reconnection entirely and hide the connection indicator
+    const app2 = window.app;
+    if (app2) {
+      // Stop reconnection timers
+      if (app2.sseReconnectTimeout) clearTimeout(app2.sseReconnectTimeout);
+      if (app2.eventSource) { app2.eventSource.close(); app2.eventSource = null; }
+      app2._connectionStatus = 'connected';
+      // Monkey-patch so it never re-shows
+      app2._updateConnectionIndicator = () => {};
+      app2.connectSSE = () => {};
+      app2.setConnectionStatus = () => {};
+    }
+    // Remove the indicator element from the DOM entirely
     const indicator = document.getElementById('connectionIndicator');
-    if (indicator) indicator.style.display = 'none';
+    if (indicator) indicator.remove();
 
     // Hide respawn banner (shows "idle" state which isn't needed in screenshots)
     const respawnBanner = document.getElementById('respawnBanner');
@@ -676,7 +692,8 @@ async function injectState(page, initPayload, terminalContent, activeSessionId) 
     }
   });
 
-  await sleep(300);
+  // Final settle — let xterm.js WebGL renderer, fonts, and layout stabilize
+  await sleep(2000);
 }
 
 // ─── Screenshot Scenarios ────────────────────────────────────────────────────
@@ -701,7 +718,7 @@ async function captureOverview(page) {
       app._renderMuxSessionsImmediate();
     }
   }, MUX_SESSIONS);
-  await sleep(500);
+  await sleep(1500);
 
   await page.screenshot({
     path: join(PROJECT_ROOT, 'docs', 'images', 'claude-overview.png'),
@@ -733,9 +750,9 @@ async function captureSubagentSpawn(page) {
     app.openSubagentWindow('agent-001');
     app.openSubagentWindow('agent-002');
   }, SUBAGENT_ACTIVITY);
-  await sleep(800);
+  await sleep(2000);
 
-  // Position windows nicely (matching existing screenshot layout)
+  // Position windows nicely for 1280x720 viewport
   await page.evaluate(() => {
     const app = window.app;
     if (!app) return;
@@ -755,7 +772,7 @@ async function captureSubagentSpawn(page) {
       w2.style.height = '320px';
     }
   });
-  await sleep(500);
+  await sleep(1500);
 
   await page.screenshot({
     path: join(PROJECT_ROOT, 'docs', 'images', 'subagent-spawn.png'),
@@ -789,7 +806,7 @@ async function captureRalphTracker(page) {
       app._renderRalphStatePanelImmediate();
     }
   }, RALPH_SESSION_ID);
-  await sleep(500);
+  await sleep(1500);
 
   await page.screenshot({
     path: join(PROJECT_ROOT, 'docs', 'images', 'ralph-tracker-8tasks-44percent.png'),
@@ -834,7 +851,7 @@ async function captureMultiSessionMonitor(page) {
       app._renderMuxSessionsImmediate();
     }
   }, MUX_SESSIONS);
-  await sleep(500);
+  await sleep(1500);
 
   await page.screenshot({
     path: join(PROJECT_ROOT, 'docs', 'screenshots', 'multi-session-monitor.png'),
@@ -874,9 +891,9 @@ async function main() {
       captureMultiSessionDashboard,
       captureMultiSessionMonitor,
     ]) {
-      const context = await browser.newContext({ viewport: VIEWPORT });
+      const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: DEVICE_SCALE_FACTOR });
       const page = await context.newPage();
-      page.setDefaultTimeout(15000);
+      page.setDefaultTimeout(30000);
 
       try {
         await scenario(page);

@@ -9909,12 +9909,51 @@ class ClaudemanApp {
   // ========== Session Lifecycle Log ==========
 
   openLifecycleLog() {
-    document.getElementById('lifecycleModal').classList.add('active');
+    const win = document.getElementById('lifecycleWindow');
+    win.style.display = 'block';
+    // Reset transform so it appears centered initially
+    if (!win._dragInitialized) {
+      win.style.left = '50%';
+      win.style.transform = 'translateX(-50%)';
+      this._initLifecycleDrag(win);
+      win._dragInitialized = true;
+    }
     this.loadLifecycleLog();
   }
 
   closeLifecycleLog() {
-    document.getElementById('lifecycleModal').classList.remove('active');
+    document.getElementById('lifecycleWindow').style.display = 'none';
+  }
+
+  _initLifecycleDrag(win) {
+    const header = document.getElementById('lifecycleWindowHeader');
+    let isDragging = false;
+    let startX, startY, startLeft, startTop;
+
+    header.addEventListener('mousedown', (e) => {
+      if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
+      isDragging = true;
+      // Clear transform so left/top work in absolute pixels
+      const rect = win.getBoundingClientRect();
+      win.style.transform = 'none';
+      win.style.left = rect.left + 'px';
+      win.style.top = rect.top + 'px';
+      startX = e.clientX;
+      startY = e.clientY;
+      startLeft = rect.left;
+      startTop = rect.top;
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      win.style.left = (startLeft + e.clientX - startX) + 'px';
+      win.style.top = (startTop + e.clientY - startY) + 'px';
+    });
+
+    document.addEventListener('mouseup', () => {
+      isDragging = false;
+    });
   }
 
   async loadLifecycleLog() {

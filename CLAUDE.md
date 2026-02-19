@@ -35,7 +35,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md` (verify they match with `grep version package.json && grep Version CLAUDE.md`)
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1556 (must match `package.json` for npm publish)
+**Version**: 0.1557 (must match `package.json` for npm publish)
 
 ## Project Overview
 
@@ -120,6 +120,7 @@ journalctl --user -u claudeman-web -f
 | `src/bash-tool-parser.ts` | Parses Claude's bash tool invocations from output |
 | `src/transcript-watcher.ts` | Watches Claude's transcript files for changes |
 | `src/hooks-config.ts` | Manages `.claude/settings.local.json` hook configuration |
+| `src/session-lifecycle-log.ts` | Append-only JSONL audit log at `~/.claudeman/session-lifecycle.jsonl` |
 | `src/image-watcher.ts` | Watches for image file creation (screenshots, etc.) |
 | `src/file-stream-manager.ts` | Manages `tail -f` processes for live log viewing |
 | `src/plan-orchestrator.ts` | Multi-agent plan generation with research and planning phases |
