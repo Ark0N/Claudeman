@@ -282,6 +282,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         // Disable tmux status bar — Claudeman's web UI provides session info
         execAsync(`tmux set-option -t "${muxName}" status off`, { timeout: EXEC_TIMEOUT_MS })
           .then(() => {}).catch(() => { /* Non-critical — session still works with status bar */ }),
+        // Keep pane alive after command exits — prevents session loss when Claude exits.
+        // Without this, tmux destroys the session entirely, losing all buffer/history.
+        // With remain-on-exit, the pane shows [Exited] and can be respawned.
+        execAsync(`tmux set-option -t "${muxName}" remain-on-exit on`, { timeout: EXEC_TIMEOUT_MS })
+          .then(() => {}).catch(() => { /* Non-critical — old behavior (session destroyed on exit) */ }),
       ];
 
       // Enable 24-bit true color passthrough — server-wide, set once per lifetime
@@ -350,6 +355,73 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    */
   muxSessionExists(muxName: string): boolean {
     return this.sessionExists(muxName);
+  }
+
+  /**
+   * Check if the pane in a tmux session is dead (command exited but remain-on-exit keeps it).
+   * Returns true if the session exists but the pane's command has exited.
+   */
+  isPaneDead(muxName: string): boolean {
+    if (IS_TEST_MODE) return false;
+    if (!isValidMuxName(muxName)) return false;
+    try {
+      const output = execSync(
+        `tmux display-message -t "${muxName}" -p '#{pane_dead}'`,
+        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+      ).trim();
+      return output === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Respawn a dead pane in an existing tmux session.
+   * Uses `tmux respawn-pane -k` to restart the command in the same pane,
+   * preserving the session and its scrollback buffer.
+   */
+  async respawnPane(sessionId: string, workingDir: string, mode: 'claude' | 'shell', niceConfig?: NiceConfig, model?: string): Promise<number | null> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+    const muxName = session.muxName;
+
+    if (!isValidMuxName(muxName) || !isValidPath(workingDir)) return null;
+
+    const claudeDir = findClaudeDir();
+    const pathExport = claudeDir ? `export PATH="${claudeDir}:$PATH" && ` : '';
+    const envExports = [
+      'unset CLAUDECODE',
+      'unset COLORTERM',
+      'export CLAUDEMAN_MUX=1',
+      `export CLAUDEMAN_SESSION_ID=${sessionId}`,
+      `export CLAUDEMAN_MUX_NAME=${muxName}`,
+      `export CLAUDEMAN_API_URL=${process.env.CLAUDEMAN_API_URL || 'http://localhost:3000'}`,
+    ].join(' && ');
+
+    const safeModel = (model && /^[a-zA-Z0-9._-]+$/.test(model)) ? model : undefined;
+    const modelFlag = (mode === 'claude' && safeModel) ? ` --model ${safeModel}` : '';
+    const baseCmd = mode === 'claude'
+      ? `claude --dangerously-skip-permissions --session-id "${sessionId}"${modelFlag}`
+      : '$SHELL';
+
+    const config = niceConfig || DEFAULT_NICE_CONFIG;
+    const cmd = wrapWithNice(baseCmd, config);
+    const fullCmd = `${pathExport}${envExports} && ${cmd}`;
+
+    try {
+      await execAsync(
+        `tmux respawn-pane -k -t "${muxName}" bash -c ${JSON.stringify(fullCmd)}`,
+        { timeout: EXEC_TIMEOUT_MS }
+      );
+      // Wait for the respawned process to start
+      await new Promise(resolve => setTimeout(resolve, TMUX_CREATION_WAIT_MS));
+      const pid = this.getPanePid(muxName);
+      if (pid) session.pid = pid;
+      return pid;
+    } catch (err) {
+      console.error('[TmuxManager] Failed to respawn pane:', err);
+      return null;
+    }
   }
 
   private sessionExists(muxName: string): boolean {

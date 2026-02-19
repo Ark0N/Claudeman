@@ -158,4 +158,10 @@ export interface TerminalMultiplexer extends EventEmitter {
 
   /** Check if a multiplexer session actually exists (process-level check, not just tracked) */
   muxSessionExists(muxName: string): boolean;
+
+  /** Check if the pane in a session is dead (command exited but remain-on-exit keeps it alive) */
+  isPaneDead(muxName: string): boolean;
+
+  /** Respawn a dead pane with a fresh command. Returns the new PID or null on failure. */
+  respawnPane(sessionId: string, workingDir: string, mode: 'claude' | 'shell', niceConfig?: NiceConfig, model?: string): Promise<number | null>;
 }

@@ -849,14 +849,29 @@ export class Session extends EventEmitter {
     // If mux wrapping is enabled, create or attach to a mux session
     if (this._useMux && this._mux) {
       try {
-        // Verify stale mux session — tmux destroys session when command exits
-        // (remain-on-exit is off), but _muxSession reference persists
+        // Verify stale mux session — tmux may have been destroyed (e.g., killed externally)
         if (this._muxSession && !this._mux.muxSessionExists(this._muxSession.muxName)) {
           console.log('[Session] Stale mux session detected (tmux gone):', this._muxSession.muxName);
           this._muxSession = null;
         }
+
+        // Check if session exists but pane is dead (remain-on-exit keeps it alive)
+        // Respawn the pane instead of creating a whole new session — preserves tmux scrollback
+        let needsNewSession = false;
+        if (this._muxSession && this._mux.isPaneDead(this._muxSession.muxName)) {
+          console.log('[Session] Dead pane detected, respawning:', this._muxSession.muxName);
+          const newPid = await this._mux.respawnPane(this.id, this.workingDir, 'claude', this._niceConfig, this._model);
+          if (!newPid) {
+            console.error('[Session] Failed to respawn pane, will create new session');
+            needsNewSession = true;
+          } else {
+            // Wait a moment for the respawned process to fully start
+            await new Promise(resolve => setTimeout(resolve, MUX_STARTUP_DELAY_MS));
+          }
+        }
+
         // Check if we already have a mux session (restored session)
-        const isRestoredSession = this._muxSession !== null;
+        const isRestoredSession = this._muxSession !== null && !needsNewSession;
         if (isRestoredSession) {
           console.log('[Session] Attaching to existing mux session:', this._muxSession!.muxName);
         } else {
@@ -1134,13 +1149,27 @@ export class Session extends EventEmitter {
     // If mux wrapping is enabled, create or attach to a mux session
     if (this._useMux && this._mux) {
       try {
-        // Verify stale mux session — tmux destroys session when command exits
+        // Verify stale mux session — tmux may have been destroyed externally
         if (this._muxSession && !this._mux.muxSessionExists(this._muxSession.muxName)) {
           console.log('[Session] Stale mux session detected (tmux gone):', this._muxSession.muxName);
           this._muxSession = null;
         }
+
+        // Check if session exists but pane is dead (remain-on-exit keeps it alive)
+        let needsNewSession = false;
+        if (this._muxSession && this._mux.isPaneDead(this._muxSession.muxName)) {
+          console.log('[Session] Dead pane detected, respawning:', this._muxSession.muxName);
+          const newPid = await this._mux.respawnPane(this.id, this.workingDir, 'shell', this._niceConfig);
+          if (!newPid) {
+            console.error('[Session] Failed to respawn pane, will create new session');
+            needsNewSession = true;
+          } else {
+            await new Promise(resolve => setTimeout(resolve, MUX_STARTUP_DELAY_MS));
+          }
+        }
+
         // Check if we already have a mux session (restored session)
-        const isRestoredSession = this._muxSession !== null;
+        const isRestoredSession = this._muxSession !== null && !needsNewSession;
         if (isRestoredSession) {
           console.log('[Session] Attaching to existing mux session:', this._muxSession!.muxName);
         } else {
