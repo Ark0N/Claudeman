@@ -1019,7 +1019,10 @@ class LocalEchoOverlay {
 
             this.overlay.style.display = '';
         } catch {
-            this.clear();
+            // Hide overlay on render error but preserve pendingText —
+            // next rerender() (from flushPendingWrites) will retry when terminal is ready.
+            this.overlay.innerHTML = '';
+            this.overlay.style.display = 'none';
         }
     }
 
@@ -4607,13 +4610,20 @@ class ClaudemanApp {
         }
       }
 
-      // Restore local echo text for incoming session (saved during previous tab switch)
+      // Restore local echo text for incoming session (saved during previous tab switch).
+      // Retry rerender at increasing delays — terminal render service may not be ready
+      // immediately after buffer load (especially on slower mobile devices).
       const savedEcho = this.localEchoTextCache.get(sessionId);
       if (savedEcho && this._localEchoOverlay) {
         this._localEchoOverlay.pendingText = savedEcho;
         this._localEchoOverlay._persist();
-        // Delay rerender until buffer is settled and prompt is visible
-        setTimeout(() => this._localEchoOverlay?.rerender(), 100);
+        for (const delay of [150, 500, 1000]) {
+          setTimeout(() => {
+            if (this.activeSessionId === sessionId && this._localEchoOverlay?.pendingText) {
+              this._localEchoOverlay.rerender();
+            }
+          }, delay);
+        }
       }
 
       // Send resize and Ctrl+L to trigger Claude to redraw at correct size
