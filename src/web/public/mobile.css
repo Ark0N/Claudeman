@@ -783,15 +783,16 @@ html.mobile-init .file-browser-panel {
 
   .paste-textarea {
     width: 100%;
-    min-height: 100px;
+    min-height: 60px;
+    max-height: 120px;
     background: var(--bg-primary, #0d0d14);
     color: var(--text-primary, #e0e0e0);
     border: 1px solid var(--border-color, #444);
     border-radius: 8px;
-    padding: 10px;
+    padding: 8px;
     font-family: inherit;
-    font-size: 14px;
-    resize: vertical;
+    font-size: 16px;
+    resize: none;
     box-sizing: border-box;
   }
 
