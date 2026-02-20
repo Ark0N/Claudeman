@@ -7716,7 +7716,8 @@ class ClaudemanApp {
       while (attempts < maxAttempts) {
         await new Promise(r => setTimeout(r, 500));
         try {
-          const statusRes = await fetch(`/api/sessions/${sessionId}`);
+          // Use /terminal?tail=2048 instead of /sessions/:id to avoid fetching 2-3MB full state
+          const statusRes = await fetch(`/api/sessions/${sessionId}/terminal?tail=2048`);
           const statusData = await statusRes.json();
           // Session is ready ONLY when Claude CLI shows its UI:
           // Must see prompt character '❯' OR 'tokens' status line
@@ -7781,9 +7782,14 @@ class ClaudemanApp {
           for (let attempt = 0; attempt < initMaxAttempts; attempt++) {
             await new Promise(r => setTimeout(r, 1000));
             try {
-              const statusRes = await fetch(`/api/sessions/${sessionId}`);
-              const statusData = await statusRes.json();
-              const termBuf = statusData?.terminalBuffer || '';
+              // Fetch terminal tail (lightweight) + session state separately to avoid 2-3MB full buffer
+              const [termRes, stateRes] = await Promise.all([
+                fetch(`/api/sessions/${sessionId}/terminal?tail=2048`),
+                fetch(`/api/sessions/${sessionId}`)
+              ]);
+              const termData = await termRes.json();
+              const statusData = await stateRes.json();
+              const termBuf = termData?.terminalBuffer || '';
               // /init is complete when we see the prompt indicator (❯) and not working
               const hasPrompt = termBuf.includes('❯');
               const isIdle = !statusData.isWorking;

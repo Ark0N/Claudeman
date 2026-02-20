@@ -47,7 +47,6 @@ import {
   ApiErrorCode,
   createErrorResponse,
   type ApiResponse,
-  type SessionResponse,
   type QuickStartResponse,
   type CaseInfo,
   type PersistedRespawnConfig,
@@ -809,7 +808,7 @@ export class WebServer extends EventEmitter {
     // Session management
     this.app.get('/api/sessions', async () => this.getLightSessionsState());
 
-    this.app.post('/api/sessions', async (req): Promise<SessionResponse> => {
+    this.app.post('/api/sessions', async (req) => {
       // Prevent unbounded session creation
       if (this.sessions.size >= MAX_CONCURRENT_SESSIONS) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached. Delete some sessions first.`);
@@ -858,9 +857,11 @@ export class WebServer extends EventEmitter {
       await this.setupSessionListeners(session);
       getLifecycleLog().log({ event: 'created', sessionId: session.id, name: session.name });
 
-      const detailedState = session.toDetailedState();
-      this.broadcast('session:created', detailedState);
-      return { success: true, session: detailedState };
+      // Use light state for broadcast + response — buffers are fetched on-demand via /terminal.
+      // Avoids serializing 2-3MB of terminal+text buffers per session creation.
+      const lightState = this.getSessionStateWithRespawn(session);
+      this.broadcast('session:created', lightState);
+      return { success: true, session: lightState };
     });
 
     // Rename a session
@@ -947,14 +948,9 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
-      // Include respawn controller state if active
-      const controller = this.respawnControllers.get(id);
-      return {
-        ...session.toDetailedState(),
-        respawnEnabled: controller?.getConfig()?.enabled ?? false,
-        respawnConfig: controller?.getConfig() ?? null,
-        respawn: controller?.getStatus() ?? null,
-      };
+      // Use light state (no full buffers) — terminal buffer available via /terminal endpoint.
+      // Full buffers were 2-3MB and caused slowness when polled frequently (e.g. Ralph wizard).
+      return this.getSessionStateWithRespawn(session);
     });
 
     this.app.get('/api/sessions/:id/output', async (req) => {
@@ -2242,7 +2238,7 @@ export class WebServer extends EventEmitter {
       await this.setupSessionListeners(session);
       getLifecycleLog().log({ event: 'created', sessionId: session.id, name: session.name, reason: 'run_prompt' });
 
-      this.broadcast('session:created', session.toDetailedState());
+      this.broadcast('session:created', this.getSessionStateWithRespawn(session));
 
       try {
         const result = await session.runPrompt(prompt);
@@ -2660,7 +2656,7 @@ export class WebServer extends EventEmitter {
       this.persistSessionState(session);
       await this.setupSessionListeners(session);
       getLifecycleLog().log({ event: 'created', sessionId: session.id, name: session.name, reason: 'quick_start' });
-      this.broadcast('session:created', session.toDetailedState());
+      this.broadcast('session:created', this.getSessionStateWithRespawn(session));
 
       // Start in the appropriate mode
       try {

@@ -692,16 +692,12 @@ export function createErrorResponse(code: ApiErrorCode, details?: string): ApiRe
 export interface SessionResponse {
   /** Whether the request succeeded */
   success: boolean;
-  /** Session details if successful */
+  /** Session details if successful (light state — no full buffers) */
   session?: SessionState & {
     /** Claude session ID from CLI */
     claudeSessionId: string | null;
     /** Total API cost */
     totalCost: number;
-    /** Text output buffer */
-    textOutput: string;
-    /** Terminal buffer */
-    terminalBuffer: string;
     /** Number of messages */
     messageCount: number;
     /** Whether Claude is working */

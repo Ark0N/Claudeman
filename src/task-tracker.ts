@@ -548,6 +548,27 @@ export class TaskTracker extends EventEmitter {
   }
 
   /**
+   * Lightweight task tree for SSE broadcasts — strips large `output` strings
+   * to avoid serializing 5-10MB of task results every 500ms.
+   * Full task details available via getTaskTree().
+   *
+   * @returns Array of root tasks with output truncated to 200 chars
+   */
+  getTaskTreeLight(): Omit<BackgroundTask, 'output'>[] {
+    const rootTasks: Omit<BackgroundTask, 'output'>[] = [];
+
+    for (const task of this.tasks.values()) {
+      if (!task.parentId) {
+        // Strip output to avoid serializing large strings on every broadcast
+        const { output: _output, ...lightTask } = task;
+        rootTasks.push(lightTask);
+      }
+    }
+
+    return rootTasks;
+  }
+
+  /**
    * Get all tasks as a flat Map.
    *
    * @returns Copy of the internal tasks map (safe to modify)

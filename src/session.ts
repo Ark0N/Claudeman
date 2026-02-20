@@ -789,9 +789,9 @@ export class Session extends EventEmitter {
         maxTextOutput: MAX_TEXT_OUTPUT_SIZE,
         maxMessages: MAX_MESSAGES,
       },
-      // Background task tracking
+      // Background task tracking (light tree strips large output strings)
       taskStats: this._taskTracker.getStats(),
-      taskTree: this._taskTracker.getTaskTree(),
+      taskTree: this._taskTracker.getTaskTreeLight(),
       // Token tracking
       tokens: {
         input: this._totalInputTokens,
