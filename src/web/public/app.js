@@ -2135,26 +2135,42 @@ class ClaudemanApp {
             return;
           }
           if (/^[\r\n]+$/.test(data)) {
-            // Enter: drain any background-buffered chars, then send \r after 120ms.
-            // PTY already has the text from background sends; drain catches any remainder.
-            // Capture sessionId NOW — the setTimeout fires 120ms later and activeSessionId
-            // could change if the user switches tabs during that window.
+            // Enter: use the overlay text as the authoritative source of truth.
+            // Background sends may have dropped or reordered chars (transient
+            // network errors, HTTP/1.1 connection races). Instead of trusting
+            // the PTY state, we: (1) wait for in-flight sends to complete,
+            // (2) clear whatever the PTY has with backspaces, (3) re-send the
+            // correct text from the overlay, (4) send Enter. All in one batch
+            // so ordering is guaranteed.
             const enterSessionId = this.activeSessionId;
+            const correctText = this._localEchoOverlay?.pendingText || '';
             this._localEchoOverlay?.clear();
+            // Cancel all pending timers and buffers — we'll re-send everything
             if (this._inputFlushTimeout) {
               clearTimeout(this._inputFlushTimeout);
               this._inputFlushTimeout = null;
             }
-            const remainder = drainBgBuffer();
-            if (remainder) {
-              this._pendingInput += remainder;
-              flushInput();
+            if (this._localEchoBgTimer) {
+              clearTimeout(this._localEchoBgTimer);
+              this._localEchoBgTimer = null;
             }
-            setTimeout(() => {
-              if (enterSessionId) {
+            this._localEchoBgBuffer = '';
+            this._pendingInput = '';
+            // Discard any unsent pending chars — they'll be re-sent correctly
+            this._inputSendPending = '';
+            // Wait for any in-flight request to finish, then send correction
+            (async () => {
+              await this._waitForSendIdle();
+              if (!enterSessionId) return;
+              if (correctText) {
+                // Clear PTY input (backspaces) + re-type correct text + Enter.
+                // Extra backspaces on empty Ink input are harmless (no-ops).
+                const bs = '\x7f'.repeat(correctText.length + 10);
+                this._sendInputAsync(enterSessionId, bs + correctText + '\r');
+              } else {
                 this._sendInputAsync(enterSessionId, '\r');
               }
-            }, 120);
+            })();
             return;
           }
           if (data.length > 1 && data.charCodeAt(0) >= 32) {
@@ -3817,6 +3833,23 @@ class ClaudemanApp {
     })();
   }
 
+
+  /**
+   * Wait for the background send loop to finish its current in-flight request.
+   * Used by the Enter handler to ensure all background-sent chars have been
+   * delivered before sending the authoritative correction.
+   */
+  _waitForSendIdle(timeoutMs = 500) {
+    if (!this._inputSendActive) return Promise.resolve();
+    return new Promise(resolve => {
+      const deadline = Date.now() + timeoutMs;
+      const check = () => {
+        if (!this._inputSendActive || Date.now() >= deadline) resolve();
+        else setTimeout(check, 10);
+      };
+      check();
+    });
+  }
 
   _enqueueInput(sessionId, input) {
     const existing = this._inputQueue.get(sessionId) || '';
