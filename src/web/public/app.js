@@ -885,12 +885,15 @@ class LocalEchoOverlay {
         }
         screen.appendChild(this.overlay);
         this.pendingText = '';
+        this._cursorPos = 0; // Cursor position within pendingText (0 = before first char)
+        this._mutationId = 0; // Increments on every content/cursor change, used for renderKey dedup
         this._storageKey = 'claudeman_local_echo_pending';
         // Restore unsent input from previous session (survives reload/disconnect)
         try {
             const saved = localStorage.getItem(this._storageKey);
             if (saved) {
                 this.pendingText = saved;
+                this._cursorPos = saved.length;
                 this._render();
             }
         } catch {}
@@ -925,14 +928,20 @@ class LocalEchoOverlay {
     }
 
     addChar(char) {
-        this.pendingText += char;
+        // Insert at cursor position, not always at end
+        this.pendingText = this.pendingText.slice(0, this._cursorPos) + char + this.pendingText.slice(this._cursorPos);
+        this._cursorPos++;
+        this._mutationId++;
         this._persist();
         this._render();
     }
 
     removeChar() {
-        if (this.pendingText.length > 0) {
-            this.pendingText = this.pendingText.slice(0, -1);
+        // Delete char before cursor position (like real backspace)
+        if (this._cursorPos > 0) {
+            this.pendingText = this.pendingText.slice(0, this._cursorPos - 1) + this.pendingText.slice(this._cursorPos);
+            this._cursorPos--;
+            this._mutationId++;
             this._persist();
             if (this.pendingText.length > 0) {
                 this._render();
@@ -942,15 +951,34 @@ class LocalEchoOverlay {
         }
     }
 
+    moveCursorLeft() {
+        if (this._cursorPos > 0) {
+            this._cursorPos--;
+            this._mutationId++;
+            this._render();
+        }
+    }
+
+    moveCursorRight() {
+        if (this._cursorPos < this.pendingText.length) {
+            this._cursorPos++;
+            this._mutationId++;
+            this._render();
+        }
+    }
+
     appendText(text) {
         if (!text) return;
-        this.pendingText += text;
+        this.pendingText = this.pendingText.slice(0, this._cursorPos) + text + this.pendingText.slice(this._cursorPos);
+        this._cursorPos += text.length;
+        this._mutationId++;
         this._persist();
         this._render();
     }
 
     clear() {
         this.pendingText = '';
+        this._cursorPos = 0;
         this._persist();
         this._lastRenderKey = '';
         this._lastPromptPos = null;
@@ -1001,8 +1029,10 @@ class LocalEchoOverlay {
             const startCol = Math.min(activePrompt.col + 2, totalCols - 1);
             const firstLineCols = Math.max(1, totalCols - startCol);
 
-            // Skip redundant re-renders (e.g. from flushPendingWrites at 60fps)
-            const renderKey = `${this.pendingText.length}:${activePrompt.row}:${activePrompt.col}:${totalCols}`;
+            // Skip redundant re-renders (e.g. from flushPendingWrites at 60fps).
+            // _mutationId increments on every content/cursor change; prompt position
+            // is included so moves from Ink redraws also trigger re-render.
+            const renderKey = `${this._mutationId}:${activePrompt.row}:${activePrompt.col}:${totalCols}`;
             if (renderKey === this._lastRenderKey && this.overlay.style.display !== 'none') return;
             this._lastRenderKey = renderKey;
 
@@ -1036,15 +1066,24 @@ class LocalEchoOverlay {
                 this.overlay.appendChild(lineEl);
             }
 
-            // Block cursor at end of last line
-            const lastLine = lines[lines.length - 1];
-            const lastLineLeft = lines.length === 1 ? startCol : 0;
-            const cursorCol = lastLineLeft + lastLine.length;
+            // Block cursor at cursor position (not always end of text)
+            // Map _cursorPos to visual line/col position
+            let cursorVisualPos = this._cursorPos;
+            let cursorLine = 0;
+            if (cursorVisualPos <= firstLineCols) {
+                cursorLine = 0;
+            } else {
+                cursorVisualPos -= firstLineCols;
+                cursorLine = 1 + Math.floor(cursorVisualPos / totalCols);
+                cursorVisualPos = cursorVisualPos % totalCols;
+            }
+            const cursorLineLeft = cursorLine === 0 ? startCol : 0;
+            const cursorCol = cursorLineLeft + cursorVisualPos;
             if (cursorCol < totalCols) {
                 const cursor = document.createElement('span');
                 cursor.style.cssText = 'position:absolute;display:inline-block';
                 cursor.style.left = (cursorCol * cellW) + 'px';
-                cursor.style.top = ((lines.length - 1) * cellH) + 'px';
+                cursor.style.top = (cursorLine * cellH) + 'px';
                 cursor.style.width = cellW + 'px';
                 cursor.style.height = cellH + 'px';
                 cursor.style.backgroundColor = this.terminal.options?.theme?.cursor || '#e0e0e0';
@@ -1689,8 +1728,13 @@ class ClaudemanApp {
     this._inputQueueMaxBytes = 64 * 1024; // 64KB cap per session
     this._connectionStatus = 'connected';
 
-    // Sequential input send chain — ensures keystroke ordering across async fetches
-    this._inputSendChain = Promise.resolve();
+    // Serialized input sender — at most one fetch in-flight at a time.
+    // New input arriving while a send is in-flight merges into a single
+    // pending buffer (never a growing queue). Guarantees ordering without
+    // blocking the UI — typing and overlay rendering remain fully instant.
+    this._inputSendActive = false;   // true while a fetch is in-flight
+    this._inputSendPending = '';     // chars waiting behind the in-flight request
+    this._inputSendPendingSession = null;
 
     // Local echo overlay — DOM overlay positioned at the visible ❯ prompt
     // (not at buffer.cursorY, which reflects Ink's internal cursor position)
@@ -2084,7 +2128,7 @@ class ClaudemanApp {
         // (50ms debounce) so Tab completion and tab-switching work.
         if (this._localEchoEnabled) {
           if (data === '\x7f') {
-            // Backspace: remove last char from overlay, send \x7f to PTY in background
+            // Backspace: delete char at cursor position, send \x7f to PTY in background
             this._localEchoOverlay?.removeChar();
             this._localEchoBgBuffer += '\x7f';
             scheduleBgFlush();
@@ -2093,6 +2137,9 @@ class ClaudemanApp {
           if (/^[\r\n]+$/.test(data)) {
             // Enter: drain any background-buffered chars, then send \r after 120ms.
             // PTY already has the text from background sends; drain catches any remainder.
+            // Capture sessionId NOW — the setTimeout fires 120ms later and activeSessionId
+            // could change if the user switches tabs during that window.
+            const enterSessionId = this.activeSessionId;
             this._localEchoOverlay?.clear();
             if (this._inputFlushTimeout) {
               clearTimeout(this._inputFlushTimeout);
@@ -2104,8 +2151,9 @@ class ClaudemanApp {
               flushInput();
             }
             setTimeout(() => {
-              this._pendingInput += '\r';
-              flushInput();
+              if (enterSessionId) {
+                this._sendInputAsync(enterSessionId, '\r');
+              }
             }, 120);
             return;
           }
@@ -2122,8 +2170,21 @@ class ClaudemanApp {
             flushInput();
             return;
           }
+          // Arrow left/right: move cursor within overlay text, send to PTY in background
+          if (data === '\x1b[D') {
+            this._localEchoOverlay?.moveCursorLeft();
+            this._localEchoBgBuffer += data;
+            scheduleBgFlush();
+            return;
+          }
+          if (data === '\x1b[C') {
+            this._localEchoOverlay?.moveCursorRight();
+            this._localEchoBgBuffer += data;
+            scheduleBgFlush();
+            return;
+          }
           if (data.charCodeAt(0) < 32) {
-            // Control chars (Ctrl+C, escape sequences): clear overlay, drain bg, send immediately
+            // Other control chars (Ctrl+C, up/down arrows, etc.): clear overlay, drain bg, send immediately
             this._localEchoOverlay?.clear();
             const remainder = drainBgBuffer();
             if (remainder) {
@@ -2138,7 +2199,7 @@ class ClaudemanApp {
             return;
           }
           if (data.length === 1 && data.charCodeAt(0) >= 32) {
-            // Printable char: add to overlay + queue for background send to PTY
+            // Printable char: insert at cursor position + queue for background send to PTY
             this._localEchoOverlay?.addChar(data);
             this._localEchoBgBuffer += data;
             scheduleBgFlush();
@@ -3719,32 +3780,41 @@ class ClaudemanApp {
       return;
     }
 
-    // Chain on dispatch only — wait for the previous request to be sent before
-    // dispatching the next one (preserves keystroke ordering), but don't wait
-    // for the server's response. The server handles writeViaMux as
-    // fire-and-forget anyway, so the HTTP response carries no useful data
-    // beyond success/failure for retry purposes.
-    this._inputSendChain = this._inputSendChain.then(() => {
-      const fetchPromise = fetch(`/api/sessions/${sessionId}/input`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input }),
-        keepalive: input.length < 65536,
-      });
+    // Merge into the pending buffer. If a request is already in-flight,
+    // this just accumulates — the send loop will pick it up when the
+    // current request completes. No growing queue, no blocked typing.
+    this._inputSendPending += input;
+    this._inputSendPendingSession = sessionId;
 
-      // Handle response asynchronously — don't block next keystroke on response
-      fetchPromise.then(resp => {
-        if (!resp.ok) {
-          this._enqueueInput(sessionId, input);
-        } else {
-          this.clearPendingHooks(sessionId);
+    // If already sending, the loop will drain the pending buffer — done.
+    if (this._inputSendActive) return;
+
+    // Start the send loop. Runs entirely in the background; callers
+    // (onData, bgBuffer timer, Enter handler) return immediately.
+    this._inputSendActive = true;
+    (async () => {
+      while (this._inputSendPending) {
+        const batch = this._inputSendPending;
+        const batchSession = this._inputSendPendingSession;
+        this._inputSendPending = '';
+        try {
+          const resp = await fetch(`/api/sessions/${batchSession}/input`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ input: batch }),
+            keepalive: batch.length < 65536,
+          });
+          if (!resp.ok) {
+            this._enqueueInput(batchSession, batch);
+          } else {
+            this.clearPendingHooks(batchSession);
+          }
+        } catch {
+          this._enqueueInput(batchSession, batch);
         }
-      }).catch(() => {
-        this._enqueueInput(sessionId, input);
-      });
-
-      // Return immediately after fetch is dispatched (don't await response)
-    });
+      }
+      this._inputSendActive = false;
+    })();
   }
 
 
@@ -4050,6 +4120,7 @@ class ClaudemanApp {
     // selectSession loads the terminal buffer, so we schedule rerender after it settles.
     if (savedEchoText && this._localEchoOverlay) {
       this._localEchoOverlay.pendingText = savedEchoText;
+      this._localEchoOverlay._cursorPos = savedEchoText.length;
       this._localEchoOverlay._persist();
       // Delay rerender until buffer load completes and prompt is visible
       setTimeout(() => this._localEchoOverlay?.rerender(), 500);
@@ -4718,6 +4789,7 @@ class ClaudemanApp {
       const savedEcho = this.localEchoTextCache.get(sessionId);
       if (savedEcho && this._localEchoOverlay) {
         this._localEchoOverlay.pendingText = savedEcho;
+        this._localEchoOverlay._cursorPos = savedEcho.length;
         this._localEchoOverlay._persist();
         for (const delay of [150, 500, 1000]) {
           setTimeout(() => {
