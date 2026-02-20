@@ -33,6 +33,7 @@ export interface SubagentInfo {
   modelShort?: 'haiku' | 'sonnet' | 'opus'; // Short model identifier
   totalInputTokens?: number; // Running total of input tokens
   totalOutputTokens?: number; // Running total of output tokens
+  pid?: number; // Cached process ID for fast liveness checks
 }
 
 export interface SubagentToolCall {
@@ -126,6 +127,7 @@ const IDLE_TIMEOUT_MS = 30000; // Consider agent idle after 30s of no activity
 const POLL_INTERVAL_MS = 1000; // Base poll interval (lightweight checks)
 const FULL_SCAN_EVERY_N_POLLS = 5; // Full directory traversal every 5th poll (5s)
 const LIVENESS_CHECK_MS = 10000; // Check if subagent processes are still alive every 10s
+const FILE_ALIVE_THRESHOLD_MS = 30000; // File mtime within 30s = agent alive (primary check)
 const STALE_COMPLETED_MAX_AGE_MS = 60 * 60 * 1000; // Remove completed agents older than 1 hour
 const STALE_IDLE_MAX_AGE_MS = 4 * 60 * 60 * 1000; // Remove idle agents older than 4 hours
 const STARTUP_MAX_FILE_AGE_MS = 4 * 60 * 60 * 1000; // Only load files modified in last 4 hours on startup
@@ -235,7 +237,12 @@ export class SubagentWatcher extends EventEmitter {
 
   /**
    * Start periodic liveness checker
-   * Detects when subagent processes have exited but status is still active/idle
+   * Detects when subagent processes have exited but status is still active/idle.
+   *
+   * Uses a 3-tier check to minimize cost:
+   *   1. File mtime (stat ~0.3ms/agent) — if transcript modified recently, agent is alive
+   *   2. Cached PID (/proc/{pid}/stat ~0.1ms) — if stored PID still exists, alive
+   *   3. Full pgrep scan (expensive, ~500ms) — only for agents that fail tiers 1+2
    */
   private startLivenessChecker(): void {
     if (this.livenessInterval) return;
@@ -246,26 +253,40 @@ export class SubagentWatcher extends EventEmitter {
       this._isCheckingLiveness = true;
 
       try {
-        // Run pgrep ONCE and collect all claude process info
-        const pidMap = await this.getClaudePids();
+        // Collect agents that need the expensive pgrep scan
+        const needsFullScan: SubagentInfo[] = [];
 
         for (const [_agentId, info] of this.agentInfo) {
-          // Re-check status in case another check completed this agent
-          if (info.status === 'active' || info.status === 'idle') {
+          if (info.status !== 'active' && info.status !== 'idle') continue;
+
+          // Tier 1: File mtime check (~0.3ms per agent)
+          if (await this.checkSubagentFileAlive(info)) continue;
+
+          // Tier 2: Cached PID check (~0.1ms per agent)
+          if (info.pid && await this.checkPidAlive(info.pid)) continue;
+
+          // Tiers 1+2 failed — need expensive scan for this agent
+          needsFullScan.push(info);
+        }
+
+        // Tier 3: Full pgrep scan — only if any agents failed cheap checks
+        if (needsFullScan.length > 0) {
+          const pidMap = await this.getClaudePids();
+
+          for (const info of needsFullScan) {
+            // Re-check status in case another check completed this agent
+            if (info.status !== 'active' && info.status !== 'idle') continue;
+
             const alive = this.checkSubagentAliveFromPidMap(info, pidMap);
-            // If process not found, fall back to file mtime check
             if (!alive) {
-              const fileAlive = await this.checkSubagentFileAlive(info);
-              if (!fileAlive && (info.status === 'active' || info.status === 'idle')) {
-                // Double-check status after async call to prevent race
-                info.status = 'completed';
-                // Clean up pendingToolCalls for this agent to prevent memory leak
-                this.pendingToolCalls.delete(info.agentId);
-                this.emit('subagent:completed', info);
-              }
+              info.pid = undefined;
+              info.status = 'completed';
+              this.pendingToolCalls.delete(info.agentId);
+              this.emit('subagent:completed', info);
             }
           }
         }
+
         // Periodically clean up stale completed agents (older than 24 hours)
         this.cleanupStaleAgents();
       } finally {
@@ -275,9 +296,22 @@ export class SubagentWatcher extends EventEmitter {
   }
 
   /**
+   * Check if a PID is still alive via /proc/{pid}/stat (single file read, ~0.1ms).
+   */
+  private async checkPidAlive(pid: number): Promise<boolean> {
+    try {
+      await statAsync(`/proc/${pid}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Run pgrep once and read /proc info for all Claude PIDs in parallel.
    * Returns a Map of pid -> { environ, cmdline } for subagent processes only.
    * Excludes main Claudeman-managed Claude processes (CLAUDEMAN_MUX=1).
+   * Also updates cached PIDs on tracked agents when a match is found.
    */
   private async getClaudePids(): Promise<Map<number, { environ: string; cmdline: string }>> {
     const result = new Map<number, { environ: string; cmdline: string }>();
@@ -302,6 +336,17 @@ export class SubagentWatcher extends EventEmitter {
           result.set(pid, { environ, cmdline });
         }
       }));
+
+      // Update cached PIDs on tracked agents
+      for (const [pid, procInfo] of result) {
+        for (const [_agentId, info] of this.agentInfo) {
+          if (info.status !== 'active' && info.status !== 'idle') continue;
+          if (procInfo.environ.includes(info.sessionId) || procInfo.cmdline.includes(info.sessionId)) {
+            info.pid = pid;
+            break; // Each PID belongs to at most one agent
+          }
+        }
+      }
     } catch {
       // pgrep returns non-zero if no matches
     }
@@ -324,14 +369,15 @@ export class SubagentWatcher extends EventEmitter {
   }
 
   /**
-   * Check if a subagent's transcript file was recently modified (fallback for process check).
+   * Check if a subagent's transcript file was recently modified.
+   * Primary liveness signal — transcript files are written to continuously while agent is active.
    */
   private async checkSubagentFileAlive(info: SubagentInfo): Promise<boolean> {
     try {
       const fileStat = await statAsync(info.filePath);
       const mtime = fileStat.mtime.getTime();
       const now = Date.now();
-      if (now - mtime < 60000) {
+      if (now - mtime < FILE_ALIVE_THRESHOLD_MS) {
         return true;
       }
     } catch {
@@ -597,7 +643,7 @@ export class SubagentWatcher extends EventEmitter {
 
   /**
    * Kill a subagent by its agent ID
-   * Finds the Claude process and sends SIGTERM
+   * Uses cached PID first, falls back to findSubagentProcess if needed.
    */
   async killSubagent(agentId: string): Promise<boolean> {
     const info = this.agentInfo.get(agentId);
@@ -607,10 +653,12 @@ export class SubagentWatcher extends EventEmitter {
     if (info.status === 'completed') return false;
 
     try {
-      // Find Claude process with matching session ID
+      // Always use findSubagentProcess for kill — it verifies environ/cmdline,
+      // preventing PID reuse attacks (cached PID may have been recycled by OS)
       const pid = await this.findSubagentProcess(info.sessionId);
       if (pid) {
         process.kill(pid, 'SIGTERM');
+        info.pid = undefined;
         info.status = 'completed';
         this.emit('subagent:completed', info);
         return true;
@@ -620,6 +668,7 @@ export class SubagentWatcher extends EventEmitter {
     }
 
     // Mark as completed even if we couldn't find the process
+    info.pid = undefined;
     info.status = 'completed';
     this.emit('subagent:completed', info);
     return true;
@@ -646,6 +695,7 @@ export class SubagentWatcher extends EventEmitter {
    * Find the process ID of a Claude subagent by its session ID.
    * Searches /proc for claude processes with matching session ID in environment.
    * Skips main Claudeman-managed Claude processes (identified by CLAUDEMAN_MUX=1).
+   * Caches the discovered PID on the matching agent info for future fast checks.
    */
   private async findSubagentProcess(sessionId: string): Promise<number | null> {
     try {
@@ -674,12 +724,15 @@ export class SubagentWatcher extends EventEmitter {
         if (environ.includes('CLAUDEMAN_MUX=1')) continue;
 
         if (environ.includes(sessionId)) {
+          // Cache PID on the matching agent
+          this.cacheAgentPid(sessionId, pid);
           return pid;
         }
 
         try {
           const cmdline = await readFile(`/proc/${pid}/cmdline`, 'utf8');
           if (cmdline.includes(sessionId)) {
+            this.cacheAgentPid(sessionId, pid);
             return pid;
           }
         } catch {
@@ -690,6 +743,18 @@ export class SubagentWatcher extends EventEmitter {
       // pgrep returns non-zero if no matches
     }
     return null;
+  }
+
+  /**
+   * Store a discovered PID on the agent info with matching sessionId.
+   */
+  private cacheAgentPid(sessionId: string, pid: number): void {
+    for (const [_agentId, info] of this.agentInfo) {
+      if (info.sessionId === sessionId && (info.status === 'active' || info.status === 'idle')) {
+        info.pid = pid;
+        return;
+      }
+    }
   }
 
   /**

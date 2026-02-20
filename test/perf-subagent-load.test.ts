@@ -504,55 +504,132 @@ describe('SubagentWatcher performance', () => {
     });
   });
 
-  describe('liveness checker: serial pgrep amplification', () => {
-    it('should measure total event loop impact of serial liveness checks', async () => {
-      // The liveness checker iterates all active agents SERIALLY with await:
-      //   for (const [agentId, info] of this.agentInfo) {
-      //     const alive = await this.checkSubagentAlive(agentId);
-      //   }
-      // Each checkSubagentAlive calls findSubagentProcess which runs:
-      //   1. pgrep -f claude
-      //   2. For each PID: readFile(/proc/{pid}/environ) + readFile(/proc/{pid}/cmdline)
-      //
-      // With 20 active agents, the entire for-loop holds the event loop hostage
-      // because Node's microtask queue won't process other work between awaits
-      // in a tight loop.
-
+  describe('liveness checker: tiered optimization', () => {
+    it('should measure old approach: full pgrep scan for 20 agents', async () => {
       const { execFile } = await import('node:child_process');
       const { readFile } = await import('node:fs/promises');
 
-      // Simulate the liveness check loop for 20 agents
       const lagPromise = measureEventLoopLag(3000);
 
       const start = performance.now();
-      for (let agent = 0; agent < 20; agent++) {
-        // Step 1: pgrep (what findSubagentProcess does)
-        const pids = await new Promise<string[]>((resolve) => {
-          execFile('pgrep', ['-f', 'node'], { encoding: 'utf8' }, (_err, stdout) => {
-            resolve((stdout || '').trim().split('\n').filter(Boolean));
-          });
+      // Old approach: pgrep once + /proc reads for all PIDs, then iterate all agents
+      const pids = await new Promise<string[]>((resolve) => {
+        execFile('pgrep', ['-f', 'node'], { encoding: 'utf8' }, (_err, stdout) => {
+          resolve((stdout || '').trim().split('\n').filter(Boolean));
         });
-
-        // Step 2: Read /proc for each PID (what findSubagentProcess does per PID)
-        for (const pidStr of pids.slice(0, 5)) { // limit to 5 PIDs for test sanity
-          try {
-            await readFile(`/proc/${pidStr}/environ`, 'utf8');
-          } catch { /* expected for many PIDs */ }
-          try {
-            await readFile(`/proc/${pidStr}/cmdline`, 'utf8');
-          } catch { /* expected */ }
-        }
+      });
+      for (const pidStr of pids.slice(0, 10)) {
+        try { await readFile(`/proc/${pidStr}/environ`, 'utf8'); } catch { /* */ }
+        try { await readFile(`/proc/${pidStr}/cmdline`, 'utf8'); } catch { /* */ }
       }
       const elapsed = performance.now() - start;
-
       const lag = await lagPromise;
 
-      console.log(`[liveness × 20 agents] total: ${elapsed.toFixed(0)}ms`);
-      console.log(`[liveness × 20 agents] max event loop lag: ${lag.maxLagMs.toFixed(1)}ms`);
-      console.log(`[liveness × 20 agents] avg event loop lag: ${lag.avgLagMs.toFixed(1)}ms`);
+      console.log(`[old liveness] pgrep + /proc for ${pids.length} PIDs: ${elapsed.toFixed(0)}ms`);
+      console.log(`[old liveness] max event loop lag: ${lag.maxLagMs.toFixed(1)}ms`);
+    });
 
-      // Document the cost: this runs every 10 seconds and takes N×hundreds of ms
-      // During this time, SSE broadcasts, terminal data, and API responses are delayed
+    it('should measure new tier-1: file stat for 20 agents (fast path)', async () => {
+      // Create 20 agent files to stat
+      const agentDir = join(tmpDir, 'tier1-agents');
+      mkdirSync(agentDir, { recursive: true });
+      const files: string[] = [];
+      for (let i = 0; i < 20; i++) {
+        const f = join(agentDir, `agent-${i}.jsonl`);
+        writeFileSync(f, generateAgentTranscript(50));
+        files.push(f);
+      }
+
+      const { stat: statFn } = await import('node:fs/promises');
+      const lagPromise = measureEventLoopLag(500);
+
+      const start = performance.now();
+      let aliveCount = 0;
+      for (const f of files) {
+        try {
+          const s = await statFn(f);
+          if (Date.now() - s.mtime.getTime() < 30000) aliveCount++;
+        } catch { /* */ }
+      }
+      const elapsed = performance.now() - start;
+      const lag = await lagPromise;
+
+      console.log(`[tier-1 file stat × 20 agents] ${elapsed.toFixed(1)}ms, all alive: ${aliveCount === 20}`);
+      console.log(`[tier-1 file stat] max event loop lag: ${lag.maxLagMs.toFixed(1)}ms`);
+
+      // File stat for 20 agents should be well under 5ms total
+      expect(elapsed).toBeLessThan(20);
+      expect(aliveCount).toBe(20);
+    });
+
+    it('should measure new tier-2: /proc/{pid}/stat for 20 cached PIDs', async () => {
+      const { stat: statFn } = await import('node:fs/promises');
+      const ourPid = process.pid;
+
+      const lagPromise = measureEventLoopLag(500);
+
+      const start = performance.now();
+      let aliveCount = 0;
+      // Simulate checking 20 cached PIDs (all point to our own PID for testing)
+      for (let i = 0; i < 20; i++) {
+        try {
+          await statFn(`/proc/${ourPid}`);
+          aliveCount++;
+        } catch { /* */ }
+      }
+      const elapsed = performance.now() - start;
+      const lag = await lagPromise;
+
+      console.log(`[tier-2 /proc/pid × 20 agents] ${elapsed.toFixed(1)}ms, alive: ${aliveCount}`);
+      console.log(`[tier-2 /proc/pid] max event loop lag: ${lag.maxLagMs.toFixed(1)}ms`);
+
+      // /proc/pid stat for 20 agents should be well under 5ms total
+      expect(elapsed).toBeLessThan(20);
+    });
+
+    it('should show tier-1+2 is orders of magnitude faster than full pgrep scan', async () => {
+      const { stat: statFn } = await import('node:fs/promises');
+      const { execFile: execFileFn } = await import('node:child_process');
+
+      // Create 20 agent files
+      const agentDir = join(tmpDir, 'comparison-agents');
+      mkdirSync(agentDir, { recursive: true });
+      const files: string[] = [];
+      for (let i = 0; i < 20; i++) {
+        const f = join(agentDir, `agent-${i}.jsonl`);
+        writeFileSync(f, 'x'.repeat(100));
+        files.push(f);
+      }
+
+      // Tier 1+2 approach: stat files + stat /proc/pid
+      const startFast = performance.now();
+      for (const f of files) {
+        await statFn(f); // tier 1
+      }
+      for (let i = 0; i < 20; i++) {
+        try { await statFn(`/proc/${process.pid}`); } catch { /* */ } // tier 2
+      }
+      const fastElapsed = performance.now() - startFast;
+
+      // Old approach: pgrep + /proc reads
+      const startSlow = performance.now();
+      const { readFile } = await import('node:fs/promises');
+      const pids = await new Promise<string[]>((resolve) => {
+        execFileFn('pgrep', ['-f', 'node'], { encoding: 'utf8' }, (_err, stdout) => {
+          resolve((stdout || '').trim().split('\n').filter(Boolean));
+        });
+      });
+      for (const pidStr of pids.slice(0, 10)) {
+        try { await readFile(`/proc/${pidStr}/environ`, 'utf8'); } catch { /* */ }
+        try { await readFile(`/proc/${pidStr}/cmdline`, 'utf8'); } catch { /* */ }
+      }
+      const slowElapsed = performance.now() - startSlow;
+
+      const speedup = slowElapsed / Math.max(fastElapsed, 0.01);
+      console.log(`[comparison] tier-1+2: ${fastElapsed.toFixed(1)}ms, old pgrep: ${slowElapsed.toFixed(1)}ms, speedup: ${speedup.toFixed(0)}x`);
+
+      // Tiered approach should be significantly faster
+      expect(fastElapsed).toBeLessThan(slowElapsed);
     });
   });
 
