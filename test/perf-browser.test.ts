@@ -662,51 +662,28 @@ describe('Subagent window simulation', () => {
     expect(timing).toBeLessThan(THRESHOLDS.SUBAGENT_WINDOW_OPEN);
   });
 
-  it('closes subagent window within threshold', async () => {
-    // Ensure a window is open
-    const hasWindow = await page.locator('.subagent-window').count().then(c => c > 0);
-    if (!hasWindow) {
-      const claudeSessionId = await page.evaluate((sid: string) => {
-        const app = (window as unknown as { app: { sessions: Map<string, { claudeSessionId?: string }> } }).app;
-        return app.sessions.get(sid)?.claudeSessionId || 'fake-claude-session';
-      }, sessionId);
-      await page.evaluate(({ cSessionId }: { cSessionId: string }) => {
-        const app = (window as unknown as {
-          app: {
-            subagents: Map<string, Record<string, unknown>>;
-            openSubagentWindow: (id: string) => void;
-          }
-        }).app;
-        app.subagents.set('perf-agent-close', {
-          agentId: 'perf-agent-close',
-          sessionId: cSessionId,
-          status: 'active',
-          description: 'Close test agent',
-          startedAt: Date.now(),
-          lastActivityAt: Date.now(),
-          toolCallCount: 0,
-          entryCount: 0,
-          fileSize: 0,
-        });
-        app.openSubagentWindow('perf-agent-close');
-      }, { cSessionId: claudeSessionId });
-      await page.waitForSelector('.subagent-window', { timeout: 3000 });
-    }
+  it('closes (minimizes) subagent window within threshold', async () => {
+    // perf-agent-1 should still be open from the previous test
+    // Note: closeSubagentWindow minimizes to tab (display:none), doesn't remove from DOM
+    const isVisible = await page.locator('#subagent-window-perf-agent-1').isVisible();
+    expect(isVisible).toBe(true);
 
     const timing = await measure(async () => {
       await page.evaluate(() => {
         const app = (window as unknown as { app: { closeSubagentWindow: (id: string) => void } }).app;
-        const win = document.querySelector('.subagent-window');
-        const id = win?.id?.replace('subagent-window-', '') || 'perf-agent-close';
-        app.closeSubagentWindow(id);
+        app.closeSubagentWindow('perf-agent-1');
       });
+      // Wait for element to become hidden (display: none)
       await page.waitForFunction(
-        () => document.querySelectorAll('.subagent-window').length === 0,
+        () => {
+          const el = document.getElementById('subagent-window-perf-agent-1');
+          return el && el.style.display === 'none';
+        },
         { timeout: 2000 },
       );
     });
 
-    console.log(`[subagent window] close: ${timing.toFixed(0)}ms`);
+    console.log(`[subagent window] close (minimize): ${timing.toFixed(0)}ms`);
     expect(timing).toBeLessThan(THRESHOLDS.SUBAGENT_WINDOW_CLOSE);
   });
 

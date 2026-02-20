@@ -967,22 +967,31 @@ class LocalEchoOverlay {
         this.overlay.style.display = 'none';
     }
 
-    // Create a styled line div with opaque background
-    _makeLine(text, leftPx, topPx, widthPx, cellH) {
+    // Create a styled line div with per-character grid positioning.
+    // Each char is placed at exact col*cellW to match xterm's canvas renderer
+    // (DOM text flow drifts vs canvas due to sub-pixel glyph width differences).
+    _makeLine(text, leftPx, topPx, widthPx, cellH, cellW) {
         const el = document.createElement('div');
-        el.style.cssText = `position:absolute;white-space:pre;font-kerning:none;pointer-events:none`;
-        el.style.fontFamily = this._fontFamily;
-        el.style.fontSize = this._fontSize;
-        el.style.fontWeight = this._fontWeight;
-        el.style.letterSpacing = this._letterSpacing;
-        el.style.color = this._color;
+        el.style.cssText = `position:absolute;pointer-events:none`;
         el.style.backgroundColor = this._bg;
         el.style.left = leftPx + 'px';
         el.style.top = topPx + 'px';
         el.style.width = widthPx + 'px';
         el.style.height = (cellH + 1) + 'px';
         el.style.lineHeight = cellH + 'px';
-        el.textContent = text;
+        // Place each character at its exact grid position
+        for (let i = 0; i < text.length; i++) {
+            const span = document.createElement('span');
+            span.style.cssText = `position:absolute;display:inline-block;text-align:center;pointer-events:none`;
+            span.style.left = (i * cellW) + 'px';
+            span.style.width = cellW + 'px';
+            span.style.fontFamily = this._fontFamily;
+            span.style.fontSize = this._fontSize;
+            span.style.fontWeight = this._fontWeight;
+            span.style.color = this._color;
+            span.textContent = text[i];
+            el.appendChild(span);
+        }
         return el;
     }
 
@@ -1038,7 +1047,7 @@ class LocalEchoOverlay {
                 const leftPx = i === 0 ? startCol * cellW : 0;
                 const widthPx = i === 0 ? (fullWidthPx - leftPx) : fullWidthPx;
                 const topPx = i * cellH;
-                const lineEl = this._makeLine(lines[i], leftPx, topPx, widthPx, cellH);
+                const lineEl = this._makeLine(lines[i], leftPx, topPx, widthPx, cellH, cellW);
                 this.overlay.appendChild(lineEl);
             }
 
