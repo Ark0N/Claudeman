@@ -35,7 +35,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md` (verify they match with `grep version package.json && grep Version CLAUDE.md`)
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1567 (must match `package.json` for npm publish)
+**Version**: 0.1568 (must match `package.json` for npm publish)
 
 ## Project Overview
 
@@ -202,7 +202,7 @@ The frontend is a single 16K-line vanilla JS file with these key systems:
 
 **Z-index layers**: subagent windows (1000), plan agents (1100), log viewers (2000), image popups (3000), local echo overlay (7).
 
-**Built-in respawn presets**: `solo-work` (3s idle, 60min), `subagent-workflow` (45s idle, 240min), `team-lead` (90s idle, 480min), `overnight-autonomous` (10s idle, 480min, full reset).
+**Built-in respawn presets**: `solo-work` (3s idle, 60min), `subagent-workflow` (45s idle, 240min), `team-lead` (90s idle, 480min), `ralph-todo` (8s idle, 480min, works through @fix_plan.md tasks), `overnight-autonomous` (10s idle, 480min, full reset).
 
 **Keyboard shortcuts**: Escape (close panels), Ctrl+? (help), Ctrl+Enter (quick start), Ctrl+W (kill session), Ctrl+Tab (next session), Ctrl+K (kill all), Ctrl+L (clear), Ctrl+Shift+R (restore size), Ctrl/Cmd +/- (font size).
 

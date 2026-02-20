@@ -878,9 +878,7 @@ export class Session extends EventEmitter {
           // Create a new mux session
           this._muxSession = await this._mux.createSession(this.id, this.workingDir, 'claude', this._name, this._niceConfig, this._model);
           console.log('[Session] Created mux session:', this._muxSession.muxName);
-
-          // Wait a moment for mux to fully start
-          await new Promise(resolve => setTimeout(resolve, MUX_STARTUP_DELAY_MS));
+          // No extra sleep — createSession() already waits for tmux readiness
         }
 
         // Attach to the mux session via PTY
@@ -1176,9 +1174,7 @@ export class Session extends EventEmitter {
           // Create a new mux session
           this._muxSession = await this._mux.createSession(this.id, this.workingDir, 'shell', this._name, this._niceConfig);
           console.log('[Session] Created mux session:', this._muxSession.muxName);
-
-          // Wait a moment for mux to fully start
-          await new Promise(resolve => setTimeout(resolve, MUX_STARTUP_DELAY_MS));
+          // No extra sleep — createSession() already waits for tmux readiness
         }
 
         // Attach to the mux session via PTY

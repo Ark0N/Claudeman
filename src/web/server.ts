@@ -4635,37 +4635,42 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     return undefined;
   }
 
-  // Helper to get global Nice priority config from settings
-  private async getGlobalNiceConfig(): Promise<NiceConfig | undefined> {
+  // Read ~/.claudeman/settings.json once and return the parsed object.
+  // Cached for 2s to avoid redundant reads during session creation bursts.
+  private _settingsCache: { data: Record<string, unknown>; ts: number } | null = null;
+  private async readSettings(): Promise<Record<string, unknown>> {
+    const now = Date.now();
+    if (this._settingsCache && now - this._settingsCache.ts < 2000) {
+      return this._settingsCache.data;
+    }
     const settingsPath = join(homedir(), '.claudeman', 'settings.json');
-
     try {
       const content = await fs.readFile(settingsPath, 'utf-8');
-      const settings = JSON.parse(content);
-      if (settings.nice && settings.nice.enabled) {
-        return {
-          enabled: settings.nice.enabled ?? false,
-          niceValue: settings.nice.niceValue ?? DEFAULT_NICE_CONFIG.niceValue,
-        };
-      }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.error('Failed to read Nice priority settings:', err);
-      }
+      const data = JSON.parse(content) as Record<string, unknown>;
+      this._settingsCache = { data, ts: now };
+      return data;
+    } catch {
+      return {};
+    }
+  }
+
+  // Helper to get global Nice priority config from settings
+  private async getGlobalNiceConfig(): Promise<NiceConfig | undefined> {
+    const settings = await this.readSettings();
+    const nice = settings.nice as { enabled?: boolean; niceValue?: number } | undefined;
+    if (nice && nice.enabled) {
+      return {
+        enabled: nice.enabled ?? false,
+        niceValue: nice.niceValue ?? DEFAULT_NICE_CONFIG.niceValue,
+      };
     }
     return undefined;
   }
 
   // Helper to get model configuration from settings
   private async getModelConfig(): Promise<{ defaultModel?: string; agentTypeOverrides?: Record<string, string> } | null> {
-    const settingsPath = join(homedir(), '.claudeman', 'settings.json');
-
-    try {
-      const content = await fs.readFile(settingsPath, 'utf-8');
-      return JSON.parse(content).modelConfig || null;
-    } catch {
-      return null;
-    }
+    const settings = await this.readSettings();
+    return (settings.modelConfig as { defaultModel?: string; agentTypeOverrides?: Record<string, string> }) || null;
   }
 
   private async startScheduledRun(prompt: string, workingDir: string, durationMinutes: number): Promise<ScheduledRun> {

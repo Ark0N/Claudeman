@@ -45,8 +45,8 @@ import { findClaudeDir } from './utils/claude-cli-resolver.js';
 /** Timeout for exec commands (5 seconds) */
 const EXEC_TIMEOUT_MS = 5000;
 
-/** Delay after tmux session creation (300ms) */
-const TMUX_CREATION_WAIT_MS = 300;
+/** Delay after tmux session creation — enough for detached tmux to be queryable */
+const TMUX_CREATION_WAIT_MS = 100;
 
 /** Delay after tmux kill command (200ms) */
 const TMUX_KILL_WAIT_MS = 200;
@@ -298,7 +298,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         );
       }
 
-      await Promise.all(configPromises);
+      // Fire-and-forget — these are non-critical UX niceties that don't need
+      // to complete before the session is usable. Errors are already swallowed.
+      void Promise.all(configPromises);
 
       // Get the PID of the pane process
       const pid = this.getPanePid(muxName);

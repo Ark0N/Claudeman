@@ -97,6 +97,23 @@ const BUILTIN_RESPAWN_PRESETS = [
     createdAt: 0,
   },
   {
+    id: 'ralph-todo',
+    name: 'Ralph/Todo',
+    description: 'Ralph Loop task list — works through todos with progress tracking',
+    config: {
+      idleTimeoutMs: 8000,
+      updatePrompt: 'update CLAUDE.md with discoveries and progress notes, mark completed tasks in @fix_plan.md, write a brief summary so the next cycle can continue seamlessly.',
+      interStepDelayMs: 3000,
+      sendClear: true,
+      sendInit: true,
+      kickstartPrompt: 'read @fix_plan.md for task status, continue on the next uncompleted task. When ALL tasks are complete, output <promise>COMPLETE</promise>.',
+      autoAcceptPrompts: true,
+    },
+    durationMinutes: 480,
+    builtIn: true,
+    createdAt: 0,
+  },
+  {
     id: 'overnight-autonomous',
     name: 'Overnight',
     description: 'Unattended overnight runs with full context reset between cycles',
