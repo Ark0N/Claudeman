@@ -660,6 +660,7 @@ export class SubagentWatcher extends EventEmitter {
         process.kill(pid, 'SIGTERM');
         info.pid = undefined;
         info.status = 'completed';
+        this.pendingToolCalls.delete(info.agentId);
         this.emit('subagent:completed', info);
         return true;
       }
@@ -670,6 +671,7 @@ export class SubagentWatcher extends EventEmitter {
     // Mark as completed even if we couldn't find the process
     info.pid = undefined;
     info.status = 'completed';
+    this.pendingToolCalls.delete(info.agentId);
     this.emit('subagent:completed', info);
     return true;
   }
