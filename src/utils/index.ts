@@ -14,6 +14,7 @@ export {
   ANSI_ESCAPE_PATTERN_FULL,
   ANSI_ESCAPE_PATTERN_SIMPLE,
   TOKEN_PATTERN,
+  SPINNER_PATTERN,
   createAnsiPatternFull,
   createAnsiPatternSimple,
   stripAnsi,

@@ -220,7 +220,7 @@ describe('SubagentWatcher performance', () => {
   });
 
   describe('extractDescriptionFromFile — full subagent file reads', () => {
-    it('should not read entire large agent file just for first 5 lines', async () => {
+    it('should extract description from first 8KB instead of reading entire file', async () => {
       const agentDir = join(tmpDir, 'agent-files');
       mkdirSync(agentDir, { recursive: true });
 
@@ -232,7 +232,7 @@ describe('SubagentWatcher performance', () => {
       const fileStat = await statAsync(agentFile);
       const fileSizeKB = fileStat.size / 1024;
 
-      // Current implementation: reads ENTIRE file then slices first 5 lines
+      // Approach 1: Read entire file then slice first 5 lines
       const start = performance.now();
       const content = await readFile(agentFile, 'utf8');
       const lines = content.split('\n').filter((l: string) => l.trim());
@@ -253,48 +253,44 @@ describe('SubagentWatcher performance', () => {
       }
       const readAllElapsed = performance.now() - start;
 
-      // Compare with streaming approach (only read first N bytes)
-      const { createReadStream } = await import('node:fs');
-      const { createInterface } = await import('node:readline');
-
+      // Approach 2: Read only first 8KB via partial read
       const start2 = performance.now();
+      const fd = await import('node:fs/promises').then(m => m.open(agentFile, 'r'));
+      const buf = Buffer.alloc(8192);
+      const { bytesRead } = await fd.read(buf, 0, 8192, 0);
+      await fd.close();
+      const partial = buf.subarray(0, bytesRead).toString('utf8');
+      const partialLines = partial.split('\n').filter((l: string) => l.trim());
       let description2: string | undefined;
-      await new Promise<void>((resolve) => {
-        const stream = createReadStream(agentFile, { end: 8192 }); // Only read first 8KB
-        const rl = createInterface({ input: stream });
-        let lineCount = 0;
-        rl.on('line', (line) => {
-          if (lineCount >= 5) { rl.close(); stream.destroy(); return; }
-          lineCount++;
-          try {
-            const entry = JSON.parse(line);
-            if (entry.type === 'user' && entry.message?.content) {
-              const firstContent = Array.isArray(entry.message.content)
-                ? entry.message.content[0]
-                : undefined;
-              if (firstContent?.type === 'text') {
-                description2 = firstContent.text.trim().slice(0, 45);
-                rl.close();
-                stream.destroy();
-              }
+      for (const line of partialLines.slice(0, 5)) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.type === 'user' && entry.message?.content) {
+            const firstContent = Array.isArray(entry.message.content)
+              ? entry.message.content[0]
+              : undefined;
+            if (firstContent?.type === 'text') {
+              description2 = firstContent.text.trim().slice(0, 45);
             }
-          } catch { /* skip */ }
-        });
-        rl.on('close', resolve);
-        rl.on('error', resolve);
-      });
-      const streamElapsed = performance.now() - start2;
+          }
+        } catch { /* skip */ }
+      }
+      const partialElapsed = performance.now() - start2;
 
-      console.log(`[extractDescription] file: ${fileSizeKB.toFixed(0)}KB, readAll: ${readAllElapsed.toFixed(1)}ms, stream-first-8KB: ${streamElapsed.toFixed(1)}ms`);
-      console.log(`[extractDescription] speedup: ${(readAllElapsed / Math.max(streamElapsed, 0.1)).toFixed(1)}x`);
+      console.log(`[extractDescription] file: ${fileSizeKB.toFixed(0)}KB, readAll: ${readAllElapsed.toFixed(1)}ms, partial-8KB: ${partialElapsed.toFixed(1)}ms`);
+      console.log(`[extractDescription] readAll bytes: ${content.length}, partial bytes: ${bytesRead}`);
 
+      // Both approaches must find the same description
       expect(description).toBeDefined();
       expect(description2).toBeDefined();
       expect(description).toBe(description2);
 
-      // Stream approach should be significantly faster on large files
-      // This test documents the waste in the current approach
-      expect(streamElapsed).toBeLessThan(readAllElapsed);
+      // The partial read should touch far less data than readAll
+      expect(bytesRead).toBeLessThan(fileStat.size / 10);
+
+      // Both approaches should complete quickly (under 50ms for cached files)
+      expect(readAllElapsed).toBeLessThan(50);
+      expect(partialElapsed).toBeLessThan(50);
     });
   });
 

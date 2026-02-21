@@ -28,6 +28,7 @@ import { LRUMap } from './utils/lru-map.js';
 import {
   ANSI_ESCAPE_PATTERN_FULL,
   TOKEN_PATTERN,
+  SPINNER_PATTERN,
   MAX_SESSION_TOKENS,
 } from './utils/index.js';
 import {
@@ -1036,10 +1037,7 @@ export class Session extends EventEmitter {
 
       // Detect when Claude starts working (thinking, writing, etc)
       // Fast path: check spinner characters on raw data (Unicode, never in ANSI sequences)
-      const hasSpinner = data.includes('⠋') || data.includes('⠙') ||
-          data.includes('⠹') || data.includes('⠸') ||
-          data.includes('⠼') || data.includes('⠴') ||
-          data.includes('⠦') || data.includes('⠧');
+      const hasSpinner = SPINNER_PATTERN.test(data);
       if (hasSpinner) {
         if (!this._isWorking) {
           this._isWorking = true;

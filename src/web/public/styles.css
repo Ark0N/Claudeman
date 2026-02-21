@@ -189,6 +189,7 @@ body {
 
 .session-tabs::-webkit-scrollbar {
   width: 4px;
+  height: 0;
 }
 
 .session-tabs::-webkit-scrollbar-track {
@@ -202,10 +203,6 @@ body {
 
 .session-tabs::-webkit-scrollbar-thumb:hover {
   background: var(--border-light);
-}
-
-.session-tabs::-webkit-scrollbar {
-  height: 0;
 }
 
 .session-tab {
@@ -795,10 +792,6 @@ body {
   color: var(--accent);
 }
 
-.respawn-action-entry.action-command .action-detail {
-  color: var(--accent-hover);
-}
-
 .respawn-action-entry.action-command .action-type {
   color: var(--accent);
   font-weight: 600;
@@ -1384,6 +1377,7 @@ body {
   border-radius: 4px;
   border-left: 2px solid var(--text-muted);
   transition: border-color 0.2s, background 0.2s;
+  position: relative;
 }
 
 .ralph-task-card.task-pending {
@@ -7313,11 +7307,6 @@ kbd {
 .plan-item-action:hover {
   color: var(--text);
   background: var(--bg-card);
-}
-
-/* Runtime task card enhancements */
-.ralph-task-card {
-  position: relative;
 }
 
 .ralph-task-attempts {

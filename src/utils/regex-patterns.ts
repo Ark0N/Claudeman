@@ -67,5 +67,12 @@ export function stripAnsi(text: string): string {
  * Regex to validate safe file paths (no shell metacharacters).
  * Shared by schemas.ts and tmux-manager.ts for consistent path validation.
  */
+/**
+ * Braille spinner characters used by Claude Code's Ink UI.
+ * Matches any of: ⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧
+ * Used on the hot path (every PTY chunk) — pre-compiled for performance.
+ */
+export const SPINNER_PATTERN = /[⠋⠙⠹⠸⠼⠴⠦⠧]/;
+
 export const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_\/\-. ~]+$/;
 

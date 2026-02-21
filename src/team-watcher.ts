@@ -74,7 +74,7 @@ export class TeamWatcher extends EventEmitter {
   getTeamForSession(sessionId: string): TeamConfig | undefined {
     const teamName = this.sessionToTeam.get(sessionId);
     if (teamName) {
-      const team = this.teams.get(teamName);
+      const team = this.teams.peek(teamName);
       if (team) return team;
       // Stale reverse index entry — clean up
       this.sessionToTeam.delete(sessionId);
@@ -210,7 +210,7 @@ export class TeamWatcher extends EventEmitter {
     }
 
     // Detect removed teams
-    for (const name of Array.from(this.teams.keys())) {
+    for (const name of this.teams.keys()) {
       if (!currentTeamNames.has(name)) {
         const removed = this.teams.get(name);
         this.teams.delete(name);
@@ -221,7 +221,7 @@ export class TeamWatcher extends EventEmitter {
         }
         // Prune stale mtime entries for removed teams
         this.taskMtimes.delete(name);
-        for (const key of Array.from(this.inboxMtimes.keys())) {
+        for (const key of this.inboxMtimes.keys()) {
           if (key.startsWith(`${name}/`)) {
             this.inboxMtimes.delete(key);
           }
