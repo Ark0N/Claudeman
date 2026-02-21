@@ -884,37 +884,57 @@ class LocalEchoOverlay {
         this._fontSize = terminal.options.fontSize + 'px';
         this._fontWeight = terminal.options.fontWeight || 'normal';
         this._bg = terminal.options?.theme?.background || '#0d0d0d';
-        this._color = '';
+        this._color = terminal.options?.theme?.foreground || '#eeeeee';
         this._letterSpacing = '';
         const rows = terminal.element.querySelector('.xterm-rows');
         if (rows) {
             const cs = getComputedStyle(rows);
             this._letterSpacing = cs.letterSpacing;
-            this._color = cs.color;
+            // Prefer computed color from rendered rows (matches actual rendering),
+            // fall back to theme foreground if the computed value is empty/default.
+            if (cs.color) this._color = cs.color;
         }
         screen.appendChild(this.overlay);
         this.pendingText = '';
         this._flushedOffset = 0; // chars flushed to PTY during tab switch (echo may not have arrived yet)
         this._storageKey = 'claudeman_local_echo_pending';
-        // Restore unsent input from previous session (survives reload/disconnect)
-        try {
-            const saved = localStorage.getItem(this._storageKey);
-            if (saved) {
-                this.pendingText = saved;
-                this._render();
-            }
-        } catch {}
+        // Clear stale text from previous page load.  Persisted text can't be
+        // backspaced (flushedOffset is lost on reload) and ghost-merges with
+        // new input, breaking editing.  Tab-switch text is already flushed to
+        // PTY directly — localStorage persistence is not needed.
+        try { localStorage.removeItem(this._storageKey); } catch {}
+        // Hide overlay when user scrolls away from bottom (prompt not in viewport).
+        // _render() checks viewportY !== baseY, but only on render triggers — scrolling
+        // alone doesn't trigger a render, so the overlay stays visible over wrong content.
+        // Listen on .xterm-viewport DOM element (terminal.onScroll fires on buffer changes).
+        // Debounce the re-render on scroll-to-bottom to avoid loadCell errors when the
+        // buffer is mid-update during rapid scroll events.
+        this._scrollTimer = null;
+        this._scrollHandler = () => {
+            try {
+                const buf = this.terminal.buffer.active;
+                if (buf.viewportY !== buf.baseY) {
+                    this.overlay.style.display = 'none';
+                    if (this._scrollTimer) { clearTimeout(this._scrollTimer); this._scrollTimer = null; }
+                } else if (this.pendingText) {
+                    // Debounce re-render — buffer lines may still be settling
+                    if (this._scrollTimer) clearTimeout(this._scrollTimer);
+                    this._scrollTimer = setTimeout(() => {
+                        this._scrollTimer = null;
+                        this._lastRenderKey = '';
+                        this._render();
+                    }, 50);
+                }
+            } catch {}
+        };
+        const viewport = terminal.element.querySelector('.xterm-viewport');
+        if (viewport) viewport.addEventListener('scroll', this._scrollHandler, { passive: true });
+        this._scrollViewport = viewport;
     }
 
-    _persist() {
-        try {
-            if (this.pendingText) {
-                localStorage.setItem(this._storageKey, this.pendingText);
-            } else {
-                localStorage.removeItem(this._storageKey);
-            }
-        } catch {}
-    }
+    // No-op: localStorage persistence removed — stale text from previous page
+    // loads can't be edited (flushedOffset lost) and ghost-merges with new input.
+    _persist() {}
 
     // Scan terminal buffer to find the visible ❯ prompt position (bottom-up)
     _findPrompt() {
@@ -947,7 +967,14 @@ class LocalEchoOverlay {
             if (this.pendingText.length > 0) {
                 this._render();
             } else {
-                this.clear();
+                // Hide overlay but preserve _flushedOffset — the flushed text
+                // is still in the PTY buffer and the offset is needed if the
+                // user types again.  clear() would reset it to 0 and desync
+                // from the _flushedOffsets Map.
+                this._lastRenderKey = '';
+                this._lastPromptPos = null;
+                this.overlay.innerHTML = '';
+                this.overlay.style.display = 'none';
             }
         }
     }
@@ -984,13 +1011,18 @@ class LocalEchoOverlay {
         // Place each character at its exact grid position
         for (let i = 0; i < text.length; i++) {
             const span = document.createElement('span');
-            span.style.cssText = `position:absolute;display:inline-block;text-align:center;pointer-events:none`;
+            // Match xterm.js WebGL canvas text rendering as closely as possible:
+            // - antialiased font smoothing (canvas uses grayscale, not LCD subpixel)
+            // - geometricPrecision for consistent glyph sizing
+            // - no ligatures (canvas renders each glyph independently)
+            span.style.cssText = `position:absolute;display:inline-block;text-align:center;pointer-events:none;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:geometricPrecision;font-feature-settings:'liga' 0,'calt' 0`;
             span.style.left = (i * cellW) + 'px';
             span.style.width = cellW + 'px';
             span.style.fontFamily = this._fontFamily;
             span.style.fontSize = this._fontSize;
             span.style.fontWeight = this._fontWeight;
             span.style.color = this._color;
+            if (this._letterSpacing) span.style.letterSpacing = this._letterSpacing;
             span.textContent = text[i];
             el.appendChild(span);
         }
@@ -1003,11 +1035,27 @@ class LocalEchoOverlay {
             return;
         }
         try {
+            // Hide overlay when scrolled up — the current prompt is at the bottom
+            // of the buffer, not in the visible viewport.  Rendering at a stale
+            // prompt position would overlap unrelated content.
+            const buf = this.terminal.buffer.active;
+            if (buf.viewportY !== buf.baseY) {
+                this.overlay.style.display = 'none';
+                return;
+            }
+
             // Re-scan for prompt on EVERY render — Ink can move it between redraws.
             // Cache last known position as fallback during Ink redraw flicker.
             const prompt = this._findPrompt();
             if (prompt) {
-                this._lastPromptPos = prompt;
+                // When flushed text exists, lock the column to prevent jitter from
+                // Ink redraws that temporarily shift the ❯ prompt.  Only allow the
+                // ROW to change (terminal output may scroll the prompt down).
+                if (this._lastPromptPos && (this._flushedOffset || 0) > 0) {
+                    this._lastPromptPos = { row: prompt.row, col: this._lastPromptPos.col };
+                } else {
+                    this._lastPromptPos = prompt;
+                }
             } else if (!this._lastPromptPos) {
                 this.overlay.style.display = 'none'; return;
             }
@@ -1017,13 +1065,30 @@ class LocalEchoOverlay {
             const cellW = dims.css.cell.width;
             const cellH = dims.css.cell.height;
             const totalCols = this.terminal.cols;
-            // Position right after "❯ " (prompt col + 2), plus any chars flushed
-            // to PTY during a tab switch that may not be echoed yet.
-            const startCol = Math.min(activePrompt.col + 2 + (this._flushedOffset || 0), totalCols - 1);
+
+            // When flushed text exists alongside pending text, both render on the
+            // same prompt line but via different engines (canvas vs DOM), creating a
+            // visible font mismatch.  Fix: read the flushed portion from the terminal
+            // buffer and re-render the ENTIRE line as DOM, covering the canvas text.
+            let displayText = this.pendingText;
+            const flushed = this._flushedOffset || 0;
+            const textStart = activePrompt.col + 2; // right after "❯ "
+            if (flushed > 0) {
+                // Read flushed chars from the terminal buffer (PTY already echoed them)
+                const promptAbsRow = buf.viewportY + activePrompt.row;
+                const line = buf.getLine(promptAbsRow);
+                if (line) {
+                    const lineText = line.translateToString(true);
+                    const flushedChars = lineText.slice(textStart, textStart + flushed);
+                    displayText = flushedChars + this.pendingText;
+                }
+            }
+
+            const startCol = textStart;
             const firstLineCols = Math.max(1, totalCols - startCol);
 
             // Skip redundant re-renders (e.g. from flushPendingWrites at 60fps)
-            const renderKey = `${this.pendingText.length}:${startCol}:${activePrompt.row}:${activePrompt.col}:${totalCols}`;
+            const renderKey = `${displayText.length}:${startCol}:${activePrompt.row}:${activePrompt.col}:${totalCols}:${flushed}`;
             if (renderKey === this._lastRenderKey && this.overlay.style.display !== 'none') return;
             this._lastRenderKey = renderKey;
 
@@ -1031,7 +1096,7 @@ class LocalEchoOverlay {
             // Line 0: starts after prompt, fits (totalCols - startCol) chars
             // Line 1+: starts at col 0, fits totalCols chars each
             const lines = [];
-            let remaining = this.pendingText;
+            let remaining = displayText;
             lines.push(remaining.slice(0, firstLineCols));
             remaining = remaining.slice(firstLineCols);
             while (remaining.length > 0) {
@@ -1078,6 +1143,26 @@ class LocalEchoOverlay {
         }
     }
 
+    // Refresh cached font properties from terminal options.
+    // Call after font size changes, theme changes, etc.
+    refreshFont() {
+        this._fontFamily = this.terminal.options.fontFamily;
+        this._fontSize = this.terminal.options.fontSize + 'px';
+        this._fontWeight = this.terminal.options.fontWeight || 'normal';
+        this._bg = this.terminal.options?.theme?.background || '#0d0d0d';
+        const fg = this.terminal.options?.theme?.foreground || '#eeeeee';
+        this._color = fg;
+        const rows = this.terminal.element?.querySelector('.xterm-rows');
+        if (rows) {
+            const cs = getComputedStyle(rows);
+            this._letterSpacing = cs.letterSpacing;
+            if (cs.color) this._color = cs.color;
+        }
+        // Force full re-render with updated font (clear render cache)
+        this._lastRenderKey = '';
+        if (this.pendingText) this._render();
+    }
+
     // Re-render overlay at current prompt position without clearing pending text.
     // Used after terminal resets/redraws that move the prompt.
     rerender() {
@@ -1088,6 +1173,10 @@ class LocalEchoOverlay {
 
     dispose() {
         this.clear();
+        if (this._scrollTimer) { clearTimeout(this._scrollTimer); this._scrollTimer = null; }
+        if (this._scrollViewport && this._scrollHandler) {
+            this._scrollViewport.removeEventListener('scroll', this._scrollHandler);
+        }
         this.overlay.remove();
     }
 }
@@ -1636,7 +1725,7 @@ class ClaudemanApp {
     this.teammateTerminals = new Map(); // Map<agentId, { terminal, fitAddon, paneTarget, sessionId, resizeObserver }>
 
     this.terminalBufferCache = new Map(); // Map<sessionId, string> — client-side cache for instant tab re-visits (max 20)
-    this.localEchoTextCache = new Map(); // Map<sessionId, string> — preserve local echo input across tab switches
+
     this.ralphStatePanelCollapsed = true; // Default to collapsed
     this.ralphClosedSessions = new Set(); // Sessions where user explicitly closed Ralph panel
 
@@ -2043,6 +2132,11 @@ class ClaudemanApp {
         }
         // Update subagent connection lines when viewport resizes
         this.updateConnectionLines();
+        // Re-render local echo overlay at new cell dimensions/positions
+        if (this._localEchoOverlay?.hasPending) {
+          this._localEchoOverlay._lastRenderKey = ''; // force re-render (cols changed)
+          this._localEchoOverlay.rerender();
+        }
       }, 100); // Throttle to 100ms
     };
 
@@ -2089,8 +2183,22 @@ class ClaudemanApp {
         // (or a control char) is pressed — avoids out-of-order char delivery.
         if (this._localEchoEnabled) {
           if (data === '\x7f') {
-            // Backspace: remove last char from overlay only (nothing sent to PTY yet)
-            this._localEchoOverlay?.removeChar();
+            if (this._localEchoOverlay?.pendingText) {
+              // Backspace with pending overlay text: remove from overlay only
+              this._localEchoOverlay.removeChar();
+            } else if (this._localEchoOverlay?._flushedOffset > 0) {
+              // No pending text but flushed text in PTY — send backspace to PTY
+              // so the user can delete chars that were auto-flushed during tab switch.
+              this._localEchoOverlay._flushedOffset--;
+              if (this._flushedOffsets?.has(this.activeSessionId)) {
+                const prev = this._flushedOffsets.get(this.activeSessionId);
+                if (prev <= 1) this._flushedOffsets.delete(this.activeSessionId);
+                else this._flushedOffsets.set(this.activeSessionId, prev - 1);
+              }
+              this._pendingInput += data;
+              flushInput();
+            }
+            // else: nothing to delete — swallow the backspace
             return;
           }
           if (/^[\r\n]+$/.test(data)) {
@@ -2123,6 +2231,9 @@ class ClaudemanApp {
             // Control chars (Ctrl+C, escape sequences): send buffered text + control char immediately
             const text = this._localEchoOverlay?.pendingText || '';
             this._localEchoOverlay?.clear();
+            // Clear flushed offset — control chars (Ctrl+C, Escape, arrows) change
+            // cursor position or abort readline, making flushed text tracking invalid.
+            this._flushedOffsets?.delete(this.activeSessionId);
             if (text) {
               this._pendingInput += text;
             }
@@ -4024,8 +4135,6 @@ class ClaudemanApp {
     // Guard: skip if a newer handleInit has already started (race between loadState + SSE init).
     if (gen !== this._initGeneration) return;
     const previousActiveId = this.activeSessionId;
-    // Save local echo pending text before selectSession clears it
-    const savedEchoText = this._localEchoOverlay?.pendingText || '';
     this.activeSessionId = null;
     if (this.sessionOrder.length > 0) {
       // Priority: current active > localStorage > first session
@@ -4038,14 +4147,6 @@ class ClaudemanApp {
       } else {
         this.selectSession(this.sessionOrder[0]);
       }
-    }
-    // Restore local echo text that was cleared by selectSession during SSE reconnect.
-    // selectSession loads the terminal buffer, so we schedule rerender after it settles.
-    if (savedEchoText && this._localEchoOverlay) {
-      this._localEchoOverlay.pendingText = savedEchoText;
-      this._localEchoOverlay._persist();
-      // Delay rerender until buffer load completes and prompt is visible
-      setTimeout(() => this._localEchoOverlay?.rerender(), 500);
     }
   }
 
@@ -4652,6 +4753,14 @@ class ClaudemanApp {
     this.renderSessionTabs();
     this._updateLocalEchoState();
 
+    // Restore flushed offset IMMEDIATELY so backspace/typing work during
+    // the async buffer load.  Without this, the offset is 0 during the
+    // fetch() gap: backspace is swallowed, and typing a space covers the
+    // canvas text with an opaque overlay showing only the new char.
+    if (this._flushedOffsets?.has(sessionId) && this._localEchoOverlay) {
+      this._localEchoOverlay._flushedOffset = this._flushedOffsets.get(sessionId);
+    }
+
     // Glow the newly-active tab
     const activeTab = document.querySelector(`.session-tab.active[data-id="${sessionId}"]`);
     if (activeTab) {
@@ -4811,7 +4920,7 @@ class ClaudemanApp {
     }
     this.terminalBuffers.delete(sessionId);
     this.terminalBufferCache.delete(sessionId);
-    this.localEchoTextCache.delete(sessionId);
+
     this._flushedOffsets?.delete(sessionId);
     this._inputQueue.delete(sessionId);
     this.ralphStates.delete(sessionId);
@@ -8813,6 +8922,8 @@ class ClaudemanApp {
     document.getElementById('fontSizeDisplay').textContent = size;
     this.fitAddon.fit();
     localStorage.setItem('claudeman-font-size', size);
+    // Update overlay font cache and re-render at new cell dimensions
+    this._localEchoOverlay?.refreshFont();
   }
 
   loadFontSize() {
@@ -10261,11 +10372,13 @@ class ClaudemanApp {
     this.updateSubagentWindowVisibility();  // Apply subagent window visibility setting
 
     // Save to server (includes notification prefs for cross-browser persistence)
+    // Strip device-specific keys — localEchoEnabled is per-platform (touch default differs)
+    const { localEchoEnabled: _leo, ...serverSettings } = settings;
     try {
       await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...settings, notificationPreferences: notifPrefsToSave })
+        body: JSON.stringify({ ...serverSettings, notificationPreferences: notifPrefsToSave })
       });
 
       // Save model configuration separately
@@ -10619,7 +10732,7 @@ class ClaudemanApp {
         const displayKeys = new Set([
           'showFontControls', 'showSystemStats', 'showTokenCount', 'showCost',
           'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
-          'subagentActiveTabOnly', 'tabTwoRows',
+          'subagentActiveTabOnly', 'tabTwoRows', 'localEchoEnabled',
         ]);
         // Merge settings: non-display keys always sync from server,
         // display keys only seed from server when localStorage has no value
