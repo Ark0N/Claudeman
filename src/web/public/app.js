@@ -894,6 +894,7 @@ class LocalEchoOverlay {
         }
         screen.appendChild(this.overlay);
         this.pendingText = '';
+        this._flushedOffset = 0; // chars flushed to PTY during tab switch (echo may not have arrived yet)
         this._storageKey = 'claudeman_local_echo_pending';
         // Restore unsent input from previous session (survives reload/disconnect)
         try {
@@ -960,6 +961,7 @@ class LocalEchoOverlay {
 
     clear() {
         this.pendingText = '';
+        this._flushedOffset = 0;
         this._persist();
         this._lastRenderKey = '';
         this._lastPromptPos = null;
@@ -1015,12 +1017,29 @@ class LocalEchoOverlay {
             const cellW = dims.css.cell.width;
             const cellH = dims.css.cell.height;
             const totalCols = this.terminal.cols;
-            // Position right after "❯ " (prompt col + 2)
-            const startCol = Math.min(activePrompt.col + 2, totalCols - 1);
+            // Position after existing text on the prompt line.  Normally this is
+            // just "❯ " (col+2), but after a tab switch the flushed text is echoed
+            // by the PTY and sits in the terminal buffer — the overlay must start
+            // AFTER it to avoid covering it with its opaque background.
+            // _flushedOffset provides immediate offset even before echo arrives.
+            let startCol = activePrompt.col + 2 + (this._flushedOffset || 0);
+            try {
+                const buf = this.terminal.buffer.active;
+                const promptLine = buf.getLine(buf.viewportY + activePrompt.row);
+                if (promptLine) {
+                    const existingEnd = promptLine.translateToString(true).trimEnd().length;
+                    if (existingEnd > startCol) startCol = existingEnd;
+                    // Once echo has arrived in the buffer, we can drop the offset
+                    if (this._flushedOffset && existingEnd >= activePrompt.col + 2 + this._flushedOffset) {
+                        this._flushedOffset = 0;
+                    }
+                }
+            } catch {}
+            startCol = Math.min(startCol, totalCols - 1);
             const firstLineCols = Math.max(1, totalCols - startCol);
 
             // Skip redundant re-renders (e.g. from flushPendingWrites at 60fps)
-            const renderKey = `${this.pendingText.length}:${activePrompt.row}:${activePrompt.col}:${totalCols}`;
+            const renderKey = `${this.pendingText.length}:${startCol}:${activePrompt.row}:${activePrompt.col}:${totalCols}`;
             if (renderKey === this._lastRenderKey && this.overlay.style.display !== 'none') return;
             this._lastRenderKey = renderKey;
 
@@ -2067,33 +2086,10 @@ class ClaudemanApp {
       }
     };
 
-    // Background keystroke forwarding for local echo mode.
-    // Sends keystrokes to the PTY in the background (50ms debounce) so Tab
-    // completion works and tab-switching doesn't lose PTY state.
-    this._localEchoBgBuffer = '';
-    this._localEchoBgTimer = null;
-
-    const drainBgBuffer = () => {
-      if (this._localEchoBgTimer) {
-        clearTimeout(this._localEchoBgTimer);
-        this._localEchoBgTimer = null;
-      }
-      const buf = this._localEchoBgBuffer;
-      this._localEchoBgBuffer = '';
-      return buf;
-    };
-
-    const scheduleBgFlush = () => {
-      if (this._localEchoBgTimer) return;
-      this._localEchoBgTimer = setTimeout(() => {
-        this._localEchoBgTimer = null;
-        const buf = this._localEchoBgBuffer;
-        this._localEchoBgBuffer = '';
-        if (buf && this.activeSessionId) {
-          this._sendInputAsync(this.activeSessionId, buf);
-        }
-      }, 50);
-    };
+    // Local echo mode: buffer keystrokes locally (shown in overlay) and only
+    // send to PTY on Enter.  Avoids out-of-order delivery on high-latency
+    // mobile connections.  The overlay + localStorage persistence ensure input
+    // survives tab switches and reconnects.
 
     this.terminal.onData((data) => {
       if (this.activeSessionId) {
@@ -2104,55 +2100,47 @@ class ClaudemanApp {
         if (/^\x1b\[[\?>=]?[\d;]*[cnR]$/.test(data)) return;
 
         // ── Local Echo Mode ──
-        // When enabled, keystrokes are captured locally in the overlay for
-        // instant visual feedback AND sent to the PTY in the background
-        // (50ms debounce) so Tab completion and tab-switching work.
+        // When enabled, keystrokes are buffered locally in the overlay for
+        // instant visual feedback.  Nothing is sent to the PTY until Enter
+        // (or a control char) is pressed — avoids out-of-order char delivery.
         if (this._localEchoEnabled) {
           if (data === '\x7f') {
-            // Backspace: remove last char from overlay, send \x7f to PTY in background
+            // Backspace: remove last char from overlay only (nothing sent to PTY yet)
             this._localEchoOverlay?.removeChar();
-            this._localEchoBgBuffer += '\x7f';
-            scheduleBgFlush();
             return;
           }
           if (/^[\r\n]+$/.test(data)) {
-            // Enter: drain any background-buffered chars, then send \r after 120ms.
-            // PTY already has the text from background sends; drain catches any remainder.
+            // Enter: send full buffered text + \r to PTY in one shot
+            const text = this._localEchoOverlay?.pendingText || '';
             this._localEchoOverlay?.clear();
+            // Clear flushed offset — Enter commits all text
+            this._flushedOffsets?.delete(this.activeSessionId);
             if (this._inputFlushTimeout) {
               clearTimeout(this._inputFlushTimeout);
               this._inputFlushTimeout = null;
             }
-            const remainder = drainBgBuffer();
-            if (remainder) {
-              this._pendingInput += remainder;
+            if (text) {
+              this._pendingInput += text;
               flushInput();
             }
+            // Send \r after a short delay so text arrives first
             setTimeout(() => {
               this._pendingInput += '\r';
               flushInput();
-            }, 120);
+            }, 80);
             return;
           }
           if (data.length > 1 && data.charCodeAt(0) >= 32) {
-            // Paste: append to overlay + send to PTY immediately
+            // Paste: append to overlay only (sent on Enter)
             this._localEchoOverlay?.appendText(data);
-            const remainder = drainBgBuffer();
-            if (remainder) this._pendingInput += remainder;
-            this._pendingInput += data;
-            if (this._inputFlushTimeout) {
-              clearTimeout(this._inputFlushTimeout);
-              this._inputFlushTimeout = null;
-            }
-            flushInput();
             return;
           }
           if (data.charCodeAt(0) < 32) {
-            // Control chars (Ctrl+C, escape sequences): clear overlay, drain bg, send immediately
+            // Control chars (Ctrl+C, escape sequences): send buffered text + control char immediately
+            const text = this._localEchoOverlay?.pendingText || '';
             this._localEchoOverlay?.clear();
-            const remainder = drainBgBuffer();
-            if (remainder) {
-              this._pendingInput += remainder;
+            if (text) {
+              this._pendingInput += text;
             }
             this._pendingInput += data;
             if (this._inputFlushTimeout) {
@@ -2163,10 +2151,8 @@ class ClaudemanApp {
             return;
           }
           if (data.length === 1 && data.charCodeAt(0) >= 32) {
-            // Printable char: add to overlay + queue for background send to PTY
+            // Printable char: add to overlay only (sent on Enter)
             this._localEchoOverlay?.addChar(data);
-            this._localEchoBgBuffer += data;
-            scheduleBgFlush();
             return;
           }
         }
@@ -2469,16 +2455,6 @@ class ClaudemanApp {
       const echoEnabled = settings.localEchoEnabled ?? MobileDetection.isTouchDevice();
       const shouldEnable = !!(echoEnabled && session);
       if (this._localEchoEnabled && !shouldEnable) {
-          // Flush background-buffered keystrokes before disabling
-          if (this.activeSessionId && this._localEchoBgBuffer) {
-            const remainder = this._localEchoBgBuffer;
-            if (this._localEchoBgTimer) {
-              clearTimeout(this._localEchoBgTimer);
-              this._localEchoBgTimer = null;
-            }
-            this._localEchoBgBuffer = '';
-            this._sendInputAsync(this.activeSessionId, remainder);
-          }
           this._localEchoOverlay?.clear();
       }
       this._localEchoEnabled = shouldEnable;
@@ -4652,23 +4628,33 @@ class ClaudemanApp {
     this.writeFrameScheduled = false;
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
-    // Flush any background-buffered keystrokes to the outgoing session's PTY
-    if (this.activeSessionId && this._localEchoBgBuffer) {
-      const remainder = this._localEchoBgBuffer;
-      if (this._localEchoBgTimer) {
-        clearTimeout(this._localEchoBgTimer);
-        this._localEchoBgTimer = null;
+    // End any in-flight IME composition.
+    // iOS Safari keeps autocorrect composing; switching tabs without ending it
+    // leaves xterm's _compositionHelper._isComposing stuck true, which blocks
+    // keyboard input when the user returns to this tab.
+    try {
+      const ch = this.terminal?._core?._compositionHelper;
+      if (ch?._isComposing) {
+        ch._isComposing = false;
+        // Also fire compositionend on the textarea so any other listeners reset
+        const ta = this.terminal?.element?.querySelector('.xterm-helper-textarea');
+        if (ta) ta.dispatchEvent(new CompositionEvent('compositionend', { data: '' }));
       }
-      this._localEchoBgBuffer = '';
-      this._sendInputAsync(this.activeSessionId, remainder);
-    }
-    // Save local echo text for outgoing session before clear destroys it
+    } catch {}
+
+    // Flush local echo text to PTY before switching tabs.
+    // Send as a single batch (no Enter) so it lands in the session's readline
+    // input buffer — avoids "old text resent on Enter" and overlay render bugs.
+    // Track flushed length so _render() offsets the overlay correctly even before
+    // the PTY echo arrives in the terminal buffer.
     if (this.activeSessionId) {
       const echoText = this._localEchoOverlay?.pendingText || '';
       if (echoText) {
-        this.localEchoTextCache.set(this.activeSessionId, echoText);
-      } else {
-        this.localEchoTextCache.delete(this.activeSessionId);
+        this._sendInputAsync(this.activeSessionId, echoText);
+        // Store flushed length PER SESSION so it's available when switching back
+        if (!this._flushedOffsets) this._flushedOffsets = new Map();
+        const prev = this._flushedOffsets.get(this.activeSessionId) || 0;
+        this._flushedOffsets.set(this.activeSessionId, prev + echoText.length);
       }
     }
     this._localEchoOverlay?.clear();
@@ -4755,20 +4741,10 @@ class ClaudemanApp {
         this.terminal.reset();
       }
 
-      // Restore local echo text for incoming session (saved during previous tab switch).
-      // Retry rerender at increasing delays — terminal render service may not be ready
-      // immediately after buffer load (especially on slower mobile devices).
-      const savedEcho = this.localEchoTextCache.get(sessionId);
-      if (savedEcho && this._localEchoOverlay) {
-        this._localEchoOverlay.pendingText = savedEcho;
-        this._localEchoOverlay._persist();
-        for (const delay of [150, 500, 1000]) {
-          setTimeout(() => {
-            if (this.activeSessionId === sessionId && this._localEchoOverlay?.pendingText) {
-              this._localEchoOverlay.rerender();
-            }
-          }, delay);
-        }
+      // Restore flushed offset for this session so the overlay positions correctly
+      // even before the PTY echo arrives in the terminal buffer.
+      if (this._flushedOffsets?.has(sessionId) && this._localEchoOverlay) {
+        this._localEchoOverlay._flushedOffset = this._flushedOffsets.get(sessionId);
       }
 
       // Fire-and-forget resize — don't await to avoid blocking UI.
@@ -4852,12 +4828,7 @@ class ClaudemanApp {
     this.terminalBuffers.delete(sessionId);
     this.terminalBufferCache.delete(sessionId);
     this.localEchoTextCache.delete(sessionId);
-    // Cancel orphaned background echo timer (discard — session is gone)
-    if (this._localEchoBgTimer) {
-      clearTimeout(this._localEchoBgTimer);
-      this._localEchoBgTimer = null;
-      this._localEchoBgBuffer = '';
-    }
+    this._flushedOffsets?.delete(sessionId);
     this._inputQueue.delete(sessionId);
     this.ralphStates.delete(sessionId);
     this.ralphClosedSessions.delete(sessionId);
