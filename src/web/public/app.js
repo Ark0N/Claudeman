@@ -2352,12 +2352,48 @@ class ClaudemanApp {
                 clearTimeout(this._inputFlushTimeout);
                 this._inputFlushTimeout = null;
               }
+              // Snapshot prompt line text BEFORE flushing — used to distinguish
+              // real Tab completions from pre-existing Claude UI text.
+              let baseText = '';
+              try {
+                const p = this._localEchoOverlay?._findPrompt?.();
+                if (p) {
+                  const buf = this.terminal.buffer.active;
+                  const line = buf.getLine(buf.viewportY + p.row);
+                  if (line) baseText = line.translateToString(true).slice(p.col + 2).trimEnd();
+                }
+              } catch {}
+              this._tabCompletionBaseText = baseText;
               flushInput();
-              // Only arm detection if there was actual text — stray Tabs from
-              // UI navigation (Ctrl+Tab) on an empty prompt should be ignored.
-              if (text) {
-                this._tabCompletionSessionId = this.activeSessionId;
-              }
+              this._tabCompletionSessionId = this.activeSessionId;
+              this._tabCompletionRetries = 0;
+              // Fallback: if flushPendingWrites() detection misses the completion
+              // (e.g., flicker filter delays data, or xterm hasn't processed writes
+              // by the time the callback fires), retry detection after a delay.
+              // This ensures the overlay renders even without further terminal data.
+              if (this._tabCompletionFallback) clearTimeout(this._tabCompletionFallback);
+              const selfTab = this;
+              this._tabCompletionFallback = setTimeout(() => {
+                selfTab._tabCompletionFallback = null;
+                if (!selfTab._tabCompletionSessionId || selfTab._tabCompletionSessionId !== selfTab.activeSessionId) return;
+                const ov = selfTab._localEchoOverlay;
+                if (!ov || ov.pendingText) return;
+                selfTab.terminal.write('', () => {
+                  if (!selfTab._tabCompletionSessionId) return;
+                  ov._bufferDetectDone = false;
+                  ov._detectBufferText();
+                  if (ov._flushedOffset > 0) {
+                    const detected = ov._flushedText;
+                    if (detected !== selfTab._tabCompletionBaseText) {
+                      selfTab._tabCompletionSessionId = null;
+                      selfTab._tabCompletionRetries = 0;
+                      selfTab._tabCompletionBaseText = null;
+                      ov._lastRenderKey = '';
+                      ov._render();
+                    }
+                  }
+                });
+              }, 300);
               return;
             }
             // Control chars (Ctrl+C, single ESC): send buffered text + control char immediately
@@ -2725,17 +2761,50 @@ class ClaudemanApp {
       this._localEchoOverlay.rerender();
     }
 
-    // After Tab completion: the PTY response just arrived. Detect the
-    // completed text in the buffer and render it in the overlay.
+    // After Tab completion: detect the completed text in the overlay.
+    // Use terminal.write('', callback) to defer detection until xterm.js
+    // finishes processing ALL queued writes — direct buffer reads after
+    // terminal.write(data) can miss text if xterm processes asynchronously.
     if (this._tabCompletionSessionId && this._tabCompletionSessionId === this.activeSessionId
         && this._localEchoOverlay && !this._localEchoOverlay.pendingText) {
-      this._tabCompletionSessionId = null;
-      this._localEchoOverlay._bufferDetectDone = false;
-      this._localEchoOverlay._detectBufferText();
-      if (this._localEchoOverlay._flushedOffset > 0) {
-        this._localEchoOverlay._lastRenderKey = '';
-        this._localEchoOverlay._render();
-      }
+      const overlay = this._localEchoOverlay;
+      const self = this;
+      this.terminal.write('', () => {
+        if (!self._tabCompletionSessionId) return; // already resolved
+        overlay._bufferDetectDone = false;
+        overlay._detectBufferText();
+        if (overlay._flushedOffset > 0) {
+          // Compare with pre-Tab snapshot to avoid false positives from
+          // Claude's pre-existing UI text (placeholder hints, etc.).
+          const detected = overlay._flushedText;
+          if (detected === self._tabCompletionBaseText) {
+            // Same text as before Tab — no completion yet. Undo and retry.
+            overlay._flushedOffset = 0;
+            overlay._flushedText = '';
+            overlay._bufferDetectDone = false;
+            self._tabCompletionRetries = (self._tabCompletionRetries || 0) + 1;
+            if (self._tabCompletionRetries > 60) {
+              self._tabCompletionSessionId = null;
+              self._tabCompletionRetries = 0;
+            }
+          } else {
+            // Text changed — real completion happened
+            self._tabCompletionSessionId = null;
+            self._tabCompletionRetries = 0;
+            self._tabCompletionBaseText = null;
+            if (self._tabCompletionFallback) { clearTimeout(self._tabCompletionFallback); self._tabCompletionFallback = null; }
+            overlay._lastRenderKey = '';
+            overlay._render();
+          }
+        } else {
+          // No text found yet — retry on next flush.
+          self._tabCompletionRetries = (self._tabCompletionRetries || 0) + 1;
+          if (self._tabCompletionRetries > 60) {
+            self._tabCompletionSessionId = null;
+            self._tabCompletionRetries = 0;
+          }
+        }
+      });
     }
   }
 
@@ -4852,6 +4921,9 @@ class ClaudemanApp {
 
     // Clear tab completion detection flag — don't carry across sessions
     this._tabCompletionSessionId = null;
+    this._tabCompletionRetries = 0;
+    this._tabCompletionBaseText = null;
+    if (this._tabCompletionFallback) { clearTimeout(this._tabCompletionFallback); this._tabCompletionFallback = null; }
 
     // Clean up pending terminal writes to prevent old session data from appearing in new session
     if (this.syncWaitTimeout) {
@@ -4899,6 +4971,14 @@ class ClaudemanApp {
       }
     }
     this._localEchoOverlay?.clear();
+    // Prevent _detectBufferText() from picking up Claude's Ink UI text
+    // (status bar, model info, etc.) as "user input" on fresh sessions.
+    // Only sessions with prior flushed text (from tab-switch-away) need detection.
+    // After the user's first Enter, clear() resets _bufferDetectDone = false,
+    // re-enabling detection for tab completion and other legitimate cases.
+    if (this._localEchoOverlay && !this._flushedOffsets?.has(sessionId)) {
+      this._localEchoOverlay._bufferDetectDone = true;
+    }
     this.activeSessionId = sessionId;
     try { localStorage.setItem('claudeman-active-session', sessionId); } catch {}
     this.hideWelcome();
