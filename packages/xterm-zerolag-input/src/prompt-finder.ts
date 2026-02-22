@@ -27,11 +27,17 @@ export function findPrompt(
             }
 
             case 'regex': {
+                // Create a fresh non-global regex to avoid lastIndex mutation
+                // and ensure .match() returns a single result with .index
+                const pattern = finder.pattern;
+                const safePattern = pattern.global
+                    ? new RegExp(pattern.source, pattern.flags.replace('g', ''))
+                    : pattern;
                 for (let row = terminal.rows - 1; row >= 0; row--) {
                     const line = buffer.getLine(viewportTop + row);
                     if (!line) continue;
                     const text = line.translateToString(true);
-                    const match = text.match(finder.pattern);
+                    const match = text.match(safePattern);
                     if (match) {
                         const col = match.index ?? 0;
                         return { row, col };

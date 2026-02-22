@@ -7,5 +7,4 @@ export type {
     PromptFinder,
     PromptPosition,
     CellDimensions,
-    FontStyle,
 } from './types.js';

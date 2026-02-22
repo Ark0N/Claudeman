@@ -40,8 +40,8 @@ terminal.onData((data) => {
     zerolag.clear();
     ws.send(text + '\r');
   } else if (data === '\x7f') {
-    const removed = zerolag.removeChar();
-    if (removed) ws.send(data);
+    const source = zerolag.removeChar();
+    if (source === 'flushed') ws.send(data); // only backspace text already in PTY
   } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
     zerolag.addChar(data);
     // Don't send to server yet — wait for Enter
@@ -115,7 +115,7 @@ Implements xterm.js `ITerminalAddon`. Load via `terminal.loadAddon(addon)`.
 |--------|-------------|
 | `addChar(char)` | Add a single printable character to the overlay |
 | `appendText(text)` | Append multiple characters (e.g., paste) |
-| `removeChar(): boolean` | Remove last char. Returns `false` if nothing to remove |
+| `removeChar(): 'pending' \| 'flushed' \| false` | Remove last char. Returns source (`'pending'` = unsent, `'flushed'` = send backspace to PTY) or `false` |
 | `clear()` | Clear all state and hide overlay |
 
 #### Flushed Text Tracking

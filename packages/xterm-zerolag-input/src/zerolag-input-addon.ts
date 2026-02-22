@@ -48,7 +48,8 @@ const DEFAULT_CURSOR = '#e0e0e0';
  *     zerolag.clear();
  *     ws.send(text + '\r');
  *   } else if (data === '\x7f') {
- *     if (zerolag.removeChar()) ws.send(data);
+ *     const source = zerolag.removeChar();
+ *     if (source === 'flushed') ws.send(data); // only send if text was already in PTY
  *   } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
  *     zerolag.addChar(data);
  *   }
@@ -194,14 +195,19 @@ export class ZerolagInputAddon implements XtermAddon {
      * Remove the last character from the overlay.
      *
      * Cascade order:
-     * 1. Remove from `pendingText` if non-empty
-     * 2. Decrement `flushedOffset` if pending is empty but flushed exists
-     * 3. Try `detectBufferText()` if both are empty
+     * 1. Remove from `pendingText` if non-empty → returns `'pending'`
+     * 2. Decrement `flushedOffset` if pending is empty but flushed exists → returns `'flushed'`
+     * 3. Try `detectBufferText()` if both are empty, then decrement → returns `'flushed'`
      *
-     * @returns `true` if a character was removed, `false` if nothing to remove.
-     *          When `false`, the consumer should NOT send backspace to the PTY.
+     * @returns The source of the removed character, or `false` if nothing to remove.
+     *
+     * - `'pending'`: A character was removed from unsent text. The consumer
+     *   should NOT send backspace to the PTY (the text was never transmitted).
+     * - `'flushed'`: A character was removed from text already sent to the PTY.
+     *   The consumer SHOULD send backspace to the PTY.
+     * - `false`: Nothing to remove. The consumer should NOT send backspace.
      */
-    removeChar(): boolean {
+    removeChar(): 'pending' | 'flushed' | false {
         if (this._pendingText.length > 0) {
             this._pendingText = this._pendingText.slice(0, -1);
             if (this._pendingText.length > 0 || this._flushedOffset > 0) {
@@ -209,7 +215,7 @@ export class ZerolagInputAddon implements XtermAddon {
             } else {
                 this._hide();
             }
-            return true;
+            return 'pending';
         }
 
         if (this._flushedOffset > 0) {
@@ -220,7 +226,21 @@ export class ZerolagInputAddon implements XtermAddon {
             } else {
                 this._hide();
             }
-            return true;
+            return 'flushed';
+        }
+
+        // Both empty — try detecting text already on the prompt line
+        // (handles tab completion, arrow-key edits, etc.)
+        this._detectBufferText();
+        if (this._flushedOffset > 0) {
+            this._flushedOffset--;
+            this._flushedText = this._flushedText.slice(0, -1);
+            if (this._flushedOffset > 0) {
+                this._render();
+            } else {
+                this._hide();
+            }
+            return 'flushed';
         }
 
         return false;
@@ -369,7 +389,7 @@ export class ZerolagInputAddon implements XtermAddon {
             pendingText: this._pendingText,
             flushedLength: this._flushedOffset,
             flushedText: this._flushedText,
-            visible: this._overlay?.style.display !== 'none',
+            visible: this._overlay !== null && this._overlay.style.display !== 'none',
             promptPosition: this._lastPromptPos ? { ...this._lastPromptPos } : null,
         };
     }
@@ -500,8 +520,9 @@ export class ZerolagInputAddon implements XtermAddon {
                 }
             }
 
-            // Skip redundant re-renders
-            const renderKey = `${displayText.length}:${startCol}:${activePrompt.row}:${activePrompt.col}:${totalCols}:${this._flushedOffset}`;
+            // Skip redundant re-renders — include text content to detect
+            // same-length changes (e.g., setFlushed with different text)
+            const renderKey = `${displayText}:${startCol}:${activePrompt.row}:${activePrompt.col}:${totalCols}:${this._flushedOffset}`;
             if (renderKey === this._lastRenderKey && this._overlay.style.display !== 'none') return;
             this._lastRenderKey = renderKey;
 

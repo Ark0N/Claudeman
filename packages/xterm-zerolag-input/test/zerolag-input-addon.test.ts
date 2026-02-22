@@ -1,7 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createMockTerminal } from './helpers.js';
 import { ZerolagInputAddon } from '../src/zerolag-input-addon.js';
-import type { Terminal } from '../src/types.js';
 
 function setup(lines: string[] = ['$ '], promptChar = '$') {
     const mock = createMockTerminal({ buffer: { lines } });
@@ -83,12 +82,12 @@ describe('ZerolagInputAddon', () => {
     });
 
     describe('removeChar', () => {
-        it('removes last character from pendingText', () => {
+        it('returns "pending" when removing from pendingText', () => {
             const { addon } = tracked();
             addon.addChar('a');
             addon.addChar('b');
-            const removed = addon.removeChar();
-            expect(removed).toBe(true);
+            const source = addon.removeChar();
+            expect(source).toBe('pending');
             expect(addon.pendingText).toBe('a');
         });
 
@@ -97,10 +96,11 @@ describe('ZerolagInputAddon', () => {
             expect(addon.removeChar()).toBe(false);
         });
 
-        it('decrements flushed when pending is empty', () => {
+        it('returns "flushed" when removing from flushed text', () => {
             const { addon } = tracked();
             addon.setFlushed(3, 'abc');
-            expect(addon.removeChar()).toBe(true);
+            const source = addon.removeChar();
+            expect(source).toBe('flushed');
             expect(addon.getFlushed().count).toBe(2);
             expect(addon.getFlushed().text).toBe('ab');
         });
@@ -109,7 +109,8 @@ describe('ZerolagInputAddon', () => {
             const { addon } = tracked();
             addon.setFlushed(2, 'ab');
             addon.addChar('c');
-            expect(addon.removeChar()).toBe(true);
+            const source = addon.removeChar();
+            expect(source).toBe('pending');
             expect(addon.pendingText).toBe('');
             expect(addon.getFlushed().count).toBe(2); // flushed unchanged
         });
@@ -119,6 +120,21 @@ describe('ZerolagInputAddon', () => {
             addon.addChar('x');
             addon.removeChar();
             expect(addon.hasPending).toBe(false);
+        });
+
+        it('detects buffer text and removes from it when both empty', () => {
+            const { addon } = tracked(['$ hello']);
+            // Both pending and flushed are empty, but buffer has text
+            const source = addon.removeChar();
+            expect(source).toBe('flushed');
+            // "hello" (5 chars) detected, then one removed = 4
+            expect(addon.getFlushed().count).toBe(4);
+            expect(addon.getFlushed().text).toBe('hell');
+        });
+
+        it('returns false on empty prompt with no buffer text', () => {
+            const { addon } = tracked(['$ ']);
+            expect(addon.removeChar()).toBe(false);
         });
     });
 
@@ -273,6 +289,22 @@ describe('ZerolagInputAddon', () => {
 
             const text = addon.readPromptText();
             expect(text).toBe('hello');
+        });
+    });
+
+    describe('state.visible', () => {
+        it('is false before activate', () => {
+            const addon = new ZerolagInputAddon();
+            expect(addon.state.visible).toBe(false);
+            // No cleanup needed — never activated
+        });
+
+        it('is false after dispose', () => {
+            const { addon, mock } = tracked();
+            addon.addChar('x');
+            addon.dispose();
+            expect(addon.state.visible).toBe(false);
+            mock.cleanup();
         });
     });
 

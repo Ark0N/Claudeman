@@ -88,6 +88,18 @@ describe('findPrompt', () => {
             expect(pos).toBeNull();
             cleanup();
         });
+
+        it('handles global flag safely (strips g to avoid lastIndex)', () => {
+            const { terminal, cleanup } = term(['user@host:~$ cmd']);
+            const finder: PromptFinder = { type: 'regex', pattern: /\$/g };
+            const pos = findPrompt(terminal as unknown as XtermTerminal, finder);
+            expect(pos).not.toBeNull();
+            expect(pos!.col).toBe(11);
+            // Call again — should return same result (no lastIndex drift)
+            const pos2 = findPrompt(terminal as unknown as XtermTerminal, finder);
+            expect(pos2).toEqual(pos);
+            cleanup();
+        });
     });
 
     describe('custom strategy', () => {
