@@ -261,6 +261,45 @@ describe('ZerolagInputAddon', () => {
             expect(text).toBe('text');
         });
 
+        it('suppressBufferDetection prevents detection', () => {
+            const { addon } = tracked(['$ some UI text']);
+            addon.suppressBufferDetection();
+
+            // Detection should be blocked
+            const text = addon.detectBufferText();
+            expect(text).toBeNull();
+            expect(addon.getFlushed().count).toBe(0);
+        });
+
+        it('suppressBufferDetection also blocks implicit detection in addChar', () => {
+            const { addon } = tracked(['$ ink status bar']);
+            addon.suppressBufferDetection();
+
+            // addChar calls _detectBufferText internally on first keystroke
+            addon.addChar('x');
+            // Should have only 'x' pending, NOT the buffer text as flushed
+            expect(addon.pendingText).toBe('x');
+            expect(addon.getFlushed().count).toBe(0);
+        });
+
+        it('suppressBufferDetection also blocks detection in removeChar cascade', () => {
+            const { addon } = tracked(['$ buffer text']);
+            addon.suppressBufferDetection();
+
+            // removeChar step 3 calls _detectBufferText — should be blocked
+            expect(addon.removeChar()).toBe(false);
+            expect(addon.getFlushed().count).toBe(0);
+        });
+
+        it('clear resets suppression (re-enables detection)', () => {
+            const { addon } = tracked(['$ text']);
+            addon.suppressBufferDetection();
+            addon.clear(); // resets _bufferDetectDone to false
+
+            const text = addon.detectBufferText();
+            expect(text).toBe('text');
+        });
+
         it('clear resets buffer detection guard', () => {
             const { addon } = tracked(['$ text']);
             addon.detectBufferText();
@@ -324,6 +363,130 @@ describe('ZerolagInputAddon', () => {
             addon.addChar('x');
             expect(() => addon.rerender()).not.toThrow();
             expect(addon.hasPending).toBe(true);
+        });
+
+        it('refreshFont re-renders flushed-only text', () => {
+            const { addon } = tracked();
+            addon.setFlushed(3, 'abc');
+            expect(() => addon.refreshFont()).not.toThrow();
+            expect(addon.hasPending).toBe(true);
+        });
+    });
+
+    describe('tab-switch save/restore pattern', () => {
+        it('save pending + flushed, restore as flushed', () => {
+            const { addon } = tracked(['$ ']);
+
+            // User types some text
+            addon.addChar('h');
+            addon.addChar('i');
+            expect(addon.pendingText).toBe('hi');
+
+            // Tab switch: save state
+            const pending = addon.pendingText;
+            const { count: flushedCount, text: flushedText } = addon.getFlushed();
+            const totalCount = flushedCount + pending.length;
+            const totalText = flushedText + pending;
+            addon.clear();
+
+            // Simulate PTY send of pending text (app would do this)
+            // ...
+
+            // Tab switch back: restore as flushed (text is now in PTY)
+            addon.suppressBufferDetection(); // prevent false Ink detection
+            addon.setFlushed(totalCount, totalText);
+            expect(addon.getFlushed()).toEqual({ count: 2, text: 'hi' });
+            expect(addon.hasPending).toBe(true); // has flushed content
+
+            // Backspace should return 'flushed' (text is in PTY)
+            const source = addon.removeChar();
+            expect(source).toBe('flushed');
+            expect(addon.getFlushed().count).toBe(1);
+        });
+
+        it('save with existing flushed + pending', () => {
+            const { addon } = tracked(['$ ']);
+
+            // Set flushed from previous restore, then user types more
+            addon.setFlushed(3, 'abc');
+            addon.addChar('d');
+            addon.addChar('e');
+
+            // Save state
+            const pending = addon.pendingText;
+            const { count, text } = addon.getFlushed();
+            expect(pending).toBe('de');
+            expect(count).toBe(3);
+            expect(text).toBe('abc');
+
+            // Combined for restore
+            const totalCount = count + pending.length;
+            const totalText = text + pending;
+            addon.clear();
+
+            // Restore
+            addon.setFlushed(totalCount, totalText);
+            expect(addon.getFlushed()).toEqual({ count: 5, text: 'abcde' });
+        });
+    });
+
+    describe('methods before activate / after dispose', () => {
+        it('addChar accumulates but does not crash before activate', () => {
+            const addon = new ZerolagInputAddon();
+            addon.addChar('a');
+            addon.addChar('b');
+            expect(addon.pendingText).toBe('ab');
+            expect(addon.hasPending).toBe(true);
+            // No dispose needed — never activated, no DOM
+        });
+
+        it('removeChar works on pending text before activate', () => {
+            const addon = new ZerolagInputAddon();
+            addon.addChar('x');
+            expect(addon.removeChar()).toBe('pending');
+            expect(addon.pendingText).toBe('');
+        });
+
+        it('clear works before activate', () => {
+            const addon = new ZerolagInputAddon();
+            addon.addChar('x');
+            addon.clear();
+            expect(addon.pendingText).toBe('');
+            expect(addon.hasPending).toBe(false);
+        });
+
+        it('all methods safe after dispose', () => {
+            const { addon, mock } = tracked();
+            addon.dispose();
+            expect(() => addon.addChar('x')).not.toThrow();
+            expect(() => addon.removeChar()).not.toThrow();
+            expect(() => addon.clear()).not.toThrow();
+            expect(() => addon.rerender()).not.toThrow();
+            expect(() => addon.refreshFont()).not.toThrow();
+            expect(addon.findPrompt()).toBeNull();
+            expect(addon.readPromptText()).toBeNull();
+            expect(addon.detectBufferText()).toBeNull();
+            mock.cleanup();
+        });
+    });
+
+    describe('addChar implicit buffer detection', () => {
+        it('first keystroke detects existing buffer text as flushed', () => {
+            const { addon } = tracked(['$ existing']);
+            // First addChar should trigger _detectBufferText
+            addon.addChar('!');
+            expect(addon.pendingText).toBe('!');
+            expect(addon.getFlushed().count).toBe(8); // 'existing'
+            expect(addon.getFlushed().text).toBe('existing');
+        });
+
+        it('second keystroke does NOT re-detect', () => {
+            const { addon } = tracked(['$ existing']);
+            addon.addChar('a');
+            addon.addChar('b');
+            // Should NOT detect again — flushed from first char remains
+            expect(addon.pendingText).toBe('ab');
+            expect(addon.getFlushed().count).toBe(8); // still 'existing'
         });
     });
 });

@@ -347,6 +347,20 @@ export class ZerolagInputAddon implements XtermAddon {
         this._bufferDetectDone = false;
     }
 
+    /**
+     * Suppress buffer detection until the next `clear()` or
+     * `resetBufferDetection()` call.
+     *
+     * Use case: When switching to a session whose buffer contains UI
+     * framework text (e.g., Ink status bars) after the prompt marker,
+     * `detectBufferText()` would falsely pick up that text as user input.
+     * Call this after switching to prevent false detection until the user
+     * actually presses Enter (which calls `clear()` and re-enables detection).
+     */
+    suppressBufferDetection(): void {
+        this._bufferDetectDone = true;
+    }
+
     // ─── Prompt utilities ─────────────────────────────────────────────
 
     /**
