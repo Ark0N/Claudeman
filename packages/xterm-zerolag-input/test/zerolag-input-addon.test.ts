@@ -160,6 +160,30 @@ describe('ZerolagInputAddon', () => {
             expect(addon.hasPending).toBe(true);
         });
 
+        it('setFlushed with render=false does not render', () => {
+            const { addon } = tracked();
+            addon.setFlushed(3, 'abc', false);
+            expect(addon.getFlushed()).toEqual({ count: 3, text: 'abc' });
+            expect(addon.hasPending).toBe(true);
+            // Overlay should still be hidden (no render triggered)
+            expect(addon.state.visible).toBe(false);
+        });
+
+        it('setFlushed with render=false prevents stale column lock', () => {
+            const { addon, mock } = tracked(['$ old session text']);
+            // Simulate: clear overlay, then restore flushed WITHOUT render
+            addon.clear();
+            addon.setFlushed(5, 'hello', false);
+            // lastPromptPos should still be null (no render happened)
+            expect(addon.state.promptPosition).toBeNull();
+            // Now simulate buffer load and rerender
+            mock.setLines(['$ ']);
+            addon.rerender();
+            // Prompt should be freshly scanned, no stale column lock
+            const pos = addon.state.promptPosition;
+            expect(pos).not.toBeNull();
+        });
+
         it('clearFlushed resets flushed state', () => {
             const { addon } = tracked();
             addon.setFlushed(3, 'abc');
@@ -291,6 +315,34 @@ describe('ZerolagInputAddon', () => {
             expect(addon.getFlushed().count).toBe(0);
         });
 
+        it('undoDetection clears flushed and re-enables detection', () => {
+            const { addon } = tracked(['$ completed']);
+            // Detect buffer text (simulates tab completion detection)
+            addon.detectBufferText();
+            expect(addon.getFlushed().count).toBe(9); // 'completed'
+
+            // Undo because it matched baseline (no real completion)
+            addon.undoDetection();
+            expect(addon.getFlushed().count).toBe(0);
+            expect(addon.getFlushed().text).toBe('');
+
+            // Detection should work again (guard reset)
+            const text = addon.detectBufferText();
+            expect(text).toBe('completed');
+        });
+
+        it('undoDetection does not hide overlay or clear pending', () => {
+            const { addon } = tracked(['$ buffer']);
+            addon.detectBufferText(); // sets flushed
+            addon.addChar('x');       // adds pending on top
+
+            addon.undoDetection();
+            // Flushed cleared, but pending preserved
+            expect(addon.pendingText).toBe('x');
+            expect(addon.getFlushed().count).toBe(0);
+            expect(addon.hasPending).toBe(true);
+        });
+
         it('clear resets suppression (re-enables detection)', () => {
             const { addon } = tracked(['$ text']);
             addon.suppressBufferDetection();
@@ -394,7 +446,7 @@ describe('ZerolagInputAddon', () => {
 
             // Tab switch back: restore as flushed (text is now in PTY)
             addon.suppressBufferDetection(); // prevent false Ink detection
-            addon.setFlushed(totalCount, totalText);
+            addon.setFlushed(totalCount, totalText, false); // no render — buffer not loaded yet
             expect(addon.getFlushed()).toEqual({ count: 2, text: 'hi' });
             expect(addon.hasPending).toBe(true); // has flushed content
 

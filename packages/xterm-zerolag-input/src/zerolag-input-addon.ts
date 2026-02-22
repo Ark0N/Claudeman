@@ -271,11 +271,16 @@ export class ZerolagInputAddon implements XtermAddon {
      *
      * @param count - Number of characters flushed
      * @param text - The actual flushed text (avoids reading stale terminal buffer)
+     * @param render - Whether to re-render immediately (default: `true`).
+     *   Pass `false` when restoring flushed state during a tab/session switch
+     *   before the new buffer has loaded — rendering against a stale buffer
+     *   would lock the prompt column to the wrong position. Call `rerender()`
+     *   explicitly after the buffer finishes loading.
      */
-    setFlushed(count: number, text: string): void {
+    setFlushed(count: number, text: string, render = true): void {
         this._flushedOffset = count;
         this._flushedText = text;
-        this._render();
+        if (render) this._render();
     }
 
     /**
@@ -344,6 +349,20 @@ export class ZerolagInputAddon implements XtermAddon {
      * re-detection (e.g., after a tab completion response arrives).
      */
     resetBufferDetection(): void {
+        this._bufferDetectDone = false;
+    }
+
+    /**
+     * Undo the last `detectBufferText()` call — clears flushed state and
+     * re-enables detection.
+     *
+     * Use case: Tab completion detection found text that matches the
+     * pre-tab baseline (no real completion happened). Call this to undo
+     * the detection so it can retry on the next flush cycle.
+     */
+    undoDetection(): void {
+        this._flushedOffset = 0;
+        this._flushedText = '';
         this._bufferDetectDone = false;
     }
 

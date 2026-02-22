@@ -153,7 +153,7 @@ Step 3 handles tab completion and arrow-key edits: if the user tabs to complete 
 
 | Method | Description |
 |--------|-------------|
-| `setFlushed(count, text)` | Mark characters as sent-but-unacknowledged. Triggers a render. |
+| `setFlushed(count, text, render?)` | Mark characters as sent-but-unacknowledged. Pass `render=false` when restoring during a tab switch before the new buffer has loaded (prevents stale prompt column locking). Default: `true`. |
 | `getFlushed()` | Returns `{ count: number, text: string }`. |
 | `clearFlushed()` | Clear flushed state (call when server echo has arrived). |
 
@@ -166,6 +166,7 @@ The overlay can scan the terminal buffer for text that already exists after the 
 | `detectBufferText()` | Scan buffer for text after prompt. Returns the detected text string, or `null`. If found, sets it as flushed text. Guarded: only runs once per `clear()` cycle. |
 | `resetBufferDetection()` | Re-enable detection (e.g., after tab completion response arrives). |
 | `suppressBufferDetection()` | Prevent detection until next `clear()`. Use when switching to a session whose buffer has UI framework text (e.g., Ink status bars) after the prompt marker that would be falsely detected. |
+| `undoDetection()` | Undo the last `detectBufferText()` — clears flushed state and re-enables detection. Use when tab completion detection found text matching the pre-tab baseline (no real completion happened) and needs to retry. |
 
 #### Rendering
 
@@ -251,12 +252,10 @@ function switchToSession(newSessionId: string) {
   loadSessionBuffer(newSessionId);
 
   // 3. Restore overlay state for new session
+  zerolag.suppressBufferDetection(); // prevent false detection of UI text
   const saved = savedFlushed.get(newSessionId);
   if (saved) {
-    zerolag.suppressBufferDetection(); // prevent false detection of UI text
-    zerolag.setFlushed(saved.count, saved.text);
-  } else {
-    zerolag.suppressBufferDetection(); // fresh session, no flushed state
+    zerolag.setFlushed(saved.count, saved.text, false); // render=false: buffer not loaded yet
   }
 
   // 4. Re-render after buffer loads
@@ -281,6 +280,10 @@ zerolag.resetBufferDetection();
 const detected = zerolag.detectBufferText();
 if (detected && detected !== baseline) {
   // Tab completion occurred — overlay now shows the completed text
+  zerolag.rerender();
+} else if (detected) {
+  // Same text as before Tab — no real completion. Undo and retry next cycle.
+  zerolag.undoDetection();
 }
 ```
 
