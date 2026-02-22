@@ -897,6 +897,7 @@ class LocalEchoOverlay {
         screen.appendChild(this.overlay);
         this.pendingText = '';
         this._flushedOffset = 0; // chars flushed to PTY during tab switch (echo may not have arrived yet)
+        this._flushedText = '';  // stored flushed text string (avoids reading stale terminal buffer)
         this._storageKey = 'claudeman_local_echo_pending';
         // Clear stale text from previous page load.  Persisted text can't be
         // backspaced (flushedOffset is lost on reload) and ghost-merges with
@@ -916,7 +917,7 @@ class LocalEchoOverlay {
                 if (buf.viewportY !== buf.baseY) {
                     this.overlay.style.display = 'none';
                     if (this._scrollTimer) { clearTimeout(this._scrollTimer); this._scrollTimer = null; }
-                } else if (this.pendingText) {
+                } else if (this.pendingText || this._flushedOffset > 0) {
                     // Debounce re-render — buffer lines may still be settling
                     if (this._scrollTimer) clearTimeout(this._scrollTimer);
                     this._scrollTimer = setTimeout(() => {
@@ -964,13 +965,12 @@ class LocalEchoOverlay {
         if (this.pendingText.length > 0) {
             this.pendingText = this.pendingText.slice(0, -1);
             this._persist();
-            if (this.pendingText.length > 0) {
+            if (this.pendingText.length > 0 || this._flushedOffset > 0) {
+                // Re-render: either pending text remains, or flushed text exists
+                // and should stay visible so the user can continue backspacing.
                 this._render();
             } else {
-                // Hide overlay but preserve _flushedOffset — the flushed text
-                // is still in the PTY buffer and the offset is needed if the
-                // user types again.  clear() would reset it to 0 and desync
-                // from the _flushedOffsets Map.
+                // Both pending and flushed are empty — hide overlay completely.
                 this._lastRenderKey = '';
                 this._lastPromptPos = null;
                 this.overlay.innerHTML = '';
@@ -989,6 +989,7 @@ class LocalEchoOverlay {
     clear() {
         this.pendingText = '';
         this._flushedOffset = 0;
+        this._flushedText = '';
         this._persist();
         this._lastRenderKey = '';
         this._lastPromptPos = null;
@@ -1030,7 +1031,7 @@ class LocalEchoOverlay {
     }
 
     _render() {
-        if (!this.pendingText) {
+        if (!this.pendingText && !(this._flushedOffset > 0)) {
             this.overlay.style.display = 'none';
             return;
         }
@@ -1074,13 +1075,19 @@ class LocalEchoOverlay {
             const flushed = this._flushedOffset || 0;
             const textStart = activePrompt.col + 2; // right after "❯ "
             if (flushed > 0) {
-                // Read flushed chars from the terminal buffer (PTY already echoed them)
-                const promptAbsRow = buf.viewportY + activePrompt.row;
-                const line = buf.getLine(promptAbsRow);
-                if (line) {
-                    const lineText = line.translateToString(true);
-                    const flushedChars = lineText.slice(textStart, textStart + flushed);
-                    displayText = flushedChars + this.pendingText;
+                // Use stored flushed text (reliable) instead of reading from terminal
+                // buffer (which may be stale/wrong after async buffer reload on tab switch).
+                if (this._flushedText && this._flushedText.length === flushed) {
+                    displayText = this._flushedText + this.pendingText;
+                } else {
+                    // Fallback: read flushed chars from terminal buffer
+                    const promptAbsRow = buf.viewportY + activePrompt.row;
+                    const line = buf.getLine(promptAbsRow);
+                    if (line) {
+                        const lineText = line.translateToString(true);
+                        const flushedChars = lineText.slice(textStart, textStart + flushed);
+                        displayText = flushedChars + this.pendingText;
+                    }
                 }
             }
 
@@ -1166,10 +1173,10 @@ class LocalEchoOverlay {
     // Re-render overlay at current prompt position without clearing pending text.
     // Used after terminal resets/redraws that move the prompt.
     rerender() {
-        if (this.pendingText) this._render();
+        if (this.pendingText || this._flushedOffset > 0) this._render();
     }
 
-    get hasPending() { return this.pendingText.length > 0; }
+    get hasPending() { return this.pendingText.length > 0 || this._flushedOffset > 0; }
 
     dispose() {
         this.clear();
@@ -2190,10 +2197,32 @@ class ClaudemanApp {
               // No pending text but flushed text in PTY — send backspace to PTY
               // so the user can delete chars that were auto-flushed during tab switch.
               this._localEchoOverlay._flushedOffset--;
+              // Trim stored flushed text to match
+              if (this._localEchoOverlay._flushedText) {
+                this._localEchoOverlay._flushedText = this._localEchoOverlay._flushedText.slice(0, -1);
+              }
               if (this._flushedOffsets?.has(this.activeSessionId)) {
                 const prev = this._flushedOffsets.get(this.activeSessionId);
-                if (prev <= 1) this._flushedOffsets.delete(this.activeSessionId);
-                else this._flushedOffsets.set(this.activeSessionId, prev - 1);
+                if (prev <= 1) {
+                  this._flushedOffsets.delete(this.activeSessionId);
+                  this._flushedTexts?.delete(this.activeSessionId);
+                } else {
+                  this._flushedOffsets.set(this.activeSessionId, prev - 1);
+                  if (this._flushedTexts?.has(this.activeSessionId)) {
+                    this._flushedTexts.set(this.activeSessionId,
+                      this._flushedTexts.get(this.activeSessionId).slice(0, -1));
+                  }
+                }
+              }
+              // Immediate visual feedback — re-render overlay with shortened flushed text
+              this._localEchoOverlay._lastRenderKey = '';
+              if (this._localEchoOverlay._flushedOffset > 0) {
+                this._localEchoOverlay._render();
+              } else {
+                // Fully backspaced through flushed text — hide overlay
+                this._localEchoOverlay._lastPromptPos = null;
+                this._localEchoOverlay.overlay.innerHTML = '';
+                this._localEchoOverlay.overlay.style.display = 'none';
               }
               this._pendingInput += data;
               flushInput();
@@ -2205,8 +2234,9 @@ class ClaudemanApp {
             // Enter: send full buffered text + \r to PTY in one shot
             const text = this._localEchoOverlay?.pendingText || '';
             this._localEchoOverlay?.clear();
-            // Clear flushed offset — Enter commits all text
+            // Clear flushed offset and text — Enter commits all text
             this._flushedOffsets?.delete(this.activeSessionId);
+            this._flushedTexts?.delete(this.activeSessionId);
             if (this._inputFlushTimeout) {
               clearTimeout(this._inputFlushTimeout);
               this._inputFlushTimeout = null;
@@ -2228,12 +2258,24 @@ class ClaudemanApp {
             return;
           }
           if (data.charCodeAt(0) < 32) {
+            // Skip xterm-generated terminal responses (OSC color queries, etc.).
+            // These arrive via triggerDataEvent from _handleColorEvent when the
+            // terminal buffer is loaded and contain escape sequences like \x1b]10;rgb:...\x07.
+            // They are NOT user input and must not clear flushed text state.
+            if (data.length > 1 && data.charCodeAt(0) === 27 && data.charCodeAt(1) === 93) {
+              // OSC sequence (\x1b]) — terminal response, send to PTY but
+              // don't clear overlay/flushed state (not user input)
+              this._pendingInput += data;
+              flushInput();
+              return;
+            }
             // Control chars (Ctrl+C, escape sequences): send buffered text + control char immediately
             const text = this._localEchoOverlay?.pendingText || '';
             this._localEchoOverlay?.clear();
-            // Clear flushed offset — control chars (Ctrl+C, Escape, arrows) change
+            // Clear flushed offset and text — control chars (Ctrl+C, Escape, arrows) change
             // cursor position or abort readline, making flushed text tracking invalid.
             this._flushedOffsets?.delete(this.activeSessionId);
+            this._flushedTexts?.delete(this.activeSessionId);
             if (text) {
               this._pendingInput += text;
             }
@@ -4736,10 +4778,14 @@ class ClaudemanApp {
       const echoText = this._localEchoOverlay?.pendingText || '';
       if (echoText) {
         this._sendInputAsync(this.activeSessionId, echoText);
-        // Store flushed length PER SESSION so it's available when switching back
+        // Store flushed length AND text PER SESSION so it's available when switching back.
+        // The text is needed because the terminal buffer may be stale after async reload.
         if (!this._flushedOffsets) this._flushedOffsets = new Map();
+        if (!this._flushedTexts) this._flushedTexts = new Map();
         const prev = this._flushedOffsets.get(this.activeSessionId) || 0;
+        const prevText = this._flushedTexts.get(this.activeSessionId) || '';
         this._flushedOffsets.set(this.activeSessionId, prev + echoText.length);
+        this._flushedTexts.set(this.activeSessionId, prevText + echoText);
       }
     }
     this._localEchoOverlay?.clear();
@@ -4753,12 +4799,13 @@ class ClaudemanApp {
     this.renderSessionTabs();
     this._updateLocalEchoState();
 
-    // Restore flushed offset IMMEDIATELY so backspace/typing work during
+    // Restore flushed offset AND text IMMEDIATELY so backspace/typing work during
     // the async buffer load.  Without this, the offset is 0 during the
     // fetch() gap: backspace is swallowed, and typing a space covers the
     // canvas text with an opaque overlay showing only the new char.
     if (this._flushedOffsets?.has(sessionId) && this._localEchoOverlay) {
       this._localEchoOverlay._flushedOffset = this._flushedOffsets.get(sessionId);
+      this._localEchoOverlay._flushedText = this._flushedTexts?.get(sessionId) || '';
     }
 
     // Glow the newly-active tab
@@ -4834,10 +4881,21 @@ class ClaudemanApp {
         this.terminal.reset();
       }
 
-      // Restore flushed offset for this session so the overlay positions correctly
-      // even before the PTY echo arrives in the terminal buffer.
+      // Restore flushed offset and text for this session so the overlay positions
+      // correctly even before the PTY echo arrives in the terminal buffer.
       if (this._flushedOffsets?.has(sessionId) && this._localEchoOverlay) {
         this._localEchoOverlay._flushedOffset = this._flushedOffsets.get(sessionId);
+        this._localEchoOverlay._flushedText = this._flushedTexts?.get(sessionId) || '';
+        // Trigger render after xterm.js finishes processing the buffer data.
+        // terminal.write('', callback) fires the callback after ALL previously
+        // queued writes have been parsed — so _findPrompt() can find ❯ in the buffer.
+        const overlay = this._localEchoOverlay;
+        this.terminal.write('', () => {
+          if (overlay._flushedOffset > 0) {
+            overlay._lastRenderKey = '';
+            overlay._render();
+          }
+        });
       }
 
       // Fire-and-forget resize — don't await to avoid blocking UI.
@@ -4922,6 +4980,7 @@ class ClaudemanApp {
     this.terminalBufferCache.delete(sessionId);
 
     this._flushedOffsets?.delete(sessionId);
+    this._flushedTexts?.delete(sessionId);
     this._inputQueue.delete(sessionId);
     this.ralphStates.delete(sessionId);
     this.ralphClosedSessions.delete(sessionId);
