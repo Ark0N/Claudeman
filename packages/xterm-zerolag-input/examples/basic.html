@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>xterm-zerolag-input Demo</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+    <style>
+        body {
+            margin: 0;
+            background: #1a1a2e;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            font-family: system-ui, sans-serif;
+            color: #e0e0e0;
+        }
+        h1 { margin-bottom: 0.5rem; }
+        p { margin: 0.25rem 0 1rem; opacity: 0.7; font-size: 0.9rem; }
+        #terminal-container {
+            border: 1px solid #333;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .info {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: #16213e;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            max-width: 600px;
+        }
+        .info code {
+            background: #0f3460;
+            padding: 0.15em 0.4em;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <h1>xterm-zerolag-input</h1>
+    <p>Type below — characters appear instantly via DOM overlay (simulated 500ms RTT)</p>
+    <div id="terminal-container"></div>
+    <div class="info">
+        <strong>What's happening:</strong> Each keystroke is rendered immediately as a DOM overlay
+        positioned on the exact terminal grid. The simulated server echo arrives 500ms later.
+        Without this addon, you'd see a half-second delay on every keystroke.
+        <br><br>
+        Try typing a sentence and pressing Enter. The overlay clears and the "server"
+        processes your input.
+    </div>
+
+    <script type="module">
+        // In a real app you'd import from node_modules:
+        //   import { Terminal } from '@xterm/xterm';
+        //   import { ZerolagInputAddon } from 'xterm-zerolag-input';
+        //
+        // For this demo we use CDN + inline addon class simulation.
+
+        // Load xterm.js from CDN
+        const xtermScript = document.createElement('script');
+        xtermScript.src = 'https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js';
+        document.head.appendChild(xtermScript);
+
+        xtermScript.onload = () => {
+            const terminal = new Terminal({
+                cursorBlink: true,
+                fontSize: 14,
+                fontFamily: '"Fira Code", "Cascadia Code", monospace',
+                theme: {
+                    background: '#0d1117',
+                    foreground: '#c9d1d9',
+                    cursor: '#58a6ff',
+                },
+                rows: 20,
+                cols: 80,
+            });
+
+            terminal.open(document.getElementById('terminal-container'));
+
+            // Print welcome message and prompt
+            terminal.write('Welcome to the xterm-zerolag-input demo!\r\n');
+            terminal.write('Simulated RTT: 500ms. Type anything and press Enter.\r\n\r\n');
+            terminal.write('$ ');
+
+            // --- In a real app, you'd use the npm package ---
+            // For this demo, we simulate the addon behavior inline
+            // since we can't import the built package from a static HTML file.
+
+            let pendingText = '';
+            let overlay = null;
+
+            // Create overlay element (this is what the addon does internally)
+            const screen = terminal.element.querySelector('.xterm-screen');
+            overlay = document.createElement('div');
+            overlay.style.cssText = 'position:absolute;z-index:7;pointer-events:none;display:none';
+            screen.appendChild(overlay);
+
+            function findPromptRow() {
+                const buf = terminal.buffer.active;
+                for (let row = terminal.rows - 1; row >= 0; row--) {
+                    const line = buf.getLine(buf.viewportY + row);
+                    if (!line) continue;
+                    const text = line.translateToString(true);
+                    if (text.lastIndexOf('$') >= 0) {
+                        return { row, col: text.lastIndexOf('$') };
+                    }
+                }
+                return null;
+            }
+
+            function renderOverlay() {
+                if (!pendingText) {
+                    overlay.style.display = 'none';
+                    return;
+                }
+                const prompt = findPromptRow();
+                if (!prompt) return;
+
+                const dims = terminal._core._renderService.dimensions;
+                const cellW = dims.css.cell.width;
+                const cellH = dims.css.cell.height;
+                const startCol = prompt.col + 2; // after "$ "
+
+                overlay.style.left = '0px';
+                overlay.style.top = (prompt.row * cellH) + 'px';
+                overlay.innerHTML = '';
+
+                // Line div
+                const lineDiv = document.createElement('div');
+                lineDiv.style.cssText = 'position:absolute;pointer-events:none';
+                lineDiv.style.backgroundColor = '#0d1117';
+                lineDiv.style.left = (startCol * cellW) + 'px';
+                lineDiv.style.top = '0px';
+                lineDiv.style.width = ((terminal.cols - startCol) * cellW) + 'px';
+                lineDiv.style.height = (cellH + 1) + 'px';
+                lineDiv.style.lineHeight = cellH + 'px';
+
+                for (let i = 0; i < pendingText.length; i++) {
+                    const span = document.createElement('span');
+                    span.style.cssText = "position:absolute;display:inline-block;text-align:center;-webkit-font-smoothing:antialiased;text-rendering:geometricPrecision;font-feature-settings:'liga' 0,'calt' 0";
+                    span.style.left = (i * cellW) + 'px';
+                    span.style.width = cellW + 'px';
+                    span.style.fontFamily = terminal.options.fontFamily;
+                    span.style.fontSize = terminal.options.fontSize + 'px';
+                    span.style.color = '#c9d1d9';
+                    span.textContent = pendingText[i];
+                    lineDiv.appendChild(span);
+                }
+                overlay.appendChild(lineDiv);
+
+                // Cursor
+                const cursor = document.createElement('span');
+                cursor.style.cssText = 'position:absolute;display:inline-block';
+                cursor.style.left = ((startCol + pendingText.length) * cellW) + 'px';
+                cursor.style.top = '0px';
+                cursor.style.width = cellW + 'px';
+                cursor.style.height = cellH + 'px';
+                cursor.style.backgroundColor = '#58a6ff';
+                overlay.appendChild(cursor);
+
+                overlay.style.display = '';
+            }
+
+            // Simulated 500ms RTT
+            const SIMULATED_RTT = 500;
+
+            terminal.onData((data) => {
+                if (data === '\r') {
+                    // Enter: clear overlay, send to "server"
+                    const text = pendingText;
+                    pendingText = '';
+                    overlay.style.display = 'none';
+                    overlay.innerHTML = '';
+
+                    // Simulate server processing
+                    setTimeout(() => {
+                        terminal.write('\r\n');
+                        if (text.trim()) {
+                            terminal.write(`echo: ${text}\r\n`);
+                        }
+                        terminal.write('$ ');
+                    }, SIMULATED_RTT);
+                } else if (data === '\x7f') {
+                    // Backspace
+                    if (pendingText.length > 0) {
+                        pendingText = pendingText.slice(0, -1);
+                        renderOverlay();
+                        // Also send to server (delayed)
+                        setTimeout(() => {
+                            terminal.write('\b \b');
+                        }, SIMULATED_RTT);
+                    }
+                } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
+                    // Printable character — instant overlay
+                    pendingText += data;
+                    renderOverlay();
+
+                    // Simulate server echo arriving later
+                    const char = data;
+                    setTimeout(() => {
+                        terminal.write(char);
+                    }, SIMULATED_RTT);
+                }
+            });
+        };
+    </script>
+</body>
+</html>
