@@ -1810,6 +1810,7 @@ class ClaudemanApp {
     // (not at buffer.cursorY, which reflects Ink's internal cursor position)
     this._localEchoOverlay = null;  // created after terminal.open()
     this._localEchoEnabled = false; // true when setting on + session active
+    this._restoringFlushedState = false; // true during selectSession buffer load — protects flushed Maps
 
     // Accessibility: Focus trap for modals
     this.activeFocusTrap = null;
@@ -2258,21 +2259,33 @@ class ClaudemanApp {
             return;
           }
           if (data.charCodeAt(0) < 32) {
-            // Skip xterm-generated terminal responses (OSC color queries, etc.).
-            // These arrive via triggerDataEvent from _handleColorEvent when the
-            // terminal buffer is loaded and contain escape sequences like \x1b]10;rgb:...\x07.
+            // Skip xterm-generated terminal responses.
+            // These arrive via triggerDataEvent when the terminal processes
+            // buffer data (DA responses, OSC color queries, mode reports, etc.).
             // They are NOT user input and must not clear flushed text state.
-            if (data.length > 1 && data.charCodeAt(0) === 27 && data.charCodeAt(1) === 93) {
-              // OSC sequence (\x1b]) — terminal response, send to PTY but
-              // don't clear overlay/flushed state (not user input)
+            // Covers: CSI (\x1b[), OSC (\x1b]), DCS (\x1bP), APC (\x1b_),
+            // PM (\x1b^), SOS (\x1bX), and any other multi-byte ESC sequence.
+            // Single-byte ESC (user pressing Escape) still falls through to
+            // the control char handler below.
+            if (data.length > 1 && data.charCodeAt(0) === 27) {
+              // Multi-byte escape sequence — forward to PTY without clearing
+              // overlay/flushed state (terminal response, not user input)
               this._pendingInput += data;
               flushInput();
               return;
             }
-            // Control chars (Ctrl+C, escape sequences): send buffered text + control char immediately
+            // During buffer load (tab switch), stray control chars from
+            // terminal response processing must not wipe the flushed state
+            // that selectSession() is actively restoring.
+            if (this._restoringFlushedState) {
+              this._pendingInput += data;
+              flushInput();
+              return;
+            }
+            // Control chars (Ctrl+C, single ESC): send buffered text + control char immediately
             const text = this._localEchoOverlay?.pendingText || '';
             this._localEchoOverlay?.clear();
-            // Clear flushed offset and text — control chars (Ctrl+C, Escape, arrows) change
+            // Clear flushed offset and text — control chars (Ctrl+C, Escape) change
             // cursor position or abort readline, making flushed text tracking invalid.
             this._flushedOffsets?.delete(this.activeSessionId);
             this._flushedTexts?.delete(this.activeSessionId);
@@ -4834,6 +4847,13 @@ class ClaudemanApp {
     // Load terminal buffer for this session
     // Show cached content instantly while fetching fresh data in background.
     // Use tail mode for faster initial load (256KB is enough for recent visible content).
+    //
+    // Protect flushed state during buffer load: terminal.write() can trigger
+    // xterm.js onData responses (DA, OSC, etc.) that would otherwise clear
+    // the flushed Maps via the control char handler.  The multi-byte ESC
+    // filter catches most cases, but _restoringFlushedState provides a
+    // belt-and-suspenders guard for any edge cases.
+    this._restoringFlushedState = true;
     try {
       // Instant cache restore — show previous buffer immediately while network fetch runs
       const cachedBuffer = this.terminalBufferCache.get(sessionId);
@@ -4846,7 +4866,7 @@ class ClaudemanApp {
 
       const tailSize = 256 * 1024;
       const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${tailSize}`);
-      if (selectGen !== this._selectGeneration) return; // stale — newer selectSession won
+      if (selectGen !== this._selectGeneration) { this._restoringFlushedState = false; return; }
       const data = await res.json();
 
       if (data.terminalBuffer) {
@@ -4863,7 +4883,7 @@ class ClaudemanApp {
           }
           // Use chunked write for large buffers to avoid UI jank
           await this.chunkedTerminalWrite(data.terminalBuffer);
-          if (selectGen !== this._selectGeneration) return; // stale — skip post-write UI updates
+          if (selectGen !== this._selectGeneration) { this._restoringFlushedState = false; return; }
           // Ensure terminal is scrolled to bottom after buffer load
           this.terminal.scrollToBottom();
         }
@@ -4880,6 +4900,9 @@ class ClaudemanApp {
         this.terminal.clear();
         this.terminal.reset();
       }
+
+      // Buffer load complete — drop the guard so user input clears state normally
+      this._restoringFlushedState = false;
 
       // Restore flushed offset and text for this session so the overlay positions
       // correctly even before the PTY echo arrives in the terminal buffer.
@@ -4963,6 +4986,7 @@ class ClaudemanApp {
       this.terminal.focus();
       this.terminal.scrollToBottom();
     } catch (err) {
+      this._restoringFlushedState = false;
       console.error('Failed to load session terminal:', err);
     }
   }
