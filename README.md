@@ -43,57 +43,12 @@ Stop with Ctrl+C.
 
 **Linux (systemd):**
 ```bash
-# The install script offers this automatically, or set it up manually:
-mkdir -p ~/.config/systemd/user
-cat > ~/.config/systemd/user/claudeman-web.service << EOF
-[Unit]
-Description=Claudeman Web Server
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=$(which node) $(which claudeman) web
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=default.target
-EOF
-
-systemctl --user daemon-reload
-systemctl --user enable --now claudeman-web
-loginctl enable-linger $USER  # survive logout
+mkdir -p ~/.config/systemd/user && printf '[Unit]\nDescription=Claudeman Web Server\nAfter=network.target\n\n[Service]\nType=simple\nExecStart=%s %s/dist/index.js web\nRestart=always\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n' "$(which node)" "$HOME/.claudeman/app" > ~/.config/systemd/user/claudeman-web.service && systemctl --user daemon-reload && systemctl --user enable --now claudeman-web && loginctl enable-linger $USER
 ```
 
 **macOS (launchd):**
 ```bash
-mkdir -p ~/Library/LaunchAgents
-cat > ~/Library/LaunchAgents/com.claudeman.web.plist << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.claudeman.web</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>$(which node)</string>
-        <string>$(which claudeman)</string>
-        <string>web</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>/tmp/claudeman.log</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/claudeman.log</string>
-</dict>
-</plist>
-EOF
-
-launchctl load ~/Library/LaunchAgents/com.claudeman.web.plist
+mkdir -p ~/Library/LaunchAgents && printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>com.claudeman.web</string><key>ProgramArguments</key><array><string>%s</string><string>%s/dist/index.js</string><string>web</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>StandardOutPath</key><string>/tmp/claudeman.log</string><key>StandardErrorPath</key><string>/tmp/claudeman.log</string></dict></plist>\n' "$(which node)" "$HOME/.claudeman/app" > ~/Library/LaunchAgents/com.claudeman.web.plist && launchctl load ~/Library/LaunchAgents/com.claudeman.web.plist
 ```
 </details>
 
