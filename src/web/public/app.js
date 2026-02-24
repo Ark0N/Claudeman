@@ -590,6 +590,246 @@ const SwipeHandler = {
 };
 
 // ============================================================================
+// Voice Input (Web Speech API)
+// ============================================================================
+
+/**
+ * VoiceInput - Speech-to-text using the Web Speech API.
+ * Toggle mode: tap mic to start, tap again to stop. Auto-stops after silence.
+ * Shows interim transcription in a floating preview overlay.
+ * Inserts final text into the active session (user presses Enter to submit).
+ */
+const VoiceInput = {
+  recognition: null,
+  isRecording: false,
+  supported: false,
+  silenceTimeout: null,
+  previewEl: null,
+  _lastTranscript: '',
+  _stabilityTimer: null,
+  _accumulatedFinal: '',
+
+  init() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    this.supported = !!SR;
+    if (!this.supported) return;
+
+    this.recognition = new SR();
+    this.recognition.continuous = false;
+    this.recognition.interimResults = true;
+    this.recognition.lang = 'en-US';
+    this.recognition.maxAlternatives = 1;
+
+    this.recognition.onresult = (e) => this._onResult(e);
+    this.recognition.onerror = (e) => this._onError(e);
+    this.recognition.onend = () => this._onEnd();
+
+    // Show voice buttons now that we know it's supported
+    this._showButtons();
+  },
+
+  toggle() {
+    if (this.isRecording) {
+      this.stop();
+    } else {
+      this.start();
+    }
+  },
+
+  start() {
+    if (!this.supported || this.isRecording) return;
+    if (!app.activeSessionId) {
+      app.showToast('No active session', 'warning');
+      return;
+    }
+    this.isRecording = true;
+    this._accumulatedFinal = '';
+    this._lastTranscript = '';
+    this._updateButtons('recording');
+    this._showPreview('Listening...');
+    try {
+      this.recognition.start();
+    } catch (_e) {
+      // Already started — ignore
+    }
+    this._resetSilenceTimeout();
+    // Haptic feedback on mobile
+    if (navigator.vibrate) navigator.vibrate(50);
+  },
+
+  stop() {
+    if (!this.isRecording) return;
+    this.isRecording = false;
+    clearTimeout(this.silenceTimeout);
+    clearTimeout(this._stabilityTimer);
+    this.silenceTimeout = null;
+    this._stabilityTimer = null;
+    this._updateButtons('idle');
+    this._hidePreview();
+    try {
+      this.recognition.stop();
+    } catch (_e) {
+      // Already stopped — ignore
+    }
+    // Haptic feedback on mobile
+    if (navigator.vibrate) navigator.vibrate([30, 50, 30]);
+  },
+
+  _onResult(event) {
+    this._resetSilenceTimeout();
+    let interim = '';
+    let finalText = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const transcript = event.results[i][0].transcript;
+      if (event.results[i].isFinal) {
+        finalText += transcript;
+      } else {
+        interim += transcript;
+      }
+    }
+
+    if (finalText) {
+      this._accumulatedFinal += finalText;
+      this._hidePreview();
+      this._insertText(this._accumulatedFinal);
+      this.stop();
+    } else if (interim) {
+      const display = this._accumulatedFinal + interim;
+      this._showPreview(display);
+      // iOS Safari workaround: isFinal is always false.
+      // Detect when interim results stop changing for 750ms → treat as final.
+      this._iosStabilityCheck(interim);
+    }
+  },
+
+  _onError(event) {
+    const wasRecording = this.isRecording;
+    this.stop();
+    if (!wasRecording) return;
+
+    switch (event.error) {
+      case 'not-allowed':
+        app.showToast('Microphone access denied. Check browser settings.', 'error');
+        break;
+      case 'no-speech':
+        // Silent — auto-stop is enough feedback
+        break;
+      case 'network':
+        app.showToast('Voice input requires internet connection.', 'error');
+        break;
+      case 'aborted':
+        // User cancelled — no message needed
+        break;
+      default:
+        app.showToast('Voice input error: ' + event.error, 'error');
+    }
+  },
+
+  _onEnd() {
+    // Recognition ended (browser auto-stopped or we called stop())
+    if (this.isRecording) {
+      // Ended unexpectedly while still recording — finalize any accumulated text
+      if (this._accumulatedFinal) {
+        this._insertText(this._accumulatedFinal);
+      }
+      this.stop();
+    }
+  },
+
+  _insertText(text) {
+    if (!app.activeSessionId || !text.trim()) return;
+    // Send text to session input (user presses Enter to submit)
+    app.sendInput(text.trim());
+  },
+
+  _resetSilenceTimeout() {
+    clearTimeout(this.silenceTimeout);
+    this.silenceTimeout = setTimeout(() => {
+      if (this.isRecording) {
+        // Finalize any accumulated text before stopping
+        if (this._accumulatedFinal) {
+          this._insertText(this._accumulatedFinal);
+        }
+        this.stop();
+      }
+    }, 5000);
+  },
+
+  _iosStabilityCheck(transcript) {
+    if (transcript !== this._lastTranscript) {
+      this._lastTranscript = transcript;
+      clearTimeout(this._stabilityTimer);
+      this._stabilityTimer = setTimeout(() => {
+        if (this.isRecording) {
+          const finalText = this._accumulatedFinal + transcript;
+          this._hidePreview();
+          this._insertText(finalText);
+          this.stop();
+        }
+      }, 750);
+    }
+  },
+
+  _showPreview(text) {
+    if (!this.previewEl) {
+      this.previewEl = document.createElement('div');
+      this.previewEl.className = 'voice-preview';
+      this.previewEl.setAttribute('aria-live', 'polite');
+      document.body.appendChild(this.previewEl);
+    }
+    this.previewEl.textContent = text || 'Listening...';
+    this.previewEl.style.display = '';
+  },
+
+  _hidePreview() {
+    if (this.previewEl) {
+      this.previewEl.style.display = 'none';
+      this.previewEl.textContent = '';
+    }
+  },
+
+  _updateButtons(state) {
+    const isRecording = state === 'recording';
+    // Desktop button
+    const desktopBtn = document.getElementById('voiceInputBtn');
+    if (desktopBtn) {
+      desktopBtn.classList.toggle('recording', isRecording);
+      desktopBtn.setAttribute('aria-pressed', String(isRecording));
+      desktopBtn.setAttribute('aria-label', isRecording ? 'Stop voice input' : 'Start voice input');
+      desktopBtn.title = isRecording ? 'Stop voice input (Ctrl+Shift+V)' : 'Voice input (Ctrl+Shift+V)';
+    }
+    // Mobile button (inside accessory bar)
+    const mobileBtn = document.querySelector('[data-action="voice"]');
+    if (mobileBtn) {
+      mobileBtn.classList.toggle('recording', isRecording);
+      mobileBtn.setAttribute('aria-pressed', String(isRecording));
+      mobileBtn.setAttribute('aria-label', isRecording ? 'Stop voice input' : 'Start voice input');
+    }
+  },
+
+  _showButtons() {
+    // Desktop: show the toolbar button
+    const desktopBtn = document.getElementById('voiceInputBtn');
+    if (desktopBtn) desktopBtn.style.display = '';
+  },
+
+  /** Cleanup on SSE reconnect or page unload */
+  cleanup() {
+    if (this.isRecording) this.stop();
+    if (this.previewEl) {
+      this.previewEl.remove();
+      this.previewEl = null;
+    }
+    clearTimeout(this.silenceTimeout);
+    clearTimeout(this._stabilityTimer);
+    this.silenceTimeout = null;
+    this._stabilityTimer = null;
+    this._accumulatedFinal = '';
+    this._lastTranscript = '';
+  }
+};
+
+// ============================================================================
 // Mobile Keyboard Accessory Bar
 // ============================================================================
 
@@ -1010,7 +1250,7 @@ function _zl_makeLine(text, leftPx, topPx, widthPx, cellH, cellW, font, terminal
   for (const ch of text) {
     const charWidth = _zl_charCellWidth(ch, terminal);
     const span = document.createElement('span');
-    span.style.cssText = "position:absolute;display:inline-block;text-align:center;pointer-events:none;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:geometricPrecision;font-feature-settings:'liga' 0,'calt' 0";
+    span.style.cssText = "position:absolute;display:inline-block;text-align:center;pointer-events:none;font-feature-settings:'liga' 0,'calt' 0";
     span.style.left = (colOffset * cellW) + 'px';
     span.style.width = (charWidth * cellW) + 'px';
     span.style.fontFamily = font.fontFamily;
