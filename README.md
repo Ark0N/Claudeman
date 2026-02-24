@@ -85,9 +85,9 @@ The most responsive Claude Code experience on any phone. Full xterm.js terminal 
 | Tiny text, no context | Full xterm.js terminal, responsive layout |
 | No session management | Swipe between sessions, status badges |
 | No notifications | Push alerts for approvals and idle |
-| Manual reconnect after drops | tmux persistence — sessions survive anything |
+| Manual reconnect after drops | tmux persistence |
 | No agent visibility | Background agents in real-time |
-| Copy-paste slash commands | One-tap `/init`, `/clear`, `/compact` buttons |
+| Copy-paste slash commands | One-tap `/init` |
 
 </td>
 </tr>
