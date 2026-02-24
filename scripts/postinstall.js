@@ -208,34 +208,42 @@ if (claudeFound) {
 
 // ----------------------------------------------------------------------------
 // 4. Copy xterm vendor files for dev mode (src/web/public/vendor/)
+//    Skip for global installs — dist/ already has built vendor files
 // ----------------------------------------------------------------------------
 
-try {
-    const require = createRequire(import.meta.url);
-    const xtermDir = join(require.resolve('xterm'), '..', '..');
-    const fitDir = join(require.resolve('xterm-addon-fit'), '..', '..');
-    const vendorDir = join(import.meta.dirname, '..', 'src', 'web', 'public', 'vendor');
+const srcDir = join(import.meta.dirname, '..', 'src');
+const isGlobalInstall = !existsSync(srcDir);
 
-    const { mkdirSync, copyFileSync } = await import('fs');
-    mkdirSync(vendorDir, { recursive: true });
-    copyFileSync(join(xtermDir, 'css', 'xterm.css'), join(vendorDir, 'xterm.css'));
-
-    // Minify xterm JS for dev vendor dir (npm packages don't ship .min.js)
+if (isGlobalInstall) {
+    console.log(colors.dim('  Skipping vendor copy (global install — dist/ already has built assets)'));
+} else {
     try {
-        execSync(`npx esbuild "${join(xtermDir, 'lib', 'xterm.js')}" --minify --outfile="${join(vendorDir, 'xterm.min.js')}"`, { stdio: 'pipe' });
-        execSync(`npx esbuild "${join(fitDir, 'lib', 'xterm-addon-fit.js')}" --minify --outfile="${join(vendorDir, 'xterm-addon-fit.min.js')}"`, { stdio: 'pipe' });
-        console.log(colors.green('✓ xterm vendor files copied to src/web/public/vendor/'));
-    } catch {
-        // Fallback: copy unminified
-        copyFileSync(join(xtermDir, 'lib', 'xterm.js'), join(vendorDir, 'xterm.min.js'));
-        copyFileSync(join(fitDir, 'lib', 'xterm-addon-fit.js'), join(vendorDir, 'xterm-addon-fit.min.js'));
-        console.log(colors.green('✓ xterm vendor files copied') + colors.dim(' (unminified — esbuild not available)'));
+        const require = createRequire(import.meta.url);
+        const xtermDir = join(require.resolve('xterm'), '..', '..');
+        const fitDir = join(require.resolve('xterm-addon-fit'), '..', '..');
+        const vendorDir = join(srcDir, 'web', 'public', 'vendor');
+
+        const { mkdirSync, copyFileSync } = await import('fs');
+        mkdirSync(vendorDir, { recursive: true });
+        copyFileSync(join(xtermDir, 'css', 'xterm.css'), join(vendorDir, 'xterm.css'));
+
+        // Minify xterm JS for dev vendor dir (npm packages don't ship .min.js)
+        try {
+            execSync(`npx esbuild "${join(xtermDir, 'lib', 'xterm.js')}" --minify --outfile="${join(vendorDir, 'xterm.min.js')}"`, { stdio: 'pipe' });
+            execSync(`npx esbuild "${join(fitDir, 'lib', 'xterm-addon-fit.js')}" --minify --outfile="${join(vendorDir, 'xterm-addon-fit.min.js')}"`, { stdio: 'pipe' });
+            console.log(colors.green('✓ xterm vendor files copied to src/web/public/vendor/'));
+        } catch {
+            // Fallback: copy unminified
+            copyFileSync(join(xtermDir, 'lib', 'xterm.js'), join(vendorDir, 'xterm.min.js'));
+            copyFileSync(join(fitDir, 'lib', 'xterm-addon-fit.js'), join(vendorDir, 'xterm-addon-fit.min.js'));
+            console.log(colors.green('✓ xterm vendor files copied') + colors.dim(' (unminified — esbuild not available)'));
+        }
+    } catch (err) {
+        hasWarnings = true;
+        console.log(colors.yellow('⚠ Failed to copy xterm vendor files'));
+        console.log(colors.dim(`  ${err.message}`));
+        console.log(colors.dim('  Dev server may fail to load xterm.js — run: npm run build'));
     }
-} catch (err) {
-    hasWarnings = true;
-    console.log(colors.yellow('⚠ Failed to copy xterm vendor files'));
-    console.log(colors.dim(`  ${err.message}`));
-    console.log(colors.dim('  Dev server may fail to load xterm.js — run: npm run build'));
 }
 
 // ----------------------------------------------------------------------------
@@ -250,9 +258,14 @@ if (hasErrors) {
 }
 
 console.log(colors.bold('Next steps:'));
-console.log(colors.dim('  1. Build:  ') + colors.cyan('npm run build'));
-console.log(colors.dim('  2. Start:  ') + colors.cyan('claudeman web'));
-console.log(colors.dim('  3. Open:   ') + colors.cyan('http://localhost:3000'));
+if (isGlobalInstall) {
+    console.log(colors.dim('  1. Start:  ') + colors.cyan('claudeman web'));
+    console.log(colors.dim('  2. Open:   ') + colors.cyan('http://localhost:3000'));
+} else {
+    console.log(colors.dim('  1. Build:  ') + colors.cyan('npm run build'));
+    console.log(colors.dim('  2. Start:  ') + colors.cyan('claudeman web'));
+    console.log(colors.dim('  3. Open:   ') + colors.cyan('http://localhost:3000'));
+}
 
 if (hasWarnings) {
     console.log('');
