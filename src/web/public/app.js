@@ -1017,6 +1017,8 @@ function _zl_makeLine(text, leftPx, topPx, widthPx, cellH, cellW, font, terminal
     span.style.fontSize = font.fontSize;
     span.style.fontWeight = font.fontWeight;
     span.style.color = font.color;
+    span.style.height = cellH + 'px';
+    span.style.lineHeight = cellH + 'px';
     if (font.letterSpacing) span.style.letterSpacing = font.letterSpacing;
     span.textContent = ch;
     el.appendChild(span);
