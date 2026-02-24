@@ -24,27 +24,19 @@
 
 ## Quick Start
 
-**Requirements:** Node.js 18+, [Claude CLI](https://docs.anthropic.com/en/docs/claude-code/getting-started), tmux (`apt install tmux` / `brew install tmux`)
-
-```bash
-npm install -g claudeman
-claudeman web
-# Open http://localhost:3000 — press Ctrl+Enter to start your first session
-```
-
-`npm install -g` installs the `claudeman` CLI globally. It does **not** start a service — you run `claudeman web` to start the web server. Stop it with Ctrl+C.
-
-<details>
-<summary><strong>Full installer (auto-installs dependencies)</strong></summary>
-
-If you don't have Node.js or tmux yet, the install script handles everything:
-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Ark0N/claudeman/master/install.sh | bash
 ```
 
-This installs Node.js, tmux, and Claude CLI if missing, clones Claudeman to `~/.claudeman/app`, builds it, and optionally sets up a systemd service (Linux) for auto-start. After install, run `claudeman web`.
-</details>
+This installs Node.js, tmux, and Claude CLI if missing, clones Claudeman to `~/.claudeman/app`, builds it, and optionally sets up a systemd service (Linux) for auto-start. After install:
+
+```bash
+claudeman web
+# Open http://localhost:3000 — press Ctrl+Enter to start your first session
+```
+
+Stop with Ctrl+C.
+
 
 <details>
 <summary><strong>Run as a background service</strong></summary>
