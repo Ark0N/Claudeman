@@ -261,9 +261,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // cold-start (common on macOS first run) completes before we query it.
       // -d: don't attach, -s: session name, -c: starting directory
       // -x/-y: initial window size
+      //
+      // CRITICAL: set remain-on-exit BEFORE spawning the command. If the command
+      // exits quickly (e.g. Claude CLI not found), tmux destroys the session
+      // before we can query it. Setting it as a server default first prevents this.
       const shellCmd = fullCmd.replace(/'/g, "'\\''");
       execSync(
-        `tmux new-session -ds "${muxName}" -c "${workingDir}" -x 120 -y 40 bash -c '${shellCmd}'`,
+        `tmux set-option -g remain-on-exit on 2>/dev/null; tmux new-session -ds "${muxName}" -c "${workingDir}" -x 120 -y 40 bash -c '${shellCmd}'`,
         { cwd: workingDir, timeout: EXEC_TIMEOUT_MS, stdio: 'ignore' }
       );
 
@@ -278,11 +282,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         // Disable tmux status bar — Claudeman's web UI provides session info
         execAsync(`tmux set-option -t "${muxName}" status off`, { timeout: EXEC_TIMEOUT_MS })
           .then(() => {}).catch(() => { /* Non-critical — session still works with status bar */ }),
-        // Keep pane alive after command exits — prevents session loss when Claude exits.
-        // Without this, tmux destroys the session entirely, losing all buffer/history.
-        // With remain-on-exit, the pane shows [Exited] and can be respawned.
+        // Override global remain-on-exit with session-level setting
         execAsync(`tmux set-option -t "${muxName}" remain-on-exit on`, { timeout: EXEC_TIMEOUT_MS })
-          .then(() => {}).catch(() => { /* Non-critical — old behavior (session destroyed on exit) */ }),
+          .then(() => {}).catch(() => { /* Already set globally as fallback */ }),
       ];
 
       // Enable 24-bit true color passthrough — server-wide, set once per lifetime
