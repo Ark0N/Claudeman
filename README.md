@@ -94,7 +94,7 @@ The most responsive Claude Code experience on any phone. Full xterm.js terminal 
 </table>
 
 - **Swipe navigation** — left/right on the terminal to switch sessions (80px threshold, 300ms)
-- **Keyboard accessory bar** — `/init`, `/clear`, `/compact` quick-action buttons appear above the virtual keyboard with confirmation dialogs for destructive commands
+- **Keyboard accessory bar** — `/init`, `/clear`, `/compact` quick-action buttons above the virtual keyboard. Destructive commands (`/clear`, `/compact`) require a double-press to confirm — first tap arms the button, second tap executes — so you never fire one by accident on a bumpy commute
 - **Smart keyboard handling** — toolbar and terminal shift up when keyboard opens (uses `visualViewport` API with 100px threshold for iOS address bar drift)
 - **Safe area support** — respects iPhone notch and home indicator via `env(safe-area-inset-*)`
 - **44px touch targets** — all buttons meet iOS Human Interface Guidelines minimum sizes
