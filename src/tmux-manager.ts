@@ -22,7 +22,7 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { spawn, execSync, exec } from 'node:child_process';
+import { execSync, exec } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execAsync = promisify(exec);
@@ -47,6 +47,10 @@ const EXEC_TIMEOUT_MS = 5000;
 
 /** Delay after tmux session creation — enough for detached tmux to be queryable */
 const TMUX_CREATION_WAIT_MS = 100;
+
+/** Max retries for getPanePid — tmux server cold-start (e.g. macOS) may need extra time */
+const GET_PID_MAX_RETRIES = 5;
+const GET_PID_RETRY_MS = 200;
 
 /** Delay after tmux kill command (200ms) */
 const TMUX_KILL_WAIT_MS = 200;
@@ -253,25 +257,17 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // Build the full command to run inside tmux
       const fullCmd = `${pathExport}${envExports} && ${cmd}`;
 
-      // Create tmux session in detached mode
+      // Create tmux session in detached mode using execSync so tmux server
+      // cold-start (common on macOS first run) completes before we query it.
       // -d: don't attach, -s: session name, -c: starting directory
       // -x/-y: initial window size
-      const tmuxProcess = spawn('tmux', [
-        'new-session',
-        '-ds', muxName,
-        '-c', workingDir,
-        '-x', '120',
-        '-y', '40',
-        'bash', '-c', fullCmd,
-      ], {
-        cwd: workingDir,
-        detached: true,
-        stdio: 'ignore',
-      });
+      const shellCmd = fullCmd.replace(/'/g, "'\\''");
+      execSync(
+        `tmux new-session -ds "${muxName}" -c "${workingDir}" -x 120 -y 40 bash -c '${shellCmd}'`,
+        { cwd: workingDir, timeout: EXEC_TIMEOUT_MS, stdio: 'ignore' }
+      );
 
-      tmuxProcess.unref();
-
-      // Wait for tmux session to start
+      // Wait for tmux session to be queryable
       await new Promise(resolve => setTimeout(resolve, TMUX_CREATION_WAIT_MS));
 
       // Non-critical tmux config — run in parallel to avoid blocking event loop.
@@ -302,8 +298,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // to complete before the session is usable. Errors are already swallowed.
       void Promise.all(configPromises);
 
-      // Get the PID of the pane process
-      const pid = this.getPanePid(muxName);
+      // Get the PID of the pane process (retry for tmux server cold-start)
+      let pid = this.getPanePid(muxName);
+      for (let i = 0; !pid && i < GET_PID_MAX_RETRIES; i++) {
+        await new Promise(resolve => setTimeout(resolve, GET_PID_RETRY_MS));
+        pid = this.getPanePid(muxName);
+      }
       if (!pid) {
         throw new Error('Failed to get tmux pane PID');
       }
