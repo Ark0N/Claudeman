@@ -72,9 +72,9 @@ The most responsive Claude Code experience on any phone. Full xterm.js terminal 
 
 <table>
 <tr>
-<td width="300" align="center" valign="top">
+<td width="440" align="center" valign="top">
   <br>
-  <img src="docs/screenshots/mobile-keyboard-open.png" alt="Mobile — keyboard open" width="280">
+  <img src="docs/screenshots/mobile-keyboard-open.png" alt="Mobile — keyboard open" width="420">
   <br><br>
 </td>
 <td valign="top">
