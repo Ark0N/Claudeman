@@ -933,8 +933,39 @@ function _zl_readTextAfterPrompt(terminal, prompt, offset) {
   } catch { return ''; }
 }
 
+// Get visual cell width of a character (CJK wide chars = 2, others = 1)
+function _zl_charCellWidth(ch, terminal) {
+  if (terminal?.unicode?.getStringCellWidth) {
+    return terminal.unicode.getStringCellWidth(ch);
+  }
+  const code = ch.codePointAt(0);
+  if (code >= 0x1100 && (
+    (code <= 0x115F) || // Hangul Jamo
+    (code >= 0x2E80 && code <= 0x303E) || // CJK Radicals, Kangxi, Ideographic
+    (code >= 0x3040 && code <= 0x33BF) || // Hiragana, Katakana, Bopomofo, CJK Compat
+    (code >= 0x3400 && code <= 0x4DBF) || // CJK Unified Ext A
+    (code >= 0x4E00 && code <= 0xA4CF) || // CJK Unified, Yi
+    (code >= 0xA960 && code <= 0xA97C) || // Hangul Jamo Extended-A
+    (code >= 0xAC00 && code <= 0xD7A3) || // Hangul Syllables
+    (code >= 0xF900 && code <= 0xFAFF) || // CJK Compat Ideographs
+    (code >= 0xFE30 && code <= 0xFE6F) || // CJK Compat Forms
+    (code >= 0xFF01 && code <= 0xFF60) || // Fullwidth Forms
+    (code >= 0xFFE0 && code <= 0xFFE6) || // Fullwidth Signs
+    (code >= 0x1F000 && code <= 0x1FBFF) || // Mahjong, Domino, Emoji
+    (code >= 0x20000 && code <= 0x2FFFF) || // CJK Unified Ext B-F
+    (code >= 0x30000 && code <= 0x3FFFF)    // CJK Unified Ext G+
+  )) return 2;
+  return 1;
+}
+
+function _zl_stringCellWidth(str, terminal) {
+  let w = 0;
+  for (const ch of str) w += _zl_charCellWidth(ch, terminal);
+  return w;
+}
+
 function _zl_renderOverlay(container, params) {
-  const { lines, startCol, totalCols, cellW, cellH, promptRow, font, showCursor, cursorColor } = params;
+  const { lines, startCol, totalCols, cellW, cellH, promptRow, font, showCursor, cursorColor, terminal } = params;
   container.style.left = '0px';
   container.style.top = (promptRow * cellH) + 'px';
   container.innerHTML = '';
@@ -943,13 +974,13 @@ function _zl_renderOverlay(container, params) {
     const leftPx = i === 0 ? startCol * cellW : 0;
     const widthPx = i === 0 ? (fullWidthPx - leftPx) : fullWidthPx;
     const topPx = i * cellH;
-    const lineEl = _zl_makeLine(lines[i], leftPx, topPx, widthPx, cellH, cellW, font);
+    const lineEl = _zl_makeLine(lines[i], leftPx, topPx, widthPx, cellH, cellW, font, terminal);
     container.appendChild(lineEl);
   }
   if (showCursor) {
     const lastLine = lines[lines.length - 1];
     const lastLineLeft = lines.length === 1 ? startCol : 0;
-    const cursorCol = lastLineLeft + lastLine.length;
+    const cursorCol = lastLineLeft + _zl_stringCellWidth(lastLine, terminal);
     if (cursorCol < totalCols) {
       const cursor = document.createElement('span');
       cursor.style.cssText = 'position:absolute;display:inline-block';
@@ -964,7 +995,7 @@ function _zl_renderOverlay(container, params) {
   container.style.display = '';
 }
 
-function _zl_makeLine(text, leftPx, topPx, widthPx, cellH, cellW, font) {
+function _zl_makeLine(text, leftPx, topPx, widthPx, cellH, cellW, font, terminal) {
   const el = document.createElement('div');
   el.style.cssText = 'position:absolute;pointer-events:none';
   el.style.backgroundColor = font.backgroundColor;
@@ -973,18 +1004,21 @@ function _zl_makeLine(text, leftPx, topPx, widthPx, cellH, cellW, font) {
   el.style.width = widthPx + 'px';
   el.style.height = (cellH + 1) + 'px';
   el.style.lineHeight = cellH + 'px';
-  for (let i = 0; i < text.length; i++) {
+  let colOffset = 0;
+  for (const ch of text) {
+    const charWidth = _zl_charCellWidth(ch, terminal);
     const span = document.createElement('span');
     span.style.cssText = "position:absolute;display:inline-block;text-align:center;pointer-events:none;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:geometricPrecision;font-feature-settings:'liga' 0,'calt' 0";
-    span.style.left = (i * cellW) + 'px';
-    span.style.width = cellW + 'px';
+    span.style.left = (colOffset * cellW) + 'px';
+    span.style.width = (charWidth * cellW) + 'px';
     span.style.fontFamily = font.fontFamily;
     span.style.fontSize = font.fontSize;
     span.style.fontWeight = font.fontWeight;
     span.style.color = font.color;
     if (font.letterSpacing) span.style.letterSpacing = font.letterSpacing;
-    span.textContent = text[i];
+    span.textContent = ch;
     el.appendChild(span);
+    colOffset += charWidth;
   }
   return el;
 }
@@ -1192,11 +1226,15 @@ class ZerolagInputAddon {
       if (renderKey === this._lastRenderKey && this._overlay.style.display !== 'none') return;
       this._lastRenderKey = renderKey;
       const firstLineCols = Math.max(1, totalCols - startCol);
-      const lines = []; let remaining = displayText;
-      lines.push(remaining.slice(0, firstLineCols)); remaining = remaining.slice(firstLineCols);
-      while (remaining.length > 0) { lines.push(remaining.slice(0, totalCols)); remaining = remaining.slice(totalCols); }
+      const lines = []; const chars = [...displayText]; let ci = 0;
+      { let lineStr = '', lineCols = 0;
+        while (ci < chars.length) { const cw = _zl_charCellWidth(chars[ci], this._terminal); if (lineCols + cw > firstLineCols) break; lineStr += chars[ci]; lineCols += cw; ci++; }
+        lines.push(lineStr); }
+      while (ci < chars.length) { let lineStr = '', lineCols = 0;
+        while (ci < chars.length) { const cw = _zl_charCellWidth(chars[ci], this._terminal); if (lineCols + cw > totalCols) break; lineStr += chars[ci]; lineCols += cw; ci++; }
+        lines.push(lineStr); }
       const cursorColor = this._options.cursorColor ?? this._terminal.options.theme?.cursor ?? _ZL_DEFAULT_CURSOR;
-      _zl_renderOverlay(this._overlay, { lines, startCol, totalCols, cellW, cellH, promptRow: activePrompt.row, font: this._font, showCursor: this._options.showCursor, cursorColor });
+      _zl_renderOverlay(this._overlay, { lines, startCol, totalCols, cellW, cellH, promptRow: activePrompt.row, font: this._font, showCursor: this._options.showCursor, cursorColor, terminal: this._terminal });
     } catch {
       if (this._overlay) { this._overlay.innerHTML = ''; this._overlay.style.display = 'none'; }
     }
@@ -2009,6 +2047,14 @@ class ClaudemanApp {
 
     this.fitAddon = new FitAddon.FitAddon();
     this.terminal.loadAddon(this.fitAddon);
+
+    if (typeof Unicode11Addon !== 'undefined') {
+      try {
+        const unicode11Addon = new Unicode11Addon.Unicode11Addon();
+        this.terminal.loadAddon(unicode11Addon);
+        this.terminal.unicode.activeVersion = '11';
+      } catch (_e) { /* Unicode11 addon failed — default Unicode handling used */ }
+    }
 
     const container = document.getElementById('terminalContainer');
     this.terminal.open(container);
@@ -14364,6 +14410,14 @@ class ClaudemanApp {
 
       const fitAddon = new FitAddon.FitAddon();
       terminal.loadAddon(fitAddon);
+
+      if (typeof Unicode11Addon !== 'undefined') {
+        try {
+          const unicode11Addon = new Unicode11Addon.Unicode11Addon();
+          terminal.loadAddon(unicode11Addon);
+          terminal.unicode.activeVersion = '11';
+        } catch (_e) { /* Unicode11 addon failed */ }
+      }
 
       try {
         terminal.open(body);

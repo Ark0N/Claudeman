@@ -949,7 +949,7 @@ export class Session extends EventEmitter {
             cols: 120,
             rows: 40,
             cwd: this.workingDir,
-            env: { ...process.env, TERM: 'xterm-256color', COLORTERM: undefined, CLAUDECODE: undefined },
+            env: { ...process.env, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8', TERM: 'xterm-256color', COLORTERM: undefined, CLAUDECODE: undefined },
           });
 
           // Set claudeSessionId immediately since we passed --session-id to Claude
@@ -1016,6 +1016,8 @@ export class Session extends EventEmitter {
           cwd: this.workingDir,
           env: {
             ...process.env,
+            LANG: 'en_US.UTF-8',
+            LC_ALL: 'en_US.UTF-8',
             PATH: getAugmentedPath(),
             TERM: 'xterm-256color',
             COLORTERM: undefined,
@@ -1295,7 +1297,7 @@ export class Session extends EventEmitter {
             cols: 120,
             rows: 40,
             cwd: this.workingDir,
-            env: { ...process.env, TERM: 'xterm-256color', COLORTERM: undefined, CLAUDECODE: undefined },
+            env: { ...process.env, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8', TERM: 'xterm-256color', COLORTERM: undefined, CLAUDECODE: undefined },
           });
         } catch (spawnErr) {
           console.error('[Session] Failed to spawn PTY for shell mux attachment:', spawnErr);
@@ -1330,6 +1332,8 @@ export class Session extends EventEmitter {
           cwd: this.workingDir,
           env: {
             ...process.env,
+            LANG: 'en_US.UTF-8',
+            LC_ALL: 'en_US.UTF-8',
             TERM: 'xterm-256color',
             CLAUDEMAN_MUX: '1',
             CLAUDEMAN_SESSION_ID: this.id,
@@ -1458,6 +1462,8 @@ export class Session extends EventEmitter {
             cwd: this.workingDir,
             env: {
               ...process.env,
+              LANG: 'en_US.UTF-8',
+              LC_ALL: 'en_US.UTF-8',
               PATH: getAugmentedPath(),
               TERM: 'xterm-256color',
               COLORTERM: undefined,
