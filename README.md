@@ -70,21 +70,20 @@ Claudeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com
 
 The most responsive Claude Code experience on any phone. Full xterm.js terminal with local echo, swipe navigation, and a touch-optimized interface designed for real remote work.
 
-<table><tr><td width="40%" valign="top">
-  <img src="docs/screenshots/mobile-keyboard-open.png" alt="Mobile — keyboard open">
-</td><td width="60%" valign="top">
-
-| Terminal Apps | Claudeman Mobile |
-|:--------------|:-----------------|
-| 200-300ms input lag over remote | **Local echo — instant feedback** |
-| Tiny text, no context | Full xterm.js terminal, responsive layout |
-| No session management | Swipe between sessions, status badges |
-| No notifications | Push alerts for approvals and idle |
-| Manual reconnect after drops | tmux persistence — sessions survive anything |
-| No agent visibility | Background agents in real-time |
-| Copy-paste slash commands | One-tap `/init`, `/clear`, `/compact` buttons |
-
-</td></tr></table>
+<table>
+<tr>
+<td rowspan="8" width="320"><img src="docs/screenshots/mobile-keyboard-open.png" alt="Mobile — keyboard open" width="300"></td>
+<th>Terminal Apps</th>
+<th>Claudeman Mobile</th>
+</tr>
+<tr><td>200-300ms input lag over remote</td><td><b>Local echo — instant feedback</b></td></tr>
+<tr><td>Tiny text, no context</td><td>Full xterm.js terminal, responsive layout</td></tr>
+<tr><td>No session management</td><td>Swipe between sessions, status badges</td></tr>
+<tr><td>No notifications</td><td>Push alerts for approvals and idle</td></tr>
+<tr><td>Manual reconnect after drops</td><td>tmux persistence — sessions survive anything</td></tr>
+<tr><td>No agent visibility</td><td>Background agents in real-time</td></tr>
+<tr><td>Copy-paste slash commands</td><td>One-tap <code>/init</code>, <code>/clear</code>, <code>/compact</code> buttons</td></tr>
+</table>
 
 - **Swipe navigation** — left/right on the terminal to switch sessions (80px threshold, 300ms)
 - **Keyboard accessory bar** — `/init`, `/clear`, `/compact` quick-action buttons above the virtual keyboard. Destructive commands (`/clear`, `/compact`) require a double-press to confirm — first tap arms the button, second tap executes — so you never fire one by accident on a bumpy commute
