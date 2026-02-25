@@ -659,8 +659,13 @@ const VoiceInput = {
     this._showPreview('Listening...');
     try {
       this.recognition.start();
-    } catch (_e) {
-      // Already started — ignore
+    } catch (e) {
+      // InvalidStateError = already started — ignore. Other errors = genuine failure.
+      if (e.name !== 'InvalidStateError') {
+        this.stop();
+        app.showToast('Voice input failed to start: ' + e.message, 'error');
+        return;
+      }
     }
     this._resetSilenceTimeout();
     // Haptic feedback on mobile
@@ -749,7 +754,7 @@ const VoiceInput = {
   _insertText(text) {
     if (!app.activeSessionId || !text.trim()) return;
     // Send text to session input (user presses Enter to submit)
-    app.sendInput(text.trim());
+    app.sendInput(text.trim()).catch(() => {});
   },
 
   _resetSilenceTimeout() {

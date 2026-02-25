@@ -320,8 +320,8 @@ html.mobile-init .file-browser-panel {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
-    height: 32px;
+    width: 40px;
+    height: 40px;
     background: #1a2a3f;
     border: 1px solid rgba(59, 130, 246, 0.3);
     border-radius: 6px;

@@ -2006,8 +2006,15 @@ body {
 }
 
 @keyframes voice-pulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.1); opacity: 0.75; }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+  50% { box-shadow: 0 0 0 4px rgba(239, 68, 68, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-toolbar.btn-voice.recording,
+  .btn-voice-mobile.recording {
+    animation: none;
+  }
 }
 
 /* Voice preview overlay — shows interim transcription */
@@ -2025,9 +2032,8 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.1);
   font-size: 0.85rem;
   max-width: 80%;
-  white-space: nowrap;
+  max-height: 3.6em;
   overflow: hidden;
-  text-overflow: ellipsis;
   z-index: 100;
   pointer-events: none;
   backdrop-filter: blur(8px);
