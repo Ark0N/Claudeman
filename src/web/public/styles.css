@@ -2040,7 +2040,7 @@ body {
   max-width: 80%;
   max-height: 3.6em;
   overflow: hidden;
-  z-index: 100;
+  z-index: 10001;
   pointer-events: none;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);

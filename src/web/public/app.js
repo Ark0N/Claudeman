@@ -789,20 +789,31 @@ const DeepgramProvider = {
     clearInterval(this._keepAliveInterval);
     this._keepAliveInterval = null;
     this._stopRecording();
-    if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-      try { this._ws.close(1000); } catch (_e) { /* ignore */ }
+    // Detach WS handlers before closing to prevent stale onclose from
+    // killing a subsequent recording that starts before the close completes
+    if (this._ws) {
+      this._ws.onclose = null;
+      this._ws.onmessage = null;
+      this._ws.onerror = null;
+      if (this._ws.readyState === WebSocket.OPEN) {
+        try { this._ws.close(1000); } catch (_e) { /* ignore */ }
+      }
+      this._ws = null;
     }
+    // Save onEnd before nulling — must notify VoiceInput when silence timeout
+    // triggers stop internally (VoiceInput.onEnd guards with isRecording check)
+    const onEnd = this._onEnd;
+    this._onResult = null;
+    this._onError = null;
+    this._onEnd = null;
+    onEnd?.();
   },
 
   _cleanup() {
     this.stop();
-    this._ws = null;
     this._mediaRecorder = null;
     this._stream = null;
     this._selectedMime = null;
-    this._onResult = null;
-    this._onError = null;
-    this._onEnd = null;
   }
 };
 
@@ -1121,7 +1132,15 @@ const VoiceInput = {
     const mode = this._getDeepgramConfig().insertMode || 'direct';
 
     if (mode === 'compose') {
-      this._showComposeOverlay(trimmed);
+      // If a compose overlay is already open, populate its textarea instead of recreating
+      const existingTextarea = document.querySelector('.voice-compose-overlay .paste-textarea');
+      if (existingTextarea) {
+        existingTextarea.value = trimmed;
+        existingTextarea.focus();
+        existingTextarea.selectionStart = existingTextarea.selectionEnd = trimmed.length;
+      } else {
+        this._showComposeOverlay(trimmed);
+      }
     } else {
       // Direct mode: inject into local echo overlay if available, else send to PTY
       if (app._localEchoEnabled && app._localEchoOverlay) {
@@ -1215,7 +1234,7 @@ const VoiceInput = {
     const cancel = () => overlay.remove();
     const newInput = () => {
       textarea.value = '';
-      textarea.focus();
+      textarea.blur();
       this.start();
     };
     overlay.querySelector('.paste-cancel').addEventListener('click', cancel);
