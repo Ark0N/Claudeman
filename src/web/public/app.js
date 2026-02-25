@@ -224,6 +224,14 @@ const MobileDetection = {
       resizeTimeout = setTimeout(() => this.updateBodyClass(), 100);
     };
     window.addEventListener('resize', this._resizeHandler);
+
+    // iOS: prevent pinch-to-zoom (Safari ignores user-scalable=no since iOS 10)
+    if (this.isIOS()) {
+      this._gestureStartHandler = (e) => e.preventDefault();
+      this._gestureChangeHandler = (e) => e.preventDefault();
+      document.addEventListener('gesturestart', this._gestureStartHandler);
+      document.addEventListener('gesturechange', this._gestureChangeHandler);
+    }
   },
 
   /** Remove event listeners */
@@ -231,6 +239,12 @@ const MobileDetection = {
     if (this._resizeHandler) {
       window.removeEventListener('resize', this._resizeHandler);
       this._resizeHandler = null;
+    }
+    if (this._gestureStartHandler) {
+      document.removeEventListener('gesturestart', this._gestureStartHandler);
+      document.removeEventListener('gesturechange', this._gestureChangeHandler);
+      this._gestureStartHandler = null;
+      this._gestureChangeHandler = null;
     }
   }
 };

@@ -21,6 +21,24 @@ html.mobile-init .file-browser-panel {
 }
 
 /* ============================================================================
+   iOS Zoom Prevention (all mobile/tablet sizes)
+   iOS Safari ignores user-scalable=no since iOS 10.
+   font-size >= 16px on inputs prevents auto-zoom on focus.
+   touch-action: manipulation prevents double-tap zoom.
+   ============================================================================ */
+@media (max-width: 768px) {
+  /* Prevent iOS auto-zoom on input focus (triggers at font-size < 16px) */
+  input, textarea, select {
+    font-size: 16px !important;
+  }
+
+  /* Prevent double-tap zoom globally */
+  html {
+    touch-action: manipulation;
+  }
+}
+
+/* ============================================================================
    Tablet Breakpoint (430px - 768px)
    ============================================================================ */
 @media (max-width: 768px) and (min-width: 430px) {
