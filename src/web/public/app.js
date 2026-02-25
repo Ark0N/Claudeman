@@ -11378,13 +11378,14 @@ class ClaudemanApp {
     this.saveAppSettingsToStorage(settings);
     this._updateLocalEchoState();
 
-    // Save voice settings to localStorage (never sent to server)
-    VoiceInput._saveDeepgramConfig({
+    // Save voice settings to localStorage + include in server payload for cross-device sync
+    const voiceSettings = {
       apiKey: document.getElementById('voiceDeepgramKey').value.trim(),
       language: document.getElementById('voiceLanguage').value,
       keyterms: document.getElementById('voiceKeyterms').value.trim(),
       insertMode: document.getElementById('voiceInsertMode').value,
-    });
+    };
+    VoiceInput._saveDeepgramConfig(voiceSettings);
 
     // Save notification preferences separately
     const notifPrefsToSave = {
@@ -11470,7 +11471,7 @@ class ClaudemanApp {
       await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...serverSettings, notificationPreferences: notifPrefsToSave })
+        body: JSON.stringify({ ...serverSettings, notificationPreferences: notifPrefsToSave, voiceSettings })
       });
 
       // Save model configuration separately
@@ -11816,7 +11817,7 @@ class ClaudemanApp {
       const settings = settingsPromise ? await settingsPromise : await fetch('/api/settings').then(r => r.ok ? r.json() : null);
       if (settings) {
         // Extract notification prefs before merging app settings
-        const { notificationPreferences, ...appSettings } = settings;
+        const { notificationPreferences, voiceSettings, ...appSettings } = settings;
         // Filter out display settings — these are device-specific (mobile vs desktop)
         // and should not be synced from the server to avoid overriding mobile defaults.
         // NOTE: Feature toggles (subagentTrackingEnabled, imageWatcherEnabled, ralphTrackerEnabled)
@@ -11850,6 +11851,14 @@ class ClaudemanApp {
           if (!localNotifPrefs) {
             this.notificationManager.preferences = notificationPreferences;
             this.notificationManager.savePreferences();
+          }
+        }
+
+        // Sync voice settings from server (seed localStorage if no local API key)
+        if (voiceSettings) {
+          const localVoice = localStorage.getItem('claudeman-voice-settings');
+          if (!localVoice || !JSON.parse(localVoice).apiKey) {
+            VoiceInput._saveDeepgramConfig(voiceSettings);
           }
         }
 
