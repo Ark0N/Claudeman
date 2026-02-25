@@ -610,6 +610,13 @@ const VoiceInput = {
   _accumulatedFinal: '',
 
   init() {
+    this._initRecognition();
+    // Always show buttons — if unsupported, toggle() shows a toast
+    this._showButtons();
+  },
+
+  /** Try to create a SpeechRecognition instance */
+  _initRecognition() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     this.supported = !!SR;
     if (!this.supported) return;
@@ -623,9 +630,6 @@ const VoiceInput = {
     this.recognition.onresult = (e) => this._onResult(e);
     this.recognition.onerror = (e) => this._onError(e);
     this.recognition.onend = () => this._onEnd();
-
-    // Show voice buttons now that we know it's supported
-    this._showButtons();
   },
 
   toggle() {
@@ -637,7 +641,13 @@ const VoiceInput = {
   },
 
   start() {
-    if (!this.supported || this.isRecording) return;
+    if (this.isRecording) return;
+    // Lazy-init: retry if recognition was cleaned up or not available at page load
+    if (!this.recognition) this._initRecognition();
+    if (!this.supported) {
+      app.showToast('Voice input not supported in this browser', 'warning');
+      return;
+    }
     if (!app.activeSessionId) {
       app.showToast('No active session', 'warning');
       return;
@@ -798,20 +808,20 @@ const VoiceInput = {
       desktopBtn.setAttribute('aria-label', isRecording ? 'Stop voice input' : 'Start voice input');
       desktopBtn.title = isRecording ? 'Stop voice input (Ctrl+Shift+V)' : 'Voice input (Ctrl+Shift+V)';
     }
-    // Mobile button (inside accessory bar)
-    const mobileBtn = document.querySelector('[data-action="voice"]');
-    if (mobileBtn) {
-      mobileBtn.classList.toggle('recording', isRecording);
-      mobileBtn.setAttribute('aria-pressed', String(isRecording));
-      mobileBtn.setAttribute('aria-label', isRecording ? 'Stop voice input' : 'Start voice input');
+    // Mobile toolbar button (always visible on mobile)
+    const mobileToolbarBtn = document.getElementById('voiceInputBtnMobile');
+    if (mobileToolbarBtn) {
+      mobileToolbarBtn.classList.toggle('recording', isRecording);
+      mobileToolbarBtn.setAttribute('aria-pressed', String(isRecording));
+      mobileToolbarBtn.setAttribute('aria-label', isRecording ? 'Stop voice input' : 'Start voice input');
     }
   },
 
   _showButtons() {
     const desktopBtn = document.getElementById('voiceInputBtn');
     if (desktopBtn) desktopBtn.style.display = '';
-    const mobileBtn = document.querySelector('[data-action="voice"]');
-    if (mobileBtn) mobileBtn.style.display = '';
+    const mobileToolbarBtn = document.getElementById('voiceInputBtnMobile');
+    if (mobileToolbarBtn) mobileToolbarBtn.style.display = '';
   },
 
   /** Cleanup on SSE reconnect or page unload */
@@ -863,16 +873,6 @@ const KeyboardAccessoryBar = {
       <button class="accessory-btn" data-action="init" title="/init">/init</button>
       <button class="accessory-btn" data-action="clear" title="/clear">/clear</button>
       <button class="accessory-btn" data-action="compact" title="/compact">/compact</button>
-      <button class="accessory-btn accessory-btn-voice" data-action="voice" title="Voice input"
-              aria-label="Start voice input" aria-pressed="false"
-              style="${!VoiceInput.supported ? 'display:none' : ''}">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-          <line x1="12" y1="19" x2="12" y2="23"/>
-          <line x1="8" y1="23" x2="16" y2="23"/>
-        </svg>
-      </button>
       <button class="accessory-btn" data-action="paste" title="Paste from clipboard">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
@@ -941,9 +941,6 @@ const KeyboardAccessoryBar = {
         }
         break;
       }
-      case 'voice':
-        VoiceInput.toggle();
-        break;
       case 'paste':
         this.pasteFromClipboard();
         break;
@@ -1418,6 +1415,10 @@ class ZerolagInputAddon {
   }
   _detectBufferText() {
     if (this._bufferDetectDone || !this._terminal) return null;
+    // Mark as done regardless of result — prevents repeated scans from picking
+    // up PTY-echoed text or Ink redraws that appear between keystrokes.
+    // Explicit resetBufferDetection() is needed to re-enable (e.g., Tab completion).
+    this._bufferDetectDone = true;
     try {
       const prompt = this.findPrompt();
       if (!prompt) return null;
@@ -1425,7 +1426,7 @@ class ZerolagInputAddon {
       const afterPrompt = _zl_readTextAfterPrompt(this._terminal, prompt, offset);
       if (afterPrompt.length > 0) {
         this._flushedOffset = afterPrompt.length; this._flushedText = afterPrompt;
-        this._lastPromptPos = prompt; this._bufferDetectDone = true;
+        this._lastPromptPos = prompt;
         return afterPrompt;
       }
     } catch {}
@@ -2565,6 +2566,8 @@ class ClaudemanApp {
             // Enter: send full buffered text + \r to PTY in one shot
             const text = this._localEchoOverlay?.pendingText || '';
             this._localEchoOverlay?.clear();
+            // Suppress detection so PTY-echoed text isn't re-detected as user input
+            this._localEchoOverlay?.suppressBufferDetection();
             // Clear flushed offset and text — Enter commits all text
             this._flushedOffsets?.delete(this.activeSessionId);
             this._flushedTexts?.delete(this.activeSessionId);
@@ -2671,6 +2674,8 @@ class ClaudemanApp {
             // Control chars (Ctrl+C, single ESC): send buffered text + control char immediately
             const text = this._localEchoOverlay?.pendingText || '';
             this._localEchoOverlay?.clear();
+            // Suppress detection so PTY-echoed text isn't re-detected as user input
+            this._localEchoOverlay?.suppressBufferDetection();
             // Clear flushed offset and text — control chars (Ctrl+C, Escape) change
             // cursor position or abort readline, making flushed text tracking invalid.
             this._flushedOffsets?.delete(this.activeSessionId);

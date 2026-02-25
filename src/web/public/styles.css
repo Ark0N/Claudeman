@@ -1936,6 +1936,11 @@ body {
   white-space: nowrap;
 }
 
+/* Mobile voice input button - hidden on desktop */
+.btn-voice-mobile {
+  display: none;
+}
+
 /* Mobile case settings gear - hidden on desktop */
 .btn-case-settings-mobile {
   display: none;

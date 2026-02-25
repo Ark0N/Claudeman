@@ -332,6 +332,15 @@
             </div>
           </div>
           <!-- Mobile-only case button + gear -->
+          <button class="btn-voice-mobile" id="voiceInputBtnMobile" onclick="VoiceInput.toggle()"
+                  title="Voice input" aria-label="Start voice input" aria-pressed="false">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+              <line x1="12" y1="19" x2="12" y2="23"/>
+              <line x1="8" y1="23" x2="16" y2="23"/>
+            </svg>
+          </button>
           <button class="btn-settings-mobile" onclick="app.openAppSettings()" title="App Settings">&#x2699;</button>
           <button class="btn-toolbar btn-case-mobile" onclick="app.showMobileCasePicker()" title="Select case">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
@@ -362,8 +371,7 @@
 
       <div class="toolbar-right">
         <button class="btn-toolbar btn-sm btn-voice" id="voiceInputBtn" onclick="VoiceInput.toggle()"
-                title="Voice input (Ctrl+Shift+V)" aria-label="Start voice input" aria-pressed="false"
-                style="display: none;">
+                title="Voice input (Ctrl+Shift+V)" aria-label="Start voice input" aria-pressed="false">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
             <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>

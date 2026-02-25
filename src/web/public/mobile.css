@@ -314,6 +314,39 @@ html.mobile-init .file-browser-panel {
     display: none !important;
   }
 
+  /* Mobile voice input button in toolbar — initially hidden via inline style,
+     shown by VoiceInput._showButtons() clearing the inline display */
+  .btn-voice-mobile {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    background: #1a2a3f;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    border-radius: 6px;
+    color: #93c5fd;
+    cursor: pointer;
+    flex-shrink: 0;
+    order: 5; /* Between Run Shell and settings gear */
+  }
+
+  .btn-voice-mobile svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .btn-voice-mobile:active {
+    background: #2a3a5f;
+  }
+
+  .btn-voice-mobile.recording {
+    background: rgba(239, 68, 68, 0.2);
+    border-color: rgba(239, 68, 68, 0.5);
+    color: #ef4444;
+    animation: voice-pulse 1.5s ease-in-out infinite;
+  }
+
   /* Mobile app settings gear in toolbar - far right */
   .btn-settings-mobile {
     display: inline-flex !important;
@@ -328,7 +361,7 @@ html.mobile-init .file-browser-panel {
     font-size: 0.85rem;
     cursor: pointer;
     flex-shrink: 0;
-    order: 5; /* Far right */
+    order: 6; /* Far right */
     position: relative;
   }
 
@@ -744,24 +777,6 @@ html.mobile-init .file-browser-panel {
 
   .accessory-btn-dismiss:active {
     background: #3a3a3a;
-  }
-
-  /* Voice input button */
-  .accessory-btn-voice {
-    background: #1a2a3f;
-    border-color: rgba(59, 130, 246, 0.25);
-    color: #93c5fd;
-  }
-
-  .accessory-btn-voice:active {
-    background: #2a3a5f;
-  }
-
-  .accessory-btn-voice.recording {
-    background: rgba(239, 68, 68, 0.2);
-    border-color: rgba(239, 68, 68, 0.5);
-    color: #ef4444;
-    animation: voice-pulse 1.5s ease-in-out infinite;
   }
 
   /* Voice preview — positioned above accessory bar on mobile */
