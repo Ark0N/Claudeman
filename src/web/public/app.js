@@ -960,6 +960,7 @@ const VoiceInput = {
   },
 
   _onWebSpeechResult(event) {
+    if (!this.isRecording) return;
     this._resetSilenceTimeout();
     let interim = '';
     let finalText = '';
@@ -1023,13 +1024,18 @@ const VoiceInput = {
   _insertText(text) {
     if (!app.activeSessionId || !text.trim()) return;
     const trimmed = text.trim();
-    if (app._localEchoEnabled && app._localEchoOverlay) {
-      // Local echo on: inject into overlay so backspace/editing works (same as paste).
-      app._localEchoOverlay.appendText(trimmed);
-      setTimeout(() => { if (app.terminal) app.terminal.focus(); }, 150);
-    } else {
-      // Local echo off: show editable compose overlay before sending to PTY.
+    const mode = this._getDeepgramConfig().insertMode || 'direct';
+
+    if (mode === 'compose') {
       this._showComposeOverlay(trimmed);
+    } else {
+      // Direct mode: inject into local echo overlay if available, else send to PTY
+      if (app._localEchoEnabled && app._localEchoOverlay) {
+        app._localEchoOverlay.appendText(trimmed);
+      } else {
+        app.sendInput(trimmed).catch(() => {});
+      }
+      setTimeout(() => { if (app.terminal) app.terminal.focus(); }, 150);
     }
   },
 
@@ -2585,14 +2591,29 @@ class ClaudemanApp {
     const settingsPromise = fetch('/api/settings').then(r => r.ok ? r.json() : null).catch(() => null);
     this.loadQuickStartCases(null, settingsPromise);
     this.setupEventListeners();
-    // Mobile settings gear: non-passive touchstart to prevent keyboard dismiss
-    const settingsBtn = document.querySelector('.btn-settings-mobile');
-    if (settingsBtn) {
-      settingsBtn.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        app.openAppSettings();
-      }, { passive: false });
+    // Mobile: ensure button taps register even when keyboard is visible.
+    // On mobile, tapping a button while the soft keyboard is up causes the
+    // browser to dismiss the keyboard first (blur event), swallowing the tap.
+    // The button only receives the click on a second tap. Fix: intercept
+    // touchstart on buttons while keyboard is visible, preventDefault to stop
+    // the dismiss-swallows-tap behavior, and trigger the click programmatically.
+    if (MobileDetection.isTouchDevice()) {
+      const addKeyboardTapFix = (container) => {
+        if (!container) return;
+        container.addEventListener('touchstart', (e) => {
+          if (!KeyboardHandler.keyboardVisible) return;
+          const btn = e.target.closest('button');
+          if (!btn) return;
+          e.preventDefault();
+          btn.click();
+          // Refocus terminal so keyboard stays open (e.g. voice input button)
+          if (typeof app !== 'undefined' && app.terminal) {
+            app.terminal.focus();
+          }
+        }, { passive: false });
+      };
+      addKeyboardTapFix(document.querySelector('.toolbar'));
+      addKeyboardTapFix(document.querySelector('.welcome-overlay'));
     }
     // System stats polling deferred until sessions exist (started in handleInit/session:created)
     // Setup online/offline detection
@@ -10995,6 +11016,7 @@ class ClaudemanApp {
     document.getElementById('voiceDeepgramKey').value = voiceCfg.apiKey || '';
     document.getElementById('voiceLanguage').value = voiceCfg.language || 'en-US';
     document.getElementById('voiceKeyterms').value = voiceCfg.keyterms || 'claudeman, tmux, respawn, subagent, ralph, fastify, xterm, pty';
+    document.getElementById('voiceInsertMode').value = voiceCfg.insertMode || 'direct';
     // Reset key visibility to hidden
     const keyInput = document.getElementById('voiceDeepgramKey');
     keyInput.type = 'password';
@@ -11190,6 +11212,7 @@ class ClaudemanApp {
       apiKey: document.getElementById('voiceDeepgramKey').value.trim(),
       language: document.getElementById('voiceLanguage').value,
       keyterms: document.getElementById('voiceKeyterms').value.trim(),
+      insertMode: document.getElementById('voiceInsertMode').value,
     });
 
     // Save notification preferences separately
