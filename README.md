@@ -78,11 +78,11 @@ The most responsive Claude Code experience on any phone. Full xterm.js terminal 
 </tr>
 <tr><td>200-300ms input lag over remote</td><td><b>Local echo — instant feedback</b></td></tr>
 <tr><td>Tiny text, no context</td><td>Full xterm.js terminal, responsive layout</td></tr>
-<tr><td>No session management</td><td>Swipe between sessions, status badges</td></tr>
+<tr><td>No session management</td><td>Swipe between sessions</td></tr>
 <tr><td>No notifications</td><td>Push alerts for approvals and idle</td></tr>
-<tr><td>Manual reconnect after drops</td><td>tmux persistence — sessions survive anything</td></tr>
+<tr><td>Manual reconnect after drops</td><td>tmux persistence</td></tr>
 <tr><td>No agent visibility</td><td>Background agents in real-time</td></tr>
-<tr><td>Copy-paste slash commands</td><td>One-tap <code>/init</code>, <code>/clear</code>, <code>/compact</code> buttons</td></tr>
+<tr><td>Copy-paste slash commands</td><td>One-tap <code>/init</code></tr>
 </table>
 
 - **Swipe navigation** — left/right on the terminal to switch sessions (80px threshold, 300ms)
