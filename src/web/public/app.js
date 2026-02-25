@@ -622,7 +622,7 @@ const VoiceInput = {
     if (!this.supported) return;
 
     this.recognition = new SR();
-    this.recognition.continuous = false;
+    this.recognition.continuous = true;
     this.recognition.interimResults = true;
     this.recognition.lang = 'en-US';
     this.recognition.maxAlternatives = 1;
