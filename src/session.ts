@@ -989,6 +989,7 @@ export class Session extends EventEmitter {
             // Emit needsRefresh so the client fetches the full buffer once the TUI has rendered.
             this._promptCheckTimeout = setTimeout(() => {
               this._promptCheckTimeout = null;
+              if (this._isStopped) return;
               this._status = 'idle';
               this.emit('needsRefresh');
             }, 3000);
@@ -1035,6 +1036,10 @@ export class Session extends EventEmitter {
 
     // Fallback to direct PTY if mux is not used
     if (!this.ptyProcess) {
+      // OpenCode sessions require tmux for env var injection (API keys via setenv)
+      if (this.mode === 'opencode') {
+        throw new Error('OpenCode sessions require tmux. Direct PTY fallback is not supported.');
+      }
       try {
         // Pass --session-id to use the SAME ID as the Claudeman session
         // This ensures subagents can be directly matched to the correct tab

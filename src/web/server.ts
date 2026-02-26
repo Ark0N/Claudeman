@@ -2026,10 +2026,14 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'Session is busy');
       }
 
+      // Respawn is not supported for opencode sessions
+      if (session.mode === 'opencode') {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Respawn is not supported for opencode sessions');
+      }
+
       try {
         // Auto-detect completion phrase from CLAUDE.md BEFORE starting (only if globally enabled and not explicitly disabled by user)
-        // Ralph tracker is not supported for opencode sessions
-        if (session.mode !== 'opencode' && this.store.getConfig().ralphEnabled && !session.ralphTracker.autoEnableDisabled) {
+        if (this.store.getConfig().ralphEnabled && !session.ralphTracker.autoEnableDisabled) {
           autoConfigureRalph(session, session.workingDir, () => {});
           if (!session.ralphTracker.enabled) {
             session.ralphTracker.enable();
@@ -2082,6 +2086,11 @@ export class WebServer extends EventEmitter {
 
       if (!session) {
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
+      // Respawn is not supported for opencode sessions
+      if (session.mode === 'opencode') {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Respawn is not supported for opencode sessions');
       }
 
       // Check if session is running (has a PID)

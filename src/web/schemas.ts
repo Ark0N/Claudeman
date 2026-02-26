@@ -70,7 +70,10 @@ const OpenCodeConfigSchema = z.object({
   autoAllowTools: z.boolean().optional(),
   continueSession: z.string().max(100).regex(/^[a-zA-Z0-9_-]+$/).optional(),
   forkSession: z.boolean().optional(),
-  configContent: z.string().max(10000).optional(),
+  configContent: z.string().max(10000).refine(
+    (val) => { try { JSON.parse(val); return true; } catch { return false; } },
+    { message: 'configContent must be valid JSON' },
+  ).optional(),
 }).optional();
 
 export const CreateSessionSchema = z.object({

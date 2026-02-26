@@ -258,7 +258,7 @@ function setOpenCodeConfigContent(muxName: string, config?: OpenCodeConfig): voi
  * const manager = new TmuxManager();
  *
  * // Create a tmux session for Claude
- * const session = await manager.createSession(sessionId, '/project', 'claude');
+ * const session = await manager.createSession({ sessionId, workingDir: '/project', mode: 'claude' });
  *
  * // Send input (single command, no delay!)
  * manager.sendInput(sessionId, '/clear\r');
