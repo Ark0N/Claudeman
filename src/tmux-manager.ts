@@ -154,7 +154,7 @@ function buildOpenCodeCommand(config?: OpenCodeConfig): string {
   if (config?.continueSession) {
     const safeId = /^[a-zA-Z0-9_-]+$/.test(config.continueSession) ? config.continueSession : undefined;
     if (safeId) parts.push('--session', safeId);
-    if (config.forkSession) parts.push('--fork');
+    if (safeId && config.forkSession) parts.push('--fork');
   }
 
   return parts.join(' ');
@@ -405,9 +405,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // 1. Create session with default shell (starts tmux server, stays alive)
       // 2. Set remain-on-exit (server now exists, session won't vanish on exit)
       // 3. Replace shell with actual command via respawn-pane (no terminal echo)
+      // Unset $TMUX so nested sessions work when the dev server itself runs inside tmux.
+      // (Production uses systemd which has a clean env, but dev/test may be nested.)
+      const cleanEnv = { ...process.env };
+      delete cleanEnv.TMUX;
       execSync(
         `tmux new-session -ds "${muxName}" -c "${workingDir}" -x 120 -y 40`,
-        { cwd: workingDir, timeout: EXEC_TIMEOUT_MS, stdio: 'ignore' }
+        { cwd: workingDir, timeout: EXEC_TIMEOUT_MS, stdio: 'ignore', env: cleanEnv }
       );
 
       // Set remain-on-exit now that the server is running — must be before respawn-pane
