@@ -1,7 +1,7 @@
 {
   "name": "codeman",
-  "version": "0.1650",
-  "description": "The missing control plane for Claude Code - run 20 autonomous agents with real-time monitoring and session persistence",
+  "version": "0.1651",
+  "description": "The missing control plane for AI coding agents - run 20 autonomous agents with real-time monitoring and session persistence",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

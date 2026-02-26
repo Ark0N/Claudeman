@@ -2,7 +2,7 @@
   <img src="docs/images/codeman-title.svg" alt="Codeman" height="60">
 </p>
 
-<h2 align="center">The missing control plane for Claude Code</h2>
+<h2 align="center">The missing control plane for AI coding agents</h2>
 
 <p align="center">
   <em>Agent Visualization &bull; Zero-Lag Input Overlay &bull; Mobile-First UI &bull; Respawn Controller &bull; Multi-Session Dashboard </em>
@@ -28,7 +28,7 @@
 curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash
 ```
 
-This installs Node.js, tmux, and Claude CLI if missing, clones Codeman to `~/.codeman/app`, builds it. After install:
+This installs Node.js and tmux if missing, clones Codeman to `~/.codeman/app`, and builds it. You'll need at least one AI coding CLI installed — [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [OpenCode](https://opencode.ai) (or both). After install:
 
 ```bash
 codeman web
@@ -61,14 +61,14 @@ mkdir -p ~/Library/LaunchAgents && printf '<?xml version="1.0" encoding="UTF-8"?
 wsl bash -c "curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash"
 ```
 
-Codeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). If you don't have WSL yet: run `wsl --install` in an admin PowerShell, reboot, open Ubuntu, then install Claude CLI inside WSL: `curl -fsSL https://claude.ai/install.sh | bash`. After installing, `http://localhost:3000` is accessible from your Windows browser.
+Codeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). If you don't have WSL yet: run `wsl --install` in an admin PowerShell, reboot, open Ubuntu, then install your preferred AI coding CLI inside WSL ([Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [OpenCode](https://opencode.ai)). After installing, `http://localhost:3000` is accessible from your Windows browser.
 </details>
 
 ---
 
 ## Mobile-Optimized Web UI
 
-The most responsive Claude Code experience on any phone. Full xterm.js terminal with local echo, swipe navigation, and a touch-optimized interface designed for real remote work.
+The most responsive AI coding agent experience on any phone. Full xterm.js terminal with local echo, swipe navigation, and a touch-optimized interface designed for real remote work.
 
 <table>
 <tr>
@@ -104,7 +104,7 @@ codeman web --https
 
 ## Live Agent Visualization
 
-Watch Claude's background agents work in real-time. Codeman monitors every `Task` tool invocation and displays each agent in a draggable floating window with animated Matrix-style connection lines back to the parent session.
+Watch background agents work in real-time. Codeman monitors agent activity and displays each agent in a draggable floating window with animated Matrix-style connection lines back to the parent session.
 
 <p align="center">
   <img src="docs/images/subagent-spawn.png" alt="Subagent Visualization" width="900">
@@ -120,7 +120,7 @@ Watch Claude's background agents work in real-time. Codeman monitors every `Task
 
 ## Zero-Lag Input Overlay
 
-When accessing Claude Code remotely (VPN, Tailscale, SSH tunnel), every keystroke normally takes 200-300ms to round-trip. Codeman implements a **Mosh-inspired local echo system** that makes typing feel instant regardless of latency.
+When accessing your coding agent remotely (VPN, Tailscale, SSH tunnel), every keystroke normally takes 200-300ms to round-trip. Codeman implements a **Mosh-inspired local echo system** that makes typing feel instant regardless of latency.
 
 A pixel-perfect DOM overlay inside xterm.js renders keystrokes at 0ms. Background forwarding silently sends every character to the PTY in 50ms debounced batches, so Tab completion, `Ctrl+R` history search, and all shell features work normally. When the server echo arrives 200-300ms later, the overlay seamlessly disappears and the real terminal text takes over — the transition is invisible.
 
@@ -136,7 +136,7 @@ A pixel-perfect DOM overlay inside xterm.js renders keystrokes at 0ms. Backgroun
 
 ## Respawn Controller
 
-The core of autonomous work. When Claude goes idle, the Respawn Controller detects it, sends a continue prompt, cycles `/clear` -> `/init` for fresh context, and resumes — running **24+ hours** completely unattended.
+The core of autonomous work. When the agent goes idle, the Respawn Controller detects it, sends a continue prompt, cycles context management commands for fresh context, and resumes — running **24+ hours** completely unattended.
 
 ```
 WATCHING → IDLE DETECTED → SEND UPDATE → /clear → /init → CONTINUE → WATCHING
@@ -159,7 +159,7 @@ Run **20 parallel sessions** with full visibility — real-time xterm.js termina
 
 ### Persistent Sessions
 
-Every session runs inside **tmux** — sessions survive server restarts, network drops, and machine sleep. Auto-recovery on startup with dual redundancy. Ghost session discovery finds orphaned tmux sessions. Claude knows it's managed and won't kill its own session.
+Every session runs inside **tmux** — sessions survive server restarts, network drops, and machine sleep. Auto-recovery on startup with dual redundancy. Ghost session discovery finds orphaned tmux sessions. Managed sessions are environment-tagged so the agent won't kill its own session.
 
 ### Smart Token Management
 
@@ -186,7 +186,7 @@ Click the chart icon on any session tab to see a timeline of everything that hap
 
 ### Zero-Flicker Terminal
 
-Claude Code uses Ink (React for terminals) which redraws the entire screen on every state change. Codeman implements a 6-layer anti-flicker pipeline for smooth 60fps output across all sessions:
+Terminal-based AI agents (Claude Code's Ink, OpenCode's Bubble Tea) redraw the screen on every state change. Codeman implements a 6-layer anti-flicker pipeline for smooth 60fps output across all sessions:
 
 ```
 PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xterm.js (60fps)
@@ -293,7 +293,7 @@ flowchart TB
         end
 
         subgraph External["External"]
-            CLI["Claude CLI"]
+            CLI["AI CLI<br/><small>Claude Code / OpenCode</small>"]
             BG["Background Agents<br/><small>(Task tool)</small>"]
         end
     end
