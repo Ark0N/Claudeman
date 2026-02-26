@@ -11687,7 +11687,7 @@ class CodemanApp {
       const newEnabled = !isActive;
       current.tunnelEnabled = newEnabled;
       await fetch('/api/settings', {
-        method: 'POST',
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(current),
       });
@@ -11707,6 +11707,11 @@ class CodemanApp {
   }
 
   _showTunnelConnecting() {
+    // Remove any existing connecting toast first (without resetting button state)
+    const oldToast = document.getElementById('tunnelConnectingToast');
+    if (oldToast) {
+      oldToast.remove();
+    }
     const btn = document.getElementById('welcomeTunnelBtn');
     if (btn) {
       btn.classList.add('connecting');
@@ -11715,7 +11720,6 @@ class CodemanApp {
         Connecting...`;
     }
     // Persistent toast with spinner
-    this._dismissTunnelConnecting();
     const toast = document.createElement('div');
     toast.className = 'toast toast-info show';
     toast.id = 'tunnelConnectingToast';
