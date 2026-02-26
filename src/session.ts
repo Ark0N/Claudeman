@@ -986,9 +986,11 @@ export class Session extends EventEmitter {
             // OpenCode uses Bubble Tea TUI — no ❯ prompt to detect.
             // Wait for TUI to stabilize (output stops changing), then mark ready.
             // Don't clear the buffer — the TUI's initial render IS the useful content.
+            // Emit needsRefresh so the client fetches the full buffer once the TUI has rendered.
             this._promptCheckTimeout = setTimeout(() => {
               this._promptCheckTimeout = null;
               this._status = 'idle';
+              this.emit('needsRefresh');
             }, 3000);
           } else {
             // Claude mode: wait for ❯ prompt

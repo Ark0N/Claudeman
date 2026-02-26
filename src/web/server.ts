@@ -307,6 +307,7 @@ function getOrCreateSelfSignedCert(): { key: string; cert: string } {
 interface SessionListenerRefs {
   terminal: (data: string) => void;
   clearTerminal: () => void;
+  needsRefresh: () => void;
   message: (msg: ClaudeMessage) => void;
   error: (error: string) => void;
   completion: (result: string, cost: number) => void;
@@ -4169,6 +4170,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       if (listeners) {
         session.off('terminal', listeners.terminal);
         session.off('clearTerminal', listeners.clearTerminal);
+        session.off('needsRefresh', listeners.needsRefresh);
         session.off('message', listeners.message);
         session.off('error', listeners.error);
         session.off('completion', listeners.completion);
@@ -4236,6 +4238,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       clearTerminal: () => {
         // Tell clients to clear their terminal (after mux attach)
         this.broadcast('session:clearTerminal', { id: session.id });
+      },
+
+      needsRefresh: () => {
+        // Tell clients to reload the terminal buffer (e.g., after OpenCode TUI stabilizes)
+        this.broadcast('session:needsRefresh', { id: session.id });
       },
 
       message: (msg: ClaudeMessage) => {
@@ -4436,6 +4443,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Attach all listeners to the session
     session.on('terminal', listeners.terminal);
     session.on('clearTerminal', listeners.clearTerminal);
+    session.on('needsRefresh', listeners.needsRefresh);
     session.on('message', listeners.message);
     session.on('error', listeners.error);
     session.on('completion', listeners.completion);
@@ -5611,6 +5619,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       if (listeners) {
         session.off('terminal', listeners.terminal);
         session.off('clearTerminal', listeners.clearTerminal);
+        session.off('needsRefresh', listeners.needsRefresh);
         session.off('message', listeners.message);
         session.off('error', listeners.error);
         session.off('completion', listeners.completion);
