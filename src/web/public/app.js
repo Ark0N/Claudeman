@@ -3622,7 +3622,10 @@ class ClaudemanApp {
       const settings = this.loadAppSettingsFromStorage();
       const session = this.activeSessionId ? this.sessions.get(this.activeSessionId) : null;
       const echoEnabled = settings.localEchoEnabled ?? MobileDetection.isTouchDevice();
-      const shouldEnable = !!(echoEnabled && session);
+      // Disable local echo for OpenCode sessions — Bubble Tea TUI has no '>' prompt
+      // for the overlay to anchor to, so keystrokes buffer invisibly
+      const isOpenCode = session?.mode === 'opencode';
+      const shouldEnable = !!(echoEnabled && session && !isOpenCode);
       if (this._localEchoEnabled && !shouldEnable) {
           this._localEchoOverlay?.clear();
       }
