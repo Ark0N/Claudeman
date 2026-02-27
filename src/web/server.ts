@@ -4821,6 +4821,13 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       this.runSummaryTrackers.delete(sessionId);
     }
 
+    // Clear pending persist-debounce timer (prevents stale closure holding session ref)
+    const pendingPersist = this.persistDebounceTimers.get(sessionId);
+    if (pendingPersist) {
+      clearTimeout(pendingPersist);
+      this.persistDebounceTimers.delete(sessionId);
+    }
+
     // Clear batches, per-session timers, and pending state updates
     this.terminalBatches.delete(sessionId);
     this.terminalBatchSizes.delete(sessionId);
@@ -6587,6 +6594,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     }
 
     // Clear remaining Maps that accumulate session references
+    for (const { timer } of this.respawnTimers.values()) {
+      clearTimeout(timer);
+    }
     this.respawnTimers.clear();
     this.runSummaryTrackers.clear();
     this.transcriptWatchers.clear();

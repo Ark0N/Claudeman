@@ -1,5 +1,11 @@
 # codeman
 
+## 0.2.5
+
+### Patch Changes
+
+- Fix 3 minor memory leaks: clear respawn timers in stop(), clean up persistDebounceTimers on session cleanup, reset _parentNameCache on SSE reconnect
+
 ## 0.2.4
 
 ### Patch Changes

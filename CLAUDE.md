@@ -8,6 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |------|---------|
 | Dev server | `npx tsx src/index.ts web` |
 | Type check | `tsc --noEmit` |
+| Lint | `npm run lint` (fix: `npm run lint:fix`) |
+| Format | `npm run format` (check: `npm run format:check`) |
 | Single test | `npx vitest run test/<file>.test.ts` |
 | Production | `npm run build && systemctl --user restart codeman-web` |
 
@@ -50,7 +52,7 @@ When user says "COM":
 4. **Sync CLAUDE.md version**: Update the `**Version**` line below to match the new version from `package.json`
 5. **Commit and deploy**: `git add -A && git commit -m "chore: version packages" && git push && npm run build && systemctl --user restart codeman-web`
 
-**Version**: 0.2.4 (must match `package.json`)
+**Version**: 0.2.5 (must match `package.json`)
 
 ## Project Overview
 
@@ -77,9 +79,12 @@ npx tsx src/index.ts web           # Dev server (RECOMMENDED)
 npx tsx src/index.ts web --https   # With TLS (only needed for remote access)
 npm run typecheck                  # Type check
 tsc --noEmit --watch               # Continuous type checking
+npm run lint                       # ESLint
+npm run lint:fix                   # ESLint with auto-fix
+npm run format                     # Prettier format
+npm run format:check               # Prettier check only
 
-# Testing (NEVER run full suite from inside Codeman — kills tmux sessions)
-# npx vitest run                   # ALL tests — DANGEROUS inside Codeman
+# Testing (see "Testing" section for CRITICAL safety warnings)
 npx vitest run test/<file>.test.ts # Single file (SAFE)
 npx vitest run -t "pattern"        # Tests matching name
 npm run test:coverage              # With coverage report
@@ -94,7 +99,6 @@ journalctl --user -u codeman-web -f
 
 - **Single-line prompts only** — `writeViaMux()` sends text and Enter separately; multi-line breaks Ink
 - **Don't kill tmux sessions blindly** — Check `$CODEMAN_TMUX` first; you might be inside one
-- **Never run full test suite** — `npx vitest run` spawns/kills tmux sessions and will crash your Codeman session. Run individual test files only.
 - **Global regex `lastIndex` sharing** — `ANSI_ESCAPE_PATTERN_FULL/SIMPLE` have `g` flag; use `createAnsiPatternFull/Simple()` factory functions for fresh instances in loops
 - **DEC 2026 sync blocks** — Never discard incomplete sync blocks (START without END); buffer up to 50ms then flush. See `app.js:extractSyncSegments()`
 - **Terminal writes during buffer load** — Live SSE writes are queued while `_isLoadingBuffer` is true to prevent interleaving with historical data
@@ -142,6 +146,7 @@ journalctl --user -u codeman-web -f
 | `src/prompts/index.ts` | Barrel export for all agent prompts |
 | `src/prompts/*.ts` | Agent prompts (research-agent, planner) |
 | `src/templates/claude-md.ts` | CLAUDE.md generation for new cases |
+| `src/tunnel-manager.ts` | Manages cloudflared child process for Cloudflare tunnel remote access |
 | `src/cli.ts` | Command-line interface handlers |
 | `src/web/server.ts` | Fastify REST API + SSE at `/api/events` (~105 routes) |
 | `src/web/schemas.ts` | Zod v4 validation schemas with path/env security allowlists |
@@ -162,23 +167,6 @@ journalctl --user -u codeman-web -f
 |------|---------|
 | `buffer-limits.ts` | Terminal/text buffer size limits |
 | `map-limits.ts` | Global limits for Maps, sessions, watchers |
-
-### Utility Files (`src/utils/`)
-
-| File | Purpose |
-|------|---------|
-| `index.ts` | Re-exports all utilities (standard import point) |
-| `lru-map.ts` | LRU eviction Map for bounded caches |
-| `nice-wrapper.ts` | Wrap commands with `nice` priority adjustment |
-| `stale-expiration-map.ts` | TTL-based Map with lazy expiration |
-| `claude-cli-resolver.ts` | Resolve Claude CLI binary across install paths |
-| `cleanup-manager.ts` | Centralized resource disposal |
-| `buffer-accumulator.ts` | Chunk accumulator with size limits |
-| `string-similarity.ts` | String matching utilities (fuzzy matching) |
-| `token-validation.ts` | Token count parsing and validation |
-| `regex-patterns.ts` | Shared regex patterns for parsing |
-| `type-safety.ts` | `assertNever()` for exhaustive switch/case type checking |
-| `opencode-cli-resolver.ts` | Resolve OpenCode CLI binary across install paths |
 
 ### Data Flow
 
@@ -215,6 +203,7 @@ journalctl --user -u codeman-web -f
 |------|---------|
 | `src/web/public/index.html` | HTML entry point with inline critical CSS and async vendor loading |
 | `src/web/public/app.js` | Core UI: xterm.js, tab management, subagent windows, mobile support (~15K lines) |
+| `src/web/public/ralph-wizard.js` | Ralph Loop wizard UI extracted from app.js (~1K lines) |
 | `src/web/public/styles.css` | Main styling (dark theme, layout, components) |
 | `src/web/public/mobile.css` | Responsive overrides for screens <1024px (loaded conditionally via `media` attribute) |
 | `src/web/public/upload.html` | Screenshot upload page served at `/upload.html` |
@@ -430,58 +419,27 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **Ralph Loop guide** | `docs/ralph-wiggum-guide.md` |
 | **Claude Code hooks** | `docs/claude-code-hooks-reference.md` |
 | **Terminal anti-flicker** | `docs/terminal-anti-flicker.md` |
-| **API routes** | `src/web/server.ts:buildServer()` or README.md (full endpoint tables) |
+| **Agent Teams (experimental)** | `agent-teams/README.md`, `agent-teams/design.md` |
+| **API routes** | `src/web/server.ts:buildServer()` or README.md |
 | **SSE events** | Search `broadcast(` in `server.ts` |
-| **CLI commands** | `codeman --help` |
-| **Frontend patterns** | `src/web/public/app.js` (subagent windows, notifications) |
 | **Session statuses** | `SessionStatus` type in `src/types.ts` |
 | **Error codes** | `createErrorResponse()` in `src/types.ts` |
 | **Test utilities** | `test/respawn-test-utils.ts` |
-| **Memory leak patterns** | `test/memory-leak-prevention.test.ts` |
-| **Keyboard shortcuts** | README.md or App Settings in web UI |
-| **Mobile/SSH access** | README.md (Codeman Sessions / `sc` command) |
-| **Plan orchestrator** | `src/plan-orchestrator.ts` file header |
-| **Agent prompts** | `src/prompts/` directory |
-| **Agent Teams (experimental)** | `agent-teams/README.md`, `agent-teams/design.md` |
-| **Local echo overlay** | `docs/local-echo-overlay-plan.md` |
-| **Browser testing** | `docs/browser-testing-guide.md` |
-| **Mobile testing** | `docs/mobile-testing-report.md` |
-| **Run summary design** | `docs/run-summary-plan.md` |
-| **Performance audit** | `docs/perf-audit-first-load.md` |
-| **First-load optimization** | `docs/first-load-optimization-plan.md` |
-| **Dead code audit** | `docs/cleanup-findings.md` |
 | **Mobile test suite** | `mobile-test/README.md` |
-| **Voice input** | `docs/voice-input-plan.md` |
-| **Background keystroke forwarding** | `docs/background-keystroke-forwarding-merged-plan.md` |
-| **Respawn improvements** | `docs/respawn-improvement-plan.md` |
-| **Ralph improvements** | `docs/ralph-improvement-plan.md`, `docs/ralph-phase1-implementation.md` |
-| **Performance investigation** | `docs/performance-investigation-report.md` |
-| **Plan improvements** | `docs/plan-improvement-roadmap.md` |
-| **TypeScript improvements** | `docs/typescript-improvement-suggestions.md` |
-| **OpenCode integration** | `docs/opencode-integration.md` |
+
+Additional design docs, plans, and investigation reports are in the `docs/` directory.
 
 ## Scripts
 
 | Script | Purpose |
 |--------|---------|
 | `scripts/tmux-manager.sh` | Safe tmux session management (use instead of direct kill commands) |
-| `scripts/tmux-chooser.sh` | Mobile-friendly tmux session picker (`sc` alias) |
 | `scripts/monitor-respawn.sh` | Monitor respawn state machine in real-time |
-| `scripts/postinstall.js` | npm postinstall hook for setup |
-| `scripts/data-generator.sh` | Generate test data for development |
-| `scripts/test-tail-links.sh` | Test clickable file links in tail output |
-| `scripts/capture-subagent-screenshots.mjs` | Capture subagent screenshots for README (uses real Claude sessions) |
-| `scripts/capture-subagent-gif.mjs` | Capture subagent GIF animations for README |
-| `scripts/mobile-screenshot.mjs` | Capture mobile UI screenshots |
-| `scripts/ralph-wizard-start.mjs` | Automate Ralph Loop startup via headless browser |
-| `scripts/ralph-wizard-prod.mjs` | Production Ralph wizard with HTTPS support |
-| `scripts/browser-comparison.mjs` | Compare Playwright, Puppeteer, and Agent-Browser frameworks |
-| `scripts/ralph-wizard-demo.mjs` | Demo Ralph Loop wizard via visible browser |
-| `scripts/test-links-browser.mjs` | Browser test for clickable terminal file links |
-| `scripts/test-patterns.mjs` | Test file path link detection regex patterns |
 | `scripts/watch-subagents.ts` | Real-time subagent transcript watcher (list, follow by session/agent ID) |
-| `scripts/capture-readme-screenshots.mjs` | Capture screenshots for README |
 | `scripts/codeman-web.service` | systemd service file for production deployment |
+| `scripts/postinstall.js` | npm postinstall hook for setup |
+
+Additional scripts in `scripts/` for screenshots, demos, Ralph wizards, and browser testing.
 
 ## Memory Leak Prevention
 

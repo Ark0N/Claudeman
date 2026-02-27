@@ -5239,6 +5239,8 @@ class CodemanApp {
     this._localEchoOverlay?.rerender();
     // Clear pending hooks
     this.pendingHooks.clear();
+    // Clear parent name cache (prevents stale session name entries accumulating)
+    if (this._parentNameCache) this._parentNameCache.clear();
     // Clear subagent activity/results maps (prevents leaks if data.subagents is missing)
     this.subagentActivity.clear();
     this.subagentToolResults.clear();
