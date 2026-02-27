@@ -28,9 +28,7 @@ function trackError(): void {
   }, ERROR_RESET_MS);
 
   if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-    console.error(
-      `[FATAL] ${MAX_CONSECUTIVE_ERRORS} consecutive unhandled errors — exiting for systemd restart`
-    );
+    console.error(`[FATAL] ${MAX_CONSECUTIVE_ERRORS} consecutive unhandled errors — exiting for systemd restart`);
     process.exit(1);
   }
 }

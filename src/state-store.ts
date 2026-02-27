@@ -14,15 +14,7 @@
  * @module state-store
  */
 
-import {
-  readFileSync,
-  writeFileSync,
-  existsSync,
-  mkdirSync,
-  renameSync,
-  unlinkSync,
-  copyFileSync,
-} from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync, copyFileSync } from 'node:fs';
 import { writeFile, rename, unlink, copyFile, access } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -195,9 +187,7 @@ export class StateStore {
 
     // Circuit breaker: stop attempting writes after too many failures
     if (this.circuitBreakerOpen) {
-      console.warn(
-        '[StateStore] Circuit breaker open - skipping save (too many consecutive failures)'
-      );
+      console.warn('[StateStore] Circuit breaker open - skipping save (too many consecutive failures)');
       return;
     }
 
@@ -211,10 +201,7 @@ export class StateStore {
     try {
       json = JSON.stringify(this.state);
     } catch (err) {
-      console.error(
-        '[StateStore] Failed to serialize state (circular reference or invalid data):',
-        err
-      );
+      console.error('[StateStore] Failed to serialize state (circular reference or invalid data):', err);
       this.consecutiveSaveFailures++;
       if (this.consecutiveSaveFailures >= MAX_CONSECUTIVE_FAILURES) {
         console.error('[StateStore] Circuit breaker OPEN - serialization failing repeatedly');
@@ -277,9 +264,7 @@ export class StateStore {
     }
 
     if (this.circuitBreakerOpen) {
-      console.warn(
-        '[StateStore] Circuit breaker open - skipping save (too many consecutive failures)'
-      );
+      console.warn('[StateStore] Circuit breaker open - skipping save (too many consecutive failures)');
       return;
     }
 
@@ -292,10 +277,7 @@ export class StateStore {
     try {
       json = JSON.stringify(this.state);
     } catch (err) {
-      console.error(
-        '[StateStore] Failed to serialize state (circular reference or invalid data):',
-        err
-      );
+      console.error('[StateStore] Failed to serialize state (circular reference or invalid data):', err);
       this.consecutiveSaveFailures++;
       if (this.consecutiveSaveFailures >= MAX_CONSECUTIVE_FAILURES) {
         console.error('[StateStore] Circuit breaker OPEN - serialization failing repeatedly');
@@ -510,9 +492,7 @@ export class StateStore {
   addToGlobalStats(inputTokens: number, outputTokens: number, cost: number): void {
     // Sanity check: reject absurdly large values
     if (inputTokens > MAX_SESSION_TOKENS || outputTokens > MAX_SESSION_TOKENS) {
-      console.warn(
-        `[StateStore] Rejected absurd global stats: input=${inputTokens}, output=${outputTokens}`
-      );
+      console.warn(`[StateStore] Rejected absurd global stats: input=${inputTokens}, output=${outputTokens}`);
       return;
     }
     // Reject negative values
@@ -544,10 +524,7 @@ export class StateStore {
    * @param activeSessions Map of active session states
    */
   getAggregateStats(
-    activeSessions: Record<
-      string,
-      { inputTokens?: number; outputTokens?: number; totalCost?: number }
-    >
+    activeSessions: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }>
   ): {
     totalInputTokens: number;
     totalOutputTokens: number;
@@ -631,9 +608,7 @@ export class StateStore {
     // Claude's context window is ~200k, so 1M per recording is already very generous
     const MAX_TOKENS_PER_RECORDING = 1_000_000;
     if (inputTokens > MAX_TOKENS_PER_RECORDING || outputTokens > MAX_TOKENS_PER_RECORDING) {
-      console.warn(
-        `[StateStore] Rejected absurd token values: input=${inputTokens}, output=${outputTokens}`
-      );
+      console.warn(`[StateStore] Rejected absurd token values: input=${inputTokens}, output=${outputTokens}`);
       return;
     }
 
@@ -662,10 +637,7 @@ export class StateStore {
     // Accumulate tokens
     todayEntry.inputTokens += inputTokens;
     todayEntry.outputTokens += outputTokens;
-    todayEntry.estimatedCost = this.calculateEstimatedCost(
-      todayEntry.inputTokens,
-      todayEntry.outputTokens
-    );
+    todayEntry.estimatedCost = this.calculateEstimatedCost(todayEntry.inputTokens, todayEntry.outputTokens);
 
     // Only increment session count for unique sessions
     if (sessionId && !this.dailySessionIds.has(sessionId)) {
@@ -740,10 +712,7 @@ export class StateStore {
     try {
       json = JSON.stringify(data);
     } catch (err) {
-      console.error(
-        '[StateStore] Failed to serialize Ralph state (circular reference or invalid data):',
-        err
-      );
+      console.error('[StateStore] Failed to serialize Ralph state (circular reference or invalid data):', err);
       // Keep dirty flag true for retry - don't throw, let caller continue
       return;
     }
@@ -761,10 +730,7 @@ export class StateStore {
           unlinkSync(tempPath);
         }
       } catch (cleanupErr) {
-        console.warn(
-          '[StateStore] Failed to cleanup temp file during Ralph state save error:',
-          cleanupErr
-        );
+        console.warn('[StateStore] Failed to cleanup temp file during Ralph state save error:', cleanupErr);
       }
       // Don't throw - let caller continue, retry on next save
     }

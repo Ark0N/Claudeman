@@ -170,20 +170,14 @@ export class SubagentWatcher extends EventEmitter {
   private knownSubagentDirs = new Set<string>();
   // Map of agentId -> Map of toolUseId -> { toolName, timestamp } (for linking tool_result to tool_call)
   // Includes timestamp for TTL-based cleanup of orphaned entries
-  private pendingToolCalls = new Map<
-    string,
-    Map<string, { toolName: string; timestamp: number }>
-  >();
+  private pendingToolCalls = new Map<string, Map<string, { toolName: string; timestamp: number }>>();
   // Guard to prevent concurrent liveness checks (prevents duplicate completed events)
   private _isCheckingLiveness = false;
   // Counter for throttling full directory scans (only scan every FULL_SCAN_EVERY_N_POLLS)
   private _pollCount = 0;
   // Short-lived cache for parsed parent transcript descriptions (TTL: 5s)
   // Key: "{projectHash}/{sessionId}", Value: { descriptions: Map<agentId, description>, timestamp }
-  private parentDescriptionCache = new Map<
-    string,
-    { descriptions: Map<string, string>; timestamp: number }
-  >();
+  private parentDescriptionCache = new Map<string, { descriptions: Map<string, string>; timestamp: number }>();
   // Store error handlers for FSWatchers to enable proper cleanup (prevent memory leaks)
   private dirWatcherErrorHandlers = new Map<string, (error: Error) => void>();
   private fileWatcherErrorHandlers = new Map<string, (error: Error) => void>();
@@ -364,10 +358,7 @@ export class SubagentWatcher extends EventEmitter {
       for (const [pid, procInfo] of result) {
         for (const [_agentId, info] of this.agentInfo) {
           if (info.status !== 'active' && info.status !== 'idle') continue;
-          if (
-            procInfo.environ.includes(info.sessionId) ||
-            procInfo.cmdline.includes(info.sessionId)
-          ) {
+          if (procInfo.environ.includes(info.sessionId) || procInfo.cmdline.includes(info.sessionId)) {
             info.pid = pid;
             break; // Each PID belongs to at most one agent
           }
@@ -829,10 +820,7 @@ export class SubagentWatcher extends EventEmitter {
         if (typeof entry.message.content === 'string') {
           const text = entry.message.content.trim();
           if (text.length > 0) {
-            const preview =
-              text.length > TEXT_PREVIEW_LENGTH
-                ? text.substring(0, TEXT_PREVIEW_LENGTH) + '...'
-                : text;
+            const preview = text.length > TEXT_PREVIEW_LENGTH ? text.substring(0, TEXT_PREVIEW_LENGTH) + '...' : text;
             lines.push(`${this.formatTime(entry.timestamp)} 💬 ${preview.replace(/\n/g, ' ')}`);
           }
         } else {
@@ -843,9 +831,7 @@ export class SubagentWatcher extends EventEmitter {
               const text = content.text.trim();
               if (text.length > 0) {
                 const preview =
-                  text.length > TEXT_PREVIEW_LENGTH
-                    ? text.substring(0, TEXT_PREVIEW_LENGTH) + '...'
-                    : text;
+                  text.length > TEXT_PREVIEW_LENGTH ? text.substring(0, TEXT_PREVIEW_LENGTH) + '...' : text;
                 lines.push(`${this.formatTime(entry.timestamp)} 💬 ${preview.replace(/\n/g, ' ')}`);
               }
             }
@@ -856,18 +842,14 @@ export class SubagentWatcher extends EventEmitter {
         if (typeof entry.message.content === 'string') {
           const text = entry.message.content.trim();
           if (text.length < 100 && !text.includes('{')) {
-            lines.push(
-              `${this.formatTime(entry.timestamp)} 📥 User: ${text.substring(0, USER_TEXT_PREVIEW_LENGTH)}`
-            );
+            lines.push(`${this.formatTime(entry.timestamp)} 📥 User: ${text.substring(0, USER_TEXT_PREVIEW_LENGTH)}`);
           }
         } else {
           const firstContent = entry.message.content[0];
           if (firstContent?.type === 'text' && firstContent.text) {
             const text = firstContent.text.trim();
             if (text.length < 100 && !text.includes('{')) {
-              lines.push(
-                `${this.formatTime(entry.timestamp)} 📥 User: ${text.substring(0, USER_TEXT_PREVIEW_LENGTH)}`
-              );
+              lines.push(`${this.formatTime(entry.timestamp)} 📥 User: ${text.substring(0, USER_TEXT_PREVIEW_LENGTH)}`);
             }
           }
         }
@@ -987,11 +969,7 @@ export class SubagentWatcher extends EventEmitter {
       for (const line of lines) {
         try {
           const entry = JSON.parse(line);
-          if (
-            entry.type === 'user' &&
-            entry.toolUseResult?.agentId &&
-            entry.toolUseResult?.description
-          ) {
+          if (entry.type === 'user' && entry.toolUseResult?.agentId && entry.toolUseResult?.description) {
             descriptions.set(entry.toolUseResult.agentId, entry.toolUseResult.description);
           }
         } catch {
@@ -1115,11 +1093,7 @@ export class SubagentWatcher extends EventEmitter {
   /**
    * Watch a subagent directory for new/updated files
    */
-  private async watchSubagentDir(
-    dir: string,
-    projectHash: string,
-    sessionId: string
-  ): Promise<void> {
+  private async watchSubagentDir(dir: string, projectHash: string, sessionId: string): Promise<void> {
     if (this.knownSubagentDirs.has(dir)) return;
     this.knownSubagentDirs.add(dir);
 
@@ -1206,11 +1180,7 @@ export class SubagentWatcher extends EventEmitter {
 
     // Extract description - prefer reading from parent transcript (most reliable)
     // The parent transcript has the exact Task tool call with description parameter
-    let description = await this.extractDescriptionFromParentTranscript(
-      projectHash,
-      sessionId,
-      agentId
-    );
+    let description = await this.extractDescriptionFromParentTranscript(projectHash, sessionId, agentId);
 
     // Fallback: extract a smart title from the subagent's prompt if parent lookup failed
     if (!description) {
@@ -1316,11 +1286,7 @@ export class SubagentWatcher extends EventEmitter {
       // Handle watcher errors to prevent unhandled exceptions
       // Store handler reference for proper cleanup
       const errorHandler = (error: Error) => {
-        this.emit(
-          'subagent:error',
-          error instanceof Error ? error : new Error(String(error)),
-          agentId
-        );
+        this.emit('subagent:error', error instanceof Error ? error : new Error(String(error)), agentId);
         watcher.close();
         this.fileWatcherErrorHandlers.delete(filePath);
         this.fileWatchers.delete(filePath);
@@ -1338,12 +1304,7 @@ export class SubagentWatcher extends EventEmitter {
   /**
    * Tail a file from a specific position
    */
-  private async tailFile(
-    filePath: string,
-    agentId: string,
-    sessionId: string,
-    fromPosition: number
-  ): Promise<number> {
+  private async tailFile(filePath: string, agentId: string, sessionId: string, fromPosition: number): Promise<number> {
     return new Promise((resolve) => {
       let position = fromPosition;
 
@@ -1383,11 +1344,7 @@ export class SubagentWatcher extends EventEmitter {
   /**
    * Process a transcript entry and emit appropriate events
    */
-  private async processEntry(
-    entry: SubagentTranscriptEntry,
-    agentId: string,
-    sessionId: string
-  ): Promise<void> {
+  private async processEntry(entry: SubagentTranscriptEntry, agentId: string, sessionId: string): Promise<void> {
     const info = this.agentInfo.get(agentId);
 
     // Extract model from assistant messages (first one sets the model)
@@ -1410,11 +1367,7 @@ export class SubagentWatcher extends EventEmitter {
     // Check if this is first user message and description is missing
     if (info && !info.description && entry.type === 'user' && entry.message?.content) {
       // First try parent transcript (most reliable)
-      let description = await this.extractDescriptionFromParentTranscript(
-        info.projectHash,
-        info.sessionId,
-        agentId
-      );
+      let description = await this.extractDescriptionFromParentTranscript(info.projectHash, info.sessionId, agentId);
       // Fallback: extract smart title from the prompt content
       if (!description) {
         let text: string | undefined;
@@ -1601,9 +1554,7 @@ export class SubagentWatcher extends EventEmitter {
   /**
    * Extract text content from tool_result content field
    */
-  private extractToolResultContent(
-    content: string | Array<{ type: string; text?: string }> | undefined
-  ): string {
+  private extractToolResultContent(content: string | Array<{ type: string; text?: string }> | undefined): string {
     if (!content) return '';
     if (typeof content === 'string') return content;
     if (Array.isArray(content)) {
@@ -1618,10 +1569,7 @@ export class SubagentWatcher extends EventEmitter {
   /**
    * Get truncated input for display (keeps primary param, truncates large content)
    */
-  private getTruncatedInput(
-    _tool: string,
-    input: Record<string, unknown>
-  ): Record<string, unknown> {
+  private getTruncatedInput(_tool: string, input: Record<string, unknown>): Record<string, unknown> {
     const truncated: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(input)) {
       if (typeof value === 'string' && value.length > INPUT_TRUNCATE_LENGTH) {
@@ -1688,10 +1636,7 @@ export class SubagentWatcher extends EventEmitter {
       details = input.file_path as string;
     } else if (name === 'Bash' && input.command) {
       const cmd = input.command as string;
-      details =
-        cmd.length > COMMAND_DISPLAY_LENGTH
-          ? cmd.substring(0, COMMAND_DISPLAY_LENGTH) + '...'
-          : cmd;
+      details = cmd.length > COMMAND_DISPLAY_LENGTH ? cmd.substring(0, COMMAND_DISPLAY_LENGTH) + '...' : cmd;
     } else if (name === 'Glob' && input.pattern) {
       details = input.pattern as string;
     } else if (name === 'Grep' && input.pattern) {

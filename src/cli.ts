@@ -21,10 +21,7 @@ const pkg = require('../package.json') as { version: string };
 
 const program = new Command();
 
-program
-  .name('codeman')
-  .description('Claude Code session manager with autonomous Ralph Loop')
-  .version(pkg.version);
+program.name('codeman').description('Claude Code session manager with autonomous Ralph Loop').version(pkg.version);
 
 // ============ Session Commands ============
 
@@ -95,9 +92,7 @@ sessionCmd
       console.log(chalk.bold('\nStopped Sessions:'));
       for (const session of stoppedSessions) {
         const name = session.name ? ` (${session.name})` : '';
-        console.log(
-          `  ${chalk.gray(session.id.slice(0, 8))} ${chalk.gray('stopped')}${name} ${session.workingDir}`
-        );
+        console.log(`  ${chalk.gray(session.id.slice(0, 8))} ${chalk.gray('stopped')}${name} ${session.workingDir}`);
       }
     }
 
@@ -115,9 +110,7 @@ sessionCmd
         const name = session.name ? ` (${session.name})` : '';
         const mode = session.mode === 'shell' ? chalk.gray(' [shell]') : '';
         const cost = session.totalCost ? chalk.gray(` $${session.totalCost.toFixed(4)}`) : '';
-        console.log(
-          `  ${chalk.cyan(session.id.slice(0, 8))} ${status}${name}${mode}${cost} ${session.workingDir}`
-        );
+        console.log(`  ${chalk.cyan(session.id.slice(0, 8))} ${status}${name}${mode}${cost} ${session.workingDir}`);
       }
     }
     console.log('');
@@ -198,9 +191,7 @@ taskCmd
     for (const task of tasks) {
       const color = statusColors[task.status];
       const prompt = task.prompt.slice(0, 40) + (task.prompt.length > 40 ? '...' : '');
-      console.log(
-        `  ${chalk.cyan(task.id.slice(0, 8))} ${color(task.status.padEnd(10))} [${task.priority}] ${prompt}`
-      );
+      console.log(`  ${chalk.cyan(task.id.slice(0, 8))} ${color(task.status.padEnd(10))} [${task.priority}] ${prompt}`);
     }
 
     const counts = queue.getCount();
@@ -278,10 +269,7 @@ taskCmd
 
 // ============ Ralph Loop Commands ============
 
-const ralphCmd = program
-  .command('ralph')
-  .alias('r')
-  .description('Control the Ralph autonomous loop');
+const ralphCmd = program.command('ralph').alias('r').description('Control the Ralph autonomous loop');
 
 ralphCmd
   .command('start')
@@ -303,9 +291,7 @@ ralphCmd
     }
 
     loop.on('taskAssigned', (taskId, sessionId) => {
-      console.log(
-        chalk.cyan(`→ Task ${taskId.slice(0, 8)} assigned to session ${sessionId.slice(0, 8)}`)
-      );
+      console.log(chalk.cyan(`→ Task ${taskId.slice(0, 8)} assigned to session ${sessionId.slice(0, 8)}`));
     });
 
     loop.on('taskCompleted', (taskId) => {
@@ -359,12 +345,7 @@ ralphCmd
   });
 
 function printStats(stats: ReturnType<ReturnType<typeof getRalphLoop>['getStats']>) {
-  const statusColor =
-    stats.status === 'running'
-      ? chalk.green
-      : stats.status === 'paused'
-        ? chalk.yellow
-        : chalk.gray;
+  const statusColor = stats.status === 'running' ? chalk.green : stats.status === 'paused' ? chalk.yellow : chalk.gray;
 
   console.log(chalk.bold('\nRalph Loop Status:'));
   console.log(`  Status: ${statusColor(stats.status)}`);
@@ -407,8 +388,7 @@ program
     const loopStatus = loop.status;
 
     // Use live sessions if available, otherwise fall back to stored state
-    const activeCount =
-      sessions.length || storedValues.filter((s) => s.status !== 'stopped').length;
+    const activeCount = sessions.length || storedValues.filter((s) => s.status !== 'stopped').length;
     const idleCount = sessions.length
       ? sessions.filter((s) => s.isIdle()).length
       : storedValues.filter((s) => s.status === 'idle').length;
@@ -431,8 +411,7 @@ program
     console.log(`  Completed: ${taskCounts.completed}`);
     console.log(`  Failed: ${taskCounts.failed}`);
 
-    const statusColor =
-      loopStatus === 'running' ? chalk.green : loopStatus === 'paused' ? chalk.yellow : chalk.gray;
+    const statusColor = loopStatus === 'running' ? chalk.green : loopStatus === 'paused' ? chalk.yellow : chalk.gray;
     console.log(chalk.bold('\nRalph Loop:'));
     console.log(`  Status: ${statusColor(loopStatus)}`);
     console.log('');
@@ -505,27 +484,20 @@ program
   .command('web')
   .description('Start the web interface')
   .option('-p, --port <port>', 'Port to listen on', '3000')
-  .option(
-    '--https',
-    'Enable HTTPS with self-signed certificate (only needed for remote access, not localhost)'
-  )
+  .option('--https', 'Enable HTTPS with self-signed certificate (only needed for remote access, not localhost)')
   .action(async (options) => {
     const { startWebServer } = await import('./web/server.js');
     const port = parseInt(options.port, 10);
     const https = !!options.https;
     const protocol = https ? 'https' : 'http';
 
-    console.log(
-      chalk.cyan(`Starting Codeman web interface on port ${port}${https ? ' (HTTPS)' : ''}...`)
-    );
+    console.log(chalk.cyan(`Starting Codeman web interface on port ${port}${https ? ' (HTTPS)' : ''}...`));
 
     try {
       const server = await startWebServer(port, https);
       console.log(chalk.green(`\n✓ Web interface running at ${protocol}://localhost:${port}`));
       if (https) {
-        console.log(
-          chalk.yellow('  Note: Accept the self-signed certificate in your browser on first visit')
-        );
+        console.log(chalk.yellow('  Note: Accept the self-signed certificate in your browser on first visit'));
       }
       console.log(chalk.gray('  Press Ctrl+C to stop\n'));
 

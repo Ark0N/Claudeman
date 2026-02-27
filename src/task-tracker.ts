@@ -51,11 +51,7 @@ const MAX_PENDING_TOOL_USES = 100;
  * Used as fallback when JSON parsing doesn't capture the launch.
  * Capture group 1: Agent/task type name
  */
-const LAUNCH_PATTERNS = [
-  /Launching\s+(\w+)\s+agent/i,
-  /Starting\s+(\w+)\s+task/i,
-  /Spawning\s+(\w+)\s+agent/i,
-];
+const LAUNCH_PATTERNS = [/Launching\s+(\w+)\s+agent/i, /Starting\s+(\w+)\s+task/i, /Spawning\s+(\w+)\s+agent/i];
 
 /**
  * Patterns that indicate a task has completed.
@@ -365,8 +361,7 @@ export class TaskTracker extends EventEmitter {
     if (task) {
       task.status = block.is_error ? 'failed' : 'completed';
       task.endTime = Date.now();
-      task.output =
-        typeof block.content === 'string' ? block.content : JSON.stringify(block.content);
+      task.output = typeof block.content === 'string' ? block.content : JSON.stringify(block.content);
 
       // Remove from stack
       const stackIndex = this.taskStack.indexOf(toolUseId);

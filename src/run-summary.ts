@@ -203,8 +203,7 @@ export class RunSummaryTracker {
     }
 
     // Check for milestone
-    const currentMilestone =
-      Math.floor(total / TOKEN_MILESTONE_INTERVAL) * TOKEN_MILESTONE_INTERVAL;
+    const currentMilestone = Math.floor(total / TOKEN_MILESTONE_INTERVAL) * TOKEN_MILESTONE_INTERVAL;
     if (currentMilestone > this.lastTokenMilestone && currentMilestone > 0) {
       this.lastTokenMilestone = currentMilestone;
       this.addEvent(
@@ -212,7 +211,11 @@ export class RunSummaryTracker {
         'info',
         `Token milestone: ${this.formatTokens(currentMilestone)}`,
         `Input: ${this.formatTokens(inputTokens)}, Output: ${this.formatTokens(outputTokens)}`,
-        { total, input: inputTokens, output: outputTokens }
+        {
+          total,
+          input: inputTokens,
+          output: outputTokens,
+        }
       );
     }
   }
@@ -303,13 +306,10 @@ export class RunSummaryTracker {
    * Record session started.
    */
   recordSessionStarted(mode: string, workingDir: string): void {
-    this.addEvent(
-      'session_started',
-      'success',
-      'Session started',
-      `Mode: ${mode}, Dir: ${workingDir}`,
-      { mode, workingDir }
-    );
+    this.addEvent('session_started', 'success', 'Session started', `Mode: ${mode}, Dir: ${workingDir}`, {
+      mode,
+      workingDir,
+    });
   }
 
   /**

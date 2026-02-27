@@ -111,11 +111,7 @@ export class ImageWatcher extends EventEmitter {
       try {
         watcher.close();
       } catch (error) {
-        this.emit(
-          'image:error',
-          error instanceof Error ? error : new Error(String(error)),
-          sessionId
-        );
+        this.emit('image:error', error instanceof Error ? error : new Error(String(error)), sessionId);
       }
     }
     this.sessionWatchers.clear();
@@ -194,11 +190,7 @@ export class ImageWatcher extends EventEmitter {
 
       this.sessionWatchers.set(sessionId, watcher);
     } catch (error) {
-      this.emit(
-        'image:error',
-        error instanceof Error ? error : new Error(String(error)),
-        sessionId
-      );
+      this.emit('image:error', error instanceof Error ? error : new Error(String(error)), sessionId);
     }
   }
 
@@ -213,11 +205,7 @@ export class ImageWatcher extends EventEmitter {
       try {
         watcher.close();
       } catch (error) {
-        this.emit(
-          'image:error',
-          error instanceof Error ? error : new Error(String(error)),
-          sessionId
-        );
+        this.emit('image:error', error instanceof Error ? error : new Error(String(error)), sessionId);
       }
       this.sessionWatchers.delete(sessionId);
     }
@@ -322,11 +310,7 @@ export class ImageWatcher extends EventEmitter {
       this.emit('image:detected', event);
     } catch (error) {
       // File may have been deleted between detection and stat
-      this.emit(
-        'image:error',
-        error instanceof Error ? error : new Error(String(error)),
-        sessionId
-      );
+      this.emit('image:error', error instanceof Error ? error : new Error(String(error)), sessionId);
     }
   }
 }

@@ -108,9 +108,7 @@ export class TeamWatcher extends EventEmitter {
         messages.push(...msgs);
       }
     }
-    return messages.sort(
-      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-    );
+    return messages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
   }
 
   /** Check if a session has active teammates (for idle detection) */
@@ -190,8 +188,7 @@ export class TeamWatcher extends EventEmitter {
       if (await this.isLocked(join(this.teamsDir, entry, 'config.json'))) continue;
 
       const config = await this.readJson<TeamConfig>(configPath);
-      if (!config || !config.name || !config.leadSessionId || !Array.isArray(config.members))
-        continue;
+      if (!config || !config.name || !config.leadSessionId || !Array.isArray(config.members)) continue;
 
       const existing = this.teams.get(entry);
       this.teams.set(entry, config);
@@ -256,9 +253,7 @@ export class TeamWatcher extends EventEmitter {
 
       let taskFiles: string[];
       try {
-        taskFiles = (await readdir(teamTaskDir)).filter(
-          (f) => f.endsWith('.json') && f !== '.lock'
-        );
+        taskFiles = (await readdir(teamTaskDir)).filter((f) => f.endsWith('.json') && f !== '.lock');
       } catch {
         continue;
       }

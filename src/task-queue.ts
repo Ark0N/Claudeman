@@ -166,11 +166,7 @@ export class TaskQueue extends EventEmitter {
    * @param visited - Set of already visited nodes (for DFS)
    * @returns true if adding this dependency would create a cycle
    */
-  private wouldCreateCycle(
-    taskId: string,
-    depId: string,
-    visited: Set<string> = new Set()
-  ): boolean {
+  private wouldCreateCycle(taskId: string, depId: string, visited: Set<string> = new Set()): boolean {
     // Direct self-reference
     if (depId === taskId) return true;
     // Already visited this node in current path
@@ -214,9 +210,7 @@ export class TaskQueue extends EventEmitter {
 
   /** Gets the currently running task for a session, if any. */
   getRunningTaskForSession(sessionId: string): Task | null {
-    return (
-      this.getAllTasks().find((t) => t.isRunning() && t.assignedSessionId === sessionId) || null
-    );
+    return this.getAllTasks().find((t) => t.isRunning() && t.assignedSessionId === sessionId) || null;
   }
 
   /** Gets counts of tasks by status (single-pass). */

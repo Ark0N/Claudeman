@@ -229,10 +229,7 @@ export class CleanupManager implements Disposable {
    * @param description - Human-readable description
    * @returns Registration ID
    */
-  registerStream(
-    stream: { destroy?: () => void; close?: () => void },
-    description: string
-  ): string {
+  registerStream(stream: { destroy?: () => void; close?: () => void }, description: string): string {
     return this.registerCleanup(
       'stream',
       () => {

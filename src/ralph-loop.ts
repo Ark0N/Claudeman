@@ -406,11 +406,7 @@ export class RalphLoop extends EventEmitter {
     // 2. Min duration not reached
     // 3. We have idle sessions
     const counts = this.taskQueue.getCount();
-    return (
-      counts.pending === 0 &&
-      !this.isMinDurationReached() &&
-      this.sessionManager.getIdleSessions().length > 0
-    );
+    return counts.pending === 0 && !this.isMinDurationReached() && this.sessionManager.getIdleSessions().length > 0;
   }
 
   private async generateFollowUpTasks(): Promise<void> {

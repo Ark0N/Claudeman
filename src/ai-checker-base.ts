@@ -205,9 +205,7 @@ export abstract class AiCheckerBase<
     super();
     this.sessionId = sessionId;
     // Filter out undefined values to prevent overwriting defaults
-    const filteredConfig = Object.fromEntries(
-      Object.entries(config).filter(([, v]) => v !== undefined)
-    ) as Partial<C>;
+    const filteredConfig = Object.fromEntries(Object.entries(config).filter(([, v]) => v !== undefined)) as Partial<C>;
     this.config = { ...defaultConfig, ...filteredConfig };
   }
 
@@ -283,15 +281,11 @@ export abstract class AiCheckerBase<
       if (result.verdict === this.getPositiveVerdict()) {
         this.consecutiveErrors = 0;
         this._status = 'ready';
-        this.log(
-          `${this.checkDescription} verdict: ${result.verdict} (${result.durationMs}ms) - ${result.reasoning}`
-        );
+        this.log(`${this.checkDescription} verdict: ${result.verdict} (${result.durationMs}ms) - ${result.reasoning}`);
       } else if (result.verdict === this.getNegativeVerdict()) {
         this.consecutiveErrors = 0;
         this.startCooldown(this.config.cooldownMs);
-        this.log(
-          `${this.checkDescription} verdict: ${result.verdict} (${result.durationMs}ms) - ${result.reasoning}`
-        );
+        this.log(`${this.checkDescription} verdict: ${result.verdict} (${result.durationMs}ms) - ${result.reasoning}`);
       } else {
         this.handleError('Unexpected verdict');
       }
@@ -346,9 +340,7 @@ export abstract class AiCheckerBase<
   /** Update configuration at runtime */
   updateConfig(config: Partial<C>): void {
     // Filter out undefined values to prevent overwriting existing config
-    const filteredConfig = Object.fromEntries(
-      Object.entries(config).filter(([, v]) => v !== undefined)
-    ) as Partial<C>;
+    const filteredConfig = Object.fromEntries(Object.entries(config).filter(([, v]) => v !== undefined)) as Partial<C>;
     this.config = { ...this.config, ...filteredConfig };
     if (config.enabled === false) {
       this.disable('Disabled by config');
@@ -374,9 +366,7 @@ export abstract class AiCheckerBase<
     // Prepare the terminal buffer (strip ANSI, trim to maxContextChars)
     const stripped = terminalBuffer.replace(ANSI_ESCAPE_PATTERN_SIMPLE, '');
     const trimmed =
-      stripped.length > this.config.maxContextChars
-        ? stripped.slice(-this.config.maxContextChars)
-        : stripped;
+      stripped.length > this.config.maxContextChars ? stripped.slice(-this.config.maxContextChars) : stripped;
 
     // Build the prompt
     const prompt = this.buildPrompt(trimmed);
@@ -385,10 +375,7 @@ export abstract class AiCheckerBase<
     const shortId = this.sessionId.slice(0, 8);
     const timestamp = Date.now();
     this.checkTempFile = join(tmpdir(), `${this.tempFilePrefix}-${shortId}-${timestamp}.txt`);
-    this.checkPromptFile = join(
-      tmpdir(),
-      `${this.tempFilePrefix}-prompt-${shortId}-${timestamp}.txt`
-    );
+    this.checkPromptFile = join(tmpdir(), `${this.tempFilePrefix}-prompt-${shortId}-${timestamp}.txt`);
     this.checkMuxName = `${this.muxNamePrefix}${shortId}`;
 
     // Security: Validate mux name before use in shell commands
@@ -419,14 +406,10 @@ export abstract class AiCheckerBase<
         // No existing session, that's fine
       }
 
-      const muxProcess = childSpawn(
-        'tmux',
-        ['new-session', '-d', '-s', this.checkMuxName, 'bash', '-c', fullCmd],
-        {
-          detached: true,
-          stdio: 'ignore',
-        }
-      );
+      const muxProcess = childSpawn('tmux', ['new-session', '-d', '-s', this.checkMuxName, 'bash', '-c', fullCmd], {
+        detached: true,
+        stdio: 'ignore',
+      });
       muxProcess.unref();
     } catch (err) {
       throw new Error(
@@ -468,9 +451,7 @@ export abstract class AiCheckerBase<
         if (this._status === 'checking' && !this.checkCancelled && !resolved) {
           resolved = true; // Mark as resolved first to prevent poll race
           this.checkResolve = null;
-          reject(
-            new Error(`${this.checkDescription} timed out after ${this.config.checkTimeoutMs}ms`)
-          );
+          reject(new Error(`${this.checkDescription} timed out after ${this.config.checkTimeoutMs}ms`));
         }
       }, this.config.checkTimeoutMs);
     });
@@ -487,10 +468,7 @@ export abstract class AiCheckerBase<
     // Delegate to subclass for verdict parsing
     const parsed = this.parseVerdict(output);
     if (!parsed) {
-      return this.createErrorResult(
-        `Could not parse verdict from: "${output.substring(0, 100)}"`,
-        durationMs
-      );
+      return this.createErrorResult(`Could not parse verdict from: "${output.substring(0, 100)}"`, durationMs);
     }
 
     return this.createResult(parsed.verdict, parsed.reasoning, durationMs);
@@ -560,9 +538,7 @@ export abstract class AiCheckerBase<
         this.config.errorCooldownMs * backoffMultiplier,
         5 * 60 * 1000 // Max 5 minutes
       );
-      this.log(
-        `Exponential backoff: ${Math.round(backoffCooldownMs / 1000)}s (error #${this.consecutiveErrors})`
-      );
+      this.log(`Exponential backoff: ${Math.round(backoffCooldownMs / 1000)}s (error #${this.consecutiveErrors})`);
       this.startCooldown(backoffCooldownMs);
     }
   }

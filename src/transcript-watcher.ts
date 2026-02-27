@@ -86,12 +86,7 @@ const POLL_INTERVAL_MS = 1000;
 const MAX_MESSAGE_LENGTH = 500;
 
 /** Patterns that indicate plan mode / approval prompt */
-const PLAN_MODE_PATTERNS = [
-  /ExitPlanMode/i,
-  /AskUserQuestion/i,
-  /Ready for user approval/i,
-  /approve.*plan/i,
-];
+const PLAN_MODE_PATTERNS = [/ExitPlanMode/i, /AskUserQuestion/i, /Ready for user approval/i, /approve.*plan/i];
 
 // ========== TranscriptWatcher Class ==========
 

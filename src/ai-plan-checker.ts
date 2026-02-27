@@ -105,9 +105,7 @@ export class AiPlanChecker extends AiCheckerBase<
     return AI_PLAN_CHECK_PROMPT.replace('{TERMINAL_BUFFER}', terminalBuffer);
   }
 
-  protected parseVerdict(
-    output: string
-  ): { verdict: AiPlanCheckVerdict; reasoning: string } | null {
+  protected parseVerdict(output: string): { verdict: AiPlanCheckVerdict; reasoning: string } | null {
     const match = output.match(VERDICT_PATTERN);
     if (!match) return null;
 
@@ -134,11 +132,7 @@ export class AiPlanChecker extends AiCheckerBase<
     return { verdict: 'ERROR', reasoning, durationMs };
   }
 
-  protected createResult(
-    verdict: AiPlanCheckVerdict,
-    reasoning: string,
-    durationMs: number
-  ): AiPlanCheckResult {
+  protected createResult(verdict: AiPlanCheckVerdict, reasoning: string, durationMs: number): AiPlanCheckResult {
     return { verdict, reasoning, durationMs };
   }
 }

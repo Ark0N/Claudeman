@@ -85,15 +85,13 @@ const INVALID_PATH_PATTERN = /^[/~]-|\/dev\/null$/;
  * Matches lines like "tail -f /path/to/file" without the ● Bash() wrapper.
  * This catches commands Claude mentions but doesn't execute.
  */
-const TEXT_COMMAND_PATTERN =
-  /^\s*(tail|cat|head|less|grep|watch|multitail)\s+(?:-[^\s]+\s+)*([/~][^\s'"<>|;&\n]+)/;
+const TEXT_COMMAND_PATTERN = /^\s*(tail|cat|head|less|grep|watch|multitail)\s+(?:-[^\s]+\s+)*([/~][^\s'"<>|;&\n]+)/;
 
 /**
  * Pattern to detect log file paths mentioned in text (even without commands).
  * Matches paths ending in .log, .txt, .out, or in common log directories.
  */
-const LOG_FILE_MENTION_PATTERN =
-  /([/~][^\s'"<>|;&\n]*(?:\.log|\.txt|\.out|\/log\/[^\s'"<>|;&\n]+))/g;
+const LOG_FILE_MENTION_PATTERN = /([/~][^\s'"<>|;&\n]*(?:\.log|\.txt|\.out|\/log\/[^\s'"<>|;&\n]+))/g;
 
 // ========== Event Interfaces ==========
 
@@ -421,9 +419,7 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
     if (this._lineBuffer.length > MAX_LINE_BUFFER_SIZE) {
       const trimPoint = this._lineBuffer.lastIndexOf('\n', MAX_LINE_BUFFER_SIZE / 2);
       this._lineBuffer =
-        trimPoint > 0
-          ? this._lineBuffer.slice(trimPoint + 1)
-          : this._lineBuffer.slice(-MAX_LINE_BUFFER_SIZE / 2);
+        trimPoint > 0 ? this._lineBuffer.slice(trimPoint + 1) : this._lineBuffer.slice(-MAX_LINE_BUFFER_SIZE / 2);
     }
 
     // Process complete lines
@@ -449,9 +445,7 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
     if (this._lineBuffer.length > MAX_LINE_BUFFER_SIZE) {
       const trimPoint = this._lineBuffer.lastIndexOf('\n', MAX_LINE_BUFFER_SIZE / 2);
       this._lineBuffer =
-        trimPoint > 0
-          ? this._lineBuffer.slice(trimPoint + 1)
-          : this._lineBuffer.slice(-MAX_LINE_BUFFER_SIZE / 2);
+        trimPoint > 0 ? this._lineBuffer.slice(trimPoint + 1) : this._lineBuffer.slice(-MAX_LINE_BUFFER_SIZE / 2);
     }
 
     const lines = this._lineBuffer.split('\n');
@@ -505,9 +499,7 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
           // Enforce max tools limit
           if (this._activeTools.size >= MAX_ACTIVE_TOOLS) {
             // Remove oldest tool
-            const oldest = Array.from(this._activeTools.entries()).sort(
-              (a, b) => a[1].startedAt - b[1].startedAt
-            )[0];
+            const oldest = Array.from(this._activeTools.entries()).sort((a, b) => a[1].startedAt - b[1].startedAt)[0];
             if (oldest) {
               this._activeTools.delete(oldest[0]);
             }

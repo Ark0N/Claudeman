@@ -16,16 +16,7 @@ import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  existsSync,
-  statSync,
-  mkdirSync,
-  writeFileSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  chmodSync,
-} from 'node:fs';
+import { existsSync, statSync, mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync, chmodSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -224,9 +215,7 @@ function formatUptime(seconds: number): string {
  * Extracts only relevant fields and limits total size to prevent
  * oversized payloads from being broadcast to all connected clients.
  */
-function sanitizeHookData(
-  data: Record<string, unknown> | null | undefined
-): Record<string, unknown> {
+function sanitizeHookData(data: Record<string, unknown> | null | undefined): Record<string, unknown> {
   if (!data || typeof data !== 'object') return {};
 
   // Only forward known safe fields from Claude Code hook stdin
@@ -291,18 +280,13 @@ function autoConfigureRalph(
 
   if (ralphConfig && ralphConfig.completionPromise) {
     session.ralphTracker.enable();
-    session.ralphTracker.startLoop(
-      ralphConfig.completionPromise,
-      ralphConfig.maxIterations ?? undefined
-    );
+    session.ralphTracker.startLoop(ralphConfig.completionPromise, ralphConfig.maxIterations ?? undefined);
 
     // Restore iteration count if available
     if (ralphConfig.iteration > 0) {
       // The tracker's cycleCount will be updated when we detect iteration patterns
       // in the terminal output, but we can set maxIterations now
-      console.log(
-        `[auto-detect] Ralph loop at iteration ${ralphConfig.iteration}/${ralphConfig.maxIterations ?? '∞'}`
-      );
+      console.log(`[auto-detect] Ralph loop at iteration ${ralphConfig.iteration}/${ralphConfig.maxIterations ?? '∞'}`);
     }
 
     console.log(
@@ -322,9 +306,7 @@ function autoConfigureRalph(
   if (completionPhrase) {
     session.ralphTracker.enable();
     session.ralphTracker.startLoop(completionPhrase);
-    console.log(
-      `[auto-detect] Configured Ralph loop for session ${session.id} from CLAUDE.md: ${completionPhrase}`
-    );
+    console.log(`[auto-detect] Configured Ralph loop for session ${session.id} from CLAUDE.md: ${completionPhrase}`);
     broadcast('session:ralphLoopUpdate', {
       sessionId: session.id,
       state: session.ralphTracker.loopState,
@@ -385,12 +367,7 @@ interface SessionListenerRefs {
   taskFailed: (task: BackgroundTask, error: string) => void;
   autoClear: (data: { tokens: number; threshold: number }) => void;
   autoCompact: (data: { tokens: number; threshold: number; prompt?: string }) => void;
-  cliInfoUpdated: (data: {
-    version?: string;
-    model?: string;
-    accountType?: string;
-    latestVersion?: string;
-  }) => void;
+  cliInfoUpdated: (data: { version?: string; model?: string; accountType?: string; latestVersion?: string }) => void;
   ralphLoopUpdate: (state: RalphTrackerState) => void;
   ralphTodoUpdate: (todos: RalphTodoItem[]) => void;
   ralphCompletionDetected: (phrase: string) => void;
@@ -409,8 +386,7 @@ export class WebServer extends EventEmitter {
   private app: FastifyInstance;
   private sessions: Map<string, Session> = new Map();
   private respawnControllers: Map<string, RespawnController> = new Map();
-  private respawnTimers: Map<string, { timer: NodeJS.Timeout; endAt: number; startedAt: number }> =
-    new Map();
+  private respawnTimers: Map<string, { timer: NodeJS.Timeout; endAt: number; startedAt: number }> = new Map();
   private runSummaryTrackers: Map<string, RunSummaryTracker> = new Map();
   private transcriptWatchers: Map<string, TranscriptWatcher> = new Map();
   // Store session listener references for explicit cleanup (prevents memory leaks)
@@ -606,10 +582,7 @@ export class WebServer extends EventEmitter {
     this.imageWatcherHandlers = {
       detected: (event: ImageDetectedEvent) => this.broadcast('image:detected', event),
       error: (error: Error, sessionId?: string) => {
-        console.error(
-          `[ImageWatcher] Error${sessionId ? ` for ${sessionId}` : ''}:`,
-          error.message
-        );
+        console.error(`[ImageWatcher] Error${sessionId ? ` for ${sessionId}` : ''}:`, error.message);
       },
     };
 
@@ -680,8 +653,7 @@ export class WebServer extends EventEmitter {
     const authPassword = process.env.CODEMAN_PASSWORD;
     if (authPassword) {
       const authUsername = process.env.CODEMAN_USERNAME || 'admin';
-      const expectedHeader =
-        'Basic ' + Buffer.from(`${authUsername}:${authPassword}`).toString('base64');
+      const expectedHeader = 'Basic ' + Buffer.from(`${authUsername}:${authPassword}`).toString('base64');
 
       // Session token store — active sessions extend TTL on access
       this.authSessions = new StaleExpirationMap<string, string>({
@@ -780,11 +752,7 @@ export class WebServer extends EventEmitter {
       if (origin) {
         try {
           const url = new URL(origin);
-          if (
-            url.hostname === 'localhost' ||
-            url.hostname === '127.0.0.1' ||
-            url.hostname === '::1'
-          ) {
+          if (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1') {
             reply.header('Access-Control-Allow-Origin', origin);
             reply.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
             reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -871,9 +839,7 @@ export class WebServer extends EventEmitter {
     this.app.get('/api/tunnel/qr', async (_req, reply) => {
       const url = this.tunnelManager.getUrl();
       if (!url) {
-        return reply
-          .code(404)
-          .send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'Tunnel not running'));
+        return reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'Tunnel not running'));
       }
       try {
         const QRCode = require('qrcode');
@@ -881,16 +847,13 @@ export class WebServer extends EventEmitter {
         // Return as data URI to avoid Fastify compress issues with SVG content-type
         return { svg };
       } catch (err) {
-        return reply
-          .code(500)
-          .send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err)));
+        return reply.code(500).send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err)));
       }
     });
 
     // OpenCode CLI availability check
     this.app.get('/api/opencode/status', async () => {
-      const { isOpenCodeAvailable, resolveOpenCodeDir } =
-        await import('../utils/opencode-cli-resolver.js');
+      const { isOpenCodeAvailable, resolveOpenCodeDir } = await import('../utils/opencode-cli-resolver.js');
       return {
         available: isOpenCodeAvailable(),
         path: resolveOpenCodeDir(),
@@ -923,10 +886,8 @@ export class WebServer extends EventEmitter {
 
     // Global stats endpoint
     this.app.get('/api/stats', async () => {
-      const activeSessionTokens: Record<
-        string,
-        { inputTokens?: number; outputTokens?: number; totalCost?: number }
-      > = {};
+      const activeSessionTokens: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }> =
+        {};
       for (const [sessionId, session] of this.sessions) {
         activeSessionTokens[sessionId] = {
           inputTokens: session.inputTokens,
@@ -944,10 +905,8 @@ export class WebServer extends EventEmitter {
     // Token stats with daily history
     this.app.get('/api/token-stats', async () => {
       // Get aggregate totals (global + active sessions)
-      const activeSessionTokens: Record<
-        string,
-        { inputTokens?: number; outputTokens?: number; totalCost?: number }
-      > = {};
+      const activeSessionTokens: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }> =
+        {};
       for (const [sessionId, session] of this.sessions) {
         activeSessionTokens[sessionId] = {
           inputTokens: session.inputTokens,
@@ -970,10 +929,7 @@ export class WebServer extends EventEmitter {
       // Validate request body against schema to prevent arbitrary config injection
       const parseResult = ConfigUpdateSchema.safeParse(req.body);
       if (!parseResult.success) {
-        return createErrorResponse(
-          ApiErrorCode.INVALID_INPUT,
-          `Invalid config: ${parseResult.error.message}`
-        );
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Invalid config: ${parseResult.error.message}`);
       }
       this.store.setConfig(parseResult.data as Partial<ReturnType<typeof this.store.getConfig>>);
       return { success: true, config: this.store.getConfig() };
@@ -1032,17 +988,13 @@ export class WebServer extends EventEmitter {
           fileWatchers: subagentStats.fileWatcherCount,
           dirWatchers: subagentStats.dirWatcherCount,
           transcriptWatchers: this.transcriptWatchers.size,
-          total:
-            subagentStats.fileWatcherCount +
-            subagentStats.dirWatcherCount +
-            this.transcriptWatchers.size,
+          total: subagentStats.fileWatcherCount + subagentStats.dirWatcherCount + this.transcriptWatchers.size,
         },
         timers: {
           respawnTimers: this.respawnTimers.size,
           pendingRespawnStarts: this.pendingRespawnStarts.size,
           subagentIdleTimers: subagentStats.idleTimerCount,
-          total:
-            this.respawnTimers.size + this.pendingRespawnStarts.size + subagentStats.idleTimerCount,
+          total: this.respawnTimers.size + this.pendingRespawnStarts.size + subagentStats.idleTimerCount,
         },
         uptime: {
           seconds: Math.round(process.uptime()),
@@ -1066,10 +1018,7 @@ export class WebServer extends EventEmitter {
 
       const result = CreateSessionSchema.safeParse(req.body);
       if (!result.success) {
-        return createErrorResponse(
-          ApiErrorCode.INVALID_INPUT,
-          result.error.issues[0]?.message ?? 'Validation failed'
-        );
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
       }
       const body = result.data;
       const workingDir = body.workingDir || process.cwd();
@@ -1106,11 +1055,7 @@ export class WebServer extends EventEmitter {
       const modelConfig = await this.getModelConfig();
       const mode = body.mode || 'claude';
       const model =
-        mode === 'opencode'
-          ? body.openCodeConfig?.model
-          : mode !== 'shell'
-            ? modelConfig?.defaultModel
-            : undefined;
+        mode === 'opencode' ? body.openCodeConfig?.model : mode !== 'shell' ? modelConfig?.defaultModel : undefined;
       const claudeModeConfig = await this.getClaudeModeConfig();
       const session = new Session({
         workingDir,
@@ -1350,10 +1295,7 @@ export class WebServer extends EventEmitter {
       let truncated = false;
       const maxFiles = 5000;
 
-      const scanDirectory = async (
-        dirPath: string,
-        currentDepth: number
-      ): Promise<FileTreeNode[]> => {
+      const scanDirectory = async (dirPath: string, currentDepth: number): Promise<FileTreeNode[]> => {
         if (currentDepth > maxDepth || totalFiles + totalDirectories > maxFiles) {
           truncated = true;
           return [];
@@ -1396,9 +1338,7 @@ export class WebServer extends EventEmitter {
               });
             } else {
               totalFiles++;
-              const ext = entry.name.includes('.')
-                ? entry.name.split('.').pop()?.toLowerCase()
-                : undefined;
+              const ext = entry.name.includes('.') ? entry.name.split('.').pop()?.toLowerCase() : undefined;
               let size: number | undefined;
               try {
                 const stat = await fs.stat(fullPath);
@@ -1440,11 +1380,7 @@ export class WebServer extends EventEmitter {
     // Get file content for preview (File Browser)
     this.app.get('/api/sessions/:id/file-content', async (req) => {
       const { id } = req.params as { id: string };
-      const {
-        path: filePath,
-        lines,
-        raw,
-      } = req.query as { path?: string; lines?: string; raw?: string };
+      const { path: filePath, lines, raw } = req.query as { path?: string; lines?: string; raw?: string };
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1459,10 +1395,7 @@ export class WebServer extends EventEmitter {
       const fullPath = resolve(session.workingDir, filePath);
       const relativePath = relative(session.workingDir, fullPath);
       if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
-        return createErrorResponse(
-          ApiErrorCode.INVALID_INPUT,
-          'Path must be within working directory'
-        );
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be within working directory');
       }
 
       try {
@@ -1544,10 +1477,7 @@ export class WebServer extends EventEmitter {
           },
         };
       } catch (err) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          `Failed to read file: ${getErrorMessage(err)}`
-        );
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${getErrorMessage(err)}`);
       }
     });
 
@@ -1563,9 +1493,7 @@ export class WebServer extends EventEmitter {
       }
 
       if (!filePath) {
-        reply
-          .code(400)
-          .send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
+        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
         return;
       }
 
@@ -1573,11 +1501,7 @@ export class WebServer extends EventEmitter {
       const fullPath = resolve(session.workingDir, filePath);
       const relativePath = relative(session.workingDir, fullPath);
       if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
-        reply
-          .code(400)
-          .send(
-            createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be within working directory')
-          );
+        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be within working directory'));
         return;
       }
 
@@ -1623,12 +1547,7 @@ export class WebServer extends EventEmitter {
       } catch (err) {
         reply
           .code(500)
-          .send(
-            createErrorResponse(
-              ApiErrorCode.OPERATION_FAILED,
-              `Failed to read file: ${getErrorMessage(err)}`
-            )
-          );
+          .send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${getErrorMessage(err)}`));
       }
     });
 
@@ -1644,9 +1563,7 @@ export class WebServer extends EventEmitter {
       }
 
       if (!filePath) {
-        reply
-          .code(400)
-          .send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
+        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
         return;
       }
 
@@ -1689,9 +1606,7 @@ export class WebServer extends EventEmitter {
       streamRef.id = result.streamId;
 
       // Notify client of successful connection
-      reply.raw.write(
-        `data: ${JSON.stringify({ type: 'connected', streamId: result.streamId, filePath })}\n\n`
-      );
+      reply.raw.write(`data: ${JSON.stringify({ type: 'connected', streamId: result.streamId, filePath })}\n\n`);
 
       // Handle client disconnect
       req.raw.on('close', () => {
@@ -1721,14 +1636,13 @@ export class WebServer extends EventEmitter {
       if (!ralphResult.success) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
       }
-      const { enabled, completionPhrase, maxIterations, reset, disableAutoEnable } =
-        ralphResult.data as {
-          enabled?: boolean;
-          completionPhrase?: string;
-          maxIterations?: number;
-          reset?: boolean | 'full';
-          disableAutoEnable?: boolean;
-        };
+      const { enabled, completionPhrase, maxIterations, reset, disableAutoEnable } = ralphResult.data as {
+        enabled?: boolean;
+        completionPhrase?: string;
+        maxIterations?: number;
+        reset?: boolean | 'full';
+        disableAutoEnable?: boolean;
+      };
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1737,10 +1651,7 @@ export class WebServer extends EventEmitter {
 
       // Ralph tracker is not supported for opencode sessions
       if (session.mode === 'opencode') {
-        return createErrorResponse(
-          ApiErrorCode.INVALID_INPUT,
-          'Ralph tracker is not supported for opencode sessions'
-        );
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Ralph tracker is not supported for opencode sessions');
       }
 
       // Handle reset first (before other config)
@@ -1938,10 +1849,7 @@ export class WebServer extends EventEmitter {
         };
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-          return createErrorResponse(
-            ApiErrorCode.NOT_FOUND,
-            '@fix_plan.md not found in working directory'
-          );
+          return createErrorResponse(ApiErrorCode.NOT_FOUND, '@fix_plan.md not found in working directory');
         }
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${error}`);
       }
@@ -1988,10 +1896,7 @@ export class WebServer extends EventEmitter {
       const { id } = req.params as { id: string };
       const result = RunPromptSchema.safeParse(req.body);
       if (!result.success) {
-        return createErrorResponse(
-          ApiErrorCode.INVALID_INPUT,
-          result.error.issues[0]?.message ?? 'Validation failed'
-        );
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
       }
       const { prompt } = result.data;
       const session = this.sessions.get(id);
@@ -2091,10 +1996,7 @@ export class WebServer extends EventEmitter {
       const { id } = req.params as { id: string };
       const result = SessionInputWithLimitSchema.safeParse(req.body);
       if (!result.success) {
-        return createErrorResponse(
-          ApiErrorCode.INVALID_INPUT,
-          result.error.issues[0]?.message ?? 'Validation failed'
-        );
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
       }
       const { input, useMux } = result.data;
       const session = this.sessions.get(id);
@@ -2120,9 +2022,7 @@ export class WebServer extends EventEmitter {
           .writeViaMux(inputStr)
           .then((ok) => {
             if (!ok) {
-              console.warn(
-                `[Server] writeViaMux failed for session ${id}, falling back to direct write`
-              );
+              console.warn(`[Server] writeViaMux failed for session ${id}, falling back to direct write`);
               session.write(inputStr);
             }
           })
@@ -2140,10 +2040,7 @@ export class WebServer extends EventEmitter {
       const { id } = req.params as { id: string };
       const result = ResizeSchema.safeParse(req.body);
       if (!result.success) {
-        return createErrorResponse(
-          ApiErrorCode.INVALID_INPUT,
-          result.error.issues[0]?.message ?? 'Validation failed'
-        );
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
       }
       const { cols, rows } = result.data;
       const session = this.sessions.get(id);
@@ -2273,10 +2170,7 @@ export class WebServer extends EventEmitter {
 
       // Respawn is not supported for opencode sessions
       if (session.mode === 'opencode') {
-        return createErrorResponse(
-          ApiErrorCode.INVALID_INPUT,
-          'Respawn is not supported for opencode sessions'
-        );
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Respawn is not supported for opencode sessions');
       }
 
       // Create or get existing controller
@@ -2344,10 +2238,7 @@ export class WebServer extends EventEmitter {
       // Validate respawn config to prevent arbitrary field injection
       const parseResult = RespawnConfigSchema.safeParse(req.body);
       if (!parseResult.success) {
-        return createErrorResponse(
-          ApiErrorCode.INVALID_INPUT,
-          `Invalid respawn config: ${parseResult.error.message}`
-        );
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Invalid respawn config: ${parseResult.error.message}`);
       }
       const config = parseResult.data as Partial<RespawnConfig>;
       const session = this.sessions.get(id);
@@ -2373,8 +2264,7 @@ export class WebServer extends EventEmitter {
       const merged: PersistedRespawnConfig = {
         enabled: config.enabled ?? currentConfig?.enabled ?? false,
         idleTimeoutMs: config.idleTimeoutMs ?? currentConfig?.idleTimeoutMs ?? 10000,
-        updatePrompt:
-          config.updatePrompt ?? currentConfig?.updatePrompt ?? 'update all the docs and CLAUDE.md',
+        updatePrompt: config.updatePrompt ?? currentConfig?.updatePrompt ?? 'update all the docs and CLAUDE.md',
         interStepDelayMs: config.interStepDelayMs ?? currentConfig?.interStepDelayMs ?? 1000,
         sendClear: config.sendClear ?? currentConfig?.sendClear ?? true,
         sendInit: config.sendInit ?? currentConfig?.sendInit ?? true,
@@ -2382,23 +2272,15 @@ export class WebServer extends EventEmitter {
         autoAcceptPrompts: config.autoAcceptPrompts ?? currentConfig?.autoAcceptPrompts ?? true,
         autoAcceptDelayMs: config.autoAcceptDelayMs ?? currentConfig?.autoAcceptDelayMs ?? 8000,
         aiIdleCheckEnabled: config.aiIdleCheckEnabled ?? currentConfig?.aiIdleCheckEnabled ?? true,
-        aiIdleCheckModel:
-          config.aiIdleCheckModel ?? currentConfig?.aiIdleCheckModel ?? 'claude-opus-4-5-20251101',
-        aiIdleCheckMaxContext:
-          config.aiIdleCheckMaxContext ?? currentConfig?.aiIdleCheckMaxContext ?? 16000,
-        aiIdleCheckTimeoutMs:
-          config.aiIdleCheckTimeoutMs ?? currentConfig?.aiIdleCheckTimeoutMs ?? 90000,
-        aiIdleCheckCooldownMs:
-          config.aiIdleCheckCooldownMs ?? currentConfig?.aiIdleCheckCooldownMs ?? 180000,
+        aiIdleCheckModel: config.aiIdleCheckModel ?? currentConfig?.aiIdleCheckModel ?? 'claude-opus-4-5-20251101',
+        aiIdleCheckMaxContext: config.aiIdleCheckMaxContext ?? currentConfig?.aiIdleCheckMaxContext ?? 16000,
+        aiIdleCheckTimeoutMs: config.aiIdleCheckTimeoutMs ?? currentConfig?.aiIdleCheckTimeoutMs ?? 90000,
+        aiIdleCheckCooldownMs: config.aiIdleCheckCooldownMs ?? currentConfig?.aiIdleCheckCooldownMs ?? 180000,
         aiPlanCheckEnabled: config.aiPlanCheckEnabled ?? currentConfig?.aiPlanCheckEnabled ?? true,
-        aiPlanCheckModel:
-          config.aiPlanCheckModel ?? currentConfig?.aiPlanCheckModel ?? 'claude-opus-4-5-20251101',
-        aiPlanCheckMaxContext:
-          config.aiPlanCheckMaxContext ?? currentConfig?.aiPlanCheckMaxContext ?? 8000,
-        aiPlanCheckTimeoutMs:
-          config.aiPlanCheckTimeoutMs ?? currentConfig?.aiPlanCheckTimeoutMs ?? 60000,
-        aiPlanCheckCooldownMs:
-          config.aiPlanCheckCooldownMs ?? currentConfig?.aiPlanCheckCooldownMs ?? 30000,
+        aiPlanCheckModel: config.aiPlanCheckModel ?? currentConfig?.aiPlanCheckModel ?? 'claude-opus-4-5-20251101',
+        aiPlanCheckMaxContext: config.aiPlanCheckMaxContext ?? currentConfig?.aiPlanCheckMaxContext ?? 8000,
+        aiPlanCheckTimeoutMs: config.aiPlanCheckTimeoutMs ?? currentConfig?.aiPlanCheckTimeoutMs ?? 60000,
+        aiPlanCheckCooldownMs: config.aiPlanCheckCooldownMs ?? currentConfig?.aiPlanCheckCooldownMs ?? 30000,
         durationMinutes: currentConfig?.durationMinutes,
       };
       this.mux.updateRespawnConfig(id, merged);
@@ -2410,9 +2292,7 @@ export class WebServer extends EventEmitter {
     // Start interactive session WITH respawn enabled
     this.app.post('/api/sessions/:id/interactive-respawn', async (req) => {
       const { id } = req.params as { id: string };
-      const irResult = req.body
-        ? InteractiveRespawnSchema.safeParse(req.body)
-        : { success: true as const, data: {} };
+      const irResult = req.body ? InteractiveRespawnSchema.safeParse(req.body) : { success: true as const, data: {} };
       if (!irResult.success) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
       }
@@ -2432,10 +2312,7 @@ export class WebServer extends EventEmitter {
 
       // Respawn is not supported for opencode sessions
       if (session.mode === 'opencode') {
-        return createErrorResponse(
-          ApiErrorCode.INVALID_INPUT,
-          'Respawn is not supported for opencode sessions'
-        );
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Respawn is not supported for opencode sessions');
       }
 
       try {
@@ -2490,9 +2367,7 @@ export class WebServer extends EventEmitter {
     // Enable respawn on an EXISTING interactive session
     this.app.post('/api/sessions/:id/respawn/enable', async (req) => {
       const { id } = req.params as { id: string };
-      const reResult = req.body
-        ? RespawnEnableSchema.safeParse(req.body)
-        : { success: true as const, data: {} };
+      const reResult = req.body ? RespawnEnableSchema.safeParse(req.body) : { success: true as const, data: {} };
       if (!reResult.success) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
       }
@@ -2505,18 +2380,12 @@ export class WebServer extends EventEmitter {
 
       // Respawn is not supported for opencode sessions
       if (session.mode === 'opencode') {
-        return createErrorResponse(
-          ApiErrorCode.INVALID_INPUT,
-          'Respawn is not supported for opencode sessions'
-        );
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Respawn is not supported for opencode sessions');
       }
 
       // Check if session is running (has a PID)
       if (!session.pid) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'Session is not running. Start it first.'
-        );
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Session is not running. Start it first.');
       }
 
       // Stop existing controller if any
@@ -2746,21 +2615,14 @@ export class WebServer extends EventEmitter {
           try {
             const stat = statSync(workingDir);
             if (!stat.isDirectory()) {
-              return createErrorResponse(
-                ApiErrorCode.INVALID_INPUT,
-                'workingDir is not a directory'
-              );
+              return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'workingDir is not a directory');
             }
           } catch {
             return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'workingDir does not exist');
           }
         }
 
-        const run = await this.startScheduledRun(
-          prompt,
-          workingDir || process.cwd(),
-          durationMinutes ?? 60
-        );
+        const run = await this.startScheduledRun(prompt, workingDir || process.cwd(), durationMinutes ?? 60);
         return { success: true, run };
       }
     );
@@ -2813,9 +2675,7 @@ export class WebServer extends EventEmitter {
       // Get linked cases
       const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
       try {
-        const linkedCases: Record<string, string> = JSON.parse(
-          await fs.readFile(linkedCasesFile, 'utf-8')
-        );
+        const linkedCases: Record<string, string> = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
         for (const [name, path] of Object.entries(linkedCases)) {
           // Only add if not already in cases (avoid duplicates) and path exists
           if (!cases.some((c) => c.name === name) && existsSync(path)) {
@@ -2835,116 +2695,105 @@ export class WebServer extends EventEmitter {
       return cases;
     });
 
-    this.app.post(
-      '/api/cases',
-      async (req): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
-        const result = CreateCaseSchema.safeParse(req.body);
-        if (!result.success) {
-          return createErrorResponse(
-            ApiErrorCode.INVALID_INPUT,
-            result.error.issues[0]?.message ?? 'Validation failed'
-          );
-        }
-        const { name, description } = result.data;
-
-        const casePath = join(casesDir, name);
-
-        // Security: Path traversal protection - use relative path check
-        const resolvedPath = resolve(casePath);
-        const resolvedBase = resolve(casesDir);
-        const relPath = relative(resolvedBase, resolvedPath);
-        if (relPath.startsWith('..') || isAbsolute(relPath)) {
-          return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
-        }
-
-        if (existsSync(casePath)) {
-          return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
-        }
-
-        try {
-          mkdirSync(casePath, { recursive: true });
-          mkdirSync(join(casePath, 'src'), { recursive: true });
-
-          // Read settings to get custom template path
-          const templatePath = await this.getDefaultClaudeMdPath();
-          const claudeMd = generateClaudeMd(name, description || '', templatePath);
-          writeFileSync(join(casePath, 'CLAUDE.md'), claudeMd);
-
-          // Write .claude/settings.local.json with hooks for desktop notifications
-          await writeHooksConfig(casePath);
-
-          this.broadcast('case:created', { name, path: casePath });
-
-          return { success: true, data: { case: { name, path: casePath } } };
-        } catch (err) {
-          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
-        }
+    this.app.post('/api/cases', async (req): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
+      const result = CreateCaseSchema.safeParse(req.body);
+      if (!result.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
       }
-    );
+      const { name, description } = result.data;
+
+      const casePath = join(casesDir, name);
+
+      // Security: Path traversal protection - use relative path check
+      const resolvedPath = resolve(casePath);
+      const resolvedBase = resolve(casesDir);
+      const relPath = relative(resolvedBase, resolvedPath);
+      if (relPath.startsWith('..') || isAbsolute(relPath)) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
+      }
+
+      if (existsSync(casePath)) {
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
+      }
+
+      try {
+        mkdirSync(casePath, { recursive: true });
+        mkdirSync(join(casePath, 'src'), { recursive: true });
+
+        // Read settings to get custom template path
+        const templatePath = await this.getDefaultClaudeMdPath();
+        const claudeMd = generateClaudeMd(name, description || '', templatePath);
+        writeFileSync(join(casePath, 'CLAUDE.md'), claudeMd);
+
+        // Write .claude/settings.local.json with hooks for desktop notifications
+        await writeHooksConfig(casePath);
+
+        this.broadcast('case:created', { name, path: casePath });
+
+        return { success: true, data: { case: { name, path: casePath } } };
+      } catch (err) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+      }
+    });
 
     // Link an existing folder as a case
-    this.app.post(
-      '/api/cases/link',
-      async (req): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
-        const lcResult = LinkCaseSchema.safeParse(req.body);
-        if (!lcResult.success) {
-          return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
-        }
-        const { name, path: folderPath } = lcResult.data;
+    this.app.post('/api/cases/link', async (req): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
+      const lcResult = LinkCaseSchema.safeParse(req.body);
+      if (!lcResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+      }
+      const { name, path: folderPath } = lcResult.data;
 
-        // Expand ~ to home directory
-        const expandedPath = folderPath.startsWith('~')
-          ? join(homedir(), folderPath.slice(1))
-          : folderPath;
+      // Expand ~ to home directory
+      const expandedPath = folderPath.startsWith('~') ? join(homedir(), folderPath.slice(1)) : folderPath;
 
-        // Validate the folder exists
-        if (!existsSync(expandedPath)) {
-          return createErrorResponse(ApiErrorCode.NOT_FOUND, `Folder not found: ${expandedPath}`);
-        }
+      // Validate the folder exists
+      if (!existsSync(expandedPath)) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, `Folder not found: ${expandedPath}`);
+      }
 
-        // Check if case name already exists in casesDir
-        const casePath = join(casesDir, name);
-        if (existsSync(casePath)) {
-          return createErrorResponse(
-            ApiErrorCode.ALREADY_EXISTS,
-            'A case with this name already exists in codeman-cases.'
-          );
-        }
+      // Check if case name already exists in casesDir
+      const casePath = join(casesDir, name);
+      if (existsSync(casePath)) {
+        return createErrorResponse(
+          ApiErrorCode.ALREADY_EXISTS,
+          'A case with this name already exists in codeman-cases.'
+        );
+      }
 
-        // Load existing linked cases
-        const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
-        let linkedCases: Record<string, string> = {};
-        try {
-          linkedCases = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-            console.warn('[Server] Failed to read linked cases:', err);
-          }
-        }
-
-        // Check if name is already linked
-        if (linkedCases[name]) {
-          return createErrorResponse(
-            ApiErrorCode.ALREADY_EXISTS,
-            `Case "${name}" is already linked to ${linkedCases[name]}`
-          );
-        }
-
-        // Save the linked case
-        linkedCases[name] = expandedPath;
-        try {
-          const codemanDir = join(homedir(), '.codeman');
-          if (!existsSync(codemanDir)) {
-            mkdirSync(codemanDir, { recursive: true });
-          }
-          await fs.writeFile(linkedCasesFile, JSON.stringify(linkedCases, null, 2));
-          this.broadcast('case:linked', { name, path: expandedPath });
-          return { success: true, data: { case: { name, path: expandedPath } } };
-        } catch (err) {
-          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+      // Load existing linked cases
+      const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
+      let linkedCases: Record<string, string> = {};
+      try {
+        linkedCases = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          console.warn('[Server] Failed to read linked cases:', err);
         }
       }
-    );
+
+      // Check if name is already linked
+      if (linkedCases[name]) {
+        return createErrorResponse(
+          ApiErrorCode.ALREADY_EXISTS,
+          `Case "${name}" is already linked to ${linkedCases[name]}`
+        );
+      }
+
+      // Save the linked case
+      linkedCases[name] = expandedPath;
+      try {
+        const codemanDir = join(homedir(), '.codeman');
+        if (!existsSync(codemanDir)) {
+          mkdirSync(codemanDir, { recursive: true });
+        }
+        await fs.writeFile(linkedCasesFile, JSON.stringify(linkedCases, null, 2));
+        this.broadcast('case:linked', { name, path: expandedPath });
+        return { success: true, data: { case: { name, path: expandedPath } } };
+      } catch (err) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+      }
+    });
 
     this.app.get('/api/cases/:name', async (req) => {
       const { name } = req.params as { name: string };
@@ -2952,9 +2801,7 @@ export class WebServer extends EventEmitter {
       // First check linked cases
       const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
       try {
-        const linkedCases: Record<string, string> = JSON.parse(
-          await fs.readFile(linkedCasesFile, 'utf-8')
-        );
+        const linkedCases: Record<string, string> = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
         if (linkedCases[name]) {
           const linkedPath = linkedCases[name];
           return {
@@ -2991,9 +2838,7 @@ export class WebServer extends EventEmitter {
 
       const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
       try {
-        const linkedCases: Record<string, string> = JSON.parse(
-          await fs.readFile(linkedCasesFile, 'utf-8')
-        );
+        const linkedCases: Record<string, string> = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
         if (linkedCases[name]) {
           casePath = linkedCases[name];
         }
@@ -3092,10 +2937,7 @@ export class WebServer extends EventEmitter {
           stats,
         };
       } catch (err) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          `Failed to read @fix_plan.md: ${err}`
-        );
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read @fix_plan.md: ${err}`);
       }
     });
 
@@ -3111,10 +2953,7 @@ export class WebServer extends EventEmitter {
 
       const result = QuickStartSchema.safeParse(req.body);
       if (!result.success) {
-        return createErrorResponse(
-          ApiErrorCode.INVALID_INPUT,
-          result.error.issues[0]?.message ?? 'Validation failed'
-        );
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
       }
       const { caseName = 'testcase', mode = 'claude', openCodeConfig } = result.data;
 
@@ -3158,10 +2997,7 @@ export class WebServer extends EventEmitter {
 
           this.broadcast('case:created', { name: caseName, path: casePath });
         } catch (err) {
-          return createErrorResponse(
-            ApiErrorCode.OPERATION_FAILED,
-            `Failed to create case: ${getErrorMessage(err)}`
-          );
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create case: ${getErrorMessage(err)}`);
         }
       }
 
@@ -3170,11 +3006,7 @@ export class WebServer extends EventEmitter {
       const niceConfig = await this.getGlobalNiceConfig();
       const qsModelConfig = await this.getModelConfig();
       const qsModel =
-        mode === 'opencode'
-          ? openCodeConfig?.model
-          : mode !== 'shell'
-            ? qsModelConfig?.defaultModel
-            : undefined;
+        mode === 'opencode' ? openCodeConfig?.model : mode !== 'shell' ? qsModelConfig?.defaultModel : undefined;
       const qsClaudeModeConfig = await this.getClaudeModeConfig();
       const session = new Session({
         workingDir: casePath,
@@ -3289,14 +3121,7 @@ export class WebServer extends EventEmitter {
           rlResult.error.issues[0]?.message ?? 'Validation failed'
         );
       }
-      const {
-        caseName,
-        taskDescription,
-        completionPhrase,
-        maxIterations,
-        enableRespawn,
-        planItems,
-      } = rlResult.data;
+      const { caseName, taskDescription, completionPhrase, maxIterations, enableRespawn, planItems } = rlResult.data;
 
       const casePath = join(casesDir, caseName);
 
@@ -3319,10 +3144,7 @@ export class WebServer extends EventEmitter {
           await writeHooksConfig(casePath);
           this.broadcast('case:created', { name: caseName, path: casePath });
         } catch (err) {
-          return createErrorResponse(
-            ApiErrorCode.OPERATION_FAILED,
-            `Failed to create case: ${getErrorMessage(err)}`
-          );
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create case: ${getErrorMessage(err)}`);
         }
       }
 
@@ -3399,15 +3221,13 @@ export class WebServer extends EventEmitter {
       let fullPrompt = taskDescription + '\n\n---\n\n';
       if (hasPlan) {
         fullPrompt += '## Task Plan\n\n';
-        fullPrompt +=
-          'A task plan has been written to `@fix_plan.md`. Use this to track progress:\n';
+        fullPrompt += 'A task plan has been written to `@fix_plan.md`. Use this to track progress:\n';
         fullPrompt += '- Reference the plan at the start of each iteration\n';
         fullPrompt += '- Update task checkboxes as you complete items\n';
         fullPrompt += '- Work through items in priority order (P0 > P1 > P2)\n\n';
       }
       fullPrompt += '## Iteration Protocol\n\n';
-      fullPrompt +=
-        'This is an autonomous loop. Files from previous iterations persist. On each iteration:\n';
+      fullPrompt += 'This is an autonomous loop. Files from previous iterations persist. On each iteration:\n';
       fullPrompt += '1. Check what work has already been done\n';
       fullPrompt += '2. Make incremental progress toward completion\n';
       fullPrompt += '3. Commit meaningful changes with descriptive messages\n\n';
@@ -3426,8 +3246,7 @@ export class WebServer extends EventEmitter {
       fullPrompt += "1. Document what you've tried\n";
       fullPrompt += '2. Identify the specific blocker\n';
       fullPrompt += '3. Try an alternative approach\n';
-      fullPrompt +=
-        '4. If truly blocked, output `<promise>BLOCKED</promise>` with an explanation\n';
+      fullPrompt += '4. If truly blocked, output `<promise>BLOCKED</promise>` with an explanation\n';
 
       // Write prompt to file
       const promptPath = join(casePath, '@ralph_prompt.md');
@@ -3521,14 +3340,9 @@ export class WebServer extends EventEmitter {
           const s = this.sessions.get(sessionId);
           if (!s) return;
           try {
-            await s.writeViaMux(
-              'Read @ralph_prompt.md and follow the instructions. Start working immediately.\r'
-            );
+            await s.writeViaMux('Read @ralph_prompt.md and follow the instructions. Start working immediately.\r');
           } catch (err) {
-            console.warn(
-              `[RalphLoop] Failed to send prompt to session ${sessionId}:`,
-              getErrorMessage(err)
-            );
+            console.warn(`[RalphLoop] Failed to send prompt to session ${sessionId}:`, getErrorMessage(err));
           }
         };
         pollReady().catch((err) => console.error('[RalphLoop] pollReady error:', err));
@@ -3649,8 +3463,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
       // Use configured model for plan generation, falling back to opus
       const planModelConfig = await this.getModelConfig();
-      const modelToUse =
-        planModelConfig?.agentTypeOverrides?.implement || planModelConfig?.defaultModel || 'opus';
+      const modelToUse = planModelConfig?.agentTypeOverrides?.implement || planModelConfig?.defaultModel || 'opus';
 
       try {
         const { result, cost } = await session.runPrompt(prompt, { model: modelToUse });
@@ -3658,20 +3471,14 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         // Parse JSON from result
         const jsonMatch = result.match(/\[[\s\S]*\]/);
         if (!jsonMatch) {
-          return createErrorResponse(
-            ApiErrorCode.OPERATION_FAILED,
-            'Failed to parse plan - no JSON array found'
-          );
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Failed to parse plan - no JSON array found');
         }
 
         let items: PlanItem[];
         try {
           const parsed = JSON.parse(jsonMatch[0]);
           if (!Array.isArray(parsed)) {
-            return createErrorResponse(
-              ApiErrorCode.OPERATION_FAILED,
-              'Invalid response - expected array'
-            );
+            return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Invalid response - expected array');
           }
 
           // Validate and normalize items with enhanced fields
@@ -3688,8 +3495,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
               };
             }
             const obj = item as Record<string, unknown>;
-            const content =
-              typeof obj.content === 'string' ? obj.content.slice(0, 200) : `Step ${idx + 1}`;
+            const content = typeof obj.content === 'string' ? obj.content.slice(0, 200) : `Step ${idx + 1}`;
             let priority: 'P0' | 'P1' | 'P2' | null = null;
             if (obj.priority === 'P0' || obj.priority === 'P1' || obj.priority === 'P2') {
               priority = obj.priority;
@@ -3711,9 +3517,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
               content,
               priority,
               verificationCriteria:
-                typeof obj.verificationCriteria === 'string'
-                  ? obj.verificationCriteria
-                  : 'Task completed successfully',
+                typeof obj.verificationCriteria === 'string' ? obj.verificationCriteria : 'Task completed successfully',
               tddPhase,
               dependencies: Array.isArray(obj.dependencies) ? obj.dependencies.map(String) : [],
               status: 'pending' as const,
@@ -3734,10 +3538,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
           data: { items, costUsd: cost },
         };
       } catch (err) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'Plan generation failed: ' + getErrorMessage(err)
-        );
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Plan generation failed: ' + getErrorMessage(err));
       } finally {
         // Clean up the temporary session
         try {
@@ -3783,12 +3584,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       }
 
       const detailedModelConfig = await this.getModelConfig();
-      const orchestrator = new PlanOrchestrator(
-        this.mux,
-        process.cwd(),
-        outputDir,
-        detailedModelConfig ?? undefined
-      );
+      const orchestrator = new PlanOrchestrator(this.mux, process.cwd(), outputDir, detailedModelConfig ?? undefined);
 
       // Store orchestrator for potential cancellation via API (not on disconnect)
       // Plan generation continues even if browser disconnects - only explicit cancel stops it
@@ -3834,10 +3630,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         this.broadcast('plan:completed', { orchestratorId, success: result.success });
 
         if (!result.success) {
-          return createErrorResponse(
-            ApiErrorCode.OPERATION_FAILED,
-            result.error || 'Plan generation failed'
-          );
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, result.error || 'Plan generation failed');
         }
 
         return {
@@ -3877,10 +3670,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       if (orchestratorId) {
         const orchestrator = this.activePlanOrchestrators.get(orchestratorId);
         if (!orchestrator) {
-          return createErrorResponse(
-            ApiErrorCode.NOT_FOUND,
-            'Plan generation not found or already completed'
-          );
+          return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Plan generation not found or already completed');
         }
         console.log(`[API] Cancelling plan generation ${orchestratorId}`);
         await orchestrator.cancel();
@@ -3920,9 +3710,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       if (!existsSync(casePath)) {
         const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
         try {
-          const linkedCases: Record<string, string> = JSON.parse(
-            await fs.readFile(linkedCasesFile, 'utf-8')
-          );
+          const linkedCases: Record<string, string> = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
           if (linkedCases[caseName]) {
             casePath = linkedCases[caseName];
           }
@@ -3988,9 +3776,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       if (!existsSync(casePath)) {
         const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
         try {
-          const linkedCases: Record<string, string> = JSON.parse(
-            await fs.readFile(linkedCasesFile, 'utf-8')
-          );
+          const linkedCases: Record<string, string> = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
           if (linkedCases[caseName]) {
             casePath = linkedCases[caseName];
           }
@@ -4514,10 +4300,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       if (killed) {
         return { success: true, data: { agentId, status: 'killed' } };
       }
-      return createErrorResponse(
-        ApiErrorCode.OPERATION_FAILED,
-        'Subagent not found or already completed'
-      );
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Subagent not found or already completed');
     });
 
     // Trigger cleanup of stale subagents
@@ -4550,10 +4333,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     this.app.post('/api/hook-event', async (req) => {
       const result = HookEventSchema.safeParse(req.body);
       if (!result.success) {
-        return createErrorResponse(
-          ApiErrorCode.INVALID_INPUT,
-          result.error.issues[0]?.message ?? 'Validation failed'
-        );
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
       }
       const { event, sessionId, data } = result.data;
       if (!this.sessions.has(sessionId)) {
@@ -4610,10 +4390,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     this.app.post('/api/push/subscribe', async (req) => {
       const result = PushSubscribeSchema.safeParse(req.body);
       if (!result.success) {
-        return createErrorResponse(
-          ApiErrorCode.INVALID_INPUT,
-          result.error.issues[0]?.message ?? 'Validation failed'
-        );
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
       }
       const { endpoint, keys, userAgent, pushPreferences } = result.data;
       const record = this.pushStore.addSubscription({
@@ -4631,10 +4408,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       const { id } = req.params as { id: string };
       const result = PushPreferencesUpdateSchema.safeParse(req.body);
       if (!result.success) {
-        return createErrorResponse(
-          ApiErrorCode.INVALID_INPUT,
-          result.error.issues[0]?.message ?? 'Validation failed'
-        );
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
       }
       const updated = this.pushStore.updatePreferences(id, result.data.pushPreferences);
       if (!updated) {
@@ -4732,11 +4506,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       if (!existsSync(SCREENSHOTS_DIR)) {
         mkdirSync(SCREENSHOTS_DIR, { recursive: true });
       }
-      const timestamp = new Date()
-        .toISOString()
-        .replace(/[:.]/g, '-')
-        .replace('T', '_')
-        .slice(0, 19);
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
       const filename = `screenshot_${timestamp}${ext}`;
       const filepath = join(SCREENSHOTS_DIR, filename);
       await fs.writeFile(filepath, filePart.data);
@@ -4870,9 +4640,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     if (controller) {
       const config = controller.getConfig();
       const timerInfo = this.respawnTimers.get(session.id);
-      const durationMinutes = timerInfo
-        ? Math.round((timerInfo.endAt - timerInfo.startedAt) / 60000)
-        : undefined;
+      const durationMinutes = timerInfo ? Math.round((timerInfo.endAt - timerInfo.startedAt) / 60000) : undefined;
       state.respawnConfig = { ...config, durationMinutes };
       // Use config.enabled instead of controller.state - this way the respawn
       // will be restored on server restart even if it was temporarily stopped
@@ -4892,11 +4660,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 
   // Helper to save respawn config to mux session for persistence
-  private saveRespawnConfig(
-    sessionId: string,
-    config: RespawnConfig,
-    durationMinutes?: number
-  ): void {
+  private saveRespawnConfig(sessionId: string, config: RespawnConfig, durationMinutes?: number): void {
     const persistedConfig: PersistedRespawnConfig = {
       enabled: config.enabled,
       idleTimeoutMs: config.idleTimeoutMs,
@@ -4941,10 +4705,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
           const pageSize = parseInt(vmstat.match(/page size of (\d+)/)?.[1] || '4096', 10);
           const wired = parseInt(vmstat.match(/Pages wired down:\s+(\d+)/)?.[1] || '0', 10);
           const active = parseInt(vmstat.match(/Pages active:\s+(\d+)/)?.[1] || '0', 10);
-          const compressed = parseInt(
-            vmstat.match(/Pages occupied by compressor:\s+(\d+)/)?.[1] || '0',
-            10
-          );
+          const compressed = parseInt(vmstat.match(/Pages occupied by compressor:\s+(\d+)/)?.[1] || '0', 10);
           usedMem = (wired + active + compressed) * pageSize;
         } catch {
           usedMem = totalMem - freemem();
@@ -4978,11 +4739,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   // Track sessions currently being cleaned up to prevent concurrent cleanup races
   private cleaningUp: Set<string> = new Set();
 
-  private async cleanupSession(
-    sessionId: string,
-    killMux: boolean = true,
-    reason?: string
-  ): Promise<void> {
+  private async cleanupSession(sessionId: string, killMux: boolean = true, reason?: string): Promise<void> {
     // Guard against concurrent cleanup of the same session
     if (this.cleaningUp.has(sessionId)) return;
     this.cleaningUp.add(sessionId);
@@ -4994,11 +4751,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     }
   }
 
-  private async _doCleanupSession(
-    sessionId: string,
-    killMux: boolean,
-    reason?: string
-  ): Promise<void> {
+  private async _doCleanupSession(sessionId: string, killMux: boolean, reason?: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     const lifecycleLog = getLifecycleLog();
     lifecycleLog.log({
@@ -5029,9 +4782,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       // Save the config BEFORE removing controller, so it can be restored on restart
       const config = controller.getConfig();
       const timerInfo = this.respawnTimers.get(sessionId);
-      const durationMinutes = timerInfo
-        ? Math.round((timerInfo.endAt - timerInfo.startedAt) / 60000)
-        : undefined;
+      const durationMinutes = timerInfo ? Math.round((timerInfo.endAt - timerInfo.startedAt) / 60000) : undefined;
       this.saveRespawnConfig(sessionId, config, durationMinutes);
 
       controller.stop();
@@ -5110,10 +4861,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     if (session) {
       // Accumulate tokens to global stats before removing session
       // This preserves lifetime usage even after sessions are deleted
-      if (
-        killMux &&
-        (session.inputTokens > 0 || session.outputTokens > 0 || session.totalCost > 0)
-      ) {
+      if (killMux && (session.inputTokens > 0 || session.outputTokens > 0 || session.totalCost > 0)) {
         this.store.addToGlobalStats(session.inputTokens, session.outputTokens, session.totalCost);
         // Record to daily stats (for what hasn't been recorded yet via periodic recording)
         const lastRecorded = this.lastRecordedTokens.get(sessionId) || { input: 0, output: 0 };
@@ -5330,12 +5078,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       },
 
       // Claude Code CLI info parsed from terminal (version, model, account)
-      cliInfoUpdated: (data: {
-        version?: string;
-        model?: string;
-        accountType?: string;
-        latestVersion?: string;
-      }) => {
+      cliInfoUpdated: (data: { version?: string; model?: string; accountType?: string; latestVersion?: string }) => {
         this.broadcast('session:cliInfo', { sessionId: session.id, ...data });
         this.broadcastSessionStateDebounced(session.id);
       },
@@ -5503,20 +5246,17 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       this.broadcast('respawn:aiCheckStarted', { sessionId });
     });
 
-    controller.on(
-      'aiCheckCompleted',
-      (result: { verdict: string; reasoning: string; durationMs: number }) => {
-        this.broadcast('respawn:aiCheckCompleted', {
-          sessionId,
-          verdict: result.verdict,
-          reasoning: result.reasoning,
-          durationMs: result.durationMs,
-        });
-        // Track in run summary (lazy lookup)
-        const tracker = getTracker();
-        if (tracker) tracker.recordAiCheckResult(result.verdict);
-      }
-    );
+    controller.on('aiCheckCompleted', (result: { verdict: string; reasoning: string; durationMs: number }) => {
+      this.broadcast('respawn:aiCheckCompleted', {
+        sessionId,
+        verdict: result.verdict,
+        reasoning: result.reasoning,
+        durationMs: result.durationMs,
+      });
+      // Track in run summary (lazy lookup)
+      const tracker = getTracker();
+      if (tracker) tracker.recordAiCheckResult(result.verdict);
+    });
 
     controller.on('aiCheckFailed', (error: string) => {
       this.broadcast('respawn:aiCheckFailed', { sessionId, error });
@@ -5533,17 +5273,14 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       this.broadcast('respawn:planCheckStarted', { sessionId });
     });
 
-    controller.on(
-      'planCheckCompleted',
-      (result: { verdict: string; reasoning: string; durationMs: number }) => {
-        this.broadcast('respawn:planCheckCompleted', {
-          sessionId,
-          verdict: result.verdict,
-          reasoning: result.reasoning,
-          durationMs: result.durationMs,
-        });
-      }
-    );
+    controller.on('planCheckCompleted', (result: { verdict: string; reasoning: string; durationMs: number }) => {
+      this.broadcast('respawn:planCheckCompleted', {
+        sessionId,
+        verdict: result.verdict,
+        reasoning: result.reasoning,
+        durationMs: result.durationMs,
+      });
+    });
 
     controller.on('planCheckFailed', (error: string) => {
       this.broadcast('respawn:planCheckFailed', { sessionId, error });
@@ -5620,11 +5357,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
    * @param config - The persisted respawn configuration
    * @param source - Source of the config for logging (e.g., 'state.json' or 'mux-sessions.json')
    */
-  private restoreRespawnController(
-    session: Session,
-    config: PersistedRespawnConfig,
-    source: string
-  ): void {
+  private restoreRespawnController(session: Session, config: PersistedRespawnConfig, source: string): void {
     const controller = new RespawnController(session, {
       idleTimeoutMs: config.idleTimeoutMs,
       updatePrompt: config.updatePrompt,
@@ -5665,9 +5398,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         this.pendingRespawnStarts.delete(session.id);
         // Verify session still exists (may have been deleted during grace period)
         if (!this.sessions.has(session.id)) {
-          console.log(
-            `[Server] Skipping restored respawn start - session ${session.id} no longer exists`
-          );
+          console.log(`[Server] Skipping restored respawn start - session ${session.id} no longer exists`);
           return;
         }
         // Double-check controller still exists and is stopped
@@ -5748,11 +5479,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     const claudeMode = settings.claudeMode as string | undefined;
     const allowedTools = settings.allowedTools as string | undefined;
     // Only return valid modes
-    if (
-      claudeMode === 'dangerously-skip-permissions' ||
-      claudeMode === 'normal' ||
-      claudeMode === 'allowedTools'
-    ) {
+    if (claudeMode === 'dangerously-skip-permissions' || claudeMode === 'normal' || claudeMode === 'allowedTools') {
       return { claudeMode, allowedTools };
     }
     return {};
@@ -5772,11 +5499,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     );
   }
 
-  private async startScheduledRun(
-    prompt: string,
-    workingDir: string,
-    durationMinutes: number
-  ): Promise<ScheduledRun> {
+  private async startScheduledRun(prompt: string, workingDir: string, durationMinutes: number): Promise<ScheduledRun> {
     const id = uuidv4();
     const now = Date.now();
 
@@ -5803,9 +5526,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       const failedRun = this.scheduledRuns.get(id);
       if (failedRun && failedRun.status === 'running') {
         failedRun.status = 'stopped';
-        failedRun.logs.push(
-          `[${new Date().toISOString()}] Error: ${err instanceof Error ? err.message : String(err)}`
-        );
+        failedRun.logs.push(`[${new Date().toISOString()}] Error: ${err instanceof Error ? err.message : String(err)}`);
         this.broadcast('scheduled:stopped', { id, reason: 'error' });
       }
     });
@@ -5851,9 +5572,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         run.completedTasks++;
         run.totalCost += result.cost;
 
-        addLog(
-          `Task completed. Cost: $${result.cost.toFixed(4)}. Total tasks: ${run.completedTasks}`
-        );
+        addLog(`Task completed. Cost: $${result.cost.toFixed(4)}. Total tasks: ${run.completedTasks}`);
         this.broadcast('scheduled:updated', run);
 
         // Clean up the session after iteration to prevent memory leaks
@@ -5883,9 +5602,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     if (run.status === 'running') {
       run.status = 'completed';
-      addLog(
-        `Scheduled run completed. Total tasks: ${run.completedTasks}, Total cost: $${run.totalCost.toFixed(4)}`
-      );
+      addLog(`Scheduled run completed. Total tasks: ${run.completedTasks}, Total cost: $${run.totalCost.toFixed(4)}`);
     }
 
     this.broadcast('scheduled:completed', run);
@@ -5928,10 +5645,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
    */
   private getLightSessionsState() {
     const now = Date.now();
-    if (
-      this.cachedSessionsList &&
-      now - this.cachedSessionsList.timestamp < SESSIONS_LIST_CACHE_TTL
-    ) {
+    if (this.cachedSessionsList && now - this.cachedSessionsList.timestamp < SESSIONS_LIST_CACHE_TTL) {
       return this.cachedSessionsList.data;
     }
     // getSessionStateWithRespawn already uses toLightDetailedState() which
@@ -5987,10 +5701,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
    */
   private getLightState() {
     const now = Date.now();
-    if (
-      this.cachedLightState &&
-      now - this.cachedLightState.timestamp < WebServer.LIGHT_STATE_CACHE_TTL_MS
-    ) {
+    if (this.cachedLightState && now - this.cachedLightState.timestamp < WebServer.LIGHT_STATE_CACHE_TTL_MS) {
       return this.cachedLightState.data;
     }
 
@@ -5999,10 +5710,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       respawnStatus[sessionId] = controller.getStatus();
     }
 
-    const activeSessionTokens: Record<
-      string,
-      { inputTokens?: number; outputTokens?: number; totalCost?: number }
-    > = {};
+    const activeSessionTokens: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }> = {};
     for (const [sessionId, session] of this.sessions) {
       activeSessionTokens[sessionId] = {
         inputTokens: session.inputTokens,
@@ -6404,9 +6112,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     // Security warning: server binds to 0.0.0.0 (all interfaces) — warn if no auth configured
     if (!process.env.CODEMAN_PASSWORD) {
-      console.warn(
-        '\n⚠  WARNING: No CODEMAN_PASSWORD set — server is accessible without authentication.'
-      );
+      console.warn('\n⚠  WARNING: No CODEMAN_PASSWORD set — server is accessible without authentication.');
       console.warn('   Anyone on your network can access and control Claude sessions.');
       console.warn('   Set CODEMAN_PASSWORD environment variable to enable auth.\n');
     }
@@ -6435,9 +6141,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Start subagent watcher for Claude Code background agent visibility (if enabled)
     if (await this.isSubagentTrackingEnabled()) {
       subagentWatcher.start();
-      console.log(
-        'Subagent watcher started - monitoring ~/.claude/projects for background agent activity'
-      );
+      console.log('Subagent watcher started - monitoring ~/.claude/projects for background agent activity');
     } else {
       console.log('Subagent watcher disabled by user settings');
     }
@@ -6524,9 +6228,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       }
 
       if (alive.length > 0 || discovered.length > 0) {
-        console.log(
-          `[Server] Found ${alive.length + discovered.length} alive mux session(s) from previous run`
-        );
+        console.log(`[Server] Found ${alive.length + discovered.length} alive mux session(s) from previous run`);
 
         // For each alive mux session, create a Session object if it doesn't exist
         const muxSessions = this.mux.getSessions();
@@ -6559,10 +6261,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
             }
             if (savedState) {
               // Auto-compact
-              if (
-                savedState.autoCompactEnabled !== undefined ||
-                savedState.autoCompactThreshold !== undefined
-              ) {
+              if (savedState.autoCompactEnabled !== undefined || savedState.autoCompactThreshold !== undefined) {
                 session.setAutoCompact(
                   savedState.autoCompactEnabled ?? false,
                   savedState.autoCompactThreshold,
@@ -6570,14 +6269,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
                 );
               }
               // Auto-clear
-              if (
-                savedState.autoClearEnabled !== undefined ||
-                savedState.autoClearThreshold !== undefined
-              ) {
-                session.setAutoClear(
-                  savedState.autoClearEnabled ?? false,
-                  savedState.autoClearThreshold
-                );
+              if (savedState.autoClearEnabled !== undefined || savedState.autoClearThreshold !== undefined) {
+                session.setAutoClear(savedState.autoClearEnabled ?? false, savedState.autoClearThreshold);
               }
               // Token tracking
               if (
@@ -6606,9 +6299,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
               if (session.mode !== 'opencode') {
                 if (savedState.ralphAutoEnableDisabled) {
                   session.ralphTracker.disableAutoEnable();
-                  console.log(
-                    `[Server] Restored Ralph auto-enable disabled for session ${session.id}`
-                  );
+                  console.log(`[Server] Restored Ralph auto-enable disabled for session ${session.id}`);
                 } else if (savedState.ralphEnabled) {
                   // If Ralph was enabled and not explicitly disabled, allow re-enabling on restart
                   session.ralphTracker.enableAutoEnable();
@@ -6635,18 +6326,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
                 session.flickerFilterEnabled = savedState.flickerFilterEnabled;
               }
               // Respawn controller (not supported for opencode sessions)
-              if (
-                session.mode !== 'opencode' &&
-                savedState.respawnEnabled &&
-                savedState.respawnConfig
-              ) {
+              if (session.mode !== 'opencode' && savedState.respawnEnabled && savedState.respawnConfig) {
                 try {
                   this.restoreRespawnController(session, savedState.respawnConfig, 'state.json');
                 } catch (err) {
-                  console.error(
-                    `[Server] Failed to restore respawn for session ${session.id}:`,
-                    err
-                  );
+                  console.error(`[Server] Failed to restore respawn for session ${session.id}:`, err);
                 }
               }
             }
@@ -6658,11 +6342,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
               muxSession.respawnConfig?.enabled
             ) {
               try {
-                this.restoreRespawnController(
-                  session,
-                  muxSession.respawnConfig,
-                  'mux-sessions.json'
-                );
+                this.restoreRespawnController(session, muxSession.respawnConfig, 'mux-sessions.json');
               } catch (err) {
                 console.error(
                   `[Server] Failed to restore respawn from mux-sessions.json for session ${session.id}:`,
@@ -6681,9 +6361,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
               const ralphState = this.store.getRalphState(muxSession.sessionId);
               if (ralphState?.loop?.enabled) {
                 session.ralphTracker.restoreState(ralphState.loop, ralphState.todos);
-                console.log(
-                  `[Server] Restored Ralph state from inner store for session ${session.id}`
-                );
+                console.log(`[Server] Restored Ralph state from inner store for session ${session.id}`);
               }
             }
 
@@ -6697,9 +6375,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
               const completionPhrase = extractCompletionPhrase(claudeMdPath);
               if (completionPhrase) {
                 session.ralphTracker.startLoop(completionPhrase);
-                console.log(
-                  `[Server] Auto-detected completion phrase for session ${session.id}: ${completionPhrase}`
-                );
+                console.log(`[Server] Auto-detected completion phrase for session ${session.id}: ${completionPhrase}`);
               }
             }
 
@@ -6824,9 +6500,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     this.respawnControllers.clear();
 
     // Stop all scheduled runs first (they have their own session cleanup)
-    await Promise.allSettled(
-      Array.from(this.scheduledRuns.keys()).map((id) => this.stopScheduledRun(id))
-    );
+    await Promise.allSettled(Array.from(this.scheduledRuns.keys()).map((id) => this.stopScheduledRun(id)));
 
     // On server shutdown, DO NOT call cleanupSession — it tears down session state,
     // removes listeners, kills PTY processes, and broadcasts session:deleted.

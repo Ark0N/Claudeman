@@ -133,10 +133,7 @@ export class TunnelManager extends EventEmitter {
         detached: false,
       });
     } catch (err) {
-      this.emit(
-        'error',
-        `Failed to spawn cloudflared: ${err instanceof Error ? err.message : String(err)}`
-      );
+      this.emit('error', `Failed to spawn cloudflared: ${err instanceof Error ? err.message : String(err)}`);
       return;
     }
 

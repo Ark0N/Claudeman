@@ -172,18 +172,11 @@ export class PlanOrchestrator {
     this.mux = mux;
     this.workingDir = workingDir;
     this.outputDir = outputDir;
-    this.researchModel =
-      modelConfig?.agentTypeOverrides?.explore || modelConfig?.defaultModel || DEFAULT_MODEL;
-    this.plannerModel =
-      modelConfig?.agentTypeOverrides?.review || modelConfig?.defaultModel || DEFAULT_MODEL;
+    this.researchModel = modelConfig?.agentTypeOverrides?.explore || modelConfig?.defaultModel || DEFAULT_MODEL;
+    this.plannerModel = modelConfig?.agentTypeOverrides?.review || modelConfig?.defaultModel || DEFAULT_MODEL;
   }
 
-  private saveAgentOutput(
-    agentType: string,
-    prompt: string,
-    result: unknown,
-    durationMs: number
-  ): void {
+  private saveAgentOutput(agentType: string, prompt: string, result: unknown, durationMs: number): void {
     if (!this.outputDir) return;
 
     try {
@@ -433,10 +426,7 @@ export class PlanOrchestrator {
 
     this.runningSessions.add(session);
 
-    const prompt = RESEARCH_AGENT_PROMPT.replace('{TASK}', taskDescription).replace(
-      '{WORKING_DIR}',
-      this.workingDir
-    );
+    const prompt = RESEARCH_AGENT_PROMPT.replace('{TASK}', taskDescription).replace('{WORKING_DIR}', this.workingDir);
 
     // Start progress interval before try block to ensure cleanup in finally
     const progressInterval = setInterval(() => {
@@ -517,18 +507,12 @@ export class PlanOrchestrator {
         findings: {
           externalResources: Array.isArray(data.externalResources) ? data.externalResources : [],
           codebasePatterns: Array.isArray(data.codebasePatterns) ? data.codebasePatterns : [],
-          technicalRecommendations: Array.isArray(data.technicalRecommendations)
-            ? data.technicalRecommendations
-            : [],
-          potentialChallenges: Array.isArray(data.potentialChallenges)
-            ? data.potentialChallenges
-            : [],
+          technicalRecommendations: Array.isArray(data.technicalRecommendations) ? data.technicalRecommendations : [],
+          potentialChallenges: Array.isArray(data.potentialChallenges) ? data.potentialChallenges : [],
           recommendedTools: Array.isArray(data.recommendedTools) ? data.recommendedTools : [],
         },
         enrichedTaskDescription:
-          typeof data.enrichedTaskDescription === 'string'
-            ? data.enrichedTaskDescription
-            : taskDescription,
+          typeof data.enrichedTaskDescription === 'string' ? data.enrichedTaskDescription : taskDescription,
         durationMs,
       };
 

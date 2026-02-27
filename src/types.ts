@@ -145,15 +145,7 @@ export interface SessionConfig {
 /**
  * Available session colors for visual differentiation
  */
-export type SessionColor =
-  | 'default'
-  | 'red'
-  | 'orange'
-  | 'yellow'
-  | 'green'
-  | 'blue'
-  | 'purple'
-  | 'pink';
+export type SessionColor = 'default' | 'red' | 'orange' | 'yellow' | 'green' | 'blue' | 'purple' | 'pink';
 
 /**
  * Current state of a session

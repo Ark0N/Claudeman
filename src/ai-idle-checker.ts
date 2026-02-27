@@ -123,12 +123,7 @@ Remember: When uncertain, answer WORKING.`;
  * Manages AI-powered idle detection by spawning a fresh Claude CLI session
  * to analyze terminal output and provide a definitive IDLE/WORKING verdict.
  */
-export class AiIdleChecker extends AiCheckerBase<
-  AiCheckVerdict,
-  AiIdleCheckConfig,
-  AiCheckResult,
-  AiCheckState
-> {
+export class AiIdleChecker extends AiCheckerBase<AiCheckVerdict, AiIdleCheckConfig, AiCheckResult, AiCheckState> {
   protected readonly muxNamePrefix = 'codeman-aicheck-';
   protected readonly doneMarker = '__AICHECK_DONE__';
   protected readonly tempFilePrefix = 'codeman-aicheck';
@@ -170,11 +165,7 @@ export class AiIdleChecker extends AiCheckerBase<
     return { verdict: 'ERROR', reasoning, durationMs };
   }
 
-  protected createResult(
-    verdict: AiCheckVerdict,
-    reasoning: string,
-    durationMs: number
-  ): AiCheckResult {
+  protected createResult(verdict: AiCheckVerdict, reasoning: string, durationMs: number): AiCheckResult {
     return { verdict, reasoning, durationMs };
   }
 }

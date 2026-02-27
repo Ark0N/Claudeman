@@ -34,12 +34,7 @@ import {
   PlanTaskStatus,
   TddPhase,
 } from './types.js';
-import {
-  ANSI_ESCAPE_PATTERN_SIMPLE,
-  fuzzyPhraseMatch,
-  todoContentHash,
-  stringSimilarity,
-} from './utils/index.js';
+import { ANSI_ESCAPE_PATTERN_SIMPLE, fuzzyPhraseMatch, todoContentHash, stringSimilarity } from './utils/index.js';
 import { MAX_LINE_BUFFER_SIZE } from './config/buffer-limits.js';
 import { MAX_TODOS_PER_SESSION } from './config/map-limits.js';
 
@@ -246,8 +241,7 @@ const TODO_NATIVE_PATTERN = /^[\s⎿]*(☐|☒|◐|✓)\s+([^☐☒◐✓\n]{3,}
  */
 const TODO_TASK_CREATED_PATTERN = /✔\s*Task\s*#(\d+)\s*created:\s*(.+)/g;
 const TODO_TASK_SUMMARY_PATTERN = /✔\s*#(\d+)\s+(.+)/g;
-const TODO_TASK_STATUS_PATTERN =
-  /✔\s*Task\s*#(\d+)\s*updated:\s*status\s*→\s*(in progress|completed|pending)/g;
+const TODO_TASK_STATUS_PATTERN = /✔\s*Task\s*#(\d+)\s*updated:\s*status\s*→\s*(in progress|completed|pending)/g;
 
 /**
  * Matches plain checkmark TodoWrite output without task numbers.
@@ -297,15 +291,13 @@ const CYCLE_PATTERN = /cycle\s*#?(\d+)|respawn cycle #(\d+)/i;
  * Examples: "Iteration 5/50", "[5/50]", "iteration #5", "iter. 3 of 10"
  * Capture groups: (1,2) for "Iteration X/Y" format, (3,4) for "[X/Y]" format
  */
-const ITERATION_PATTERN =
-  /(?:iteration|iter\.?)\s*#?(\d+)(?:\s*(?:\/|of)\s*(\d+))?|\[(\d+)\/(\d+)\]/i;
+const ITERATION_PATTERN = /(?:iteration|iter\.?)\s*#?(\d+)(?:\s*(?:\/|of)\s*(\d+))?|\[(\d+)\/(\d+)\]/i;
 
 /**
  * Matches Ralph loop start command or announcement
  * Examples: "/ralph-loop:ralph-loop", "Starting Ralph Wiggum loop", "ralph loop beginning"
  */
-const RALPH_START_PATTERN =
-  /\/ralph-loop|starting ralph(?:\s+wiggum)?\s+loop|ralph loop (?:started|beginning)/i;
+const RALPH_START_PATTERN = /\/ralph-loop|starting ralph(?:\s+wiggum)?\s+loop|ralph loop (?:started|beginning)/i;
 
 /**
  * Matches max iterations configuration
@@ -318,8 +310,7 @@ const MAX_ITERATIONS_PATTERN = /max[_-]?iterations?\s*[=:]\s*(\d+)/i;
  * Matches TodoWrite tool usage indicators
  * Examples: "TodoWrite", "todos updated", "Todos have been modified"
  */
-const TODOWRITE_PATTERN =
-  /TodoWrite|todo(?:s)?\s*(?:updated|written|saved)|Todos have been modified/i;
+const TODOWRITE_PATTERN = /TodoWrite|todo(?:s)?\s*(?:updated|written|saved)|Todos have been modified/i;
 
 // ---------- Task Completion Detection Patterns ----------
 
@@ -394,8 +385,7 @@ const RALPH_TESTS_STATUS_PATTERN = /^TESTS_STATUS:\s*(PASSING|FAILING|NOT_RUN)\s
  * Matches WORK_TYPE field
  * Captures: IMPLEMENTATION | TESTING | DOCUMENTATION | REFACTORING
  */
-const RALPH_WORK_TYPE_PATTERN =
-  /^WORK_TYPE:\s*(IMPLEMENTATION|TESTING|DOCUMENTATION|REFACTORING)\s*$/i;
+const RALPH_WORK_TYPE_PATTERN = /^WORK_TYPE:\s*(IMPLEMENTATION|TESTING|DOCUMENTATION|REFACTORING)\s*$/i;
 
 /**
  * Matches EXIT_SIGNAL field
@@ -1704,8 +1694,7 @@ export class RalphTracker extends EventEmitter {
       const isNotInPromptContext = !line.includes('<promise>') && !line.includes('output:');
       // Also avoid triggering on "completion phrase is X" explanatory text
       const isNotExplanation =
-        !line.toLowerCase().includes('completion phrase') &&
-        !line.toLowerCase().includes('output exactly');
+        !line.toLowerCase().includes('completion phrase') && !line.toLowerCase().includes('output exactly');
 
       if (isNotInPromptContext && isNotExplanation) {
         this.handleBareCompletionPhrase(expectedPhrase);
@@ -1791,10 +1780,7 @@ export class RalphTracker extends EventEmitter {
         this._completionPhraseCount.set(entries[i][0], entries[i][1]);
       }
       // Always keep the expected phrase if set
-      if (
-        this._loopState.completionPhrase &&
-        !this._completionPhraseCount.has(this._loopState.completionPhrase)
-      ) {
+      if (this._loopState.completionPhrase && !this._completionPhraseCount.has(this._loopState.completionPhrase)) {
         this._completionPhraseCount.set(this._loopState.completionPhrase, 1);
       }
     }
@@ -2085,10 +2071,8 @@ export class RalphTracker extends EventEmitter {
     // Pre-compute which pattern categories might match (60-75% faster)
     const hasCheckbox = line.includes('[');
     const hasTodoIndicator = line.includes('Todo:');
-    const hasNativeCheckbox =
-      line.includes('☐') || line.includes('☒') || line.includes('◐') || line.includes('✓');
-    const hasStatus =
-      line.includes('(pending)') || line.includes('(in_progress)') || line.includes('(completed)');
+    const hasNativeCheckbox = line.includes('☐') || line.includes('☒') || line.includes('◐') || line.includes('✓');
+    const hasStatus = line.includes('(pending)') || line.includes('(in_progress)') || line.includes('(completed)');
     const hasCheckmark = line.includes('✔');
 
     // Quick check: skip lines that can't possibly contain todos
@@ -2196,11 +2180,7 @@ export class RalphTracker extends EventEmitter {
         const taskNum = parseInt(match[1], 10);
         const statusStr = match[2].trim();
         const status: RalphTodoStatus =
-          statusStr === 'completed'
-            ? 'completed'
-            : statusStr === 'in progress'
-              ? 'in_progress'
-              : 'pending';
+          statusStr === 'completed' ? 'completed' : statusStr === 'in progress' ? 'in_progress' : 'pending';
         const content = this._taskNumberToContent.get(taskNum);
         if (content) {
           this.upsertTodo(content, status);
@@ -2606,14 +2586,7 @@ export class RalphTracker extends EventEmitter {
     ];
 
     // Moderate: Bugs, features, enhancements
-    const moderatePatterns = [
-      /\bbug\b/,
-      /\bfeature\b/,
-      /\benhance(?:ment)?\b/,
-      /\bimplement\b/,
-      /\badd\b/,
-      /\bfix\b/,
-    ];
+    const moderatePatterns = [/\bbug\b/, /\bfeature\b/, /\benhance(?:ment)?\b/, /\bimplement\b/, /\badd\b/, /\bfix\b/];
 
     for (const pattern of complexPatterns) {
       if (pattern.test(lower)) return 'complex';
@@ -2895,11 +2868,7 @@ export class RalphTracker extends EventEmitter {
    * @param config - Partial configuration to apply
    * @fires loopUpdate - When loop state changes
    */
-  configure(config: {
-    enabled?: boolean;
-    completionPhrase?: string;
-    maxIterations?: number;
-  }): void {
+  configure(config: { enabled?: boolean; completionPhrase?: string; maxIterations?: number }): void {
     if (config.enabled !== undefined) {
       this._loopState.enabled = config.enabled;
     }
@@ -3103,9 +3072,7 @@ export class RalphTracker extends EventEmitter {
         if (['IN_PROGRESS', 'COMPLETE', 'BLOCKED'].includes(value)) {
           block.status = value as RalphStatusValue;
         } else {
-          parseErrors.push(
-            `Invalid STATUS value: "${value}". Expected: IN_PROGRESS, COMPLETE, or BLOCKED`
-          );
+          parseErrors.push(`Invalid STATUS value: "${value}". Expected: IN_PROGRESS, COMPLETE, or BLOCKED`);
         }
         matched = true;
       }
@@ -3131,9 +3098,7 @@ export class RalphTracker extends EventEmitter {
         if (!Number.isNaN(value) && value >= 0) {
           block.filesModified = value;
         } else {
-          parseErrors.push(
-            `Invalid FILES_MODIFIED value: "${filesMatch[1]}". Expected: non-negative integer`
-          );
+          parseErrors.push(`Invalid FILES_MODIFIED value: "${filesMatch[1]}". Expected: non-negative integer`);
         }
         matched = true;
       }
@@ -3145,9 +3110,7 @@ export class RalphTracker extends EventEmitter {
         if (['PASSING', 'FAILING', 'NOT_RUN'].includes(value)) {
           block.testsStatus = value as RalphTestsStatus;
         } else {
-          parseErrors.push(
-            `Invalid TESTS_STATUS value: "${value}". Expected: PASSING, FAILING, or NOT_RUN`
-          );
+          parseErrors.push(`Invalid TESTS_STATUS value: "${value}". Expected: PASSING, FAILING, or NOT_RUN`);
         }
         matched = true;
       }
@@ -3278,11 +3241,7 @@ export class RalphTracker extends EventEmitter {
    * @param status - Overall status from RALPH_STATUS
    * @fires circuitBreakerUpdate - If state changes
    */
-  private updateCircuitBreaker(
-    hasProgress: boolean,
-    testsStatus: RalphTestsStatus,
-    status: RalphStatusValue
-  ): void {
+  private updateCircuitBreaker(hasProgress: boolean, testsStatus: RalphTestsStatus, status: RalphStatusValue): void {
     const prevState = this._circuitBreaker.state;
 
     if (hasProgress) {
@@ -3323,10 +3282,7 @@ export class RalphTracker extends EventEmitter {
     // Track tests failure
     if (testsStatus === 'FAILING') {
       this._circuitBreaker.consecutiveTestsFailure++;
-      if (
-        this._circuitBreaker.consecutiveTestsFailure >= 5 &&
-        this._circuitBreaker.state !== 'OPEN'
-      ) {
+      if (this._circuitBreaker.consecutiveTestsFailure >= 5 && this._circuitBreaker.state !== 'OPEN') {
         this._circuitBreaker.state = 'OPEN';
         this._circuitBreaker.reason = `Tests failing for ${this._circuitBreaker.consecutiveTestsFailure} iterations`;
         this._circuitBreaker.reasonCode = 'tests_failing_too_long';
@@ -3568,9 +3524,7 @@ export class RalphTracker extends EventEmitter {
         }
 
         // Parse priority from content if not in a priority section
-        const parsedPriority = inCompletedSection
-          ? null
-          : currentPriority || this.parsePriority(content);
+        const parsedPriority = inCompletedSection ? null : currentPriority || this.parsePriority(content);
 
         const id = this.generateTodoId(content);
         newTodos.push({
@@ -3724,10 +3678,7 @@ export class RalphTracker extends EventEmitter {
    */
   private _checkForCheckpoint(): void {
     const currentIteration = this._loopState.cycleCount;
-    if (
-      this._checkpointIterations.includes(currentIteration) &&
-      currentIteration > this._lastCheckpointIteration
-    ) {
+    if (this._checkpointIterations.includes(currentIteration) && currentIteration > this._lastCheckpointIteration) {
       this._lastCheckpointIteration = currentIteration;
       const checkpoint = this.generateCheckpointReview();
       this.emit('planCheckpoint', checkpoint);
@@ -3763,23 +3714,16 @@ export class RalphTracker extends EventEmitter {
     const recommendations: string[] = [];
 
     if (stuckTasks.length > 0) {
-      recommendations.push(
-        `${stuckTasks.length} task(s) are stuck. Consider breaking them into smaller steps.`
-      );
+      recommendations.push(`${stuckTasks.length} task(s) are stuck. Consider breaking them into smaller steps.`);
     }
 
     if (summary.failed > summary.completed && summary.total > 5) {
-      recommendations.push(
-        'More tasks have failed than completed. Review approach and consider plan adjustment.'
-      );
+      recommendations.push('More tasks have failed than completed. Review approach and consider plan adjustment.');
     }
 
-    const progressPercent =
-      summary.total > 0 ? Math.round((summary.completed / summary.total) * 100) : 0;
+    const progressPercent = summary.total > 0 ? Math.round((summary.completed / summary.total) * 100) : 0;
     if (progressPercent < 20 && this._loopState.cycleCount > 10) {
-      recommendations.push(
-        'Progress is slow. Consider simplifying tasks or reviewing dependencies.'
-      );
+      recommendations.push('Progress is slow. Consider simplifying tasks or reviewing dependencies.');
     }
 
     if (summary.total > 0 && summary.blocked > summary.total / 3) {
@@ -3932,10 +3876,7 @@ export class RalphTracker extends EventEmitter {
    */
   isCheckpointDue(): boolean {
     const currentIteration = this._loopState.cycleCount;
-    return (
-      this._checkpointIterations.includes(currentIteration) &&
-      currentIteration > this._lastCheckpointIteration
-    );
+    return this._checkpointIterations.includes(currentIteration) && currentIteration > this._lastCheckpointIteration;
   }
 
   /**

@@ -153,10 +153,7 @@ export const ResizeSchema = z.object({
 export const CreateCaseSchema = z.object({
   name: z
     .string()
-    .regex(
-      /^[a-zA-Z0-9_-]+$/,
-      'Invalid case name format. Use only letters, numbers, hyphens, underscores.'
-    ),
+    .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format. Use only letters, numbers, hyphens, underscores.'),
   description: z.string().max(1000).optional(),
 });
 
@@ -169,10 +166,7 @@ export const CreateCaseSchema = z.object({
 export const QuickStartSchema = z.object({
   caseName: z
     .string()
-    .regex(
-      /^[a-zA-Z0-9_-]+$/,
-      'Invalid case name format. Use only letters, numbers, hyphens, underscores.'
-    )
+    .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format. Use only letters, numbers, hyphens, underscores.')
     .optional(),
   mode: z.enum(['claude', 'shell', 'opencode']).optional(),
   openCodeConfig: OpenCodeConfigSchema,
@@ -185,14 +179,7 @@ export const QuickStartSchema = z.object({
  * Receives Claude Code hook events.
  */
 export const HookEventSchema = z.object({
-  event: z.enum([
-    'permission_prompt',
-    'elicitation_dialog',
-    'idle_prompt',
-    'stop',
-    'teammate_idle',
-    'task_completed',
-  ]),
+  event: z.enum(['permission_prompt', 'elicitation_dialog', 'idle_prompt', 'stop', 'teammate_idle', 'task_completed']),
   sessionId: z.string().min(1),
   data: z.record(z.string(), z.unknown()).nullable().optional(),
 });

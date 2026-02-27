@@ -37,12 +37,7 @@ import { RalphTracker } from './ralph-tracker.js';
 import { BashToolParser } from './bash-tool-parser.js';
 import { BufferAccumulator } from './utils/buffer-accumulator.js';
 import { LRUMap } from './utils/lru-map.js';
-import {
-  ANSI_ESCAPE_PATTERN_FULL,
-  TOKEN_PATTERN,
-  SPINNER_PATTERN,
-  MAX_SESSION_TOKENS,
-} from './utils/index.js';
+import { ANSI_ESCAPE_PATTERN_FULL, TOKEN_PATTERN, SPINNER_PATTERN, MAX_SESSION_TOKENS } from './utils/index.js';
 import {
   MAX_TERMINAL_BUFFER_SIZE,
   TRIM_TERMINAL_TO as TERMINAL_BUFFER_TRIM_SIZE,
@@ -263,10 +258,7 @@ export class Session extends EventEmitter {
   private _status: SessionStatus = 'idle';
   private _currentTaskId: string | null = null;
   // Use BufferAccumulator for hot-path buffers to reduce GC pressure
-  private _terminalBuffer = new BufferAccumulator(
-    MAX_TERMINAL_BUFFER_SIZE,
-    TERMINAL_BUFFER_TRIM_SIZE
-  );
+  private _terminalBuffer = new BufferAccumulator(MAX_TERMINAL_BUFFER_SIZE, TERMINAL_BUFFER_TRIM_SIZE);
   private _textOutput = new BufferAccumulator(MAX_TEXT_OUTPUT_SIZE, TEXT_OUTPUT_TRIM_SIZE);
   private _errorBuffer: string = '';
   private _lastActivityAt: number;
@@ -944,8 +936,7 @@ export class Session extends EventEmitter {
 
     const modeLabel = this.mode === 'opencode' ? 'OpenCode' : 'Claude';
     console.log(
-      `[Session] Starting interactive ${modeLabel} session` +
-        (this._useMux ? ` (with ${this._mux!.backend})` : '')
+      `[Session] Starting interactive ${modeLabel} session` + (this._useMux ? ` (with ${this._mux!.backend})` : '')
     );
 
     // If mux wrapping is enabled, create or attach to a mux session
@@ -953,10 +944,7 @@ export class Session extends EventEmitter {
       try {
         // Verify stale mux session — tmux may have been destroyed (e.g., killed externally)
         if (this._muxSession && !this._mux.muxSessionExists(this._muxSession.muxName)) {
-          console.log(
-            '[Session] Stale mux session detected (tmux gone):',
-            this._muxSession.muxName
-          );
+          console.log('[Session] Stale mux session detected (tmux gone):', this._muxSession.muxName);
           this._muxSession = null;
         }
 
@@ -1359,10 +1347,7 @@ export class Session extends EventEmitter {
       try {
         // Verify stale mux session — tmux may have been destroyed externally
         if (this._muxSession && !this._mux.muxSessionExists(this._muxSession.muxName)) {
-          console.log(
-            '[Session] Stale mux session detected (tmux gone):',
-            this._muxSession.muxName
-          );
+          console.log('[Session] Stale mux session detected (tmux gone):', this._muxSession.muxName);
           this._muxSession = null;
         }
 
@@ -1569,13 +1554,7 @@ export class Session extends EventEmitter {
           model ? `(model: ${model})` : ''
         );
 
-        const args = [
-          '-p',
-          '--verbose',
-          '--dangerously-skip-permissions',
-          '--output-format',
-          'stream-json',
-        ];
+        const args = ['-p', '--verbose', '--dangerously-skip-permissions', '--output-format', 'stream-json'];
         if (model) {
           args.push('--model', model);
         }
@@ -1663,11 +1642,7 @@ export class Session extends EventEmitter {
           } else if (exitCode !== 0 || (resultMsg && resultMsg.is_error)) {
             this._status = 'error';
             if (reject) {
-              reject(
-                new Error(
-                  this._errorBuffer || this._textOutput.value || 'Process exited with error'
-                )
-              );
+              reject(new Error(this._errorBuffer || this._textOutput.value || 'Process exited with error'));
             }
           } else {
             this._status = 'idle';
@@ -1745,8 +1720,7 @@ export class Session extends EventEmitter {
           // Extract Claude session ID from messages (can be in any message type)
           // Support both sessionId (camelCase) and session_id (snake_case)
           const msgSessionId =
-            ((msg as unknown as Record<string, unknown>).sessionId as string | undefined) ??
-            msg.session_id;
+            ((msg as unknown as Record<string, unknown>).sessionId as string | undefined) ?? msg.session_id;
           if (msgSessionId && !this._claudeSessionId) {
             this._claudeSessionId = msgSessionId;
           }
@@ -1938,9 +1912,7 @@ export class Session extends EventEmitter {
 
       // Safety: Absolute maximum tokens per session
       if (tokenCount > MAX_SESSION_TOKENS) {
-        console.warn(
-          `[Session ${this.id}] Rejected token count exceeding max: ${tokenCount} > ${MAX_SESSION_TOKENS}`
-        );
+        console.warn(`[Session ${this.id}] Rejected token count exceeding max: ${tokenCount} > ${MAX_SESSION_TOKENS}`);
         return;
       }
 
@@ -2057,9 +2029,7 @@ export class Session extends EventEmitter {
     const totalTokens = this._totalInputTokens + this._totalOutputTokens;
     if (totalTokens >= this._autoCompactThreshold) {
       this._isCompacting = true;
-      console.log(
-        `[Session] Auto-compact triggered: ${totalTokens} tokens >= ${this._autoCompactThreshold} threshold`
-      );
+      console.log(`[Session] Auto-compact triggered: ${totalTokens} tokens >= ${this._autoCompactThreshold} threshold`);
 
       // Wait for Claude to be idle before compacting
       const checkAndCompact = async () => {
@@ -2072,9 +2042,7 @@ export class Session extends EventEmitter {
           if (this._isStopped) return;
 
           // Send /compact command with optional prompt
-          const compactCmd = this._autoCompactPrompt
-            ? `/compact ${this._autoCompactPrompt}\r`
-            : '/compact\r';
+          const compactCmd = this._autoCompactPrompt ? `/compact ${this._autoCompactPrompt}\r` : '/compact\r';
           await this.writeViaMux(compactCmd);
           this.emit('autoCompact', {
             tokens: totalTokens,
@@ -2113,9 +2081,7 @@ export class Session extends EventEmitter {
     const totalTokens = this._totalInputTokens + this._totalOutputTokens;
     if (totalTokens >= this._autoClearThreshold) {
       this._isClearing = true;
-      console.log(
-        `[Session] Auto-clear triggered: ${totalTokens} tokens >= ${this._autoClearThreshold} threshold`
-      );
+      console.log(`[Session] Auto-clear triggered: ${totalTokens} tokens >= ${this._autoClearThreshold} threshold`);
 
       // Wait for Claude to be idle before clearing
       const checkAndClear = async () => {
@@ -2370,10 +2336,7 @@ export class Session extends EventEmitter {
         try {
           this.ptyProcess.kill();
         } catch (err) {
-          console.warn(
-            '[Session] Failed to send SIGTERM to PTY process (may already be dead):',
-            err
-          );
+          console.warn('[Session] Failed to send SIGTERM to PTY process (may already be dead):', err);
         }
 
         // Give it a moment to terminate gracefully
