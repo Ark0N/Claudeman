@@ -5,7 +5,7 @@
  * Runs after `npm install` to check environment readiness
  */
 
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import { chmodSync, existsSync } from 'fs';
 import { homedir, platform } from 'os';
 import { join } from 'path';
@@ -58,6 +58,37 @@ function commandExists(cmd) {
     } catch {
         return false;
     }
+}
+
+/**
+ * Check if a TCP port is already in use
+ */
+async function isPortBusy(port) {
+    const net = await import('node:net');
+    return new Promise((resolve) => {
+        const srv = net.createServer();
+        srv.once('error', () => resolve(true));
+        srv.once('listening', () => { srv.close(); resolve(false); });
+        srv.listen(port, '127.0.0.1');
+    });
+}
+
+/**
+ * Wait for a server to start accepting connections
+ */
+async function waitForServer(port, timeoutMs = 15000) {
+    const net = await import('node:net');
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        const ok = await new Promise((resolve) => {
+            const conn = net.createConnection({ port, host: '127.0.0.1' });
+            conn.once('connect', () => { conn.destroy(); resolve(true); });
+            conn.once('error', () => resolve(false));
+        });
+        if (ok) return true;
+        await new Promise(r => setTimeout(r, 500));
+    }
+    return false;
 }
 
 /**
@@ -221,6 +252,8 @@ if (isGlobalInstall) {
         const require = createRequire(import.meta.url);
         const xtermDir = join(require.resolve('xterm'), '..', '..');
         const fitDir = join(require.resolve('xterm-addon-fit'), '..', '..');
+        const webglDir = join(require.resolve('xterm-addon-webgl'), '..', '..');
+        const unicode11Dir = join(require.resolve('xterm-addon-unicode11'), '..', '..');
         const vendorDir = join(srcDir, 'web', 'public', 'vendor');
 
         const { mkdirSync, copyFileSync } = await import('fs');
@@ -231,13 +264,18 @@ if (isGlobalInstall) {
         try {
             execSync(`npx esbuild "${join(xtermDir, 'lib', 'xterm.js')}" --minify --outfile="${join(vendorDir, 'xterm.min.js')}"`, { stdio: 'pipe' });
             execSync(`npx esbuild "${join(fitDir, 'lib', 'xterm-addon-fit.js')}" --minify --outfile="${join(vendorDir, 'xterm-addon-fit.min.js')}"`, { stdio: 'pipe' });
+            execSync(`npx esbuild "${join(unicode11Dir, 'lib', 'xterm-addon-unicode11.js')}" --minify --outfile="${join(vendorDir, 'xterm-addon-unicode11.min.js')}"`, { stdio: 'pipe' });
             console.log(colors.green('✓ xterm vendor files copied to src/web/public/vendor/'));
         } catch {
             // Fallback: copy unminified
             copyFileSync(join(xtermDir, 'lib', 'xterm.js'), join(vendorDir, 'xterm.min.js'));
             copyFileSync(join(fitDir, 'lib', 'xterm-addon-fit.js'), join(vendorDir, 'xterm-addon-fit.min.js'));
+            copyFileSync(join(unicode11Dir, 'lib', 'xterm-addon-unicode11.js'), join(vendorDir, 'xterm-addon-unicode11.min.js'));
             console.log(colors.green('✓ xterm vendor files copied') + colors.dim(' (unminified — esbuild not available)'));
         }
+
+        // WebGL addon: copy unminified (matches build script behavior)
+        copyFileSync(join(webglDir, 'lib', 'xterm-addon-webgl.js'), join(vendorDir, 'xterm-addon-webgl.min.js'));
     } catch (err) {
         hasWarnings = true;
         console.log(colors.yellow('⚠ Failed to copy xterm vendor files'));
@@ -247,7 +285,7 @@ if (isGlobalInstall) {
 }
 
 // ----------------------------------------------------------------------------
-// Print Summary and Next Steps
+// Summary
 // ----------------------------------------------------------------------------
 
 console.log('');
@@ -257,19 +295,96 @@ if (hasErrors) {
     process.exit(1);
 }
 
-console.log(colors.bold('Next steps:'));
-if (isGlobalInstall) {
-    console.log(colors.dim('  1. Start:  ') + colors.cyan('codeman web'));
-    console.log(colors.dim('  2. Open:   ') + colors.cyan('http://localhost:3000'));
-} else {
-    console.log(colors.dim('  1. Build:  ') + colors.cyan('npm run build'));
-    console.log(colors.dim('  2. Start:  ') + colors.cyan('codeman web'));
-    console.log(colors.dim('  3. Open:   ') + colors.cyan('http://localhost:3000'));
-}
-
 if (hasWarnings) {
-    console.log('');
     console.log(colors.yellow('Note: Resolve warnings above for full functionality.'));
+    console.log('');
 }
 
-console.log('');
+// ----------------------------------------------------------------------------
+// Auto-start Codeman web server
+// ----------------------------------------------------------------------------
+
+const port = parseInt(process.env.PORT || '3000', 10);
+const projectRoot = join(import.meta.dirname, '..');
+
+if (process.env.CI || process.env.CODEMAN_NO_AUTOSTART) {
+    // CI or explicit opt-out — just print next steps
+    console.log(colors.bold('Next steps:'));
+    if (isGlobalInstall) {
+        console.log(colors.dim('  1. Start:  ') + colors.cyan('codeman web'));
+        console.log(colors.dim('  2. Open:   ') + colors.cyan(`http://localhost:${port}`));
+    } else {
+        console.log(colors.dim('  1. Build:  ') + colors.cyan('npm run build'));
+        console.log(colors.dim('  2. Start:  ') + colors.cyan('npx codeman web'));
+        console.log(colors.dim('  3. Open:   ') + colors.cyan(`http://localhost:${port}`));
+    }
+    console.log('');
+} else {
+    // Auto-start the server
+    const portInUse = await isPortBusy(port);
+
+    if (portInUse) {
+        console.log(colors.green('✓ Codeman appears to be already running'));
+        console.log('');
+        console.log(colors.bold('  ┌──────────────────────────────────────────┐'));
+        console.log(colors.bold(`  │  ${colors.cyan(`→ http://localhost:${port}`)}${' '.repeat(Math.max(0, 21 - String(port).length))}│`));
+        console.log(colors.bold('  └──────────────────────────────────────────┘'));
+        console.log('');
+    } else {
+        // Build if dist/ doesn't exist (local install only)
+        const distEntry = join(projectRoot, 'dist', 'index.js');
+        let buildOk = existsSync(distEntry);
+
+        if (!buildOk && !isGlobalInstall) {
+            const hasTsc = existsSync(join(projectRoot, 'node_modules', '.bin', 'tsc'));
+            if (hasTsc) {
+                console.log(colors.dim('  Building Codeman...'));
+                try {
+                    execSync('npm run build', {
+                        stdio: ['ignore', 'pipe', 'pipe'],
+                        timeout: 180000,
+                        cwd: projectRoot,
+                    });
+                    console.log(colors.green('✓ Build complete'));
+                    buildOk = true;
+                } catch {
+                    console.log(colors.yellow('⚠ Build failed — start manually: npm run build && npx codeman web'));
+                }
+            } else {
+                console.log(colors.yellow('⚠ TypeScript not found — run: npm run build'));
+            }
+        }
+
+        if (buildOk) {
+            console.log(colors.dim('  Starting Codeman web server...'));
+            try {
+                const child = spawn('node', [join(projectRoot, 'dist', 'index.js'), 'web'], {
+                    detached: true,
+                    stdio: 'ignore',
+                    cwd: projectRoot,
+                    env: { ...process.env, NODE_ENV: 'production' },
+                });
+                child.unref();
+
+                const ready = await waitForServer(port);
+
+                console.log('');
+                if (ready) {
+                    console.log(colors.green('✓ Codeman is running'));
+                } else {
+                    console.log(colors.yellow('⚠ Server may still be starting...'));
+                }
+
+                console.log('');
+                console.log(colors.bold('  ┌──────────────────────────────────────────┐'));
+                console.log(colors.bold(`  │  ${colors.cyan(`→ http://localhost:${port}`)}${' '.repeat(Math.max(0, 21 - String(port).length))}│`));
+                console.log(colors.bold('  └──────────────────────────────────────────┘'));
+                console.log('');
+            } catch (err) {
+                console.log(colors.yellow(`⚠ Could not auto-start: ${err.message}`));
+                console.log(colors.dim('  Start manually: npx codeman web'));
+                console.log('');
+            }
+        }
+    }
+}

@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, statSync, mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { homedir, totalmem, freemem, loadavg, cpus } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { Session, ClaudeMessage, type BackgroundTask, type RalphTrackerState, type RalphTodoItem, type ActiveBashTool } from '../session.js';
@@ -637,9 +637,14 @@ export class WebServer extends EventEmitter {
       this.app.addHook('onRequest', (req, reply, done) => {
         // Hook events come from local Claude Code hooks (curl from localhost) — no auth headers available.
         // Safe: validated by HookEventSchema, only triggers broadcasts.
+        // Security: restrict bypass to localhost only — prevents forged hook events via tunnel/LAN.
         if (req.url === '/api/hook-event' && req.method === 'POST') {
-          done();
-          return;
+          const ip = req.ip;
+          if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') {
+            done();
+            return;
+          }
+          // Non-localhost hook requests fall through to normal auth
         }
 
         const clientIp = req.ip;
@@ -652,15 +657,18 @@ export class WebServer extends EventEmitter {
         }
 
         // Check session cookie first (avoids re-sending credentials on every request)
+        // Use get() instead of has() so refreshOnGet extends the TTL on active sessions
         const sessionToken = req.cookies[AUTH_COOKIE_NAME];
-        if (sessionToken && this.authSessions!.has(sessionToken)) {
+        if (sessionToken && this.authSessions!.get(sessionToken) !== undefined) {
           done();
           return;
         }
 
-        // Check Basic Auth header
+        // Check Basic Auth header (timing-safe comparison to prevent side-channel attacks)
         const auth = req.headers.authorization;
-        if (auth === expectedHeader) {
+        const authBuf = Buffer.from(auth ?? '');
+        const expectedBuf = Buffer.from(expectedHeader);
+        if (authBuf.length === expectedBuf.length && timingSafeEqual(authBuf, expectedBuf)) {
           // Issue session token cookie so browser doesn't need to re-send credentials
           const token = randomBytes(32).toString('hex');
 
@@ -5419,6 +5427,13 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     await this.app.listen({ port: this.port, host: '0.0.0.0' });
     const protocol = this.https ? 'https' : 'http';
     console.log(`Codeman web interface running at ${protocol}://localhost:${this.port}`);
+
+    // Security warning: server binds to 0.0.0.0 (all interfaces) — warn if no auth configured
+    if (!process.env.CODEMAN_PASSWORD) {
+      console.warn('\n⚠  WARNING: No CODEMAN_PASSWORD set — server is accessible without authentication.');
+      console.warn('   Anyone on your network can access and control Claude sessions.');
+      console.warn('   Set CODEMAN_PASSWORD environment variable to enable auth.\n');
+    }
 
     // Set API URL for child processes (MCP server, spawned sessions)
     process.env.CODEMAN_API_URL = `${protocol}://localhost:${this.port}`;

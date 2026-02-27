@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/arkon/default/codeman
+WorkingDirectory=/home/arkon/default/claudeman
 ExecStart=/usr/bin/node dist/index.js web --https
 Restart=always
 RestartSec=5
