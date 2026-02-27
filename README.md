@@ -194,6 +194,53 @@ PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xt
 
 ---
 
+## Remote Access — Cloudflare Tunnel
+
+Access Codeman from your phone or any device outside your local network using a free [Cloudflare quick tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/) — no port forwarding, no DNS, no static IP required.
+
+```
+Browser (phone/tablet) → Cloudflare Edge (HTTPS) → cloudflared → localhost:3000
+```
+
+**Prerequisites:** Install [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) and set `CODEMAN_PASSWORD` in your environment.
+
+```bash
+# Quick start
+./scripts/tunnel.sh start      # Start tunnel, prints public URL
+./scripts/tunnel.sh url        # Show current URL
+./scripts/tunnel.sh stop       # Stop tunnel
+./scripts/tunnel.sh status     # Service status + URL
+```
+
+The script auto-installs a systemd user service on first run. The tunnel URL is a randomly generated `*.trycloudflare.com` address that changes each time the tunnel restarts.
+
+<details>
+<summary><strong>Persistent tunnel (survives reboots)</strong></summary>
+
+```bash
+# Enable as a persistent service
+systemctl --user enable codeman-tunnel
+loginctl enable-linger $USER
+
+# Or via the Codeman web UI: Settings → Tunnel → Toggle On
+```
+
+</details>
+
+<details>
+<summary><strong>Authentication</strong></summary>
+
+1. First request → browser shows Basic Auth prompt (username: `admin` or `CODEMAN_USERNAME`)
+2. On success → server issues a `codeman_session` cookie (24h TTL, auto-extends on activity)
+3. Subsequent requests authenticate silently via cookie
+4. 10 failed attempts per IP → 429 rate limit (15-minute decay)
+
+**Always set `CODEMAN_PASSWORD`** before exposing via tunnel — without it, anyone with the URL has full access to your sessions.
+
+</details>
+
+---
+
 ## SSH Alternative (`sc`)
 
 If you prefer SSH (Termius, Blink, etc.), the `sc` command is a thumb-friendly session chooser:
