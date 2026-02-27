@@ -47,6 +47,16 @@ export const MAX_TOOL_RESULTS_PER_AGENT = 200;
 export const MAX_CONCURRENT_SESSIONS = 50;
 
 // ============================================================================
+// SSE Client Limits
+// ============================================================================
+
+/**
+ * Maximum concurrent SSE client connections.
+ * Each connection holds an open HTTP response and receives all broadcast events.
+ */
+export const MAX_SSE_CLIENTS = 100;
+
+// ============================================================================
 // Todo Item Limits (Ralph Tracker)
 // ============================================================================
 

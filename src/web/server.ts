@@ -16,7 +16,7 @@ import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, statSync, mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, statSync, mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync, chmodSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -95,7 +95,7 @@ import {
   isValidWorkingDir,
 } from './schemas.js';
 import { StaleExpirationMap } from '../utils/index.js';
-import { MAX_CONCURRENT_SESSIONS } from '../config/map-limits.js';
+import { MAX_CONCURRENT_SESSIONS, MAX_SSE_CLIENTS } from '../config/map-limits.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -300,7 +300,7 @@ function getOrCreateSelfSignedCert(): { key: string; cert: string } {
     };
   }
 
-  mkdirSync(certsDir, { recursive: true });
+  mkdirSync(certsDir, { recursive: true, mode: 0o700 });
 
   // Generate self-signed cert valid for 365 days, covering localhost and common LAN access patterns
   execSync(
@@ -310,6 +310,9 @@ function getOrCreateSelfSignedCert(): { key: string; cert: string } {
     `-addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:0.0.0.0"`,
     { stdio: 'pipe' }
   );
+
+  // Restrict private key to owner-only (prevent other local users from reading it)
+  chmodSync(keyPath, 0o600);
 
   return {
     key: readFileSync(keyPath, 'utf-8'),
@@ -749,6 +752,12 @@ export class WebServer extends EventEmitter {
 
     // SSE endpoint for real-time updates
     this.app.get('/api/events', (req, reply) => {
+      // Enforce SSE client limit to prevent memory exhaustion from too many connections
+      if (this.sseClients.size >= MAX_SSE_CLIENTS) {
+        reply.code(503).send('Too many SSE connections');
+        return;
+      }
+
       reply.raw.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
@@ -770,6 +779,17 @@ export class WebServer extends EventEmitter {
     });
 
     // API Routes
+
+    // Logout: invalidate session cookie
+    this.app.post('/api/logout', async (req, reply) => {
+      const sessionToken = req.cookies[AUTH_COOKIE_NAME];
+      if (sessionToken && this.authSessions) {
+        this.authSessions.delete(sessionToken);
+      }
+      reply.clearCookie(AUTH_COOKIE_NAME, { path: '/' });
+      return { success: true };
+    });
+
     this.app.get('/api/status', async () => this.getLightState());
 
     this.app.get('/api/tunnel/status', async () => this.tunnelManager.getStatus());

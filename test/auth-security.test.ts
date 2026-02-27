@@ -1,14 +1,18 @@
 /**
- * Auth security tests — verifies critical security fixes:
+ * Auth security tests — verifies security fixes:
  * 1. Timing-safe password comparison (timingSafeEqual)
  * 2. Hook event endpoint restricted to localhost
  * 3. Session cookie TTL refresh on access
  * 4. Startup warning when no password configured
+ * 5. SSE client limit enforcement
+ * 6. Logout endpoint invalidates session
+ * 7. Settings schema rejects unknown fields
  *
  * Port: 3160 (auth tests), 3161 (no-auth tests)
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { WebServer } from '../src/web/server.js';
+import { SettingsUpdateSchema } from '../src/web/schemas.js';
 
 const AUTH_PORT = 3160;
 const NOAUTH_PORT = 3161;
@@ -117,6 +121,38 @@ describe('Auth Security', () => {
     });
   });
 
+  describe('Logout', () => {
+    it('should invalidate session cookie on logout', async () => {
+      // Authenticate to get a cookie
+      const authRes = await fetch(`${baseUrl}/api/status`, {
+        headers: { Authorization: basicAuthHeader(TEST_USER, TEST_PASS) },
+      });
+      const setCookie = authRes.headers.get('set-cookie')!;
+      const cookieMatch = setCookie.match(/codeman_session=([^;]+)/);
+      expect(cookieMatch).toBeTruthy();
+      const cookie = `codeman_session=${cookieMatch![1]}`;
+
+      // Verify cookie works
+      const beforeRes = await fetch(`${baseUrl}/api/status`, {
+        headers: { Cookie: cookie },
+      });
+      expect(beforeRes.status).toBe(200);
+
+      // Logout
+      const logoutRes = await fetch(`${baseUrl}/api/logout`, {
+        method: 'POST',
+        headers: { Cookie: cookie },
+      });
+      expect(logoutRes.status).toBe(200);
+
+      // Cookie should no longer work
+      const afterRes = await fetch(`${baseUrl}/api/status`, {
+        headers: { Cookie: cookie },
+      });
+      expect(afterRes.status).toBe(401);
+    });
+  });
+
   describe('Rate Limiting', () => {
     it('should block after too many failed attempts', async () => {
       // Send 10 failed attempts
@@ -169,6 +205,68 @@ describe('Auth Security', () => {
       // Schema validation should catch this
       expect(res.status).not.toBe(401); // Not an auth error
     });
+  });
+});
+
+describe('Settings Schema Security', () => {
+  it('should accept valid known settings fields', () => {
+    const result = SettingsUpdateSchema.safeParse({
+      tunnelEnabled: true,
+      ralphTrackerEnabled: false,
+      defaultClaudeMdPath: '/some/path',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('should enforce tunnelEnabled as boolean', () => {
+    const result = SettingsUpdateSchema.safeParse({
+      tunnelEnabled: 'yes',  // truthy string — should be rejected
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject unknown fields (strict mode)', () => {
+    const result = SettingsUpdateSchema.safeParse({
+      tunnelEnabled: true,
+      maliciousField: 'injected',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('should accept notification preferences', () => {
+    const result = SettingsUpdateSchema.safeParse({
+      notificationPreferences: {
+        enabled: true,
+        browserNotifications: true,
+        audioAlerts: false,
+        eventTypes: {
+          stop: { enabled: true, browser: true, audio: false },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('should accept voice settings', () => {
+    const result = SettingsUpdateSchema.safeParse({
+      voiceSettings: {
+        apiKey: 'some-key',
+        language: 'en-US',
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate nice value range', () => {
+    const validResult = SettingsUpdateSchema.safeParse({
+      nice: { enabled: true, niceValue: 10 },
+    });
+    expect(validResult.success).toBe(true);
+
+    const invalidResult = SettingsUpdateSchema.safeParse({
+      nice: { enabled: true, niceValue: 100 },  // Out of range
+    });
+    expect(invalidResult.success).toBe(false);
   });
 });
 

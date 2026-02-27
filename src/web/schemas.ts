@@ -184,13 +184,76 @@ export const ConfigUpdateSchema = z.object({
 
 /**
  * Schema for PUT /api/settings
- * User settings with allowed fields only.
+ * Explicit allowlist of known settings fields — prevents arbitrary key persistence.
  */
+const NotificationEventSchema = z.object({
+  enabled: z.boolean().optional(),
+  browser: z.boolean().optional(),
+  audio: z.boolean().optional(),
+}).optional();
+
 export const SettingsUpdateSchema = z.object({
+  // Paths
   defaultClaudeMdPath: z.string().max(500).optional(),
+  defaultWorkingDir: z.string().max(500).optional(),
   lastUsedCase: z.string().max(200).optional(),
-  // Add other known settings fields as needed
-}).passthrough(); // Allow additional fields but validate known ones
+  // Feature toggles
+  ralphTrackerEnabled: z.boolean().optional(),
+  subagentTrackingEnabled: z.boolean().optional(),
+  subagentActiveTabOnly: z.boolean().optional(),
+  imageWatcherEnabled: z.boolean().optional(),
+  tunnelEnabled: z.boolean().optional(),
+  tabTwoRows: z.boolean().optional(),
+  agentTeamsEnabled: z.boolean().optional(),
+  // UI visibility
+  showFontControls: z.boolean().optional(),
+  showSystemStats: z.boolean().optional(),
+  showTokenCount: z.boolean().optional(),
+  showCost: z.boolean().optional(),
+  showLifecycleLog: z.boolean().optional(),
+  showMonitor: z.boolean().optional(),
+  showProjectInsights: z.boolean().optional(),
+  showFileBrowser: z.boolean().optional(),
+  showSubagents: z.boolean().optional(),
+  // Claude CLI settings
+  claudeMode: z.string().max(50).optional(),
+  allowedTools: z.string().max(2000).optional(),
+  // CPU priority
+  nice: z.object({
+    enabled: z.boolean().optional(),
+    niceValue: z.number().int().min(-20).max(19).optional(),
+  }).optional(),
+  // Notification preferences (cross-device sync)
+  notificationPreferences: z.object({
+    enabled: z.boolean().optional(),
+    browserNotifications: z.boolean().optional(),
+    audioAlerts: z.boolean().optional(),
+    stuckThresholdMs: z.number().optional(),
+    muteCritical: z.boolean().optional(),
+    muteWarning: z.boolean().optional(),
+    muteInfo: z.boolean().optional(),
+    eventTypes: z.object({
+      permission_prompt: NotificationEventSchema,
+      elicitation_dialog: NotificationEventSchema,
+      idle_prompt: NotificationEventSchema,
+      stop: NotificationEventSchema,
+      session_error: NotificationEventSchema,
+      respawn_cycle: NotificationEventSchema,
+      token_milestone: NotificationEventSchema,
+      ralph_complete: NotificationEventSchema,
+      subagent_spawn: NotificationEventSchema,
+      subagent_complete: NotificationEventSchema,
+    }).optional(),
+    _version: z.number().optional(),
+  }).optional(),
+  // Voice settings (cross-device sync)
+  voiceSettings: z.object({
+    apiKey: z.string().max(200).optional(),
+    language: z.string().max(20).optional(),
+    keyterms: z.string().max(500).optional(),
+    insertMode: z.string().max(20).optional(),
+  }).optional(),
+}).strict();
 
 /**
  * Schema for POST /api/sessions/:id/input with length limit
