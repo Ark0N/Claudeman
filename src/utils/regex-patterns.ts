@@ -18,7 +18,8 @@
  * Note: Has global flag - reset lastIndex before exec() if reusing.
  */
 // eslint-disable-next-line no-control-regex
-export const ANSI_ESCAPE_PATTERN_FULL = /\x1b(?:\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[=>])/g;
+export const ANSI_ESCAPE_PATTERN_FULL =
+  /\x1b(?:\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[=>])/g;
 
 /**
  * Simple ANSI CSI-only pattern for basic escape code stripping.

@@ -4036,17 +4036,15 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
             repaired = repaired.replace(/,(\s*[\]}])/g, '$1');
             // Fix unescaped control characters within JSON strings
             repaired = repaired.replace(/"([^"\\]|\\.)*"/g, (match) => {
-              return (
-                match
-                  .replace(/\n/g, '\\n')
-                  .replace(/\r/g, '\\r')
-                  .replace(/\t/g, '\\t')
-                  .replace(
-                    // eslint-disable-next-line no-control-regex
-                    /[\x00-\x1f]/g,
-                    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`
-                  )
-              );
+              return match
+                .replace(/\n/g, '\\n')
+                .replace(/\r/g, '\\r')
+                .replace(/\t/g, '\\t')
+                .replace(
+                  // eslint-disable-next-line no-control-regex
+                  /[\x00-\x1f]/g,
+                  (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`
+                );
             });
             parsed = JSON.parse(repaired);
           } catch {
