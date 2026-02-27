@@ -22,6 +22,7 @@ export default tseslint.config(
       'src/web/public/vendor/**',
       'src/web/public/app.js',
       'scripts/**/*.mjs',
+      'tools/**',
       'remotion/**',
     ],
   }
