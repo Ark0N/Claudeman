@@ -92,7 +92,6 @@ journalctl --user -u codeman-web -f
 
 ## Common Gotchas
 
-- **`npm run dev` starts the web server** — equivalent to `npx tsx src/index.ts web`
 - **Single-line prompts only** — `writeViaMux()` sends text and Enter separately; multi-line breaks Ink
 - **Don't kill tmux sessions blindly** — Check `$CODEMAN_TMUX` first; you might be inside one
 - **Never run full test suite** — `npx vitest run` spawns/kills tmux sessions and will crash your Codeman session. Run individual test files only.
