@@ -1406,6 +1406,26 @@ export interface PaneInfo {
 
 export type { PlanItem } from './plan-orchestrator.js';
 
+// ========== Web Push Types ==========
+
+/** A registered push subscription */
+export interface PushSubscriptionRecord {
+  id: string;
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+  userAgent: string;
+  createdAt: number;
+  lastUsedAt: number;
+  pushPreferences: Record<string, boolean>;
+}
+
+/** VAPID key pair for Web Push */
+export interface VapidKeys {
+  publicKey: string;
+  privateKey: string;
+  generatedAt: number;
+}
+
 // ========== Agent Teams Types ==========
 
 /** Team configuration from ~/.claude/teams/{name}/config.json */

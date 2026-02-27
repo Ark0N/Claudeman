@@ -1,6 +1,22 @@
 // Codeman App - Tab-based Terminal UI
 
 // ============================================================================
+// Web Push Utilities
+// ============================================================================
+
+/** Convert a base64-encoded VAPID key to Uint8Array for pushManager.subscribe() */
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+// ============================================================================
 // Constants
 // ============================================================================
 
@@ -2237,16 +2253,16 @@ class NotificationManager {
 
   loadPreferences() {
     const defaultEventTypes = {
-      permission_prompt: { enabled: true, browser: true, audio: true },
-      elicitation_dialog: { enabled: true, browser: true, audio: true },
-      idle_prompt: { enabled: true, browser: true, audio: false },
-      stop: { enabled: true, browser: false, audio: false },
-      session_error: { enabled: true, browser: true, audio: false },
-      respawn_cycle: { enabled: true, browser: false, audio: false },
-      token_milestone: { enabled: true, browser: false, audio: false },
-      ralph_complete: { enabled: true, browser: true, audio: true },
-      subagent_spawn: { enabled: false, browser: false, audio: false },
-      subagent_complete: { enabled: false, browser: false, audio: false },
+      permission_prompt: { enabled: true, browser: true, audio: true, push: false },
+      elicitation_dialog: { enabled: true, browser: true, audio: true, push: false },
+      idle_prompt: { enabled: true, browser: true, audio: false, push: false },
+      stop: { enabled: true, browser: false, audio: false, push: false },
+      session_error: { enabled: true, browser: true, audio: false, push: false },
+      respawn_cycle: { enabled: true, browser: false, audio: false, push: false },
+      token_milestone: { enabled: true, browser: false, audio: false, push: false },
+      ralph_complete: { enabled: true, browser: true, audio: true, push: false },
+      subagent_spawn: { enabled: false, browser: false, audio: false, push: false },
+      subagent_complete: { enabled: false, browser: false, audio: false, push: false },
     };
 
     // Device-specific defaults: mobile has notifications disabled by default
@@ -2262,7 +2278,7 @@ class NotificationManager {
       muteInfo: false,
       // Per-event-type preferences
       eventTypes: defaultEventTypes,
-      _version: 3,
+      _version: 4,
     };
     try {
       const storageKey = this.getStorageKey();
@@ -2278,6 +2294,18 @@ class NotificationManager {
         if (prefs._version < 3) {
           prefs.eventTypes = defaultEventTypes;
           prefs._version = 3;
+          localStorage.setItem(storageKey, JSON.stringify(prefs));
+        }
+        // Migrate: v3 -> v4 adds push field to all eventTypes
+        if (prefs._version < 4) {
+          if (prefs.eventTypes) {
+            for (const key of Object.keys(prefs.eventTypes)) {
+              if (prefs.eventTypes[key] && prefs.eventTypes[key].push === undefined) {
+                prefs.eventTypes[key].push = false;
+              }
+            }
+          }
+          prefs._version = 4;
           localStorage.setItem(storageKey, JSON.stringify(prefs));
         }
         // Merge with defaults to ensure all eventTypes exist
@@ -2875,6 +2903,8 @@ class CodemanApp {
         if (this._initGeneration === 0) this.loadState();
       }, 3000);
     });
+    // Register service worker for push notifications
+    this.registerServiceWorker();
     // Share a single settings fetch between both consumers
     const settingsPromise = fetch('/api/settings').then(r => r.ok ? r.json() : null).catch(() => null);
     this.loadQuickStartCases(null, settingsPromise);
@@ -11424,6 +11454,149 @@ class CodemanApp {
     });
   }
 
+  // ========== Web Push ==========
+
+  registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) return;
+    navigator.serviceWorker.register('/sw.js').then((reg) => {
+      this._swRegistration = reg;
+      // Listen for messages from service worker (notification clicks)
+      navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data?.type === 'notification-click') {
+          const { sessionId } = event.data;
+          if (sessionId && this.sessions.has(sessionId)) {
+            this.selectSession(sessionId);
+          }
+          window.focus();
+        }
+      });
+      // Check if already subscribed
+      reg.pushManager.getSubscription().then((sub) => {
+        if (sub) {
+          this._pushSubscription = sub;
+          this._updatePushUI(true);
+        }
+      });
+    }).catch(() => {
+      // Service worker registration failed (likely not HTTPS)
+    });
+  }
+
+  async subscribeToPush() {
+    if (!this._swRegistration) {
+      this.showToast('Service worker not available. HTTPS or localhost required.', 'error');
+      return;
+    }
+    try {
+      // Get VAPID public key from server
+      const keyRes = await fetch('/api/push/vapid-key');
+      const keyData = await keyRes.json();
+      if (!keyData.success) throw new Error('Failed to get VAPID key');
+
+      const applicationServerKey = urlBase64ToUint8Array(keyData.data.publicKey);
+      const subscription = await this._swRegistration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey,
+      });
+
+      // Send subscription to server
+      const subJson = subscription.toJSON();
+      const res = await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          endpoint: subJson.endpoint,
+          keys: subJson.keys,
+          userAgent: navigator.userAgent,
+          pushPreferences: this._buildPushPreferences(),
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error('Failed to register subscription');
+
+      this._pushSubscription = subscription;
+      this._pushSubscriptionId = data.data.id;
+      localStorage.setItem('codeman-push-subscription-id', data.data.id);
+      this._updatePushUI(true);
+      this.showToast('Push notifications enabled', 'success');
+    } catch (err) {
+      this.showToast('Push subscription failed: ' + (err.message || err), 'error');
+    }
+  }
+
+  async unsubscribeFromPush() {
+    try {
+      if (this._pushSubscription) {
+        await this._pushSubscription.unsubscribe();
+      }
+      const subId = this._pushSubscriptionId || localStorage.getItem('codeman-push-subscription-id');
+      if (subId) {
+        await fetch(`/api/push/subscribe/${subId}`, { method: 'DELETE' }).catch(() => {});
+      }
+      this._pushSubscription = null;
+      this._pushSubscriptionId = null;
+      localStorage.removeItem('codeman-push-subscription-id');
+      this._updatePushUI(false);
+      this.showToast('Push notifications disabled', 'success');
+    } catch (err) {
+      this.showToast('Failed to unsubscribe: ' + (err.message || err), 'error');
+    }
+  }
+
+  async togglePushSubscription() {
+    if (this._pushSubscription) {
+      await this.unsubscribeFromPush();
+    } else {
+      await this.subscribeToPush();
+    }
+  }
+
+  /** Sync push preferences to server */
+  async _syncPushPreferences() {
+    const subId = this._pushSubscriptionId || localStorage.getItem('codeman-push-subscription-id');
+    if (!subId) return;
+    try {
+      await fetch(`/api/push/subscribe/${subId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pushPreferences: this._buildPushPreferences() }),
+      });
+    } catch {
+      // Silently fail — prefs saved locally, will sync on next subscribe
+    }
+  }
+
+  /** Build push preferences object from current event type checkboxes */
+  _buildPushPreferences() {
+    const prefs = {};
+    const eventMap = {
+      'hook:permission_prompt': 'eventPermissionPush',
+      'hook:elicitation_dialog': 'eventQuestionPush',
+      'hook:idle_prompt': 'eventIdlePush',
+      'hook:stop': 'eventStopPush',
+      'respawn:blocked': 'eventRespawnPush',
+      'session:ralphCompletionDetected': 'eventRalphPush',
+    };
+    for (const [event, checkboxId] of Object.entries(eventMap)) {
+      const el = document.getElementById(checkboxId);
+      prefs[event] = el ? el.checked : true;
+    }
+    // session:error always receives push (no per-event toggle, always critical)
+    prefs['session:error'] = true;
+    return prefs;
+  }
+
+  _updatePushUI(subscribed) {
+    const btn = document.getElementById('pushSubscribeBtn');
+    const status = document.getElementById('pushSubscriptionStatus');
+    if (btn) btn.textContent = subscribed ? 'Unsubscribe' : 'Subscribe';
+    if (status) {
+      status.textContent = subscribed ? 'active' : 'off';
+      status.classList.remove('granted', 'denied');
+      if (subscribed) status.classList.add('granted');
+    }
+  }
+
   // ========== App Settings Modal ==========
 
   openAppSettings() {
@@ -11478,42 +11651,52 @@ class CodemanApp {
     document.getElementById('appSettingsNotifCritical').checked = !notifPrefs.muteCritical;
     document.getElementById('appSettingsNotifWarning').checked = !notifPrefs.muteWarning;
     document.getElementById('appSettingsNotifInfo').checked = !notifPrefs.muteInfo;
+    // Push notification settings
+    document.getElementById('appSettingsPushEnabled').checked = !!this._pushSubscription;
+    this._updatePushUI(!!this._pushSubscription);
     // Per-event-type preferences
     const eventTypes = notifPrefs.eventTypes || {};
     // Permission prompts
     const permPref = eventTypes.permission_prompt || {};
     document.getElementById('eventPermissionEnabled').checked = permPref.enabled ?? true;
     document.getElementById('eventPermissionBrowser').checked = permPref.browser ?? true;
+    document.getElementById('eventPermissionPush').checked = permPref.push ?? false;
     document.getElementById('eventPermissionAudio').checked = permPref.audio ?? true;
     // Questions (elicitation_dialog)
     const questionPref = eventTypes.elicitation_dialog || {};
     document.getElementById('eventQuestionEnabled').checked = questionPref.enabled ?? true;
     document.getElementById('eventQuestionBrowser').checked = questionPref.browser ?? true;
+    document.getElementById('eventQuestionPush').checked = questionPref.push ?? false;
     document.getElementById('eventQuestionAudio').checked = questionPref.audio ?? true;
     // Session idle (idle_prompt)
     const idlePref = eventTypes.idle_prompt || {};
     document.getElementById('eventIdleEnabled').checked = idlePref.enabled ?? true;
     document.getElementById('eventIdleBrowser').checked = idlePref.browser ?? true;
+    document.getElementById('eventIdlePush').checked = idlePref.push ?? false;
     document.getElementById('eventIdleAudio').checked = idlePref.audio ?? false;
     // Response complete (stop)
     const stopPref = eventTypes.stop || {};
     document.getElementById('eventStopEnabled').checked = stopPref.enabled ?? true;
     document.getElementById('eventStopBrowser').checked = stopPref.browser ?? false;
+    document.getElementById('eventStopPush').checked = stopPref.push ?? false;
     document.getElementById('eventStopAudio').checked = stopPref.audio ?? false;
     // Respawn cycles
     const respawnPref = eventTypes.respawn_cycle || {};
     document.getElementById('eventRespawnEnabled').checked = respawnPref.enabled ?? true;
     document.getElementById('eventRespawnBrowser').checked = respawnPref.browser ?? false;
+    document.getElementById('eventRespawnPush').checked = respawnPref.push ?? false;
     document.getElementById('eventRespawnAudio').checked = respawnPref.audio ?? false;
     // Task complete (ralph_complete)
     const ralphPref = eventTypes.ralph_complete || {};
     document.getElementById('eventRalphEnabled').checked = ralphPref.enabled ?? true;
     document.getElementById('eventRalphBrowser').checked = ralphPref.browser ?? true;
+    document.getElementById('eventRalphPush').checked = ralphPref.push ?? false;
     document.getElementById('eventRalphAudio').checked = ralphPref.audio ?? true;
     // Subagent activity (subagent_spawn and subagent_complete)
     const subagentPref = eventTypes.subagent_spawn || {};
     document.getElementById('eventSubagentEnabled').checked = subagentPref.enabled ?? false;
     document.getElementById('eventSubagentBrowser').checked = subagentPref.browser ?? false;
+    document.getElementById('eventSubagentPush').checked = subagentPref.push ?? false;
     document.getElementById('eventSubagentAudio').checked = subagentPref.audio ?? false;
     // Update permission status display (compact format for new grid layout)
     const permStatus = document.getElementById('notifPermissionStatus');
@@ -11971,60 +12154,73 @@ class CodemanApp {
         permission_prompt: {
           enabled: document.getElementById('eventPermissionEnabled').checked,
           browser: document.getElementById('eventPermissionBrowser').checked,
+          push: document.getElementById('eventPermissionPush').checked,
           audio: document.getElementById('eventPermissionAudio').checked,
         },
         elicitation_dialog: {
           enabled: document.getElementById('eventQuestionEnabled').checked,
           browser: document.getElementById('eventQuestionBrowser').checked,
+          push: document.getElementById('eventQuestionPush').checked,
           audio: document.getElementById('eventQuestionAudio').checked,
         },
         idle_prompt: {
           enabled: document.getElementById('eventIdleEnabled').checked,
           browser: document.getElementById('eventIdleBrowser').checked,
+          push: document.getElementById('eventIdlePush').checked,
           audio: document.getElementById('eventIdleAudio').checked,
         },
         stop: {
           enabled: document.getElementById('eventStopEnabled').checked,
           browser: document.getElementById('eventStopBrowser').checked,
+          push: document.getElementById('eventStopPush').checked,
           audio: document.getElementById('eventStopAudio').checked,
         },
         session_error: {
           enabled: true,
           browser: this.notificationManager?.preferences?.eventTypes?.session_error?.browser ?? true,
+          push: this.notificationManager?.preferences?.eventTypes?.session_error?.push ?? false,
           audio: false,
         },
         respawn_cycle: {
           enabled: document.getElementById('eventRespawnEnabled').checked,
           browser: document.getElementById('eventRespawnBrowser').checked,
+          push: document.getElementById('eventRespawnPush').checked,
           audio: document.getElementById('eventRespawnAudio').checked,
         },
         token_milestone: {
           enabled: true,
           browser: false,
+          push: false,
           audio: false,
         },
         ralph_complete: {
           enabled: document.getElementById('eventRalphEnabled').checked,
           browser: document.getElementById('eventRalphBrowser').checked,
+          push: document.getElementById('eventRalphPush').checked,
           audio: document.getElementById('eventRalphAudio').checked,
         },
         subagent_spawn: {
           enabled: document.getElementById('eventSubagentEnabled').checked,
           browser: document.getElementById('eventSubagentBrowser').checked,
+          push: document.getElementById('eventSubagentPush').checked,
           audio: document.getElementById('eventSubagentAudio').checked,
         },
         subagent_complete: {
           enabled: document.getElementById('eventSubagentEnabled').checked,
           browser: document.getElementById('eventSubagentBrowser').checked,
+          push: document.getElementById('eventSubagentPush').checked,
           audio: document.getElementById('eventSubagentAudio').checked,
         },
       },
-      _version: 3,
+      _version: 4,
     };
     if (this.notificationManager) {
       this.notificationManager.preferences = notifPrefsToSave;
       this.notificationManager.savePreferences();
     }
+
+    // Sync push preferences to server
+    this._syncPushPreferences();
 
     // Apply header visibility immediately
     this.applyHeaderVisibilitySettings();

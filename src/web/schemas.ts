@@ -190,6 +190,7 @@ const NotificationEventSchema = z.object({
   enabled: z.boolean().optional(),
   browser: z.boolean().optional(),
   audio: z.boolean().optional(),
+  push: z.boolean().optional(),
 }).optional();
 
 export const SettingsUpdateSchema = z.object({
@@ -398,4 +399,22 @@ export const InteractiveRespawnSchema = z.object({
 export const RespawnEnableSchema = z.object({
   config: RespawnConfigSchema.optional(),
   durationMinutes: z.number().int().min(1).max(14400).optional(),
+});
+
+// ========== Web Push ==========
+
+/** POST /api/push/subscribe */
+export const PushSubscribeSchema = z.object({
+  endpoint: z.string().url().max(2000),
+  keys: z.object({
+    p256dh: z.string().min(1).max(500),
+    auth: z.string().min(1).max(500),
+  }),
+  userAgent: z.string().max(500).optional(),
+  pushPreferences: z.record(z.string(), z.boolean()).optional(),
+});
+
+/** PUT /api/push/subscribe/:id */
+export const PushPreferencesUpdateSchema = z.object({
+  pushPreferences: z.record(z.string(), z.boolean()),
 });

@@ -35,7 +35,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md` (verify they match with `grep version package.json && grep Version CLAUDE.md`)
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart codeman-web`
 
-**Version**: 0.1655 (must match `package.json`)
+**Version**: 0.1656 (must match `package.json`)
 
 ## Project Overview
 
@@ -120,6 +120,7 @@ journalctl --user -u codeman-web -f
 | `src/bash-tool-parser.ts` | Parses Claude's bash tool invocations from output |
 | `src/transcript-watcher.ts` | Watches Claude's transcript files for changes |
 | `src/hooks-config.ts` | Manages `.claude/settings.local.json` hook configuration |
+| `src/push-store.ts` | VAPID key auto-gen + push subscription CRUD for Web Push |
 | `src/session-lifecycle-log.ts` | Append-only JSONL audit log at `~/.codeman/session-lifecycle.jsonl` |
 | `src/image-watcher.ts` | Watches for image file creation (screenshots, etc.) |
 | `src/file-stream-manager.ts` | Manages `tail -f` processes for live log viewing |
@@ -128,7 +129,7 @@ journalctl --user -u codeman-web -f
 | `src/prompts/*.ts` | Agent prompts (research-agent, planner) |
 | `src/templates/claude-md.ts` | CLAUDE.md generation for new cases |
 | `src/cli.ts` | Command-line interface handlers |
-| `src/web/server.ts` | Fastify REST API + SSE at `/api/events` (~101 routes) |
+| `src/web/server.ts` | Fastify REST API + SSE at `/api/events` (~105 routes) |
 | `src/web/schemas.ts` | Zod v4 validation schemas with path/env security allowlists |
 | `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows, mobile support (~17K lines) |
 | `src/types.ts` | All TypeScript interfaces (~70 type/interface/enum defs, ~1450 lines) |
@@ -184,6 +185,8 @@ journalctl --user -u codeman-web -f
 
 **Hook events**: Claude Code hooks trigger notifications via `/api/hook-event`. Key events: `permission_prompt` (tool approval needed), `elicitation_dialog` (Claude asking question), `idle_prompt` (waiting for input), `stop` (response complete), `teammate_idle` (Agent Teams), `task_completed` (Agent Teams). See `src/hooks-config.ts`.
 
+**Web Push**: Layer 5 of the notification system. Service worker (`sw.js`) receives push events and shows OS-level notifications even when the browser tab is closed. VAPID keys auto-generated on first use and persisted to `~/.codeman/push-keys.json`. Per-subscription per-event preferences stored in `~/.codeman/push-subscriptions.json`. Expired subscriptions (410/404) auto-cleaned. Requires HTTPS or localhost. iOS requires PWA installed to home screen. See `src/push-store.ts`.
+
 **Agent Teams (experimental)**: `TeamWatcher` polls `~/.claude/teams/` for team configs and matches teams to sessions via `leadSessionId`. Teammates are in-process threads (not separate OS processes) and appear as standard subagents. RespawnController checks `TeamWatcher.hasActiveTeammates()` before triggering respawn. Enable via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` env var in `settings.local.json`. See `agent-teams/` for full docs.
 
 **Circuit breaker**: Prevents respawn thrashing when Claude is stuck. States: `CLOSED` (normal) → `HALF_OPEN` (testing) → `OPEN` (blocked). Tracks consecutive no-progress, same-error-repeated, and tests-failing-too-long. Reset via API at `/api/sessions/:id/ralph-circuit-breaker/reset`.
@@ -201,6 +204,8 @@ journalctl --user -u codeman-web -f
 | `src/web/public/styles.css` | Main styling (dark theme, layout, components) |
 | `src/web/public/mobile.css` | Responsive overrides for screens <1024px (loaded conditionally via `media` attribute) |
 | `src/web/public/upload.html` | Screenshot upload page served at `/upload.html` |
+| `src/web/public/sw.js` | Service worker for Web Push notifications |
+| `src/web/public/manifest.json` | Minimal PWA manifest (required for push on Android) |
 | `src/web/public/vendor/` | Self-hosted xterm.js + addons (eliminates CDN latency) |
 
 ### Frontend Architecture (`app.js`)
@@ -213,7 +218,7 @@ The frontend is a single ~17.5K-line vanilla JS file with these key systems:
 | **Local echo overlay** | `LocalEchoOverlay` class | DOM overlay for instant mobile keystroke feedback |
 | **Mobile support** | `MobileDetection`, `KeyboardHandler`, `SwipeHandler`, `KeyboardAccessoryBar` | Touch input, viewport adaptation, swipe navigation |
 | **Subagent windows** | `openSubagentWindow()`, `closeSubagentWindow()`, `updateConnectionLines()` | Floating terminal windows with parent connection lines |
-| **Notifications** | `NotificationManager` class | 4-layer: in-app drawer, tab flash, browser API, audio beep |
+| **Notifications** | `NotificationManager` class | 5-layer: in-app drawer, tab flash, browser API, web push, audio beep |
 | **SSE connection** | `connectSSE()`, `addListener()` | EventSource with exponential backoff (1-30s), offline queue (64KB) |
 | **Settings** | `openAppSettings()`, `apply*Visibility()` | Server-backed + localStorage persistence |
 | **Focus management** | `FocusTrap` class | Modal keyboard navigation with focus restore |
@@ -254,7 +259,7 @@ The frontend is a single ~17.5K-line vanilla JS file with these key systems:
 
 ### API Route Categories
 
-~101 routes in `server.ts:buildServer()`. Key groups:
+~105 routes in `server.ts:buildServer()`. Key groups:
 
 | Group | Prefix | Count | Key endpoints |
 |-------|--------|-------|---------------|
@@ -265,6 +270,7 @@ The frontend is a single ~17.5K-line vanilla JS file with these key systems:
 | Subagents | `/api/subagents` | 7 | list, transcript, kill, cleanup |
 | Cases | `/api/cases` | 5 | CRUD, link, fix-plan |
 | Scheduled | `/api/scheduled` | 4 | CRUD for scheduled runs |
+| Push | `/api/push` | 4 | VAPID key, subscribe, update prefs, unsubscribe |
 | System | `/api/status`, `/api/stats`, `/api/config`, `/api/settings` | 8 | App state, config |
 | Files | `/api/sessions/:id/file*`, `tail-file` | 5 | Browser, preview, raw, tail stream |
 | Mux | `/api/mux-sessions` | 4 | tmux management, stats |
@@ -287,6 +293,8 @@ The frontend is a single ~17.5K-line vanilla JS file with these key systems:
 | `~/.codeman/state.json` | Sessions, settings, tokens, respawn config |
 | `~/.codeman/mux-sessions.json` | Tmux session metadata for recovery |
 | `~/.codeman/settings.json` | User preferences |
+| `~/.codeman/push-keys.json` | VAPID key pair for Web Push (auto-generated) |
+| `~/.codeman/push-subscriptions.json` | Registered push notification subscriptions |
 
 ## Default Settings
 

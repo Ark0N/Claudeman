@@ -6,6 +6,7 @@
   <meta name="description" content="Claude Code session manager with web interface">
   <meta name="theme-color" content="#0a0a0a">
   <meta name="google" content="notranslate">
+  <link rel="manifest" href="manifest.json">
   <title>Codeman</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2360a5fa'/%3E%3Cstop offset='100%25' stop-color='%233b82f6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='6' fill='%230a0a0a'/%3E%3Cpath d='M18 4L8 18h6l-2 10 10-14h-6z' fill='url(%23g)'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css?v=0.1631">
@@ -1112,6 +1113,19 @@
               </div>
               <span class="form-hint" style="grid-column: 1 / -1; margin-top: -8px;">For remote access, HTTPS is required. Start with: <code>codeman web --https</code></span>
 
+              <div class="settings-item" title="OS-level push notifications — works even when tab is closed">
+                <span class="settings-item-label">Push</span>
+                <div class="settings-item-actions">
+                  <label class="switch switch-sm">
+                    <input type="checkbox" id="appSettingsPushEnabled">
+                    <span class="slider"></span>
+                  </label>
+                  <button class="btn-toolbar btn-sm" id="pushSubscribeBtn" onclick="app.togglePushSubscription()" title="Subscribe/unsubscribe to push notifications">Subscribe</button>
+                  <span class="settings-status" id="pushSubscriptionStatus">off</span>
+                </div>
+              </div>
+              <span class="form-hint" style="grid-column: 1 / -1; margin-top: -8px;">Works through Cloudflare tunnel. Requires HTTPS or localhost. iOS requires PWA (Add to Home Screen).</span>
+
               <!-- Alerts Section -->
               <div class="settings-section-header">Alerts</div>
               <div class="settings-item" title="Play a short beep for critical events">
@@ -1164,41 +1178,49 @@
               <div class="event-header">Event</div>
               <div class="event-header">On</div>
               <div class="event-header">Browser</div>
+              <div class="event-header">Push</div>
               <div class="event-header">Sound</div>
 
               <div class="event-label">Permission prompts</div>
               <input type="checkbox" id="eventPermissionEnabled" checked>
               <input type="checkbox" id="eventPermissionBrowser" checked>
+              <input type="checkbox" id="eventPermissionPush" checked>
               <input type="checkbox" id="eventPermissionAudio" checked>
 
               <div class="event-label">Questions from Claude</div>
               <input type="checkbox" id="eventQuestionEnabled" checked>
               <input type="checkbox" id="eventQuestionBrowser" checked>
+              <input type="checkbox" id="eventQuestionPush" checked>
               <input type="checkbox" id="eventQuestionAudio" checked>
 
               <div class="event-label">Session idle</div>
               <input type="checkbox" id="eventIdleEnabled" checked>
               <input type="checkbox" id="eventIdleBrowser" checked>
+              <input type="checkbox" id="eventIdlePush">
               <input type="checkbox" id="eventIdleAudio">
 
               <div class="event-label">Response complete</div>
               <input type="checkbox" id="eventStopEnabled" checked>
               <input type="checkbox" id="eventStopBrowser">
+              <input type="checkbox" id="eventStopPush">
               <input type="checkbox" id="eventStopAudio">
 
               <div class="event-label">Respawn cycles</div>
               <input type="checkbox" id="eventRespawnEnabled" checked>
               <input type="checkbox" id="eventRespawnBrowser">
+              <input type="checkbox" id="eventRespawnPush">
               <input type="checkbox" id="eventRespawnAudio">
 
               <div class="event-label">Task complete</div>
               <input type="checkbox" id="eventRalphEnabled" checked>
               <input type="checkbox" id="eventRalphBrowser" checked>
+              <input type="checkbox" id="eventRalphPush">
               <input type="checkbox" id="eventRalphAudio" checked>
 
               <div class="event-label">Subagent activity</div>
               <input type="checkbox" id="eventSubagentEnabled">
               <input type="checkbox" id="eventSubagentBrowser">
+              <input type="checkbox" id="eventSubagentPush">
               <input type="checkbox" id="eventSubagentAudio">
             </div>
           </div>

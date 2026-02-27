@@ -42,6 +42,8 @@ import { createRequire } from 'node:module';
 import { RunSummaryTracker } from '../run-summary.js';
 import { PlanOrchestrator, type DetailedPlanResult } from '../plan-orchestrator.js';
 import { getLifecycleLog } from '../session-lifecycle-log.js';
+import { PushSubscriptionStore } from '../push-store.js';
+import webpush from 'web-push';
 
 // Load version from package.json
 const require = createRequire(import.meta.url);
@@ -92,6 +94,8 @@ import {
   SubagentParentMapSchema,
   InteractiveRespawnSchema,
   RespawnEnableSchema,
+  PushSubscribeSchema,
+  PushPreferencesUpdateSchema,
   isValidWorkingDir,
 } from './schemas.js';
 import { StaleExpirationMap } from '../utils/index.js';
@@ -428,6 +432,7 @@ export class WebServer extends EventEmitter {
   private tunnelManager: TunnelManager = new TunnelManager();
   private authSessions: StaleExpirationMap<string, string> | null = null;
   private authFailures: StaleExpirationMap<string, number> | null = null;
+  private pushStore: PushSubscriptionStore = new PushSubscriptionStore();
   private teamWatcher: TeamWatcher = new TeamWatcher();
   private teamWatcherHandlers: {
     teamCreated: (config: unknown) => void;
@@ -738,6 +743,15 @@ export class WebServer extends EventEmitter {
       }
 
       done();
+    });
+
+    // Service worker must never be cached — browsers check for SW updates on navigation
+    this.app.get('/sw.js', async (_req, reply) => {
+      return reply
+        .header('Cache-Control', 'no-cache, no-store')
+        .header('Service-Worker-Allowed', '/')
+        .type('application/javascript')
+        .sendFile('sw.js', join(__dirname, 'public'));
     });
 
     // Serve static files — versioned assets (?v=X) are immutable, cache aggressively
@@ -3909,12 +3923,62 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       const safeData = sanitizeHookData(data);
       this.broadcast(`hook:${event}`, { sessionId, timestamp: Date.now(), ...safeData });
 
+      // Send push notifications for hook events
+      const session = this.sessions.get(sessionId);
+      const sessionName = session?.name ?? sessionId.slice(0, 8);
+      this.sendPushNotifications(`hook:${event}`, { sessionId, sessionName, ...safeData });
+
       // Track in run summary
       const summaryTracker = this.runSummaryTrackers.get(sessionId);
       if (summaryTracker) {
         summaryTracker.recordHookEvent(event, safeData);
       }
 
+      return { success: true };
+    });
+
+    // ========== Web Push ==========
+
+    this.app.get('/api/push/vapid-key', async () => {
+      return { success: true, data: { publicKey: this.pushStore.getPublicKey() } };
+    });
+
+    this.app.post('/api/push/subscribe', async (req) => {
+      const result = PushSubscribeSchema.safeParse(req.body);
+      if (!result.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
+      }
+      const { endpoint, keys, userAgent, pushPreferences } = result.data;
+      const record = this.pushStore.addSubscription({
+        id: uuidv4(),
+        endpoint,
+        keys,
+        userAgent: userAgent ?? req.headers['user-agent'] ?? '',
+        createdAt: Date.now(),
+        pushPreferences: pushPreferences ?? {},
+      });
+      return { success: true, data: { id: record.id } };
+    });
+
+    this.app.put('/api/push/subscribe/:id', async (req) => {
+      const { id } = req.params as { id: string };
+      const result = PushPreferencesUpdateSchema.safeParse(req.body);
+      if (!result.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
+      }
+      const updated = this.pushStore.updatePreferences(id, result.data.pushPreferences);
+      if (!updated) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Subscription not found');
+      }
+      return { success: true };
+    });
+
+    this.app.delete('/api/push/subscribe/:id', async (req) => {
+      const { id } = req.params as { id: string };
+      const removed = this.pushStore.removeSubscription(id);
+      if (!removed) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Subscription not found');
+      }
       return { success: true };
     });
 
@@ -4427,6 +4491,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
       error: (error) => {
         this.broadcast('session:error', { id: session.id, error });
+        this.sendPushNotifications('session:error', { sessionId: session.id, sessionName: session.name, error: String(error) });
         // Track in run summary
         const tracker = this.runSummaryTrackers.get(session.id);
         if (tracker) tracker.recordError('Session error', String(error));
@@ -4551,6 +4616,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
       ralphCompletionDetected: (phrase: string) => {
         this.broadcast('session:ralphCompletionDetected', { sessionId: session.id, phrase });
+        this.sendPushNotifications('session:ralphCompletionDetected', { sessionId: session.id, sessionName: session.name, phrase });
         // Track in run summary
         const tracker = this.runSummaryTrackers.get(session.id);
         if (tracker) tracker.recordRalphCompletion(phrase);
@@ -4668,6 +4734,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     controller.on('respawnBlocked', (data: { reason: string; details: string }) => {
       this.broadcast('respawn:blocked', { sessionId, reason: data.reason, details: data.details });
+      const sessionForPush = this.sessions.get(sessionId);
+      this.sendPushNotifications('respawn:blocked', { sessionId, sessionName: sessionForPush?.name ?? sessionId.slice(0, 8), reason: data.reason });
       // Track in run summary (lazy lookup)
       const tracker = getTracker();
       if (tracker) tracker.recordWarning(`Respawn blocked: ${data.reason}`, data.details);
@@ -5372,6 +5440,80 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     this.stateUpdatePending.clear();
   }
 
+  // ========== Web Push ==========
+
+  /** Map SSE event names to push notification payloads */
+  private static readonly PUSH_EVENT_MAP: Record<string, { title: string; urgency: string; actions?: Array<{ action: string; title: string }> }> = {
+    'hook:permission_prompt': { title: 'Permission Required', urgency: 'critical', actions: [{ action: 'approve', title: 'Approve' }, { action: 'deny', title: 'Deny' }] },
+    'hook:elicitation_dialog': { title: 'Question Asked', urgency: 'critical' },
+    'hook:idle_prompt': { title: 'Waiting for Input', urgency: 'warning' },
+    'hook:stop': { title: 'Response Complete', urgency: 'info' },
+    'session:error': { title: 'Session Error', urgency: 'critical' },
+    'respawn:blocked': { title: 'Respawn Blocked', urgency: 'critical' },
+    'session:ralphCompletionDetected': { title: 'Task Complete', urgency: 'warning' },
+  };
+
+  /**
+   * Send push notifications for a given event to all subscribed devices.
+   * Only events in PUSH_EVENT_MAP trigger push. Per-subscription preferences are checked.
+   * Expired subscriptions (410/404) are auto-removed.
+   */
+  private sendPushNotifications(event: string, data: Record<string, unknown>): void {
+    const template = WebServer.PUSH_EVENT_MAP[event];
+    if (!template) return;
+
+    const subscriptions = this.pushStore.getAll();
+    if (subscriptions.length === 0) return;
+
+    const vapidKeys = this.pushStore.getVapidKeys();
+    webpush.setVapidDetails('mailto:codeman@localhost', vapidKeys.publicKey, vapidKeys.privateKey);
+
+    const sessionName = (data.sessionName as string) || '';
+    const sessionId = (data.sessionId as string) || '';
+
+    // Build body text from event data
+    let body = sessionName ? `[${sessionName}]` : '';
+    if (event === 'session:error' && data.error) {
+      body += body ? ' ' : '';
+      body += String(data.error).slice(0, 200);
+    } else if (event === 'respawn:blocked' && data.reason) {
+      body += body ? ' ' : '';
+      body += String(data.reason);
+    } else if (event === 'session:ralphCompletionDetected' && data.phrase) {
+      body += body ? ' ' : '';
+      body += String(data.phrase);
+    } else if (event === 'hook:permission_prompt' && data.tool_name) {
+      body += body ? ' ' : '';
+      body += `Tool: ${String(data.tool_name)}`;
+    }
+
+    const payload = JSON.stringify({
+      title: template.title,
+      body,
+      tag: `codeman-${event}-${sessionId}`,
+      sessionId,
+      urgency: template.urgency,
+      actions: template.actions,
+    });
+
+    for (const sub of subscriptions) {
+      // Check per-subscription preferences
+      if (sub.pushPreferences[event] === false) continue;
+
+      const pushSub = {
+        endpoint: sub.endpoint,
+        keys: sub.keys,
+      };
+
+      webpush.sendNotification(pushSub, payload).catch((err: { statusCode?: number }) => {
+        // Auto-remove expired/invalid subscriptions
+        if (err.statusCode === 410 || err.statusCode === 404) {
+          this.pushStore.removeByEndpoint(sub.endpoint);
+        }
+      });
+    }
+  }
+
   /**
    * Clean up dead SSE clients and send keep-alive comments.
    * Keep-alive prevents proxy/load-balancer timeouts on idle connections.
@@ -5914,6 +6056,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     }
     this.activePlanOrchestrators.clear();
     this.cleaningUp.clear();
+
+    // Dispose push store (flush pending saves)
+    this.pushStore.dispose();
 
     await this.app.close();
   }

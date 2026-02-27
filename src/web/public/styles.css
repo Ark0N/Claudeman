@@ -2997,7 +2997,7 @@ body {
 /* Event Type Notification Grid */
 .event-type-grid {
   display: grid;
-  grid-template-columns: 1fr 50px 50px 50px;
+  grid-template-columns: 1fr 50px 50px 50px 50px;
   gap: 6px 8px;
   align-items: center;
   margin-top: 8px;
