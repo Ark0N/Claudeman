@@ -1,3 +1,6 @@
+# Claude Code skills (local tooling, not project code)
+.agents/
+
 # Dependencies
 node_modules/
 
