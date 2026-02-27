@@ -7,20 +7,16 @@ on:
 
 jobs:
   ci:
-    name: Typecheck & Lint (Node ${{ matrix.node-version }})
+    name: Typecheck & Lint
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        node-version: [20, 22]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ matrix.node-version }}
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 22
           cache: 'npm'
 
       - name: Install dependencies
