@@ -8946,17 +8946,16 @@ class CodemanApp {
     const isActive = btn.classList.contains('active');
     btn.disabled = true;
     try {
-      const res = await fetch('/api/settings');
-      const current = res.ok ? await res.json() : {};
       const newEnabled = !isActive;
-      current.tunnelEnabled = newEnabled;
       await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(current),
+        body: JSON.stringify({ tunnelEnabled: newEnabled }),
       });
       if (newEnabled) {
         this._showTunnelConnecting();
+        // Poll tunnel status as fallback in case SSE event is missed
+        this._pollTunnelStatus();
       } else {
         this._dismissTunnelConnecting();
         this.showToast('Tunnel stopped', 'info');
@@ -9001,6 +9000,8 @@ class CodemanApp {
   }
 
   _dismissTunnelConnecting() {
+    clearTimeout(this._tunnelPollTimer);
+    this._tunnelPollTimer = null;
     const toast = document.getElementById('tunnelConnectingToast');
     if (toast) {
       toast.classList.remove('show');
@@ -9008,6 +9009,32 @@ class CodemanApp {
     }
     const btn = document.getElementById('welcomeTunnelBtn');
     if (btn) btn.classList.remove('connecting');
+  }
+
+  _pollTunnelStatus(attempt = 0) {
+    if (attempt > 15) return; // give up after ~30s
+    this._tunnelPollTimer = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/tunnel/status');
+        const status = await res.json();
+        if (status.running && status.url) {
+          // Tunnel is up — update UI
+          this._dismissTunnelConnecting();
+          this._updateTunnelUrlDisplay(status.url);
+          const welcomeVisible = document.getElementById('welcomeOverlay')?.classList.contains('visible');
+          if (welcomeVisible) {
+            this._updateWelcomeTunnelBtn(true, status.url, true);
+            this.showToast('Tunnel active', 'success');
+          } else {
+            this._updateWelcomeTunnelBtn(true, status.url);
+            this.showToast(`Tunnel active: ${status.url}`, 'success');
+            this.showTunnelQR();
+          }
+          return;
+        }
+      } catch { /* ignore */ }
+      this._pollTunnelStatus(attempt + 1);
+    }, 2000);
   }
 
   _updateWelcomeTunnelBtn(active, url, firstAppear = false) {

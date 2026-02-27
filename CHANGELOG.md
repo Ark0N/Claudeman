@@ -1,5 +1,11 @@
 # codeman
 
+## 0.2.4
+
+### Patch Changes
+
+- Fix tunnel button not working: settings PUT was rejected by strict Zod validation when sending full settings blob; now sends only `{tunnelEnabled}`. Added polling fallback for tunnel status in case SSE events are missed.
+
 ## 0.2.3
 
 ### Patch Changes
