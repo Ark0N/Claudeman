@@ -29,6 +29,7 @@
     "release": "changeset publish"
   },
   "workspaces": [
+    ".",
     "packages/*"
   ],
   "keywords": [
