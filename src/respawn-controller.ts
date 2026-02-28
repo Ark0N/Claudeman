@@ -653,6 +653,9 @@ export class RespawnController extends EventEmitter {
   /** Timer for periodic detection status updates */
   private detectionUpdateTimer: NodeJS.Timeout | null = null;
 
+  /** Cached key fields from last emitted detection status (for dedup) */
+  private lastEmittedDetectionKey: string = '';
+
   /** Timer for auto-accepting plan mode prompts */
   private autoAcceptTimer: NodeJS.Timeout | null = null;
 
@@ -1196,10 +1199,18 @@ export class RespawnController extends EventEmitter {
   private startDetectionUpdates(): void {
     this.stopDetectionUpdates();
     if (this._state === 'stopped') return;
+    this.lastEmittedDetectionKey = '';
     this.detectionUpdateTimer = setInterval(() => {
       try {
         if (this._state !== 'stopped') {
-          this.emit('detectionUpdate', this.getDetectionStatus());
+          const status = this.getDetectionStatus();
+          // Only emit when status meaningfully changed (confidence, state text, or timer values)
+          // to avoid broadcasting identical data every 2s for stable/idle sessions.
+          const key = `${status.confidenceLevel}|${status.statusText}|${this._state}`;
+          if (key !== this.lastEmittedDetectionKey) {
+            this.lastEmittedDetectionKey = key;
+            this.emit('detectionUpdate', status);
+          }
         }
       } catch (err) {
         console.error(`[RespawnController] Error in detectionUpdateTimer:`, err);

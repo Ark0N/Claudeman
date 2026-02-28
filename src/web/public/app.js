@@ -12011,8 +12011,6 @@ class CodemanApp {
     const svg = document.getElementById('connectionLines');
     if (!svg) return;
 
-    svg.innerHTML = '';
-
     // Check if Ralph wizard modal is open
     const wizardModal = document.getElementById('ralphWizardModal');
     const wizardOpen = wizardModal?.classList.contains('active');
@@ -12032,8 +12030,51 @@ class CodemanApp {
       .filter(([, data]) => data.element)
       .map(([id, data]) => ({ id, ...data }));
 
+    // === PHASE 1: Batch all layout reads (getBoundingClientRect) ===
+    // Reading layout properties forces the browser to calculate layout.
+    // By batching all reads before any writes, we avoid repeated forced reflows.
+    const rects = new Map();
+
+    // Read all subagent window rects
     for (const { agentId, win } of visibleSubagentWindows) {
-      const winRect = win.getBoundingClientRect();
+      rects.set('sub:' + agentId, win.getBoundingClientRect());
+    }
+
+    // Read all plan subagent rects
+    for (const planAgent of planSubagentArray) {
+      rects.set('plan:' + planAgent.id, planAgent.element.getBoundingClientRect());
+    }
+
+    // Read wizard rect (if open)
+    let wizardRect = null;
+    if (wizardOpen && wizardContent) {
+      wizardRect = wizardContent.getBoundingClientRect();
+    }
+
+    // Read tab rects for normal mode (only tabs that are actually needed)
+    if (!wizardOpen) {
+      for (const { agentId } of visibleSubagentWindows) {
+        const parentSessionId = this.subagentParentMap.get(agentId);
+        if (!parentSessionId || rects.has('tab:' + parentSessionId)) continue;
+        const tab = document.querySelector(`.session-tab[data-id="${parentSessionId}"]`);
+        if (tab) rects.set('tab:' + parentSessionId, tab.getBoundingClientRect());
+      }
+    }
+
+    // Read plan window rects for wizard-to-plan lines
+    if (wizardOpen && wizardContent && this.planSubagents.size > 0 && !this.planAgentsMinimized) {
+      for (const [agentId, windowData] of this.planSubagents) {
+        if (!windowData.element) continue;
+        const key = 'planwin:' + agentId;
+        if (!rects.has(key)) rects.set(key, windowData.element.getBoundingClientRect());
+      }
+    }
+
+    // === PHASE 2: DOM writes using cached rects (no more layout reads) ===
+    svg.innerHTML = '';
+
+    for (const { agentId } of visibleSubagentWindows) {
+      const winRect = rects.get('sub:' + agentId);
 
       // If wizard is open with plan subagents, connect regular subagents to plan subagent windows
       if (wizardOpen && wizardContent && planSubagentArray.length > 0) {
@@ -12042,7 +12083,7 @@ class CodemanApp {
         let nearestDistance = Infinity;
 
         for (const planAgent of planSubagentArray) {
-          const planRect = planAgent.element.getBoundingClientRect();
+          const planRect = rects.get('plan:' + planAgent.id);
           const planCenterX = planRect.left + planRect.width / 2;
           const planCenterY = planRect.top + planRect.height / 2;
           const winCenterX = winRect.left + winRect.width / 2;
@@ -12056,7 +12097,7 @@ class CodemanApp {
         }
 
         if (nearestPlanAgent) {
-          const planRect = nearestPlanAgent.element.getBoundingClientRect();
+          const planRect = rects.get('plan:' + nearestPlanAgent.id);
 
           // Draw line from plan subagent window to regular subagent window
           let x1, y1, x2, y2;
@@ -12087,8 +12128,6 @@ class CodemanApp {
         }
       } else if (wizardOpen && wizardContent) {
         // Wizard open but no plan subagents - connect directly to wizard
-        const wizardRect = wizardContent.getBoundingClientRect();
-
         const winCenterX = winRect.left + winRect.width / 2;
         const wizardCenterX = wizardRect.left + wizardRect.width / 2;
 
@@ -12124,14 +12163,11 @@ class CodemanApp {
           continue;
         }
 
-        // Find the TAB element by its data-id
-        const tab = document.querySelector(`.session-tab[data-id="${parentSessionId}"]`);
-        if (!tab) {
+        const tabRect = rects.get('tab:' + parentSessionId);
+        if (!tabRect) {
           // Tab not in DOM (might be scrolled out or session closed)
           continue;
         }
-
-        const tabRect = tab.getBoundingClientRect();
 
         // Draw curved line from TAB bottom-center to window top-center
         const x1 = tabRect.left + tabRect.width / 2;
@@ -12155,13 +12191,9 @@ class CodemanApp {
     // Draw lines from wizard to plan subagent windows (Opus agents during plan generation)
     // Skip if agents are minimized to tab
     if (wizardOpen && wizardContent && this.planSubagents.size > 0 && !this.planAgentsMinimized) {
-      const wizardRect = wizardContent.getBoundingClientRect();
-
-      for (const [agentId, windowData] of this.planSubagents) {
-        const win = windowData.element;
-        if (!win) continue;
-
-        const winRect = win.getBoundingClientRect();
+      for (const [agentId] of this.planSubagents) {
+        const winRect = rects.get('planwin:' + agentId);
+        if (!winRect) continue;
 
         // Determine which side of wizard the window is on
         const winCenterX = winRect.left + winRect.width / 2;

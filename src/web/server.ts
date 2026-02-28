@@ -995,10 +995,10 @@ export class WebServer extends EventEmitter {
           },
         },
         watchers: {
-          fileWatchers: subagentStats.fileWatcherCount,
+          fileDebouncers: subagentStats.fileDebouncerCount,
           dirWatchers: subagentStats.dirWatcherCount,
           transcriptWatchers: this.transcriptWatchers.size,
-          total: subagentStats.fileWatcherCount + subagentStats.dirWatcherCount + this.transcriptWatchers.size,
+          total: subagentStats.fileDebouncerCount + subagentStats.dirWatcherCount + this.transcriptWatchers.size,
         },
         timers: {
           respawnTimers: this.respawnTimers.size,
@@ -5878,15 +5878,17 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 
   private broadcast(event: string, data: unknown): void {
-    // Invalidate caches on state-changing broadcasts, but NOT on high-frequency
-    // streaming events that don't change session metadata (terminal data,
-    // detection updates). These fire every 16ms-2s and would make the 1s TTL
-    // caches permanently empty — defeating their purpose.
+    // Invalidate caches only on structurally significant events — ones that
+    // change session list content (creation, deletion, or full state refresh).
+    // High-frequency non-structural events (working/idle transitions, completion,
+    // error, respawn state changes) are NOT worth invalidating for because:
+    //   1. The debounced session:updated follows within 500ms with the new state
+    //   2. These caches serve /api/sessions and SSE init — neither is polled rapidly
+    //   3. Invalidating on every working/idle transition makes the 1s TTL useless
     if (
-      (event.startsWith('session:') || event.startsWith('respawn:')) &&
-      event !== 'session:terminal' &&
-      event !== 'session:needsRefresh' &&
-      event !== 'respawn:detectionUpdate'
+      event === 'session:created' ||
+      event === 'session:deleted' ||
+      event === 'session:updated'
     ) {
       this.cachedLightState = null;
       this.cachedSessionsList = null;

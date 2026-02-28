@@ -62,6 +62,8 @@ export class StateStore {
   private filePath: string;
   private saveTimeout: NodeJS.Timeout | null = null;
   private dirty: boolean = false;
+  private dirtySessions = new Set<string>();
+  private cachedSessionJsons = new Map<string, string>();
 
   // Inner state storage (separate from main state to reduce write frequency)
   private ralphStates: Map<string, RalphSessionState> = new Map();
@@ -97,6 +99,10 @@ export class StateStore {
     this.ralphStatePath = this.filePath.replace('.json', '-inner.json');
     this.state = this.load();
     this.state.config.stateFilePath = this.filePath;
+    // Pre-populate session cache for loaded state
+    for (const [id, session] of Object.entries(this.state.sessions)) {
+      this.cachedSessionJsons.set(id, JSON.stringify(session));
+    }
     this.loadRalphStates();
   }
 
@@ -176,6 +182,65 @@ export class StateStore {
     }
   }
 
+  /**
+   * Assemble JSON string with incremental per-session caching.
+   * Only dirty sessions are re-serialized; clean sessions use cached JSON fragments.
+   */
+  private assembleStateJson(): string {
+    // Re-serialize dirty sessions and update cache
+    for (const id of this.dirtySessions) {
+      const session = this.state.sessions[id];
+      if (session) {
+        this.cachedSessionJsons.set(id, JSON.stringify(session));
+      } else {
+        this.cachedSessionJsons.delete(id);
+      }
+    }
+    this.dirtySessions.clear();
+
+    // Build sessions object from cached fragments
+    const sessionParts: string[] = [];
+    for (const [id, session] of Object.entries(this.state.sessions)) {
+      let json = this.cachedSessionJsons.get(id);
+      if (!json) {
+        // Session not in cache (loaded from disk or set via direct state mutation)
+        json = JSON.stringify(session);
+        this.cachedSessionJsons.set(id, json);
+      }
+      sessionParts.push(`${JSON.stringify(id)}:${json}`);
+    }
+
+    // Prune stale cache entries (sessions removed via direct state mutation)
+    if (this.cachedSessionJsons.size > Object.keys(this.state.sessions).length) {
+      for (const cachedId of this.cachedSessionJsons.keys()) {
+        if (!(cachedId in this.state.sessions)) {
+          this.cachedSessionJsons.delete(cachedId);
+        }
+      }
+    }
+
+    // Build final JSON: sessions from cache, everything else re-serialized (tiny)
+    const sessionsJson = `{${sessionParts.join(',')}}`;
+
+    // Serialize non-session fields individually (they're small)
+    const parts: string[] = [
+      `"sessions":${sessionsJson}`,
+      `"tasks":${JSON.stringify(this.state.tasks)}`,
+      `"ralphLoop":${JSON.stringify(this.state.ralphLoop)}`,
+      `"config":${JSON.stringify(this.state.config)}`,
+    ];
+
+    // Optional fields
+    if (this.state.globalStats) {
+      parts.push(`"globalStats":${JSON.stringify(this.state.globalStats)}`);
+    }
+    if (this.state.tokenStats) {
+      parts.push(`"tokenStats":${JSON.stringify(this.state.tokenStats)}`);
+    }
+
+    return `{${parts.join(',')}}`;
+  }
+
   private async _doSaveAsync(): Promise<void> {
     if (this.saveTimeout) {
       clearTimeout(this.saveTimeout);
@@ -199,15 +264,23 @@ export class StateStore {
 
     // Step 1: Serialize state (validates it's JSON-safe)
     try {
-      json = JSON.stringify(this.state);
-    } catch (err) {
-      console.error('[StateStore] Failed to serialize state (circular reference or invalid data):', err);
-      this.consecutiveSaveFailures++;
-      if (this.consecutiveSaveFailures >= MAX_CONSECUTIVE_FAILURES) {
-        console.error('[StateStore] Circuit breaker OPEN - serialization failing repeatedly');
-        this.circuitBreakerOpen = true;
+      json = this.assembleStateJson();
+    } catch (assembleErr) {
+      // Fallback to full serialization if incremental assembly fails
+      console.warn('[StateStore] assembleStateJson failed, falling back to full serialize:', assembleErr);
+      this.cachedSessionJsons.clear();
+      this.dirtySessions.clear();
+      try {
+        json = JSON.stringify(this.state);
+      } catch (err) {
+        console.error('[StateStore] Failed to serialize state (circular reference or invalid data):', err);
+        this.consecutiveSaveFailures++;
+        if (this.consecutiveSaveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          console.error('[StateStore] Circuit breaker OPEN - serialization failing repeatedly');
+          this.circuitBreakerOpen = true;
+        }
+        return;
       }
-      return;
     }
 
     // Clear dirty flag BEFORE async I/O so mutations during write re-set it.
@@ -279,15 +352,23 @@ export class StateStore {
     let json: string;
 
     try {
-      json = JSON.stringify(this.state);
-    } catch (err) {
-      console.error('[StateStore] Failed to serialize state (circular reference or invalid data):', err);
-      this.consecutiveSaveFailures++;
-      if (this.consecutiveSaveFailures >= MAX_CONSECUTIVE_FAILURES) {
-        console.error('[StateStore] Circuit breaker OPEN - serialization failing repeatedly');
-        this.circuitBreakerOpen = true;
+      json = this.assembleStateJson();
+    } catch (assembleErr) {
+      // Fallback to full serialization if incremental assembly fails
+      console.warn('[StateStore] assembleStateJson failed, falling back to full serialize:', assembleErr);
+      this.cachedSessionJsons.clear();
+      this.dirtySessions.clear();
+      try {
+        json = JSON.stringify(this.state);
+      } catch (err) {
+        console.error('[StateStore] Failed to serialize state (circular reference or invalid data):', err);
+        this.consecutiveSaveFailures++;
+        if (this.consecutiveSaveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          console.error('[StateStore] Circuit breaker OPEN - serialization failing repeatedly');
+          this.circuitBreakerOpen = true;
+        }
+        return;
       }
-      return;
     }
 
     // Backup via atomic copy (avoids reading entire file into memory)
@@ -387,12 +468,15 @@ export class StateStore {
   /** Sets a session state and triggers a debounced save. */
   setSession(id: string, session: AppState['sessions'][string]) {
     this.state.sessions[id] = session;
+    this.dirtySessions.add(id);
     this.save();
   }
 
   /** Removes a session state and triggers a debounced save. */
   removeSession(id: string) {
     delete this.state.sessions[id];
+    this.cachedSessionJsons.delete(id);
+    this.dirtySessions.delete(id);
     this.save();
   }
 
@@ -413,6 +497,8 @@ export class StateStore {
         const name = this.state.sessions[sessionId]?.name;
         cleaned.push({ id: sessionId, name });
         delete this.state.sessions[sessionId];
+        this.cachedSessionJsons.delete(sessionId);
+        this.dirtySessions.delete(sessionId);
         // Also clean up Ralph state for this session
         this.ralphStates.delete(sessionId);
       }
@@ -475,6 +561,8 @@ export class StateStore {
     this.state = createInitialState();
     this.state.config.stateFilePath = this.filePath;
     this.ralphStates.clear();
+    this.cachedSessionJsons.clear();
+    this.dirtySessions.clear();
     this.saveNow(); // Immediate save for reset operations
     this.saveRalphStatesNow();
   }

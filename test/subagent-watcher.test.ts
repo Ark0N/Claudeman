@@ -1236,7 +1236,24 @@ describe('SubagentWatcher', () => {
 
       const mockRl = new EventEmitter();
       mockCreateInterface.mockReturnValue(mockRl);
-      mockCreateReadStream.mockReturnValue({});
+
+      // createReadStream now used for parent transcript reading (stream tail)
+      // Return a stream-like EventEmitter that emits the transcript content
+      mockCreateReadStream.mockImplementation((filepath: string) => {
+        const stream = new EventEmitter() as EventEmitter & { destroy: () => void };
+        stream.destroy = vi.fn();
+        if (typeof filepath === 'string' && filepath.includes('session1.jsonl')) {
+          // Emit parent transcript content on next tick
+          process.nextTick(() => {
+            stream.emit('data', parentTranscript + '\n');
+            stream.emit('end');
+          });
+        } else {
+          // For agent files, emit end immediately (empty content)
+          process.nextTick(() => stream.emit('end'));
+        }
+        return stream;
+      });
 
       mockExistsSync.mockReturnValue(true);
       mockReaddirSync.mockImplementation((path: string) => {
@@ -1250,14 +1267,6 @@ describe('SubagentWatcher', () => {
         birthtime: new Date(),
         mtime: new Date(),
         size: 100,
-      });
-      // Return parent transcript when reading the session transcript
-      // Return empty for subagent file (will fall back, but we want to test parent extraction)
-      mockReadFileSync.mockImplementation((filepath: string) => {
-        if (filepath.includes('session1.jsonl')) {
-          return parentTranscript;
-        }
-        return ''; // Empty subagent file
       });
 
       const discoveredHandler = vi.fn();
@@ -1509,14 +1518,11 @@ describe('SubagentWatcher', () => {
   });
 
   describe('File Watcher Management', () => {
-    it('should close file watchers on stop', async () => {
-      const mockFileWatcher = { close: vi.fn(), on: vi.fn(), off: vi.fn() };
+    it('should close directory watchers on stop', async () => {
       const mockDirWatcher = { close: vi.fn(), on: vi.fn(), off: vi.fn() };
 
-      mockWatch.mockImplementation((path: string) => {
-        if (path.endsWith('.jsonl')) return mockFileWatcher;
-        return mockDirWatcher;
-      });
+      // Only directory watchers are created (no per-file watchers)
+      mockWatch.mockReturnValue(mockDirWatcher);
 
       const mockRl = new EventEmitter();
       mockCreateInterface.mockReturnValue(mockRl);
@@ -1545,8 +1551,8 @@ describe('SubagentWatcher', () => {
 
       watcher.stop();
 
-      // Watchers should be closed
-      expect(mockFileWatcher.close).toHaveBeenCalled();
+      // Directory watchers should be closed (per-file watchers no longer exist)
+      expect(mockDirWatcher.close).toHaveBeenCalled();
     });
 
     it('should clear idle timers on stop', async () => {

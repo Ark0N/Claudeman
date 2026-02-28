@@ -160,8 +160,9 @@ const FILE_CONTENT_DEBOUNCE_MS = 100; // Debounce delay for file content updates
 
 export class SubagentWatcher extends EventEmitter {
   private filePositions = new Map<string, number>();
-  private fileWatchers = new Map<string, FSWatcher>();
   private dirWatchers = new Map<string, FSWatcher>();
+  // Per-file debounce timers for directory watcher (replaces per-file FSWatchers)
+  private fileDebouncers = new Map<string, NodeJS.Timeout>();
   private agentInfo = new Map<string, SubagentInfo>();
   private idleTimers = new Map<string, NodeJS.Timeout>();
   private pollInterval: NodeJS.Timeout | null = null;
@@ -180,7 +181,8 @@ export class SubagentWatcher extends EventEmitter {
   private parentDescriptionCache = new Map<string, { descriptions: Map<string, string>; timestamp: number }>();
   // Store error handlers for FSWatchers to enable proper cleanup (prevent memory leaks)
   private dirWatcherErrorHandlers = new Map<string, (error: Error) => void>();
-  private fileWatcherErrorHandlers = new Map<string, (error: Error) => void>();
+  // Map filePath → { projectHash, sessionId } for directory watcher file-change handling
+  private fileAgentContext = new Map<string, { projectHash: string; sessionId: string }>();
 
   constructor() {
     super();
@@ -426,17 +428,12 @@ export class SubagentWatcher extends EventEmitter {
       this.livenessInterval = null;
     }
 
-    // Remove error handlers before closing watchers to prevent memory leak
-    for (const [filePath, handler] of this.fileWatcherErrorHandlers) {
-      const watcher = this.fileWatchers.get(filePath);
-      if (watcher) watcher.off('error', handler);
+    // Clear file debouncers
+    for (const timer of this.fileDebouncers.values()) {
+      clearTimeout(timer);
     }
-    this.fileWatcherErrorHandlers.clear();
-
-    for (const watcher of this.fileWatchers.values()) {
-      watcher.close();
-    }
-    this.fileWatchers.clear();
+    this.fileDebouncers.clear();
+    this.fileAgentContext.clear();
 
     // Remove error handlers before closing watchers to prevent memory leak
     for (const [dir, handler] of this.dirWatcherErrorHandlers) {
@@ -534,11 +531,11 @@ export class SubagentWatcher extends EventEmitter {
       this.agentInfo.delete(agentId);
       this.pendingToolCalls.delete(agentId);
       this.filePositions.delete(info.filePath);
-      const watcher = this.fileWatchers.get(info.filePath);
-      if (watcher) {
-        watcher.close();
-        this.fileWatchers.delete(info.filePath);
-        this.fileWatcherErrorHandlers.delete(info.filePath);
+      this.fileAgentContext.delete(info.filePath);
+      const debounceTimer = this.fileDebouncers.get(info.filePath);
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+        this.fileDebouncers.delete(info.filePath);
       }
       const timer = this.idleTimers.get(agentId);
       if (timer) {
@@ -622,7 +619,7 @@ export class SubagentWatcher extends EventEmitter {
    */
   getStats(): {
     agentCount: number;
-    fileWatcherCount: number;
+    fileDebouncerCount: number;
     dirWatcherCount: number;
     idleTimerCount: number;
     pendingToolCallsCount: number;
@@ -637,7 +634,7 @@ export class SubagentWatcher extends EventEmitter {
 
     return {
       agentCount: this.agentInfo.size,
-      fileWatcherCount: this.fileWatchers.size,
+      fileDebouncerCount: this.fileDebouncers.size,
       dirWatcherCount: this.dirWatchers.size,
       idleTimerCount: this.idleTimers.size,
       pendingToolCallsCount,
@@ -955,14 +952,29 @@ export class SubagentWatcher extends EventEmitter {
     try {
       // The parent session's transcript is at: ~/.claude/projects/{projectHash}/{sessionId}.jsonl
       const transcriptPath = join(CLAUDE_PROJECTS_DIR, projectHash, `${sessionId}.jsonl`);
+      let fileSize: number;
       try {
-        await statAsync(transcriptPath);
+        const fileStat = await statAsync(transcriptPath);
+        fileSize = fileStat.size;
       } catch {
         return undefined;
       }
 
-      const content = await readFile(transcriptPath, 'utf8');
-      const lines = content.split('\n').filter((l) => l.trim());
+      // Only read last 16KB — toolUseResult entries are near the end of the transcript
+      const TAIL_BYTES = 16384;
+      const startOffset = Math.max(0, fileSize - TAIL_BYTES);
+      const content = await new Promise<string>((resolve, reject) => {
+        const chunks: string[] = [];
+        const stream = createReadStream(transcriptPath, { start: startOffset, encoding: 'utf8' });
+        stream.on('data', (chunk) => chunks.push(String(chunk)));
+        stream.on('end', () => resolve(chunks.join('')));
+        stream.on('error', reject);
+      });
+      let lines = content.split('\n').filter((l) => l.trim());
+      // If we started mid-file, drop the first partial line
+      if (startOffset > 0 && lines.length > 0) {
+        lines = lines.slice(1);
+      }
 
       // Parse ALL toolUseResult entries into a Map and cache them
       const descriptions = new Map<string, string>();
@@ -1091,39 +1103,51 @@ export class SubagentWatcher extends EventEmitter {
   }
 
   /**
-   * Watch a subagent directory for new/updated files
+   * Watch a subagent directory for new and changed files.
+   * Uses a single directory-level fs.watch() instead of per-file watchers.
+   * On Linux, inotify IN_MODIFY fires for content changes within the directory.
    */
   private async watchSubagentDir(dir: string, projectHash: string, sessionId: string): Promise<void> {
     if (this.knownSubagentDirs.has(dir)) return;
     this.knownSubagentDirs.add(dir);
 
-    // Watch existing files (initial scan - skip old files)
+    // Register existing files (initial scan - skip old files)
     try {
       const files = await readdir(dir);
       for (const file of files) {
         if (file.endsWith('.jsonl')) {
-          await this.watchAgentFile(join(dir, file), projectHash, sessionId, true);
+          await this.registerAgentFile(join(dir, file), projectHash, sessionId, true);
         }
       }
     } catch {
       return;
     }
 
-    // Watch for new files with debounce to allow content to be written
+    // Single directory watcher handles both new files and file content changes
     try {
       const watcher = watch(dir, (_eventType, filename) => {
-        if (filename?.endsWith('.jsonl')) {
-          const filePath = join(dir, filename);
-          // Wait 100ms for file content to be written before processing
-          // Even if file is empty after debounce, we still watch it - the
-          // description retry mechanisms in processEntry and the file change
-          // handler will extract description when content arrives
-          setTimeout(() => {
-            if (existsSync(filePath)) {
-              this.watchAgentFile(filePath, projectHash, sessionId);
-            }
-          }, FILE_CONTENT_DEBOUNCE_MS);
-        }
+        if (!filename?.endsWith('.jsonl')) return;
+        const filePath = join(dir, filename);
+
+        // Clear existing debounce for this file
+        const existing = this.fileDebouncers.get(filePath);
+        if (existing) clearTimeout(existing);
+
+        // Debounce 100ms to batch rapid writes
+        const timer = setTimeout(() => {
+          this.fileDebouncers.delete(filePath);
+          if (!existsSync(filePath)) return;
+
+          if (this.fileAgentContext.has(filePath)) {
+            // Known file — handle content change
+            this.handleFileChange(filePath).catch(() => {});
+          } else {
+            // New file — register it
+            this.registerAgentFile(filePath, projectHash, sessionId).catch(() => {});
+          }
+        }, FILE_CONTENT_DEBOUNCE_MS);
+
+        this.fileDebouncers.set(filePath, timer);
       });
 
       // Handle watcher errors to prevent unhandled exceptions
@@ -1145,26 +1169,80 @@ export class SubagentWatcher extends EventEmitter {
   }
 
   /**
-   * Watch a specific agent transcript file
+   * Handle a file content change for an already-registered agent file.
+   * Tails from last known position, updates info, retries description if missing.
+   */
+  private async handleFileChange(filePath: string): Promise<void> {
+    const context = this.fileAgentContext.get(filePath);
+    if (!context) return;
+
+    const agentId = basename(filePath).replace('agent-', '').replace('.jsonl', '');
+    const currentPos = this.filePositions.get(filePath) || 0;
+    const newPos = await this.tailFile(filePath, agentId, context.sessionId, currentPos);
+    this.filePositions.set(filePath, newPos);
+
+    // Update info
+    const existingInfo = this.agentInfo.get(agentId);
+    if (existingInfo) {
+      try {
+        const newStat = await statAsync(filePath);
+        existingInfo.lastActivityAt = Date.now();
+        existingInfo.fileSize = newStat.size;
+        existingInfo.status = 'active';
+      } catch {
+        // Stat failed
+      }
+
+      // Retry description extraction if missing (race condition fix)
+      if (!existingInfo.description) {
+        // First try parent transcript (most reliable)
+        let extractedDescription = await this.extractDescriptionFromParentTranscript(
+          existingInfo.projectHash,
+          existingInfo.sessionId,
+          agentId
+        );
+        // Fallback to subagent file
+        if (!extractedDescription) {
+          extractedDescription = await this.extractDescriptionFromFile(filePath);
+        }
+        if (extractedDescription) {
+          // Check if this is an internal agent - if so, remove it
+          if (this.isInternalAgent(extractedDescription)) {
+            this.removeAgent(agentId);
+            return;
+          }
+          existingInfo.description = extractedDescription;
+          this.emit('subagent:updated', existingInfo);
+        }
+      }
+
+      // Reset idle timer
+      this.resetIdleTimer(agentId);
+    }
+  }
+
+  /**
+   * Register a specific agent transcript file (discovery + initial read).
+   * Does NOT create a per-file watcher — the directory watcher handles changes.
    * @param filePath Path to the agent transcript file
    * @param projectHash Claude project hash
    * @param sessionId Claude session ID
    * @param isInitialScan If true, skip files older than STARTUP_MAX_FILE_AGE_MS
    */
-  private async watchAgentFile(
+  private async registerAgentFile(
     filePath: string,
     projectHash: string,
     sessionId: string,
     isInitialScan: boolean = false
   ): Promise<void> {
-    if (this.fileWatchers.has(filePath)) return;
+    if (this.fileAgentContext.has(filePath)) return;
 
     const agentId = basename(filePath).replace('agent-', '').replace('.jsonl', '');
 
     // Initial info - handle race condition where file may be deleted between discovery and stat
-    let stat;
+    let fileStat;
     try {
-      stat = await statAsync(filePath);
+      fileStat = await statAsync(filePath);
     } catch {
       // File was deleted between discovery and stat - skip this agent
       return;
@@ -1172,7 +1250,7 @@ export class SubagentWatcher extends EventEmitter {
 
     // On initial scan, skip old files to avoid loading stale historical data
     if (isInitialScan) {
-      const fileAge = Date.now() - stat.mtime.getTime();
+      const fileAge = Date.now() - fileStat.mtime.getTime();
       if (fileAge > STARTUP_MAX_FILE_AGE_MS) {
         return; // Skip old files on startup
       }
@@ -1197,12 +1275,12 @@ export class SubagentWatcher extends EventEmitter {
       sessionId,
       projectHash,
       filePath,
-      startedAt: stat.birthtime.toISOString(),
-      lastActivityAt: stat.mtime.getTime(),
+      startedAt: fileStat.birthtime.toISOString(),
+      lastActivityAt: fileStat.mtime.getTime(),
       status: 'active',
       toolCallCount: 0,
       entryCount: 0,
-      fileSize: stat.size,
+      fileSize: fileStat.size,
       description,
     };
 
@@ -1221,6 +1299,8 @@ export class SubagentWatcher extends EventEmitter {
       }
     }
 
+    // Track file context for directory watcher change handling
+    this.fileAgentContext.set(filePath, { projectHash, sessionId });
     this.agentInfo.set(agentId, info);
     this.emit('subagent:discovered', info);
 
@@ -1234,71 +1314,7 @@ export class SubagentWatcher extends EventEmitter {
         console.warn(`[SubagentWatcher] Failed to read initial content for ${agentId}:`, err);
       });
 
-    // Watch for changes
-    try {
-      const watcher = watch(filePath, async (eventType) => {
-        if (eventType === 'change') {
-          const currentPos = this.filePositions.get(filePath) || 0;
-          const newPos = await this.tailFile(filePath, agentId, sessionId, currentPos);
-          this.filePositions.set(filePath, newPos);
-
-          // Update info
-          const existingInfo = this.agentInfo.get(agentId);
-          if (existingInfo) {
-            try {
-              const newStat = await statAsync(filePath);
-              existingInfo.lastActivityAt = Date.now();
-              existingInfo.fileSize = newStat.size;
-              existingInfo.status = 'active';
-            } catch {
-              // Stat failed
-            }
-
-            // Retry description extraction if missing (race condition fix)
-            if (!existingInfo.description) {
-              // First try parent transcript (most reliable)
-              let extractedDescription = await this.extractDescriptionFromParentTranscript(
-                existingInfo.projectHash,
-                existingInfo.sessionId,
-                agentId
-              );
-              // Fallback to subagent file
-              if (!extractedDescription) {
-                extractedDescription = await this.extractDescriptionFromFile(filePath);
-              }
-              if (extractedDescription) {
-                // Check if this is an internal agent - if so, remove it
-                if (this.isInternalAgent(extractedDescription)) {
-                  this.removeAgent(agentId);
-                  return;
-                }
-                existingInfo.description = extractedDescription;
-                this.emit('subagent:updated', existingInfo);
-              }
-            }
-
-            // Reset idle timer
-            this.resetIdleTimer(agentId);
-          }
-        }
-      });
-
-      // Handle watcher errors to prevent unhandled exceptions
-      // Store handler reference for proper cleanup
-      const errorHandler = (error: Error) => {
-        this.emit('subagent:error', error instanceof Error ? error : new Error(String(error)), agentId);
-        watcher.close();
-        this.fileWatcherErrorHandlers.delete(filePath);
-        this.fileWatchers.delete(filePath);
-      };
-      watcher.on('error', errorHandler);
-      this.fileWatcherErrorHandlers.set(filePath, errorHandler);
-
-      this.fileWatchers.set(filePath, watcher);
-      this.resetIdleTimer(agentId);
-    } catch {
-      // Watch failed
-    }
+    this.resetIdleTimer(agentId);
   }
 
   /**

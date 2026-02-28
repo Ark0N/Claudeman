@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, unlinkSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, unlinkSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -360,7 +360,7 @@ describe('StateStore', () => {
       const store = new StateStore(testFilePath);
 
       store.addToGlobalStats(1000, 500, 0.05);
-      store.addToGlobalStats(2000, 1000, 0.10);
+      store.addToGlobalStats(2000, 1000, 0.1);
 
       const stats = store.getGlobalStats();
       expect(stats.totalInputTokens).toBe(3000);
@@ -388,20 +388,20 @@ describe('StateStore', () => {
       // Simulate active sessions
       const activeSessions = {
         'session-1': { inputTokens: 1000, outputTokens: 500, totalCost: 0.05 },
-        'session-2': { inputTokens: 2000, outputTokens: 1000, totalCost: 0.10 },
+        'session-2': { inputTokens: 2000, outputTokens: 1000, totalCost: 0.1 },
       };
 
       const aggregate = store.getAggregateStats(activeSessions);
 
       expect(aggregate.totalInputTokens).toBe(8000); // 5000 + 1000 + 2000
       expect(aggregate.totalOutputTokens).toBe(4000); // 2500 + 500 + 1000
-      expect(aggregate.totalCost).toBeCloseTo(0.40, 10); // 0.25 + 0.05 + 0.10
+      expect(aggregate.totalCost).toBeCloseTo(0.4, 10); // 0.25 + 0.05 + 0.10
       expect(aggregate.activeSessionsCount).toBe(2);
     });
 
     it('should persist global stats across instances', () => {
       const store1 = new StateStore(testFilePath);
-      store1.addToGlobalStats(10000, 5000, 0.50);
+      store1.addToGlobalStats(10000, 5000, 0.5);
       store1.incrementSessionsCreated();
       store1.flushAll();
 
@@ -410,8 +410,103 @@ describe('StateStore', () => {
 
       expect(stats.totalInputTokens).toBe(10000);
       expect(stats.totalOutputTokens).toBe(5000);
-      expect(stats.totalCost).toBe(0.50);
+      expect(stats.totalCost).toBe(0.5);
       expect(stats.totalSessionsCreated).toBe(1);
+    });
+  });
+
+  describe('assembleStateJson', () => {
+    it('should produce output identical to JSON.stringify(state)', () => {
+      const store = new StateStore(testFilePath);
+
+      // Add sessions, tasks, config changes
+      store.setSession('s1', createMockSessionState('s1'));
+      store.setSession('s2', createMockSessionState('s2'));
+      store.setTask('t1', createMockTaskState('t1'));
+      store.setConfig({ maxConcurrentSessions: 5 });
+      store.addToGlobalStats(1000, 500, 0.05);
+
+      // Force a save so assembleStateJson is called
+      store.saveNow();
+
+      // Read persisted file and compare with full JSON.stringify
+      const persisted = JSON.parse(readFileSync(testFilePath, 'utf-8'));
+      const fullStringify = JSON.parse(JSON.stringify(store.getState()));
+
+      expect(persisted).toEqual(fullStringify);
+    });
+
+    it('should correctly persist all sessions after partial update', () => {
+      const store = new StateStore(testFilePath);
+
+      // Create 10 sessions
+      for (let i = 0; i < 10; i++) {
+        store.setSession(`s${i}`, createMockSessionState(`s${i}`));
+      }
+      store.saveNow();
+
+      // Modify only 1 session
+      const updated = createMockSessionState('s3');
+      updated.status = 'idle';
+      updated.pid = 99999;
+      store.setSession('s3', updated);
+      store.saveNow();
+
+      // Read from disk and verify all 10 sessions are present and correct
+      const persisted = JSON.parse(readFileSync(testFilePath, 'utf-8'));
+      expect(Object.keys(persisted.sessions)).toHaveLength(10);
+
+      // The updated session should have the new values
+      expect(persisted.sessions['s3'].status).toBe('idle');
+      expect(persisted.sessions['s3'].pid).toBe(99999);
+
+      // Other sessions should be unchanged
+      for (let i = 0; i < 10; i++) {
+        if (i === 3) continue;
+        expect(persisted.sessions[`s${i}`].id).toBe(`s${i}`);
+        expect(persisted.sessions[`s${i}`].status).toBe('running');
+      }
+    });
+
+    it('should handle session removal and prune cache correctly', () => {
+      const store = new StateStore(testFilePath);
+
+      store.setSession('s1', createMockSessionState('s1'));
+      store.setSession('s2', createMockSessionState('s2'));
+      store.setSession('s3', createMockSessionState('s3'));
+      store.saveNow();
+
+      // Remove s2
+      store.removeSession('s2');
+      store.saveNow();
+
+      const persisted = JSON.parse(readFileSync(testFilePath, 'utf-8'));
+      expect(Object.keys(persisted.sessions)).toHaveLength(2);
+      expect(persisted.sessions['s1']).toBeDefined();
+      expect(persisted.sessions['s2']).toBeUndefined();
+      expect(persisted.sessions['s3']).toBeDefined();
+
+      // Verify round-trip: state in memory matches what's on disk
+      const fullStringify = JSON.parse(JSON.stringify(store.getState()));
+      expect(persisted).toEqual(fullStringify);
+    });
+
+    it('should persist the last value after rapid updates to the same session', () => {
+      const store = new StateStore(testFilePath);
+
+      // Rapidly update the same session 100 times
+      for (let i = 0; i < 100; i++) {
+        const session = createMockSessionState('rapid');
+        session.pid = i;
+        store.setSession('rapid', session);
+      }
+
+      // Only one save at the end
+      store.saveNow();
+
+      const persisted = JSON.parse(readFileSync(testFilePath, 'utf-8'));
+      expect(persisted.sessions['rapid']).toBeDefined();
+      expect(persisted.sessions['rapid'].pid).toBe(99); // Last value wins
     });
   });
 });

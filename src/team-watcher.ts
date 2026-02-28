@@ -13,12 +13,14 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { watch as chokidarWatch, type FSWatcher as ChokidarWatcher } from 'chokidar';
+
 import type { TeamConfig, TeamMember, TeamTask, InboxMessage } from './types.js';
 import { LRUMap } from './utils/lru-map.js';
 
 // ========== Constants ==========
 
-const POLL_INTERVAL_MS = 5000;
+const POLL_INTERVAL_MS = 30000;
 const MAX_CACHED_TEAMS = 50;
 const MAX_CACHED_TASKS = 200;
 
@@ -37,6 +39,8 @@ export class TeamWatcher extends EventEmitter {
   private inboxMtimes: Map<string, number> = new Map();
   // Reverse index: sessionId → teamName for O(1) lookup
   private sessionToTeam: Map<string, string> = new Map();
+  private teamsWatcher: ChokidarWatcher | null = null;
+  private tasksWatcher: ChokidarWatcher | null = null;
 
   constructor(teamsDir?: string, tasksDir?: string) {
     super();
@@ -49,9 +53,60 @@ export class TeamWatcher extends EventEmitter {
     if (this.pollTimer) return;
     this.poll();
     this.pollTimer = setInterval(() => this.poll(), POLL_INTERVAL_MS);
+    this.setupFsWatchers();
+  }
+
+  private setupFsWatchers(): void {
+    try {
+      this.teamsWatcher = chokidarWatch(this.teamsDir, {
+        depth: 2,
+        awaitWriteFinish: { stabilityThreshold: 200 },
+        ignored: /\.lock/,
+        ignoreInitial: true,
+        persistent: false,
+      });
+
+      const teamsHandler = () => this.pollAsync().catch(() => {});
+      this.teamsWatcher.on('add', teamsHandler);
+      this.teamsWatcher.on('change', teamsHandler);
+      this.teamsWatcher.on('unlink', teamsHandler);
+      this.teamsWatcher.on('unlinkDir', teamsHandler);
+      this.teamsWatcher.on('error', (err) => {
+        console.warn('[TeamWatcher] chokidar teams watcher error:', err);
+      });
+    } catch (err) {
+      console.warn('[TeamWatcher] Failed to set up teams chokidar watcher, relying on polling:', err);
+    }
+
+    try {
+      this.tasksWatcher = chokidarWatch(this.tasksDir, {
+        depth: 1,
+        awaitWriteFinish: { stabilityThreshold: 200 },
+        ignored: /\.lock/,
+        ignoreInitial: true,
+        persistent: false,
+      });
+
+      this.tasksWatcher.on('add', () => this.pollTasks().catch(() => {}));
+      this.tasksWatcher.on('change', () => this.pollTasks().catch(() => {}));
+      this.tasksWatcher.on('error', (err) => {
+        console.warn('[TeamWatcher] chokidar tasks watcher error:', err);
+      });
+    } catch (err) {
+      console.warn('[TeamWatcher] Failed to set up tasks chokidar watcher, relying on polling:', err);
+    }
   }
 
   stop(): void {
+    // Close chokidar watchers
+    if (this.teamsWatcher) {
+      this.teamsWatcher.close().catch(() => {});
+      this.teamsWatcher = null;
+    }
+    if (this.tasksWatcher) {
+      this.tasksWatcher.close().catch(() => {});
+      this.tasksWatcher = null;
+    }
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;

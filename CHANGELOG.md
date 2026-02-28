@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.2.9
+
+### Patch Changes
+
+- System-level performance optimizations (Phase 4): stream parent transcripts instead of full reads, consolidate subagent file watchers from 500 to ~50 using directory-level inotify, incremental state persistence with per-session JSON caching, and replace team watcher polling with chokidar fs events
+
 ## 0.2.8
 
 ### Patch Changes
