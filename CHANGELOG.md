@@ -1,4 +1,4 @@
-# codeman
+# aicodeman
 
 ## 0.2.8
 

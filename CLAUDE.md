@@ -41,7 +41,7 @@ When user says "COM":
    ```bash
    cat > .changeset/$(openssl rand -hex 4).md << 'CHANGESET'
    ---
-   "codeman": patch
+   "aicodeman": patch
    ---
 
    Description of changes
@@ -152,7 +152,7 @@ journalctl --user -u codeman-web -f
 | `src/templates/claude-md.ts` | CLAUDE.md generation for new cases |
 | `src/tunnel-manager.ts` | Manages cloudflared child process for Cloudflare tunnel remote access |
 | `src/cli.ts` | Command-line interface handlers |
-| `src/web/server.ts` | Fastify REST API + SSE at `/api/events` (~105 routes) |
+| `src/web/server.ts` | Fastify REST API + SSE at `/api/events` (~280 routes) |
 | `src/web/schemas.ts` | Zod v4 validation schemas with path/env security allowlists |
 | `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows, mobile support (~15K lines) |
 | `src/types.ts` | All TypeScript interfaces (~70 type/interface/enum defs, ~1450 lines) |
@@ -184,7 +184,7 @@ Re-exported via `src/utils/index.ts`. Key exports:
 | `regex-patterns.ts` | `ANSI_ESCAPE_PATTERN_FULL/SIMPLE`, `createAnsiPatternFull/Simple()`, `stripAnsi`, `TOKEN_PATTERN`, `SPINNER_PATTERN` |
 | `buffer-accumulator.ts` | `BufferAccumulator` — batches rapid writes into single flushes |
 | `claude-cli-resolver.ts` | `findClaudeDir`, `getAugmentedPath` — resolves Claude CLI paths |
-| `opencode-cli-resolver.ts` | `resolveOpenCodeDir`, `isOpenCodeAvailable`, `getOpenCodeAugmentedPath` — OpenCode CLI support |
+| `opencode-cli-resolver.ts` | `resolveOpenCodeDir`, `isOpenCodeAvailable` — OpenCode CLI support |
 | `string-similarity.ts` | `stringSimilarity`, `fuzzyPhraseMatch`, `todoContentHash` |
 | `token-validation.ts` | `validateTokenCounts`, `validateTokensAndCost` |
 | `nice-wrapper.ts` | `wrapWithNice` — wraps commands with `nice`/`ionice` for lower priority |
@@ -284,7 +284,7 @@ The frontend is a single ~15K-line vanilla JS file with these key systems:
 
 ### API Route Categories
 
-~105 routes in `server.ts:buildServer()`. Key groups:
+~280 route handlers in `server.ts:buildServer()`. Key groups:
 
 | Group | Prefix | Count | Key endpoints |
 |-------|--------|-------|---------------|
