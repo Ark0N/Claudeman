@@ -24,7 +24,7 @@
  * levenshteinDistance('hello', 'helo')  // 1 (one deletion)
  * levenshteinDistance('COMPLETE', 'COMPLET') // 1 (one deletion)
  */
-export function levenshteinDistance(a: string, b: string): number {
+function levenshteinDistance(a: string, b: string): number {
   // Ensure a is the shorter string for space efficiency
   if (a.length > b.length) {
     [a, b] = [b, a];
@@ -92,22 +92,6 @@ export function stringSimilarity(a: string, b: string): number {
 }
 
 /**
- * Check if two strings are similar within a given threshold.
- *
- * @param a - First string
- * @param b - Second string
- * @param threshold - Minimum similarity ratio (default: 0.85 = 85% similar)
- * @returns True if similarity >= threshold
- *
- * @example
- * isSimilar('COMPLETE', 'COMPLET', 0.85)  // true (87.5% similar)
- * isSimilar('COMPLETE', 'DONE', 0.85)     // false (0% similar)
- */
-export function isSimilar(a: string, b: string, threshold = 0.85): boolean {
-  return stringSimilarity(a, b) >= threshold;
-}
-
-/**
  * Check if two strings are similar with edit distance tolerance.
  * More intuitive for short strings than percentage-based threshold.
  *
@@ -120,7 +104,7 @@ export function isSimilar(a: string, b: string, threshold = 0.85): boolean {
  * isSimilarByDistance('COMPLETE', 'COMPLET', 2)   // true (distance 1)
  * isSimilarByDistance('COMPLETE', 'COMP', 2)     // false (distance 4)
  */
-export function isSimilarByDistance(a: string, b: string, maxDistance = 2): boolean {
+function isSimilarByDistance(a: string, b: string, maxDistance = 2): boolean {
   return levenshteinDistance(a, b) <= maxDistance;
 }
 
@@ -136,7 +120,7 @@ export function isSimilarByDistance(a: string, b: string, maxDistance = 2): bool
  * normalizePhrase('TASK-DONE')   // 'TASKDONE'
  * normalizePhrase('Task Done')   // 'TASKDONE'
  */
-export function normalizePhrase(phrase: string): string {
+function normalizePhrase(phrase: string): string {
   return phrase
     .toUpperCase()
     .replace(/[\s_\-.]+/g, '') // Remove whitespace, underscores, hyphens, dots

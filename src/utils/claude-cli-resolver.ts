@@ -12,9 +12,7 @@ import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-
-/** Timeout for exec commands (5 seconds) */
-const EXEC_TIMEOUT_MS = 5000;
+import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
 
 /** Common directories where the Claude CLI binary may be installed */
 const CLAUDE_SEARCH_DIRS = [

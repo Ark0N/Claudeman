@@ -28,7 +28,7 @@ import {
   TokenStats,
   TokenUsageEntry,
 } from './types.js';
-import { MAX_SESSION_TOKENS } from './utils/index.js';
+import { Debouncer, MAX_SESSION_TOKENS } from './utils/index.js';
 
 /** Debounce delay for batching state writes (ms) */
 const SAVE_DEBOUNCE_MS = 500;
@@ -60,7 +60,7 @@ const MAX_CONSECUTIVE_FAILURES = 3;
 export class StateStore {
   private state: AppState;
   private filePath: string;
-  private saveTimeout: NodeJS.Timeout | null = null;
+  private saveDeb = new Debouncer(SAVE_DEBOUNCE_MS);
   private dirty: boolean = false;
   private dirtySessions = new Set<string>();
   private cachedSessionJsons = new Map<string, string>();
@@ -68,7 +68,7 @@ export class StateStore {
   // Inner state storage (separate from main state to reduce write frequency)
   private ralphStates: Map<string, RalphSessionState> = new Map();
   private ralphStatePath: string;
-  private ralphStateSaveTimeout: NodeJS.Timeout | null = null;
+  private ralphStateSaveDeb = new Debouncer(SAVE_DEBOUNCE_MS);
   private ralphStateDirty: boolean = false;
 
   // Circuit breaker for save failures (prevents hammering disk on persistent errors)
@@ -150,14 +150,12 @@ export class StateStore {
    */
   save(): void {
     this.dirty = true;
-    if (this.saveTimeout) {
-      return; // Already scheduled
-    }
-    this.saveTimeout = setTimeout(() => {
+    if (this.saveDeb.isPending) return; // Already scheduled
+    this.saveDeb.schedule(() => {
       this.saveNowAsync().catch((err) => {
         console.error('[StateStore] Async save failed:', err);
       });
-    }, SAVE_DEBOUNCE_MS);
+    });
   }
 
   /**
@@ -242,10 +240,7 @@ export class StateStore {
   }
 
   private async _doSaveAsync(): Promise<void> {
-    if (this.saveTimeout) {
-      clearTimeout(this.saveTimeout);
-      this.saveTimeout = null;
-    }
+    this.saveDeb.cancel();
     if (!this.dirty) {
       return;
     }
@@ -332,10 +327,7 @@ export class StateStore {
    * Prefer saveNowAsync() for normal operation.
    */
   saveNow(): void {
-    if (this.saveTimeout) {
-      clearTimeout(this.saveTimeout);
-      this.saveTimeout = null;
-    }
+    this.saveDeb.cancel();
     if (!this.dirty) {
       return;
     }
@@ -775,12 +767,10 @@ export class StateStore {
   // Debounced save for inner states
   private saveRalphStates(): void {
     this.ralphStateDirty = true;
-    if (this.ralphStateSaveTimeout) {
-      return; // Already scheduled
-    }
-    this.ralphStateSaveTimeout = setTimeout(() => {
+    if (this.ralphStateSaveDeb.isPending) return; // Already scheduled
+    this.ralphStateSaveDeb.schedule(() => {
       this.saveRalphStatesNow();
-    }, SAVE_DEBOUNCE_MS);
+    });
   }
 
   /**
@@ -788,10 +778,7 @@ export class StateStore {
    * Writes to temp file first, then renames to prevent corruption on crash.
    */
   private saveRalphStatesNow(): void {
-    if (this.ralphStateSaveTimeout) {
-      clearTimeout(this.ralphStateSaveTimeout);
-      this.ralphStateSaveTimeout = null;
-    }
+    this.ralphStateSaveDeb.cancel();
     if (!this.ralphStateDirty) {
       return;
     }

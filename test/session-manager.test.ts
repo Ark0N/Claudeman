@@ -214,6 +214,7 @@ describe('SessionManager', () => {
 
     it('should handle non-existent session gracefully', async () => {
       await expect(manager.stopSession('non-existent')).resolves.not.toThrow();
+      expect(manager.getSessionCount()).toBe(0);
     });
 
     it('should update stored session to stopped', async () => {

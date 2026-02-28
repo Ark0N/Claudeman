@@ -564,14 +564,18 @@ describe('TaskTracker', () => {
   describe('Edge Cases', () => {
     it('should handle null message', () => {
       expect(() => tracker.processMessage(null)).not.toThrow();
+      expect(tracker.getAllTasks().size).toBe(0);
+      expect(tracker.getRunningCount()).toBe(0);
     });
 
     it('should handle message without content', () => {
       expect(() => tracker.processMessage({ message: {} })).not.toThrow();
+      expect(tracker.getAllTasks().size).toBe(0);
     });
 
     it('should handle empty content array', () => {
       expect(() => tracker.processMessage({ message: { content: [] } })).not.toThrow();
+      expect(tracker.getAllTasks().size).toBe(0);
     });
 
     it('should handle tool_result for unknown task', () => {
@@ -587,11 +591,15 @@ describe('TaskTracker', () => {
           },
         });
       }).not.toThrow();
+      expect(tracker.getTask('unknown-task')).toBeUndefined();
+      expect(tracker.getAllTasks().size).toBe(0);
     });
 
     it('should handle empty terminal output', () => {
       expect(() => tracker.processTerminalOutput('')).not.toThrow();
       expect(() => tracker.processTerminalOutput('   ')).not.toThrow();
+      expect(tracker.getAllTasks().size).toBe(0);
+      expect(tracker.getRunningCount()).toBe(0);
     });
   });
 

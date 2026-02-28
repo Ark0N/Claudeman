@@ -506,3 +506,42 @@ export const RalphLoopStartSchema = z.object({
     )
     .optional(),
 });
+
+// ========== Inferred Types ==========
+
+export type CreateSessionInput = z.infer<typeof CreateSessionSchema>;
+export type RunPromptInput = z.infer<typeof RunPromptSchema>;
+export type ResizeInput = z.infer<typeof ResizeSchema>;
+export type CreateCaseInput = z.infer<typeof CreateCaseSchema>;
+export type QuickStartInput = z.infer<typeof QuickStartSchema>;
+export type HookEventInput = z.infer<typeof HookEventSchema>;
+export type RespawnConfigInput = z.infer<typeof RespawnConfigSchema>;
+export type ConfigUpdateInput = z.infer<typeof ConfigUpdateSchema>;
+export type SettingsUpdateInput = z.infer<typeof SettingsUpdateSchema>;
+export type SessionInputWithLimitInput = z.infer<typeof SessionInputWithLimitSchema>;
+export type SessionNameInput = z.infer<typeof SessionNameSchema>;
+export type SessionColorInput = z.infer<typeof SessionColorSchema>;
+export type RalphConfigInput = z.infer<typeof RalphConfigSchema>;
+export type FixPlanImportInput = z.infer<typeof FixPlanImportSchema>;
+export type RalphPromptWriteInput = z.infer<typeof RalphPromptWriteSchema>;
+export type AutoClearInput = z.infer<typeof AutoClearSchema>;
+export type AutoCompactInput = z.infer<typeof AutoCompactSchema>;
+export type ImageWatcherInput = z.infer<typeof ImageWatcherSchema>;
+export type FlickerFilterInput = z.infer<typeof FlickerFilterSchema>;
+export type QuickRunInput = z.infer<typeof QuickRunSchema>;
+export type ScheduledRunInput = z.infer<typeof ScheduledRunSchema>;
+export type LinkCaseInput = z.infer<typeof LinkCaseSchema>;
+export type GeneratePlanInput = z.infer<typeof GeneratePlanSchema>;
+export type GeneratePlanDetailedInput = z.infer<typeof GeneratePlanDetailedSchema>;
+export type CancelPlanInput = z.infer<typeof CancelPlanSchema>;
+export type PlanTaskUpdateInput = z.infer<typeof PlanTaskUpdateSchema>;
+export type PlanTaskAddInput = z.infer<typeof PlanTaskAddSchema>;
+export type CpuLimitInput = z.infer<typeof CpuLimitSchema>;
+export type ModelConfigUpdateInput = z.infer<typeof ModelConfigUpdateSchema>;
+export type SubagentWindowStatesInput = z.infer<typeof SubagentWindowStatesSchema>;
+export type SubagentParentMapInput = z.infer<typeof SubagentParentMapSchema>;
+export type InteractiveRespawnInput = z.infer<typeof InteractiveRespawnSchema>;
+export type RespawnEnableInput = z.infer<typeof RespawnEnableSchema>;
+export type PushSubscribeInput = z.infer<typeof PushSubscribeSchema>;
+export type PushPreferencesUpdateInput = z.infer<typeof PushPreferencesUpdateSchema>;
+export type RalphLoopStartInput = z.infer<typeof RalphLoopStartSchema>;

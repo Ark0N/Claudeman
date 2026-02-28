@@ -13,6 +13,7 @@ import { watch, type FSWatcher } from 'chokidar';
 import { basename, extname, relative } from 'node:path';
 import { statSync } from 'node:fs';
 import type { ImageDetectedEvent } from './types.js';
+import { KeyedDebouncer } from './utils/index.js';
 
 // ========== Types ==========
 
@@ -65,11 +66,11 @@ export class ImageWatcher extends EventEmitter {
   /** Map of sessionId -> working directory path */
   private sessionDirs = new Map<string, string>();
 
-  /** Debounce timers for rapid image creation (keyed by filePath) */
-  private debounceTimers = new Map<string, NodeJS.Timeout>();
+  /** Per-file debouncer for rapid image creation */
+  private fileDeb = new KeyedDebouncer(DEBOUNCE_DELAY_MS);
 
-  /** Track which session owns each debounce timer (for cleanup) */
-  private timerToSession = new Map<string, string>();
+  /** Track which session owns each debounced file (for cleanup) */
+  private fileToSession = new Map<string, string>();
 
   /** Per-session burst tracking: sessionId -> { count, windowStart } */
   private burstTrackers = new Map<string, { count: number; windowStart: number }>();
@@ -118,11 +119,8 @@ export class ImageWatcher extends EventEmitter {
     this.sessionDirs.clear();
 
     // Clear all debounce timers
-    for (const timer of this.debounceTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.debounceTimers.clear();
-    this.timerToSession.clear();
+    this.fileDeb.dispose();
+    this.fileToSession.clear();
     this.burstTrackers.clear();
   }
 
@@ -212,20 +210,15 @@ export class ImageWatcher extends EventEmitter {
     this.sessionDirs.delete(sessionId);
 
     // Clear any pending debounce timers for this session
-    // Collect keys first to avoid iterator invalidation during deletion
-    const toDelete: string[] = [];
-    for (const [filePath, ownerId] of this.timerToSession) {
+    const toCancel: string[] = [];
+    for (const [filePath, ownerId] of this.fileToSession) {
       if (ownerId === sessionId) {
-        toDelete.push(filePath);
+        toCancel.push(filePath);
       }
     }
-    for (const filePath of toDelete) {
-      const timer = this.debounceTimers.get(filePath);
-      if (timer) {
-        clearTimeout(timer);
-        this.debounceTimers.delete(filePath);
-      }
-      this.timerToSession.delete(filePath);
+    for (const filePath of toCancel) {
+      this.fileDeb.cancelKey(filePath);
+      this.fileToSession.delete(filePath);
     }
     this.burstTrackers.delete(sessionId);
   }
@@ -269,22 +262,15 @@ export class ImageWatcher extends EventEmitter {
     }
 
     // Debounce rapid file creation (e.g., multiple screenshots quickly)
-    const existingTimer = this.debounceTimers.get(filePath);
-    if (existingTimer) {
-      clearTimeout(existingTimer);
-    }
-
-    const timer = setTimeout(() => {
-      this.debounceTimers.delete(filePath);
-      this.timerToSession.delete(filePath);
+    this.fileDeb.schedule(filePath, () => {
+      this.fileToSession.delete(filePath);
       this.emitImageDetected(sessionId, filePath);
       // Increment burst count on actual emission (not on detection)
       const b = this.burstTrackers.get(sessionId);
       if (b) b.count++;
-    }, DEBOUNCE_DELAY_MS);
+    });
 
-    this.debounceTimers.set(filePath, timer);
-    this.timerToSession.set(filePath, sessionId);
+    this.fileToSession.set(filePath, sessionId);
   }
 
   /**

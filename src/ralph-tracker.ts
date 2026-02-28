@@ -34,7 +34,14 @@ import {
   PlanTaskStatus,
   TddPhase,
 } from './types.js';
-import { ANSI_ESCAPE_PATTERN_SIMPLE, fuzzyPhraseMatch, todoContentHash, stringSimilarity } from './utils/index.js';
+import {
+  ANSI_ESCAPE_PATTERN_SIMPLE,
+  CleanupManager,
+  Debouncer,
+  fuzzyPhraseMatch,
+  todoContentHash,
+  stringSimilarity,
+} from './utils/index.js';
 import { MAX_LINE_BUFFER_SIZE } from './config/buffer-limits.js';
 import { MAX_TODOS_PER_SESSION } from './config/map-limits.js';
 
@@ -559,17 +566,14 @@ export class RalphTracker extends EventEmitter {
   /** Timestamp of last cleanup check for throttling */
   private _lastCleanupTime: number = 0;
 
-  /** Debounce timer for todoUpdate events */
-  private _todoUpdateTimer: NodeJS.Timeout | null = null;
+  /** Centralized resource cleanup for timers/intervals */
+  private cleanup = new CleanupManager();
 
-  /** Debounce timer for loopUpdate events */
-  private _loopUpdateTimer: NodeJS.Timeout | null = null;
+  /** Debouncer for todoUpdate events */
+  private _todoUpdateDeb = new Debouncer(EVENT_DEBOUNCE_MS);
 
-  /** Flag indicating pending todoUpdate emission */
-  private _todoUpdatePending: boolean = false;
-
-  /** Flag indicating pending loopUpdate emission */
-  private _loopUpdatePending: boolean = false;
+  /** Debouncer for loopUpdate events */
+  private _loopUpdateDeb = new Debouncer(EVENT_DEBOUNCE_MS);
 
   /** When true, prevents auto-enable on pattern detection */
   private _autoEnableDisabled: boolean = true;
@@ -621,8 +625,8 @@ export class RalphTracker extends EventEmitter {
   /** Error handler for FSWatcher (stored for cleanup to prevent memory leak) */
   private _fixPlanWatcherErrorHandler: ((err: Error) => void) | null = null;
 
-  /** Debounce timer for file change events */
-  private _fixPlanReloadTimer: NodeJS.Timeout | null = null;
+  /** Debouncer for file change events */
+  private _fixPlanReloadDeb = new Debouncer(500);
 
   /** Path to the @fix_plan.md file being watched */
   private _fixPlanPath: string | null = null;
@@ -665,8 +669,8 @@ export class RalphTracker extends EventEmitter {
   /** Last observed iteration count for stall detection */
   private _lastObservedIteration: number = 0;
 
-  /** Timer for iteration stall detection */
-  private _iterationStallTimer: NodeJS.Timeout | null = null;
+  /** CleanupManager registration ID for iteration stall detection interval */
+  private _iterationStallTimerId: string | null = null;
 
   /** Iteration stall warning threshold (ms) - default 10 minutes */
   private _iterationStallWarningMs: number = 10 * 60 * 1000;
@@ -869,14 +873,9 @@ export class RalphTracker extends EventEmitter {
    */
   private handleFixPlanChange(): void {
     // Debounce rapid changes (e.g., multiple writes)
-    if (this._fixPlanReloadTimer) {
-      clearTimeout(this._fixPlanReloadTimer);
-    }
-
-    this._fixPlanReloadTimer = setTimeout(() => {
-      this._fixPlanReloadTimer = null;
+    this._fixPlanReloadDeb.schedule(() => {
       this.loadFixPlanFromDisk();
-    }, 500); // 500ms debounce
+    });
   }
 
   /**
@@ -892,10 +891,7 @@ export class RalphTracker extends EventEmitter {
       this._fixPlanWatcher.close();
       this._fixPlanWatcher = null;
     }
-    if (this._fixPlanReloadTimer) {
-      clearTimeout(this._fixPlanReloadTimer);
-      this._fixPlanReloadTimer = null;
-    }
+    this._fixPlanReloadDeb.cancel();
   }
 
   /**
@@ -1023,16 +1019,8 @@ export class RalphTracker extends EventEmitter {
    * Called during reset/fullReset to prevent stale emissions.
    */
   private clearDebounceTimers(): void {
-    if (this._todoUpdateTimer) {
-      clearTimeout(this._todoUpdateTimer);
-      this._todoUpdateTimer = null;
-    }
-    if (this._loopUpdateTimer) {
-      clearTimeout(this._loopUpdateTimer);
-      this._loopUpdateTimer = null;
-    }
-    this._todoUpdatePending = false;
-    this._loopUpdatePending = false;
+    this._todoUpdateDeb.cancel();
+    this._loopUpdateDeb.cancel();
   }
 
   /**
@@ -1041,19 +1029,9 @@ export class RalphTracker extends EventEmitter {
    * The event fires after EVENT_DEBOUNCE_MS of inactivity.
    */
   private emitTodoUpdateDebounced(): void {
-    this._todoUpdatePending = true;
-
-    if (this._todoUpdateTimer) {
-      clearTimeout(this._todoUpdateTimer);
-    }
-
-    this._todoUpdateTimer = setTimeout(() => {
-      if (this._todoUpdatePending) {
-        this._todoUpdatePending = false;
-        this._todoUpdateTimer = null;
-        this.emit('todoUpdate', this.todos);
-      }
-    }, EVENT_DEBOUNCE_MS);
+    this._todoUpdateDeb.schedule(() => {
+      this.emit('todoUpdate', this.todos);
+    });
   }
 
   /**
@@ -1062,19 +1040,9 @@ export class RalphTracker extends EventEmitter {
    * The event fires after EVENT_DEBOUNCE_MS of inactivity.
    */
   private emitLoopUpdateDebounced(): void {
-    this._loopUpdatePending = true;
-
-    if (this._loopUpdateTimer) {
-      clearTimeout(this._loopUpdateTimer);
-    }
-
-    this._loopUpdateTimer = setTimeout(() => {
-      if (this._loopUpdatePending) {
-        this._loopUpdatePending = false;
-        this._loopUpdateTimer = null;
-        this.emit('loopUpdate', this.loopState);
-      }
-    }, EVENT_DEBOUNCE_MS);
+    this._loopUpdateDeb.schedule(() => {
+      this.emit('loopUpdate', this.loopState);
+    });
   }
 
   /**
@@ -1082,21 +1050,11 @@ export class RalphTracker extends EventEmitter {
    * Useful for testing or when immediate state sync is needed.
    */
   flushPendingEvents(): void {
-    if (this._todoUpdatePending) {
-      this._todoUpdatePending = false;
-      if (this._todoUpdateTimer) {
-        clearTimeout(this._todoUpdateTimer);
-        this._todoUpdateTimer = null;
-      }
-      this.emit('todoUpdate', this.todos);
+    if (this._todoUpdateDeb.isPending) {
+      this._todoUpdateDeb.flush(() => this.emit('todoUpdate', this.todos));
     }
-    if (this._loopUpdatePending) {
-      this._loopUpdatePending = false;
-      if (this._loopUpdateTimer) {
-        clearTimeout(this._loopUpdateTimer);
-        this._loopUpdateTimer = null;
-      }
-      this.emit('loopUpdate', this.loopState);
+    if (this._loopUpdateDeb.isPending) {
+      this._loopUpdateDeb.flush(() => this.emit('loopUpdate', this.loopState));
     }
   }
 
@@ -1116,18 +1074,22 @@ export class RalphTracker extends EventEmitter {
     this._iterationStallWarned = false;
 
     // Check every minute
-    this._iterationStallTimer = setInterval(() => {
-      this.checkIterationStall();
-    }, 60 * 1000);
+    this._iterationStallTimerId = this.cleanup.setInterval(
+      () => {
+        this.checkIterationStall();
+      },
+      60 * 1000,
+      { description: 'iteration stall detection' }
+    );
   }
 
   /**
    * Stop iteration stall detection timer.
    */
   stopIterationStallDetection(): void {
-    if (this._iterationStallTimer) {
-      clearInterval(this._iterationStallTimer);
-      this._iterationStallTimer = null;
+    if (this._iterationStallTimerId) {
+      this.cleanup.unregister(this._iterationStallTimerId);
+      this._iterationStallTimerId = null;
     }
   }
 
@@ -3888,7 +3850,8 @@ export class RalphTracker extends EventEmitter {
   destroy(): void {
     this.clearDebounceTimers();
     this.stopWatchingFixPlan();
-    this.stopIterationStallDetection();
+    this._fixPlanReloadDeb.dispose();
+    this.cleanup.dispose();
     this._todos.clear();
     this._taskNumberToContent.clear();
     this._todoStartTimes.clear();

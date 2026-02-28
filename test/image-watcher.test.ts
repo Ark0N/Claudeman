@@ -121,6 +121,7 @@ describe('ImageWatcher', () => {
 
     it('should be safe to call for non-watched session', () => {
       expect(() => watcher.unwatchSession('nonexistent')).not.toThrow();
+      expect(watcher.getWatchedSessions()).toHaveLength(0);
     });
 
     it('should clear pending debounce timers for the session', () => {

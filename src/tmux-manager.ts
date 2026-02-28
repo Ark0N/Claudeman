@@ -59,8 +59,7 @@ import { resolveOpenCodeDir } from './utils/opencode-cli-resolver.js';
 // Timing Constants
 // ============================================================================
 
-/** Timeout for exec commands (5 seconds) */
-const EXEC_TIMEOUT_MS = 5000;
+import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
 
 /** Delay after tmux session creation — enough for detached tmux to be queryable */
 const TMUX_CREATION_WAIT_MS = 100;

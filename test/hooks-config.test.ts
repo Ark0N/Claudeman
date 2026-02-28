@@ -126,7 +126,10 @@ describe('writeHooksConfig', () => {
     writeHooksConfig(testDir);
     const settingsPath = join(testDir, '.claude', 'settings.local.json');
     const content = readFileSync(settingsPath, 'utf-8');
-    expect(() => JSON.parse(content)).not.toThrow();
+    const parsed = JSON.parse(content);
+    expect(parsed).toHaveProperty('hooks');
+    expect(parsed.hooks).toHaveProperty('Notification');
+    expect(parsed.hooks).toHaveProperty('Stop');
   });
 
   it('should include hooks config in output', () => {

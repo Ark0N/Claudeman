@@ -14,6 +14,7 @@ import { join, basename } from 'node:path';
 import { execFile } from 'node:child_process';
 import { readFile, readdir, stat as statAsync } from 'node:fs/promises';
 import { PENDING_TOOL_CALL_TTL_MS, MAX_PENDING_TOOL_CALLS } from './config/map-limits.js';
+import { CleanupManager, KeyedDebouncer } from './utils/index.js';
 
 // ========== Types ==========
 
@@ -161,12 +162,11 @@ const FILE_CONTENT_DEBOUNCE_MS = 100; // Debounce delay for file content updates
 export class SubagentWatcher extends EventEmitter {
   private filePositions = new Map<string, number>();
   private dirWatchers = new Map<string, FSWatcher>();
-  // Per-file debounce timers for directory watcher (replaces per-file FSWatchers)
-  private fileDebouncers = new Map<string, NodeJS.Timeout>();
+  // Per-file debouncer for directory watcher (replaces per-file FSWatchers)
+  private fileDeb = new KeyedDebouncer(FILE_CONTENT_DEBOUNCE_MS);
   private agentInfo = new Map<string, SubagentInfo>();
-  private idleTimers = new Map<string, NodeJS.Timeout>();
-  private pollInterval: NodeJS.Timeout | null = null;
-  private livenessInterval: NodeJS.Timeout | null = null;
+  private idleDeb = new KeyedDebouncer(IDLE_TIMEOUT_MS);
+  private cleanup = new CleanupManager();
   private _isRunning = false;
   private knownSubagentDirs = new Set<string>();
   // Map of agentId -> Map of toolUseId -> { toolName, timestamp } (for linking tool_result to tool_call)
@@ -228,12 +228,16 @@ export class SubagentWatcher extends EventEmitter {
     // Periodic scan for new subagent directories
     // Full directory traversal only every FULL_SCAN_EVERY_N_POLLS polls (~5s)
     // FSWatchers handle known directories between full scans
-    this.pollInterval = setInterval(() => {
-      this._pollCount++;
-      if (this._pollCount % FULL_SCAN_EVERY_N_POLLS === 0) {
-        this.scanForSubagents().catch((err) => this.emit('subagent:error', err as Error));
-      }
-    }, POLL_INTERVAL_MS);
+    this.cleanup.setInterval(
+      () => {
+        this._pollCount++;
+        if (this._pollCount % FULL_SCAN_EVERY_N_POLLS === 0) {
+          this.scanForSubagents().catch((err) => this.emit('subagent:error', err as Error));
+        }
+      },
+      POLL_INTERVAL_MS,
+      { description: 'subagent directory poll' }
+    );
 
     // Periodic liveness check for active subagents
     this.startLivenessChecker();
@@ -249,54 +253,56 @@ export class SubagentWatcher extends EventEmitter {
    *   3. Full pgrep scan (expensive, ~500ms) — only for agents that fail tiers 1+2
    */
   private startLivenessChecker(): void {
-    if (this.livenessInterval) return;
+    this.cleanup.setInterval(
+      async () => {
+        // Guard: prevent concurrent liveness checks (avoids duplicate completed events)
+        if (this._isCheckingLiveness) return;
+        this._isCheckingLiveness = true;
 
-    this.livenessInterval = setInterval(async () => {
-      // Guard: prevent concurrent liveness checks (avoids duplicate completed events)
-      if (this._isCheckingLiveness) return;
-      this._isCheckingLiveness = true;
+        try {
+          // Collect agents that need the expensive pgrep scan
+          const needsFullScan: SubagentInfo[] = [];
 
-      try {
-        // Collect agents that need the expensive pgrep scan
-        const needsFullScan: SubagentInfo[] = [];
-
-        for (const [_agentId, info] of this.agentInfo) {
-          if (info.status !== 'active' && info.status !== 'idle') continue;
-
-          // Tier 1: File mtime check (~0.3ms per agent)
-          if (await this.checkSubagentFileAlive(info)) continue;
-
-          // Tier 2: Cached PID check (~0.1ms per agent)
-          if (info.pid && (await this.checkPidAlive(info.pid))) continue;
-
-          // Tiers 1+2 failed — need expensive scan for this agent
-          needsFullScan.push(info);
-        }
-
-        // Tier 3: Full pgrep scan — only if any agents failed cheap checks
-        if (needsFullScan.length > 0) {
-          const pidMap = await this.getClaudePids();
-
-          for (const info of needsFullScan) {
-            // Re-check status in case another check completed this agent
+          for (const [_agentId, info] of this.agentInfo) {
             if (info.status !== 'active' && info.status !== 'idle') continue;
 
-            const alive = this.checkSubagentAliveFromPidMap(info, pidMap);
-            if (!alive) {
-              info.pid = undefined;
-              info.status = 'completed';
-              this.pendingToolCalls.delete(info.agentId);
-              this.emit('subagent:completed', info);
+            // Tier 1: File mtime check (~0.3ms per agent)
+            if (await this.checkSubagentFileAlive(info)) continue;
+
+            // Tier 2: Cached PID check (~0.1ms per agent)
+            if (info.pid && (await this.checkPidAlive(info.pid))) continue;
+
+            // Tiers 1+2 failed — need expensive scan for this agent
+            needsFullScan.push(info);
+          }
+
+          // Tier 3: Full pgrep scan — only if any agents failed cheap checks
+          if (needsFullScan.length > 0) {
+            const pidMap = await this.getClaudePids();
+
+            for (const info of needsFullScan) {
+              // Re-check status in case another check completed this agent
+              if (info.status !== 'active' && info.status !== 'idle') continue;
+
+              const alive = this.checkSubagentAliveFromPidMap(info, pidMap);
+              if (!alive) {
+                info.pid = undefined;
+                info.status = 'completed';
+                this.pendingToolCalls.delete(info.agentId);
+                this.emit('subagent:completed', info);
+              }
             }
           }
-        }
 
-        // Periodically clean up stale completed agents (older than 24 hours)
-        this.cleanupStaleAgents();
-      } finally {
-        this._isCheckingLiveness = false;
-      }
-    }, LIVENESS_CHECK_MS);
+          // Periodically clean up stale completed agents (older than 24 hours)
+          this.cleanupStaleAgents();
+        } finally {
+          this._isCheckingLiveness = false;
+        }
+      },
+      LIVENESS_CHECK_MS,
+      { description: 'subagent liveness check' }
+    );
   }
 
   /**
@@ -418,21 +424,12 @@ export class SubagentWatcher extends EventEmitter {
   stop(): void {
     this._isRunning = false;
 
-    if (this.pollInterval) {
-      clearInterval(this.pollInterval);
-      this.pollInterval = null;
-    }
-
-    if (this.livenessInterval) {
-      clearInterval(this.livenessInterval);
-      this.livenessInterval = null;
-    }
+    // Dispose poll and liveness intervals, then re-create for potential restart
+    this.cleanup.dispose();
+    this.cleanup = new CleanupManager();
 
     // Clear file debouncers
-    for (const timer of this.fileDebouncers.values()) {
-      clearTimeout(timer);
-    }
-    this.fileDebouncers.clear();
+    this.fileDeb.dispose();
     this.fileAgentContext.clear();
 
     // Remove error handlers before closing watchers to prevent memory leak
@@ -447,10 +444,7 @@ export class SubagentWatcher extends EventEmitter {
     }
     this.dirWatchers.clear();
 
-    for (const timer of this.idleTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.idleTimers.clear();
+    this.idleDeb.dispose();
 
     // Clear all state for clean restart
     this.filePositions.clear();
@@ -532,16 +526,8 @@ export class SubagentWatcher extends EventEmitter {
       this.pendingToolCalls.delete(agentId);
       this.filePositions.delete(info.filePath);
       this.fileAgentContext.delete(info.filePath);
-      const debounceTimer = this.fileDebouncers.get(info.filePath);
-      if (debounceTimer) {
-        clearTimeout(debounceTimer);
-        this.fileDebouncers.delete(info.filePath);
-      }
-      const timer = this.idleTimers.get(agentId);
-      if (timer) {
-        clearTimeout(timer);
-        this.idleTimers.delete(agentId);
-      }
+      this.fileDeb.cancelKey(info.filePath);
+      this.idleDeb.cancelKey(agentId);
     }
   }
 
@@ -634,9 +620,9 @@ export class SubagentWatcher extends EventEmitter {
 
     return {
       agentCount: this.agentInfo.size,
-      fileDebouncerCount: this.fileDebouncers.size,
+      fileDebouncerCount: this.fileDeb.size,
       dirWatcherCount: this.dirWatchers.size,
-      idleTimerCount: this.idleTimers.size,
+      idleTimerCount: this.idleDeb.size,
       pendingToolCallsCount,
       knownDirsCount: this.knownSubagentDirs.size,
       filePositionsCount: this.filePositions.size,
@@ -1129,13 +1115,8 @@ export class SubagentWatcher extends EventEmitter {
         if (!filename?.endsWith('.jsonl')) return;
         const filePath = join(dir, filename);
 
-        // Clear existing debounce for this file
-        const existing = this.fileDebouncers.get(filePath);
-        if (existing) clearTimeout(existing);
-
         // Debounce 100ms to batch rapid writes
-        const timer = setTimeout(() => {
-          this.fileDebouncers.delete(filePath);
+        this.fileDeb.schedule(filePath, () => {
           if (!existsSync(filePath)) return;
 
           if (this.fileAgentContext.has(filePath)) {
@@ -1145,9 +1126,7 @@ export class SubagentWatcher extends EventEmitter {
             // New file — register it
             this.registerAgentFile(filePath, projectHash, sessionId).catch(() => {});
           }
-        }, FILE_CONTENT_DEBOUNCE_MS);
-
-        this.fileDebouncers.set(filePath, timer);
+        });
       });
 
       // Handle watcher errors to prevent unhandled exceptions
@@ -1602,25 +1581,13 @@ export class SubagentWatcher extends EventEmitter {
    * Reset idle timer for an agent
    */
   private resetIdleTimer(agentId: string): void {
-    const existing = this.idleTimers.get(agentId);
-    if (existing) {
-      clearTimeout(existing);
-    }
-
-    const timer = setTimeout(() => {
-      // Guard against race condition: agent may have been deleted before timer fires
+    this.idleDeb.schedule(agentId, () => {
       const info = this.agentInfo.get(agentId);
-      if (!info) {
-        // Agent was deleted - clean up timer reference
-        this.idleTimers.delete(agentId);
-        return;
-      }
+      if (!info) return;
       if (info.status === 'active') {
         info.status = 'idle';
       }
-    }, IDLE_TIMEOUT_MS);
-
-    this.idleTimers.set(agentId, timer);
+    });
   }
 
   /**

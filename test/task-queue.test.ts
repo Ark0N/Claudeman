@@ -536,9 +536,11 @@ describe('circular dependency detection', () => {
 
   it('should allow dependencies on non-existent tasks (just unsatisfied, not a cycle)', () => {
     // Dependencies on non-existent tasks are valid - they just won't be satisfied
-    expect(() => {
-      queue.addTask({ prompt: 'Task D', dependencies: ['non-existent-id'] });
-    }).not.toThrow();
+    const task = queue.addTask({ prompt: 'Task D', dependencies: ['non-existent-id'] });
+    expect(queue.getAllTasks()).toHaveLength(1);
+    expect(task.dependencies).toEqual(['non-existent-id']);
+    // Task is blocked by unsatisfied dependency, so next() should return null
+    expect(queue.next()).toBeNull();
   });
 
   it('should detect self-dependency when task references itself', () => {

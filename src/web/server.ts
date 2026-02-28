@@ -123,7 +123,7 @@ import {
   RalphLoopStartSchema,
   isValidWorkingDir,
 } from './schemas.js';
-import { StaleExpirationMap } from '../utils/index.js';
+import { CleanupManager, KeyedDebouncer, StaleExpirationMap } from '../utils/index.js';
 import { MAX_CONCURRENT_SESSIONS, MAX_SSE_CLIENTS } from '../config/map-limits.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -420,16 +420,14 @@ export class WebServer extends EventEmitter {
     ttlMs: 5 * 60 * 1000, // 5 minutes - auto-expire stale session timing data
     refreshOnGet: false, // Don't refresh on reads, only on explicit sets
   });
-  // Scheduled runs cleanup timer
-  private scheduledCleanupTimer: NodeJS.Timeout | null = null;
+  // Centralized cleanup for standalone timers (intervals + resettable timeouts)
+  private cleanup = new CleanupManager();
   // SSE event batching
   private taskUpdateBatches: Map<string, { sessionId: string; task: BackgroundTask }> = new Map();
-  private taskUpdateBatchTimer: NodeJS.Timeout | null = null;
+  private taskUpdateBatchTimerId: string | null = null;
   // State update batching (reduce expensive toDetailedState() serialization)
   private stateUpdatePending: Set<string> = new Set();
-  private stateUpdateTimer: NodeJS.Timeout | null = null;
-  // SSE client health check timer
-  private sseHealthCheckTimer: NodeJS.Timeout | null = null;
+  private stateUpdateTimerId: string | null = null;
   // Flag to prevent new timers during shutdown
   private _isStopping: boolean = false;
   // Cached light state for SSE init (avoids rebuilding on every reconnect)
@@ -439,14 +437,13 @@ export class WebServer extends EventEmitter {
   private cachedSessionsList: { data: unknown[]; timestamp: number } | null = null;
   // Token recording for daily stats (track what's been recorded to avoid double-counting)
   private lastRecordedTokens: Map<string, { input: number; output: number }> = new Map();
-  private tokenRecordingTimer: NodeJS.Timeout | null = null;
   // Server startup time for respawn grace period calculation
   private readonly serverStartTime: number = Date.now();
   // Pending respawn start timers (for cleanup on shutdown)
   private pendingRespawnStarts: Map<string, NodeJS.Timeout> = new Map();
   // Active plan orchestrators (for cancellation via API)
   private activePlanOrchestrators: Map<string, PlanOrchestrator> = new Map();
-  private persistDebounceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private persistDeb = new KeyedDebouncer(100);
   // Grace period before starting restored respawn controllers (2 minutes)
   private static readonly RESPAWN_RESTORE_GRACE_PERIOD_MS = 2 * 60 * 1000;
   // Stored listener handlers for cleanup
@@ -4646,18 +4643,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
   /** Debounced wrapper — coalesces rapid persistSessionState calls per session */
   private persistSessionState(session: Session): void {
-    const existing = this.persistDebounceTimers.get(session.id);
-    if (existing) clearTimeout(existing);
-    this.persistDebounceTimers.set(
-      session.id,
-      setTimeout(() => {
-        this.persistDebounceTimers.delete(session.id);
-        // Session may have been removed during debounce
-        if (this.sessions.has(session.id)) {
-          this._persistSessionStateNow(session);
-        }
-      }, 100)
-    );
+    this.persistDeb.schedule(session.id, () => {
+      // Session may have been removed during debounce
+      if (this.sessions.has(session.id)) {
+        this._persistSessionStateNow(session);
+      }
+    });
   }
 
   /** Persists full session state including respawn config to state.json */
@@ -4845,11 +4836,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     }
 
     // Clear pending persist-debounce timer (prevents stale closure holding session ref)
-    const pendingPersist = this.persistDebounceTimers.get(sessionId);
-    if (pendingPersist) {
-      clearTimeout(pendingPersist);
-      this.persistDebounceTimers.delete(sessionId);
-    }
+    this.persistDeb.cancelKey(sessionId);
 
     // Clear batches, per-session timers, and pending state updates
     this.terminalBatches.delete(sessionId);
@@ -5079,11 +5066,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
           this.lastTerminalEventTime.delete(session.id);
 
           // Clear pending persist-debounce timer
-          const pendingPersist = this.persistDebounceTimers.get(session.id);
-          if (pendingPersist) {
-            clearTimeout(pendingPersist);
-            this.persistDebounceTimers.delete(session.id);
-          }
+          this.persistDeb.cancelKey(session.id);
 
           // Close any active file streams
           fileStreamManager.closeSessionStreams(session.id);
@@ -6000,11 +5983,15 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     const key = `${sessionId}:${task.id}`;
     this.taskUpdateBatches.set(key, { sessionId, task });
 
-    if (!this.taskUpdateBatchTimer) {
-      this.taskUpdateBatchTimer = setTimeout(() => {
-        this.flushTaskUpdateBatches();
-        this.taskUpdateBatchTimer = null;
-      }, TASK_UPDATE_BATCH_INTERVAL);
+    if (!this.taskUpdateBatchTimerId) {
+      this.taskUpdateBatchTimerId = this.cleanup.setTimeout(
+        () => {
+          this.taskUpdateBatchTimerId = null;
+          this.flushTaskUpdateBatches();
+        },
+        TASK_UPDATE_BATCH_INTERVAL,
+        { description: 'task update batch flush' }
+      );
     }
   }
 
@@ -6031,11 +6018,15 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     this.stateUpdatePending.add(sessionId);
 
-    if (!this.stateUpdateTimer) {
-      this.stateUpdateTimer = setTimeout(() => {
-        this.flushStateUpdates();
-        this.stateUpdateTimer = null;
-      }, STATE_UPDATE_DEBOUNCE_INTERVAL);
+    if (!this.stateUpdateTimerId) {
+      this.stateUpdateTimerId = this.cleanup.setTimeout(
+        () => {
+          this.stateUpdateTimerId = null;
+          this.flushStateUpdates();
+        },
+        STATE_UPDATE_DEBOUNCE_INTERVAL,
+        { description: 'state update debounce flush' }
+      );
     }
   }
 
@@ -6226,21 +6217,30 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     process.env.CODEMAN_API_URL = `${protocol}://localhost:${this.port}`;
 
     // Start scheduled runs cleanup timer
-    this.scheduledCleanupTimer = setInterval(() => {
-      this.cleanupScheduledRuns();
-    }, SCHEDULED_CLEANUP_INTERVAL);
+    this.cleanup.setInterval(
+      () => {
+        this.cleanupScheduledRuns();
+      },
+      SCHEDULED_CLEANUP_INTERVAL,
+      { description: 'scheduled runs cleanup' }
+    );
 
     // Start SSE client health check timer (prevents memory leaks from dead connections)
-    this.sseHealthCheckTimer = setInterval(() => {
-      this.cleanupDeadSSEClients();
-    }, SSE_HEALTH_CHECK_INTERVAL);
+    this.cleanup.setInterval(
+      () => {
+        this.cleanupDeadSSEClients();
+      },
+      SSE_HEALTH_CHECK_INTERVAL,
+      { description: 'SSE client health check' }
+    );
 
     // Start token recording timer (every 5 minutes for long-running sessions)
-    this.tokenRecordingTimer = setInterval(
+    this.cleanup.setInterval(
       () => {
         this.recordPeriodicTokenUsage();
       },
-      5 * 60 * 1000
+      5 * 60 * 1000,
+      { description: 'periodic token recording' }
     );
 
     // Start subagent watcher for Claude Code background agent visibility (if enabled)
@@ -6531,11 +6531,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Set stopping flag to prevent new timer creation during shutdown
     this._isStopping = true;
 
-    // Clear SSE health check timer
-    if (this.sseHealthCheckTimer) {
-      clearInterval(this.sseHealthCheckTimer);
-      this.sseHealthCheckTimer = null;
-    }
+    // Dispose all managed timers (intervals + resettable timeouts)
+    this.cleanup.dispose();
 
     // Gracefully close all SSE connections before clearing
     for (const client of this.sseClients) {
@@ -6558,43 +6555,20 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     this.terminalBatches.clear();
     this.terminalBatchSizes.clear();
 
-    if (this.taskUpdateBatchTimer) {
-      clearTimeout(this.taskUpdateBatchTimer);
-      this.taskUpdateBatchTimer = null;
-    }
     this.taskUpdateBatches.clear();
-
-    if (this.stateUpdateTimer) {
-      clearTimeout(this.stateUpdateTimer);
-      this.stateUpdateTimer = null;
-    }
     this.stateUpdatePending.clear();
-
-    // Clear token recording timer
-    if (this.tokenRecordingTimer) {
-      clearInterval(this.tokenRecordingTimer);
-      this.tokenRecordingTimer = null;
-    }
     this.lastRecordedTokens.clear();
-
-    // Clear scheduled cleanup timer
-    if (this.scheduledCleanupTimer) {
-      clearInterval(this.scheduledCleanupTimer);
-      this.scheduledCleanupTimer = null;
-    }
 
     // Stop multiplexer and flush pending saves
     this.mux.destroy();
 
     // Flush any pending persist-debounce timers and persist dirty sessions
-    for (const [sessionId, timer] of this.persistDebounceTimers) {
-      clearTimeout(timer);
+    this.persistDeb.flushAll((sessionId) => {
       const session = this.sessions.get(sessionId);
       if (session) {
         this._persistSessionStateNow(session);
       }
-    }
-    this.persistDebounceTimers.clear();
+    });
 
     // Clear cached state
     this.cachedLightState = null;

@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import webpush from 'web-push';
 import type { VapidKeys, PushSubscriptionRecord } from './types.js';
+import { Debouncer } from './utils/index.js';
 
 const DATA_DIR = join(homedir(), '.codeman');
 const KEYS_FILE = join(DATA_DIR, 'push-keys.json');
@@ -20,7 +21,7 @@ const SAVE_DEBOUNCE_MS = 500;
 export class PushSubscriptionStore {
   private vapidKeys: VapidKeys | null = null;
   private subscriptions: Map<string, PushSubscriptionRecord> = new Map();
-  private saveTimer: NodeJS.Timeout | null = null;
+  private saveDeb = new Debouncer(SAVE_DEBOUNCE_MS);
   private _disposed = false;
 
   constructor() {
@@ -149,10 +150,7 @@ export class PushSubscriptionStore {
   /** Schedule a debounced save */
   private scheduleSave(): void {
     if (this._disposed) return;
-    if (this.saveTimer) clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => {
-      this.flushSave();
-    }, SAVE_DEBOUNCE_MS);
+    this.saveDeb.schedule(() => this.flushSave());
   }
 
   /** Immediately persist subscriptions to disk */
@@ -169,11 +167,6 @@ export class PushSubscriptionStore {
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
-    if (this.saveTimer) {
-      clearTimeout(this.saveTimer);
-      this.saveTimer = null;
-    }
-    // Final flush
-    this.flushSave();
+    this.saveDeb.flush(() => this.flushSave());
   }
 }

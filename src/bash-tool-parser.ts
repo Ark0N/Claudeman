@@ -15,6 +15,7 @@
 import { EventEmitter } from 'node:events';
 import { v4 as uuidv4 } from 'uuid';
 import { ActiveBashTool } from './types.js';
+import { CleanupManager, Debouncer } from './utils/index.js';
 
 // ========== Configuration Constants ==========
 
@@ -145,15 +146,14 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
   private _workingDir: string;
   private _homeDir: string;
 
-  // Track auto-remove timers for cleanup
-  private _autoRemoveTimers: Set<ReturnType<typeof setTimeout>> = new Set();
+  // Centralized resource cleanup for auto-remove timers
+  private cleanup = new CleanupManager();
 
   // Flag to prevent operations after destroy
   private _destroyed: boolean = false;
 
   // Debouncing
-  private _pendingUpdate: boolean = false;
-  private _updateTimer: ReturnType<typeof setTimeout> | null = null;
+  private _updateDeb = new Debouncer(EVENT_DEBOUNCE_MS);
 
   constructor(config: BashToolParserConfig) {
     super();
@@ -524,13 +524,15 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
         this.scheduleUpdate();
 
         // Remove completed tool after a short delay to allow UI to show completion
-        const timer = setTimeout(() => {
-          this._autoRemoveTimers.delete(timer);
-          if (this._destroyed) return;
-          this._activeTools.delete(tool.id);
-          this.scheduleUpdate();
-        }, 2000);
-        this._autoRemoveTimers.add(timer);
+        this.cleanup.setTimeout(
+          () => {
+            if (this._destroyed) return;
+            this._activeTools.delete(tool.id);
+            this.scheduleUpdate();
+          },
+          2000,
+          { description: 'auto-remove completed tool' }
+        );
       }
       this._lastToolId = null;
       return;
@@ -562,13 +564,15 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
       this.scheduleUpdate();
 
       // Auto-remove suggestions after 30 seconds
-      const timer = setTimeout(() => {
-        this._autoRemoveTimers.delete(timer);
-        if (this._destroyed) return;
-        this._activeTools.delete(tool.id);
-        this.scheduleUpdate();
-      }, 30000);
-      this._autoRemoveTimers.add(timer);
+      this.cleanup.setTimeout(
+        () => {
+          if (this._destroyed) return;
+          this._activeTools.delete(tool.id);
+          this.scheduleUpdate();
+        },
+        30000,
+        { description: 'auto-remove suggestion tool' }
+      );
       return;
     }
 
@@ -599,13 +603,15 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
       this.scheduleUpdate();
 
       // Auto-remove after 60 seconds
-      const timer = setTimeout(() => {
-        this._autoRemoveTimers.delete(timer);
-        if (this._destroyed) return;
-        this._activeTools.delete(tool.id);
-        this.scheduleUpdate();
-      }, 60000);
-      this._autoRemoveTimers.add(timer);
+      this.cleanup.setTimeout(
+        () => {
+          if (this._destroyed) return;
+          this._activeTools.delete(tool.id);
+          this.scheduleUpdate();
+        },
+        60000,
+        { description: 'auto-remove log file tool' }
+      );
     }
   }
 
@@ -675,13 +681,9 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
    * Schedule a debounced update emission.
    */
   private scheduleUpdate(): void {
-    if (this._pendingUpdate) return;
-
-    this._pendingUpdate = true;
-    this._updateTimer = setTimeout(() => {
-      this._pendingUpdate = false;
+    this._updateDeb.schedule(() => {
       this.emitUpdate();
-    }, EVENT_DEBOUNCE_MS);
+    });
   }
 
   /**
@@ -696,15 +698,8 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
    */
   destroy(): void {
     this._destroyed = true;
-    if (this._updateTimer) {
-      clearTimeout(this._updateTimer);
-      this._updateTimer = null;
-    }
-    // Clear all auto-remove timers to prevent orphaned callbacks
-    for (const timer of this._autoRemoveTimers) {
-      clearTimeout(timer);
-    }
-    this._autoRemoveTimers.clear();
+    this._updateDeb.dispose();
+    this.cleanup.dispose();
     this._activeTools.clear();
     this.removeAllListeners();
   }
