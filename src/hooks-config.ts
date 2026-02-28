@@ -27,9 +27,10 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
   // Falls back to empty object if stdin is unavailable or malformed.
   const curlCmd = (event: HookEventType) =>
     `HOOK_DATA=$(cat 2>/dev/null || echo '{}'); ` +
+    `printf '{"event":"${event}","sessionId":"%s","data":%s}' "$CODEMAN_SESSION_ID" "$HOOK_DATA" | ` +
     `curl -s -X POST "$CODEMAN_API_URL/api/hook-event" ` +
     `-H 'Content-Type: application/json' ` +
-    `-d "{\\"event\\":\\"${event}\\",\\"sessionId\\":\\"$CODEMAN_SESSION_ID\\",\\"data\\":$HOOK_DATA}" ` +
+    `--data @- ` +
     `2>/dev/null || true`;
 
   return {

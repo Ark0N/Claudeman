@@ -444,8 +444,6 @@ export class PlanOrchestrator {
     try {
       const { result: response } = await session.runPrompt(prompt, { model: this.researchModel });
 
-      this.runningSessions.delete(session);
-
       const durationMs = Date.now() - startTime;
 
       // Extract JSON from response
@@ -528,7 +526,6 @@ export class PlanOrchestrator {
 
       return result;
     } catch (err) {
-      this.runningSessions.delete(session);
       const durationMs = Date.now() - startTime;
       const error = err instanceof Error ? err.message : String(err);
       onSubagent?.({
@@ -554,7 +551,10 @@ export class PlanOrchestrator {
         durationMs,
       };
     } finally {
-      // Always clear the progress interval to prevent memory leaks
+      // Always clean up session and progress interval — centralizing here
+      // prevents the race where cancel() and catch both try to manage the set
+      await session.stop().catch(() => {});
+      this.runningSessions.delete(session);
       clearInterval(progressInterval);
     }
   }
@@ -617,8 +617,6 @@ export class PlanOrchestrator {
     try {
       const { result: response } = await session.runPrompt(prompt, { model: this.plannerModel });
 
-      this.runningSessions.delete(session);
-
       const durationMs = Date.now() - startTime;
 
       // Extract JSON from response
@@ -670,7 +668,6 @@ export class PlanOrchestrator {
 
       return { success: true, items, gaps, warnings };
     } catch (err) {
-      this.runningSessions.delete(session);
       const durationMs = Date.now() - startTime;
       const error = err instanceof Error ? err.message : String(err);
       onSubagent?.({
@@ -684,7 +681,10 @@ export class PlanOrchestrator {
       });
       return { success: false, error };
     } finally {
-      // Always clear the progress interval to prevent memory leaks
+      // Always clean up session and progress interval — centralizing here
+      // prevents the race where cancel() and catch both try to manage the set
+      await session.stop().catch(() => {});
+      this.runningSessions.delete(session);
       clearInterval(progressInterval);
     }
   }

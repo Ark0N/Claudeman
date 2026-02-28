@@ -210,6 +210,10 @@ export class StateStore {
       return;
     }
 
+    // Clear dirty flag BEFORE async I/O so mutations during write re-set it.
+    // The state snapshot is already captured in `json` above.
+    this.dirty = false;
+
     // Step 2: Create backup via file copy (async, no read+parse+write)
     try {
       await access(this.filePath);
@@ -223,8 +227,6 @@ export class StateStore {
       await writeFile(tempPath, json, 'utf-8');
       await rename(tempPath, this.filePath);
 
-      // Success! Clear dirty flag AFTER write completes
-      this.dirty = false;
       this.consecutiveSaveFailures = 0;
       if (this.circuitBreakerOpen) {
         console.log('[StateStore] Circuit breaker CLOSED - save succeeded');
@@ -232,6 +234,8 @@ export class StateStore {
       }
     } catch (err) {
       console.error('[StateStore] Failed to write state file:', err);
+      // Re-mark dirty so the data is retried on the next save cycle
+      this.dirty = true;
       this.consecutiveSaveFailures++;
 
       // Try to clean up temp file on error

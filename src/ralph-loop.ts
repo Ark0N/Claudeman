@@ -77,6 +77,7 @@ export class RalphLoop extends EventEmitter {
     completion: (sessionId: string, phrase: string) => void;
     error: (sessionId: string, error: string) => void;
     stopped: (sessionId: string) => void;
+    taskError: (sessionId: string, taskId: string, error: string) => void;
   } | null = null;
 
   constructor(options: RalphLoopOptions = {}) {
@@ -118,11 +119,15 @@ export class RalphLoop extends EventEmitter {
       stopped: (sessionId: string) => {
         this.handleSessionStopped(sessionId);
       },
+      taskError: (sessionId: string, taskId: string, error: string) => {
+        this.handleSessionTaskError(sessionId, taskId, error);
+      },
     };
 
     this.sessionManager.on('sessionCompletion', this.sessionEventHandlers.completion);
     this.sessionManager.on('sessionError', this.sessionEventHandlers.error);
     this.sessionManager.on('sessionStopped', this.sessionEventHandlers.stopped);
+    this.sessionManager.on('sessionTaskError', this.sessionEventHandlers.taskError);
   }
 
   /** Remove event listeners to prevent memory leaks */
@@ -131,6 +136,7 @@ export class RalphLoop extends EventEmitter {
       this.sessionManager.off('sessionCompletion', this.sessionEventHandlers.completion);
       this.sessionManager.off('sessionError', this.sessionEventHandlers.error);
       this.sessionManager.off('sessionStopped', this.sessionEventHandlers.stopped);
+      this.sessionManager.off('sessionTaskError', this.sessionEventHandlers.taskError);
       this.sessionEventHandlers = null;
     }
   }
@@ -281,8 +287,11 @@ export class RalphLoop extends EventEmitter {
   private async tick(): Promise<void> {
     this.store.setRalphLoopState({ lastCheckAt: Date.now() });
 
-    // Run independent checks in parallel for better performance
-    await Promise.all([this.checkTimeouts(), this.assignTasks()]);
+    // Run sequentially: timeouts first so timed-out tasks are cleaned up
+    // before assignTasks() picks new work (prevents race where both
+    // mutate the same task concurrently)
+    await this.checkTimeouts();
+    await this.assignTasks();
 
     // Check if we should auto-generate tasks (depends on assignment results)
     if (this.autoGenerateTasks && this.shouldGenerateTasks()) {
@@ -304,7 +313,11 @@ export class RalphLoop extends EventEmitter {
         break;
       }
 
-      await this.assignTaskToSession(task, session);
+      try {
+        await this.assignTaskToSession(task, session);
+      } catch (err) {
+        console.error(`[RalphLoop] Failed to assign task ${task.id} to session ${session.id}:`, err);
+      }
     }
   }
 
@@ -398,6 +411,17 @@ export class RalphLoop extends EventEmitter {
       this.taskQueue.updateTask(task);
       this.emit('taskFailed', task.id, 'Session stopped unexpectedly');
     }
+  }
+
+  private handleSessionTaskError(_sessionId: string, taskId: string, error: string): void {
+    const task = this.taskQueue.getTask(taskId);
+    if (!task) {
+      return;
+    }
+
+    task.fail(error);
+    this.taskQueue.updateTask(task);
+    this.emit('taskFailed', task.id, error);
   }
 
   private shouldGenerateTasks(): boolean {

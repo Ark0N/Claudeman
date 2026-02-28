@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **You may be running inside a Codeman-managed tmux session.** Before killing ANY tmux or Claude process:
 
-1. Check: `echo $CODEMAN_TMUX` - if `1`, you're in a managed session
+1. Check: `echo $CODEMAN_MUX` - if `1`, you're in a managed session
 2. **NEVER** run `tmux kill-session`, `pkill tmux`, or `pkill claude` without confirming
 3. Use the web UI or `./scripts/tmux-manager.sh` instead of direct kill commands
 
@@ -52,7 +52,7 @@ When user says "COM":
 4. **Sync CLAUDE.md version**: Update the `**Version**` line below to match the new version from `package.json`
 5. **Commit and deploy**: `git add -A && git commit -m "chore: version packages" && git push && npm run build && systemctl --user restart codeman-web`
 
-**Version**: 0.2.6 (must match `package.json`)
+**Version**: 0.2.7 (must match `package.json`)
 
 ## Project Overview
 
@@ -90,15 +90,18 @@ npx vitest run -t "pattern"        # Tests matching name
 npm run test:coverage              # With coverage report
 
 # Production
-npm run build
+npm run build                      # esbuild via scripts/build.mjs (not tsc)
+npm run start                      # node dist/index.js (production)
 systemctl --user restart codeman-web
 journalctl --user -u codeman-web -f
 ```
 
+**CI**: `.github/workflows/ci.yml` runs `typecheck`, `lint`, and `format:check` on push to master. Tests are intentionally excluded from CI (they spawn tmux).
+
 ## Common Gotchas
 
 - **Single-line prompts only** — `writeViaMux()` sends text and Enter separately; multi-line breaks Ink
-- **Don't kill tmux sessions blindly** — Check `$CODEMAN_TMUX` first; you might be inside one
+- **Don't kill tmux sessions blindly** — Check `$CODEMAN_MUX` first; you might be inside one
 - **Global regex `lastIndex` sharing** — `ANSI_ESCAPE_PATTERN_FULL/SIMPLE` have `g` flag; use `createAnsiPatternFull/Simple()` factory functions for fresh instances in loops
 - **DEC 2026 sync blocks** — Never discard incomplete sync blocks (START without END); buffer up to 50ms then flush. See `app.js:extractSyncSegments()`
 - **Terminal writes during buffer load** — Live SSE writes are queued while `_isLoadingBuffer` is true to prevent interleaving with historical data
@@ -116,6 +119,7 @@ journalctl --user -u codeman-web -f
 
 | File | Purpose |
 |------|---------|
+| `src/index.ts` | CLI entry point: global error recovery, uncaught exception guard, `MAX_CONSECUTIVE_ERRORS` auto-restart |
 | `src/session.ts` | PTY wrapper: `runPrompt()`, `startInteractive()`, `startShell()` |
 | `src/mux-interface.ts` | `TerminalMultiplexer` interface + `MuxSession` type |
 | `src/mux-factory.ts` | Create tmux multiplexer instance |
@@ -167,6 +171,24 @@ journalctl --user -u codeman-web -f
 |------|---------|
 | `buffer-limits.ts` | Terminal/text buffer size limits |
 | `map-limits.ts` | Global limits for Maps, sessions, watchers |
+
+### Utilities (`src/utils/`)
+
+Re-exported via `src/utils/index.ts`. Key exports:
+
+| File | Exports |
+|------|---------|
+| `cleanup-manager.ts` | `CleanupManager` — centralized disposal for timers, intervals, watchers, listeners, streams |
+| `lru-map.ts` | `LRUMap` — bounded cache with eviction |
+| `stale-expiration-map.ts` | `StaleExpirationMap` — TTL-based map with automatic cleanup |
+| `regex-patterns.ts` | `ANSI_ESCAPE_PATTERN_FULL/SIMPLE`, `createAnsiPatternFull/Simple()`, `stripAnsi`, `TOKEN_PATTERN`, `SPINNER_PATTERN` |
+| `buffer-accumulator.ts` | `BufferAccumulator` — batches rapid writes into single flushes |
+| `claude-cli-resolver.ts` | `findClaudeDir`, `getAugmentedPath` — resolves Claude CLI paths |
+| `opencode-cli-resolver.ts` | `resolveOpenCodeDir`, `isOpenCodeAvailable`, `getOpenCodeAugmentedPath` — OpenCode CLI support |
+| `string-similarity.ts` | `stringSimilarity`, `fuzzyPhraseMatch`, `todoContentHash` |
+| `token-validation.ts` | `validateTokenCounts`, `validateTokensAndCost` |
+| `nice-wrapper.ts` | `wrapWithNice` — wraps commands with `nice`/`ionice` for lower priority |
+| `type-safety.ts` | `assertNever` — exhaustive switch/case guard |
 
 ### Data Flow
 
@@ -426,8 +448,20 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **Error codes** | `createErrorResponse()` in `src/types.ts` |
 | **Test utilities** | `test/respawn-test-utils.ts` |
 | **Mobile test suite** | `mobile-test/README.md` |
+| **OpenCode integration** | `docs/opencode-integration.md` |
+| **Local echo overlay** | `docs/local-echo-overlay-plan.md` |
+| **Performance investigation** | `docs/performance-investigation-report.md` |
+| **First-load optimization** | `docs/first-load-optimization-plan.md`, `docs/perf-audit-first-load.md` |
+| **Dead code audit** | `docs/cleanup-findings.md` |
+| **TypeScript improvements** | `docs/typescript-improvement-suggestions.md` |
+| **Browser testing** | `docs/browser-testing-guide.md` |
+| **Mobile testing report** | `docs/mobile-testing-report.md` |
+| **Voice input** | `docs/voice-input-plan.md` |
+| **Improvement roadmaps** | `docs/respawn-improvement-plan.md`, `docs/ralph-improvement-plan.md`, `docs/plan-improvement-roadmap.md` |
+| **Background keystroke forwarding** | `docs/background-keystroke-forwarding-merged-plan.md` |
+| **Run summary** | `docs/run-summary-plan.md` |
 
-Additional design docs, plans, and investigation reports are in the `docs/` directory.
+Additional design docs and investigation reports are in the `docs/` directory.
 
 ## Scripts
 
@@ -437,6 +471,9 @@ Additional design docs, plans, and investigation reports are in the `docs/` dire
 | `scripts/monitor-respawn.sh` | Monitor respawn state machine in real-time |
 | `scripts/watch-subagents.ts` | Real-time subagent transcript watcher (list, follow by session/agent ID) |
 | `scripts/codeman-web.service` | systemd service file for production deployment |
+| `scripts/codeman-tunnel.service` | systemd service file for persistent Cloudflare tunnel |
+| `scripts/tunnel.sh` | Start/stop/check Cloudflare quick tunnel (`./scripts/tunnel.sh start\|stop\|url`) |
+| `scripts/build.mjs` | esbuild-based production build (called by `npm run build`) |
 | `scripts/postinstall.js` | npm postinstall hook for setup |
 
 Additional scripts in `scripts/` for screenshots, demos, Ralph wizards, and browser testing.

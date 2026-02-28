@@ -16,7 +16,17 @@ import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, statSync, mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync, chmodSync } from 'node:fs';
+import {
+  existsSync,
+  statSync,
+  mkdirSync,
+  writeFileSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  chmodSync,
+  realpathSync,
+} from 'node:fs';
 import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -1391,15 +1401,21 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter');
       }
 
-      // Validate path is within working directory (security: proper path traversal check)
+      // Validate path is within working directory (security: resolve symlinks to prevent traversal)
       const fullPath = resolve(session.workingDir, filePath);
-      const relativePath = relative(session.workingDir, fullPath);
+      let resolvedPath: string;
+      try {
+        resolvedPath = realpathSync(fullPath);
+      } catch {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found');
+      }
+      const relativePath = relative(session.workingDir, resolvedPath);
       if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be within working directory');
       }
 
       try {
-        const stat = await fs.stat(fullPath);
+        const stat = await fs.stat(resolvedPath);
 
         // Check if it's a binary/media file
         const ext = filePath.split('.').pop()?.toLowerCase() || '';
@@ -1460,7 +1476,7 @@ export class WebServer extends EventEmitter {
         // Read text file with line limit (bounded to prevent DoS)
         const MAX_LINES_LIMIT = 10000;
         const maxLines = Math.min(parseInt(lines || '500', 10) || 500, MAX_LINES_LIMIT);
-        const content = await fs.readFile(fullPath, 'utf-8');
+        const content = await fs.readFile(resolvedPath, 'utf-8');
         const allLines = content.split('\n');
         const truncatedContent = allLines.length > maxLines;
         const displayContent = truncatedContent ? allLines.slice(0, maxLines).join('\n') : content;
@@ -1497,9 +1513,16 @@ export class WebServer extends EventEmitter {
         return;
       }
 
-      // Validate path is within working directory (security: proper path traversal check)
+      // Validate path is within working directory (security: resolve symlinks to prevent traversal)
       const fullPath = resolve(session.workingDir, filePath);
-      const relativePath = relative(session.workingDir, fullPath);
+      let resolvedPath: string;
+      try {
+        resolvedPath = realpathSync(fullPath);
+      } catch {
+        reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
+        return;
+      }
+      const relativePath = relative(session.workingDir, resolvedPath);
       if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
         reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be within working directory'));
         return;
@@ -1508,7 +1531,7 @@ export class WebServer extends EventEmitter {
       try {
         // Validate file size before reading (DoS protection - prevent memory exhaustion)
         const MAX_RAW_FILE_SIZE = 50 * 1024 * 1024; // 50MB for raw files
-        const stat = await fs.stat(fullPath);
+        const stat = await fs.stat(resolvedPath);
         if (stat.size > MAX_RAW_FILE_SIZE) {
           reply
             .code(400)
@@ -1541,7 +1564,7 @@ export class WebServer extends EventEmitter {
           json: 'application/json',
         };
 
-        const content = await fs.readFile(fullPath);
+        const content = await fs.readFile(resolvedPath);
         reply.header('Content-Type', mimeTypes[ext] || 'application/octet-stream');
         reply.send(content);
       } catch (err) {
@@ -5026,6 +5049,79 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
           }
         } catch (err) {
           console.error(`[Server] Error cleaning up respawn controller for ${session.id}:`, err);
+        }
+
+        // Clean up per-session resources that are stale after PTY exit.
+        // These are only cleaned by cleanupSession() on explicit delete,
+        // so without this they leak when a session exits without deletion.
+        try {
+          // Transcript watcher is tied to the specific PTY run
+          this.stopTranscriptWatcher(session.id);
+
+          // Finalize run summary tracker
+          const summaryTracker = this.runSummaryTrackers.get(session.id);
+          if (summaryTracker) {
+            summaryTracker.recordSessionStopped();
+            summaryTracker.stop();
+            this.runSummaryTrackers.delete(session.id);
+          }
+
+          // Flush/clear terminal batching state (no more output coming)
+          this.terminalBatches.delete(session.id);
+          this.terminalBatchSizes.delete(session.id);
+          const batchTimer = this.terminalBatchTimers.get(session.id);
+          if (batchTimer) {
+            clearTimeout(batchTimer);
+            this.terminalBatchTimers.delete(session.id);
+          }
+          this.taskUpdateBatches.delete(session.id);
+          this.stateUpdatePending.delete(session.id);
+          this.lastTerminalEventTime.delete(session.id);
+
+          // Clear pending persist-debounce timer
+          const pendingPersist = this.persistDebounceTimers.get(session.id);
+          if (pendingPersist) {
+            clearTimeout(pendingPersist);
+            this.persistDebounceTimers.delete(session.id);
+          }
+
+          // Close any active file streams
+          fileStreamManager.closeSessionStreams(session.id);
+
+          // Remove stored listener refs to break closure references (prevents memory leak).
+          // Without this, the closures capture the Session object (including up to 2MB terminal buffer)
+          // and keep it alive even after the PTY exits.
+          const listenerRefs = this.sessionListenerRefs.get(session.id);
+          if (listenerRefs) {
+            session.off('terminal', listenerRefs.terminal);
+            session.off('clearTerminal', listenerRefs.clearTerminal);
+            session.off('needsRefresh', listenerRefs.needsRefresh);
+            session.off('message', listenerRefs.message);
+            session.off('error', listenerRefs.error);
+            session.off('completion', listenerRefs.completion);
+            session.off('exit', listenerRefs.exit);
+            session.off('working', listenerRefs.working);
+            session.off('idle', listenerRefs.idle);
+            session.off('taskCreated', listenerRefs.taskCreated);
+            session.off('taskUpdated', listenerRefs.taskUpdated);
+            session.off('taskCompleted', listenerRefs.taskCompleted);
+            session.off('taskFailed', listenerRefs.taskFailed);
+            session.off('autoClear', listenerRefs.autoClear);
+            session.off('autoCompact', listenerRefs.autoCompact);
+            session.off('cliInfoUpdated', listenerRefs.cliInfoUpdated);
+            session.off('ralphLoopUpdate', listenerRefs.ralphLoopUpdate);
+            session.off('ralphTodoUpdate', listenerRefs.ralphTodoUpdate);
+            session.off('ralphCompletionDetected', listenerRefs.ralphCompletionDetected);
+            session.off('ralphStatusBlockDetected', listenerRefs.ralphStatusBlockDetected);
+            session.off('ralphCircuitBreakerUpdate', listenerRefs.ralphCircuitBreakerUpdate);
+            session.off('ralphExitGateMet', listenerRefs.ralphExitGateMet);
+            session.off('bashToolStart', listenerRefs.bashToolStart);
+            session.off('bashToolEnd', listenerRefs.bashToolEnd);
+            session.off('bashToolsUpdate', listenerRefs.bashToolsUpdate);
+            this.sessionListenerRefs.delete(session.id);
+          }
+        } catch (err) {
+          console.error(`[Server] Error cleaning up session resources on exit for ${session.id}:`, err);
         }
       },
 

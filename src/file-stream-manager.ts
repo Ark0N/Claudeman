@@ -398,13 +398,7 @@ export class FileStreamManager extends EventEmitter {
 
     // Check if the resolved path is within the working directory
     // or common log directories (/tmp intentionally excluded — world-writable)
-    const allowedPaths = [
-      normalizedWorkingDir,
-      '/var/log',
-      resolve(homedir(), '.local/share'),
-      resolve(homedir(), '.cache'),
-      resolve(homedir(), 'logs'),
-    ];
+    const allowedPaths = [normalizedWorkingDir, '/var/log', resolve(homedir(), 'logs')];
 
     const isAllowed = allowedPaths.some((allowed) => {
       const rel = relative(allowed, absolutePath);

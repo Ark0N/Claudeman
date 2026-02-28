@@ -1,5 +1,19 @@
 # codeman
 
+## 0.2.7
+
+### Patch Changes
+
+- Fix race condition in StateStore where dirty flag was overwritten after async write, silently discarding mutations
+- Fix PlanOrchestrator session leak by adding session.stop() in finally blocks and centralizing cleanup
+- Fix symlink path traversal in file-content and file-raw endpoints by adding realpathSync validation
+- Fix PTY exit handler to clean up sessionListenerRefs, transcriptWatchers, runSummaryTrackers, and terminal batching state
+- Fix sendInput() fire-and-forget by propagating runPrompt errors to task queue via taskError event
+- Fix Ralph Loop tick() race condition by running checkTimeouts/assignTasks sequentially with per-iteration error handling
+- Fix shell injection in hook scripts by piping HOOK_DATA via printf to curl stdin instead of inline embedding
+- Narrow tail-file allowlist to remove ~/.cache and ~/.local/share paths that exposed credentials
+- Fix stored XSS in quick-start dropdown by escaping case names with escapeHtml()
+
 ## 0.2.6
 
 ### Patch Changes

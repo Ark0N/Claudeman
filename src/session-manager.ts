@@ -54,6 +54,7 @@ interface SessionHandlers {
   error: (data: string) => void;
   completion: (phrase: string) => void;
   exit: () => void;
+  taskError: (taskId: string, error: string) => void;
 }
 
 export class SessionManager extends EventEmitter {
@@ -134,12 +135,16 @@ export class SessionManager extends EventEmitter {
           this.emit('sessionStopped', session.id);
           this.updateSessionState(session);
         },
+        taskError: (taskId: string, error: string) => {
+          this.emit('sessionTaskError', session.id, taskId, error);
+        },
       };
 
       session.on('output', handlers.output);
       session.on('error', handlers.error);
       session.on('completion', handlers.completion);
       session.on('exit', handlers.exit);
+      session.on('taskError', handlers.taskError);
 
       // Store handlers for later cleanup
       this.sessionHandlers.set(session.id, handlers);
@@ -183,6 +188,7 @@ export class SessionManager extends EventEmitter {
       session.off('error', handlers.error);
       session.off('completion', handlers.completion);
       session.off('exit', handlers.exit);
+      session.off('taskError', handlers.taskError);
       this.sessionHandlers.delete(id);
     }
 

@@ -667,8 +667,8 @@ describe('Hook Config Generation - Extended', () => {
 
     for (const hook of notifHooks) {
       const cmd = hook.hooks[0].command;
-      // The command contains escaped quotes for the JSON payload: \"event\":\"idle_prompt\"
-      expect(cmd).toContain(`\\"event\\":\\"${hook.matcher}\\"`);
+      // The printf format string contains the event name baked in
+      expect(cmd).toContain(`"event":"${hook.matcher}"`);
     }
   });
 
@@ -684,8 +684,9 @@ describe('Hook Config Generation - Extended', () => {
     const notifHooks = config.hooks.Notification as Array<{ hooks: Array<{ command: string }> }>;
     const cmd = notifHooks[0].hooks[0].command;
     expect(cmd).toContain('HOOK_DATA=$(cat');
-    // The data field in the JSON uses escaped quotes: \"data\":$HOOK_DATA
-    expect(cmd).toContain('\\"data\\":$HOOK_DATA');
+    // Data is piped to curl via stdin (--data @-) to prevent shell injection
+    expect(cmd).toContain('$HOOK_DATA');
+    expect(cmd).toContain('--data @-');
   });
 
   it('should have consistent structure across all notification hooks', () => {
@@ -699,6 +700,18 @@ describe('Hook Config Generation - Extended', () => {
       expect(hook.hooks[0].timeout).toBe(10000);
       expect(hook.hooks[0].command).toBeTruthy();
     }
+  });
+
+  it('should pipe data to curl via stdin to prevent shell injection', () => {
+    const config = generateHooksConfig();
+    const notifHooks = config.hooks.Notification as Array<{ hooks: Array<{ command: string }> }>;
+    const cmd = notifHooks[0].hooks[0].command;
+    // HOOK_DATA must NOT be embedded unquoted in a -d "..." argument (shell injection vector)
+    expect(cmd).not.toMatch(/-d\s+"[^"]*\$HOOK_DATA/);
+    // Instead, data should be piped to curl via stdin
+    expect(cmd).toContain('printf');
+    expect(cmd).toContain('| curl');
+    expect(cmd).toContain('--data @-');
   });
 
   it('should have stop hook without matcher (catches all)', () => {

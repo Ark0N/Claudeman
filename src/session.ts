@@ -2203,6 +2203,16 @@ export class Session extends EventEmitter {
     this._lastActivityAt = Date.now();
     this.runPrompt(input).catch((err) => {
       const errorMsg = err instanceof Error ? err.message : String(err);
+      // Clean up task state so the task queue doesn't get stuck
+      if (this._currentTaskId) {
+        const taskId = this._currentTaskId;
+        this._currentTaskId = null;
+        this._status = 'idle';
+        this._lastActivityAt = Date.now();
+        this.emit('taskError', taskId, errorMsg);
+      } else {
+        this._status = 'idle';
+      }
       this.emit('error', errorMsg);
     });
   }

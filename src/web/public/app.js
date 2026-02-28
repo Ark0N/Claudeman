@@ -6391,7 +6391,7 @@ class CodemanApp {
         const displayName = c.name.length > maxNameLength
           ? c.name.substring(0, maxNameLength) + '…'
           : c.name;
-        options += `<option value="${c.name}">${displayName}</option>`;
+        options += `<option value="${this.escapeHtml(c.name)}">${this.escapeHtml(displayName)}</option>`;
       });
 
       // Add testcase option if it doesn't exist (will be created on first run)
