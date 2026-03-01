@@ -362,8 +362,7 @@ export class TunnelManager extends EventEmitter {
     if (!code) throw new Error('No QR token available');
     if (this.cachedQrSvg?.shortCode === code) return this.cachedQrSvg.svg;
 
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- dynamic optional dependency
-    const QRCode = require('qrcode');
+    const QRCode = await import('qrcode');
     const svg: string = await QRCode.toString(`${tunnelUrl}/q/${code}`, {
       type: 'svg',
       margin: 2,

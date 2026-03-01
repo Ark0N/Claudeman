@@ -112,8 +112,7 @@ export function registerSystemRoutes(
         return { svg, authEnabled: true };
       }
       // No auth — just encode the raw tunnel URL
-      // eslint-disable-next-line @typescript-eslint/no-require-imports -- dynamic optional dependency
-      const QRCode = require('qrcode');
+      const QRCode = await import('qrcode');
       const svg: string = await QRCode.toString(url, { type: 'svg', margin: 2, width: 256 });
       return { svg, authEnabled: false };
     } catch (err) {
