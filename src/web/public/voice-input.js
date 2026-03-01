@@ -30,6 +30,11 @@ const DeepgramProvider = {
     this._onEnd = opts.onEnd;
 
     // 1. Get microphone access
+    if (!navigator.mediaDevices?.getUserMedia) {
+      this._onError?.('Microphone requires a secure context (HTTPS). Use --https flag or access via localhost.');
+      this._cleanup();
+      return;
+    }
     try {
       this._stream = await navigator.mediaDevices.getUserMedia({
         audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: true }
