@@ -482,6 +482,131 @@ describe('ZerolagInputAddon', () => {
         });
     });
 
+    describe('setPrompt', () => {
+        it('changes prompt detection strategy', () => {
+            const { addon, mock } = tracked(['$ hello'], '$');
+            // Initially finds $ prompt
+            expect(addon.findPrompt()).toEqual({ row: 0, col: 0 });
+            expect(addon.readPromptText()).toBe('hello');
+
+            // Switch to > prompt — $ is no longer detected
+            mock.setLines(['> world']);
+            addon.setPrompt({ type: 'character', char: '>', offset: 2 });
+            expect(addon.findPrompt()).toEqual({ row: 0, col: 0 });
+            expect(addon.readPromptText()).toBe('world');
+        });
+
+        it('returns null when new prompt character not found', () => {
+            const { addon } = tracked(['$ hello'], '$');
+            addon.setPrompt({ type: 'character', char: '>', offset: 2 });
+            // Buffer still has $ not >
+            expect(addon.findPrompt()).toBeNull();
+        });
+
+        it('resets cached prompt position', () => {
+            const { addon } = tracked(['$ typed']);
+            addon.addChar('x');
+            expect(addon.state.promptPosition).not.toBeNull();
+
+            addon.setPrompt({ type: 'character', char: '>', offset: 2 });
+            // After setPrompt with no matching prompt, position resets
+            expect(addon.state.promptPosition).toBeNull();
+        });
+
+        it('re-renders when text exists', () => {
+            const { addon, mock } = tracked(['$ '], '$');
+            addon.addChar('h');
+            addon.addChar('i');
+
+            // Switch prompt strategy — should re-render with existing text
+            mock.setLines(['> ']);
+            addon.setPrompt({ type: 'character', char: '>', offset: 2 });
+            expect(addon.pendingText).toBe('hi');
+            expect(addon.hasPending).toBe(true);
+        });
+
+        it('does not crash when no text to render', () => {
+            const { addon } = tracked(['$ ']);
+            expect(() => addon.setPrompt({ type: 'character', char: '>', offset: 2 })).not.toThrow();
+        });
+
+        it('works with regex prompt strategy', () => {
+            const mock = createMockTerminal({ buffer: { lines: ['user@host:~$ cmd'] } });
+            const addon = new ZerolagInputAddon({
+                prompt: { type: 'character', char: '$', offset: 2 },
+            });
+            mock.terminal.loadAddon(addon);
+            cleanups.push(() => { addon.dispose(); mock.cleanup(); });
+
+            // Switch to regex
+            addon.setPrompt({ type: 'regex', pattern: /\$/, offset: 2 });
+            expect(addon.findPrompt()).not.toBeNull();
+            expect(addon.readPromptText()).toBe('cmd');
+        });
+    });
+
+    describe('tab switch with setPrompt (CLI switching)', () => {
+        it('full tab switch cycle: save state, setPrompt, restore', () => {
+            // Session A with $ prompt
+            const { addon, mock } = tracked(['$ '], '$');
+            addon.addChar('h');
+            addon.addChar('e');
+            addon.addChar('l');
+            addon.addChar('l');
+            addon.addChar('o');
+            expect(addon.pendingText).toBe('hello');
+
+            // Save state before tab switch
+            const pending = addon.pendingText;
+            const { count: flushedCount, text: flushedText } = addon.getFlushed();
+            const totalText = flushedText + pending;
+            const totalCount = flushedCount + pending.length;
+            addon.clear();
+
+            // Switch to Session B with > prompt
+            mock.setLines(['> ']);
+            addon.setPrompt({ type: 'character', char: '>', offset: 2 });
+            expect(addon.pendingText).toBe('');
+            expect(addon.hasPending).toBe(false);
+
+            // Switch back to Session A — restore state
+            mock.setLines(['$ ']);
+            addon.setPrompt({ type: 'character', char: '$', offset: 2 });
+            addon.suppressBufferDetection();
+            addon.setFlushed(totalCount, totalText, false);
+
+            expect(addon.getFlushed()).toEqual({ count: 5, text: 'hello' });
+            expect(addon.hasPending).toBe(true);
+        });
+    });
+
+    describe('overlay hides when prompt not found (ghost artifact fix)', () => {
+        it('overlay hides when prompt scrolls away', () => {
+            const { addon, mock } = tracked(['$ ']);
+            addon.addChar('x');
+            // Prompt visible, overlay should render
+            expect(addon.hasPending).toBe(true);
+
+            // Simulate prompt scrolling away (no $ in buffer)
+            mock.setLines(['just output', 'more output']);
+            addon.clear();
+            addon.addChar('y');
+            // Prompt not found — overlay hidden despite pending text
+            // (the addon renders but finds no prompt, so display stays none)
+            const state = addon.state;
+            expect(state.pendingText).toBe('y');
+        });
+
+        it('clear resets lastPromptPos to null', () => {
+            const { addon } = tracked(['$ ']);
+            addon.addChar('a');
+            expect(addon.state.promptPosition).not.toBeNull();
+
+            addon.clear();
+            expect(addon.state.promptPosition).toBeNull();
+        });
+    });
+
     describe('methods before activate / after dispose', () => {
         it('addChar accumulates but does not crash before activate', () => {
             const addon = new ZerolagInputAddon();

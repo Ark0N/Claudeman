@@ -18,6 +18,8 @@ function makeParams(overrides: Partial<RenderParams> = {}): RenderParams {
         totalCols: 80,
         cellW: 8.4,
         cellH: 17,
+        charTop: 2,
+        charHeight: 14,
         promptRow: 10,
         font: FONT,
         showCursor: true,
@@ -165,5 +167,134 @@ describe('renderOverlay', () => {
         container.style.display = 'none';
         renderOverlay(container, makeParams());
         expect(container.style.display).toBe('');
+    });
+
+    // ─── Anti-flicker / compositing seam tests ────────────────────
+
+    it('line div height extends 1px past cellH to cover compositing seam', () => {
+        const container = document.createElement('div');
+        renderOverlay(container, makeParams({ lines: ['abc'], cellH: 19 }));
+        const lineDiv = container.children[0] as HTMLDivElement;
+        // cellH + 1 = 20px — the extra 1px covers the compositing seam
+        expect(lineDiv.style.height).toBe('20px');
+    });
+
+    it('line div height is cellH+1 for various cell heights', () => {
+        for (const cellH of [15, 17, 19, 22]) {
+            const container = document.createElement('div');
+            renderOverlay(container, makeParams({ lines: ['x'], cellH }));
+            const lineDiv = container.children[0] as HTMLDivElement;
+            expect(lineDiv.style.height).toBe((cellH + 1) + 'px');
+        }
+    });
+
+    it('multi-line overlay has cellH+1 height on each line div', () => {
+        const container = document.createElement('div');
+        renderOverlay(container, makeParams({
+            lines: ['first', 'second'],
+            cellH: 19,
+        }));
+        const line1 = container.children[0] as HTMLDivElement;
+        const line2 = container.children[1] as HTMLDivElement;
+        expect(line1.style.height).toBe('20px');
+        expect(line2.style.height).toBe('20px');
+    });
+
+    // ─── Span vertical centering tests ────────────────────────────
+
+    it('span uses full cellH for height and lineHeight (CSS centering)', () => {
+        const container = document.createElement('div');
+        renderOverlay(container, makeParams({ lines: ['a'], cellH: 19 }));
+        const lineDiv = container.children[0] as HTMLDivElement;
+        const span = lineDiv.children[0] as HTMLSpanElement;
+        expect(span.style.height).toBe('19px');
+        expect(span.style.lineHeight).toBe('19px');
+    });
+
+    it('span top is 0px (no vertical offset / no transform)', () => {
+        const container = document.createElement('div');
+        renderOverlay(container, makeParams({ lines: ['a'], cellH: 19 }));
+        const lineDiv = container.children[0] as HTMLDivElement;
+        const span = lineDiv.children[0] as HTMLSpanElement;
+        expect(span.style.top).toBe('0px');
+        // No translateY transform — sub-pixel overhang causes artifacts
+        expect(span.style.transform).toBe('');
+    });
+
+    // ─── Font rendering tests ─────────────────────────────────────
+
+    it('span disables ligatures via font-feature-settings', () => {
+        const container = document.createElement('div');
+        renderOverlay(container, makeParams({ lines: ['fi'] }));
+        const lineDiv = container.children[0] as HTMLDivElement;
+        const span = lineDiv.children[0] as HTMLSpanElement;
+        // Check cssText includes the ligature-disabling settings
+        // jsdom may normalize whitespace; check that both liga and calt are disabled
+        expect(span.style.cssText).toContain("font-feature-settings:");
+        expect(span.style.cssText).toContain("'liga' 0");
+        expect(span.style.cssText).toContain("'calt' 0");
+    });
+
+    it('span has text-align: center for glyph centering', () => {
+        const container = document.createElement('div');
+        renderOverlay(container, makeParams({ lines: ['m'] }));
+        const lineDiv = container.children[0] as HTMLDivElement;
+        const span = lineDiv.children[0] as HTMLSpanElement;
+        expect(span.style.textAlign).toBe('center');
+    });
+
+    it('span has pointer-events: none', () => {
+        const container = document.createElement('div');
+        renderOverlay(container, makeParams({ lines: ['a'] }));
+        const lineDiv = container.children[0] as HTMLDivElement;
+        const span = lineDiv.children[0] as HTMLSpanElement;
+        expect(span.style.pointerEvents).toBe('none');
+    });
+
+    // ─── Multi-line cursor positioning ────────────────────────────
+
+    it('cursor on wrapped line uses col 0 as base', () => {
+        const container = document.createElement('div');
+        renderOverlay(container, makeParams({
+            lines: ['first', 'ab'],
+            startCol: 5,
+            cellW: 10,
+            cellH: 20,
+            showCursor: true,
+        }));
+        // Cursor at end of second line: col = 0 + 2 = 2
+        const cursor = container.children[container.children.length - 1] as HTMLSpanElement;
+        expect(cursor.style.left).toBe('20px'); // 2 * 10
+        expect(cursor.style.top).toBe('20px'); // row 1 * cellH
+    });
+
+    // ─── charTop/charHeight passed through ────────────────────────
+
+    it('accepts charTop and charHeight params without error', () => {
+        const container = document.createElement('div');
+        expect(() => renderOverlay(container, makeParams({
+            lines: ['test'],
+            charTop: 2,
+            charHeight: 14,
+        }))).not.toThrow();
+        expect(container.children.length).toBeGreaterThan(0);
+    });
+
+    // ─── Line div positioning regression ──────────────────────────
+
+    it('line div background color matches font.backgroundColor', () => {
+        const container = document.createElement('div');
+        const font: FontStyle = { ...FONT, backgroundColor: '#1a1a1a' };
+        renderOverlay(container, makeParams({ lines: ['x'], font }));
+        const lineDiv = container.children[0] as HTMLDivElement;
+        // jsdom normalizes hex to rgb()
+        expect(lineDiv.style.backgroundColor).toBe('rgb(26, 26, 26)');
+    });
+
+    it('empty line produces line div with no spans', () => {
+        const container = document.createElement('div');
+        renderOverlay(container, makeParams({ lines: [''] }));
+        const lineDiv = container.children[0] as HTMLDivElement;
+        expect(lineDiv.children.length).toBe(0);
     });
 });

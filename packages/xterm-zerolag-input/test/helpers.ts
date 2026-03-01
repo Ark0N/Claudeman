@@ -31,6 +31,10 @@ interface MockTerminalOptions {
     };
     cellWidth?: number;
     cellHeight?: number;
+    /** Device-pixel char top offset (for charTop calculation). Default: 0 */
+    deviceCharTop?: number;
+    /** Device-pixel char height (for charHeight calculation). Default: cellHeight * dpr */
+    deviceCharHeight?: number;
 }
 
 export function createMockTerminal(opts: MockTerminalOptions = {}) {
@@ -94,6 +98,12 @@ export function createMockTerminal(opts: MockTerminalOptions = {}) {
                 dimensions: {
                     css: {
                         cell: { width: cellW, height: cellH },
+                    },
+                    device: {
+                        char: {
+                            top: opts.deviceCharTop ?? 0,
+                            height: opts.deviceCharHeight ?? cellH,
+                        },
                     },
                 },
             },
