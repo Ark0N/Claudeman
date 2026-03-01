@@ -167,6 +167,89 @@ describe('QR Token Manager (unit)', () => {
     expect(svg1).not.toBe(svg2); // Different content (new short code)
     tm.stopTokenRotation();
   });
+
+  it('should accept token at exactly grace period (90000ms)', () => {
+    const code = tm.getCurrentShortCode()!;
+    const tokenMap = (tm as unknown as { qrTokensByCode: Map<string, { createdAt: number }> })
+      .qrTokensByCode;
+    const record = tokenMap.get(code)!;
+    record.createdAt = Date.now() - 90_000;
+    // Condition is `> QR_TOKEN_GRACE_MS` (strict >), so exactly 90000 should pass
+    expect(tm.consumeToken(code)).toBe(true);
+  });
+
+  it('should reject token at grace period + 1ms (90001ms)', () => {
+    const code = tm.getCurrentShortCode()!;
+    const tokenMap = (tm as unknown as { qrTokensByCode: Map<string, { createdAt: number }> })
+      .qrTokensByCode;
+    const record = tokenMap.get(code)!;
+    record.createdAt = Date.now() - 90_001;
+    expect(tm.consumeToken(code)).toBe(false);
+  });
+
+  it('should never produce non-base62 characters (100 samples)', () => {
+    for (let i = 0; i < 100; i++) {
+      tm.regenerateQrToken();
+      const code = tm.getCurrentShortCode()!;
+      expect(code).toMatch(/^[A-Za-z0-9]{6}$/);
+    }
+  });
+
+  it('should accept both current and previous token within grace period', () => {
+    const firstCode = tm.getCurrentShortCode()!;
+    // Normal rotation (not regenerateQrToken which clears all) preserves old tokens
+    (tm as unknown as { rotateToken(): void }).rotateToken();
+    const secondCode = tm.getCurrentShortCode()!;
+    expect(firstCode).not.toBe(secondCode);
+    // Previous should still be in map and valid (within 90s grace)
+    expect(tm.consumeToken(firstCode)).toBe(true);
+    // consumeToken called rotateToken, but secondCode was just created so still in grace
+    expect(tm.consumeToken(secondCode)).toBe(true);
+  });
+
+  it('stopTokenRotation should clear map, shortCode, SVG cache, and counter', () => {
+    // Consume something to create state
+    tm.consumeToken('BADCODE'); // increments qrAttemptCount
+    expect(tm.getCurrentShortCode()).toBeDefined();
+
+    tm.stopTokenRotation();
+
+    expect(tm.getCurrentShortCode()).toBeUndefined();
+    const tokenMap = (tm as unknown as { qrTokensByCode: Map<string, unknown> }).qrTokensByCode;
+    expect(tokenMap.size).toBe(0);
+    expect((tm as unknown as { cachedQrSvg: unknown }).cachedQrSvg).toBeNull();
+    expect((tm as unknown as { qrAttemptCount: number }).qrAttemptCount).toBe(0);
+  });
+
+  it('consumeToken with empty string should increment attempt counter', () => {
+    const before = (tm as unknown as { qrAttemptCount: number }).qrAttemptCount;
+    expect(tm.consumeToken('')).toBe(false);
+    expect((tm as unknown as { qrAttemptCount: number }).qrAttemptCount).toBe(before + 1);
+  });
+
+  it('valid codes should work after rate limit counter resets', () => {
+    // Exhaust global rate limit
+    for (let i = 0; i < 30; i++) {
+      tm.consumeToken('BADCODE');
+    }
+    const code = tm.getCurrentShortCode()!;
+    expect(tm.consumeToken(code)).toBe(false); // blocked
+
+    // Simulate the interval reset
+    (tm as unknown as { qrAttemptCount: number }).qrAttemptCount = 0;
+    // Need a fresh code since the one above was valid and we want to test consumption
+    tm.regenerateQrToken();
+    const freshCode = tm.getCurrentShortCode()!;
+    expect(tm.consumeToken(freshCode)).toBe(true);
+  });
+
+  it('consumed token should be evicted from map after rotation', () => {
+    const code = tm.getCurrentShortCode()!;
+    tm.consumeToken(code); // sets consumed=true, calls rotateToken()
+    // rotateToken evicts consumed records
+    const tokenMap = (tm as unknown as { qrTokensByCode: Map<string, unknown> }).qrTokensByCode;
+    expect(tokenMap.has(code)).toBe(false);
+  });
 });
 
 describe('Short code distribution (bias check)', () => {
@@ -219,6 +302,18 @@ describe('QR Auth Integration', () => {
     delete process.env.CODEMAN_PASSWORD;
     delete process.env.CODEMAN_USERNAME;
   });
+
+  beforeEach(() => {
+    // Reset QR failure counter to prevent cross-test contamination
+    // (all requests come from 127.0.0.1)
+    const qrFailures = (server as unknown as { qrAuthFailures: { clear(): void } | null })
+      .qrAuthFailures;
+    if (qrFailures) qrFailures.clear();
+  });
+
+  function getTunnelManager(): TunnelManager {
+    return (server as unknown as { tunnelManager: TunnelManager }).tunnelManager;
+  }
 
   it('GET /q/:code should bypass auth middleware (not 401)', async () => {
     // Even with a bad code, we should get 401 from the route handler,
@@ -343,5 +438,142 @@ describe('QR Auth Integration', () => {
       headers: { Authorization: basicAuthHeader(TEST_USER, TEST_PASS) },
     });
     expect(res.status).toBe(200);
+  });
+
+  // ========== End-to-End Flow Tests ==========
+
+  it('full QR auth flow: consume token, get cookie, make authenticated request', async () => {
+    const tm = getTunnelManager();
+    tm.startTokenRotation();
+    try {
+      const code = tm.getCurrentShortCode()!;
+
+      const qrRes = await fetch(`${baseUrl}/q/${code}`, { redirect: 'manual' });
+      expect(qrRes.status).toBe(302);
+      expect(qrRes.headers.get('location')).toBe('/');
+
+      const setCookie = qrRes.headers.get('set-cookie')!;
+      const cookieMatch = setCookie.match(/codeman_session=([^;]+)/);
+      expect(cookieMatch).toBeTruthy();
+
+      // Use the cookie to access an authenticated endpoint
+      const apiRes = await fetch(`${baseUrl}/api/status`, {
+        headers: { Cookie: `codeman_session=${cookieMatch![1]}` },
+      });
+      expect(apiRes.status).toBe(200);
+    } finally {
+      tm.stopTokenRotation();
+    }
+  });
+
+  it('should return 429 after 10 QR auth failures from same IP', async () => {
+    for (let i = 0; i < 10; i++) {
+      await fetch(`${baseUrl}/q/BAD${String(i).padStart(3, '0')}`, { redirect: 'manual' });
+    }
+    const res = await fetch(`${baseUrl}/q/ANOTHER1`, { redirect: 'manual' });
+    expect(res.status).toBe(429);
+  });
+
+  it('QR auth cookie should have HttpOnly, SameSite=Lax, Path=/, correct MaxAge', async () => {
+    const tm = getTunnelManager();
+    tm.startTokenRotation();
+    try {
+      const code = tm.getCurrentShortCode()!;
+      const res = await fetch(`${baseUrl}/q/${code}`, { redirect: 'manual' });
+      const setCookie = res.headers.get('set-cookie')!;
+
+      expect(setCookie).toContain('HttpOnly');
+      expect(setCookie).toContain('SameSite=Lax');
+      expect(setCookie).toContain('Path=/');
+      expect(setCookie).toContain('Max-Age=86400');
+    } finally {
+      tm.stopTokenRotation();
+    }
+  });
+
+  it('concurrent requests with same code: first succeeds, second fails', async () => {
+    const tm = getTunnelManager();
+    tm.startTokenRotation();
+    try {
+      const code = tm.getCurrentShortCode()!;
+
+      // Fire both simultaneously (Node is single-threaded so they serialize)
+      const [res1, res2] = await Promise.all([
+        fetch(`${baseUrl}/q/${code}`, { redirect: 'manual' }),
+        fetch(`${baseUrl}/q/${code}`, { redirect: 'manual' }),
+      ]);
+
+      const statuses = [res1.status, res2.status].sort();
+      expect(statuses).toEqual([302, 401]);
+    } finally {
+      tm.stopTokenRotation();
+    }
+  });
+
+  it('regenerateQrToken should invalidate previously-valid code', async () => {
+    const tm = getTunnelManager();
+    tm.startTokenRotation();
+    try {
+      const code = tm.getCurrentShortCode()!;
+      tm.regenerateQrToken(); // clears all tokens
+
+      const res = await fetch(`${baseUrl}/q/${code}`, { redirect: 'manual' });
+      expect(res.status).toBe(401);
+    } finally {
+      tm.stopTokenRotation();
+    }
+  });
+
+  it('should handle URL-encoded QR code in path parameter', async () => {
+    const tm = getTunnelManager();
+    tm.startTokenRotation();
+    try {
+      const code = tm.getCurrentShortCode()!;
+      const encoded = encodeURIComponent(code);
+
+      const res = await fetch(`${baseUrl}/q/${encoded}`, { redirect: 'manual' });
+      // Fastify auto-decodes path params, so this should succeed
+      expect(res.status).toBe(302);
+    } finally {
+      tm.stopTokenRotation();
+    }
+  });
+
+  // ========== Security Tests ==========
+
+  it('/q without path parameter should not bypass auth', async () => {
+    const res = await fetch(`${baseUrl}/q`, { redirect: 'manual' });
+    // /q doesn't match the auth-exempt /q/:code route, so auth middleware intercepts → 401
+    expect(res.status).toBe(401);
+  });
+
+  it('/q/../api/status path traversal should not return 200', async () => {
+    // Note: fetch() normalizes /../ before sending, so this tests the
+    // browser-level normalization. The request arrives as /api/status
+    // which requires auth → should be 401.
+    const res = await fetch(`${baseUrl}/q/../api/status`, { redirect: 'manual' });
+    expect(res.status).not.toBe(200);
+  });
+
+  it('QR auth session record should have method: qr', async () => {
+    const tm = getTunnelManager();
+    tm.startTokenRotation();
+    try {
+      const code = tm.getCurrentShortCode()!;
+      const res = await fetch(`${baseUrl}/q/${code}`, { redirect: 'manual' });
+      expect(res.status).toBe(302);
+
+      const setCookie = res.headers.get('set-cookie')!;
+      const token = setCookie.match(/codeman_session=([^;]+)/)![1];
+
+      const authSessions = (server as unknown as {
+        authSessions: { get(k: string): { method: string } | undefined } | null;
+      }).authSessions;
+      const record = authSessions?.get(token);
+      expect(record).toBeDefined();
+      expect(record!.method).toBe('qr');
+    } finally {
+      tm.stopTokenRotation();
+    }
   });
 });

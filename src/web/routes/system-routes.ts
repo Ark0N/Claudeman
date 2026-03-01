@@ -27,6 +27,8 @@ import { getLifecycleLog } from '../../session-lifecycle-log.js';
 import { findSessionOrFail, formatUptime, SETTINGS_PATH } from '../route-helpers.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '../ports/index.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
+import { QR_AUTH_FAILURE_MAX } from '../../config/tunnel-config.js';
+import { AUTH_SESSION_TTL_MS } from '../../config/auth-config.js';
 
 // Maximum screenshot upload size (10MB)
 const MAX_SCREENSHOT_SIZE = 10 * 1024 * 1024;
@@ -134,7 +136,7 @@ export function registerSystemRoutes(
 
     // Per-IP rate limit (separate counter from Basic Auth failures)
     const qrFailures = ctx.qrAuthFailures?.get(clientIp) ?? 0;
-    if (qrFailures >= 10) {
+    if (qrFailures >= QR_AUTH_FAILURE_MAX) {
       return reply.code(429).send('Too Many Requests');
     }
 
@@ -171,7 +173,7 @@ export function registerSystemRoutes(
       httpOnly: true,
       secure: ctx.https,
       sameSite: 'lax',
-      maxAge: 86400, // 24h
+      maxAge: AUTH_SESSION_TTL_MS / 1000,
       path: '/',
     });
 
