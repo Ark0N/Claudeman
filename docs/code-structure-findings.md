@@ -861,9 +861,9 @@ execSync(`tmux kill-session -t "${this.checkMuxName}"`, { timeout: 3000 });
 | TypeScript Safety | 8.5/10 | 9/10 | 0 `any`, 0 `@ts-ignore`, Zod `z.infer` eliminates type drift |
 | Error Handling | 8/10 | 8/10 | Unchanged — already strong |
 | Async/Promise Safety | 9.5/10 | 9.5/10 | Unchanged — already strong |
-| Resource Cleanup | 7/10 | 9/10 | CleanupManager adopted across 6+ files; Debouncer utility eliminates manual timer patterns |
+| Resource Cleanup | 7/10 | 8/10 | CleanupManager adopted in server.ts, subagent-watcher, bash-tool-parser; Debouncer in 6 files. **Gaps**: respawn-controller (10+ manual timers) and ralph-tracker (2 manual timers) not migrated |
 | Module Organization | 5/10 | 8/10 | Routes extracted (12 modules), types split (14 domain files), domain files split (ralph: 7, respawn: 5, session: 6) |
-| Test Coverage | 6/10 | 7/10 | Shared mock infrastructure, 3 route test files with 58 tests, MockSession/MockStateStore consolidated |
+| Test Coverage | 6/10 | 7.5/10 | Shared mock infrastructure, 12 route test files, MockSession/MockStateStore consolidated |
 | Config Centralization | 6/10 | 9/10 | 9 config files, ~65 constants centralized, 0 cross-file duplicates |
 | Frontend Architecture | 4/10 | 7/10 | 8 extracted modules (3,453 LOC), app.js reduced 24% (15.2K → 11.5K), xterm-zerolag-input vendor build |
 | Code Duplication | 5/10 | 8/10 | Debouncer utility, shared test mocks, barrel exports, config consolidation |
@@ -877,12 +877,12 @@ execSync(`tmux kill-session -t "${this.checkMuxName}"`, { timeout: 3000 });
 4. ✅ Add `z.infer` to Zod schemas (~2 hours) — `src/web/schemas.ts` now has 36 `z.infer` type exports (lines 512-547) covering all schemas
 5. ✅ Fix 10 weak "not.toThrow()" tests (~1 hour) — All `not.toThrow()` calls now have behavior assertions: `task-tracker.test.ts` (6 instances all followed by state checks), `image-watcher.test.ts` (1 instance followed by length check), `session-manager.test.ts` (1 instance followed by count check)
 
-**Phase 2 - CleanupManager & Debounce (2-3 days)** ✅ COMPLETE
+**Phase 2 - CleanupManager & Debounce (2-3 days)** ⚠️ PARTIALLY COMPLETE
 1. ✅ Create `Debouncer` utility class (~1 hour) — Created `src/utils/debouncer.ts` with `Debouncer` and `KeyedDebouncer` classes; exported from `src/utils/index.ts`
-2. ✅ Migrate 8 files from manual debounce to Debouncer (~3 hours) — `state-store.ts` (2 Debouncers), `push-store.ts` (1 Debouncer), `ralph-tracker.ts` (2 Debouncers), `bash-tool-parser.ts` (1 Debouncer), `image-watcher.ts` (1 KeyedDebouncer), `subagent-watcher.ts` (1 KeyedDebouncer), `server.ts` (1 KeyedDebouncer for persist timers)
-3. ✅ Migrate respawn-controller to CleanupManager (~3 hours) — 10 timer fields replaced with `CleanupManager` instance; `clearTimers()` now uses `cleanup.dispose()` with reinitialization for reuse
-4. ✅ Migrate server.ts timer cleanup to CleanupManager (~2 hours) — 5 standalone timers migrated to `CleanupManager`; terminal batch timers and pending respawn starts left as manual Maps (complex lifecycle)
-5. ✅ Migrate remaining files (~2 hours) — `ralph-tracker.ts` (watcher + stall timer → CleanupManager), `bash-tool-parser.ts` (auto-remove timers → CleanupManager), `subagent-watcher.ts` (intervals + watchers → CleanupManager); ~30 manual timer fields eliminated, ~200+ lines of boilerplate removed
+2. ⚠️ Migrate 6 of 8 files from manual debounce to Debouncer — `state-store.ts` (2 Debouncers), `push-store.ts` (1 Debouncer), `bash-tool-parser.ts` (1 Debouncer), `image-watcher.ts` (1 KeyedDebouncer), `subagent-watcher.ts` (2 KeyedDebouncers), `server.ts` (1 KeyedDebouncer for persist timers). **Not migrated**: `ralph-tracker.ts` (still has 2 manual timer fields: `_todoUpdateTimer`, `_loopUpdateTimer`)
+3. ❌ Migrate respawn-controller to CleanupManager — **NOT DONE**. Still has 10+ manual timer fields (`stepTimer`, `completionConfirmTimer`, `noOutputTimer`, `detectionUpdateTimer`, `autoAcceptTimer`, `preFilterTimer`, `hookConfirmTimer`, `clearFallbackTimer`, `stepConfirmTimer`, `stuckStateTimer`). Uses custom `startTrackedTimer()`/`cancelTrackedTimer()` helpers instead.
+4. ✅ Migrate server.ts timer cleanup to CleanupManager (~2 hours) — `private cleanup = new CleanupManager()` present; terminal batch timers and pending respawn starts left as manual Maps (complex lifecycle)
+5. ⚠️ Migrate remaining files — `bash-tool-parser.ts` (CleanupManager ✅), `subagent-watcher.ts` (CleanupManager ✅). **Not migrated**: `ralph-tracker.ts` (no CleanupManager, still uses manual timer clearing)
 
 **Phase 3 - server.ts Route Extraction (3-4 days)** ✅ COMPLETE
 1. ✅ Created `src/web/routes/` with 12 domain route modules + index barrel (4,090 LOC total): session (909), system (768), ralph (533), plan (459), respawn (315), case, file, hook-event, mux, push, scheduled, team
@@ -918,8 +918,8 @@ execSync(`tmux kill-session -t "${this.checkMuxName}"`, { timeout: 3000 });
 1. ✅ Created `test/mocks/` directory with 5 files (541 LOC): `mock-session.ts` (312), `mock-state-store.ts` (60), `mock-route-context.ts` (121), `test-helpers.ts` (37), `index.ts` (11 — barrel export)
 2. ✅ Consolidated MockSession into single shared definition — no duplicate class definitions remain (2 `vi.mock()`-based copies intentionally left in session-manager.test.ts and ralph-loop.test.ts)
 3. ✅ `respawn-test-utils.ts` converted to backward-compatibility shim — re-exports from `test/mocks/`, retains respawn-specific utilities (MockAiIdleChecker, TimeController, etc.)
-4. ✅ Created 3 route test files with 58 total tests: `session-routes.test.ts` (34 tests), `respawn-routes.test.ts` (13 tests), `system-routes.test.ts` (11 tests). Route test harness uses `app.inject()` — no real ports needed
-5. ⚠️ Remaining: 9 of 12 route modules still lack dedicated tests (ralph, plan, push, team, mux, file, scheduled, hook-event, case)
+4. ✅ Created initial 3 route test files with 58 total tests: `session-routes.test.ts` (34 tests), `respawn-routes.test.ts` (13 tests), `system-routes.test.ts` (11 tests). Route test harness uses `app.inject()` — no real ports needed
+5. ✅ All 12 route modules now have dedicated test files in `test/routes/`: session, respawn, system, ralph, plan, push, team, mux, file, scheduled, hook-event, case
 
 ---
 
