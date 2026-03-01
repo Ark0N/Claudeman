@@ -164,13 +164,13 @@ journalctl --user -u codeman-web -f
 | `src/tunnel-manager.ts` | Manages cloudflared child process for Cloudflare tunnel + QR auth token rotation |
 | `src/cli.ts` | Command-line interface handlers |
 | `src/web/server.ts` | Fastify server setup, SSE at `/api/events`, delegates to route modules |
-| `src/web/routes/*.ts` | 13 domain route modules (session, respawn, ralph, plan, etc.) — each exports `register*Routes()` |
+| `src/web/routes/*.ts` | 12 domain route modules (session, respawn, ralph, plan, etc.) — each exports `register*Routes()` |
 | `src/web/ports/*.ts` | Port interfaces (SessionPort, EventPort, etc.) — route modules declare dependencies via intersection types |
 | `src/web/middleware/auth.ts` | Auth middleware: Basic Auth, session cookies, rate limiting, security headers, CORS |
 | `src/web/route-helpers.ts` | Shared helper utilities for route modules |
 | `src/web/schemas.ts` | Zod v4 validation schemas with path/env security allowlists |
 | `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows, mobile support (~12K lines) |
-| `src/types.ts` | Barrel re-export from `src/types/` — 14 domain files (session, task, respawn, ralph, api, etc.) |
+| `src/types.ts` | Barrel re-export from `src/types/` — 13 domain files (session, task, respawn, ralph, api, etc.) |
 
 **Large files** (>50KB): `app.js`, `ralph-tracker.ts`, `respawn-controller.ts`, `session.ts`, `subagent-watcher.ts` — these contain complex state machines; read `docs/respawn-state-machine.md` before modifying.
 
@@ -299,7 +299,7 @@ The frontend is split across multiple vanilla JS modules (extracted from the ori
 
 ### SSE Event Categories
 
-~80+ event types broadcast via `broadcast()`. Key categories:
+~100 event types broadcast via `broadcast()`. Key categories:
 
 | Category | Events | Purpose |
 |----------|--------|---------|
@@ -316,22 +316,21 @@ The frontend is split across multiple vanilla JS modules (extracted from the ori
 
 ### API Route Categories
 
-~110 route handlers split across `src/web/routes/` domain modules. Key groups:
+~160 route handlers split across `src/web/routes/` domain modules. Key groups:
 
 | Group | Prefix | Count | Key endpoints |
 |-------|--------|-------|---------------|
-| Sessions | `/api/sessions` | ~24 | CRUD, input, resize, interactive, shell |
-| System | `/api/status`, `/api/stats`, `/api/config`, `/api/settings` | ~32 | App state, config |
-| Ralph | `/api/sessions/:id/ralph-*` | 9 | state, status, config, circuit-breaker |
-| Plan | `/api/sessions/:id/plan/*` | 8 | task CRUD, checkpoint, history, rollback |
-| Respawn | `/api/sessions/:id/respawn` | 7 | start, stop, enable, config |
-| Subagents | `/api/subagents` | 7 | list, transcript, kill, cleanup |
+| Sessions | `/api/sessions` | 43 | CRUD, input, resize, interactive, shell |
+| System | `/api/status`, `/api/stats`, `/api/config`, `/api/settings`, `/api/subagents` | 38 | App state, config, subagents |
+| Ralph | `/api/sessions/:id/ralph-*` | 19 | state, status, config, circuit-breaker |
+| Respawn | `/api/sessions/:id/respawn` | 17 | start, stop, enable, config |
+| Plan | `/api/sessions/:id/plan/*` | 12 | task CRUD, checkpoint, history, rollback |
 | Cases | `/api/cases` | 7 | CRUD, link, fix-plan |
+| Scheduled | `/api/scheduled` | 6 | CRUD for scheduled runs |
 | Files | `/api/sessions/:id/file*`, `tail-file` | 5 | Browser, preview, raw, tail stream |
 | Mux | `/api/mux-sessions` | 5 | tmux management, stats |
-| Scheduled | `/api/scheduled` | 4 | CRUD for scheduled runs |
 | Push | `/api/push` | 4 | VAPID key, subscribe, update prefs, unsubscribe |
-| Auth | `/api/auth`, `/q/:code` | 3 | QR validation, session revocation |
+| Hooks | `/api/hook-event` | 4 | Hook event ingestion |
 | Teams | `/api/teams` | 2 | list teams, get team tasks |
 
 ## Adding Features
