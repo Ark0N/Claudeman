@@ -89,10 +89,19 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Batch terminal data for performance - collect for 16ms (60fps) before sending
-const TERMINAL_BATCH_INTERVAL = 16;
-// Batch task:updated events for 100ms
-const TASK_UPDATE_BATCH_INTERVAL = 100;
+import {
+  TERMINAL_BATCH_INTERVAL,
+  TASK_UPDATE_BATCH_INTERVAL,
+  STATE_UPDATE_DEBOUNCE_INTERVAL,
+  SESSIONS_LIST_CACHE_TTL,
+  SCHEDULED_CLEANUP_INTERVAL,
+  SCHEDULED_RUN_MAX_AGE,
+  SSE_HEALTH_CHECK_INTERVAL,
+  SESSION_LIMIT_WAIT_MS,
+  ITERATION_PAUSE_MS,
+  BATCH_FLUSH_THRESHOLD,
+  STATS_COLLECTION_INTERVAL_MS,
+} from '../config/server-timing.js';
 
 // DEC mode 2026 - Synchronized Output
 // When terminal supports this, it buffers all output between start/end markers
@@ -100,25 +109,6 @@ const TASK_UPDATE_BATCH_INTERVAL = 100;
 // Supported by: WezTerm, Kitty, Ghostty, iTerm2 3.5+, Windows Terminal, VSCode terminal
 const DEC_SYNC_START = '\x1b[?2026h'; // Begin synchronized update
 const DEC_SYNC_END = '\x1b[?2026l'; // End synchronized update (flush to screen)
-// State update debounce interval (batch expensive toDetailedState() calls)
-const STATE_UPDATE_DEBOUNCE_INTERVAL = 500;
-// Cache TTL for getLightSessionsState() — avoids re-serializing all sessions on every SSE init / /api/sessions call
-const SESSIONS_LIST_CACHE_TTL = 1000;
-// Scheduled runs cleanup interval (check every 5 minutes)
-const SCHEDULED_CLEANUP_INTERVAL = 5 * 60 * 1000;
-// Completed scheduled runs max age (1 hour)
-const SCHEDULED_RUN_MAX_AGE = 60 * 60 * 1000;
-// SSE client health check interval (every 30 seconds)
-const SSE_HEALTH_CHECK_INTERVAL = 30 * 1000;
-// Session limit wait time before retrying (5 seconds)
-const SESSION_LIMIT_WAIT_MS = 5000;
-// Pause between scheduled run iterations (2 seconds)
-const ITERATION_PAUSE_MS = 2000;
-// Terminal batch flush threshold - flush immediately if batch exceeds this size
-// Set high (32KB) to allow effective batching; avg Ink events are ~14KB
-const BATCH_FLUSH_THRESHOLD = 32 * 1024;
-// Stats collection interval (2 seconds)
-const STATS_COLLECTION_INTERVAL_MS = 2000;
 
 /**
  * Get or generate a self-signed TLS certificate for HTTPS.

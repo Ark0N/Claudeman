@@ -5,9 +5,7 @@
 
 import { FastifyInstance } from 'fastify';
 import type { InfraPort } from '../ports/index.js';
-
-// Stats collection interval (2 seconds) — matches server.ts constant
-const STATS_COLLECTION_INTERVAL_MS = 2000;
+import { STATS_COLLECTION_INTERVAL_MS } from '../../config/server-timing.js';
 
 export function registerMuxRoutes(app: FastifyInstance, ctx: InfraPort): void {
   app.get('/api/mux-sessions', async () => {

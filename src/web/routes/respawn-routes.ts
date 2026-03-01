@@ -10,6 +10,7 @@ import { RespawnConfigSchema, InteractiveRespawnSchema, RespawnEnableSchema } fr
 import { findSessionOrFail, autoConfigureRalph } from '../route-helpers.js';
 import type { SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort } from '../ports/index.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
+import { AI_CHECK_MODEL, AI_IDLE_CHECK_MAX_CONTEXT, AI_PLAN_CHECK_MAX_CONTEXT } from '../../config/ai-defaults.js';
 
 /** No-op EventPort used to suppress broadcasts during pre-start ralph configuration. */
 const noopEventPort: EventPort = {
@@ -170,13 +171,15 @@ export function registerRespawnRoutes(
       autoAcceptPrompts: config.autoAcceptPrompts ?? currentConfig?.autoAcceptPrompts ?? true,
       autoAcceptDelayMs: config.autoAcceptDelayMs ?? currentConfig?.autoAcceptDelayMs ?? 8000,
       aiIdleCheckEnabled: config.aiIdleCheckEnabled ?? currentConfig?.aiIdleCheckEnabled ?? true,
-      aiIdleCheckModel: config.aiIdleCheckModel ?? currentConfig?.aiIdleCheckModel ?? 'claude-opus-4-5-20251101',
-      aiIdleCheckMaxContext: config.aiIdleCheckMaxContext ?? currentConfig?.aiIdleCheckMaxContext ?? 16000,
+      aiIdleCheckModel: config.aiIdleCheckModel ?? currentConfig?.aiIdleCheckModel ?? AI_CHECK_MODEL,
+      aiIdleCheckMaxContext:
+        config.aiIdleCheckMaxContext ?? currentConfig?.aiIdleCheckMaxContext ?? AI_IDLE_CHECK_MAX_CONTEXT,
       aiIdleCheckTimeoutMs: config.aiIdleCheckTimeoutMs ?? currentConfig?.aiIdleCheckTimeoutMs ?? 90000,
       aiIdleCheckCooldownMs: config.aiIdleCheckCooldownMs ?? currentConfig?.aiIdleCheckCooldownMs ?? 180000,
       aiPlanCheckEnabled: config.aiPlanCheckEnabled ?? currentConfig?.aiPlanCheckEnabled ?? true,
-      aiPlanCheckModel: config.aiPlanCheckModel ?? currentConfig?.aiPlanCheckModel ?? 'claude-opus-4-5-20251101',
-      aiPlanCheckMaxContext: config.aiPlanCheckMaxContext ?? currentConfig?.aiPlanCheckMaxContext ?? 8000,
+      aiPlanCheckModel: config.aiPlanCheckModel ?? currentConfig?.aiPlanCheckModel ?? AI_CHECK_MODEL,
+      aiPlanCheckMaxContext:
+        config.aiPlanCheckMaxContext ?? currentConfig?.aiPlanCheckMaxContext ?? AI_PLAN_CHECK_MAX_CONTEXT,
       aiPlanCheckTimeoutMs: config.aiPlanCheckTimeoutMs ?? currentConfig?.aiPlanCheckTimeoutMs ?? 60000,
       aiPlanCheckCooldownMs: config.aiPlanCheckCooldownMs ?? currentConfig?.aiPlanCheckCooldownMs ?? 30000,
       durationMinutes: currentConfig?.durationMinutes,

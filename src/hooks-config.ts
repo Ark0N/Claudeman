@@ -13,6 +13,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { HookEventType } from './types.js';
+import { HOOK_TIMEOUT_MS } from './config/auth-config.js';
 
 /**
  * Generates the hooks section for .claude/settings.local.json
@@ -38,30 +39,30 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
       Notification: [
         {
           matcher: 'idle_prompt',
-          hooks: [{ type: 'command', command: curlCmd('idle_prompt'), timeout: 10000 }],
+          hooks: [{ type: 'command', command: curlCmd('idle_prompt'), timeout: HOOK_TIMEOUT_MS }],
         },
         {
           matcher: 'permission_prompt',
-          hooks: [{ type: 'command', command: curlCmd('permission_prompt'), timeout: 10000 }],
+          hooks: [{ type: 'command', command: curlCmd('permission_prompt'), timeout: HOOK_TIMEOUT_MS }],
         },
         {
           matcher: 'elicitation_dialog',
-          hooks: [{ type: 'command', command: curlCmd('elicitation_dialog'), timeout: 10000 }],
+          hooks: [{ type: 'command', command: curlCmd('elicitation_dialog'), timeout: HOOK_TIMEOUT_MS }],
         },
       ],
       Stop: [
         {
-          hooks: [{ type: 'command', command: curlCmd('stop'), timeout: 10000 }],
+          hooks: [{ type: 'command', command: curlCmd('stop'), timeout: HOOK_TIMEOUT_MS }],
         },
       ],
       TeammateIdle: [
         {
-          hooks: [{ type: 'command', command: curlCmd('teammate_idle'), timeout: 10000 }],
+          hooks: [{ type: 'command', command: curlCmd('teammate_idle'), timeout: HOOK_TIMEOUT_MS }],
         },
       ],
       TaskCompleted: [
         {
-          hooks: [{ type: 'command', command: curlCmd('task_completed'), timeout: 10000 }],
+          hooks: [{ type: 'command', command: curlCmd('task_completed'), timeout: HOOK_TIMEOUT_MS }],
         },
       ],
     },

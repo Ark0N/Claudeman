@@ -12,17 +12,15 @@ import { FastifyInstance } from 'fastify';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { StaleExpirationMap } from '../../utils/index.js';
 import type { AuthSessionRecord } from '../ports/auth-port.js';
+import {
+  AUTH_SESSION_TTL_MS,
+  MAX_AUTH_SESSIONS,
+  AUTH_FAILURE_MAX,
+  AUTH_FAILURE_WINDOW_MS,
+} from '../../config/auth-config.js';
 
-// Auth session cookie TTL (24h — matches autonomous run length)
-const AUTH_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 // Auth session cookie name
 export const AUTH_COOKIE_NAME = 'codeman_session';
-// Max concurrent auth sessions
-const MAX_AUTH_SESSIONS = 100;
-// Max failed auth attempts per IP before rate-limiting
-const AUTH_FAILURE_MAX = 10;
-// Failed auth attempt tracking window (15 minutes)
-const AUTH_FAILURE_WINDOW_MS = 15 * 60 * 1000;
 
 /** State returned from registerAuthMiddleware for cleanup in server stop() */
 export interface AuthState {

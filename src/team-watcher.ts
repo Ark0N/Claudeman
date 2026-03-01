@@ -17,12 +17,7 @@ import { watch as chokidarWatch, type FSWatcher as ChokidarWatcher } from 'choki
 
 import type { TeamConfig, TeamMember, TeamTask, InboxMessage } from './types.js';
 import { LRUMap } from './utils/lru-map.js';
-
-// ========== Constants ==========
-
-const POLL_INTERVAL_MS = 30000;
-const MAX_CACHED_TEAMS = 50;
-const MAX_CACHED_TASKS = 200;
+import { TEAM_POLL_INTERVAL_MS, MAX_CACHED_TEAMS, MAX_CACHED_TASKS } from './config/team-config.js';
 
 // ========== TeamWatcher Class ==========
 
@@ -52,7 +47,7 @@ export class TeamWatcher extends EventEmitter {
   start(): void {
     if (this.pollTimer) return;
     this.poll();
-    this.pollTimer = setInterval(() => this.poll(), POLL_INTERVAL_MS);
+    this.pollTimer = setInterval(() => this.poll(), TEAM_POLL_INTERVAL_MS);
     this.setupFsWatchers();
   }
 

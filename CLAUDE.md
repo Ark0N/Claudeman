@@ -187,6 +187,12 @@ journalctl --user -u codeman-web -f
 | `buffer-limits.ts` | Terminal/text buffer size limits |
 | `map-limits.ts` | Global limits for Maps, sessions, watchers |
 | `exec-timeout.ts` | Execution timeout configuration |
+| `server-timing.ts` | Web server batching, SSE, scheduled run timing |
+| `auth-config.ts` | Auth session TTL, rate limits, hook timeout |
+| `tunnel-config.ts` | QR token rotation, tunnel process lifecycle |
+| `terminal-limits.ts` | Terminal dimension and input validation limits |
+| `ai-defaults.ts` | AI checker model and context limits |
+| `team-config.ts` | Agent Teams polling and cache sizes |
 
 ### Utilities (`src/utils/`)
 
@@ -447,7 +453,7 @@ See `docs/terminal-anti-flicker.md` for full implementation details (adaptive ba
 
 ## Resource Limits
 
-Limits are centralized in `src/config/buffer-limits.ts` and `src/config/map-limits.ts`.
+Limits are centralized in `src/config/` — see `buffer-limits.ts`, `map-limits.ts`, `server-timing.ts`, `auth-config.ts`, `tunnel-config.ts`, `terminal-limits.ts`, `ai-defaults.ts`, `team-config.ts`.
 
 **Buffer limits** (per session):
 | Buffer | Max | Trim To |

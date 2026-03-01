@@ -30,6 +30,7 @@ import {
   type AiCheckerResultBase,
   type AiCheckerStateBase,
 } from './ai-checker-base.js';
+import { AI_CHECK_MODEL, AI_IDLE_CHECK_MAX_CONTEXT } from './config/ai-defaults.js';
 
 // ========== Types ==========
 
@@ -45,8 +46,8 @@ export type AiCheckState = AiCheckerStateBase<AiCheckVerdict>;
 
 const DEFAULT_AI_CHECK_CONFIG: AiIdleCheckConfig = {
   enabled: true,
-  model: 'claude-opus-4-5-20251101',
-  maxContextChars: 16000,
+  model: AI_CHECK_MODEL,
+  maxContextChars: AI_IDLE_CHECK_MAX_CONTEXT,
   checkTimeoutMs: 90000,
   cooldownMs: 180000,
   errorCooldownMs: 60000,

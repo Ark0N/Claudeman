@@ -41,11 +41,12 @@ import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '..
 import { MAX_CONCURRENT_SESSIONS } from '../../config/map-limits.js';
 import { RunSummaryTracker } from '../../run-summary.js';
 
-// Constants
-const MAX_INPUT_LENGTH = 64 * 1024;
-const MAX_TERMINAL_COLS = 500;
-const MAX_TERMINAL_ROWS = 200;
-const MAX_SESSION_NAME_LENGTH = 128;
+import {
+  MAX_INPUT_LENGTH,
+  MAX_TERMINAL_COLS,
+  MAX_TERMINAL_ROWS,
+  MAX_SESSION_NAME_LENGTH,
+} from '../../config/terminal-limits.js';
 
 // Pre-compiled regex for terminal buffer cleaning (avoids per-request compilation)
 // eslint-disable-next-line no-control-regex

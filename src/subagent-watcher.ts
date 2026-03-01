@@ -13,7 +13,7 @@ import { homedir } from 'node:os';
 import { join, basename } from 'node:path';
 import { execFile } from 'node:child_process';
 import { readFile, readdir, stat as statAsync } from 'node:fs/promises';
-import { PENDING_TOOL_CALL_TTL_MS, MAX_PENDING_TOOL_CALLS } from './config/map-limits.js';
+import { PENDING_TOOL_CALL_TTL_MS, MAX_PENDING_TOOL_CALLS, MAX_TRACKED_AGENTS } from './config/map-limits.js';
 import { CleanupManager, KeyedDebouncer } from './utils/index.js';
 
 // ========== Types ==========
@@ -134,7 +134,6 @@ const FILE_ALIVE_THRESHOLD_MS = 30000; // File mtime within 30s = agent alive (p
 const STALE_COMPLETED_MAX_AGE_MS = 60 * 60 * 1000; // Remove completed agents older than 1 hour
 const STALE_IDLE_MAX_AGE_MS = 4 * 60 * 60 * 1000; // Remove idle agents older than 4 hours
 const STARTUP_MAX_FILE_AGE_MS = 4 * 60 * 60 * 1000; // Only load files modified in last 4 hours on startup
-const MAX_TRACKED_AGENTS = 500; // Maximum agents to track (LRU eviction when exceeded)
 
 // Internal Claude Code agent patterns to filter out (not real user-initiated subagents)
 const INTERNAL_AGENT_PATTERNS = [

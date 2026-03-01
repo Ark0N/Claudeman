@@ -19,6 +19,16 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
+import {
+  QR_TOKEN_TTL_MS,
+  QR_TOKEN_GRACE_MS,
+  SHORT_CODE_LENGTH,
+  QR_RATE_LIMIT_MAX,
+  QR_RATE_LIMIT_WINDOW_MS,
+  URL_TIMEOUT_MS,
+  RESTART_DELAY_MS,
+  FORCE_KILL_MS,
+} from './config/tunnel-config.js';
 
 // ========== Types ==========
 
@@ -34,19 +44,6 @@ interface QrTokenRecord {
   consumed: boolean; // single-use flag
 }
 
-// ========== Constants ==========
-
-/** QR token auto-rotation interval */
-const QR_TOKEN_TTL_MS = 60_000;
-/** Grace period for previous token (scan-during-rotation race) */
-const QR_TOKEN_GRACE_MS = 90_000;
-/** Length of short code in QR URL path */
-const SHORT_CODE_LENGTH = 6;
-/** Global rate limit for QR attempts across all IPs */
-const QR_RATE_LIMIT_MAX = 30;
-/** Global rate limit reset window */
-const QR_RATE_LIMIT_WINDOW_MS = 60_000;
-
 /** Rejection-sampled base62 short code — no modulo bias */
 function generateShortCode(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -60,19 +57,8 @@ function generateShortCode(): string {
   return result.join('');
 }
 
-// ========== Constants (Tunnel) ==========
-
 /** Regex to extract the trycloudflare.com URL from cloudflared output */
 const TUNNEL_URL_REGEX = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
-
-/** Max time to wait for URL before considering it a timeout (ms) */
-const URL_TIMEOUT_MS = 30_000;
-
-/** Restart delay after unexpected exit (ms) */
-const RESTART_DELAY_MS = 5_000;
-
-/** Force-kill timeout after SIGTERM (ms) */
-const FORCE_KILL_MS = 5_000;
 
 // ========== TunnelManager Class ==========
 

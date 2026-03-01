@@ -14,10 +14,10 @@ import { program } from './cli.js';
 // In web mode, we should NOT exit on transient errors — log and continue
 const isWebMode = process.argv.includes('web');
 
+import { MAX_CONSECUTIVE_ERRORS, ERROR_RESET_MS } from './config/server-timing.js';
+
 // Track consecutive unhandled errors in web mode — restart after too many
 let consecutiveErrors = 0;
-const MAX_CONSECUTIVE_ERRORS = 5;
-const ERROR_RESET_MS = 60000; // Reset counter after 1 minute of no errors
 let errorResetTimer: ReturnType<typeof setTimeout> | null = null;
 
 function trackError(): void {

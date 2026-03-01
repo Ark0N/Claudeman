@@ -29,6 +29,7 @@ import {
   type AiCheckerResultBase,
   type AiCheckerStateBase,
 } from './ai-checker-base.js';
+import { AI_CHECK_MODEL, AI_PLAN_CHECK_MAX_CONTEXT } from './config/ai-defaults.js';
 
 // ========== Types ==========
 
@@ -44,8 +45,8 @@ export type AiPlanCheckState = AiCheckerStateBase<AiPlanCheckVerdict>;
 
 const DEFAULT_PLAN_CHECK_CONFIG: AiPlanCheckConfig = {
   enabled: true,
-  model: 'claude-opus-4-5-20251101',
-  maxContextChars: 8000,
+  model: AI_CHECK_MODEL,
+  maxContextChars: AI_PLAN_CHECK_MAX_CONTEXT,
   checkTimeoutMs: 60000,
   cooldownMs: 30000,
   errorCooldownMs: 30000,

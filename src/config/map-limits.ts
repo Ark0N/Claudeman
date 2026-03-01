@@ -47,6 +47,15 @@ export const MAX_TODOS_PER_SESSION = 500;
 // Pending Tool Calls Limits
 // ============================================================================
 
+// ============================================================================
+// Agent Tracking Limits
+// ============================================================================
+
+/**
+ * Maximum agents to track across all sessions (LRU eviction when exceeded).
+ */
+export const MAX_TRACKED_AGENTS = 500;
+
 /**
  * Maximum pending tool calls to track per subagent.
  * Entries should be cleaned up on tool_result, but this prevents leaks.
