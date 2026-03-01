@@ -22,7 +22,7 @@ import {
 import { subagentWatcher } from '../../subagent-watcher.js';
 import { imageWatcher } from '../../image-watcher.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
-import { findSessionOrFail, formatUptime } from '../route-helpers.js';
+import { findSessionOrFail, formatUptime, SETTINGS_PATH } from '../route-helpers.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/index.js';
 
 // Maximum screenshot upload size (10MB)
@@ -83,7 +83,6 @@ export function registerSystemRoutes(
   app: FastifyInstance,
   ctx: SessionPort & EventPort & ConfigPort & InfraPort
 ): void {
-  const settingsPath = join(homedir(), '.codeman', 'settings.json');
   const windowStatesPath = join(homedir(), '.codeman', 'subagent-window-states.json');
   const parentMapPath = join(homedir(), '.codeman', 'subagent-parents.json');
 
@@ -101,6 +100,7 @@ export function registerSystemRoutes(
       return reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'Tunnel not running'));
     }
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- dynamic optional dependency
       const QRCode = require('qrcode');
       const svg: string = await QRCode.toString(url, { type: 'svg', margin: 2, width: 256 });
       return { svg };
@@ -262,7 +262,7 @@ export function registerSystemRoutes(
 
   app.get('/api/settings', async () => {
     try {
-      const content = await fs.readFile(settingsPath, 'utf-8');
+      const content = await fs.readFile(SETTINGS_PATH, 'utf-8');
       return JSON.parse(content);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -280,18 +280,18 @@ export function registerSystemRoutes(
     const settings = settingsResult.data as Record<string, unknown>;
 
     try {
-      const dir = dirname(settingsPath);
+      const dir = dirname(SETTINGS_PATH);
       if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true });
       }
       let existing: Record<string, unknown> = {};
       try {
-        existing = JSON.parse(await fs.readFile(settingsPath, 'utf-8'));
+        existing = JSON.parse(await fs.readFile(SETTINGS_PATH, 'utf-8'));
       } catch {
         /* ignore */
       }
       const merged = { ...existing, ...settings };
-      await fs.writeFile(settingsPath, JSON.stringify(merged, null, 2));
+      await fs.writeFile(SETTINGS_PATH, JSON.stringify(merged, null, 2));
 
       // Handle subagent tracking toggle dynamically
       const subagentEnabled = settings.subagentTrackingEnabled ?? true;
@@ -345,7 +345,7 @@ export function registerSystemRoutes(
 
   app.get('/api/execution/model-config', async () => {
     try {
-      const content = await fs.readFile(settingsPath, 'utf-8');
+      const content = await fs.readFile(SETTINGS_PATH, 'utf-8');
       const settings = JSON.parse(content);
       return { success: true, data: settings.modelConfig || {} };
     } catch (err) {
@@ -366,7 +366,7 @@ export function registerSystemRoutes(
     try {
       let existingSettings: Record<string, unknown> = {};
       try {
-        const content = await fs.readFile(settingsPath, 'utf-8');
+        const content = await fs.readFile(SETTINGS_PATH, 'utf-8');
         existingSettings = JSON.parse(content);
       } catch {
         // File doesn't exist yet, start fresh
@@ -374,11 +374,11 @@ export function registerSystemRoutes(
 
       existingSettings.modelConfig = modelConfig;
 
-      const dir = dirname(settingsPath);
+      const dir = dirname(SETTINGS_PATH);
       if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true });
       }
-      await fs.writeFile(settingsPath, JSON.stringify(existingSettings, null, 2));
+      await fs.writeFile(SETTINGS_PATH, JSON.stringify(existingSettings, null, 2));
 
       return { success: true };
     } catch (err) {

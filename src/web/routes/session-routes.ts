@@ -8,7 +8,6 @@ import { FastifyInstance } from 'fastify';
 import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
-import { homedir } from 'node:os';
 import {
   ApiErrorCode,
   createErrorResponse,
@@ -32,7 +31,8 @@ import {
   QuickRunSchema,
   QuickStartSchema,
 } from '../schemas.js';
-import { autoConfigureRalph } from '../route-helpers.js';
+import { autoConfigureRalph, CASES_DIR, SETTINGS_PATH } from '../route-helpers.js';
+import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
 import { writeHooksConfig, updateCaseEnvVars } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { imageWatcher } from '../../image-watcher.js';
@@ -46,7 +46,6 @@ const MAX_INPUT_LENGTH = 64 * 1024;
 const MAX_TERMINAL_COLS = 500;
 const MAX_TERMINAL_ROWS = 200;
 const MAX_SESSION_NAME_LENGTH = 128;
-const AUTH_COOKIE_NAME = 'codeman_session';
 
 // Pre-compiled regex for terminal buffer cleaning (avoids per-request compilation)
 // eslint-disable-next-line no-control-regex
@@ -54,9 +53,6 @@ const CLAUDE_BANNER_PATTERN = /\x1b\[1mClaud/;
 // eslint-disable-next-line no-control-regex
 const CTRL_L_PATTERN = /\x0c/g;
 const LEADING_WHITESPACE_PATTERN = /^[\s\r\n]+/;
-
-const casesDir = join(homedir(), 'codeman-cases');
-const settingsPath = join(homedir(), '.codeman', 'settings.json');
 
 export function registerSessionRoutes(
   app: FastifyInstance,
@@ -72,7 +68,7 @@ export function registerSessionRoutes(
   // ========== Session Listing ==========
 
   app.get('/api/sessions', async () => {
-    return Array.from(ctx.sessions.values()).map((s) => ctx.getSessionStateWithRespawn(s));
+    return ctx.getLightSessionsState();
   });
 
   // ========== Session Creation ==========
@@ -140,7 +136,7 @@ export function registerSessionRoutes(
       openCodeConfig: mode === 'opencode' ? body.openCodeConfig : undefined,
     });
 
-    (ctx.sessions as Map<string, Session>).set(session.id, session);
+    ctx.addSession(session);
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
@@ -717,7 +713,7 @@ export function registerSessionRoutes(
     }
 
     const session = new Session({ workingDir: dir });
-    (ctx.sessions as Map<string, Session>).set(session.id, session);
+    ctx.addSession(session);
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
@@ -770,11 +766,11 @@ export function registerSessionRoutes(
       }
     }
 
-    const casePath = join(casesDir, caseName);
+    const casePath = join(CASES_DIR, caseName);
 
     // Security: Path traversal protection - use relative path check
     const resolvedPath = resolve(casePath);
-    const resolvedBase = resolve(casesDir);
+    const resolvedBase = resolve(CASES_DIR);
     const relPath = relative(resolvedBase, resolvedPath);
     if (relPath.startsWith('..') || isAbsolute(relPath)) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
@@ -832,7 +828,7 @@ export function registerSessionRoutes(
       }
     }
 
-    (ctx.sessions as Map<string, Session>).set(session.id, session);
+    ctx.addSession(session);
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
@@ -870,7 +866,7 @@ export function registerSessionRoutes(
 
       // Save lastUsedCase to settings for TUI/web sync
       try {
-        const settingsFilePath = settingsPath;
+        const settingsFilePath = SETTINGS_PATH;
         let settings: Record<string, unknown> = {};
         try {
           settings = JSON.parse(await fs.readFile(settingsFilePath, 'utf-8'));

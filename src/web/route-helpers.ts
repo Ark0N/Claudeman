@@ -6,11 +6,16 @@
  */
 
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { Session } from '../session.js';
 import { ApiErrorCode, createErrorResponse } from '../types.js';
 import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
 import type { SessionPort } from './ports/session-port.js';
 import type { EventPort } from './ports/event-port.js';
+
+// Shared path constants used across route modules
+export const CASES_DIR = join(homedir(), 'codeman-cases');
+export const SETTINGS_PATH = join(homedir(), '.codeman', 'settings.json');
 
 // Maximum hook data size (prevents oversized SSE broadcasts)
 const MAX_HOOK_DATA_SIZE = 8 * 1024;

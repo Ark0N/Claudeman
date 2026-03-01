@@ -14,9 +14,8 @@ import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.
 import { CreateCaseSchema, LinkCaseSchema } from '../schemas.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { writeHooksConfig } from '../../hooks-config.js';
+import { CASES_DIR } from '../route-helpers.js';
 import type { EventPort, ConfigPort } from '../ports/index.js';
-
-const casesDir = join(homedir(), 'codeman-cases');
 
 export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & ConfigPort): void {
   // ============ Case CRUD ============
@@ -24,20 +23,20 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
   app.get('/api/cases', async (): Promise<CaseInfo[]> => {
     const cases: CaseInfo[] = [];
 
-    // Get cases from casesDir
+    // Get cases from CASES_DIR
     try {
-      const entries = await fs.readdir(casesDir, { withFileTypes: true });
+      const entries = await fs.readdir(CASES_DIR, { withFileTypes: true });
       for (const e of entries) {
         if (e.isDirectory()) {
           cases.push({
             name: e.name,
-            path: join(casesDir, e.name),
-            hasClaudeMd: existsSync(join(casesDir, e.name, 'CLAUDE.md')),
+            path: join(CASES_DIR, e.name),
+            hasClaudeMd: existsSync(join(CASES_DIR, e.name, 'CLAUDE.md')),
           });
         }
       }
     } catch {
-      // casesDir may not exist yet
+      // CASES_DIR may not exist yet
     }
 
     // Get linked cases
@@ -70,11 +69,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     }
     const { name, description } = result.data;
 
-    const casePath = join(casesDir, name);
+    const casePath = join(CASES_DIR, name);
 
     // Security: Path traversal protection - use relative path check
     const resolvedPath = resolve(casePath);
-    const resolvedBase = resolve(casesDir);
+    const resolvedBase = resolve(CASES_DIR);
     const relPath = relative(resolvedBase, resolvedPath);
     if (relPath.startsWith('..') || isAbsolute(relPath)) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
@@ -120,8 +119,8 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       return createErrorResponse(ApiErrorCode.NOT_FOUND, `Folder not found: ${expandedPath}`);
     }
 
-    // Check if case name already exists in casesDir
-    const casePath = join(casesDir, name);
+    // Check if case name already exists in CASES_DIR
+    const casePath = join(CASES_DIR, name);
     if (existsSync(casePath)) {
       return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'A case with this name already exists in codeman-cases.');
     }
@@ -177,11 +176,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
         };
       }
     } catch {
-      // ENOENT or parse errors - fall through to casesDir check
+      // ENOENT or parse errors - fall through to CASES_DIR check
     }
 
-    // Then check casesDir
-    const casePath = join(casesDir, name);
+    // Then check CASES_DIR
+    const casePath = join(CASES_DIR, name);
 
     if (!existsSync(casePath)) {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Case not found');
@@ -198,7 +197,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
   app.get('/api/cases/:name/fix-plan', async (req) => {
     const { name } = req.params as { name: string };
 
-    // Get case path (check linked cases first, then casesDir)
+    // Get case path (check linked cases first, then CASES_DIR)
     let casePath: string | null = null;
 
     const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
@@ -208,11 +207,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
         casePath = linkedCases[name];
       }
     } catch {
-      // ENOENT or parse errors - fall through to casesDir
+      // ENOENT or parse errors - fall through to CASES_DIR
     }
 
     if (!casePath) {
-      casePath = join(casesDir, name);
+      casePath = join(CASES_DIR, name);
     }
 
     const fixPlanPath = join(casePath, '@fix_plan.md');
@@ -310,11 +309,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
   app.get('/api/cases/:caseName/ralph-wizard/files', async (req) => {
     const { caseName } = req.params as { caseName: string };
-    let casePath = join(casesDir, caseName);
+    let casePath = join(CASES_DIR, caseName);
 
     // Security: Path traversal protection - use relative path check
     const resolvedCase = resolve(casePath);
-    const resolvedBase = resolve(casesDir);
+    const resolvedBase = resolve(CASES_DIR);
     const relPath = relative(resolvedBase, resolvedCase);
     if (relPath.startsWith('..') || isAbsolute(relPath)) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
@@ -370,7 +369,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
   // Cache disabled to ensure fresh prompts when starting new plan generations
   app.get('/api/cases/:caseName/ralph-wizard/file/:filePath', async (req, reply) => {
     const { caseName, filePath } = req.params as { caseName: string; filePath: string };
-    let casePath = join(casesDir, caseName);
+    let casePath = join(CASES_DIR, caseName);
 
     // Prevent browser caching - prompts change between plan generations
     reply.header('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -379,7 +378,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
     // Security: Path traversal protection for case name - use relative path check
     const resolvedCase = resolve(casePath);
-    const resolvedBase = resolve(casesDir);
+    const resolvedBase = resolve(CASES_DIR);
     const relPath = relative(resolvedBase, resolvedCase);
     if (relPath.startsWith('..') || isAbsolute(relPath)) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');

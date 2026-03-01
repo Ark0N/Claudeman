@@ -15,7 +15,7 @@ import { StaleExpirationMap } from '../../utils/index.js';
 // Auth session cookie TTL (24h — matches autonomous run length)
 const AUTH_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 // Auth session cookie name
-const AUTH_COOKIE_NAME = 'codeman_session';
+export const AUTH_COOKIE_NAME = 'codeman_session';
 // Max concurrent auth sessions
 const MAX_AUTH_SESSIONS = 100;
 // Max failed auth attempts per IP before rate-limiting

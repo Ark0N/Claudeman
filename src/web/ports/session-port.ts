@@ -7,6 +7,7 @@ import type { Session } from '../../session.js';
 
 export interface SessionPort {
   readonly sessions: ReadonlyMap<string, Session>;
+  addSession(session: Session): void;
   cleanupSession(sessionId: string, killMux?: boolean, reason?: string): Promise<void>;
   setupSessionListeners(session: Session): Promise<void>;
   persistSessionState(session: Session): void;

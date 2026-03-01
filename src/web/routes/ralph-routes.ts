@@ -8,20 +8,16 @@ import { FastifyInstance } from 'fastify';
 import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
 import { Session } from '../../session.js';
 import { RespawnController } from '../../respawn-controller.js';
 import { RalphConfigSchema, FixPlanImportSchema, RalphPromptWriteSchema, RalphLoopStartSchema } from '../schemas.js';
-import { autoConfigureRalph } from '../route-helpers.js';
+import { autoConfigureRalph, CASES_DIR, SETTINGS_PATH } from '../route-helpers.js';
 import { writeHooksConfig } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
 import type { SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort } from '../ports/index.js';
 import { MAX_CONCURRENT_SESSIONS } from '../../config/map-limits.js';
-
-const casesDir = join(homedir(), 'codeman-cases');
-const settingsPath = join(homedir(), '.codeman', 'settings.json');
 
 export function registerRalphRoutes(
   app: FastifyInstance,
@@ -305,11 +301,11 @@ export function registerRalphRoutes(
     }
     const { caseName, taskDescription, completionPhrase, maxIterations, enableRespawn, planItems } = rlResult.data;
 
-    const casePath = join(casesDir, caseName);
+    const casePath = join(CASES_DIR, caseName);
 
     // Security: Path traversal protection
     const rlResolvedPath = resolve(casePath);
-    const rlResolvedBase = resolve(casesDir);
+    const rlResolvedBase = resolve(CASES_DIR);
     const rlRelPath = relative(rlResolvedBase, rlResolvedPath);
     if (rlRelPath.startsWith('..') || isAbsolute(rlRelPath)) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
@@ -435,7 +431,7 @@ export function registerRalphRoutes(
     writeFileSync(promptPath, fullPrompt, 'utf-8');
 
     // Register session
-    (ctx.sessions as Map<string, Session>).set(session.id, session);
+    ctx.addSession(session);
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
@@ -489,14 +485,14 @@ export function registerRalphRoutes(
     try {
       let settings: Record<string, unknown> = {};
       try {
-        settings = JSON.parse(await fs.readFile(settingsPath, 'utf-8'));
+        settings = JSON.parse(await fs.readFile(SETTINGS_PATH, 'utf-8'));
       } catch {
         /* ignore */
       }
       settings.lastUsedCase = caseName;
-      const dir = dirname(settingsPath);
+      const dir = dirname(SETTINGS_PATH);
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      fs.writeFile(settingsPath, JSON.stringify(settings, null, 2)).catch(() => {});
+      fs.writeFile(SETTINGS_PATH, JSON.stringify(settings, null, 2)).catch(() => {});
     } catch {
       /* non-critical */
     }

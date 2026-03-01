@@ -7,7 +7,6 @@
 import { FastifyInstance } from 'fastify';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { existsSync, rmSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { Session } from '../../session.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
 import { PlanOrchestrator, type PlanItem, type DetailedPlanResult } from '../../plan-orchestrator.js';
@@ -18,7 +17,7 @@ import {
   PlanTaskUpdateSchema,
   PlanTaskAddSchema,
 } from '../schemas.js';
-import { findSessionOrFail } from '../route-helpers.js';
+import { findSessionOrFail, CASES_DIR } from '../route-helpers.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/index.js';
 
 export function registerPlanRoutes(app: FastifyInstance, ctx: SessionPort & EventPort & ConfigPort & InfraPort): void {
@@ -228,11 +227,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Determine output directory for saving wizard results
     let outputDir: string | undefined;
     if (caseName) {
-      const casesDir = join(homedir(), 'codeman-cases');
-      const casePath = join(casesDir, caseName);
+      const casePath = join(CASES_DIR, caseName);
       // Security: Path traversal protection - use relative path check
       const resolvedCase = resolve(casePath);
-      const resolvedBase = resolve(casesDir);
+      const resolvedBase = resolve(CASES_DIR);
       const relPath = relative(resolvedBase, resolvedCase);
       if (!relPath.startsWith('..') && !isAbsolute(relPath) && existsSync(casePath)) {
         outputDir = join(casePath, 'ralph-wizard');
