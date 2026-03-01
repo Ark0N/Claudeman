@@ -1794,4 +1794,181 @@ Final text
       expect(todos[0].priority).toBe('P0');
     });
   });
+
+  describe('Debouncer migration', () => {
+    // EVENT_DEBOUNCE_MS is 50 in ralph-tracker.ts
+    const EVENT_DEBOUNCE_MS = 50;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      tracker = new RalphTracker();
+      tracker.enable();
+    });
+
+    afterEach(() => {
+      tracker.destroy();
+      vi.useRealTimers();
+    });
+
+    it('should debounce todoUpdate events (not fire immediately)', () => {
+      const handler = vi.fn();
+      tracker.on('todoUpdate', handler);
+
+      tracker.processTerminalData('- [ ] Fix the bug\n');
+
+      // Should not fire immediately
+      expect(handler).not.toHaveBeenCalled();
+
+      // Should fire after debounce delay
+      vi.advanceTimersByTime(EVENT_DEBOUNCE_MS);
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler).toHaveBeenCalledWith(expect.arrayContaining([
+        expect.objectContaining({ content: expect.stringContaining('Fix the bug') }),
+      ]));
+    });
+
+    it('should debounce loopUpdate events (not fire immediately)', () => {
+      const handler = vi.fn();
+      tracker.on('loopUpdate', handler);
+
+      // enable() emits loopUpdate synchronously — capture that first
+      tracker.processTerminalData('<promise>SETUP</promise>\n');
+      const callsAfterSetup = handler.mock.calls.length;
+
+      // Iteration/Elapsed/Cycle lines use emitLoopUpdateDebounced()
+      tracker.processTerminalData('Elapsed: 2.5 hours\n');
+
+      // Should not fire immediately (debounced)
+      expect(handler).toHaveBeenCalledTimes(callsAfterSetup);
+
+      // Should fire after debounce delay
+      vi.advanceTimersByTime(EVENT_DEBOUNCE_MS);
+      expect(handler).toHaveBeenCalledTimes(callsAfterSetup + 1);
+    });
+
+    it('should flush pending todoUpdate events immediately via flushPendingEvents()', () => {
+      const handler = vi.fn();
+      tracker.on('todoUpdate', handler);
+
+      tracker.processTerminalData('- [ ] Pending task\n');
+      expect(handler).not.toHaveBeenCalled();
+
+      tracker.flushPendingEvents();
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      // Timer should be cancelled — no duplicate after delay
+      vi.advanceTimersByTime(EVENT_DEBOUNCE_MS);
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('should flush pending loopUpdate events immediately via flushPendingEvents()', () => {
+      const handler = vi.fn();
+      tracker.on('loopUpdate', handler);
+
+      // Use Elapsed pattern which goes through emitLoopUpdateDebounced()
+      tracker.processTerminalData('Elapsed: 3.0 hours\n');
+      const callsBefore = handler.mock.calls.length;
+
+      // Should have a pending debounce (not yet fired)
+      tracker.flushPendingEvents();
+      expect(handler).toHaveBeenCalledTimes(callsBefore + 1);
+
+      // No duplicate after delay
+      vi.advanceTimersByTime(EVENT_DEBOUNCE_MS);
+      expect(handler).toHaveBeenCalledTimes(callsBefore + 1);
+    });
+
+    it('should not fire pending events after destroy()', () => {
+      const todoHandler = vi.fn();
+      const loopHandler = vi.fn();
+      tracker.on('todoUpdate', todoHandler);
+      tracker.on('loopUpdate', loopHandler);
+
+      // Feed data that uses debounced paths
+      tracker.processTerminalData('- [ ] Will not arrive\n');
+      tracker.processTerminalData('Elapsed: 5.0 hours\n');
+
+      const todoCallsBefore = todoHandler.mock.calls.length;
+      const loopCallsBefore = loopHandler.mock.calls.length;
+
+      tracker.destroy();
+
+      // Advance past debounce — nothing new should fire
+      vi.advanceTimersByTime(EVENT_DEBOUNCE_MS * 2);
+      expect(todoHandler).toHaveBeenCalledTimes(todoCallsBefore);
+      expect(loopHandler).toHaveBeenCalledTimes(loopCallsBefore);
+    });
+
+    it('should coalesce rapid todoUpdate events into one emission', () => {
+      const handler = vi.fn();
+      tracker.on('todoUpdate', handler);
+
+      // Feed multiple todo items rapidly (within debounce window)
+      tracker.processTerminalData('- [ ] Task one\n');
+      vi.advanceTimersByTime(10);
+      tracker.processTerminalData('- [ ] Task two\n');
+      vi.advanceTimersByTime(10);
+      tracker.processTerminalData('- [ ] Task three\n');
+
+      // Still within debounce window — nothing fired yet
+      expect(handler).not.toHaveBeenCalled();
+
+      // Advance past debounce from the last schedule
+      vi.advanceTimersByTime(EVENT_DEBOUNCE_MS);
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      // The final emission should include all 3 todos
+      const emittedTodos = handler.mock.calls[0][0];
+      expect(emittedTodos).toHaveLength(3);
+    });
+
+    it('should coalesce rapid loopUpdate events into one emission', () => {
+      const handler = vi.fn();
+      tracker.on('loopUpdate', handler);
+
+      // Feed multiple loop state changes rapidly
+      tracker.processTerminalData('Iteration: 1/10\n');
+      vi.advanceTimersByTime(10);
+      tracker.processTerminalData('Elapsed: 1.5 hours\n');
+      vi.advanceTimersByTime(10);
+      tracker.processTerminalData('Cycle: 3\n');
+
+      // Still within debounce window
+      expect(handler).not.toHaveBeenCalled();
+
+      // Advance past debounce
+      vi.advanceTimersByTime(EVENT_DEBOUNCE_MS);
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('should allow new debounced events after flush', () => {
+      const handler = vi.fn();
+      tracker.on('todoUpdate', handler);
+
+      tracker.processTerminalData('- [ ] First batch\n');
+      tracker.flushPendingEvents();
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      // Feed more data — should debounce again
+      tracker.processTerminalData('- [ ] Second batch\n');
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(EVENT_DEBOUNCE_MS);
+      expect(handler).toHaveBeenCalledTimes(2);
+    });
+
+    it('should clear pending debounced events on reset()', () => {
+      const handler = vi.fn();
+      tracker.on('todoUpdate', handler);
+
+      tracker.processTerminalData('- [ ] About to reset\n');
+      expect(handler).not.toHaveBeenCalled();
+
+      tracker.reset();
+
+      // Timer should have been cancelled by reset
+      vi.advanceTimersByTime(EVENT_DEBOUNCE_MS * 2);
+      expect(handler).not.toHaveBeenCalled();
+    });
+  });
 });

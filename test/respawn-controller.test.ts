@@ -2631,3 +2631,405 @@ describe('RespawnController Hook-Based Idle Detection', () => {
     expect(status.confidenceLevel).toBe(100);
   });
 });
+
+// ========== CleanupManager Timer Tracking Tests ==========
+
+describe('RespawnController CleanupManager Timer Tracking', () => {
+  let session: MockSession;
+
+  beforeEach(() => {
+    session = new MockSession();
+  });
+
+  describe('Timer lifecycle events', () => {
+    it('should emit timerStarted when completion confirm timer begins', async () => {
+      const controller = new RespawnController(session as unknown as Session, {
+        completionConfirmMs: 200,
+        noOutputTimeoutMs: 5000,
+        aiIdleCheckEnabled: false,
+      });
+
+      const timerEvents: Array<{ name: string; durationMs: number; endsAt: number; reason?: string }> = [];
+      controller.on('timerStarted', (timer) => {
+        timerEvents.push(timer);
+      });
+
+      controller.start();
+      session.simulateCompletionMessage();
+
+      // Wait for completion detection to trigger timer
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Should have started at least one timer (completion-confirm or no-output-fallback)
+      expect(timerEvents.length).toBeGreaterThan(0);
+
+      // Each timer event should have valid fields
+      for (const event of timerEvents) {
+        expect(event.name).toBeTruthy();
+        expect(event.durationMs).toBeGreaterThan(0);
+        expect(event.endsAt).toBeGreaterThan(0);
+      }
+
+      controller.stop();
+    });
+
+    it('should emit timerStarted with correct duration for no-output-fallback', async () => {
+      const noOutputTimeoutMs = 300;
+      const controller = new RespawnController(session as unknown as Session, {
+        completionConfirmMs: 5000, // Long so it doesn't fire first
+        noOutputTimeoutMs,
+        aiIdleCheckEnabled: false,
+      });
+
+      const timerEvents: Array<{ name: string; durationMs: number }> = [];
+      controller.on('timerStarted', (timer) => {
+        timerEvents.push({ name: timer.name, durationMs: timer.durationMs });
+      });
+
+      controller.start();
+      // Send output to trigger no-output timer reset
+      session.simulateTerminalOutput('some output');
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      const noOutputTimer = timerEvents.find(e => e.name === 'no-output-fallback');
+      if (noOutputTimer) {
+        expect(noOutputTimer.durationMs).toBe(noOutputTimeoutMs);
+      }
+
+      controller.stop();
+    });
+
+    it('should emit timerCompleted when a timer fires', async () => {
+      const controller = new RespawnController(session as unknown as Session, {
+        completionConfirmMs: 50,
+        noOutputTimeoutMs: 5000,
+        aiIdleCheckEnabled: false,
+      });
+
+      const completedTimers: string[] = [];
+      controller.on('timerCompleted', (name: string) => {
+        completedTimers.push(name);
+      });
+
+      controller.start();
+      session.simulateCompletionMessage();
+
+      // Wait for completion confirm timer to fire (50ms + processing)
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      // At least one timer should have completed (completion-confirm)
+      expect(completedTimers.length).toBeGreaterThan(0);
+      controller.stop();
+    });
+  });
+
+  describe('Timer cancellation', () => {
+    it('should emit timerCancelled when working patterns interrupt idle detection', async () => {
+      const controller = new RespawnController(session as unknown as Session, {
+        completionConfirmMs: 5000, // Long so we can cancel it
+        noOutputTimeoutMs: 10000,
+        aiIdleCheckEnabled: false,
+      });
+
+      const cancelledTimers: Array<{ name: string; reason?: string }> = [];
+      controller.on('timerCancelled', (name: string, reason?: string) => {
+        cancelledTimers.push({ name, reason });
+      });
+
+      controller.start();
+      session.simulateCompletionMessage();
+
+      // Wait for timer to start
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Simulate working to cancel the completion confirm timer
+      session.simulateWorking();
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Working patterns should have cancelled at least one timer
+      const hasCancel = cancelledTimers.length > 0;
+      expect(hasCancel).toBe(true);
+
+      controller.stop();
+    });
+
+    it('should include reason in timerCancelled event', async () => {
+      const controller = new RespawnController(session as unknown as Session, {
+        completionConfirmMs: 5000,
+        noOutputTimeoutMs: 10000,
+        aiIdleCheckEnabled: false,
+      });
+
+      const cancelledTimers: Array<{ name: string; reason?: string }> = [];
+      controller.on('timerCancelled', (name: string, reason?: string) => {
+        cancelledTimers.push({ name, reason });
+      });
+
+      controller.start();
+
+      // Trigger Stop hook to start hook-confirm timer
+      controller.signalStopHook();
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Then working patterns should cancel it with a reason
+      session.simulateWorking();
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      const hookCancel = cancelledTimers.find(e => e.name === 'hook-confirm');
+      if (hookCancel) {
+        expect(hookCancel.reason).toBeTruthy();
+      }
+
+      controller.stop();
+    });
+  });
+
+  describe('clearTimers on stop', () => {
+    it('should clear all active timers when stopped', async () => {
+      const controller = new RespawnController(session as unknown as Session, {
+        completionConfirmMs: 5000,
+        noOutputTimeoutMs: 10000,
+        aiIdleCheckEnabled: false,
+      });
+
+      controller.start();
+      session.simulateCompletionMessage();
+
+      // Wait for timers to start
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Should have active timers
+      const timersBefore = controller.getActiveTimers();
+      expect(timersBefore.length).toBeGreaterThan(0);
+
+      // Stop should clear all
+      controller.stop();
+
+      const timersAfter = controller.getActiveTimers();
+      expect(timersAfter.length).toBe(0);
+    });
+
+    it('should not fire timers after stop', async () => {
+      const controller = new RespawnController(session as unknown as Session, {
+        completionConfirmMs: 100,
+        noOutputTimeoutMs: 200,
+        aiIdleCheckEnabled: false,
+      });
+
+      let timerFiredAfterStop = false;
+      controller.start();
+      session.simulateCompletionMessage();
+
+      // Wait for timers to start
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      controller.stop();
+
+      // Listen for any events after stop
+      controller.on('timerCompleted', () => {
+        timerFiredAfterStop = true;
+      });
+      controller.on('respawnCycleStarted', () => {
+        timerFiredAfterStop = true;
+      });
+
+      // Wait longer than any timer duration
+      await new Promise(resolve => setTimeout(resolve, 400));
+
+      expect(timerFiredAfterStop).toBe(false);
+    });
+  });
+
+  describe('Multiple start/stop cycles', () => {
+    it('should recreate CleanupManager on restart (no stale timers)', async () => {
+      const controller = new RespawnController(session as unknown as Session, {
+        completionConfirmMs: 5000,
+        noOutputTimeoutMs: 10000,
+        aiIdleCheckEnabled: false,
+      });
+
+      // First cycle: start, trigger completion-related timers, stop
+      controller.start();
+      session.simulateCompletionMessage();
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Should have completion-confirm timer active
+      const firstCycleTimers = controller.getActiveTimers();
+      const hasCompletionConfirm = firstCycleTimers.some(t => t.name === 'completion-confirm');
+      expect(hasCompletionConfirm).toBe(true);
+
+      controller.stop();
+      expect(controller.getActiveTimers().length).toBe(0);
+
+      // Second cycle: start fresh — completion-confirm from first cycle should be gone
+      controller.start();
+      expect(controller.state).toBe('watching');
+      const restartTimers = controller.getActiveTimers();
+      const staleCompletionConfirm = restartTimers.some(t => t.name === 'completion-confirm');
+      expect(staleCompletionConfirm).toBe(false);
+
+      // Can still trigger new timers
+      session.simulateCompletionMessage();
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const newTimers = controller.getActiveTimers();
+      const hasNewCompletionConfirm = newTimers.some(t => t.name === 'completion-confirm');
+      expect(hasNewCompletionConfirm).toBe(true);
+
+      controller.stop();
+    });
+
+    it('should handle rapid start/stop without timer leaks', async () => {
+      const controller = new RespawnController(session as unknown as Session, {
+        completionConfirmMs: 50,
+        noOutputTimeoutMs: 200,
+        aiIdleCheckEnabled: false,
+      });
+
+      const completedTimers: string[] = [];
+      controller.on('timerCompleted', (name: string) => {
+        completedTimers.push(name);
+      });
+
+      // Rapid start/stop cycles
+      for (let i = 0; i < 5; i++) {
+        controller.start();
+        session.simulateCompletionMessage();
+        await new Promise(resolve => setTimeout(resolve, 20));
+        controller.stop();
+      }
+
+      // Wait to check no stale timers fire
+      const countBefore = completedTimers.length;
+      await new Promise(resolve => setTimeout(resolve, 300));
+      const countAfter = completedTimers.length;
+
+      // No new timer completions should happen after final stop
+      expect(countAfter).toBe(countBefore);
+      expect(controller.state).toBe('stopped');
+    });
+  });
+
+  describe('activeTimers tracking', () => {
+    it('should return correct timer metadata from getActiveTimers()', async () => {
+      const controller = new RespawnController(session as unknown as Session, {
+        completionConfirmMs: 5000,
+        noOutputTimeoutMs: 10000,
+        aiIdleCheckEnabled: false,
+      });
+
+      controller.start();
+      session.simulateCompletionMessage();
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      const activeTimers = controller.getActiveTimers();
+      expect(activeTimers.length).toBeGreaterThan(0);
+
+      for (const timer of activeTimers) {
+        expect(timer.name).toBeTruthy();
+        expect(typeof timer.name).toBe('string');
+        expect(timer.remainingMs).toBeGreaterThanOrEqual(0);
+        expect(timer.totalMs).toBeGreaterThan(0);
+        // remainingMs should not exceed totalMs
+        expect(timer.remainingMs).toBeLessThanOrEqual(timer.totalMs);
+      }
+
+      controller.stop();
+    });
+
+    it('should include activeTimers in detection status', async () => {
+      const controller = new RespawnController(session as unknown as Session, {
+        completionConfirmMs: 5000,
+        noOutputTimeoutMs: 10000,
+        aiIdleCheckEnabled: false,
+      });
+
+      controller.start();
+      session.simulateCompletionMessage();
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      const detectionStatus = controller.getDetectionStatus();
+      expect(Array.isArray(detectionStatus.activeTimers)).toBe(true);
+      expect(detectionStatus.activeTimers.length).toBeGreaterThan(0);
+
+      controller.stop();
+    });
+
+    it('should remove timers from activeTimers after they complete', async () => {
+      const controller = new RespawnController(session as unknown as Session, {
+        completionConfirmMs: 50, // Short timer
+        noOutputTimeoutMs: 5000,
+        aiIdleCheckEnabled: false,
+      });
+
+      controller.start();
+      session.simulateCompletionMessage();
+
+      // Wait for completion confirm timer to be set up
+      await new Promise(resolve => setTimeout(resolve, 20));
+      const timersBefore = controller.getActiveTimers();
+      const hasCompletionConfirm = timersBefore.some(t => t.name === 'completion-confirm');
+
+      // Wait for the timer to fire
+      await new Promise(resolve => setTimeout(resolve, 200));
+      const timersAfter = controller.getActiveTimers();
+      const stillHasCompletionConfirm = timersAfter.some(t => t.name === 'completion-confirm');
+
+      // If we caught the timer before it fired, it should be gone now
+      if (hasCompletionConfirm) {
+        expect(stillHasCompletionConfirm).toBe(false);
+      }
+
+      controller.stop();
+    });
+
+    it('should remove timers from activeTimers after they are cancelled', async () => {
+      const controller = new RespawnController(session as unknown as Session, {
+        completionConfirmMs: 5000,
+        noOutputTimeoutMs: 10000,
+        aiIdleCheckEnabled: false,
+      });
+
+      controller.start();
+      session.simulateCompletionMessage();
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Should have timers
+      const timersBefore = controller.getActiveTimers();
+      expect(timersBefore.length).toBeGreaterThan(0);
+
+      // Cancel via working
+      session.simulateWorking();
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // completion-confirm should be removed
+      const timersAfter = controller.getActiveTimers();
+      const hasCompletionConfirm = timersAfter.some(t => t.name === 'completion-confirm');
+      expect(hasCompletionConfirm).toBe(false);
+
+      controller.stop();
+    });
+
+    it('should track hook-confirm timer when Stop hook is signaled', async () => {
+      const controller = new RespawnController(session as unknown as Session, {
+        completionConfirmMs: 5000,
+        noOutputTimeoutMs: 10000,
+        aiIdleCheckEnabled: false,
+      });
+
+      controller.start();
+      controller.signalStopHook();
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      const activeTimers = controller.getActiveTimers();
+      const hookTimer = activeTimers.find(t => t.name === 'hook-confirm');
+      expect(hookTimer).toBeDefined();
+      if (hookTimer) {
+        expect(hookTimer.totalMs).toBeGreaterThan(0);
+        expect(hookTimer.remainingMs).toBeGreaterThan(0);
+      }
+
+      controller.stop();
+    });
+  });
+});
