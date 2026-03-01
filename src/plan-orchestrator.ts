@@ -20,36 +20,10 @@ import type { TerminalMultiplexer } from './mux-interface.js';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { RESEARCH_AGENT_PROMPT, PLANNER_PROMPT } from './prompts/index.js';
-import { PlanTaskStatus, TddPhase } from './types.js';
+import type { PlanItem } from './types.js';
 
-// ============================================================================
-// Types
-// ============================================================================
-
-/** Development phase in TDD cycle (alias for TddPhase) */
-export type PlanPhase = TddPhase;
-
-/**
- * Plan item with TDD structure.
- */
-export interface PlanItem {
-  id?: string;
-  content: string;
-  priority: 'P0' | 'P1' | 'P2' | null;
-  source?: string;
-  rationale?: string;
-  verificationCriteria?: string;
-  testCommand?: string;
-  dependencies?: string[];
-  status?: PlanTaskStatus;
-  attempts?: number;
-  lastError?: string;
-  completedAt?: number;
-  complexity?: 'low' | 'medium' | 'high';
-  tddPhase?: PlanPhase;
-  pairedWith?: string;
-  reviewChecklist?: string[];
-}
+// Re-export for backward compatibility
+export type { PlanItem };
 
 export interface ResearchResult {
   success: boolean;
