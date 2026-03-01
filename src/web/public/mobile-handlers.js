@@ -403,6 +403,10 @@ const SwipeHandler = {
   maxSwipeTime: 300,     // Maximum ms for a swipe gesture
   maxVerticalDrift: 100, // Max vertical movement allowed
 
+  _touchStartHandler: null,
+  _touchEndHandler: null,
+  _element: null,
+
   /** Initialize swipe handling */
   init() {
     // Only on touch devices
@@ -411,8 +415,22 @@ const SwipeHandler = {
     const terminal = document.querySelector('.main');
     if (!terminal) return;
 
-    terminal.addEventListener('touchstart', (e) => this.onTouchStart(e), { passive: true });
-    terminal.addEventListener('touchend', (e) => this.onTouchEnd(e), { passive: true });
+    this._element = terminal;
+    this._touchStartHandler = (e) => this.onTouchStart(e);
+    this._touchEndHandler = (e) => this.onTouchEnd(e);
+    terminal.addEventListener('touchstart', this._touchStartHandler, { passive: true });
+    terminal.addEventListener('touchend', this._touchEndHandler, { passive: true });
+  },
+
+  /** Remove swipe listeners */
+  cleanup() {
+    if (this._element && this._touchStartHandler) {
+      this._element.removeEventListener('touchstart', this._touchStartHandler);
+      this._element.removeEventListener('touchend', this._touchEndHandler);
+    }
+    this._touchStartHandler = null;
+    this._touchEndHandler = null;
+    this._element = null;
   },
 
   onTouchStart(e) {

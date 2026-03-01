@@ -162,6 +162,14 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
   app.get('/api/cases/:name', async (req) => {
     const { name } = req.params as { name: string };
 
+    // Security: Path traversal protection
+    const resolvedPath = resolve(join(CASES_DIR, name));
+    const resolvedBase = resolve(CASES_DIR);
+    const relPath = relative(resolvedBase, resolvedPath);
+    if (relPath.startsWith('..') || isAbsolute(relPath)) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
+    }
+
     // First check linked cases
     const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
     try {
@@ -196,6 +204,14 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
   // Read @fix_plan.md from a case directory (for wizard to detect existing plans)
   app.get('/api/cases/:name/fix-plan', async (req) => {
     const { name } = req.params as { name: string };
+
+    // Security: Path traversal protection
+    const resolvedPath = resolve(join(CASES_DIR, name));
+    const resolvedBase = resolve(CASES_DIR);
+    const relPath = relative(resolvedBase, resolvedPath);
+    if (relPath.startsWith('..') || isAbsolute(relPath)) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
+    }
 
     // Get case path (check linked cases first, then CASES_DIR)
     let casePath: string | null = null;

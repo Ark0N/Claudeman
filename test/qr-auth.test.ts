@@ -38,8 +38,8 @@ describe('QR Token Manager (unit)', () => {
     tm.startTokenRotation();
   });
 
-  afterAll(() => {
-    // Clean up any lingering timers
+  afterEach(() => {
+    // Clean up rotation timer for this test's TunnelManager
     tm?.stopTokenRotation();
   });
 
@@ -234,11 +234,13 @@ describe('QR Auth Integration', () => {
     const savedPass = process.env.CODEMAN_PASSWORD;
     delete process.env.CODEMAN_PASSWORD;
 
-    const res = await fetch(`${baseUrl}/q/ANYCODE`, { redirect: 'manual' });
-    expect(res.status).toBe(302);
-    expect(res.headers.get('location')).toBe('/');
-
-    process.env.CODEMAN_PASSWORD = savedPass;
+    try {
+      const res = await fetch(`${baseUrl}/q/ANYCODE`, { redirect: 'manual' });
+      expect(res.status).toBe(302);
+      expect(res.headers.get('location')).toBe('/');
+    } finally {
+      process.env.CODEMAN_PASSWORD = savedPass;
+    }
   });
 
   it('GET /api/tunnel/qr should return authEnabled flag', async () => {

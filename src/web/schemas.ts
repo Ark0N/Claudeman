@@ -396,7 +396,12 @@ export const ScheduledRunSchema = z.object({
 /** POST /api/cases/link */
 export const LinkCaseSchema = z.object({
   name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format'),
-  path: z.string().min(1).max(1000),
+  path: safePathSchema,
+});
+
+/** POST /api/auth/revoke */
+export const RevokeSessionSchema = z.object({
+  sessionToken: z.string().min(1).max(200).optional(),
 });
 
 /** POST /api/generate-plan */

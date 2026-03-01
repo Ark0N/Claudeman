@@ -29,6 +29,36 @@ export interface BufferConfig {
 /**
  * Resource types that can be registered for cleanup.
  */
+/**
+ * Configuration for process priority using `nice`.
+ * Lower priority reduces CPU contention with other processes.
+ */
+export interface NiceConfig {
+  /** Whether nice priority is enabled */
+  enabled: boolean;
+  /** Nice value (-20 to 19, default: 10 = lower priority) */
+  niceValue: number;
+}
+
+export const DEFAULT_NICE_CONFIG: NiceConfig = {
+  enabled: false,
+  niceValue: 10,
+};
+
+/**
+ * Process resource statistics
+ */
+export interface ProcessStats {
+  /** Memory usage in megabytes */
+  memoryMB: number;
+  /** CPU usage percentage */
+  cpuPercent: number;
+  /** Number of child processes */
+  childCount: number;
+  /** Timestamp of stats collection */
+  updatedAt: number;
+}
+
 export type CleanupResourceType = 'timer' | 'interval' | 'watcher' | 'listener' | 'stream';
 
 /**

@@ -111,11 +111,7 @@ Object.assign(CodemanApp.prototype, {
 
     // Save to server for cross-browser persistence
     try {
-      await fetch('/api/subagent-window-states', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(windowStates)
-      });
+      await this._apiPut('/api/subagent-window-states', windowStates);
     } catch (err) {
       console.error('Failed to save subagent window states to server:', err);
     }
@@ -178,7 +174,7 @@ Object.assign(CodemanApp.prototype, {
           if (windowData && windowData.element) {
             // Parse position values and clamp to viewport
             let left = parseInt(position.left, 10) || 50;
-            let top = parseInt(position.top, 10) || 120;
+            let top = parseInt(position.top, 10) || WINDOW_INITIAL_TOP_PX;
             const viewportWidth = window.innerWidth;
             const viewportHeight = window.innerHeight;
             const windowWidth = 420;
@@ -545,7 +541,7 @@ Object.assign(CodemanApp.prototype, {
       } else {
         // Normal positioning
         startX = 50;
-        startY = 120;
+        startY = WINDOW_INITIAL_TOP_PX;
         maxCols = Math.floor((viewportWidth - startX - 50) / (windowWidth + gap)) || 1;
       }
 

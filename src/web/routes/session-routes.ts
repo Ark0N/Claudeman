@@ -43,8 +43,6 @@ import { RunSummaryTracker } from '../../run-summary.js';
 
 import {
   MAX_INPUT_LENGTH,
-  MAX_TERMINAL_COLS,
-  MAX_TERMINAL_ROWS,
   MAX_SESSION_NAME_LENGTH,
 } from '../../config/terminal-limits.js';
 
@@ -493,14 +491,6 @@ export function registerSessionRoutes(
 
     if (!session) {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
-    }
-
-    // Note: Zod already validates that cols and rows are positive integers within bounds
-    if (cols > MAX_TERMINAL_COLS || rows > MAX_TERMINAL_ROWS) {
-      return createErrorResponse(
-        ApiErrorCode.INVALID_INPUT,
-        `Terminal dimensions exceed maximum (${MAX_TERMINAL_COLS}x${MAX_TERMINAL_ROWS})`
-      );
     }
 
     session.resize(cols, rows);

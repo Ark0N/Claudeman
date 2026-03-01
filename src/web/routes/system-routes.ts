@@ -19,6 +19,7 @@ import {
   CpuLimitSchema,
   SubagentWindowStatesSchema,
   SubagentParentMapSchema,
+  RevokeSessionSchema,
 } from '../schemas.js';
 import { subagentWatcher } from '../../subagent-watcher.js';
 import { imageWatcher } from '../../image-watcher.js';
@@ -194,9 +195,9 @@ export function registerSystemRoutes(
   // ========== Auth Session Revocation ==========
 
   app.post('/api/auth/revoke', async (req) => {
-    const body = req.body as { sessionToken?: string } | undefined;
-    if (body?.sessionToken) {
-      ctx.authSessions?.delete(body.sessionToken);
+    const result = RevokeSessionSchema.safeParse(req.body);
+    if (result.success && result.data.sessionToken) {
+      ctx.authSessions?.delete(result.data.sessionToken);
     } else {
       // Revoke all sessions (nuclear option)
       ctx.authSessions?.clear();

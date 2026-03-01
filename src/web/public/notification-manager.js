@@ -188,9 +188,9 @@ class NotificationManager {
       count: 1,
     };
 
-    // Add to log (cap at 100)
+    // Add to log (cap at NOTIFICATION_LIST_CAP)
     this.notifications.unshift(notification);
-    if (this.notifications.length > 100) this.notifications.pop();
+    if (this.notifications.length > NOTIFICATION_LIST_CAP) this.notifications.pop();
 
     // Track for grouping
     const timeout = setTimeout(() => this.groupingMap.delete(groupKey), GROUPING_TIMEOUT_MS);
@@ -298,9 +298,9 @@ class NotificationManager {
     }
     if (Notification.permission !== 'granted') return;
 
-    // Rate limit: max 1 per 3 seconds
+    // Rate limit
     const now = Date.now();
-    if (now - this.lastBrowserNotifTime < 3000) return;
+    if (now - this.lastBrowserNotifTime < BROWSER_NOTIF_RATE_LIMIT_MS) return;
     this.lastBrowserNotifTime = now;
 
     const notif = new Notification(`Codeman: ${title}`, {
@@ -318,8 +318,8 @@ class NotificationManager {
       notif.close();
     };
 
-    // Auto-close after 8s
-    setTimeout(() => notif.close(), 8000);
+    // Auto-close
+    setTimeout(() => notif.close(), AUTO_CLOSE_NOTIFICATION_MS);
   }
 
   async requestPermission() {

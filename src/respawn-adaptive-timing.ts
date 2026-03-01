@@ -76,11 +76,6 @@ export class RespawnAdaptiveTiming {
    * @returns Completion confirm timeout in milliseconds
    */
   getAdaptiveCompletionConfirmMs(): number {
-    // Need at least 5 samples before adjusting
-    if (this.timingHistory.sampleCount < 5) {
-      return this.timingHistory.adaptiveCompletionConfirmMs;
-    }
-
     return this.timingHistory.adaptiveCompletionConfirmMs;
   }
 
