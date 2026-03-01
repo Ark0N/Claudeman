@@ -111,19 +111,19 @@ describe('writeHooksConfig', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should create .claude directory if it does not exist', () => {
-    writeHooksConfig(testDir);
+  it('should create .claude directory if it does not exist', async () => {
+    await writeHooksConfig(testDir);
     expect(existsSync(join(testDir, '.claude'))).toBe(true);
   });
 
-  it('should create settings.local.json', () => {
-    writeHooksConfig(testDir);
+  it('should create settings.local.json', async () => {
+    await writeHooksConfig(testDir);
     const settingsPath = join(testDir, '.claude', 'settings.local.json');
     expect(existsSync(settingsPath)).toBe(true);
   });
 
-  it('should write valid JSON', () => {
-    writeHooksConfig(testDir);
+  it('should write valid JSON', async () => {
+    await writeHooksConfig(testDir);
     const settingsPath = join(testDir, '.claude', 'settings.local.json');
     const content = readFileSync(settingsPath, 'utf-8');
     const parsed = JSON.parse(content);
@@ -132,8 +132,8 @@ describe('writeHooksConfig', () => {
     expect(parsed.hooks).toHaveProperty('Stop');
   });
 
-  it('should include hooks config in output', () => {
-    writeHooksConfig(testDir);
+  it('should include hooks config in output', async () => {
+    await writeHooksConfig(testDir);
     const settingsPath = join(testDir, '.claude', 'settings.local.json');
     const parsed = JSON.parse(readFileSync(settingsPath, 'utf-8'));
     expect(parsed.hooks).toBeDefined();
@@ -141,7 +141,7 @@ describe('writeHooksConfig', () => {
     expect(parsed.hooks.Stop).toHaveLength(1);
   });
 
-  it('should merge with existing settings.local.json', () => {
+  it('should merge with existing settings.local.json', async () => {
     const claudeDir = join(testDir, '.claude');
     mkdirSync(claudeDir, { recursive: true });
     writeFileSync(
@@ -149,7 +149,7 @@ describe('writeHooksConfig', () => {
       JSON.stringify({ existingKey: 'existingValue', permissions: { allow: ['Read'] } }, null, 2),
     );
 
-    writeHooksConfig(testDir);
+    await writeHooksConfig(testDir);
 
     const parsed = JSON.parse(readFileSync(join(claudeDir, 'settings.local.json'), 'utf-8'));
     expect(parsed.existingKey).toBe('existingValue');
@@ -157,7 +157,7 @@ describe('writeHooksConfig', () => {
     expect(parsed.hooks).toBeDefined();
   });
 
-  it('should overwrite existing hooks key', () => {
+  it('should overwrite existing hooks key', async () => {
     const claudeDir = join(testDir, '.claude');
     mkdirSync(claudeDir, { recursive: true });
     writeFileSync(
@@ -165,26 +165,26 @@ describe('writeHooksConfig', () => {
       JSON.stringify({ hooks: { oldHook: [] } }, null, 2),
     );
 
-    writeHooksConfig(testDir);
+    await writeHooksConfig(testDir);
 
     const parsed = JSON.parse(readFileSync(join(claudeDir, 'settings.local.json'), 'utf-8'));
     expect(parsed.hooks.oldHook).toBeUndefined();
     expect(parsed.hooks.Notification).toBeDefined();
   });
 
-  it('should handle malformed existing settings.local.json', () => {
+  it('should handle malformed existing settings.local.json', async () => {
     const claudeDir = join(testDir, '.claude');
     mkdirSync(claudeDir, { recursive: true });
     writeFileSync(join(claudeDir, 'settings.local.json'), 'not valid json{{{');
 
-    writeHooksConfig(testDir);
+    await writeHooksConfig(testDir);
 
     const parsed = JSON.parse(readFileSync(join(claudeDir, 'settings.local.json'), 'utf-8'));
     expect(parsed.hooks).toBeDefined();
   });
 
-  it('should end file with newline', () => {
-    writeHooksConfig(testDir);
+  it('should end file with newline', async () => {
+    await writeHooksConfig(testDir);
     const content = readFileSync(join(testDir, '.claude', 'settings.local.json'), 'utf-8');
     expect(content.endsWith('\n')).toBe(true);
   });
