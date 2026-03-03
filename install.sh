@@ -312,6 +312,32 @@ get_opencode_path() {
     done
 }
 
+check_cloudflared() {
+    # Check ~/.local/bin first (matches tunnel-manager.ts resolution order)
+    if [[ -x "$HOME/.local/bin/cloudflared" ]]; then
+        return 0
+    fi
+    if [[ -x "/usr/local/bin/cloudflared" ]]; then
+        return 0
+    fi
+    if command -v cloudflared &>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+get_cloudflared_path() {
+    if [[ -x "$HOME/.local/bin/cloudflared" ]]; then
+        echo "$HOME/.local/bin/cloudflared"
+        return
+    fi
+    if [[ -x "/usr/local/bin/cloudflared" ]]; then
+        echo "/usr/local/bin/cloudflared"
+        return
+    fi
+    command -v cloudflared 2>/dev/null
+}
+
 # ============================================================================
 # Dependency Installation
 # ============================================================================
@@ -541,6 +567,70 @@ install_git_suse() {
     run_as_root zypper install -y git
 }
 
+install_cloudflared_macos() {
+    info "Installing cloudflared via Homebrew..."
+    ensure_homebrew
+    brew install cloudflared
+}
+
+install_cloudflared_debian() {
+    info "Installing cloudflared..."
+    ensure_sudo
+    local arch
+    arch="$(dpkg --print-architecture 2>/dev/null || echo "amd64")"
+    local tmp
+    tmp="$(mktemp)"
+    download "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$arch.deb" "$tmp"
+    run_as_root dpkg -i "$tmp"
+    rm -f "$tmp"
+}
+
+install_cloudflared_fedora() {
+    info "Installing cloudflared..."
+    ensure_sudo
+    local arch
+    arch="$(uname -m)"
+    local rpm_arch="$arch"
+    [[ "$arch" == "x86_64" ]] && rpm_arch="x86_64"
+    [[ "$arch" == "aarch64" ]] && rpm_arch="aarch64"
+    local tmp
+    tmp="$(mktemp)"
+    download "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$rpm_arch.rpm" "$tmp"
+    run_as_root rpm -i "$tmp" || run_as_root rpm -U "$tmp"
+    rm -f "$tmp"
+}
+
+install_cloudflared_arch() {
+    info "Installing cloudflared via pacman..."
+    ensure_sudo
+    run_as_root pacman -Sy --noconfirm cloudflared
+}
+
+install_cloudflared_alpine() {
+    info "Installing cloudflared binary..."
+    local arch
+    arch="$(uname -m)"
+    local cf_arch="amd64"
+    [[ "$arch" == "aarch64" ]] && cf_arch="arm64"
+    [[ "$arch" == "armv7l" ]] && cf_arch="arm"
+    ensure_sudo
+    download "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$cf_arch" /usr/local/bin/cloudflared
+    run_as_root chmod +x /usr/local/bin/cloudflared
+}
+
+install_cloudflared_suse() {
+    info "Installing cloudflared..."
+    ensure_sudo
+    local arch
+    arch="$(uname -m)"
+    local rpm_arch="$arch"
+    local tmp
+    tmp="$(mktemp)"
+    download "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$rpm_arch.rpm" "$tmp"
+    run_as_root rpm -i "$tmp" || run_as_root rpm -U "$tmp"
+    rm -f "$tmp"
+}
+
 # ============================================================================
 # Interactive Prompts
 # ============================================================================
@@ -733,6 +823,22 @@ EOF
     success "Systemd service installed and started"
 }
 
+setup_tunnel_service() {
+    local service_dir="$HOME/.config/systemd/user"
+    local service_file="$service_dir/codeman-tunnel.service"
+
+    info "Setting up Cloudflare tunnel systemd service..."
+
+    mkdir -p "$service_dir"
+    cp "$INSTALL_DIR/scripts/codeman-tunnel.service" "$service_file"
+
+    systemctl --user daemon-reload
+    systemctl --user enable codeman-tunnel.service 2>/dev/null || true
+
+    success "Tunnel service installed (start with: systemctl --user start codeman-tunnel)"
+    echo -e "  ${DIM}Note: Set CODEMAN_PASSWORD env var before starting the tunnel for security.${NC}"
+}
+
 # ============================================================================
 # Installation Helpers
 # ============================================================================
@@ -915,6 +1021,24 @@ main() {
         fi
     fi
 
+    # cloudflared (optional — for remote/mobile access via Cloudflare Tunnel)
+    info "Checking cloudflared (optional, for remote access)..."
+    if check_cloudflared; then
+        success "cloudflared found at $(get_cloudflared_path)"
+    else
+        if prompt_yes_no "Install cloudflared? (enables remote/mobile access via Cloudflare Tunnel)" "n"; then
+            install_dependency "cloudflared" "$os" "$distro"
+            hash -r 2>/dev/null || true
+            if check_cloudflared; then
+                success "cloudflared installed at $(get_cloudflared_path)"
+            else
+                warn "cloudflared installation failed. You can install it manually later."
+            fi
+        else
+            info "Skipped (you can install cloudflared later for remote access)"
+        fi
+    fi
+
     echo ""
 
     # ========================================================================
@@ -989,18 +1113,7 @@ main() {
     fi
 
     # ========================================================================
-    # Systemd Service (Linux only)
-    # ========================================================================
-
-    if [[ "$os" == "linux" ]] && [[ "$SKIP_SYSTEMD" != "1" ]] && command -v systemctl &>/dev/null; then
-        echo ""
-        if prompt_yes_no "Set up systemd service for auto-start?" "n"; then
-            setup_systemd_service
-        fi
-    fi
-
-    # ========================================================================
-    # Success!
+    # Launch Options
     # ========================================================================
 
     echo ""
@@ -1009,13 +1122,73 @@ main() {
     echo -e "${GREEN}${BOLD}============================================================${NC}"
     echo ""
 
-    # Check if systemd service is running (we just started it above)
-    local service_running=false
-    if systemctl --user is-active codeman-web.service &>/dev/null; then
-        service_running=true
+    local launch_choice=""
+    local has_systemd=false
+
+    if [[ "$os" == "linux" ]] && [[ "$SKIP_SYSTEMD" != "1" ]] && command -v systemctl &>/dev/null; then
+        has_systemd=true
     fi
 
-    if [[ "$service_running" == "true" ]]; then
+    if [[ "$has_systemd" == "true" ]]; then
+        echo -e "  ${BOLD}How would you like to run Codeman?${NC}"
+        echo ""
+        echo -e "    ${CYAN}1)${NC} Run now in this terminal"
+        echo -e "    ${CYAN}2)${NC} Install as systemd service (auto-start on boot)"
+        echo -e "    ${CYAN}3)${NC} Don't start — I'll run it later"
+        echo ""
+
+        if [[ "$NONINTERACTIVE" == "1" ]] || [[ ! -t 0 ]]; then
+            launch_choice="3"
+        else
+            while true; do
+                echo -en "${CYAN}Choose [1/2/3]:${NC} " >&2
+                read -r launch_choice
+                case "$launch_choice" in
+                    1|2|3) break ;;
+                    *) echo "Please enter 1, 2, or 3." >&2 ;;
+                esac
+            done
+        fi
+    else
+        # macOS or no systemd — only offer run now or skip
+        echo -e "  ${BOLD}Would you like to start Codeman now?${NC}"
+        echo ""
+        echo -e "    ${CYAN}1)${NC} Run now in this terminal"
+        echo -e "    ${CYAN}2)${NC} Don't start — I'll run it later"
+        echo ""
+
+        if [[ "$NONINTERACTIVE" == "1" ]] || [[ ! -t 0 ]]; then
+            launch_choice="2"
+        else
+            while true; do
+                echo -en "${CYAN}Choose [1/2]:${NC} " >&2
+                read -r launch_choice
+                case "$launch_choice" in
+                    1) break ;;
+                    2) break ;;
+                    *) echo "Please enter 1 or 2." >&2 ;;
+                esac
+            done
+        fi
+        # Remap: no-systemd choice "2" (skip) → internal "3"
+        [[ "$launch_choice" == "2" ]] && launch_choice="3"
+    fi
+
+    echo ""
+
+    # Handle systemd setup
+    if [[ "$launch_choice" == "2" ]]; then
+        setup_systemd_service
+
+        # Offer tunnel service if cloudflared is available
+        if check_cloudflared && [[ -f "$INSTALL_DIR/scripts/codeman-tunnel.service" ]]; then
+            echo ""
+            if prompt_yes_no "Also set up Cloudflare tunnel service? (requires CODEMAN_PASSWORD)" "n"; then
+                setup_tunnel_service
+            fi
+        fi
+
+        echo ""
         echo -e "  ${GREEN}${BOLD}Codeman is running now!${NC}"
         echo ""
         echo -e "    ${CYAN}# Open in browser${NC}"
@@ -1028,17 +1201,26 @@ main() {
         echo -e "    ${CYAN}systemctl --user status codeman-web${NC}  # Check status"
         echo -e "    ${CYAN}journalctl --user -u codeman-web -f${NC}  # View logs"
         echo ""
-    else
+    fi
+
+    # Show quick-start help for non-service paths
+    if [[ "$launch_choice" != "2" ]]; then
         echo -e "  ${BOLD}Quick Start:${NC}"
         echo ""
-        echo -e "    ${CYAN}# Start the web server${NC}"
-        echo -e "    codeman web"
-        echo ""
-        echo -e "    ${CYAN}# Start with HTTPS (only needed for remote access)${NC}"
-        echo -e "    codeman web --https"
+        echo -e "    ${CYAN}codeman web${NC}            # Start the web server"
+        echo -e "    ${CYAN}codeman web --https${NC}    # With HTTPS (for remote access)"
         echo ""
         echo -e "    ${CYAN}# Open in browser${NC}"
         echo -e "    http://localhost:3000"
+        echo ""
+    fi
+
+    if check_cloudflared; then
+        echo -e "  ${BOLD}Remote Access (Cloudflare Tunnel):${NC}"
+        echo ""
+        echo -e "    ${CYAN}./scripts/tunnel.sh start${NC}   # Start tunnel"
+        echo -e "    ${CYAN}./scripts/tunnel.sh url${NC}     # Show tunnel URL"
+        echo -e "    ${CYAN}./scripts/tunnel.sh stop${NC}    # Stop tunnel"
         echo ""
     fi
 
@@ -1060,16 +1242,19 @@ main() {
         echo ""
     fi
 
-    # Check if PATH needs reload in user's shell (only relevant if service not running)
-    if [[ "$service_running" != "true" ]]; then
+    # Run now in foreground (must be last — exec replaces the shell)
+    if [[ "$launch_choice" == "1" ]]; then
         local profile
         profile=$(detect_shell_profile)
-        if ! command -v codeman &>/dev/null 2>&1; then
-            echo -e "  ${YELLOW}Run this to start using codeman now:${NC}"
-            echo ""
-            echo -e "    ${CYAN}source $profile && codeman web${NC}"
-            echo ""
-        fi
+
+        echo -e "  ${GREEN}${BOLD}Starting Codeman...${NC}"
+        echo -e "  ${DIM}Press Ctrl+C to stop${NC}"
+        echo ""
+
+        # Source profile to pick up PATH changes, then exec codeman
+        # shellcheck disable=SC1090
+        source "$profile" 2>/dev/null || true
+        exec node "$INSTALL_DIR/dist/index.js" web
     fi
 }
 
@@ -1095,21 +1280,23 @@ uninstall() {
     info "Uninstalling Codeman..."
     echo ""
 
-    # Stop and remove systemd service
-    if systemctl --user is-active codeman-web.service &>/dev/null; then
-        info "Stopping codeman-web service..."
-        systemctl --user stop codeman-web.service
-    fi
-    if systemctl --user is-enabled codeman-web.service &>/dev/null 2>&1; then
-        info "Disabling codeman-web service..."
-        systemctl --user disable codeman-web.service 2>/dev/null || true
-    fi
-    local service_file="$HOME/.config/systemd/user/codeman-web.service"
-    if [[ -f "$service_file" ]]; then
-        rm -f "$service_file"
-        systemctl --user daemon-reload 2>/dev/null || true
-        success "Systemd service removed"
-    fi
+    # Stop and remove systemd services
+    for svc in codeman-web codeman-tunnel; do
+        if systemctl --user is-active "${svc}.service" &>/dev/null; then
+            info "Stopping ${svc} service..."
+            systemctl --user stop "${svc}.service"
+        fi
+        if systemctl --user is-enabled "${svc}.service" &>/dev/null 2>&1; then
+            info "Disabling ${svc} service..."
+            systemctl --user disable "${svc}.service" 2>/dev/null || true
+        fi
+        local svc_file="$HOME/.config/systemd/user/${svc}.service"
+        if [[ -f "$svc_file" ]]; then
+            rm -f "$svc_file"
+            success "Removed ${svc} service"
+        fi
+    done
+    systemctl --user daemon-reload 2>/dev/null || true
 
     # Remove symlinks
     local symlink_dir="$HOME/.local/bin"
