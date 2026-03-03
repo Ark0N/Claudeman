@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.3.1
+
+### Patch Changes
+
+- LLM context optimization and performance improvements: compress CLAUDE.md 21%, MEMORY.md 61%; SSE broadcast early return, cached tunnel state, cache invalidation fix, ralph todo cleanup timer; frontend SSE listener leak fix, short ID caching, subagent window handle cleanup; 100% @fileoverview coverage
+
 ## 0.3.0
 
 ### Minor Changes

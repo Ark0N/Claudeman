@@ -1,10 +1,12 @@
 /**
- * Research Agent Prompt
- *
- * Gathers external resources, codebase patterns, and technical context
- * before other agents analyze the task.
+ * @fileoverview Research Agent Prompt — gathers codebase patterns, external
+ * resources, and technical context before the planner analyzes the task.
  *
  * Placeholders: {TASK}, {WORKING_DIR}
+ *
+ * @dependencies none (pure template)
+ * @consumedby prompts/index (re-export), plan-orchestrator
+ * @module prompts/research-agent
  */
 
 export const RESEARCH_AGENT_PROMPT = `You are a Research Specialist preparing context for an implementation task. Your job is to gather all relevant information that will help the development team succeed.

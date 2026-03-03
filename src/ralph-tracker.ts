@@ -54,6 +54,7 @@ import {
   todoContentHash,
   stringSimilarity,
   Debouncer,
+  CleanupManager,
 } from './utils/index.js';
 import { MAX_LINE_BUFFER_SIZE } from './config/buffer-limits.js';
 import { MAX_TODOS_PER_SESSION } from './config/map-limits.js';
@@ -76,11 +77,18 @@ export type { EnhancedPlanTask, CheckpointReview } from './ralph-plan-tracker.js
 const TODO_EXPIRY_MS = 60 * 60 * 1000;
 
 /**
- * Minimum interval between cleanup checks (in milliseconds).
+ * Minimum interval between on-demand cleanup checks (in milliseconds).
  * Prevents running cleanup on every data chunk.
  * Default: 30 seconds
  */
 const CLEANUP_THROTTLE_MS = 30 * 1000;
+
+/**
+ * Interval for periodic todo expiry cleanup (in milliseconds).
+ * Actively purges expired todos even when no terminal data is flowing.
+ * Default: 5 minutes
+ */
+const TODO_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
  * Similarity threshold for todo deduplication.
@@ -517,6 +525,9 @@ export class RalphTracker extends EventEmitter {
   /** Last calculated completion confidence */
   private _lastCompletionConfidence: CompletionConfidence | undefined;
 
+  /** Manages periodic cleanup timers (todo expiry) */
+  private cleanup = new CleanupManager();
+
   /** Confidence threshold for triggering completion (0-100) */
   private static readonly COMPLETION_CONFIDENCE_THRESHOLD = 70;
 
@@ -536,6 +547,12 @@ export class RalphTracker extends EventEmitter {
 
     // Wire sub-module events
     this._wireSubModuleEvents();
+
+    // Periodic cleanup of expired todos — ensures stale entries are purged
+    // even when no terminal data is flowing (e.g., idle sessions)
+    this.cleanup.setInterval(() => this.cleanupExpiredTodos(), TODO_CLEANUP_INTERVAL_MS, {
+      description: 'ralph todo expiry cleanup',
+    });
   }
 
   /**
@@ -2204,6 +2221,7 @@ export class RalphTracker extends EventEmitter {
     if (toDelete.length > 0) {
       for (const id of toDelete) {
         this._todos.delete(id);
+        this._todoStartTimes.delete(id);
       }
       this.emit('todoUpdate', this.todos);
     }
@@ -2348,6 +2366,7 @@ export class RalphTracker extends EventEmitter {
    * Clean up all resources and release memory.
    */
   destroy(): void {
+    this.cleanup.dispose();
     this._todoDeb.dispose();
     this._loopDeb.dispose();
     this.fixPlanWatcher.destroy();

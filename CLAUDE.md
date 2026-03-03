@@ -52,7 +52,7 @@ When user says "COM":
 4. **Sync CLAUDE.md version**: Update the `**Version**` line below to match the new version from `package.json`
 5. **Commit and deploy**: `git add -A && git commit -m "chore: version packages" && git push && npm run build && systemctl --user restart codeman-web`
 
-**Version**: 0.3.0 (must match `package.json`)
+**Version**: 0.3.1 (must match `package.json`)
 
 ## Project Overview
 
@@ -84,20 +84,12 @@ Codeman is a Claude Code session manager with web interface and autonomous Ralph
 
 ## Common Gotchas
 
-- **Single-line prompts only** — `writeViaMux()` sends text and Enter separately; multi-line breaks Ink
-- **Don't kill tmux sessions blindly** — Check `$CODEMAN_MUX` first; you might be inside one
-- **Global regex `lastIndex` sharing** — `ANSI_ESCAPE_PATTERN_FULL/SIMPLE` have `g` flag; use `createAnsiPatternFull/Simple()` factory functions for fresh instances in loops
-- **DEC 2026 sync blocks** — Never discard incomplete sync blocks (START without END); buffer up to 50ms then flush. See `app.js:extractSyncSegments()`
-- **Terminal writes during buffer load** — Live SSE writes are queued while `_isLoadingBuffer` is true to prevent interleaving with historical data
-- **Local echo prompt scanning** — Does NOT use `buffer.cursorY` (Ink moves it); scans buffer bottom-up for visible `>` prompt marker
-- **ESM dynamic imports** — Never use `require()` in this codebase; it breaks in production ESM builds. Use `await import()` for dynamic imports. (`tsx` masks this in dev by shimming CJS/ESM)
-- **Package name vs product name** — npm package is `aicodeman`, product is **Codeman**. Release workflow renames `aicodeman@X.Y.Z` tags to `codeman@X.Y.Z`
+- **Single-line prompts only** — `writeViaMux()` sends text+Enter separately; multi-line breaks Ink
+- **ESM only** — Never `require()`, use `await import()`. `tsx` masks CJS/ESM issues in dev but production breaks
+- **Package ≠ product name** — npm: `aicodeman`, product: **Codeman**. Release renames tags accordingly
+- **Global regex `lastIndex`** — Use `createAnsiPatternFull/Simple()` factories, not shared `g`-flag patterns in loops
 
-## Import Conventions
-
-- **Utilities**: Import from `./utils` (re-exports all): `import { LRUMap, stripAnsi } from './utils'`
-- **Types**: Use type imports from barrel: `import type { SessionState } from './types'` (re-exports from `src/types/` domain files)
-- **Config**: Import from specific files: `import { MAX_TERMINAL_BUFFER_SIZE } from './config/buffer-limits'`
+**Import conventions**: Utils from `./utils`, types from `./types` (barrel), config from specific `./config/*` files.
 
 ## Architecture
 
@@ -105,28 +97,28 @@ Codeman is a Claude Code session manager with web interface and autonomous Ralph
 
 | Domain | Key files | Notes |
 |--------|-----------|-------|
-| **Entry** | `src/index.ts`, `src/cli.ts` | CLI entry point, global error recovery |
-| **Session** | `src/session.ts` ★, `src/session-manager.ts`, `src/session-auto-ops.ts`, `src/session-cli-builder.ts` | PTY wrapper, lifecycle, auto-compact |
-| **Mux** | `src/mux-interface.ts`, `src/mux-factory.ts`, `src/tmux-manager.ts` | tmux abstraction layer |
-| **Respawn** | `src/respawn-controller.ts` ★ + 4 helpers (`-adaptive-timing`, `-health`, `-metrics`, `-patterns`) | Autonomous cycling state machine |
-| **Ralph** | `src/ralph-tracker.ts` ★, `src/ralph-loop.ts` + 5 helpers (`-config`, `-fix-plan-watcher`, `-plan-tracker`, `-stall-detector`, `-status-parser`) | Completion tracking, autonomous task loop |
-| **Agents** | `src/subagent-watcher.ts` ★, `src/team-watcher.ts`, `src/bash-tool-parser.ts`, `src/transcript-watcher.ts` | Background agent monitoring |
-| **AI** | `src/ai-checker-base.ts`, `src/ai-idle-checker.ts`, `src/ai-plan-checker.ts` | AI-powered idle/plan detection |
-| **Tasks** | `src/task.ts`, `src/task-queue.ts`, `src/task-tracker.ts` | Task model, priority queue |
-| **State** | `src/state-store.ts`, `src/run-summary.ts`, `src/session-lifecycle-log.ts` | Persistence, timeline, audit log |
-| **Infra** | `src/hooks-config.ts`, `src/push-store.ts`, `src/tunnel-manager.ts`, `src/image-watcher.ts`, `src/file-stream-manager.ts` | Hooks, push, tunnel, file watching |
-| **Plan** | `src/plan-orchestrator.ts`, `src/prompts/*.ts`, `src/templates/claude-md.ts` | 2-agent plan generation |
-| **Web** | `src/web/server.ts`, `src/web/sse-events.ts`, `src/web/routes/*.ts` (13 modules), `src/web/ports/*.ts`, `src/web/middleware/auth.ts`, `src/web/schemas.ts` | Fastify server, SSE event registry, REST API |
-| **Frontend** | `src/web/public/app.js` ★ (~11.5K lines) + 8 JS modules | xterm.js UI, tabs, settings |
-| **Types** | `src/types/index.ts` → 13 domain files | Barrel re-export, see `@fileoverview` in index.ts |
+| **Entry** | `src/index.ts`, `src/cli.ts` | |
+| **Session** | `src/session.ts` ★, `src/session-manager.ts`, `src/session-auto-ops.ts`, `src/session-cli-builder.ts` | |
+| **Mux** | `src/mux-interface.ts`, `src/mux-factory.ts`, `src/tmux-manager.ts` | |
+| **Respawn** | `src/respawn-controller.ts` ★ + 4 helpers (`-adaptive-timing`, `-health`, `-metrics`, `-patterns`) | Read `docs/respawn-state-machine.md` first |
+| **Ralph** | `src/ralph-tracker.ts` ★, `src/ralph-loop.ts` + 5 helpers (`-config`, `-fix-plan-watcher`, `-plan-tracker`, `-stall-detector`, `-status-parser`) | Read `docs/ralph-wiggum-guide.md` first |
+| **Agents** | `src/subagent-watcher.ts` ★, `src/team-watcher.ts`, `src/bash-tool-parser.ts`, `src/transcript-watcher.ts` | |
+| **AI** | `src/ai-checker-base.ts`, `src/ai-idle-checker.ts`, `src/ai-plan-checker.ts` | |
+| **Tasks** | `src/task.ts`, `src/task-queue.ts`, `src/task-tracker.ts` | |
+| **State** | `src/state-store.ts`, `src/run-summary.ts`, `src/session-lifecycle-log.ts` | |
+| **Infra** | `src/hooks-config.ts`, `src/push-store.ts`, `src/tunnel-manager.ts`, `src/image-watcher.ts`, `src/file-stream-manager.ts` | |
+| **Plan** | `src/plan-orchestrator.ts`, `src/prompts/*.ts`, `src/templates/claude-md.ts` | |
+| **Web** | `src/web/server.ts`, `src/web/sse-events.ts`, `src/web/routes/*.ts` (13 modules), `src/web/ports/*.ts`, `src/web/middleware/auth.ts`, `src/web/schemas.ts` | |
+| **Frontend** | `src/web/public/app.js` ★ (~11.7K lines) + 9 JS modules | |
+| **Types** | `src/types/index.ts` → 14 domain files | See `@fileoverview` in index.ts |
 
-★ = Large file (>50KB), contains complex state machines. Read `docs/respawn-state-machine.md` before modifying respawn/ralph.
+★ = Large file (>50KB). All files have `@fileoverview` JSDoc — read that before diving in.
 
-**Local package**: `packages/xterm-zerolag-input/` — instant keystroke feedback overlay for xterm.js. Source of truth for `LocalEchoOverlay`; copy embedded in `app.js`. Build: `npm run build` (tsup).
+**Local package**: `packages/xterm-zerolag-input/` — local echo overlay for xterm.js; copy embedded in `app.js`.
 
-**Config**: `src/config/` — 9 files (buffer limits, map limits, timeouts, SSE timing, auth, tunnel, terminal, AI, teams). Import from specific files.
+**Config**: `src/config/` — 9 files. Import from specific files, not barrel.
 
-**Utilities**: `src/utils/` — re-exported via `src/utils/index.ts`. Key: `CleanupManager`, `LRUMap`, `StaleExpirationMap`, `BufferAccumulator`, `stripAnsi`, `createAnsiPatternFull/Simple()`, `assertNever`, `Debouncer`.
+**Utilities**: `src/utils/` — re-exported via index. Key: `CleanupManager`, `LRUMap`, `StaleExpirationMap`, `BufferAccumulator`, `stripAnsi`, `Debouncer`.
 
 ### Data Flow
 
@@ -176,24 +168,9 @@ Frontend JS modules have `@fileoverview` with `@dependency`/`@loadorder` tags. L
 
 ~100 event types in `src/web/sse-events.ts` (backend) and `SSE_EVENTS` in `constants.js` (frontend). Both must be kept in sync.
 
-### API Route Categories
+### API Routes
 
-~111 route handlers in `src/web/routes/`. Key groups:
-
-| Group | Prefix | Count | Key endpoints |
-|-------|--------|-------|---------------|
-| System | `/api/status`, `/api/stats`, `/api/config`, `/api/settings`, `/api/subagents` | 35 | App state, config, subagents |
-| Sessions | `/api/sessions` | 24 | CRUD, input, resize, interactive, shell |
-| Ralph | `/api/sessions/:id/ralph-*` | 9 | state, status, config, circuit-breaker |
-| Plan | `/api/sessions/:id/plan/*` | 8 | task CRUD, checkpoint, history, rollback |
-| Respawn | `/api/sessions/:id/respawn` | 7 | start, stop, enable, config |
-| Cases | `/api/cases` | 7 | CRUD, link, fix-plan |
-| Files | `/api/sessions/:id/file*`, `tail-file` | 5 | Browser, preview, raw, tail stream |
-| Mux | `/api/mux-sessions` | 5 | tmux management, stats |
-| Scheduled | `/api/scheduled` | 4 | CRUD for scheduled runs |
-| Push | `/api/push` | 4 | VAPID key, subscribe, update prefs, unsubscribe |
-| Teams | `/api/teams` | 2 | list teams, get team tasks |
-| Hooks | `/api/hook-event` | 1 | Hook event ingestion |
+~111 handlers across 13 route files in `src/web/routes/`: system (35), sessions (24), ralph (9), plan (8), respawn (7), cases (7), files (5), mux (5), scheduled (4), push (4), teams (2), hooks (1). Each file has `@fileoverview` with endpoint details.
 
 ## Adding Features
 
@@ -208,18 +185,7 @@ Frontend JS modules have `@fileoverview` with `@dependency`/`@loadorder` tags. L
 
 ## State Files
 
-| File | Purpose |
-|------|---------|
-| `~/.codeman/state.json` | Sessions, settings, tokens, respawn config |
-| `~/.codeman/mux-sessions.json` | Tmux session metadata for recovery |
-| `~/.codeman/settings.json` | User preferences |
-| `~/.codeman/push-keys.json` | VAPID key pair for Web Push (auto-generated) |
-| `~/.codeman/push-subscriptions.json` | Push notification subscriptions |
-| `~/.codeman/session-lifecycle.jsonl` | Append-only audit log (QR auth, session events) |
-
-## Default Settings
-
-UI defaults in `app.js` using `??` fallbacks. Edit `openAppSettings()` and `apply*Visibility()` to change. Key defaults: most panels hidden (monitor, subagents shown), notifications on (audio off), subagent tracking on, Ralph tracking off.
+All in `~/.codeman/`: `state.json` (sessions, settings, respawn), `mux-sessions.json` (tmux recovery), `settings.json` (user prefs), `push-keys.json` (VAPID), `push-subscriptions.json`, `session-lifecycle.jsonl` (audit log).
 
 ## Testing
 
@@ -241,69 +207,40 @@ npx vitest run -t "pattern"                      # By name (SAFE)
 
 ## Screenshots
 
-"sc"/"screenshot" = uploaded mobile screenshots in `~/.codeman/screenshots/`. View with Read tool. API: `GET /api/screenshots` (list), `POST /api/screenshots` (upload).
+Mobile screenshots in `~/.codeman/screenshots/`. API: `GET /api/screenshots`, `POST /api/screenshots`.
 
-## Debugging & Troubleshooting
+## Debugging
 
 ```bash
 tmux list-sessions                                 # List tmux sessions
 curl localhost:3000/api/sessions | jq              # Check sessions
 curl localhost:3000/api/status | jq                # Full app state
 curl localhost:3000/api/subagents | jq             # Background agents
-curl localhost:3000/api/sessions/:id/run-summary | jq  # Session timeline
 cat ~/.codeman/state.json | jq                     # Persisted state
 ```
 
-| Problem | Fix |
-|---------|-----|
-| Session won't start | Kill orphaned tmux sessions, check Claude CLI installed |
-| Port 3000 in use | `lsof -i :3000`, kill conflicting process or use `--port` |
-| SSE not connecting | Check CORS, ensure server running, check browser console |
-| Respawn not triggering | Enable respawn in session settings, check idle timeout |
-| Terminal blank on tab switch | Check session exists, restart server |
-| Tests failing on session limits | `tmux list-sessions \| grep test \| awk -F: '{print $1}' \| xargs -I{} tmux kill-session -t {}` |
+## Performance & Limits
 
-## Performance & Resource Limits
-
-Must stay fast with 20 sessions and 50 agent windows. Key: 60fps terminal (16ms batching + rAF), auto-trimming buffers, debounced state persistence (500ms), SSE adaptive batching (16-50ms), backpressure handling, cached endpoints (1s TTL for `/api/sessions` and `/api/status`).
-
-**Anti-flicker**: `PTY → Server Batching → DEC 2026 Wrap → SSE → Client rAF → xterm.js`. See `docs/terminal-anti-flicker.md`.
-
-**Limits** in `src/config/` (buffer-limits.ts, map-limits.ts, etc.). Key: terminal 2MB/1.5MB trim, text 1MB/768KB, messages 1000/800, max agents 500, max sessions 50, max SSE clients 100. Use `LRUMap` for bounded caches, `StaleExpirationMap` for TTL cleanup.
+Target: 20 sessions, 50 agent windows at 60fps. Limits in `src/config/`: terminal 2MB, text 1MB, messages 1000, max agents 500, max sessions 50, max SSE clients 100. Use `LRUMap` for bounded caches, `StaleExpirationMap` for TTL cleanup. Anti-flicker pipeline: `docs/terminal-anti-flicker.md`.
 
 ## References
 
-| Topic | Location |
-|-------|----------|
-| Respawn state machine | `docs/respawn-state-machine.md` |
-| Ralph Loop guide | `docs/ralph-wiggum-guide.md` |
-| Claude Code hooks | `docs/claude-code-hooks-reference.md` |
-| Terminal anti-flicker | `docs/terminal-anti-flicker.md` |
-| Agent Teams | `agent-teams/README.md`, `agent-teams/design.md` |
-| OpenCode integration | `docs/opencode-integration.md` |
-| QR auth design | `docs/qr-auth-plan.md` |
-| SSE events | `src/web/sse-events.ts` + `constants.js` |
-| Types architecture | `src/types/index.ts` `@fileoverview` |
-| API routes | `src/web/routes/` — each file has `@fileoverview` |
+Deep-dive docs in `docs/`: `respawn-state-machine.md`, `ralph-wiggum-guide.md`, `claude-code-hooks-reference.md`, `terminal-anti-flicker.md`, `opencode-integration.md`, `qr-auth-plan.md`. Agent Teams: `agent-teams/README.md`. SSE events: `src/web/sse-events.ts` + `constants.js`.
 
 ## Scripts
 
-Key: `scripts/tmux-manager.sh` (safe tmux mgmt), `scripts/tunnel.sh` (tunnel start/stop/url), `scripts/monitor-respawn.sh` (respawn monitoring), `scripts/watch-subagents.ts` (transcript watcher). Production services: `scripts/codeman-web.service`, `scripts/codeman-tunnel.service`.
+Key: `scripts/tmux-manager.sh` (safe tmux mgmt), `scripts/tunnel.sh` (tunnel start/stop/url). Production: `scripts/codeman-web.service`, `scripts/codeman-tunnel.service`.
 
 ## Memory Leak Prevention
 
-24+ hour sessions require cleanup of all Maps/timers. Backend: use `CleanupManager`, clear Maps in `stop()`, guard async with `if (this.cleanup.isStopped) return`. Frontend: store handler refs, clean in `close*()`, SSE reconnect resets via `handleInit()`. Verify: `npx vitest run test/memory-leak-prevention.test.ts`.
+24+ hour sessions: use `CleanupManager`, clear Maps in `stop()`, guard async with `if (this.cleanup.isStopped) return`. Frontend: store handler refs, clean in `close*()`. Verify: `npx vitest run test/memory-leak-prevention.test.ts`.
 
 ## Common Workflows
 
-**Investigating a bug**: Start dev server, reproduce in browser, check terminal + `~/.codeman/state.json`.
+**Bug investigation**: Dev server → reproduce in browser → check terminal + `~/.codeman/state.json`.
+**API endpoint**: Types in `src/types/*.ts` → route in `src/web/routes/*-routes.ts` → SSE event if needed → handle in `app.js`.
+**Respawn changes**: Read `docs/respawn-state-machine.md` first. Use `MockSession` from `test/respawn-test-utils.ts`.
 
-**Adding an API endpoint**: Types in `src/types/*.ts`, route in `src/web/routes/*-routes.ts`, broadcast SSE if needed, handle in `app.js:handleSSEEvent()`.
+## Tunnel
 
-**Modifying respawn**: Study `docs/respawn-state-machine.md` first. Use `MockSession` from `test/respawn-test-utils.ts`.
-
-**Modifying mobile**: Singletons have `init()`/`cleanup()` lifecycle. Re-initialized after SSE reconnect to prevent stale closures.
-
-## Tunnel Setup
-
-Remote access via Cloudflare quick tunnel: `./scripts/tunnel.sh start|stop|url`. Web UI: Settings → Tunnel. Persistent: `systemctl --user enable --now codeman-tunnel`. **Always set `CODEMAN_PASSWORD`** before exposing via tunnel.
+`./scripts/tunnel.sh start|stop|url`. **Always set `CODEMAN_PASSWORD`** before exposing via tunnel.

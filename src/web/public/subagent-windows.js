@@ -1012,19 +1012,20 @@ Object.assign(CodemanApp.prototype, {
       }
     };
 
-    // Mouse events
-    handle.addEventListener('mousedown', (e) => {
+    // Named handle-level listeners (stored for explicit cleanup on window close)
+    const handleMouseDown = (e) => {
       if (e.target.tagName === 'BUTTON') return;
       startDrag(e.clientX, e.clientY);
       e.preventDefault();
-    });
-
-    // Touch events
-    handle.addEventListener('touchstart', (e) => {
+    };
+    const handleTouchStart = (e) => {
       if (e.target.tagName === 'BUTTON') return;
       const touch = e.touches[0];
       startDrag(touch.clientX, touch.clientY);
-    }, { passive: true });
+    };
+
+    handle.addEventListener('mousedown', handleMouseDown);
+    handle.addEventListener('touchstart', handleTouchStart, { passive: true });
 
     // Store references to document-level listeners so they can be removed on window close
     const moveListener = (e) => {
@@ -1048,8 +1049,15 @@ Object.assign(CodemanApp.prototype, {
     document.addEventListener('touchend', upListener);
     document.addEventListener('touchcancel', upListener);
 
-    // Return listener references for cleanup
-    return { move: moveListener, up: upListener, touchMove: touchMoveListener };
+    // Return all listener references for cleanup (both handle-level and document-level)
+    return {
+      move: moveListener,
+      up: upListener,
+      touchMove: touchMoveListener,
+      handle,
+      handleMouseDown,
+      handleTouchStart,
+    };
   },
 
   // Show subagent dropdown on hover

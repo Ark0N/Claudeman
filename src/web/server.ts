@@ -270,6 +270,8 @@ export class WebServer extends EventEmitter {
     error: (error: Error, sessionId?: string) => void;
   } | null = null;
   private tunnelManager: TunnelManager = new TunnelManager();
+  /** Cached tunnel active state — updated on TunnelStarted/TunnelStopped to avoid getUrl() on every broadcast */
+  private _isTunnelActive: boolean = false;
   private authSessions: StaleExpirationMap<string, import('./ports/auth-port.js').AuthSessionRecord> | null = null;
   private authFailures: StaleExpirationMap<string, number> | null = null;
   private qrAuthFailures: StaleExpirationMap<string, number> | null = null;
@@ -326,9 +328,11 @@ export class WebServer extends EventEmitter {
 
     // Set up tunnel manager listeners
     this.tunnelManager.on('started', (data: { url: string }) => {
+      this._isTunnelActive = true;
       this.broadcast(SseEvent.TunnelStarted, data);
     });
     this.tunnelManager.on('stopped', () => {
+      this._isTunnelActive = false;
       this.broadcast(SseEvent.TunnelStopped, {});
     });
     this.tunnelManager.on('error', (message: string) => {
@@ -601,7 +605,7 @@ export class WebServer extends EventEmitter {
       this.sendSSE(reply, SseEvent.Init, this.getLightState());
       // Flush Cloudflare tunnel buffer with padding — ensures the init event
       // (and any immediately following events) are delivered without proxy delay.
-      if (this.tunnelManager.getUrl()) {
+      if (this._isTunnelActive) {
         try {
           reply.raw.write(SSE_PADDING);
         } catch {
@@ -1931,21 +1935,22 @@ export class WebServer extends EventEmitter {
   }
 
   private broadcast(event: string, data: unknown): void {
-    // Invalidate caches only on structurally significant events — ones that
-    // change session list content (creation, deletion, or full state refresh).
-    // High-frequency non-structural events (working/idle transitions, completion,
-    // error, respawn state changes) are NOT worth invalidating for because:
-    //   1. The debounced session:updated follows within 500ms with the new state
-    //   2. These caches serve /api/sessions and SSE init — neither is polled rapidly
-    //   3. Invalidating on every working/idle transition makes the 1s TTL useless
-    if (event === SseEvent.SessionCreated || event === SseEvent.SessionDeleted || event === SseEvent.SessionUpdated) {
+    // Skip serialization entirely when no clients are listening
+    if (this.sseClients.size === 0) return;
+
+    // Invalidate caches only on structural changes (creation/deletion).
+    // SessionUpdated fires too frequently (working/idle transitions, completion)
+    // and makes the 1s TTL cache useless — the debounced session:updated follows
+    // within 500ms anyway, and these caches serve /api/sessions and SSE init
+    // which aren't polled rapidly.
+    if (event === SseEvent.SessionCreated || event === SseEvent.SessionDeleted) {
       this.cachedLightState = null;
       this.cachedSessionsList = null;
     }
     // Performance optimization: serialize JSON once for all clients.
     // Only append Cloudflare tunnel padding when tunnel is actually active —
     // direct/Tailscale clients don't need 8KB padding on every event.
-    const padding = this.tunnelManager.getUrl() ? SSE_PADDING : '';
+    const padding = this._isTunnelActive ? SSE_PADDING : '';
     let message: string;
     try {
       message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n` + padding;
@@ -2221,7 +2226,7 @@ export class WebServer extends EventEmitter {
           // Send SSE comment as keep-alive. Only add padding when tunnel is
           // active — it flushes Cloudflare proxy buffers but wastes bandwidth
           // for direct/Tailscale connections.
-          const ka = this.tunnelManager.getUrl() ? ':keepalive\n' + SSE_PADDING : ':keepalive\n\n';
+          const ka = this._isTunnelActive ? ':keepalive\n' + SSE_PADDING : ':keepalive\n\n';
           client.raw.write(ka);
         }
       } catch {

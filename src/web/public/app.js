@@ -196,6 +196,7 @@ const _SSE_HANDLER_MAP = [
 class CodemanApp {
   constructor() {
     this.sessions = new Map();
+    this._shortIdCache = new Map(); // Cache session ID .slice(0, 8) results
     this.sessionOrder = []; // Track tab order for drag-and-drop reordering
     this.draggedTabId = null; // Currently dragged tab session ID
     this.cases = [];
@@ -1558,16 +1559,25 @@ class CodemanApp {
       this.sseReconnectTimeout = setTimeout(() => this.connectSSE(), delay);
     };
 
+    // Create stable handler wrappers once (reused across reconnects so
+    // removeEventListener always matches the original reference)
+    if (!this._sseHandlerWrappers) {
+      this._sseHandlerWrappers = new Map();
+      for (const [event, method] of _SSE_HANDLER_MAP) {
+        const fn = this[method];
+        this._sseHandlerWrappers.set(event, (e) => {
+          try {
+            fn.call(this, e.data ? JSON.parse(e.data) : {});
+          } catch (err) {
+            console.error(`[SSE] Error handling ${event}:`, err);
+          }
+        });
+      }
+    }
+
     // Register all SSE event handlers via centralized map
-    for (const [event, method] of _SSE_HANDLER_MAP) {
-      const fn = this[method];
-      addListener(event, (e) => {
-        try {
-          fn.call(this, e.data ? JSON.parse(e.data) : {});
-        } catch (err) {
-          console.error(`[SSE] Error handling ${event}:`, err);
-        }
-      });
+    for (const [event] of _SSE_HANDLER_MAP) {
+      addListener(event, this._sseHandlerWrappers.get(event));
     }
   }
 
@@ -1711,7 +1721,7 @@ class CodemanApp {
       urgency: 'critical',
       category: 'session-error',
       sessionId: data.id,
-      sessionName: session?.name || data.id?.slice(0, 8),
+      sessionName: session?.name || this.getShortId(data.id),
       title: 'Session Error',
       message: data.error || 'Unknown error',
     });
@@ -1730,7 +1740,7 @@ class CodemanApp {
         urgency: 'critical',
         category: 'session-crash',
         sessionId: data.id,
-        sessionName: session?.name || data.id?.slice(0, 8),
+        sessionName: session?.name || this.getShortId(data.id),
         title: 'Session Crashed',
         message: `Exited with code ${data.code}`,
       });
@@ -1755,7 +1765,7 @@ class CodemanApp {
           urgency: 'warning',
           category: 'session-stuck',
           sessionId: data.id,
-          sessionName: s?.name || data.id?.slice(0, 8),
+          sessionName: s?.name || this.getShortId(data.id),
           title: 'Session Idle',
           message: `Idle for ${Math.round(threshold / 60000)}+ minutes`,
         });
@@ -1794,7 +1804,7 @@ class CodemanApp {
       urgency: 'info',
       category: 'auto-clear',
       sessionId: data.sessionId,
-      sessionName: session?.name || data.sessionId?.slice(0, 8),
+      sessionName: session?.name || this.getShortId(data.sessionId),
       title: 'Auto-Cleared',
       message: `Context reset at ${(data.tokens || 0).toLocaleString()} tokens`,
     });
@@ -1880,7 +1890,7 @@ class CodemanApp {
       urgency: 'critical',
       category: 'respawn-blocked',
       sessionId: data.sessionId,
-      sessionName: session?.name || data.sessionId?.slice(0, 8),
+      sessionName: session?.name || this.getShortId(data.sessionId),
       title,
       message: data.details,
     });
@@ -1900,7 +1910,7 @@ class CodemanApp {
       urgency: 'info',
       category: 'auto-accept',
       sessionId: data.sessionId,
-      sessionName: session?.name || data.sessionId?.slice(0, 8),
+      sessionName: session?.name || this.getShortId(data.sessionId),
       title: 'Plan Accepted',
       message: `Accepted plan mode for ${session?.name || 'session'}`,
     });
@@ -2031,7 +2041,7 @@ class CodemanApp {
   _onMuxDied(data) {
     this.muxSessions = this.muxSessions.filter(s => s.sessionId !== data.sessionId);
     this.renderMuxSessions();
-    this.showToast('Mux session died: ' + data.sessionId.slice(0, 8), 'warning');
+    this.showToast('Mux session died: ' + this.getShortId(data.sessionId), 'warning');
   }
 
   _onMuxStatsUpdated(data) {
@@ -2081,7 +2091,7 @@ class CodemanApp {
       urgency: 'warning',
       category: 'ralph-complete',
       sessionId: data.sessionId,
-      sessionName: session?.name || data.sessionId?.slice(0, 8),
+      sessionName: session?.name || this.getShortId(data.sessionId),
       title: 'Loop Complete',
       message: `Completion: ${data.phrase || 'unknown'}`,
     });
@@ -2104,7 +2114,7 @@ class CodemanApp {
         urgency: 'critical',
         category: 'circuit-breaker',
         sessionId: data.sessionId,
-        sessionName: session?.name || data.sessionId?.slice(0, 8),
+        sessionName: session?.name || this.getShortId(data.sessionId),
         title: 'Circuit Breaker Open',
         message: data.status.reason || 'Loop stuck - no progress detected',
       });
@@ -2117,7 +2127,7 @@ class CodemanApp {
       urgency: 'warning',
       category: 'exit-gate',
       sessionId: data.sessionId,
-      sessionName: session?.name || data.sessionId?.slice(0, 8),
+      sessionName: session?.name || this.getShortId(data.sessionId),
       title: 'Exit Gate Met',
       message: `Loop ready to exit (indicators: ${data.completionIndicators})`,
     });
@@ -3273,6 +3283,16 @@ class CodemanApp {
   // Session Lifecycle — select, close, navigate
   // ═══════════════════════════════════════════════════════════════
 
+  getShortId(id) {
+    if (!id) return '';
+    let short = this._shortIdCache.get(id);
+    if (!short) {
+      short = id.slice(0, 8);
+      this._shortIdCache.set(id, short);
+    }
+    return short;
+  }
+
   getSessionName(session) {
     // Use custom name if set
     if (session.name) {
@@ -3282,7 +3302,7 @@ class CodemanApp {
     if (session.workingDir) {
       return session.workingDir.split('/').pop() || session.workingDir;
     }
-    return session.id.slice(0, 8);
+    return this.getShortId(session.id);
   }
 
   async selectSession(sessionId) {
@@ -6619,7 +6639,7 @@ class CodemanApp {
       tbody.innerHTML = data.entries.map(e => {
         const time = new Date(e.ts).toLocaleString();
         const color = eventColors[e.event] || '#888';
-        const name = e.name || (e.sessionId === '*' ? '—' : e.sessionId.slice(0, 8));
+        const name = e.name || (e.sessionId === '*' ? '—' : this.getShortId(e.sessionId));
         const extra = [];
         if (e.exitCode !== undefined && e.exitCode !== null) extra.push(`code=${e.exitCode}`);
         if (e.mode) extra.push(e.mode);
@@ -9386,7 +9406,7 @@ class CodemanApp {
       if (windowData.resizeObserver) {
         windowData.resizeObserver.disconnect();
       }
-      // Clean up global drag event listeners (prevents memory leak)
+      // Clean up drag event listeners (both document-level and handle-level)
       if (windowData.dragListeners) {
         document.removeEventListener('mousemove', windowData.dragListeners.move);
         document.removeEventListener('mouseup', windowData.dragListeners.up);
@@ -9394,6 +9414,11 @@ class CodemanApp {
           document.removeEventListener('touchmove', windowData.dragListeners.touchMove);
           document.removeEventListener('touchend', windowData.dragListeners.up);
           document.removeEventListener('touchcancel', windowData.dragListeners.up);
+        }
+        // Remove handle-level listeners before DOM removal
+        if (windowData.dragListeners.handle) {
+          windowData.dragListeners.handle.removeEventListener('mousedown', windowData.dragListeners.handleMouseDown);
+          windowData.dragListeners.handle.removeEventListener('touchstart', windowData.dragListeners.handleTouchStart);
         }
       }
       windowData.element.remove();
@@ -9985,6 +10010,10 @@ class CodemanApp {
         document.removeEventListener('touchmove', this.teamTasksDragListeners.touchMove);
         document.removeEventListener('touchend', this.teamTasksDragListeners.up);
         document.removeEventListener('touchcancel', this.teamTasksDragListeners.up);
+      }
+      if (this.teamTasksDragListeners.handle) {
+        this.teamTasksDragListeners.handle.removeEventListener('mousedown', this.teamTasksDragListeners.handleMouseDown);
+        this.teamTasksDragListeners.handle.removeEventListener('touchstart', this.teamTasksDragListeners.handleTouchStart);
       }
       this.teamTasksDragListeners = null;
     }
@@ -10743,10 +10772,14 @@ class CodemanApp {
       windowData.eventSource.close();
     }
 
-    // Clean up global drag event listeners (prevents memory leak)
+    // Clean up drag event listeners (both document-level and handle-level)
     if (windowData.dragListeners) {
       document.removeEventListener('mousemove', windowData.dragListeners.move);
       document.removeEventListener('mouseup', windowData.dragListeners.up);
+      if (windowData.dragListeners.handle) {
+        windowData.dragListeners.handle.removeEventListener('mousedown', windowData.dragListeners.handleMouseDown);
+        windowData.dragListeners.handle.removeEventListener('touchstart', windowData.dragListeners.handleTouchStart);
+      }
     }
 
     // Remove element
@@ -10870,7 +10903,7 @@ class CodemanApp {
     const popupData = this.imagePopups.get(imageId);
     if (!popupData) return;
 
-    // Clean up global drag event listeners
+    // Clean up drag event listeners (both document-level and handle-level)
     if (popupData.dragListeners) {
       document.removeEventListener('mousemove', popupData.dragListeners.move);
       document.removeEventListener('mouseup', popupData.dragListeners.up);
@@ -10878,6 +10911,10 @@ class CodemanApp {
         document.removeEventListener('touchmove', popupData.dragListeners.touchMove);
         document.removeEventListener('touchend', popupData.dragListeners.up);
         document.removeEventListener('touchcancel', popupData.dragListeners.up);
+      }
+      if (popupData.dragListeners.handle) {
+        popupData.dragListeners.handle.removeEventListener('mousedown', popupData.dragListeners.handleMouseDown);
+        popupData.dragListeners.handle.removeEventListener('touchstart', popupData.dragListeners.handleTouchStart);
       }
     }
 

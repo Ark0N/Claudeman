@@ -1,14 +1,13 @@
 /**
- * Planner Prompt - Single agent for TDD plan generation
- *
- * Combines what was previously 5 separate agents:
- * - Requirements Analyst (redundant)
- * - Architecture Planner (redundant)
- * - Testing Specialist (kept - TDD focus)
- * - Risk Analyst (redundant)
- * - Verification Expert (kept - structure)
+ * @fileoverview Planner Prompt — single TDD plan generator combining
+ * requirements analysis, architecture, testing, risk, and verification
+ * into one agent (previously 5 separate agents).
  *
  * Placeholders: {TASK}, {RESEARCH_CONTEXT}
+ *
+ * @dependencies none (pure template)
+ * @consumedby prompts/index (re-export), plan-orchestrator
+ * @module prompts/planner
  */
 
 export const PLANNER_PROMPT = `You are a TDD Plan Generator. Create a complete implementation plan with test-first approach.
