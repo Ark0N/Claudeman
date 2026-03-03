@@ -1,8 +1,32 @@
 /**
- * @fileoverview Centralized SSE event type registry.
+ * @fileoverview Centralized SSE event type registry — single source of truth.
  *
- * Single source of truth for all Server-Sent Event type strings used across
- * the backend (broadcast calls) and referenced by the frontend (SSE_EVENTS in constants.js).
+ * All Server-Sent Event type strings used by the backend (`broadcast()` calls)
+ * and referenced by the frontend (`SSE_EVENTS` in `constants.js`).
+ * Both files MUST be kept in sync.
+ *
+ * ~90 event constants organized by category:
+ * - **Core** (1): init
+ * - **Session lifecycle** (17): created, updated, deleted, terminal, idle, working, ...
+ * - **Session: Ralph** (6): ralphLoopUpdate, todoUpdate, completionDetected, ...
+ * - **Session: Bash tools** (3): bashToolStart, bashToolEnd, bashToolsUpdate
+ * - **Session: Plan** (4): planTaskUpdate, planCheckpoint, planRollback, planTaskAdded
+ * - **Tasks** (4): created, completed, failed, updated
+ * - **Mux** (4): created, killed, died, statsUpdated
+ * - **Respawn** (17): stateChanged, cycleStarted, aiCheck*, timer*, log, ...
+ * - **Subagents** (7): discovered, updated, tool_call, tool_result, progress, message, completed
+ * - **Scheduled** (6): created, updated, completed, stopped, log, deleted
+ * - **Teams** (4): created, updated, removed, taskUpdated
+ * - **Transcript** (4): complete, plan_mode, tool_start, tool_end
+ * - **Plan orchestration** (5): started, progress, subagent, completed, cancelled
+ * - **Tunnel** (7): started, stopped, progress, error, qrRotated, qrRegenerated, qrAuthUsed
+ * - **Image** (1): detected
+ * - **Hooks** (6): idle_prompt, permission_prompt, elicitation_dialog, stop, teammate_idle, task_completed
+ * - **Cases** (2): created, linked
+ *
+ * Naming convention: `domain:action` (e.g., `session:created`, `respawn:stateChanged`)
+ *
+ * Key export: `SseEvent` namespace object — import for destructured access.
  *
  * Usage:
  *   import { SseEvent } from './sse-events.js';

@@ -1,14 +1,24 @@
 /**
- * @fileoverview Ralph Loop - Autonomous task execution engine
+ * @fileoverview Ralph Loop - Autonomous task execution engine.
  *
- * The Ralph Loop orchestrates autonomous Claude sessions by:
+ * Orchestrates autonomous Claude sessions by:
  * - Polling for available tasks from the task queue
  * - Assigning tasks to idle sessions
  * - Monitoring completion and handling failures
  * - Auto-generating follow-up tasks when min duration not reached
  *
- * Named after Ralph Wiggum's persistence ("I'm in danger!"),
- * this loop keeps Claude working until all tasks are done.
+ * Key exports:
+ * - `RalphLoop` class — the loop engine, extends EventEmitter
+ * - `RalphLoopEvents` interface — typed event map
+ * - `RalphLoopOptions` interface — configuration options
+ *
+ * Lifecycle: `start()` → poll loop → `stop()` (when all tasks done + min duration met)
+ *
+ * @dependencies session-manager (session lifecycle), task-queue (task FIFO),
+ *   state-store (persistence), session (PTY execution), task (task model)
+ * @consumedby web/server (ralph routes, SSE)
+ * @emits started, stopped, taskAssigned, taskCompleted, taskFailed, error
+ * @persistence Ralph loop state saved to `~/.codeman/state.json` (ralphLoop key)
  *
  * @module ralph-loop
  */

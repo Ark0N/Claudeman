@@ -1,20 +1,35 @@
 /**
- * @fileoverview Ralph Tracker - Detects Ralph Wiggum loops, todos, and completion phrases
+ * @fileoverview Ralph Tracker - Detects Ralph Wiggum loops, todos, and completion phrases.
  *
- * This module parses terminal output from Claude Code sessions to detect:
- * - Ralph Wiggum loop state (active, completion phrase, iteration count)
- * - Todo list items from the TodoWrite tool
+ * Parses terminal output from Claude Code sessions to detect:
+ * - Ralph loop state (active, completion phrase, iteration count)
+ * - Todo items from the TodoWrite tool (with deduplication and expiry)
  * - Completion phrases signaling loop completion
+ * - Circuit breaker state (CLOSED/HALF_OPEN/OPEN)
  *
- * The tracker is DISABLED by default and auto-enables when Ralph-related
- * patterns are detected in the output stream, reducing overhead for
- * sessions not using autonomous loops.
+ * DISABLED by default — auto-enables when Ralph-related patterns appear,
+ * reducing overhead for non-autonomous sessions.
  *
  * Composed of four sub-modules:
- * - RalphPlanTracker: Plan task management, checkpoints, versioning
- * - RalphFixPlanWatcher: @fix_plan.md file watching and parsing
- * - RalphStallDetector: Iteration stall detection
- * - RalphStatusParser: RALPH_STATUS block parsing, circuit breaker
+ * - `RalphPlanTracker`: Plan task management, checkpoints, versioning
+ * - `RalphFixPlanWatcher`: @fix_plan.md file watching and parsing
+ * - `RalphStallDetector`: Iteration stall detection
+ * - `RalphStatusParser`: RALPH_STATUS block parsing, circuit breaker
+ *
+ * Key exports:
+ * - `RalphTracker` class — main tracker, extends EventEmitter
+ * - `RalphTrackerEvents` interface — typed event map
+ * - Re-exports: `EnhancedPlanTask`, `CheckpointReview` from ralph-plan-tracker
+ *
+ * Key methods: `processData(data)` — feed terminal output, `getState()`,
+ * `getTodos()`, `getCompletionHistory()`, `getPlanTasks()`, `reset()`
+ *
+ * @dependencies types (RalphTrackerState, RalphTodoItem, CircuitBreakerStatus),
+ *   ralph-plan-tracker, ralph-fix-plan-watcher, ralph-stall-detector, ralph-status-parser,
+ *   config/buffer-limits, config/map-limits
+ * @consumedby session (owns one RalphTracker per session), web/server (SSE events)
+ * @emits ralphStateChanged, todoUpdated, completionDetected, statusBlockParsed,
+ *   circuitBreakerChanged, exitGateMet, planTaskUpdated, planCheckpoint
  *
  * @module ralph-tracker
  */

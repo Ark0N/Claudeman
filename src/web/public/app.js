@@ -8,50 +8,54 @@
  *
  * ═══ Major Sections ═══
  *
- *   _SSE_HANDLER_MAP (line ~14)       — SSE event-to-method routing table
- *   CodemanApp class (line ~115)      — Constructor, state initialization
- *   Pending Hooks (line ~291)         — Hook state machine for tab alerts
- *   init / initTerminal (line ~329)   — App bootstrap, xterm.js setup, fit addon, link provider
- *   Terminal Rendering (line ~979)    — batchTerminalWrite, flushPendingWrites, chunkedTerminalWrite
- *   Event Listeners (line ~1299)      — Keyboard shortcuts, resize, beforeunload
- *   SSE Connection (line ~1379)       — connectSSE with exponential backoff (1-30s)
- *   SSE Event Handlers (line ~1473)   — ~60 handler methods (_onSessionCreated, _onRespawnStateChanged, etc.)
- *   Connection Status (line ~2454)    — Online detection, handleInit (full state sync on reconnect)
- *   Session Tabs (line ~2808)         — Tab rendering, selection, drag-and-drop reordering
- *   Navigation (line ~3563)           — goHome, Ralph wizard stub
- *   Quick Start (line ~3595)          — Case loading, session spawning (Claude, Shell, OpenCode)
- *   Respawn Banner (line ~4087)       — Respawn state display, countdown timers, action log
- *   Kill Sessions (line ~4518)        — Kill active/all sessions
- *   Terminal Controls (line ~4554)    — Clear, resize, copy, font size, sendInput
- *   Timer / Tokens (line ~4707)       — Session timer, token/cost display
- *   Session Options Modal (line ~4809) — Per-session settings, respawn config, color picker
- *   Respawn Presets (line ~5056)      — Preset CRUD, load/save/delete
- *   Run Summary Modal (line ~5372)    — Timeline events, filtering, export (JSON/Markdown)
- *   Session Options Tabs (line ~5626) — Ralph config tab within session options
- *   Web Push (line ~5744)             — Service worker registration, push subscribe/unsubscribe
- *   App Settings Modal (line ~5884)   — Global settings, tunnel management, QR auth, voice config
- *   Session Lifecycle Log (line ~6394) — JSONL audit log viewer
- *   Visibility Settings (line ~6716)  — Header/panel visibility, device-specific defaults
- *   Persistent Parent Assoc (line ~7070) — Parent session tracking for subagent windows
- *   Help Modal (line ~7176)           — Keyboard shortcuts help
- *   Token Statistics (line ~7211)     — Aggregate token/cost stats across sessions
- *   Monitor Panel (line ~7336)        — Mux sessions + background tasks, detachable panel
- *   Subagents Panel (line ~7456)      — Detachable subagent list panel
- *   Ralph Panel (line ~7639)          — Ralph Loop status, @fix_plan.md integration
- *   Plan Versioning (line ~8474)      — Plan checkpoint/rollback/diff UI
- *   Subagent Panel (line ~8614)       — Agent discovery, window open/close, connection lines
- *   Subagent Parent Tracking (line ~8933) — Tab-based agent grouping
- *   Agent Teams (line ~9425)          — Team tasks panel, teammate badges
- *   Project Insights (line ~9823)     — Bash tool tracking with clickable file paths
- *   File Browser (line ~10136)        — Directory tree panel with file preview
- *   Log Viewer (line ~10443)          — Floating file streamer windows (tail -f)
- *   Image Popups (line ~10590)        — Auto-popup windows for detected screenshots
- *   Mux Sessions (line ~10729)        — tmux session list in monitor panel
- *   Case Settings (line ~10804)       — Case CRUD and link management
- *   Mobile Case Picker (line ~11035)  — Touch-friendly case selection modal
- *   Plan Wizard Agents (line ~11294)  — Plan orchestrator subagent display in monitor
- *   Toast (line ~11378)               — Toast notification popups
- *   System Stats (line ~11428)        — CPU/memory polling display
+ *   SSE Handler Map (line ~80)        — Event-to-method routing table
+ *   CodemanApp Class (line ~189)      — Constructor and global state
+ *   Pending Hooks (line ~368)         — Hook state machine for tab alerts
+ *   Init (line ~408)                  — App bootstrap and mobile setup
+ *   Terminal Setup (line ~483)        — xterm.js config and input handling
+ *   Terminal Rendering (line ~1053)   — batchTerminalWrite, flushPendingWrites, chunkedTerminalWrite
+ *   Event Listeners (line ~1390)      — Keyboard shortcuts, resize, beforeunload
+ *   SSE Connection (line ~1474)       — connectSSE with exponential backoff (1-30s)
+ *   SSE Event Handlers (line ~1570)   — ~60 handler methods (_onSessionCreated, _onRespawnStateChanged, etc.)
+ *   Connection Status (line ~2553)    — Online detection, handleInit (full state sync on reconnect)
+ *   Session Tabs (line ~2911)         — Tab rendering, selection, drag-and-drop reordering
+ *   Tab Order & Drag-and-Drop (~3143) — Persistent tab ordering with drag reorder
+ *   Session Lifecycle (line ~3268)    — Select, close, navigate sessions
+ *   Navigation (line ~3673)           — goHome, Ralph wizard stub
+ *   Quick Start (line ~3709)          — Case loading, session spawning (Claude, Shell, OpenCode)
+ *   Respawn Banner (line ~4205)       — Respawn state display, countdown timers, action log
+ *   Kill Sessions (line ~4640)        — Kill active/all sessions
+ *   Terminal Controls (line ~4678)    — Clear, resize, copy, font size, sendInput
+ *   Timer / Tokens (line ~4833)       — Session timer, token/cost display
+ *   Session Options Modal (line ~4939) — Per-session settings, respawn config, color picker
+ *   Respawn Presets (line ~5188)      — Preset CRUD, load/save/delete
+ *   Run Summary Modal (line ~5506)    — Timeline events, filtering, export (JSON/Markdown)
+ *   Session Options Tabs (line ~5762) — Ralph config tab within session options
+ *   Web Push (line ~5882)             — Service worker registration, push subscribe/unsubscribe
+ *   App Settings Modal (line ~6024)   — Global settings, tunnel management, QR auth, voice config
+ *   Session Lifecycle Log (line ~6536) — JSONL audit log viewer
+ *   Visibility Settings (line ~6859)  — Header/panel visibility, device-specific defaults
+ *   Persistent Parent Assoc (line ~7218) — Parent session tracking for subagent windows
+ *   Help Modal (line ~7326)           — Keyboard shortcuts help
+ *   Token Statistics (line ~7363)     — Aggregate token/cost stats across sessions
+ *   Monitor Panel (line ~7490)        — Mux sessions + background tasks, detachable panel
+ *   Subagents Panel (line ~7614)      — Detachable subagent list panel
+ *   Ralph Panel (line ~7799)          — Ralph Loop status, @fix_plan.md integration
+ *   Plan Versioning (line ~8638)      — Plan checkpoint/rollback/diff UI
+ *   Subagent Panel (line ~8780)       — Agent discovery, window open/close, connection lines
+ *   Subagent Parent Tracking (~9101)  — Tab-based agent grouping
+ *   Agent Teams (line ~9595)          — Team tasks panel, teammate badges
+ *   Project Insights (line ~9995)     — Bash tool tracking with clickable file paths
+ *   File Browser (line ~10310)        — Directory tree panel with file preview
+ *   Log Viewer (line ~10619)          — Floating file streamer windows (tail -f)
+ *   Image Popups (line ~10768)        — Auto-popup windows for detected screenshots
+ *   Mux Sessions (line ~10909)        — tmux session list in monitor panel
+ *   Case Settings (line ~10986)       — Case CRUD and link management
+ *   Mobile Case Picker (line ~11221)  — Touch-friendly case selection modal
+ *   Plan Wizard Agents (line ~11480)  — Plan orchestrator subagent display in monitor
+ *   Toast (line ~11566)               — Toast notification popups
+ *   System Stats (line ~11618)        — CPU/memory polling display
+ *   Module Init (line ~11696)         — localStorage migration and app start
  *
  * After the class: localStorage migration (claudeman-* → codeman-*), app instantiation,
  * and window.app / window.MobileDetection exports.
@@ -77,7 +81,9 @@
 
 
 
-// SSE event → handler method mapping.
+// ═══════════════════════════════════════════════════════════════
+// SSE Handler Map — event-to-method routing table
+// ═══════════════════════════════════════════════════════════════
 // connectSSE() iterates this array to register all listeners in a single loop.
 // Omitted no-op events (registered by server but unused in UI):
 //   respawn:stepSent, respawn:aiCheckStarted, respawn:aiCheckCompleted,
@@ -182,6 +188,10 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.PLAN_CANCELLED, '_onPlanCancelled'],
   [SSE_EVENTS.PLAN_COMPLETED, '_onPlanCompleted'],
 ];
+
+// ═══════════════════════════════════════════════════════════════
+// CodemanApp Class — constructor and global state
+// ═══════════════════════════════════════════════════════════════
 
 class CodemanApp {
   constructor() {
@@ -399,6 +409,10 @@ class CodemanApp {
     this.renderSessionTabs();
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // Init — app bootstrap and mobile setup
+  // ═══════════════════════════════════════════════════════════════
+
   init() {
     // Initialize mobile detection first (adds device classes to body)
     MobileDetection.init();
@@ -469,6 +483,10 @@ class CodemanApp {
     // Hide loading skeleton now that the app shell is ready
     document.body.classList.add('app-loaded');
   }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Terminal Setup — xterm.js config and input handling
+  // ═══════════════════════════════════════════════════════════════
 
   initTerminal() {
     // Load scrollback setting from localStorage (default 5000)
@@ -3251,6 +3269,9 @@ class CodemanApp {
     });
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // Session Lifecycle — select, close, navigate
+  // ═══════════════════════════════════════════════════════════════
 
   getSessionName(session) {
     // Use custom name if set
@@ -11675,6 +11696,10 @@ class CodemanApp {
   }
 
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Module Init — localStorage migration and app start
+// ═══════════════════════════════════════════════════════════════
 
 // Migrate legacy localStorage keys (claudeman-* → codeman-*)
 try {

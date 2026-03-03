@@ -1,15 +1,25 @@
 /**
  * @fileoverview Persistent JSON state storage for Codeman.
  *
- * This module provides the StateStore class which persists application state
- * to `~/.codeman/state.json` with debounced writes to prevent excessive disk I/O.
- *
+ * Persists application state with debounced writes (500ms) to prevent excessive disk I/O.
  * State is split into two files:
- * - `state.json`: Main app state (sessions, tasks, config)
- * - `state-inner.json`: Inner loop state (todos, Ralph loop state per session)
+ * - `~/.codeman/state.json` — main app state (sessions, tasks, config, global stats)
+ * - `~/.codeman/state-inner.json` — Ralph loop state per session (changes rapidly)
  *
- * The separation reduces write frequency since Ralph state changes rapidly
- * during Ralph Wiggum loops.
+ * Key exports:
+ * - `StateStore` class — singleton store with circuit breaker for save failures
+ * - `getStore(filePath?)` — factory/singleton accessor
+ *
+ * Key methods: `getState()`, `getSessions()`, `setSession()`, `getConfig()`,
+ * `setConfig()`, `getGlobalStats()`, `getAggregateStats()`, `getTokenStats()`,
+ * `getDailyStats()`, `getRalphState()`, `setRalphState()`, `save()`, `saveNow()`
+ *
+ * Auto-migrates legacy `~/.claudeman/` → `~/.codeman/` on first load.
+ *
+ * @dependencies types (AppState, RalphSessionState, GlobalStats, TokenStats),
+ *   utils (Debouncer, MAX_SESSION_TOKENS)
+ * @consumedby session-manager, ralph-loop, web/server, respawn-controller,
+ *   hooks-config, and most subsystems
  *
  * @module state-store
  */

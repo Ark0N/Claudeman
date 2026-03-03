@@ -1,9 +1,9 @@
 /**
- * @fileoverview Respawn Controller for autonomous Claude Code session cycling
+ * @fileoverview Respawn Controller for autonomous Claude Code session cycling.
  *
- * The RespawnController manages automatic respawning of Claude Code sessions.
- * When Claude finishes working (detected by completion message + output silence),
- * it automatically cycles through update → clear → init steps to keep the session productive.
+ * Manages automatic respawning of Claude Code sessions. When Claude finishes
+ * working (detected by completion message + output silence), it cycles through
+ * update → clear → init steps to keep the session productive.
  *
  * ## State Machine
  *
@@ -17,19 +17,28 @@
  *    └──────────────────────── SENDING_KICKSTART → WAITING_KICKSTART ──┘
  * ```
  *
- * ## Idle Detection (Updated for Claude Code 2024+)
+ * ## Idle Detection (multi-layer)
+ * - Layer 0: Stop hook / idle_prompt notification (definitive)
+ * - Layer 1: Completion message pattern "for Xm Xs"
+ * - Layer 2: AI idle check via `AiIdleChecker` (optional)
+ * - Layer 3: No-output timeout fallback
  *
- * Primary detection: Completion message pattern "for Xm Xs" (e.g., "✻ Worked for 2m 46s")
- * Confirmation: No new output for configurable duration (default 5s)
- * Fallback: No output at all for extended period (default 30s)
+ * Key exports:
+ * - `RespawnController` class — state machine, extends EventEmitter
+ * - `RespawnConfig` interface — all configuration options
+ * - `RespawnState` type — union of all state machine states
+ * - `DetectionStatus`, `ActiveTimerInfo`, `RespawnEvents` — status/event types
  *
- * ## Configuration
+ * Key methods: `start()`, `stop()`, `getStatus()`, `getConfig()`,
+ * `getDetectionStatus()`, `getActiveTimers()`, `getAggregateMetrics()`,
+ * `getTimingHistory()`, `getHealthScore()`
  *
- * - `sendClear`: Whether to send /clear after update (default: true)
- * - `sendInit`: Whether to send /init after clear (default: true)
- * - `kickstartPrompt`: Optional prompt if /init doesn't trigger work
- * - `completionConfirmMs`: Time to wait after completion message (default: 10000)
- * - `noOutputTimeoutMs`: Fallback timeout with no output at all (default: 30000)
+ * @dependencies session (PTY output), ai-idle-checker, ai-plan-checker,
+ *   respawn-patterns, respawn-adaptive-timing, respawn-metrics, respawn-health,
+ *   team-watcher (blocks respawn if teammates active)
+ * @consumedby web/server (respawn routes, SSE), ralph-loop
+ * @emits respawn:stateChanged, respawn:started, respawn:stopped, respawn:cycleStarted,
+ *   respawn:cycleCompleted, respawn:detectionUpdate, respawn:aiCheck*, respawn:log
  *
  * @module respawn-controller
  */

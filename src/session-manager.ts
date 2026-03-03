@@ -1,11 +1,23 @@
 /**
- * @fileoverview Session Manager for coordinating multiple Claude sessions
+ * @fileoverview Session Manager for coordinating multiple Claude sessions.
  *
- * Provides lifecycle management for Claude CLI sessions:
- * - Session creation with working directory configuration
- * - Event forwarding from individual sessions
+ * Lifecycle management for Claude CLI sessions:
+ * - Session creation with working directory, concurrent session limits (mutex-guarded)
+ * - Event forwarding from individual sessions to subscribers
  * - State persistence via StateStore
- * - Concurrent session limits
+ * - Graceful shutdown of all sessions
+ *
+ * Key exports:
+ * - `SessionManager` class — coordinator, extends EventEmitter
+ * - `SessionManagerEvents` interface — typed event map
+ * - `getSessionManager()` — singleton accessor
+ *
+ * Key methods: `createSession(workingDir)`, `getSession(id)`, `getAllSessions()`,
+ * `removeSession(id)`, `stopAll()`
+ *
+ * @dependencies session (Session class), state-store (persistence), types (SessionState)
+ * @consumedby web/server, ralph-loop, respawn-controller
+ * @emits sessionStarted, sessionStopped, sessionError, sessionOutput, sessionCompletion
  *
  * @module session-manager
  */

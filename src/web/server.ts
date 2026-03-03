@@ -1,11 +1,28 @@
 /**
- * @fileoverview Codeman web server and REST API
+ * @fileoverview Codeman web server — central hub coordinating all subsystems.
  *
- * Provides a Fastify-based web server with:
- * - REST API for session management, respawn control, and monitoring
- * - Server-Sent Events (SSE) for real-time updates at /api/events
- * - Static file serving for the web UI
- * - 60fps terminal streaming with batched updates
+ * Fastify-based web server providing:
+ * - ~111 REST API routes (delegated to `src/web/routes/` domain modules)
+ * - SSE streaming at `/api/events` with backpressure handling
+ * - Static file serving for the web UI (1-year cache in production)
+ * - 60fps terminal streaming via batched PTY output (16-50ms adaptive)
+ *
+ * Coordinates: SessionManager, RespawnController, SubagentWatcher, TeamWatcher,
+ * TranscriptWatcher, ImageWatcher, TunnelManager, PushSubscriptionStore,
+ * PlanOrchestrator, RunSummaryTracker, FileStreamManager.
+ *
+ * Key exports:
+ * - `WebServer` class — implements all port interfaces, extends EventEmitter
+ * - `startWebServer(options)` — factory function to create and start the server
+ *
+ * Implements port interfaces: `SessionPort`, `EventPort`, `ConfigPort`,
+ * `RespawnPort`, `MuxPort`, `FilePort`, `ScheduledPort`, `PushPort`, `TeamPort`
+ * (see `src/web/ports/` for definitions)
+ *
+ * @dependencies All major subsystems (session, respawn-controller, subagent-watcher,
+ *   team-watcher, tunnel-manager, state-store, etc.)
+ * @consumedby src/index.ts (entry point), src/cli.ts
+ * @emits SSE events via broadcast() — see sse-events.ts for full registry
  *
  * @module web/server
  */

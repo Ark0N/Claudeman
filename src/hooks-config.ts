@@ -1,11 +1,26 @@
 /**
- * @fileoverview Claude Code hooks configuration generator
+ * @fileoverview Claude Code hooks configuration generator.
  *
- * Generates .claude/settings.local.json with hook definitions that POST
- * to Codeman's /api/hook-event endpoint when Claude Code fires
- * notification or stop hooks. Uses $CODEMAN_API_URL and
- * $CODEMAN_SESSION_ID env vars (set on every managed session) so the
- * config is static per case directory.
+ * Generates `.claude/settings.local.json` with hook definitions that POST
+ * to Codeman's `/api/hook-event` endpoint when Claude Code fires hooks.
+ * Uses `$CODEMAN_API_URL` and `$CODEMAN_SESSION_ID` env vars (set on every
+ * managed session) so the config is static per case directory.
+ *
+ * Key exports:
+ * - `generateHooksConfig()` — returns hooks object for settings.local.json
+ * - `writeHooksConfig(casePath)` — writes hooks + env config to disk
+ * - `updateCaseEnvVars(casePath, envVars)` — merges env vars into settings
+ *
+ * Hook events generated: `idle_prompt`, `permission_prompt`, `elicitation_dialog`,
+ * `stop`, `teammate_idle`, `task_completed`
+ *
+ * Hook categories: `Notification` (3 matchers), `Stop` (1), `TeammateIdle` (1),
+ * `TaskCompleted` (1)
+ *
+ * @dependencies types (HookEventType), config/auth-config (HOOK_TIMEOUT_MS)
+ * @consumedby web/server (session creation), session-cli-builder (env setup)
+ *
+ * @module hooks-config
  */
 
 import { existsSync } from 'node:fs';

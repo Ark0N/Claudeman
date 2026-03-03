@@ -1,8 +1,28 @@
 /**
- * @fileoverview Subagent Watcher - Real-time monitoring of Claude Code background agents
+ * @fileoverview Subagent Watcher - Real-time monitoring of Claude Code background agents.
  *
- * Watches ~/.claude/projects/{project}/{session}/subagents/agent-{id}.jsonl files
- * and emits structured events for tool calls, progress, and messages.
+ * Watches `~/.claude/projects/{project}/{session}/subagents/agent-{id}.jsonl` files
+ * and emits structured events for tool calls, progress, messages, and tool results.
+ * Also detects Agent Teams teammates (distinguished by `<teammate-message>` in description).
+ *
+ * Key exports:
+ * - `SubagentWatcher` class — singleton watcher, extends EventEmitter
+ * - `subagentWatcher` — pre-instantiated singleton instance
+ * - `SubagentInfo`, `SubagentToolCall`, `SubagentProgress`, `SubagentMessage`,
+ *   `SubagentToolResult`, `SubagentTranscriptEntry` — data interfaces
+ * - `SubagentEvents` — typed event map
+ *
+ * Watched patterns: `~/.claude/projects/{hash}/subagents/agent-{id}.jsonl`
+ * Parses JSONL entries: user/assistant messages, tool_use/tool_result blocks, progress events.
+ * Tracks per-agent: status, token counts, model, description, tool call count, liveness (PID).
+ *
+ * @dependencies config/map-limits (MAX_TRACKED_AGENTS, PENDING_TOOL_CALL_TTL_MS),
+ *   utils (CleanupManager, KeyedDebouncer)
+ * @consumedby web/server (SSE broadcast), session (subagent-session correlation)
+ * @emits subagent:discovered, subagent:updated, subagent:tool_call, subagent:tool_result,
+ *   subagent:progress, subagent:message, subagent:completed
+ *
+ * @module subagent-watcher
  */
 
 import { EventEmitter } from 'node:events';

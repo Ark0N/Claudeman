@@ -66,41 +66,21 @@ Codeman is a Claude Code session manager with web interface and autonomous Ralph
 
 **Git**: Main branch is `master`. SSH session chooser: `sc` (interactive), `sc 2` (quick attach), `sc -l` (list).
 
-## Commands
+## Additional Commands
 
-**Note**: `npm run dev` starts the web server (equivalent to `npx tsx src/index.ts web`).
+`npm run dev` = dev server. Default port: `3000`. Commands not in Quick Reference:
 
-**Default port**: `3000` (web UI at `http://localhost:3000`)
+| Task | Command |
+|------|---------|
+| Dev with TLS | `npx tsx src/index.ts web --https` |
+| Continuous typecheck | `tsc --noEmit --watch` |
+| Test coverage | `npm run test:coverage` |
+| Production start | `npm run start` |
+| Production logs | `journalctl --user -u codeman-web -f` |
 
-```bash
-# Setup
-npm install                        # Install dependencies
+**CI**: `.github/workflows/ci.yml` runs `typecheck`, `lint`, `format:check` on push to master (Node 22). Tests excluded (they spawn tmux).
 
-# Development
-npx tsx src/index.ts web           # Dev server (RECOMMENDED)
-npx tsx src/index.ts web --https   # With TLS (only needed for remote access)
-npm run typecheck                  # Type check
-tsc --noEmit --watch               # Continuous type checking
-npm run lint                       # ESLint
-npm run lint:fix                   # ESLint with auto-fix
-npm run format                     # Prettier format
-npm run format:check               # Prettier check only
-
-# Testing (see "Testing" section for CRITICAL safety warnings)
-npx vitest run test/<file>.test.ts # Single file (SAFE)
-npx vitest run -t "pattern"        # Tests matching name
-npm run test:coverage              # With coverage report
-
-# Production
-npm run build                      # esbuild via scripts/build.mjs (not tsc)
-npm run start                      # node dist/index.js (production)
-systemctl --user restart codeman-web
-journalctl --user -u codeman-web -f
-```
-
-**CI**: `.github/workflows/ci.yml` runs `typecheck`, `lint`, and `format:check` on push to master (Node 22). Tests are intentionally excluded from CI (they spawn tmux).
-
-**Code style**: Prettier with `singleQuote: true`, `printWidth: 120`, `trailingComma: "es5"`. ESLint allows `no-console`, warns on `@typescript-eslint/no-explicit-any`. ESLint does not lint `app.js` or `scripts/**/*.mjs`.
+**Code style**: Prettier (`singleQuote: true`, `printWidth: 120`, `trailingComma: "es5"`). ESLint allows `no-console`, warns on `@typescript-eslint/no-explicit-any`. Does not lint `app.js` or `scripts/**/*.mjs`.
 
 ## Common Gotchas
 
@@ -142,13 +122,9 @@ journalctl --user -u codeman-web -f
 
 ★ = Large file (>50KB), contains complex state machines. Read `docs/respawn-state-machine.md` before modifying respawn/ralph.
 
-### Local Packages
+**Local package**: `packages/xterm-zerolag-input/` — instant keystroke feedback overlay for xterm.js. Source of truth for `LocalEchoOverlay`; copy embedded in `app.js`. Build: `npm run build` (tsup).
 
-| Package | Purpose |
-|---------|---------|
-| `packages/xterm-zerolag-input/` | Instant keystroke feedback overlay for xterm.js — eliminates perceived input latency over high-RTT connections. Source of truth for `LocalEchoOverlay`; a copy is embedded in `app.js`. Build: `npm run build` (tsup). |
-
-**Config**: `src/config/` — 9 files for buffer limits, map limits, timeouts, SSE timing, auth, tunnel, terminal, AI, and teams. Import from specific files.
+**Config**: `src/config/` — 9 files (buffer limits, map limits, timeouts, SSE timing, auth, tunnel, terminal, AI, teams). Import from specific files.
 
 **Utilities**: `src/utils/` — re-exported via `src/utils/index.ts`. Key: `CleanupManager`, `LRUMap`, `StaleExpirationMap`, `BufferAccumulator`, `stripAnsi`, `createAnsiPatternFull/Simple()`, `assertNever`, `Debouncer`.
 
@@ -161,74 +137,48 @@ journalctl --user -u codeman-web -f
 
 ### Key Patterns
 
-**Input to sessions**: Use `session.writeViaMux()` for programmatic input (respawn, auto-compact). Uses tmux `send-keys -l` (literal text) + `send-keys Enter`. All prompts must be single-line.
-
-**Terminal multiplexer**: `TerminalMultiplexer` interface (`src/mux-interface.ts`) abstracts the backend. `createMultiplexer()` from `src/mux-factory.ts` creates the tmux backend.
+**Input**: `session.writeViaMux()` for programmatic input — tmux `send-keys -l` (literal) + `send-keys Enter`. Single-line only.
 
 **Idle detection**: Multi-layer (completion message → AI check → output silence → token stability). See `docs/respawn-state-machine.md`.
 
-**Token tracking**: Interactive mode parses status line ("123.4k tokens"), estimates 60/40 input/output split.
+**Hook events**: Claude Code hooks trigger via `/api/hook-event`. Key events: `permission_prompt`, `elicitation_dialog`, `idle_prompt`, `stop`, `teammate_idle`, `task_completed`. See `src/hooks-config.ts`.
 
-**Hook events**: Claude Code hooks trigger notifications via `/api/hook-event`. Key events: `permission_prompt` (tool approval needed), `elicitation_dialog` (Claude asking question), `idle_prompt` (waiting for input), `stop` (response complete), `teammate_idle` (Agent Teams), `task_completed` (Agent Teams). See `src/hooks-config.ts`.
+**Agent Teams**: `TeamWatcher` polls `~/.claude/teams/`, matches to sessions via `leadSessionId`. Teammates are in-process threads appearing as subagents. Enable: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`. See `agent-teams/`.
 
-**Web Push**: Layer 5 of the notification system. Service worker (`sw.js`) receives push events and shows OS-level notifications even when the browser tab is closed. VAPID keys auto-generated on first use and persisted to `~/.codeman/push-keys.json`. Per-subscription per-event preferences stored in `~/.codeman/push-subscriptions.json`. Expired subscriptions (410/404) auto-cleaned. Requires HTTPS or localhost. iOS requires PWA installed to home screen. See `src/push-store.ts`.
+**Circuit breaker**: Prevents respawn thrashing. States: `CLOSED` → `HALF_OPEN` → `OPEN`. Reset: `/api/sessions/:id/ralph-circuit-breaker/reset`.
 
-**Agent Teams (experimental)**: `TeamWatcher` polls `~/.claude/teams/` for team configs and matches teams to sessions via `leadSessionId`. Teammates are in-process threads (not separate OS processes) and appear as standard subagents. RespawnController checks `TeamWatcher.hasActiveTeammates()` before triggering respawn. Enable via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` env var in `settings.local.json`. See `agent-teams/` for full docs.
+**Port interfaces**: Routes declare dependencies via port interfaces (`src/web/ports/`). Routes use intersection types (e.g., `SessionPort & EventPort`).
 
-**Circuit breaker**: Prevents respawn thrashing when Claude is stuck. States: `CLOSED` (normal) → `HALF_OPEN` (testing) → `OPEN` (blocked). Tracks consecutive no-progress, same-error-repeated, and tests-failing-too-long. Reset via API at `/api/sessions/:id/ralph-circuit-breaker/reset`.
+### Frontend
 
-**Respawn cycle metrics & health scoring**: `RespawnCycleMetrics` tracks per-cycle outcomes (success, stuck_recovery, blocked, error). `RalphLoopHealthScore` computes 0-100 health with component scores (cycleSuccess, circuitBreaker, iterationProgress, aiChecker, stuckRecovery). Available via respawn status API.
-
-**Subagent-session correlation**: Session parses Task tool output via `BashToolParser` → `SubagentWatcher` discovers new agent → calls `session.findTaskDescriptionNear()` to match description for window title.
-
-**Port interfaces**: Route modules declare their dependencies via port interfaces (`src/web/ports/`). `WebServer` implements all ports; routes use TypeScript intersection types (e.g., `SessionPort & EventPort`) to specify only what they need. This enables loose coupling between routes and the server.
-
-**Frontend files** are in `src/web/public/`. Each JS module has a `@fileoverview` JSDoc with `@dependency` and `@loadorder` tags. **Script loading order** (global scope, order matters): `constants.js`(1) → `mobile-handlers.js`(2) → `voice-input.js`(3) → `notification-manager.js`(4) → `keyboard-accessory.js`(5) → `app.js`(6) → `ralph-wizard.js`(7) → `api-client.js`(8) → `subagent-windows.js`(9).
-
-### Frontend Architecture
-
-The frontend is split across multiple vanilla JS modules (extracted from the original monolithic `app.js`). Key systems:
-
-| System | Module | Key Classes/Functions | Purpose |
-|--------|--------|----------------------|---------|
-| **Terminal rendering** | `app.js` | `batchTerminalWrite()`, `flushPendingWrites()`, `chunkedTerminalWrite()` | 60fps batched writes with DEC 2026 sync |
-| **Local echo overlay** | `app.js` | `LocalEchoOverlay` class | DOM overlay for instant mobile keystroke feedback |
-| **Mobile support** | `mobile-handlers.js` | `MobileDetection`, `KeyboardHandler`, `SwipeHandler` | Touch input, viewport adaptation, swipe navigation |
-| **Keyboard accessory** | `keyboard-accessory.js` | `KeyboardAccessoryBar`, `FocusTrap` | Mobile keyboard toolbar, modal focus management |
-| **Subagent windows** | `subagent-windows.js` | `openSubagentWindow()`, `closeSubagentWindow()`, `updateConnectionLines()` | Floating terminal windows with parent connection lines |
-| **Notifications** | `notification-manager.js` | `NotificationManager` class | 5-layer: in-app drawer, tab flash, browser API, web push, audio beep |
-| **Voice input** | `voice-input.js` | `DeepgramProvider`, `VoiceInput` | Speech-to-text via Deepgram WebSocket |
-| **SSE connection** | `app.js` | `connectSSE()`, `addListener()` | EventSource with exponential backoff (1-30s), offline queue (64KB) |
-| **Settings** | `app.js` | `openAppSettings()`, `apply*Visibility()` | Server-backed + localStorage persistence |
+Frontend JS modules have `@fileoverview` with `@dependency`/`@loadorder` tags. Load order: `constants.js`(1) → `mobile-handlers.js`(2) → `voice-input.js`(3) → `notification-manager.js`(4) → `keyboard-accessory.js`(5) → `app.js`(6) → `ralph-wizard.js`(7) → `api-client.js`(8) → `subagent-windows.js`(9).
 
 **Z-index layers**: subagent windows (1000), plan agents (1100), log viewers (2000), image popups (3000), local echo overlay (7).
 
-**Built-in respawn presets**: `solo-work` (3s idle, 60min), `subagent-workflow` (45s idle, 240min), `team-lead` (90s idle, 480min), `ralph-todo` (8s idle, 480min, works through @fix_plan.md tasks), `overnight-autonomous` (10s idle, 480min, full reset).
+**Respawn presets**: `solo-work` (3s/60min), `subagent-workflow` (45s/240min), `team-lead` (90s/480min), `ralph-todo` (8s/480min), `overnight-autonomous` (10s/480min).
 
-**Keyboard shortcuts**: Escape (close panels), Ctrl+? (help), Ctrl+Enter (quick start), Ctrl+W (kill session), Ctrl+Tab (next session), Ctrl+K (kill all), Ctrl+L (clear), Ctrl+Shift+R (restore size), Ctrl/Cmd +/- (font size).
+**Keyboard shortcuts**: Escape (close), Ctrl+? (help), Ctrl+Enter (quick start), Ctrl+W (kill), Ctrl+Tab (next), Ctrl+K (kill all), Ctrl+L (clear), Ctrl+Shift+R (restore size), Ctrl/Cmd +/- (font).
 
 ### Security
 
-- **Environment variables**: `CODEMAN_USERNAME`/`CODEMAN_PASSWORD` (auth), `CODEMAN_MUX` (set if inside managed session), `CODEMAN_API_URL` (auto-set by server at startup, injected into spawned sessions for hook callbacks), `CODEMAN_MUX_NAME` (set by tmux-manager for session identification)
-- **HTTP Basic Auth**: Optional via `CODEMAN_USERNAME`/`CODEMAN_PASSWORD` env vars
-- **QR Auth**: Single-use ephemeral 6-char tokens (60s TTL, 90s grace) for tunnel login without typing passwords. `TunnelManager` rotates tokens, serves cached SVG at `GET /api/tunnel/qr`, validates at `GET /q/:code`. Separate per-IP rate limit (10/15min) + global path limit (30/min). Desktop notification on consumption (QRLjacking detection). Audit logged as `qr_auth` in `session-lifecycle.jsonl`. See `docs/qr-auth-plan.md`.
-- **Session cookies**: After Basic Auth or QR Auth, a 24h session cookie (`codeman_session`) is issued so credentials aren't re-sent on every request. Active sessions auto-extend. SSE works via same-origin cookie (`EventSource` can't send custom headers). Sessions store device context (IP + User-Agent) for audit via `AuthSessionRecord`.
-- **Session revocation**: `POST /api/auth/revoke` revokes individual sessions or all sessions.
-- **Rate limiting**: 10 failed auth attempts per IP triggers 429 rejection (15-minute decay window). Manual `StaleExpirationMap` counter — no `@fastify/rate-limit` needed. QR auth has its own separate rate limiter.
-- **Hook bypass**: `/api/hook-event` POST is exempt from auth — Claude Code hooks curl this from localhost and can't present credentials. Safe: validated by `HookEventSchema`, only triggers broadcasts.
-- **CORS**: Restricted to localhost only
-- **Security headers**: X-Content-Type-Options, X-Frame-Options, CSP; HSTS if HTTPS
-- **Path validation** (`schemas.ts`): Strict allowlist regex, no shell metacharacters, no traversal, must be absolute
-- **Env var allowlist**: Only `CLAUDE_CODE_*` prefixes allowed; blocks `PATH`, `LD_PRELOAD`, `NODE_OPTIONS`, `CODEMAN_*` keys
-- **File streaming TOCTOU protection**: `FileStreamManager` calls `realpathSync()` twice (at validation and before spawn) to catch symlink swaps
+| Layer | Details |
+|-------|---------|
+| **Auth** | Optional HTTP Basic via `CODEMAN_USERNAME`/`CODEMAN_PASSWORD` env vars |
+| **QR Auth** | Single-use 6-char tokens (60s TTL) for tunnel login. See `docs/qr-auth-plan.md` |
+| **Sessions** | 24h cookie (`codeman_session`), auto-extend, device context audit |
+| **Rate limit** | 10 failed auth/IP → 429 (15min decay). QR has separate limiter |
+| **Hook bypass** | `/api/hook-event` exempt from auth (localhost-only, schema-validated) |
+| **Env vars** | `CODEMAN_MUX` (managed session), `CODEMAN_API_URL` (auto-set for hooks) |
+| **Validation** | Zod schemas, path allowlist regex, `CLAUDE_CODE_*` env prefix allowlist |
+| **Headers** | CORS localhost-only, CSP, X-Frame-Options, HSTS if HTTPS |
 
 ### SSE Event Registry
 
-~100 event types defined in `src/web/sse-events.ts` (backend) and `SSE_EVENTS` in `constants.js` (frontend). Both must be kept in sync. Categories: Session lifecycle, Terminal output, Respawn state machine, Subagent monitoring, Ralph tracking, Hook events, Plan orchestration, Mux management, Tunnel/QR, Image detection.
+~100 event types in `src/web/sse-events.ts` (backend) and `SSE_EVENTS` in `constants.js` (frontend). Both must be kept in sync.
 
 ### API Route Categories
 
-~111 route handlers split across `src/web/routes/` domain modules. Key groups:
+~111 route handlers in `src/web/routes/`. Key groups:
 
 | Group | Prefix | Count | Key endpoints |
 |-------|--------|-------|---------------|
@@ -247,14 +197,14 @@ The frontend is split across multiple vanilla JS modules (extracted from the ori
 
 ## Adding Features
 
-- **API endpoint**: Types in `src/types/` (domain file), route in the appropriate `src/web/routes/*-routes.ts` module, use `createErrorResponse()`. Validate request bodies with Zod schemas in `schemas.ts`.
-- **SSE event**: Add constant to `src/web/sse-events.ts`, add to `SSE_EVENTS` in `constants.js`, emit via `broadcast()`, handle in `app.js` (search `addListener(`)
-- **Session setting**: Add to `SessionState` in `types.ts`, include in `session.toState()`, call `persistSessionState()`
-- **Hook event**: Add to `HookEventType` in `types.ts`, add hook command in `hooks-config.ts:generateHooksConfig()`, update `HookEventSchema` in `schemas.ts`
-- **Mobile feature**: Add to relevant mobile singleton (`KeyboardHandler`, `KeyboardAccessoryBar`, etc.), test with `MobileDetection.isMobile()` guard
-- **New test**: Pick unique port (search `const PORT =` across `test/`), add port comment to test file header. Integration tests use ports 3099-3211. Route tests in `test/routes/` use `app.inject()` (no real port needed) — see `test/routes/_route-test-utils.ts`.
+- **API endpoint**: Types in `src/types/` domain file, route in `src/web/routes/*-routes.ts`, use `createErrorResponse()`. Validate with Zod schemas in `schemas.ts`.
+- **SSE event**: Add to `src/web/sse-events.ts` + `SSE_EVENTS` in `constants.js`, emit via `broadcast()`, handle in `app.js` (`addListener(`)
+- **Session setting**: Add to `SessionState`, include in `session.toState()`, call `persistSessionState()`
+- **Hook event**: Add to `HookEventType`, add hook in `hooks-config.ts:generateHooksConfig()`, update `HookEventSchema`
+- **Mobile feature**: Add to relevant singleton, guard with `MobileDetection.isMobile()`
+- **New test**: Pick unique port (search `const PORT =`). Integration: ports 3099-3211. Route tests: `app.inject()` — see `test/routes/_route-test-utils.ts`.
 
-**Validation**: Uses Zod v4 for request validation. Define schemas in `schemas.ts` and use `.parse()` or `.safeParse()`. Note: Zod v4 has different API from v3 (e.g., `z.object()` options changed, error formatting differs).
+**Validation**: Zod v4 (different API from v3). Define schemas in `schemas.ts`, use `.parse()`/`.safeParse()`.
 
 ## State Files
 
@@ -264,192 +214,96 @@ The frontend is split across multiple vanilla JS modules (extracted from the ori
 | `~/.codeman/mux-sessions.json` | Tmux session metadata for recovery |
 | `~/.codeman/settings.json` | User preferences |
 | `~/.codeman/push-keys.json` | VAPID key pair for Web Push (auto-generated) |
-| `~/.codeman/push-subscriptions.json` | Registered push notification subscriptions |
-| `~/.codeman/session-lifecycle.jsonl` | Append-only JSONL audit log (QR auth, session events) |
+| `~/.codeman/push-subscriptions.json` | Push notification subscriptions |
+| `~/.codeman/session-lifecycle.jsonl` | Append-only audit log (QR auth, session events) |
 
 ## Default Settings
 
-UI defaults are set in `src/web/public/app.js` using `??` fallbacks. To change defaults, edit `openAppSettings()` and `apply*Visibility()` functions.
-
-**Key defaults:** Most panels hidden (monitor, subagents shown), notifications enabled (audio disabled), subagent tracking on, Ralph tracking off.
+UI defaults in `app.js` using `??` fallbacks. Edit `openAppSettings()` and `apply*Visibility()` to change. Key defaults: most panels hidden (monitor, subagents shown), notifications on (audio off), subagent tracking on, Ralph tracking off.
 
 ## Testing
 
-**CRITICAL: You are running inside a Codeman-managed tmux session.** Never run `npx vitest run` (full suite) — it spawns/kills tmux sessions and will crash your own session. Instead:
+**CRITICAL: You are running inside a Codeman-managed tmux session.** Never run `npx vitest run` (full suite) — it spawns/kills tmux sessions and will crash your own session. Only run individual files:
 
 ```bash
-# Safe: run individual test files
-npx vitest run test/<specific-file>.test.ts
-
-# Safe: run tests matching a pattern
-npx vitest run -t "pattern"
-
-# DANGEROUS from inside Codeman — will kill your tmux session:
-# npx vitest run          ← DON'T DO THIS
+npx vitest run test/<specific-file>.test.ts     # Single file (SAFE)
+npx vitest run -t "pattern"                      # By name (SAFE)
+# npx vitest run                                 # DANGEROUS — DON'T DO THIS
 ```
 
-**Ports**: Unit tests pick unique ports manually. Search `const PORT =` before adding new tests.
+**Config**: Vitest with `globals: true`, `fileParallelism: false`. Timeout 30s, teardown 60s.
 
-**Config**: Vitest with `globals: true`, `fileParallelism: false`. Unit timeout 30s, teardown timeout 60s.
+**Safety**: `test/setup.ts` snapshots pre-existing tmux sessions and never kills them. Only `registerTestTmuxSession()` sessions get cleaned up.
 
-**Safety**: `test/setup.ts` snapshots pre-existing tmux sessions at load time and never kills them. Only sessions registered via `registerTestTmuxSession()` get cleaned up.
+**Ports**: Pick unique ports manually. Search `const PORT =` before adding new tests.
 
-**Respawn tests**: Use MockSession from `test/respawn-test-utils.ts` to avoid spawning real Claude processes.
+**Respawn tests**: Use `MockSession` from `test/respawn-test-utils.ts`. **Route tests**: `app.inject()` in `test/routes/`. **Mobile tests**: Playwright suite in `mobile-test/` (135 device profiles).
 
-**Route tests**: `test/routes/` uses Fastify's `app.inject()` for fast in-process testing (no real ports). See `test/routes/_route-test-utils.ts` for the shared setup helper.
+## Screenshots
 
-**Mobile tests**: Separate Playwright-based suite in `mobile-test/` with 135 device profiles. Run via `npx vitest run --config mobile-test/vitest.config.ts`. See `mobile-test/README.md`.
+"sc"/"screenshot" = uploaded mobile screenshots in `~/.codeman/screenshots/`. View with Read tool. API: `GET /api/screenshots` (list), `POST /api/screenshots` (upload).
 
-## Screenshots ("sc")
-
-When the user says "check the sc", "screenshot", or "sc", they mean uploaded screenshots from their mobile device. Screenshots are saved to `~/.codeman/screenshots/` and uploaded via `/upload.html` on the Codeman web UI. To view them, use the Read tool on the image files:
+## Debugging & Troubleshooting
 
 ```bash
-ls ~/.codeman/screenshots/        # List uploaded screenshots
-# Then use Read tool on individual files — Claude Code can view images natively
-```
-
-API: `GET /api/screenshots` (list), `GET /api/screenshots/:name` (serve), `POST /api/screenshots` (upload multipart/form-data). Source: `src/web/public/upload.html`.
-
-## Debugging
-
-```bash
-tmux list-sessions                  # List tmux sessions
-tmux attach-session -t <name>       # Attach (Ctrl+B D to detach)
-curl localhost:3000/api/sessions    # Check sessions
-curl localhost:3000/api/status | jq # Full app state
-cat ~/.codeman/state.json | jq    # View persisted state
-curl localhost:3000/api/subagents   # List background agents
+tmux list-sessions                                 # List tmux sessions
+curl localhost:3000/api/sessions | jq              # Check sessions
+curl localhost:3000/api/status | jq                # Full app state
+curl localhost:3000/api/subagents | jq             # Background agents
 curl localhost:3000/api/sessions/:id/run-summary | jq  # Session timeline
+cat ~/.codeman/state.json | jq                     # Persisted state
 ```
 
-## Troubleshooting
+| Problem | Fix |
+|---------|-----|
+| Session won't start | Kill orphaned tmux sessions, check Claude CLI installed |
+| Port 3000 in use | `lsof -i :3000`, kill conflicting process or use `--port` |
+| SSE not connecting | Check CORS, ensure server running, check browser console |
+| Respawn not triggering | Enable respawn in session settings, check idle timeout |
+| Terminal blank on tab switch | Check session exists, restart server |
+| Tests failing on session limits | `tmux list-sessions \| grep test \| awk -F: '{print $1}' \| xargs -I{} tmux kill-session -t {}` |
 
-| Problem | Check | Fix |
-|---------|-------|-----|
-| Session won't start | `tmux list-sessions` for orphans | Kill orphaned sessions, check Claude CLI installed |
-| Port 3000 in use | `lsof -i :3000` | Kill conflicting process or use `--port` flag |
-| SSE not connecting | Browser console for errors | Check CORS, ensure server running |
-| Respawn not triggering | Session settings → Respawn enabled? | Enable respawn, check idle timeout config |
-| Terminal blank on tab switch | Network tab for `/api/sessions/:id/buffer` | Check session exists, restart server |
-| Tests failing on session limits | `tmux list-sessions \| wc -l` | Clean up: `tmux list-sessions \| grep test \| awk -F: '{print $1}' \| xargs -I{} tmux kill-session -t {}` |
-| State not persisting | `cat ~/.codeman/state.json` | Check file permissions, disk space |
+## Performance & Resource Limits
 
-## Performance Constraints
+Must stay fast with 20 sessions and 50 agent windows. Key: 60fps terminal (16ms batching + rAF), auto-trimming buffers, debounced state persistence (500ms), SSE adaptive batching (16-50ms), backpressure handling, cached endpoints (1s TTL for `/api/sessions` and `/api/status`).
 
-The app must stay fast with 20 sessions and 50 agent windows:
-- 60fps terminal (16ms batching + `requestAnimationFrame`)
-- Auto-trimming buffers (2MB terminal max)
-- Debounced state persistence (500ms)
-- SSE adaptive batching: 16ms (normal), 32ms (moderate), 50ms (rapid); immediate flush at 32KB
-- SSE backpressure handling: skip writes to backpressured clients, recover via `session:needsRefresh` on drain
-- Cached endpoints: `/api/sessions` and `/api/status` use 1s TTL caches to avoid expensive serialization
-- Frontend buffer loads: 128KB chunks via `requestAnimationFrame` to prevent UI jank
+**Anti-flicker**: `PTY → Server Batching → DEC 2026 Wrap → SSE → Client rAF → xterm.js`. See `docs/terminal-anti-flicker.md`.
 
-**Anti-flicker pipeline**: `PTY → Server Batching (16-50ms) → DEC 2026 Wrap → SSE → Client rAF → xterm.js`. Key functions: `server.ts:batchTerminalData()`, `app.js:batchTerminalWrite()`, `app.js:extractSyncSegments()`. Optional per-session flicker filter adds ~50ms. See `docs/terminal-anti-flicker.md`.
+**Limits** in `src/config/` (buffer-limits.ts, map-limits.ts, etc.). Key: terminal 2MB/1.5MB trim, text 1MB/768KB, messages 1000/800, max agents 500, max sessions 50, max SSE clients 100. Use `LRUMap` for bounded caches, `StaleExpirationMap` for TTL cleanup.
 
-## Resource Limits
-
-Limits are centralized in `src/config/` — see `buffer-limits.ts`, `map-limits.ts`, `server-timing.ts`, `auth-config.ts`, `tunnel-config.ts`, `terminal-limits.ts`, `ai-defaults.ts`, `team-config.ts`.
-
-**Buffer limits** (per session):
-| Buffer | Max | Trim To |
-|--------|-----|---------|
-| Terminal | 2MB | 1.5MB |
-| Text output | 1MB | 768KB |
-| Messages | 1000 | 800 |
-
-**Map limits** (global):
-| Resource | Max |
-|----------|-----|
-| Tracked agents | 500 |
-| Concurrent sessions | 50 |
-| SSE clients total | 100 |
-| File watchers | 500 |
-
-Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-based cleanup.
-
-## Where to Find More Information
+## References
 
 | Topic | Location |
 |-------|----------|
-| **Respawn state machine** | `docs/respawn-state-machine.md` |
-| **Ralph Loop guide** | `docs/ralph-wiggum-guide.md` |
-| **Claude Code hooks** | `docs/claude-code-hooks-reference.md` |
-| **Terminal anti-flicker** | `docs/terminal-anti-flicker.md` |
-| **Agent Teams** | `agent-teams/README.md`, `agent-teams/design.md` |
-| **OpenCode integration** | `docs/opencode-integration.md` |
-| **QR auth design** | `docs/qr-auth-plan.md` |
-| **SSE events** | `src/web/sse-events.ts` (registry) + `src/web/public/constants.js` (frontend) |
-| **Types architecture** | `src/types/index.ts` `@fileoverview` (domain map + cross-references) |
-| **API routes** | `src/web/routes/` — each file has `@fileoverview` with route listing |
-
-Additional docs in `docs/` directory: refactoring phases (1-7), performance reports, improvement roadmaps, mobile/browser testing guides.
+| Respawn state machine | `docs/respawn-state-machine.md` |
+| Ralph Loop guide | `docs/ralph-wiggum-guide.md` |
+| Claude Code hooks | `docs/claude-code-hooks-reference.md` |
+| Terminal anti-flicker | `docs/terminal-anti-flicker.md` |
+| Agent Teams | `agent-teams/README.md`, `agent-teams/design.md` |
+| OpenCode integration | `docs/opencode-integration.md` |
+| QR auth design | `docs/qr-auth-plan.md` |
+| SSE events | `src/web/sse-events.ts` + `constants.js` |
+| Types architecture | `src/types/index.ts` `@fileoverview` |
+| API routes | `src/web/routes/` — each file has `@fileoverview` |
 
 ## Scripts
 
-| Script | Purpose |
-|--------|---------|
-| `scripts/tmux-manager.sh` | Safe tmux session management (use instead of direct kill commands) |
-| `scripts/monitor-respawn.sh` | Monitor respawn state machine in real-time |
-| `scripts/watch-subagents.ts` | Real-time subagent transcript watcher (list, follow by session/agent ID) |
-| `scripts/codeman-web.service` | systemd service file for production deployment |
-| `scripts/codeman-tunnel.service` | systemd service file for persistent Cloudflare tunnel |
-| `scripts/tunnel.sh` | Start/stop/check Cloudflare quick tunnel (`./scripts/tunnel.sh start\|stop\|url`) |
-| `scripts/build.mjs` | esbuild-based production build (called by `npm run build`) |
-| `scripts/postinstall.js` | npm postinstall hook for setup |
-
-Additional scripts in `scripts/` for screenshots, demos, Ralph wizards, and browser testing.
+Key: `scripts/tmux-manager.sh` (safe tmux mgmt), `scripts/tunnel.sh` (tunnel start/stop/url), `scripts/monitor-respawn.sh` (respawn monitoring), `scripts/watch-subagents.ts` (transcript watcher). Production services: `scripts/codeman-web.service`, `scripts/codeman-tunnel.service`.
 
 ## Memory Leak Prevention
 
-Frontend runs long (24+ hour sessions); all Maps/timers must be cleaned up.
-
-### Cleanup Patterns
-When adding new event listeners or timers:
-1. Store handler references for later removal
-2. Add cleanup to appropriate `stop()` or `cleanup*()` method
-3. For singleton watchers, store refs in class properties and remove in server `stop()`
-
-**Backend**: Clear Maps in `stop()`, null promise callbacks on error, remove watcher listeners on shutdown. Use `CleanupManager` for centralized disposal — supports timers, intervals, watchers, listeners, streams. Guard async callbacks with `if (this.cleanup.isStopped) return`.
-
-**Frontend**: Store drag/resize handlers on elements, clean up in `close*()` functions. SSE reconnect calls `handleInit()` which resets state. SSE listeners are tracked in an array and removed on reconnect to prevent accumulation.
-
-Run `npx vitest run test/memory-leak-prevention.test.ts` to verify patterns.
+24+ hour sessions require cleanup of all Maps/timers. Backend: use `CleanupManager`, clear Maps in `stop()`, guard async with `if (this.cleanup.isStopped) return`. Frontend: store handler refs, clean in `close*()`, SSE reconnect resets via `handleInit()`. Verify: `npx vitest run test/memory-leak-prevention.test.ts`.
 
 ## Common Workflows
 
-**Investigating a bug**: Start dev server (`npx tsx src/index.ts web`), reproduce in browser, check terminal output and `~/.codeman/state.json` for clues.
+**Investigating a bug**: Start dev server, reproduce in browser, check terminal + `~/.codeman/state.json`.
 
-**Adding a new API endpoint**: Define types in the appropriate `src/types/*.ts` domain file, add route in the matching `src/web/routes/*-routes.ts` module, broadcast SSE events if needed, handle in `app.js:handleSSEEvent()`.
+**Adding an API endpoint**: Types in `src/types/*.ts`, route in `src/web/routes/*-routes.ts`, broadcast SSE if needed, handle in `app.js:handleSSEEvent()`.
 
-**Modifying respawn behavior**: Study `docs/respawn-state-machine.md` first. The state machine is in `respawn-controller.ts`. Use MockSession from `test/respawn-test-utils.ts` for testing.
+**Modifying respawn**: Study `docs/respawn-state-machine.md` first. Use `MockSession` from `test/respawn-test-utils.ts`.
 
-**Modifying mobile behavior**: Mobile singletons (`MobileDetection`, `KeyboardHandler`, `SwipeHandler`, `KeyboardAccessoryBar`) all have `init()`/`cleanup()` lifecycle. KeyboardHandler uses `visualViewport` API for iOS keyboard detection (100px threshold for address bar drift). All mobile handlers are re-initialized after SSE reconnect to prevent stale closures.
+**Modifying mobile**: Singletons have `init()`/`cleanup()` lifecycle. Re-initialized after SSE reconnect to prevent stale closures.
 
-**Adding a file watcher**: Use `ImageWatcher` as a template pattern — chokidar with `awaitWriteFinish`, burst throttling (max 20/10s), debouncing (200ms), and auto-ignore of `node_modules/.git/dist/`.
+## Tunnel Setup
 
-## Tunnel Setup (Remote Access)
-
-Access Codeman from mobile/remote devices via Cloudflare quick tunnel.
-
-```
-Browser → Cloudflare Edge (HTTPS) → cloudflared → localhost:3000
-```
-
-**Prerequisites**: `cloudflared` installed (`cloudflared --version`), `CODEMAN_PASSWORD` set in environment.
-
-### Quick Start
-
-```bash
-# Via CLI
-./scripts/tunnel.sh start      # Start tunnel, prints public URL
-./scripts/tunnel.sh url        # Show current URL
-./scripts/tunnel.sh stop       # Stop tunnel
-
-# Via web UI: Settings → Tunnel → Toggle On
-```
-
-For persistent tunnel: `systemctl --user enable --now codeman-tunnel` (after copying `scripts/codeman-tunnel.service` to `~/.config/systemd/user/`).
-
-**Always set `CODEMAN_PASSWORD`** before exposing via tunnel — without it, anyone with the URL has full access. See the Security section above for full auth flow details (Basic Auth, QR Auth, session cookies, rate limiting).
+Remote access via Cloudflare quick tunnel: `./scripts/tunnel.sh start|stop|url`. Web UI: Settings → Tunnel. Persistent: `systemctl --user enable --now codeman-tunnel`. **Always set `CODEMAN_PASSWORD`** before exposing via tunnel.

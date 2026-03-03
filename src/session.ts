@@ -1,16 +1,29 @@
 /**
  * @fileoverview Core PTY session wrapper for Claude CLI interactions.
  *
- * This module provides the Session class which manages a PTY (pseudo-terminal)
- * process running the Claude CLI. It supports three operation modes:
+ * Manages a PTY (pseudo-terminal) process running Claude CLI or OpenCode CLI.
+ * Three operation modes:
+ * 1. **One-shot** (`runPrompt`): Single prompt → JSON response
+ * 2. **Interactive** (`startInteractive`): Persistent interactive session
+ * 3. **Shell** (`startShell`): Plain bash shell for debugging
  *
- * 1. **One-shot mode** (`runPrompt`): Execute a single prompt and get JSON response
- * 2. **Interactive mode** (`startInteractive`): Start an interactive Claude session
- * 3. **Shell mode**: Run a plain bash shell for debugging/testing
+ * Optionally wraps in a tmux session for persistence across disconnects.
+ * Tracks tokens, costs, background tasks, and auto-compact/clear.
  *
- * The session can optionally run inside a tmux session for persistence across disconnects.
- * It tracks tokens, costs, background tasks, and supports
- * auto-clear/auto-compact functionality when token limits are approached.
+ * Key exports:
+ * - `Session` class — main entity, extends EventEmitter
+ * - `ClaudeMessage` interface — parsed JSON messages from Claude output
+ * - `SessionEvents` interface — typed event map
+ *
+ * Key methods: `runPrompt()`, `startInteractive()`, `startShell()`,
+ * `writeViaMux()`, `toState()`, `stop()`, `resize()`, `isIdle()`,
+ * `setAutoCompact()`, `findTaskDescriptionNear()`, `getTerminalBuffer()`
+ *
+ * @dependencies session-cli-builder (args/env), session-auto-ops (auto-compact/clear),
+ *   ralph-tracker (todo/completion parsing), bash-tool-parser (tool invocation tracking),
+ *   task-tracker (background tasks), mux-interface (tmux abstraction)
+ * @consumedby session-manager, web/server, respawn-controller
+ * @emits session:terminal, session:idle, session:working, session:completion, session:exit
  *
  * @module session
  */
