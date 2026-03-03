@@ -12,7 +12,7 @@
  *   `SubagentToolResult`, `SubagentTranscriptEntry` — data interfaces
  * - `SubagentEvents` — typed event map
  *
- * Watched patterns: `~/.claude/projects/{hash}/subagents/agent-{id}.jsonl`
+ * Watched patterns: `~/.claude/projects/{project}/{session}/subagents/agent-{id}.jsonl`
  * Parses JSONL entries: user/assistant messages, tool_use/tool_result blocks, progress events.
  * Tracks per-agent: status, token counts, model, description, tool call count, liveness (PID).
  *

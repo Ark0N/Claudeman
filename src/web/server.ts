@@ -1918,7 +1918,7 @@ export class WebServer extends EventEmitter {
           // Client may have missed terminal data during backpressure.
           // Tell it to reload the active session's buffer to recover.
           try {
-            reply.raw.write(`event: session:needsRefresh\ndata: {}\n\n`);
+            reply.raw.write(`event: ${SseEvent.SessionNeedsRefresh}\ndata: {}\n\n`);
           } catch {
             /* client gone */
           }

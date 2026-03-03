@@ -1,7 +1,7 @@
 /**
  * @fileoverview Web Push notification type definitions.
  *
- * Types for the Web Push notification layer (layer 5 of the 5-layer notification system).
+ * Types for the Web Push notification layer (layer 4 of the 5-layer notification system).
  *
  * Key exports:
  * - PushSubscriptionRecord — a registered push endpoint with per-event preferences

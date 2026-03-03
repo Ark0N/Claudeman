@@ -601,9 +601,18 @@ install_cloudflared_fedora() {
 }
 
 install_cloudflared_arch() {
-    info "Installing cloudflared via pacman..."
+    info "Installing cloudflared binary..."
+    local arch
+    arch="$(uname -m)"
+    local cf_arch="amd64"
+    [[ "$arch" == "aarch64" ]] && cf_arch="arm64"
+    [[ "$arch" == "armv7l" ]] && cf_arch="arm"
     ensure_sudo
-    run_as_root pacman -Sy --noconfirm cloudflared
+    local tmp
+    tmp="$(mktemp)"
+    download "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$cf_arch" "$tmp"
+    run_as_root mv "$tmp" /usr/local/bin/cloudflared
+    run_as_root chmod +x /usr/local/bin/cloudflared
 }
 
 install_cloudflared_alpine() {
@@ -614,7 +623,10 @@ install_cloudflared_alpine() {
     [[ "$arch" == "aarch64" ]] && cf_arch="arm64"
     [[ "$arch" == "armv7l" ]] && cf_arch="arm"
     ensure_sudo
-    download "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$cf_arch" /usr/local/bin/cloudflared
+    local tmp
+    tmp="$(mktemp)"
+    download "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$cf_arch" "$tmp"
+    run_as_root mv "$tmp" /usr/local/bin/cloudflared
     run_as_root chmod +x /usr/local/bin/cloudflared
 }
 

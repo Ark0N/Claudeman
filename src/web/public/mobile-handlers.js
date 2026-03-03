@@ -18,7 +18,7 @@
  * @globals {object} KeyboardHandler
  * @globals {object} SwipeHandler
  *
- * @dependency constants.js (KeyboardAccessoryBar reference in KeyboardHandler.onKeyboardShow)
+ * @dependency keyboard-accessory.js (KeyboardAccessoryBar reference in KeyboardHandler.onKeyboardShow, soft — guarded with typeof check)
  * @loadorder 2 of 9 — loaded after constants.js, before voice-input.js
  */
 

@@ -11,7 +11,7 @@
  * @globals {function} extractSyncSegments - DEC 2026 terminal sync marker parser
  * @globals {function} getEventCoords - Unified mouse/touch coordinate extractor
  * @globals {function} escapeHtml - XSS-safe HTML escaping
- * @globals {object} SSE_EVENTS - Centralized SSE event type constants (~65 event types)
+ * @globals {object} SSE_EVENTS - Centralized SSE event type constants (~73 event types)
  * @globals {Array} BUILTIN_RESPAWN_PRESETS - Built-in respawn configuration presets
  *
  * @dependency None (first in load order)
