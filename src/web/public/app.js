@@ -618,15 +618,14 @@ class CodemanApp {
     const container = document.getElementById('terminalContainer');
     this.terminal.open(container);
 
-    // Activate WebGL renderer for up to 900% faster rendering (fallback to canvas on failure).
-    // Store reference so we can disable during large buffer loads to prevent GPU stalls.
-    // Disable with ?nowebgl=1 URL param for debugging GPU freeze issues.
+    // WebGL renderer disabled — canvas renderer used instead.
+    // xterm.js WebGL addon causes synchronous GPU ReadPixels calls during large
+    // terminal writes (buffer loads, heavy Ink output) that block Chrome's main
+    // thread for 10+ seconds, triggering "page unresponsive" crashes.
+    // Canvas renderer handles the same workloads without GPU stalls.
+    // Re-enable with ?webgl=1 URL param for testing.
     this._webglAddon = null;
-    const _noWebGL = new URLSearchParams(location.search).has('nowebgl');
-    if (_noWebGL) {
-      console.warn('[CRASH-DIAG] WebGL renderer DISABLED via ?nowebgl param — using canvas renderer');
-    }
-    if (!_noWebGL && typeof WebglAddon !== 'undefined') {
+    if (new URLSearchParams(location.search).has('webgl') && typeof WebglAddon !== 'undefined') {
       try {
         this._webglAddon = new WebglAddon.WebglAddon();
         this._webglAddon.onContextLoss(() => {
@@ -635,6 +634,7 @@ class CodemanApp {
           this._webglAddon = null;
         });
         this.terminal.loadAddon(this._webglAddon);
+        console.log('[CRASH-DIAG] WebGL renderer enabled via ?webgl param');
       } catch (_e) { /* WebGL2 unavailable — canvas renderer used */ }
     }
 
@@ -1376,11 +1376,13 @@ class CodemanApp {
     // This implements synchronized output for xterm.js which doesn't support DEC 2026 natively
     const _joinedLen = this.pendingWrites.reduce((s, w) => s + w.length, 0);
     if (_joinedLen > 16384) _crashDiag.log(`FLUSH: ${(_joinedLen/1024).toFixed(0)}KB`);
-    const segments = extractSyncSegments(this.pendingWrites.join(''));
+    const joined = this.pendingWrites.join('');
     this.pendingWrites = [];
 
-    // Write all segments in a single batch (atomic within this frame)
-    // xterm.js internally batches multiple write() calls within same frame
+    const segments = extractSyncSegments(joined);
+
+    // Write all segments in a single batch (atomic within this frame).
+    // xterm.js internally batches multiple write() calls within same frame.
     // Never discard content from incomplete sync blocks — xterm.js doesn't support
     // DEC 2026 natively anyway, so strip the marker and write content regardless.
     // Discarding causes real data loss (including Ink's erase-line escapes).
@@ -1393,7 +1395,7 @@ class CodemanApp {
       }
     }
     const _dt = performance.now() - _t0;
-    if (_dt > 100) console.warn(`[CRASH-DIAG] flushPendingWrites took ${_dt.toFixed(0)}ms (${_joinedLen} bytes, ${segments.length} segments)`);
+    if (_dt > 100) console.warn(`[CRASH-DIAG] flushPendingWrites took ${_dt.toFixed(0)}ms (${_joinedLen} bytes)`);
 
     // Sticky scroll: if user was at bottom, keep them there after new output
     if (this._wasAtBottomBeforeWrite) {
@@ -3578,6 +3580,12 @@ class CodemanApp {
     // filter catches most cases, but _restoringFlushedState provides a
     // belt-and-suspenders guard for any edge cases.
     this._restoringFlushedState = true;
+    // Gate live SSE terminal writes for the ENTIRE buffer load sequence.
+    // Without this, SSE events arriving during the fetch() gap compete with
+    // the buffer write, causing 70KB+ single-frame flushes that stall WebGL.
+    // chunkedTerminalWrite also sets this, but we need it before the fetch too.
+    this._isLoadingBuffer = true;
+    this._loadBufferQueue = [];
     try {
       // Instant cache restore — show previous buffer via chunked write to avoid WebGL GPU stalls.
       // Direct terminal.write() of large cached buffers (256KB+) can block the main thread
@@ -3588,7 +3596,7 @@ class CodemanApp {
         this.terminal.clear();
         this.terminal.reset();
         await this.chunkedTerminalWrite(cachedBuffer);
-        if (selectGen !== this._selectGeneration) { this._restoringFlushedState = false; return; }
+        if (selectGen !== this._selectGeneration) { if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
         this.terminal.scrollToBottom();
         _crashDiag.log('CACHE_DONE');
       }
@@ -3596,7 +3604,7 @@ class CodemanApp {
       _crashDiag.log('FETCH_START');
       const tailSize = 256 * 1024;
       const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${tailSize}`);
-      if (selectGen !== this._selectGeneration) { this._restoringFlushedState = false; return; }
+      if (selectGen !== this._selectGeneration) { if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
       const data = await res.json();
       _crashDiag.log(`FETCH_DONE: ${data.terminalBuffer ? (data.terminalBuffer.length/1024).toFixed(0) + 'KB' : 'empty'} truncated=${data.truncated}`);
 
@@ -3615,7 +3623,7 @@ class CodemanApp {
           }
           // Use chunked write for large buffers to avoid UI jank
           await this.chunkedTerminalWrite(data.terminalBuffer);
-          if (selectGen !== this._selectGeneration) { this._restoringFlushedState = false; return; }
+          if (selectGen !== this._selectGeneration) { if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
           // Ensure terminal is scrolled to bottom after buffer load
           this.terminal.scrollToBottom();
         }
@@ -3633,7 +3641,13 @@ class CodemanApp {
         this.terminal.reset();
       }
 
-      // Buffer load complete — drop the guard so user input clears state normally
+      // Buffer load complete — unblock live SSE writes and flush any queued events.
+      // chunkedTerminalWrite calls _finishBufferLoad internally, but if we skipped
+      // the chunked write (small buffer, cache hit, or empty), we must call it here.
+      if (this._isLoadingBuffer) {
+        this._finishBufferLoad();
+      }
+      // Drop the guard so user input clears state normally
       this._restoringFlushedState = false;
 
       // Restore flushed offset and text for this session so the overlay positions
@@ -3739,6 +3753,7 @@ class CodemanApp {
       _crashDiag.log(`SELECT_DONE: ${(performance.now() - _selStart).toFixed(0)}ms`);
       console.log(`[CRASH-DIAG] selectSession DONE: ${sessionId.slice(0,8)} in ${(performance.now() - _selStart).toFixed(0)}ms`);
     } catch (err) {
+      if (this._isLoadingBuffer) this._finishBufferLoad();
       this._restoringFlushedState = false;
       console.error('Failed to load session terminal:', err);
     }
