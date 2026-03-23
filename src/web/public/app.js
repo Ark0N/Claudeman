@@ -618,7 +618,7 @@ class CodemanApp {
       { key: 'Enter', ctrl: true, action: () => this.quickStart() },
       { key: 'w', ctrl: true, action: () => this.killActiveSession() },
       { key: 'Tab', ctrl: true, action: () => this.nextSession() },
-      { key: 'k', ctrl: true, action: () => this.killAllSessions() },
+      // { key: 'k', ctrl: true, action: () => this.killAllSessions() }, // disabled: too easy to trigger accidentally
       { key: 'l', ctrl: true, action: () => this.clearTerminal() },
       { key: 'R', ctrl: true, shift: true, action: () => this.restoreTerminalSize() },
       { key: '=', altKey: '+', ctrl: true, action: () => this.increaseFontSize() },
