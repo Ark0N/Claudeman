@@ -251,6 +251,23 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.ORCHESTRATOR_ERROR, '_onOrchestratorError'],
 ];
 
+
+// ═══════════════════════════════════════════════════════════════
+// Session Name Prefix Parser
+// ═══════════════════════════════════════════════════════════════
+// Parses w<N>-<caseName> or s<N>-<caseName> prefix from session names.
+// Returns { prefix, suffix } or null if name does not match the pattern.
+function parseSessionPrefix(name) {
+  if (!name) return null;
+  const m = name.match(/^(w\d+-[a-zA-Z0-9_-]+|s\d+-[a-zA-Z0-9_-]+)/);
+  if (!m) return null;
+  const prefix = m[1];
+  const rest = name.slice(prefix.length);
+  if (rest === "") return { prefix, suffix: "" };
+  if (rest.startsWith(": ")) return { prefix, suffix: rest.slice(2) };
+  return null;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // CodemanApp Class — constructor and global state
 // ═══════════════════════════════════════════════════════════════
@@ -1594,7 +1611,12 @@ class CodemanApp {
         // Update name if changed
         const nameEl = tab.querySelector('.tab-name');
         if (nameEl && nameEl.textContent !== name) {
-          nameEl.textContent = name;
+          const _p = parseSessionPrefix(name);
+          if (_p && _p.suffix) {
+            nameEl.innerHTML = '<span class="tab-prefix">' + escapeHtml(_p.prefix) + '</span><span class="tab-suffix">: ' + escapeHtml(_p.suffix) + '</span>';
+          } else {
+            nameEl.textContent = name;
+          }
         }
 
         // Update task badge
@@ -1702,7 +1724,7 @@ class CodemanApp {
           <span class="tab-info">
             <span class="tab-name-row">
               ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : mode === 'opencode' ? '<span class="tab-mode opencode" aria-hidden="true">oc</span>' : ''}
-              <span class="tab-name" data-session-id="${id}">${escapeHtml(name)}</span>
+              <span class="tab-name" data-session-id="${id}">${(() => { const p = parseSessionPrefix(name); return p && p.suffix ? '<span class="tab-prefix">' + escapeHtml(p.prefix) + '</span><span class="tab-suffix">: ' + escapeHtml(p.suffix) + '</span>' : escapeHtml(name); })()}</span>
             </span>
             ${showFolder ? `<span class="tab-folder">\u{1F4C1} ${escapeHtml(folderName)}</span>` : ''}
           </span>
@@ -2471,6 +2493,14 @@ class CodemanApp {
     this.showWelcome();
     this.renderSessionTabs();
     this.renderRalphStatePanel();
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Upload
+  // ═══════════════════════════════════════════════════════════════
+
+  openUploadPopup() {
+    window.open('/upload.html', 'codeman-upload', 'width=520,height=600,resizable=yes');
   }
 
   // ═══════════════════════════════════════════════════════════════

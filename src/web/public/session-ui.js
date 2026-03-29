@@ -298,7 +298,7 @@ Object.assign(CodemanApp.prototype, {
       // Find the highest existing w-number for THIS case to avoid duplicates
       let startNumber = 1;
       for (const [, session] of this.sessions) {
-        const match = session.name && session.name.match(/^w(\d+)-(.+)$/);
+        const match = session.name && session.name.match(/^w(\d+)-([a-zA-Z0-9_-]+)/);
         if (match && match[2] === caseName) {
           const num = parseInt(match[1]);
           if (num >= startNumber) {
@@ -432,7 +432,7 @@ Object.assign(CodemanApp.prototype, {
       // Find the highest existing s-number for THIS case to avoid duplicates
       let startNumber = 1;
       for (const [, session] of this.sessions) {
-        const match = session.name && session.name.match(/^s(\d+)-(.+)$/);
+        const match = session.name && session.name.match(/^s(\d+)-([a-zA-Z0-9_-]+)/);
         if (match && match[2] === caseName) {
           const num = parseInt(match[1]);
           if (num >= startNumber) {
@@ -596,8 +596,20 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('modalImageWatcherEnabled').checked = session.imageWatcherEnabled ?? true;
     document.getElementById('modalFlickerFilterEnabled').checked = session.flickerFilterEnabled ?? false;
 
-    // Populate session name input
-    document.getElementById('modalSessionName').value = session.name || '';
+    // Populate session name input with prefix/suffix split
+    const _modalParsed = parseSessionPrefix(session.name);
+    const _prefixEl = document.getElementById('modalSessionPrefix');
+    if (_modalParsed) {
+      _prefixEl.textContent = _modalParsed.prefix + ': ';
+      _prefixEl.style.display = '';
+      document.getElementById('modalSessionName').value = _modalParsed.suffix;
+      document.getElementById('modalSessionName').placeholder = 'Add description...';
+    } else {
+      _prefixEl.style.display = 'none';
+      _prefixEl.textContent = '';
+      document.getElementById('modalSessionName').value = session.name || '';
+      document.getElementById('modalSessionName').placeholder = 'Auto (directory name)';
+    }
 
     // Initialize color picker with current session color
     const currentColor = session.color || 'default';
@@ -644,7 +656,15 @@ Object.assign(CodemanApp.prototype, {
 
   async saveSessionName() {
     if (!this.editingSessionId) return;
-    const name = document.getElementById('modalSessionName').value.trim();
+    const session = this.sessions.get(this.editingSessionId);
+    const parsed = session ? parseSessionPrefix(session.name) : null;
+    const inputVal = document.getElementById('modalSessionName').value.trim();
+    let name;
+    if (parsed) {
+      name = parsed.prefix + (inputVal ? ': ' + inputVal : '');
+    } else {
+      name = inputVal;
+    }
     try {
       await this._apiPut(`/api/sessions/${this.editingSessionId}/name`, { name });
     } catch (err) {
@@ -864,29 +884,46 @@ Object.assign(CodemanApp.prototype, {
     if (!tabName) return;
 
     const currentName = this.getSessionName(session);
+    const parsed = parseSessionPrefix(session.name);
+    const originalContent = tabName.textContent;
+    tabName.textContent = '';
+    tabName.innerHTML = '';
+
+    // If prefix detected, show it as non-editable label
+    if (parsed) {
+      const prefixLabel = document.createElement('span');
+      prefixLabel.textContent = parsed.prefix + ': ';
+      prefixLabel.style.cssText = 'color: var(--text-muted); font-size: 0.75rem; white-space: nowrap;';
+      tabName.appendChild(prefixLabel);
+    }
+
     const input = document.createElement('input');
     input.type = 'text';
-    input.value = session.name || '';
-    input.placeholder = currentName;
+    input.value = parsed ? parsed.suffix : (session.name || '');
+    input.placeholder = parsed ? 'Add description...' : currentName;
     input.className = 'tab-rename-input';
     input.style.cssText = 'width: 80px; font-size: 0.75rem; padding: 2px 4px; background: var(--bg-input); border: 1px solid var(--accent); border-radius: 3px; color: var(--text); outline: none;';
 
-    const originalContent = tabName.textContent;
-    tabName.textContent = '';
     tabName.appendChild(input);
     input.focus();
     input.select();
 
     const finishRename = async () => {
-      const newName = input.value.trim();
-      tabName.textContent = newName || originalContent;
+      const suffix = input.value.trim();
+      let fullName;
+      if (parsed) {
+        fullName = parsed.prefix + (suffix ? ': ' + suffix : '');
+      } else {
+        fullName = suffix;
+      }
+      tabName.textContent = fullName || originalContent;
 
-      if (newName && newName !== session.name) {
+      if (fullName !== session.name) {
         try {
           await fetch(`/api/sessions/${sessionId}/name`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: newName })
+            body: JSON.stringify({ name: fullName })
           });
         } catch (err) {
           tabName.textContent = originalContent;

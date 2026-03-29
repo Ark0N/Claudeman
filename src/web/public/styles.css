@@ -330,6 +330,15 @@ body {
   text-overflow: ellipsis;
 }
 
+.session-tab .tab-prefix {
+  color: var(--text-muted);
+}
+
+.session-tab .tab-suffix {
+  color: var(--text);
+  font-weight: 500;
+}
+
 /* Tab folder path — hidden by default, shown via .tabs-show-folder on container */
 .session-tab .tab-folder {
   font-size: 0.6rem;
