@@ -78,6 +78,9 @@ Object.assign(CodemanApp.prototype, {
     this.terminal.attachCustomKeyEventHandler((ev) => {
       if (ev.isComposing || ev.keyCode === 229) return false;
 
+      // Let Alt+digit pass through to browser (tab switching)
+      if (ev.altKey && ev.key >= '0' && ev.key <= '9') return false;
+
       // Shift+Enter / Ctrl+Enter: insert newline for multi-line input.
       // xterm.js sends plain \r for all Enter variants, so Claude Code (Ink) can't
       // distinguish them.  We use tmux send-keys via HTTP POST to send the named

@@ -655,6 +655,16 @@ class CodemanApp {
         this.closeHelp();
       }
 
+      // Alt+1-9: switch to Codeman session by index
+      if (e.altKey && !e.ctrlKey && !e.shiftKey && e.key >= '1' && e.key <= '9') {
+        const idx = parseInt(e.key) - 1;
+        if (idx < this.sessionOrder.length) {
+          e.preventDefault();
+          this.selectSession(this.sessionOrder[idx]);
+        }
+        return;
+      }
+
       // Match against shortcut table
       for (const s of SHORTCUTS) {
         const keyMatch = e.key === s.key || (s.altKey && e.key === s.altKey);
