@@ -494,6 +494,42 @@ export function registerSessionRoutes(
     return { success: true };
   });
 
+  // ========== Send Named Key (tmux send-keys -H) ==========
+  // Sends raw hex bytes to tmux pane for keys like Shift+Enter / Ctrl+Enter.
+  // Uses send-keys -H (hex) to inject 0x0a (line feed) which Claude Code's
+  // Ink input recognizes as "insert newline" vs 0x0d (carriage return = submit).
+
+  app.post('/api/sessions/:id/send-key', async (req): Promise<ApiResponse> => {
+    const { id } = req.params as { id: string };
+    const body = req.body as Record<string, unknown>;
+    const key = typeof body?.key === 'string' ? body.key : '';
+
+    // Map key names to hex byte sequences
+    const KEY_HEX_MAP: Record<string, string[]> = {
+      'S-Enter': ['0a'], // \n (line feed)
+      'C-Enter': ['0a'], // \n (line feed)
+    };
+    const hex = KEY_HEX_MAP[key];
+    if (!hex) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Key not allowed: ${key}`);
+    }
+
+    const session = findSessionOrFail(ctx, id);
+    const muxName = (session as any)._muxSession?.muxName;
+    if (!muxName) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'No tmux session');
+    }
+
+    try {
+      const { execFileSync } = await import('child_process');
+      execFileSync('tmux', ['send-keys', '-H', '-t', muxName, ...hex], { timeout: 5000 });
+    } catch (err) {
+      console.error('[Server] send-key failed:', err);
+      return createErrorResponse(ApiErrorCode.INTERNAL_ERROR, 'tmux send-keys failed');
+    }
+    return { success: true };
+  });
+
   // ========== Resize Terminal ==========
 
   app.post('/api/sessions/:id/resize', async (req): Promise<ApiResponse> => {

@@ -632,7 +632,8 @@ class CodemanApp {
     //               shift? (require Shift), action }.
     const SHORTCUTS = [
       { key: '?', altKey: '/', ctrl: true, action: () => this.showHelp() },
-      { key: 'Enter', ctrl: true, action: () => this.quickStart() },
+      // Ctrl+Enter reserved for multi-line input in terminal; use welcome screen button instead
+      // { key: 'Enter', ctrl: true, action: () => this.quickStart() },
       { key: 'w', ctrl: true, action: () => this.killActiveSession() },
       { key: 'Tab', ctrl: true, action: () => this.nextSession() },
       // { key: 'k', ctrl: true, action: () => this.killAllSessions() }, // disabled: too easy to trigger accidentally

@@ -80,14 +80,13 @@ Object.assign(CodemanApp.prototype, {
 
       // Shift+Enter / Ctrl+Enter: insert newline for multi-line input.
       // xterm.js sends plain \r for all Enter variants, so Claude Code (Ink) can't
-      // distinguish them.  We intercept here and send \n (Ctrl+J / line feed) which
-      // Claude Code recognises as "insert newline" rather than "submit".
-      // Note: CSI u sequences (\x1b[13;2u) do NOT work -- Claude Code doesn't handle them.
+      // distinguish them.  We use tmux send-keys via HTTP POST to send the named
+      // key (e.g. S-Enter) which tmux translates to the correct CSI u sequence
+      // for the inner application.  Direct PTY write doesn't work because tmux
+      // doesn't know xterm.js supports CSI u (no client capability negotiation).
       if (ev.key === 'Enter' && (ev.shiftKey || ev.ctrlKey) && ev.type === 'keydown') {
-        const newline = '\n';
         if (this.activeSessionId) {
           if (this._localEchoEnabled) {
-            // Flush any buffered local-echo text first, then send the newline
             const text = this._localEchoOverlay?.pendingText || '';
             this._localEchoOverlay?.clear();
             this._localEchoOverlay?.suppressBufferDetection();
@@ -98,12 +97,18 @@ Object.assign(CodemanApp.prototype, {
               flushInput();
             }
             setTimeout(() => {
-              this._pendingInput += newline;
-              flushInput();
+              fetch(`/api/sessions/${this.activeSessionId}/send-key`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: ev.ctrlKey ? 'C-Enter' : 'S-Enter' }),
+              });
             }, text ? 80 : 0);
           } else {
-            this._pendingInput += newline;
-            flushInput();
+            fetch(`/api/sessions/${this.activeSessionId}/send-key`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ key: ev.ctrlKey ? 'C-Enter' : 'S-Enter' }),
+            });
           }
         }
         return false;
