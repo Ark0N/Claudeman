@@ -77,8 +77,77 @@ Object.assign(CodemanApp.prototype, {
     // during composition, causing duplicate or garbled input.
     this.terminal.attachCustomKeyEventHandler((ev) => {
       if (ev.isComposing || ev.keyCode === 229) return false;
+
+      // Shift+Enter / Ctrl+Enter: insert newline for multi-line input.
+      // xterm.js sends plain \r for all Enter variants, so Claude Code (Ink) can't
+      // distinguish them.  We intercept here and send \n (Ctrl+J / line feed) which
+      // Claude Code recognises as "insert newline" rather than "submit".
+      // Note: CSI u sequences (\x1b[13;2u) do NOT work -- Claude Code doesn't handle them.
+      if (ev.key === 'Enter' && (ev.shiftKey || ev.ctrlKey) && ev.type === 'keydown') {
+        const newline = '\n';
+        if (this.activeSessionId) {
+          if (this._localEchoEnabled) {
+            // Flush any buffered local-echo text first, then send the newline
+            const text = this._localEchoOverlay?.pendingText || '';
+            this._localEchoOverlay?.clear();
+            this._localEchoOverlay?.suppressBufferDetection();
+            this._flushedOffsets?.delete(this.activeSessionId);
+            this._flushedTexts?.delete(this.activeSessionId);
+            if (text) {
+              this._pendingInput += text;
+              flushInput();
+            }
+            setTimeout(() => {
+              this._pendingInput += newline;
+              flushInput();
+            }, text ? 80 : 0);
+          } else {
+            this._pendingInput += newline;
+            flushInput();
+          }
+        }
+        return false;
+      }
+
       return true;
     });
+
+    // Android virtual keyboard fix: catch non-composition input events.
+    // On Android Chrome, typing symbols (e.g., "/" from Gboard's symbol keyboard)
+    // sends keyCode 229 + input event WITHOUT compositionstart/end wrapping.
+    // The custom key handler above returns false for keyCode 229, telling xterm
+    // to ignore the keydown. xterm.js expects the character to arrive via
+    // composition events, but since there's no composition, the character is lost.
+    // This listener catches those orphaned input events and forwards them to onData.
+    {
+      const xtermTextarea = container.querySelector('.xterm-helper-textarea');
+      if (xtermTextarea && MobileDetection.isTouchDevice()) {
+        let composing = false;
+        xtermTextarea.addEventListener('compositionstart', () => { composing = true; });
+        xtermTextarea.addEventListener('compositionend', () => { composing = false; });
+        xtermTextarea.addEventListener('input', (e) => {
+          // Only handle insertText events outside of composition — these are
+          // the ones xterm.js misses on Android virtual keyboards.
+          if (composing || e.isComposing) return;
+          if (e.inputType !== 'insertText' || !e.data) return;
+          // xterm.js may have already processed this via its own input handler.
+          // Check if the textarea was cleared by xterm (value is empty or just
+          // whitespace) — if so, xterm handled it and we should not double-send.
+          // Use a microtask to check after xterm's own handlers have run.
+          const data = e.data;
+          Promise.resolve().then(() => {
+            // If xterm cleared the textarea, it processed the input — skip.
+            const val = xtermTextarea.value;
+            if (!val || val.trim() === '') return;
+            // xterm didn't process it — forward to terminal as if typed.
+            // Emit via onData path by writing to terminal's input handler.
+            this.terminal._core.coreService.triggerDataEvent(data, true);
+            // Clear the textarea to prevent xterm from processing it later.
+            xtermTextarea.value = '';
+          });
+        });
+      }
+    }
 
     // WebGL renderer for GPU-accelerated terminal rendering.
     // Previously caused "page unresponsive" crashes from synchronous GPU stalls,
