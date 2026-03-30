@@ -293,11 +293,18 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
       };
 
       const content = await fs.readFile(resolvedPath);
-      reply.header('Content-Type', mimeTypes[ext] || 'application/octet-stream');
       if (download === 'true') {
+        // Bypass Fastify compression — write directly to raw response
         const basename = filePath!.split('/').pop() || 'download';
-        reply.header('Content-Disposition', `attachment; filename="${basename}"`);
+        reply.raw.writeHead(200, {
+          'Content-Type': mimeTypes[ext] || 'application/octet-stream',
+          'Content-Disposition': `attachment; filename="${basename}"`,
+          'Content-Length': content.length,
+        });
+        reply.raw.end(content);
+        return;
       }
+      reply.header('Content-Type', mimeTypes[ext] || 'application/octet-stream');
       reply.send(content);
     } catch (err) {
       reply
@@ -467,9 +474,14 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
 
       const filename = pathBasename(resolvedPath);
       const content = await fs.readFile(resolvedPath);
-      reply.header('Content-Type', mimeTypes[ext] || 'application/octet-stream');
-      reply.header('Content-Disposition', `attachment; filename="${filename}"`);
-      reply.send(content);
+      // Bypass Fastify compression — write directly to raw response
+      reply.raw.writeHead(200, {
+        'Content-Type': mimeTypes[ext] || 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Length': content.length,
+      });
+      reply.raw.end(content);
+      return;
     } catch (err) {
       reply
         .code(500)
