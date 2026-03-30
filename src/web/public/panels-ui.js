@@ -2318,12 +2318,17 @@ Object.assign(CodemanApp.prototype, {
 
       const nameClass = isDir ? 'file-tree-name directory' : 'file-tree-name';
 
+      const downloadBtn = !isDir
+        ? `<a class="file-tree-download" href="/api/sessions/${this.activeSessionId}/file-raw?path=${encodeURIComponent(node.path)}&download=true" title="Download" onclick="event.stopPropagation()">&#x2B07;</a>`
+        : '';
+
       html.push(`
         <div class="file-tree-item${hiddenClass}" data-path="${escapeHtml(node.path)}" data-type="${node.type}" data-depth="${depth}">
           ${expandIcon}
           <span class="file-tree-icon">${icon}</span>
           <span class="${nameClass}">${escapeHtml(node.name)}</span>
           ${sizeStr}
+          ${downloadBtn}
         </div>
       `);
 

@@ -6568,6 +6568,22 @@ kbd {
 .file-tree-item[data-depth="8"] { padding-left: 6.5rem; }
 .file-tree-item[data-depth="9"] { padding-left: 7.25rem; }
 
+.file-tree-download {
+  display: none;
+  margin-left: auto;
+  padding: 0 4px;
+  color: #888;
+  text-decoration: none;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.file-tree-item:hover .file-tree-download {
+  display: inline;
+}
+.file-tree-download:hover {
+  color: #4fc3f7;
+}
+
 /* ========== File Preview Overlay ========== */
 
 .file-preview-overlay {
