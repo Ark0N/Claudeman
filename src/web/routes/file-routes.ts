@@ -4,7 +4,8 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { join } from 'node:path';
+import { join, basename as pathBasename } from 'node:path';
+import { homedir } from 'node:os';
 import fs from 'node:fs/promises';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import { fileStreamManager } from '../../file-stream-manager.js';
@@ -371,5 +372,108 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
     findSessionOrFail(ctx, id); // Validates session exists
     const closed = fileStreamManager.closeStream(streamId);
     return { success: closed };
+  });
+
+  // Standalone file download -- any readable path on the filesystem.
+  // Protected by auth middleware (CODEMAN_PASSWORD) and a sensitive-path blocklist.
+  const SENSITIVE_PATTERNS: RegExp[] = [
+    /^\/etc\/shadow$/,
+    /^\/etc\/gshadow$/,
+    /^\/etc\/master\.passwd$/,
+    new RegExp(`^${homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\/\\.ssh\\/`),
+    /\/\.env$/,
+    /\/\.env\./,
+    /\/credentials(\.json|\.yml|\.yaml|\.xml)?$/i,
+    /\/\.aws\/credentials$/,
+    /\/\.gcloud\/credentials\.db$/,
+    /\/\.docker\/config\.json$/,
+  ];
+
+  function isSensitivePath(absPath: string): boolean {
+    return SENSITIVE_PATTERNS.some((pattern) => pattern.test(absPath));
+  }
+
+  app.get('/api/download', async (req, reply) => {
+    const { path: filePath } = req.query as { path?: string };
+
+    if (!filePath) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
+      return;
+    }
+
+    // Require absolute path
+    if (!filePath.startsWith('/')) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be absolute'));
+      return;
+    }
+
+    // Resolve to canonical path (follow symlinks, normalize ..)
+    let resolvedPath: string;
+    try {
+      resolvedPath = join(filePath); // normalize
+      const { realpathSync } = await import('node:fs');
+      resolvedPath = realpathSync(resolvedPath);
+    } catch {
+      reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
+      return;
+    }
+
+    // Check sensitive path blocklist
+    if (isSensitivePath(resolvedPath)) {
+      reply.code(403).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Access to this file is blocked'));
+      return;
+    }
+
+    try {
+      const stat = await fs.stat(resolvedPath);
+
+      if (stat.isDirectory()) {
+        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path is a directory'));
+        return;
+      }
+
+      // 50MB size limit
+      const MAX_DOWNLOAD_SIZE = 50 * 1024 * 1024;
+      if (stat.size > MAX_DOWNLOAD_SIZE) {
+        reply
+          .code(400)
+          .send(
+            createErrorResponse(
+              ApiErrorCode.INVALID_INPUT,
+              `File too large (${Math.round(stat.size / 1024 / 1024)}MB > 50MB limit)`
+            )
+          );
+        return;
+      }
+
+      const ext = filePath.split('.').pop()?.toLowerCase() || '';
+      const mimeTypes: Record<string, string> = {
+        png: 'image/png',
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        gif: 'image/gif',
+        webp: 'image/webp',
+        svg: 'image/svg+xml',
+        pdf: 'application/pdf',
+        json: 'application/json',
+        txt: 'text/plain',
+        md: 'text/markdown',
+        csv: 'text/csv',
+        xml: 'application/xml',
+        zip: 'application/zip',
+        gz: 'application/gzip',
+        tar: 'application/x-tar',
+      };
+
+      const filename = pathBasename(resolvedPath);
+      const content = await fs.readFile(resolvedPath);
+      reply.header('Content-Type', mimeTypes[ext] || 'application/octet-stream');
+      reply.header('Content-Disposition', `attachment; filename="${filename}"`);
+      reply.send(content);
+    } catch (err) {
+      reply
+        .code(500)
+        .send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${getErrorMessage(err)}`));
+    }
   });
 }
