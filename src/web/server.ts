@@ -34,7 +34,7 @@ import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, mkdirSync, readFileSync, chmodSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, chmodSync, rmSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { homedir, hostname as getHostname } from 'node:os';
@@ -926,6 +926,15 @@ export class WebServer extends EventEmitter {
       fileStreamManager.closeSessionStreams(sessionId);
       // Stop watching for images in this session's directory
       imageWatcher.unwatchSession(sessionId);
+      // Clean up pasted images directory for this session
+      if (killMux && session.workingDir) {
+        const pasteImageDir = join(session.workingDir, '.claude-images');
+        try {
+          rmSync(pasteImageDir, { recursive: true, force: true });
+        } catch {
+          // Best-effort cleanup
+        }
+      }
       await session.stop(killMux);
       this.sessions.delete(sessionId);
       // Only remove from state.json if we're also killing the mux session.

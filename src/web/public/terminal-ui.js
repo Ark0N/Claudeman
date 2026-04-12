@@ -83,6 +83,15 @@ Object.assign(CodemanApp.prototype, {
       // Let Alt+digit pass through to browser (tab switching)
       if (ev.altKey && ev.key >= '0' && ev.key <= '9') return false;
 
+      // Ctrl+V / Cmd+V: intercept before xterm sends ^V to PTY.
+      // Route through our paste trap which handles both images and text.
+      if ((ev.ctrlKey || ev.metaKey) && ev.key === 'v' && ev.type === 'keydown') {
+        if (this.activeSessionId && this._handleImagePaste) {
+          this._handleImagePaste();
+        }
+        return false;
+      }
+
       // Shift+Enter / Ctrl+Enter: insert newline for multi-line input.
       // xterm.js sends plain \r for all Enter variants, so Claude Code (Ink) can't
       // distinguish them. We use tmux send-keys -H to send a line feed byte (0x0a)
@@ -340,6 +349,9 @@ Object.assign(CodemanApp.prototype, {
 
     // Welcome message
     this.showWelcome();
+
+    // Image paste and drag-and-drop support
+    this.initImageInput();
 
     // Generation counter for chunkedTerminalWrite — aborts stale writes on tab switch
     this._chunkedWriteGen = 0;

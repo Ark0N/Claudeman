@@ -5,7 +5,7 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { join, dirname } from 'node:path';
+import { join, dirname, extname } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
@@ -1436,5 +1436,111 @@ export function registerSessionRoutes(
     results.sort((a, b) => new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime());
 
     return { sessions: results.slice(0, 50) };
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // Paste Image (clipboard / drag-drop upload)
+  // ═══════════════════════════════════════════════════════════════
+
+  const MAX_PASTE_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB
+  const ALLOWED_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
+
+  app.post('/api/sessions/:id/paste-image', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const session = findSessionOrFail(ctx, id);
+
+    const contentType = req.headers['content-type'] ?? '';
+    if (!contentType.includes('multipart/form-data')) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Expected multipart/form-data');
+    }
+
+    // Parse multipart boundary
+    const boundaryMatch = contentType.match(/boundary=(.+?)(?:;|$)/);
+    if (!boundaryMatch) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing boundary');
+    }
+
+    // Collect raw body with size limit
+    const chunks: Buffer[] = [];
+    let totalSize = 0;
+    for await (const chunk of req.raw) {
+      totalSize += chunk.length;
+      if (totalSize > MAX_PASTE_IMAGE_SIZE) {
+        reply.code(413);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'File too large (max 10MB)');
+      }
+      chunks.push(chunk as Buffer);
+    }
+    const body = Buffer.concat(chunks);
+
+    // Extract image from multipart body
+    const boundary = '--' + boundaryMatch[1];
+    const boundaryBuf = Buffer.from(boundary);
+    const parts: { headers: string; data: Buffer }[] = [];
+    let pos = 0;
+
+    while (pos < body.length) {
+      const start = body.indexOf(boundaryBuf, pos);
+      if (start === -1) break;
+      const afterBoundary = start + boundaryBuf.length;
+      if (body[afterBoundary] === 0x2d && body[afterBoundary + 1] === 0x2d) break;
+      const headerStart = afterBoundary + 2;
+      const headerEnd = body.indexOf(Buffer.from('\r\n\r\n'), headerStart);
+      if (headerEnd === -1) break;
+      const headers = body.subarray(headerStart, headerEnd).toString();
+      const dataStart = headerEnd + 4;
+      const nextBoundary = body.indexOf(boundaryBuf, dataStart);
+      const dataEnd = nextBoundary === -1 ? body.length : nextBoundary - 2;
+      parts.push({ headers, data: body.subarray(dataStart, dataEnd) });
+      pos = nextBoundary === -1 ? body.length : nextBoundary;
+    }
+
+    const imagePart = parts.find((p) => p.headers.includes('name="image"'));
+    if (!imagePart || imagePart.data.length === 0) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'No image uploaded');
+    }
+
+    // Determine extension from filename or Content-Type
+    let ext = '.png';
+    const filenameMatch = imagePart.headers.match(/filename="(.+?)"/);
+    if (filenameMatch) {
+      const origExt = extname(filenameMatch[1]).toLowerCase();
+      if (ALLOWED_IMAGE_EXTS.has(origExt)) ext = origExt;
+    }
+    const ctMatch = imagePart.headers.match(/Content-Type:\s*image\/(png|jpeg|jpg|webp|gif|bmp|svg\+xml)/i);
+    if (ctMatch) {
+      const map: Record<string, string> = {
+        png: '.png',
+        jpeg: '.jpg',
+        jpg: '.jpg',
+        webp: '.webp',
+        gif: '.gif',
+        bmp: '.bmp',
+        'svg+xml': '.svg',
+      };
+      ext = map[ctMatch[1].toLowerCase()] ?? ext;
+    }
+
+    if (!ALLOWED_IMAGE_EXTS.has(ext)) {
+      reply.code(400);
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        `Unsupported image type: ${ext}. Allowed: ${[...ALLOWED_IMAGE_EXTS].join(', ')}`
+      );
+    }
+
+    // Save to {workingDir}/.claude-images/
+    const imageDir = join(session.workingDir, '.claude-images');
+    if (!existsSync(imageDir)) {
+      mkdirSync(imageDir, { recursive: true });
+    }
+    const filename = `paste-${Date.now()}${ext}`;
+    const filepath = join(imageDir, filename);
+    await fs.writeFile(filepath, imagePart.data);
+
+    return { success: true, path: filepath, filename };
   });
 }

@@ -8591,3 +8591,23 @@ kbd {
   margin-top: 4px;
   font-size: 0.7rem;
 }
+
+/* Image drag-and-drop overlay */
+#terminalContainer.drag-active {
+  outline: 2px dashed #4a9eff;
+  outline-offset: -2px;
+  position: relative;
+}
+#terminalContainer.drag-active::after {
+  content: 'Drop image here';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(74, 158, 255, 0.08);
+  color: #4a9eff;
+  font-size: 1.2rem;
+  pointer-events: none;
+  z-index: 100;
+}

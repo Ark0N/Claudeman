@@ -93,6 +93,7 @@ console.log('\n[build] content-hash cache busting');
     'ralph-wizard.js',
     'api-client.js',
     'subagent-windows.js',
+    'image-input.js',
     'vendor/xterm-zerolag-input.js',
   ];
   const manifest = {};
