@@ -267,6 +267,7 @@ export const SettingsUpdateSchema = z
     tunnelEnabled: z.boolean().optional(),
     tabTwoRows: z.boolean().optional(),
     agentTeamsEnabled: z.boolean().optional(),
+    opusContext1mEnabled: z.boolean().optional(),
     thinkingEffort: z.string().max(20).optional(),
     // UI visibility
     showFontControls: z.boolean().optional(),
