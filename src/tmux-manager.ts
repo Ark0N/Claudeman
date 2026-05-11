@@ -556,7 +556,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // (Production uses systemd which has a clean env, but dev/test may be nested.)
       const cleanEnv = { ...process.env };
       delete cleanEnv.TMUX;
-      execSync(`tmux new-session -ds "${muxName}" -c "${workingDir}" -x 120 -y 40`, {
+      execSync(`tmux new-session -ds "${muxName}" -c "${workingDir}"`, {
         cwd: workingDir,
         timeout: EXEC_TIMEOUT_MS,
         stdio: 'ignore',

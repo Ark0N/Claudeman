@@ -29,7 +29,7 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { v4 as uuidv4 } from 'uuid';
 import * as pty from 'node-pty';
 import {
@@ -946,11 +946,28 @@ export class Session extends EventEmitter {
     }
 
     // Attach to the mux session via PTY
+    // Query existing tmux window size so re-attach matches (avoids flicker from 120x40 default)
+    let ptyCols = 120;
+    let ptyRows = 40;
+    try {
+      const sizeStr = execFileSync(
+        'tmux',
+        ['display', '-t', this._muxSession!.muxName, '-p', '#{window_width} #{window_height}'],
+        { timeout: 2000, encoding: 'utf8' }
+      ).trim();
+      const [w, h] = sizeStr.split(' ').map(Number);
+      if (w > 0 && h > 0) {
+        ptyCols = w;
+        ptyRows = h;
+      }
+    } catch {
+      /* fall back to 120x40 */
+    }
     try {
       this.ptyProcess = pty.spawn(mux.getAttachCommand(), mux.getAttachArgs(this._muxSession!.muxName), {
         name: 'xterm-256color',
-        cols: 120,
-        rows: 40,
+        cols: ptyCols,
+        rows: ptyRows,
         cwd: this.workingDir,
         env: buildMuxAttachEnv(),
       });
