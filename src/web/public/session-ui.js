@@ -912,11 +912,15 @@ Object.assign(CodemanApp.prototype, {
     const tabName = document.querySelector(`.tab-name[data-session-id="${sessionId}"]`);
     if (!tabName) return;
 
+    // Prevent tab re-renders from destroying the input while renaming
+    this._inlineRenameActive = true;
+
     const currentName = this.getSessionName(session);
     const parsed = parseSessionPrefix(session.name);
     const originalContent = tabName.textContent;
+    // Clear existing content to make room for the input element
     tabName.textContent = '';
-    tabName.innerHTML = '';
+    while (tabName.firstChild) tabName.removeChild(tabName.firstChild);
 
     // If prefix detected, show it as non-editable label
     if (parsed) {
@@ -938,6 +942,8 @@ Object.assign(CodemanApp.prototype, {
     input.select();
 
     const finishRename = async () => {
+      if (!this._inlineRenameActive) return; // prevent double-fire
+      this._inlineRenameActive = false;
       const suffix = input.value.trim();
       let fullName;
       if (parsed) {
@@ -959,6 +965,8 @@ Object.assign(CodemanApp.prototype, {
           this.showToast('Failed to rename', 'error');
         }
       }
+      // Re-render tabs to restore full tab structure
+      this.renderSessionTabs();
     };
 
     input.addEventListener('blur', finishRename);
