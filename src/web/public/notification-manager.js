@@ -291,11 +291,11 @@ class NotificationManager {
         this.titleFlashInterval = setInterval(() => {
           this.titleFlashState = !this.titleFlashState;
           document.title = this.titleFlashState
-            ? `\u26A0\uFE0F (${this.unreadCount}) Codeman`
+            ? `\u26A0\uFE0F (${this.unreadCount}) ${this.originalTitle}`
             : this.originalTitle;
         }, TITLE_FLASH_INTERVAL_MS);
         // Set immediately
-        document.title = `\u26A0\uFE0F (${this.unreadCount}) Codeman`;
+        document.title = `\u26A0\uFE0F (${this.unreadCount}) ${this.originalTitle}`;
       }
     }
   }

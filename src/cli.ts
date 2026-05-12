@@ -485,16 +485,18 @@ program
   .description('Start the web interface')
   .option('-p, --port <port>', 'Port to listen on', '3000')
   .option('--https', 'Enable HTTPS with self-signed certificate (only needed for remote access, not localhost)')
+  .option('--title-hostname <hostname>', 'Override the hostname shown in the browser title')
   .action(async (options) => {
     const { startWebServer } = await import('./web/server.js');
     const port = parseInt(options.port, 10);
     const https = !!options.https;
+    const titleHostname = options.titleHostname;
     const protocol = https ? 'https' : 'http';
 
     console.log(chalk.cyan(`Starting Codeman web interface on port ${port}${https ? ' (HTTPS)' : ''}...`));
 
     try {
-      const server = await startWebServer(port, https);
+      const server = await startWebServer(port, https, false, titleHostname);
       console.log(chalk.green(`\n✓ Web interface running at ${protocol}://localhost:${port}`));
       if (https) {
         console.log(chalk.yellow('  Note: Accept the self-signed certificate in your browser on first visit'));

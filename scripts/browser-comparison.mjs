@@ -19,6 +19,10 @@ const PORTS = {
 
 const results = [];
 
+function isCodemanTitle(title) {
+  return typeof title === 'string' && title.startsWith('codeman:');
+}
+
 function logSection(title) {
   console.log('\n' + '='.repeat(60));
   console.log(`  ${title}`);
@@ -88,7 +92,7 @@ async function main() {
       const page = await playwrightBrowser.newPage();
       await page.goto(`http://localhost:${PORTS.playwright}`);
       const title = await page.title();
-      if (title !== 'Codeman') throw new Error(`Expected Codeman, got ${title}`);
+      if (!isCodemanTitle(title)) throw new Error(`Expected codeman:<hostname>, got ${title}`);
       await page.close();
     });
 
@@ -149,7 +153,7 @@ async function main() {
       const page = await puppeteerBrowser.newPage();
       await page.goto(`http://localhost:${PORTS.puppeteer}`);
       const title = await page.title();
-      if (title !== 'Codeman') throw new Error(`Expected Codeman, got ${title}`);
+      if (!isCodemanTitle(title)) throw new Error(`Expected codeman:<hostname>, got ${title}`);
       await page.close();
     });
 
@@ -202,7 +206,7 @@ async function main() {
     agentBrowser(`open http://localhost:${PORTS.agentBrowser}`);
     await new Promise(r => setTimeout(r, 2000));
     const title = agentBrowserJson('get title');
-    agentBrowserAvailable = title.title === 'Codeman';
+    agentBrowserAvailable = isCodemanTitle(title.title);
     console.log('  Browser launched');
 
     // Test 1: Page load
@@ -210,7 +214,7 @@ async function main() {
       agentBrowser(`open http://localhost:${PORTS.agentBrowser}`);
       await new Promise(r => setTimeout(r, 1000));
       const title = agentBrowserJson('get title');
-      if (title.title !== 'Codeman') throw new Error(`Expected Codeman, got ${title.title}`);
+      if (!isCodemanTitle(title.title)) throw new Error(`Expected codeman:<hostname>, got ${title.title}`);
     });
 
     // Test 2: Element selection

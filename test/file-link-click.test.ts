@@ -49,8 +49,10 @@ async function waitForElement(selector: string, timeout = 10000): Promise<boolea
     try {
       const count = browserJson<{ count: number }>(`get count "${selector}"`);
       if (count.count > 0) return true;
-    } catch { /* retry */ }
-    await new Promise(r => setTimeout(r, 500));
+    } catch {
+      /* retry */
+    }
+    await new Promise((r) => setTimeout(r, 500));
   }
   return false;
 }
@@ -74,7 +76,9 @@ function isVisible(selector: string): boolean {
 function closeBrowser() {
   try {
     browser('close');
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 describe('File Link Click Tests', () => {
@@ -95,14 +99,14 @@ describe('File Link Click Tests', () => {
 
     server = new WebServer(TEST_PORT, false, true);
     await server.start();
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 1000));
 
     // Test if browser is available
     try {
       browser(`open ${baseUrl}`);
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise((r) => setTimeout(r, 2000));
       const title = browserJson<{ title: string }>('get title');
-      browserAvailable = title.title === 'Codeman';
+      browserAvailable = title.title.startsWith('codeman:');
     } catch (e) {
       console.warn('Browser not available, skipping browser tests:', (e as Error).message);
       browserAvailable = false;
@@ -114,14 +118,18 @@ describe('File Link Click Tests', () => {
     for (const sessionId of createdSessions) {
       try {
         await fetch(`${baseUrl}/api/sessions/${sessionId}`, { method: 'DELETE' });
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
     await server.stop();
 
     // Cleanup test directory
     try {
       rmSync(testDir, { recursive: true, force: true });
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }, 60000);
 
   it('should create shell session and display terminal output', async () => {
@@ -142,7 +150,7 @@ describe('File Link Click Tests', () => {
     createdSessions.push(data.session.id);
 
     // Wait for session to appear in UI
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, 2000));
 
     // Check that terminal is visible
     const terminalExists = await waitForElement('.xterm-screen', 5000);
@@ -167,7 +175,7 @@ describe('File Link Click Tests', () => {
       body: JSON.stringify({ input: command + '\r' }),
     });
 
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, 2000));
 
     // Check if xterm contains the file path
     // The xterm link provider should detect "tail -f /path/to/file" pattern
@@ -204,7 +212,7 @@ describe('File Link Click Tests', () => {
       // Click somewhere in the terminal where the tail -f line should be
       // This is approximate - the link detection works on hover
       browser('click ".xterm-screen"');
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 500));
     } catch (e) {
       console.log('Click failed:', e);
     }
@@ -243,10 +251,10 @@ describe('File Link Click Tests', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ input: `echo "${pattern}"\r` }),
       });
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 500));
     }
 
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 1000));
 
     // Verify patterns appear in terminal
     const terminalText = getText('.xterm-screen');
@@ -255,11 +263,12 @@ describe('File Link Click Tests', () => {
     }
   }, 60000);
 
-it('should match file paths with various command patterns', () => {
+  it('should match file paths with various command patterns', () => {
     // Unit test for pattern matching logic - runs without browser
     // Pattern matches: tail -f /path, grep pattern /path, cat -n /path
     const cmdPattern = /(tail|cat|head|less|grep|watch|vim|nano)\s+(?:[^\s\/]*\s+)*(\/[^\s"'<>|;&\n\x00-\x1f]+)/g;
-    const extPattern = /(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|yaml|yml|csv|xml|sh|py|ts|js))\b/g;
+    const extPattern =
+      /(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|yaml|yml|csv|xml|sh|py|ts|js))\b/g;
     const bashPattern = /Bash\([^)]*?(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\)\n\x00-\x1f]+)/g;
 
     // Test cmdPattern
@@ -309,13 +318,14 @@ it('should match file paths with various command patterns', () => {
   });
 
   it('should NOT match invalid or unsafe paths', () => {
-    const extPattern = /(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|yaml|yml|csv|xml|sh|py|ts|js))\b/g;
+    const extPattern =
+      /(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|yaml|yml|csv|xml|sh|py|ts|js))\b/g;
 
     const invalidCases = [
       'This is just text without paths',
-      './relative/path.log',  // relative path
-      'C:\\Windows\\path.log',  // windows path
-      '/usr/bin/something.log',  // /usr not in allowed prefixes
+      './relative/path.log', // relative path
+      'C:\\Windows\\path.log', // windows path
+      '/usr/bin/something.log', // /usr not in allowed prefixes
     ];
 
     for (const line of invalidCases) {
@@ -337,7 +347,7 @@ it('should match file paths with various command patterns', () => {
       });
       const data = await response.json();
       expect(data.success).toBe(true);
-      sessionId = data.sessionId;  // quick-start returns sessionId directly
+      sessionId = data.sessionId; // quick-start returns sessionId directly
       createdSessions.push(sessionId);
     }
 

@@ -37,7 +37,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readFileSync, chmodSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
-import { homedir } from 'node:os';
+import { homedir, hostname as getHostname } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { Session, type BackgroundTask } from '../session.js';
 import type { ClaudeMode, SessionState } from '../types.js';
@@ -118,6 +118,10 @@ import {
 } from './routes/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+function escapeHtmlText(value: string): string {
+  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+}
 
 import {
   SESSIONS_LIST_CACHE_TTL,
@@ -226,12 +230,18 @@ export class WebServer extends EventEmitter {
     teamRemoved: (config: unknown) => void;
     taskUpdated: (data: unknown) => void;
   } | null = null;
-  constructor(port: number = 3000, https: boolean = false, testMode: boolean = false) {
+  private readonly titleHostname: string;
+  private readonly windowTitle: string;
+  private readonly indexHtmlTemplate: string;
+  constructor(port: number = 3000, https: boolean = false, testMode: boolean = false, titleHostname?: string) {
     super();
     this.setMaxListeners(0);
     this.port = port;
     this.https = https;
     this.testMode = testMode;
+    this.titleHostname = titleHostname || getHostname();
+    this.windowTitle = `codeman:${this.titleHostname}`;
+    this.indexHtmlTemplate = readFileSync(join(__dirname, 'public', 'index.html'), 'utf-8');
 
     if (https) {
       const { key, cert } = getOrCreateSelfSignedCert();
@@ -526,6 +536,12 @@ export class WebServer extends EventEmitter {
 
     // Security headers + CORS
     registerSecurityHeaders(this.app, this.https);
+    this.app.get('/', async (_req, reply) => {
+      return reply.header('Cache-Control', 'no-cache').type('text/html; charset=utf-8').send(this.renderIndexHtml());
+    });
+    this.app.get('/index.html', async (_req, reply) => {
+      return reply.header('Cache-Control', 'no-cache').type('text/html; charset=utf-8').send(this.renderIndexHtml());
+    });
     // Service worker must never be cached — browsers check for SW updates on navigation
     this.app.get('/sw.js', async (_req, reply) => {
       return reply
@@ -920,6 +936,13 @@ export class WebServer extends EventEmitter {
     }
 
     this.broadcast(SseEvent.SessionDeleted, { id: sessionId });
+  }
+
+  private renderIndexHtml(): string {
+    return this.indexHtmlTemplate.replace(
+      '<title>Codeman</title>',
+      `<title>${escapeHtmlText(this.windowTitle)}</title>`
+    );
   }
 
   private async setupSessionListeners(session: Session): Promise<void> {
@@ -1970,9 +1993,10 @@ export class WebServer extends EventEmitter {
 export async function startWebServer(
   port: number = 3000,
   https: boolean = false,
-  testMode: boolean = false
+  testMode: boolean = false,
+  titleHostname?: string
 ): Promise<WebServer> {
-  const server = new WebServer(port, https, testMode);
+  const server = new WebServer(port, https, testMode, titleHostname);
   await server.start();
   return server;
 }
