@@ -579,9 +579,11 @@ export class WebServer extends EventEmitter {
       }
 
       // Parse optional session subscription filter from query parameter.
-      // /api/events?sessions=id1,id2 — client only receives events for those sessions.
-      // /api/events (no param) — client receives all events (backwards-compatible).
-      const query = req.query as { sessions?: string };
+      // /api/events?sessions=id1,id2 — client only receives session:terminal
+      //   events for those sessions (other events broadcast to all clients).
+      // /api/events?clientId=<uuid> — enables live filter updates via
+      //   POST /api/events/subscribe without reconnecting.
+      const query = req.query as { sessions?: string; clientId?: string };
       let sessionFilter: Set<string> | null = null;
       if (query.sessions) {
         const ids = query.sessions
@@ -592,6 +594,7 @@ export class WebServer extends EventEmitter {
           sessionFilter = new Set(ids);
         }
       }
+      const clientId = typeof query.clientId === 'string' && query.clientId ? query.clientId : undefined;
 
       reply.raw.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -603,7 +606,7 @@ export class WebServer extends EventEmitter {
       // Track tunnel clients — cloudflared proxies locally so req.ip is always
       // 127.0.0.1; detect tunnel traffic via Cf-Connecting-Ip header instead.
       const isRemote = !!req.headers['cf-connecting-ip'];
-      this.sse.addClient(reply, sessionFilter, isRemote);
+      this.sse.addClient(reply, sessionFilter, isRemote, clientId);
 
       // Send initial state
       // Use light state for SSE init to avoid sending 2MB+ terminal buffers
@@ -616,6 +619,20 @@ export class WebServer extends EventEmitter {
       req.raw.on('close', () => {
         this.sse.removeClient(reply);
       });
+    });
+
+    // Live subscription update — change a connected client's session filter
+    // without forcing an SSE reconnect. Body: { clientId, sessions: string[] | null }
+    // Empty/null sessions array = remove filter (receive all session:terminal events).
+    this.app.post('/api/events/subscribe', (req, reply) => {
+      const body = (req.body || {}) as { clientId?: string; sessions?: string[] | null };
+      if (!body.clientId || typeof body.clientId !== 'string') {
+        reply.code(400).send({ error: 'clientId required' });
+        return;
+      }
+      const sessions = Array.isArray(body.sessions) ? body.sessions.filter((s) => typeof s === 'string') : null;
+      const updated = this.sse.updateClientFilter(body.clientId, sessions);
+      reply.code(updated ? 204 : 404).send();
     });
 
     // Global error handler for structured errors thrown by findSessionOrFail

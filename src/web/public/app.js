@@ -286,6 +286,12 @@ class CodemanApp {
     this.totalTokens = 0;
     this.globalStats = null; // Global token/cost stats across all sessions
     this.eventSource = null;
+    // Stable per-page client ID — lets the server target this connection
+    // for live filter updates (POST /api/events/subscribe) without forcing
+    // an SSE reconnect on session switches.
+    this._clientId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : 'c-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
     this.terminal = null;
     this.fitAddon = null;
     this.activeSessionId = null;
@@ -696,6 +702,28 @@ class CodemanApp {
   // SSE Connection
   // ═══════════════════════════════════════════════════════════════
 
+  /**
+   * POST a live subscription update so the server filters terminal events
+   * to the given session(s) for this client. Fire-and-forget — failures
+   * are non-fatal because we'll still get every event we don't want
+   * (just at higher cost), and the next reconnect carries the filter via
+   * the SSE query string.
+   */
+  _updateSseSubscription(sessionId) {
+    try {
+      const body = JSON.stringify({
+        clientId: this._clientId,
+        sessions: sessionId ? [sessionId] : null,
+      });
+      fetch('/api/events/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        keepalive: true,
+      }).catch(() => { /* non-fatal */ });
+    } catch { /* non-fatal */ }
+  }
+
   connectSSE() {
     // Check if browser is offline
     if (!navigator.onLine) {
@@ -725,7 +753,13 @@ class CodemanApp {
       this.setConnectionStatus('reconnecting');
     }
 
-    this.eventSource = new EventSource('/api/events');
+    // Build URL with stable client ID and (if known) the active-session
+    // filter so the server only streams session:terminal events for the
+    // session we're rendering. Lifecycle/metadata events are sent globally
+    // regardless of filter (server side).
+    const _sseParams = new URLSearchParams({ clientId: this._clientId });
+    if (this.activeSessionId) _sseParams.set('sessions', this.activeSessionId);
+    this.eventSource = new EventSource(`/api/events?${_sseParams.toString()}`);
 
     // Store all event listeners for cleanup on reconnect
     const listeners = [];
@@ -2424,6 +2458,12 @@ class CodemanApp {
     this._cleanupPreviousSession(sessionId);
     this.activeSessionId = sessionId;
     try { localStorage.setItem('codeman-active-session', sessionId); } catch {}
+    // Narrow SSE filter to the active session — server stops streaming
+    // session:terminal events for other sessions to this client. Cuts
+    // SSE traffic ~Nx for N concurrent sessions. Fire-and-forget; on the
+    // rare race where server doesn't know our clientId yet, the next
+    // selectSession or reconnect catches up.
+    this._updateSseSubscription(sessionId);
     this.hideWelcome();
     // Clear idle hooks on view, but keep action hooks until user interacts
     this.clearPendingHooks(sessionId, 'idle_prompt');

@@ -48,6 +48,8 @@ export class SseStreamManager {
    * or `null` meaning "receive all events" (backwards-compatible default).
    */
   private sseClients: Map<FastifyReply, Set<string> | null> = new Map();
+  /** Optional client-supplied IDs → reply, for live filter updates without reconnecting */
+  private sseClientsById: Map<string, FastifyReply> = new Map();
   /** SSE clients connecting from non-localhost (i.e. through tunnel) */
   private remoteSseClients: Set<FastifyReply> = new Set();
   /** Clients with backpressure — skip writes until 'drain' fires */
@@ -103,10 +105,20 @@ export class SseStreamManager {
     this._isTunnelActive = active;
   }
 
-  addClient(reply: FastifyReply, sessionFilter: Set<string> | null, isRemote: boolean): void {
+  addClient(reply: FastifyReply, sessionFilter: Set<string> | null, isRemote: boolean, clientId?: string): void {
     this.sseClients.set(reply, sessionFilter);
     if (isRemote) {
       this.remoteSseClients.add(reply);
+    }
+    if (clientId) {
+      // If a previous reply registered the same id (reconnect), drop the old one.
+      const prev = this.sseClientsById.get(clientId);
+      if (prev && prev !== reply) {
+        this.sseClients.delete(prev);
+        this.remoteSseClients.delete(prev);
+        this.backpressuredClients.delete(prev);
+      }
+      this.sseClientsById.set(clientId, reply);
     }
   }
 
@@ -114,6 +126,22 @@ export class SseStreamManager {
     this.sseClients.delete(reply);
     this.remoteSseClients.delete(reply);
     this.backpressuredClients.delete(reply);
+    // Clear any clientId mappings pointing at this reply
+    for (const [id, r] of this.sseClientsById) {
+      if (r === reply) this.sseClientsById.delete(id);
+    }
+  }
+
+  /**
+   * Update an existing client's session subscription filter without forcing
+   * an SSE reconnect. Returns true if the client was found and updated.
+   */
+  updateClientFilter(clientId: string, sessions: string[] | null): boolean {
+    const reply = this.sseClientsById.get(clientId);
+    if (!reply || !this.sseClients.has(reply)) return false;
+    const filter = sessions && sessions.length > 0 ? new Set(sessions) : null;
+    this.sseClients.set(reply, filter);
+    return true;
   }
 
   /** Send a single SSE event to a specific client. */
@@ -188,33 +216,16 @@ export class SseStreamManager {
       console.error(`[Server] Failed to serialize SSE event "${event}":`, err);
       return;
     }
-    // Extract sessionId from event data for subscription filtering.
-    const eventSessionId = this.extractSessionId(event, data);
-
-    for (const [client, filter] of this.sseClients) {
-      // No filter (null) = receive everything. Otherwise, skip if event is
-      // session-scoped and the session isn't in the client's subscription set.
-      if (filter && eventSessionId && !filter.has(eventSessionId)) continue;
+    // Subscription filtering is intentionally NOT applied here. The
+    // `?sessions=` filter is intended to suppress only the high-volume
+    // terminal stream — lifecycle/metadata events (session:created,
+    // session:updated, ralph:*, hook:*, etc.) are needed for correct UI
+    // state across all sessions even when the client subscribes to a single
+    // active session's terminal output. Terminal events bypass this method
+    // entirely (see flushSessionTerminalBatch — it applies the filter).
+    for (const [client] of this.sseClients) {
       this.sendSSEPreformatted(client, message);
     }
-  }
-
-  /**
-   * Extract the session ID from an event's data payload for subscription filtering.
-   * Returns the sessionId string if the event is session-scoped, or null for global events.
-   */
-  private extractSessionId(event: string, data: unknown): string | null {
-    if (data == null || typeof data !== 'object') return null;
-    const record = data as Record<string, unknown>;
-
-    // Most session-scoped events use `sessionId`
-    if (typeof record.sessionId === 'string') return record.sessionId;
-
-    // Session lifecycle events (session:*) use `id` from the session state object
-    if (typeof record.id === 'string' && event.startsWith('session:')) return record.id;
-
-    // No session ID found — treat as global event (sent to all clients)
-    return null;
   }
 
   // ========== Terminal Data Batching ==========
