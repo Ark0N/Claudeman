@@ -174,10 +174,36 @@ Object.assign(CodemanApp.prototype, {
     // but the 48KB/frame flush cap in flushPendingWrites() now prevents
     // oversized terminal.write() calls that triggered the stalls.
     // Disable with ?nowebgl URL param if GPU issues return.
+    // Auto-fallback: _initWebGL installs a long-task watchdog that disables
+    // WebGL sticky in localStorage after repeated GPU stalls (see app.js).
+    // Force re-enable after sticky disable with ?webgl=force.
     // Lazy-loaded: script downloaded only on desktop (saves 244KB on mobile).
     this._webglAddon = null;
-    const skipWebGL = MobileDetection.getDeviceType() !== 'desktop';
-    if (!skipWebGL && !new URLSearchParams(location.search).has('nowebgl')) {
+    const _params = new URLSearchParams(location.search);
+    if (_params.get('webgl') === 'force') {
+      try { localStorage.removeItem('codeman-webgl-disabled'); } catch {}
+    }
+    const _stickyDisabled = (() => {
+      try {
+        const raw = localStorage.getItem('codeman-webgl-disabled');
+        if (!raw) return false;
+        const { at } = JSON.parse(raw);
+        // Auto-expire after 7 days so we retry (driver may have been fixed)
+        if (Date.now() - at > 7 * 24 * 60 * 60 * 1000) {
+          localStorage.removeItem('codeman-webgl-disabled');
+          return false;
+        }
+        return true;
+      } catch { return false; }
+    })();
+    const skipWebGL =
+      MobileDetection.getDeviceType() !== 'desktop' ||
+      _params.has('nowebgl') ||
+      _stickyDisabled;
+    if (_stickyDisabled) {
+      console.log('[CRASH-DIAG] WebGL sticky-disabled from prior stalls — DOM renderer in use. Re-enable: ?webgl=force');
+    }
+    if (!skipWebGL) {
       if (typeof WebglAddon !== 'undefined') {
         this._initWebGL();
       } else {

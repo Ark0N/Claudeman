@@ -617,12 +617,55 @@ class CodemanApp {
       this._webglAddon = new WebglAddon.WebglAddon();
       this._webglAddon.onContextLoss(() => {
         console.error('[CRASH-DIAG] WebGL context LOST — falling back to canvas renderer');
-        this._webglAddon.dispose();
+        _crashDiag.log('WEBGL_LOST');
+        this._disableWebGLSticky('context-lost');
+        this._webglAddon?.dispose();
         this._webglAddon = null;
       });
       this.terminal.loadAddon(this._webglAddon);
       console.log('[CRASH-DIAG] WebGL renderer enabled');
+      this._installWebGLLongTaskGuard();
     } catch (_e) { /* WebGL2 unavailable — canvas renderer used */ }
+  }
+
+  /**
+   * Watch for sustained main-thread stalls that indicate WebGL/GPU trouble.
+   * After 3 long tasks (>=200ms each) within 30s, dispose the WebGL addon and
+   * persist a sticky disable so subsequent reloads also use the DOM renderer.
+   * 5s grace period skips initial-load stalls. Force-re-enable: ?webgl=force.
+   */
+  _installWebGLLongTaskGuard() {
+    if (typeof PerformanceObserver === 'undefined' || this._webglLongTaskObserver) return;
+    const installedAt = performance.now();
+    const recent = [];
+    try {
+      this._webglLongTaskObserver = new PerformanceObserver((list) => {
+        if (!this._webglAddon) return;
+        const now = performance.now();
+        if (now - installedAt < 5000) return;
+        for (const entry of list.getEntries()) {
+          if (entry.duration >= 200) recent.push(entry.startTime);
+        }
+        while (recent.length && now - recent[0] > 30000) recent.shift();
+        if (recent.length >= 3) {
+          console.warn(`[CRASH-DIAG] WebGL long-task threshold (${recent.length} stalls/30s) — falling back to canvas renderer`);
+          _crashDiag.log(`WEBGL_FALLBACK: ${recent.length}`);
+          this._disableWebGLSticky('long-tasks');
+          this._webglAddon?.dispose();
+          this._webglAddon = null;
+          try { this._webglLongTaskObserver.disconnect(); } catch {}
+          this._webglLongTaskObserver = null;
+          try { this.terminal.refresh(0, this.terminal.rows - 1); } catch {}
+        }
+      });
+      this._webglLongTaskObserver.observe({ type: 'longtask', buffered: false });
+    } catch { /* longtask not supported */ }
+  }
+
+  _disableWebGLSticky(reason) {
+    try {
+      localStorage.setItem('codeman-webgl-disabled', JSON.stringify({ reason, at: Date.now() }));
+    } catch {}
   }
 
   // ═══════════════════════════════════════════════════════════════
