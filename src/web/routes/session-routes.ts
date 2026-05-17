@@ -1533,15 +1533,39 @@ export function registerSessionRoutes(
     }
 
     // Save to {workingDir}/.claude-images/
+    // Refuse symlinks at imageDir — an agent or postinstall script could plant
+    // `.claude-images -> ~/.ssh/` and redirect future writes outside workingDir.
+    // We lstat (not stat) so we see the symlink itself. Use mkdir without
+    // `recursive` so the leaf creation does not follow a symlink either, and
+    // O_EXCL|O_NOFOLLOW on the file open so the write itself is symlink-safe.
     const imageDir = join(session.workingDir, '.claude-images');
-    if (!existsSync(imageDir)) {
-      mkdirSync(imageDir, { recursive: true });
+    try {
+      const dirStat = await fs.lstat(imageDir);
+      if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
+        reply.code(403);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, '.claude-images is not a regular directory');
+      }
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      // Non-recursive mkdir: errors on EEXIST and does not follow symlinks for
+      // the leaf. session.workingDir is guaranteed to exist (live session).
+      await fs.mkdir(imageDir);
     }
     // Date.now() collides on same-ms uploads from two tabs (last-write wins
     // silently). Append 8 hex chars so concurrent pastes get distinct names.
     const filename = `paste-${Date.now()}-${randomBytes(4).toString('hex')}${ext}`;
     const filepath = join(imageDir, filename);
-    await fs.writeFile(filepath, imagePart.data);
+    // O_EXCL: refuse to overwrite (collision is impossible with random suffix,
+    // but defends against TOCTOU). O_NOFOLLOW: refuse if filepath is a symlink.
+    const fh = await fs.open(
+      filepath,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW
+    );
+    try {
+      await fh.writeFile(imagePart.data);
+    } finally {
+      await fh.close();
+    }
 
     return { success: true, path: filepath, filename };
   });
