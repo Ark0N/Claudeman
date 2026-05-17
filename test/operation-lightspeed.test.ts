@@ -3,7 +3,8 @@
  *
  * Covers:
  * - SSE subscription filter edge cases (empty params, whitespace, duplicates)
- * - extractSessionId logic (sessionId vs id field, global events)
+ * - Lifecycle-event broadcast contract (session:*, case:* fan out to all clients;
+ *   only session:terminal is filtered by subscription)
  * - Tab switching: terminal buffer loading, session creation + switch
  * - Terminal data cap / backpressure recovery
  * - Lazy teammate terminal lifecycle
@@ -254,11 +255,11 @@ describe('Operation Lightspeed', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════
-  // extractSessionId — Event Classification
+  // Lifecycle Event Broadcast — Event Classification
   // ═══════════════════════════════════════════════════════════════
 
-  describe('extractSessionId via SSE Filtering', () => {
-    it('should route session:updated events by id field', async () => {
+  describe('Lifecycle Event Broadcast Contract', () => {
+    it('should deliver session:updated events to all clients regardless of filter', async () => {
       // Create two sessions
       const session1 = await createSession(baseUrl);
       const session2 = await createSession(baseUrl);
@@ -310,21 +311,23 @@ describe('Operation Lightspeed', () => {
 
       const events = parseSSEEvents(receivedData);
 
-      // Should receive session:updated for session1 only
+      // New contract: session:updated is a lifecycle event that broadcasts to ALL clients.
+      // The subscription filter only applies to session:terminal.
       const updatedEvents = events.filter((e) => e.event === 'session:updated');
       const session1Updated = updatedEvents.find((e) => (e.data as any).id === session1);
       const session2Updated = updatedEvents.find((e) => (e.data as any).id === session2);
 
       expect(session1Updated).toBeDefined();
-      expect(session2Updated).toBeUndefined();
+      expect(session2Updated).toBeDefined();
 
       // Cleanup
       await deleteSession(baseUrl, session1);
       await deleteSession(baseUrl, session2);
     });
 
-    it('should filter session:deleted by session ID (sessionId extraction from id field)', async () => {
-      // Tests extractSessionId's fallback path: session:* events use `id` not `sessionId`
+    it('should deliver session:deleted events to all clients regardless of filter', async () => {
+      // New contract: lifecycle events (session:*) broadcast to every connected client;
+      // the per-client filter no longer gates them. Only session:terminal is filtered.
       const target = await createSession(baseUrl);
       const other = await createSession(baseUrl);
 
@@ -367,13 +370,12 @@ describe('Operation Lightspeed', () => {
 
       const events = parseSSEEvents(receivedData);
 
-      // Target deletion should arrive (extractSessionId matches `id` field for session:* events)
+      // Both deletions arrive regardless of the per-client filter
       const targetDeleted = events.find((e) => e.event === 'session:deleted' && (e.data as any).id === target);
       expect(targetDeleted).toBeDefined();
 
-      // Other deletion should NOT arrive
       const otherDeleted = events.find((e) => e.event === 'session:deleted' && (e.data as any).id === other);
-      expect(otherDeleted).toBeUndefined();
+      expect(otherDeleted).toBeDefined();
     });
   });
 
@@ -488,13 +490,13 @@ describe('Operation Lightspeed', () => {
       expect(events.find((e) => e.event === 'init')).toBeDefined();
     });
 
-    it('should handle multiple SSE clients with different filters', async () => {
+    it('should fan lifecycle events out to all SSE clients regardless of filter', async () => {
       const session1 = await createSession(baseUrl);
       const session2 = await createSession(baseUrl);
 
-      // Client A: subscribes to session1
-      // Client B: subscribes to session2
-      // Client C: no filter (all events)
+      // Client A: subscribes to session1, Client B: subscribes to session2, Client C: no filter.
+      // Under the broadcast contract, all three see every session:deleted event — the filter
+      // only narrows session:terminal traffic.
       const controllerA = new AbortController();
       const controllerB = new AbortController();
       const controllerC = new AbortController();
@@ -585,15 +587,13 @@ describe('Operation Lightspeed', () => {
       const eventsB = parseSSEEvents(dataB);
       const eventsC = parseSSEEvents(dataC);
 
-      // Client A: sees session1 deleted, not session2
+      // Every client sees both deletions — lifecycle events are not filter-gated.
       expect(eventsA.find((e) => e.event === 'session:deleted' && (e.data as any).id === session1)).toBeDefined();
-      expect(eventsA.find((e) => e.event === 'session:deleted' && (e.data as any).id === session2)).toBeUndefined();
+      expect(eventsA.find((e) => e.event === 'session:deleted' && (e.data as any).id === session2)).toBeDefined();
 
-      // Client B: sees session2 deleted, not session1
+      expect(eventsB.find((e) => e.event === 'session:deleted' && (e.data as any).id === session1)).toBeDefined();
       expect(eventsB.find((e) => e.event === 'session:deleted' && (e.data as any).id === session2)).toBeDefined();
-      expect(eventsB.find((e) => e.event === 'session:deleted' && (e.data as any).id === session1)).toBeUndefined();
 
-      // Client C: sees both
       expect(eventsC.find((e) => e.event === 'session:deleted' && (e.data as any).id === session1)).toBeDefined();
       expect(eventsC.find((e) => e.event === 'session:deleted' && (e.data as any).id === session2)).toBeDefined();
     });
@@ -991,13 +991,13 @@ describe('Operation Lightspeed', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════
-  // extractSessionId — Additional Edge Cases
+  // Lifecycle Event Broadcast — Additional Edge Cases
   // ═══════════════════════════════════════════════════════════════
 
-  describe('extractSessionId — Edge Cases via SSE', () => {
+  describe('Lifecycle Event Broadcast — Edge Cases via SSE', () => {
     it('should treat non-session: events with id field as global (not filtered)', async () => {
       // Events like case:created have an `id` field but aren't session:* events.
-      // extractSessionId should NOT use the `id` field for non-session:* events.
+      // Under the broadcast contract they reach every connected client.
       const controller = new AbortController();
       let receivedData = '';
 
@@ -1052,8 +1052,9 @@ describe('Operation Lightspeed', () => {
       }
     });
 
-    it('should deliver session:created for a newly created session to unfiltered client but not mismatched filter', async () => {
-      // session:created uses `id` field and starts with `session:` — extractSessionId should match it
+    it('should deliver session:created to every client, even those with a mismatched filter', async () => {
+      // Under the broadcast contract, lifecycle events ignore the per-client filter.
+      // A client subscribed only to `existing` still receives `session:created` for `newSession`.
       const existing = await createSession(baseUrl);
 
       // Subscribe to existing session only
@@ -1091,9 +1092,9 @@ describe('Operation Lightspeed', () => {
       }
 
       const events = parseSSEEvents(receivedData);
-      // session:created for newSession should be filtered OUT (id doesn't match our filter)
+      // session:created reaches the filtered client even though its id doesn't match the filter.
       const createdEvent = events.find((e) => e.event === 'session:created' && (e.data as any).id === newSession);
-      expect(createdEvent).toBeUndefined();
+      expect(createdEvent).toBeDefined();
 
       await Promise.all([deleteSession(baseUrl, existing), deleteSession(baseUrl, newSession)]);
     });
