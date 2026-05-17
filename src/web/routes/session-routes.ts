@@ -123,6 +123,43 @@ export function stripInkRedrawBloat(buffer: string): string {
   return parts.join('');
 }
 
+/**
+ * Validate image bytes against a declared extension. Sniffs the first ~12 bytes
+ * for a known magic-number signature. Defends against polyglots (e.g. HTML or
+ * SVG disguised under a `Content-Type: image/png` header) and against simple
+ * extension-only spoofing — both the multipart filename and the Content-Type
+ * are attacker-controlled, the raw bytes are not.
+ *
+ * Signatures: https://en.wikipedia.org/wiki/List_of_file_signatures
+ */
+export function imageMagicMatchesExt(data: Buffer, ext: string): boolean {
+  if (data.length < 12) return false;
+  const u32be = (off: number): number => data.readUInt32BE(off);
+  switch (ext) {
+    case '.png':
+      return u32be(0) === 0x89504e47 && u32be(4) === 0x0d0a1a0a;
+    case '.jpg':
+    case '.jpeg':
+      return data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
+    case '.gif':
+      return (
+        data[0] === 0x47 &&
+        data[1] === 0x49 &&
+        data[2] === 0x46 &&
+        data[3] === 0x38 &&
+        (data[4] === 0x37 || data[4] === 0x39) &&
+        data[5] === 0x61
+      );
+    case '.webp':
+      // RIFF....WEBP
+      return u32be(0) === 0x52494646 && u32be(8) === 0x57454250;
+    case '.bmp':
+      return data[0] === 0x42 && data[1] === 0x4d;
+    default:
+      return false;
+  }
+}
+
 export function registerSessionRoutes(
   app: FastifyInstance,
   ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort
@@ -1530,6 +1567,13 @@ export function registerSessionRoutes(
         ApiErrorCode.INVALID_INPUT,
         `Unsupported image type: ${ext}. Allowed: ${[...ALLOWED_IMAGE_EXTS].join(', ')}`
       );
+    }
+
+    // Sniff actual bytes — filename and Content-Type are both attacker-supplied.
+    // Polyglot HTML/PNG would otherwise pass and serve back with image/png MIME.
+    if (!imageMagicMatchesExt(imagePart.data, ext)) {
+      reply.code(415);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Image bytes do not match declared type ${ext}`);
     }
 
     // Save to {workingDir}/.claude-images/
