@@ -32,6 +32,8 @@ import fastifyCompress from '@fastify/compress';
 import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
+import fastifyMultipart from '@fastify/multipart';
+import { startPasteImageGc } from './paste-image-gc.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readFileSync, chmodSync, rmSync } from 'node:fs';
@@ -229,6 +231,7 @@ export class WebServer extends EventEmitter {
   private pushStore: PushSubscriptionStore = new PushSubscriptionStore();
   private teamWatcher: TeamWatcher = new TeamWatcher();
   private _orchestratorLoop: import('../orchestrator-loop.js').OrchestratorLoop | null = null;
+  private _pasteImageGcStop: (() => void) | null = null;
   private teamWatcherHandlers: {
     teamCreated: (config: unknown) => void;
     teamUpdated: (config: unknown) => void;
@@ -538,6 +541,18 @@ export class WebServer extends EventEmitter {
 
     // WebSocket support (terminal I/O — low-latency bidirectional channel)
     await this.app.register(fastifyWebsocket);
+
+    // Multipart parsing (used by paste-image). Replaces a hand-rolled
+    // boundary scanner that had several edge-case bugs: literal boundary
+    // anywhere in body was a match, LF-only clients silently corrupted the
+    // last byte (hard-coded \r\n offsets), and there was no part-count cap.
+    await this.app.register(fastifyMultipart, {
+      limits: {
+        fileSize: 10 * 1024 * 1024, // 10MB per file
+        files: 1, // paste-image only ever sends one file
+        fields: 4, // small headroom for accompanying form fields
+      },
+    });
 
     // Security headers + CORS
     registerSecurityHeaders(this.app, this.https);
@@ -1541,6 +1556,12 @@ export class WebServer extends EventEmitter {
     // Clean up stale sessions from state file that don't have active mux sessions
     this.cleanupStaleSessions();
 
+    // Bound disk use under heavy paste-image traffic: delete `paste-*` files
+    // older than 7 days from each live session's .claude-images/ hourly.
+    if (!this.testMode) {
+      this._pasteImageGcStop = startPasteImageGc({ sessions: this.sessions });
+    }
+
     await this.app.listen({ port: this.port, host: '0.0.0.0' });
     const protocol = this.https ? 'https' : 'http';
     console.log(`Codeman web interface running at ${protocol}://localhost:${this.port}`);
@@ -1893,6 +1914,11 @@ export class WebServer extends EventEmitter {
     getLifecycleLog().log({ event: 'server_stopped', sessionId: '*' });
     // Set stopping flag to prevent new timer creation during shutdown
     this.sse.setStopping();
+
+    if (this._pasteImageGcStop) {
+      this._pasteImageGcStop();
+      this._pasteImageGcStop = null;
+    }
 
     // Dispose all managed timers (intervals + resettable timeouts)
     this.cleanup.dispose();
