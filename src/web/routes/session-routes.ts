@@ -1484,6 +1484,37 @@ export function registerSessionRoutes(
   const ALLOWED_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']);
 
   app.post('/api/sessions/:id/paste-image', async (req, reply) => {
+    // CSRF defense: state-changing routes must come from same origin.
+    // Cookies are SameSite=lax, multipart/form-data is a "simple" CORS request
+    // (no preflight), so a cross-origin <form enctype="multipart/form-data">
+    // submit attaches the session cookie unimpeded. Reject unless Origin/Referer
+    // matches req.host. Non-browser clients (no Origin AND no Referer) must
+    // supply X-Codeman-CSRF — a header browsers cannot add cross-origin without
+    // a preflight, which our CORS config does not allow from other origins.
+    const reqHost = req.headers.host;
+    const origin = req.headers.origin;
+    const referer = req.headers.referer;
+    let csrfOk = false;
+    if (origin) {
+      try {
+        csrfOk = new URL(origin).host === reqHost;
+      } catch {
+        /* invalid Origin → not ok */
+      }
+    } else if (referer) {
+      try {
+        csrfOk = new URL(referer).host === reqHost;
+      } catch {
+        /* invalid Referer → not ok */
+      }
+    } else {
+      csrfOk = !!req.headers['x-codeman-csrf'];
+    }
+    if (!csrfOk) {
+      reply.code(403);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'CSRF check failed');
+    }
+
     const { id } = req.params as { id: string };
     const session = findSessionOrFail(ctx, id);
 
