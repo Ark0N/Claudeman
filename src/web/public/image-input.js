@@ -87,10 +87,15 @@ Object.assign(CodemanApp.prototype, {
         e.preventDefault();
         self._uploadAndInsertImages(imageFiles);
       } else {
-        // No image -- extract text and send to terminal
+        // No image -- route text through xterm's paste() so bracketed-paste
+        // markers (CSI 200~ ... CSI 201~) survive when the inner application
+        // has enabled bracketed-paste mode (Claude Code does). Sending text
+        // via raw sendInput() strips those markers and makes pasted input
+        // indistinguishable from typed input, weakening the CLI's
+        // prompt-injection defenses.
         var text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
         e.preventDefault();
-        if (text) self.sendInput(text);
+        if (text && self.terminal) self.terminal.paste(text);
       }
     });
 
