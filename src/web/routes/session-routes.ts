@@ -10,6 +10,7 @@ import { homedir } from 'node:os';
 import { existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
 import {
   ApiErrorCode,
   createErrorResponse,
@@ -1536,7 +1537,9 @@ export function registerSessionRoutes(
     if (!existsSync(imageDir)) {
       mkdirSync(imageDir, { recursive: true });
     }
-    const filename = `paste-${Date.now()}${ext}`;
+    // Date.now() collides on same-ms uploads from two tabs (last-write wins
+    // silently). Append 8 hex chars so concurrent pastes get distinct names.
+    const filename = `paste-${Date.now()}-${randomBytes(4).toString('hex')}${ext}`;
     const filepath = join(imageDir, filename);
     await fs.writeFile(filepath, imagePart.data);
 
