@@ -197,8 +197,9 @@ Object.assign(CodemanApp.prototype, {
         const raw = localStorage.getItem('codeman-webgl-disabled');
         if (!raw) return false;
         const { at } = JSON.parse(raw);
-        // Auto-expire after 7 days so we retry (driver may have been fixed)
-        if (Date.now() - at > 7 * 24 * 60 * 60 * 1000) {
+        // Auto-expire after WEBGL_FALLBACK.STICKY_EXPIRY_MS so we retry
+        // (driver/Chrome may have been updated).
+        if (Date.now() - at > WEBGL_FALLBACK.STICKY_EXPIRY_MS) {
           localStorage.removeItem('codeman-webgl-disabled');
           return false;
         }

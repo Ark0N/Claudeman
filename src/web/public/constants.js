@@ -71,6 +71,52 @@ const WINDOW_MIN_WIDTH_PX = 200;
 const WINDOW_MIN_HEIGHT_PX = 200;
 const WINDOW_DEFAULT_WIDTH_PX = 300;
 
+// WebGL renderer auto-fallback thresholds.
+// _installWebGLLongTaskGuard() observes longtask entries and disables WebGL
+// after LONGTASK_COUNT stalls of >= LONGTASK_MS within WINDOW_MS. GRACE_MS
+// suppresses the noisy initial-load stalls. STICKY_EXPIRY_MS is how long
+// localStorage's webgl-disabled marker survives before we retry WebGL on a
+// fresh load (driver/Chrome may have been updated).
+const WEBGL_FALLBACK = {
+  LONGTASK_MS: 200,
+  LONGTASK_COUNT: 3,
+  WINDOW_MS: 30000,
+  GRACE_MS: 5000,
+  STICKY_EXPIRY_MS: 7 * 24 * 60 * 60 * 1000,
+};
+
+/**
+ * Pure rolling-window trip evaluator for the WebGL longtask guard.
+ * Mutates `recent` in place (prunes entries older than `now - WINDOW_MS`)
+ * and appends each new duration's startTime that meets the threshold.
+ * Returns true when the count inside the window reaches `LONGTASK_COUNT`.
+ *
+ * Exposed on `window` for unit testing — the production guard in app.js
+ * inlines this same logic in its PerformanceObserver callback. Splitting it
+ * out keeps the threshold math testable without a real PerformanceObserver.
+ *
+ * @param {number[]} recent - mutable array of startTimes inside the window
+ * @param {{startTime: number, duration: number}[]} entries - new longtask entries
+ * @param {number} now - performance.now() at evaluation time
+ * @param {typeof WEBGL_FALLBACK} [config=WEBGL_FALLBACK] - thresholds
+ * @returns {boolean} true if the rolling window has reached the trip count
+ */
+function evaluateWebGLLongTaskTrip(recent, entries, now, config = WEBGL_FALLBACK) {
+  for (const entry of entries) {
+    if (entry.duration >= config.LONGTASK_MS) recent.push(entry.startTime);
+  }
+  while (recent.length && now - recent[0] > config.WINDOW_MS) recent.shift();
+  return recent.length >= config.LONGTASK_COUNT;
+}
+
+// Expose for tests. `const` declarations at the top of a non-module script
+// are global lexical bindings but not `window` properties, so explicit
+// assignment is the test-visible API surface.
+if (typeof window !== 'undefined') {
+  window.WEBGL_FALLBACK = WEBGL_FALLBACK;
+  window.evaluateWebGLLongTaskTrip = evaluateWebGLLongTaskTrip;
+}
+
 // Scheduler API — prioritize terminal writes over background UI updates.
 // scheduler.postTask('background') defers non-critical work (connection lines, panel renders)
 // so the main thread stays free for terminal rendering at 60fps.

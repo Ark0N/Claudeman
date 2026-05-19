@@ -625,6 +625,7 @@ class CodemanApp {
         console.error('[CRASH-DIAG] WebGL context LOST — falling back to canvas renderer');
         _crashDiag.log('WEBGL_LOST');
         this._disableWebGLSticky('context-lost');
+        this._disposeWebGLObserver();
         this._webglAddon?.dispose();
         this._webglAddon = null;
       });
@@ -636,9 +637,10 @@ class CodemanApp {
 
   /**
    * Watch for sustained main-thread stalls that indicate WebGL/GPU trouble.
-   * After 3 long tasks (>=200ms each) within 30s, dispose the WebGL addon and
-   * persist a sticky disable so subsequent reloads also use the DOM renderer.
-   * 5s grace period skips initial-load stalls. Force-re-enable: ?webgl=force.
+   * After WEBGL_FALLBACK.LONGTASK_COUNT long tasks (>=LONGTASK_MS each) within
+   * WINDOW_MS, dispose the WebGL addon and persist a sticky disable so
+   * subsequent reloads also use the DOM renderer. GRACE_MS skips initial-load
+   * stalls. Force-re-enable: ?webgl=force.
    */
   _installWebGLLongTaskGuard() {
     if (typeof PerformanceObserver === 'undefined' || this._webglLongTaskObserver) return;
@@ -648,24 +650,31 @@ class CodemanApp {
       this._webglLongTaskObserver = new PerformanceObserver((list) => {
         if (!this._webglAddon) return;
         const now = performance.now();
-        if (now - installedAt < 5000) return;
-        for (const entry of list.getEntries()) {
-          if (entry.duration >= 200) recent.push(entry.startTime);
-        }
-        while (recent.length && now - recent[0] > 30000) recent.shift();
-        if (recent.length >= 3) {
-          console.warn(`[CRASH-DIAG] WebGL long-task threshold (${recent.length} stalls/30s) — falling back to canvas renderer`);
+        if (now - installedAt < WEBGL_FALLBACK.GRACE_MS) return;
+        if (evaluateWebGLLongTaskTrip(recent, list.getEntries(), now)) {
+          console.warn(`[CRASH-DIAG] WebGL long-task threshold (${recent.length} stalls/${WEBGL_FALLBACK.WINDOW_MS}ms) — falling back to canvas renderer`);
           _crashDiag.log(`WEBGL_FALLBACK: ${recent.length}`);
           this._disableWebGLSticky('long-tasks');
+          this._disposeWebGLObserver();
           this._webglAddon?.dispose();
           this._webglAddon = null;
-          try { this._webglLongTaskObserver.disconnect(); } catch {}
-          this._webglLongTaskObserver = null;
           try { this.terminal.refresh(0, this.terminal.rows - 1); } catch {}
         }
       });
       this._webglLongTaskObserver.observe({ type: 'longtask', buffered: false });
     } catch { /* longtask not supported */ }
+  }
+
+  /**
+   * Disconnect the WebGL longtask observer. Idempotent. Called from the trip
+   * path, the onContextLoss handler, and any future terminal-teardown path —
+   * the observer outlives its addon otherwise, holding a closure reference
+   * over `this` for every long task the page emits.
+   */
+  _disposeWebGLObserver() {
+    if (!this._webglLongTaskObserver) return;
+    try { this._webglLongTaskObserver.disconnect(); } catch {}
+    this._webglLongTaskObserver = null;
   }
 
   _disableWebGLSticky(reason) {
