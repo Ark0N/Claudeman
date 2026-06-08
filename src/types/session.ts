@@ -43,6 +43,34 @@ export type ClaudeMode = 'dangerously-skip-permissions' | 'normal' | 'allowedToo
 /** Session mode: which CLI backend a session runs */
 export type SessionMode = 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini';
 
+export type RemoteCommandMode = Extract<SessionMode, 'shell' | 'claude' | 'opencode' | 'codex' | 'gemini'>;
+
+export interface RemoteHost {
+  id: string;
+  label: string;
+  host: string;
+  username: string;
+  port?: number;
+  commands?: Partial<Record<RemoteCommandMode, string>>;
+}
+
+export interface RemoteCase {
+  name: string;
+  type: 'remote';
+  hostId: string;
+  remotePath: string;
+}
+
+export interface SessionRemote {
+  hostId: string;
+  label: string;
+  host: string;
+  username: string;
+  port?: number;
+  remotePath: string;
+  commands?: Partial<Record<RemoteCommandMode, string>>;
+}
+
 /**
  * Valid Claude CLI effort levels (claude >= 2.1.154).
  * `ultracode` = xhigh effort + standing dynamic-workflow orchestration; it is a
@@ -160,6 +188,8 @@ export interface SessionState {
   status: SessionStatus;
   /** Working directory path */
   workingDir: string;
+  /** Remote execution metadata, present when this session runs over SSH through local tmux */
+  remote?: SessionRemote;
   /** ID of currently assigned task, null if none */
   currentTaskId: string | null;
   /** Timestamp when session was created */
