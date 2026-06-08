@@ -62,6 +62,7 @@ const mockedMkdirSync = vi.mocked(mkdirSync);
 const mockedReaddirSync = vi.mocked(readdirSync);
 const mockedReaddir = vi.mocked(fs.readdir);
 const mockedReadFile = vi.mocked(fs.readFile);
+const mockedWriteFile = vi.mocked(fs.writeFile);
 
 interface CaseRouteHarness {
   app: FastifyInstance;
@@ -196,6 +197,91 @@ describe('case-routes', () => {
       const body = JSON.parse(res.body);
       // Should have both regular and linked cases
       expect(body.data.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe('remote host and remote case routes', () => {
+    function setupRemoteConfigStore() {
+      const store = new Map<string, string>();
+      mockedReadFile.mockImplementation(async (path) => {
+        const key = String(path);
+        if (store.has(key)) return store.get(key) || '';
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      mockedWriteFile.mockImplementation(async (path, data) => {
+        store.set(String(path), String(data));
+      });
+    }
+
+    it('creates a remote host and lists it', async () => {
+      setupRemoteConfigStore();
+
+      const create = await harness.app.inject({
+        method: 'POST',
+        url: '/api/remote-hosts',
+        payload: {
+          id: 'gpu-box',
+          label: 'GPU Box',
+          host: '10.0.0.42',
+          username: 'ubuntu',
+          commands: { codex: 'exec codx personal' },
+        },
+      });
+      expect(create.statusCode).toBe(200);
+      expect(JSON.parse(create.body)).toMatchObject({ success: true });
+
+      const list = await harness.app.inject({ method: 'GET', url: '/api/remote-hosts' });
+      expect(list.statusCode).toBe(200);
+      expect(JSON.parse(list.body)).toEqual([
+        expect.objectContaining({ id: 'gpu-box', label: 'GPU Box', commands: { codex: 'exec codx personal' } }),
+      ]);
+    });
+
+    it('links a remote case and includes it in GET /api/cases', async () => {
+      setupRemoteConfigStore();
+      mockedReaddir.mockRejectedValue(new Error('ENOENT'));
+
+      await harness.app.inject({
+        method: 'POST',
+        url: '/api/remote-hosts',
+        payload: { id: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu' },
+      });
+
+      const link = await harness.app.inject({
+        method: 'POST',
+        url: '/api/cases/remote-link',
+        payload: { name: 'gpu-work', hostId: 'gpu-box', remotePath: '/home/ubuntu/work' },
+      });
+      expect(link.statusCode).toBe(200);
+
+      const cases = await harness.app.inject({ method: 'GET', url: '/api/cases' });
+      expect(JSON.parse(cases.body)).toContainEqual(
+        expect.objectContaining({
+          name: 'gpu-work',
+          location: 'remote',
+          path: 'ubuntu@10.0.0.42:/home/ubuntu/work',
+          remote: expect.objectContaining({ hostId: 'gpu-box', hostLabel: 'GPU Box', path: '/home/ubuntu/work' }),
+        })
+      );
+    });
+
+    it('deletes remote case metadata only', async () => {
+      setupRemoteConfigStore();
+
+      await harness.app.inject({
+        method: 'POST',
+        url: '/api/remote-hosts',
+        payload: { id: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu' },
+      });
+      await harness.app.inject({
+        method: 'POST',
+        url: '/api/cases/remote-link',
+        payload: { name: 'gpu-work', hostId: 'gpu-box', remotePath: '/home/ubuntu/work' },
+      });
+
+      const deleted = await harness.app.inject({ method: 'DELETE', url: '/api/cases/gpu-work' });
+      expect(deleted.statusCode).toBe(200);
+      expect(JSON.parse(deleted.body)).toEqual({ success: true, data: { name: 'gpu-work' } });
     });
   });
 

@@ -11,15 +11,29 @@ import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import type { ApiResponse, CaseInfo } from '../../types.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
-import { CreateCaseSchema, LinkCaseSchema, CaseOrderSchema } from '../schemas.js';
+import {
+  CreateCaseSchema,
+  LinkCaseSchema,
+  CaseOrderSchema,
+  RemoteCaseLinkSchema,
+  RemoteHostSchema,
+} from '../schemas.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { writeHooksConfig } from '../../hooks-config.js';
 import { CASES_DIR, SETTINGS_PATH, validatePathWithinBase, parseBody, readJsonConfig } from '../route-helpers.js';
 import { SseEvent } from '../sse-events.js';
 import type { EventPort, ConfigPort } from '../ports/index.js';
 import { dataPath, getDataDir } from '../../config/instance.js';
+import {
+  readRemoteCases,
+  readRemoteHosts,
+  remoteDisplayPath,
+  writeRemoteCases,
+  writeRemoteHosts,
+} from '../../remote-hosts.js';
 
 const LINKED_CASES_FILE = dataPath('linked-cases.json');
+const CODEMAN_CONFIG_DIR = getDataDir();
 const SAFE_CASE_NAME = /^[a-zA-Z0-9_-]+$/;
 
 /** Read and parse linked-cases.json, returning empty object on missing/invalid file. */
@@ -53,6 +67,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
             name: e.name,
             path: join(CASES_DIR, e.name),
             hasClaudeMd: existsSync(join(CASES_DIR, e.name, 'CLAUDE.md')),
+            location: 'local',
           });
         }
       }
@@ -69,8 +84,32 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
           name,
           path,
           hasClaudeMd: existsSync(join(path, 'CLAUDE.md')),
+          linked: true,
+          location: 'linked-local',
         });
       }
+    }
+
+    // Get remote cases
+    const remoteHosts = await readRemoteHosts(CODEMAN_CONFIG_DIR);
+    const remoteHostMap = new Map(remoteHosts.map((host) => [host.id, host]));
+    for (const remoteCase of await readRemoteCases(CODEMAN_CONFIG_DIR)) {
+      const host = remoteHostMap.get(remoteCase.hostId);
+      if (!host || existingNames.has(remoteCase.name) || !SAFE_CASE_NAME.test(remoteCase.name)) continue;
+      existingNames.add(remoteCase.name);
+      cases.push({
+        name: remoteCase.name,
+        path: remoteDisplayPath({ username: host.username, host: host.host, path: remoteCase.remotePath }),
+        hasClaudeMd: false,
+        location: 'remote',
+        remote: {
+          hostId: host.id,
+          hostLabel: host.label,
+          host: host.host,
+          username: host.username,
+          path: remoteCase.remotePath,
+        },
+      });
     }
 
     // Sort by persisted caseOrder from settings.json
@@ -118,6 +157,65 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     } catch (err) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
     }
+  });
+
+  app.get('/api/remote-hosts', async () => readRemoteHosts(CODEMAN_CONFIG_DIR));
+
+  app.post('/api/remote-hosts', async (req): Promise<ApiResponse<{ host: unknown }>> => {
+    const host = parseBody(RemoteHostSchema, req.body);
+    const hosts = await readRemoteHosts(CODEMAN_CONFIG_DIR);
+    if (hosts.some((item) => item.id === host.id)) {
+      return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Remote host already exists');
+    }
+    await writeRemoteHosts(CODEMAN_CONFIG_DIR, [...hosts, host]);
+    return { success: true, data: { host } };
+  });
+
+  app.put('/api/remote-hosts/:id', async (req): Promise<ApiResponse<{ host: unknown }>> => {
+    const { id } = req.params as { id: string };
+    const host = parseBody(RemoteHostSchema, { ...(req.body as object), id });
+    const hosts = await readRemoteHosts(CODEMAN_CONFIG_DIR);
+    const index = hosts.findIndex((item) => item.id === id);
+    if (index === -1) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
+    const next = [...hosts];
+    next[index] = host;
+    await writeRemoteHosts(CODEMAN_CONFIG_DIR, next);
+    return { success: true, data: { host } };
+  });
+
+  app.delete('/api/remote-hosts/:id', async (req): Promise<ApiResponse<{ id: string }>> => {
+    const { id } = req.params as { id: string };
+    const cases = await readRemoteCases(CODEMAN_CONFIG_DIR);
+    if (cases.some((item) => item.hostId === id)) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Remote host is still used by remote cases');
+    }
+    const hosts = await readRemoteHosts(CODEMAN_CONFIG_DIR);
+    await writeRemoteHosts(
+      CODEMAN_CONFIG_DIR,
+      hosts.filter((item) => item.id !== id)
+    );
+    return { success: true, data: { id } };
+  });
+
+  app.post('/api/cases/remote-link', async (req): Promise<ApiResponse<{ case: unknown }>> => {
+    const remoteCase = { ...parseBody(RemoteCaseLinkSchema, req.body), type: 'remote' as const };
+    const hosts = await readRemoteHosts(CODEMAN_CONFIG_DIR);
+    const host = hosts.find((item) => item.id === remoteCase.hostId);
+    if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
+
+    const linkedCases = await readLinkedCases();
+    const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
+    if (
+      remoteCases.some((item) => item.name === remoteCase.name) ||
+      linkedCases[remoteCase.name] ||
+      existsSync(join(CASES_DIR, remoteCase.name))
+    ) {
+      return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
+    }
+
+    await writeRemoteCases(CODEMAN_CONFIG_DIR, [...remoteCases, remoteCase]);
+    ctx.broadcast(SseEvent.CaseLinked, { name: remoteCase.name, path: remoteCase.remotePath, type: 'remote' });
+    return { success: true, data: { case: remoteCase } };
   });
 
   // Link an existing folder as a case
@@ -171,6 +269,16 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
     if (!validatePathWithinBase(name, CASES_DIR)) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
+    }
+
+    const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
+    if (remoteCases.some((item) => item.name === name)) {
+      await writeRemoteCases(
+        CODEMAN_CONFIG_DIR,
+        remoteCases.filter((item) => item.name !== name)
+      );
+      ctx.broadcast(SseEvent.CaseDeleted, { name, type: 'remote-unlinked' });
+      return { success: true, data: { name } };
     }
 
     // Check linked cases first — unlink only, don't delete the actual directory
