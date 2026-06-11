@@ -232,7 +232,7 @@ describe('case-routes', () => {
 
       const list = await harness.app.inject({ method: 'GET', url: '/api/remote-hosts' });
       expect(list.statusCode).toBe(200);
-      expect(JSON.parse(list.body)).toEqual([
+      expect(JSON.parse(list.body).data).toEqual([
         expect.objectContaining({ id: 'gpu-box', label: 'GPU Box', commands: { codex: 'exec codx personal' } }),
       ]);
     });
@@ -255,12 +255,38 @@ describe('case-routes', () => {
       expect(link.statusCode).toBe(200);
 
       const cases = await harness.app.inject({ method: 'GET', url: '/api/cases' });
-      expect(JSON.parse(cases.body)).toContainEqual(
+      expect(JSON.parse(cases.body).data).toContainEqual(
         expect.objectContaining({
           name: 'gpu-work',
           location: 'remote',
           path: 'ubuntu@10.0.0.42:/home/ubuntu/work',
-          remote: expect.objectContaining({ hostId: 'gpu-box', hostLabel: 'GPU Box', path: '/home/ubuntu/work' }),
+          remote: expect.objectContaining({ hostId: 'gpu-box', path: '/home/ubuntu/work' }),
+        })
+      );
+    });
+
+    it('prefers remote case metadata over a same-name local managed case', async () => {
+      setupRemoteConfigStore();
+      mockedReaddir.mockResolvedValue([{ name: 'gpu-work', isDirectory: () => true }] as never);
+
+      await harness.app.inject({
+        method: 'POST',
+        url: '/api/remote-hosts',
+        payload: { id: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu' },
+      });
+      await harness.app.inject({
+        method: 'POST',
+        url: '/api/cases/remote-link',
+        payload: { name: 'gpu-work', hostId: 'gpu-box', remotePath: '/home/ubuntu/work' },
+      });
+      mockedExistsSync.mockReturnValue(true);
+
+      const cases = await harness.app.inject({ method: 'GET', url: '/api/cases' });
+      expect(JSON.parse(cases.body).data).toContainEqual(
+        expect.objectContaining({
+          name: 'gpu-work',
+          location: 'remote',
+          path: 'ubuntu@10.0.0.42:/home/ubuntu/work',
         })
       );
     });

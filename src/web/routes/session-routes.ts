@@ -1293,24 +1293,36 @@ export function registerSessionRoutes(
       }
     }
 
-    // Resolve case path: check linked-cases registry first, then fall back to CASES_DIR.
-    // This mirrors the behaviour of resolveCasePath() in case-routes so that linked
-    // external project directories are honoured by quick-start just like regular case routes.
-    let linkedCases: Record<string, string> = {};
-    try {
-      const raw = await fs.readFile(LINKED_CASES_FILE, 'utf-8');
-      linkedCases = JSON.parse(raw);
-    } catch {
-      // File missing or unparseable — treat as empty registry
-    }
-    const linkedCasePath = linkedCases[caseName];
-    const casePath = linkedCasePath || validatePathWithinBase(caseName, CASES_DIR);
-    if (!casePath) {
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
+    let remote = undefined;
+    let linkedCasePath: string | undefined;
+    let casePath: string | null = null;
+    const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
+    const remoteCase = remoteCases.find((item) => item.name === caseName);
+    if (remoteCase) {
+      const host = (await readRemoteHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === remoteCase.hostId);
+      if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
+      casePath = remoteCase.remotePath;
+      remote = toSessionRemote(host, remoteCase);
+    } else {
+      // Resolve case path: check linked-cases registry first, then fall back to CASES_DIR.
+      // This mirrors the behaviour of resolveCasePath() in case-routes so that linked
+      // external project directories are honoured by quick-start just like regular case routes.
+      let linkedCases: Record<string, string> = {};
+      try {
+        const raw = await fs.readFile(LINKED_CASES_FILE, 'utf-8');
+        linkedCases = JSON.parse(raw);
+      } catch {
+        // File missing or unparseable — treat as empty registry
+      }
+      linkedCasePath = linkedCases[caseName];
+      casePath = linkedCasePath || validatePathWithinBase(caseName, CASES_DIR);
+      if (!casePath) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
+      }
     }
 
-    // Create case folder and CLAUDE.md if it doesn't exist (only for non-linked cases)
-    if (!existsSync(casePath)) {
+    // Create case folder and CLAUDE.md if it doesn't exist (only for non-linked, non-remote cases)
+    if (!remote && !existsSync(casePath)) {
       try {
         mkdirSync(casePath, { recursive: true });
         mkdirSync(join(casePath, 'src'), { recursive: true });
@@ -1343,6 +1355,7 @@ export function registerSessionRoutes(
       mode !== 'opencode' &&
       mode !== 'codex' &&
       mode !== 'gemini' &&
+      !remote &&
       envOverrides &&
       Object.keys(envOverrides).length > 0
     ) {
@@ -1379,12 +1392,13 @@ export function registerSessionRoutes(
       geminiConfig: mode === 'gemini' ? geminiConfig : undefined,
       envOverrides,
       effort,
+      remote,
       tmuxHistoryLimit: qsTerminalHistoryConfig.tmuxHistoryLimit,
     });
 
     // Auto-detect completion phrase from CLAUDE.md BEFORE broadcasting
     // so the initial state already has the phrase configured (only if globally enabled)
-    if (mode === 'claude' && ctx.store.getConfig().ralphEnabled) {
+    if (mode === 'claude' && !remote && ctx.store.getConfig().ralphEnabled) {
       autoConfigureRalph(session, casePath, ctx);
       if (!session.ralphTracker.enabled) {
         session.ralphTracker.enable();

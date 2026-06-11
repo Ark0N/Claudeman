@@ -1649,6 +1649,36 @@
               <span class="form-hint">Absolute path to an existing project folder, e.g. /home/you/my-project</span>
             </div>
           </div>
+          <!-- Remote Tab -->
+          <div class="modal-tab-content hidden" id="case-remote">
+            <div class="form-row">
+              <label>Case Name</label>
+              <input type="text" id="remoteCaseName" placeholder="gpu-work" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
+              <span class="form-hint">Name to identify this remote case in Codeman</span>
+            </div>
+            <div class="form-row">
+              <label>Remote Path</label>
+              <input type="text" id="remoteCasePath" placeholder="/home/user/projects/work" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+              <span class="form-hint">Absolute path on the remote host. Codeman will not create or delete it.</span>
+            </div>
+            <div class="form-row">
+              <label>Host ID</label>
+              <input type="text" id="remoteHostId" placeholder="gpu-box" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
+            </div>
+            <div class="form-row">
+              <label>SSH Host/IP</label>
+              <input type="text" id="remoteHostAddress" placeholder="10.0.0.42" autocomplete="off" autocapitalize="off" spellcheck="false">
+            </div>
+            <div class="form-row">
+              <label>SSH Username</label>
+              <input type="text" id="remoteHostUsername" placeholder="ubuntu" autocomplete="off" autocapitalize="off" spellcheck="false">
+            </div>
+            <div class="form-row">
+              <label>Codex Command Override</label>
+              <input type="text" id="remoteHostCodexCommand" placeholder="exec codx personal" autocomplete="off" autocapitalize="off" spellcheck="false">
+              <span class="form-hint">Optional. Leave blank to use exec codex on the remote host.</span>
+            </div>
+          </div>
           <!-- Manage Tab -->
           <div class="modal-tab-content hidden" id="case-manage">
             <div class="case-manage-list" id="caseManageList">

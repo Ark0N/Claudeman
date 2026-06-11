@@ -130,7 +130,6 @@ export interface CaseInfo {
   /** Remote case metadata for display and session creation */
   remote?: {
     hostId: string;
-    hostLabel: string;
     host: string;
     username: string;
     path: string;

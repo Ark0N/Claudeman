@@ -71,9 +71,12 @@ Object.assign(CodemanApp.prototype, {
       const maxNameLength = isMobile ? 8 : 20; // Truncate to 8 chars on mobile
 
       cases.forEach(c => {
-        const displayName = c.name.length > maxNameLength
-          ? c.name.substring(0, maxNameLength) + '…'
+        const baseLabel = c.location === 'remote' && c.remote
+          ? `${c.name} @ ${c.remote.hostId}`
           : c.name;
+        const displayName = baseLabel.length > maxNameLength
+          ? baseLabel.substring(0, maxNameLength) + '…'
+          : baseLabel;
         options += `<option value="${escapeHtml(c.name)}">${escapeHtml(displayName)}</option>`;
       });
 
@@ -1254,6 +1257,18 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('newCaseDescription').value = '';
     document.getElementById('linkCaseName').value = '';
     document.getElementById('linkCasePath').value = '';
+    const remoteFields = [
+      'remoteCaseName',
+      'remoteCasePath',
+      'remoteHostId',
+      'remoteHostAddress',
+      'remoteHostUsername',
+      'remoteHostCodexCommand',
+    ];
+    remoteFields.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
     // Reset to first tab
     this.caseModalTab = 'case-create';
     this.switchCaseModalTab('case-create');
@@ -1407,6 +1422,64 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  async linkRemoteCase() {
+    const name = document.getElementById('remoteCaseName').value.trim();
+    const remotePath = document.getElementById('remoteCasePath').value.trim();
+    const hostId = document.getElementById('remoteHostId').value.trim();
+    const host = document.getElementById('remoteHostAddress').value.trim();
+    const username = document.getElementById('remoteHostUsername').value.trim();
+    const codexCommand = document.getElementById('remoteHostCodexCommand').value.trim();
+
+    if (!name || !remotePath || !hostId || !host || !username) {
+      this.showToast('Please complete all required remote fields', 'error');
+      return;
+    }
+    if (!/^[a-zA-Z0-9_-]+$/.test(name) || !/^[a-zA-Z0-9_-]+$/.test(hostId)) {
+      this.showToast('Invalid name. Use only letters, numbers, hyphens, underscores.', 'error');
+      return;
+    }
+    if (!remotePath.startsWith('/')) {
+      this.showToast('Remote path must be absolute', 'error');
+      return;
+    }
+
+    try {
+      const hostPayload = {
+        id: hostId,
+        label: hostId,
+        host,
+        username,
+        ...(codexCommand ? { commands: { codex: codexCommand } } : {}),
+      };
+      const hostRes = await fetch('/api/remote-hosts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(hostPayload)
+      });
+      const hostData = await hostRes.json();
+      if (!hostData.success && hostData.errorCode !== 'ALREADY_EXISTS') {
+        throw new Error(hostData.error || 'Failed to save remote host');
+      }
+
+      const caseRes = await fetch('/api/cases/remote-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, hostId, remotePath })
+      });
+      const caseData = await caseRes.json();
+      if (caseData.success) {
+        this.closeCreateCaseModal();
+        this.showToast(`Remote case "${name}" linked`, 'success');
+        await this.loadQuickStartCases(name);
+        await this.saveLastUsedCase(name);
+      } else {
+        this.showToast(caseData.error || 'Failed to link remote case', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to link remote case:', err);
+      this.showToast('Failed to link remote case: ' + err.message, 'error');
+    }
+  },
 
   // ═══════════════════════════════════════════════════════════════
   // Case Management (reorder + delete)

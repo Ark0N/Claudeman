@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Session } from '../src/session.js';
+import { resolveMuxAttachCwd, Session } from '../src/session.js';
 import type { SessionAttachmentHistoryItem } from '../src/types/session.js';
 import {
   ATTACHMENT_HISTORY_LIMIT,
@@ -160,5 +160,18 @@ describe('session attachment history', () => {
     const persisted = session.getAttachmentHistoryForPersist();
     expect(persisted).toHaveLength(1);
     expect(persisted?.[0].fileName).toBe('ok.png');
+  });
+
+  it('attaches remote mux sessions from a local cwd', () => {
+    expect(
+      resolveMuxAttachCwd('/Users/remote/project', {
+        hostId: 'mac-mini',
+        label: 'Mac Mini',
+        host: '192.168.21.109',
+        username: 'saqebakhter',
+        remotePath: '/Users/remote/project',
+      })
+    ).toBe('/tmp');
+    expect(resolveMuxAttachCwd('/opt/projects/Codeman')).toBe('/opt/projects/Codeman');
   });
 });

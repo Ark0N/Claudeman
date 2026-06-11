@@ -42,8 +42,10 @@ import {
   type CodexConfig,
   type EffortLevel,
   type GeminiConfig,
+  type SessionRemote,
 } from './types.js';
 import { buildEffortCliArgs } from './session-cli-builder.js';
+import { defaultRemoteCommandForMode, remoteSshTarget } from './remote-hosts.js';
 import {
   wrapWithNice,
   SAFE_PATH_PATTERN,
@@ -667,6 +669,16 @@ function buildSpawnCommand(options: {
     return buildGeminiCommand(options.geminiConfig);
   }
   return '$SHELL';
+}
+
+export function buildRemoteLaunchCommand(options: { mode: SessionMode; remote: SessionRemote }): string {
+  const { mode, remote } = options;
+  const modeCommand = remote.commands?.[mode] || defaultRemoteCommandForMode(mode);
+  const args = ['ssh', '-o', 'BatchMode=yes', '-t'];
+  if (remote.port) args.push('-p', String(remote.port));
+  const remoteCommand = `cd ${shellescape(remote.remotePath)} && ${modeCommand}`;
+  args.push(remoteSshTarget(remote), `bash -lc ${shellescape(remoteCommand)}`);
+  return args.map((arg) => shellescape(arg)).join(' ');
 }
 
 /**

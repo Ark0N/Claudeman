@@ -95,21 +95,26 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     const remoteHostMap = new Map(remoteHosts.map((host) => [host.id, host]));
     for (const remoteCase of await readRemoteCases(CODEMAN_CONFIG_DIR)) {
       const host = remoteHostMap.get(remoteCase.hostId);
-      if (!host || existingNames.has(remoteCase.name) || !SAFE_CASE_NAME.test(remoteCase.name)) continue;
+      if (!host || !SAFE_CASE_NAME.test(remoteCase.name)) continue;
       existingNames.add(remoteCase.name);
-      cases.push({
+      const remoteCaseInfo: CaseInfo = {
         name: remoteCase.name,
         path: remoteDisplayPath({ username: host.username, host: host.host, path: remoteCase.remotePath }),
         hasClaudeMd: false,
         location: 'remote',
         remote: {
           hostId: host.id,
-          hostLabel: host.label,
           host: host.host,
           username: host.username,
           path: remoteCase.remotePath,
         },
-      });
+      };
+      const existingIndex = cases.findIndex((item) => item.name === remoteCase.name);
+      if (existingIndex === -1) {
+        cases.push(remoteCaseInfo);
+      } else {
+        cases[existingIndex] = remoteCaseInfo;
+      }
     }
 
     // Sort by persisted caseOrder from settings.json
@@ -339,6 +344,25 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
     if (!validatePathWithinBase(name, CASES_DIR)) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
+    }
+
+    const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
+    const remoteCase = remoteCases.find((item) => item.name === name);
+    if (remoteCase) {
+      const host = (await readRemoteHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === remoteCase.hostId);
+      if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
+      return {
+        name,
+        path: remoteDisplayPath({ username: host.username, host: host.host, path: remoteCase.remotePath }),
+        hasClaudeMd: false,
+        location: 'remote',
+        remote: {
+          hostId: host.id,
+          host: host.host,
+          username: host.username,
+          path: remoteCase.remotePath,
+        },
+      };
     }
 
     const casePath = await resolveCasePath(name);

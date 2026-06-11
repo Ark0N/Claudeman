@@ -8,7 +8,13 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { TmuxManager, formatPaneSnapshot, parsePaneList, resolveActivePaneTarget } from '../src/tmux-manager.js';
+import {
+  TmuxManager,
+  buildRemoteLaunchCommand,
+  formatPaneSnapshot,
+  parsePaneList,
+  resolveActivePaneTarget,
+} from '../src/tmux-manager.js';
 import { execSync, exec } from 'node:child_process';
 
 // ============================================================================
@@ -88,6 +94,44 @@ describe('TmuxManager (unit)', () => {
   describe('backend', () => {
     it('should report tmux as backend', () => {
       expect(manager.backend).toBe('tmux');
+    });
+  });
+
+  describe('remote launch command builder', () => {
+    it('wraps codex command overrides in ssh with remote cd', () => {
+      const command = buildRemoteLaunchCommand({
+        mode: 'codex',
+        remote: {
+          hostId: 'gpu-box',
+          label: 'GPU Box',
+          host: '10.0.0.42',
+          username: 'ubuntu',
+          remotePath: '/home/ubuntu/work',
+          commands: { codex: 'exec codx personal' },
+        },
+      });
+
+      expect(command).toContain('ssh');
+      expect(command).toContain('BatchMode=yes');
+      expect(command).toContain('ubuntu@10.0.0.42');
+      expect(command).toContain('/home/ubuntu/work');
+      expect(command).toContain('bash -lc');
+      expect(command).toContain('exec codx personal');
+    });
+
+    it('uses default shell command when no override is configured', () => {
+      const command = buildRemoteLaunchCommand({
+        mode: 'shell',
+        remote: {
+          hostId: 'gpu-box',
+          label: 'GPU Box',
+          host: '10.0.0.42',
+          username: 'ubuntu',
+          remotePath: '/home/ubuntu/work',
+        },
+      });
+
+      expect(command).toContain('exec bash -l');
     });
   });
 
