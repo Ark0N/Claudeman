@@ -11,15 +11,19 @@ import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.
 import { fileStreamManager } from '../../file-stream-manager.js';
 import {
   AttachmentRegistrationError,
+  attachmentRecordToEvent,
   attachmentRegistry,
+  buildFileThumbnailRoute,
   isSupportedAttachmentExtension,
   registerExternalAttachment,
   type AttachmentRecord,
 } from '../../attachment-registry.js';
 import { generateFirstPageThumbnail } from '../../document-thumbnailer.js';
 import { getOfficePreviewPdfPath, getPreviewPdfDownloadName } from '../../document-preview-cache.js';
+import { sanitizeAttachmentHistoryItem } from '../../session-attachment-history.js';
 import { isBlockedAttachmentPath, loadAttachmentGuardConfig } from '../../config/attachment-guard.js';
 import { findSessionOrFail, validateSessionFilePath } from '../route-helpers.js';
+import type { SessionAttachmentHistoryItem, SessionState } from '../../types/session.js';
 import { isSensitivePath } from '../sensitive-path.js';
 import { SseEvent } from '../sse-events.js';
 import type { ConfigPort, EventPort, SessionPort } from '../ports/index.js';
@@ -233,6 +237,133 @@ function getKnownSessionWorkingDir(
 
   reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${sessionId} not found`));
   return undefined;
+}
+
+// Persisted sessions carry the private (externalPath-bearing) history under a
+// `__attachmentHistory` key so the list route can re-register external files.
+type StoredSessionWithPrivateAttachmentHistory = SessionState & {
+  __attachmentHistory?: SessionAttachmentHistoryItem[];
+};
+
+type AttachmentHistoryRouteItem = Omit<SessionAttachmentHistoryItem, 'externalPath'> & {
+  missing: boolean;
+  rawUrl?: string;
+  url?: string;
+  previewUrl?: string;
+  thumbnailUrl?: string;
+  downloadUrl?: string;
+  attachmentId?: string;
+};
+
+function appendDownloadFlag(url: string): string {
+  return `${url}${url.includes('?') ? '&' : '?'}download=true`;
+}
+
+function getSessionAttachmentHistory(
+  ctx: SessionPort & ConfigPort,
+  sessionId: string
+): { workingDir: string; history: SessionAttachmentHistoryItem[] } | undefined {
+  const liveSession = ctx.sessions.get(sessionId);
+  if (liveSession) {
+    return {
+      workingDir: liveSession.workingDir,
+      history: liveSession.getAttachmentHistoryForPersist() ?? liveSession.attachmentHistory ?? [],
+    };
+  }
+
+  const stored = ctx.store.getSession(sessionId) as StoredSessionWithPrivateAttachmentHistory | undefined;
+  if (!stored) return undefined;
+
+  return {
+    workingDir: stored.workingDir,
+    history: stored.__attachmentHistory ?? stored.attachmentHistory ?? [],
+  };
+}
+
+// History item for a file detected inside the workspace: re-stat for live
+// size/mtime and resolve preview/thumbnail/raw routes off the relative path.
+async function buildDetectedAttachmentRouteItem(
+  sessionId: string,
+  workingDir: string,
+  item: SessionAttachmentHistoryItem
+): Promise<AttachmentHistoryRouteItem> {
+  const safe = sanitizeAttachmentHistoryItem(item);
+  if (!item.relativePath) {
+    return { ...safe, missing: true };
+  }
+
+  const validated = validateSessionFilePath(workingDir, item.relativePath);
+  if (!validated) {
+    return { ...safe, missing: true };
+  }
+
+  let size = item.size;
+  let mtimeMs = item.mtimeMs;
+  try {
+    const stat = await fs.stat(validated.resolvedPath);
+    size = stat.size;
+    mtimeMs = stat.mtimeMs ?? mtimeMs;
+  } catch {
+    return { ...safe, missing: true };
+  }
+
+  const encodedPath = encodeURIComponent(item.relativePath);
+  const rawUrl = `/api/sessions/${sessionId}/file-raw?path=${encodedPath}`;
+  const previewUrl =
+    item.extension === 'docx' || item.extension === 'pptx'
+      ? `/api/sessions/${sessionId}/file-preview?path=${encodedPath}`
+      : rawUrl;
+  const thumbnailUrl = isSupportedAttachmentExtension(item.extension)
+    ? buildFileThumbnailRoute(sessionId, item.relativePath)
+    : undefined;
+
+  return {
+    ...safe,
+    size,
+    mtimeMs,
+    missing: false,
+    rawUrl,
+    url: rawUrl,
+    previewUrl,
+    thumbnailUrl,
+    downloadUrl: appendDownloadFlag(rawUrl),
+  };
+}
+
+// History item for an explicitly published external file: re-register it to mint
+// a fresh id + by-id routes (the guard runs again), or mark it missing.
+async function buildExternalAttachmentRouteItem(
+  sessionId: string,
+  item: SessionAttachmentHistoryItem,
+  sessionWorkingDir?: string
+): Promise<AttachmentHistoryRouteItem> {
+  const safe = sanitizeAttachmentHistoryItem(item);
+  if (!item.externalPath) {
+    return { ...safe, missing: true };
+  }
+
+  try {
+    const event = await registerExternalAttachment(sessionId, item.externalPath, { sessionWorkingDir });
+    return {
+      ...safe,
+      fileName: event.fileName,
+      extension: event.extension,
+      attachmentType: event.attachmentType,
+      size: event.size,
+      missing: false,
+      attachmentId: event.attachmentId,
+      rawUrl: event.rawUrl,
+      url: event.rawUrl,
+      previewUrl: event.previewUrl,
+      thumbnailUrl: event.thumbnailUrl,
+      downloadUrl: appendDownloadFlag(event.rawUrl),
+    };
+  } catch (err) {
+    if (err instanceof AttachmentRegistrationError) {
+      return { ...safe, missing: true };
+    }
+    throw err;
+  }
 }
 
 export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & EventPort & ConfigPort): void {
@@ -569,6 +700,69 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
           createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to register attachment: ${getErrorMessage(err)}`)
         );
     }
+  });
+
+  // List a session's attachment history (live session or persisted), resolving
+  // each entry to current metadata + routes. External entries are re-registered.
+  app.get('/api/sessions/:id/attachments', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const sessionHistory = getSessionAttachmentHistory(ctx, id);
+    if (!sessionHistory) {
+      reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${id} not found`));
+      return;
+    }
+
+    const items = await Promise.all(
+      sessionHistory.history.map((item) =>
+        item.source === 'external'
+          ? buildExternalAttachmentRouteItem(id, item, sessionHistory.workingDir)
+          : buildDetectedAttachmentRouteItem(id, sessionHistory.workingDir, item)
+      )
+    );
+
+    return {
+      success: true,
+      data: {
+        items,
+        count: items.length,
+      },
+    };
+  });
+
+  // Metadata poll for a single registered attachment (re-stats for live
+  // size/mtime as the underlying file is rewritten).
+  app.get('/api/sessions/:id/attachments/:attachmentId', async (req, reply) => {
+    const { id, attachmentId } = req.params as { id: string; attachmentId: string };
+    const workingDir = getKnownSessionWorkingDir(ctx, id, reply);
+    if (!workingDir) return;
+    const record = getAttachmentOr404(reply, id, attachmentId);
+    if (!record) return;
+    if (!(await resolveServableAttachmentPath(reply, record, workingDir))) return;
+    const event = attachmentRecordToEvent(record);
+    let size = record.size;
+    let mtimeMs = record.mtimeMs;
+    try {
+      const stat = await fs.stat(record.filePath);
+      size = stat.size;
+      mtimeMs = stat.mtimeMs ?? mtimeMs;
+    } catch {
+      // File temporarily unavailable mid-write — keep cached values.
+    }
+    return {
+      success: true,
+      data: {
+        path: record.fileName,
+        size,
+        mtimeMs,
+        type: record.attachmentType,
+        extension: record.extension,
+        url: event.rawUrl,
+        previewUrl: event.previewUrl,
+        thumbnailUrl: event.thumbnailUrl,
+        attachmentId: record.attachmentId,
+        fileName: record.fileName,
+      },
+    };
   });
 
   // Serve the raw bytes of a registered attachment by id. Re-checks the

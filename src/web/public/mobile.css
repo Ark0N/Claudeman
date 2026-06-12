@@ -2346,3 +2346,47 @@ html.mobile-init .file-browser-panel {
     display: block;
   }
 }
+
+@media (max-width: 430px) {
+  /* Attachment history (COD-18): full-screen sheet on phones */
+  .attachment-history-drawer {
+    top: 0;
+    bottom: 0;
+    width: 100%;
+    max-width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    border-left: none;
+    border-radius: 0;
+    padding-top: var(--safe-area-top);
+    padding-left: var(--safe-area-left);
+    padding-right: var(--safe-area-right);
+    padding-bottom: var(--safe-area-bottom);
+  }
+
+  .attachment-history-header {
+    padding: 12px;
+  }
+
+  .attachment-history-list {
+    padding: 6px;
+  }
+
+  .attachment-history-item {
+    grid-template-columns: 104px minmax(0, 1fr);
+    gap: 8px;
+    padding: 8px 6px;
+  }
+
+  .attachment-history-thumb {
+    width: 104px;
+  }
+
+  .attachment-history-actions {
+    gap: 4px;
+  }
+
+  .attachment-history-actions button {
+    padding: 4px 7px;
+  }
+}

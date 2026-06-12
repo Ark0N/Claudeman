@@ -9226,3 +9226,210 @@ body.touch-device.cjk-input-visible .main {
   border: 0;
   background: #fff;
 }
+
+.attachment-history-badge {
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 700;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+@keyframes notif-badge-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+}
+
+/* Attachment History Drawer */
+.attachment-history-drawer {
+  position: fixed;
+  top: var(--header-height);
+  right: 0;
+  width: 390px;
+  max-width: calc(100vw - 24px);
+  height: calc(100vh - var(--header-height) - var(--toolbar-height));
+  height: calc(100dvh - var(--header-height) - var(--toolbar-height));
+  background: rgba(19, 19, 22, 0.98);
+  border-left: 1px solid var(--border);
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.18s ease;
+  box-shadow: -10px 0 28px rgba(0, 0, 0, 0.36);
+}
+
+.attachment-history-drawer.open {
+  transform: translateX(0);
+}
+
+.attachment-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.attachment-history-title {
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.attachment-history-subtitle {
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: 0.68rem;
+}
+
+.attachment-history-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.attachment-history-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.attachment-history-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 160px;
+  padding: 24px 16px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.attachment-history-empty-title {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.attachment-history-empty code {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 5px 7px;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  font-size: 0.76rem;
+}
+
+.attachment-history-item {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.attachment-history-item:last-child {
+  border-bottom: none;
+}
+
+.attachment-history-item.missing {
+  opacity: 0.58;
+}
+
+.attachment-history-thumb {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 112px;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: #f8f8fb;
+}
+
+.attachment-history-thumb-img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  object-position: center;
+}
+
+.attachment-history-thumb-fallback {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  inset: 0;
+  background: #20202a;
+  color: var(--text);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.attachment-history-thumb-fallback.visible {
+  display: flex;
+}
+
+.attachment-history-item-main {
+  min-width: 0;
+}
+
+.attachment-history-file-name {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-history-meta {
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: 0.67rem;
+}
+
+.attachment-history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.attachment-history-actions button {
+  padding: 3px 7px;
+  border: 1px solid var(--border-light);
+  border-radius: 5px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 0.67rem;
+  cursor: pointer;
+}
+
+.attachment-history-actions button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
+.attachment-history-actions button:disabled {

@@ -25,6 +25,7 @@
  */
 
 import type { RespawnConfig } from './respawn.js';
+import type { AttachmentDetectedType } from './tools.js';
 
 /** Status of a Claude session */
 export type SessionStatus = 'idle' | 'busy' | 'stopped' | 'error';
@@ -100,6 +101,40 @@ export interface SessionConfig {
  * Available session colors for visual differentiation
  */
 export type SessionColor = 'default' | 'red' | 'orange' | 'yellow' | 'green' | 'blue' | 'purple' | 'pink';
+
+export type SessionAttachmentHistorySource = 'detected' | 'external';
+
+/**
+ * Session-scoped attachment history entry.
+ *
+ * `externalPath` is server-private. It may be present in the internal persisted
+ * history copy, but API-bound session state must sanitize it before returning
+ * to the browser.
+ */
+export interface SessionAttachmentHistoryItem {
+  /** Stable history identity used for dedupe and list rendering */
+  id: string;
+  /** Codeman session ID this item belongs to */
+  sessionId: string;
+  /** Display filename */
+  fileName: string;
+  /** Lowercase extension without a leading dot */
+  extension: string;
+  /** Viewer category used by the web UI */
+  attachmentType: AttachmentDetectedType;
+  /** File size in bytes */
+  size: number;
+  /** Last modified timestamp in milliseconds, if known */
+  mtimeMs: number;
+  /** Last time this attachment was seen or explicitly published */
+  timestamp: number;
+  /** How the attachment entered the session */
+  source: SessionAttachmentHistorySource;
+  /** Workspace-relative path for detected session files */
+  relativePath?: string;
+  /** Server-private absolute path for explicitly published external files */
+  externalPath?: string;
+}
 
 /**
  * Current state of a session
@@ -183,6 +218,8 @@ export interface SessionState {
   resumeSessionId?: string;
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
   effort?: EffortLevel;
+  /** Sanitized per-session attachment history. */
+  attachmentHistory?: SessionAttachmentHistoryItem[];
 }
 
 /**

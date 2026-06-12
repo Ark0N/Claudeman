@@ -2552,10 +2552,24 @@ Object.assign(CodemanApp.prototype, {
   // Attachment Cards (detected documents/images)
   // ═══════════════════════════════════════════════════════════════
 
-  // SSE `attachment:detected` consumer: surface a dismissible card for the file.
+  // SSE `attachment:detected` consumer: surface a dismissible card for the file
+  // and bump the per-session history unread count (refreshing the open drawer).
   _onAttachmentDetected(data) {
     console.log('[Attachment Detected]', data);
     this.addAttachmentCard(data);
+    if (data.sessionId) {
+      const current =
+        this.attachmentHistoryCounts.get(data.sessionId) ??
+        this.sessions.get(data.sessionId)?.attachmentHistory?.length ??
+        0;
+      this.attachmentHistoryCounts.set(data.sessionId, Math.min(current + 1, 100));
+      if (data.sessionId === this.activeSessionId) {
+        this.updateAttachmentHistoryBadge();
+        if (this.attachmentHistoryDrawerOpen) {
+          this._debouncedCall('attachmentHistoryRefresh', () => this.loadAttachmentHistory(data.sessionId), 250);
+        }
+      }
+    }
   },
 
   // Lazily create the floating stack the cards live in (appended to <body>).
@@ -2723,6 +2737,232 @@ Object.assign(CodemanApp.prototype, {
     for (const attachmentId of toClose) {
       this.closeAttachmentCard(attachmentId);
     }
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // Attachment History Drawer
+  // ═══════════════════════════════════════════════════════════════
+
+  updateAttachmentHistoryBadge(count = null) {
+    const badge = document.getElementById('attachmentHistoryBadge');
+    const button = document.getElementById('attachmentsHistoryBtn');
+    const sessionId = this.activeSessionId;
+    const nextCount = count ?? (sessionId ? this.attachmentHistoryCounts.get(sessionId) || 0 : 0);
+    if (badge) {
+      badge.textContent = String(Math.min(nextCount, 99));
+      badge.style.display = nextCount > 0 ? '' : 'none';
+    }
+    if (button) {
+      button.classList.toggle('active', this.attachmentHistoryDrawerOpen);
+      button.setAttribute('aria-expanded', this.attachmentHistoryDrawerOpen ? 'true' : 'false');
+    }
+  },
+
+  ensureAttachmentHistoryDrawer() {
+    let drawer = document.getElementById('attachmentHistoryDrawer');
+    if (drawer) return drawer;
+
+    drawer = document.createElement('aside');
+    drawer.id = 'attachmentHistoryDrawer';
+    drawer.className = 'attachment-history-drawer';
+    drawer.setAttribute('aria-label', 'Attachment history');
+    drawer.innerHTML = `
+      <div class="attachment-history-header">
+        <div>
+          <div class="attachment-history-title">Attachments</div>
+          <div class="attachment-history-subtitle" id="attachmentHistorySubtitle">0 files</div>
+        </div>
+        <div class="attachment-history-header-actions">
+          <button type="button" class="btn-icon-sm" id="attachmentHistoryRefreshBtn" title="Refresh" aria-label="Refresh attachments">&#x21BB;</button>
+          <button type="button" class="btn-icon-sm" id="attachmentHistoryCloseBtn" title="Close" aria-label="Close attachments">&times;</button>
+        </div>
+      </div>
+      <div class="attachment-history-list" id="attachmentHistoryList"></div>
+    `;
+    document.body.appendChild(drawer);
+    drawer.querySelector('#attachmentHistoryRefreshBtn')?.addEventListener('click', () => {
+      this.loadAttachmentHistory(this.activeSessionId);
+    });
+    drawer.querySelector('#attachmentHistoryCloseBtn')?.addEventListener('click', () => {
+      this.closeAttachmentHistory();
+    });
+    return drawer;
+  },
+
+  async toggleAttachmentHistory() {
+    if (this.attachmentHistoryDrawerOpen) {
+      this.closeAttachmentHistory();
+      return;
+    }
+    await this.openAttachmentHistory();
+  },
+
+  async openAttachmentHistory() {
+    const drawer = this.ensureAttachmentHistoryDrawer();
+    this.attachmentHistoryDrawerOpen = true;
+    drawer.classList.add('open');
+    this.updateAttachmentHistoryBadge();
+    await this.loadAttachmentHistory(this.activeSessionId);
+  },
+
+  closeAttachmentHistory() {
+    const drawer = document.getElementById('attachmentHistoryDrawer');
+    this.attachmentHistoryDrawerOpen = false;
+    drawer?.classList.remove('open');
+    this.updateAttachmentHistoryBadge();
+  },
+
+  async loadAttachmentHistory(sessionId = this.activeSessionId) {
+    const drawer = this.ensureAttachmentHistoryDrawer();
+    const list = drawer.querySelector('#attachmentHistoryList');
+    const subtitle = drawer.querySelector('#attachmentHistorySubtitle');
+    if (!list || !subtitle) return;
+
+    if (!sessionId) {
+      this.attachmentHistoryItems = [];
+      subtitle.textContent = 'No session';
+      list.innerHTML = '<div class="attachment-history-empty">No active session</div>';
+      this.updateAttachmentHistoryBadge(0);
+      return;
+    }
+
+    list.innerHTML = '<div class="attachment-history-empty">Loading...</div>';
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/attachments`);
+      if (!res.ok) throw new Error('Failed to load attachments');
+      const result = await res.json();
+      if (!result.success) throw new Error(result.error || 'Failed to load attachments');
+      const items = result.data?.items || [];
+      this.attachmentHistoryItems = items;
+      this.attachmentHistoryCounts.set(sessionId, items.length);
+      this.updateAttachmentHistoryBadge(items.length);
+      this.renderAttachmentHistory(items);
+    } catch (err) {
+      console.error('Failed to load attachment history:', err);
+      subtitle.textContent = 'Unavailable';
+      list.innerHTML = `<div class="attachment-history-empty">Error: ${escapeHtml(err.message)}</div>`;
+    }
+  },
+
+  renderAttachmentHistory(items = this.attachmentHistoryItems || []) {
+    const drawer = this.ensureAttachmentHistoryDrawer();
+    const list = drawer.querySelector('#attachmentHistoryList');
+    const subtitle = drawer.querySelector('#attachmentHistorySubtitle');
+    if (!list || !subtitle) return;
+
+    subtitle.textContent = `${items.length} ${items.length === 1 ? 'file' : 'files'}`;
+    if (items.length === 0) {
+      list.innerHTML = `
+        <div class="attachment-history-empty">
+          <div class="attachment-history-empty-title">No attachments yet</div>
+          <div>Show a file here by running:</div>
+          <code>codeman attach /absolute/path/to/file.pptx</code>
+          <div>Supports .pptx, .docx, .pdf, .png, .md, and .txt.</div>
+        </div>
+      `;
+      return;
+    }
+
+    list.innerHTML = items.map((item) => this.renderAttachmentHistoryItem(item)).join('');
+    list.querySelectorAll('.attachment-history-thumb-img').forEach((img) => {
+      img.onerror = () => {
+        img.remove();
+        const fallback = img.closest('.attachment-history-thumb')?.querySelector('.attachment-history-thumb-fallback');
+        fallback?.classList.add('visible');
+      };
+    });
+    list.querySelectorAll('[data-attachment-action]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const id = button.getAttribute('data-history-id');
+        const action = button.getAttribute('data-attachment-action');
+        if (!id || !action) return;
+        if (action === 'preview') this.previewAttachmentHistoryItem(id);
+        if (action === 'download') this.downloadAttachmentHistoryItem(id);
+        if (action === 'open') this.openAttachmentHistoryItem(id);
+        if (action === 'reshow') this.reshowAttachmentCard(id);
+      });
+    });
+  },
+
+  renderAttachmentHistoryItem(item) {
+    const typeLabel = (item.extension || item.attachmentType || 'file').toUpperCase();
+    const meta = [
+      item.source === 'external' ? 'published' : 'workspace',
+      this.formatFileSize(item.size || 0),
+      item.missing ? 'missing' : '',
+    ]
+      .filter(Boolean)
+      .join(' • ');
+    const thumb =
+      item.thumbnailUrl && !item.missing
+        ? `<img class="attachment-history-thumb-img" src="${escapeHtml(item.thumbnailUrl)}" alt="">`
+        : '';
+    const disabled = item.missing ? 'disabled aria-disabled="true"' : '';
+    return `
+      <div class="attachment-history-item ${item.missing ? 'missing' : ''}" data-history-item="${escapeHtml(item.id)}">
+        <div class="attachment-history-thumb">
+          ${thumb}
+          <div class="attachment-history-thumb-fallback ${thumb ? '' : 'visible'}">${escapeHtml(typeLabel)}</div>
+        </div>
+        <div class="attachment-history-item-main">
+          <div class="attachment-history-file-name" title="${escapeHtml(item.fileName)}">${escapeHtml(item.fileName)}</div>
+          <div class="attachment-history-meta">${escapeHtml(meta)}</div>
+          <div class="attachment-history-actions">
+            <button type="button" data-attachment-action="preview" data-history-id="${escapeHtml(item.id)}" ${disabled}>Preview</button>
+            <button type="button" data-attachment-action="download" data-history-id="${escapeHtml(item.id)}" ${disabled}>Download</button>
+            <button type="button" data-attachment-action="open" data-history-id="${escapeHtml(item.id)}" ${disabled}>Open</button>
+            <button type="button" data-attachment-action="reshow" data-history-id="${escapeHtml(item.id)}" ${disabled}>Card</button>
+          </div>
+        </div>
+      </div>
+    `;
+  },
+
+  getAttachmentHistoryItem(itemId) {
+    return (this.attachmentHistoryItems || []).find((item) => item.id === itemId) || null;
+  },
+
+  previewAttachmentHistoryItem(itemId) {
+    const item = this.getAttachmentHistoryItem(itemId);
+    if (!item || item.missing) return;
+    const path = item.relativePath || item.fileName;
+    this.openFilePreview(path, item.sessionId, item.attachmentId || null);
+    // Close the drawer so the preview window is unobstructed.
+    this.closeAttachmentHistory();
+  },
+
+  openAttachmentHistoryItem(itemId) {
+    const item = this.getAttachmentHistoryItem(itemId);
+    if (!item || item.missing) return;
+    if (item.rawUrl || item.url) {
+      window.open(item.rawUrl || item.url, '_blank');
+      return;
+    }
+    this.openAttachmentInNewTab(item.sessionId, item.relativePath || item.fileName, item.attachmentId || null);
+  },
+
+  downloadAttachmentHistoryItem(itemId) {
+    const item = this.getAttachmentHistoryItem(itemId);
+    if (!item || item.missing || !item.downloadUrl) return;
+    window.open(item.downloadUrl, '_blank');
+  },
+
+  reshowAttachmentCard(itemId) {
+    const item = this.getAttachmentHistoryItem(itemId);
+    if (!item || item.missing) return;
+    this.addAttachmentCard({
+      sessionId: item.sessionId,
+      relativePath: item.relativePath,
+      fileName: item.fileName,
+      timestamp: Date.now(),
+      size: item.size,
+      attachmentType: item.attachmentType,
+      extension: item.extension,
+      attachmentId: item.attachmentId,
+      rawUrl: item.rawUrl,
+      previewUrl: item.previewUrl,
+      thumbnailUrl: item.thumbnailUrl,
+    });
   },
 
   copyFilePreviewContent() {
