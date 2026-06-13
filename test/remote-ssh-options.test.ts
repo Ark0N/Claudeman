@@ -157,6 +157,8 @@ describe('COD-107 buildRemoteLaunchCommand — threads connection args', () => {
       `set -t ${remoteName} mouse off`,
       `set -t ${remoteName} prefix C-q`,
       'set -s escape-time 0',
+      // COD-106 — shared/collaborative sizing, per-session scoped (never -g).
+      `set -t ${remoteName} window-size latest`,
     ].join(' \\; ');
     // Connection args (with the default -o ConnectTimeout=10) sit after -t.
     const expected = `ssh -o BatchMode=yes -t -o ConnectTimeout=10 ${remoteSshTarget(baseRemote)} ${sh(tmuxInvocation)}`;

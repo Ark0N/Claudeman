@@ -127,8 +127,10 @@ export interface SessionRemote extends RemoteSshOptions {
 export interface RemoteSessionInfo {
   /** tmux session name (always starts `codeman-`). */
   name: string;
-  /** Whether a client is currently attached to the remote session. */
+  /** Whether at least one client is currently attached to the remote session. */
   attached: boolean;
+  /** COD-106 — number of clients attached (tmux `session_attached`); >1 = shared. */
+  attachedClients: number;
   /** tmux `session_created` epoch seconds. */
   created: number;
   /** Number of windows in the remote session. */

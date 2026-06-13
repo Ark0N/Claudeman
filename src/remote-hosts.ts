@@ -270,9 +270,13 @@ export function parseRemoteSessionList(stdout: string): RemoteSessionInfo[] {
     const created = Number(createdStr);
     const windows = Number(windowsStr);
     if (!Number.isFinite(created) || !Number.isFinite(windows)) continue;
+    // COD-106 — `session_attached` is the CLIENT COUNT (not a 0/1 flag); >1 = shared.
+    const attachedNum = Number(attachedStr.trim());
+    const attachedClients = Number.isFinite(attachedNum) ? Math.max(0, Math.trunc(attachedNum)) : 0;
     out.push({
       name,
-      attached: attachedStr.trim() === '1',
+      attached: attachedClients > 0,
+      attachedClients,
       created: Math.trunc(created),
       windows: Math.trunc(windows),
     });

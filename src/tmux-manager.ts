@@ -805,6 +805,13 @@ export function buildRemoteLaunchCommand(options: {
     `set -t ${remoteName} mouse off`,
     `set -t ${remoteName} prefix C-q`,
     'set -s escape-time 0',
+    // COD-106 — shared/collaborative sessions: tmux defaults to sizing a window
+    // to the SMALLEST attached client, so two Codemans at different viewports
+    // would fight (clamp to the smaller). `window-size latest` sizes to the
+    // most-recently-active client instead, so concurrent clients coexist.
+    // Per-session scoped (`set -t <name>`, matching #145's hardening) so a shared
+    // remote tmux server's other sessions keep their own sizing behavior.
+    `set -t ${remoteName} window-size latest`,
   ].join(' \\; ');
 
   // ssh runs its trailing args through the remote login shell, so the entire

@@ -1858,9 +1858,15 @@ Object.assign(CodemanApp.prototype, {
     const rows = sessions.map(s => {
       const ageSecs = Math.max(0, now - (s.created || 0));
       const age = ageSecs < 3600 ? `${Math.floor(ageSecs / 60)}m` : ageSecs < 86400 ? `${Math.floor(ageSecs / 3600)}h` : `${Math.floor(ageSecs / 86400)}d`;
-      const attachedBadge = s.attached
-        ? '<span class="case-location-badge" style="background: var(--accent, #61afef);">attached</span>'
-        : '';
+      // COD-106 — show "shared · N clients" when more than one client is attached
+      // (genuinely collaborative), else a plain "attached" badge for a single client.
+      const clients = s.attachedClients != null ? s.attachedClients : s.attached ? 1 : 0;
+      const attachedBadge =
+        clients > 1
+          ? `<span class="case-location-badge" style="background: var(--warning, #e5c07b); color: #000;">shared · ${clients} clients</span>`
+          : clients === 1
+            ? '<span class="case-location-badge" style="background: var(--accent, #61afef);">attached</span>'
+            : '';
       return `
         <div class="remote-discover-item">
           <div class="remote-discover-info">

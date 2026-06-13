@@ -29,8 +29,8 @@ describe('COD-105 parseRemoteSessionList', () => {
     const stdout = 'codeman-disco1\t0\t1700000000\t1\n' + 'codeman-abcd1234\t1\t1700000123\t3\n';
     const list = parseRemoteSessionList(stdout);
     expect(list).toEqual([
-      { name: 'codeman-disco1', attached: false, created: 1700000000, windows: 1 },
-      { name: 'codeman-abcd1234', attached: true, created: 1700000123, windows: 3 },
+      { name: 'codeman-disco1', attached: false, attachedClients: 0, created: 1700000000, windows: 1 },
+      { name: 'codeman-abcd1234', attached: true, attachedClients: 1, created: 1700000123, windows: 3 },
     ]);
   });
 
@@ -40,8 +40,8 @@ describe('COD-105 parseRemoteSessionList', () => {
     const stdout = 'codeman-disco1\\t0\\t1781362858\\t1\n' + 'codeman-real\\t1\\t1781329905\\t2\n';
     const list = parseRemoteSessionList(stdout);
     expect(list).toEqual([
-      { name: 'codeman-disco1', attached: false, created: 1781362858, windows: 1 },
-      { name: 'codeman-real', attached: true, created: 1781329905, windows: 2 },
+      { name: 'codeman-disco1', attached: false, attachedClients: 0, created: 1781362858, windows: 1 },
+      { name: 'codeman-real', attached: true, attachedClients: 1, created: 1781329905, windows: 2 },
     ]);
   });
 
@@ -59,7 +59,9 @@ describe('COD-105 parseRemoteSessionList', () => {
   it('tolerates malformed lines (missing columns) by skipping them', () => {
     const stdout = 'codeman-ok\t0\t1700000000\t1\n' + 'codeman-bad\tnotanumber\n';
     const list = parseRemoteSessionList(stdout);
-    expect(list).toEqual([{ name: 'codeman-ok', attached: false, created: 1700000000, windows: 1 }]);
+    expect(list).toEqual([
+      { name: 'codeman-ok', attached: false, attachedClients: 0, created: 1700000000, windows: 1 },
+    ]);
   });
 });
 
