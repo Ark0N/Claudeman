@@ -73,7 +73,13 @@ import { RunSummaryTracker } from '../../run-summary.js';
 import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal-limits.js';
 import { MAX_PASTE_IMAGE_BYTES } from '../../config/buffer-limits.js';
 import { dataPath, getDataDir } from '../../config/instance.js';
-import { checkRemoteTmuxAvailable, readRemoteCases, readRemoteHosts, toSessionRemote } from '../../remote-hosts.js';
+import {
+  checkRemoteTmuxAvailable,
+  readRemoteCases,
+  readRemoteHosts,
+  toAttachedSessionRemote,
+  toSessionRemote,
+} from '../../remote-hosts.js';
 import { LRUMap } from '../../utils/lru-map.js';
 
 // Path to linked-cases registry (same file used by case-routes resolveCasePath)
@@ -292,7 +298,21 @@ export function registerSessionRoutes(
     }
 
     const body = parseBody(CreateSessionSchema, req.body);
-    const workingDir = body.workingDir || process.cwd();
+    let workingDir = body.workingDir || process.cwd();
+    let remote = undefined;
+
+    // COD-105 — attach to a discovered (non-owned) remote tmux session. The
+    // remote session is already running, so we skip the tmux-prereq probe and
+    // build a NON-owned SessionRemote (detach-not-kill on close). Remote CASE
+    // creation (owned durable sessions) is handled by the dedicated case-create
+    // endpoint below, which #145 consolidated remote-host resolution into.
+    if (body.attachRemoteSession) {
+      const { hostId, remoteSessionName } = body.attachRemoteSession;
+      const host = (await readRemoteHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === hostId);
+      if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
+      workingDir = `${host.username}@${host.host}:${remoteSessionName}`;
+      remote = toAttachedSessionRemote(host, remoteSessionName, workingDir);
+    }
 
     // Validate workingDir exists and is a directory
     if (body.workingDir) {
@@ -447,6 +467,7 @@ export function registerSessionRoutes(
       envOverrides: body.envOverrides,
       effort: body.effort,
       tmuxHistoryLimit: terminalHistoryConfig.tmuxHistoryLimit,
+      remote,
     });
 
     ctx.addSession(session);

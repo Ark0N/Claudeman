@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import type { ApiResponse, CaseInfo } from '../../types.js';
+import type { ApiResponse, CaseInfo, RemoteSessionInfo } from '../../types.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import {
   CreateCaseSchema,
@@ -26,6 +26,7 @@ import type { EventPort, ConfigPort } from '../ports/index.js';
 import { dataPath, getDataDir } from '../../config/instance.js';
 import {
   checkRemoteTmuxAvailable,
+  listRemoteCodemanSessions,
   readRemoteCases,
   readRemoteHosts,
   remoteDisplayPath,
@@ -166,6 +167,23 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
   });
 
   app.get('/api/remote-hosts', async () => readRemoteHosts(CODEMAN_CONFIG_DIR));
+
+  // COD-105 — discover `codeman-*` tmux sessions already running on a remote
+  // host (created by the remote's own Codeman, another instance, or this one)
+  // so the operator can attach to one this Codeman didn't launch. Explicit
+  // trigger only (Decision A): the frontend calls this on a "Discover" click,
+  // never automatically on host select. listRemoteCodemanSessions never throws
+  // (returns [] on unreachable/no-tmux/no-sessions) and is ssh-guarded under test.
+  app.get(
+    '/api/remote-hosts/:hostId/sessions',
+    async (req): Promise<ApiResponse<{ sessions: RemoteSessionInfo[] }>> => {
+      const { hostId } = req.params as { hostId: string };
+      const host = (await readRemoteHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === hostId);
+      if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
+      const sessions = await listRemoteCodemanSessions(host);
+      return { success: true, data: { sessions } };
+    }
+  );
 
   app.post('/api/remote-hosts', async (req): Promise<ApiResponse<{ host: unknown }>> => {
     const host = parseBody(RemoteHostSchema, req.body);

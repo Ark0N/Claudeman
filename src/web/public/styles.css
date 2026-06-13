@@ -3933,6 +3933,37 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   transition: background var(--transition-smooth);
 }
 
+/* COD-105 — discovered remote tmux sessions list (remote-case flow). */
+.remote-discover-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.remote-discover-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+}
+
+.remote-discover-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.remote-discover-name {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
 .case-manage-item:hover {
   background: rgba(255, 255, 255, 0.06);
 }

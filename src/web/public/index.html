@@ -1915,6 +1915,17 @@
                 </div>
               </div>
             </details>
+            <!-- COD-105 — discover + attach existing remote tmux sessions this Codeman didn't create. -->
+            <details class="advanced-options" id="remoteDiscoverSection">
+              <summary>Discover existing sessions</summary>
+              <div class="advanced-options-content">
+                <span class="form-hint">Find <code>codeman-*</code> tmux sessions already running on this host (started by the remote's own Codeman or another instance) and attach to one. Attaching shares the session; closing the tab detaches it — it is never killed.</span>
+                <div class="form-row" style="margin-top: 8px;">
+                  <button type="button" class="btn-toolbar" id="remoteDiscoverBtn" onclick="app.discoverRemoteSessions()">Discover existing sessions</button>
+                </div>
+                <div id="remoteDiscoverResults" class="remote-discover-results"></div>
+              </div>
+            </details>
           </div>
           <!-- Manage Tab -->
           <div class="modal-tab-content hidden" id="case-manage">

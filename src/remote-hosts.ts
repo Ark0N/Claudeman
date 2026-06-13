@@ -8,6 +8,7 @@ import type {
   RemoteCase,
   RemoteCommandMode,
   RemoteHost,
+  RemoteSessionInfo,
   RemoteSshOptions,
   SessionMode,
   SessionRemote,
@@ -210,6 +211,105 @@ export async function checkRemoteTmuxAvailable(
   }
 }
 
+/**
+ * COD-105 — build the SSH command that lists `codeman-*` tmux sessions on a
+ * remote host's canonical `-L codeman` socket.
+ *
+ * `list-sessions` exits NON-ZERO with empty output when no sessions exist (and
+ * the server isn't running), so `2>/dev/null` swallows tmux's "no server
+ * running" stderr; the caller treats a non-zero exit / empty output as "no
+ * sessions" rather than an error.
+ *
+ * COD-107 — connection options come from the shared `buildSshConnectionArgs`, so
+ * discovery connects with the SAME port/identity/proxy/jump-host as the launch
+ * and the tmux prereq probe.
+ */
+export function buildRemoteListSessionsCommand(
+  host: Pick<RemoteHost, 'username' | 'host' | 'port'> & RemoteSshOptions
+): string {
+  const [ssh, ...connectionArgs] = buildSshConnectionArgs(host);
+  const parts = [ssh, connectionArgs[0], '-o ConnectTimeout=10', ...connectionArgs.slice(1)];
+  // The tmux list-sessions invocation is passed as ONE shell-quoted argument so
+  // the remote login shell runs it verbatim. The `-F` format uses literal `\t`
+  // separators (tmux expands them); `2>/dev/null` is inside the quoted command.
+  const remoteCmd =
+    'tmux -L codeman list-sessions -F "#{session_name}\\t#{session_attached}\\t#{session_created}\\t#{session_windows}" 2>/dev/null';
+  parts.push(remoteSshTarget(host), shellescape(remoteCmd));
+  return parts.join(' ');
+}
+
+/**
+ * COD-105 — pure parser for the `tmux list-sessions -F` output emitted by
+ * `buildRemoteListSessionsCommand`. Factored out so the parse is unit-testable
+ * without opening a real ssh connection.
+ *
+ * - Splits each non-empty line into [name, attached, created, windows] on the
+ *   field separator. IMPORTANT: the remote tmux's `-F "…\t…"` format does NOT
+ *   expand `\t` to a real tab — it emits the LITERAL two-character sequence
+ *   `\t` (verified on aa-desktop / tmux next-3.7). So we split on the literal
+ *   backslash-t sequence; we also tolerate a real tab in case a tmux build
+ *   does expand it. (A real TAB is the regex `\t`; a literal backslash-t is the
+ *   regex `\\t`.)
+ * - Keeps ONLY sessions whose name starts with `codeman-` (ignores foreign tmux
+ *   sessions that happen to share the socket).
+ * - Coerces: `attached` → boolean (`'1'`), `created`/`windows` → finite ints.
+ * - Skips malformed lines (wrong column count or non-numeric created/windows)
+ *   rather than emitting garbage.
+ */
+export function parseRemoteSessionList(stdout: string): RemoteSessionInfo[] {
+  const out: RemoteSessionInfo[] = [];
+  for (const rawLine of stdout.split('\n')) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    // Split on a literal `\t` (backslash + t, what the remote tmux emits) OR a
+    // real tab character. `/\\t|\t/` = the two-char sequence, or a TAB.
+    const cols = line.split(/\\t|\t/);
+    if (cols.length !== 4) continue;
+    const [name, attachedStr, createdStr, windowsStr] = cols;
+    if (!name.startsWith('codeman-')) continue;
+    const created = Number(createdStr);
+    const windows = Number(windowsStr);
+    if (!Number.isFinite(created) || !Number.isFinite(windows)) continue;
+    out.push({
+      name,
+      attached: attachedStr.trim() === '1',
+      created: Math.trunc(created),
+      windows: Math.trunc(windows),
+    });
+  }
+  return out;
+}
+
+/**
+ * COD-105 — discover `codeman-*` tmux sessions already running on a remote host
+ * (created by the remote's own Codeman, another instance, or this one), so the
+ * operator can attach to one this Codeman didn't launch.
+ *
+ * NEVER throws: returns `[]` on unreachable host / no tmux / no sessions
+ * (`list-sessions` exits non-zero with empty output when there are none).
+ *
+ * VITEST guard — like `checkRemoteTmuxAvailable`, returns `[]` under test so a
+ * real ssh never runs in a request path (which would make route tests hit a
+ * ~10s timeout). The command construction is covered by
+ * `buildRemoteListSessionsCommand` and the parse by `parseRemoteSessionList`.
+ */
+export async function listRemoteCodemanSessions(
+  remote: Pick<RemoteHost, 'username' | 'host' | 'port'> & RemoteSshOptions
+): Promise<RemoteSessionInfo[]> {
+  if (process.env.VITEST) {
+    return [];
+  }
+  const command = buildRemoteListSessionsCommand(remote);
+  try {
+    const { stdout } = await execAsync(command, { timeout: 15_000 });
+    return parseRemoteSessionList(stdout);
+  } catch {
+    // Unreachable host, no tmux server, or no sessions (non-zero exit). All map
+    // to "nothing to attach to" — never surface as an error to the caller.
+    return [];
+  }
+}
+
 export function remoteDisplayPath(
   remote: Pick<SessionRemote, 'username' | 'host' | 'remotePath'> | { username: string; host: string; path: string }
 ): string {
@@ -226,8 +326,47 @@ export function toSessionRemote(host: RemoteHost, remoteCase: RemoteCase): Sessi
     port: host.port,
     remotePath: remoteCase.remotePath,
     commands: host.commands,
+    // COD-105 — the COD-104 launch path creates the remote session, so we own it
+    // (an explicit kill may propagate a remote kill-session). Discovered+attached
+    // sessions go through `toAttachedSessionRemote` with `owned: false`.
+    owned: true,
     // COD-107 — carry the advanced SSH options from host config into the session
     // so the launch/prereq commands connect the same way the operator configured.
+    identityFile: host.identityFile,
+    socksProxy: host.socksProxy,
+    jumpHost: host.jumpHost,
+    extraSshOptions: host.extraSshOptions,
+  };
+}
+
+/**
+ * COD-105 — build a NON-owned `SessionRemote` for ATTACHING to a `codeman-*`
+ * session already running on a remote host (discovered via
+ * `listRemoteCodemanSessions`). The resulting session's pane runs
+ * `tmux -L codeman attach -t <remoteSessionName>` (see
+ * `buildRemoteAttachCommand`), and because we did NOT create the remote session,
+ * `owned: false` means closing the tab DETACHES rather than killing it.
+ *
+ * `remotePath` is informational here (the attached remote session keeps its own
+ * cwd); we record the host's nominal path so display helpers still show
+ * `user@host:path`.
+ */
+export function toAttachedSessionRemote(
+  host: RemoteHost,
+  remoteSessionName: string,
+  remotePath: string
+): SessionRemote {
+  return {
+    hostId: host.id,
+    label: host.label,
+    host: host.host,
+    username: host.username,
+    port: host.port,
+    remotePath,
+    commands: host.commands,
+    // Discovered + attached — another Codeman created it. Detach-not-kill.
+    owned: false,
+    remoteSessionName,
     identityFile: host.identityFile,
     socksProxy: host.socksProxy,
     jumpHost: host.jumpHost,

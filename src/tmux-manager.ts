@@ -813,6 +813,49 @@ export function buildRemoteKillCommand(options: { remote: SessionRemote; session
 }
 
 /**
+ * COD-105 — build the SSH command that ATTACHES to an EXISTING `codeman-*` tmux
+ * session on the remote host (one this Codeman didn't create — discovered via
+ * `listRemoteCodemanSessions`). Sibling of `buildRemoteLaunchCommand`.
+ *
+ * Emits:
+ *   ssh -o BatchMode=yes -t [<COD-107 connection opts>] user@host \
+ *     'tmux -L codeman attach -t <session>'
+ *
+ * - `attach` (NOT `new-session -A`) so we only join an existing session; the
+ *   remote session keeps running independent of us, which is exactly why the
+ *   resulting Codeman session is NON-OWNED (see `SessionRemote.owned`): closing
+ *   the local tab must detach, never `kill-session` the remote.
+ * - The remote session name is shell-escaped so a value with metachars stays a
+ *   single token inside the quoted tmux invocation.
+ * - COD-107 — connection options (`-p`, `-i`, `-J`, SOCKS `-o ProxyCommand`,
+ *   arbitrary `-o`) come from the shared `buildSshConnectionArgs`, so attach
+ *   connects identically to launch / discovery / the prereq probe. `-t` sits
+ *   right after `ssh -o BatchMode=yes` (a PTY is required for interactive tmux).
+ */
+export function buildRemoteAttachCommand(remote: SessionRemote, remoteSessionName: string): string {
+  const tmuxInvocation = `tmux -L codeman attach -t ${shellescape(remoteSessionName)}`;
+  const [ssh, batchMode, ...connectionArgs] = buildSshConnectionArgs(remote);
+  const sshParts = [ssh, batchMode, '-t', ...connectionArgs, remoteSshTarget(remote), shellescape(tmuxInvocation)];
+  return sshParts.join(' ');
+}
+
+/**
+ * COD-105 — choose the right remote ssh command for a session's ownership:
+ *   - NON-owned (`remote.owned === false`): ATTACH to a discovered remote tmux
+ *     session by its EXISTING name (`remote.remoteSessionName`, falling back to
+ *     this session's deterministic name). We only join — never create.
+ *   - owned (default): LAUNCH/attach-or-create via `buildRemoteLaunchCommand`
+ *     (COD-104), which we then own and may explicitly kill.
+ */
+function buildRemoteSessionCommand(mode: SessionMode, remote: SessionRemote, sessionId: string): string {
+  if (remote.owned === false) {
+    const target = remote.remoteSessionName || remoteTmuxSessionName(sessionId);
+    return buildRemoteAttachCommand(remote, target);
+  }
+  return buildRemoteLaunchCommand({ mode, remote, sessionId });
+}
+
+/**
  * Set sensitive environment variables on a tmux session via setenv.
  * These are inherited by panes but not visible in ps output or tmux history.
  */
@@ -1273,7 +1316,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     try {
       // Build the full command to run inside tmux
       const localFullCmd = `${buildNofileLimitCommand()} && ${pathExport}${envExportsStr} && ${cmd}`;
-      const fullCmd = remote ? buildRemoteLaunchCommand({ mode, remote, sessionId }) : localFullCmd;
+      const fullCmd = remote ? buildRemoteSessionCommand(mode, remote, sessionId) : localFullCmd;
 
       // Create tmux session in three steps to handle cold-start (no server running)
       // and avoid the race where the command exits before remain-on-exit is set:
@@ -1521,7 +1564,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const config = niceConfig || DEFAULT_NICE_CONFIG;
     const cmd = wrapWithNice(baseCmd, config);
     const localFullCmd = `${buildNofileLimitCommand()} && ${pathExport}${envExportsStr} && ${cmd}`;
-    const fullCmd = remote ? buildRemoteLaunchCommand({ mode, remote, sessionId }) : localFullCmd;
+    const fullCmd = remote ? buildRemoteSessionCommand(mode, remote, sessionId) : localFullCmd;
 
     try {
       // For OpenCode: set sensitive env vars via tmux setenv before respawn
@@ -1648,6 +1691,39 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     if (currentMuxName && session.muxName === currentMuxName) {
       console.error(`[TmuxManager] BLOCKED: Refusing to kill own tmux session: ${session.muxName}`);
       return false;
+    }
+
+    // COD-105 — DETACH-NOT-KILL for NON-owned remote sessions.
+    //
+    // When this session was created by ATTACHING a remote tmux session another
+    // Codeman owns (`remote.owned === false`), closing the tab must NOT propagate
+    // a remote `tmux kill-session` — that would nuke work the remote's own
+    // Codeman (or another instance) still relies on. We tear down ONLY the LOCAL
+    // pane that holds the ssh client: killing the local ssh sends SIGHUP to its
+    // remote `tmux attach`, which DETACHES (the durable remote session survives).
+    //
+    // This early return is the structural guarantee: no code below this point
+    // (now or in future for owned sessions) can ever issue a remote kill-session
+    // for a non-owned session. The only `kill-session` we run is on OUR LOCAL
+    // socket (`this.tmux()` = `tmux -L codeman` on THIS host), which kills the
+    // local pane — it does NOT reach the REMOTE socket.
+    if (session.remote && session.remote.owned === false) {
+      console.log(`[TmuxManager] DETACH (non-owned remote): tearing down local pane only for ${session.muxName}`);
+      if (isValidMuxName(session.muxName)) {
+        try {
+          // Local socket only — detaches the remote session by killing the local ssh pane.
+          execSync(`${this.tmux()} kill-session -t "${session.muxName}" 2>/dev/null`, {
+            timeout: EXEC_TIMEOUT_MS,
+          });
+        } catch {
+          // Local pane may already be gone.
+        }
+      }
+      this.lastPaneCount.delete(session.muxName);
+      this.sessions.delete(sessionId);
+      this.saveSessions();
+      this.emit('sessionKilled', { sessionId });
+      return true;
     }
 
     // Get current PID (may have changed)

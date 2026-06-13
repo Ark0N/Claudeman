@@ -192,6 +192,22 @@ export const CreateSessionSchema = z.object({
     .max(100)
     .regex(/^[a-f0-9-]+$/, 'resumeSessionId must be a valid UUID')
     .optional(),
+  /**
+   * COD-105 — attach to an EXISTING remote tmux session discovered via
+   * `GET /api/remote-hosts/:hostId/sessions` (one this Codeman didn't create).
+   * The resulting session is NON-owned (closing it detaches, never kills the
+   * remote). `remoteSessionName` is a discovered `codeman-*` tmux session name.
+   */
+  attachRemoteSession: z
+    .object({
+      hostId: z.string().min(1).max(200),
+      remoteSessionName: z
+        .string()
+        .min(1)
+        .max(200)
+        .regex(/^codeman-[a-zA-Z0-9._-]+$/, 'remoteSessionName must be a codeman-* tmux session name'),
+    })
+    .optional(),
 });
 
 /**

@@ -1768,6 +1768,150 @@ Object.assign(CodemanApp.prototype, {
   },
 
   // ═══════════════════════════════════════════════════════════════
+  // COD-105 — Discover + attach existing remote tmux sessions
+  // ═══════════════════════════════════════════════════════════════
+
+  /** Read the remote-host fields from the remote-case form into a host payload. */
+  _readRemoteHostFromForm() {
+    const hostId = document.getElementById('remoteHostId').value.trim();
+    const host = document.getElementById('remoteHostAddress').value.trim();
+    const username = document.getElementById('remoteHostUsername').value.trim();
+    const portRaw = document.getElementById('remoteHostPort').value.trim();
+    const identityFile = document.getElementById('remoteHostIdentityFile').value.trim();
+    const socksProxy = document.getElementById('remoteHostSocksProxy').value.trim();
+    const jumpHost = document.getElementById('remoteHostJumpHost').value.trim();
+    const codexCommand = document.getElementById('remoteHostCodexCommand').value.trim();
+    const extraSshOptions = document.getElementById('remoteHostExtraSshOptions').value
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
+    let port;
+    if (portRaw) {
+      const n = Number(portRaw);
+      if (Number.isInteger(n) && n >= 1 && n <= 65535) port = n;
+    }
+    return {
+      id: hostId,
+      label: hostId,
+      host,
+      username,
+      ...(port ? { port } : {}),
+      ...(identityFile ? { identityFile } : {}),
+      ...(socksProxy ? { socksProxy } : {}),
+      ...(jumpHost ? { jumpHost } : {}),
+      ...(extraSshOptions.length ? { extraSshOptions } : {}),
+      ...(codexCommand ? { commands: { codex: codexCommand } } : {}),
+    };
+  },
+
+  /**
+   * Explicit Discover action (Decision A — never auto-runs on host select).
+   * Saves the host config (idempotent), then queries the host for `codeman-*`
+   * tmux sessions it didn't create and renders an Attach action per session.
+   */
+  async discoverRemoteSessions() {
+    const results = document.getElementById('remoteDiscoverResults');
+    const btn = document.getElementById('remoteDiscoverBtn');
+    const hostPayload = this._readRemoteHostFromForm();
+    if (!hostPayload.id || !hostPayload.host || !hostPayload.username) {
+      this.showToast('Fill in Host ID, address, and username first', 'error');
+      return;
+    }
+    if (!/^[a-zA-Z0-9_-]+$/.test(hostPayload.id)) {
+      this.showToast('Invalid Host ID. Use letters, numbers, hyphens, underscores.', 'error');
+      return;
+    }
+    if (btn) btn.disabled = true;
+    if (results) results.innerHTML = '<div class="form-hint">Discovering…</div>';
+    try {
+      // Persist the host so the discovery endpoint can resolve it by id (idempotent).
+      const hostRes = await fetch('/api/remote-hosts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(hostPayload)
+      });
+      const hostData = await hostRes.json();
+      if (!hostData.success && hostData.errorCode !== 'ALREADY_EXISTS') {
+        throw new Error(hostData.error || 'Failed to save remote host');
+      }
+      const res = await fetch(`/api/remote-hosts/${encodeURIComponent(hostPayload.id)}/sessions`);
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Discovery failed');
+      this._renderDiscoveredSessions(hostPayload.id, data.data.sessions || []);
+    } catch (err) {
+      console.error('Discover remote sessions failed:', err);
+      if (results) results.innerHTML = `<div class="form-hint" style="color: var(--error, #e06c75);">${escapeHtml(err.message)}</div>`;
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  },
+
+  /** Render the discovered remote sessions with an Attach action each. */
+  _renderDiscoveredSessions(hostId, sessions) {
+    const results = document.getElementById('remoteDiscoverResults');
+    if (!results) return;
+    if (!sessions.length) {
+      results.innerHTML = '<div class="form-hint">No <code>codeman-*</code> sessions running on this host (or it is unreachable).</div>';
+      return;
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const rows = sessions.map(s => {
+      const ageSecs = Math.max(0, now - (s.created || 0));
+      const age = ageSecs < 3600 ? `${Math.floor(ageSecs / 60)}m` : ageSecs < 86400 ? `${Math.floor(ageSecs / 3600)}h` : `${Math.floor(ageSecs / 86400)}d`;
+      const attachedBadge = s.attached
+        ? '<span class="case-location-badge" style="background: var(--accent, #61afef);">attached</span>'
+        : '';
+      return `
+        <div class="remote-discover-item">
+          <div class="remote-discover-info">
+            <span class="remote-discover-name">${escapeHtml(s.name)} ${attachedBadge}</span>
+            <span class="form-hint">age ${age} · ${s.windows || 1} window(s)</span>
+          </div>
+          <button type="button" class="btn-toolbar" onclick="app.attachDiscoveredSession('${escapeHtml(hostId)}', '${escapeHtml(s.name)}')">Attach</button>
+        </div>`;
+    }).join('');
+    results.innerHTML = rows;
+  },
+
+  /**
+   * Create a NON-owned session that attaches to a discovered remote tmux session.
+   * Closing this tab detaches — it never kills the remote session.
+   */
+  async attachDiscoveredSession(hostId, remoteSessionName) {
+    try {
+      const createRes = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'shell',
+          name: remoteSessionName,
+          attachRemoteSession: { hostId, remoteSessionName },
+        })
+      });
+      const createData = await createRes.json();
+      if (!createData.success) throw new Error(createData.error || 'Failed to create session');
+      const id = createData.data.session.id;
+      await fetch(`/api/sessions/${id}/shell`, { method: 'POST' });
+      const dims = this.getTerminalDimensions();
+      if (dims) {
+        await fetch(`/api/sessions/${id}/resize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(dims)
+        });
+      }
+      this.closeCreateCaseModal();
+      this.showToast(`Attached to ${remoteSessionName} (detach on close)`, 'success');
+      this.activeSessionId = id;
+      await this.selectSession(id);
+      if (this.terminal && typeof this.terminal.focus === 'function') this.terminal.focus();
+    } catch (err) {
+      console.error('Attach discovered session failed:', err);
+      this.showToast('Failed to attach: ' + err.message, 'error');
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════
   // Case Management (reorder + delete)
   // ═══════════════════════════════════════════════════════════════
 

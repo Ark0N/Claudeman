@@ -96,6 +96,43 @@ export interface SessionRemote extends RemoteSshOptions {
   port?: number;
   remotePath: string;
   commands?: Partial<Record<RemoteCommandMode, string>>;
+  /**
+   * COD-105 — whether THIS Codeman created the remote tmux session.
+   *
+   * - `true` (default for COD-104 launched sessions): we own the remote session;
+   *   an explicit "kill" may propagate a remote `tmux kill-session`.
+   * - `false` (discovered + attached an existing remote session another Codeman
+   *   created): closing the local tab must DETACH only — we must NEVER issue a
+   *   remote `kill-session`, or we'd nuke work the remote's own Codeman (or
+   *   another instance) still relies on. See `killSession()` gate.
+   *
+   * Absent is treated as owned (legacy/COD-104 sessions persisted before this
+   * field existed were all launched by us).
+   */
+  owned?: boolean;
+  /**
+   * COD-105 — for a NON-owned (discovered + attached) session, the EXISTING
+   * remote tmux session name to `attach -t` (e.g. `codeman-disco1`). It differs
+   * from this Codeman's deterministic `codeman-<id>` name because the remote
+   * session was created elsewhere. Only meaningful when `owned === false`.
+   */
+  remoteSessionName?: string;
+}
+
+/**
+ * COD-105 — a `codeman-*` tmux session discovered on a remote host's
+ * `tmux -L codeman` socket (may have been created by the remote's own Codeman,
+ * another instance, or this one). Returned by `listRemoteCodemanSessions`.
+ */
+export interface RemoteSessionInfo {
+  /** tmux session name (always starts `codeman-`). */
+  name: string;
+  /** Whether a client is currently attached to the remote session. */
+  attached: boolean;
+  /** tmux `session_created` epoch seconds. */
+  created: number;
+  /** Number of windows in the remote session. */
+  windows: number;
 }
 
 /**
