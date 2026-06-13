@@ -315,13 +315,19 @@ export const RemoteHostSchema = z.object({
     .string()
     .regex(/^[\w.-]+:\d{1,5}$/, 'SOCKS proxy must be host:port')
     .optional(),
-  // SSH jump host ([user@]host[:port]); reject shell metacharacters.
+  // SSH jump host: a comma-separated chain of [user@]host[:port] hops. Structural
+  // ALLOWLIST (not an open denylist) — only chars valid in user/host/port/IPv6,
+  // so no shell metacharacter (;, |, &, space, $, quotes, …) can appear. The value
+  // is also shellescaped at command-build time (buildSshConnectionArgs); this is the
+  // belt to that suspenders.
   jumpHost: z
     .string()
     .min(1)
     .max(255)
-    .regex(NO_SHELL_INJECTION, 'Invalid jump host')
-    .refine(noCommandSubstitution, 'Invalid jump host')
+    .regex(
+      /^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.:\[\]-]+(?::\d{1,5})?(?:,(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.:\[\]-]+(?::\d{1,5})?)*$/,
+      'Jump host must be [user@]host[:port] (comma-separated for multiple hops)'
+    )
     .optional(),
   // Arbitrary extra -o KEY=VALUE options (escape hatch); each must be KEY=VALUE.
   extraSshOptions: z

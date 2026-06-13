@@ -87,9 +87,19 @@ describe('COD-107 buildSshConnectionArgs — shared ssh connection tokens', () =
     expect(idxProxy).toBeLessThan(idxExtra);
   });
 
-  it('supports an explicit -J jump host', () => {
+  it('supports an explicit -J jump host (shellescaped, like its siblings)', () => {
     const args = buildSshConnectionArgs({ ...baseRemote, jumpHost: 'bastion@10.0.0.1:22' });
-    expect(args.join(' ')).toContain('-J bastion@10.0.0.1:22');
+    expect(args.join(' ')).toContain("-J 'bastion@10.0.0.1:22'");
+  });
+
+  it('shellescapes a -J jump host containing shell metacharacters (no injection)', () => {
+    // Defense-in-depth: even if a metachar-laden value slipped past schema validation,
+    // it must stay a single shell token and never break out of the ssh command.
+    const args = buildSshConnectionArgs({ ...baseRemote, jumpHost: 'x; touch /tmp/pwned' });
+    const joined = args.join(' ');
+    // The whole value is wrapped in single quotes — the `;` cannot start a new command.
+    expect(joined).toContain("-J 'x; touch /tmp/pwned'");
+    expect(joined).not.toContain('-J x;');
   });
 
   it('expands a $HOME-prefixed identity path', () => {

@@ -105,7 +105,7 @@ function expandIdentityPath(identityFile: string): string {
  *   ssh -o BatchMode=yes
  *       [-p <port>]
  *       [-i <abs-identity>]              (~/$HOME expanded, then shellescaped)
- *       [-J <jumpHost>]
+ *       [-J <jumpHost>]                  (shellescaped, single token)
  *       [-o ProxyCommand=nc -X 5 -x <socks> %h %p]   (ONE shellescaped -o token)
  *       [-o <KEY=VALUE>] …               (each extra option, shellescaped)
  *
@@ -120,7 +120,7 @@ export function buildSshConnectionArgs(remote: RemoteSshOptions & Pick<RemoteHos
   const parts: string[] = ['ssh', '-o BatchMode=yes'];
   if (remote.port) parts.push(`-p ${remote.port}`);
   if (remote.identityFile) parts.push(`-i ${shellescape(expandIdentityPath(remote.identityFile))}`);
-  if (remote.jumpHost) parts.push(`-J ${remote.jumpHost}`);
+  if (remote.jumpHost) parts.push(`-J ${shellescape(remote.jumpHost)}`);
   if (remote.socksProxy) {
     parts.push(`-o ${shellescape(`ProxyCommand=nc -X 5 -x ${remote.socksProxy} %h %p`)}`);
   }
