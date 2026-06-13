@@ -173,6 +173,14 @@ export interface RemoteTmuxCheckResult {
 export async function checkRemoteTmuxAvailable(
   host: Pick<RemoteHost, 'username' | 'host' | 'port'> & RemoteSshOptions
 ): Promise<RemoteTmuxCheckResult> {
+  // Under vitest, never open a real ssh connection — mirrors TmuxManager's
+  // no-op-shell-under-VITEST (IS_TEST_MODE). Without this, remote-case
+  // create-path tests hit a real ~10s ssh timeout. The command construction is
+  // covered by buildRemoteTmuxCheckCommand unit tests; only the live probe is
+  // short-circuited here.
+  if (process.env.VITEST) {
+    return { ok: true, tmuxPath: '(test-mode)' };
+  }
   const command = buildRemoteTmuxCheckCommand(host);
   try {
     const { stdout } = await execAsync(command, { timeout: 15_000 });
