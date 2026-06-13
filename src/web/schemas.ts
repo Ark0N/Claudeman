@@ -494,6 +494,10 @@ export const SettingsUpdateSchema = z
     /** Model for new Claude sessions (e.g. "claude-fable-5[1m]", "opus[1m]"); takes precedence over opusContext1mEnabled */
     claudeModel: z.string().max(50).optional(),
     opusContext1mEnabled: z.boolean().optional(),
+    // COD-108 remote-session auto-reconnect kill-switch (default ON). When false,
+    // the TmuxManager watcher does nothing — dropped remote sessions are NOT
+    // auto-reattached.
+    remoteAutoReconnect: z.boolean().optional(),
     thinkingEffort: z.string().max(20).optional(),
     // UI visibility
     showFontControls: z.boolean().optional(),

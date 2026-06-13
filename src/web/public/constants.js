@@ -379,6 +379,11 @@ const SSE_EVENTS = {
   MUX_DIED: 'mux:died',
   MUX_STATS_UPDATED: 'mux:statsUpdated',
 
+  // Remote auto-reconnect (COD-108)
+  REMOTE_SESSION_DROPPED: 'remote:sessionDropped',
+  REMOTE_SESSION_RECONNECTED: 'remote:sessionReconnected',
+  REMOTE_RECONNECT_EXHAUSTED: 'remote:reconnectExhausted',
+
   // Ralph
   SESSION_RALPH_LOOP_UPDATE: 'session:ralphLoopUpdate',
   SESSION_RALPH_TODO_UPDATE: 'session:ralphTodoUpdate',

@@ -1471,6 +1471,14 @@
               </label>
               <span class="form-hint">Use 1M token context window (model: opus[1m]) for all new sessions — ignored when a Claude Model is selected above</span>
             </div>
+            <div class="form-row form-row-switch">
+              <label>Remote auto-reconnect</label>
+              <label class="switch">
+                <input type="checkbox" id="appSettingsRemoteAutoReconnect">
+                <span class="slider"></span>
+              </label>
+              <span class="form-hint">Automatically re-establish remote (SSH) sessions when the connection drops, reattaching to the durable remote tmux session (on by default; bounded backoff)</span>
+            </div>
             <div class="form-row">
               <label>Thinking Effort</label>
               <select id="appSettingsThinkingEffort" class="form-select">

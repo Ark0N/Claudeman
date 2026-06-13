@@ -216,6 +216,10 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.MUX_DIED, '_onMuxDied'],
   [SSE_EVENTS.MUX_STATS_UPDATED, '_onMuxStatsUpdated'],
 
+  // Remote auto-reconnect (COD-108)
+  [SSE_EVENTS.REMOTE_SESSION_RECONNECTED, '_onRemoteSessionReconnected'],
+  [SSE_EVENTS.REMOTE_RECONNECT_EXHAUSTED, '_onRemoteReconnectExhausted'],
+
   // Ralph
   [SSE_EVENTS.SESSION_RALPH_LOOP_UPDATE, '_onRalphLoopUpdate'],
   [SSE_EVENTS.SESSION_RALPH_TODO_UPDATE, '_onRalphTodoUpdate'],

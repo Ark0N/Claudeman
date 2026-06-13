@@ -351,6 +351,22 @@ export class WebServer extends EventEmitter {
       this.broadcast(SseEvent.MuxStatsUpdated, sessions);
     });
 
+    // COD-108 — remote-session auto-reconnect. The TmuxManager watcher detects a
+    // dead remote pane and emits `remoteSessionDropped`; the session owner (here)
+    // reassembles the respawn options and reattaches via Session.reattachRemote()
+    // (D1: the watcher does NOT reassemble options itself). On success we reset
+    // the watcher's backoff; on failure the backoff schedules the next attempt.
+    this.mux.on('remoteSessionDropped', (data) => {
+      const { sessionId, attempt } = data as { sessionId: string; attempt: number };
+      this.broadcast(SseEvent.RemoteSessionDropped, { sessionId, attempt });
+      void this.handleRemoteSessionDropped(sessionId);
+    });
+    this.mux.on('remoteReconnectExhausted', (data) => {
+      const { sessionId } = data as { sessionId: string };
+      console.warn(`[Server] Remote auto-reconnect exhausted for session ${sessionId}`);
+      this.broadcast(SseEvent.RemoteReconnectExhausted, { sessionId });
+    });
+
     // Set up subagent watcher listeners
     this.setupSubagentWatcherListeners();
     this.setupWorkflowRunWatcherListeners();
@@ -2384,11 +2400,53 @@ export class WebServer extends EventEmitter {
         (this.mux as { startMouseModeSync: (ms?: number) => void }).startMouseModeSync();
       }
 
+      // COD-108 — start the remote-session auto-reconnect watcher (tmux only).
+      // Always-on (D3) with a `remoteAutoReconnect` kill-switch the watcher reads
+      // each tick. Start even with no sessions — remote sessions may arrive later.
+      if ('startRemoteReconnectWatcher' in this.mux) {
+        (this.mux as { startRemoteReconnectWatcher: (ms?: number) => void }).startRemoteReconnectWatcher();
+      }
+
       if (dead.length > 0) {
         console.log(`[Server] Cleaned up ${dead.length} dead mux session(s)`);
       }
     } catch (err) {
       console.error('[Server] Failed to restore mux sessions:', err);
+    }
+  }
+
+  /**
+   * COD-108 — handle a `remoteSessionDropped` emit from the watcher: reattach
+   * the dropped remote session and report the outcome back to the watcher so it
+   * can reset/advance its backoff. Re-running the idempotent remote command
+   * REATTACHES the durable remote tmux session (does NOT recreate it).
+   */
+  private async handleRemoteSessionDropped(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    // No live Session object (e.g. detached/restored-but-not-attached) — nothing
+    // to drive the reattach; report failure so the watcher backs off and retries.
+    if (!session) {
+      this.noteRemoteReconnect(sessionId, false);
+      return;
+    }
+    let ok = false;
+    try {
+      ok = await session.reattachRemote();
+    } catch (err) {
+      console.error(`[Server] Remote reattach failed for ${sessionId}:`, err);
+      ok = false;
+    }
+    this.noteRemoteReconnect(sessionId, ok);
+    if (ok) {
+      this.persistSessionState(session);
+      this.broadcast(SseEvent.RemoteSessionReconnected, { sessionId });
+    }
+  }
+
+  /** Forward a reattach outcome to the TmuxManager watcher (resets/clears backoff). */
+  private noteRemoteReconnect(sessionId: string, success: boolean): void {
+    if ('noteRemoteReconnect' in this.mux) {
+      (this.mux as { noteRemoteReconnect: (id: string, ok: boolean) => void }).noteRemoteReconnect(sessionId, success);
     }
   }
 
