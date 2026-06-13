@@ -98,7 +98,7 @@ describe('TmuxManager (unit)', () => {
   });
 
   describe('remote launch command builder', () => {
-    it('wraps codex command overrides in ssh with remote cd', () => {
+    it('wraps codex command overrides in ssh with remote tmux launch', () => {
       const command = buildRemoteLaunchCommand({
         mode: 'codex',
         remote: {
@@ -109,13 +109,14 @@ describe('TmuxManager (unit)', () => {
           remotePath: '/home/ubuntu/work',
           commands: { codex: 'exec codx personal' },
         },
+        sessionId: 'abc123def456',
       });
 
       expect(command).toContain('ssh');
       expect(command).toContain('BatchMode=yes');
       expect(command).toContain('ubuntu@10.0.0.42');
       expect(command).toContain('/home/ubuntu/work');
-      expect(command).toContain('bash -lc');
+      expect(command).toContain('tmux -L codeman new-session -A');
       expect(command).toContain('exec codx personal');
     });
 
@@ -129,6 +130,7 @@ describe('TmuxManager (unit)', () => {
           username: 'ubuntu',
           remotePath: '/home/ubuntu/work',
         },
+        sessionId: 'abc123def456',
       });
 
       expect(command).toContain('exec bash -l');

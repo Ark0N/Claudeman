@@ -45,7 +45,34 @@ export type SessionMode = 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini';
 
 export type RemoteCommandMode = Extract<SessionMode, 'shell' | 'claude' | 'opencode' | 'codex' | 'gemini'>;
 
-export interface RemoteHost {
+/**
+ * Advanced SSH connection options shared by RemoteHost and SessionRemote.
+ *
+ * COD-107 — all fields are optional; every field absent reproduces today's
+ * behavior (port-22, default-identity, directly-SSH-able hosts). These describe
+ * HOW Codeman reaches the host (identity, proxy, jump host, arbitrary `-o`),
+ * letting it connect to e.g. a host fronted by a cloudflared SOCKS5 proxy on a
+ * custom port — the same connection `ssh-aa-desktop` makes — without a wrapper.
+ */
+export interface RemoteSshOptions {
+  /**
+   * Path to an SSH identity (private key) file — path ONLY, never key bytes.
+   * A leading `~`/`$HOME` is expanded to an absolute path at command-build time
+   * (ssh does not expand `~` in `-i`).
+   */
+  identityFile?: string;
+  /**
+   * SOCKS5 proxy as `host:port` (e.g. `127.0.0.1:1080`). Expands to
+   * `-o ProxyCommand=nc -X 5 -x <host:port> %h %p` (the cloudflared/SOCKS5 case).
+   */
+  socksProxy?: string;
+  /** SSH jump host (`[user@]host[:port]`) emitted as `-J <jumpHost>`. */
+  jumpHost?: string;
+  /** Arbitrary additional `-o KEY=VALUE` options (escape hatch). Each `KEY=VALUE`. */
+  extraSshOptions?: string[];
+}
+
+export interface RemoteHost extends RemoteSshOptions {
   id: string;
   label: string;
   host: string;
@@ -61,7 +88,7 @@ export interface RemoteCase {
   remotePath: string;
 }
 
-export interface SessionRemote {
+export interface SessionRemote extends RemoteSshOptions {
   hostId: string;
   label: string;
   host: string;

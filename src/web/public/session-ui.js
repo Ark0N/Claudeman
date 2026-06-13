@@ -1263,7 +1263,12 @@ Object.assign(CodemanApp.prototype, {
       'remoteHostId',
       'remoteHostAddress',
       'remoteHostUsername',
+      'remoteHostPort',
       'remoteHostCodexCommand',
+      'remoteHostIdentityFile',
+      'remoteHostSocksProxy',
+      'remoteHostJumpHost',
+      'remoteHostExtraSshOptions',
     ];
     remoteFields.forEach(id => {
       const el = document.getElementById(id);
@@ -1429,6 +1434,15 @@ Object.assign(CodemanApp.prototype, {
     const host = document.getElementById('remoteHostAddress').value.trim();
     const username = document.getElementById('remoteHostUsername').value.trim();
     const codexCommand = document.getElementById('remoteHostCodexCommand').value.trim();
+    // COD-107 — port + advanced SSH connection options.
+    const portRaw = document.getElementById('remoteHostPort').value.trim();
+    const identityFile = document.getElementById('remoteHostIdentityFile').value.trim();
+    const socksProxy = document.getElementById('remoteHostSocksProxy').value.trim();
+    const jumpHost = document.getElementById('remoteHostJumpHost').value.trim();
+    const extraSshOptions = document.getElementById('remoteHostExtraSshOptions').value
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
 
     if (!name || !remotePath || !hostId || !host || !username) {
       this.showToast('Please complete all required remote fields', 'error');
@@ -1442,6 +1456,14 @@ Object.assign(CodemanApp.prototype, {
       this.showToast('Remote path must be absolute', 'error');
       return;
     }
+    let port;
+    if (portRaw) {
+      port = Number(portRaw);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        this.showToast('SSH port must be a number between 1 and 65535', 'error');
+        return;
+      }
+    }
 
     try {
       const hostPayload = {
@@ -1449,6 +1471,11 @@ Object.assign(CodemanApp.prototype, {
         label: hostId,
         host,
         username,
+        ...(port ? { port } : {}),
+        ...(identityFile ? { identityFile } : {}),
+        ...(socksProxy ? { socksProxy } : {}),
+        ...(jumpHost ? { jumpHost } : {}),
+        ...(extraSshOptions.length ? { extraSshOptions } : {}),
         ...(codexCommand ? { commands: { codex: codexCommand } } : {}),
       };
       const hostRes = await fetch('/api/remote-hosts', {

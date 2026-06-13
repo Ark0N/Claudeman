@@ -237,6 +237,72 @@ describe('case-routes', () => {
       ]);
     });
 
+    // COD-107 — advanced SSH connection options (port, identity, SOCKS proxy,
+    // jump host, escape-hatch -o options) round-trip through the host schema.
+    it('persists advanced SSH options (port/identity/socks/jump/extra) on a remote host', async () => {
+      setupRemoteConfigStore();
+
+      const create = await harness.app.inject({
+        method: 'POST',
+        url: '/api/remote-hosts',
+        payload: {
+          id: 'aa-desktop',
+          label: 'aa-desktop',
+          host: '192.168.55.170',
+          username: 'aakht',
+          port: 2222,
+          identityFile: '~/.ssh/remote_ed25519',
+          socksProxy: '127.0.0.1:1080',
+          jumpHost: 'bastion@10.0.0.1:22',
+          extraSshOptions: ['StrictHostKeyChecking=accept-new'],
+        },
+      });
+      expect(create.statusCode).toBe(200);
+      expect(JSON.parse(create.body)).toMatchObject({ success: true });
+
+      const list = await harness.app.inject({ method: 'GET', url: '/api/remote-hosts' });
+      expect(JSON.parse(list.body).data).toEqual([
+        expect.objectContaining({
+          id: 'aa-desktop',
+          port: 2222,
+          identityFile: '~/.ssh/remote_ed25519',
+          socksProxy: '127.0.0.1:1080',
+          jumpHost: 'bastion@10.0.0.1:22',
+          extraSshOptions: ['StrictHostKeyChecking=accept-new'],
+        }),
+      ]);
+    });
+
+    it('rejects a malformed extraSshOptions entry (not KEY=VALUE) with INVALID_INPUT', async () => {
+      setupRemoteConfigStore();
+
+      const create = await harness.app.inject({
+        method: 'POST',
+        url: '/api/remote-hosts',
+        payload: {
+          id: 'bad-host',
+          label: 'bad',
+          host: '10.0.0.9',
+          username: 'ubuntu',
+          extraSshOptions: ['not a valid option'],
+        },
+      });
+      expect(create.statusCode).toBe(httpStatusForErrorCode(ApiErrorCode.INVALID_INPUT));
+      expect(JSON.parse(create.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.INVALID_INPUT });
+    });
+
+    it('rejects a malformed socksProxy (missing port) with INVALID_INPUT', async () => {
+      setupRemoteConfigStore();
+
+      const create = await harness.app.inject({
+        method: 'POST',
+        url: '/api/remote-hosts',
+        payload: { id: 'bad2', label: 'bad2', host: '10.0.0.9', username: 'ubuntu', socksProxy: '127.0.0.1' },
+      });
+      expect(create.statusCode).toBe(httpStatusForErrorCode(ApiErrorCode.INVALID_INPUT));
+      expect(JSON.parse(create.body)).toMatchObject({ success: false });
+    });
+
     it('links a remote case and includes it in GET /api/cases', async () => {
       setupRemoteConfigStore();
       mockedReaddir.mockRejectedValue(new Error('ENOENT'));

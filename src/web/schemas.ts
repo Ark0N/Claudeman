@@ -282,6 +282,13 @@ const RemoteCommandOverridesSchema = z
   .strict()
   .optional();
 
+// COD-107 — advanced SSH connection options. These ultimately exec as shell
+// (ProxyCommand etc.), but are OPERATOR-entered host config (never attacker- or
+// terminal-output-influenced), so we validate as defense-in-depth, not as the
+// security boundary. Reject newline/NUL/backtick/`$(` shell-injection vectors.
+const NO_SHELL_INJECTION = /^[^\n\r\0`]*$/;
+const noCommandSubstitution = (s: string) => !s.includes('$(');
+
 export const RemoteHostSchema = z.object({
   id: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid remote host id'),
   label: z.string().min(1).max(100),
@@ -296,6 +303,39 @@ export const RemoteHostSchema = z.object({
     .max(100)
     .regex(/^[a-zA-Z0-9._-]+$/, 'Invalid SSH username'),
   port: z.number().int().min(1).max(65535).optional(),
+  // Identity (private-key) file PATH only — never key bytes. No newline/NUL.
+  identityFile: z
+    .string()
+    .min(1)
+    .max(4096)
+    .regex(/^[^\n\r\0]*$/, 'Invalid identity file path')
+    .optional(),
+  // SOCKS5 proxy as host:port (e.g. 127.0.0.1:1080).
+  socksProxy: z
+    .string()
+    .regex(/^[\w.-]+:\d{1,5}$/, 'SOCKS proxy must be host:port')
+    .optional(),
+  // SSH jump host ([user@]host[:port]); reject shell metacharacters.
+  jumpHost: z
+    .string()
+    .min(1)
+    .max(255)
+    .regex(NO_SHELL_INJECTION, 'Invalid jump host')
+    .refine(noCommandSubstitution, 'Invalid jump host')
+    .optional(),
+  // Arbitrary extra -o KEY=VALUE options (escape hatch); each must be KEY=VALUE.
+  extraSshOptions: z
+    .array(
+      z
+        .string()
+        .min(3)
+        .max(1024)
+        .regex(/^[A-Za-z][A-Za-z0-9]*=.+$/, 'Extra SSH option must be KEY=VALUE')
+        .regex(NO_SHELL_INJECTION, 'Invalid characters in SSH option')
+        .refine(noCommandSubstitution, 'Invalid characters in SSH option')
+    )
+    .max(32)
+    .optional(),
   commands: RemoteCommandOverridesSchema,
 });
 
