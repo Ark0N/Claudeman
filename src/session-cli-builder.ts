@@ -124,17 +124,32 @@ export function buildClaudeEnv(sessionId: string): Record<string, string | undef
  * Lighter than buildClaudeEnv — no PATH augmentation or Codeman vars needed
  * since the mux session already has those set.
  *
+ * @param truecolorEnabled - When true, set COLORTERM=truecolor (COD-75 opt-in);
+ *   otherwise leave COLORTERM unset. Mirrors buildEnvExports() so both paths agree.
  * @returns Environment variables object for pty.spawn
  */
-export function buildMuxAttachEnv(): Record<string, string | undefined> {
-  return {
+export function buildMuxAttachEnv(truecolorEnabled?: boolean): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {
     ...process.env,
     LANG: 'en_US.UTF-8',
     LC_ALL: 'en_US.UTF-8',
     TERM: 'xterm-256color',
-    COLORTERM: undefined,
-    CLAUDECODE: undefined,
   };
+  // COD-115: keys to UNSET must be `delete`d, NOT set to `undefined`. On a
+  // `{...process.env}` spread the key stays present with value undefined, and node-pty
+  // serializes it as the literal string "TMUX=undefined" — a non-empty value that still
+  // trips tmux's nesting guard, killing the attach-bridge PTY (exit 1 → respawn loop).
+  // The server can be launched from inside tmux; attach clients must never inherit that
+  // parent tmux context. (Same fix the working create path uses in tmux-manager.ts.)
+  delete env.TMUX;
+  delete env.TMUX_PANE;
+  delete env.CLAUDECODE;
+  if (truecolorEnabled) {
+    env.COLORTERM = 'truecolor';
+  } else {
+    delete env.COLORTERM; // COD-75: unset for non-truecolor (was `: undefined`, same node-pty quirk)
+  }
+  return env;
 }
 
 /**
