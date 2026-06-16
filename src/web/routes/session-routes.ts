@@ -633,6 +633,9 @@ export function registerSessionRoutes(
         }
       }
 
+      // COD-118: an explicit user-initiated start clears any tripped PTY-exit
+      // circuit breaker so an intentional restart is never blocked by a prior crash-loop.
+      session.resetRespawnBreaker();
       await session.startInteractive();
       getLifecycleLog().log({
         event: 'started',

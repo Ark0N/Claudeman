@@ -156,6 +156,7 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.SESSION_LIMIT_PAUSE_SCHEDULED, '_onSessionLimitPauseScheduled'],
   [SSE_EVENTS.SESSION_LIMIT_RESUME, '_onSessionLimitResume'],
   [SSE_EVENTS.SESSION_LIMIT_RESUME_CANCELLED, '_onSessionLimitResumeCancelled'],
+  [SSE_EVENTS.SESSION_RESPAWN_BREAKER_TRIPPED, '_onSessionRespawnBreakerTripped'],
   [SSE_EVENTS.SESSION_CLI_INFO, '_onSessionCliInfo'],
   [SSE_EVENTS.SESSION_STATUS_TELEMETRY, '_onSessionStatusTelemetry'],
 
@@ -1850,6 +1851,15 @@ class CodemanApp {
     const session = this.sessions.get(data.sessionId);
     if (session) session.autoResumeAt = undefined;
     this.updateAutoResumeStatus(data.sessionId);
+  }
+
+  // COD-118: the interactive PTY exit circuit breaker tripped (repeated non-zero exits).
+  // The errored status itself arrives via session:updated; this just surfaces a toast for
+  // diagnostic clarity so a silently-looping session is obvious. Restart clears the breaker.
+  _onSessionRespawnBreakerTripped(data) {
+    const session = this.sessions.get(data.sessionId);
+    const label = session?.name || 'Session';
+    this.showToast?.(`${label} stopped: repeated crashes detected. Restart to retry.`, 'error');
   }
 
   _onSessionCliInfo(data) {

@@ -262,6 +262,7 @@ const SSE_EVENTS = {
   SESSION_LIMIT_PAUSE_SCHEDULED: 'session:limitPauseScheduled',
   SESSION_LIMIT_RESUME: 'session:limitResume',
   SESSION_LIMIT_RESUME_CANCELLED: 'session:limitResumeCancelled',
+  SESSION_RESPAWN_BREAKER_TRIPPED: 'session:respawnBreakerTripped',
   SESSION_CLI_INFO: 'session:cliInfo',
   SESSION_MESSAGE: 'session:message',
   SESSION_INTERACTIVE: 'session:interactive',
