@@ -827,6 +827,7 @@ class CodemanApp {
         this.closeAllPanels();
         this.closeHelp();
         if (this.attachmentHistoryDrawerOpen) this.closeAttachmentHistory();
+        this.closeSessionManager();
       }
 
       // Option/Alt session navigation uses physical key CODES, not e.key, so macOS

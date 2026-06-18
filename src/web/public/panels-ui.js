@@ -278,6 +278,100 @@ Object.assign(CodemanApp.prototype, {
     if (modal) modal.classList.remove('active');
   },
 
+  // ═══════════════════════════════════════════════════════════════
+  // Session Manager Modal (COD-121)
+  // Persistent, header-reachable session list (GET /api/sessions/unified)
+  // reachable mid-session, with a server-side search box. Reuses the
+  // unit-2 history item renderer so clicking resumes/switches sessions.
+  // ═══════════════════════════════════════════════════════════════
+
+  async openSessionManager() {
+    const modal = document.getElementById('sessionManagerModal');
+    if (modal) {
+      modal.classList.add('active');
+      // Escape closes the modal even while focus is in the search input. A
+      // modal-scoped listener is robust regardless of the global Escape chain
+      // (which runs other close handlers first and can short-circuit). Wire once.
+      if (!this._sessionManagerEscWired) {
+        this._sessionManagerEscWired = true;
+        modal.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            this.closeSessionManager();
+          }
+        });
+      }
+    }
+
+    // Ensure cases are loaded so item subtitles can show "#caseName" labels.
+    // Mirror loadHistorySessions(): prefer already-loaded this.cases.
+    if (!Array.isArray(this.cases) || this.cases.length === 0) {
+      try {
+        const r = await fetch('/api/cases');
+        const d = r.ok ? await r.json() : null;
+        this.cases = d?.data || [];
+      } catch {
+        this.cases = this.cases || [];
+      }
+    }
+
+    const search = document.getElementById('sessionManagerSearch');
+    if (search) {
+      // Wire the debounced search input once (lazy — the element exists by
+      // the time the modal is first opened, and mixin methods are bound).
+      if (!this._sessionManagerSearchWired) {
+        this._sessionManagerSearchWired = true;
+        search.addEventListener('input', () => {
+          const value = search.value.trim();
+          this._debouncedCall('sessionManagerSearch', () => this._loadSessionManagerList(value), 200);
+        });
+      }
+      search.value = '';
+      search.focus();
+    }
+    await this._loadSessionManagerList('');
+  },
+
+  closeSessionManager() {
+    const modal = document.getElementById('sessionManagerModal');
+    if (modal) modal.classList.remove('active');
+  },
+
+  async _loadSessionManagerList(q = '') {
+    const list = document.getElementById('sessionManagerList');
+    if (!list) return;
+    try {
+      const url = '/api/sessions/unified?limit=200' + (q ? '&q=' + encodeURIComponent(q) : '');
+      const res = await fetch(url);
+      const data = await res.json();
+      const sessions = data.data?.sessions || [];
+      list.replaceChildren();
+      if (sessions.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'empty-message';
+        empty.textContent = q ? 'No sessions match your search' : 'No sessions found';
+        list.appendChild(empty);
+        return;
+      }
+      for (const s of sessions) {
+        const item = this._buildHistoryItem(s, this.cases, { showViewAll: false });
+        // Close the modal when an item is clicked; the underlying
+        // resume/select (registered on the item) still fires because this
+        // is a capture-phase listener that does not stop propagation.
+        item.addEventListener('click', () => this.closeSessionManager(), true);
+        list.appendChild(item);
+      }
+    } catch (err) {
+      console.error('[_loadSessionManagerList]', err);
+      list.replaceChildren();
+      const errLine = document.createElement('p');
+      errLine.className = 'empty-message';
+      errLine.textContent = 'Failed to load sessions';
+      list.appendChild(errLine);
+    }
+  },
+
   setAwayDigestRange(range) {
     this.awayDigestRange = range;
     this._awayDigestLoadedSuccessfully = false;

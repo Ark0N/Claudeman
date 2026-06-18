@@ -5443,6 +5443,34 @@ kbd {
   padding: 1rem;
 }
 
+/* Session Manager modal (COD-121) */
+.session-manager-modal {
+  max-width: 720px;
+  width: min(92vw, 720px);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.session-manager-modal .modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  overflow: hidden;
+  padding: 1rem;
+}
+
+#sessionManagerSearch {
+  flex: 0 0 auto;
+}
+
+.session-manager-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  overflow-y: auto;
+}
+
 .away-digest-ranges {
   display: flex;
   flex-wrap: wrap;
