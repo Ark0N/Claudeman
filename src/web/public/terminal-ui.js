@@ -1128,6 +1128,19 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
+   * Fetch the unified session list (live + persisted + non-Claude + closed
+   * history), already de-duplicated and sorted newest-first by the backend
+   * (`GET /api/sessions/unified`, COD-121). No client-side grouping needed.
+   * @param {number} [limit=60] max sessions to request
+   * @returns {Promise<Array>} unified session items, most recent first
+   */
+  async _fetchUnifiedSessions(limit = 60) {
+    const res = await fetch('/api/sessions/unified?limit=' + limit);
+    const data = await res.json();
+    return data.data?.sessions || [];
+  },
+
+  /**
    * Resolve workingDir to a case-aware short label.
    * - Exact case path match → "#caseName"
    * - workingDir under a case dir → "#caseName/subdir"
@@ -1168,42 +1181,87 @@ Object.assign(CodemanApp.prototype, {
    */
   _buildHistoryItem(s, cases, options) {
     const showViewAll = options?.showViewAll !== false;
-    const size =
-      s.sizeBytes < 1024
+
+    // Size: only render when a numeric byte count is present (unified items
+    // backed solely by a live/persisted source may omit it).
+    const hasSize = typeof s.sizeBytes === 'number';
+    const size = !hasSize
+      ? ''
+      : s.sizeBytes < 1024
         ? `${s.sizeBytes}B`
         : s.sizeBytes < 1048576
           ? `${(s.sizeBytes / 1024).toFixed(0)}K`
           : `${(s.sizeBytes / 1048576).toFixed(1)}M`;
-    const date = new Date(s.lastModified);
-    const timeStr =
-      date.toLocaleDateString('en', { month: 'short', day: 'numeric' }) +
-      ' ' +
-      date.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+    // Timestamp: unified shape carries lastActivityAt (ms epoch); the older
+    // folder-modal/history shape carries an ISO lastModified string. Prefer ms,
+    // fall back to parsing the string, and omit entirely when neither is valid.
+    const tsMs =
+      typeof s.lastActivityAt === 'number'
+        ? s.lastActivityAt
+        : s.lastModified
+          ? Date.parse(s.lastModified)
+          : NaN;
+    let timeStr = '';
+    if (!Number.isNaN(tsMs)) {
+      const date = new Date(tsMs);
+      timeStr =
+        date.toLocaleDateString('en', { month: 'short', day: 'numeric' }) +
+        ' ' +
+        date.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+
     const shortDir = this._shortenHomePath(s.workingDir);
     const caseLabel = this._resolveCaseLabel(s.workingDir, cases);
 
+    const isLive = Array.isArray(s.sources) && s.sources.includes('live');
+
     const item = document.createElement('div');
     item.className = 'history-item';
-    item.title = s.workingDir;
+    item.title = s.workingDir || '';
 
-    // Main row: clickable surface that triggers resume
+    // Main row: clickable surface that triggers resume (or focuses the live tab).
     const mainRow = document.createElement('div');
     mainRow.className = 'history-item-main';
-    mainRow.addEventListener('click', () => this.resumeHistorySession(s.sessionId, s.workingDir));
+    mainRow.addEventListener('click', () => {
+      if (isLive && this.sessions.has(s.sessionId)) {
+        this.selectSession(s.sessionId);
+      } else {
+        this.resumeHistorySession(s.sessionId, s.workingDir || '');
+      }
+    });
 
     const textCol = document.createElement('div');
     textCol.className = 'history-item-text';
 
     const titleSpan = document.createElement('span');
     titleSpan.className = 'history-item-title';
-    titleSpan.textContent = s.firstPrompt || shortDir;
+    titleSpan.textContent = s.name || s.firstPrompt || shortDir;
+
+    // Badge row: mode (claude/codex/opencode/gemini/shell) + a LIVE pill.
+    const badgeRow = document.createElement('div');
+    badgeRow.className = 'history-item-badges';
+    if (s.mode) {
+      const modeBadge = document.createElement('span');
+      modeBadge.className = 'history-item-badge history-item-badge-mode';
+      modeBadge.textContent = s.mode;
+      badgeRow.appendChild(modeBadge);
+    }
+    if (isLive) {
+      const liveBadge = document.createElement('span');
+      liveBadge.className = 'history-item-badge history-item-badge-live';
+      liveBadge.textContent = 'LIVE';
+      badgeRow.appendChild(liveBadge);
+    }
 
     const subtitleSpan = document.createElement('span');
     subtitleSpan.className = 'history-item-subtitle';
     if (caseLabel.startsWith('#')) subtitleSpan.classList.add('is-case');
     subtitleSpan.textContent = caseLabel;
 
-    textCol.append(titleSpan, subtitleSpan);
+    textCol.append(titleSpan);
+    if (badgeRow.childElementCount > 0) textCol.append(badgeRow);
+    textCol.append(subtitleSpan);
 
     const metaSpan = document.createElement('span');
     metaSpan.className = 'history-item-meta';
@@ -1245,7 +1303,11 @@ Object.assign(CodemanApp.prototype, {
 
     const metaRow = document.createElement('div');
     metaRow.className = 'history-detail-row history-detail-meta';
-    metaRow.textContent = `${timeStr} · ${size} · ${s.sessionId.slice(0, 8)}`;
+    const metaParts = [];
+    if (timeStr) metaParts.push(timeStr);
+    if (hasSize) metaParts.push(size);
+    metaParts.push(s.sessionId.slice(0, 8));
+    metaRow.textContent = metaParts.join(' · ');
 
     detail.append(promptRow, pathRow, metaRow);
 
@@ -1290,7 +1352,7 @@ Object.assign(CodemanApp.prototype, {
         ? Promise.resolve(this.cases)
         : fetch('/api/cases').then((r) => (r.ok ? r.json() : null)).then((d) => d?.data || []).catch(() => []);
       const [allSessions, cases] = await Promise.all([
-        this._fetchHistorySessions(30),
+        this._fetchUnifiedSessions(60),
         casesPromise,
       ]);
       if (allSessions.length === 0) {

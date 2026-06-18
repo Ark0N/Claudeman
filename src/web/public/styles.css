@@ -2822,6 +2822,32 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   font-weight: 500;
 }
 
+/* Badge row (mode + LIVE pills) sits between the title and subtitle (COD-121). */
+.history-item-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.history-item-badge {
+  font-size: 0.55rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  line-height: 1;
+  padding: 0.12rem 0.35rem;
+  border-radius: 0.35rem;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.history-item-badge-live {
+  background: color-mix(in srgb, var(--green) 22%, transparent);
+  color: var(--green);
+}
+
 .history-item-meta {
   font-size: 0.7rem;
   color: var(--text-muted);
