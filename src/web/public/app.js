@@ -1258,6 +1258,15 @@ class CodemanApp {
     for (const [event] of _SSE_HANDLER_MAP) {
       addListener(event, this._sseHandlerWrappers.get(event));
     }
+
+    // COD-121: live-refresh the unified session list (Session Manager modal +
+    // visible welcome list) on session structural changes. Extra listeners on the
+    // same EventSource — EventSource supports multiple listeners per event — so the
+    // existing handlers above are untouched. Registered through addListener so they
+    // are torn down with the rest on reconnect.
+    for (const event of [SSE_EVENTS.SESSION_CREATED, SSE_EVENTS.SESSION_UPDATED, SSE_EVENTS.SESSION_DELETED]) {
+      addListener(event, () => this._onSessionListMaybeChanged());
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════

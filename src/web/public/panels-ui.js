@@ -338,7 +338,30 @@ Object.assign(CodemanApp.prototype, {
     if (modal) modal.classList.remove('active');
   },
 
+  /**
+   * COD-121: live-refresh the unified session list when sessions change
+   * (created/updated/deleted via SSE). Only touches surfaces that are currently
+   * showing — the open Session Manager modal and/or the visible welcome list —
+   * and is debounced so an event burst collapses into one re-fetch. The current
+   * search query is preserved.
+   */
+  _onSessionListMaybeChanged() {
+    const modal = document.getElementById('sessionManagerModal');
+    if (modal && modal.classList.contains('active')) {
+      this._debouncedCall(
+        'sessionManagerRefresh',
+        () => this._loadSessionManagerList(this._sessionManagerQuery || ''),
+        400
+      );
+    }
+    const welcome = document.getElementById('welcomeOverlay');
+    if (welcome && welcome.classList.contains('visible')) {
+      this._debouncedCall('welcomeHistoryRefresh', () => this.loadHistorySessions(), 600);
+    }
+  },
+
   async _loadSessionManagerList(q = '') {
+    this._sessionManagerQuery = q;
     const list = document.getElementById('sessionManagerList');
     if (!list) return;
     try {
