@@ -1270,7 +1270,11 @@ Object.assign(CodemanApp.prototype, {
     const expandBtn = document.createElement('button');
     expandBtn.className = 'history-item-expand';
     expandBtn.type = 'button';
-    expandBtn.setAttribute('aria-label', 'Show details');
+    // COD-130: the ⋯ button now opens a context (kebab) menu rather than
+    // toggling the inline detail panel directly. aria-expanded still tracks
+    // the detail panel (toggled via the menu's "Show details" item).
+    expandBtn.setAttribute('aria-haspopup', 'menu');
+    expandBtn.setAttribute('aria-label', 'Session actions');
     expandBtn.setAttribute('aria-expanded', 'false');
     expandBtn.textContent = '⋯'; // ⋯
 
@@ -1327,14 +1331,170 @@ Object.assign(CodemanApp.prototype, {
     }
 
     expandBtn.addEventListener('click', (ev) => {
+      // COD-130: stop both the row resume handler and the Session Manager
+      // modal's main-row close listener from firing, then open the kebab menu.
       ev.stopPropagation();
-      const expanded = item.classList.toggle('expanded');
-      detail.hidden = !expanded;
-      expandBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      ev.preventDefault();
+      this._openSessionRowMenu(ev.currentTarget, s, cases, item, detail);
     });
 
     item.append(mainRow, detail);
     return item;
+  },
+
+  /**
+   * COD-130: Open a context (kebab) menu anchored to a history item's ⋯
+   * button. Replaces the old inline detail-toggle so the same control works
+   * both in the history list and inside the Session Manager modal (where a
+   * capture-phase close listener previously swallowed the click).
+   *
+   * The menu is appended to <body> with fixed positioning so it escapes the
+   * modal's overflow/stacking context, and flips above the anchor when it
+   * would overflow the viewport bottom.
+   *
+   * @param {HTMLElement} anchorEl the ⋯ button the menu anchors to
+   * @param {object} s session record
+   * @param {Array} cases linked cases (unused but kept for parity/future)
+   * @param {HTMLElement} item the .history-item element (for detail toggle)
+   * @param {HTMLElement} detail the inline detail panel element
+   */
+  _openSessionRowMenu(anchorEl, s, cases, item, detail) {
+    // Close any already-open row menu first.
+    if (this._openRowMenuEl) {
+      try {
+        this._openRowMenuEl.remove();
+      } catch {
+        /* noop */
+      }
+      this._openRowMenuEl = null;
+    }
+
+    const isLiveOpen =
+      Array.isArray(s.sources) && s.sources.includes('live') && this.sessions.has(s.sessionId);
+
+    const menu = document.createElement('div');
+    menu.className = 'session-row-menu';
+    menu.setAttribute('role', 'menu');
+
+    // closeMenu tears down the menu and all transient listeners.
+    let onDocMouseDown = null;
+    let onKeyDown = null;
+    let onScrollResize = null;
+    const closeMenu = () => {
+      document.removeEventListener('mousedown', onDocMouseDown, true);
+      document.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('scroll', onScrollResize, true);
+      window.removeEventListener('resize', onScrollResize, true);
+      try {
+        menu.remove();
+      } catch {
+        /* noop */
+      }
+      if (this._openRowMenuEl === menu) this._openRowMenuEl = null;
+    };
+
+    // Helper: build one menu item button.
+    const addItem = (label, onActivate, opts) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'session-row-menu-item';
+      btn.setAttribute('role', 'menuitem');
+      const text = document.createElement('span');
+      text.className = 'session-row-menu-label';
+      text.textContent = label;
+      btn.appendChild(text);
+      if (opts && opts.sublabel) {
+        const sub = document.createElement('span');
+        sub.className = 'session-row-menu-sublabel';
+        sub.textContent = opts.sublabel;
+        btn.appendChild(sub);
+      }
+      btn.addEventListener('click', async (ev) => {
+        // Never let the click bubble to the row resume / modal close handlers.
+        ev.stopPropagation();
+        ev.preventDefault();
+        await onActivate();
+      });
+      menu.appendChild(btn);
+    };
+
+    // Resume / Switch to session (always).
+    addItem(
+      isLiveOpen ? 'Switch to session' : 'Resume session',
+      () => {
+        if (isLiveOpen) {
+          this.selectSession(s.sessionId);
+        } else {
+          this.resumeHistorySession(s.sessionId, s.workingDir || '');
+        }
+        this.closeSessionManager?.();
+        closeMenu();
+      }
+    );
+
+    // Open folder (only for a live+open session — file browser is session-scoped).
+    if (isLiveOpen) {
+      addItem('Open folder', () => {
+        this.selectSession(s.sessionId);
+        this.loadFileBrowser?.(s.sessionId);
+        this.closeSessionManager?.();
+        closeMenu();
+      });
+    }
+
+    // Copy path (only when a workingDir is known).
+    if (s.workingDir) {
+      addItem('Copy path', async () => {
+        const ok = await this._copyText(s.workingDir);
+        this.showToast(ok ? 'Path copied' : 'Copy failed', ok ? 'success' : 'error');
+        closeMenu();
+      });
+    }
+
+    // Show details (always) — toggles the inline detail panel; keeps modal open.
+    addItem('Show details', () => {
+      const expanded = item.classList.toggle('expanded');
+      detail.hidden = !expanded;
+      anchorEl.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      closeMenu();
+    });
+
+    // Position: fixed, anchored under/over the button; flip up on overflow.
+    document.body.appendChild(menu);
+    const rect = anchorEl.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const gap = 4;
+    let top = rect.bottom + gap;
+    if (top + menuRect.height > window.innerHeight && rect.top - gap - menuRect.height >= 0) {
+      top = rect.top - gap - menuRect.height; // flip above the anchor
+    }
+    // Right-align the menu to the button, clamped into the viewport.
+    let left = rect.right - menuRect.width;
+    if (left < gap) left = gap;
+    if (left + menuRect.width > window.innerWidth - gap) {
+      left = Math.max(gap, window.innerWidth - gap - menuRect.width);
+    }
+    menu.style.top = `${Math.max(gap, top)}px`;
+    menu.style.left = `${left}px`;
+
+    // Dismissal listeners.
+    onDocMouseDown = (ev) => {
+      if (menu.contains(ev.target) || anchorEl.contains(ev.target)) return;
+      closeMenu();
+    };
+    onKeyDown = (ev) => {
+      if (ev.key === 'Escape') {
+        ev.stopPropagation();
+        closeMenu();
+      }
+    };
+    onScrollResize = () => closeMenu();
+    document.addEventListener('mousedown', onDocMouseDown, true);
+    document.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('scroll', onScrollResize, true);
+    window.addEventListener('resize', onScrollResize, true);
+
+    this._openRowMenuEl = menu;
   },
 
   /** Number of history items shown before "Show More" */

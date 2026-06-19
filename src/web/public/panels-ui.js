@@ -379,10 +379,10 @@ Object.assign(CodemanApp.prototype, {
       }
       for (const s of sessions) {
         const item = this._buildHistoryItem(s, this.cases, { showViewAll: false });
-        // Close the modal when an item is clicked; the underlying
-        // resume/select (registered on the item) still fires because this
-        // is a capture-phase listener that does not stop propagation.
-        item.addEventListener('click', () => this.closeSessionManager(), true);
+        // COD-130: scope the modal-close to the main (resume) row only, in the
+        // bubble phase. The ⋯ kebab button calls stopPropagation(), so clicking
+        // it (or its menu) no longer closes the Session Manager modal.
+        item.querySelector('.history-item-main')?.addEventListener('click', () => this.closeSessionManager());
         list.appendChild(item);
       }
     } catch (err) {

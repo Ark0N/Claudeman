@@ -5471,6 +5471,51 @@ kbd {
   overflow-y: auto;
 }
 
+/* COD-130: per-row ⋯ kebab context menu (appended to <body>, fixed-positioned).
+   z-index must clear the Session Manager modal (.modal is z-index: 1000). */
+.session-row-menu {
+  position: fixed;
+  z-index: 10010;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  background: rgba(22, 22, 28, 0.97);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.session-row-menu-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  padding: 7px 12px;
+  background: none;
+  border: none;
+  border-radius: var(--btn-radius);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.8rem;
+  text-align: left;
+  white-space: nowrap;
+  transition: background var(--transition-smooth);
+}
+
+.session-row-menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.session-row-menu-sublabel {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
 .away-digest-ranges {
   display: flex;
   flex-wrap: wrap;
