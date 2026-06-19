@@ -2358,34 +2358,68 @@ class CodemanApp {
     const text = this.$('connectionText');
     if (!indicator || !dot || !text) return;
 
-    const status = this._connectionStatus;
+    const { bytes: totalBytes, count } = this._pendingBytes();
+    const hasQueue = count > 0;
+    // Only surface a backlog once it's more than a few bytes. A single keystroke
+    // (1B) ACKs in milliseconds, so without this the label flickered "sending 1B"
+    // on every key press. Above this threshold means input is genuinely backing up.
+    const BACKLOG_HINT_BYTES = 4;
+    const showBacklog = totalBytes > BACKLOG_HINT_BYTES;
+    const formatBytes = (b) => (b < 1024 ? `${b}B` : `${(b / 1024).toFixed(1)}KB`);
+    const queuedSuffix = showBacklog ? ` · ${formatBytes(totalBytes)} queued` : '';
 
-    // While the connection is healthy, never surface the input queue. With the
-    // reliable-delivery layer every keystroke is briefly "pending" until its ACK
-    // lands a few ms later — showing that flashed "Sending 1B…" on every single
-    // character. The indicator is only meaningful for an actual connection
-    // problem (reconnecting / offline), where the queued byte count reassures
-    // the user their typing is safely buffered and will be sent.
-    if (status === 'connected' || status === 'connecting') {
-      indicator.style.display = 'none';
+    // Hard offline (browser reports no network) dominates everything.
+    if (!this.isOnline || this._connectionStatus === 'offline') {
+      indicator.style.display = 'flex';
+      dot.className = 'connection-dot offline';
+      text.textContent = showBacklog ? `Offline (${formatBytes(totalBytes)} queued)` : 'Offline';
+      indicator.title = 'No network connection';
       return;
     }
 
-    const { bytes: totalBytes, count } = this._pendingBytes();
-    const hasQueue = count > 0;
-    indicator.style.display = 'flex';
-    dot.className = 'connection-dot';
-
-    const formatBytes = (b) => (b < 1024 ? `${b}B` : `${(b / 1024).toFixed(1)}KB`);
-
-    if (status === 'reconnecting') {
-      dot.classList.add('reconnecting');
-      text.textContent = hasQueue ? `Reconnecting (${formatBytes(totalBytes)} queued)` : 'Reconnecting...';
-    } else {
-      // Offline or disconnected
-      dot.classList.add('offline');
-      text.textContent = hasQueue ? `Offline (${formatBytes(totalBytes)} queued)` : 'Offline';
+    // With an active terminal, show its transport (WebSocket vs HTTP fallback).
+    if (this.activeSessionId) {
+      let cls, label, detail;
+      switch (this._wsState) {
+        case 'connected':
+          cls = 'connected'; label = 'WS'; detail = 'Terminal connected over WebSocket';
+          break;
+        case 'fallback':
+          cls = 'fallback'; label = 'HTTP'; detail = 'WebSocket unavailable — input sent over HTTP';
+          break;
+        case 'reconnecting':
+          cls = 'reconnecting'; label = 'WS…'; detail = 'Reconnecting WebSocket';
+          break;
+        case 'connecting':
+        default:
+          cls = 'reconnecting'; label = 'WS…'; detail = 'Connecting WebSocket';
+          break;
+      }
+      indicator.style.display = 'flex';
+      dot.className = `connection-dot ${cls}`;
+      text.textContent = `${label}${queuedSuffix}`;
+      indicator.title = detail;
+      return;
     }
+
+    // No active terminal — reflect the SSE event stream only when it needs attention.
+    if (this._connectionStatus === 'reconnecting' || this._connectionStatus === 'disconnected') {
+      indicator.style.display = 'flex';
+      dot.className = 'connection-dot reconnecting';
+      text.textContent = showBacklog ? `Reconnecting (${formatBytes(totalBytes)} queued)` : 'Reconnecting...';
+      indicator.title = 'Reconnecting to server';
+      return;
+    }
+
+    // Idle dashboard, healthy stream — hide unless input is genuinely queued.
+    if (!hasQueue) {
+      indicator.style.display = 'none';
+      return;
+    }
+    indicator.style.display = 'flex';
+    dot.className = 'connection-dot draining';
+    text.textContent = showBacklog ? `Sending ${formatBytes(totalBytes)}...` : 'Sending...';
+    indicator.title = 'Delivering queued input';
   }
 
   setupOnlineDetection() {
