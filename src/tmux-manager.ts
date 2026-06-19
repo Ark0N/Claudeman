@@ -2191,13 +2191,20 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
-   * Capture the current visible text and SGR styles of a specific pane.
+   * Capture a pane's text and SGR styles.
    *
-   * `capture-pane -e` is sanitized by `formatPaneSnapshot`: SGR color/style
-   * codes are preserved, while cursor/erase/scroll-region controls are stripped
-   * before rows are repainted at absolute positions in browser xterm.
+   * Two modes:
+   * - Visible (default): `capture-pane -p -e` grabs only the on-screen frame,
+   *   then `formatPaneSnapshot` repaints each row at its absolute position so
+   *   the browser xterm reproduces the live frame. Used for fast tab switches.
+   * - Full history (`opts.fullHistory`): `capture-pane -p -e -S -` grabs the
+   *   ENTIRE tmux scrollback (COD-47), returned as linear scrollback text with
+   *   SGR codes preserved (NOT repositioned — a multi-screen history can't be
+   *   painted into a single visible frame, so the snapshot repaint is skipped).
+   *   Used for full page reloads so the user gets back their scroll history.
+   *   Caveat: lines tmux has already evicted past its history-limit are gone.
    */
-  capturePaneBuffer(muxName: string, paneTarget: string): string | null {
+  capturePaneBuffer(muxName: string, paneTarget?: string, opts?: { fullHistory?: boolean }): string | null {
     if (IS_TEST_MODE) return '';
     if (!isValidMuxName(muxName)) {
       console.error('[TmuxManager] Invalid session name in capturePaneBuffer:', muxName);
@@ -2210,11 +2217,20 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     const target = paneTarget.startsWith('%') ? `${muxName}.${paneTarget}` : `${muxName}.%${paneTarget}`;
 
+    const fullHistory = opts?.fullHistory === true;
+
     try {
-      const buffer = execSync(`${this.tmux()} capture-pane -p -e -t ${shellescape(target)}`, {
+      // `-S -` extends the capture start to the very top of the scrollback.
+      const captureFlags = fullHistory ? 'capture-pane -p -e -S -' : 'capture-pane -p -e';
+      const buffer = execSync(`${this.tmux()} ${captureFlags} -t ${shellescape(target)}`, {
         encoding: 'utf-8',
         timeout: EXEC_TIMEOUT_MS,
       }).replace(/\n+$/g, '');
+      // Full-history spans many screens — return it as raw linear scrollback
+      // rather than repainting rows at single-screen absolute positions.
+      if (fullHistory) {
+        return buffer;
+      }
       try {
         const cursor = execSync(
           `${this.tmux()} display-message -p -t ${shellescape(target)} '#{cursor_x} #{cursor_y} #{pane_width} #{pane_height}'`,
@@ -2252,7 +2268,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * Pane ids are not stable across respawns or restores, so callers should not
    * assume the first pane remains `%0`.
    */
-  captureActivePaneBuffer(muxName: string): string | null {
+  captureActivePaneBuffer(muxName: string, opts?: { fullHistory?: boolean }): string | null {
     if (IS_TEST_MODE) return '';
     if (!isValidMuxName(muxName)) {
       console.error('[TmuxManager] Invalid session name in captureActivePaneBuffer:', muxName);
@@ -2265,7 +2281,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         timeout: EXEC_TIMEOUT_MS,
       }).trim();
       const target = resolveActivePaneTarget(output);
-      return target ? this.capturePaneBuffer(muxName, target) : null;
+      return target ? this.capturePaneBuffer(muxName, target, opts) : null;
     } catch (err) {
       console.error('[TmuxManager] Failed to resolve active pane for capture:', err);
       return null;

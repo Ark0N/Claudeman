@@ -225,9 +225,16 @@ export interface TerminalMultiplexer extends EventEmitter {
   /** Respawn a dead pane with a fresh command. Returns the new PID or null on failure. */
   respawnPane(options: RespawnPaneOptions): Promise<number | null>;
 
-  /** Capture a pane's current tmux buffer with ANSI escape codes preserved. */
-  capturePaneBuffer?(muxName: string, paneTarget: string): string | null;
+  /**
+   * Capture a pane's current tmux buffer with ANSI escape codes preserved.
+   * Pass `{ fullHistory: true }` to capture the entire scrollback (`-S -`)
+   * as linear text instead of just the visible single-screen frame (COD-47).
+   */
+  capturePaneBuffer?(muxName: string, paneTarget?: string, opts?: { fullHistory?: boolean }): string | null;
 
-  /** Capture the active pane's current tmux buffer with ANSI escape codes preserved. */
-  captureActivePaneBuffer?(muxName: string): string | null;
+  /**
+   * Capture the active pane's current tmux buffer with ANSI escape codes preserved.
+   * Pass `{ fullHistory: true }` to capture the entire scrollback (COD-47).
+   */
+  captureActivePaneBuffer?(muxName: string, opts?: { fullHistory?: boolean }): string | null;
 }

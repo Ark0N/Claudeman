@@ -985,6 +985,15 @@ export function registerSessionRoutes(
     const query = req.query as { tail?: string };
     const session = findSessionOrFail(ctx, id);
 
+    // A request WITHOUT a `tail` param is a FULL RELOAD (the browser reloaded the
+    // page and needs the whole scroll history back). A request WITH `tail` is a
+    // tab switch — only the recent tail matters and speed wins. On a full reload
+    // we capture the ENTIRE tmux scrollback (`-S -`, COD-47) so the user gets
+    // back history that scrolled off Codeman's byte buffer; on a tab switch we
+    // capture only the visible frame, which stays fast.
+    const tailBytes = query.tail ? parseInt(query.tail, 10) : 0;
+    const isFullReload = tailBytes <= 0;
+
     // Prepend the live tmux pane buffer so tab-switch replay shows the current
     // on-screen frame, not just the accumulated byte history. This matters for
     // TUI modes (codex/opencode) that repaint only their latest frame: the
@@ -995,15 +1004,20 @@ export function registerSessionRoutes(
     const muxName = session.muxName;
     const liveMuxBuffer =
       muxName && typeof ctx.mux.captureActivePaneBuffer === 'function'
-        ? ctx.mux.captureActivePaneBuffer(muxName)
+        ? ctx.mux.captureActivePaneBuffer(muxName, isFullReload ? { fullHistory: true } : undefined)
         : null;
+    const source: 'history' | 'mux-visible' | 'mux-full-history' =
+      liveMuxBuffer !== null && liveMuxBuffer.length > 0
+        ? isFullReload
+          ? 'mux-full-history'
+          : 'mux-visible'
+        : 'history';
     const rawBuffer =
       liveMuxBuffer !== null && liveMuxBuffer.length > 0
         ? session.terminalBufferLength > 0
           ? `${session.terminalBuffer}\x1b[H\x1b[2J${liveMuxBuffer}`
           : liveMuxBuffer
         : session.terminalBuffer;
-    const tailBytes = query.tail ? parseInt(query.tail, 10) : 0;
     const fullSize = rawBuffer.length;
     let truncated = false;
     let cleanBuffer: string;
@@ -1055,11 +1069,26 @@ export function registerSessionRoutes(
     // Remove Ctrl+L and leading whitespace (cheap on tailed subset)
     cleanBuffer = cleanBuffer.replace(CTRL_L_PATTERN, '').replace(LEADING_WHITESPACE_PATTERN, '');
 
+    // Cap the payload at the configured terminal buffer limit. Full-history
+    // tmux capture (`-S -`) can be tens of MB of scrollback; shipping all of it
+    // would freeze the browser xterm. Keep the most RECENT bytes (slice from the
+    // end) and align to a line boundary so we never start mid-ANSI-escape.
+    const { terminalBufferMaxBytes } = await ctx.getTerminalHistoryConfig();
+    if (terminalBufferMaxBytes > 0 && cleanBuffer.length > terminalBufferMaxBytes) {
+      cleanBuffer = cleanBuffer.slice(-terminalBufferMaxBytes);
+      truncated = true;
+      const firstNewline = cleanBuffer.indexOf('\n');
+      if (firstNewline > 0 && firstNewline < 4096) {
+        cleanBuffer = cleanBuffer.slice(firstNewline + 1);
+      }
+    }
+
     return {
       terminalBuffer: cleanBuffer,
       status: session.status,
       fullSize,
       truncated,
+      source,
     };
   });
 
