@@ -35,7 +35,9 @@ import {
   QuickRunSchema,
   QuickStartSchema,
   InteractiveStartSchema,
+  SessionOrderUpdateSchema,
 } from '../schemas.js';
+import { mergeSessionOrder } from '../../session-order.js';
 import {
   autoConfigureRalph,
   CASES_DIR,
@@ -278,6 +280,18 @@ export function registerSessionRoutes(
 
   app.get('/api/sessions', async () => {
     return ctx.getLightSessionsState();
+  });
+
+  // ========== Session Tab Order (global sync, COD-131) ==========
+
+  app.put('/api/session-order', async (req): Promise<ApiResponse<{ order: string[] }>> => {
+    const { order } = parseBody(SessionOrderUpdateSchema, req.body, 'Invalid session order');
+    // Server is authoritative but never drops ids it knows about that the
+    // pushing device hadn't loaded yet — those fall to the end (mergeSessionOrder).
+    const merged = mergeSessionOrder(order, ctx.store.getSessionOrder());
+    ctx.store.setSessionOrder(merged);
+    ctx.broadcast(SseEvent.SessionOrderChanged, { order: merged });
+    return { success: true, data: { order: merged } };
   });
 
   // ========== Session Creation ==========

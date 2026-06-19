@@ -370,6 +370,9 @@ export const CaseDeleted = 'case:deleted' as const;
 /** Case ordering changed. */
 export const CaseOrderChanged = 'case:order-changed' as const;
 
+/** Global session tab order changed (synced across devices). COD-131. */
+export const SessionOrderChanged = 'session:orderChanged' as const;
+
 // ─── Namespace Re-export ─────────────────────────────────────────────────────
 
 /**
@@ -551,4 +554,7 @@ export const SseEvent = {
   CaseLinked,
   CaseDeleted,
   CaseOrderChanged,
+
+  // Session order (global tab order sync)
+  SessionOrderChanged,
 } as const;

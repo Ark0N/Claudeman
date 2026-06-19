@@ -116,6 +116,8 @@ export interface AppState {
   cronJobs?: Record<string, CronJob>;
   /** Scheduled job run history, keyed by run ID. */
   cronJobRuns?: Record<string, CronJobRun>;
+  /** Global tab order shared across devices (ordered list of sessionIds) — COD-131 */
+  sessionOrder?: string[];
 }
 
 // ========== Default Configuration ==========

@@ -769,6 +769,11 @@ export const CaseOrderSchema = z.object({
   order: z.array(z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format')),
 });
 
+/** PUT /api/session-order — global tab order (ordered sessionIds), COD-131 */
+export const SessionOrderUpdateSchema = z.object({
+  order: z.array(z.string()),
+});
+
 /** POST /api/auth/revoke */
 export const RevokeSessionSchema = z.object({
   sessionToken: z.string().min(1).max(200).optional(),

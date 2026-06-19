@@ -21,6 +21,10 @@ export function createMockRouteContext(options?: { sessionId?: string }) {
   const sessions = new Map<string, MockSession>();
   sessions.set(sessionId, session);
 
+  // Stateful backing for the global tab order (COD-131) so route tests can
+  // assert that setSessionOrder() actually persists what the handler computed.
+  let sessionOrder: string[] = [];
+
   return {
     // -- SessionPort --
     sessions,
@@ -65,6 +69,10 @@ export function createMockRouteContext(options?: { sessionId?: string }) {
       load: vi.fn(),
       incrementSessionsCreated: vi.fn(),
       setConfig: vi.fn(),
+      getSessionOrder: vi.fn(() => sessionOrder),
+      setSessionOrder: vi.fn((order: string[]) => {
+        sessionOrder = order;
+      }),
       getAggregateStats: vi.fn(() => ({ totalInputTokens: 0, totalOutputTokens: 0, totalCost: 0 })),
       getGlobalStats: vi.fn(() => ({ sessionsCreated: 0 })),
       getDailyStats: vi.fn(() => []),

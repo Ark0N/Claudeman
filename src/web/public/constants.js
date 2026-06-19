@@ -474,6 +474,9 @@ const SSE_EVENTS = {
   CASE_LINKED: 'case:linked',
   CASE_DELETED: 'case:deleted',
   CASE_ORDER_CHANGED: 'case:order-changed',
+
+  // Session order (global tab order sync)
+  SESSION_ORDER_CHANGED: 'session:orderChanged',
 };
 
 // ═══════════════════════════════════════════════════════════════
