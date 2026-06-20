@@ -126,11 +126,73 @@ function shouldAutoWrapTabs(input) {
   return scrollWidth > clientWidth + 1;
 }
 
+// COD-122: Monitor "Tmux Sessions" row label policy. A row carries up to three
+// identifiers — the tab name (user-facing L1 label), the tmux session name
+// (e.g. "codeman-1fac7304"), and the agent (Claude/Codex) session id. The tab name
+// must win as the primary label; the other two are secondary metadata shown only
+// when known and not redundant with the primary, so the row degrades gracefully
+// when identifiers are missing.
+function resolveMonitorRowLabels(input) {
+  const clean = (v) => (typeof v === 'string' ? v.trim() : '');
+  const tabName = clean(input && input.tabName);
+  const storedName = clean(input && input.storedName);
+  const muxName = clean(input && input.muxName);
+  const agentId = clean(input && input.agentSessionId);
+  const sessionId = clean(input && input.sessionId);
+
+  // Tab name is the L1 label; fall back through the persisted mux name → tmux name
+  // → a generic placeholder so the primary is never blank.
+  const primary = tabName || storedName || muxName || 'session';
+
+  const secondaries = [];
+  // tmux name — skip when it's already serving as the primary fallback (no dup).
+  if (muxName && muxName !== primary) {
+    secondaries.push({ kind: 'tmux', label: muxName });
+  }
+  // agent session id — show only when genuinely known: non-empty, not the codeman
+  // sessionId placeholder (claudeSessionId is seeded with the session id until a
+  // real agent message arrives), and not redundant with the primary label.
+  if (agentId && agentId !== sessionId && agentId !== primary) {
+    secondaries.push({ kind: 'agent', label: agentId });
+  }
+  return { primary, secondaries };
+}
+
+// COD-134 — Terminal WebSocket reconnect policy.
+//
+// Decide what to do after a terminal WebSocket closes, given the close `code`
+// and `attempt` (0-based count of consecutive reconnects already made):
+//   - transient closes (code < 4004: 1000/1001/1005/1006/etc.) → 'reconnect'
+//     with exponential backoff (0 on the first attempt; the caller adds jitter),
+//     250ms → 500 → 1000 → ... capped at 10s.
+//   - 4004 (session not found) / 4009 (session terminated) → 'give-up': the
+//     session is gone, retrying only wastes connections.
+//   - 4008 (too many connections) and any other code >= 4004 → 'retry-fallback':
+//     show the HTTP fallback but keep retrying on a bounded 5s timer so the
+//     transport returns to WS once the transient condition clears (un-stick).
+// Pure: no DOM, no side effects.
+function planWsReconnect(code, attempt) {
+  if (code === 4004 || code === 4009) {
+    return { action: 'give-up', delayMs: 0 };
+  }
+  if (code >= 4004) {
+    return { action: 'retry-fallback', delayMs: 5000 };
+  }
+  const delayMs = attempt <= 0 ? 0 : Math.min(250 * Math.pow(2, attempt - 1), 10000);
+  return { action: 'reconnect', delayMs };
+}
+
 if (typeof window !== 'undefined') {
   window.WEBGL_FALLBACK = WEBGL_FALLBACK;
   window.evaluateWebGLLongTaskTrip = evaluateWebGLLongTaskTrip;
   window.CodemanTabOverflow = {
     shouldAutoWrapTabs,
+  };
+  window.CodemanMonitorLabels = {
+    resolveMonitorRowLabels,
+  };
+  window.CodemanWsReconnect = {
+    plan: planWsReconnect,
   };
 }
 

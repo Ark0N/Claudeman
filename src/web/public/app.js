@@ -435,6 +435,11 @@ class CodemanApp {
     this._ws = null;            // WebSocket instance for active session
     this._wsSessionId = null;   // Session ID the WS is connected to
     this._wsReady = false;      // True when WS is open and ready for I/O
+    this._wsState = 'disconnected'; // connecting | connected | reconnecting | fallback | disconnected
+    this._wsLastClose = null; // { code, reason, at } for transport diagnostics
+    this._wsLastRecvAt = 0;     // ms timestamp of the last frame received on the active WS
+    this._wsInputSendCount = 0;
+    this._httpFallbackSendCount = 0;
 
     // Terminal write batching with DEC 2026 sync support
     this.pendingWrites = [];
@@ -1976,6 +1981,7 @@ class CodemanApp {
       if (this._ws === ws) {
         this._wsReady = true;
         this._wsReconnectAttempts = 0;
+        this._updateConnectionIndicator();
         // Send a typed resize over the fresh socket: syncs PTY dims after
         // (re)connects AND registers the desktop sizing claim server-side —
         // selectSession's earlier resizes ran before this WS existed, so they
@@ -1990,6 +1996,9 @@ class CodemanApp {
 
     ws.onmessage = (event) => {
       if (this._ws !== ws) return;
+      // Mark the socket as alive on every received frame (output, ACK, etc.) so
+      // the redeliver sweep only force-closes a genuinely silent connection.
+      this._wsLastRecvAt = Date.now();
       try {
         const msg = JSON.parse(event.data);
         if (msg.t === 'o') {
@@ -2016,18 +2025,53 @@ class CodemanApp {
       this._wsReady = false;
       this._stopMobileResizeRetry();
 
-      // Reconnect on unexpected close (server restart, network blip, ping timeout).
-      // Don't reconnect if we intentionally disconnected (_disconnectWs nulls onclose)
-      // or if the server rejected the session (4004=not found, 4008=too many, 4009=terminated).
-      if (event.code < 4004 && this.activeSessionId === sessionId) {
-        const delay = Math.min(1000 * Math.pow(2, this._wsReconnectAttempts || 0), 10000);
-        this._wsReconnectAttempts = (this._wsReconnectAttempts || 0) + 1;
-        this._wsReconnectTimer = setTimeout(() => {
-          this._wsReconnectTimer = null;
-          if (this.activeSessionId === sessionId) {
-            this._connectWs(sessionId);
-          }
-        }, delay);
+      // Decide what to do next from the close code + how many consecutive
+      // reconnects we've already made (pure policy in constants.js):
+      //   reconnect      → transient (server restart, network blip, ping timeout);
+      //                    schedule a backoff retry while this session stays active.
+      //   retry-fallback → too-many-connections / unknown rejection; show the HTTP
+      //                    fallback but keep retrying so we return to WS when it clears.
+      //   give-up        → 4004 (not found) / 4009 (terminated); the session is gone.
+      // _disconnectWs() nulls onclose for intentional disconnects, so we never land here for those.
+      const plan = window.CodemanWsReconnect.plan(event.code, this._wsReconnectAttempts || 0);
+      _crashDiag.log(
+        `WS CLOSE code=${event.code} reason=${event.reason || ''} action=${plan.action} attempts=${this._wsReconnectAttempts || 0}`
+      );
+
+      const stillActive = this.activeSessionId === sessionId;
+      if (plan.action === 'give-up') {
+        this._wsState = stillActive ? 'fallback' : 'disconnected';
+        this._updateConnectionIndicator();
+      } else if (plan.action === 'reconnect') {
+        if (stillActive) {
+          this._wsState = 'reconnecting';
+          this._updateConnectionIndicator();
+          const delay = plan.delayMs + Math.floor(Math.random() * 250); // jitter to de-sync herds
+          this._wsReconnectAttempts = (this._wsReconnectAttempts || 0) + 1;
+          this._wsReconnectTimer = setTimeout(() => {
+            this._wsReconnectTimer = null;
+            if (this.activeSessionId === sessionId) {
+              this._connectWs(sessionId);
+            }
+          }, delay);
+        } else {
+          this._wsState = 'disconnected';
+          this._updateConnectionIndicator();
+        }
+      } else {
+        // retry-fallback: surface the HTTP fallback, but keep trying on a bounded
+        // timer so the transport returns to WS once the transient condition clears.
+        this._wsState = stillActive ? 'fallback' : 'disconnected';
+        this._updateConnectionIndicator();
+        if (stillActive) {
+          this._wsReconnectAttempts = (this._wsReconnectAttempts || 0) + 1;
+          this._wsReconnectTimer = setTimeout(() => {
+            this._wsReconnectTimer = null;
+            if (this.activeSessionId === sessionId) {
+              this._connectWs(sessionId);
+            }
+          }, plan.delayMs);
+        }
       }
     };
 
@@ -2234,7 +2278,13 @@ class CodemanApp {
         this._ws && this._ws.readyState === WebSocket.OPEN && this._wsSessionId === sessionId;
       if (isActiveWs) {
         const oldest = list[0];
-        if (oldest && oldest.sentAt && Date.now() - oldest.sentAt > this._reliableAckTimeoutMs) {
+        // Only tear the socket down when the oldest unacked frame is stale AND the
+        // socket has been silent for the timeout: a connection still delivering
+        // output/ACKs is alive (the ACK is just behind), so force-closing it would
+        // cause needless WS↔HTTP flapping. A truly half-open socket goes quiet.
+        const stale = oldest && oldest.sentAt && Date.now() - oldest.sentAt > this._reliableAckTimeoutMs;
+        const silent = Date.now() - this._wsLastRecvAt > this._reliableAckTimeoutMs;
+        if (stale && silent) {
           try {
             this._ws.close(); // half-open: never recovers on its own — force reconnect
           } catch {

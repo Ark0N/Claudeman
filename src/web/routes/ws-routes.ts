@@ -83,13 +83,19 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
       return;
     }
 
+    // Structured transport logging — surfaces WS open/close/timeout churn so the
+    // tunnel-flap behavior (COD-134) is observable in the server logs. Fastify is
+    // configured logger:false, so we log via console (→ journald under systemd).
+
     // Enforce per-session connection limit
     const currentCount = sessionWsCount.get(id) ?? 0;
     if (currentCount >= MAX_WS_PER_SESSION) {
+      console.warn('[ws] terminal rejected: too many connections', { sessionId: id, wsCount: currentCount });
       socket.close(4008, 'Too many connections');
       return;
     }
     sessionWsCount.set(id, currentCount + 1);
+    console.info('[ws] terminal open', { sessionId: id, wsCount: currentCount + 1 });
 
     // Swallow socket errors — cleanup happens in 'close'
     socket.on('error', () => {});
@@ -228,11 +234,12 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
       if (socket.readyState !== 1) return;
       socket.ping();
       pongTimeout = setTimeout(() => {
+        console.warn('[ws] terminal ping timeout — terminating', { sessionId: id });
         socket.terminate();
       }, WS_PONG_TIMEOUT_MS);
     }, WS_PING_INTERVAL_MS);
 
-    socket.on('close', () => {
+    socket.on('close', (code: number, reason: Buffer) => {
       clearInterval(pingInterval);
       if (pongTimeout) clearTimeout(pongTimeout);
       if (batchTimer) clearTimeout(batchTimer);
@@ -245,11 +252,13 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
 
       // Decrement per-session connection count
       const count = sessionWsCount.get(id) ?? 1;
-      if (count <= 1) {
+      const remaining = count <= 1 ? 0 : count - 1;
+      if (remaining === 0) {
         sessionWsCount.delete(id);
       } else {
-        sessionWsCount.set(id, count - 1);
+        sessionWsCount.set(id, remaining);
       }
+      console.info('[ws] terminal close', { sessionId: id, code, reason: String(reason), wsCount: remaining });
     });
   });
 }
