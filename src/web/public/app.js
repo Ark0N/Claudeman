@@ -1971,7 +1971,13 @@ class CodemanApp {
     this._disconnectWs();
 
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${proto}//${location.host}/ws/sessions/${sessionId}/terminal`;
+    // Pass the stable per-browser clientId on the upgrade URL so the server's
+    // connection registry scopes the per-session limit by client (COD-137): a
+    // reconnect supersedes its own socket instead of consuming a new slot and
+    // tripping a spurious 4008. Omitted if clientId is unavailable (server then
+    // treats the upgrade as anonymous — still admitted up to the limit).
+    const cidQuery = this._clientId ? `?cid=${encodeURIComponent(this._clientId)}` : '';
+    const url = `${proto}//${location.host}/ws/sessions/${sessionId}/terminal${cidQuery}`;
     const ws = new WebSocket(url);
     this._ws = ws;
     this._wsSessionId = sessionId;
