@@ -157,3 +157,78 @@ describe('durable input delivery — send ordering', () => {
     expect(app._pendingDeliveries.get('session-1')).toBeUndefined();
   });
 });
+
+// COD-135 — durable redelivery sweep when an ACK is lost.
+type RedriveApp = App & {
+  _redeliverSweep: () => void;
+  _reliableAckTimeoutMs: number;
+  _wsLastRecvAt: number;
+};
+
+describe('durable input delivery — _redeliverSweep ACK-loss recovery (COD-135)', () => {
+  it('re-drives a stale unacked frame over a STILL-LIVE socket (lost ACK, not silent)', () => {
+    const app = makeApp() as RedriveApp;
+    const frames: Frame[] = [];
+    const close = vi.fn();
+    app._ws = { readyState: 1, send: (d: string) => frames.push(JSON.parse(d)), close } as never;
+    app._wsSessionId = 'session-1';
+    app._reliableAckTimeoutMs = 4000;
+
+    // Frame sent once over the open socket; ACK never arrives.
+    app._sendInputAsync('session-1', 'a');
+    expect(frames.map((f) => f.d)).toEqual(['a']);
+
+    // ACK is lost, but the socket KEEPS receiving output → it is NOT silent.
+    // Backdate the send so the frame is stale; keep recv timestamp fresh.
+    const list = app._pendingDeliveries.get('session-1')!;
+    list[0].sentAt = Date.now() - (app._reliableAckTimeoutMs + 1000);
+    app._wsLastRecvAt = Date.now();
+
+    app._redeliverSweep();
+
+    // The stale frame must be re-sent over the live socket (a second send),
+    // and the socket must NOT be force-closed (it's alive, just the ACK was lost).
+    expect(frames.map((f) => f.d)).toEqual(['a', 'a']);
+    expect(close).not.toHaveBeenCalled();
+    expect(app._pendingDeliveries.get('session-1')).toHaveLength(1);
+  });
+
+  it('does NOT re-drive a not-yet-stale frame (sent recently)', () => {
+    const app = makeApp() as RedriveApp;
+    const frames: Frame[] = [];
+    const close = vi.fn();
+    app._ws = { readyState: 1, send: (d: string) => frames.push(JSON.parse(d)), close } as never;
+    app._wsSessionId = 'session-1';
+    app._reliableAckTimeoutMs = 4000;
+
+    app._sendInputAsync('session-1', 'a');
+    app._wsLastRecvAt = Date.now(); // not silent
+
+    // sentAt is fresh (just sent) → below the stale threshold → leave it alone.
+    app._redeliverSweep();
+
+    expect(frames.map((f) => f.d)).toEqual(['a']); // no second send
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it('force-closes the socket when stale AND silent (half-open — COD-134 fallback preserved)', () => {
+    const app = makeApp() as RedriveApp;
+    const frames: Frame[] = [];
+    const close = vi.fn();
+    app._ws = { readyState: 1, send: (d: string) => frames.push(JSON.parse(d)), close } as never;
+    app._wsSessionId = 'session-1';
+    app._reliableAckTimeoutMs = 4000;
+
+    app._sendInputAsync('session-1', 'a');
+    const list = app._pendingDeliveries.get('session-1')!;
+    list[0].sentAt = Date.now() - (app._reliableAckTimeoutMs + 1000); // stale
+    app._wsLastRecvAt = Date.now() - (app._reliableAckTimeoutMs + 1000); // silent
+
+    app._redeliverSweep();
+
+    // Half-open socket never recovers on its own → force-close to reconnect.
+    // It must NOT have re-sent over the dead socket.
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(frames.map((f) => f.d)).toEqual(['a']);
+  });
+});

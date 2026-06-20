@@ -2292,6 +2292,18 @@ class CodemanApp {
           }
           continue;
         }
+        if (stale) {
+          // Stale but the socket is still delivering output: the ACK was lost,
+          // not the connection. Force-closing isn't warranted (the link is fine),
+          // but the fast path skips anything with sentAt!==0, so the stranded
+          // frame would never re-send. Reset sentAt=0 on every stale unacked
+          // frame so the _drainSession below re-drives them over the live socket
+          // (server dedups by seq, so a re-sent lost-ACK frame is harmless).
+          // Frames sent recently (not yet stale) are left untouched.
+          for (const rec of list) {
+            if (rec.sentAt && Date.now() - rec.sentAt > this._reliableAckTimeoutMs) rec.sentAt = 0;
+          }
+        }
       }
       this._drainSession(sessionId);
     }
