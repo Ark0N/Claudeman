@@ -430,6 +430,26 @@ function truncatePaneLineByVisibleColumns(line: string, maxColumns: number): str
   return result;
 }
 
+/**
+ * Normalize scrollback line endings to `\r\n` so a fresh xterm replays each line
+ * at column 0 (COD-138).
+ *
+ * `capture-pane -p -e -S -` (full-history capture) joins scrollback rows with a
+ * BARE `\n`. The browser xterm is created with the default `convertEol: false`
+ * (correct for the live PTY stream, which already carries real `\r\n`), so a bare
+ * `\n` drops a row without returning the cursor to column 0. Replaying that raw
+ * buffer on a full page reload makes every line start one column further right —
+ * the diagonal "staircase". The visible/tab-switch path avoids this by repainting
+ * each row with an absolute cursor CSI (`formatPaneSnapshot`); the full-history
+ * path returns raw scrollback, so it must be CRLF-normalized here.
+ *
+ * `\r?\n → \r\n` is idempotent on already-CRLF input and leaves a lone `\r` (an
+ * intentional in-line column reset / overwrite) untouched.
+ */
+export function normalizeScrollbackEol(buffer: string): string {
+  return buffer.replace(/\r?\n/g, '\r\n');
+}
+
 export function formatPaneSnapshot(
   lines: string[],
   geometry: { cols: number; rows: number; cursorX: number; cursorY: number }
@@ -2206,16 +2226,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    */
   capturePaneBuffer(muxName: string, paneTarget?: string, opts?: { fullHistory?: boolean }): string | null {
     if (IS_TEST_MODE) return '';
-    if (!isValidMuxName(muxName)) {
-      console.error('[TmuxManager] Invalid session name in capturePaneBuffer:', muxName);
+    const target = resolveTmuxPaneTarget(muxName, paneTarget);
+    if (!target) {
+      console.error('[TmuxManager] Invalid pane target in capturePaneBuffer:', { muxName, paneTarget });
       return null;
     }
-    if (!SAFE_PANE_TARGET_PATTERN.test(paneTarget)) {
-      console.error('[TmuxManager] Invalid pane target:', paneTarget);
-      return null;
-    }
-
-    const target = paneTarget.startsWith('%') ? `${muxName}.${paneTarget}` : `${muxName}.%${paneTarget}`;
 
     const fullHistory = opts?.fullHistory === true;
 
@@ -2227,9 +2242,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         timeout: EXEC_TIMEOUT_MS,
       }).replace(/\n+$/g, '');
       // Full-history spans many screens — return it as raw linear scrollback
-      // rather than repainting rows at single-screen absolute positions.
+      // rather than repainting rows at single-screen absolute positions. tmux
+      // joins scrollback rows with a bare `\n`; normalize to `\r\n` so a fresh
+      // xterm (convertEol:false) starts each replayed line at column 0 instead
+      // of staircasing diagonally (COD-138).
       if (fullHistory) {
-        return buffer;
+        return normalizeScrollbackEol(buffer);
       }
       try {
         const cursor = execSync(
@@ -2255,7 +2273,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       } catch (cursorErr) {
         console.error('[TmuxManager] Failed to query pane cursor after capture:', cursorErr);
       }
-      return buffer;
+      // Cursor query failed or geometry was invalid, so we skip the absolute-
+      // positioned snapshot repaint and fall back to the raw capture. Normalize
+      // its bare `\n` line endings to `\r\n` so the replay doesn't staircase
+      // diagonally in a fresh xterm (COD-138, same reason as the fullHistory path).
+      return normalizeScrollbackEol(buffer);
     } catch (err) {
       console.error('[TmuxManager] Failed to capture pane buffer:', err);
       return null;
