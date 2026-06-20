@@ -483,6 +483,9 @@ class CodemanApp {
     this._clientId = '';
     this._seqCounters = new Map(); // sessionId -> last issued seq
     this._pendingDeliveries = new Map(); // sessionId -> [{seq,data,useMux,ts,tries,sentAt}]
+    // Last rendered connection-indicator tuple; the hot input path skips DOM
+    // writes when the freshly computed descriptor is identical (COD-136).
+    this._lastIndicatorDescriptor = null;
     this._postDraining = new Set(); // sessionIds with an in-flight POST drainer
     this._persistReliableTimer = null;
     this._reliableAckTimeoutMs = 4000; // unacked WS frame older than this ⇒ socket likely dead
@@ -2420,12 +2423,12 @@ class CodemanApp {
     }
   }
 
-  _updateConnectionIndicator() {
-    const indicator = this.$('connectionIndicator');
-    const dot = this.$('connectionDot');
-    const text = this.$('connectionText');
-    if (!indicator || !dot || !text) return;
-
+  // Pure render of the header connection indicator: reads only `this.*` state,
+  // touches NO DOM. Returns the exact { display, dotClass, text, title } tuple the
+  // writer applies. When hidden (display:'none') the other three are normalized to
+  // '' so the cache compare in _updateConnectionIndicator() is well-defined.
+  // Every branch/string here must stay byte-identical to what's rendered today.
+  _computeConnectionDescriptor() {
     const { bytes: totalBytes, count } = this._pendingBytes();
     const hasQueue = count > 0;
     // Only surface a backlog once it's more than a few bytes. A single keystroke
@@ -2438,11 +2441,12 @@ class CodemanApp {
 
     // Hard offline (browser reports no network) dominates everything.
     if (!this.isOnline || this._connectionStatus === 'offline') {
-      indicator.style.display = 'flex';
-      dot.className = 'connection-dot offline';
-      text.textContent = showBacklog ? `Offline (${formatBytes(totalBytes)} queued)` : 'Offline';
-      indicator.title = 'No network connection';
-      return;
+      return {
+        display: 'flex',
+        dotClass: 'connection-dot offline',
+        text: showBacklog ? `Offline (${formatBytes(totalBytes)} queued)` : 'Offline',
+        title: 'No network connection',
+      };
     }
 
     // With an active terminal, show its transport (WebSocket vs HTTP fallback).
@@ -2463,31 +2467,64 @@ class CodemanApp {
           cls = 'reconnecting'; label = 'WS…'; detail = 'Connecting WebSocket';
           break;
       }
-      indicator.style.display = 'flex';
-      dot.className = `connection-dot ${cls}`;
-      text.textContent = `${label}${queuedSuffix}`;
-      indicator.title = detail;
-      return;
+      return {
+        display: 'flex',
+        dotClass: `connection-dot ${cls}`,
+        text: `${label}${queuedSuffix}`,
+        title: detail,
+      };
     }
 
     // No active terminal — reflect the SSE event stream only when it needs attention.
     if (this._connectionStatus === 'reconnecting' || this._connectionStatus === 'disconnected') {
-      indicator.style.display = 'flex';
-      dot.className = 'connection-dot reconnecting';
-      text.textContent = showBacklog ? `Reconnecting (${formatBytes(totalBytes)} queued)` : 'Reconnecting...';
-      indicator.title = 'Reconnecting to server';
-      return;
+      return {
+        display: 'flex',
+        dotClass: 'connection-dot reconnecting',
+        text: showBacklog ? `Reconnecting (${formatBytes(totalBytes)} queued)` : 'Reconnecting...',
+        title: 'Reconnecting to server',
+      };
     }
 
     // Idle dashboard, healthy stream — hide unless input is genuinely queued.
     if (!hasQueue) {
-      indicator.style.display = 'none';
+      return { display: 'none', dotClass: '', text: '', title: '' };
+    }
+    return {
+      display: 'flex',
+      dotClass: 'connection-dot draining',
+      text: showBacklog ? `Sending ${formatBytes(totalBytes)}...` : 'Sending...',
+      title: 'Delivering queued input',
+    };
+  }
+
+  _updateConnectionIndicator() {
+    const indicator = this.$('connectionIndicator');
+    const dot = this.$('connectionDot');
+    const text = this.$('connectionText');
+    if (!indicator || !dot || !text) return;
+
+    // Called on EVERY keystroke (_reliableSend) and EVERY ACK (_ackDelivery).
+    // During fast typing the rendered tuple is usually identical, so skip the DOM
+    // writes when nothing changed (COD-136) — the compute above is DOM-free.
+    const next = this._computeConnectionDescriptor();
+    const prev = this._lastIndicatorDescriptor;
+    if (
+      prev &&
+      prev.display === next.display &&
+      prev.dotClass === next.dotClass &&
+      prev.text === next.text &&
+      prev.title === next.title
+    ) {
       return;
     }
-    indicator.style.display = 'flex';
-    dot.className = 'connection-dot draining';
-    text.textContent = showBacklog ? `Sending ${formatBytes(totalBytes)}...` : 'Sending...';
-    indicator.title = 'Delivering queued input';
+    this._lastIndicatorDescriptor = next;
+
+    indicator.style.display = next.display;
+    if (next.display !== 'none') {
+      dot.className = next.dotClass;
+      text.textContent = next.text;
+      indicator.title = next.title;
+    }
   }
 
   setupOnlineDetection() {

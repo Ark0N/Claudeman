@@ -14,6 +14,15 @@
  *      surfaced the terminal WebSocket transport ("WS" / "HTTP"), and it flashed
  *      "sending 1B" on every single keystroke.
  *
+ * COD-136 (perf, no behavior change) extracts the pure render into
+ * `_computeConnectionDescriptor()` and makes `_updateConnectionIndicator()`
+ * early-return when that descriptor is byte-identical to the last render — so
+ * fast typing stops doing redundant DOM writes on the hot input path. The
+ * `_computeConnectionDescriptor` block below pins the exact rendered strings per
+ * state (so a future refactor can't silently relabel), and the unchanged-skip
+ * block asserts the DOM is written once across two identical calls and re-written
+ * when state changes.
+ *
  * Loaded via `vm` with a stubbed context (no jsdom — see input-send-order.test.ts).
  */
 import { readFileSync } from 'node:fs';
@@ -200,5 +209,237 @@ describe('durable input delivery is not aborted by the indicator (typing-lag reg
 
     expect(drain).toHaveBeenCalledWith('s1');
     expect(app._pendingDeliveries.get('s1')).toHaveLength(1);
+  });
+});
+
+// ---- COD-136: pure descriptor + cache-skip on the hot input path --------------
+
+type Descriptor = { display: string; dotClass: string; text: string; title: string };
+
+type DescriptorApp = Indicator & {
+  _computeConnectionDescriptor: () => Descriptor;
+  _lastIndicatorDescriptor: Descriptor | null;
+};
+
+function computeApp(overrides: Partial<Indicator> & { queuedBytes?: number } = {}) {
+  const { app } = makeApp(overrides);
+  return app as unknown as DescriptorApp;
+}
+
+describe('_computeConnectionDescriptor — pure render per state (COD-136)', () => {
+  it('offline dominates everything (even an active connected terminal)', () => {
+    const app = computeApp({ activeSessionId: 's1', _wsState: 'connected', isOnline: false });
+    expect(app._computeConnectionDescriptor()).toEqual({
+      display: 'flex',
+      dotClass: 'connection-dot offline',
+      text: 'Offline',
+      title: 'No network connection',
+    });
+  });
+
+  it('active terminal — connected → WS', () => {
+    const app = computeApp({ activeSessionId: 's1', _wsState: 'connected' });
+    expect(app._computeConnectionDescriptor()).toEqual({
+      display: 'flex',
+      dotClass: 'connection-dot connected',
+      text: 'WS',
+      title: 'Terminal connected over WebSocket',
+    });
+  });
+
+  it('active terminal — fallback → HTTP', () => {
+    const app = computeApp({ activeSessionId: 's1', _wsState: 'fallback' });
+    expect(app._computeConnectionDescriptor()).toEqual({
+      display: 'flex',
+      dotClass: 'connection-dot fallback',
+      text: 'HTTP',
+      title: 'WebSocket unavailable — input sent over HTTP',
+    });
+  });
+
+  it('active terminal — reconnecting → WS…', () => {
+    const app = computeApp({ activeSessionId: 's1', _wsState: 'reconnecting' });
+    expect(app._computeConnectionDescriptor()).toEqual({
+      display: 'flex',
+      dotClass: 'connection-dot reconnecting',
+      text: 'WS…',
+      title: 'Reconnecting WebSocket',
+    });
+  });
+
+  it('active terminal — connecting (default branch) → WS…', () => {
+    const app = computeApp({ activeSessionId: 's1', _wsState: 'connecting' });
+    expect(app._computeConnectionDescriptor()).toEqual({
+      display: 'flex',
+      dotClass: 'connection-dot reconnecting',
+      text: 'WS…',
+      title: 'Connecting WebSocket',
+    });
+  });
+
+  it('active terminal — a queued backlog (>4B) adds the " · …KB queued" suffix', () => {
+    const app = computeApp({ activeSessionId: 's1', _wsState: 'connected', queuedBytes: 2048 });
+    expect(app._computeConnectionDescriptor()).toEqual({
+      display: 'flex',
+      dotClass: 'connection-dot connected',
+      text: 'WS · 2.0KB queued',
+      title: 'Terminal connected over WebSocket',
+    });
+  });
+
+  it('no terminal, SSE reconnecting → Reconnecting...', () => {
+    const app = computeApp({ activeSessionId: null, _connectionStatus: 'reconnecting' });
+    expect(app._computeConnectionDescriptor()).toEqual({
+      display: 'flex',
+      dotClass: 'connection-dot reconnecting',
+      text: 'Reconnecting...',
+      title: 'Reconnecting to server',
+    });
+  });
+
+  it('idle dashboard, healthy stream, no queue → hidden (display:none, others normalized to "")', () => {
+    const app = computeApp({ activeSessionId: null, _connectionStatus: 'connected' });
+    expect(app._computeConnectionDescriptor()).toEqual({
+      display: 'none',
+      dotClass: '',
+      text: '',
+      title: '',
+    });
+  });
+
+  it('idle dashboard with a small queue (≤4B) → draining "Sending..."', () => {
+    const app = computeApp({ activeSessionId: null, _connectionStatus: 'connected', queuedBytes: 2 });
+    expect(app._computeConnectionDescriptor()).toEqual({
+      display: 'flex',
+      dotClass: 'connection-dot draining',
+      text: 'Sending...',
+      title: 'Delivering queued input',
+    });
+  });
+});
+
+/** A DOM element fake that COUNTS each property write — used to detect the skip. */
+function countingElement() {
+  const writes = { display: 0, className: 0, textContent: 0, title: 0 };
+  let _display = '';
+  let _className = '';
+  let _textContent = '';
+  let _title = '';
+  return {
+    writes,
+    style: {
+      get display() {
+        return _display;
+      },
+      set display(v: string) {
+        _display = v;
+        writes.display++;
+      },
+    },
+    get className() {
+      return _className;
+    },
+    set className(v: string) {
+      _className = v;
+      writes.className++;
+    },
+    get textContent() {
+      return _textContent;
+    },
+    set textContent(v: string) {
+      _textContent = v;
+      writes.textContent++;
+    },
+    get title() {
+      return _title;
+    },
+    set title(v: string) {
+      _title = v;
+      writes.title++;
+    },
+  };
+}
+
+function makeCountingApp(overrides: Partial<Indicator> & { queuedBytes?: number } = {}) {
+  const app = Object.create((CodemanApp as { prototype: object }).prototype) as DescriptorApp & {
+    queuedBytes?: number;
+  };
+  const els = {
+    connectionIndicator: countingElement(),
+    connectionDot: countingElement(),
+    connectionText: countingElement(),
+  };
+  app.$ = (id: string) => (els as Record<string, ReturnType<typeof countingElement>>)[id];
+  app._pendingDeliveries = new Map();
+  app._connectionStatus = 'connected';
+  app._wsState = 'disconnected';
+  app.activeSessionId = null;
+  app.isOnline = true;
+  app._lastIndicatorDescriptor = null;
+  Object.assign(app, overrides);
+  const queued = overrides.queuedBytes ?? 0;
+  if (queued > 0) {
+    app._pendingDeliveries.set('s1', [{ seq: 1, data: 'x'.repeat(queued) }]);
+  }
+  return { app, els };
+}
+
+describe('_updateConnectionIndicator — COD-136 unchanged-skip', () => {
+  it('writes the DOM on the first call (cache starts null → renders)', () => {
+    const { app, els } = makeCountingApp({ activeSessionId: 's1', _wsState: 'connected' });
+    app._updateConnectionIndicator();
+    expect(els.connectionIndicator.style.display).toBe('flex');
+    expect(els.connectionDot.className).toBe('connection-dot connected');
+    expect(els.connectionText.textContent).toBe('WS');
+    expect(els.connectionText.writes.textContent).toBe(1);
+  });
+
+  it('skips redundant DOM writes when the descriptor is unchanged across two calls', () => {
+    const { app, els } = makeCountingApp({ activeSessionId: 's1', _wsState: 'connected' });
+
+    app._updateConnectionIndicator(); // first render
+    const before = {
+      display: els.connectionIndicator.writes.display,
+      className: els.connectionDot.writes.className,
+      textContent: els.connectionText.writes.textContent,
+      title: els.connectionIndicator.writes.title,
+    };
+
+    app._updateConnectionIndicator(); // identical state → must early-return, no writes
+
+    expect(els.connectionIndicator.writes.display).toBe(before.display);
+    expect(els.connectionDot.writes.className).toBe(before.className);
+    expect(els.connectionText.writes.textContent).toBe(before.textContent);
+    expect(els.connectionIndicator.writes.title).toBe(before.title);
+  });
+
+  it('re-renders when state changes between calls (WS → HTTP)', () => {
+    const { app, els } = makeCountingApp({ activeSessionId: 's1', _wsState: 'connected' });
+
+    app._updateConnectionIndicator(); // WS
+    const writesAfterFirst = els.connectionText.writes.textContent;
+
+    app._wsState = 'fallback';
+    app._updateConnectionIndicator(); // HTTP — must write again
+
+    expect(els.connectionText.writes.textContent).toBe(writesAfterFirst + 1);
+    expect(els.connectionText.textContent).toBe('HTTP');
+    expect(els.connectionDot.className).toBe('connection-dot fallback');
+  });
+
+  it('re-renders display when the hidden→shown transition occurs (none → flex)', () => {
+    const { app, els } = makeCountingApp({ activeSessionId: null, _connectionStatus: 'connected' });
+
+    app._updateConnectionIndicator(); // hidden (display:none)
+    expect(els.connectionIndicator.style.display).toBe('none');
+    const displayWrites = els.connectionIndicator.writes.display;
+
+    app.activeSessionId = 's1';
+    app._wsState = 'connected';
+    app._updateConnectionIndicator(); // now shown
+
+    expect(els.connectionIndicator.writes.display).toBe(displayWrites + 1);
+    expect(els.connectionIndicator.style.display).toBe('flex');
+    expect(els.connectionText.textContent).toBe('WS');
   });
 });
