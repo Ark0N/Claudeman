@@ -31,6 +31,10 @@ export type UnifiedSessionItem = {
   sizeBytes?: number;
   projectKey?: string;
   remote?: boolean;
+  /** Pinned to the top of the session manager list (COD-139). */
+  pinned?: boolean;
+  /** When the session was pinned (epoch ms) — orders the pinned group desc. */
+  pinnedAt?: number;
   sources: string[];
   stats?: { memoryMB: number; cpuPercent: number };
 };
@@ -46,6 +50,8 @@ export type LiveSessionInput = {
   createdAt?: number;
   lastActivityAt?: number;
   claudeSessionId?: string;
+  pinned?: boolean;
+  pinnedAt?: number;
 };
 
 /** Persisted session view (subset of `SessionState`). */
@@ -59,6 +65,8 @@ export type PersistedSessionInput = {
   lastActivityAt?: number;
   /** Claude conversation ID this session resumes (`SessionState.resumeSessionId`). */
   claudeSessionId?: string;
+  pinned?: boolean;
+  pinnedAt?: number;
 };
 
 /** Lifecycle audit-log view. Entries are expected NEWEST-first (the order `SessionLifecycleLog.query()` returns). */
@@ -175,6 +183,8 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
     overwrite(item, 'workingDir', p.workingDir);
     overwrite(item, 'createdAt', p.createdAt);
     overwrite(item, 'lastActivityAt', p.lastActivityAt);
+    overwrite(item, 'pinned', p.pinned);
+    overwrite(item, 'pinnedAt', p.pinnedAt);
   }
 
   // 4) live (highest precedence)
@@ -189,6 +199,8 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
     overwrite(item, 'createdAt', v.createdAt);
     overwrite(item, 'lastActivityAt', v.lastActivityAt);
     overwrite(item, 'claudeSessionId', v.claudeSessionId);
+    overwrite(item, 'pinned', v.pinned);
+    overwrite(item, 'pinnedAt', v.pinnedAt);
   }
 
   // 5) mux stats + remote flag (create item if mux-only)
@@ -211,8 +223,24 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
     if (isReal) kept.push(item);
   }
 
-  // Stable sort: lastActivityAt desc (undefined last), createdAt desc, sessionId asc.
+  // Stable sort (COD-139): pinned group first (pinnedAt desc, most-recently-pinned
+  // first), then unpinned by lastActivityAt desc (undefined last), createdAt desc,
+  // sessionId asc.
   kept.sort((a, b) => {
+    const pa = a.pinned === true;
+    const pb = b.pinned === true;
+    if (pa !== pb) return pa ? -1 : 1; // pinned floats above unpinned
+    if (pa && pb) {
+      // Both pinned: most-recently-pinned first (undefined pinnedAt sorts last).
+      const ta = a.pinnedAt;
+      const tb = b.pinnedAt;
+      if (ta !== tb) {
+        if (ta === undefined) return 1;
+        if (tb === undefined) return -1;
+        return tb - ta;
+      }
+      // tie-break falls through to the activity/createdAt/id rules below.
+    }
     const la = a.lastActivityAt;
     const lb = b.lastActivityAt;
     if (la !== lb) {

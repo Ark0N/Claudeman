@@ -241,6 +241,10 @@ export interface SessionState {
   autoResumeEnabled?: boolean;
   /** Pending usage-limit auto-resume fire time (epoch ms), if armed */
   autoResumeAt?: number;
+  /** Pinned to the top of the session manager list (COD-139) */
+  pinned?: boolean;
+  /** When the session was pinned (epoch ms) — orders the pinned group, most-recent-first */
+  pinnedAt?: number;
   /** Image watcher enabled for this session */
   imageWatcherEnabled?: boolean;
   /** Total cost in USD */

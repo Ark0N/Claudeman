@@ -2794,6 +2794,25 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   background: rgba(255, 255, 255, 0.05);
 }
 
+/* COD-139: pinned sessions float to the top with a subtle accent highlight. */
+.history-item.is-pinned {
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.08);
+  box-shadow: inset 3px 0 0 rgba(245, 158, 11, 0.7);
+}
+
+.history-item.is-pinned:hover {
+  border-color: rgba(245, 158, 11, 0.5);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.history-item-pin {
+  margin-right: 0.35rem;
+  font-size: 0.75rem;
+  line-height: 1;
+  vertical-align: baseline;
+}
+
 .history-item-main {
   display: flex;
   align-items: center;

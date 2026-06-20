@@ -1239,8 +1239,10 @@ Object.assign(CodemanApp.prototype, {
 
     const isLive = Array.isArray(s.sources) && s.sources.includes('live');
 
+    const isPinned = s.pinned === true;
+
     const item = document.createElement('div');
-    item.className = 'history-item';
+    item.className = 'history-item' + (isPinned ? ' is-pinned' : '');
     item.title = s.workingDir || '';
 
     // Main row: clickable surface. A caller-supplied onActivate wins (the
@@ -1268,7 +1270,16 @@ Object.assign(CodemanApp.prototype, {
 
     const titleSpan = document.createElement('span');
     titleSpan.className = 'history-item-title';
-    titleSpan.textContent = s.name || s.firstPrompt || shortDir;
+    if (isPinned) {
+      // Filled pin glyph indicating the session is pinned to the top (COD-139).
+      const pin = document.createElement('span');
+      pin.className = 'history-item-pin';
+      pin.textContent = '📌';
+      pin.setAttribute('aria-label', 'Pinned');
+      pin.title = 'Pinned';
+      titleSpan.appendChild(pin);
+    }
+    titleSpan.appendChild(document.createTextNode(s.name || s.firstPrompt || shortDir));
 
     // Badge row: mode (claude/codex/opencode/gemini/shell) + a LIVE pill.
     const badgeRow = document.createElement('div');
@@ -1470,6 +1481,20 @@ Object.assign(CodemanApp.prototype, {
       }
     );
 
+    // Pin / Unpin (COD-139) — floats the session to the top of the list.
+    const isPinned = s.pinned === true;
+    addItem(isPinned ? 'Unpin session' : 'Pin to top', async () => {
+      const ok = await this._setSessionPinned(s.sessionId, !isPinned);
+      if (ok) {
+        // Optimistic local flip so a re-render before the SSE event is consistent.
+        s.pinned = !isPinned;
+        this.showToast(!isPinned ? 'Pinned to top' : 'Unpinned', 'success');
+      } else {
+        this.showToast('Pin failed', 'error');
+      }
+      closeMenu();
+    });
+
     // Open folder (only for a live+open session — file browser is session-scoped).
     if (isLiveOpen) {
       addItem('Open folder', () => {
@@ -1534,6 +1559,32 @@ Object.assign(CodemanApp.prototype, {
 
     this._openRowMenuEl = menu;
     this._openRowMenuClose = closeMenu;
+  },
+
+  /**
+   * COD-139: Toggle a session's pin via POST /api/sessions/:id/pin.
+   * Pinned sessions float to the top of the session manager list. Returns true
+   * on success. The live re-sort happens when the session:pinned SSE event
+   * fires (handled in app.js), so callers don't need to re-render themselves.
+   * @param {string} sessionId
+   * @param {boolean} pinned explicit desired pin state (idempotent)
+   * @returns {Promise<boolean>}
+   */
+  async _setSessionPinned(sessionId, pinned) {
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/pin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ pinned }),
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      return data?.success === true;
+    } catch (err) {
+      console.error('[_setSessionPinned]', err);
+      return false;
+    }
   },
 
   /** Number of history items shown before "Show More" */

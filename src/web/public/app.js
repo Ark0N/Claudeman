@@ -1436,6 +1436,26 @@ class CodemanApp {
     for (const event of [SSE_EVENTS.SESSION_CREATED, SSE_EVENTS.SESSION_DELETED]) {
       addListener(event, () => this._onSessionListMaybeChanged());
     }
+
+    // COD-139: a session:pinned event updates the local live-session pin flag (so
+    // a subsequent render is consistent) and re-sorts the open session manager /
+    // welcome list so pinned sessions float to the top.
+    addListener(SSE_EVENTS.SESSION_PINNED, (e) => {
+      let data = null;
+      try {
+        data = JSON.parse(e.data);
+      } catch {
+        /* ignore malformed payload */
+      }
+      if (data && data.id) {
+        const live = this.sessions.get(data.id);
+        if (live) {
+          live.pinned = data.pinned === true;
+          live.pinnedAt = data.pinned ? data.pinnedAt : undefined;
+        }
+      }
+      this._onSessionListMaybeChanged();
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════

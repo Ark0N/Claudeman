@@ -84,6 +84,8 @@ export const SessionLimitResumeCancelled = 'session:limitResumeCancelled' as con
 export const SessionRespawnBreakerTripped = 'session:respawnBreakerTripped' as const;
 /** CLI version/model info detected from session output. */
 export const SessionCliInfo = 'session:cliInfo' as const;
+/** Session pin state changed (COD-139): pinned/unpinned in the session manager list. */
+export const SessionPinned = 'session:pinned' as const;
 /** General session message (e.g. status text). */
 export const SessionMessage = 'session:message' as const;
 /** Session entered interactive mode (claude or shell). */
@@ -402,6 +404,7 @@ export const SseEvent = {
   SessionLimitResumeCancelled,
   SessionRespawnBreakerTripped,
   SessionCliInfo,
+  SessionPinned,
   SessionMessage,
   SessionInteractive,
   SessionRunning,

@@ -30,6 +30,7 @@ import {
   AutoClearSchema,
   AutoCompactSchema,
   AutoResumeSchema,
+  PinSessionSchema,
   ImageWatcherSchema,
   FlickerFilterSchema,
   QuickRunSchema,
@@ -1565,6 +1566,32 @@ export function registerSessionRoutes(
     };
   });
 
+  // ========== Pin (float to top of the session manager list, COD-139) ==========
+
+  app.post('/api/sessions/:id/pin', async (req) => {
+    const { id } = req.params as { id: string };
+    const body = parseBody(PinSessionSchema, req.body, 'Invalid request body');
+    const session = findSessionOrFail(ctx, id);
+
+    session.setPinned(body.pinned);
+    // Persist + broadcast session:updated (keeps tabs/state consistent), then a
+    // dedicated session:pinned event so the session manager list re-sorts live.
+    persistAndBroadcastSession(ctx, session);
+    ctx.broadcast(SseEvent.SessionPinned, {
+      id,
+      pinned: session.pinned,
+      pinnedAt: session.pinnedAt ?? undefined,
+    });
+
+    return {
+      success: true,
+      data: {
+        pinned: session.pinned,
+        pinnedAt: session.pinnedAt ?? undefined,
+      },
+    };
+  });
+
   // ========== Image Watcher ==========
 
   app.post('/api/sessions/:id/image-watcher', async (req) => {
@@ -2252,6 +2279,8 @@ export function registerSessionRoutes(
         createdAt: st.createdAt,
         lastActivityAt: st.lastActivityAt,
         claudeSessionId: s.claudeSessionId ?? undefined,
+        pinned: st.pinned,
+        pinnedAt: st.pinnedAt,
       };
     });
 
@@ -2267,6 +2296,8 @@ export function registerSessionRoutes(
       createdAt: p.createdAt,
       lastActivityAt: p.lastActivityAt,
       claudeSessionId: p.resumeSessionId,
+      pinned: p.pinned,
+      pinnedAt: p.pinnedAt,
     }));
 
     // Lifecycle audit log (newest-first, capped).

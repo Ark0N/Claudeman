@@ -667,6 +667,11 @@ export const AutoResumeSchema = z.object({
   enabled: z.boolean(),
 });
 
+/** POST /api/sessions/:id/pin (COD-139) — explicit pin state for idempotency. */
+export const PinSessionSchema = z.object({
+  pinned: z.boolean(),
+});
+
 /** POST /api/sessions/:id/image-watcher */
 export const ImageWatcherSchema = z.object({
   enabled: z.boolean(),

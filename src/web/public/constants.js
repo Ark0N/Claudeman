@@ -322,6 +322,7 @@ const SSE_EVENTS = {
   SESSION_LIMIT_RESUME_CANCELLED: 'session:limitResumeCancelled',
   SESSION_RESPAWN_BREAKER_TRIPPED: 'session:respawnBreakerTripped',
   SESSION_CLI_INFO: 'session:cliInfo',
+  SESSION_PINNED: 'session:pinned',
   SESSION_MESSAGE: 'session:message',
   SESSION_INTERACTIVE: 'session:interactive',
   SESSION_RUNNING: 'session:running',
