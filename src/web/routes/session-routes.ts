@@ -2025,6 +2025,59 @@ export function registerSessionRoutes(
   }
 
   /**
+   * Extract the text of the LAST user message from a JSONL transcript chunk
+   * (COD-145). Mirrors `extractFirstUserPrompt` exactly — same user-message
+   * detection, same noise/secret/slash-command filters, same 120-char cap — but
+   * keeps the last qualifying match instead of returning on the first. Scan the
+   * file tail for this (the most recent prompt lives near the end).
+   */
+  function extractLastUserPrompt(text: string): string | undefined {
+    const MAX_PROMPT_LEN = 120;
+    let result: string | undefined;
+    let start = 0;
+    while (start < text.length) {
+      const end = text.indexOf('\n', start);
+      const line = end === -1 ? text.slice(start) : text.slice(start, end);
+      start = end === -1 ? text.length : end + 1;
+      if (!line.includes('"type":"user"')) continue;
+      try {
+        const entry = JSON.parse(line);
+        if (entry.type !== 'user' || !entry.message) continue;
+        const content = entry.message.content;
+        let msgText: string | undefined;
+        if (typeof content === 'string') {
+          msgText = content;
+        } else if (Array.isArray(content)) {
+          const textBlock = content.find((b: { type: string }) => b.type === 'text');
+          if (textBlock) msgText = textBlock.text;
+        }
+        if (!msgText) continue;
+        msgText = msgText
+          .replace(/<[^>]+>/g, '')
+          .replace(new RegExp(String.raw`\x1b\[[0-9;]*[a-zA-Z]`, 'g'), '')
+          .trim()
+          .replace(/\s+/g, ' ');
+        if (!msgText) continue;
+        if (
+          /^(Caveat:|init\b|clear\b|resume\b|\/[a-z][\w-]*\b|You are a |\[Request |Set model to )/i.test(msgText) ||
+          /^(Please )?(analyze|review) this codebase/i.test(msgText) ||
+          /^(Read|Implement the following) .+, then (search|list|check) /i.test(msgText) ||
+          /^\d+ vulnerabilit/i.test(msgText) ||
+          /\btoolu_/.test(msgText) ||
+          /^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]+/.test(msgText) ||
+          /\b(sk-ant-|ANTHROPIC_API_KEY|API_KEY=|SECRET|TOKEN=)/i.test(msgText) ||
+          msgText.length < 8
+        )
+          continue;
+        result = msgText.length > MAX_PROMPT_LEN ? msgText.slice(0, MAX_PROMPT_LEN) + '…' : msgText;
+      } catch {
+        // Malformed line — skip
+      }
+    }
+    return result;
+  }
+
+  /**
    * Decode a Claude project key (e.g. "-Users-teigen-Documents-Workspace-AI-project-Mirror")
    * back to a filesystem path ("/Users/teigen/Documents/Workspace/AI_project/Mirror").
    *
@@ -2162,6 +2215,7 @@ export function registerSessionRoutes(
     sizeBytes: number;
     lastModified: string;
     firstPrompt?: string;
+    lastPrompt?: string;
   };
 
   // Scan a single project directory and return all valid history sessions in it.
@@ -2207,6 +2261,17 @@ export function registerSessionRoutes(
         if (tail) firstPrompt = extractFirstUserPrompt(tail);
       }
 
+      // COD-145: last (most recent) user prompt lives near the END of the file, so
+      // prefer the tail. For large files where no tail was read yet, read one
+      // (mirrors the firstPrompt > 65536 block). Small files fit in `head`, which
+      // then contains the whole transcript — scan it for the last match instead.
+      if (!tail && fileStat.size > 65536) {
+        const tailBuf = Buffer.alloc(32768);
+        tail = await readFileTail(filePath, tailBuf, fileStat.size);
+      }
+      const lastPrompt =
+        (tail ? extractLastUserPrompt(tail) : undefined) ?? (head ? extractLastUserPrompt(head) : undefined);
+
       out.push({
         sessionId,
         workingDir,
@@ -2214,6 +2279,7 @@ export function registerSessionRoutes(
         sizeBytes: fileStat.size,
         lastModified: fileStat.mtime.toISOString(),
         firstPrompt,
+        lastPrompt,
       });
     }
     return out;
@@ -2331,6 +2397,7 @@ export function registerSessionRoutes(
             sizeBytes: h.sizeBytes,
             lastModified: h.lastModified,
             firstPrompt: h.firstPrompt,
+            lastPrompt: h.lastPrompt,
             projectKey: h.projectKey,
           });
         }

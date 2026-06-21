@@ -28,6 +28,8 @@ export type UnifiedSessionItem = {
   lastActivityAt?: number;
   claudeSessionId?: string;
   firstPrompt?: string;
+  /** Most recent user prompt from the transcript (COD-145), parallel to firstPrompt. */
+  lastPrompt?: string;
   sizeBytes?: number;
   projectKey?: string;
   remote?: boolean;
@@ -85,6 +87,8 @@ export type HistoryInput = {
   sizeBytes: number;
   lastModified: string;
   firstPrompt?: string;
+  /** Most recent user prompt from the transcript (COD-145). */
+  lastPrompt?: string;
   projectKey?: string;
 };
 
@@ -157,6 +161,7 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
     overwrite(item, 'workingDir', h.workingDir);
     overwrite(item, 'sizeBytes', h.sizeBytes);
     overwrite(item, 'firstPrompt', h.firstPrompt);
+    overwrite(item, 'lastPrompt', h.lastPrompt);
     overwrite(item, 'projectKey', h.projectKey);
     const ms = Date.parse(h.lastModified);
     if (!Number.isNaN(ms) && item.lastActivityAt === undefined) item.lastActivityAt = ms;
@@ -223,30 +228,50 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
   // firstPrompt (so rows keyed to their own transcript are untouched).
   const firstPromptByUuid = new Map<string, string>();
   const firstPromptByWorkingDir = new Map<string, { prompt: string; ms: number }>();
+  // COD-145: lastPrompt rides the same backfill (build parallel indexes; never overwrite).
+  const lastPromptByUuid = new Map<string, string>();
+  const lastPromptByWorkingDir = new Map<string, { prompt: string; ms: number }>();
   for (const h of sources.history ?? []) {
-    if (!h.firstPrompt) continue;
-    firstPromptByUuid.set(h.sessionId, h.firstPrompt);
-    if (h.workingDir) {
-      const ms = Date.parse(h.lastModified);
-      const ts = Number.isNaN(ms) ? -Infinity : ms;
-      const existing = firstPromptByWorkingDir.get(h.workingDir);
-      if (!existing || ts > existing.ms) {
-        firstPromptByWorkingDir.set(h.workingDir, { prompt: h.firstPrompt, ms: ts });
+    const ms = Date.parse(h.lastModified);
+    const ts = Number.isNaN(ms) ? -Infinity : ms;
+    if (h.firstPrompt) {
+      firstPromptByUuid.set(h.sessionId, h.firstPrompt);
+      if (h.workingDir) {
+        const existing = firstPromptByWorkingDir.get(h.workingDir);
+        if (!existing || ts > existing.ms) {
+          firstPromptByWorkingDir.set(h.workingDir, { prompt: h.firstPrompt, ms: ts });
+        }
+      }
+    }
+    if (h.lastPrompt) {
+      lastPromptByUuid.set(h.sessionId, h.lastPrompt);
+      if (h.workingDir) {
+        const existing = lastPromptByWorkingDir.get(h.workingDir);
+        if (!existing || ts > existing.ms) {
+          lastPromptByWorkingDir.set(h.workingDir, { prompt: h.lastPrompt, ms: ts });
+        }
       }
     }
   }
   for (const item of map.values()) {
-    if (item.firstPrompt) continue; // never overwrite an existing non-empty prompt
-    if (item.claudeSessionId) {
-      const byUuid = firstPromptByUuid.get(item.claudeSessionId);
+    if (!item.firstPrompt) {
+      // never overwrite an existing non-empty prompt
+      const byUuid = item.claudeSessionId ? firstPromptByUuid.get(item.claudeSessionId) : undefined;
       if (byUuid) {
         item.firstPrompt = byUuid;
-        continue;
+      } else if (item.workingDir) {
+        const byDir = firstPromptByWorkingDir.get(item.workingDir);
+        if (byDir) item.firstPrompt = byDir.prompt;
       }
     }
-    if (item.workingDir) {
-      const byDir = firstPromptByWorkingDir.get(item.workingDir);
-      if (byDir) item.firstPrompt = byDir.prompt;
+    if (!item.lastPrompt) {
+      const byUuid = item.claudeSessionId ? lastPromptByUuid.get(item.claudeSessionId) : undefined;
+      if (byUuid) {
+        item.lastPrompt = byUuid;
+      } else if (item.workingDir) {
+        const byDir = lastPromptByWorkingDir.get(item.workingDir);
+        if (byDir) item.lastPrompt = byDir.prompt;
+      }
     }
   }
 
@@ -300,7 +325,7 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
 }
 
 /**
- * Case-insensitive substring filter (name + firstPrompt + workingDir + sessionId)
+ * Case-insensitive substring filter (name + firstPrompt + lastPrompt + workingDir + sessionId)
  * with offset/limit paging. `total` is the filtered count BEFORE paging.
  */
 export function filterAndPaginate(
@@ -310,7 +335,7 @@ export function filterAndPaginate(
   const q = (opts.q ?? '').trim().toLowerCase();
   const filtered = q
     ? items.filter((it) => {
-        const hay = [it.name, it.firstPrompt, it.workingDir, it.sessionId]
+        const hay = [it.name, it.firstPrompt, it.lastPrompt, it.workingDir, it.sessionId]
           .filter((v): v is string => typeof v === 'string')
           .join(' ')
           .toLowerCase();

@@ -1338,6 +1338,21 @@ Object.assign(CodemanApp.prototype, {
     promptText.textContent = s.firstPrompt || '(no prompt captured)';
     promptRow.append(promptLabel, promptText);
 
+    // COD-145: show the most recent user prompt too, but collapse single-prompt
+    // sessions (omit when there's no last prompt or it duplicates the first).
+    let lastPromptRow = null;
+    if (s.lastPrompt && s.lastPrompt !== s.firstPrompt) {
+      lastPromptRow = document.createElement('div');
+      lastPromptRow.className = 'history-detail-row';
+      const lastPromptLabel = document.createElement('span');
+      lastPromptLabel.className = 'history-detail-label';
+      lastPromptLabel.textContent = 'Last prompt';
+      const lastPromptText = document.createElement('span');
+      lastPromptText.className = 'history-detail-value history-detail-prompt';
+      lastPromptText.textContent = s.lastPrompt;
+      lastPromptRow.append(lastPromptLabel, lastPromptText);
+    }
+
     const pathRow = document.createElement('div');
     pathRow.className = 'history-detail-row';
     const pathLabel = document.createElement('span');
@@ -1356,7 +1371,9 @@ Object.assign(CodemanApp.prototype, {
     metaParts.push(s.sessionId.slice(0, 8));
     metaRow.textContent = metaParts.join(' · ');
 
-    detail.append(promptRow, pathRow, metaRow);
+    detail.append(promptRow);
+    if (lastPromptRow) detail.append(lastPromptRow);
+    detail.append(pathRow, metaRow);
 
     if (showViewAll && s.projectKey) {
       const actionRow = document.createElement('div');
