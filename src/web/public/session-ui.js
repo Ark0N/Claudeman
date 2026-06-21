@@ -424,7 +424,7 @@ Object.assign(CodemanApp.prototype, {
         btn.append(dirSpan, metaSpan);
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
-          this.resumeHistorySession(s.sessionId, s.workingDir);
+          this.resumeHistorySession(s.sessionId, s.workingDir, s.name);
         });
         container.appendChild(btn);
       }

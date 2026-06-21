@@ -1260,7 +1260,7 @@ Object.assign(CodemanApp.prototype, {
           if (isLive && this.sessions.has(s.sessionId)) {
             this.selectSession(s.sessionId);
           } else {
-            this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '');
+            this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '', s.name);
           }
         })
     );
@@ -1474,7 +1474,7 @@ Object.assign(CodemanApp.prototype, {
         } else {
           // Resume by the Claude conversation UUID when present (resumed sessions
           // carry theirs separately from their Codeman id).
-          this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '');
+          this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '', s.name);
         }
         this.closeSessionManager?.();
         closeMenu();
@@ -1772,7 +1772,24 @@ Object.assign(CodemanApp.prototype, {
     this._folderHistoryState = null;
   },
 
-  async resumeHistorySession(sessionId, workingDir) {
+  // Choose the name for a resumed session: keep the session's own name when it
+  // has one, otherwise synthesize a fresh w<N>-<dir> name (next free w-number
+  // across open sessions). COD-143 — resume used to always generate a new name.
+  _resolveResumeName(existingName, workingDir) {
+    if (typeof existingName === 'string' && existingName.trim()) return existingName;
+    const dirName = (workingDir || '').split('/').pop() || 'session';
+    let startNumber = 1;
+    for (const [, session] of this.sessions) {
+      const match = session.name && session.name.match(/^w(\d+)-/);
+      if (match) {
+        const num = parseInt(match[1]);
+        if (num >= startNumber) startNumber = num + 1;
+      }
+    }
+    return `w${startNumber}-${dirName}`;
+  },
+
+  async resumeHistorySession(sessionId, workingDir, existingName) {
     // Close the run mode menu if open
     document.getElementById('runModeMenu')?.classList.remove('active');
     // Close folder history modal if open
@@ -1781,17 +1798,9 @@ Object.assign(CodemanApp.prototype, {
       this.terminal.clear();
       this.terminal.writeln(`\x1b[1;32m Resuming conversation ${sessionId.slice(0, 8)}...\x1b[0m`);
 
-      // Generate a session name from the working dir
-      const dirName = workingDir.split('/').pop() || 'session';
-      let startNumber = 1;
-      for (const [, session] of this.sessions) {
-        const match = session.name && session.name.match(/^w(\d+)-/);
-        if (match) {
-          const num = parseInt(match[1]);
-          if (num >= startNumber) startNumber = num + 1;
-        }
-      }
-      const name = `w${startNumber}-${dirName}`;
+      // Keep the session's own name when resuming; only synthesize a w<N>-<dir>
+      // name when the source row had none (COD-143).
+      const name = this._resolveResumeName(existingName, workingDir);
 
       // Create session with resumeSessionId — include envOverrides so resumed
       // conversations inherit current UI settings (effort, agent teams, etc.).
