@@ -141,6 +141,66 @@ describe('StateStore', () => {
     });
   });
 
+  describe('demoteOrRemoveSession and pinned cleanup (COD-142)', () => {
+    it('should preserve a pinned session as a stopped record on kill', () => {
+      const store = new StateStore(testFilePath);
+      const pinnedAt = Date.now();
+      store.setSession('pinned-1', {
+        ...createMockSessionState('pinned-1'),
+        name: 'My Pinned Session',
+        workingDir: '/tmp/pinned',
+        pinned: true,
+        pinnedAt,
+      });
+
+      const result = store.demoteOrRemoveSession('pinned-1');
+
+      expect(result).toBe('preserved');
+      const preserved = store.getSession('pinned-1');
+      expect(preserved).not.toBeNull();
+      expect(preserved?.status).toBe('stopped');
+      expect(preserved?.pid).toBeNull();
+      expect(preserved?.pinned).toBe(true);
+      expect(preserved?.pinnedAt).toBe(pinnedAt);
+      expect(preserved?.name).toBe('My Pinned Session');
+      expect(preserved?.workingDir).toBe('/tmp/pinned');
+    });
+
+    it('should fully remove an unpinned session on kill', () => {
+      const store = new StateStore(testFilePath);
+      store.setSession('plain-1', createMockSessionState('plain-1'));
+
+      const result = store.demoteOrRemoveSession('plain-1');
+
+      expect(result).toBe('removed');
+      expect(store.getSession('plain-1')).toBeNull();
+    });
+
+    it('should report absent for an unknown session id', () => {
+      const store = new StateStore(testFilePath);
+
+      expect(store.demoteOrRemoveSession('does-not-exist')).toBe('absent');
+    });
+
+    it('should keep pinned records during cleanupStaleSessions but reap unpinned ones', () => {
+      const store = new StateStore(testFilePath);
+      store.setSession('pinned-1', {
+        ...createMockSessionState('pinned-1'),
+        pinned: true,
+        pinnedAt: Date.now(),
+      });
+      store.setSession('plain-1', createMockSessionState('plain-1'));
+
+      const result = store.cleanupStaleSessions(new Set<string>());
+
+      expect(result.count).toBe(1);
+      expect(result.cleaned.map((c) => c.id)).toEqual(['plain-1']);
+      expect(result.cleaned.some((c) => c.id === 'pinned-1')).toBe(false);
+      expect(store.getSession('pinned-1')).not.toBeNull();
+      expect(store.getSession('plain-1')).toBeNull();
+    });
+  });
+
   describe('task operations', () => {
     it('should set and get tasks', () => {
       const store = new StateStore(testFilePath);

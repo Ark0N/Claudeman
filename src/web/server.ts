@@ -1185,7 +1185,7 @@ export class WebServer extends EventEmitter {
       // Only remove from state.json if we're also killing the mux session.
       // When killMux=false (server shutdown), preserve state for recovery.
       if (killMux) {
-        this.store.removeSession(sessionId);
+        this.store.demoteOrRemoveSession(sessionId);
       }
     }
 
