@@ -3733,6 +3733,9 @@ class CodemanApp {
     // the buffer write, causing 70KB+ single-frame flushes that stall WebGL.
     // chunkedTerminalWrite also sets this, but we need it before the fetch too.
     const bufferLoadOwner = this._beginBufferLoad(selectGen);
+    // COD-144: track whether the load painted nothing (empty fetch + no cache).
+    // For that just-created-session case we flush (not discard) queued SSE events.
+    let bufferWasEmpty = false;
     try {
       // Fit terminal to container BEFORE writing any buffer data.
       // If the browser was resized while viewing another session, the terminal
@@ -3889,13 +3892,16 @@ class CodemanApp {
       } else if (!cachedBuffer) {
         // No fresh buffer and no cache — clear any stale content
         this._resetTerminalForReplay();
+        bufferWasEmpty = true;
       }
 
-      // Buffer load complete — unblock live SSE writes (queued events are discarded
-      // to prevent duplicate content). chunkedTerminalWrite calls _finishBufferLoad
-      // internally, but if we skipped the write (cache hit or empty), call it here.
+      // Buffer load complete — unblock live SSE writes. chunkedTerminalWrite calls
+      // _finishBufferLoad internally (discarding queued events to prevent duplicate
+      // content); if we skipped the write (cache hit or empty), call it here.
+      // COD-144: when the load painted nothing, FLUSH the queued events instead of
+      // discarding — a new session's prompt arrives only as a queued SSE event.
       if (this._isLoadingBuffer) {
-        this._finishBufferLoad(bufferLoadOwner);
+        this._finishBufferLoad(bufferLoadOwner, { flushQueued: bufferWasEmpty });
       }
       // Drop the guard so user input clears state normally
       this._restoringFlushedState = false;
