@@ -163,6 +163,112 @@ describe('mergeUnifiedSessions', () => {
     expect(merged).toHaveLength(1);
     expect(merged[0].projectKey).toBe('-repo-alpha');
   });
+
+  // COD-140: firstPrompt backfill — live sessions whose Codeman id does not match an
+  // on-disk transcript UUID still surface a first prompt (by claudeSessionId join, then
+  // by newest transcript in the same workingDir).
+  it('backfills firstPrompt onto a live session by claudeSessionId join (uuid-join)', () => {
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'codeman-1', status: 'working', claudeSessionId: 'uuid-A', workingDir: '/w' }],
+      history: [
+        {
+          sessionId: 'uuid-A',
+          workingDir: '/w',
+          sizeBytes: 5000,
+          lastModified: '2026-01-01T00:00:00.000Z',
+          firstPrompt: 'fix the bug',
+        },
+      ],
+    });
+    const live = merged.find((m) => m.sessionId === 'codeman-1');
+    expect(live).toBeDefined();
+    expect(live!.firstPrompt).toBe('fix the bug');
+    // The upstream unified-service alias map (COD-160/161) folds a history row keyed
+    // by the Claude conversation UUID into the owning live session (claudeSessionId
+    // join), so it does NOT surface as a separate item — the firstPrompt reaches the
+    // live row above rather than a duplicate uuid-A entry.
+    const hist = merged.find((m) => m.sessionId === 'uuid-A');
+    expect(hist).toBeUndefined();
+  });
+
+  it('falls back to the workingDir transcript when no uuid join exists (workingDir fallback)', () => {
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'codeman-2', status: 'working', claudeSessionId: 'uuid-missing', workingDir: '/w2' }],
+      history: [
+        {
+          sessionId: 'uuid-other',
+          workingDir: '/w2',
+          sizeBytes: 5000,
+          lastModified: '2026-01-01T00:00:00.000Z',
+          firstPrompt: 'borrowed prompt',
+        },
+      ],
+    });
+    const live = merged.find((m) => m.sessionId === 'codeman-2');
+    expect(live).toBeDefined();
+    expect(live!.firstPrompt).toBe('borrowed prompt');
+  });
+
+  it('uses the newest transcript per workingDir for the fallback (newest-wins)', () => {
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'codeman-3', status: 'working', claudeSessionId: 'uuid-missing', workingDir: '/w3' }],
+      history: [
+        {
+          sessionId: 'uuid-old',
+          workingDir: '/w3',
+          sizeBytes: 5000,
+          lastModified: '2026-01-01T00:00:00.000Z',
+          firstPrompt: 'older prompt',
+        },
+        {
+          sessionId: 'uuid-new',
+          workingDir: '/w3',
+          sizeBytes: 6000,
+          lastModified: '2026-02-01T00:00:00.000Z',
+          firstPrompt: 'newer prompt',
+        },
+      ],
+    });
+    const live = merged.find((m) => m.sessionId === 'codeman-3');
+    expect(live).toBeDefined();
+    expect(live!.firstPrompt).toBe('newer prompt');
+  });
+
+  it('never overwrites a firstPrompt that already merged from the session own transcript (no overwrite)', () => {
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'self-uuid', status: 'working', claudeSessionId: 'self-uuid', workingDir: '/w4' }],
+      history: [
+        // the session's own transcript (keyed by its id) — provides the real prompt
+        {
+          sessionId: 'self-uuid',
+          workingDir: '/w4',
+          sizeBytes: 5000,
+          lastModified: '2026-01-01T00:00:00.000Z',
+          firstPrompt: 'own prompt',
+        },
+        // a newer sibling transcript in the same dir that must NOT clobber it
+        {
+          sessionId: 'sibling-uuid',
+          workingDir: '/w4',
+          sizeBytes: 6000,
+          lastModified: '2026-03-01T00:00:00.000Z',
+          firstPrompt: 'sibling prompt',
+        },
+      ],
+    });
+    const self = merged.find((m) => m.sessionId === 'self-uuid');
+    expect(self).toBeDefined();
+    expect(self!.firstPrompt).toBe('own prompt');
+  });
+
+  it('leaves firstPrompt undefined when there is no transcript at all (no transcript)', () => {
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'codeman-5', status: 'working', claudeSessionId: 'uuid-none', workingDir: '/empty' }],
+    });
+    const live = merged.find((m) => m.sessionId === 'codeman-5');
+    expect(live).toBeDefined();
+    expect(live!.firstPrompt).toBeUndefined();
+  });
 });
 
 describe('filterAndPaginate', () => {

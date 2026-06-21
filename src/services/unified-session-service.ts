@@ -212,6 +212,44 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
     if (m.remote !== undefined) item.remote = m.remote;
   }
 
+  // firstPrompt backfill (COD-140): the only source that sets firstPrompt is the
+  // transcript-history view, keyed by the Claude transcript file's UUID. A live/persisted
+  // row keyed by its Codeman id only inherits firstPrompt when that id happens to equal an
+  // on-disk transcript UUID. When it doesn't (stale/wrong claudeSessionId, post-/clear new
+  // uuid, resumed/attached/worktree session, transcript not yet flushed), the row shows
+  // "(no prompt captured)" even though a real transcript for that working dir exists under a
+  // different UUID. Backfill from the already-passed history: first try the claudeSessionId
+  // join, then the newest transcript in the same workingDir. Never overwrite a non-empty
+  // firstPrompt (so rows keyed to their own transcript are untouched).
+  const firstPromptByUuid = new Map<string, string>();
+  const firstPromptByWorkingDir = new Map<string, { prompt: string; ms: number }>();
+  for (const h of sources.history ?? []) {
+    if (!h.firstPrompt) continue;
+    firstPromptByUuid.set(h.sessionId, h.firstPrompt);
+    if (h.workingDir) {
+      const ms = Date.parse(h.lastModified);
+      const ts = Number.isNaN(ms) ? -Infinity : ms;
+      const existing = firstPromptByWorkingDir.get(h.workingDir);
+      if (!existing || ts > existing.ms) {
+        firstPromptByWorkingDir.set(h.workingDir, { prompt: h.firstPrompt, ms: ts });
+      }
+    }
+  }
+  for (const item of map.values()) {
+    if (item.firstPrompt) continue; // never overwrite an existing non-empty prompt
+    if (item.claudeSessionId) {
+      const byUuid = firstPromptByUuid.get(item.claudeSessionId);
+      if (byUuid) {
+        item.firstPrompt = byUuid;
+        continue;
+      }
+    }
+    if (item.workingDir) {
+      const byDir = firstPromptByWorkingDir.get(item.workingDir);
+      if (byDir) item.firstPrompt = byDir.prompt;
+    }
+  }
+
   // Meaningfulness floor: keep real rows, drop bare lifecycle/mux-only noise.
   const kept: UnifiedSessionItem[] = [];
   for (const item of map.values()) {
