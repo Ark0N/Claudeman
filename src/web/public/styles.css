@@ -11071,3 +11071,25 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   background: linear-gradient(135deg, #7c3aed, #8b5cf6);
   box-shadow: 0 0 28px -4px rgba(124, 58, 237, 0.5);
 }
+
+/* ── Scheduled Jobs (cron-style scheduler) ───────────────────────────────── */
+.scheduler-job-list { display: flex; flex-direction: column; gap: 8px; }
+.scheduler-job-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 10px 12px; border: 1px solid var(--border, #333); border-radius: 8px;
+  background: var(--panel-bg, rgba(255,255,255,0.02));
+}
+.scheduler-job-main { min-width: 0; flex: 1; }
+.scheduler-job-name { font-weight: 600; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.scheduler-job-meta { font-size: 12px; opacity: 0.7; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; }
+.scheduler-job-actions { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+.scheduler-badge {
+  font-size: 11px; padding: 1px 6px; border-radius: 10px;
+  background: var(--accent-bg, rgba(120,160,255,0.15)); opacity: 0.9;
+}
+.scheduler-badge-off { background: rgba(200,80,80,0.18); }
+.scheduler-weekdays { display: flex; gap: 10px; flex-wrap: wrap; }
+.scheduler-weekdays label { display: inline-flex; align-items: center; gap: 3px; font-weight: 400; }
+.scheduler-job-form {
+  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border, #333);
+}
