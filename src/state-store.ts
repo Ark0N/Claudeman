@@ -272,6 +272,12 @@ export class StateStore {
     if (this.state.tokenStats) {
       parts.push(`"tokenStats":${JSON.stringify(this.state.tokenStats)}`);
     }
+    if (this.state.scheduledJobs) {
+      parts.push(`"scheduledJobs":${JSON.stringify(this.state.scheduledJobs)}`);
+    }
+    if (this.state.scheduledJobRuns) {
+      parts.push(`"scheduledJobRuns":${JSON.stringify(this.state.scheduledJobRuns)}`);
+    }
 
     return `{${parts.join(',')}}`;
   }
@@ -565,6 +571,51 @@ export class StateStore {
   /** Clears orchestrator state and triggers a debounced save. */
   clearOrchestratorState() {
     this.state.orchestrator = undefined;
+    this.save();
+  }
+
+  // ========== Scheduled Job Methods (cron-style scheduler) ==========
+
+  /** Returns all scheduled jobs keyed by job ID. */
+  getScheduledJobs(): Record<string, import('./types/scheduler.js').ScheduledJob> {
+    if (!this.state.scheduledJobs) this.state.scheduledJobs = {};
+    return this.state.scheduledJobs;
+  }
+
+  /** Returns a scheduled job by ID, or null if not found. */
+  getScheduledJob(id: string): import('./types/scheduler.js').ScheduledJob | null {
+    return this.state.scheduledJobs?.[id] ?? null;
+  }
+
+  /** Sets a scheduled job and triggers a debounced save. */
+  setScheduledJob(id: string, job: import('./types/scheduler.js').ScheduledJob): void {
+    if (!this.state.scheduledJobs) this.state.scheduledJobs = {};
+    this.state.scheduledJobs[id] = job;
+    this.save();
+  }
+
+  /** Removes a scheduled job and triggers a debounced save. */
+  removeScheduledJob(id: string): void {
+    if (this.state.scheduledJobs) delete this.state.scheduledJobs[id];
+    this.save();
+  }
+
+  /** Returns all scheduled job runs keyed by run ID. */
+  getScheduledJobRuns(): Record<string, import('./types/scheduler.js').ScheduledJobRun> {
+    if (!this.state.scheduledJobRuns) this.state.scheduledJobRuns = {};
+    return this.state.scheduledJobRuns;
+  }
+
+  /** Sets a scheduled job run (history record) and triggers a debounced save. */
+  setScheduledJobRun(id: string, run: import('./types/scheduler.js').ScheduledJobRun): void {
+    if (!this.state.scheduledJobRuns) this.state.scheduledJobRuns = {};
+    this.state.scheduledJobRuns[id] = run;
+    this.save();
+  }
+
+  /** Removes a scheduled job run and triggers a debounced save. */
+  removeScheduledJobRun(id: string): void {
+    if (this.state.scheduledJobRuns) delete this.state.scheduledJobRuns[id];
     this.save();
   }
 

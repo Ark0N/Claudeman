@@ -152,8 +152,10 @@ import {
   registerClipboardRoutes,
   registerSearchRoutes,
   registerOrchestratorRoutes,
+  registerSchedulerRoutes,
   registerWsRoutes,
 } from './routes/index.js';
+import { SchedulerService } from '../scheduler/scheduler-service.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -175,6 +177,7 @@ import {
   ITERATION_PAUSE_MS,
   STATS_COLLECTION_INTERVAL_MS,
   INACTIVITY_TIMEOUT_MS,
+  SCHEDULER_TICK_INTERVAL,
 } from '../config/server-timing.js';
 
 /**
@@ -223,6 +226,8 @@ export class WebServer extends EventEmitter {
   // Store session listener references for explicit cleanup (prevents memory leaks)
   private sessionListenerRefs: Map<string, SessionListenerRefs> = new Map();
   private scheduledRuns: Map<string, ScheduledRun> = new Map();
+  /** Cron-style scheduler service (assigned in setupRoutes). */
+  private schedulerService!: SchedulerService;
   private sse: SseStreamManager;
   private store = getStore();
   private port: number;
@@ -873,6 +878,13 @@ export class WebServer extends EventEmitter {
     registerClipboardRoutes(this.app, ctx);
     registerSearchRoutes(this.app, ctx);
     registerOrchestratorRoutes(this.app, ctx);
+
+    // Cron-style scheduler: build the service from the same context, recompute
+    // due times for any persisted jobs, then expose it to its routes.
+    this.schedulerService = new SchedulerService(ctx);
+    this.schedulerService.init();
+    registerSchedulerRoutes(this.app, { ...ctx, scheduler: this.schedulerService });
+
     registerWsRoutes(this.app, ctx, () => this.getHostPolicy());
   }
 
@@ -1945,6 +1957,17 @@ export class WebServer extends EventEmitter {
       },
       SCHEDULED_CLEANUP_INTERVAL,
       { description: 'scheduled runs cleanup' }
+    );
+
+    // Start the cron-style scheduler loop (fires due ScheduledJobs).
+    this.cleanup.setInterval(
+      () => {
+        this.schedulerService.tickDueJobs().catch((err) => {
+          console.error('[scheduler] tick failed:', getErrorMessage(err));
+        });
+      },
+      SCHEDULER_TICK_INTERVAL,
+      { description: 'scheduled jobs due-checker' }
     );
 
     // Start SSE client health check timer (prevents memory leaks from dead connections)

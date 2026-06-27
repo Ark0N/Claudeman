@@ -23,6 +23,7 @@ import type { SessionState } from './session.js';
 import type { TaskState } from './task.js';
 import type { RalphLoopState } from './ralph.js';
 import type { RespawnConfig } from './respawn.js';
+import type { ScheduledJob, ScheduledJobRun } from './scheduler.js';
 
 // ========== Global Stats Types ==========
 
@@ -111,6 +112,10 @@ export interface AppState {
   tokenStats?: TokenStats;
   /** Orchestrator Loop state (phased plan execution) */
   orchestrator?: import('./orchestrator.js').OrchestratorPersistState;
+  /** Cron-style scheduled jobs, keyed by job ID. */
+  scheduledJobs?: Record<string, ScheduledJob>;
+  /** Scheduled job run history, keyed by run ID. */
+  scheduledJobRuns?: Record<string, ScheduledJobRun>;
 }
 
 // ========== Default Configuration ==========
