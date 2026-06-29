@@ -43,6 +43,13 @@ export const MAX_SSE_CLIENTS = 100;
  */
 export const MAX_TODOS_PER_SESSION = 500;
 
+/**
+ * Maximum cron-job run-history records retained across all jobs. Oldest runs
+ * (by startedAt) are pruned when exceeded — bounds state.json growth from
+ * frequently-firing or perpetually-skipped jobs.
+ */
+export const MAX_CRON_RUN_HISTORY = 500;
+
 // ============================================================================
 // Pending Tool Calls Limits
 // ============================================================================

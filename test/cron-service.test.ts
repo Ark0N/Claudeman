@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CronService, type CronDeps } from '../src/cron/cron-service.js';
@@ -140,6 +140,25 @@ describe('CronService', () => {
       // Cosmetic edit must not resurrect a fired one-time job.
       expect(updated!.completedOnce).toBe(true);
       expect(updated!.nextRunAt).toBeNull();
+    });
+
+    it('does NOT resurrect a fired once-job when the edit form round-trips the unchanged schedule', async () => {
+      // Reproduces the real UI flow: the edit modal re-sends the FULL job
+      // (scheduleType + runAt unchanged) on every save. A field-presence check
+      // would wrongly re-arm; we compare VALUES, so an unchanged schedule does not.
+      const runAt = Date.now() - 1000;
+      const job = svc.service.createJob(mkInput({ scheduleType: 'once', runAt, intervalMinutes: undefined }));
+      await svc.service.tickDueJobs(Date.now());
+      await flush();
+      expect(svc.service.getJob(job.id)!.completedOnce).toBe(true);
+
+      // Full-body edit changing only the name; schedule values identical.
+      const updated = svc.service.updateJob(job.id, { name: 'renamed', scheduleType: 'once', runAt, enabled: false });
+      expect(updated!.completedOnce).toBe(true);
+
+      // Even re-enabling afterward must not bring the dead job back to life.
+      const reenabled = svc.service.setEnabled(job.id, true);
+      expect(reenabled!.nextRunAt).toBeNull();
     });
 
     it('re-arms a completed once-job when the schedule itself is edited', async () => {
@@ -282,61 +301,108 @@ describe('CronService', () => {
       expect(runs[0].status).toBe('skipped');
       const after = local.service.getJob(job.id)!;
       expect(after.lastStatus).toBe('skipped');
+      // A skip is not a run: lastRunAt must NOT advance.
+      expect(after.lastRunAt).toBeNull();
       expect(after.nextRunAt!).toBeGreaterThan(fireAt);
       expect(after.lastDueKey).not.toBeNull();
+    });
+
+    it('coalesces consecutive skips — a perpetually-skipped job does not flood run history', async () => {
+      const sessions = new Map<string, { mode: string }>([['s1', { mode: 'claude' }]]);
+      const local = makeService(sessions);
+      const job = local.service.createJob(
+        mkInput({ agentType: 'claude', concurrencyPolicy: 'skip_if_same_agent_running', intervalMinutes: 10 })
+      );
+
+      // Drive 50 due ticks; the same-mode session keeps it skipped every time.
+      for (let i = 0; i < 50; i++) {
+        const due = local.service.getJob(job.id)!.nextRunAt! + 1;
+        await local.service.tickDueJobs(due);
+        await flush();
+      }
+
+      // Exactly ONE skipped run is recorded for the whole skip streak.
+      expect(local.service.listRuns(job.id).length).toBe(1);
+      expect(local.service.listRuns(job.id)[0].status).toBe('skipped');
     });
   });
 
   describe('resolvePrompt path guard', () => {
-    it('blocks a prompt_file_path pointing at a sensitive system file', async () => {
-      const job = svc.service.createJob(
-        mkInput({ promptMode: 'prompt_file_path', promptFilePath: '/etc/passwd', promptText: undefined })
+    // A real workspace dir for the in-workspace / confinement cases.
+    let ws: string;
+    beforeEach(() => {
+      ws = mkdtempSync(join(tmpdir(), 'codeman-cron-ws-'));
+    });
+
+    const fileJob = (promptFilePath: string, workingDir: string) =>
+      svc.service.createJob(
+        mkInput({ promptMode: 'prompt_file_path', promptFilePath, promptText: undefined, workingDir })
       );
-      const run = await svc.service.runNow(job.id);
-      expect(run).not.toBeNull();
+
+    it('blocks a sensitive system file via the blocklist (/etc/passwd)', async () => {
+      const run = await svc.service.runNow(fileJob('/etc/passwd', ws).id);
       expect(run!.status).toBe('failed');
-      // Must fail at prompt resolution (blocked), NOT later at the missing workingDir —
-      // i.e. the file content must never be read.
+      // Fails at prompt resolution (blocked) — content is never read.
       expect(run!.errorMessage).toMatch(/Prompt error/i);
       expect(run!.errorMessage).toMatch(/block/i);
-      // No session was created for a blocked job.
       expect(svc.sessions.size).toBe(0);
     });
 
-    it('blocks a prompt_file_path under a default-blocked tree (/root)', async () => {
-      const job = svc.service.createJob(
-        mkInput({ promptMode: 'prompt_file_path', promptFilePath: '/root/.bashrc', promptText: undefined })
-      );
-      const run = await svc.service.runNow(job.id);
+    it('blocks /proc/self/environ (server-process env exfil) via workspace confinement', async () => {
+      const run = await svc.service.runNow(fileJob('/proc/self/environ', ws).id);
       expect(run!.status).toBe('failed');
       expect(run!.errorMessage).toMatch(/Prompt error/i);
+      expect(run!.errorMessage).toMatch(/inside the job working directory/i);
+    });
+
+    it('blocks a regular file that lives OUTSIDE the job workspace', async () => {
+      const outside = mkdtempSync(join(tmpdir(), 'codeman-cron-outside-'));
+      const file = join(outside, 'prompt.md');
+      writeFileSync(file, 'do the thing');
+      const run = await svc.service.runNow(fileJob(file, ws).id);
+      expect(run!.status).toBe('failed');
+      expect(run!.errorMessage).toMatch(/inside the job working directory/i);
+    });
+
+    it('blocks a non-regular file (directory) inside the workspace', async () => {
+      const sub = join(ws, 'adir');
+      mkdirSync(sub);
+      const run = await svc.service.runNow(fileJob(sub, ws).id);
+      expect(run!.status).toBe('failed');
+      expect(run!.errorMessage).toMatch(/not a regular file/i);
+    });
+
+    it('blocks an oversized prompt file (unbounded-read DoS)', async () => {
+      const file = join(ws, 'huge.md');
+      writeFileSync(file, Buffer.alloc(1024 * 1024 + 1, 0x61));
+      const run = await svc.service.runNow(fileJob(file, ws).id);
+      expect(run!.status).toBe('failed');
+      expect(run!.errorMessage).toMatch(/too large/i);
     });
 
     it('fails cleanly (no throw) when the prompt file does not exist', async () => {
-      const job = svc.service.createJob(
-        mkInput({
-          promptMode: 'prompt_file_path',
-          promptFilePath: '/tmp/codeman-cron-no-such-prompt-file.md',
-          promptText: undefined,
-        })
-      );
-      const run = await svc.service.runNow(job.id);
+      const run = await svc.service.runNow(fileJob(join(ws, 'nope.md'), ws).id);
       expect(run!.status).toBe('failed');
       expect(run!.errorMessage).toMatch(/Prompt error/i);
     });
 
-    it('allows an ordinary prompt file outside the blocklist (passes resolution)', async () => {
-      const dir = mkdtempSync(join(tmpdir(), 'codeman-cron-prompt-'));
-      const file = join(dir, 'prompt.md');
+    it('allows a regular prompt file INSIDE the job workspace (passes resolution)', async () => {
+      const file = join(ws, 'prompt.md');
       writeFileSync(file, 'do the thing');
-      const job = svc.service.createJob(
-        mkInput({ promptMode: 'prompt_file_path', promptFilePath: file, promptText: undefined })
-      );
-      const run = await svc.service.runNow(job.id);
-      expect(run!.status).toBe('failed'); // still fails — workingDir (MISSING_DIR) does not exist
-      // ...but it got PAST prompt resolution: the failure is the workingDir, not a Prompt error.
+      const run = await svc.service.runNow(fileJob(file, ws).id);
+      // Got past prompt resolution + workingDir checks; fails only at the
+      // (mock-incomplete) session-launch step — NOT a prompt error.
+      expect(run!.status).toBe('failed');
       expect(run!.errorMessage).not.toMatch(/Prompt error/i);
-      expect(run!.errorMessage).toMatch(/workingDir/i);
+      expect(run!.errorMessage).toMatch(/Session launch failed/i);
+    });
+
+    it('blocks a symlink inside the workspace that escapes to /etc/passwd', async () => {
+      const link = join(ws, 'sneaky.md');
+      symlinkSync('/etc/passwd', link);
+      const run = await svc.service.runNow(fileJob(link, ws).id);
+      expect(run!.status).toBe('failed');
+      expect(run!.errorMessage).toMatch(/Prompt error/i);
     });
   });
 

@@ -14,7 +14,7 @@ import { Session } from '../session.js';
 import { SseEvent } from '../web/sse-events.js';
 import { CronJobSchema } from '../web/schemas.js';
 import { getErrorMessage, createErrorResponse, ApiErrorCode } from '../types/api.js';
-import { MAX_CONCURRENT_SESSIONS } from '../config/map-limits.js';
+import { MAX_CONCURRENT_SESSIONS, MAX_CRON_RUN_HISTORY } from '../config/map-limits.js';
 import { CRON_READY_MAX_ATTEMPTS, CRON_READY_SETTLE_MS } from '../config/server-timing.js';
 import { isBlockedAttachmentPath, loadAttachmentGuardConfig } from '../config/attachment-guard.js';
 import { validateSessionFilePath } from '../web/route-helpers.js';
@@ -27,6 +27,16 @@ import type { CronJobInput } from './cron-input.js';
 export type CronDeps = SessionPort & EventPort & ConfigPort & InfraPort;
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Hard ceiling on a prompt-file read (defends against unbounded-read DoS). */
+const MAX_PROMPT_FILE_BYTES = 1024 * 1024;
+
+/** Order-insensitive equality for the weekly-days arrays. */
+function sameDays(a: number[] | undefined, b: number[] | undefined): boolean {
+  const x = [...(a ?? [])].sort((p, q) => p - q);
+  const y = [...(b ?? [])].sort((p, q) => p - q);
+  return x.length === y.length && x.every((v, i) => v === y[i]);
+}
 
 export class CronService {
   constructor(private readonly deps: CronDeps) {}
@@ -99,17 +109,21 @@ export class CronService {
     if (!existing) return null;
     const now = Date.now();
 
-    // A completed one-time job is only re-armed when the SCHEDULE itself is
-    // edited — otherwise a cosmetic edit (rename, notes) would silently
-    // resurrect a job that already fired and run it again.
-    const scheduleTouched =
-      patch.scheduleType !== undefined ||
-      patch.runAt !== undefined ||
-      patch.intervalMinutes !== undefined ||
-      patch.dailyTime !== undefined ||
-      patch.weeklyTime !== undefined ||
-      patch.weeklyDays !== undefined;
-    const reArm = existing.scheduleType !== 'once' || !existing.completedOnce || scheduleTouched;
+    // A completed one-time job is only re-armed when the SCHEDULE actually
+    // CHANGES — otherwise a cosmetic edit would silently resurrect a job that
+    // already fired. We compare VALUES, not field-presence: the edit form
+    // round-trips the full job (incl. unchanged scheduleType/runAt) on every
+    // save, so a presence check would always re-arm. Only a real schedule
+    // change re-arms.
+    const changed = <T>(next: T | undefined, prev: T): boolean => next !== undefined && next !== prev;
+    const scheduleChanged =
+      changed(patch.scheduleType, existing.scheduleType) ||
+      changed(patch.runAt, existing.runAt) ||
+      changed(patch.intervalMinutes, existing.intervalMinutes) ||
+      changed(patch.dailyTime, existing.dailyTime) ||
+      changed(patch.weeklyTime, existing.weeklyTime) ||
+      (patch.weeklyDays !== undefined && !sameDays(patch.weeklyDays, existing.weeklyDays));
+    const reArm = existing.scheduleType !== 'once' || !existing.completedOnce || scheduleChanged;
 
     const updated: CronJob = {
       ...existing,
@@ -245,6 +259,7 @@ export class CronService {
       createdSessionUrl: null,
     };
     this.store.setCronJobRun(run.id, run);
+    this.pruneRunHistory();
     this.deps.broadcast(SseEvent.CronRunCreated, run);
 
     // Resolve the prompt.
@@ -327,13 +342,19 @@ export class CronService {
 
   /**
    * Guards a prompt-file path before it is read. The path is user-supplied via
-   * the API, so without this an attacker (or a hostile job config) could read
-   * arbitrary host files (e.g. /etc/passwd, SSH keys) into a Claude session.
+   * the API and its contents are injected into an agent session (an exfil sink
+   * over SSE/terminal), so an unconfined read would let a hostile job config
+   * pull arbitrary host files — including the SERVER PROCESS'S OWN secrets via
+   * `/proc/self/environ` — into the session.
    *
-   * Mirrors the attachment-serving guard (`resolveServableAttachmentPath` in
-   * file-routes): realpath-resolve, then reject via the shared blocklist
-   * (`/etc`, `/root`, secret locations) plus optional workspace confinement.
-   * Returns the symlink-resolved path to read.
+   * A denylist is the wrong posture for an exfil sink (it kept missing `/proc`,
+   * `/dev`, other users' `~/.ssh`, modern cloud creds…). So the PRIMARY gate is
+   * an allowlist: the prompt file must resolve INSIDE the job's working
+   * directory. A symlink escaping the workspace fails this because we check the
+   * realpath-resolved target. We additionally require a regular file (rejects
+   * directories, FIFOs, and `/dev/*` character devices that would hang or OOM
+   * the unbounded read) within a sane size cap, and keep the shared blocklist as
+   * cheap defense-in-depth. Returns the symlink-resolved path to read.
    */
   private async resolveSafePromptPath(rawPath: string, workingDir: string): Promise<string> {
     let resolved: string;
@@ -343,13 +364,27 @@ export class CronService {
       throw new Error('prompt file path could not be resolved');
     }
 
+    // Defense-in-depth blocklist (secret locations, /etc, /root).
     const guard = await loadAttachmentGuardConfig();
-    const blocked =
-      isBlockedAttachmentPath(resolved, guard.blockedTrees) ||
-      isBlockedAttachmentPath(rawPath, guard.blockedTrees) ||
-      (guard.confineToWorkspace && !validateSessionFilePath(workingDir, resolved));
+    if (isBlockedAttachmentPath(resolved, guard.blockedTrees)) {
+      throw new Error('prompt file path is blocked');
+    }
 
-    if (blocked) throw new Error('prompt file path is blocked');
+    // Primary gate: the prompt file must live inside the job's workspace.
+    if (!validateSessionFilePath(workingDir, resolved)) {
+      throw new Error('prompt file path must be inside the job working directory');
+    }
+
+    // Reject non-regular files and oversized files (DoS via unbounded read).
+    let info;
+    try {
+      info = statSync(resolved);
+    } catch {
+      throw new Error('prompt file path could not be resolved');
+    }
+    if (!info.isFile()) throw new Error('prompt file path is not a regular file');
+    if (info.size > MAX_PROMPT_FILE_BYTES) throw new Error('prompt file is too large');
+
     return resolved;
   }
 
@@ -401,6 +436,11 @@ export class CronService {
   }
 
   private recordSkippedRun(job: CronJob): void {
+    // Coalesce consecutive skips: if the job is already in a skip streak, don't
+    // record again — a perpetually-skipped interval job would otherwise write a
+    // run every tick forever and bloat state.json.
+    if (this.listRuns(job.id)[0]?.status === 'skipped') return;
+
     const now = Date.now();
     const run: CronJobRun = {
       id: uuidv4(),
@@ -415,16 +455,29 @@ export class CronService {
       createdSessionUrl: null,
     };
     this.store.setCronJobRun(run.id, run);
+    this.pruneRunHistory();
     this.deps.broadcast(SseEvent.CronRunCreated, run);
-    this.updateJobLastStatus(job.id, 'skipped');
+    // A skip is NOT a run: surface it as the lastStatus, but do NOT advance
+    // lastRunAt (no session was created).
+    this.updateJobLastStatus(job.id, 'skipped', { touchLastRun: false });
   }
 
-  private updateJobLastStatus(jobId: string, status: CronJobRunStatus): void {
+  /** Prune the oldest run records (by startedAt) once the global cap is exceeded. */
+  private pruneRunHistory(): void {
+    const runs = Object.values(this.store.getCronJobRuns());
+    if (runs.length <= MAX_CRON_RUN_HISTORY) return;
+    runs.sort((a, b) => a.startedAt - b.startedAt);
+    for (const run of runs.slice(0, runs.length - MAX_CRON_RUN_HISTORY)) {
+      this.store.removeCronJobRun(run.id);
+    }
+  }
+
+  private updateJobLastStatus(jobId: string, status: CronJobRunStatus, opts: { touchLastRun?: boolean } = {}): void {
     const fresh = this.store.getCronJob(jobId);
     if (!fresh) return;
     const now = Date.now();
     fresh.lastStatus = status;
-    fresh.lastRunAt = now;
+    if (opts.touchLastRun !== false) fresh.lastRunAt = now;
     fresh.updatedAt = now;
     this.store.setCronJob(fresh.id, fresh);
     this.broadcastListChanged();
