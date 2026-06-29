@@ -1,8 +1,8 @@
-# SCHEDULER_DISCOVERY.md
+# CRON_DISCOVERY.md
 
 Phase 1 deliverable for the "Add Scheduling to Codeman" build brief.
 This documents the existing Codeman architecture and the smallest integration
-points for a cron-style scheduler. **No session/tmux logic will be rebuilt** —
+points for a cron. **No session/tmux logic will be rebuilt** —
 the new code is purely a trigger + persistence + history layer on top of the
 existing primitives.
 
@@ -12,7 +12,7 @@ validation, ports-based dependency injection.
 
 ---
 
-## 0. Critical finding: an existing `ScheduledRun` is NOT a scheduler
+## 0. Critical finding: an existing `ScheduledRun` is NOT a cron
 
 Codeman already has a `ScheduledRun` concept (`/api/scheduled`,
 `src/web/ports/infra-port.ts:14-26`, `src/web/server.ts:1480-1605`). It is a
@@ -25,7 +25,7 @@ or persistence across restarts.
 Therefore the brief's core (the calendar/cron trigger layer) does **not** exist
 and must be built. The execution primitives it sits on top of **do** exist and
 will be reused. To honor brief §16 ("do not rename existing core concepts"), the
-new feature is named **`ScheduledJob`** (with **`ScheduledJobRun`** history
+new feature is named **`CronJob`** (with **`CronJobRun`** history
 records), kept distinct from the existing `ScheduledRun`.
 
 ---
@@ -38,7 +38,7 @@ records), kept distinct from the existing `ScheduledRun`.
   - `ctx.addSession(session)` → `ctx.setupSessionListeners(session)` →
     `ctx.persistSessionState(session)` (all via `SessionPort`).
 - `SessionPort` interface: `src/web/ports/session-port.ts:8-16`.
-- **Integration point:** the scheduler service will mirror this exact sequence
+- **Integration point:** the cron service will mirror this exact sequence
   (create → addSession → setupSessionListeners → start) via `SessionPort`,
   not reimplement it.
 
@@ -69,7 +69,7 @@ records), kept distinct from the existing `ScheduledRun`.
 - `ctx.cleanupSession(sessionId, killMux?, reason?)`
   (`SessionPort`; impl `src/web/server.ts:997-1152`). Underlying
   `session.stop(killMux)` at `src/session.ts:2498-2585`.
-- The scheduler does **not** kill sessions it launches (the brief wants them
+- The cron does **not** kill sessions it launches (the brief wants them
   visible in the normal session UI); cleanup stays user-driven.
 
 ## 6. How session state is stored / 7. Existing persistence
@@ -80,8 +80,8 @@ records), kept distinct from the existing `ScheduledRun`.
 - Pattern: declare a field on `AppState`, add typed get/set methods on
   `StateStore` that mutate in-memory state and call the debounced `save()`
   (500ms debounce, atomic temp-file+rename, `.bak` backup, circuit breaker).
-- **Integration point:** add `scheduledJobs?: Record<string, ScheduledJob>` and
-  `scheduledJobRuns?: Record<string, ScheduledJobRun>` to `AppState`, with
+- **Integration point:** add `cronJobs?: Record<string, CronJob>` and
+  `cronJobRuns?: Record<string, CronJobRun>` to `AppState`, with
   matching `StateStore` accessors. No new DB (brief §6 forbids Postgres/Redis).
 
 ## 8. Where backend routes live
@@ -97,7 +97,7 @@ records), kept distinct from the existing `ScheduledRun`.
   (`src/web/server.ts:644-659`).
 - SSE: `ctx.broadcast(SseEvent.X, data)` (`EventPort`,
   `src/web/sse-events.ts`); frontend mirror in `src/web/public/constants.js`.
-- **Integration point:** new `scheduler-routes.ts` registered alongside the
+- **Integration point:** new `cron-routes.ts` registered alongside the
   others; new zod schema; new `SseEvent` constants for job list/run changes.
 
 ## 9. Where frontend pages/components live
@@ -108,7 +108,7 @@ records), kept distinct from the existing `ScheduledRun`.
   bundler (`scripts/build.mjs`).
 - UI is panels/modals toggled by JS classes; forms use `.form-row` / `.modal`
   conventions (`styles.css`). SSE handler map in `app.js`.
-- **Integration point:** add a new `scheduler-ui.js` mixin + a panel/modal in
+- **Integration point:** add a new `cron-ui.js` mixin + a panel/modal in
   `index.html` + nav entry, following the orchestrator/respawn panel pattern.
 
 ## 10. Background-loop pattern (for the due-checker)
@@ -117,7 +117,7 @@ records), kept distinct from the existing `ScheduledRun`.
   in `WebServer.start()` (`src/web/server.ts:~1942-1966`), auto-disposed in
   `WebServer.stop()` via `this.cleanup.dispose()` (`src/web/server.ts:2336`).
   RalphLoop (`src/ralph-loop.ts:268-286`) shows the self-rescheduling guard idiom.
-- **Integration point:** register a 30s scheduler tick via `cleanup.setInterval`;
+- **Integration point:** register a 30s cron tick via `cleanup.setInterval`;
   no manual shutdown wiring needed.
 
 ---
@@ -126,13 +126,13 @@ records), kept distinct from the existing `ScheduledRun`.
 
 | New piece | Reuses | Location |
 | --- | --- | --- |
-| `ScheduledJob` / `ScheduledJobRun` types | — (new) | `src/types/scheduler.ts` |
+| `CronJob` / `CronJobRun` types | — (new) | `src/types/cron.ts` |
 | Persistence | `StateStore` / `AppState` | `src/types/app-state.ts`, `src/state-store.ts` |
-| Next-run time math | — (new, pure, unit-tested) | `src/scheduler/scheduler-time.ts` |
-| Launch + send prompt | `SessionPort` (`addSession`/listeners/`writeViaMux`) | `src/scheduler/scheduler-service.ts` |
-| Background due loop | `cleanup.setInterval` pattern | `src/scheduler/scheduler-loop.ts` |
-| Routes + schema | route/ports/zod/SSE patterns | `src/web/routes/scheduler-routes.ts`, `src/web/schemas.ts`, `src/web/sse-events.ts` |
-| UI | panel/modal/mixin conventions | `src/web/public/scheduler-ui.js`, `index.html` |
+| Next-run time math | — (new, pure, unit-tested) | `src/cron/cron-time.ts` |
+| Launch + send prompt | `SessionPort` (`addSession`/listeners/`writeViaMux`) | `src/cron/cron-service.ts` |
+| Background due loop | `cleanup.setInterval` pattern | `src/cron/cron-loop.ts` |
+| Routes + schema | route/ports/zod/SSE patterns | `src/web/routes/cron-routes.ts`, `src/web/schemas.ts`, `src/web/sse-events.ts` |
+| UI | panel/modal/mixin conventions | `src/web/public/cron-ui.js`, `index.html` |
 
 Nothing in the session, tmux, persistence, routing, or SSE subsystems is
-rewritten — the scheduler is additive and calls existing services.
+rewritten — the cron is additive and calls existing services.

@@ -1,5 +1,5 @@
 /**
- * @fileoverview Scheduler service: CRUD for scheduled jobs, manual Run Now,
+ * @fileoverview Cron service: CRUD for cron jobs, manual Run Now,
  * the background due-job tick, and run-history recording.
  *
  * It does NOT own session/tmux logic — it reuses Codeman's existing session
@@ -14,19 +14,19 @@ import { Session } from '../session.js';
 import { SseEvent } from '../web/sse-events.js';
 import { getErrorMessage } from '../types/api.js';
 import { MAX_CONCURRENT_SESSIONS } from '../config/map-limits.js';
-import { SCHEDULER_READY_MAX_ATTEMPTS, SCHEDULER_READY_SETTLE_MS } from '../config/server-timing.js';
-import { computeNextRunAt, dueKeyFor } from './scheduler-time.js';
+import { CRON_READY_MAX_ATTEMPTS, CRON_READY_SETTLE_MS } from '../config/server-timing.js';
+import { computeNextRunAt, dueKeyFor } from './cron-time.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../web/ports/index.js';
-import type { ScheduledJob, ScheduledJobRun, ScheduledJobRunStatus, TriggerType } from '../types/scheduler.js';
-import type { ScheduledJobInput } from './scheduler-input.js';
+import type { CronJob, CronJobRun, CronJobRunStatus, TriggerType } from '../types/cron.js';
+import type { CronJobInput } from './cron-input.js';
 
-/** The subset of the route context the scheduler depends on. */
-export type SchedulerDeps = SessionPort & EventPort & ConfigPort & InfraPort;
+/** The subset of the route context the cron depends on. */
+export type CronDeps = SessionPort & EventPort & ConfigPort & InfraPort;
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-export class SchedulerService {
-  constructor(private readonly deps: SchedulerDeps) {}
+export class CronService {
+  constructor(private readonly deps: CronDeps) {}
 
   private get store() {
     return this.deps.store;
@@ -34,17 +34,17 @@ export class SchedulerService {
 
   // ───────────────────────────── Reads ─────────────────────────────
 
-  listJobs(): ScheduledJob[] {
-    return Object.values(this.store.getScheduledJobs());
+  listJobs(): CronJob[] {
+    return Object.values(this.store.getCronJobs());
   }
 
-  getJob(id: string): ScheduledJob | null {
-    return this.store.getScheduledJob(id);
+  getJob(id: string): CronJob | null {
+    return this.store.getCronJob(id);
   }
 
-  listRuns(jobId?: string): ScheduledJobRun[] {
-    const all = Object.values(this.store.getScheduledJobRuns());
-    const filtered = jobId ? all.filter((r) => r.scheduledJobId === jobId) : all;
+  listRuns(jobId?: string): CronJobRun[] {
+    const all = Object.values(this.store.getCronJobRuns());
+    const filtered = jobId ? all.filter((r) => r.cronJobId === jobId) : all;
     return filtered.sort((a, b) => b.startedAt - a.startedAt);
   }
 
@@ -57,9 +57,9 @@ export class SchedulerService {
 
   // ──────────────────────────── Mutations ───────────────────────────
 
-  createJob(input: ScheduledJobInput): ScheduledJob {
+  createJob(input: CronJobInput): CronJob {
     const now = Date.now();
-    const job: ScheduledJob = {
+    const job: CronJob = {
       id: uuidv4(),
       name: input.name,
       agentType: input.agentType,
@@ -86,16 +86,16 @@ export class SchedulerService {
       lastDueKey: null,
     };
     job.nextRunAt = job.enabled ? computeNextRunAt(job, now) : null;
-    this.store.setScheduledJob(job.id, job);
+    this.store.setCronJob(job.id, job);
     this.broadcastListChanged();
     return job;
   }
 
-  updateJob(id: string, patch: Partial<ScheduledJobInput>): ScheduledJob | null {
+  updateJob(id: string, patch: Partial<CronJobInput>): CronJob | null {
     const existing = this.getJob(id);
     if (!existing) return null;
     const now = Date.now();
-    const updated: ScheduledJob = {
+    const updated: CronJob = {
       ...existing,
       ...patch,
       id: existing.id,
@@ -107,28 +107,28 @@ export class SchedulerService {
       lastDueKey: null,
     };
     updated.nextRunAt = updated.enabled ? computeNextRunAt(updated, now) : null;
-    this.store.setScheduledJob(updated.id, updated);
+    this.store.setCronJob(updated.id, updated);
     this.broadcastListChanged();
     return updated;
   }
 
-  setEnabled(id: string, enabled: boolean): ScheduledJob | null {
+  setEnabled(id: string, enabled: boolean): CronJob | null {
     const existing = this.getJob(id);
     if (!existing) return null;
     const now = Date.now();
     existing.enabled = enabled;
     existing.updatedAt = now;
     existing.nextRunAt = enabled ? computeNextRunAt(existing, now) : null;
-    this.store.setScheduledJob(existing.id, existing);
+    this.store.setCronJob(existing.id, existing);
     this.broadcastListChanged();
     return existing;
   }
 
   deleteJob(id: string): boolean {
     if (!this.getJob(id)) return false;
-    this.store.removeScheduledJob(id);
-    for (const run of this.listRuns(id)) this.store.removeScheduledJobRun(run.id);
-    this.deps.broadcast(SseEvent.SchedulerJobDeleted, { id });
+    this.store.removeCronJob(id);
+    for (const run of this.listRuns(id)) this.store.removeCronJobRun(run.id);
+    this.deps.broadcast(SseEvent.CronJobDeleted, { id });
     this.broadcastListChanged();
     return true;
   }
@@ -136,7 +136,7 @@ export class SchedulerService {
   // ──────────────────────────── Execution ───────────────────────────
 
   /** Manual Run Now — always launches regardless of schedule/enabled state. */
-  async runNow(id: string): Promise<ScheduledJobRun | null> {
+  async runNow(id: string): Promise<CronJobRun | null> {
     const job = this.getJob(id);
     if (!job) return null;
     return this.launch(job, 'manual_run_now');
@@ -169,7 +169,7 @@ export class SchedulerService {
       // re-triggered by the next tick.
       this.advanceAfterFire(job, now);
       this.launch(job, 'scheduled').catch((err) =>
-        console.error(`[scheduler] launch failed for job ${job.id}:`, getErrorMessage(err))
+        console.error(`[cron] launch failed for job ${job.id}:`, getErrorMessage(err))
       );
     }
   }
@@ -181,14 +181,14 @@ export class SchedulerService {
       const isDeadOnce = job.scheduleType === 'once' && job.completedOnce;
       if (job.enabled && job.nextRunAt == null && !isDeadOnce) {
         job.nextRunAt = computeNextRunAt(job, now);
-        this.store.setScheduledJob(job.id, job);
+        this.store.setCronJob(job.id, job);
       }
     }
   }
 
   // ──────────────────────────── Internals ───────────────────────────
 
-  private advanceAfterFire(job: ScheduledJob, now: number): void {
+  private advanceAfterFire(job: CronJob, now: number): void {
     if (job.scheduleType === 'once') {
       job.completedOnce = true;
       job.enabled = false;
@@ -197,14 +197,14 @@ export class SchedulerService {
       job.nextRunAt = computeNextRunAt(job, now);
     }
     job.updatedAt = now;
-    this.store.setScheduledJob(job.id, job);
+    this.store.setCronJob(job.id, job);
     this.broadcastListChanged();
   }
 
-  private async launch(job: ScheduledJob, trigger: TriggerType): Promise<ScheduledJobRun> {
-    const run: ScheduledJobRun = {
+  private async launch(job: CronJob, trigger: TriggerType): Promise<CronJobRun> {
+    const run: CronJobRun = {
       id: uuidv4(),
-      scheduledJobId: job.id,
+      cronJobId: job.id,
       sessionId: null,
       sessionName: null,
       startedAt: Date.now(),
@@ -213,8 +213,8 @@ export class SchedulerService {
       triggerType: trigger,
       createdSessionUrl: null,
     };
-    this.store.setScheduledJobRun(run.id, run);
-    this.deps.broadcast(SseEvent.SchedulerRunCreated, run);
+    this.store.setCronJobRun(run.id, run);
+    this.deps.broadcast(SseEvent.CronRunCreated, run);
 
     // Resolve the prompt.
     let prompt: string;
@@ -276,8 +276,8 @@ export class SchedulerService {
     run.sessionName = session.name;
     run.createdSessionUrl = `/?session=${session.id}`;
     run.status = 'session_started';
-    this.store.setScheduledJobRun(run.id, run);
-    this.deps.broadcast(SseEvent.SchedulerRunUpdated, run);
+    this.store.setCronJobRun(run.id, run);
+    this.deps.broadcast(SseEvent.CronRunUpdated, run);
     this.updateJobLastStatus(job.id, 'session_started');
 
     // Send the prompt once the CLI is ready (async; does not block the caller).
@@ -285,7 +285,7 @@ export class SchedulerService {
     return run;
   }
 
-  private async resolvePrompt(job: ScheduledJob): Promise<string> {
+  private async resolvePrompt(job: CronJob): Promise<string> {
     if (job.promptMode === 'prompt_file_path') {
       if (!job.promptFilePath) throw new Error('prompt file path is empty');
       return readFile(job.promptFilePath, 'utf-8');
@@ -293,18 +293,18 @@ export class SchedulerService {
     return job.promptText ?? '';
   }
 
-  private sendPromptWhenReady(sessionId: string, prompt: string, job: ScheduledJob, run: ScheduledJobRun): void {
+  private sendPromptWhenReady(sessionId: string, prompt: string, job: CronJob, run: CronJobRun): void {
     setImmediate(() => {
       const poll = async (): Promise<void> => {
         if (job.agentType !== 'shell') {
-          for (let attempt = 0; attempt < SCHEDULER_READY_MAX_ATTEMPTS; attempt++) {
+          for (let attempt = 0; attempt < CRON_READY_MAX_ATTEMPTS; attempt++) {
             await delay(500);
             const s = this.deps.sessions.get(sessionId);
             if (!s) return; // session was removed
             const buf = s.getTerminalBuffer().slice(-2048);
             if (buf.includes('❯') || buf.includes('tokens')) break;
           }
-          await delay(SCHEDULER_READY_SETTLE_MS);
+          await delay(CRON_READY_SETTLE_MS);
         } else {
           await delay(1000);
         }
@@ -319,39 +319,39 @@ export class SchedulerService {
           }
           run.status = 'prompt_sent';
           run.finishedAt = Date.now();
-          this.store.setScheduledJobRun(run.id, run);
-          this.deps.broadcast(SseEvent.SchedulerRunUpdated, run);
+          this.store.setCronJobRun(run.id, run);
+          this.deps.broadcast(SseEvent.CronRunUpdated, run);
           this.updateJobLastStatus(job.id, 'prompt_sent');
         } catch (err) {
           this.failRun(job, run, `Failed to send prompt: ${getErrorMessage(err)}`);
         }
       };
-      poll().catch((err) => console.error('[scheduler] sendPromptWhenReady error:', getErrorMessage(err)));
+      poll().catch((err) => console.error('[cron] sendPromptWhenReady error:', getErrorMessage(err)));
     });
   }
 
-  private failRun(job: ScheduledJob, run: ScheduledJobRun, message: string): ScheduledJobRun {
+  private failRun(job: CronJob, run: CronJobRun, message: string): CronJobRun {
     run.status = 'failed';
     run.errorMessage = message;
     run.finishedAt = Date.now();
-    this.store.setScheduledJobRun(run.id, run);
-    this.deps.broadcast(SseEvent.SchedulerRunUpdated, run);
+    this.store.setCronJobRun(run.id, run);
+    this.deps.broadcast(SseEvent.CronRunUpdated, run);
     this.updateJobLastStatus(job.id, 'failed');
     return run;
   }
 
-  private updateJobLastStatus(jobId: string, status: ScheduledJobRunStatus): void {
-    const fresh = this.store.getScheduledJob(jobId);
+  private updateJobLastStatus(jobId: string, status: CronJobRunStatus): void {
+    const fresh = this.store.getCronJob(jobId);
     if (!fresh) return;
     const now = Date.now();
     fresh.lastStatus = status;
     fresh.lastRunAt = now;
     fresh.updatedAt = now;
-    this.store.setScheduledJob(fresh.id, fresh);
+    this.store.setCronJob(fresh.id, fresh);
     this.broadcastListChanged();
   }
 
   private broadcastListChanged(): void {
-    this.deps.broadcast(SseEvent.SchedulerJobsChanged, { jobs: this.listJobs() });
+    this.deps.broadcast(SseEvent.CronJobsChanged, { jobs: this.listJobs() });
   }
 }

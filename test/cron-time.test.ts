@@ -1,14 +1,14 @@
 /**
- * Unit tests for the scheduler's pure next-run-time calculations.
+ * Unit tests for the cron's pure next-run-time calculations.
  * Timezone-independent: daily/weekly expectations are asserted via local
  * Date getters rather than hardcoded epoch values.
  */
 
 import { describe, it, expect } from 'vitest';
-import { parseHHMM, computeNextRunAt, dueKeyFor } from '../src/scheduler/scheduler-time.js';
-import type { ScheduledJob } from '../src/types/scheduler.js';
+import { parseHHMM, computeNextRunAt, dueKeyFor } from '../src/cron/cron-time.js';
+import type { CronJob } from '../src/types/cron.js';
 
-function baseJob(partial: Partial<ScheduledJob>): ScheduledJob {
+function baseJob(partial: Partial<CronJob>): CronJob {
   return {
     id: 'j1',
     name: 'test',

@@ -1,5 +1,5 @@
 /**
- * @fileoverview Pure next-run-time calculations for the scheduler.
+ * @fileoverview Pure next-run-time calculations for the cron.
  *
  * All functions are pure and take an explicit `after` timestamp (epoch ms) so
  * they are deterministic and unit-testable. Times use the SERVER'S LOCAL
@@ -7,7 +7,7 @@
  * interpreted via the host's local time.
  */
 
-import type { ScheduledJob } from '../types/scheduler.js';
+import type { CronJob } from '../types/cron.js';
 
 /** Parse an 'HH:MM' (24-hour) string into hours/minutes, or null if invalid. */
 export function parseHHMM(value: string | undefined): { hours: number; minutes: number } | null {
@@ -38,7 +38,7 @@ function atLocalTime(base: number, hours: number, minutes: number, dayOffset: nu
  * For `once`, returns the absolute `runAt` (even if already in the past, so a
  * missed one-time job still fires once) until it has `completedOnce`.
  */
-export function computeNextRunAt(job: ScheduledJob, after: number): number | null {
+export function computeNextRunAt(job: CronJob, after: number): number | null {
   switch (job.scheduleType) {
     case 'once': {
       if (job.completedOnce) return null;
@@ -74,7 +74,7 @@ export function computeNextRunAt(job: ScheduledJob, after: number): number | nul
 
 /**
  * Duplicate-launch guard key: identifies a specific due time for a job. The
- * scheduler records the key it last consumed so an overlapping or restarted
+ * cron records the key it last consumed so an overlapping or restarted
  * loop will not launch the same due time twice.
  */
 export function dueKeyFor(jobId: string, fireTime: number): string {

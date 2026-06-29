@@ -152,10 +152,10 @@ import {
   registerClipboardRoutes,
   registerSearchRoutes,
   registerOrchestratorRoutes,
-  registerSchedulerRoutes,
+  registerCronRoutes,
   registerWsRoutes,
 } from './routes/index.js';
-import { SchedulerService } from '../scheduler/scheduler-service.js';
+import { CronService } from '../cron/cron-service.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -177,7 +177,7 @@ import {
   ITERATION_PAUSE_MS,
   STATS_COLLECTION_INTERVAL_MS,
   INACTIVITY_TIMEOUT_MS,
-  SCHEDULER_TICK_INTERVAL,
+  CRON_TICK_INTERVAL,
 } from '../config/server-timing.js';
 
 /**
@@ -226,8 +226,8 @@ export class WebServer extends EventEmitter {
   // Store session listener references for explicit cleanup (prevents memory leaks)
   private sessionListenerRefs: Map<string, SessionListenerRefs> = new Map();
   private scheduledRuns: Map<string, ScheduledRun> = new Map();
-  /** Cron-style scheduler service (assigned in setupRoutes). */
-  private schedulerService!: SchedulerService;
+  /** Cron service (assigned in setupRoutes). */
+  private cronService!: CronService;
   private sse: SseStreamManager;
   private store = getStore();
   private port: number;
@@ -879,11 +879,11 @@ export class WebServer extends EventEmitter {
     registerSearchRoutes(this.app, ctx);
     registerOrchestratorRoutes(this.app, ctx);
 
-    // Cron-style scheduler: build the service from the same context, recompute
+    // Cron: build the service from the same context, recompute
     // due times for any persisted jobs, then expose it to its routes.
-    this.schedulerService = new SchedulerService(ctx);
-    this.schedulerService.init();
-    registerSchedulerRoutes(this.app, { ...ctx, scheduler: this.schedulerService });
+    this.cronService = new CronService(ctx);
+    this.cronService.init();
+    registerCronRoutes(this.app, { ...ctx, cron: this.cronService });
 
     registerWsRoutes(this.app, ctx, () => this.getHostPolicy());
   }
@@ -1959,14 +1959,14 @@ export class WebServer extends EventEmitter {
       { description: 'scheduled runs cleanup' }
     );
 
-    // Start the cron-style scheduler loop (fires due ScheduledJobs).
+    // Start the cron loop (fires due CronJobs).
     this.cleanup.setInterval(
       () => {
-        this.schedulerService.tickDueJobs().catch((err) => {
-          console.error('[scheduler] tick failed:', getErrorMessage(err));
+        this.cronService.tickDueJobs().catch((err) => {
+          console.error('[cron] tick failed:', getErrorMessage(err));
         });
       },
-      SCHEDULER_TICK_INTERVAL,
+      CRON_TICK_INTERVAL,
       { description: 'scheduled jobs due-checker' }
     );
 

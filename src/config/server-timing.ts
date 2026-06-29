@@ -52,17 +52,17 @@ export const SCHEDULED_CLEANUP_INTERVAL = 5 * 60 * 1000;
 export const SCHEDULED_RUN_MAX_AGE = 60 * 60 * 1000;
 
 // ============================================================================
-// Scheduled Jobs (cron-style scheduler)
+// Cron Jobs
 // ============================================================================
 
-/** How often the scheduler loop wakes to check for due jobs (ms). */
-export const SCHEDULER_TICK_INTERVAL = 30 * 1000;
+/** How often the cron loop wakes to check for due jobs (ms). */
+export const CRON_TICK_INTERVAL = 30 * 1000;
 
 /** Max attempts (× 500ms) to poll a launched session for CLI readiness before sending the prompt. */
-export const SCHEDULER_READY_MAX_ATTEMPTS = 60;
+export const CRON_READY_MAX_ATTEMPTS = 60;
 
 /** Extra settle delay after CLI readiness is detected, before sending the prompt (ms). */
-export const SCHEDULER_READY_SETTLE_MS = 2000;
+export const CRON_READY_SETTLE_MS = 2000;
 
 /** Session limit retry wait before retrying (ms) */
 export const SESSION_LIMIT_WAIT_MS = 5000;

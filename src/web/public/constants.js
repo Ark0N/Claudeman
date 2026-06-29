@@ -276,11 +276,11 @@ const SSE_EVENTS = {
   SCHEDULED_LOG: 'scheduled:log',
   SCHEDULED_DELETED: 'scheduled:deleted',
 
-  // Scheduled jobs (cron-style scheduler)
-  SCHEDULER_JOBS_CHANGED: 'scheduler:jobsChanged',
-  SCHEDULER_JOB_DELETED: 'scheduler:jobDeleted',
-  SCHEDULER_RUN_CREATED: 'scheduler:runCreated',
-  SCHEDULER_RUN_UPDATED: 'scheduler:runUpdated',
+  // Cron jobs
+  CRON_JOBS_CHANGED: 'cron:jobsChanged',
+  CRON_JOB_DELETED: 'cron:jobDeleted',
+  CRON_RUN_CREATED: 'cron:runCreated',
+  CRON_RUN_UPDATED: 'cron:runUpdated',
 
   // Respawn
   RESPAWN_STARTED: 'respawn:started',

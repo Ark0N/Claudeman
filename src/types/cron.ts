@@ -1,11 +1,11 @@
 /**
- * @fileoverview Scheduled Jobs (cron-style scheduler) type definitions.
+ * @fileoverview Cron Jobs type definitions.
  *
  * NOTE: This is intentionally distinct from the existing `ScheduledRun` concept
  * (see src/web/ports/infra-port.ts), which is a run-now, duration-bounded
- * autonomous loop. A `ScheduledJob` is a SAVED, NAMED job with a recurring
+ * autonomous loop. A `CronJob` is a SAVED, NAMED job with a recurring
  * schedule (once/interval/daily/weekly), enable/disable, next-run calculation,
- * and a history of `ScheduledJobRun` records. The two do not interact.
+ * and a history of `CronJobRun` records. The two do not interact.
  *
  * Persisted to `~/.codeman/state.json` via StateStore (see AppState).
  */
@@ -22,7 +22,7 @@ export type PromptMode = 'inline_text' | 'prompt_file_path';
 export type InputMode = 'paste' | 'typed';
 
 /** Lifecycle status of a single job execution. */
-export type ScheduledJobRunStatus = 'created' | 'session_started' | 'prompt_sent' | 'failed';
+export type CronJobRunStatus = 'created' | 'session_started' | 'prompt_sent' | 'failed';
 
 /** What triggered a run. */
 export type TriggerType = 'scheduled' | 'manual_run_now';
@@ -31,9 +31,9 @@ export type TriggerType = 'scheduled' | 'manual_run_now';
 export type ConcurrencyPolicy = 'warn_only' | 'skip_if_same_agent_running';
 
 /**
- * A saved, named scheduled job.
+ * A saved, named cron job.
  */
-export interface ScheduledJob {
+export interface CronJob {
   id: string;
   name: string;
   /** Reuses Codeman's existing session modes; 'shell' covers Terminal/custom. */
@@ -69,7 +69,7 @@ export interface ScheduledJob {
   updatedAt: number;
   lastRunAt: number | null;
   nextRunAt: number | null;
-  lastStatus: ScheduledJobRunStatus | null;
+  lastStatus: CronJobRunStatus | null;
   /** Duplicate-launch guard: identifies the most recent due-time consumed. */
   lastDueKey: string | null;
   /** True once a 'once' job has fired (it is also disabled). */
@@ -77,16 +77,16 @@ export interface ScheduledJob {
 }
 
 /**
- * A single execution of a scheduled job (history record).
+ * A single execution of a cron job (history record).
  */
-export interface ScheduledJobRun {
+export interface CronJobRun {
   id: string;
-  scheduledJobId: string;
+  cronJobId: string;
   sessionId: string | null;
   sessionName: string | null;
   startedAt: number;
   finishedAt: number | null;
-  status: ScheduledJobRunStatus;
+  status: CronJobRunStatus;
   errorMessage?: string;
   triggerType: TriggerType;
   /** Best-effort deep link to the created session in the web UI. */

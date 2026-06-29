@@ -574,13 +574,13 @@ export const ScheduledRunSchema = z.object({
   durationMinutes: z.number().int().min(1).max(14400).optional(),
 });
 
-// ========== Scheduled Jobs (cron-style scheduler) ==========
+// ========== Cron Jobs ==========
 
 /** 'HH:MM' 24-hour time. */
 const hhmmSchema = z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/, 'Time must be HH:MM (24-hour)');
 
 /** Shared field shape for creating/updating a scheduled job. */
-const ScheduledJobBaseSchema = z.object({
+const CronJobBaseSchema = z.object({
   name: z.string().min(1).max(200),
   agentType: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini']),
   workingDir: safePathSchema,
@@ -601,7 +601,7 @@ const ScheduledJobBaseSchema = z.object({
 });
 
 /** Cross-field validation: required fields depend on promptMode + scheduleType. */
-function refineScheduledJob(val: z.infer<typeof ScheduledJobBaseSchema>, ctx: z.RefinementCtx): void {
+function refineCronJob(val: z.infer<typeof CronJobBaseSchema>, ctx: z.RefinementCtx): void {
   const add = (message: string, path: string) => ctx.addIssue({ code: 'custom', message, path: [path] });
 
   if (val.promptMode === 'inline_text' && !val.promptText) {
@@ -624,14 +624,14 @@ function refineScheduledJob(val: z.infer<typeof ScheduledJobBaseSchema>, ctx: z.
   }
 }
 
-/** POST /api/scheduler/jobs — full job definition. */
-export const ScheduledJobSchema = ScheduledJobBaseSchema.superRefine(refineScheduledJob);
+/** POST /api/cron/jobs — full job definition. */
+export const CronJobSchema = CronJobBaseSchema.superRefine(refineCronJob);
 
-/** PUT /api/scheduler/jobs/:id — partial update. */
-export const ScheduledJobUpdateSchema = ScheduledJobBaseSchema.partial();
+/** PUT /api/cron/jobs/:id — partial update. */
+export const CronJobUpdateSchema = CronJobBaseSchema.partial();
 
-/** PUT /api/scheduler/jobs/:id/enabled */
-export const ScheduledJobEnabledSchema = z.object({ enabled: z.boolean() });
+/** PUT /api/cron/jobs/:id/enabled */
+export const CronJobEnabledSchema = z.object({ enabled: z.boolean() });
 
 /** POST /api/cases/link */
 export const LinkCaseSchema = z.object({

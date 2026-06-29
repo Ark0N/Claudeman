@@ -541,7 +541,7 @@
       <div class="toolbar-right">
         <!-- Orchestrator button hidden until feature is ready -->
         <!-- <button class="btn-toolbar btn-sm" onclick="app.toggleOrchestratorPanel()" title="Orchestrator Loop">&#x2699; Orchestrator</button> -->
-        <button class="btn-toolbar btn-sm" onclick="app.openScheduler()" title="Scheduled Jobs">&#x23F0; Schedules</button>
+        <button class="btn-toolbar btn-sm" onclick="app.openCron()" title="Cron Jobs">&#x23F0; Cron</button>
         <span class="version-display" id="versionDisplay" title="Codeman version">v0.0.0</span>
       </div>
     </footer>
@@ -571,26 +571,26 @@
       </div>
     </div>
 
-    <!-- Scheduled Jobs Modal (cron-style scheduler) -->
-    <div class="modal" id="schedulerModal">
-      <div class="modal-backdrop" onclick="app.closeScheduler()"></div>
+    <!-- Cron Jobs Modal -->
+    <div class="modal" id="cronModal">
+      <div class="modal-backdrop" onclick="app.closeCron()"></div>
       <div class="modal-content modal-lg">
         <div class="modal-header">
-          <h3>Scheduled Jobs</h3>
-          <button class="modal-close" onclick="app.closeScheduler()" aria-label="Close scheduler">&times;</button>
+          <h3>Cron Jobs</h3>
+          <button class="modal-close" onclick="app.closeCron()" aria-label="Close cron">&times;</button>
         </div>
         <div class="modal-body">
           <p class="form-hint" style="margin-bottom:10px;">Times use the server's local timezone.</p>
           <div style="margin-bottom:10px;">
-            <button class="btn-toolbar btn-sm btn-primary" onclick="app.openSchedulerJobForm()">+ New Job</button>
-            <button class="btn-toolbar btn-sm" onclick="app.refreshScheduler()">Refresh</button>
+            <button class="btn-toolbar btn-sm btn-primary" onclick="app.openCronJobForm()">+ New Job</button>
+            <button class="btn-toolbar btn-sm" onclick="app.refreshCron()">Refresh</button>
           </div>
           <!-- Job list -->
-          <div id="schedulerJobList" class="scheduler-job-list"></div>
+          <div id="cronJobList" class="cron-job-list"></div>
 
           <!-- Create/Edit form (hidden until New/Edit) -->
-          <div id="schedulerJobForm" class="scheduler-job-form hidden">
-            <div class="form-section-header" id="schedulerFormTitle">New Scheduled Job</div>
+          <div id="cronJobForm" class="cron-job-form hidden">
+            <div class="form-section-header" id="cronFormTitle">New Cron Job</div>
             <input type="hidden" id="schJobId">
             <div class="form-row"><label>Name</label><input type="text" id="schName" placeholder="My nightly job"></div>
             <div class="form-row"><label>Agent Type</label>
@@ -604,7 +604,7 @@
             </div>
             <div class="form-row"><label>Working Directory</label><input type="text" id="schWorkingDir" placeholder="/absolute/path"></div>
             <div class="form-row"><label>Prompt Source</label>
-              <select id="schPromptMode" onchange="app.onSchedulerPromptModeChange()">
+              <select id="schPromptMode" onchange="app.onCronPromptModeChange()">
                 <option value="inline_text">Inline text</option>
                 <option value="prompt_file_path">Prompt file path</option>
               </select>
@@ -618,7 +618,7 @@
               </select>
             </div>
             <div class="form-row"><label>Schedule Type</label>
-              <select id="schScheduleType" onchange="app.onSchedulerScheduleTypeChange()">
+              <select id="schScheduleType" onchange="app.onCronScheduleTypeChange()">
                 <option value="once">Once</option>
                 <option value="interval">Interval</option>
                 <option value="daily">Daily</option>
@@ -629,7 +629,7 @@
             <div class="form-row hidden" id="schIntervalRow"><label>Every (minutes)</label><input type="number" id="schIntervalMinutes" min="1" value="60"></div>
             <div class="form-row hidden" id="schDailyRow"><label>Daily Time (HH:MM)</label><input type="time" id="schDailyTime"></div>
             <div class="form-row hidden" id="schWeeklyDaysRow"><label>Weekdays</label>
-              <span id="schWeeklyDays" class="scheduler-weekdays">
+              <span id="schWeeklyDays" class="cron-weekdays">
                 <label><input type="checkbox" value="0">Sun</label>
                 <label><input type="checkbox" value="1">Mon</label>
                 <label><input type="checkbox" value="2">Tue</label>
@@ -650,10 +650,10 @@
               <label class="switch"><input type="checkbox" id="schEnabled" checked><span class="slider"></span></label>
             </div>
             <div class="form-row"><label>Notes</label><input type="text" id="schNotes" placeholder="Optional"></div>
-            <div id="schedulerFormError" class="form-hint" style="color:var(--danger,#e55);"></div>
+            <div id="cronFormError" class="form-hint" style="color:var(--danger,#e55);"></div>
             <div style="margin-top:10px;">
-              <button class="btn-toolbar btn-sm btn-primary" onclick="app.saveSchedulerJob()">Save</button>
-              <button class="btn-toolbar btn-sm" onclick="app.cancelSchedulerJobForm()">Cancel</button>
+              <button class="btn-toolbar btn-sm btn-primary" onclick="app.saveCronJob()">Save</button>
+              <button class="btn-toolbar btn-sm" onclick="app.cancelCronJobForm()">Cancel</button>
             </div>
           </div>
         </div>
@@ -2146,7 +2146,7 @@
   <script defer src="respawn-ui.js"></script>
   <script defer src="ralph-panel.js"></script>
   <script defer src="orchestrator-panel.js"></script>
-  <script defer src="scheduler-ui.js"></script>
+  <script defer src="cron-ui.js"></script>
   <script defer src="settings-ui.js"></script>
   <script defer src="panels-ui.js"></script>
   <script defer src="ultracode-panel.js"></script>
