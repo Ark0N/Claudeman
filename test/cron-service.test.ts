@@ -12,6 +12,9 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { CronService, type CronDeps } from '../src/cron/cron-service.js';
 import type { CronJob, CronJobRun } from '../src/types/cron.js';
 import type { CronJobInput } from '../src/cron/cron-input.js';
@@ -242,6 +245,59 @@ describe('CronService', () => {
       const after = local.service.getJob(job.id)!;
       expect(after.nextRunAt!).toBeGreaterThan(fireAt);
       expect(after.lastDueKey).not.toBeNull();
+    });
+  });
+
+  describe('resolvePrompt path guard', () => {
+    it('blocks a prompt_file_path pointing at a sensitive system file', async () => {
+      const job = svc.service.createJob(
+        mkInput({ promptMode: 'prompt_file_path', promptFilePath: '/etc/passwd', promptText: undefined })
+      );
+      const run = await svc.service.runNow(job.id);
+      expect(run).not.toBeNull();
+      expect(run!.status).toBe('failed');
+      // Must fail at prompt resolution (blocked), NOT later at the missing workingDir —
+      // i.e. the file content must never be read.
+      expect(run!.errorMessage).toMatch(/Prompt error/i);
+      expect(run!.errorMessage).toMatch(/block/i);
+      // No session was created for a blocked job.
+      expect(svc.sessions.size).toBe(0);
+    });
+
+    it('blocks a prompt_file_path under a default-blocked tree (/root)', async () => {
+      const job = svc.service.createJob(
+        mkInput({ promptMode: 'prompt_file_path', promptFilePath: '/root/.bashrc', promptText: undefined })
+      );
+      const run = await svc.service.runNow(job.id);
+      expect(run!.status).toBe('failed');
+      expect(run!.errorMessage).toMatch(/Prompt error/i);
+    });
+
+    it('fails cleanly (no throw) when the prompt file does not exist', async () => {
+      const job = svc.service.createJob(
+        mkInput({
+          promptMode: 'prompt_file_path',
+          promptFilePath: '/tmp/codeman-cron-no-such-prompt-file.md',
+          promptText: undefined,
+        })
+      );
+      const run = await svc.service.runNow(job.id);
+      expect(run!.status).toBe('failed');
+      expect(run!.errorMessage).toMatch(/Prompt error/i);
+    });
+
+    it('allows an ordinary prompt file outside the blocklist (passes resolution)', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'codeman-cron-prompt-'));
+      const file = join(dir, 'prompt.md');
+      writeFileSync(file, 'do the thing');
+      const job = svc.service.createJob(
+        mkInput({ promptMode: 'prompt_file_path', promptFilePath: file, promptText: undefined })
+      );
+      const run = await svc.service.runNow(job.id);
+      expect(run!.status).toBe('failed'); // still fails — workingDir (MISSING_DIR) does not exist
+      // ...but it got PAST prompt resolution: the failure is the workingDir, not a Prompt error.
+      expect(run!.errorMessage).not.toMatch(/Prompt error/i);
+      expect(run!.errorMessage).toMatch(/workingDir/i);
     });
   });
 

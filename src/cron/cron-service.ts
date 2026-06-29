@@ -9,12 +9,14 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { readFile } from 'node:fs/promises';
-import { statSync } from 'node:fs';
+import { statSync, realpathSync } from 'node:fs';
 import { Session } from '../session.js';
 import { SseEvent } from '../web/sse-events.js';
 import { getErrorMessage } from '../types/api.js';
 import { MAX_CONCURRENT_SESSIONS } from '../config/map-limits.js';
 import { CRON_READY_MAX_ATTEMPTS, CRON_READY_SETTLE_MS } from '../config/server-timing.js';
+import { isBlockedAttachmentPath, loadAttachmentGuardConfig } from '../config/attachment-guard.js';
+import { validateSessionFilePath } from '../web/route-helpers.js';
 import { computeNextRunAt, dueKeyFor } from './cron-time.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../web/ports/index.js';
 import type { CronJob, CronJobRun, CronJobRunStatus, TriggerType } from '../types/cron.js';
@@ -288,9 +290,38 @@ export class CronService {
   private async resolvePrompt(job: CronJob): Promise<string> {
     if (job.promptMode === 'prompt_file_path') {
       if (!job.promptFilePath) throw new Error('prompt file path is empty');
-      return readFile(job.promptFilePath, 'utf-8');
+      const safePath = await this.resolveSafePromptPath(job.promptFilePath, job.workingDir);
+      return readFile(safePath, 'utf-8');
     }
     return job.promptText ?? '';
+  }
+
+  /**
+   * Guards a prompt-file path before it is read. The path is user-supplied via
+   * the API, so without this an attacker (or a hostile job config) could read
+   * arbitrary host files (e.g. /etc/passwd, SSH keys) into a Claude session.
+   *
+   * Mirrors the attachment-serving guard (`resolveServableAttachmentPath` in
+   * file-routes): realpath-resolve, then reject via the shared blocklist
+   * (`/etc`, `/root`, secret locations) plus optional workspace confinement.
+   * Returns the symlink-resolved path to read.
+   */
+  private async resolveSafePromptPath(rawPath: string, workingDir: string): Promise<string> {
+    let resolved: string;
+    try {
+      resolved = realpathSync(rawPath);
+    } catch {
+      throw new Error('prompt file path could not be resolved');
+    }
+
+    const guard = await loadAttachmentGuardConfig();
+    const blocked =
+      isBlockedAttachmentPath(resolved, guard.blockedTrees) ||
+      isBlockedAttachmentPath(rawPath, guard.blockedTrees) ||
+      (guard.confineToWorkspace && !validateSessionFilePath(workingDir, resolved));
+
+    if (blocked) throw new Error('prompt file path is blocked');
+    return resolved;
   }
 
   private sendPromptWhenReady(sessionId: string, prompt: string, job: CronJob, run: CronJobRun): void {
