@@ -22,7 +22,7 @@ export type PromptMode = 'inline_text' | 'prompt_file_path';
 export type InputMode = 'paste' | 'typed';
 
 /** Lifecycle status of a single job execution. */
-export type CronJobRunStatus = 'created' | 'session_started' | 'prompt_sent' | 'failed';
+export type CronJobRunStatus = 'created' | 'session_started' | 'prompt_sent' | 'failed' | 'skipped';
 
 /** What triggered a run. */
 export type TriggerType = 'scheduled' | 'manual_run_now';

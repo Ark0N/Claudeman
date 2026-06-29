@@ -12,7 +12,8 @@ import { readFile } from 'node:fs/promises';
 import { statSync, realpathSync } from 'node:fs';
 import { Session } from '../session.js';
 import { SseEvent } from '../web/sse-events.js';
-import { getErrorMessage } from '../types/api.js';
+import { CronJobSchema } from '../web/schemas.js';
+import { getErrorMessage, createErrorResponse, ApiErrorCode } from '../types/api.js';
 import { MAX_CONCURRENT_SESSIONS } from '../config/map-limits.js';
 import { CRON_READY_MAX_ATTEMPTS, CRON_READY_SETTLE_MS } from '../config/server-timing.js';
 import { isBlockedAttachmentPath, loadAttachmentGuardConfig } from '../config/attachment-guard.js';
@@ -97,17 +98,42 @@ export class CronService {
     const existing = this.getJob(id);
     if (!existing) return null;
     const now = Date.now();
+
+    // A completed one-time job is only re-armed when the SCHEDULE itself is
+    // edited — otherwise a cosmetic edit (rename, notes) would silently
+    // resurrect a job that already fired and run it again.
+    const scheduleTouched =
+      patch.scheduleType !== undefined ||
+      patch.runAt !== undefined ||
+      patch.intervalMinutes !== undefined ||
+      patch.dailyTime !== undefined ||
+      patch.weeklyTime !== undefined ||
+      patch.weeklyDays !== undefined;
+    const reArm = existing.scheduleType !== 'once' || !existing.completedOnce || scheduleTouched;
+
     const updated: CronJob = {
       ...existing,
       ...patch,
       id: existing.id,
       createdAt: existing.createdAt,
       updatedAt: now,
-      // Editing a job re-arms it: clear the one-time completion + dup-guard so a
-      // changed schedule can fire again.
-      completedOnce: false,
+      completedOnce: reArm ? false : existing.completedOnce,
       lastDueKey: null,
     };
+
+    // The PUT schema is `.partial()`, so its cross-field rules don't run on a
+    // partial body. Re-validate the MERGED job against the full schema so a
+    // partial edit can't leave an enabled job with an inconsistent schedule
+    // (e.g. switching to `once` without a `runAt` → a dead `nextRunAt:null`).
+    const check = CronJobSchema.safeParse(updated);
+    if (!check.success) {
+      const msg = check.error.issues[0]?.message ?? 'Invalid cron job update';
+      throw Object.assign(new Error(msg), {
+        statusCode: 400,
+        body: createErrorResponse(ApiErrorCode.INVALID_INPUT, msg),
+      });
+    }
+
     updated.nextRunAt = updated.enabled ? computeNextRunAt(updated, now) : null;
     this.store.setCronJob(updated.id, updated);
     this.broadcastListChanged();
@@ -162,6 +188,9 @@ export class CronService {
       // Optional concurrency policy for AUTOMATIC runs.
       if (job.concurrencyPolicy === 'skip_if_same_agent_running' && this.countActiveAgents(job.agentType) > 0) {
         job.lastDueKey = key;
+        // Record the skip so the job's run history isn't silently empty when it
+        // keeps getting skipped (otherwise it looks like the job never ran).
+        this.recordSkippedRun(job);
         this.advanceAfterFire(job, now);
         continue;
       }
@@ -369,6 +398,25 @@ export class CronService {
     this.deps.broadcast(SseEvent.CronRunUpdated, run);
     this.updateJobLastStatus(job.id, 'failed');
     return run;
+  }
+
+  private recordSkippedRun(job: CronJob): void {
+    const now = Date.now();
+    const run: CronJobRun = {
+      id: uuidv4(),
+      cronJobId: job.id,
+      sessionId: null,
+      sessionName: null,
+      startedAt: now,
+      finishedAt: now,
+      status: 'skipped',
+      errorMessage: `Skipped: a ${job.agentType} agent is already running (concurrency policy)`,
+      triggerType: 'scheduled',
+      createdSessionUrl: null,
+    };
+    this.store.setCronJobRun(run.id, run);
+    this.deps.broadcast(SseEvent.CronRunCreated, run);
+    this.updateJobLastStatus(job.id, 'skipped');
   }
 
   private updateJobLastStatus(jobId: string, status: CronJobRunStatus): void {

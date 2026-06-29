@@ -117,18 +117,53 @@ describe('CronService', () => {
   });
 
   describe('updateJob', () => {
-    it('re-arms the dup-guard and once-completion flags', () => {
-      const job = svc.service.createJob(
-        mkInput({ scheduleType: 'once', runAt: Date.now() + 1000, intervalMinutes: undefined })
-      );
+    it('clears the dup-guard and preserves createdAt', () => {
+      const job = svc.service.createJob(mkInput({ intervalMinutes: 10 }));
       job.lastDueKey = 'stale';
-      job.completedOnce = true;
       svc.store.setCronJob(job.id, job);
       const updated = svc.service.updateJob(job.id, { name: 'renamed' });
       expect(updated!.name).toBe('renamed');
       expect(updated!.lastDueKey).toBeNull();
-      expect(updated!.completedOnce).toBe(false);
       expect(updated!.createdAt).toBe(job.createdAt);
+    });
+
+    it('does NOT re-fire a completed once-job when editing a non-schedule field', async () => {
+      const job = svc.service.createJob(
+        mkInput({ scheduleType: 'once', runAt: Date.now() - 1000, intervalMinutes: undefined })
+      );
+      await svc.service.tickDueJobs(Date.now());
+      await flush();
+      expect(svc.service.getJob(job.id)!.completedOnce).toBe(true);
+
+      const updated = svc.service.updateJob(job.id, { name: 'renamed' });
+      expect(updated!.name).toBe('renamed');
+      // Cosmetic edit must not resurrect a fired one-time job.
+      expect(updated!.completedOnce).toBe(true);
+      expect(updated!.nextRunAt).toBeNull();
+    });
+
+    it('re-arms a completed once-job when the schedule itself is edited', async () => {
+      const job = svc.service.createJob(
+        mkInput({ scheduleType: 'once', runAt: Date.now() - 1000, intervalMinutes: undefined })
+      );
+      await svc.service.tickDueJobs(Date.now());
+      await flush();
+      expect(svc.service.getJob(job.id)!.completedOnce).toBe(true);
+
+      const future = Date.now() + 3_600_000;
+      const updated = svc.service.updateJob(job.id, { runAt: future, enabled: true });
+      expect(updated!.completedOnce).toBe(false);
+      expect(updated!.nextRunAt).toBe(future);
+    });
+
+    it('rejects a partial update that leaves an inconsistent schedule (no dead enabled job)', () => {
+      const job = svc.service.createJob(mkInput({ scheduleType: 'interval', intervalMinutes: 10 }));
+      // Switch to 'once' WITHOUT a runAt → would otherwise yield a dead nextRunAt:null.
+      expect(() => svc.service.updateJob(job.id, { scheduleType: 'once', intervalMinutes: undefined })).toThrow();
+      // The stored job is left untouched.
+      const after = svc.service.getJob(job.id)!;
+      expect(after.scheduleType).toBe('interval');
+      expect(after.nextRunAt).not.toBeNull();
     });
   });
 
@@ -240,9 +275,13 @@ describe('CronService', () => {
       await local.service.tickDueJobs(fireAt);
       await flush();
 
-      // No run recorded, but the schedule still advanced past the skipped slot.
-      expect(local.service.listRuns(job.id).length).toBe(0);
+      // A 'skipped' run is recorded (so the history isn't silently empty), and
+      // the schedule still advanced past the skipped slot.
+      const runs = local.service.listRuns(job.id);
+      expect(runs.length).toBe(1);
+      expect(runs[0].status).toBe('skipped');
       const after = local.service.getJob(job.id)!;
+      expect(after.lastStatus).toBe('skipped');
       expect(after.nextRunAt!).toBeGreaterThan(fireAt);
       expect(after.lastDueKey).not.toBeNull();
     });
