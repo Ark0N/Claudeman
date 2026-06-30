@@ -6,10 +6,9 @@
  * it easy to tune memory usage.
  *
  * Memory Budget Rationale (for 20 concurrent sessions):
- * - Terminal buffer: 2MB max × 20 = 40MB worst case
+ * - Terminal buffer: 32MB max × 20 = 640MB worst case
  * - Text output: 1MB max × 20 = 20MB worst case
  * - Messages: ~1KB each × 1000 × 20 = 20MB worst case
- * - Total buffer overhead: ~80MB (acceptable for a long-running server)
  *
  * @module config/buffer-limits
  */

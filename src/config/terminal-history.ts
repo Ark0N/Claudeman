@@ -1,19 +1,19 @@
 /**
  * Defaults, bounds, and resolution for terminal history retention.
  *
- * Centralizes the terminal scrollback, tmux history-limit, and server PTY buffer
- * byte caps that were previously scattered as hardcoded literals. Each value is
- * overridable (env var or the settings object) and clamped to a sane range via
- * resolveTerminalHistoryConfig(). Defaults intentionally match the prior
- * hardcoded values, so introducing this module is behavior-neutral.
+ * Defaults are sized to retain a full default scrollback for replay:
+ * - browser/tmux scrollback: 50,000 -> 100,000 lines
+ * - server PTY buffer cap: 2MB -> 32MB (room for 100k normal-width lines + ANSI)
+ * All values remain env- and settings-overridable and bounds-clamped via
+ * resolveTerminalHistoryConfig().
  */
 
-export const DEFAULT_TERMINAL_SCROLLBACK_LINES = 50_000;
-export const DEFAULT_TMUX_HISTORY_LIMIT = 50_000;
+export const DEFAULT_TERMINAL_SCROLLBACK_LINES = 100_000;
+export const DEFAULT_TMUX_HISTORY_LIMIT = 100_000;
 export const DEFAULT_TERMINAL_BUFFER_MAX_BYTES =
-  parseInt(process.env.CODEMAN_MAX_TERMINAL_BUFFER || '', 10) || 2 * 1024 * 1024;
+  parseInt(process.env.CODEMAN_MAX_TERMINAL_BUFFER || '', 10) || 32 * 1024 * 1024;
 export const DEFAULT_TERMINAL_BUFFER_TRIM_BYTES =
-  parseInt(process.env.CODEMAN_TRIM_TERMINAL_TO || '', 10) || 1.5 * 1024 * 1024;
+  parseInt(process.env.CODEMAN_TRIM_TERMINAL_TO || '', 10) || 24 * 1024 * 1024;
 
 export const MIN_TERMINAL_SCROLLBACK_LINES = 1_000;
 export const MAX_TERMINAL_SCROLLBACK_LINES = 1_000_000;

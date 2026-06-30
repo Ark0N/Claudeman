@@ -22,11 +22,11 @@ describe('resolveTerminalHistoryConfig', () => {
     });
   });
 
-  it('defaults match the prior hardcoded values (behavior-neutral)', () => {
-    expect(DEFAULT_TMUX_HISTORY_LIMIT).toBe(50_000);
-    expect(DEFAULT_TERMINAL_SCROLLBACK_LINES).toBe(50_000);
-    expect(DEFAULT_TERMINAL_BUFFER_MAX_BYTES).toBe(2 * 1024 * 1024);
-    expect(DEFAULT_TERMINAL_BUFFER_TRIM_BYTES).toBe(1.5 * 1024 * 1024);
+  it('defaults raise tmux scrollback to 100k and terminal buffer cap to 32MB', () => {
+    expect(DEFAULT_TMUX_HISTORY_LIMIT).toBe(100_000);
+    expect(DEFAULT_TERMINAL_SCROLLBACK_LINES).toBe(100_000);
+    expect(DEFAULT_TERMINAL_BUFFER_MAX_BYTES).toBe(32 * 1024 * 1024);
+    expect(DEFAULT_TERMINAL_BUFFER_TRIM_BYTES).toBe(24 * 1024 * 1024);
   });
 
   it('passes valid in-range values through unchanged', () => {
@@ -80,9 +80,9 @@ describe('resolveTerminalHistoryConfig', () => {
   });
 
   it('caps the default trim to a lowered max', () => {
-    // Default trim (1.5MB) exceeds a 1MB max → trim must fall to the max.
-    const cfg = resolveTerminalHistoryConfig({ terminalBufferMaxBytes: 1 * 1024 * 1024 });
-    expect(cfg.terminalBufferTrimBytes).toBe(1 * 1024 * 1024);
+    // Default trim (24MB) exceeds a 2MB max → trim must fall to the max.
+    const cfg = resolveTerminalHistoryConfig({ terminalBufferMaxBytes: 2 * 1024 * 1024 });
+    expect(cfg.terminalBufferTrimBytes).toBe(2 * 1024 * 1024);
   });
 
   it('truncates fractional inputs to integers', () => {
