@@ -250,6 +250,305 @@ Object.assign(CodemanApp.prototype, {
     this.openImagePopup(data);
   },
 
+  // ═══════════════════════════════════════════════════════════════
+  // Command Palette (COD-153)
+  // Fast Cmd/Ctrl+K switcher for currently open sessions, plus launch-new.
+  // ═══════════════════════════════════════════════════════════════
+
+  shouldOpenCommandPaletteFromShortcut(e) {
+    if (!e) return false;
+    if ((e.key || '').toLowerCase() !== 'k') return false;
+    if (!(e.metaKey || e.ctrlKey) || e.altKey) return false;
+
+    const target = e.target;
+    if (!target) return true;
+    const tagName = (target.tagName || '').toUpperCase();
+    if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') return false;
+    if (target.isContentEditable) return false;
+    if (typeof target.closest === 'function' && target.closest('[contenteditable="true"]')) return false;
+    return true;
+  },
+
+  openCommandPalette() {
+    const modal = document.getElementById('commandPaletteModal');
+    const search = document.getElementById('commandPaletteSearch');
+    if (!modal || !search) return;
+
+    this.closeMobileHeaderUtilities?.();
+    this.commandPaletteActiveIndex = 0;
+    search.value = '';
+    modal.classList.add('active');
+
+    this._wireCommandPalette();
+    this.renderCommandPalette();
+
+    search.focus();
+    search.select?.();
+  },
+
+  closeCommandPalette() {
+    const modal = document.getElementById('commandPaletteModal');
+    if (modal) modal.classList.remove('active');
+  },
+
+  _wireCommandPalette() {
+    if (this._commandPaletteWired) return;
+    this._commandPaletteWired = true;
+
+    const modal = document.getElementById('commandPaletteModal');
+    const search = document.getElementById('commandPaletteSearch');
+    const list = document.getElementById('commandPaletteList');
+
+    search?.addEventListener('input', () => {
+      this.commandPaletteActiveIndex = 0;
+      this.renderCommandPalette();
+    });
+
+    search?.addEventListener('keydown', async (e) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        this.moveCommandPaletteSelection(1);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        this.moveCommandPaletteSelection(-1);
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        await this.activateCommandPaletteItem();
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        this.closeCommandPalette();
+      }
+    });
+
+    modal?.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        this.closeCommandPalette();
+      }
+    });
+
+    list?.addEventListener?.('click', (e) => {
+      const row = e.target?.closest?.('[data-command-index]');
+      if (!row) return;
+      this.commandPaletteActiveIndex = Number(row.dataset.commandIndex) || 0;
+      void this.activateCommandPaletteItem();
+    });
+  },
+
+  buildCommandPaletteItems(query = '') {
+    const needle = query.trim().toLowerCase();
+    const orderedIds = [
+      ...(Array.isArray(this.sessionOrder) ? this.sessionOrder : []),
+      ...Array.from(this.sessions?.keys?.() || []).filter((id) => !this.sessionOrder?.includes?.(id)),
+    ];
+    const seen = new Set();
+    const sessionItems = [];
+
+    for (const sessionId of orderedIds) {
+      if (seen.has(sessionId)) continue;
+      seen.add(sessionId);
+      const session = this.sessions?.get?.(sessionId);
+      if (!session) continue;
+      const title = session.name || session.title || sessionId.slice(0, 8);
+      const subtitleParts = [session.workingDir, session.mode, session.status].filter(Boolean);
+      const haystack = [title, session.workingDir, session.mode, session.status, sessionId].filter(Boolean).join(' ').toLowerCase();
+      if (needle && !haystack.includes(needle)) continue;
+      sessionItems.push({
+        id: `session:${sessionId}`,
+        type: 'session',
+        sessionId,
+        title,
+        subtitle: subtitleParts.join(' · '),
+      });
+    }
+
+    sessionItems.push(this._buildCommandPaletteNewSessionItem());
+    return sessionItems;
+  },
+
+  _buildCommandPaletteNewSessionItem() {
+    const mode = this.runMode || this._runMode || 'claude';
+    const labels = { claude: 'Claude', opencode: 'OpenCode', codex: 'Codex', gemini: 'Gemini' };
+    const caseName = document.getElementById('quickStartCase')?.value || 'testcase';
+    return {
+      id: 'new-session',
+      type: 'new-session',
+      title: 'New session',
+      subtitle: `Run ${labels[mode] || mode} in ${caseName}`,
+    };
+  },
+
+  renderCommandPalette() {
+    const search = document.getElementById('commandPaletteSearch');
+    const list = document.getElementById('commandPaletteList');
+    if (!list) return;
+
+    const query = search?.value || '';
+    const items = this.buildCommandPaletteItems(query);
+    this.commandPaletteItems = items;
+    this.commandPaletteActiveIndex = Math.max(0, Math.min(this.commandPaletteActiveIndex || 0, items.length - 1));
+
+    list.innerHTML = items
+      .map((item, index) => {
+        const active = index === this.commandPaletteActiveIndex ? ' active' : '';
+        const icon = item.type === 'new-session' ? '+' : '›';
+        return `
+          <button class="command-palette-item${active}" type="button" data-command-index="${index}">
+            <span class="command-palette-icon" aria-hidden="true">${icon}</span>
+            <span class="command-palette-text">
+              <span class="command-palette-title">${escapeHtml(item.title)}</span>
+              <span class="command-palette-subtitle">${escapeHtml(item.subtitle || '')}</span>
+            </span>
+          </button>
+        `;
+      })
+      .join('');
+  },
+
+  moveCommandPaletteSelection(delta) {
+    const items = this.commandPaletteItems || this.buildCommandPaletteItems(document.getElementById('commandPaletteSearch')?.value || '');
+    if (!items.length) return;
+    this.commandPaletteActiveIndex = (this.commandPaletteActiveIndex + delta + items.length) % items.length;
+    this.renderCommandPalette();
+  },
+
+  async activateCommandPaletteItem(index = this.commandPaletteActiveIndex || 0) {
+    const item = (this.commandPaletteItems || [])[index];
+    if (!item) return;
+
+    this.closeCommandPalette();
+    if (item.type === 'session' && item.sessionId) {
+      await this.selectSession(item.sessionId);
+      return;
+    }
+    if (item.type === 'new-session') {
+      await this.run();
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // Session Manager Modal (COD-121)
+  // Persistent, header-reachable session list (GET /api/sessions/unified)
+  // reachable mid-session, with a server-side search box. Reuses the
+  // unit-2 history item renderer so clicking resumes/switches sessions.
+  // ═══════════════════════════════════════════════════════════════
+
+  async openSessionManager() {
+    const modal = document.getElementById('sessionManagerModal');
+    if (modal) {
+      modal.classList.add('active');
+      // Escape closes the modal even while focus is in the search input. A
+      // modal-scoped listener is robust regardless of the global Escape chain
+      // (which runs other close handlers first and can short-circuit). Wire once.
+      if (!this._sessionManagerEscWired) {
+        this._sessionManagerEscWired = true;
+        modal.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            this.closeSessionManager();
+          }
+        });
+      }
+    }
+
+    // Ensure cases are loaded so item subtitles can show "#caseName" labels.
+    // Mirror loadHistorySessions(): prefer already-loaded this.cases.
+    if (!Array.isArray(this.cases) || this.cases.length === 0) {
+      try {
+        const r = await fetch('/api/cases');
+        const d = r.ok ? await r.json() : null;
+        this.cases = d?.data || [];
+      } catch {
+        this.cases = this.cases || [];
+      }
+    }
+
+    const search = document.getElementById('sessionManagerSearch');
+    if (search) {
+      // Wire the debounced search input once (lazy — the element exists by
+      // the time the modal is first opened, and mixin methods are bound).
+      if (!this._sessionManagerSearchWired) {
+        this._sessionManagerSearchWired = true;
+        search.addEventListener('input', () => {
+          const value = search.value.trim();
+          this._debouncedCall('sessionManagerSearch', () => this._loadSessionManagerList(value), 200);
+        });
+      }
+      search.value = '';
+      search.focus();
+    }
+    await this._loadSessionManagerList('');
+  },
+
+  closeSessionManager() {
+    const modal = document.getElementById('sessionManagerModal');
+    if (modal) modal.classList.remove('active');
+  },
+
+  /**
+   * COD-121: live-refresh the unified session list when sessions change
+   * (created/updated/deleted via SSE). Only touches surfaces that are currently
+   * showing — the open Session Manager modal and/or the visible welcome list —
+   * and is debounced so an event burst collapses into one re-fetch. The current
+   * search query is preserved.
+   */
+  _onSessionListMaybeChanged() {
+    const modal = document.getElementById('sessionManagerModal');
+    if (modal && modal.classList.contains('active')) {
+      this._debouncedCall(
+        'sessionManagerRefresh',
+        () => this._loadSessionManagerList(this._sessionManagerQuery || ''),
+        400
+      );
+    }
+    const welcome = document.getElementById('welcomeOverlay');
+    if (welcome && welcome.classList.contains('visible')) {
+      this._debouncedCall('welcomeHistoryRefresh', () => this.loadHistorySessions(), 600);
+    }
+  },
+
+  async _loadSessionManagerList(q = '') {
+    this._sessionManagerQuery = q;
+    const list = document.getElementById('sessionManagerList');
+    if (!list) return;
+    try {
+      const url = '/api/sessions/unified?limit=200' + (q ? '&q=' + encodeURIComponent(q) : '');
+      const res = await fetch(url);
+      const data = await res.json();
+      const sessions = data.data?.sessions || [];
+      list.replaceChildren();
+      if (sessions.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'empty-message';
+        empty.textContent = q ? 'No sessions match your search' : 'No sessions found';
+        list.appendChild(empty);
+        return;
+      }
+      for (const s of sessions) {
+        const item = this._buildHistoryItem(s, this.cases, { showViewAll: false });
+        // COD-130: scope the modal-close to the main (resume) row only, in the
+        // bubble phase. The ⋯ kebab button calls stopPropagation(), so clicking
+        // it (or its menu) no longer closes the Session Manager modal.
+        item.querySelector('.history-item-main')?.addEventListener('click', () => this.closeSessionManager());
+        list.appendChild(item);
+      }
+    } catch (err) {
+      console.error('[_loadSessionManagerList]', err);
+      list.replaceChildren();
+      const errLine = document.createElement('p');
+      errLine.className = 'empty-message';
+      errLine.textContent = 'Failed to load sessions';
+      list.appendChild(errLine);
+    }
+  },
 
   // ═══════════════════════════════════════════════════════════════
   // Away Digest Modal

@@ -198,6 +198,27 @@ html.mobile-init .file-browser-panel {
     z-index: 1300;
   }
 
+  .command-palette-modal {
+    padding: 10vh 0.75rem 0;
+  }
+
+  .command-palette-shell {
+    width: 100%;
+    max-height: 74vh;
+  }
+
+  .command-palette-input-row {
+    grid-template-columns: 20px minmax(0, 1fr);
+  }
+
+  .command-palette-input-row kbd {
+    display: none;
+  }
+
+  .command-palette-item {
+    min-height: 56px;
+  }
+
   .modal-tabs {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;

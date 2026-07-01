@@ -34,4 +34,10 @@ describe('keyboard shortcuts', () => {
     expect(readme).toContain('`Alt/Option+[` / `Alt/Option+]`');
     expect(readme).toContain('`Alt/Option+1`-`Alt/Option+9`');
   });
+
+  it('documents the Command-K open-session palette in help and README', () => {
+    expect(appSource).toContain('this.openCommandPalette()');
+    expect(helpHtml).toContain('<kbd>Ctrl/Cmd</kbd>+<kbd>K</kbd>');
+    expect(readme).toMatch(/\| `Ctrl\/Cmd\+K`\s+\| Find open session or start a new one\s+\|/);
+  });
 });

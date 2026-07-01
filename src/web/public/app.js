@@ -804,11 +804,19 @@ class CodemanApp {
       // Don't intercept keys during CJK IME composition
       if (e.isComposing || e.keyCode === 229) return;
 
+      if (this.shouldOpenCommandPaletteFromShortcut?.(e)) {
+        e.preventDefault();
+        this.openCommandPalette();
+        return;
+      }
+
       // Escape - close panels and modals (different logic: no preventDefault, no return)
       if (e.key === 'Escape') {
         this.closeAllPanels();
         this.closeHelp();
         if (this.attachmentHistoryDrawerOpen) this.closeAttachmentHistory();
+        this.closeSessionManager();
+        this.closeCommandPalette?.();
       }
 
       // Option/Alt session navigation uses physical key CODES, not e.key, so macOS
