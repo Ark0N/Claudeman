@@ -24,7 +24,7 @@ describe('keyboard shortcuts', () => {
     // terminal-ui.js must gate its xterm pass-through on the SAME physical e.code set the
     // app.js handler consumes; otherwise Alt+[ / Alt+] (and Option+digit on remapped macOS
     // layouts) switch tabs AND inject ESC<char> into the focused terminal. Keep in sync.
-    expect(terminalUiSource).toContain('/^(Digit[1-9]|BracketLeft|BracketRight)$/.test(ev.code');
+    expect(terminalUiSource).toContain('/^(Digit[1-9]|BracketLeft|BracketRight|KeyK)$/.test(ev.code');
   });
 
   it('documents the Alt/Option shortcuts in help and README', () => {
@@ -37,7 +37,7 @@ describe('keyboard shortcuts', () => {
 
   it('documents the Command-K open-session palette in help and README', () => {
     expect(appSource).toContain('this.openCommandPalette()');
-    expect(helpHtml).toContain('<kbd>Ctrl/Cmd</kbd>+<kbd>K</kbd>');
-    expect(readme).toMatch(/\| `Ctrl\/Cmd\+K`\s+\| Find open session or start a new one\s+\|/);
+    expect(helpHtml).toContain('<kbd>Ctrl/Cmd/Option</kbd>+<kbd>K</kbd>');
+    expect(readme).toMatch(/\| `Ctrl\/Cmd\/Option\+K`\s+\| Find open session or start a new one\s+\|/);
   });
 });

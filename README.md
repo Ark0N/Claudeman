@@ -482,7 +482,7 @@ Single-digit selection (1-9), color-coded status, token counts, auto-refresh. De
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl/Cmd+W` | Kill active session |
-| `Ctrl/Cmd+K` | Find open session or start a new one |
+| `Ctrl/Cmd/Option+K` | Find open session or start a new one |
 | `Ctrl/Cmd+Tab` | Next session |
 | `Alt/Option+[` / `Alt/Option+]` | Previous / next session |
 | `Alt/Option+1`-`Alt/Option+9` | Switch to tab N (physical keys, so macOS Option layouts work) |

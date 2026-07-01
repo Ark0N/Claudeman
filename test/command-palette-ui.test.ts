@@ -122,6 +122,40 @@ describe('Command-K session palette', () => {
     ).toBe(false);
   });
 
+  it('recognizes Ctrl-K from the focused xterm helper textarea', () => {
+    const { app } = loadPaletteHarness();
+
+    expect(
+      app.shouldOpenCommandPaletteFromShortcut({
+        key: 'k',
+        code: 'KeyK',
+        metaKey: false,
+        ctrlKey: true,
+        altKey: false,
+        target: {
+          tagName: 'TEXTAREA',
+          isContentEditable: false,
+          classList: { contains: (name: string) => name === 'xterm-helper-textarea' },
+        },
+      })
+    ).toBe(true);
+  });
+
+  it('recognizes macOS Option-K by physical key code', () => {
+    const { app } = loadPaletteHarness();
+
+    expect(
+      app.shouldOpenCommandPaletteFromShortcut({
+        key: '˚',
+        code: 'KeyK',
+        metaKey: false,
+        ctrlKey: false,
+        altKey: true,
+        target: null,
+      })
+    ).toBe(true);
+  });
+
   it('opens and focuses the palette search box', () => {
     const { app, elements } = loadPaletteHarness();
 

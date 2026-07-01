@@ -257,12 +257,17 @@ Object.assign(CodemanApp.prototype, {
 
   shouldOpenCommandPaletteFromShortcut(e) {
     if (!e) return false;
-    if ((e.key || '').toLowerCase() !== 'k') return false;
-    if (!(e.metaKey || e.ctrlKey) || e.altKey) return false;
+    const key = (e.key || '').toLowerCase();
+    if (key !== 'k' && e.code !== 'KeyK') return false;
+    if (!(e.metaKey || e.ctrlKey || e.altKey)) return false;
 
     const target = e.target;
     if (!target) return true;
     const tagName = (target.tagName || '').toUpperCase();
+    const className = typeof target.className === 'string' ? target.className : '';
+    const isXtermHelper =
+      target.classList?.contains?.('xterm-helper-textarea') || className.includes('xterm-helper-textarea');
+    if (isXtermHelper) return true;
     if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') return false;
     if (target.isContentEditable) return false;
     if (typeof target.closest === 'function' && target.closest('[contenteditable="true"]')) return false;
