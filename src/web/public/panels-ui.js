@@ -374,20 +374,59 @@ Object.assign(CodemanApp.prototype, {
       });
     }
 
-    sessionItems.push(this._buildCommandPaletteNewSessionItem());
+    sessionItems.push(this._buildCommandPaletteNewSessionItem(query));
     return sessionItems;
   },
 
-  _buildCommandPaletteNewSessionItem() {
+  _buildCommandPaletteNewSessionItem(query = '') {
     const mode = this.runMode || this._runMode || 'claude';
     const labels = { claude: 'Claude', opencode: 'OpenCode', codex: 'Codex', gemini: 'Gemini' };
-    const caseName = document.getElementById('quickStartCase')?.value || 'testcase';
+    const caseName = this._findCommandPaletteCaseMatch(query) || document.getElementById('quickStartCase')?.value || 'testcase';
     return {
       id: 'new-session',
       type: 'new-session',
+      caseName,
       title: 'New session',
       subtitle: `Run ${labels[mode] || mode} in ${caseName}`,
     };
+  },
+
+  _findCommandPaletteCaseMatch(query = '') {
+    const needle = query.trim().toLowerCase();
+    if (!needle || !Array.isArray(this.cases)) return null;
+
+    const scoreCase = (caseItem) => {
+      const name = String(caseItem?.name || '').trim();
+      if (!name) return 0;
+      const haystack = [
+        name,
+        caseItem?.path,
+        caseItem?.casePath,
+        caseItem?.workingDir,
+        caseItem?.remote?.path,
+        caseItem?.remote?.hostId,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      const lowerName = name.toLowerCase();
+      if (lowerName === needle) return 100;
+      if (lowerName.startsWith(needle)) return 90;
+      if (lowerName.includes(needle)) return 80;
+      if (haystack.includes(needle)) return 60;
+      return 0;
+    };
+
+    let best = null;
+    let bestScore = 0;
+    for (const caseItem of this.cases) {
+      const score = scoreCase(caseItem);
+      if (score > bestScore) {
+        best = caseItem;
+        bestScore = score;
+      }
+    }
+    return best?.name || null;
   },
 
   renderCommandPalette() {
@@ -434,6 +473,10 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
     if (item.type === 'new-session') {
+      const caseSelect = document.getElementById('quickStartCase');
+      if (caseSelect && item.caseName) {
+        caseSelect.value = item.caseName;
+      }
       await this.run();
     }
   },

@@ -43,6 +43,9 @@ function loadPaletteHarness(overrides: Record<string, any> = {}) {
       listeners[`list:${event}`] = handler;
     }),
   };
+  elements.quickStartCase = {
+    value: 'plex-previews',
+  };
 
   const context = vm.createContext({
     CodemanApp,
@@ -87,6 +90,7 @@ function loadPaletteHarness(overrides: Record<string, any> = {}) {
     ],
   ]);
   app.sessionOrder = ['sess-beta', 'sess-alpha'];
+  app.cases = [{ name: 'plex-previews' }, { name: 'flux-player' }, { name: 'api-tools' }];
   app.selectSession = vi.fn();
   app.run = vi.fn();
   app.closeMobileHeaderUtilities = vi.fn();
@@ -174,6 +178,26 @@ describe('Command-K session palette', () => {
     expect(results.map((item: any) => item.id)).toEqual(['session:sess-beta', 'new-session']);
     expect(results[0]).toMatchObject({ type: 'session', sessionId: 'sess-beta', title: 'Billing prompt polish' });
     expect(results[1]).toMatchObject({ type: 'new-session', title: 'New session' });
+  });
+
+  it('uses the best matching case for the new-session action', async () => {
+    const { app, elements } = loadPaletteHarness();
+
+    const results = app.buildCommandPaletteItems('flux');
+    const newSession = results.find((item: any) => item.type === 'new-session');
+
+    expect(newSession).toMatchObject({
+      type: 'new-session',
+      caseName: 'flux-player',
+      subtitle: 'Run Claude in flux-player',
+    });
+
+    app.commandPaletteItems = [newSession];
+    app.commandPaletteActiveIndex = 0;
+    await app.activateCommandPaletteItem();
+
+    expect(elements.quickStartCase.value).toBe('flux-player');
+    expect(app.run).toHaveBeenCalledTimes(1);
   });
 
   it('activates the highlighted session result', async () => {
