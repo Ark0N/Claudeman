@@ -14,7 +14,18 @@ import { isBlockedAttachmentPath, loadAttachmentGuardConfig } from './config/att
 import { validateSessionFilePath } from './web/route-helpers.js';
 import type { AttachmentDetectedEvent, AttachmentDetectedType } from './types.js';
 
-const SUPPORTED_ATTACHMENT_EXTENSIONS = new Set(['png', 'pdf', 'docx', 'pptx', 'md', 'txt']);
+const SUPPORTED_ATTACHMENT_EXTENSIONS = new Set([
+  'png',
+  'jpg',
+  'jpeg',
+  'gif',
+  'webp',
+  'pdf',
+  'docx',
+  'pptx',
+  'md',
+  'txt',
+]);
 
 export type AttachmentSource = 'detected' | 'external';
 
@@ -96,7 +107,7 @@ export function isSupportedAttachmentExtension(extension: string): boolean {
 
 export function getAttachmentType(extension: string): AttachmentDetectedType {
   const normalized = extension.toLowerCase().replace(/^\./, '');
-  if (normalized === 'png') return 'image';
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(normalized)) return 'image';
   if (normalized === 'pdf') return 'pdf';
   if (normalized === 'pptx') return 'presentation';
   if (normalized === 'md') return 'markdown';

@@ -62,6 +62,7 @@ import {
 import { imageWatcher } from '../image-watcher.js';
 import { workflowRunWatcher, summarizeRun } from '../workflow-run-watcher.js';
 import { attachmentRegistry, buildFileThumbnailRoute, registerExternalAttachment } from '../attachment-registry.js';
+import { registerGeneratedArtifactAttachment } from '../generated-artifact-attachments.js';
 import {
   buildDetectedAttachmentHistoryItem,
   buildExternalAttachmentHistoryItem,
@@ -1345,13 +1346,25 @@ export class WebServer extends EventEmitter {
    * directly inside a managed session). Registration also enforces the COD-53
    * blocklist as defense-in-depth.
    */
-  private async registerAttachment(sessionId: string, filePath: string): Promise<void> {
+  private async registerAttachment(
+    sessionId: string,
+    filePath: string,
+    source: 'external' | 'codex-generated' = 'external'
+  ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
-    const event = await registerExternalAttachment(sessionId, filePath, {
-      sessionWorkingDir: session.workingDir,
-      forceWorkspaceConfinement: true,
-    });
+    const event =
+      source === 'codex-generated'
+        ? await registerGeneratedArtifactAttachment({
+            sessionId,
+            filePath,
+            sessionWorkingDir: session.workingDir,
+            remote: session.remote,
+          })
+        : await registerExternalAttachment(sessionId, filePath, {
+            sessionWorkingDir: session.workingDir,
+            forceWorkspaceConfinement: true,
+          });
     const record = attachmentRegistry.get(sessionId, event.attachmentId);
     if (record) {
       session.upsertAttachmentHistory(
