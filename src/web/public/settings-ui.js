@@ -2368,6 +2368,10 @@ Object.assign(CodemanApp.prototype, {
     this.closeAppSettings();
     this.cancelCloseSession();
     this.closeTokenStats();
+    // Mobile header utility tray closes alongside the other overlays so Escape
+    // (and any future closeAllPanels caller) dismisses it like every other panel
+    // instead of leaving it pinned open with only its toggle to close it.
+    this.closeMobileHeaderUtilities?.();
     document.getElementById('monitorPanel').classList.remove('open');
     // Collapse subagents panel (don't hide it permanently)
     const subagentsPanel = document.getElementById('subagentsPanel');
