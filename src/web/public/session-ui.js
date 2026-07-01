@@ -211,6 +211,7 @@ Object.assign(CodemanApp.prototype, {
         if (option) {
           event.preventDefault();
           this.selectQuickStartCase(option.name);
+          this.run?.();
         }
       } else if (event.key === 'Escape') {
         event.preventDefault();

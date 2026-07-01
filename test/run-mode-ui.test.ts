@@ -179,6 +179,66 @@ describe('case selector refresh', () => {
     expect(app.filterCasePickerOptions(options, 'plex').map((option: any) => option.name)).toEqual(['plex-previews']);
   });
 
+  it('launches the highlighted case with the current run mode when pressing Enter in the picker', () => {
+    const elements: Record<string, any> = {};
+    const listeners: Record<string, (event: any) => void> = {};
+    const CodemanApp = function CodemanApp(this: any) {};
+
+    elements.quickStartCase = {
+      value: 'Alpha',
+      dataset: {},
+    };
+    elements.quickStartCaseSearch = {
+      value: 'mon',
+      dataset: {},
+      setAttribute: vi.fn(),
+      removeAttribute: vi.fn(),
+      addEventListener: vi.fn((event: string, handler: (event: any) => void) => {
+        listeners[event] = handler;
+      }),
+      select: vi.fn(),
+    };
+    elements.quickStartCaseList = {
+      innerHTML: '',
+      classList: { add: vi.fn(), remove: vi.fn() },
+      addEventListener: vi.fn(),
+    };
+    elements.quickStartCasePicker = {
+      contains: () => true,
+    };
+
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: {
+        getElementById: (id: string) => elements[id] ?? null,
+        addEventListener: vi.fn(),
+      },
+      console,
+      escapeHtml: (s: string) => s,
+    });
+
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+
+    const app = new (CodemanApp as any)();
+    app.cases = [
+      { name: 'Alpha' },
+      { name: 'moneytrove', location: 'remote', remote: { hostId: 'mac-mini', path: '/Users/saqeb/moneytrove' } },
+      { name: 'zeta' },
+    ];
+    app.updateDirDisplayForCase = vi.fn();
+    app.updateMobileCaseLabel = vi.fn();
+    app.saveLastUsedCase = vi.fn();
+    app.run = vi.fn(async () => {});
+
+    app.setupQuickStartCasePicker();
+    listeners.keydown({ key: 'Enter', preventDefault: vi.fn() });
+
+    expect(elements.quickStartCase.value).toBe('moneytrove');
+    expect(app.run).toHaveBeenCalledTimes(1);
+  });
+
   it('creates remote shell sessions by caseName instead of remote display path', async () => {
     const elements: Record<string, any> = {
       quickStartCase: { value: 'gpu-work' },
