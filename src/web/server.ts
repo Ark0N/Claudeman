@@ -1359,7 +1359,6 @@ export class WebServer extends EventEmitter {
             sessionId,
             filePath,
             sessionWorkingDir: session.workingDir,
-            remote: session.remote,
           })
         : await registerExternalAttachment(sessionId, filePath, {
             sessionWorkingDir: session.workingDir,
