@@ -16,16 +16,22 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
+import fastifyMultipart from '@fastify/multipart';
+import { join } from 'node:path';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { ApiErrorCode, httpStatusForErrorCode } from '../../src/types.js';
 
 // Mock execFile so the send-key route's `tmux` invocation is observable (not run for real).
 const { execFile } = vi.hoisted(() => ({ execFile: vi.fn() }));
+const heicConvert = vi.hoisted(() => vi.fn(async () => Buffer.from('ffd8ffe000104a4649460001', 'hex')));
 vi.mock('node:child_process', async (orig) => {
   const actual = await orig<typeof import('node:child_process')>();
   return { ...actual, execFile };
 });
+vi.mock('heic-convert', () => ({ default: heicConvert }));
 
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
 
@@ -45,6 +51,9 @@ async function createEnvelopeHarness(
 ): Promise<LocalHarness> {
   const app = Fastify({ logger: false });
   await app.register(fastifyCookie);
+  await app.register(fastifyMultipart, {
+    limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 4, parts: 5 },
+  });
 
   const ctx = createMockRouteContext();
   registerFn(app, ctx);
@@ -119,6 +128,49 @@ describe('session-routes', () => {
       });
       expect(JSON.parse(res.body).success).toBe(false);
       expect(execFile).not.toHaveBeenCalled();
+    });
+  });
+
+  // ========== POST /api/sessions/:id/paste-image ==========
+
+  describe('POST /api/sessions/:id/paste-image', () => {
+    function imageUploadBody(boundary: string, filename: string, mimetype: string, imageBytes: Buffer): Buffer {
+      return Buffer.concat([
+        Buffer.from(
+          `--${boundary}\r\n` +
+            `Content-Disposition: form-data; name="image"; filename="${filename}"\r\n` +
+            `Content-Type: ${mimetype}\r\n\r\n`
+        ),
+        imageBytes,
+        Buffer.from(`\r\n--${boundary}--\r\n`),
+      ]);
+    }
+
+    it('converts HEIC paste images to JPEG attachments when browser-side normalization falls back', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-heic-'));
+      harness.ctx._session.workingDir = workDir;
+      heicConvert.mockClear();
+
+      const boundary = 'codeman-test-boundary';
+      const heic = Buffer.from('00000034667479706865696300000000', 'hex');
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/paste-image`,
+        headers: {
+          host: 'codeman.test',
+          origin: 'http://codeman.test',
+          'content-type': `multipart/form-data; boundary=${boundary}`,
+        },
+        payload: imageUploadBody(boundary, 'IMG_4996.HEIC', 'image/heic', heic),
+      });
+
+      await rm(workDir, { recursive: true });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.path).toMatch(/\/\.claude-images\/paste-\d+-[a-f0-9]{8}\.jpg$/);
+      expect(heicConvert).toHaveBeenCalledWith({ buffer: heic, format: 'JPEG', quality: 0.92 });
     });
   });
 

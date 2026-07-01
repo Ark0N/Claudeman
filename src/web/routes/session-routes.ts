@@ -189,9 +189,30 @@ export function imageMagicMatchesExt(data: Buffer, ext: string): boolean {
       return u32be(0) === 0x52494646 && u32be(8) === 0x57454250;
     case '.bmp':
       return data[0] === 0x42 && data[1] === 0x4d;
+    case '.heic':
+    case '.heif': {
+      // ISO Base Media File Format: size + "ftyp" + major brand.
+      if (u32be(4) !== 0x66747970) return false;
+      const brand = data.subarray(8, 12).toString('ascii');
+      return ['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'hevm', 'hevs', 'mif1', 'msf1'].includes(brand);
+    }
     default:
       return false;
   }
+}
+
+async function convertHeicToJpeg(imageBytes: Buffer): Promise<Buffer> {
+  const { default: convert } = await import('heic-convert');
+  const converted = await convert({ buffer: imageBytes, format: 'JPEG', quality: 0.92 });
+  const jpegBytes = Buffer.isBuffer(converted)
+    ? converted
+    : converted instanceof ArrayBuffer
+      ? Buffer.from(converted)
+      : Buffer.from(converted.buffer, converted.byteOffset, converted.byteLength);
+  if (!imageMagicMatchesExt(jpegBytes, '.jpg')) {
+    throw new Error('HEIC conversion did not produce JPEG bytes');
+  }
+  return jpegBytes;
 }
 
 // Per-(IP, sessionId) token bucket for paste-image. 30 requests/minute.
@@ -1753,7 +1774,7 @@ export function registerSessionRoutes(
   // Paste Image (clipboard / drag-drop upload)
   // ═══════════════════════════════════════════════════════════════
 
-  const ALLOWED_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']);
+  const ALLOWED_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.heic', '.heif']);
   // The per-file size cap (MAX_PASTE_IMAGE_BYTES) is enforced by @fastify/multipart (registered in server.ts).
 
   app.post('/api/sessions/:id/paste-image', async (req, reply) => {
@@ -1845,7 +1866,7 @@ export function registerSessionRoutes(
       const origExt = extname(part.filename).toLowerCase();
       if (ALLOWED_IMAGE_EXTS.has(origExt)) ext = origExt;
     }
-    const mimeMatch = (part.mimetype || '').toLowerCase().match(/^image\/(png|jpeg|jpg|webp|gif|bmp)$/);
+    const mimeMatch = (part.mimetype || '').toLowerCase().match(/^image\/(png|jpeg|jpg|webp|gif|bmp|heic|heif)$/);
     if (mimeMatch) {
       const map: Record<string, string> = {
         png: '.png',
@@ -1854,6 +1875,8 @@ export function registerSessionRoutes(
         webp: '.webp',
         gif: '.gif',
         bmp: '.bmp',
+        heic: '.heic',
+        heif: '.heif',
       };
       ext = map[mimeMatch[1]] ?? ext;
     }
@@ -1879,6 +1902,19 @@ export function registerSessionRoutes(
       );
       reply.code(415);
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Image bytes do not match declared type ${ext}`);
+    }
+
+    if (ext === '.heic' || ext === '.heif') {
+      try {
+        imageBytes = await convertHeicToJpeg(imageBytes);
+        ext = '.jpg';
+      } catch (err: unknown) {
+        console.warn(
+          `[paste-image] HEIC conversion failed: filename=${JSON.stringify(part.filename)} mime=${JSON.stringify(part.mimetype)} error=${getErrorMessage(err)}`
+        );
+        reply.code(415);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Could not convert HEIC image to JPEG');
+      }
     }
 
     // Save to {workingDir}/.claude-images/
