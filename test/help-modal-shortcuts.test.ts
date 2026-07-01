@@ -1,0 +1,67 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+
+const INDEX_HTML = readFileSync(join(process.cwd(), 'src/web/public/index.html'), 'utf-8');
+
+function normalizedHtml(value: string): string {
+  return value.replace(/\s+/g, ' ');
+}
+
+function extractElementById(html: string, id: string): string {
+  const idIndex = html.indexOf(`id="${id}"`);
+  expect(idIndex, `expected #${id} to exist`).toBeGreaterThanOrEqual(0);
+
+  const start = html.lastIndexOf('<', idIndex);
+  expect(start, `expected #${id} start tag`).toBeGreaterThanOrEqual(0);
+
+  const nextSection = html.indexOf('<!-- Monitor Panel', idIndex);
+  expect(nextSection, `expected section marker after #${id}`).toBeGreaterThanOrEqual(0);
+
+  const end = nextSection;
+  return html.slice(start, end);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function expectShortcut(html: string, keys: string[], label: string): void {
+  const keyPattern = keys.map((key) => `<kbd>${escapeRegExp(key)}</kbd>`).join('\\s*\\+\\s*');
+  expect(html).toMatch(new RegExp(`${keyPattern}.*?${label}`, 'i'));
+}
+
+describe('help modal shortcuts', () => {
+  const helpModal = normalizedHtml(extractElementById(INDEX_HTML, 'helpModal'));
+
+  it('documents implemented global and tab shortcuts', () => {
+    expectShortcut(helpModal, ['Ctrl', 'W'], 'Close Session');
+    expectShortcut(helpModal, ['Ctrl', 'Tab'], 'Next Session');
+    expectShortcut(helpModal, ['Alt/Option', '['], 'Previous / Next Session');
+    expectShortcut(helpModal, ['Alt/Option', ']'], 'Previous / Next Session');
+    expectShortcut(helpModal, ['Alt/Option', '1-9'], 'Switch to Tab N');
+    expectShortcut(helpModal, ['Ctrl', '{'], 'Move Active Tab Left');
+    expectShortcut(helpModal, ['Ctrl', '}'], 'Move Active Tab Right');
+    expectShortcut(helpModal, ['Ctrl', '?'], 'Show Shortcuts');
+    expect(helpModal).not.toMatch(/Ctrl<\/kbd>\s*\+\s*<kbd>\/<\/kbd>.*?Show Shortcuts/i);
+    expectShortcut(helpModal, ['Ctrl', 'Shift', 'V'], 'Voice Input');
+    expectShortcut(helpModal, ['Escape'], 'Close Panels');
+  });
+
+  it('documents terminal input shortcuts without advertising stale run shortcuts', () => {
+    expectShortcut(helpModal, ['Ctrl', 'L'], 'Clear Terminal');
+    expectShortcut(helpModal, ['Ctrl', '+'], 'Increase Font');
+    expectShortcut(helpModal, ['Ctrl', '-'], 'Decrease Font');
+    expectShortcut(helpModal, ['Shift', 'Enter'], 'Insert Newline');
+    expectShortcut(helpModal, ['Ctrl', 'Enter'], 'Insert Newline');
+
+    expect(helpModal).not.toMatch(/Ctrl<\/kbd>\s*\+\s*<kbd>K<\/kbd>/i);
+    expect(helpModal).not.toMatch(/Ctrl<\/kbd>\s*\+\s*<kbd>Shift<\/kbd>\s*\+\s*<kbd>R<\/kbd>/i);
+    expect(helpModal).not.toMatch(/Ctrl<\/kbd>\s*\+\s*<kbd>Enter<\/kbd>.*?(Run|Start)/i);
+  });
+
+  it('does not advertise the removed Ctrl+Enter run binding in launch UI hints', () => {
+    expect(INDEX_HTML).not.toContain('Or press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to start');
+    expect(INDEX_HTML).not.toContain('title="Run (Ctrl+Enter)"');
+  });
+});

@@ -281,6 +281,126 @@ function parseSessionPrefix(name) {
   return null;
 }
 
+const DEFAULT_SHORTCUTS = [
+  {
+    id: 'show-shortcuts',
+    group: 'Panels',
+    label: 'Show Shortcuts',
+    bindings: [
+      { modifiers: ['ctrl'], key: '?', code: 'Slash' },
+      { modifiers: ['alt'], key: '?', code: 'Slash' },
+    ],
+    action: 'showShortcutOverlay',
+  },
+  {
+    id: 'close-session',
+    group: 'Session',
+    label: 'Close Session',
+    bindings: [{ modifiers: ['ctrl'], key: 'w' }],
+    action: 'killActiveSession',
+  },
+  {
+    id: 'next-session',
+    group: 'Session',
+    label: 'Next Session',
+    bindings: [{ modifiers: ['ctrl'], key: 'Tab' }],
+    action: 'nextSession',
+  },
+  {
+    id: 'clear-terminal',
+    group: 'Terminal',
+    label: 'Clear Terminal',
+    bindings: [{ modifiers: ['ctrl'], key: 'l' }],
+    action: 'clearTerminal',
+  },
+  {
+    id: 'increase-font',
+    group: 'Terminal',
+    label: 'Increase Font',
+    bindings: [
+      { modifiers: ['ctrl'], key: '=', code: 'Equal' },
+      { modifiers: ['ctrl'], key: '+', code: 'Equal' },
+    ],
+    action: 'increaseFontSize',
+  },
+  {
+    id: 'decrease-font',
+    group: 'Terminal',
+    label: 'Decrease Font',
+    bindings: [{ modifiers: ['ctrl'], key: '-', code: 'Minus' }],
+    action: 'decreaseFontSize',
+  },
+  {
+    id: 'voice-input',
+    group: 'Terminal',
+    label: 'Voice Input',
+    bindings: [{ modifiers: ['ctrl', 'shift'], key: 'V' }],
+    action: 'toggleVoiceInput',
+  },
+  {
+    id: 'move-tab-left',
+    group: 'Tabs',
+    label: 'Move Active Tab Left',
+    bindings: [{ modifiers: ['ctrl', 'shift'], key: '{', code: 'BracketLeft' }],
+    action: 'moveActiveTabLeft',
+  },
+  {
+    id: 'move-tab-right',
+    group: 'Tabs',
+    label: 'Move Active Tab Right',
+    bindings: [{ modifiers: ['ctrl', 'shift'], key: '}', code: 'BracketRight' }],
+    action: 'moveActiveTabRight',
+  },
+  {
+    id: 'command-palette',
+    group: 'Session',
+    label: 'Find Open Session',
+    bindings: [
+      { modifiers: ['ctrl'], key: 'k', code: 'KeyK' },
+      { modifiers: ['meta'], key: 'k', code: 'KeyK' },
+      { modifiers: ['alt'], key: 'k', code: 'KeyK' },
+    ],
+    action: 'openCommandPalette',
+  },
+  {
+    id: 'previous-next-session',
+    group: 'Session',
+    label: 'Previous / Next Session',
+    displayBindings: ['Alt/Option+[', 'Alt/Option+]'],
+  },
+  {
+    id: 'switch-tab-n',
+    group: 'Session',
+    label: 'Switch to Tab N',
+    displayBindings: ['Alt/Option+1-9'],
+  },
+  {
+    id: 'focus-tabs',
+    group: 'Tabs',
+    label: 'Focus Tabs',
+    displayBindings: ['ArrowLeft', 'ArrowRight', 'Home', 'End'],
+  },
+  {
+    id: 'activate-focused-tab',
+    group: 'Tabs',
+    label: 'Activate Focused Tab',
+    displayBindings: ['Enter', 'Space'],
+  },
+  {
+    id: 'insert-newline',
+    group: 'Terminal',
+    label: 'Insert Newline',
+    displayBindings: ['Shift+Enter', 'Ctrl+Enter'],
+  },
+  {
+    id: 'close-panels',
+    group: 'Panels',
+    label: 'Close Panels',
+    displayBindings: ['Escape'],
+  },
+];
+
+
 // ═══════════════════════════════════════════════════════════════
 // CodemanApp Class — constructor and global state
 // ═══════════════════════════════════════════════════════════════

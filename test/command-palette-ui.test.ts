@@ -93,12 +93,24 @@ function loadPaletteHarness(overrides: Record<string, any> = {}) {
         status: 'idle',
       },
     ],
+    [
+      'sess-gamma',
+      {
+        id: 'sess-gamma',
+        workingDir: '/repo/flux-player',
+        mode: 'codex',
+        status: 'busy',
+      },
+    ],
   ]);
-  app.sessionOrder = ['sess-beta', 'sess-alpha'];
+  app.sessionOrder = ['sess-beta', 'sess-alpha', 'sess-gamma'];
   app.cases = [{ name: 'plex-previews' }, { name: 'flux-player' }, { name: 'api-tools' }];
   app.selectSession = vi.fn();
   app.run = vi.fn();
   app.closeMobileHeaderUtilities = vi.fn();
+  app.getShortId = (id: string) => id.slice(0, 8);
+  app.getSessionName = (session: any) =>
+    session.name || session.workingDir?.split('/').pop() || app.getShortId(session.id);
 
   return { app, elements, listeners };
 }
@@ -183,6 +195,19 @@ describe('Command-K session palette', () => {
     expect(results.map((item: any) => item.id)).toEqual(['session:sess-beta', 'new-session']);
     expect(results[0]).toMatchObject({ type: 'session', sessionId: 'sess-beta', title: 'Billing prompt polish' });
     expect(results[1]).toMatchObject({ type: 'new-session', title: 'New session' });
+  });
+
+  it('uses the tab name instead of the short session id for unnamed sessions', () => {
+    const { app } = loadPaletteHarness();
+
+    const results = app.buildCommandPaletteItems('flux-player');
+
+    expect(results[0]).toMatchObject({
+      type: 'session',
+      sessionId: 'sess-gamma',
+      title: 'flux-player',
+    });
+    expect(results[0].title).not.toBe('sess-gam');
   });
 
   it('uses the best matching case for the new-session action', async () => {

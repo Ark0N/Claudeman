@@ -361,7 +361,7 @@ Object.assign(CodemanApp.prototype, {
       seen.add(sessionId);
       const session = this.sessions?.get?.(sessionId);
       if (!session) continue;
-      const title = session.name || session.title || sessionId.slice(0, 8);
+      const title = this.getSessionName?.(session) || session.name || session.title || sessionId.slice(0, 8);
       const subtitleParts = [session.workingDir, session.mode, session.status].filter(Boolean);
       const haystack = [title, session.workingDir, session.mode, session.status, sessionId].filter(Boolean).join(' ').toLowerCase();
       if (needle && !haystack.includes(needle)) continue;

@@ -45,6 +45,7 @@ codeman web
 <summary><strong>Run as a background service</strong></summary>
 
 **Linux (systemd):**
+
 ```bash
 mkdir -p ~/.config/systemd/user
 cat > ~/.config/systemd/user/codeman-web.service << EOF
@@ -67,6 +68,7 @@ loginctl enable-linger $USER
 ```
 
 **macOS (launchd):**
+
 ```bash
 mkdir -p ~/Library/LaunchAgents
 cat > ~/Library/LaunchAgents/com.codeman.web.plist << EOF
@@ -94,6 +96,7 @@ cat > ~/Library/LaunchAgents/com.codeman.web.plist << EOF
 EOF
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.codeman.web.plist
 ```
+
 </details>
 
 <details>
@@ -104,6 +107,7 @@ wsl bash -c "curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/i
 ```
 
 Codeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). If you don't have WSL yet: run `wsl --install` in an admin PowerShell, reboot, open Ubuntu, then install your preferred AI coding CLI inside WSL ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), or [Codex](https://developers.openai.com/codex/cli)). After installing, `http://localhost:3000` is accessible from your Windows browser.
+
 </details>
 
 ---
@@ -214,7 +218,7 @@ WATCHING → IDLE DETECTED → SEND UPDATE → /clear → /init → CONTINUE →
 ```
 
 - **Multi-layer idle detection** — completion messages, AI-powered idle check, output silence, token stability
-- **Auto-resume on usage limit** *(opt-in, off by default)* — when Claude halts on a subscription limit ("You've hit your limit · resets 3pm"), Codeman parses the reset time, waits it out plus a 2-minute safety buffer, then dismisses the rate-limit dialog and sends `continue` — so an overnight run survives the 5-hour window instead of stalling until morning. Recognizes every Claude Code limit-message format, retries if still limited, survives Codeman restarts, and holds respawn cycles while paused so `/clear` can't wipe the waiting conversation. Enable per session at the top of the Respawn tab
+- **Auto-resume on usage limit** _(opt-in, off by default)_ — when Claude halts on a subscription limit ("You've hit your limit · resets 3pm"), Codeman parses the reset time, waits it out plus a 2-minute safety buffer, then dismisses the rate-limit dialog and sends `continue` — so an overnight run survives the 5-hour window instead of stalling until morning. Recognizes every Claude Code limit-message format, retries if still limited, survives Codeman restarts, and holds respawn cycles while paused so `/clear` can't wipe the waiting conversation. Enable per session at the top of the Respawn tab
 - **Circuit breaker** — prevents respawn thrashing when Claude is stuck (CLOSED -> HALF_OPEN -> OPEN states, tracks consecutive no-progress and repeated errors)
 - **Health scoring** — 0-100 health score with component scores for cycle success, circuit breaker state, iteration progress, and stuck recovery
 - **Built-in presets** — `solo-work` (3s idle, 60min), `subagent-workflow` (45s, 240min), `team-lead` (90s, 480min), `ralph-todo` (8s, 480min), `overnight-autonomous` (10s, 480min)
@@ -260,10 +264,10 @@ The title is templated into the served HTML on first byte, so it's correct from 
 
 ### Smart Token Management
 
-| Threshold | Action | Result |
-|-----------|--------|--------|
+| Threshold       | Action          | Result                             |
+| --------------- | --------------- | ---------------------------------- |
 | **110k tokens** | Auto `/compact` | Context summarized, work continues |
-| **140k tokens** | Auto `/clear` | Fresh start with `/init` |
+| **140k tokens** | Auto `/clear`   | Fresh start with `/init`           |
 
 ### Notifications
 
@@ -298,8 +302,8 @@ PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xt
 - **Effort & Ultracode** — set a per-session default effort (`low`–`max`) or enable **ultracode** (dynamic multi-agent workflows). Soft defaults only — switchable anytime with `/effort` in-session. Extended-thinking budget is configurable too
 - **Voice input** — dictate prompts with Deepgram Nova-3 (Web Speech API fallback): toggle recording, auto-silence stop, live level meter (`Ctrl+Shift+V`)
 - **Image input** — paste or drag-and-drop images straight into a session
-- **Gesture control** *(opt-in)* — a MediaPipe hand-tracking overlay to grab/drag session windows and pinch buttons, hands-free. Enable with `CODEMAN_GESTURE=1` + App Settings → Display
-- **Multi-monitor span** *(macOS)* — one click opens a browser window maximized across all displays, so floating agent/gesture panels can cross the physical seam
+- **Gesture control** _(opt-in)_ — a MediaPipe hand-tracking overlay to grab/drag session windows and pinch buttons, hands-free. Enable with `CODEMAN_GESTURE=1` + App Settings → Display
+- **Multi-monitor span** _(macOS)_ — one click opens a browser window maximized across all displays, so floating agent/gesture panels can cross the physical seam
 - **CJK / IME input** — full composition support for Chinese / Japanese / Korean
 - **OS notifications & hostname-aware titles** — desktop alerts and tab titles are prefixed `codeman:<host>` so multi-host setups stay unambiguous
 
@@ -372,14 +376,14 @@ Every **60 seconds**, the server automatically rotates to a fresh token. The pre
 
 The design is informed by ["Demystifying the (In)Security of QR Code-based Login"](https://www.usenix.org/conference/usenixsecurity25/presentation/zhang-xin) (USENIX Security 2025), which found 47 of the top-100 websites vulnerable to QR auth attacks due to 6 critical design flaws across 42 CVEs. Codeman addresses all six:
 
-| USENIX Flaw | Mitigation |
-|-------------|------------|
-| **Flaw-1**: Missing single-use enforcement | Token atomically consumed on first scan — replays always fail |
-| **Flaw-2**: Long-lived tokens | 60s TTL with 90s grace, auto-rotation via timer |
-| **Flaw-3**: Predictable token generation | `crypto.randomBytes(32)` — 256-bit entropy. Short codes use rejection sampling to eliminate modulo bias |
-| **Flaw-4**: Client-side token generation | Server-side only — tokens never leave the server until embedded in the QR |
-| **Flaw-5**: Missing status notification | Desktop toast: *"Device [IP] authenticated via QR (Safari). Not you? [Revoke]"* — real-time QRLjacking detection |
-| **Flaw-6**: Inadequate session binding | IP + User-Agent stored for audit. Manual session revocation via API. HttpOnly + Secure + SameSite=lax cookies |
+| USENIX Flaw                                | Mitigation                                                                                                       |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| **Flaw-1**: Missing single-use enforcement | Token atomically consumed on first scan — replays always fail                                                    |
+| **Flaw-2**: Long-lived tokens              | 60s TTL with 90s grace, auto-rotation via timer                                                                  |
+| **Flaw-3**: Predictable token generation   | `crypto.randomBytes(32)` — 256-bit entropy. Short codes use rejection sampling to eliminate modulo bias          |
+| **Flaw-4**: Client-side token generation   | Server-side only — tokens never leave the server until embedded in the QR                                        |
+| **Flaw-5**: Missing status notification    | Desktop toast: _"Device [IP] authenticated via QR (Safari). Not you? [Revoke]"_ — real-time QRLjacking detection |
+| **Flaw-6**: Inadequate session binding     | IP + User-Agent stored for audit. Manual session revocation via API. HttpOnly + Secure + SameSite=lax cookies    |
 
 #### Timing-Safe Lookup
 
@@ -404,23 +408,23 @@ When someone authenticates via QR, the desktop shows a notification toast with t
 
 #### Threat Coverage
 
-| Threat | Why it doesn't work |
-|--------|-------------------|
-| **QR screenshot shared** | Single-use: consumed on first scan. 60s TTL: expired before the attacker can act. Desktop notification alerts you immediately. |
-| **Replay attack** | Atomic single-use consumption + 60s TTL. Old URLs always return 401. |
-| **Cloudflare edge logs** | Short code is an opaque 6-char lookup key, not the real 256-bit token. Single-use means replaying from logs always fails. |
-| **Brute force** | 56.8 billion combinations, ~2 valid at any time, dual-layer rate limiting blocks well before statistical feasibility. |
-| **QRLjacking** | 60s rotation forces real-time relay. Desktop toast provides instant detection. Self-hosted single-user context makes phishing implausible. |
-| **Timing attack** | Hash-based Map lookup — no string comparison timing leak. |
-| **Session cookie theft** | HttpOnly + Secure + SameSite=lax + 24h TTL. Manual revocation at `POST /api/auth/revoke`. |
+| Threat                   | Why it doesn't work                                                                                                                        |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **QR screenshot shared** | Single-use: consumed on first scan. 60s TTL: expired before the attacker can act. Desktop notification alerts you immediately.             |
+| **Replay attack**        | Atomic single-use consumption + 60s TTL. Old URLs always return 401.                                                                       |
+| **Cloudflare edge logs** | Short code is an opaque 6-char lookup key, not the real 256-bit token. Single-use means replaying from logs always fails.                  |
+| **Brute force**          | 56.8 billion combinations, ~2 valid at any time, dual-layer rate limiting blocks well before statistical feasibility.                      |
+| **QRLjacking**           | 60s rotation forces real-time relay. Desktop toast provides instant detection. Self-hosted single-user context makes phishing implausible. |
+| **Timing attack**        | Hash-based Map lookup — no string comparison timing leak.                                                                                  |
+| **Session cookie theft** | HttpOnly + Secure + SameSite=lax + 24h TTL. Manual revocation at `POST /api/auth/revoke`.                                                  |
 
 #### How It Compares
 
-| Platform | Model | Comparison |
-|----------|-------|------------|
-| **Discord** | Long-lived token, no confirmation, [repeatedly exploited](https://owasp.org/www-community/attacks/Qrljacking) | Codeman: single-use + TTL + notification |
-| **WhatsApp Web** | Phone confirms "Link device?", ~60s rotation | Comparable rotation; WhatsApp adds explicit confirmation (acceptable tradeoff for single-user) |
-| **Signal** | Ephemeral public key, E2E encrypted channel | Stronger crypto, but [exploited by Russian state actors in 2025](https://cloud.google.com/blog/topics/threat-intelligence/russia-targeting-signal-messenger) via social engineering despite it |
+| Platform         | Model                                                                                                         | Comparison                                                                                                                                                                                     |
+| ---------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Discord**      | Long-lived token, no confirmation, [repeatedly exploited](https://owasp.org/www-community/attacks/Qrljacking) | Codeman: single-use + TTL + notification                                                                                                                                                       |
+| **WhatsApp Web** | Phone confirms "Link device?", ~60s rotation                                                                  | Comparable rotation; WhatsApp adds explicit confirmation (acceptable tradeoff for single-user)                                                                                                 |
+| **Signal**       | Ephemeral public key, E2E encrypted channel                                                                   | Stronger crypto, but [exploited by Russian state actors in 2025](https://cloud.google.com/blog/topics/threat-intelligence/russia-targeting-signal-messenger) via social engineering despite it |
 
 > Full design rationale, security analysis, and implementation details: [`docs/qr-auth-plan.md`](docs/qr-auth-plan.md)
 
@@ -428,20 +432,20 @@ When someone authenticates via QR, the desktop shows a notification toast with t
 
 ## Security
 
-Codeman launches sessions with `--dangerously-skip-permissions`, so the web UI is by design a remote-code-execution surface for whoever can reach it — the whole security model exists to control *who* that is. Recent hardening (v0.9.0 + v0.9.5) closes the browser-driven attack paths that bite self-hosted dev tools. Full model: [`docs/security-architecture.md`](docs/security-architecture.md). **Found a vulnerability?** See [`SECURITY.md`](SECURITY.md) for private disclosure and the list of known limitations.
+Codeman launches sessions with `--dangerously-skip-permissions`, so the web UI is by design a remote-code-execution surface for whoever can reach it — the whole security model exists to control _who_ that is. Recent hardening (v0.9.0 + v0.9.5) closes the browser-driven attack paths that bite self-hosted dev tools. Full model: [`docs/security-architecture.md`](docs/security-architecture.md). **Found a vulnerability?** See [`SECURITY.md`](SECURITY.md) for private disclosure and the list of known limitations.
 
 ### Network & access
 
-- **Loopback by default** — binds `127.0.0.1`, reachable only from the same machine, so the no-password default is safe out of the box. Binding a non-loopback host without `CODEMAN_PASSWORD` *starts but prints a loud warning* with three concrete fixes (set a password, loopback + an authenticated tunnel, or explicitly acknowledge with `--allow-unauthenticated-network`)
+- **Loopback by default** — binds `127.0.0.1`, reachable only from the same machine, so the no-password default is safe out of the box. Binding a non-loopback host without `CODEMAN_PASSWORD` _starts but prints a loud warning_ with three concrete fixes (set a password, loopback + an authenticated tunnel, or explicitly acknowledge with `--allow-unauthenticated-network`)
 - **Optional auth, real sessions** — HTTP Basic via `CODEMAN_USERNAME` (default `admin`) / `CODEMAN_PASSWORD`. Success issues an opaque 256-bit `codeman_session` cookie (`randomBytes(32)`) — validated server-side, not client-signed, so it can't be forged offline (24h TTL, auto-extend, device-context audit log)
-- **Per-IP rate limiting** — 10 failed attempts → `429` with `Retry-After` (15-min decay). A valid cookie or correct password recovers *immediately* even while an attacker hammers the same IP — important because all tunnel traffic shares one loopback IP. QR auth has its own separate limiter
+- **Per-IP rate limiting** — 10 failed attempts → `429` with `Retry-After` (15-min decay). A valid cookie or correct password recovers _immediately_ even while an attacker hammers the same IP — important because all tunnel traffic shares one loopback IP. QR auth has its own separate limiter
 
 ### Always-on browser hardening (v0.9.5)
 
 These run for **every** request — before auth, even on the default no-password loopback install:
 
 - **Host-header allowlist → blocks DNS rebinding.** A custom domain rebound to `127.0.0.1` is rejected with `403 host not allowed` before any handler runs. Allowed: `localhost`, any IP literal, the bind host, `.ts.net` / `.trycloudflare.com` / `.cfargotunnel.com`, the active managed tunnel, and `CODEMAN_ALLOWED_HOSTS` (add custom reverse-proxy domains here — comma-separated; exact host or leading-dot `.suffix` for subdomains)
-- **Cross-site Origin / CSRF guard.** On state-changing methods (`POST`/`PUT`/`PATCH`/`DELETE`) the `Origin` must pass the same allowlist, else `403 cross-site request blocked`. A *missing* Origin is allowed (so `curl`, the CLI, and Claude Code hooks keep working); only a present-but-foreign or opaque `null` origin is rejected
+- **Cross-site Origin / CSRF guard.** On state-changing methods (`POST`/`PUT`/`PATCH`/`DELETE`) the `Origin` must pass the same allowlist, else `403 cross-site request blocked`. A _missing_ Origin is allowed (so `curl`, the CLI, and Claude Code hooks keep working); only a present-but-foreign or opaque `null` origin is rejected
 - **Raw `text/plain` bodies.** The global parser no longer JSON-parses `text/plain`, closing the CORS "simple request" CSRF vector where a cross-site `fetch` could smuggle JSON into a write route with no preflight
 - **WebSocket origin validation.** The terminal WS upgrade runs the same Host + Origin check and closes with code `4003` on failure (anti-CSWSH)
 - **XSS-escaped agent output.** AI-derived strings (tool names, command arguments, subagent descriptions) are HTML-escaped at every injection site before rendering in the subagent / activity panels
@@ -502,25 +506,28 @@ Single-digit selection (1-9), color-coded status, token counts, auto-refresh. De
 REST over Fastify — **~140 handlers across 15 route modules**, plus an SSE stream and a WebSocket terminal channel. A representative subset:
 
 ### Sessions
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/sessions` | List all |
-| `POST` | `/api/quick-start` | Create case + start session |
-| `DELETE` | `/api/sessions/:id` | Delete session |
-| `POST` | `/api/sessions/:id/input` | Send input |
+
+| Method   | Endpoint                  | Description                 |
+| -------- | ------------------------- | --------------------------- |
+| `GET`    | `/api/sessions`           | List all                    |
+| `POST`   | `/api/quick-start`        | Create case + start session |
+| `DELETE` | `/api/sessions/:id`       | Delete session              |
+| `POST`   | `/api/sessions/:id/input` | Send input                  |
 
 ### Respawn
-| Method | Endpoint | Description |
-|--------|----------|-------------|
+
+| Method | Endpoint                           | Description                |
+| ------ | ---------------------------------- | -------------------------- |
 | `POST` | `/api/sessions/:id/respawn/enable` | Enable with config + timer |
-| `POST` | `/api/sessions/:id/respawn/stop` | Stop controller |
-| `PUT` | `/api/sessions/:id/respawn/config` | Update config |
+| `POST` | `/api/sessions/:id/respawn/stop`   | Stop controller            |
+| `PUT`  | `/api/sessions/:id/respawn/config` | Update config              |
 
 ### Ralph / Todo
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/sessions/:id/ralph-state` | Get loop state + todos |
-| `POST` | `/api/sessions/:id/ralph-config` | Configure tracking |
+
+| Method | Endpoint                         | Description            |
+| ------ | -------------------------------- | ---------------------- |
+| `GET`  | `/api/sessions/:id/ralph-state`  | Get loop state + todos |
+| `POST` | `/api/sessions/:id/ralph-config` | Configure tracking     |
 
 ### Orchestrator
 | Method | Endpoint | Description |
@@ -531,12 +538,13 @@ REST over Fastify — **~140 handlers across 15 route modules**, plus an SSE str
 | `POST` | `/api/orchestrator/stop` | Stop and clean up |
 
 ### Subagents
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/subagents` | List all background agents |
-| `GET` | `/api/subagents/:id` | Agent info and status |
-| `GET` | `/api/subagents/:id/transcript` | Full activity transcript |
-| `DELETE` | `/api/subagents/:id` | Kill agent process |
+
+| Method   | Endpoint                        | Description                |
+| -------- | ------------------------------- | -------------------------- |
+| `GET`    | `/api/subagents`                | List all background agents |
+| `GET`    | `/api/subagents/:id`            | Agent info and status      |
+| `GET`    | `/api/subagents/:id/transcript` | Full activity transcript   |
+| `DELETE` | `/api/subagents/:id`            | Kill agent process         |
 
 ### System
 | Method | Endpoint | Description |
