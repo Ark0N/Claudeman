@@ -475,6 +475,16 @@ Object.assign(CodemanApp.prototype, {
     if (item.type === 'new-session') {
       const caseSelect = document.getElementById('quickStartCase');
       if (caseSelect && item.caseName) {
+        if (
+          caseSelect.tagName === 'SELECT' &&
+          typeof caseSelect.appendChild === 'function' &&
+          !Array.from(caseSelect.options || []).some((option) => option.value === item.caseName)
+        ) {
+          const option = document.createElement('option');
+          option.value = item.caseName;
+          option.textContent = item.caseName;
+          caseSelect.appendChild(option);
+        }
         caseSelect.value = item.caseName;
       }
       await this.run();

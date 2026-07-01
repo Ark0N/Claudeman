@@ -51,6 +51,11 @@ function loadPaletteHarness(overrides: Record<string, any> = {}) {
     CodemanApp,
     document: {
       getElementById: (id: string) => elements[id] ?? null,
+      createElement: (tagName: string) => ({
+        tagName: tagName.toUpperCase(),
+        value: '',
+        textContent: '',
+      }),
     },
     console,
     escapeHtml: (value: string) =>
@@ -196,6 +201,33 @@ describe('Command-K session palette', () => {
     app.commandPaletteActiveIndex = 0;
     await app.activateCommandPaletteItem();
 
+    expect(elements.quickStartCase.value).toBe('flux-player');
+    expect(app.run).toHaveBeenCalledTimes(1);
+  });
+
+  it('adds the matched case option before selecting it for a new session', async () => {
+    const { app, elements } = loadPaletteHarness();
+    const options = [{ value: 'plex-previews' }];
+    elements.quickStartCase = {
+      tagName: 'SELECT',
+      options,
+      appendChild: vi.fn((option: any) => options.push(option)),
+      get value() {
+        return this._value || '';
+      },
+      set value(next: string) {
+        this._value = options.some((option) => option.value === next) ? next : '';
+      },
+    };
+    elements.quickStartCase.value = 'plex-previews';
+
+    const newSession = app.buildCommandPaletteItems('flux').find((item: any) => item.type === 'new-session');
+    app.commandPaletteItems = [newSession];
+    app.commandPaletteActiveIndex = 0;
+
+    await app.activateCommandPaletteItem();
+
+    expect(elements.quickStartCase.appendChild).toHaveBeenCalledTimes(1);
     expect(elements.quickStartCase.value).toBe('flux-player');
     expect(app.run).toHaveBeenCalledTimes(1);
   });
