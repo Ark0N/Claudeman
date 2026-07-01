@@ -162,7 +162,11 @@ html.mobile-init .file-browser-panel {
   }
 
   .case-select-group {
-    max-width: 150px;
+    max-width: none;
+  }
+
+  .case-combobox {
+    width: 160px;
   }
 
   .toolbar-select {

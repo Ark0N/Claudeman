@@ -469,7 +469,22 @@
             <button class="tab-count-btn" onclick="app.incrementShellCount()">+</button>
           </div>
           <div class="case-select-group">
-            <select id="quickStartCase" class="toolbar-select" title="Select case">
+            <div class="case-combobox" id="quickStartCasePicker">
+              <input
+                type="text"
+                id="quickStartCaseSearch"
+                class="case-combobox-input"
+                role="combobox"
+                aria-controls="quickStartCaseList"
+                aria-expanded="false"
+                aria-autocomplete="list"
+                autocomplete="off"
+                spellcheck="false"
+                title="Select case"
+              >
+              <div id="quickStartCaseList" class="case-combobox-list hidden" role="listbox"></div>
+            </div>
+            <select id="quickStartCase" class="toolbar-select case-native-select" title="Select case" aria-hidden="true" tabindex="-1">
               <option value="testcase">testcase</option>
             </select>
             <button class="btn-case-add" onclick="app.showCreateCaseModal()" title="Create new case">+</button>
