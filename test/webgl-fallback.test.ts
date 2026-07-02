@@ -215,4 +215,80 @@ describe('WebGL longtask auto-fallback', () => {
       expect(result).toBeNull();
     });
   });
+
+  describe('shouldSkipWebGL — renderer toggle + fallback precedence', () => {
+    type Input = {
+      deviceType?: string;
+      noWebglParam?: boolean;
+      forceParam?: boolean;
+      stickyDisabled?: boolean;
+      userPrefEnabled?: boolean;
+    };
+    const run = async (input: Input): Promise<{ skip: boolean; clearSticky: boolean }> =>
+      page.evaluate(
+        (i) =>
+          (
+            window as unknown as {
+              shouldSkipWebGL: (x: unknown) => { skip: boolean; clearSticky: boolean };
+            }
+          ).shouldSkipWebGL(i),
+        input
+      );
+
+    it('exposes shouldSkipWebGL on window', async () => {
+      const t = await page.evaluate(
+        () => typeof (window as unknown as { shouldSkipWebGL?: unknown }).shouldSkipWebGL
+      );
+      expect(t).toBe('function');
+    });
+
+    it('mobile always skips, even when the user opted in', async () => {
+      expect(await run({ deviceType: 'mobile', userPrefEnabled: true })).toEqual({
+        skip: true,
+        clearSticky: false,
+      });
+    });
+
+    it('explicit opt-out skips without touching the sticky marker', async () => {
+      expect(await run({ deviceType: 'desktop', userPrefEnabled: false, stickyDisabled: false })).toEqual({
+        skip: true,
+        clearSticky: false,
+      });
+    });
+
+    it('?nowebgl is a one-shot opt-out (sticky untouched)', async () => {
+      expect(await run({ deviceType: 'desktop', noWebglParam: true })).toEqual({
+        skip: true,
+        clearSticky: false,
+      });
+    });
+
+    it('explicit opt-in enables and clears a stale sticky marker', async () => {
+      expect(await run({ deviceType: 'desktop', userPrefEnabled: true, stickyDisabled: true })).toEqual({
+        skip: false,
+        clearSticky: true,
+      });
+    });
+
+    it('?webgl=force enables and clears the sticky marker', async () => {
+      expect(await run({ deviceType: 'desktop', forceParam: true, stickyDisabled: true })).toEqual({
+        skip: false,
+        clearSticky: true,
+      });
+    });
+
+    it('untouched default respects an active sticky marker', async () => {
+      expect(await run({ deviceType: 'desktop', stickyDisabled: true })).toEqual({
+        skip: true,
+        clearSticky: false,
+      });
+    });
+
+    it('untouched default enables WebGL when nothing is disabling it', async () => {
+      expect(await run({ deviceType: 'desktop', stickyDisabled: false })).toEqual({
+        skip: false,
+        clearSticky: false,
+      });
+    });
+  });
 });

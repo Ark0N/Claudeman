@@ -309,6 +309,11 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsShowResponseViewer').checked = settings.showResponseViewer ?? defaults.showResponseViewer ?? false;
     document.getElementById('appSettingsShowAttachmentsButton').checked = settings.showAttachmentsButton ?? defaults.showAttachmentsButton ?? false;
     document.getElementById('appSettingsSkin').value = settings.skin ?? defaults.skin ?? 'daylight-blue';
+    // WebGL renderer (desktop only — mobile always uses the DOM renderer, so hide
+    // the toggle there so it can't promise something that won't apply).
+    document.getElementById('appSettingsWebglRenderer').checked = settings.webglRendererEnabled ?? defaults.webglRendererEnabled ?? true;
+    const webglItem = document.getElementById('appSettingsWebglRendererItem');
+    if (webglItem) webglItem.style.display = MobileDetection.getDeviceType() === 'desktop' ? '' : 'none';
     document.getElementById('appSettingsShowMonitor').checked = settings.showMonitor ?? defaults.showMonitor ?? false;
     document.getElementById('appSettingsShowProjectInsights').checked = settings.showProjectInsights ?? defaults.showProjectInsights ?? false;
     document.getElementById('appSettingsShowFileBrowser').checked = settings.showFileBrowser ?? defaults.showFileBrowser ?? false;
@@ -1377,6 +1382,7 @@ Object.assign(CodemanApp.prototype, {
       tunnelEnabled: document.getElementById('appSettingsTunnelEnabled').checked,
       localEchoEnabled: document.getElementById('appSettingsLocalEcho').checked,
       cjkInputEnabled: document.getElementById('appSettingsCjkInput').checked,
+      webglRendererEnabled: document.getElementById('appSettingsWebglRenderer').checked,
       extendedKeyboardBar: document.getElementById('appSettingsExtendedKeyboardBar').checked,
       tabTwoRows: document.getElementById('appSettingsTabTwoRows').checked,
       skin: document.getElementById('appSettingsSkin').value,
@@ -1694,6 +1700,7 @@ Object.assign(CodemanApp.prototype, {
         ralphTrackerEnabled: false,
         tabTwoRows: false,
         cjkInputEnabled: false,
+        webglRendererEnabled: false, // mobile always uses the DOM renderer
         skin: 'daylight-blue',
       };
     }

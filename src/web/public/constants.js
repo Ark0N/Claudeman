@@ -111,6 +111,31 @@ function evaluateWebGLLongTaskTrip(recent, entries, now, config = WEBGL_FALLBACK
   return recent.length >= config.LONGTASK_COUNT;
 }
 
+/**
+ * Pure decision for whether to skip the WebGL renderer at terminal init, and
+ * whether to clear the auto-fallback sticky marker. Keeps the interaction
+ * between device type, URL params, the sticky marker, and the user's settings
+ * toggle in one testable place (terminal-ui.js calls this).
+ *
+ * Precedence (desktop only — mobile always skips):
+ *   1. user toggle OFF        -> skip (one-shot opt-out, sticky untouched)
+ *   2. ?nowebgl               -> skip (one-shot opt-out, sticky untouched)
+ *   3. user toggle ON / ?webgl=force -> enable + clear stale sticky marker
+ *   4. untouched (default on) -> respect the auto-fallback sticky marker
+ *
+ * @param {{deviceType?: string, noWebglParam?: boolean, forceParam?: boolean,
+ *          stickyDisabled?: boolean, userPrefEnabled?: (boolean|undefined)}} [input]
+ * @returns {{skip: boolean, clearSticky: boolean}}
+ */
+function shouldSkipWebGL(input = {}) {
+  if (input.deviceType !== 'desktop') return { skip: true, clearSticky: false };
+  const pref = input.userPrefEnabled; // true | false | undefined (default on)
+  if (pref === false) return { skip: true, clearSticky: false };
+  if (input.noWebglParam) return { skip: true, clearSticky: false };
+  if (pref === true || input.forceParam) return { skip: false, clearSticky: true };
+  return { skip: !!input.stickyDisabled, clearSticky: false };
+}
+
 // Expose for tests. `const` declarations at the top of a non-module script
 // are global lexical bindings but not `window` properties, so explicit
 // assignment is the test-visible API surface.
@@ -129,6 +154,7 @@ function shouldAutoWrapTabs(input) {
 if (typeof window !== 'undefined') {
   window.WEBGL_FALLBACK = WEBGL_FALLBACK;
   window.evaluateWebGLLongTaskTrip = evaluateWebGLLongTaskTrip;
+  window.shouldSkipWebGL = shouldSkipWebGL;
   window.CodemanTabOverflow = {
     shouldAutoWrapTabs,
   };
