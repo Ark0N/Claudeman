@@ -5663,6 +5663,19 @@ kbd {
   font-size: 0.72rem;
 }
 
+/* COD-192: "Browse all sessions…" escape hatch — visually secondary */
+.command-palette-item--browse {
+  margin-top: 4px;
+}
+.command-palette-item--browse .command-palette-icon {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.03);
+}
+.command-palette-item--browse .command-palette-title {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
 /* Session Manager modal (COD-121) */
 .session-manager-modal {
   max-width: 720px;
