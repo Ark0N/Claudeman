@@ -452,6 +452,15 @@ Object.assign(CodemanApp.prototype, {
             }
             if (touch && mouseTrackingOn) {
               this._dispatchSyntheticTerminalClick(touch.clientX, touch.clientY);
+            } else if (touch && this._sessionUsesServerMouseStrip()) {
+              // The server strips mouse-tracking DECSETs from claude/codex/gemini
+              // output (isAltScreenStripMode, session.ts) so the wheel keeps
+              // scrolling scrollback — which leaves THIS xterm permanently at
+              // mouseTrackingMode 'none' even though the TUI on the PTY side has
+              // tracking ON and still understands SGR reports. Encode the report
+              // ourselves and send it straight to the PTY: no DOM click is
+              // dispatched, so xterm's local selection can't trigger either.
+              this._sendSyntheticSgrTap(touch.clientX, touch.clientY);
             }
             this._syncMobileHelperTextareaToCursor();
             // Route subsequent typing to the right place: keep the CJK input
@@ -2071,6 +2080,30 @@ Object.assign(CodemanApp.prototype, {
     } catch {
       /* MouseEvent constructor unavailable — tap-to-position simply no-ops */
     }
+  },
+
+  // Mirror of the server's isAltScreenStripMode (session.ts): session modes whose
+  // output stream has mouse-tracking DECSET sequences stripped before reaching the
+  // browser. For these, xterm's live mouseTrackingMode is useless as a gate — the
+  // PTY-side TUI keeps tracking enabled, we just never see the enable sequence.
+  _sessionUsesServerMouseStrip() {
+    const mode = this.sessions?.get(this.activeSessionId)?.mode || 'claude';
+    return mode === 'claude' || mode === 'codex' || mode === 'gemini';
+  },
+
+  // Encode a tap as an SGR mouse report (press + release at button 0) and send it
+  // to the PTY directly, bypassing xterm's mouse encoder. Column/row are derived
+  // from the touch point the same way xterm maps a click: offset inside
+  // .xterm-screen divided by the rendered cell size, 1-based, clamped to the grid.
+  _sendSyntheticSgrTap(clientX, clientY) {
+    if (!this.activeSessionId || !this.terminal || !Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
+    const screen = this.terminal.element?.querySelector('.xterm-screen');
+    const cell = this.terminal._core?._renderService?.dimensions?.css?.cell;
+    if (!screen || !cell?.width || !cell?.height) return;
+    const rect = screen.getBoundingClientRect();
+    const col = Math.max(1, Math.min(this.terminal.cols, Math.floor((clientX - rect.left) / cell.width) + 1));
+    const row = Math.max(1, Math.min(this.terminal.rows, Math.floor((clientY - rect.top) / cell.height) + 1));
+    this._sendInputAsync(this.activeSessionId, `\x1b[<0;${col};${row}M\x1b[<0;${col};${row}m`);
   },
 
   _installMobileTapMouseGuard() {

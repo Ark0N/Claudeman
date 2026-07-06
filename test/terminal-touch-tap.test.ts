@@ -94,6 +94,56 @@ describe('terminal touch tap mouse guard', () => {
     expect(event.stopImmediatePropagation).not.toHaveBeenCalled();
   });
 
+  it('encodes a tap as an SGR press+release when the server strips mouse DECSETs (claude mode)', () => {
+    const { app } = loadTerminalUiHarness();
+    const sent: Array<{ id: string; data: string }> = [];
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app._sendInputAsync = (id: string, data: string) => sent.push({ id, data });
+    app.terminal = {
+      cols: 80,
+      rows: 24,
+      element: {
+        querySelector: () => ({ getBoundingClientRect: () => ({ left: 10, top: 20 }) }),
+      },
+      _core: { _renderService: { dimensions: { css: { cell: { width: 8, height: 16 } } } } },
+    };
+
+    expect(app._sessionUsesServerMouseStrip()).toBe(true);
+    // touch at x=10+8*20+1, y=20+16*5+1 → col 21, row 6 (1-based)
+    app._sendSyntheticSgrTap(171, 101);
+
+    expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[<0;21;6M\x1b[<0;21;6m' }]);
+  });
+
+  it('clamps SGR tap coordinates to the terminal grid', () => {
+    const { app } = loadTerminalUiHarness();
+    const sent: string[] = [];
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app._sendInputAsync = (_id: string, data: string) => sent.push(data);
+    app.terminal = {
+      cols: 80,
+      rows: 24,
+      element: {
+        querySelector: () => ({ getBoundingClientRect: () => ({ left: 0, top: 0 }) }),
+      },
+      _core: { _renderService: { dimensions: { css: { cell: { width: 8, height: 16 } } } } },
+    };
+
+    app._sendSyntheticSgrTap(-50, 99999);
+
+    expect(sent).toEqual(['\x1b[<0;1;24M\x1b[<0;1;24m']);
+  });
+
+  it('does not treat shell sessions as server-mouse-strip mode', () => {
+    const { app } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'shell' }]]);
+
+    expect(app._sessionUsesServerMouseStrip()).toBe(false);
+  });
+
   it('allows trusted mouse events after the tap window expires', () => {
     const { app, setNow } = loadTerminalUiHarness();
     const { element, dispatch } = createElementHarness();
