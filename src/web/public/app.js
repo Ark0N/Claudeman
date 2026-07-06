@@ -61,6 +61,10 @@
 const _crashDiag = {
   _entries: [],
   _maxEntries: 50,
+  // Per-page-load id: the server keys beacons by it, so a reload (fresh id)
+  // archives the previous page's trail instead of overwriting it, and
+  // concurrent clients (desktop + phone) don't clobber each other.
+  _pageId: Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
   log(msg) {
     const entry = `${new Date().toISOString().slice(11,23)} ${msg}`;
     this._entries.push(entry);
@@ -69,22 +73,36 @@ const _crashDiag = {
   }
 };
 
-// Log previous crash breadcrumbs on startup
+// Log previous crash breadcrumbs on startup, and re-beacon them under a
+// distinct page id — an iOS PWA reload wipes the in-memory trail, and without
+// this the fresh page's first beacon would be all the server ever sees.
 try {
   const prev = localStorage.getItem('codeman-crash-diag');
-  if (prev) console.log('[CRASH-DIAG] Previous session breadcrumbs:\n' + prev);
+  if (prev) {
+    console.log('[CRASH-DIAG] Previous session breadcrumbs:\n' + prev);
+    navigator.sendBeacon('/api/crash-diag', JSON.stringify({ data: prev, id: _crashDiag._pageId + '-prev' }));
+  }
 } catch {}
 _crashDiag.log('PAGE LOAD');
 
 // Heartbeat: send breadcrumbs to server every 2s so they survive tab freezes.
-setInterval(() => {
+function _crashDiagBeacon() {
   try {
-    localStorage.setItem('codeman-crash-heartbeat', String(Date.now()));
     if (_crashDiag._entries.length > 0) {
-      navigator.sendBeacon('/api/crash-diag', JSON.stringify({ data: _crashDiag._entries.join('\n') }));
+      navigator.sendBeacon('/api/crash-diag', JSON.stringify({ data: _crashDiag._entries.join('\n'), id: _crashDiag._pageId }));
     }
   } catch {}
+}
+setInterval(() => {
+  try { localStorage.setItem('codeman-crash-heartbeat', String(Date.now())); } catch {}
+  _crashDiagBeacon();
 }, 2000);
+// iOS suspends JS the instant the app is backgrounded — entries logged since
+// the last 2s tick would sit unsent until (if ever) the page resumes. Flush
+// immediately on hide so a repro right before an app switch is never lost.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') _crashDiagBeacon();
+});
 
 window.addEventListener('error', (e) => {
   _crashDiag.log(`ERROR: ${e.message} at ${e.filename}:${e.lineno}`);
@@ -3390,9 +3408,15 @@ class CodemanApp {
     // Close WebSocket for previous session (new one opens after buffer load)
     this._disconnectWs();
 
-    // Clear CJK textarea to prevent sending stale text to the wrong session
-    const cjkEl = document.getElementById('cjkInput');
-    if (cjkEl) cjkEl.value = '';
+    // Clear CJK input to prevent sending stale text to the wrong session.
+    // Must go through CjkInput.clear() — a raw value wipe leaves the module's
+    // pending flush timers armed and drops the phantom char it relies on.
+    if (typeof CjkInput !== 'undefined') {
+      CjkInput.clear();
+    } else {
+      const cjkEl = document.getElementById('cjkInput');
+      if (cjkEl) cjkEl.value = '';
+    }
 
     // Clean up flicker filter state when switching sessions
     this._clearTimer('flickerFilterTimeout');

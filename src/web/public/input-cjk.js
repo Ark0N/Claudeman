@@ -53,12 +53,35 @@ const CjkInput = (() => {
   let _initialized = false;
   let _composing = false;
   let _flushTimer = null;
+  let _compositionFlushTimer = null;
   let _dictationActive = false;
   let _dictationDecayTimer = null;
   let _keydownSentAt = 0;
+  let _keydownSentText = '';
   const _listeners = {};
 
   const PHANTOM = '​';
+
+  // ── Diagnostic trace (intermittent CJK-loss investigation) ──
+  // In-memory ring buffer of every IME event + flush decision. Mirrored into
+  // the crash-diag breadcrumbs (app.js), which beacon to the server every 2s —
+  // after a repro, `GET /api/crash-diag` shows the exact event sequence.
+  const TRACE_MAX = 200;
+  const _trace = [];
+  function _esc(v) {
+    const s = String(v == null ? '' : v).replace(/​/g, '∅');
+    return JSON.stringify(s.length > 24 ? s.slice(0, 24) + '…' + s.length : s);
+  }
+  function _t(msg) {
+    _trace.push(`${Date.now() % 1000000} ${msg}`);
+    if (_trace.length > TRACE_MAX) _trace.shift();
+    try {
+      // eslint-disable-next-line no-undef
+      if (typeof _crashDiag !== 'undefined') _crashDiag.log('CJK ' + msg);
+    } catch {
+      /* crash-diag unavailable (tests) — ring buffer still records */
+    }
+  }
 
   // Two-tier debounce for non-composition input:
   // - KEYBOARD: short debounce (third-party IMEs like Doubao may not fire
@@ -93,6 +116,16 @@ const CjkInput = (() => {
   }
 
   function _resetToPhantom() {
+    // Skip redundant writes: every programmatic value/selection mutation can
+    // desync an Android IME's input session (InputConnection) — after which
+    // the keyboard composes in its own UI but NO events ever reach the page.
+    // Only touch the DOM when the content actually differs.
+    if (_textarea.value === PHANTOM) {
+      if (_textarea.selectionStart !== 1 || _textarea.selectionEnd !== 1) {
+        _textarea.setSelectionRange(1, 1);
+      }
+      return;
+    }
     _textarea.value = PHANTOM;
     _textarea.setSelectionRange(1, 1);
   }
@@ -103,7 +136,17 @@ const CjkInput = (() => {
 
   /** Flush textarea: send real text to PTY and reset to phantom */
   function _flush() {
+    // Never flush mid-composition: reading the value would send the IME's
+    // provisional text, and resetting the textarea cancels the in-progress
+    // composition on iOS Safari — silently eating the character being typed.
+    // Any committed-but-unflushed text stays in the textarea and is sent
+    // together by the next compositionend flush.
+    if (_composing) {
+      _t('flush SKIP composing');
+      return;
+    }
     const val = _strip(_textarea.value);
+    _t(`flush ${val ? 'send ' + _esc(val) : 'empty'}`);
     if (val) {
       _send(val);
     }
@@ -150,12 +193,31 @@ const CjkInput = (() => {
 
       _resetToPhantom();
 
+      _t('init v2-trace');
+
       _listeners.mousedown = (e) => { e.stopPropagation(); };
+
+      // ── Wedged-IME recovery (Android) ──
+      // Some Android IMEs (esp. 9-key Sogou/Xiaomi/Baidu) can wedge their
+      // InputConnection: the keyboard composes in its own candidate bar but
+      // delivers ZERO DOM events to the focused textarea. JS cannot detect
+      // this (nothing fires) — but re-tapping the already-focused empty field
+      // is the user's natural "it's stuck" gesture. A blur→focus cycle forces
+      // the browser to restart the IME input session, which un-wedges it.
+      _listeners.pointerdown = () => {
+        if (document.activeElement === _textarea && !_composing && _isEffectivelyEmpty()) {
+          _t('ime-reset (retap)');
+          _textarea.blur();
+          setTimeout(() => _textarea.focus(), 0);
+        }
+      };
       _listeners.focus = () => {
+        _t(`focus val=${_esc(_textarea.value)}`);
         window.cjkActive = true;
         if (!_textarea.value) _resetToPhantom();
       };
       _listeners.blur = () => {
+        _t(`blur composing=${_composing} val=${_esc(_textarea.value)}`);
         // Keep cjkActive while CJK input is visible — iOS dictation and system
         // UI may steal focus temporarily, and clearing the flag during that
         // window lets xterm's onData process duplicated input.
@@ -168,28 +230,38 @@ const CjkInput = (() => {
         _composing = false;
       };
       _textarea.addEventListener('mousedown', _listeners.mousedown);
+      _textarea.addEventListener('pointerdown', _listeners.pointerdown);
       _textarea.addEventListener('focus', _listeners.focus);
       _textarea.addEventListener('blur', _listeners.blur);
 
       // ── Composition tracking (keyboard IME — works for CJK typing) ──
       _listeners.compositionstart = () => {
+        _t(`compstart val=${_esc(_textarea.value)}`);
         _composing = true;
         _cancelDebouncedFlush();
         // Leave textarea.value untouched — programmatic changes during
         // compositionstart cancel the IME composition on iOS Safari.
       };
       _listeners.compositionend = () => {
+        _t(`compend val=${_esc(_textarea.value)}`);
         _composing = false;
         _cancelDebouncedFlush();
         // Defer flush: some Android IMEs haven't committed text to textarea
         // when compositionend fires. setTimeout(0) ensures we read the final value.
-        setTimeout(_flush, 0);
+        // Tracked so destroy() can cancel it; if the next composition starts
+        // before it runs, _flush's _composing guard turns it into a no-op.
+        clearTimeout(_compositionFlushTimer);
+        _compositionFlushTimer = setTimeout(() => {
+          _compositionFlushTimer = null;
+          _flush();
+        }, 0);
       };
       _textarea.addEventListener('compositionstart', _listeners.compositionstart);
       _textarea.addEventListener('compositionend', _listeners.compositionend);
 
       // ── Keydown: special keys work REGARDLESS of composition state ──
       _listeners.keydown = (e) => {
+        _t(`keydown ${_esc(e.key)} kc=${e.keyCode} ic=${e.isComposing} c=${_composing}`);
         if (e.key === 'Enter') {
           e.preventDefault();
           _composing = false;
@@ -246,6 +318,7 @@ const CjkInput = (() => {
           e.preventDefault();
           _send(e.key);
           _keydownSentAt = performance.now();
+          _keydownSentText = e.key;
           _resetToPhantom();
           return;
         }
@@ -254,6 +327,23 @@ const CjkInput = (() => {
 
       // ── Input event: primary path for virtual keyboards + dictation ──
       _listeners.input = (e) => {
+        _t(`input ${e.inputType || '?'} ic=${e.isComposing} c=${_composing} val=${_esc(_textarea.value)}`);
+        // ── Stuck-composition recovery ──
+        // Some IMEs (WeChat/Sogou keyboards) fire compositionstart without a
+        // matching compositionend. A stale _composing=true blocks every flush
+        // below — committed CJK text piles up in the textarea and never
+        // reaches the PTY. When the event itself says composition is over
+        // (isComposing false AND a non-composition inputType), trust it.
+        if (
+          _composing &&
+          e.isComposing === false &&
+          e.inputType !== 'insertCompositionText' &&
+          e.inputType !== 'deleteCompositionText'
+        ) {
+          _t('UNSTICK composing');
+          _composing = false;
+        }
+
         // ── Backspace / delete detection ──
         if (e.inputType === 'deleteContentBackward' || e.inputType === 'deleteWordBackward') {
           if (_composing) return;
@@ -283,11 +373,18 @@ const CjkInput = (() => {
 
         if (_composing) return;
 
-        // Keydown handler already sent this character — just clear the
-        // textarea echo that the IME inserted despite preventDefault.
+        // Keydown handler already sent this character — clear the textarea
+        // echo that the IME inserted despite preventDefault. Content-checked:
+        // only a value matching the sent char is an echo. Anything else (e.g.
+        // an IME committing CJK text right after a keydown-sent char) is real
+        // input and must flow through to the debounced flush, not be dropped.
         if (performance.now() - _keydownSentAt < 100) {
-          _resetToPhantom();
-          return;
+          const cur = _strip(_textarea.value);
+          if (cur === '' || cur === _keydownSentText) {
+            _t('echo-drop');
+            _resetToPhantom();
+            return;
+          }
         }
 
         // Outside composition: keyboard typing or voice dictation.
@@ -301,8 +398,30 @@ const CjkInput = (() => {
       return this;
     },
 
+    /**
+     * Discard pending text and timers (e.g. on session switch, so stale text
+     * can't flush into the wrong session). Restores the phantom so backspace
+     * forwarding keeps working — unlike a raw `textarea.value = ''`.
+     */
+    clear() {
+      if (!_initialized || !_textarea) return;
+      _t('clear (external)');
+      _cancelDebouncedFlush();
+      clearTimeout(_compositionFlushTimer);
+      _compositionFlushTimer = null;
+      _composing = false;
+      _resetToPhantom();
+    },
+
+    /** Diagnostic: recent IME event trace (ring buffer). */
+    getTrace() {
+      return _trace.slice();
+    },
+
     destroy() {
       _cancelDebouncedFlush();
+      clearTimeout(_compositionFlushTimer);
+      _compositionFlushTimer = null;
       clearTimeout(_dictationDecayTimer);
       _dictationActive = false;
       if (_textarea) {
