@@ -192,9 +192,10 @@ describe('Command-K session palette', () => {
 
     const results = app.buildCommandPaletteItems('bill');
 
-    expect(results.map((item: any) => item.id)).toEqual(['session:sess-beta', 'new-session']);
+    expect(results.map((item: any) => item.id)).toEqual(['session:sess-beta', 'new-session', 'browse-sessions']);
     expect(results[0]).toMatchObject({ type: 'session', sessionId: 'sess-beta', title: 'Billing prompt polish' });
     expect(results[1]).toMatchObject({ type: 'new-session', title: 'New session' });
+    expect(results[2]).toMatchObject({ type: 'browse-sessions' });
   });
 
   it('uses the tab name instead of the short session id for unnamed sessions', () => {

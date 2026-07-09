@@ -2363,6 +2363,80 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  // ─── Shortcut Settings (App Settings → Shortcuts tab) ────────────────────────
+  // Renders the list of shortcuts with capture buttons for key rebinding,
+  // and persists overrides under settings.shortcutOverrides.
+
+  renderShortcutSettingsList() {
+    const list = document.getElementById('appSettingsShortcutsList');
+    if (!list) return;
+    const registry = this.getShortcutRegistry ? this.getShortcutRegistry() : (typeof DEFAULT_SHORTCUTS !== 'undefined' ? DEFAULT_SHORTCUTS : []);
+    list.innerHTML = registry.map((shortcut) => {
+      const bindingLabel = shortcut.displayBindings
+        ? shortcut.displayBindings.join(' / ')
+        : (shortcut.bindings || []).map((b) => [...(b.modifiers || []), b.key || b.code || ''].join('+')).join(' / ');
+      return `<div class="shortcut-setting-row" data-shortcut-id="${escapeHtml(shortcut.id)}">
+        <label class="shortcut-setting-label">${escapeHtml(shortcut.label)}</label>
+        <input class="shortcut-binding-input" type="text" readonly value="${escapeHtml(bindingLabel)}" placeholder="(none)" data-id="${escapeHtml(shortcut.id)}">
+        <button class="shortcut-capture-btn" onclick="app.startShortcutCapture('${escapeHtml(shortcut.id)}')" title="Capture new binding">Edit</button>
+        <button class="shortcut-reset-btn" onclick="app.resetShortcutOverride('${escapeHtml(shortcut.id)}')" title="Reset to default">Reset</button>
+        <input class="shortcut-enabled-checkbox" type="checkbox" ${shortcut.disabled ? '' : 'checked'} onchange="app.toggleShortcutEnabled('${escapeHtml(shortcut.id)}', this.checked)" title="Enable/disable">
+      </div>`;
+    }).join('');
+  },
+
+  readShortcutOverridesFromSettings() {
+    const settings = this.loadAppSettingsFromStorage();
+    return settings.shortcutOverrides || {};
+  },
+
+  startShortcutCapture(shortcutId) {
+    const input = document.querySelector(`.shortcut-binding-input[data-id="${shortcutId}"]`);
+    if (!input) return;
+    input.value = 'Press keys…';
+    input.focus();
+    this._capturingShortcutId = shortcutId;
+    input.addEventListener('keydown', (e) => this.onShortcutCaptureKeydown(e, shortcutId), { once: true });
+  },
+
+  onShortcutCaptureKeydown(e, shortcutId) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Escape') {
+      this.renderShortcutSettingsList();
+      return;
+    }
+    const settings = this.loadAppSettingsFromStorage();
+    const shortcutOverrides = settings.shortcutOverrides || {};
+    const modifiers = [];
+    if (e.ctrlKey) modifiers.push('ctrl');
+    if (e.metaKey) modifiers.push('meta');
+    if (e.shiftKey) modifiers.push('shift');
+    if (e.altKey) modifiers.push('alt');
+    shortcutOverrides[shortcutId] = { bindings: [{ modifiers, key: e.key, code: e.code }] };
+    settings.shortcutOverrides = shortcutOverrides;
+    localStorage.setItem('codeman:settings', JSON.stringify(settings));
+    this._capturingShortcutId = null;
+    this.renderShortcutSettingsList();
+  },
+
+  resetShortcutOverride(shortcutId) {
+    const settings = this.loadAppSettingsFromStorage();
+    const shortcutOverrides = settings.shortcutOverrides || {};
+    delete shortcutOverrides[shortcutId];
+    settings.shortcutOverrides = shortcutOverrides;
+    localStorage.setItem('codeman:settings', JSON.stringify(settings));
+    this.renderShortcutSettingsList();
+  },
+
+  toggleShortcutEnabled(shortcutId, enabled) {
+    const settings = this.loadAppSettingsFromStorage();
+    const shortcutOverrides = settings.shortcutOverrides || {};
+    shortcutOverrides[shortcutId] = { ...(shortcutOverrides[shortcutId] || {}), disabled: !enabled };
+    settings.shortcutOverrides = shortcutOverrides;
+    localStorage.setItem('codeman:settings', JSON.stringify(settings));
+  },
+
   closeAllPanels() {
     this.closeSessionOptions();
     this.closeAppSettings();

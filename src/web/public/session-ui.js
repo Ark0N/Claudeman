@@ -668,6 +668,8 @@ Object.assign(CodemanApp.prototype, {
         caseData = createCaseData.data.case;
       }
 
+      const selectedCase = (this.cases || []).find(c => c.name === caseName);
+      const isRemoteCase = caseData.location === 'remote' || selectedCase?.location === 'remote';
       const workingDir = caseData.path;
       if (!workingDir) throw new Error('Case path not found');
 
@@ -694,7 +696,7 @@ Object.assign(CodemanApp.prototype, {
         fetch('/api/sessions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ workingDir, mode: 'shell', name })
+          body: JSON.stringify({ ...(isRemoteCase ? { caseName } : { workingDir }), mode: 'shell', name })
         }).then(r => r.json())
       );
       const createResults = await Promise.all(createPromises);
@@ -1669,7 +1671,14 @@ Object.assign(CodemanApp.prototype, {
         // Refresh the dropdown
         const select = document.getElementById('quickStartCase');
         const currentCase = select.value;
+        if (currentCase === name) {
+          // Blur the native picker before reload so it doesn't show the stale value
+          select.blur?.();
+        }
         await this.loadQuickStartCases(currentCase === name ? null : currentCase);
+        if (currentCase === name) {
+          await this.saveLastUsedCase(document.getElementById('quickStartCase')?.value || 'testcase');
+        }
       } else {
         this.showToast(data.error || 'Failed to delete case', 'error');
       }

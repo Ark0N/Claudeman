@@ -358,7 +358,7 @@
             <h3 class="history-title" id="historyTitle">Resume Conversation</h3>
             <div class="history-list" id="historyList"></div>
           </div>
-          <p class="welcome-hint">Or press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to start</p>
+          <p class="welcome-hint">Or click Run to start</p>
           <button class="welcome-ralph-link" onclick="app.showRalphWizard()">Start Ralph Loop &rarr;</button>
         </div>
       </div>
@@ -427,7 +427,7 @@
         <!-- Run AI -->
         <div class="toolbar-group">
           <div class="run-btn-group">
-            <button class="btn-toolbar btn-run" id="runBtn" onclick="app.run()" title="Run (Ctrl+Enter)">
+            <button class="btn-toolbar btn-run" id="runBtn" onclick="app.run()" title="Run">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               <span id="runBtnLabel">Run</span>
             </button>
@@ -1040,6 +1040,7 @@
           <button class="modal-tab-btn" data-tab="settings-paths">Paths</button>
           <button class="modal-tab-btn" data-tab="settings-notifications">Notifications</button>
           <button class="modal-tab-btn" data-tab="settings-voice">Voice</button>
+          <button class="modal-tab-btn" data-tab="settings-shortcuts">Shortcuts</button>
         </div>
         <div class="modal-body">
           <!-- Display Tab -->
@@ -1646,10 +1647,37 @@
               </div>
             </div>
           </div>
+
+          <!-- Shortcuts tab -->
+          <div class="modal-tab-content hidden" id="settings-shortcuts">
+            <div class="settings-grid">
+              <div class="settings-section-header" style="grid-column: 1 / -1;">Keyboard Shortcuts</div>
+              <p class="form-hint" style="grid-column: 1 / -1; margin: 0 0 0.5rem;">
+                Customize keyboard shortcuts. Click the binding to capture a new key combination.
+              </p>
+              <div id="appSettingsShortcutsList" style="grid-column: 1 / -1;">
+                <!-- Populated by app.renderShortcutSettingsList() -->
+              </div>
+            </div>
+          </div>
         </div>
         <div class="form-actions">
           <button class="btn-toolbar" onclick="app.closeAppSettings()">Cancel</button>
           <button class="btn-toolbar btn-primary" onclick="app.saveAppSettings()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Shortcut Overlay Modal -->
+    <div class="modal shortcut-overlay-modal" id="shortcutOverlayModal" tabindex="-1">
+      <div class="modal-backdrop" onclick="app.closeShortcutOverlay()"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <span class="modal-title">Keyboard Shortcuts</span>
+          <button class="modal-close" onclick="app.closeShortcutOverlay()" aria-label="Close">&#x2715;</button>
+        </div>
+        <div class="modal-body">
+          <div id="shortcutOverlayList"></div>
         </div>
       </div>
     </div>

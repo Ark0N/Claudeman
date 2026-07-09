@@ -4350,6 +4350,77 @@ class CodemanApp {
     }
   }
 
+  // ─── Shortcut Registry ───────────────────────────────────────────────────────
+  // Returns the merged shortcut list: DEFAULT_SHORTCUTS with any per-shortcut
+  // overrides from settings.shortcutOverrides applied on top.
+
+  getShortcutRegistry() {
+    const settings = this.loadAppSettingsFromStorage();
+    const shortcutOverrides = settings.shortcutOverrides || {};
+    return DEFAULT_SHORTCUTS.map((shortcut) => {
+      const override = shortcutOverrides[shortcut.id];
+      if (!override) return shortcut;
+      return { ...shortcut, ...override };
+    });
+  }
+
+  matchesShortcutEvent(e, shortcut) {
+    if (!shortcut.bindings) return false;
+    return shortcut.bindings.some((binding) => {
+      const mods = binding.modifiers || [];
+      if (mods.includes('ctrl') && !e.ctrlKey) return false;
+      if (mods.includes('meta') && !e.metaKey) return false;
+      if (mods.includes('shift') && !e.shiftKey) return false;
+      if (mods.includes('alt') && !e.altKey) return false;
+      if (!mods.includes('ctrl') && !mods.includes('meta') && (e.ctrlKey || e.metaKey)) return false;
+      if (binding.code) return e.code === binding.code;
+      if (binding.key) return e.key === binding.key || e.key.toLowerCase() === binding.key.toLowerCase();
+      return false;
+    });
+  }
+
+  // ─── Shortcut Overlay Modal ───────────────────────────────────────────────────
+  // Ctrl/Alt+? opens a floating overlay listing all keyboard shortcuts, grouped
+  // by category. Uses the merged registry so user overrides are reflected.
+
+  showShortcutOverlay() {
+    const modal = document.getElementById('shortcutOverlayModal');
+    if (!modal) return;
+    this.renderShortcutOverlay();
+    modal.classList.add('active');
+    modal.focus?.();
+  }
+
+  renderShortcutOverlay() {
+    const list = document.getElementById('shortcutOverlayList');
+    if (!list) return;
+    const registry = this.getShortcutRegistry();
+    const groups = {};
+    for (const shortcut of registry) {
+      const g = shortcut.group || 'General';
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(shortcut);
+    }
+    const fmtBindings = (s) => {
+      if (s.displayBindings) return s.displayBindings.map((b) => `<kbd>${escapeHtml(b)}</kbd>`).join(' / ');
+      if (!s.bindings) return '';
+      return s.bindings.map((b) => {
+        const parts = [...(b.modifiers || []).map((m) => m.charAt(0).toUpperCase() + m.slice(1)), b.key || b.code || ''];
+        return `<kbd>${escapeHtml(parts.join('+'))}</kbd>`;
+      }).join(' / ');
+    };
+    list.innerHTML = Object.entries(groups).map(([group, items]) =>
+      `<div class="shortcut-overlay-group"><div class="shortcut-overlay-group-label">${escapeHtml(group)}</div>` +
+      items.map((s) => `<div class="shortcut-overlay-row"><span class="shortcut-overlay-label">${escapeHtml(s.label)}</span><span class="shortcut-overlay-keys">${fmtBindings(s)}</span></div>`).join('') +
+      `</div>`
+    ).join('');
+  }
+
+  closeShortcutOverlay() {
+    const modal = document.getElementById('shortcutOverlayModal');
+    if (modal) modal.classList.remove('active');
+  }
+
 }
 
 // ═══════════════════════════════════════════════════════════════
