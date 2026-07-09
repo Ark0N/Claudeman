@@ -325,7 +325,7 @@ export const RemoteHostSchema = z.object({
     .min(1)
     .max(255)
     .regex(
-      /^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.:\[\]-]+(?::\d{1,5})?(?:,(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.:\[\]-]+(?::\d{1,5})?)*$/,
+      /^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.:[\]-]+(?::\d{1,5})?(?:,(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.:[\]-]+(?::\d{1,5})?)*$/,
       'Jump host must be [user@]host[:port] (comma-separated for multiple hops)'
     )
     .optional(),
