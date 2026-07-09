@@ -13,6 +13,8 @@ import type {
   SessionRemote,
 } from './types.js';
 
+const execAsync = promisify(exec);
+
 const REMOTE_HOSTS_FILE = 'remote-hosts.json';
 const REMOTE_CASES_FILE = 'remote-cases.json';
 

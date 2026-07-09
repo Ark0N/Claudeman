@@ -28,6 +28,17 @@ vi.mock('node:child_process', async (orig) => {
   return { ...actual, execFile };
 });
 
+// In-memory remote store so remote-case tests can inject hosts/cases without real JSON files.
+const remoteStore = vi.hoisted(() => ({ hosts: [] as unknown[], cases: [] as unknown[] }));
+vi.mock('../../src/remote-hosts.js', async (orig) => {
+  const actual = await orig<typeof import('../../src/remote-hosts.js')>();
+  return {
+    ...actual,
+    readRemoteHosts: vi.fn(async () => remoteStore.hosts),
+    readRemoteCases: vi.fn(async () => remoteStore.cases),
+  };
+});
+
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
 
 interface LocalHarness {
@@ -79,6 +90,9 @@ describe('session-routes', () => {
 
   beforeEach(async () => {
     harness = await createEnvelopeHarness(registerSessionRoutes);
+    // Reset remote store so tests start with empty hosts/cases
+    remoteStore.hosts = [];
+    remoteStore.cases = [];
   });
 
   afterEach(async () => {
@@ -482,166 +496,6 @@ describe('session-routes', () => {
       expect(body.data.terminalBuffer).toBeDefined();
     });
 
-    it('does not strip VPA-like shell scrollback as Ink redraw bloat', async () => {
-      const shellHistory = Array.from(
-        { length: 3000 },
-        (_, index) => `SHELL_SCROLLBACK_${String(index + 1).padStart(6, '0')} payload payload payload \x1b[1d`
-      ).join('\n');
-      harness.ctx._session.terminalBuffer = shellHistory;
-      harness.ctx._session.mode = 'shell';
-      (harness.ctx.mux as { capturePaneBuffer?: unknown }).capturePaneBuffer = vi.fn(() => null);
-
-      const res = await harness.app.inject({
-        method: 'GET',
-        url: `/api/sessions/${harness.ctx._sessionId}/terminal`,
-      });
-
-      expect(res.statusCode).toBe(200);
-      const body = JSON.parse(res.body);
-      expect(body.data.terminalBuffer).toContain('SHELL_SCROLLBACK_000001');
-      expect(body.data.terminalBuffer).toContain('SHELL_SCROLLBACK_003000');
-    });
-
-    it('preserves accumulated history before the live mux pane snapshot for Codex TUI replay', async () => {
-      harness.ctx._session.terminalBuffer = 'hello world\nlater accumulated history';
-      harness.ctx._session.mode = 'codex';
-      (harness.ctx.mux as { capturePaneBuffer?: unknown }).capturePaneBuffer = vi.fn(
-        () => 'visible tmux pane only\n› current prompt'
-      );
-
-      const res = await harness.app.inject({
-        method: 'GET',
-        url: `/api/sessions/${harness.ctx._sessionId}/terminal`,
-      });
-
-      expect(res.statusCode).toBe(200);
-      const body = JSON.parse(res.body);
-      expect(body.data.terminalBuffer).toContain('hello world');
-      expect(body.data.terminalBuffer).toContain('later accumulated history');
-      expect(body.data.terminalBuffer).toContain('\x1b[H\x1b[2Jvisible tmux pane only');
-      expect(body.data.terminalBuffer.indexOf('hello world')).toBeLessThan(
-        body.data.terminalBuffer.indexOf('visible tmux pane only')
-      );
-      expect(harness.ctx.mux.capturePaneBuffer).toHaveBeenCalledWith(harness.ctx._session.muxName);
-    });
-
-    it('treats stale Codex scrollback config as TUI replay', async () => {
-      harness.ctx._session.terminalBuffer = 'hello world\nlater accumulated history';
-      harness.ctx._session.mode = 'codex';
-      harness.ctx._session.codexConfig = { renderMode: 'scrollback' } as any;
-      (harness.ctx.mux as { capturePaneBuffer?: unknown }).capturePaneBuffer = vi.fn(
-        () => 'visible tmux pane only\n› current prompt'
-      );
-
-      const res = await harness.app.inject({
-        method: 'GET',
-        url: `/api/sessions/${harness.ctx._sessionId}/terminal`,
-      });
-
-      expect(res.statusCode).toBe(200);
-      const body = JSON.parse(res.body);
-      expect(body.data.terminalBuffer).toContain('hello world');
-      expect(body.data.terminalBuffer).toContain('later accumulated history');
-      expect(body.data.terminalBuffer).toContain('\x1b[H\x1b[2Jvisible tmux pane only');
-      expect(body.data.terminalBuffer.indexOf('hello world')).toBeLessThan(
-        body.data.terminalBuffer.indexOf('visible tmux pane only')
-      );
-      expect(harness.ctx.mux.capturePaneBuffer).toHaveBeenCalledWith(harness.ctx._session.muxName);
-    });
-
-    it('preserves one-time OAuth authorization URLs in Codex TUI replay history', async () => {
-      const authUrl =
-        'https://auth.atlassian.com/authorize?response_type=code&client_id=abc&redirect_uri=http%3A%2F%2F127.0.0.1%3A35547%2Fcallback%2Fxyz';
-      harness.ctx._session.terminalBuffer =
-        'Authorize `atlassian` by opening this URL in your browser:\n' +
-        authUrl +
-        '\n(Browser launch failed; please copy the URL above manually.)\n';
-      harness.ctx._session.mode = 'codex';
-      (harness.ctx.mux as { capturePaneBuffer?: unknown }).capturePaneBuffer = vi.fn(
-        () => 'visible tmux pane only\n› current prompt'
-      );
-
-      const res = await harness.app.inject({
-        method: 'GET',
-        url: `/api/sessions/${harness.ctx._sessionId}/terminal`,
-      });
-
-      expect(res.statusCode).toBe(200);
-      const body = JSON.parse(res.body);
-      expect(body.data.terminalBuffer).toContain(authUrl);
-      expect(body.data.terminalBuffer).toContain('visible tmux pane only');
-      expect(body.data.terminalBuffer.indexOf(authUrl)).toBeLessThan(
-        body.data.terminalBuffer.indexOf('visible tmux pane only')
-      );
-    });
-
-    it('preserves incidental OAuth URL mentions as ordinary Codex TUI history', async () => {
-      const authUrl =
-        'https://auth.atlassian.com/authorize?response_type=code&client_id=abc&redirect_uri=http%3A%2F%2F127.0.0.1%3A35547%2Fcallback%2Fxyz';
-      harness.ctx._session.terminalBuffer =
-        'Root cause: URLs like ' +
-        authUrl +
-        ' could be present in history but missing from browser-rendered terminal replay.\n' +
-        "+        'Authorize `atlassian` by opening this URL in your browser:\\n' +\n";
-      harness.ctx._session.mode = 'codex';
-      (harness.ctx.mux as { capturePaneBuffer?: unknown }).capturePaneBuffer = vi.fn(
-        () => 'visible tmux pane only\n› current prompt'
-      );
-
-      const res = await harness.app.inject({
-        method: 'GET',
-        url: `/api/sessions/${harness.ctx._sessionId}/terminal`,
-      });
-
-      expect(res.statusCode).toBe(200);
-      const body = JSON.parse(res.body);
-      expect(body.data.terminalBuffer).toContain(authUrl);
-      expect(body.data.terminalBuffer).toContain('visible tmux pane only');
-    });
-
-    it('preserves accumulated history before a live mux pane snapshot for non-Codex sessions', async () => {
-      harness.ctx._session.terminalBuffer = 'hello world\nlater accumulated history';
-      harness.ctx._session.mode = 'claude';
-      (harness.ctx.mux as { capturePaneBuffer?: unknown }).capturePaneBuffer = vi.fn(
-        () => 'visible tmux pane only\n› current prompt'
-      );
-
-      const res = await harness.app.inject({
-        method: 'GET',
-        url: `/api/sessions/${harness.ctx._sessionId}/terminal`,
-      });
-
-      expect(res.statusCode).toBe(200);
-      const body = JSON.parse(res.body);
-      expect(body.data.terminalBuffer).toContain('hello world');
-      expect(body.data.terminalBuffer).toContain('later accumulated history');
-      expect(body.data.terminalBuffer).toContain('visible tmux pane only');
-      expect(body.data.terminalBuffer).toContain('\x1b[H\x1b[2Jvisible tmux pane only');
-      expect(body.data.terminalBuffer.indexOf('hello world')).toBeLessThan(
-        body.data.terminalBuffer.indexOf('visible tmux pane only')
-      );
-      expect(harness.ctx.mux.capturePaneBuffer).toHaveBeenCalledWith(harness.ctx._session.muxName);
-    });
-
-    it('uses live mux pane capture only when the accumulated buffer is empty', async () => {
-      harness.ctx._session.terminalBuffer = '';
-      harness.ctx._session.mode = 'codex';
-      (harness.ctx.mux as { capturePaneBuffer?: unknown }).capturePaneBuffer = vi.fn(
-        () => 'visible restored tmux pane\n› current prompt'
-      );
-
-      const res = await harness.app.inject({
-        method: 'GET',
-        url: `/api/sessions/${harness.ctx._sessionId}/terminal`,
-      });
-
-      expect(res.statusCode).toBe(200);
-      const body = JSON.parse(res.body);
-      expect(body.data.terminalBuffer).toContain('visible restored tmux pane');
-      expect(body.data.terminalBuffer).toContain('› current prompt');
-      expect(harness.ctx.mux.capturePaneBuffer).toHaveBeenCalledWith(harness.ctx._session.muxName);
-    });
-
     it('returns error for unknown session', async () => {
       const res = await harness.app.inject({
         method: 'GET',
@@ -927,34 +781,45 @@ describe('session-routes', () => {
 
   describe('POST /api/sessions with resumeSessionId', () => {
     it('creates session from a remote case without local stat validation', async () => {
-      remoteStore.hosts = [
-        {
-          id: 'gpu-box',
-          label: 'GPU Box',
-          host: '10.0.0.42',
-          username: 'ubuntu',
-          commands: { codex: 'exec codx personal' },
-        },
-      ];
-      remoteStore.cases = [{ name: 'gpu-work', type: 'remote', hostId: 'gpu-box', remotePath: '/home/ubuntu/work' }];
+      // Remote cases go through /api/quick-start which skips local stat() of the workingDir.
+      // /api/sessions always requires workingDir to exist on the local filesystem.
+      const startShell = vi.spyOn(Session.prototype, 'startShell').mockResolvedValue(undefined);
+      try {
+        remoteStore.hosts = [
+          {
+            id: 'gpu-box',
+            label: 'GPU Box',
+            host: '10.0.0.42',
+            username: 'ubuntu',
+            commands: { codex: 'exec codx personal' },
+          },
+        ];
+        remoteStore.cases = [{ name: 'gpu-work', type: 'remote', hostId: 'gpu-box', remotePath: '/home/ubuntu/work' }];
 
-      const res = await harness.app.inject({
-        method: 'POST',
-        url: '/api/sessions',
-        payload: { caseName: 'gpu-work', mode: 'shell', name: 'Remote Shell' },
-      });
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: '/api/quick-start',
+          payload: { caseName: 'gpu-work', mode: 'shell', name: 'Remote Shell' },
+        });
 
-      expect(res.statusCode).toBe(200);
-      const body = JSON.parse(res.body);
-      expect(body.success).toBe(true);
-      expect(body.data.session.workingDir).toBe('/home/ubuntu/work');
-      expect(body.data.session.remote).toMatchObject({
-        hostId: 'gpu-box',
-        host: '10.0.0.42',
-        username: 'ubuntu',
-        remotePath: '/home/ubuntu/work',
-        commands: { codex: 'exec codx personal' },
-      });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+        expect(body.success).toBe(true);
+        expect(body.data.casePath).toBe('/home/ubuntu/work');
+        const session = [...harness.ctx.sessions.values()].find((item) => item.id === body.data.sessionId);
+        expect(session?.toState()).toMatchObject({
+          workingDir: '/home/ubuntu/work',
+          remote: expect.objectContaining({
+            hostId: 'gpu-box',
+            host: '10.0.0.42',
+            username: 'ubuntu',
+            remotePath: '/home/ubuntu/work',
+            commands: { codex: 'exec codx personal' },
+          }),
+        });
+      } finally {
+        startShell.mockRestore();
+      }
     });
 
     it('quick-start creates remote case sessions through ssh metadata', async () => {

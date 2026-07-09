@@ -61,10 +61,12 @@ import { RunSummaryTracker } from '../../run-summary.js';
 
 import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal-limits.js';
 import { MAX_PASTE_IMAGE_BYTES } from '../../config/buffer-limits.js';
-import { dataPath } from '../../config/instance.js';
+import { dataPath, getDataDir } from '../../config/instance.js';
+import { readRemoteCases, readRemoteHosts, toSessionRemote } from '../../remote-hosts.js';
 
 // Path to linked-cases registry (same file used by case-routes resolveCasePath)
 const LINKED_CASES_FILE = dataPath('linked-cases.json');
+const CODEMAN_CONFIG_DIR = getDataDir();
 
 // Pre-compiled regex for terminal buffer cleaning (avoids per-request compilation)
 // eslint-disable-next-line no-control-regex
@@ -1321,24 +1323,28 @@ export function registerSessionRoutes(
       }
     }
 
+    // By this point casePath is guaranteed non-null: for remote cases it was set from remoteCase.remotePath,
+    // for local cases the !casePath guard above returned early. TypeScript can't narrow across the if/else.
+    const resolvedCasePath = casePath as string;
+
     // Create case folder and CLAUDE.md if it doesn't exist (only for non-linked, non-remote cases)
-    if (!remote && !existsSync(casePath)) {
+    if (!remote && !existsSync(resolvedCasePath)) {
       try {
-        mkdirSync(casePath, { recursive: true });
-        mkdirSync(join(casePath, 'src'), { recursive: true });
+        mkdirSync(resolvedCasePath, { recursive: true });
+        mkdirSync(join(resolvedCasePath, 'src'), { recursive: true });
 
         // Read settings to get custom template path
         const templatePath = await ctx.getDefaultClaudeMdPath();
         const claudeMd = generateClaudeMd(caseName, '', templatePath);
-        writeFileSync(join(casePath, 'CLAUDE.md'), claudeMd);
+        writeFileSync(join(resolvedCasePath, 'CLAUDE.md'), claudeMd);
 
         // Write .claude/settings.local.json with hooks for desktop notifications
         // (Claude-specific — OpenCode, Codex, and Gemini use their own systems)
         if (mode !== 'opencode' && mode !== 'codex' && mode !== 'gemini') {
-          await writeHooksConfig(casePath);
+          await writeHooksConfig(resolvedCasePath);
         }
 
-        ctx.broadcast(SseEvent.CaseCreated, { name: caseName, path: casePath });
+        ctx.broadcast(SseEvent.CaseCreated, { name: caseName, path: resolvedCasePath });
       } catch (err) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create case: ${getErrorMessage(err)}`);
       }
@@ -1346,7 +1352,7 @@ export function registerSessionRoutes(
       // COD-91 self-heal for an EXISTING case: refresh a pre-secret hooks block so the
       // now-unconditional hook-secret gate keeps accepting its hook events. No-op when
       // the hooks aren't ours or already carry the secret.
-      await refreshStaleHookSecret(casePath).catch(() => {});
+      await refreshStaleHookSecret(resolvedCasePath).catch(() => {});
     }
 
     // Strip stale disk entries for keys this request is actively setting (Claude only —
@@ -1359,7 +1365,7 @@ export function registerSessionRoutes(
       envOverrides &&
       Object.keys(envOverrides).length > 0
     ) {
-      await stripCaseEnvKeys(casePath, Object.keys(envOverrides));
+      await stripCaseEnvKeys(resolvedCasePath, Object.keys(envOverrides));
     }
 
     // Create a new session with the case as working directory
@@ -1379,7 +1385,7 @@ export function registerSessionRoutes(
     const qsClaudeModeConfig = await ctx.getClaudeModeConfig();
     const qsTerminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const session = new Session({
-      workingDir: casePath,
+      workingDir: resolvedCasePath,
       mux: ctx.mux,
       useMux: true,
       mode: mode,
@@ -1399,7 +1405,7 @@ export function registerSessionRoutes(
     // Auto-detect completion phrase from CLAUDE.md BEFORE broadcasting
     // so the initial state already has the phrase configured (only if globally enabled)
     if (mode === 'claude' && !remote && ctx.store.getConfig().ralphEnabled) {
-      autoConfigureRalph(session, casePath, ctx);
+      autoConfigureRalph(session, resolvedCasePath, ctx);
       if (!session.ralphTracker.enabled) {
         session.ralphTracker.enable();
         session.ralphTracker.enableAutoEnable(); // Allow re-enabling on restart
@@ -1468,7 +1474,7 @@ export function registerSessionRoutes(
 
       return {
         sessionId: session.id,
-        casePath,
+        casePath: resolvedCasePath,
         caseName,
       };
     } catch (err) {
