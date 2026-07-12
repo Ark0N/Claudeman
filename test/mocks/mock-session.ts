@@ -266,6 +266,9 @@ export class MockSession extends EventEmitter {
   /** Stub for startInteractive */
   startInteractive = vi.fn(async () => {});
 
+  /** Stub for resetRespawnBreaker (COD-118) */
+  resetRespawnBreaker = vi.fn();
+
   /** Stub for startShell */
   startShell = vi.fn(async () => {});
 

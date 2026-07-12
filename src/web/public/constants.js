@@ -156,12 +156,39 @@ function shouldAutoWrapTabs(input) {
   return scrollWidth > clientWidth + 1;
 }
 
+// COD-134 — Terminal WebSocket reconnect policy.
+//
+// Decide what to do after a terminal WebSocket closes, given the close `code`
+// and `attempt` (0-based count of consecutive reconnects already made):
+//   - transient closes (code < 4004: 1000/1001/1005/1006/etc.) → 'reconnect'
+//     with exponential backoff (0 on the first attempt; the caller adds jitter),
+//     250ms → 500 → 1000 → ... capped at 10s.
+//   - 4004 (session not found) / 4009 (session terminated) → 'give-up': the
+//     session is gone, retrying only wastes connections.
+//   - 4008 (too many connections) and any other code >= 4004 → 'retry-fallback':
+//     show the HTTP fallback but keep retrying on a bounded 5s timer so the
+//     transport returns to WS once the transient condition clears (un-stick).
+// Pure: no DOM, no side effects.
+function planWsReconnect(code, attempt) {
+  if (code === 4004 || code === 4009) {
+    return { action: 'give-up', delayMs: 0 };
+  }
+  if (code >= 4004) {
+    return { action: 'retry-fallback', delayMs: 5000 };
+  }
+  const delayMs = attempt <= 0 ? 0 : Math.min(250 * Math.pow(2, attempt - 1), 10000);
+  return { action: 'reconnect', delayMs };
+}
+
 if (typeof window !== 'undefined') {
   window.WEBGL_FALLBACK = WEBGL_FALLBACK;
   window.evaluateWebGLLongTaskTrip = evaluateWebGLLongTaskTrip;
   window.shouldSkipWebGL = shouldSkipWebGL;
   window.CodemanTabOverflow = {
     shouldAutoWrapTabs,
+  };
+  window.CodemanWsReconnect = {
+    plan: planWsReconnect,
   };
 }
 
@@ -293,6 +320,7 @@ const SSE_EVENTS = {
   SESSION_LIMIT_PAUSE_SCHEDULED: 'session:limitPauseScheduled',
   SESSION_LIMIT_RESUME: 'session:limitResume',
   SESSION_LIMIT_RESUME_CANCELLED: 'session:limitResumeCancelled',
+  SESSION_RESPAWN_BREAKER_TRIPPED: 'session:respawnBreakerTripped',
   SESSION_CLI_INFO: 'session:cliInfo',
   SESSION_MESSAGE: 'session:message',
   SESSION_INTERACTIVE: 'session:interactive',
@@ -306,6 +334,12 @@ const SSE_EVENTS = {
   SCHEDULED_STOPPED: 'scheduled:stopped',
   SCHEDULED_LOG: 'scheduled:log',
   SCHEDULED_DELETED: 'scheduled:deleted',
+
+  // Cron jobs
+  CRON_JOBS_CHANGED: 'cron:jobsChanged',
+  CRON_JOB_DELETED: 'cron:jobDeleted',
+  CRON_RUN_CREATED: 'cron:runCreated',
+  CRON_RUN_UPDATED: 'cron:runUpdated',
 
   // Respawn
   RESPAWN_STARTED: 'respawn:started',

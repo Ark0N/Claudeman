@@ -49,6 +49,7 @@ import {
   type CodexConfig,
   type EffortLevel,
   type GeminiConfig,
+  type SessionRemote,
 } from './types.js';
 import type { TerminalMultiplexer, MuxSession } from './mux-interface.js';
 import { TaskTracker, type BackgroundTask } from './task-tracker.js';
@@ -82,7 +83,8 @@ import {
 import { SessionAutoOps } from './session-auto-ops.js';
 import { detectUsageLimitPause } from './usage-limit-patterns.js';
 import { SessionTaskCache } from './session-task-cache.js';
-import { parseAttachmentMagicLinks } from './attachment-magic.js';
+import { InteractivePtyExitBreaker } from './session-pty-exit-breaker.js';
+import { parseTerminalAttachmentRequests } from './attachment-magic.js';
 import {
   sanitizeAttachmentHistory,
   upsertAttachmentHistory as upsertAttachmentHistoryList,
@@ -209,6 +211,10 @@ export function queryTmuxWindowSize(muxName: string, socket: string): { cols: nu
   return { cols: DEFAULT_PTY_COLS, rows: DEFAULT_PTY_ROWS };
 }
 
+export function resolveMuxAttachCwd(workingDir: string, remote?: SessionRemote): string {
+  return remote ? '/tmp' : workingDir;
+}
+
 /**
  * Represents a JSON message from Claude CLI's stream-json output format.
  * Messages are newline-delimited JSON objects parsed from PTY output.
@@ -288,6 +294,13 @@ export class Session extends EventEmitter {
   private _pid: number | null = null;
   private _status: SessionStatus = 'idle';
   private _currentTaskId: string | null = null;
+
+  // COD-118: bound repeated non-zero interactive-PTY exits. Recorded in the
+  // interactive PTY onExit handler; when it trips, the session flips to 'error'
+  // and startInteractive() refuses to respawn until an explicit user restart
+  // calls resetRespawnBreaker(). Defense-in-depth over the COD-115 crash-loop.
+  private readonly _ptyExitBreaker = new InteractivePtyExitBreaker();
+  private _respawnBlocked = false;
   // Use BufferAccumulator for hot-path buffers to reduce GC pressure
   private _terminalBuffer = new BufferAccumulator(MAX_TERMINAL_BUFFER_SIZE, TERMINAL_BUFFER_TRIM_SIZE);
   private _textOutput = new BufferAccumulator(MAX_TEXT_OUTPUT_SIZE, TEXT_OUTPUT_TRIM_SIZE);
@@ -385,6 +398,9 @@ export class Session extends EventEmitter {
   // tmux history-limit (scrollback lines) applied to this session's pane.
   private readonly _tmuxHistoryLimit: number;
 
+  // Remote execution metadata, present when this session runs over SSH through local tmux.
+  private readonly _remote?: SessionRemote;
+
   // Session color for visual differentiation
   private _color: import('./types.js').SessionColor = 'default';
 
@@ -456,6 +472,8 @@ export class Session extends EventEmitter {
       tmuxHistoryLimit?: number;
       /** Restored per-session attachment history. May include server-private external paths. */
       attachmentHistory?: SessionAttachmentHistoryItem[];
+      /** Remote execution metadata for sessions launched through SSH inside local tmux. */
+      remote?: SessionRemote;
     }
   ) {
     super();
@@ -528,6 +546,7 @@ export class Session extends EventEmitter {
       this._effort = config.effort;
     }
     this._tmuxHistoryLimit = config.tmuxHistoryLimit ?? DEFAULT_TMUX_HISTORY_LIMIT;
+    this._remote = config.remote;
     if (config.attachmentHistory && config.attachmentHistory.length > 0) {
       this.restoreAttachmentHistory(config.attachmentHistory);
     }
@@ -987,6 +1006,7 @@ export class Session extends EventEmitter {
       pid: this.pid,
       status: this._status,
       workingDir: this.workingDir,
+      remote: this._remote,
       currentTaskId: this._currentTaskId,
       createdAt: this.createdAt,
       lastActivityAt: this._lastActivityAt,
@@ -1021,6 +1041,11 @@ export class Session extends EventEmitter {
       geminiConfig: this._geminiConfig,
       resumeSessionId: this._resumeSessionId,
       effort: this._effort,
+      // COD-118: runtime-only — surfaced so the frontend can require explicit user
+      // intent before restarting a crash-looped session. Deliberately NOT restored
+      // by the constructor: a Codeman restart starts with a fresh breaker so boot
+      // recovery can re-attach.
+      respawnBlocked: this._respawnBlocked || undefined,
       attachmentHistory: this.attachmentHistory.length > 0 ? this.attachmentHistory : undefined,
       // envOverrides intentionally NOT on the public SessionState type — they must not
       // leak into SSE / GET /api/sessions broadcasts (schema allows OPENCODE_*, which
@@ -1171,8 +1196,10 @@ export class Session extends EventEmitter {
         name: 'xterm-256color',
         cols: ptyCols,
         rows: ptyRows,
-        cwd: this.workingDir,
-        env: buildMuxAttachEnv(),
+        cwd: resolveMuxAttachCwd(this.workingDir, this._remote),
+        // COD-75: codex/gemini get COLORTERM=truecolor — mirrors buildEnvExports()
+        // in tmux-manager.ts so the attach client and the tmux session agree.
+        env: buildMuxAttachEnv(this.mode === 'codex' || this.mode === 'gemini'),
       });
     } catch (spawnErr) {
       console.error(`[Session] Failed to spawn PTY for ${options.spawnErrLabel}:`, spawnErr);
@@ -1230,18 +1257,26 @@ export class Session extends EventEmitter {
         .replace(/\x1b\[\?(?:1000|1001|1002|1003|1005|1006|1007)[hl]/g, '');
     }
 
-    // Scan terminal output for `codeman://attach?path=...` magic links and emit
-    // an attachmentRequested event for each newly-seen absolute path. The web
-    // server turns these into registered attachment cards.
-    const attachmentPaths = parseAttachmentMagicLinks(data);
-    for (const attachmentPath of attachmentPaths) {
-      if (this._attachmentMagicSeen.has(attachmentPath)) continue;
-      this._attachmentMagicSeen.add(attachmentPath);
+    // Scan terminal output for attachment requests. `codeman://attach?...` is an
+    // explicit magic link (all modes); Codex generated images report
+    // `Saved to: file://...` — that scanner (and its relaxed trust policy) is
+    // only enabled for codex-mode sessions. The web server applies the trust
+    // boundary for each request source.
+    const attachmentRequests = parseTerminalAttachmentRequests(data, { codexArtifacts: this.mode === 'codex' });
+    for (const request of attachmentRequests) {
+      const seenKey = `${request.source}:${request.path}`;
+      if (this._attachmentMagicSeen.has(seenKey)) continue;
+      this._attachmentMagicSeen.add(seenKey);
       if (this._attachmentMagicSeen.size > 200) {
         const oldest = this._attachmentMagicSeen.values().next().value;
         if (oldest) this._attachmentMagicSeen.delete(oldest);
       }
-      this.emit('attachmentRequested', { sessionId: this.id, path: attachmentPath, timestamp: Date.now() });
+      this.emit('attachmentRequested', {
+        sessionId: this.id,
+        path: request.path,
+        source: request.source,
+        timestamp: Date.now(),
+      });
     }
 
     // BufferAccumulator handles auto-trimming when max size exceeded
@@ -1254,6 +1289,16 @@ export class Session extends EventEmitter {
   async startInteractive(): Promise<void> {
     if (this.ptyProcess) {
       throw new Error('Session already has a running process');
+    }
+
+    // COD-118: if the PTY exit breaker has tripped (repeated non-zero exits in a
+    // short window), refuse to respawn. This is the uniform choke point that stops
+    // automatic recovery/reconnect callers from re-creating a crash-looping PTY.
+    // An explicit user restart clears it via resetRespawnBreaker().
+    if (this._respawnBlocked) {
+      throw new Error(
+        'Respawn blocked: interactive PTY exited non-zero too many times in a short window (circuit breaker tripped). Restart the session to clear it.'
+      );
     }
 
     this._resetBuffers();
@@ -1282,6 +1327,7 @@ export class Session extends EventEmitter {
             envOverrides: this._envOverrides,
             effort: this._effort,
             historyLimit: this._tmuxHistoryLimit,
+            remote: this._remote,
           },
           createSessionOptions: {
             sessionId: this.id,
@@ -1299,6 +1345,7 @@ export class Session extends EventEmitter {
             envOverrides: this._envOverrides,
             effort: this._effort,
             historyLimit: this._tmuxHistoryLimit,
+            remote: this._remote,
           },
           spawnErrLabel: 'mux attachment',
         });
@@ -1496,6 +1543,9 @@ export class Session extends EventEmitter {
 
     this.ptyProcess.onExit(({ exitCode }) => {
       console.log('[Session] Interactive PTY exited with code:', exitCode);
+      // COD-118: record the exit in the circuit breaker BEFORE status bookkeeping.
+      // A clean (0) exit resets the counter; rapid non-zero repeats trip it.
+      const breakerResult = this._ptyExitBreaker.recordExit(exitCode, Date.now());
       this.ptyProcess = null;
       this._pid = null;
       this._status = 'idle';
@@ -1523,8 +1573,36 @@ export class Session extends EventEmitter {
       if (this._muxSession && this._mux) {
         this._mux.setAttached(this.id, false);
       }
+      // COD-118: if the breaker tripped, surface an error state and block the NEXT
+      // respawn so recovery/reconnect callers stop looping. Still emit 'exit' below
+      // for normal cleanup. Cleared by an explicit user restart (resetRespawnBreaker()).
+      if (breakerResult.tripped && !this._respawnBlocked) {
+        this._respawnBlocked = true;
+        this._status = 'error';
+        console.error(
+          `[Session] PTY exit circuit breaker tripped for ${this.id} (${breakerResult.count} non-zero exits within window); blocking respawn.`
+        );
+        this.emit('respawnBreakerTripped', { count: breakerResult.count });
+      }
       this.emit('exit', exitCode);
     });
+  }
+
+  /**
+   * Clear the interactive-PTY exit circuit breaker (COD-118).
+   *
+   * Called on an EXPLICIT, user-initiated (re)start so an intentional restart is
+   * never blocked by a prior crash-loop trip. Automatic recovery/reconnect paths
+   * must NOT call this — that's the whole point of the breaker.
+   */
+  resetRespawnBreaker(): void {
+    this._ptyExitBreaker.reset();
+    this._respawnBlocked = false;
+  }
+
+  /** Whether the interactive-PTY exit circuit breaker is currently tripped (COD-118). */
+  get respawnBlocked(): boolean {
+    return this._respawnBlocked;
   }
 
   /**
@@ -1637,6 +1715,7 @@ export class Session extends EventEmitter {
             niceConfig: this._niceConfig,
             envOverrides: this._envOverrides,
             historyLimit: this._tmuxHistoryLimit,
+            remote: this._remote,
           },
           createSessionOptions: {
             sessionId: this.id,
@@ -1646,6 +1725,7 @@ export class Session extends EventEmitter {
             niceConfig: this._niceConfig,
             envOverrides: this._envOverrides,
             historyLimit: this._tmuxHistoryLimit,
+            remote: this._remote,
           },
           spawnErrLabel: 'shell mux attachment',
         });
@@ -2252,8 +2332,26 @@ export class Session extends EventEmitter {
    * ```
    */
   write(data: string): void {
+    this._trackCodexSubmit(data);
     if (this.ptyProcess) {
       this.ptyProcess.write(data);
+    }
+  }
+
+  // ── Codex thread tracking ─────────────────────────────────────────────
+  // When a codex pane last submitted a message (Enter). The response-viewer
+  // correlates this against ~/.codex/history.jsonl entry timestamps to find
+  // the thread the pane is ACTUALLY on — the only signal that survives
+  // /resume, /new and /fork typed inside the codex TUI itself.
+  private _codexLastSubmitAt = 0;
+
+  get codexLastSubmitAt(): number {
+    return this._codexLastSubmitAt;
+  }
+
+  private _trackCodexSubmit(data: string): void {
+    if (this.mode === 'codex' && (data.includes('\r') || data.includes('\n'))) {
+      this._codexLastSubmitAt = Date.now();
     }
   }
 
@@ -2310,6 +2408,7 @@ export class Session extends EventEmitter {
    * ```
    */
   async writeViaMux(data: string): Promise<boolean> {
+    this._trackCodexSubmit(data);
     if (this._mux && this._muxSession) {
       return this._mux.sendInput(this.id, data);
     }

@@ -34,6 +34,7 @@ import type { WebSocket } from 'ws';
 import type { SessionPort } from '../ports/session-port.js';
 import { MAX_INPUT_LENGTH } from '../../config/terminal-limits.js';
 import { isAllowedRequestHost, isAllowedRequestOrigin, type HostPolicy } from '../network-auth-policy.js';
+import { WsConnectionRegistry } from '../ws-connection-registry.js';
 
 /** Micro-batch interval for terminal output (ms). Short enough for low latency,
  *  long enough to group Ink's rapid cursor-up redraw sequences into single frames. */
@@ -59,197 +60,240 @@ const DEC_2026_END = '\x1b[?2026l';
 /** Max concurrent WS connections per session. Prevents listener/bandwidth multiplication. */
 const MAX_WS_PER_SESSION = 5;
 
-/** Track active WS connections per session for connection limiting. */
-const sessionWsCount = new Map<string, number>();
+/**
+ * Track live WS connections per session, keyed by clientId (COD-137).
+ * Replaces a bare counter that over-counted across the async-close gap on
+ * reconnect (spurious 4008). A same-`cid` reconnect supersedes its own socket
+ * (reclaims the slot) instead of consuming a new one; cid-less upgrades are
+ * admitted anonymously up to the cap. See ws-connection-registry.ts.
+ */
+const sessionWsRegistry = new WsConnectionRegistry<WebSocket>(MAX_WS_PER_SESSION);
 
 export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHostPolicy: () => HostPolicy): void {
-  app.get<{ Params: { id: string } }>('/ws/sessions/:id/terminal', { websocket: true }, (socket: WebSocket, req) => {
-    // Reject cross-site WebSocket hijacking (CSWSH) and DNS-rebinding before doing
-    // anything: the upgrade must come from an allowed Host and (when the browser
-    // sends one — it always does for WS) a same-site Origin. Writing to this socket
-    // injects keystrokes into a --dangerously-skip-permissions agent, so this gate
-    // matters even on the default no-password install. See security review H5.
-    const policy = getHostPolicy();
-    if (!isAllowedRequestHost(req.headers.host, policy) || !isAllowedRequestOrigin(req.headers.origin, policy)) {
-      socket.close(4003, 'Forbidden');
-      return;
-    }
+  app.get<{ Params: { id: string }; Querystring: { cid?: string } }>(
+    '/ws/sessions/:id/terminal',
+    { websocket: true },
+    (socket: WebSocket, req) => {
+      // Reject cross-site WebSocket hijacking (CSWSH) and DNS-rebinding before doing
+      // anything: the upgrade must come from an allowed Host and (when the browser
+      // sends one — it always does for WS) a same-site Origin. Writing to this socket
+      // injects keystrokes into a --dangerously-skip-permissions agent, so this gate
+      // matters even on the default no-password install. See security review H5.
+      const policy = getHostPolicy();
+      if (!isAllowedRequestHost(req.headers.host, policy) || !isAllowedRequestOrigin(req.headers.origin, policy)) {
+        socket.close(4003, 'Forbidden');
+        return;
+      }
 
-    const { id } = req.params;
-    const session = ctx.sessions.get(id);
+      const { id } = req.params;
+      const session = ctx.sessions.get(id);
 
-    if (!session) {
-      socket.close(4004, 'Session not found');
-      return;
-    }
+      if (!session) {
+        socket.close(4004, 'Session not found');
+        return;
+      }
 
-    // Enforce per-session connection limit
-    const currentCount = sessionWsCount.get(id) ?? 0;
-    if (currentCount >= MAX_WS_PER_SESSION) {
-      socket.close(4008, 'Too many connections');
-      return;
-    }
-    sessionWsCount.set(id, currentCount + 1);
+      // Structured transport logging — surfaces WS open/close/timeout churn so the
+      // tunnel-flap behavior (COD-134) is observable in the server logs. Fastify is
+      // configured logger:false, so we log via console (→ journald under systemd).
 
-    // Swallow socket errors — cleanup happens in 'close'
-    socket.on('error', () => {});
+      // Enforce per-session connection limit, scoped by clientId. A same-cid
+      // reconnect reclaims its own slot (registry evicts the stale socket), so a
+      // drop+reconnect burst can no longer over-count across the async-close gap
+      // and trip a spurious 4008. cid-less upgrades are admitted anonymously.
+      const cid = typeof req.query?.cid === 'string' && req.query.cid.length > 0 ? req.query.cid : null;
+      const { admitted, evictedSocket } = sessionWsRegistry.register(id, cid, socket);
+      if (!admitted) {
+        console.warn('[ws] terminal rejected: too many connections', {
+          sessionId: id,
+          wsCount: sessionWsRegistry.liveCount(id),
+        });
+        socket.close(4008, 'Too many connections');
+        return;
+      }
+      if (evictedSocket) {
+        // Same client reconnected; retire the stale socket so it doesn't linger.
+        console.info('[ws] terminal superseded by reconnect', { sessionId: id });
+        try {
+          evictedSocket.close(4010, 'Superseded by reconnect');
+        } catch {
+          /* socket may already be closing */
+        }
+      }
+      console.info('[ws] terminal open', { sessionId: id, wsCount: sessionWsRegistry.liveCount(id) });
 
-    // Per-connection micro-batch state
-    let batchChunks: string[] = [];
-    let batchSize = 0;
-    let batchTimer: ReturnType<typeof setTimeout> | null = null;
+      // Eagerly free the slot on error/terminate — don't wait for the async
+      // 'close' (idempotent with the 'close' handler below). This is what kills
+      // the reconnect over-count: the slot is released the instant the socket dies.
+      socket.on('error', () => {
+        sessionWsRegistry.unregister(id, socket);
+      });
 
-    const flushBatch = () => {
-      batchTimer = null;
-      if (batchChunks.length === 0 || socket.readyState !== 1) {
+      // Per-connection micro-batch state
+      let batchChunks: string[] = [];
+      let batchSize = 0;
+      let batchTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const flushBatch = () => {
+        batchTimer = null;
+        if (batchChunks.length === 0 || socket.readyState !== 1) {
+          batchChunks = [];
+          batchSize = 0;
+          return;
+        }
+        const data = batchChunks.join('');
         batchChunks = [];
         batchSize = 0;
-        return;
-      }
-      const data = batchChunks.join('');
-      batchChunks = [];
-      batchSize = 0;
-      socket.send(`{"t":"o","d":${JSON.stringify(DEC_2026_START + data + DEC_2026_END)}}`);
-    };
+        socket.send(`{"t":"o","d":${JSON.stringify(DEC_2026_START + data + DEC_2026_END)}}`);
+      };
 
-    // Per-connection desktop sizing claim — registered on the first
-    // desktop-typed resize and released on socket close, so Session.resize()
-    // can ignore small-viewport resizes only while a desktop is actually
-    // connected (see Session._desktopSizeClaims).
-    const sizingToken = Symbol('ws-desktop-sizing');
-    let holdsDesktopClaim = false;
+      // Per-connection desktop sizing claim — registered on the first
+      // desktop-typed resize and released on socket close, so Session.resize()
+      // can ignore small-viewport resizes only while a desktop is actually
+      // connected (see Session._desktopSizeClaims).
+      const sizingToken = Symbol('ws-desktop-sizing');
+      let holdsDesktopClaim = false;
 
-    // Attach message handler synchronously BEFORE any async work
-    // (@fastify/websocket requirement to avoid dropped messages).
-    socket.on('message', (raw) => {
-      try {
-        const msg = JSON.parse(String(raw));
-        if (msg.t === 'i' && typeof msg.d === 'string') {
-          if (msg.d.length > MAX_INPUT_LENGTH) return;
-          // Reliable delivery: when the frame carries a clientId + seq, apply it
-          // exactly once (skip a duplicate redelivery) but ACK it regardless so
-          // the client can drop it from its durable queue. Frames without seq
-          // (legacy/other tools) are applied as-is — no behavior change.
-          const cid = typeof msg.cid === 'string' ? msg.cid : null;
-          const seq = Number.isInteger(msg.seq) ? (msg.seq as number) : null;
-          const apply = cid && seq !== null ? session.shouldApplyInput(cid, seq) : true;
-          if (apply) {
-            // Typed input from a claim-holding desktop keeps the claim "hot"
-            // and re-asserts the desktop layout after a mobile override.
-            if (holdsDesktopClaim) session.noteDesktopActivity();
-            session.write(msg.d);
+      // Attach message handler synchronously BEFORE any async work
+      // (@fastify/websocket requirement to avoid dropped messages).
+      socket.on('message', (raw) => {
+        try {
+          const msg = JSON.parse(String(raw));
+          if (msg.t === 'i' && typeof msg.d === 'string') {
+            if (msg.d.length > MAX_INPUT_LENGTH) return;
+            // Reliable delivery: when the frame carries a clientId + seq, apply it
+            // exactly once (skip a duplicate redelivery) but ACK it regardless so
+            // the client can drop it from its durable queue. Frames without seq
+            // (legacy/other tools) are applied as-is — no behavior change.
+            const cid = typeof msg.cid === 'string' ? msg.cid : null;
+            const seq = Number.isInteger(msg.seq) ? (msg.seq as number) : null;
+            const apply = cid && seq !== null ? session.shouldApplyInput(cid, seq) : true;
+            if (apply) {
+              // Typed input from a claim-holding desktop keeps the claim "hot"
+              // and re-asserts the desktop layout after a mobile override.
+              if (holdsDesktopClaim) session.noteDesktopActivity();
+              session.write(msg.d);
+            }
+            if (seq !== null && socket.readyState === 1) {
+              socket.send(`{"t":"ia","seq":${seq}}`);
+            }
+          } else if (
+            msg.t === 'z' &&
+            Number.isInteger(msg.c) &&
+            Number.isInteger(msg.r) &&
+            msg.c >= 1 &&
+            msg.c <= 500 &&
+            msg.r >= 1 &&
+            msg.r <= 200
+          ) {
+            const viewportType = msg.v === 'mobile' || msg.v === 'tablet' || msg.v === 'desktop' ? msg.v : undefined;
+            if (viewportType === 'desktop') {
+              session.claimDesktopSizing(sizingToken);
+              holdsDesktopClaim = true;
+            } else if (viewportType) {
+              // The connection's viewport can change (e.g. browser window
+              // narrowed past the tablet breakpoint) — drop a stale claim.
+              session.releaseDesktopSizing(sizingToken);
+              holdsDesktopClaim = false;
+            }
+            const force = msg.f === true;
+            session.resize(msg.c, msg.r, { viewportType, force });
           }
-          if (seq !== null && socket.readyState === 1) {
-            socket.send(`{"t":"ia","seq":${seq}}`);
-          }
-        } else if (
-          msg.t === 'z' &&
-          Number.isInteger(msg.c) &&
-          Number.isInteger(msg.r) &&
-          msg.c >= 1 &&
-          msg.c <= 500 &&
-          msg.r >= 1 &&
-          msg.r <= 200
-        ) {
-          const viewportType = msg.v === 'mobile' || msg.v === 'tablet' || msg.v === 'desktop' ? msg.v : undefined;
-          if (viewportType === 'desktop') {
-            session.claimDesktopSizing(sizingToken);
-            holdsDesktopClaim = true;
-          } else if (viewportType) {
-            // The connection's viewport can change (e.g. browser window
-            // narrowed past the tablet breakpoint) — drop a stale claim.
-            session.releaseDesktopSizing(sizingToken);
-            holdsDesktopClaim = false;
-          }
-          const force = msg.f === true;
-          session.resize(msg.c, msg.r, { viewportType, force });
+        } catch {
+          // Ignore malformed messages
         }
-      } catch {
-        // Ignore malformed messages
-      }
-    });
+      });
 
-    // Terminal output -> micro-batched WS send
-    const onTerminal = (data: string) => {
-      if (socket.readyState !== 1) return;
-      batchChunks.push(data);
-      batchSize += data.length;
+      // Terminal output -> micro-batched WS send
+      const onTerminal = (data: string) => {
+        if (socket.readyState !== 1) return;
+        batchChunks.push(data);
+        batchSize += data.length;
 
-      // Flush immediately for large batches (responsiveness during bulk output)
-      if (batchSize > WS_BATCH_FLUSH_THRESHOLD) {
-        if (batchTimer) {
-          clearTimeout(batchTimer);
+        // Flush immediately for large batches (responsiveness during bulk output)
+        if (batchSize > WS_BATCH_FLUSH_THRESHOLD) {
+          if (batchTimer) {
+            clearTimeout(batchTimer);
+          }
+          flushBatch();
+          return;
         }
-        flushBatch();
-        return;
-      }
 
-      // Start timer if not already running
-      if (!batchTimer) {
-        batchTimer = setTimeout(flushBatch, WS_BATCH_INTERVAL_MS);
-      }
-    };
+        // Start timer if not already running
+        if (!batchTimer) {
+          batchTimer = setTimeout(flushBatch, WS_BATCH_INTERVAL_MS);
+        }
+      };
 
-    const onClearTerminal = () => {
-      if (socket.readyState === 1) {
-        socket.send('{"t":"c"}');
-      }
-    };
+      const onClearTerminal = () => {
+        if (socket.readyState === 1) {
+          socket.send('{"t":"c"}');
+        }
+      };
 
-    const onNeedsRefresh = () => {
-      if (socket.readyState === 1) {
-        socket.send('{"t":"r"}');
-      }
-    };
+      const onNeedsRefresh = () => {
+        if (socket.readyState === 1) {
+          socket.send('{"t":"r"}');
+        }
+      };
 
-    // Close WS when session exits (deleted, respawned, or crashed) — prevents
-    // orphaned listeners and stale writes to a dead PTY.
-    const onSessionExit = () => {
-      socket.close(4009, 'Session terminated');
-    };
+      // Close WS when session exits (deleted, respawned, or crashed) — prevents
+      // orphaned listeners and stale writes to a dead PTY.
+      const onSessionExit = () => {
+        socket.close(4009, 'Session terminated');
+      };
 
-    session.on('terminal', onTerminal);
-    session.on('clearTerminal', onClearTerminal);
-    session.on('needsRefresh', onNeedsRefresh);
-    session.on('exit', onSessionExit);
+      session.on('terminal', onTerminal);
+      session.on('clearTerminal', onClearTerminal);
+      session.on('needsRefresh', onNeedsRefresh);
+      session.on('exit', onSessionExit);
 
-    // Heartbeat: detect stale connections (especially through tunnels where
-    // TCP RST can take minutes to propagate).
-    let pongTimeout: ReturnType<typeof setTimeout> | null = null;
+      // Heartbeat: detect stale connections (especially through tunnels where
+      // TCP RST can take minutes to propagate).
+      let pongTimeout: ReturnType<typeof setTimeout> | null = null;
 
-    socket.on('pong', () => {
-      if (pongTimeout) {
-        clearTimeout(pongTimeout);
-        pongTimeout = null;
-      }
-    });
+      socket.on('pong', () => {
+        if (pongTimeout) {
+          clearTimeout(pongTimeout);
+          pongTimeout = null;
+        }
+      });
 
-    const pingInterval = setInterval(() => {
-      if (socket.readyState !== 1) return;
-      socket.ping();
-      pongTimeout = setTimeout(() => {
-        socket.terminate();
-      }, WS_PONG_TIMEOUT_MS);
-    }, WS_PING_INTERVAL_MS);
+      const pingInterval = setInterval(() => {
+        if (socket.readyState !== 1) return;
+        socket.ping();
+        pongTimeout = setTimeout(() => {
+          console.warn('[ws] terminal ping timeout — terminating', { sessionId: id });
+          // Free the slot eagerly — terminate()'s 'close' may lag, and a client
+          // reconnecting after a stale-connection drop must not be over-counted.
+          sessionWsRegistry.unregister(id, socket);
+          socket.terminate();
+        }, WS_PONG_TIMEOUT_MS);
+      }, WS_PING_INTERVAL_MS);
 
-    socket.on('close', () => {
-      clearInterval(pingInterval);
-      if (pongTimeout) clearTimeout(pongTimeout);
-      if (batchTimer) clearTimeout(batchTimer);
-      batchChunks = [];
-      session.off('terminal', onTerminal);
-      session.off('clearTerminal', onClearTerminal);
-      session.off('needsRefresh', onNeedsRefresh);
-      session.off('exit', onSessionExit);
-      session.releaseDesktopSizing(sizingToken);
+      socket.on('close', (code: number, reason: Buffer) => {
+        clearInterval(pingInterval);
+        if (pongTimeout) clearTimeout(pongTimeout);
+        if (batchTimer) clearTimeout(batchTimer);
+        batchChunks = [];
+        session.off('terminal', onTerminal);
+        session.off('clearTerminal', onClearTerminal);
+        session.off('needsRefresh', onNeedsRefresh);
+        session.off('exit', onSessionExit);
+        session.releaseDesktopSizing(sizingToken);
 
-      // Decrement per-session connection count
-      const count = sessionWsCount.get(id) ?? 1;
-      if (count <= 1) {
-        sessionWsCount.delete(id);
-      } else {
-        sessionWsCount.set(id, count - 1);
-      }
-    });
-  });
+        // Release this socket's slot. Idempotent and identity-matched: if this
+        // socket was already superseded (a same-cid reconnect took its slot) or
+        // eagerly unregistered on terminate/error, this is a no-op and the
+        // reconnected socket keeps the slot.
+        sessionWsRegistry.unregister(id, socket);
+        console.info('[ws] terminal close', {
+          sessionId: id,
+          code,
+          reason: String(reason),
+          wsCount: sessionWsRegistry.liveCount(id),
+        });
+      });
+    }
+  );
 }

@@ -71,6 +71,22 @@ describe('document-thumbnailer', () => {
     );
   });
 
+  it('passes through generated image formats with per-extension content types', async () => {
+    const expectations: Array<[string, string]> = [
+      ['jpg', 'image/jpeg'],
+      ['jpeg', 'image/jpeg'],
+      ['gif', 'image/gif'],
+      ['webp', 'image/webp'],
+      ['png', 'image/png'],
+    ];
+
+    for (const [ext, contentType] of expectations) {
+      const result = await generateFirstPageThumbnail(`/tmp/mockup.${ext}`, ext);
+      expect(result).toEqual({ content: Buffer.from('large thumbnail'), contentType });
+    }
+    expect(mockedExecFile).not.toHaveBeenCalled();
+  });
+
   it('renders Office thumbnails from the cached converted PDF after conversion cleanup', async () => {
     mockedMkdtemp.mockImplementation(async (prefix) =>
       String(prefix).includes('codeman-document-preview-cache')

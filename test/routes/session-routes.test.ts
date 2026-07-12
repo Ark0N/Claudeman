@@ -16,15 +16,42 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
+import fastifyMultipart from '@fastify/multipart';
+import { join } from 'node:path';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { ApiErrorCode, httpStatusForErrorCode } from '../../src/types.js';
+import { Session } from '../../src/session.js';
 
 // Mock execFile so the send-key route's `tmux` invocation is observable (not run for real).
 const { execFile } = vi.hoisted(() => ({ execFile: vi.fn() }));
+// The real converter spawns a worker thread (TS worker file — not loadable
+// under vitest); the conversion pipeline itself is covered by
+// test/heic-jpeg-core.test.ts against the real heic-decode WASM.
+const heicConvert = vi.hoisted(() => vi.fn(async () => Buffer.from('ffd8ffe000104a4649460001', 'hex')));
 vi.mock('node:child_process', async (orig) => {
   const actual = await orig<typeof import('node:child_process')>();
   return { ...actual, execFile };
+});
+vi.mock('../../src/web/heic-jpeg-converter.js', () => ({ convertHeicToJpeg: heicConvert }));
+
+// In-memory remote store so remote-case tests can inject hosts/cases without real JSON files.
+const remoteStore = vi.hoisted(() => ({
+  hosts: [] as unknown[],
+  cases: [] as unknown[],
+  tmuxCheck: { ok: true, tmuxPath: '/usr/bin/tmux' } as { ok: boolean; tmuxPath?: string; error?: string },
+}));
+vi.mock('../../src/remote-hosts.js', async (orig) => {
+  const actual = await orig<typeof import('../../src/remote-hosts.js')>();
+  return {
+    ...actual,
+    readRemoteHosts: vi.fn(async () => remoteStore.hosts),
+    readRemoteCases: vi.fn(async () => remoteStore.cases),
+    // Stub the remote-tmux prereq probe so quick-start never shells out to ssh.
+    checkRemoteTmuxAvailable: vi.fn(async () => remoteStore.tmuxCheck),
+  };
 });
 
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
@@ -45,6 +72,9 @@ async function createEnvelopeHarness(
 ): Promise<LocalHarness> {
   const app = Fastify({ logger: false });
   await app.register(fastifyCookie);
+  await app.register(fastifyMultipart, {
+    limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 4, parts: 5 },
+  });
 
   const ctx = createMockRouteContext();
   registerFn(app, ctx);
@@ -78,6 +108,10 @@ describe('session-routes', () => {
 
   beforeEach(async () => {
     harness = await createEnvelopeHarness(registerSessionRoutes);
+    // Reset remote store so tests start with empty hosts/cases and a passing tmux probe
+    remoteStore.hosts = [];
+    remoteStore.cases = [];
+    remoteStore.tmuxCheck = { ok: true, tmuxPath: '/usr/bin/tmux' };
   });
 
   afterEach(async () => {
@@ -119,6 +153,123 @@ describe('session-routes', () => {
       });
       expect(JSON.parse(res.body).success).toBe(false);
       expect(execFile).not.toHaveBeenCalled();
+    });
+  });
+
+  // ========== POST /api/sessions/:id/paste-image ==========
+
+  describe('POST /api/sessions/:id/paste-image', () => {
+    function imageUploadBody(boundary: string, filename: string, mimetype: string, imageBytes: Buffer): Buffer {
+      return Buffer.concat([
+        Buffer.from(
+          `--${boundary}\r\n` +
+            `Content-Disposition: form-data; name="image"; filename="${filename}"\r\n` +
+            `Content-Type: ${mimetype}\r\n\r\n`
+        ),
+        imageBytes,
+        Buffer.from(`\r\n--${boundary}--\r\n`),
+      ]);
+    }
+
+    it('converts HEIC paste images to JPEG attachments when browser-side normalization falls back', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-heic-'));
+      harness.ctx._session.workingDir = workDir;
+      heicConvert.mockClear();
+
+      const boundary = 'codeman-test-boundary';
+      const heic = Buffer.from('00000034667479706865696300000000', 'hex');
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/paste-image`,
+        headers: {
+          host: 'codeman.test',
+          origin: 'http://codeman.test',
+          'content-type': `multipart/form-data; boundary=${boundary}`,
+        },
+        payload: imageUploadBody(boundary, 'IMG_4996.HEIC', 'image/heic', heic),
+      });
+
+      await rm(workDir, { recursive: true });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.path).toMatch(/\/\.claude-images\/paste-\d+-[a-f0-9]{8}\.jpg$/);
+      expect(heicConvert).toHaveBeenCalledWith(heic);
+    });
+
+    it('converts mislabeled HEIC (declared image/jpeg, HEIF bytes — the MIUI/Android case) via magic sniff', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-heic-mislabel-'));
+      harness.ctx._session.workingDir = workDir;
+      heicConvert.mockClear();
+
+      const boundary = 'codeman-test-boundary';
+      // ftyp brand mif1 — HEIF bytes hiding under a JPEG filename + MIME.
+      const heic = Buffer.from('000000346674797061696631000000006d69663168656963', 'hex');
+      heic.write('mif1', 8, 'ascii'); // major brand
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/paste-image`,
+        headers: {
+          host: 'codeman.test',
+          origin: 'http://codeman.test',
+          'content-type': `multipart/form-data; boundary=${boundary}`,
+        },
+        payload: imageUploadBody(boundary, 'IMG_2001.jpg', 'image/jpeg', heic),
+      });
+
+      await rm(workDir, { recursive: true });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.path).toMatch(/\/\.claude-images\/paste-\d+-[a-f0-9]{8}\.jpg$/);
+      expect(heicConvert).toHaveBeenCalledWith(heic);
+    });
+
+    it('returns 415 with the error envelope when HEIC conversion fails', async () => {
+      heicConvert.mockClear();
+      heicConvert.mockRejectedValueOnce(new Error('HEIC dimensions 30000x30000 exceed the 64MP decode limit'));
+
+      const boundary = 'codeman-test-boundary';
+      const heic = Buffer.from('00000034667479706865696300000000', 'hex');
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/paste-image`,
+        headers: {
+          host: 'codeman.test',
+          origin: 'http://codeman.test',
+          'content-type': `multipart/form-data; boundary=${boundary}`,
+        },
+        payload: imageUploadBody(boundary, 'IMG_4997.HEIC', 'image/heic', heic),
+      });
+
+      expect(res.statusCode).toBe(415);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('INVALID_INPUT');
+      expect(body.error).toMatch(/HEIC/);
+    });
+
+    it('rejects ftyp brands heic-decode cannot convert (e.g. heim) without invoking the converter', async () => {
+      heicConvert.mockClear();
+
+      const boundary = 'codeman-test-boundary';
+      const heim = Buffer.from('00000034667479706865696d00000000', 'hex');
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/paste-image`,
+        headers: {
+          host: 'codeman.test',
+          origin: 'http://codeman.test',
+          'content-type': `multipart/form-data; boundary=${boundary}`,
+        },
+        payload: imageUploadBody(boundary, 'IMG_4998.HEIC', 'image/heic', heim),
+      });
+
+      expect(res.statusCode).toBe(415);
+      expect(JSON.parse(res.body).success).toBe(false);
+      expect(heicConvert).not.toHaveBeenCalled();
     });
   });
 
@@ -481,6 +632,333 @@ describe('session-routes', () => {
       expect(body.data.terminalBuffer).toBeDefined();
     });
 
+    it('does not strip VPA-like shell scrollback as Ink redraw bloat', async () => {
+      const shellHistory = Array.from(
+        { length: 3000 },
+        (_, index) => `SHELL_SCROLLBACK_${String(index + 1).padStart(6, '0')} payload payload payload \x1b[1d`
+      ).join('\n');
+      harness.ctx._session.terminalBuffer = shellHistory;
+      harness.ctx._session.mode = 'shell';
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(() => null);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.terminalBuffer).toContain('SHELL_SCROLLBACK_000001');
+      expect(body.data.terminalBuffer).toContain('SHELL_SCROLLBACK_003000');
+    });
+
+    it('preserves accumulated history before the live mux pane snapshot for Codex TUI replay', async () => {
+      harness.ctx._session.terminalBuffer = 'hello world\nlater accumulated history';
+      harness.ctx._session.mode = 'codex';
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(
+        () => 'visible tmux pane only\n› current prompt'
+      );
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.terminalBuffer).toContain('hello world');
+      expect(body.data.terminalBuffer).toContain('later accumulated history');
+      expect(body.data.terminalBuffer).toContain('\x1b[H\x1b[2Jvisible tmux pane only');
+      expect(body.data.terminalBuffer.indexOf('hello world')).toBeLessThan(
+        body.data.terminalBuffer.indexOf('visible tmux pane only')
+      );
+      // No ?full=1 → visible-frame capture (no fullHistory opts).
+      expect(harness.ctx.mux.captureActivePaneBuffer).toHaveBeenCalledWith(harness.ctx._session.muxName, undefined);
+    });
+
+    // ── COD-47: full tmux scrollback replay on full page reload ──
+    it('full reload (?full=1) requests full tmux history and replays boundary markers', async () => {
+      // A realistic scrollback-length capture: ~5000 lines, well past one screen.
+      const firstLine = 'SCROLLBACK_FIRST_LINE_0001';
+      const lastLine = 'SCROLLBACK_LAST_LINE_5000';
+      const lines: string[] = [firstLine];
+      for (let i = 2; i <= 4999; i++) {
+        lines.push(`scrollback line ${String(i).padStart(4, '0')} lorem ipsum payload`);
+      }
+      lines.push(lastLine);
+      const fullHistoryCapture = lines.join('\n');
+
+      harness.ctx._session.mode = 'shell';
+      harness.ctx._session.terminalBuffer = '';
+      const captureSpy = vi.fn((_name: string, opts?: { fullHistory?: boolean }) =>
+        opts?.fullHistory ? fullHistoryCapture : 'only the visible frame'
+      );
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = captureSpy;
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal?full=1`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      // Full reload asked tmux for the entire scrollback, with the configured
+      // capture bounds (history-line limit + byte cap for exec maxBuffer).
+      expect(captureSpy).toHaveBeenCalledWith(
+        harness.ctx._session.muxName,
+        expect.objectContaining({
+          fullHistory: true,
+          historyLimitLines: expect.any(Number),
+          maxCaptureBytes: expect.any(Number),
+        })
+      );
+      // Both boundary markers survived the capture → route pipeline.
+      expect(body.data.terminalBuffer).toContain(firstLine);
+      expect(body.data.terminalBuffer).toContain(lastLine);
+      expect(body.data.source).toBe('mux-full-history');
+      expect(typeof body.data.fullSize).toBe('number');
+    });
+
+    it('full reload (?full=1) returns the tmux capture ALONE — byte history is not duplicated', async () => {
+      // The full-history capture is the rendered form of everything already in
+      // the byte buffer; prepending the byte history would replay the whole
+      // conversation twice (\x1b[2J clears the viewport, not xterm scrollback).
+      harness.ctx._session.mode = 'claude';
+      harness.ctx._session.terminalBuffer = 'BYTE_BUFFER_COPY of the conversation';
+      const rendered = 'BYTE_BUFFER_COPY of the conversation\r\nplus older scrollback\r\n› prompt';
+      const captureSpy = vi.fn((_name: string, opts?: { fullHistory?: boolean }) =>
+        opts?.fullHistory ? rendered : 'visible frame only'
+      );
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = captureSpy;
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal?full=1`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.source).toBe('mux-full-history');
+      expect(body.data.terminalBuffer).toContain('plus older scrollback');
+      // Capture alone: no history+clear-viewport concat, and the byte-buffer
+      // content appears exactly once (from the capture, not a duplicate prepend).
+      expect(body.data.terminalBuffer).not.toContain('\x1b[H\x1b[2J');
+      expect(body.data.terminalBuffer.indexOf('BYTE_BUFFER_COPY')).toBe(
+        body.data.terminalBuffer.lastIndexOf('BYTE_BUFFER_COPY')
+      );
+    });
+
+    it('full reload (?full=1) falls back to the byte history when the capture is unavailable', async () => {
+      harness.ctx._session.mode = 'claude';
+      harness.ctx._session.terminalBuffer = 'byte history survives';
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(() => null);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal?full=1`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.source).toBe('history');
+      expect(body.data.terminalBuffer).toContain('byte history survives');
+    });
+
+    it('full reload forwards the configured history-line limit and byte cap to the capture', async () => {
+      harness.ctx.getTerminalHistoryConfig = vi.fn(async () => ({
+        terminalScrollbackLines: 60_000,
+        tmuxHistoryLimit: 123_456,
+        terminalBufferMaxBytes: 5 * 1024 * 1024,
+        terminalBufferTrimBytes: 4 * 1024 * 1024,
+      }));
+      const captureSpy = vi.fn(() => 'full scrollback');
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = captureSpy;
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal?full=1`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(captureSpy).toHaveBeenCalledWith(harness.ctx._session.muxName, {
+        fullHistory: true,
+        historyLimitLines: 123_456,
+        maxCaptureBytes: 5 * 1024 * 1024,
+      });
+    });
+
+    it('tab switch (with tail) uses the visible frame, not full history', async () => {
+      harness.ctx._session.mode = 'codex';
+      harness.ctx._session.terminalBuffer = 'accumulated history';
+      const captureSpy = vi.fn((_name: string, opts?: { fullHistory?: boolean }) =>
+        opts?.fullHistory ? 'FULL_HISTORY_SHOULD_NOT_APPEAR' : 'visible frame only\n› prompt'
+      );
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = captureSpy;
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal?tail=65536`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      // Tail/tab-switch must NOT request fullHistory (undefined opts).
+      expect(captureSpy).toHaveBeenCalledWith(harness.ctx._session.muxName, undefined);
+      expect(body.data.terminalBuffer).toContain('visible frame only');
+      expect(body.data.terminalBuffer).not.toContain('FULL_HISTORY_SHOULD_NOT_APPEAR');
+      expect(body.data.source).toBe('mux-visible');
+    });
+
+    it('caps huge full-history at the configured terminal buffer limit and marks truncated', async () => {
+      // Shrink the cap so the test can exceed it without allocating 32MB.
+      harness.ctx.getTerminalHistoryConfig = vi.fn(async () => ({
+        terminalScrollbackLines: 100_000,
+        tmuxHistoryLimit: 100_000,
+        terminalBufferMaxBytes: 4096,
+        terminalBufferTrimBytes: 4096,
+      }));
+      harness.ctx._session.mode = 'shell';
+      harness.ctx._session.terminalBuffer = '';
+      const oldestMarker = 'OLDEST_EVICTED_MARKER';
+      const newestMarker = 'NEWEST_KEPT_MARKER';
+      const filler = Array.from({ length: 400 }, (_, i) => `line ${i} ${'x'.repeat(30)}`).join('\n');
+      const huge = `${oldestMarker}\n${filler}\n${newestMarker}`;
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(
+        (_name: string, opts?: { fullHistory?: boolean }) => (opts?.fullHistory ? huge : 'visible')
+      );
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal?full=1`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.truncated).toBe(true);
+      expect(body.data.fullSize).toBeGreaterThan(4096);
+      expect(body.data.terminalBuffer.length).toBeLessThanOrEqual(4096);
+      // Cap keeps the most RECENT bytes: newest marker survives, oldest is dropped.
+      expect(body.data.terminalBuffer).toContain(newestMarker);
+      expect(body.data.terminalBuffer).not.toContain(oldestMarker);
+    });
+
+    it('treats stale Codex scrollback config as TUI replay', async () => {
+      harness.ctx._session.terminalBuffer = 'hello world\nlater accumulated history';
+      harness.ctx._session.mode = 'codex';
+      harness.ctx._session.codexConfig = { renderMode: 'scrollback' } as any;
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(
+        () => 'visible tmux pane only\n› current prompt'
+      );
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.terminalBuffer).toContain('hello world');
+      expect(body.data.terminalBuffer).toContain('later accumulated history');
+      expect(body.data.terminalBuffer).toContain('\x1b[H\x1b[2Jvisible tmux pane only');
+      expect(body.data.terminalBuffer.indexOf('hello world')).toBeLessThan(
+        body.data.terminalBuffer.indexOf('visible tmux pane only')
+      );
+      expect(harness.ctx.mux.captureActivePaneBuffer).toHaveBeenCalledWith(harness.ctx._session.muxName, undefined);
+    });
+
+    it('preserves one-time OAuth authorization URLs in Codex TUI replay history', async () => {
+      const authUrl =
+        'https://auth.atlassian.com/authorize?response_type=code&client_id=abc&redirect_uri=http%3A%2F%2F127.0.0.1%3A35547%2Fcallback%2Fxyz';
+      harness.ctx._session.terminalBuffer =
+        'Authorize `atlassian` by opening this URL in your browser:\n' +
+        authUrl +
+        '\n(Browser launch failed; please copy the URL above manually.)\n';
+      harness.ctx._session.mode = 'codex';
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(
+        () => 'visible tmux pane only\n› current prompt'
+      );
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.terminalBuffer).toContain(authUrl);
+      expect(body.data.terminalBuffer).toContain('visible tmux pane only');
+      expect(body.data.terminalBuffer.indexOf(authUrl)).toBeLessThan(
+        body.data.terminalBuffer.indexOf('visible tmux pane only')
+      );
+    });
+
+    it('preserves incidental OAuth URL mentions as ordinary Codex TUI history', async () => {
+      const authUrl =
+        'https://auth.atlassian.com/authorize?response_type=code&client_id=abc&redirect_uri=http%3A%2F%2F127.0.0.1%3A35547%2Fcallback%2Fxyz';
+      harness.ctx._session.terminalBuffer =
+        'Root cause: URLs like ' +
+        authUrl +
+        ' could be present in history but missing from browser-rendered terminal replay.\n' +
+        "+        'Authorize `atlassian` by opening this URL in your browser:\\n' +\n";
+      harness.ctx._session.mode = 'codex';
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(
+        () => 'visible tmux pane only\n› current prompt'
+      );
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.terminalBuffer).toContain(authUrl);
+      expect(body.data.terminalBuffer).toContain('visible tmux pane only');
+    });
+
+    it('preserves accumulated history before a live mux pane snapshot for non-Codex sessions', async () => {
+      harness.ctx._session.terminalBuffer = 'hello world\nlater accumulated history';
+      harness.ctx._session.mode = 'claude';
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(
+        () => 'visible tmux pane only\n› current prompt'
+      );
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.terminalBuffer).toContain('hello world');
+      expect(body.data.terminalBuffer).toContain('later accumulated history');
+      expect(body.data.terminalBuffer).toContain('visible tmux pane only');
+      expect(body.data.terminalBuffer).toContain('\x1b[H\x1b[2Jvisible tmux pane only');
+      expect(body.data.terminalBuffer.indexOf('hello world')).toBeLessThan(
+        body.data.terminalBuffer.indexOf('visible tmux pane only')
+      );
+      expect(harness.ctx.mux.captureActivePaneBuffer).toHaveBeenCalledWith(harness.ctx._session.muxName, undefined);
+    });
+
+    it('uses live mux pane capture only when the accumulated buffer is empty', async () => {
+      harness.ctx._session.terminalBuffer = '';
+      harness.ctx._session.mode = 'codex';
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(
+        () => 'visible restored tmux pane\n› current prompt'
+      );
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.terminalBuffer).toContain('visible restored tmux pane');
+      expect(body.data.terminalBuffer).toContain('› current prompt');
+      expect(harness.ctx.mux.captureActivePaneBuffer).toHaveBeenCalledWith(harness.ctx._session.muxName, undefined);
+    });
+
     it('returns error for unknown session', async () => {
       const res = await harness.app.inject({
         method: 'GET',
@@ -506,7 +984,7 @@ describe('session-routes', () => {
       expect(buf).toContain('\x1b[H\x1b[2J');
       expect(buf).toContain('LIVE-PANE-FRAME');
       expect(buf.indexOf('history-bytes')).toBeLessThan(buf.indexOf('LIVE-PANE-FRAME'));
-      expect(harness.ctx.mux.captureActivePaneBuffer).toHaveBeenCalledWith(harness.ctx._session.muxName);
+      expect(harness.ctx.mux.captureActivePaneBuffer).toHaveBeenCalledWith(harness.ctx._session.muxName, undefined);
     });
 
     it('falls back to the byte history when no live pane buffer is available', async () => {
@@ -608,6 +1086,54 @@ describe('session-routes', () => {
       const body = JSON.parse(res.body);
       expect(body.success).toBe(false);
     });
+
+    // COD-118: this endpoint is ALSO the frontend's automatic re-attach path, so it
+    // must never clear a tripped PTY-exit breaker unless the request explicitly asks.
+    it('does NOT clear the PTY-exit breaker on an automatic re-attach (no body)', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/interactive`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(harness.ctx._session.resetRespawnBreaker).not.toHaveBeenCalled();
+      expect(harness.ctx._session.startInteractive).toHaveBeenCalled();
+    });
+
+    it('clears the PTY-exit breaker when the explicit restart flag is sent (COD-118)', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/interactive`,
+        payload: { clearBreaker: true },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(harness.ctx._session.resetRespawnBreaker).toHaveBeenCalledTimes(1);
+      expect(harness.ctx._session.startInteractive).toHaveBeenCalled();
+    });
+
+    it('rejects a non-boolean clearBreaker flag', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/interactive`,
+        payload: { clearBreaker: 'yes' },
+      });
+      expect(res.statusCode).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe(ApiErrorCode.INVALID_INPUT);
+      expect(harness.ctx._session.resetRespawnBreaker).not.toHaveBeenCalled();
+      expect(harness.ctx._session.startInteractive).not.toHaveBeenCalled();
+    });
+
+    // COD-118: the wiring exit handler detaches ALL session listeners on PTY exit;
+    // re-attach must restore them or later trips/output go unobserved.
+    it('re-runs session listener wiring before starting', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/interactive`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(harness.ctx.setupSessionListeners).toHaveBeenCalledWith(harness.ctx._session);
+    });
   });
 
   // ========== POST /api/sessions/:id/shell ==========
@@ -622,6 +1148,8 @@ describe('session-routes', () => {
       const body = JSON.parse(res.body);
       expect(body.success).toBe(true);
       expect(harness.ctx._session.startShell).toHaveBeenCalled();
+      // COD-118: re-attach restores listener wiring detached by a prior PTY exit.
+      expect(harness.ctx.setupSessionListeners).toHaveBeenCalledWith(harness.ctx._session);
     });
 
     it('returns error if session is busy', async () => {
@@ -765,6 +1293,142 @@ describe('session-routes', () => {
   // ========== POST /api/sessions (with resumeSessionId) ==========
 
   describe('POST /api/sessions with resumeSessionId', () => {
+    it('creates session from a remote case without local stat validation', async () => {
+      // Remote cases go through /api/quick-start which skips local stat() of the workingDir.
+      // /api/sessions always requires workingDir to exist on the local filesystem.
+      const startShell = vi.spyOn(Session.prototype, 'startShell').mockResolvedValue(undefined);
+      try {
+        remoteStore.hosts = [
+          {
+            id: 'gpu-box',
+            label: 'GPU Box',
+            host: '10.0.0.42',
+            username: 'ubuntu',
+            commands: { codex: 'exec codx personal' },
+          },
+        ];
+        remoteStore.cases = [{ name: 'gpu-work', type: 'remote', hostId: 'gpu-box', remotePath: '/home/ubuntu/work' }];
+
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: '/api/quick-start',
+          payload: { caseName: 'gpu-work', mode: 'shell', name: 'Remote Shell' },
+        });
+
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+        expect(body.success).toBe(true);
+        expect(body.data.casePath).toBe('/home/ubuntu/work');
+        const session = [...harness.ctx.sessions.values()].find((item) => item.id === body.data.sessionId);
+        expect(session?.toState()).toMatchObject({
+          workingDir: '/home/ubuntu/work',
+          remote: expect.objectContaining({
+            hostId: 'gpu-box',
+            host: '10.0.0.42',
+            username: 'ubuntu',
+            remotePath: '/home/ubuntu/work',
+            commands: { codex: 'exec codx personal' },
+          }),
+        });
+      } finally {
+        startShell.mockRestore();
+      }
+    });
+
+    it('quick-start creates remote case sessions through ssh metadata', async () => {
+      const startShell = vi.spyOn(Session.prototype, 'startShell').mockResolvedValue(undefined);
+      try {
+        remoteStore.hosts = [
+          {
+            id: 'gpu-box',
+            label: 'GPU Box',
+            host: '10.0.0.42',
+            username: 'ubuntu',
+            commands: { codex: 'exec codx personal' },
+          },
+        ];
+        remoteStore.cases = [{ name: 'gpu-work', type: 'remote', hostId: 'gpu-box', remotePath: '/home/ubuntu/work' }];
+
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: '/api/quick-start',
+          payload: { caseName: 'gpu-work', mode: 'shell' },
+        });
+
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+        expect(body.success).toBe(true);
+        expect(body.data.casePath).toBe('/home/ubuntu/work');
+        const session = [...harness.ctx.sessions.values()].find((item) => item.id === body.data.sessionId);
+        expect(session?.toState()).toMatchObject({
+          workingDir: '/home/ubuntu/work',
+          remote: expect.objectContaining({
+            hostId: 'gpu-box',
+            host: '10.0.0.42',
+            username: 'ubuntu',
+            remotePath: '/home/ubuntu/work',
+          }),
+        });
+      } finally {
+        startShell.mockRestore();
+      }
+    });
+
+    it('rejects a remote quick-start that carries envOverrides (inert over ssh)', async () => {
+      remoteStore.hosts = [{ id: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu' }];
+      remoteStore.cases = [{ name: 'gpu-work', type: 'remote', hostId: 'gpu-box', remotePath: '/home/ubuntu/work' }];
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/quick-start',
+        payload: { caseName: 'gpu-work', mode: 'claude', envOverrides: { CLAUDE_CODE_FOO: 'bar' } },
+      });
+
+      expect(res.statusCode).toBe(httpStatusForErrorCode(ApiErrorCode.INVALID_INPUT));
+      expect(JSON.parse(res.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.INVALID_INPUT });
+    });
+
+    it('rejects a remote quick-start when the remote host lacks tmux', async () => {
+      remoteStore.hosts = [{ id: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu' }];
+      remoteStore.cases = [{ name: 'gpu-work', type: 'remote', hostId: 'gpu-box', remotePath: '/home/ubuntu/work' }];
+      remoteStore.tmuxCheck = {
+        ok: false,
+        error: 'remote host 10.0.0.42 needs tmux installed for durable remote sessions',
+      };
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/quick-start',
+        payload: { caseName: 'gpu-work', mode: 'shell' },
+      });
+
+      expect(res.statusCode).toBe(httpStatusForErrorCode(ApiErrorCode.OPERATION_FAILED));
+      expect(JSON.parse(res.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.OPERATION_FAILED });
+    });
+
+    it('does not run local codex availability check for a remote codex case', async () => {
+      // A remote codex case must NOT be blocked by the LOCAL codex availability gate
+      // (the CLI runs on the remote host). Probe is stubbed ok in remoteStore.tmuxCheck.
+      const startInteractive = vi.spyOn(Session.prototype, 'startInteractive').mockResolvedValue(undefined);
+      try {
+        remoteStore.hosts = [
+          { id: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu', commands: { codex: 'exec codx' } },
+        ];
+        remoteStore.cases = [{ name: 'gpu-work', type: 'remote', hostId: 'gpu-box', remotePath: '/home/ubuntu/work' }];
+
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: '/api/quick-start',
+          payload: { caseName: 'gpu-work', mode: 'codex' },
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(res.body).success).toBe(true);
+      } finally {
+        startInteractive.mockRestore();
+      }
+    });
+
     it('creates session with valid resumeSessionId', async () => {
       const res = await harness.app.inject({
         method: 'POST',

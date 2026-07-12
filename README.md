@@ -45,6 +45,7 @@ codeman web
 <summary><strong>Run as a background service</strong></summary>
 
 **Linux (systemd):**
+
 ```bash
 mkdir -p ~/.config/systemd/user
 cat > ~/.config/systemd/user/codeman-web.service << EOF
@@ -67,6 +68,7 @@ loginctl enable-linger $USER
 ```
 
 **macOS (launchd):**
+
 ```bash
 mkdir -p ~/Library/LaunchAgents
 cat > ~/Library/LaunchAgents/com.codeman.web.plist << EOF
@@ -94,6 +96,7 @@ cat > ~/Library/LaunchAgents/com.codeman.web.plist << EOF
 EOF
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.codeman.web.plist
 ```
+
 </details>
 
 <details>
@@ -104,7 +107,75 @@ wsl bash -c "curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/i
 ```
 
 Codeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). If you don't have WSL yet: run `wsl --install` in an admin PowerShell, reboot, open Ubuntu, then install your preferred AI coding CLI inside WSL ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), or [Codex](https://developers.openai.com/codex/cli)). After installing, `http://localhost:3000` is accessible from your Windows browser.
+
 </details>
+
+---
+
+## Using Codeman — A Human's Guide
+
+A start-to-finish walkthrough for driving Codeman from the browser. If you just installed, this is where to begin.
+
+### 1. Launch the server
+
+```bash
+codeman web                       # localhost:3000 (loopback only — safe default)
+codeman web --port 8080           # custom port (or set CODEMAN_PORT)
+codeman web --https               # self-signed TLS (only needed for remote access)
+codeman web -H 0.0.0.0            # bind LAN — REQUIRES CODEMAN_PASSWORD (see Security)
+```
+
+Open the printed URL. The page is a single dashboard; everything below happens there.
+
+### 2. Create your first session
+
+Click **+ New Session** (or **Quick Start**). A session is one AI CLI running in its own tmux-backed terminal. You choose:
+
+| Field                        | What it does                                                                                                        |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| **Working directory / case** | The folder the agent operates in. A "case" is just a named working dir Codeman remembers.                           |
+| **CLI / run mode**           | `Claude` (default), `OpenCode`, `Codex`, `Gemini`, or `Terminal` (plain shell).                                     |
+| **Model**                    | Per-session model (App Settings → Claude Model). A soft default — `/model` still works in-session.                  |
+| **Effort / Ultracode**       | Reasoning effort (`low`–`max`) or `ultracode` for dynamic multi-agent workflows. Switchable anytime with `/effort`. |
+
+Hit start — Codeman spawns the CLI via a real PTY and streams it to your browser over SSE.
+
+### 3. Read the dashboard
+
+- **Tabs (top)** — one per session. `Alt+1`-`9` to jump, `Ctrl+Tab` for next, drag to reorder.
+- **Terminal (center)** — a real `xterm.js` terminal; full TUIs render correctly. Type directly and press **Enter** to send. `Shift+Enter` inserts a newline.
+- **Side panels** — Respawn, Ralph, Orchestrator, Cron, Subagents, Settings (toggled from the toolbar).
+
+### 4. Talk to the agent
+
+- **Type prompts** straight into the terminal — input is delivered exactly-once even across reconnects (a dropped link never loses or double-sends a prompt).
+- **Paste or drag-and-drop images** directly into the session.
+- **Voice input** — `Ctrl+Shift+V` (Deepgram Nova-3, with auto-silence stop).
+- **Attachments** — register external files/docs and preview Office/PDF inline.
+
+### 5. Make it autonomous
+
+| Mode             | Use it for                                                                                                                        | Where              |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| **Respawn**      | Long unattended runs — auto-restarts the CLI on idle/limit, with adaptive timing. Presets: `solo-work`, `overnight-autonomous`, … | Respawn tab        |
+| **Ralph / Todo** | A self-driving loop that tracks a todo list and keeps working until done.                                                         | Ralph tab          |
+| **Orchestrator** | Turn one goal into a phased plan and drive it to completion across agents.                                                        | Orchestrator panel |
+| **Cron**         | Saved, named jobs on a schedule (`once`/`interval`/`daily`/`weekly`) that spawn a session and send a prompt when due.             | ⏰ Cron button     |
+| **Auto-resume**  | Automatically continue after a subscription rate-limit resets.                                                                    | Respawn tab (top)  |
+
+### 6. Reach it from anywhere
+
+- **Phone/tablet** — the UI is fully touch-optimized; scan the desktop **QR code** to log in without typing a password.
+- **Outside your network** — `./scripts/tunnel.sh start` opens a Cloudflare tunnel (set `CODEMAN_PASSWORD` first).
+- **SSH** — the `sc` chooser attaches to any session from a terminal (`sc` interactive, `sc 2` quick-attach, `sc -l` list).
+
+### 7. Operate & maintain
+
+- **App Settings** — model, effort, theme/skin, notifications, display toggles, per-CLI options.
+- **Self-update** — git-clone installs update in place from **Settings → Updates**.
+- **Deploy your own changes** — see [Development](#development).
+
+> ⚠️ **Safety:** if you're working _inside_ a Codeman-managed session (`echo $CODEMAN_MUX` → `1`), never run `tmux kill-session` / `pkill claude` directly — use the web UI or `./scripts/tmux-manager.sh`.
 
 ---
 
@@ -214,7 +285,7 @@ WATCHING → IDLE DETECTED → SEND UPDATE → /clear → /init → CONTINUE →
 ```
 
 - **Multi-layer idle detection** — completion messages, AI-powered idle check, output silence, token stability
-- **Auto-resume on usage limit** *(opt-in, off by default)* — when Claude halts on a subscription limit ("You've hit your limit · resets 3pm"), Codeman parses the reset time, waits it out plus a 2-minute safety buffer, then dismisses the rate-limit dialog and sends `continue` — so an overnight run survives the 5-hour window instead of stalling until morning. Recognizes every Claude Code limit-message format, retries if still limited, survives Codeman restarts, and holds respawn cycles while paused so `/clear` can't wipe the waiting conversation. Enable per session at the top of the Respawn tab
+- **Auto-resume on usage limit** _(opt-in, off by default)_ — when Claude halts on a subscription limit ("You've hit your limit · resets 3pm"), Codeman parses the reset time, waits it out plus a 2-minute safety buffer, then dismisses the rate-limit dialog and sends `continue` — so an overnight run survives the 5-hour window instead of stalling until morning. Recognizes every Claude Code limit-message format, retries if still limited, survives Codeman restarts, and holds respawn cycles while paused so `/clear` can't wipe the waiting conversation. Enable per session at the top of the Respawn tab
 - **Circuit breaker** — prevents respawn thrashing when Claude is stuck (CLOSED -> HALF_OPEN -> OPEN states, tracks consecutive no-progress and repeated errors)
 - **Health scoring** — 0-100 health score with component scores for cycle success, circuit breaker state, iteration progress, and stuck recovery
 - **Built-in presets** — `solo-work` (3s idle, 60min), `subagent-workflow` (45s, 240min), `team-lead` (90s, 480min), `ralph-todo` (8s, 480min), `overnight-autonomous` (10s, 480min)
@@ -260,10 +331,10 @@ The title is templated into the served HTML on first byte, so it's correct from 
 
 ### Smart Token Management
 
-| Threshold | Action | Result |
-|-----------|--------|--------|
+| Threshold       | Action          | Result                             |
+| --------------- | --------------- | ---------------------------------- |
 | **110k tokens** | Auto `/compact` | Context summarized, work continues |
-| **140k tokens** | Auto `/clear` | Fresh start with `/init` |
+| **140k tokens** | Auto `/clear`   | Fresh start with `/init`           |
 
 ### Notifications
 
@@ -298,8 +369,8 @@ PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xt
 - **Effort & Ultracode** — set a per-session default effort (`low`–`max`) or enable **ultracode** (dynamic multi-agent workflows). Soft defaults only — switchable anytime with `/effort` in-session. Extended-thinking budget is configurable too
 - **Voice input** — dictate prompts with Deepgram Nova-3 (Web Speech API fallback): toggle recording, auto-silence stop, live level meter (`Ctrl+Shift+V`)
 - **Image input** — paste or drag-and-drop images straight into a session
-- **Gesture control** *(opt-in)* — a MediaPipe hand-tracking overlay to grab/drag session windows and pinch buttons, hands-free. Enable with `CODEMAN_GESTURE=1` + App Settings → Display
-- **Multi-monitor span** *(macOS)* — one click opens a browser window maximized across all displays, so floating agent/gesture panels can cross the physical seam
+- **Gesture control** _(opt-in)_ — a MediaPipe hand-tracking overlay to grab/drag session windows and pinch buttons, hands-free. Enable with `CODEMAN_GESTURE=1` + App Settings → Display
+- **Multi-monitor span** _(macOS)_ — one click opens a browser window maximized across all displays, so floating agent/gesture panels can cross the physical seam
 - **CJK / IME input** — full composition support for Chinese / Japanese / Korean
 - **OS notifications & hostname-aware titles** — desktop alerts and tab titles are prefixed `codeman:<host>` so multi-host setups stay unambiguous
 
@@ -372,14 +443,14 @@ Every **60 seconds**, the server automatically rotates to a fresh token. The pre
 
 The design is informed by ["Demystifying the (In)Security of QR Code-based Login"](https://www.usenix.org/conference/usenixsecurity25/presentation/zhang-xin) (USENIX Security 2025), which found 47 of the top-100 websites vulnerable to QR auth attacks due to 6 critical design flaws across 42 CVEs. Codeman addresses all six:
 
-| USENIX Flaw | Mitigation |
-|-------------|------------|
-| **Flaw-1**: Missing single-use enforcement | Token atomically consumed on first scan — replays always fail |
-| **Flaw-2**: Long-lived tokens | 60s TTL with 90s grace, auto-rotation via timer |
-| **Flaw-3**: Predictable token generation | `crypto.randomBytes(32)` — 256-bit entropy. Short codes use rejection sampling to eliminate modulo bias |
-| **Flaw-4**: Client-side token generation | Server-side only — tokens never leave the server until embedded in the QR |
-| **Flaw-5**: Missing status notification | Desktop toast: *"Device [IP] authenticated via QR (Safari). Not you? [Revoke]"* — real-time QRLjacking detection |
-| **Flaw-6**: Inadequate session binding | IP + User-Agent stored for audit. Manual session revocation via API. HttpOnly + Secure + SameSite=lax cookies |
+| USENIX Flaw                                | Mitigation                                                                                                       |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| **Flaw-1**: Missing single-use enforcement | Token atomically consumed on first scan — replays always fail                                                    |
+| **Flaw-2**: Long-lived tokens              | 60s TTL with 90s grace, auto-rotation via timer                                                                  |
+| **Flaw-3**: Predictable token generation   | `crypto.randomBytes(32)` — 256-bit entropy. Short codes use rejection sampling to eliminate modulo bias          |
+| **Flaw-4**: Client-side token generation   | Server-side only — tokens never leave the server until embedded in the QR                                        |
+| **Flaw-5**: Missing status notification    | Desktop toast: _"Device [IP] authenticated via QR (Safari). Not you? [Revoke]"_ — real-time QRLjacking detection |
+| **Flaw-6**: Inadequate session binding     | IP + User-Agent stored for audit. Manual session revocation via API. HttpOnly + Secure + SameSite=lax cookies    |
 
 #### Timing-Safe Lookup
 
@@ -404,23 +475,23 @@ When someone authenticates via QR, the desktop shows a notification toast with t
 
 #### Threat Coverage
 
-| Threat | Why it doesn't work |
-|--------|-------------------|
-| **QR screenshot shared** | Single-use: consumed on first scan. 60s TTL: expired before the attacker can act. Desktop notification alerts you immediately. |
-| **Replay attack** | Atomic single-use consumption + 60s TTL. Old URLs always return 401. |
-| **Cloudflare edge logs** | Short code is an opaque 6-char lookup key, not the real 256-bit token. Single-use means replaying from logs always fails. |
-| **Brute force** | 56.8 billion combinations, ~2 valid at any time, dual-layer rate limiting blocks well before statistical feasibility. |
-| **QRLjacking** | 60s rotation forces real-time relay. Desktop toast provides instant detection. Self-hosted single-user context makes phishing implausible. |
-| **Timing attack** | Hash-based Map lookup — no string comparison timing leak. |
-| **Session cookie theft** | HttpOnly + Secure + SameSite=lax + 24h TTL. Manual revocation at `POST /api/auth/revoke`. |
+| Threat                   | Why it doesn't work                                                                                                                        |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **QR screenshot shared** | Single-use: consumed on first scan. 60s TTL: expired before the attacker can act. Desktop notification alerts you immediately.             |
+| **Replay attack**        | Atomic single-use consumption + 60s TTL. Old URLs always return 401.                                                                       |
+| **Cloudflare edge logs** | Short code is an opaque 6-char lookup key, not the real 256-bit token. Single-use means replaying from logs always fails.                  |
+| **Brute force**          | 56.8 billion combinations, ~2 valid at any time, dual-layer rate limiting blocks well before statistical feasibility.                      |
+| **QRLjacking**           | 60s rotation forces real-time relay. Desktop toast provides instant detection. Self-hosted single-user context makes phishing implausible. |
+| **Timing attack**        | Hash-based Map lookup — no string comparison timing leak.                                                                                  |
+| **Session cookie theft** | HttpOnly + Secure + SameSite=lax + 24h TTL. Manual revocation at `POST /api/auth/revoke`.                                                  |
 
 #### How It Compares
 
-| Platform | Model | Comparison |
-|----------|-------|------------|
-| **Discord** | Long-lived token, no confirmation, [repeatedly exploited](https://owasp.org/www-community/attacks/Qrljacking) | Codeman: single-use + TTL + notification |
-| **WhatsApp Web** | Phone confirms "Link device?", ~60s rotation | Comparable rotation; WhatsApp adds explicit confirmation (acceptable tradeoff for single-user) |
-| **Signal** | Ephemeral public key, E2E encrypted channel | Stronger crypto, but [exploited by Russian state actors in 2025](https://cloud.google.com/blog/topics/threat-intelligence/russia-targeting-signal-messenger) via social engineering despite it |
+| Platform         | Model                                                                                                         | Comparison                                                                                                                                                                                     |
+| ---------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Discord**      | Long-lived token, no confirmation, [repeatedly exploited](https://owasp.org/www-community/attacks/Qrljacking) | Codeman: single-use + TTL + notification                                                                                                                                                       |
+| **WhatsApp Web** | Phone confirms "Link device?", ~60s rotation                                                                  | Comparable rotation; WhatsApp adds explicit confirmation (acceptable tradeoff for single-user)                                                                                                 |
+| **Signal**       | Ephemeral public key, E2E encrypted channel                                                                   | Stronger crypto, but [exploited by Russian state actors in 2025](https://cloud.google.com/blog/topics/threat-intelligence/russia-targeting-signal-messenger) via social engineering despite it |
 
 > Full design rationale, security analysis, and implementation details: [`docs/qr-auth-plan.md`](docs/qr-auth-plan.md)
 
@@ -428,20 +499,20 @@ When someone authenticates via QR, the desktop shows a notification toast with t
 
 ## Security
 
-Codeman launches sessions with `--dangerously-skip-permissions`, so the web UI is by design a remote-code-execution surface for whoever can reach it — the whole security model exists to control *who* that is. Recent hardening (v0.9.0 + v0.9.5) closes the browser-driven attack paths that bite self-hosted dev tools. Full model: [`docs/security-architecture.md`](docs/security-architecture.md). **Found a vulnerability?** See [`SECURITY.md`](SECURITY.md) for private disclosure and the list of known limitations.
+Codeman launches sessions with `--dangerously-skip-permissions`, so the web UI is by design a remote-code-execution surface for whoever can reach it — the whole security model exists to control _who_ that is. Recent hardening (v0.9.0 + v0.9.5) closes the browser-driven attack paths that bite self-hosted dev tools. Full model: [`docs/security-architecture.md`](docs/security-architecture.md). **Found a vulnerability?** See [`SECURITY.md`](SECURITY.md) for private disclosure and the list of known limitations.
 
 ### Network & access
 
-- **Loopback by default** — binds `127.0.0.1`, reachable only from the same machine, so the no-password default is safe out of the box. Binding a non-loopback host without `CODEMAN_PASSWORD` *starts but prints a loud warning* with three concrete fixes (set a password, loopback + an authenticated tunnel, or explicitly acknowledge with `--allow-unauthenticated-network`)
+- **Loopback by default** — binds `127.0.0.1`, reachable only from the same machine, so the no-password default is safe out of the box. Binding a non-loopback host without `CODEMAN_PASSWORD` _starts but prints a loud warning_ with three concrete fixes (set a password, loopback + an authenticated tunnel, or explicitly acknowledge with `--allow-unauthenticated-network`)
 - **Optional auth, real sessions** — HTTP Basic via `CODEMAN_USERNAME` (default `admin`) / `CODEMAN_PASSWORD`. Success issues an opaque 256-bit `codeman_session` cookie (`randomBytes(32)`) — validated server-side, not client-signed, so it can't be forged offline (24h TTL, auto-extend, device-context audit log)
-- **Per-IP rate limiting** — 10 failed attempts → `429` with `Retry-After` (15-min decay). A valid cookie or correct password recovers *immediately* even while an attacker hammers the same IP — important because all tunnel traffic shares one loopback IP. QR auth has its own separate limiter
+- **Per-IP rate limiting** — 10 failed attempts → `429` with `Retry-After` (15-min decay). A valid cookie or correct password recovers _immediately_ even while an attacker hammers the same IP — important because all tunnel traffic shares one loopback IP. QR auth has its own separate limiter
 
 ### Always-on browser hardening (v0.9.5)
 
 These run for **every** request — before auth, even on the default no-password loopback install:
 
 - **Host-header allowlist → blocks DNS rebinding.** A custom domain rebound to `127.0.0.1` is rejected with `403 host not allowed` before any handler runs. Allowed: `localhost`, any IP literal, the bind host, `.ts.net` / `.trycloudflare.com` / `.cfargotunnel.com`, the active managed tunnel, and `CODEMAN_ALLOWED_HOSTS` (add custom reverse-proxy domains here — comma-separated; exact host or leading-dot `.suffix` for subdomains)
-- **Cross-site Origin / CSRF guard.** On state-changing methods (`POST`/`PUT`/`PATCH`/`DELETE`) the `Origin` must pass the same allowlist, else `403 cross-site request blocked`. A *missing* Origin is allowed (so `curl`, the CLI, and Claude Code hooks keep working); only a present-but-foreign or opaque `null` origin is rejected
+- **Cross-site Origin / CSRF guard.** On state-changing methods (`POST`/`PUT`/`PATCH`/`DELETE`) the `Origin` must pass the same allowlist, else `403 cross-site request blocked`. A _missing_ Origin is allowed (so `curl`, the CLI, and Claude Code hooks keep working); only a present-but-foreign or opaque `null` origin is rejected
 - **Raw `text/plain` bodies.** The global parser no longer JSON-parses `text/plain`, closing the CORS "simple request" CSRF vector where a cross-site `fetch` could smuggle JSON into a write route with no preflight
 - **WebSocket origin validation.** The terminal WS upgrade runs the same Host + Origin check and closes with code `4003` on failure (anti-CSWSH)
 - **XSS-escaped agent output.** AI-derived strings (tool names, command arguments, subagent descriptions) are HTML-escaped at every injection site before rendering in the subagent / activity panels
@@ -479,74 +550,177 @@ Single-digit selection (1-9), color-coded status, token counts, auto-refresh. De
 
 > Ctrl bindings also accept Cmd on macOS.
 
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl/Cmd+W` | Kill active session |
-| `Ctrl/Cmd+Tab` | Next session |
-| `Alt/Option+[` / `Alt/Option+]` | Previous / next session |
-| `Alt/Option+1`-`Alt/Option+9` | Switch to tab N (physical keys, so macOS Option layouts work) |
-| `Ctrl+Shift+{` / `Ctrl+Shift+}` | Move active tab left / right |
-| `Ctrl/Cmd+L` | Clear terminal |
-| `Ctrl+Shift+R` | Restore terminal size |
-| `Ctrl+Shift+V` | Toggle voice input |
-| `Ctrl/Cmd +` / `-` | Font size |
-| `Ctrl/Cmd+?` | Keyboard help |
-| `Shift+Enter` | Insert newline (sent to terminal) |
-| `Escape` | Close panels & modals |
+| Shortcut                        | Action                                                        |
+| ------------------------------- | ------------------------------------------------------------- |
+| `Ctrl/Cmd+W`                    | Kill active session                                           |
+| `Ctrl/Cmd/Option+K`             | Find open session or start a new one                          |
+| `Ctrl/Cmd+Tab`                  | Next session                                                  |
+| `Alt/Option+[` / `Alt/Option+]` | Previous / next session                                       |
+| `Alt/Option+1`-`Alt/Option+9`   | Switch to tab N (physical keys, so macOS Option layouts work) |
+| `Ctrl+Shift+{` / `Ctrl+Shift+}` | Move active tab left / right                                  |
+| `Ctrl/Cmd+L`                    | Clear terminal                                                |
+| `Ctrl+Shift+R`                  | Restore terminal size                                         |
+| `Ctrl+Shift+V`                  | Toggle voice input                                            |
+| `Ctrl/Cmd +` / `-`              | Font size                                                     |
+| `Ctrl/Cmd+?`                    | Keyboard help                                                 |
+| `Shift+Enter`                   | Insert newline (sent to terminal)                             |
+| `Escape`                        | Close panels & modals                                         |
+
+---
+
+## Driving Codeman from an Agent — Programmatic Guide
+
+For AI agents and automation that control Codeman without a browser: an agent that spins up worker sessions, a CI bot, or **Claude Code running _inside_ a Codeman session orchestrating other sessions**. Everything the UI does is HTTP + a CLI, so an agent can do it too.
+
+### Detect that you're inside Codeman
+
+When a CLI runs in a Codeman-managed session, these environment variables are set — read them instead of hardcoding anything:
+
+| Variable                   | Meaning                                                                                                                              |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `CODEMAN_MUX=1`            | You're in a managed tmux session. **Never** `tmux kill-session` / `pkill claude` / `pkill tmux` — you'll kill yourself or a sibling. |
+| `CODEMAN_API_URL`          | Base URL of the API (e.g. `https://127.0.0.1:3000`). Use it for every call below.                                                    |
+| `CODEMAN_SESSION_ID`       | _Your own_ session id. Use it to avoid acting on yourself.                                                                           |
+| `CODEMAN_HOOK_SECRET_FILE` | Path to the hook secret (required on `/api/hook-event` while a managed tunnel is up).                                                |
+
+### Rules of the road (read before you POST)
+
+1. **Single-line input only.** Programmatic input is sent as literal text **+ Enter** in one shot. Multi-line strings break the agent TUI (Ink) — send one line, or split into multiple calls.
+2. **Make input idempotent.** Include a stable `clientId` and a monotonic per-session `seq` on `POST …/input`. The server de-duplicates, so a retry after a dropped connection can't double-deliver a prompt.
+3. **Auth.** If `CODEMAN_PASSWORD` is set, send HTTP Basic auth (user `admin` or `CODEMAN_USERNAME`) or a `codeman_session` cookie. The default loopback install is passwordless. A missing `Origin` header is allowed, so plain `curl` works; cross-site browser origins are rejected (CSRF guard).
+4. **Response envelope.** Most endpoints return `{ "success": true, "data": … }` (errors: `{ "success": false, "error", "errorCode" }`). A few legacy GETs return bare bodies — **handle both** (`body.data ?? body`).
+5. **`/api/v1/*`** is a stable alias of `/api/*`.
+
+### Recipes
+
+```bash
+API="${CODEMAN_API_URL:-http://127.0.0.1:3000}"
+# (add  -u admin:"$CODEMAN_PASSWORD"  to each call if a password is set)
+
+# 1. See what's running
+curl -s "$API/api/sessions" | jq '.data // .'
+
+# 2. Spin up a worker session (a "case" = named working dir)
+curl -s -X POST "$API/api/quick-start" \
+  -H 'Content-Type: application/json' \
+  -d '{"caseName":"refactor-auth","mode":"claude","effort":"high"}' | jq
+
+# 3. Send a prompt into a session (exactly-once: clientId + seq)
+curl -s -X POST "$API/api/sessions/$SID/input" \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"Run the test suite and summarize failures","useMux":true,"clientId":"agent-1","seq":1}'
+
+# 4. Read the terminal back
+curl -s "$API/api/sessions/$SID/output" | jq -r '.data // .'
+
+# 5. Stream live events (session output, agent activity, status)
+curl -sN "$API/api/events"          # Server-Sent Events
+
+# 6. Schedule recurring work (cron-style job)
+curl -s -X POST "$API/api/cron/jobs" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"nightly-deps","agentType":"claude","workingDir":"/home/me/proj",
+       "promptMode":"inline_text","promptText":"Update dependencies and open a PR",
+       "inputMode":"typed","scheduleType":"daily","dailyTime":"03:00",
+       "enabled":true,"concurrencyPolicy":"warn_only"}' | jq
+
+# 7. Inspect background sub-agents and their transcripts
+curl -s "$API/api/subagents" | jq '.data // .'
+curl -s "$API/api/subagents/$AID/transcript" | jq -r '.data // .'
+
+# 8. Whole-system snapshot (sessions, settings, respawn, stats)
+curl -s "$API/api/status" | jq
+```
+
+### Or use the bundled CLI
+
+The same operations are available as commands (`codeman <cmd>`, aliases in parentheses) — handy from a shell tool inside a session:
+
+```bash
+codeman session start -d /path/to/repo   # (s)  start a session
+codeman session list                     #      list sessions
+codeman session logs <id>                #      tail output
+codeman task add "fix the failing test"  # (t)  queue a task
+codeman ralph start --min-hours 8        # (r)  launch the autonomous loop
+codeman attach <path>                     #      attach a Claude hook context
+```
+
+### Hooks (events flowing _back_ to Codeman)
+
+Codeman registers Claude Code hooks that `POST /api/hook-event` (`permission_prompt`, `idle_prompt`, `stop`, `task_completed`, …) so the dashboard reacts in real time. This endpoint is auth-exempt on loopback but, under a managed tunnel, requires the `X-Codeman-Hook-Secret` header (read it from `$CODEMAN_HOOK_SECRET_FILE`). You normally don't call this by hand — Codeman wires it up — but it's how the autonomy layers "see" what the agent is doing.
+
+> Full endpoint list and request/response shapes follow.
 
 ---
 
 ## API
 
-REST over Fastify — **~140 handlers across 15 route modules**, plus an SSE stream and a WebSocket terminal channel. A representative subset:
+REST over Fastify — **~160 handlers across 18 route modules**, plus an SSE stream and a WebSocket terminal channel. All responses use the `ApiResponse<T>` envelope (`{success, data}` / `{success, error, errorCode}`); `/api/v1/*` is a stable alias. A representative subset:
 
 ### Sessions
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/sessions` | List all |
-| `POST` | `/api/quick-start` | Create case + start session |
-| `DELETE` | `/api/sessions/:id` | Delete session |
-| `POST` | `/api/sessions/:id/input` | Send input |
+
+| Method   | Endpoint                   | Description                                                                        |
+| -------- | -------------------------- | ---------------------------------------------------------------------------------- |
+| `GET`    | `/api/sessions`            | List all                                                                           |
+| `POST`   | `/api/quick-start`         | Create case + start session (`{caseName?, mode?, effort?, envOverrides?}`)         |
+| `POST`   | `/api/sessions/:id/input`  | Send input (`{input, useMux?, clientId?, seq?}` — `clientId`+`seq` = exactly-once) |
+| `GET`    | `/api/sessions/:id/output` | Read terminal output                                                               |
+| `DELETE` | `/api/sessions/:id`        | Delete session                                                                     |
 
 ### Respawn
-| Method | Endpoint | Description |
-|--------|----------|-------------|
+
+| Method | Endpoint                           | Description                |
+| ------ | ---------------------------------- | -------------------------- |
 | `POST` | `/api/sessions/:id/respawn/enable` | Enable with config + timer |
-| `POST` | `/api/sessions/:id/respawn/stop` | Stop controller |
-| `PUT` | `/api/sessions/:id/respawn/config` | Update config |
+| `POST` | `/api/sessions/:id/respawn/stop`   | Stop controller            |
+| `PUT`  | `/api/sessions/:id/respawn/config` | Update config              |
 
 ### Ralph / Todo
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/sessions/:id/ralph-state` | Get loop state + todos |
-| `POST` | `/api/sessions/:id/ralph-config` | Configure tracking |
+
+| Method | Endpoint                         | Description            |
+| ------ | -------------------------------- | ---------------------- |
+| `GET`  | `/api/sessions/:id/ralph-state`  | Get loop state + todos |
+| `POST` | `/api/sessions/:id/ralph-config` | Configure tracking     |
 
 ### Orchestrator
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/orchestrator/start` | Start orchestration from a goal |
-| `POST` | `/api/orchestrator/approve` | Approve the generated plan |
-| `GET` | `/api/orchestrator/status` | Current phase + progress |
-| `POST` | `/api/orchestrator/stop` | Stop and clean up |
+
+| Method | Endpoint                    | Description                     |
+| ------ | --------------------------- | ------------------------------- |
+| `POST` | `/api/orchestrator/start`   | Start orchestration from a goal |
+| `POST` | `/api/orchestrator/approve` | Approve the generated plan      |
+| `GET`  | `/api/orchestrator/status`  | Current phase + progress        |
+| `POST` | `/api/orchestrator/stop`    | Stop and clean up               |
+
+### Cron (scheduled jobs)
+
+| Method           | Endpoint                     | Description             |
+| ---------------- | ---------------------------- | ----------------------- |
+| `GET` / `POST`   | `/api/cron/jobs`             | List / create cron jobs |
+| `PUT` / `DELETE` | `/api/cron/jobs/:id`         | Update / delete a job   |
+| `PUT`            | `/api/cron/jobs/:id/enabled` | Enable / disable        |
+| `POST`           | `/api/cron/jobs/:id/run`     | Run now                 |
+| `GET`            | `/api/cron/jobs/:id/runs`    | Run history             |
 
 ### Subagents
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/subagents` | List all background agents |
-| `GET` | `/api/subagents/:id` | Agent info and status |
-| `GET` | `/api/subagents/:id/transcript` | Full activity transcript |
-| `DELETE` | `/api/subagents/:id` | Kill agent process |
+
+| Method   | Endpoint                        | Description                |
+| -------- | ------------------------------- | -------------------------- |
+| `GET`    | `/api/subagents`                | List all background agents |
+| `GET`    | `/api/subagents/:id`            | Agent info and status      |
+| `GET`    | `/api/subagents/:id/transcript` | Full activity transcript   |
+| `DELETE` | `/api/subagents/:id`            | Kill agent process         |
 
 ### System
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/events` | SSE stream |
-| `GET` | `/api/status` | Full app state |
-| `POST` | `/api/hook-event` | Hook callbacks |
-| `GET` | `/api/system/update/check` | Check for a new release |
-| `POST` | `/api/system/update` | Self-update (git-clone installs) |
-| `POST` | `/api/clipboard` | Push text to all connected browsers (`{text}`) |
-| `GET` | `/api/sessions/:id/run-summary` | Timeline + stats |
+
+| Method | Endpoint                        | Description                                    |
+| ------ | ------------------------------- | ---------------------------------------------- |
+| `GET`  | `/api/events`                   | SSE stream                                     |
+| `GET`  | `/api/status`                   | Full app state                                 |
+| `POST` | `/api/hook-event`               | Hook callbacks                                 |
+| `GET`  | `/api/system/update/check`      | Check for a new release                        |
+| `POST` | `/api/system/update`            | Self-update (git-clone installs)               |
+| `POST` | `/api/clipboard`                | Push text to all connected browsers (`{text}`) |
+| `GET`  | `/api/sessions/:id/run-summary` | Timeline + stats                               |
 
 ---
 
@@ -624,14 +798,14 @@ See [CLAUDE.md](./CLAUDE.md) for full documentation.
 
 The codebase went through a comprehensive 7-phase refactoring that eliminated god objects, centralized configuration, and established modular architecture:
 
-| Phase | What changed | Impact |
-|-------|-------------|--------|
-| **Performance** | Cached endpoints, SSE adaptive batching, buffer chunking | Sub-16ms terminal latency |
-| **Route extraction** | `server.ts` split into 15 domain route modules + auth middleware + port interfaces | **−67%** server.ts LOC (6,736 → 2,254) |
-| **Domain splitting** | `types.ts` → 16 domain files, `ralph-tracker` → 7 files, `respawn-controller` → 5 files, `session` → 6 files | No more god files |
-| **Frontend modules** | `app.js` → 18 extracted modules across infra, domain & feature layers | app.js core down to **~3.4K LOC** |
-| **Config consolidation** | ~70 scattered magic numbers → 10 domain-focused config files | Zero cross-file duplicates |
-| **Test infrastructure** | Shared mock library, 12 route test files, consolidated MockSession | Testable route handlers via `app.inject()` |
+| Phase                    | What changed                                                                                                 | Impact                                     |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------ |
+| **Performance**          | Cached endpoints, SSE adaptive batching, buffer chunking                                                     | Sub-16ms terminal latency                  |
+| **Route extraction**     | `server.ts` split into 15 domain route modules + auth middleware + port interfaces                           | **−67%** server.ts LOC (6,736 → 2,254)     |
+| **Domain splitting**     | `types.ts` → 16 domain files, `ralph-tracker` → 7 files, `respawn-controller` → 5 files, `session` → 6 files | No more god files                          |
+| **Frontend modules**     | `app.js` → 18 extracted modules across infra, domain & feature layers                                        | app.js core down to **~3.4K LOC**          |
+| **Config consolidation** | ~70 scattered magic numbers → 10 domain-focused config files                                                 | Zero cross-file duplicates                 |
+| **Test infrastructure**  | Shared mock library, 12 route test files, consolidated MockSession                                           | Testable route handlers via `app.inject()` |
 
 Full details: [`docs/archive/code-structure-findings.md`](docs/archive/code-structure-findings.md)
 

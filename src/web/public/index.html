@@ -358,7 +358,7 @@
             <h3 class="history-title" id="historyTitle">Resume Conversation</h3>
             <div class="history-list" id="historyList"></div>
           </div>
-          <p class="welcome-hint">Or press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to start</p>
+          <p class="welcome-hint">Or click Run to start</p>
           <button class="welcome-ralph-link" onclick="app.showRalphWizard()">Start Ralph Loop &rarr;</button>
         </div>
       </div>
@@ -427,7 +427,7 @@
         <!-- Run AI -->
         <div class="toolbar-group">
           <div class="run-btn-group">
-            <button class="btn-toolbar btn-run" id="runBtn" onclick="app.run()" title="Run (Ctrl+Enter)">
+            <button class="btn-toolbar btn-run" id="runBtn" onclick="app.run()" title="Run">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               <span id="runBtnLabel">Run</span>
             </button>
@@ -469,7 +469,22 @@
             <button class="tab-count-btn" onclick="app.incrementShellCount()">+</button>
           </div>
           <div class="case-select-group">
-            <select id="quickStartCase" class="toolbar-select" title="Select case">
+            <div class="case-combobox" id="quickStartCasePicker">
+              <input
+                type="text"
+                id="quickStartCaseSearch"
+                class="case-combobox-input"
+                role="combobox"
+                aria-controls="quickStartCaseList"
+                aria-expanded="false"
+                aria-autocomplete="list"
+                autocomplete="off"
+                spellcheck="false"
+                title="Select case"
+              >
+              <div id="quickStartCaseList" class="case-combobox-list hidden" role="listbox"></div>
+            </div>
+            <select id="quickStartCase" class="toolbar-select case-native-select" title="Select case" aria-hidden="true" tabindex="-1">
               <option value="testcase">testcase</option>
             </select>
             <button class="btn-case-add" onclick="app.showCreateCaseModal()" title="Create new case">+</button>
@@ -541,6 +556,7 @@
       <div class="toolbar-right">
         <!-- Orchestrator button hidden until feature is ready -->
         <!-- <button class="btn-toolbar btn-sm" onclick="app.toggleOrchestratorPanel()" title="Orchestrator Loop">&#x2699; Orchestrator</button> -->
+        <button class="btn-toolbar btn-sm" onclick="app.openCron()" title="Cron Jobs">&#x23F0; Cron</button>
         <span class="version-display" id="versionDisplay" title="Codeman version">v0.0.0</span>
       </div>
     </footer>
@@ -554,18 +570,141 @@
           <button class="modal-close" onclick="app.closeHelp()" aria-label="Close help">&times;</button>
         </div>
         <div class="modal-body">
-          <div class="shortcuts-grid">
-            <div><kbd>Ctrl</kbd>+<kbd>W</kbd></div><div>Close Session</div>
-            <div><kbd>Ctrl</kbd>+<kbd>Tab</kbd></div><div>Next Session</div>
-            <div><kbd>Alt/Option</kbd>+<kbd>[</kbd> / <kbd>Alt/Option</kbd>+<kbd>]</kbd></div><div>Previous / Next Session</div>
-            <div><kbd>Alt/Option</kbd>+<kbd>1-9</kbd></div><div>Switch to Tab N</div>
-            <div><kbd>Ctrl</kbd>+<kbd>L</kbd></div><div>Clear Terminal</div>
-            <div><kbd>Shift</kbd>+<kbd>Wheel</kbd></div><div>Scroll local history (when mouse passthrough is active)</div>
-            <div><kbd>Ctrl</kbd>+<kbd>+</kbd></div><div>Increase Font</div>
-            <div><kbd>Ctrl</kbd>+<kbd>-</kbd></div><div>Decrease Font</div>
-            <div><kbd>Ctrl</kbd>+<kbd>?</kbd></div><div>Show Help</div>
-            <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd></div><div>Voice Input</div>
-            <div><kbd>Escape</kbd></div><div>Close Panels</div>
+          <section class="shortcut-section">
+            <h4>Session</h4>
+            <div class="shortcuts-grid">
+              <div><kbd>Ctrl</kbd>+<kbd>W</kbd></div><div>Close Session</div>
+              <div><kbd>Ctrl/Cmd/Option</kbd>+<kbd>K</kbd></div><div>Find Open Session</div>
+              <div><kbd>Ctrl</kbd>+<kbd>Tab</kbd></div><div>Next Session</div>
+              <div><kbd>Alt/Option</kbd>+<kbd>[</kbd> / <kbd>Alt/Option</kbd>+<kbd>]</kbd></div><div>Previous / Next Session</div>
+              <div><kbd>Alt/Option</kbd>+<kbd>1-9</kbd></div><div>Switch to Tab N</div>
+            </div>
+          </section>
+          <section class="shortcut-section">
+            <h4>Tabs</h4>
+            <div class="shortcuts-grid">
+              <div><kbd>Ctrl</kbd>+<kbd>{</kbd></div><div>Move Active Tab Left</div>
+              <div><kbd>Ctrl</kbd>+<kbd>}</kbd></div><div>Move Active Tab Right</div>
+              <div><kbd>ArrowLeft</kbd></div><div>Focus Previous Tab</div>
+              <div><kbd>ArrowRight</kbd></div><div>Focus Next Tab</div>
+              <div><kbd>Home</kbd></div><div>Focus First Tab</div>
+              <div><kbd>End</kbd></div><div>Focus Last Tab</div>
+              <div><kbd>Enter</kbd> / <kbd>Space</kbd></div><div>Activate Focused Tab</div>
+            </div>
+          </section>
+          <section class="shortcut-section">
+            <h4>Terminal</h4>
+            <div class="shortcuts-grid">
+              <div><kbd>Ctrl</kbd>+<kbd>L</kbd></div><div>Clear Terminal</div>
+              <div><kbd>Ctrl</kbd>+<kbd>+</kbd></div><div>Increase Font</div>
+              <div><kbd>Ctrl</kbd>+<kbd>-</kbd></div><div>Decrease Font</div>
+              <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd></div><div>Restore Terminal Size</div>
+              <div><kbd>Shift</kbd>+<kbd>Enter</kbd></div><div>Insert Newline</div>
+              <div><kbd>Ctrl</kbd>+<kbd>Enter</kbd></div><div>Insert Newline</div>
+              <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd></div><div>Voice Input</div>
+              <div><kbd>Shift</kbd>+<kbd>Wheel</kbd></div><div>Scroll local history (when mouse passthrough is active)</div>
+            </div>
+          </section>
+          <section class="shortcut-section">
+            <h4>Panels</h4>
+            <div class="shortcuts-grid">
+              <div><kbd>Ctrl</kbd>+<kbd>?</kbd></div><div>Show Shortcuts</div>
+              <div><kbd>Alt/Option</kbd>+<kbd>?</kbd></div><div>Show Shortcuts</div>
+              <div><kbd>Escape</kbd></div><div>Close Panels</div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cron Jobs Modal -->
+    <div class="modal" id="cronModal">
+      <div class="modal-backdrop" onclick="app.closeCron()"></div>
+      <div class="modal-content modal-lg">
+        <div class="modal-header">
+          <h3>Cron Jobs</h3>
+          <button class="modal-close" onclick="app.closeCron()" aria-label="Close cron">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="form-hint" style="margin-bottom:10px;">Times use the server's local timezone.</p>
+          <div style="margin-bottom:10px;">
+            <button class="btn-toolbar btn-sm btn-primary" onclick="app.openCronJobForm()">+ New Job</button>
+            <button class="btn-toolbar btn-sm" onclick="app.refreshCron()">Refresh</button>
+          </div>
+          <!-- Job list -->
+          <div id="cronJobList" class="cron-job-list"></div>
+
+          <!-- Create/Edit form (hidden until New/Edit) -->
+          <div id="cronJobForm" class="cron-job-form hidden">
+            <div class="form-section-header" id="cronFormTitle">New Cron Job</div>
+            <input type="hidden" id="schJobId">
+            <div class="form-row"><label>Name</label><input type="text" id="schName" placeholder="My nightly job"></div>
+            <div class="form-row"><label>Agent Type</label>
+              <select id="schAgentType" onchange="app.onCronAgentTypeChange()">
+                <option value="claude">Claude</option>
+                <option value="shell">Terminal / Shell</option>
+                <option value="opencode">OpenCode</option>
+                <option value="codex">Codex</option>
+                <option value="gemini">Gemini</option>
+              </select>
+            </div>
+            <div class="form-row"><label>Working Directory</label><input type="text" id="schWorkingDir" placeholder="/absolute/path"></div>
+            <div class="form-row hidden" id="schLaunchCommandRow"><label>Launch Command</label><input type="text" id="schLaunchCommand" placeholder="Optional — runs as the first command in the new shell"></div>
+            <div class="form-row"><label>Prompt Source</label>
+              <select id="schPromptMode" onchange="app.onCronPromptModeChange()">
+                <option value="inline_text">Inline text</option>
+                <option value="prompt_file_path">Prompt file path</option>
+              </select>
+            </div>
+            <div class="form-row" id="schPromptTextRow"><label>Prompt</label><textarea id="schPromptText" rows="4" placeholder="Prompt to send into the session"></textarea></div>
+            <div class="form-row hidden" id="schPromptFileRow"><label>Prompt File Path</label><input type="text" id="schPromptFilePath" placeholder="/absolute/path/to/prompt.md"></div>
+            <div class="form-row"><label>Input Mode</label>
+              <select id="schInputMode">
+                <option value="typed">Typed (via tmux)</option>
+                <option value="paste">Paste (direct)</option>
+              </select>
+            </div>
+            <div class="form-row"><label>Schedule Type</label>
+              <select id="schScheduleType" onchange="app.onCronScheduleTypeChange()">
+                <option value="once">Once</option>
+                <option value="interval">Interval</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+              </select>
+            </div>
+            <div class="form-row" id="schRunAtRow"><label>Run At</label><input type="datetime-local" id="schRunAt"></div>
+            <div class="form-row hidden" id="schIntervalRow"><label>Every (minutes)</label><input type="number" id="schIntervalMinutes" min="1" value="60"></div>
+            <div class="form-row hidden" id="schDailyRow"><label>Daily Time (HH:MM)</label><input type="time" id="schDailyTime"></div>
+            <div class="form-row hidden" id="schWeeklyDaysRow"><label>Weekdays</label>
+              <span id="schWeeklyDays" class="cron-weekdays">
+                <label><input type="checkbox" value="0">Sun</label>
+                <label><input type="checkbox" value="1">Mon</label>
+                <label><input type="checkbox" value="2">Tue</label>
+                <label><input type="checkbox" value="3">Wed</label>
+                <label><input type="checkbox" value="4">Thu</label>
+                <label><input type="checkbox" value="5">Fri</label>
+                <label><input type="checkbox" value="6">Sat</label>
+              </span>
+            </div>
+            <div class="form-row hidden" id="schWeeklyTimeRow"><label>Weekly Time (HH:MM)</label><input type="time" id="schWeeklyTime"></div>
+            <div class="form-row"><label>On auto-run, if same agent running</label>
+              <select id="schConcurrencyPolicy">
+                <option value="warn_only">Run anyway</option>
+                <option value="skip_if_same_agent_running">Skip this run</option>
+              </select>
+            </div>
+            <div class="form-row form-row-switch"><label title="Recurring schedules only: when the next run fires, the still-open session created by this job's previous run is closed first">Auto-close previous run's session</label>
+              <label class="switch"><input type="checkbox" id="schAutoClosePrev" checked><span class="slider"></span></label>
+            </div>
+            <div class="form-row form-row-switch"><label>Enabled</label>
+              <label class="switch"><input type="checkbox" id="schEnabled" checked><span class="slider"></span></label>
+            </div>
+            <div class="form-row"><label>Notes</label><input type="text" id="schNotes" placeholder="Optional"></div>
+            <div id="cronFormError" class="form-hint" style="color:var(--danger,#e55);"></div>
+            <div style="margin-top:10px;">
+              <button class="btn-toolbar btn-sm btn-primary" onclick="app.saveCronJob()">Save</button>
+              <button class="btn-toolbar btn-sm" onclick="app.cancelCronJobForm()">Cancel</button>
+            </div>
           </div>
         </div>
       </div>
@@ -997,6 +1136,7 @@
           <button class="modal-tab-btn" data-tab="settings-paths">Paths</button>
           <button class="modal-tab-btn" data-tab="settings-notifications">Notifications</button>
           <button class="modal-tab-btn" data-tab="settings-voice">Voice</button>
+          <button class="modal-tab-btn" data-tab="settings-shortcuts">Shortcuts</button>
         </div>
         <div class="modal-body">
           <!-- Display Tab -->
@@ -1610,10 +1750,40 @@
               </div>
             </div>
           </div>
+
+          <!-- Shortcuts tab -->
+          <div class="modal-tab-content hidden" id="settings-shortcuts">
+            <div class="settings-grid">
+              <div class="settings-section-header" style="grid-column: 1 / -1;">Keyboard Shortcuts</div>
+              <p class="form-hint" style="grid-column: 1 / -1; margin: 0 0 0.5rem;">
+                Customize keyboard shortcuts. Click the binding to capture a new key combination.
+              </p>
+              <div id="appSettingsShortcutsList" style="grid-column: 1 / -1;">
+                <!-- Populated by app.renderShortcutSettingsList() -->
+              </div>
+            </div>
+          </div>
         </div>
         <div class="form-actions">
           <button class="btn-toolbar" onclick="app.closeAppSettings()">Cancel</button>
           <button class="btn-toolbar btn-primary" onclick="app.saveAppSettings()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Shortcut Overlay Modal -->
+    <div class="modal shortcut-overlay-modal" id="shortcutOverlayModal" tabindex="-1">
+      <div class="modal-backdrop" onclick="app.closeShortcutOverlay()"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <span class="modal-title">Keyboard Shortcuts</span>
+          <button class="modal-close" onclick="app.closeShortcutOverlay()" aria-label="Close">&#x2715;</button>
+        </div>
+        <div class="modal-body">
+          <div id="shortcutOverlayList"></div>
+          <div class="shortcut-overlay-footer">
+            <button class="btn btn-sm" onclick="app.closeShortcutOverlay(); app.showHelp()">Full shortcut reference</button>
+          </div>
         </div>
       </div>
     </div>
@@ -1629,6 +1799,7 @@
         <div class="modal-tabs">
           <button class="modal-tab-btn active" data-tab="case-create">Create New</button>
           <button class="modal-tab-btn" data-tab="case-link">Link Existing</button>
+          <button class="modal-tab-btn" data-tab="case-remote">Remote</button>
           <button class="modal-tab-btn" data-tab="case-manage">Manage</button>
         </div>
         <div class="modal-body">
@@ -1656,6 +1827,66 @@
               <input type="text" id="linkCasePath" placeholder="/home/user/projects/my-project" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
               <span class="form-hint">Absolute path to an existing project folder, e.g. /home/you/my-project</span>
             </div>
+          </div>
+          <!-- Remote Tab -->
+          <div class="modal-tab-content hidden" id="case-remote">
+            <div class="form-row">
+              <label>Case Name</label>
+              <input type="text" id="remoteCaseName" placeholder="gpu-work" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
+              <span class="form-hint">Name to identify this remote case in Codeman</span>
+            </div>
+            <div class="form-row">
+              <label>Remote Path</label>
+              <input type="text" id="remoteCasePath" placeholder="/home/user/projects/work" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+              <span class="form-hint">Absolute path on the remote host. Codeman will not create or delete it.</span>
+            </div>
+            <div class="form-row">
+              <label>Host ID</label>
+              <input type="text" id="remoteHostId" placeholder="gpu-box" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
+            </div>
+            <div class="form-row">
+              <label>SSH Host/IP</label>
+              <input type="text" id="remoteHostAddress" placeholder="10.0.0.42" autocomplete="off" autocapitalize="off" spellcheck="false">
+            </div>
+            <div class="form-row">
+              <label>SSH Username</label>
+              <input type="text" id="remoteHostUsername" placeholder="ubuntu" autocomplete="off" autocapitalize="off" spellcheck="false">
+            </div>
+            <div class="form-row">
+              <label>SSH Port</label>
+              <input type="number" id="remoteHostPort" placeholder="22" min="1" max="65535" autocomplete="off">
+              <span class="form-hint">Optional. Leave blank for the default port 22.</span>
+            </div>
+            <div class="form-row">
+              <label>Codex Command Override</label>
+              <input type="text" id="remoteHostCodexCommand" placeholder="exec codx personal" autocomplete="off" autocapitalize="off" spellcheck="false">
+              <span class="form-hint">Optional. Leave blank to use exec codex on the remote host.</span>
+            </div>
+            <details class="advanced-options">
+              <summary>Advanced SSH</summary>
+              <div class="advanced-options-content">
+                <div class="form-row">
+                  <label>Identity File</label>
+                  <input type="text" id="remoteHostIdentityFile" placeholder="~/.ssh/remote_ed25519" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+                  <span class="form-hint">Optional. Path to a private key on this machine (passed to ssh -i). Never the key contents.</span>
+                </div>
+                <div class="form-row">
+                  <label>SOCKS Proxy</label>
+                  <input type="text" id="remoteHostSocksProxy" placeholder="127.0.0.1:1080" autocomplete="off" autocapitalize="off" spellcheck="false">
+                  <span class="form-hint">Optional. host:port of a SOCKS5 proxy (e.g. cloudflared). Routes ssh through it via a ProxyCommand.</span>
+                </div>
+                <div class="form-row">
+                  <label>Jump Host</label>
+                  <input type="text" id="remoteHostJumpHost" placeholder="bastion@10.0.0.1:22" autocomplete="off" autocapitalize="off" spellcheck="false">
+                  <span class="form-hint">Optional. [user@]host[:port] for ssh -J (jump/bastion host).</span>
+                </div>
+                <div class="form-row">
+                  <label>Extra -o Options</label>
+                  <textarea id="remoteHostExtraSshOptions" rows="3" placeholder="StrictHostKeyChecking=accept-new&#10;ConnectTimeout=10" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+                  <span class="form-hint">Optional. One KEY=VALUE per line; each becomes an ssh -o option.</span>
+                </div>
+              </div>
+            </details>
           </div>
           <!-- Manage Tab -->
           <div class="modal-tab-content hidden" id="case-manage">
@@ -1956,6 +2187,20 @@
       </div>
     </div>
 
+    <!-- Command Palette Modal -->
+    <div class="modal command-palette-modal" id="commandPaletteModal">
+      <div class="modal-backdrop" onclick="app.closeCommandPalette()"></div>
+      <div class="command-palette-shell" role="dialog" aria-modal="true" aria-labelledby="commandPaletteTitle">
+        <div class="command-palette-input-row">
+          <span class="command-palette-search-icon" aria-hidden="true">⌕</span>
+          <input type="search" id="commandPaletteSearch" class="command-palette-search" placeholder="Search open sessions or start a new one" autocomplete="off" maxlength="160" aria-labelledby="commandPaletteTitle">
+          <kbd>Esc</kbd>
+        </div>
+        <div class="command-palette-label" id="commandPaletteTitle">Open sessions</div>
+        <div id="commandPaletteList" class="command-palette-list"></div>
+      </div>
+    </div>
+
     <!-- Session Manager Modal -->
     <div class="modal" id="sessionManagerModal">
       <div class="modal-backdrop" onclick="app.closeSessionManager()"></div>
@@ -1970,6 +2215,7 @@
         </div>
       </div>
     </div>
+
 
     <!-- Token Stats Modal -->
     <div class="modal" id="tokenStatsModal">
@@ -2079,6 +2325,7 @@
   <script defer src="respawn-ui.js"></script>
   <script defer src="ralph-panel.js"></script>
   <script defer src="orchestrator-panel.js"></script>
+  <script defer src="cron-ui.js"></script>
   <script defer src="settings-ui.js"></script>
   <script defer src="panels-ui.js"></script>
   <script defer src="ultracode-panel.js"></script>

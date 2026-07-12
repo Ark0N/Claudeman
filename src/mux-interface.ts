@@ -17,6 +17,7 @@ import type {
   CodexConfig,
   EffortLevel,
   GeminiConfig,
+  SessionRemote,
 } from './types.js';
 
 /**
@@ -33,6 +34,8 @@ export interface MuxSession {
   createdAt: number;
   /** Working directory */
   workingDir: string;
+  /** Remote execution metadata for local tmux sessions wrapping SSH */
+  remote?: SessionRemote;
   /** Session mode */
   mode: SessionMode;
   /** Whether webserver is attached to this session */
@@ -74,6 +77,8 @@ export interface CreateSessionOptions {
   effort?: EffortLevel;
   /** tmux history-limit (scrollback lines) to set for this session. */
   historyLimit?: number;
+  /** Remote execution metadata for local tmux sessions wrapping SSH */
+  remote?: SessionRemote;
 }
 
 /** Options for respawning a dead pane. */
@@ -96,6 +101,22 @@ export interface RespawnPaneOptions {
   effort?: EffortLevel;
   /** tmux history-limit (scrollback lines) to set for this session after respawn. */
   historyLimit?: number;
+  /** Remote execution metadata for local tmux sessions wrapping SSH */
+  remote?: SessionRemote;
+}
+
+/** Options for pane buffer capture (COD-47 full-history mode). */
+export interface PaneCaptureOptions {
+  /** Capture the entire tmux scrollback instead of just the visible frame. */
+  fullHistory?: boolean;
+  /** Bound the full-history capture to this many scrollback lines (`-S -<N>`). */
+  historyLimitLines?: number;
+  /**
+   * Byte cap the consumer will keep from the capture. Sizes the child-process
+   * stdout buffer (with slack) so multi-MB scrollback dumps aren't killed by
+   * the 1MB execSync default (ENOBUFS).
+   */
+  maxCaptureBytes?: number;
 }
 
 /**
@@ -225,9 +246,16 @@ export interface TerminalMultiplexer extends EventEmitter {
   /** Respawn a dead pane with a fresh command. Returns the new PID or null on failure. */
   respawnPane(options: RespawnPaneOptions): Promise<number | null>;
 
-  /** Capture a pane's current tmux buffer with ANSI escape codes preserved. */
-  capturePaneBuffer?(muxName: string, paneTarget: string): string | null;
+  /**
+   * Capture a pane's current tmux buffer with ANSI escape codes preserved.
+   * Pass `{ fullHistory: true }` to capture the entire scrollback as linear
+   * text instead of just the visible single-screen frame (COD-47).
+   */
+  capturePaneBuffer?(muxName: string, paneTarget?: string, opts?: PaneCaptureOptions): string | null;
 
-  /** Capture the active pane's current tmux buffer with ANSI escape codes preserved. */
-  captureActivePaneBuffer?(muxName: string): string | null;
+  /**
+   * Capture the active pane's current tmux buffer with ANSI escape codes preserved.
+   * Pass `{ fullHistory: true }` to capture the entire scrollback (COD-47).
+   */
+  captureActivePaneBuffer?(muxName: string, opts?: PaneCaptureOptions): string | null;
 }

@@ -120,12 +120,28 @@ Object.assign(CodemanApp.prototype, {
     this.terminal.attachCustomKeyEventHandler((ev) => {
       if (ev.isComposing || ev.keyCode === 229) return false;
 
-      // Let the app's Alt/Option session-nav shortcuts reach the document keydown handler
+      // Let the app's Alt/Option session-nav and Command Palette shortcuts reach the document keydown handler
       // (app.js switches tabs by PHYSICAL e.code) instead of xterm injecting ESC<char> into
       // the PTY. Mirror app.js's gate exactly — same physical codes + modifier guard — so
-      // macOS Option layouts (Option+1 -> "¡", Option+[ -> "“") are suppressed here too and
+      // macOS Option layouts (Option+1 -> "¡", Option+[ -> "“", Option+K -> "˚") are suppressed here too and
       // don't leak an escape sequence into the focused terminal on every tab switch.
-      if (ev.altKey && !ev.ctrlKey && !ev.shiftKey && /^(Digit[1-9]|BracketLeft|BracketRight)$/.test(ev.code || '')) {
+      if (
+        ev.altKey &&
+        !ev.ctrlKey &&
+        !ev.shiftKey &&
+        /^(Digit[1-9]|BracketLeft|BracketRight|KeyK)$/.test(ev.code || '')
+      ) {
+        return false;
+      }
+
+      // Command palette chord (COD-153): keep it out of the PTY. The document
+      // CAPTURE handler has already opened the palette by the time xterm sees
+      // this keydown, but its preventDefault() does NOT stop xterm — without
+      // this gate Ctrl+K would ALSO write 0x0b (readline kill-line) into the
+      // live session behind the palette, truncating whatever the user had
+      // typed. Route through the registry-aware checker so a rebound or
+      // disabled palette shortcut restores normal terminal Ctrl+K.
+      if (ev.type === 'keydown' && this.shouldOpenCommandPaletteFromShortcut?.(ev)) {
         return false;
       }
 
@@ -1178,6 +1194,7 @@ Object.assign(CodemanApp.prototype, {
    * @param {Array} cases linked cases (for #caseName label)
    * @param {object} [options]
    * @param {boolean} [options.showViewAll=true] show "View all in folder" button in detail panel
+   * @param {Function} [options.onActivate] main-row click handler override (default: resume the conversation)
    */
   _buildHistoryItem(s, cases, options) {
     const showViewAll = options?.showViewAll !== false;
@@ -1220,16 +1237,25 @@ Object.assign(CodemanApp.prototype, {
     item.className = 'history-item';
     item.title = s.workingDir || '';
 
-    // Main row: clickable surface that triggers resume (or focuses the live tab).
+    // Main row: clickable surface. A caller-supplied onActivate wins (the
+    // Session Manager routes live rows to selectSession and history rows to
+    // resume). Otherwise the default focuses the live tab when the row is a
+    // still-running session, else resumes the conversation — keyed by the Claude
+    // conversation UUID (claudeSessionId) when present, since resumed sessions
+    // carry theirs separately from their Codeman id.
     const mainRow = document.createElement('div');
     mainRow.className = 'history-item-main';
-    mainRow.addEventListener('click', () => {
-      if (isLive && this.sessions.has(s.sessionId)) {
-        this.selectSession(s.sessionId);
-      } else {
-        this.resumeHistorySession(s.sessionId, s.workingDir || '');
-      }
-    });
+    mainRow.addEventListener(
+      'click',
+      options?.onActivate ||
+        (() => {
+          if (isLive && this.sessions.has(s.sessionId)) {
+            this.selectSession(s.sessionId);
+          } else {
+            this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '');
+          }
+        })
+    );
 
     const textCol = document.createElement('div');
     textCol.className = 'history-item-text';
@@ -2247,11 +2273,25 @@ Object.assign(CodemanApp.prototype, {
    * Complete a buffer load: unblock live SSE writes.
    * Called when chunkedTerminalWrite finishes (or is skipped for empty buffers).
    *
-   * Queued SSE events are DISCARDED, not flushed. The loaded buffer from the API
-   * is the source of truth up to the response timestamp. SSE events queued during
-   * the fetch+write overlap with the buffer — flushing them writes duplicate data
-   * (especially Ink cursor-up redraws), corrupting the terminal display.
+   * By default queued SSE events are DISCARDED, not flushed. For an established
+   * session the loaded buffer from the API is the source of truth up to the
+   * response timestamp; SSE events queued during the fetch+write overlap already
+   * appear in that buffer, so flushing them writes duplicate data (especially Ink
+   * cursor-up redraws), corrupting the terminal display.
+   *
+   * COD-144: a brand-new session is the exception. Its terminal fetch can resolve
+   * BEFORE the PTY emits its first prompt, so the fetched buffer is empty and the
+   * prompt arrives only as a queued SSE event. Discarding it leaves the terminal
+   * blank until a tab-switch re-fetches a now-populated buffer. When the caller
+   * knows the load painted nothing (empty fetch + no cache), it passes
+   * `{ flushQueued: true }` so the queued events are REPLAYED through
+   * `batchTerminalWrite()` instead of dropped. Replay runs after `_isLoadingBuffer`
+   * is cleared, so the events write through normally and are not re-queued.
+   *
    * After unblocking, new SSE/WS events deliver subsequent output normally.
+   *
+   * @param {string} [owner] Load token from `_beginBufferLoad`; a stale owner is a no-op.
+   * @param {{ flushQueued?: boolean }} [opts] When `flushQueued` is true, replay any queued events.
    */
   _beginBufferLoad(owner) {
     if (this._bufferLoadSeq === undefined) this._bufferLoadSeq = 0;
@@ -2262,13 +2302,21 @@ Object.assign(CodemanApp.prototype, {
     return loadOwner;
   },
 
-  _finishBufferLoad(owner) {
+  _finishBufferLoad(owner, opts) {
     if (owner !== undefined && this._bufferLoadOwner !== owner) {
       return false;
     }
+    const queued = this._loadBufferQueue;
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
     this._bufferLoadOwner = null;
+    // COD-144: replay (rather than discard) queued live events when the load
+    // painted nothing — the queued prompt is the only content a new session has.
+    if (opts?.flushQueued && queued && queued.length) {
+      for (const data of queued) {
+        this.batchTerminalWrite(data);
+      }
+    }
     return true;
   },
 

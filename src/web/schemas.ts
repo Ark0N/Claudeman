@@ -271,6 +271,94 @@ export const CreateCaseSchema = z.object({
   description: z.string().max(1000).optional(),
 });
 
+const RemoteCommandOverridesSchema = z
+  .object({
+    shell: z.string().min(1).max(300).optional(),
+    claude: z.string().min(1).max(300).optional(),
+    opencode: z.string().min(1).max(300).optional(),
+    codex: z.string().min(1).max(300).optional(),
+    gemini: z.string().min(1).max(300).optional(),
+  })
+  .strict()
+  .optional();
+
+// COD-107 — advanced SSH connection options. These ultimately exec as shell
+// (ProxyCommand etc.), but are OPERATOR-entered host config (never attacker- or
+// terminal-output-influenced), so we validate as defense-in-depth, not as the
+// security boundary. Reject newline/NUL/backtick/`$(` shell-injection vectors.
+const NO_SHELL_INJECTION = /^[^\n\r\0`]*$/;
+const noCommandSubstitution = (s: string) => !s.includes('$(');
+
+// `remotePath`/`identityFile` are shell-escaped, then the whole launch command is
+// embedded via `JSON.stringify(...)` inside `bash -c "..."` (tmux-manager). That
+// outer DOUBLE-quote layer re-exposes `$(...)`, backticks, and `$VAR` even though
+// the inner value is single-quoted — so a `$(cmd)` in the path would run LOCALLY at
+// launch. Reject `$` and backtick (and newline/CR/NUL) entirely at the boundary.
+const NO_SHELL_META = /^[^\n\r\0`$]*$/;
+
+export const RemoteHostSchema = z.object({
+  id: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid remote host id'),
+  label: z.string().min(1).max(100),
+  host: z
+    .string()
+    .min(1)
+    .max(255)
+    .regex(/^[a-zA-Z0-9._:-]+$/, 'Invalid SSH host'),
+  username: z
+    .string()
+    .min(1)
+    .max(100)
+    .regex(/^[a-zA-Z0-9._-]+$/, 'Invalid SSH username'),
+  port: z.number().int().min(1).max(65535).optional(),
+  // Identity (private-key) file PATH only — never key bytes. Reject shell
+  // metacharacters ($, backtick) that survive into the `bash -c` launch layer.
+  identityFile: z.string().min(1).max(4096).regex(NO_SHELL_META, 'Invalid identity file path').optional(),
+  // SOCKS5 proxy as host:port (e.g. 127.0.0.1:1080).
+  socksProxy: z
+    .string()
+    .regex(/^[\w.-]+:\d{1,5}$/, 'SOCKS proxy must be host:port')
+    .optional(),
+  // SSH jump host: a comma-separated chain of [user@]host[:port] hops. Structural
+  // ALLOWLIST (not an open denylist) — only chars valid in user/host/port/IPv6,
+  // so no shell metacharacter (;, |, &, space, $, quotes, …) can appear. The value
+  // is also shellescaped at command-build time (buildSshConnectionArgs); this is the
+  // belt to that suspenders.
+  jumpHost: z
+    .string()
+    .min(1)
+    .max(255)
+    .regex(
+      /^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.:[\]-]+(?::\d{1,5})?(?:,(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.:[\]-]+(?::\d{1,5})?)*$/,
+      'Jump host must be [user@]host[:port] (comma-separated for multiple hops)'
+    )
+    .optional(),
+  // Arbitrary extra -o KEY=VALUE options (escape hatch); each must be KEY=VALUE.
+  extraSshOptions: z
+    .array(
+      z
+        .string()
+        .min(3)
+        .max(1024)
+        .regex(/^[A-Za-z][A-Za-z0-9]*=.+$/, 'Extra SSH option must be KEY=VALUE')
+        .regex(NO_SHELL_INJECTION, 'Invalid characters in SSH option')
+        .refine(noCommandSubstitution, 'Invalid characters in SSH option')
+    )
+    .max(32)
+    .optional(),
+  commands: RemoteCommandOverridesSchema,
+});
+
+export const RemoteCaseLinkSchema = z.object({
+  name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format'),
+  hostId: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid remote host id'),
+  remotePath: z
+    .string()
+    .min(1)
+    .max(2000)
+    .regex(/^\//, 'Remote path must be absolute')
+    .regex(NO_SHELL_META, 'Invalid characters in remote path'),
+});
+
 // ========== Quick Start ==========
 
 /**
@@ -603,6 +691,73 @@ export const ScheduledRunSchema = z.object({
   durationMinutes: z.number().int().min(1).max(14400).optional(),
 });
 
+// ========== Cron Jobs ==========
+
+/** 'HH:MM' 24-hour time. */
+const hhmmSchema = z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/, 'Time must be HH:MM (24-hour)');
+
+/** Prompt delivery is single-line only (writeViaMux/Ink constraint) — reject newlines outright. */
+const noNewlines = (v: string) => !/[\r\n]/.test(v);
+
+/** Shared field shape for creating/updating a scheduled job. */
+const CronJobBaseSchema = z.object({
+  name: z.string().min(1).max(200),
+  agentType: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini']),
+  workingDir: safePathSchema,
+  launchCommand: z.string().max(2000).refine(noNewlines, 'launchCommand must be a single line').optional(),
+  promptMode: z.enum(['inline_text', 'prompt_file_path']),
+  promptText: z
+    .string()
+    .max(100000)
+    .refine(noNewlines, 'promptText must be a single line (multi-line prompts are not supported)')
+    .optional(),
+  promptFilePath: safePathSchema.optional(),
+  inputMode: z.enum(['paste', 'typed']),
+  scheduleType: z.enum(['once', 'interval', 'daily', 'weekly']),
+  runAt: z.number().int().positive().optional(),
+  intervalMinutes: z.number().int().min(1).max(525600).optional(),
+  dailyTime: hhmmSchema.optional(),
+  weeklyDays: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional(),
+  weeklyTime: hhmmSchema.optional(),
+  enabled: z.boolean(),
+  notes: z.string().max(2000).optional(),
+  concurrencyPolicy: z.enum(['warn_only', 'skip_if_same_agent_running']),
+  autoClosePreviousSession: z.boolean().optional(),
+});
+
+/** Cross-field validation: required fields depend on promptMode + scheduleType. */
+function refineCronJob(val: z.infer<typeof CronJobBaseSchema>, ctx: z.RefinementCtx): void {
+  const add = (message: string, path: string) => ctx.addIssue({ code: 'custom', message, path: [path] });
+
+  if (val.promptMode === 'inline_text' && !val.promptText) {
+    add('promptText is required when promptMode is inline_text', 'promptText');
+  }
+  if (val.promptMode === 'prompt_file_path' && !val.promptFilePath) {
+    add('promptFilePath is required when promptMode is prompt_file_path', 'promptFilePath');
+  }
+  if (val.scheduleType === 'once' && val.runAt === undefined) {
+    add('runAt is required for a one-time schedule', 'runAt');
+  }
+  if (val.scheduleType === 'interval' && val.intervalMinutes === undefined) {
+    add('intervalMinutes is required for an interval schedule', 'intervalMinutes');
+  }
+  if (val.scheduleType === 'daily' && !val.dailyTime) {
+    add('dailyTime is required for a daily schedule', 'dailyTime');
+  }
+  if (val.scheduleType === 'weekly' && (!val.weeklyTime || !val.weeklyDays?.length)) {
+    add('weeklyDays and weeklyTime are required for a weekly schedule', 'weeklyTime');
+  }
+}
+
+/** POST /api/cron/jobs — full job definition. */
+export const CronJobSchema = CronJobBaseSchema.superRefine(refineCronJob);
+
+/** PUT /api/cron/jobs/:id — partial update. */
+export const CronJobUpdateSchema = CronJobBaseSchema.partial();
+
+/** PUT /api/cron/jobs/:id/enabled */
+export const CronJobEnabledSchema = z.object({ enabled: z.boolean() });
+
 /** POST /api/cases/link */
 export const LinkCaseSchema = z.object({
   name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format'),
@@ -672,6 +827,16 @@ export const SubagentWindowStatesSchema = z
 
 /** PUT /api/subagent-parents */
 export const SubagentParentMapSchema = z.record(z.string(), z.string());
+
+/** POST /api/sessions/:id/interactive */
+export const InteractiveStartSchema = z.object({
+  /**
+   * COD-118: explicit user-initiated restart — clears a tripped PTY-exit circuit
+   * breaker before starting. Automatic reconnect/re-attach callers (e.g. the
+   * frontend's selectSession auto-attach) must NOT send this flag.
+   */
+  clearBreaker: z.boolean().optional(),
+});
 
 /** POST /api/sessions/:id/interactive-respawn */
 export const InteractiveRespawnSchema = z.object({

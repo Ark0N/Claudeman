@@ -42,8 +42,10 @@ import {
   type CodexConfig,
   type EffortLevel,
   type GeminiConfig,
+  type SessionRemote,
 } from './types.js';
 import { buildEffortCliArgs } from './session-cli-builder.js';
+import { buildSshConnectionArgs, defaultRemoteCommandForMode, remoteSshTarget } from './remote-hosts.js';
 import {
   wrapWithNice,
   SAFE_PATH_PATTERN,
@@ -58,6 +60,7 @@ import type {
   MuxSessionWithStats,
   CreateSessionOptions,
   RespawnPaneOptions,
+  PaneCaptureOptions,
 } from './mux-interface.js';
 
 // ============================================================================
@@ -65,7 +68,15 @@ import type {
 // ============================================================================
 
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
-import { DEFAULT_TMUX_HISTORY_LIMIT } from './config/terminal-history.js';
+import { DEFAULT_TMUX_HISTORY_LIMIT, DEFAULT_TERMINAL_BUFFER_MAX_BYTES } from './config/terminal-history.js';
+
+/**
+ * Extra stdout headroom for the full-history `capture-pane` child process on
+ * top of the consumer's byte cap: raw scrollback carries per-line SGR/ANSI
+ * overhead that the route pipeline strips before applying its cap, so the
+ * capture must be allowed to exceed the final payload size.
+ */
+const FULL_HISTORY_CAPTURE_SLACK_BYTES = 8 * 1024 * 1024;
 
 /** Delay after tmux session creation — enough for detached tmux to be queryable */
 const TMUX_CREATION_WAIT_MS = 100;
@@ -430,6 +441,26 @@ function truncatePaneLineByVisibleColumns(line: string, maxColumns: number): str
   return result;
 }
 
+/**
+ * Normalize scrollback line endings to `\r\n` so a fresh xterm replays each line
+ * at column 0 (COD-138).
+ *
+ * `capture-pane -p -e -S -` (full-history capture) joins scrollback rows with a
+ * BARE `\n`. The browser xterm is created with the default `convertEol: false`
+ * (correct for the live PTY stream, which already carries real `\r\n`), so a bare
+ * `\n` drops a row without returning the cursor to column 0. Replaying that raw
+ * buffer on a full page reload makes every line start one column further right —
+ * the diagonal "staircase". The visible/tab-switch path avoids this by repainting
+ * each row with an absolute cursor CSI (`formatPaneSnapshot`); the full-history
+ * path returns raw scrollback, so it must be CRLF-normalized here.
+ *
+ * `\r?\n → \r\n` is idempotent on already-CRLF input and leaves a lone `\r` (an
+ * intentional in-line column reset / overwrite) untouched.
+ */
+export function normalizeScrollbackEol(buffer: string): string {
+  return buffer.replace(/\r?\n/g, '\r\n');
+}
+
 export function formatPaneSnapshot(
   lines: string[],
   geometry: { cols: number; rows: number; cursorX: number; cursorY: number }
@@ -667,6 +698,118 @@ function buildSpawnCommand(options: {
     return buildGeminiCommand(options.geminiConfig);
   }
   return '$SHELL';
+}
+
+/**
+ * Dedicated socket for Codeman-launched REMOTE tmux servers, distinct from the
+ * canonical local `-L codeman` socket. A remote host that runs its OWN Codeman
+ * would otherwise share the `-L codeman` socket AND the `codeman-<hex>` discovery
+ * name, so its `reconcileSessions()` would ADOPT our session (attach a PTY,
+ * resize, respawn-pane it locally) — the cross-machine form of the "2nd instance
+ * attaches live sessions" hazard. A private socket keeps our remote sessions off
+ * that instance's radar entirely.
+ */
+const REMOTE_TMUX_SOCKET = 'codeman-remote';
+
+/**
+ * Deterministic, reattach-stable remote tmux session name for a Codeman session.
+ *
+ * Derived from the same stable field the LOCAL muxName uses (the first 8 chars of
+ * the sessionId), so reconnecting (which re-issues the exact same
+ * `ssh … new-session -A`) lands back in the SAME remote session. Must NOT be
+ * random/time-based — it has to be stable across reconnects.
+ *
+ * The `codeman-ssh-` prefix is deliberately chosen to FAIL a remote Codeman's
+ * `SAFE_MUX_NAME_PATTERN` (`^codeman-[a-f0-9-]+$`) — the `s`/`h` letters mean a
+ * remote instance's discovery never treats this as one of its own sessions (belt
+ * to the dedicated-socket suspenders above).
+ */
+export function remoteTmuxSessionName(sessionId: string): string {
+  return `codeman-ssh-${sessionId.slice(0, 8)}`;
+}
+
+/**
+ * COD-104 — build the SSH command that launches (or reattaches) a remote
+ * session INSIDE a tmux server on the remote host, so the remote agent survives
+ * an SSH drop.
+ *
+ * Emits:
+ *   ssh -o BatchMode=yes -t [<COD-107 connection opts>] user@host \
+ *     'tmux -L codeman-remote new-session -A -s codeman-ssh-<id> -c <path> "cd <path> && exec <cli>" \
+ *        \; set -t codeman-ssh-<id> status off \; set -t codeman-ssh-<id> mouse off \
+ *        \; set -t codeman-ssh-<id> prefix C-q \; set -s escape-time 0'
+ *
+ * COD-107 — the connection options (`-p`, `-i`, `-J`, SOCKS `-o ProxyCommand`,
+ * arbitrary `-o`) come from the shared `buildSshConnectionArgs(remote)`, so the
+ * prereq tmux probe and this launch connect with identical options.
+ *
+ * - `new-session -A -s codeman-ssh-<id>` = attach-if-exists-else-create
+ *   (idempotent), so reconnect re-runs the same command and reattaches the
+ *   still-running agent.
+ * - `-L codeman-remote` = a DEDICATED socket, NOT the canonical `-L codeman` a
+ *   remote Codeman would use, so our session never collides with / gets adopted by
+ *   an instance running on the remote host.
+ * - The `set` options are scoped per-session (`set -t <name>` / server-level
+ *   `set -s`), never `-g`, so they never mutate other sessions' prefix/mouse.
+ * - The whole tmux invocation is a SINGLE ssh argument (the remote login shell
+ *   runs it), so it is shell-quoted as one unit; the `cd && exec` command is in
+ *   turn a single tmux argument (tmux runs it via `/bin/sh -c`), so the path is
+ *   shell-quoted inside it too. This keeps escaping correct through every layer
+ *   even when the remote path contains spaces.
+ */
+export function buildRemoteLaunchCommand(options: {
+  mode: SessionMode;
+  remote: SessionRemote;
+  sessionId: string;
+}): string {
+  const { mode, remote, sessionId } = options;
+  const modeCommand = remote.commands?.[mode] || defaultRemoteCommandForMode(mode);
+  const remoteName = remoteTmuxSessionName(sessionId);
+
+  // Innermost: the command tmux runs in the new pane. Run via `/bin/sh -c` by
+  // tmux, so the path needs shell-quoting here. `exec` replaces the shell with
+  // the CLI so the pane PID is the agent itself.
+  const paneCommand = `cd ${shellescape(remote.remotePath)} && ${modeCommand}`;
+
+  // The tmux command line, with `\;` separating commands so the config `set`s
+  // apply on the SAME connection (and are idempotent on reattach). Options are
+  // scoped per-session (`set -t <name>` / server `set -s`), NEVER `-g`, so a
+  // shared remote tmux server's other sessions keep their own prefix/mouse.
+  const tmuxInvocation = [
+    `tmux -L ${REMOTE_TMUX_SOCKET} new-session -A -s ${remoteName} -c ${shellescape(remote.remotePath)} ${shellescape(paneCommand)}`,
+    `set -t ${remoteName} status off`,
+    `set -t ${remoteName} mouse off`,
+    `set -t ${remoteName} prefix C-q`,
+    'set -s escape-time 0',
+  ].join(' \\; ');
+
+  // ssh runs its trailing args through the remote login shell, so the entire
+  // tmux invocation is passed as one shell-quoted argument.
+  //
+  // COD-107 — connection options (port, identity, SOCKS ProxyCommand, jump host,
+  // arbitrary -o) come from the shared `buildSshConnectionArgs` so the launch and
+  // the tmux-prereq probe connect IDENTICALLY. `-t` is inserted right after
+  // `ssh -o BatchMode=yes` (preserving the historical token order), then the rest
+  // of the connection args, then the target and the quoted tmux invocation.
+  const [ssh, batchMode, ...connectionArgs] = buildSshConnectionArgs(remote);
+  const sshParts = [ssh, batchMode, '-t', ...connectionArgs, remoteSshTarget(remote), shellescape(tmuxInvocation)];
+  return sshParts.join(' ');
+}
+
+/**
+ * Build the SSH command that kills the durable remote tmux session created by
+ * `buildRemoteLaunchCommand`. Because that session lives on a private socket
+ * (`-L codeman-remote`) under a stable name, killing the LOCAL ssh wrapper alone
+ * would orphan the remote agent forever (invisible to Codeman, still burning plan
+ * quota). This is fired best-effort on session kill; the shared connection args
+ * carry the default `-o ConnectTimeout=10` so an unreachable host fails fast.
+ */
+export function buildRemoteKillCommand(options: { remote: SessionRemote; sessionId: string }): string {
+  const { remote, sessionId } = options;
+  const remoteName = remoteTmuxSessionName(sessionId);
+  const killCmd = `tmux -L ${REMOTE_TMUX_SOCKET} kill-session -t ${shellescape(remoteName)}`;
+  const [ssh, ...connectionArgs] = buildSshConnectionArgs(remote);
+  return [ssh, ...connectionArgs, remoteSshTarget(remote), shellescape(killCmd)].join(' ');
 }
 
 /**
@@ -932,6 +1075,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       'export LC_ALL=en_US.UTF-8',
       mode === 'codex' || mode === 'gemini' ? 'export COLORTERM=truecolor' : 'unset COLORTERM',
       ...(mode === 'codex' || mode === 'gemini' ? ['unset NO_COLOR'] : []),
+      // Stamp each Codex pane with a unique originator so the response-viewer
+      // can locate THIS pane's rollout exactly — codex writes the value into
+      // session_meta.originator of every rollout it creates. Without it,
+      // rollouts are matched by cwd+mtime and two panes in the same directory
+      // bleed into each other.
+      ...(mode === 'codex' ? [`export CODEX_INTERNAL_ORIGINATOR_OVERRIDE=codeman_${sessionId}`] : []),
       'export CODEMAN_MUX=1',
       `export CODEMAN_SESSION_ID=${sessionId}`,
       `export CODEMAN_MUX_NAME=${muxName}`,
@@ -1059,6 +1208,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       envOverrides,
       effort,
       historyLimit = DEFAULT_TMUX_HISTORY_LIMIT,
+      remote,
     } = options;
     const muxName = `codeman-${sessionId.slice(0, 8)}`;
 
@@ -1077,6 +1227,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         pid: 99999,
         createdAt: Date.now(),
         workingDir,
+        remote,
         mode,
         attached: false,
         name,
@@ -1121,7 +1272,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     try {
       // Build the full command to run inside tmux
-      const fullCmd = `${buildNofileLimitCommand()} && ${pathExport}${envExportsStr} && ${cmd}`;
+      const localFullCmd = `${buildNofileLimitCommand()} && ${pathExport}${envExportsStr} && ${cmd}`;
+      const fullCmd = remote ? buildRemoteLaunchCommand({ mode, remote, sessionId }) : localFullCmd;
 
       // Create tmux session in three steps to handle cold-start (no server running)
       // and avoid the race where the command exits before remain-on-exit is set:
@@ -1172,7 +1324,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
       // Replace the shell with the actual command (no echo in terminal). Keep
       // pane launch in /tmp, then cd inside bash against the current mount table.
-      const launchCmd = `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
+      const launchCmd = remote ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
       execSync(
         `${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${JSON.stringify(launchCmd)}`,
         {
@@ -1246,6 +1398,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         pid,
         createdAt: Date.now(),
         workingDir,
+        remote,
         mode,
         attached: false,
         name,
@@ -1330,6 +1483,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       envOverrides,
       effort,
       historyLimit = DEFAULT_TMUX_HISTORY_LIMIT,
+      remote,
     } = options;
     const session = this.sessions.get(sessionId);
     if (!session) return null;
@@ -1366,7 +1520,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     });
     const config = niceConfig || DEFAULT_NICE_CONFIG;
     const cmd = wrapWithNice(baseCmd, config);
-    const fullCmd = `${buildNofileLimitCommand()} && ${pathExport}${envExportsStr} && ${cmd}`;
+    const localFullCmd = `${buildNofileLimitCommand()} && ${pathExport}${envExportsStr} && ${cmd}`;
+    const fullCmd = remote ? buildRemoteLaunchCommand({ mode, remote, sessionId }) : localFullCmd;
 
     try {
       // For OpenCode: set sensitive env vars via tmux setenv before respawn
@@ -1383,7 +1538,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // Re-apply user env overrides before respawn so the new shell inherits them.
       this.applyEnvOverrides(muxName, envOverrides);
 
-      const launchCmd = `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
+      // -c /tmp + cd bounce — see createSession() for rationale (stale FUSE state).
+      const launchCmd = remote ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
       await execAsync(
         `${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${JSON.stringify(launchCmd)}`,
         {
@@ -1552,6 +1708,20 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         });
       } catch {
         // Session may already be dead
+      }
+    }
+
+    // Strategy 3b: Remote sessions run a DURABLE tmux server on the remote host
+    // (survives ssh drops), so killing only the local ssh wrapper above would
+    // orphan the remote agent forever. Fire a best-effort `ssh … tmux kill-session`
+    // — fire-and-forget so it NEVER blocks or throws the local kill (bounded by the
+    // shared ConnectTimeout on an unreachable host).
+    if (session.remote) {
+      try {
+        const remoteKillCmd = buildRemoteKillCommand({ remote: session.remote, sessionId });
+        exec(remoteKillCmd, { timeout: EXEC_TIMEOUT_MS }, () => {});
+      } catch {
+        // Best-effort — a failure here must not affect the local kill result.
       }
     }
 
@@ -2192,30 +2362,65 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
-   * Capture the current visible text and SGR styles of a specific pane.
+   * Capture a pane's text and SGR styles.
    *
-   * `capture-pane -e` is sanitized by `formatPaneSnapshot`: SGR color/style
-   * codes are preserved, while cursor/erase/scroll-region controls are stripped
-   * before rows are repainted at absolute positions in browser xterm.
+   * Two modes:
+   * - Visible (default): `capture-pane -p -e` grabs only the on-screen frame,
+   *   then `formatPaneSnapshot` repaints each row at its absolute position so
+   *   the browser xterm reproduces the live frame. Used for fast tab switches.
+   * - Full history (`opts.fullHistory`): `capture-pane -p -e -J -S -<N>` grabs
+   *   the tmux scrollback (COD-47, bounded to the configured history limit),
+   *   returned as linear scrollback text with SGR codes preserved (NOT
+   *   repositioned — a multi-screen history can't be painted into a single
+   *   visible frame, so the snapshot repaint is skipped). `-J` re-joins lines
+   *   hard-wrapped at the pane width so they reflow in the browser xterm.
+   *   Used for full page reloads so the user gets back their scroll history.
+   *   Caveat: lines tmux has already evicted past its history-limit are gone.
    */
-  capturePaneBuffer(muxName: string, paneTarget: string): string | null {
+  capturePaneBuffer(muxName: string, paneTarget?: string, opts?: PaneCaptureOptions): string | null {
     if (IS_TEST_MODE) return '';
-    if (!isValidMuxName(muxName)) {
-      console.error('[TmuxManager] Invalid session name in capturePaneBuffer:', muxName);
-      return null;
-    }
-    if (!SAFE_PANE_TARGET_PATTERN.test(paneTarget)) {
-      console.error('[TmuxManager] Invalid pane target:', paneTarget);
+    const target = resolveTmuxPaneTarget(muxName, paneTarget);
+    if (!target) {
+      console.error('[TmuxManager] Invalid pane target in capturePaneBuffer:', { muxName, paneTarget });
       return null;
     }
 
-    const target = paneTarget.startsWith('%') ? `${muxName}.${paneTarget}` : `${muxName}.%${paneTarget}`;
+    const fullHistory = opts?.fullHistory === true;
 
     try {
-      const buffer = execSync(`${this.tmux()} capture-pane -p -e -t ${shellescape(target)}`, {
+      // `-S -<N>` starts the capture N lines above the visible frame (tmux
+      // clamps to the top of history), so tmux never serializes more scrollback
+      // than the configured history limit retains.
+      const requestedLines = opts?.historyLimitLines;
+      const historyLines =
+        typeof requestedLines === 'number' && Number.isFinite(requestedLines) && requestedLines > 0
+          ? Math.trunc(requestedLines)
+          : DEFAULT_TMUX_HISTORY_LIMIT;
+      const captureFlags = fullHistory ? `capture-pane -p -e -J -S -${historyLines}` : 'capture-pane -p -e';
+      // execSync's default maxBuffer (1MB) kills multi-MB scrollback dumps
+      // (ENOBUFS) and would silently degrade full-history capture to the byte
+      // buffer for exactly the long sessions it exists for — size it from the
+      // consumer's byte cap plus ANSI-overhead slack instead.
+      const execOpts: { encoding: 'utf-8'; timeout: number; maxBuffer?: number } = {
         encoding: 'utf-8',
         timeout: EXEC_TIMEOUT_MS,
-      }).replace(/\n+$/g, '');
+      };
+      if (fullHistory) {
+        execOpts.maxBuffer =
+          (opts?.maxCaptureBytes ?? DEFAULT_TERMINAL_BUFFER_MAX_BYTES) + FULL_HISTORY_CAPTURE_SLACK_BYTES;
+      }
+      const buffer = execSync(`${this.tmux()} ${captureFlags} -t ${shellescape(target)}`, execOpts).replace(
+        /\n+$/g,
+        ''
+      );
+      // Full-history spans many screens — return it as raw linear scrollback
+      // rather than repainting rows at single-screen absolute positions. tmux
+      // joins scrollback rows with a bare `\n`; normalize to `\r\n` so a fresh
+      // xterm (convertEol:false) starts each replayed line at column 0 instead
+      // of staircasing diagonally (COD-138).
+      if (fullHistory) {
+        return normalizeScrollbackEol(buffer);
+      }
       try {
         const cursor = execSync(
           `${this.tmux()} display-message -p -t ${shellescape(target)} '#{cursor_x} #{cursor_y} #{pane_width} #{pane_height}'`,
@@ -2240,9 +2445,19 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       } catch (cursorErr) {
         console.error('[TmuxManager] Failed to query pane cursor after capture:', cursorErr);
       }
-      return buffer;
+      // Cursor query failed or geometry was invalid, so we skip the absolute-
+      // positioned snapshot repaint and fall back to the raw capture. Normalize
+      // its bare `\n` line endings to `\r\n` so the replay doesn't staircase
+      // diagonally in a fresh xterm (COD-138, same reason as the fullHistory path).
+      return normalizeScrollbackEol(buffer);
     } catch (err) {
-      console.error('[TmuxManager] Failed to capture pane buffer:', err);
+      // ENOBUFS carries the truncated multi-MB stdout on the error object —
+      // log a concise line instead of dumping it into the journal.
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOBUFS') {
+        console.error('[TmuxManager] Pane capture exceeded maxBuffer (ENOBUFS); falling back to byte history');
+      } else {
+        console.error('[TmuxManager] Failed to capture pane buffer:', err);
+      }
       return null;
     }
   }
@@ -2253,7 +2468,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * Pane ids are not stable across respawns or restores, so callers should not
    * assume the first pane remains `%0`.
    */
-  captureActivePaneBuffer(muxName: string): string | null {
+  captureActivePaneBuffer(muxName: string, opts?: PaneCaptureOptions): string | null {
     if (IS_TEST_MODE) return '';
     if (!isValidMuxName(muxName)) {
       console.error('[TmuxManager] Invalid session name in captureActivePaneBuffer:', muxName);
@@ -2266,7 +2481,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         timeout: EXEC_TIMEOUT_MS,
       }).trim();
       const target = resolveActivePaneTarget(output);
-      return target ? this.capturePaneBuffer(muxName, target) : null;
+      return target ? this.capturePaneBuffer(muxName, target, opts) : null;
     } catch (err) {
       console.error('[TmuxManager] Failed to resolve active pane for capture:', err);
       return null;

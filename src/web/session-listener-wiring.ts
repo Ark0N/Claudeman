@@ -48,6 +48,7 @@ export interface SessionListenerRefs {
   limitPauseScheduled: (data: { resetAt: number; resumeAt: number; matched: string }) => void;
   limitResume: (data: { attempt: number }) => void;
   limitResumeCancelled: (data: { reason: string }) => void;
+  respawnBreakerTripped: (data: { count: number }) => void;
   cliInfoUpdated: (data: { version?: string; model?: string; accountType?: string; latestVersion?: string }) => void;
   ralphLoopUpdate: (state: RalphTrackerState) => void;
   ralphTodoUpdate: (todos: RalphTodoItem[]) => void;
@@ -58,7 +59,7 @@ export interface SessionListenerRefs {
   bashToolStart: (tool: ActiveBashTool) => void;
   bashToolEnd: (tool: ActiveBashTool) => void;
   bashToolsUpdate: (tools: ActiveBashTool[]) => void;
-  attachmentRequested: (event: { path: string }) => void;
+  attachmentRequested: (event: { path: string; source: 'external' | 'codex-generated' }) => void;
 }
 
 /** Dependencies injected by WebServer — keeps listener creation decoupled from server internals. */
@@ -78,7 +79,7 @@ interface SessionListenerDeps {
   removeSessionListenerRefs(sessionId: string): void;
   cleanupRespawnOnExit(sessionId: string): void;
   getStore(): import('../state-store.js').StateStore;
-  registerAttachment(sessionId: string, filePath: string): Promise<void>;
+  registerAttachment(sessionId: string, filePath: string, source: 'external' | 'codex-generated'): Promise<void>;
 }
 
 /**
@@ -270,6 +271,27 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
       deps.persistSessionState(session);
     },
 
+    /**
+     * Broadcasts `session:respawnBreakerTripped` (COD-118) — repeated non-zero PTY exits
+     * tripped the circuit breaker; the session is now errored and respawn is blocked.
+     * Also pushes the errored state (`session:updated`) so the tab renders the error,
+     * persists it, and notifies for diagnostic visibility.
+     */
+    respawnBreakerTripped: (data: { count: number }) => {
+      deps.broadcast(SseEvent.SessionRespawnBreakerTripped, { sessionId: session.id, ...data });
+      deps.broadcast(SseEvent.SessionUpdated, deps.getSessionStateWithRespawn(session));
+      deps.persistSessionState(session);
+      deps.sendPushNotifications(SseEvent.SessionRespawnBreakerTripped, {
+        sessionId: session.id,
+        sessionName: session.name,
+        count: data.count,
+      });
+      const tracker = deps.getRunSummaryTracker(session.id);
+      if (tracker) {
+        tracker.recordError('Respawn circuit breaker tripped', `${data.count} non-zero PTY exits within window`);
+      }
+    },
+
     // ─── CLI Info ────────────────────────────────────────────
 
     /** Broadcasts `session:cliInfo` — Claude Code version, model, account type parsed from terminal */
@@ -359,8 +381,8 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
     },
 
     /** Registers an explicit attachment card requested by terminal magic text. */
-    attachmentRequested: (event: { path: string }) => {
-      deps.registerAttachment(session.id, event.path).catch((err) => {
+    attachmentRequested: (event: { path: string; source: 'external' | 'codex-generated' }) => {
+      deps.registerAttachment(session.id, event.path, event.source).catch((err) => {
         console.error(`[Attachment] Failed to register ${event.path} for ${session.id}:`, err);
       });
     },
@@ -387,6 +409,7 @@ export function attachSessionListeners(session: Session, refs: SessionListenerRe
   session.on('limitPauseScheduled', refs.limitPauseScheduled);
   session.on('limitResume', refs.limitResume);
   session.on('limitResumeCancelled', refs.limitResumeCancelled);
+  session.on('respawnBreakerTripped', refs.respawnBreakerTripped);
   session.on('cliInfoUpdated', refs.cliInfoUpdated);
   session.on('ralphLoopUpdate', refs.ralphLoopUpdate);
   session.on('ralphTodoUpdate', refs.ralphTodoUpdate);
@@ -420,6 +443,7 @@ export function detachSessionListeners(session: Session, refs: SessionListenerRe
   session.off('limitPauseScheduled', refs.limitPauseScheduled);
   session.off('limitResume', refs.limitResume);
   session.off('limitResumeCancelled', refs.limitResumeCancelled);
+  session.off('respawnBreakerTripped', refs.respawnBreakerTripped);
   session.off('cliInfoUpdated', refs.cliInfoUpdated);
   session.off('ralphLoopUpdate', refs.ralphLoopUpdate);
   session.off('ralphTodoUpdate', refs.ralphTodoUpdate);

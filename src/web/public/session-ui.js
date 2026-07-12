@@ -44,6 +44,203 @@ Object.assign(CodemanApp.prototype, {
   // Quick Start
   // ═══════════════════════════════════════════════════════════════
 
+  formatCasePickerLabel(c) {
+    return c?.location === 'remote' && c.remote?.hostId ? `${c.name} @ ${c.remote.hostId}` : c?.name || '';
+  },
+
+  buildCasePickerOptions(cases = []) {
+    const normalized = [];
+    const seen = new Set();
+    for (const c of cases) {
+      if (!c?.name || seen.has(c.name)) continue;
+      seen.add(c.name);
+      normalized.push(c);
+    }
+    if (!seen.has('testcase')) {
+      normalized.push({ name: 'testcase' });
+    }
+
+    return normalized
+      .map(c => {
+        const label = this.formatCasePickerLabel(c);
+        const searchText = [
+          c.name,
+          label,
+          c.path,
+          c.location,
+          c.remote?.hostId,
+          c.remote?.label,
+          c.remote?.path
+        ].filter(Boolean).join(' ').toLowerCase();
+        return { name: c.name, label, case: c, searchText };
+      })
+      .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base', numeric: true }));
+  },
+
+  filterCasePickerOptions(options, query) {
+    const terms = String(query || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return options;
+    return options.filter(option => terms.every(term => option.searchText.includes(term)));
+  },
+
+  getCasePickerOptions() {
+    return this.buildCasePickerOptions(this.cases || []);
+  },
+
+  updateCasePickerInput(caseName) {
+    const input = document.getElementById('quickStartCaseSearch');
+    if (!input) return;
+    const option = this.getCasePickerOptions().find(item => item.name === caseName);
+    input.value = option?.label || caseName || 'testcase';
+    input.title = option?.label || input.value;
+  },
+
+  renderQuickStartCaseSelectOptions(select, options) {
+    if (!select) return;
+    select.innerHTML = options
+      .map(option => `<option value="${escapeHtml(option.name)}">${escapeHtml(option.label)}</option>`)
+      .join('');
+  },
+
+  openCasePicker(filter = '') {
+    const input = document.getElementById('quickStartCaseSearch');
+    const list = document.getElementById('quickStartCaseList');
+    if (!input || !list) return;
+    this._casePickerOpen = true;
+    this._casePickerFilter = filter;
+    this._casePickerActiveIndex = 0;
+    input.setAttribute('aria-expanded', 'true');
+    this.renderCasePickerList();
+  },
+
+  closeCasePicker() {
+    const input = document.getElementById('quickStartCaseSearch');
+    const list = document.getElementById('quickStartCaseList');
+    this._casePickerOpen = false;
+    this._casePickerFilter = '';
+    input?.setAttribute('aria-expanded', 'false');
+    input?.removeAttribute('aria-activedescendant');
+    list?.classList.add('hidden');
+  },
+
+  renderCasePickerList() {
+    const input = document.getElementById('quickStartCaseSearch');
+    const list = document.getElementById('quickStartCaseList');
+    const select = document.getElementById('quickStartCase');
+    if (!input || !list || !select) return;
+
+    const options = this.filterCasePickerOptions(this.getCasePickerOptions(), this._casePickerFilter || '');
+    const selectedName = select.value || 'testcase';
+    const maxIndex = Math.max(0, options.length - 1);
+    this._casePickerActiveIndex = Math.min(Math.max(this._casePickerActiveIndex || 0, 0), maxIndex);
+
+    if (options.length === 0) {
+      list.innerHTML = '<div class="case-combobox-empty">No cases match</div>';
+      list.classList.remove('hidden');
+      input.removeAttribute('aria-activedescendant');
+      return;
+    }
+
+    list.innerHTML = options
+      .map((option, index) => {
+        const active = index === this._casePickerActiveIndex;
+        const selected = option.name === selectedName;
+        const id = `quickStartCaseOption-${index}`;
+        return `
+          <button
+            type="button"
+            id="${id}"
+            class="case-combobox-option ${active ? 'active' : ''} ${selected ? 'selected' : ''}"
+            role="option"
+            aria-selected="${selected ? 'true' : 'false'}"
+            data-case="${escapeHtml(option.name)}"
+            title="${escapeHtml(option.label)}">
+            <span class="case-combobox-check">${selected ? '✓' : ''}</span>
+            <span class="case-combobox-option-label">${escapeHtml(option.label)}</span>
+          </button>
+        `;
+      })
+      .join('');
+    list.classList.remove('hidden');
+    input.setAttribute('aria-activedescendant', `quickStartCaseOption-${this._casePickerActiveIndex}`);
+  },
+
+  selectQuickStartCase(caseName, { save = true } = {}) {
+    const select = document.getElementById('quickStartCase');
+    if (!select) return;
+    select.value = caseName || 'testcase';
+    this.updateCasePickerInput(select.value);
+    this.closeCasePicker();
+    this.updateDirDisplayForCase(select.value);
+    this.updateMobileCaseLabel(select.value);
+    if (save) {
+      this.saveLastUsedCase(select.value);
+    }
+  },
+
+  setupQuickStartCasePicker() {
+    const select = document.getElementById('quickStartCase');
+    const input = document.getElementById('quickStartCaseSearch');
+    const list = document.getElementById('quickStartCaseList');
+    const picker = document.getElementById('quickStartCasePicker');
+    if (!select || !input || !list || !picker || input.dataset.listenerAdded) return;
+
+    input.addEventListener('focus', () => {
+      input.select?.();
+      this.openCasePicker('');
+    });
+    input.addEventListener('click', () => {
+      input.select?.();
+      this.openCasePicker('');
+    });
+    input.addEventListener('input', () => {
+      this.openCasePicker(input.value);
+    });
+    input.addEventListener('keydown', event => {
+      const options = this.filterCasePickerOptions(this.getCasePickerOptions(), this._casePickerFilter || input.value);
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        this._casePickerActiveIndex = Math.min((this._casePickerActiveIndex || 0) + 1, Math.max(0, options.length - 1));
+        this._casePickerOpen ? this.renderCasePickerList() : this.openCasePicker(input.value);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        this._casePickerActiveIndex = Math.max((this._casePickerActiveIndex || 0) - 1, 0);
+        this._casePickerOpen ? this.renderCasePickerList() : this.openCasePicker(input.value);
+      } else if (event.key === 'Enter') {
+        const option = options[this._casePickerActiveIndex || 0];
+        if (option) {
+          event.preventDefault();
+          this.selectQuickStartCase(option.name);
+          this.run?.();
+        }
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        this.updateCasePickerInput(select.value);
+        this.closeCasePicker();
+      } else if (event.key === 'Tab') {
+        this.updateCasePickerInput(select.value);
+        this.closeCasePicker();
+      }
+    });
+    list.addEventListener('mousedown', event => event.preventDefault());
+    list.addEventListener('click', event => {
+      const option = event.target.closest?.('.case-combobox-option');
+      if (option?.dataset?.case) {
+        this.selectQuickStartCase(option.dataset.case);
+      }
+    });
+    if (document.addEventListener && !this._casePickerDocumentListenerAdded) {
+      document.addEventListener('pointerdown', event => {
+        if (!picker.contains(event.target)) {
+          this.updateCasePickerInput(select.value);
+          this.closeCasePicker();
+        }
+      });
+      this._casePickerDocumentListenerAdded = true;
+    }
+    input.dataset.listenerAdded = 'true';
+  },
+
   async loadQuickStartCases(selectCaseName = null, settingsPromise = null) {
     try {
       // Load settings to get lastUsedCase (reuse shared promise if provided)
@@ -64,25 +261,8 @@ Object.assign(CodemanApp.prototype, {
 
       const select = document.getElementById('quickStartCase');
 
-      // Build options - existing cases first, then testcase as fallback if not present
-      let options = '';
-      const hasTestcase = cases.some(c => c.name === 'testcase');
-      const isMobile = MobileDetection.getDeviceType() === 'mobile';
-      const maxNameLength = isMobile ? 8 : 20; // Truncate to 8 chars on mobile
-
-      cases.forEach(c => {
-        const displayName = c.name.length > maxNameLength
-          ? c.name.substring(0, maxNameLength) + '…'
-          : c.name;
-        options += `<option value="${escapeHtml(c.name)}">${escapeHtml(displayName)}</option>`;
-      });
-
-      // Add testcase option if it doesn't exist (will be created on first run)
-      if (!hasTestcase) {
-        options = `<option value="testcase">testcase</option>` + options;
-      }
-
-      select.innerHTML = options;
+      const options = this.getCasePickerOptions();
+      this.renderQuickStartCaseSelectOptions(select, options);
       console.log('[loadQuickStartCases] Set options:', select.innerHTML.substring(0, 200));
 
       // If a specific case was requested, select it
@@ -107,6 +287,9 @@ Object.assign(CodemanApp.prototype, {
         document.getElementById('dirDisplay').textContent = '~/codeman-cases/testcase';
         this.updateMobileCaseLabel('testcase');
       }
+      this.updateCasePickerInput(select.value);
+      this.renderCasePickerList();
+      this.closeCasePicker();
 
       // Only add event listener once (on first load)
       if (!select.dataset.listenerAdded) {
@@ -114,9 +297,11 @@ Object.assign(CodemanApp.prototype, {
           this.updateDirDisplayForCase(select.value);
           this.saveLastUsedCase(select.value);
           this.updateMobileCaseLabel(select.value);
+          this.updateCasePickerInput(select.value);
         });
         select.dataset.listenerAdded = 'true';
       }
+      this.setupQuickStartCasePicker();
     } catch (err) {
       console.error('Failed to load cases:', err);
     }
@@ -328,6 +513,31 @@ Object.assign(CodemanApp.prototype, {
 
       const workingDir = caseData.path;
       if (!workingDir) throw new Error('Case path not found');
+
+      // Remote cases run over ssh — POST /api/sessions stat-validates workingDir on
+      // the LOCAL fs (a remote user@host:/path never exists locally), so route them
+      // through /api/quick-start, which resolves the remote case + launches via ssh.
+      if (caseData.location === 'remote') {
+        const remoteIds = [];
+        for (let i = 0; i < tabCount; i++) {
+          const res = await fetch('/api/quick-start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ caseName, mode: 'claude' })
+          });
+          const data = await res.json();
+          if (!data.success) throw new Error(data.error || 'Failed to start remote Claude session');
+          remoteIds.push(data.data.sessionId);
+        }
+        this.terminal.writeln(`\x1b[90m All ${tabCount} remote session(s) ready\x1b[0m`);
+        if (remoteIds[0]) {
+          await this.selectSession(remoteIds[0]);
+          this.loadQuickStartCases();
+        }
+        this.terminal.focus();
+        return;
+      }
+
       let firstSessionId = null;
 
       // Find the highest existing w-number for THIS case to avoid duplicates
@@ -483,8 +693,31 @@ Object.assign(CodemanApp.prototype, {
         caseData = createCaseData.data.case;
       }
 
+      const selectedCase = (this.cases || []).find(c => c.name === caseName);
+      const isRemoteCase = caseData.location === 'remote' || selectedCase?.location === 'remote';
       const workingDir = caseData.path;
       if (!workingDir) throw new Error('Case path not found');
+
+      // Remote cases run over ssh — route through /api/quick-start (see runClaude).
+      if (caseData.location === 'remote') {
+        const remoteIds = [];
+        for (let i = 0; i < shellCount; i++) {
+          const res = await fetch('/api/quick-start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ caseName, mode: 'shell' })
+          });
+          const data = await res.json();
+          if (!data.success) throw new Error(data.error || 'Failed to start remote shell session');
+          remoteIds.push(data.data.sessionId);
+        }
+        if (remoteIds[0]) {
+          this.activeSessionId = remoteIds[0];
+          await this.selectSession(remoteIds[0]);
+        }
+        this.terminal.focus();
+        return;
+      }
 
       // Find the highest existing s-number for THIS case to avoid duplicates
       let startNumber = 1;
@@ -509,7 +742,7 @@ Object.assign(CodemanApp.prototype, {
         fetch('/api/sessions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ workingDir, mode: 'shell', name })
+          body: JSON.stringify({ ...(isRemoteCase ? { caseName } : { workingDir }), mode: 'shell', name })
         }).then(r => r.json())
       );
       const createResults = await Promise.all(createPromises);
@@ -551,6 +784,9 @@ Object.assign(CodemanApp.prototype, {
 
   async runOpenCode() {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
+    // Remote cases run the CLI on the REMOTE host — the local /api/opencode/status
+    // probe and the local-only config/env below don't apply (quick-start rejects them).
+    const isRemote = (this.cases || []).find(c => c.name === caseName)?.location === 'remote';
 
     this.terminal.clear();
     this.terminal.writeln(`\x1b[1;32m Starting OpenCode session in ${caseName}...\x1b[0m`);
@@ -559,13 +795,15 @@ Object.assign(CodemanApp.prototype, {
     this.terminal.focus();
 
     try {
-      // Check if OpenCode is available
-      const statusRes = await fetch('/api/opencode/status');
-      const status = (await statusRes.json()).data;
-      if (!status.available) {
-        this.terminal.writeln('\x1b[1;31m OpenCode CLI not found.\x1b[0m');
-        this.terminal.writeln('\x1b[90m Install with: curl -fsSL https://opencode.ai/install | bash\x1b[0m');
-        return;
+      // Check if OpenCode is available (local sessions only)
+      if (!isRemote) {
+        const statusRes = await fetch('/api/opencode/status');
+        const status = (await statusRes.json()).data;
+        if (!status.available) {
+          this.terminal.writeln('\x1b[1;31m OpenCode CLI not found.\x1b[0m');
+          this.terminal.writeln('\x1b[90m Install with: curl -fsSL https://opencode.ai/install | bash\x1b[0m');
+          return;
+        }
       }
 
       // Quick-start with opencode mode (auto-allow tools by default).
@@ -577,8 +815,10 @@ Object.assign(CodemanApp.prototype, {
         body: JSON.stringify({
           caseName,
           mode: 'opencode',
-          openCodeConfig: { autoAllowTools: true },
-          ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
+          ...(isRemote ? {} : {
+            openCodeConfig: { autoAllowTools: true },
+            ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
+          }),
         })
       });
       const data = await res.json();
@@ -598,6 +838,9 @@ Object.assign(CodemanApp.prototype, {
 
   async runCodex() {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
+    // Remote cases run Codex on the REMOTE host — skip the local status probe and the
+    // local-only config/env below (quick-start rejects them for remote cases).
+    const isRemote = (this.cases || []).find(c => c.name === caseName)?.location === 'remote';
 
     this.terminal.clear();
     this.terminal.writeln(`\x1b[1;32m Starting Codex session in ${caseName}...\x1b[0m`);
@@ -605,12 +848,14 @@ Object.assign(CodemanApp.prototype, {
     this.terminal.focus();
 
     try {
-      const statusRes = await fetch('/api/codex/status');
-      const status = (await statusRes.json()).data;
-      if (!status.available) {
-        this.terminal.writeln('\x1b[1;31m Codex CLI not found.\x1b[0m');
-        this.terminal.writeln('\x1b[90m Install with: npm install -g @openai/codex\x1b[0m');
-        return;
+      if (!isRemote) {
+        const statusRes = await fetch('/api/codex/status');
+        const status = (await statusRes.json()).data;
+        if (!status.available) {
+          this.terminal.writeln('\x1b[1;31m Codex CLI not found.\x1b[0m');
+          this.terminal.writeln('\x1b[90m Install with: npm install -g @openai/codex\x1b[0m');
+          return;
+        }
       }
 
       const globalSettings = this.loadAppSettingsFromStorage();
@@ -621,11 +866,13 @@ Object.assign(CodemanApp.prototype, {
         body: JSON.stringify({
           caseName,
           mode: 'codex',
-          codexConfig: {
-            dangerouslyBypassApprovals: globalSettings.codexDangerouslyBypassApprovals ?? false,
-            renderMode: 'hybrid',
-          },
-          ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
+          ...(isRemote ? {} : {
+            codexConfig: {
+              dangerouslyBypassApprovals: globalSettings.codexDangerouslyBypassApprovals ?? false,
+              renderMode: 'hybrid',
+            },
+            ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
+          }),
         })
       });
       const data = await res.json();
@@ -645,6 +892,9 @@ Object.assign(CodemanApp.prototype, {
 
   async runGemini() {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
+    // Remote cases run Gemini on the REMOTE host — skip the local status probe and the
+    // local-only config/env below (quick-start rejects them for remote cases).
+    const isRemote = (this.cases || []).find(c => c.name === caseName)?.location === 'remote';
 
     this.terminal.clear();
     this.terminal.writeln(`\x1b[1;32m Starting Gemini session in ${caseName}...\x1b[0m`);
@@ -652,12 +902,14 @@ Object.assign(CodemanApp.prototype, {
     this.terminal.focus();
 
     try {
-      const statusRes = await fetch('/api/gemini/status');
-      const status = (await statusRes.json()).data;
-      if (!status.available) {
-        this.terminal.writeln('\x1b[1;31m Gemini CLI not found.\x1b[0m');
-        this.terminal.writeln('\x1b[90m Install with: npm install -g @google/gemini-cli\x1b[0m');
-        return;
+      if (!isRemote) {
+        const statusRes = await fetch('/api/gemini/status');
+        const status = (await statusRes.json()).data;
+        if (!status.available) {
+          this.terminal.writeln('\x1b[1;31m Gemini CLI not found.\x1b[0m');
+          this.terminal.writeln('\x1b[90m Install with: npm install -g @google/gemini-cli\x1b[0m');
+          return;
+        }
       }
 
       const envOverrides = this.buildEnvOverrides(this.getCaseSettings(caseName), this.loadAppSettingsFromStorage());
@@ -667,8 +919,10 @@ Object.assign(CodemanApp.prototype, {
         body: JSON.stringify({
           caseName,
           mode: 'gemini',
-          geminiConfig: { approvalMode: 'yolo' },
-          ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
+          ...(isRemote ? {} : {
+            geminiConfig: { approvalMode: 'yolo' },
+            ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
+          }),
         })
       });
       const data = await res.json();
@@ -1254,6 +1508,23 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('newCaseDescription').value = '';
     document.getElementById('linkCaseName').value = '';
     document.getElementById('linkCasePath').value = '';
+    const remoteFields = [
+      'remoteCaseName',
+      'remoteCasePath',
+      'remoteHostId',
+      'remoteHostAddress',
+      'remoteHostUsername',
+      'remoteHostPort',
+      'remoteHostCodexCommand',
+      'remoteHostIdentityFile',
+      'remoteHostSocksProxy',
+      'remoteHostJumpHost',
+      'remoteHostExtraSshOptions',
+    ];
+    remoteFields.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
     // Reset to first tab
     this.caseModalTab = 'case-create';
     this.switchCaseModalTab('case-create');
@@ -1295,13 +1566,16 @@ Object.assign(CodemanApp.prototype, {
       this.renderCaseManageList();
     } else {
       submitBtn.style.display = '';
-      submitBtn.textContent = tabName === 'case-create' ? 'Create' : 'Link';
+      submitBtn.textContent =
+        tabName === 'case-create' ? 'Create' : tabName === 'case-remote' ? 'Link Remote' : 'Link';
     }
     // Focus appropriate input
     if (tabName === 'case-create') {
       document.getElementById('newCaseName').focus();
     } else if (tabName === 'case-link') {
       document.getElementById('linkCaseName').focus();
+    } else if (tabName === 'case-remote') {
+      document.getElementById('remoteCaseName').focus();
     }
   },
 
@@ -1317,6 +1591,8 @@ Object.assign(CodemanApp.prototype, {
     try {
       if (this.caseModalTab === 'case-create') {
         await this.createCase();
+      } else if (this.caseModalTab === 'case-remote') {
+        await this.linkRemoteCase();
       } else {
         await this.linkCase();
       }
@@ -1407,6 +1683,86 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  async linkRemoteCase() {
+    const name = document.getElementById('remoteCaseName').value.trim();
+    const remotePath = document.getElementById('remoteCasePath').value.trim();
+    const hostId = document.getElementById('remoteHostId').value.trim();
+    const host = document.getElementById('remoteHostAddress').value.trim();
+    const username = document.getElementById('remoteHostUsername').value.trim();
+    const codexCommand = document.getElementById('remoteHostCodexCommand').value.trim();
+    // COD-107 — port + advanced SSH connection options.
+    const portRaw = document.getElementById('remoteHostPort').value.trim();
+    const identityFile = document.getElementById('remoteHostIdentityFile').value.trim();
+    const socksProxy = document.getElementById('remoteHostSocksProxy').value.trim();
+    const jumpHost = document.getElementById('remoteHostJumpHost').value.trim();
+    const extraSshOptions = document.getElementById('remoteHostExtraSshOptions').value
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
+
+    if (!name || !remotePath || !hostId || !host || !username) {
+      this.showToast('Please complete all required remote fields', 'error');
+      return;
+    }
+    if (!/^[a-zA-Z0-9_-]+$/.test(name) || !/^[a-zA-Z0-9_-]+$/.test(hostId)) {
+      this.showToast('Invalid name. Use only letters, numbers, hyphens, underscores.', 'error');
+      return;
+    }
+    if (!remotePath.startsWith('/')) {
+      this.showToast('Remote path must be absolute', 'error');
+      return;
+    }
+    let port;
+    if (portRaw) {
+      port = Number(portRaw);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        this.showToast('SSH port must be a number between 1 and 65535', 'error');
+        return;
+      }
+    }
+
+    try {
+      const hostPayload = {
+        id: hostId,
+        label: hostId,
+        host,
+        username,
+        ...(port ? { port } : {}),
+        ...(identityFile ? { identityFile } : {}),
+        ...(socksProxy ? { socksProxy } : {}),
+        ...(jumpHost ? { jumpHost } : {}),
+        ...(extraSshOptions.length ? { extraSshOptions } : {}),
+        ...(codexCommand ? { commands: { codex: codexCommand } } : {}),
+      };
+      const hostRes = await fetch('/api/remote-hosts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(hostPayload)
+      });
+      const hostData = await hostRes.json();
+      if (!hostData.success && hostData.errorCode !== 'ALREADY_EXISTS') {
+        throw new Error(hostData.error || 'Failed to save remote host');
+      }
+
+      const caseRes = await fetch('/api/cases/remote-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, hostId, remotePath })
+      });
+      const caseData = await caseRes.json();
+      if (caseData.success) {
+        this.closeCreateCaseModal();
+        this.showToast(`Remote case "${name}" linked`, 'success');
+        await this.loadQuickStartCases(name);
+        await this.saveLastUsedCase(name);
+      } else {
+        this.showToast(caseData.error || 'Failed to link remote case', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to link remote case:', err);
+      this.showToast('Failed to link remote case: ' + err.message, 'error');
+    }
+  },
 
   // ═══════════════════════════════════════════════════════════════
   // Case Management (reorder + delete)
@@ -1484,7 +1840,14 @@ Object.assign(CodemanApp.prototype, {
         // Refresh the dropdown
         const select = document.getElementById('quickStartCase');
         const currentCase = select.value;
+        if (currentCase === name) {
+          // Blur the native picker before reload so it doesn't show the stale value
+          select.blur?.();
+        }
         await this.loadQuickStartCases(currentCase === name ? null : currentCase);
+        if (currentCase === name) {
+          await this.saveLastUsedCase(document.getElementById('quickStartCase')?.value || 'testcase');
+        }
       } else {
         this.showToast(data.error || 'Failed to delete case', 'error');
       }
@@ -1521,11 +1884,7 @@ Object.assign(CodemanApp.prototype, {
 
     // Build case list HTML
     let html = '';
-    const cases = this.cases || [];
-
-    // Add testcase if not in list
-    const hasTestcase = cases.some(c => c.name === 'testcase');
-    const allCases = hasTestcase ? cases : [{ name: 'testcase' }, ...cases];
+    const allCases = this.getCasePickerOptions();
 
     for (const c of allCases) {
       const isSelected = c.name === currentCase;
@@ -1537,7 +1896,7 @@ Object.assign(CodemanApp.prototype, {
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
             </svg>
           </span>
-          <span class="mobile-case-item-name">${escapeHtml(c.name)}</span>
+          <span class="mobile-case-item-name">${escapeHtml(c.label)}</span>
           <span class="mobile-case-item-delete" onclick="event.stopPropagation(); app.deleteCaseMobile(${escapeHtml(JSON.stringify(c.name))})" title="Delete">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
