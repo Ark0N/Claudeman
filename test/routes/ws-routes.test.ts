@@ -491,6 +491,29 @@ describe('ws-routes', () => {
         for (const ws of connections) ws.close();
       }
     });
+
+    it('reconnecting client (same cid) is admitted at the cap instead of 4008 (COD-137)', async () => {
+      const connections: WebSocket[] = [];
+      try {
+        // Fill all 5 slots with DISTINCT clients, one of which is "alice".
+        for (const c of ['alice', 'b', 'c', 'd', 'e']) {
+          connections.push(await connectWs(`/ws/sessions/ws-test-session/terminal?cid=${c}`));
+        }
+
+        // Alice reconnects WHILE her old socket is still registered (the
+        // over-count window). This must reclaim her slot, not hit the cap.
+        const aliceNew = await connectWs('/ws/sessions/ws-test-session/terminal?cid=alice');
+        connections.push(aliceNew);
+
+        // Sanity: the reconnected socket is live and usable.
+        ctx._session.emit('terminal', 'reconnected-ok');
+        const msg = (await nextMessage(aliceNew)) as { t: string; d: string };
+        expect(msg.t).toBe('o');
+        expect(msg.d).toContain('reconnected-ok');
+      } finally {
+        for (const ws of connections) ws.close();
+      }
+    });
   });
 
   // ========== Heartbeat ==========

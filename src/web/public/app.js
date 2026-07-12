@@ -455,6 +455,14 @@ class CodemanApp {
     this._clientId = (typeof crypto !== 'undefined' && crypto.randomUUID)
       ? crypto.randomUUID()
       : 'c-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    // Per-TAB nonce for the WS registry key (COD-137). _loadReliableState()
+    // later replaces _clientId with the browser-wide localStorage identity
+    // (shared by every tab/window of this profile), so the WS upgrade sends
+    // `clientId:nonce` instead — a same-tab reconnect still supersedes its own
+    // socket, but two tabs on one session coexist instead of evicting each
+    // other in a 4010 ping-pong. Input frames keep the bare clientId for seq
+    // dedup.
+    this._wsTabNonce = this._clientId;
     this.terminal = null;
     this.fitAddon = null;
     this.activeSessionId = null;
@@ -589,6 +597,8 @@ class CodemanApp {
     this._ws = null;            // WebSocket instance for active session
     this._wsSessionId = null;   // Session ID the WS is connected to
     this._wsReady = false;      // True when WS is open and ready for I/O
+    this._wsState = 'disconnected'; // connecting | connected | reconnecting | fallback | disconnected
+    this._wsLastRecvAt = 0;     // ms timestamp of the last frame received on the active WS
 
     // Terminal write batching with DEC 2026 sync support
     this.pendingWrites = [];
@@ -632,6 +642,9 @@ class CodemanApp {
     this._clientId = '';
     this._seqCounters = new Map(); // sessionId -> last issued seq
     this._pendingDeliveries = new Map(); // sessionId -> [{seq,data,useMux,ts,tries,sentAt}]
+    // Last rendered connection-indicator tuple; the hot input path skips DOM
+    // writes when the freshly computed descriptor is identical (COD-136).
+    this._lastIndicatorDescriptor = null;
     this._postDraining = new Set(); // sessionIds with an in-flight POST drainer
     this._persistReliableTimer = null;
     this._reliableAckTimeoutMs = 4000; // unacked WS frame older than this ⇒ socket likely dead
@@ -2142,9 +2155,21 @@ class CodemanApp {
    */
   _connectWs(sessionId) {
     this._disconnectWs();
+    this._wsState = 'connecting';
+    this._updateConnectionIndicator();
 
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${proto}//${location.host}/ws/sessions/${sessionId}/terminal`;
+    // Pass a per-TAB identity on the upgrade URL so the server's connection
+    // registry scopes the per-session limit by connection (COD-137): a same-tab
+    // reconnect supersedes its own socket instead of consuming a new slot and
+    // tripping a spurious 4008, while two tabs of the same browser (which share
+    // the localStorage clientId) each keep their own socket. The bare clientId
+    // still rides the input frames for seq dedup. Omitted if clientId is
+    // unavailable (server then treats the upgrade as anonymous — still admitted
+    // up to the limit).
+    const cid = this._clientId ? `${this._clientId}:${this._wsTabNonce}` : '';
+    const cidQuery = cid ? `?cid=${encodeURIComponent(cid)}` : '';
+    const url = `${proto}//${location.host}/ws/sessions/${sessionId}/terminal${cidQuery}`;
     const ws = new WebSocket(url);
     this._ws = ws;
     this._wsSessionId = sessionId;
@@ -2153,7 +2178,9 @@ class CodemanApp {
       // Only mark ready if this is still the intended session
       if (this._ws === ws) {
         this._wsReady = true;
+        this._wsState = 'connected';
         this._wsReconnectAttempts = 0;
+        this._updateConnectionIndicator();
         // Send a typed resize over the fresh socket: syncs PTY dims after
         // (re)connects AND registers the desktop sizing claim server-side —
         // selectSession's earlier resizes ran before this WS existed, so they
@@ -2168,6 +2195,9 @@ class CodemanApp {
 
     ws.onmessage = (event) => {
       if (this._ws !== ws) return;
+      // Mark the socket as alive on every received frame (output, ACK, etc.) so
+      // the redeliver sweep only force-closes a genuinely silent connection.
+      this._wsLastRecvAt = Date.now();
       try {
         const msg = JSON.parse(event.data);
         if (msg.t === 'o') {
@@ -2194,18 +2224,53 @@ class CodemanApp {
       this._wsReady = false;
       this._stopMobileResizeRetry();
 
-      // Reconnect on unexpected close (server restart, network blip, ping timeout).
-      // Don't reconnect if we intentionally disconnected (_disconnectWs nulls onclose)
-      // or if the server rejected the session (4004=not found, 4008=too many, 4009=terminated).
-      if (event.code < 4004 && this.activeSessionId === sessionId) {
-        const delay = Math.min(1000 * Math.pow(2, this._wsReconnectAttempts || 0), 10000);
-        this._wsReconnectAttempts = (this._wsReconnectAttempts || 0) + 1;
-        this._wsReconnectTimer = setTimeout(() => {
-          this._wsReconnectTimer = null;
-          if (this.activeSessionId === sessionId) {
-            this._connectWs(sessionId);
-          }
-        }, delay);
+      // Decide what to do next from the close code + how many consecutive
+      // reconnects we've already made (pure policy in constants.js):
+      //   reconnect      → transient (server restart, network blip, ping timeout);
+      //                    schedule a backoff retry while this session stays active.
+      //   retry-fallback → too-many-connections / unknown rejection; show the HTTP
+      //                    fallback but keep retrying so we return to WS when it clears.
+      //   give-up        → 4004 (not found) / 4009 (terminated); the session is gone.
+      // _disconnectWs() nulls onclose for intentional disconnects, so we never land here for those.
+      const plan = window.CodemanWsReconnect.plan(event.code, this._wsReconnectAttempts || 0);
+      _crashDiag.log(
+        `WS CLOSE code=${event.code} reason=${event.reason || ''} action=${plan.action} attempts=${this._wsReconnectAttempts || 0}`
+      );
+
+      const stillActive = this.activeSessionId === sessionId;
+      if (plan.action === 'give-up') {
+        this._wsState = stillActive ? 'fallback' : 'disconnected';
+        this._updateConnectionIndicator();
+      } else if (plan.action === 'reconnect') {
+        if (stillActive) {
+          this._wsState = 'reconnecting';
+          this._updateConnectionIndicator();
+          const delay = plan.delayMs + Math.floor(Math.random() * 250); // jitter to de-sync herds
+          this._wsReconnectAttempts = (this._wsReconnectAttempts || 0) + 1;
+          this._wsReconnectTimer = setTimeout(() => {
+            this._wsReconnectTimer = null;
+            if (this.activeSessionId === sessionId) {
+              this._connectWs(sessionId);
+            }
+          }, delay);
+        } else {
+          this._wsState = 'disconnected';
+          this._updateConnectionIndicator();
+        }
+      } else {
+        // retry-fallback: surface the HTTP fallback, but keep trying on a bounded
+        // timer so the transport returns to WS once the transient condition clears.
+        this._wsState = stillActive ? 'fallback' : 'disconnected';
+        this._updateConnectionIndicator();
+        if (stillActive) {
+          this._wsReconnectAttempts = (this._wsReconnectAttempts || 0) + 1;
+          this._wsReconnectTimer = setTimeout(() => {
+            this._wsReconnectTimer = null;
+            if (this.activeSessionId === sessionId) {
+              this._connectWs(sessionId);
+            }
+          }, plan.delayMs);
+        }
       }
     };
 
@@ -2217,7 +2282,11 @@ class CodemanApp {
   /** Close the active WebSocket connection (if any). */
   _disconnectWs() {
     this._clearTimer('_wsReconnectTimer');
-    this._wsReconnectAttempts = 0;
+    // Deliberately do NOT reset _wsReconnectAttempts here: _connectWs() calls
+    // this first, so a reset would restart the exponential backoff ladder at
+    // attempt 0 on every retry (≈0ms tight reconnect loop during an outage).
+    // ws.onopen zeroes the counter once a connection actually succeeds.
+    this._wsState = 'disconnected';
     this._stopMobileResizeRetry();
     if (this._ws) {
       this._ws.onclose = null; // Prevent re-entrant cleanup
@@ -2412,13 +2481,31 @@ class CodemanApp {
         this._ws && this._ws.readyState === WebSocket.OPEN && this._wsSessionId === sessionId;
       if (isActiveWs) {
         const oldest = list[0];
-        if (oldest && oldest.sentAt && Date.now() - oldest.sentAt > this._reliableAckTimeoutMs) {
+        // Only tear the socket down when the oldest unacked frame is stale AND the
+        // socket has been silent for the timeout: a connection still delivering
+        // output/ACKs is alive (the ACK is just behind), so force-closing it would
+        // cause needless WS↔HTTP flapping. A truly half-open socket goes quiet.
+        const stale = oldest && oldest.sentAt && Date.now() - oldest.sentAt > this._reliableAckTimeoutMs;
+        const silent = Date.now() - this._wsLastRecvAt > this._reliableAckTimeoutMs;
+        if (stale && silent) {
           try {
             this._ws.close(); // half-open: never recovers on its own — force reconnect
           } catch {
             /* ignore */
           }
           continue;
+        }
+        if (stale) {
+          // Stale but the socket is still delivering output: the ACK was lost,
+          // not the connection. Force-closing isn't warranted (the link is fine),
+          // but the fast path skips anything with sentAt!==0, so the stranded
+          // frame would never re-send. Reset sentAt=0 on every stale unacked
+          // frame so the _drainSession below re-drives them over the live socket
+          // (server dedups by seq, so a re-sent lost-ACK frame is harmless).
+          // Frames sent recently (not yet stale) are left untouched.
+          for (const rec of list) {
+            if (rec.sentAt && Date.now() - rec.sentAt > this._reliableAckTimeoutMs) rec.sentAt = 0;
+          }
         }
       }
       this._drainSession(sessionId);
@@ -2530,39 +2617,107 @@ class CodemanApp {
     }
   }
 
+  // Pure render of the header connection indicator: reads only `this.*` state,
+  // touches NO DOM. Returns the exact { display, dotClass, text, title } tuple the
+  // writer applies. When hidden (display:'none') the other three are normalized to
+  // '' so the cache compare in _updateConnectionIndicator() is well-defined.
+  // Every branch/string here must stay byte-identical to what's rendered today.
+  _computeConnectionDescriptor() {
+    const { bytes: totalBytes, count } = this._pendingBytes();
+    const hasQueue = count > 0;
+    // Only surface a backlog once it's more than a few bytes. A single keystroke
+    // (1B) ACKs in milliseconds, so without this the label flickered "sending 1B"
+    // on every key press. Above this threshold means input is genuinely backing up.
+    const BACKLOG_HINT_BYTES = 4;
+    const showBacklog = totalBytes > BACKLOG_HINT_BYTES;
+    const formatBytes = (b) => (b < 1024 ? `${b}B` : `${(b / 1024).toFixed(1)}KB`);
+    const queuedSuffix = showBacklog ? ` · ${formatBytes(totalBytes)} queued` : '';
+
+    // Hard offline (browser reports no network) dominates everything.
+    if (!this.isOnline || this._connectionStatus === 'offline') {
+      return {
+        display: 'flex',
+        dotClass: 'connection-dot offline',
+        text: showBacklog ? `Offline (${formatBytes(totalBytes)} queued)` : 'Offline',
+        title: 'No network connection',
+      };
+    }
+
+    // With an active terminal, show its transport (WebSocket vs HTTP fallback).
+    if (this.activeSessionId) {
+      let cls, label, detail;
+      switch (this._wsState) {
+        case 'connected':
+          cls = 'connected'; label = 'WS'; detail = 'Terminal connected over WebSocket';
+          break;
+        case 'fallback':
+          cls = 'fallback'; label = 'HTTP'; detail = 'WebSocket unavailable — input sent over HTTP';
+          break;
+        case 'reconnecting':
+          cls = 'reconnecting'; label = 'WS…'; detail = 'Reconnecting WebSocket';
+          break;
+        case 'connecting':
+        default:
+          cls = 'reconnecting'; label = 'WS…'; detail = 'Connecting WebSocket';
+          break;
+      }
+      return {
+        display: 'flex',
+        dotClass: `connection-dot ${cls}`,
+        text: `${label}${queuedSuffix}`,
+        title: detail,
+      };
+    }
+
+    // No active terminal — reflect the SSE event stream only when it needs attention.
+    if (this._connectionStatus === 'reconnecting' || this._connectionStatus === 'disconnected') {
+      return {
+        display: 'flex',
+        dotClass: 'connection-dot reconnecting',
+        text: showBacklog ? `Reconnecting (${formatBytes(totalBytes)} queued)` : 'Reconnecting...',
+        title: 'Reconnecting to server',
+      };
+    }
+
+    // Idle dashboard, healthy stream — hide unless input is genuinely queued.
+    if (!hasQueue) {
+      return { display: 'none', dotClass: '', text: '', title: '' };
+    }
+    return {
+      display: 'flex',
+      dotClass: 'connection-dot draining',
+      text: showBacklog ? `Sending ${formatBytes(totalBytes)}...` : 'Sending...',
+      title: 'Delivering queued input',
+    };
+  }
+
   _updateConnectionIndicator() {
     const indicator = this.$('connectionIndicator');
     const dot = this.$('connectionDot');
     const text = this.$('connectionText');
     if (!indicator || !dot || !text) return;
 
-    const status = this._connectionStatus;
-
-    // While the connection is healthy, never surface the input queue. With the
-    // reliable-delivery layer every keystroke is briefly "pending" until its ACK
-    // lands a few ms later — showing that flashed "Sending 1B…" on every single
-    // character. The indicator is only meaningful for an actual connection
-    // problem (reconnecting / offline), where the queued byte count reassures
-    // the user their typing is safely buffered and will be sent.
-    if (status === 'connected' || status === 'connecting') {
-      indicator.style.display = 'none';
+    // Called on EVERY keystroke (_reliableSend) and EVERY ACK (_ackDelivery).
+    // During fast typing the rendered tuple is usually identical, so skip the DOM
+    // writes when nothing changed (COD-136) — the compute above is DOM-free.
+    const next = this._computeConnectionDescriptor();
+    const prev = this._lastIndicatorDescriptor;
+    if (
+      prev &&
+      prev.display === next.display &&
+      prev.dotClass === next.dotClass &&
+      prev.text === next.text &&
+      prev.title === next.title
+    ) {
       return;
     }
+    this._lastIndicatorDescriptor = next;
 
-    const { bytes: totalBytes, count } = this._pendingBytes();
-    const hasQueue = count > 0;
-    indicator.style.display = 'flex';
-    dot.className = 'connection-dot';
-
-    const formatBytes = (b) => (b < 1024 ? `${b}B` : `${(b / 1024).toFixed(1)}KB`);
-
-    if (status === 'reconnecting') {
-      dot.classList.add('reconnecting');
-      text.textContent = hasQueue ? `Reconnecting (${formatBytes(totalBytes)} queued)` : 'Reconnecting...';
-    } else {
-      // Offline or disconnected
-      dot.classList.add('offline');
-      text.textContent = hasQueue ? `Offline (${formatBytes(totalBytes)} queued)` : 'Offline';
+    indicator.style.display = next.display;
+    if (next.display !== 'none') {
+      dot.className = next.dotClass;
+      text.textContent = next.text;
+      indicator.title = next.title;
     }
   }
 
@@ -3801,6 +3956,9 @@ class CodemanApp {
     // the buffer write, causing 70KB+ single-frame flushes that stall WebGL.
     // chunkedTerminalWrite also sets this, but we need it before the fetch too.
     const bufferLoadOwner = this._beginBufferLoad(selectGen);
+    // COD-144: track whether the load painted nothing (empty fetch + no cache).
+    // For that just-created-session case we flush (not discard) queued SSE events.
+    let bufferWasEmpty = false;
     try {
       // Fit terminal to container BEFORE writing any buffer data.
       // If the browser was resized while viewing another session, the terminal
@@ -3966,13 +4124,16 @@ class CodemanApp {
       } else if (!cachedBuffer) {
         // No fresh buffer and no cache — clear any stale content
         this._resetTerminalForReplay();
+        bufferWasEmpty = true;
       }
 
-      // Buffer load complete — unblock live SSE writes (queued events are discarded
-      // to prevent duplicate content). chunkedTerminalWrite calls _finishBufferLoad
-      // internally, but if we skipped the write (cache hit or empty), call it here.
+      // Buffer load complete — unblock live SSE writes. chunkedTerminalWrite calls
+      // _finishBufferLoad internally (discarding queued events to prevent duplicate
+      // content); if we skipped the write (cache hit or empty), call it here.
+      // COD-144: when the load painted nothing, FLUSH the queued events instead of
+      // discarding — a new session's prompt arrives only as a queued SSE event.
       if (this._isLoadingBuffer) {
-        this._finishBufferLoad(bufferLoadOwner);
+        this._finishBufferLoad(bufferLoadOwner, { flushQueued: bufferWasEmpty });
       }
       // Drop the guard so user input clears state normally
       this._restoringFlushedState = false;

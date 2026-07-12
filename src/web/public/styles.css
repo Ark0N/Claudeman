@@ -626,6 +626,15 @@ body {
   flex-shrink: 0;
 }
 
+.connection-dot.connected {
+  background: var(--green);
+}
+
+.connection-dot.fallback {
+  background: var(--yellow);
+  box-shadow: 0 0 6px var(--yellow);
+}
+
 .connection-dot.offline {
   background: var(--red);
   box-shadow: 0 0 6px var(--red);

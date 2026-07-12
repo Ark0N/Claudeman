@@ -2046,11 +2046,25 @@ Object.assign(CodemanApp.prototype, {
    * Complete a buffer load: unblock live SSE writes.
    * Called when chunkedTerminalWrite finishes (or is skipped for empty buffers).
    *
-   * Queued SSE events are DISCARDED, not flushed. The loaded buffer from the API
-   * is the source of truth up to the response timestamp. SSE events queued during
-   * the fetch+write overlap with the buffer — flushing them writes duplicate data
-   * (especially Ink cursor-up redraws), corrupting the terminal display.
+   * By default queued SSE events are DISCARDED, not flushed. For an established
+   * session the loaded buffer from the API is the source of truth up to the
+   * response timestamp; SSE events queued during the fetch+write overlap already
+   * appear in that buffer, so flushing them writes duplicate data (especially Ink
+   * cursor-up redraws), corrupting the terminal display.
+   *
+   * COD-144: a brand-new session is the exception. Its terminal fetch can resolve
+   * BEFORE the PTY emits its first prompt, so the fetched buffer is empty and the
+   * prompt arrives only as a queued SSE event. Discarding it leaves the terminal
+   * blank until a tab-switch re-fetches a now-populated buffer. When the caller
+   * knows the load painted nothing (empty fetch + no cache), it passes
+   * `{ flushQueued: true }` so the queued events are REPLAYED through
+   * `batchTerminalWrite()` instead of dropped. Replay runs after `_isLoadingBuffer`
+   * is cleared, so the events write through normally and are not re-queued.
+   *
    * After unblocking, new SSE/WS events deliver subsequent output normally.
+   *
+   * @param {string} [owner] Load token from `_beginBufferLoad`; a stale owner is a no-op.
+   * @param {{ flushQueued?: boolean }} [opts] When `flushQueued` is true, replay any queued events.
    */
   _beginBufferLoad(owner) {
     if (this._bufferLoadSeq === undefined) this._bufferLoadSeq = 0;
@@ -2061,13 +2075,21 @@ Object.assign(CodemanApp.prototype, {
     return loadOwner;
   },
 
-  _finishBufferLoad(owner) {
+  _finishBufferLoad(owner, opts) {
     if (owner !== undefined && this._bufferLoadOwner !== owner) {
       return false;
     }
+    const queued = this._loadBufferQueue;
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
     this._bufferLoadOwner = null;
+    // COD-144: replay (rather than discard) queued live events when the load
+    // painted nothing — the queued prompt is the only content a new session has.
+    if (opts?.flushQueued && queued && queued.length) {
+      for (const data of queued) {
+        this.batchTerminalWrite(data);
+      }
+    }
     return true;
   },
 
