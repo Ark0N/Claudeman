@@ -828,6 +828,16 @@ export const SubagentWindowStatesSchema = z
 /** PUT /api/subagent-parents */
 export const SubagentParentMapSchema = z.record(z.string(), z.string());
 
+/** POST /api/sessions/:id/interactive */
+export const InteractiveStartSchema = z.object({
+  /**
+   * COD-118: explicit user-initiated restart — clears a tripped PTY-exit circuit
+   * breaker before starting. Automatic reconnect/re-attach callers (e.g. the
+   * frontend's selectSession auto-attach) must NOT send this flag.
+   */
+  clearBreaker: z.boolean().optional(),
+});
+
 /** POST /api/sessions/:id/interactive-respawn */
 export const InteractiveRespawnSchema = z.object({
   respawnConfig: RespawnConfigSchema.optional(),

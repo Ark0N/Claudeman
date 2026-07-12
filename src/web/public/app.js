@@ -174,6 +174,7 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.SESSION_LIMIT_PAUSE_SCHEDULED, '_onSessionLimitPauseScheduled'],
   [SSE_EVENTS.SESSION_LIMIT_RESUME, '_onSessionLimitResume'],
   [SSE_EVENTS.SESSION_LIMIT_RESUME_CANCELLED, '_onSessionLimitResumeCancelled'],
+  [SSE_EVENTS.SESSION_RESPAWN_BREAKER_TRIPPED, '_onSessionRespawnBreakerTripped'],
   [SSE_EVENTS.SESSION_CLI_INFO, '_onSessionCliInfo'],
   [SSE_EVENTS.SESSION_STATUS_TELEMETRY, '_onSessionStatusTelemetry'],
 
@@ -2019,6 +2020,15 @@ class CodemanApp {
     this.updateAutoResumeStatus(data.sessionId);
   }
 
+  // COD-118: the interactive PTY exit circuit breaker tripped (repeated non-zero exits).
+  // The errored status itself arrives via session:updated; this just surfaces a toast for
+  // diagnostic clarity so a silently-looping session is obvious. Restart clears the breaker.
+  _onSessionRespawnBreakerTripped(data) {
+    const session = this.sessions.get(data.sessionId);
+    const label = session?.name || 'Session';
+    this.showToast?.(`${label} stopped: repeated crashes detected. Restart to retry.`, 'error');
+  }
+
   _onSessionCliInfo(data) {
     const session = this.sessions.get(data.sessionId);
     if (session) {
@@ -3738,17 +3748,40 @@ class CodemanApp {
     // Track working directory for path normalization in Project Insights
     this.currentSessionWorkingDir = session?.workingDir || null;
     if (session && session.pid === null) {
-      // Session has no PTY attached — either restored after server restart
-      // or detached for some other reason. Re-attach regardless of status.
-      try {
-        const endpoint = session.mode === 'shell'
-          ? `/api/sessions/${sessionId}/shell`
-          : `/api/sessions/${sessionId}/interactive`;
-        await fetch(endpoint, { method: 'POST' });
-        // Update local session state
-        session.status = 'busy';
-      } catch (err) {
-        console.error('Failed to attach to restored session:', err);
+      if (session.respawnBlocked) {
+        // COD-118: the PTY-exit circuit breaker tripped for this session — the
+        // automatic re-attach must NOT silently clear it (that would re-arm the
+        // crash loop on every tab click / page load). Restart only on explicit
+        // user confirmation; the confirmed request carries clearBreaker:true.
+        const label = session.name || 'Session';
+        if (window.confirm(`${label} was stopped after crashing repeatedly. Restart it?`)) {
+          try {
+            await fetch(`/api/sessions/${sessionId}/interactive`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ clearBreaker: true }),
+            });
+            session.respawnBlocked = false;
+            session.status = 'busy';
+          } catch (err) {
+            console.error('Failed to restart crash-looped session:', err);
+          }
+        }
+      } else {
+        // Session has no PTY attached — either restored after server restart
+        // or detached for some other reason. Re-attach regardless of status.
+        // Deliberately NO body: this automatic path must never clear a tripped
+        // PTY-exit breaker (COD-118).
+        try {
+          const endpoint = session.mode === 'shell'
+            ? `/api/sessions/${sessionId}/shell`
+            : `/api/sessions/${sessionId}/interactive`;
+          await fetch(endpoint, { method: 'POST' });
+          // Update local session state
+          session.status = 'busy';
+        } catch (err) {
+          console.error('Failed to attach to restored session:', err);
+        }
       }
     }
 

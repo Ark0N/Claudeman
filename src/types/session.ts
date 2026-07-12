@@ -291,6 +291,11 @@ export interface SessionState {
   effort?: EffortLevel;
   /** Sanitized per-session attachment history. */
   attachmentHistory?: SessionAttachmentHistoryItem[];
+  /**
+   * PTY-exit circuit breaker tripped — respawn blocked until an explicit restart
+   * (COD-118). Runtime-only: never restored on boot (fresh server = fresh breaker).
+   */
+  respawnBlocked?: boolean;
 }
 
 /**

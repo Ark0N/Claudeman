@@ -14,6 +14,18 @@ import { program } from './cli.js';
 // In web mode, we should NOT exit on transient errors — log and continue
 const isWebMode = process.argv.includes('web');
 
+// COD-115: Codeman IS a tmux controller; it must never present as a tmux *client*.
+// If the web server is launched from inside a tmux pane it inherits TMUX/TMUX_PANE,
+// and tmux's nesting guard then kills every new attach-bridge PTY (exit 1 → respawn
+// loop, crash-looping any new tmux-backed session). Scrub at the root so every
+// downstream `{...process.env}` spread (attach, send-keys, create) is clean regardless
+// of launch context. `delete` (not `= undefined`, which node-pty serializes as the
+// literal string "undefined" and fails to clear).
+if (isWebMode) {
+  delete process.env.TMUX;
+  delete process.env.TMUX_PANE;
+}
+
 import { MAX_CONSECUTIVE_ERRORS, ERROR_RESET_MS } from './config/server-timing.js';
 
 // Track consecutive unhandled errors in web mode — restart after too many
