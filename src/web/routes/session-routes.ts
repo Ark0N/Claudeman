@@ -54,6 +54,7 @@ import {
 } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { imageWatcher } from '../../image-watcher.js';
+import { convertHeicToJpeg } from '../heic-jpeg-converter.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '../ports/index.js';
 import { MAX_CONCURRENT_SESSIONS } from '../../config/map-limits.js';
@@ -191,28 +192,16 @@ export function imageMagicMatchesExt(data: Buffer, ext: string): boolean {
       return data[0] === 0x42 && data[1] === 0x4d;
     case '.heic':
     case '.heif': {
-      // ISO Base Media File Format: size + "ftyp" + major brand.
+      // ISO Base Media File Format: size + "ftyp" + major brand. The brand
+      // list matches heic-decode's own isHeic() — accepting more brands here
+      // would only route bytes into a conversion that always throws.
       if (u32be(4) !== 0x66747970) return false;
       const brand = data.subarray(8, 12).toString('ascii');
-      return ['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'hevm', 'hevs', 'mif1', 'msf1'].includes(brand);
+      return ['heic', 'heix', 'hevc', 'hevx', 'mif1', 'msf1'].includes(brand);
     }
     default:
       return false;
   }
-}
-
-async function convertHeicToJpeg(imageBytes: Buffer): Promise<Buffer> {
-  const { default: convert } = await import('heic-convert');
-  const converted = await convert({ buffer: imageBytes, format: 'JPEG', quality: 0.92 });
-  const jpegBytes = Buffer.isBuffer(converted)
-    ? converted
-    : converted instanceof ArrayBuffer
-      ? Buffer.from(converted)
-      : Buffer.from(converted.buffer, converted.byteOffset, converted.byteLength);
-  if (!imageMagicMatchesExt(jpegBytes, '.jpg')) {
-    throw new Error('HEIC conversion did not produce JPEG bytes');
-  }
-  return jpegBytes;
 }
 
 // Per-(IP, sessionId) token bucket for paste-image. 30 requests/minute.
@@ -1889,22 +1878,12 @@ export function registerSessionRoutes(
       );
     }
 
-    // Sniff actual bytes — filename and Content-Type are both attacker-supplied.
-    // Polyglot HTML/PNG would otherwise pass and serve back with image/png MIME.
-    if (!imageMagicMatchesExt(imageBytes, ext)) {
-      // Diagnostic: on some Android galleries (e.g. MIUI) a WebP/HEIF is
-      // mislabeled as image/jpeg, so the declared ext passes the allowlist but
-      // the magic bytes do not. Log the real header so format mismatches can be
-      // pinned down without a reproduce-and-guess loop. The client now
-      // re-encodes images to JPEG/PNG before upload, so this should be rare.
-      console.warn(
-        `[paste-image] magic mismatch: filename=${JSON.stringify(part.filename)} mime=${JSON.stringify(part.mimetype)} declaredExt=${ext} magic=${imageBytes.subarray(0, 12).toString('hex')}`
-      );
-      reply.code(415);
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Image bytes do not match declared type ${ext}`);
-    }
-
-    if (ext === '.heic' || ext === '.heif') {
+    // Route HEIC on the raw bytes, NOT the declared ext/mime: on some Android
+    // galleries (e.g. MIUI) a HEIF comes back mislabeled as image/jpeg, and
+    // browsers that cannot decode HEIF upload the original file as-is — so a
+    // HEIC payload can arrive under any declared type. Filename and
+    // Content-Type are attacker-supplied anyway; only the bytes are trusted.
+    if (imageMagicMatchesExt(imageBytes, '.heic')) {
       try {
         imageBytes = await convertHeicToJpeg(imageBytes);
         ext = '.jpg';
@@ -1915,6 +1894,16 @@ export function registerSessionRoutes(
         reply.code(415);
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Could not convert HEIC image to JPEG');
       }
+    } else if (!imageMagicMatchesExt(imageBytes, ext)) {
+      // Sniff actual bytes — a polyglot HTML/PNG would otherwise pass and
+      // serve back with image/png MIME. Log the real header so format
+      // mismatches can be pinned down without a reproduce-and-guess loop. The
+      // client re-encodes images to JPEG/PNG before upload, so this is rare.
+      console.warn(
+        `[paste-image] magic mismatch: filename=${JSON.stringify(part.filename)} mime=${JSON.stringify(part.mimetype)} declaredExt=${ext} magic=${imageBytes.subarray(0, 12).toString('hex')}`
+      );
+      reply.code(415);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Image bytes do not match declared type ${ext}`);
     }
 
     // Save to {workingDir}/.claude-images/
