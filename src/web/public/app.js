@@ -302,6 +302,14 @@ class CodemanApp {
     this._clientId = (typeof crypto !== 'undefined' && crypto.randomUUID)
       ? crypto.randomUUID()
       : 'c-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    // Per-TAB nonce for the WS registry key (COD-137). _loadReliableState()
+    // later replaces _clientId with the browser-wide localStorage identity
+    // (shared by every tab/window of this profile), so the WS upgrade sends
+    // `clientId:nonce` instead — a same-tab reconnect still supersedes its own
+    // socket, but two tabs on one session coexist instead of evicting each
+    // other in a 4010 ping-pong. Input frames keep the bare clientId for seq
+    // dedup.
+    this._wsTabNonce = this._clientId;
     this.terminal = null;
     this.fitAddon = null;
     this.activeSessionId = null;
@@ -436,10 +444,7 @@ class CodemanApp {
     this._wsSessionId = null;   // Session ID the WS is connected to
     this._wsReady = false;      // True when WS is open and ready for I/O
     this._wsState = 'disconnected'; // connecting | connected | reconnecting | fallback | disconnected
-    this._wsLastClose = null; // { code, reason, at } for transport diagnostics
     this._wsLastRecvAt = 0;     // ms timestamp of the last frame received on the active WS
-    this._wsInputSendCount = 0;
-    this._httpFallbackSendCount = 0;
 
     // Terminal write batching with DEC 2026 sync support
     this.pendingWrites = [];
@@ -1972,14 +1977,20 @@ class CodemanApp {
    */
   _connectWs(sessionId) {
     this._disconnectWs();
+    this._wsState = 'connecting';
+    this._updateConnectionIndicator();
 
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // Pass the stable per-browser clientId on the upgrade URL so the server's
-    // connection registry scopes the per-session limit by client (COD-137): a
+    // Pass a per-TAB identity on the upgrade URL so the server's connection
+    // registry scopes the per-session limit by connection (COD-137): a same-tab
     // reconnect supersedes its own socket instead of consuming a new slot and
-    // tripping a spurious 4008. Omitted if clientId is unavailable (server then
-    // treats the upgrade as anonymous — still admitted up to the limit).
-    const cidQuery = this._clientId ? `?cid=${encodeURIComponent(this._clientId)}` : '';
+    // tripping a spurious 4008, while two tabs of the same browser (which share
+    // the localStorage clientId) each keep their own socket. The bare clientId
+    // still rides the input frames for seq dedup. Omitted if clientId is
+    // unavailable (server then treats the upgrade as anonymous — still admitted
+    // up to the limit).
+    const cid = this._clientId ? `${this._clientId}:${this._wsTabNonce}` : '';
+    const cidQuery = cid ? `?cid=${encodeURIComponent(cid)}` : '';
     const url = `${proto}//${location.host}/ws/sessions/${sessionId}/terminal${cidQuery}`;
     const ws = new WebSocket(url);
     this._ws = ws;
@@ -1989,6 +2000,7 @@ class CodemanApp {
       // Only mark ready if this is still the intended session
       if (this._ws === ws) {
         this._wsReady = true;
+        this._wsState = 'connected';
         this._wsReconnectAttempts = 0;
         this._updateConnectionIndicator();
         // Send a typed resize over the fresh socket: syncs PTY dims after
@@ -2092,7 +2104,11 @@ class CodemanApp {
   /** Close the active WebSocket connection (if any). */
   _disconnectWs() {
     this._clearTimer('_wsReconnectTimer');
-    this._wsReconnectAttempts = 0;
+    // Deliberately do NOT reset _wsReconnectAttempts here: _connectWs() calls
+    // this first, so a reset would restart the exponential backoff ladder at
+    // attempt 0 on every retry (≈0ms tight reconnect loop during an outage).
+    // ws.onopen zeroes the counter once a connection actually succeeds.
+    this._wsState = 'disconnected';
     this._stopMobileResizeRetry();
     if (this._ws) {
       this._ws.onclose = null; // Prevent re-entrant cleanup

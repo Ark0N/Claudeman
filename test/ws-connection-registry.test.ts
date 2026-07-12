@@ -100,6 +100,27 @@ describe('WsConnectionRegistry', () => {
     expect(reg.register('s1', 'alice', fresher).evictedSocket).toBe(fresh);
   });
 
+  it('two tabs of the same browser (shared clientId, distinct tab nonce) coexist without eviction', () => {
+    // The client keys the upgrade by `clientId:tabNonce`, NOT the bare
+    // browser-wide clientId — otherwise two windows on one session would
+    // supersede each other in a perpetual 4010/5s reconnect ping-pong.
+    const reg = new WsConnectionRegistry(5);
+    const tabA = sock('tab-a');
+    const tabB = sock('tab-b');
+
+    expect(reg.register('s1', 'c-browser:tab-A', tabA).evictedSocket).toBeUndefined();
+    const resB = reg.register('s1', 'c-browser:tab-B', tabB);
+    expect(resB.admitted).toBe(true);
+    expect(resB.evictedSocket).toBeUndefined(); // tab A keeps its socket
+    expect(reg.liveCount('s1')).toBe(2);
+
+    // A genuine same-tab reconnect still supersedes only its own socket.
+    const tabANew = sock('tab-a-new');
+    const res = reg.register('s1', 'c-browser:tab-A', tabANew);
+    expect(res.evictedSocket).toBe(tabA);
+    expect(reg.liveCount('s1')).toBe(2);
+  });
+
   it('isolates counts per session', () => {
     const reg = new WsConnectionRegistry(2);
     reg.register('s1', 'a', sock('a'));

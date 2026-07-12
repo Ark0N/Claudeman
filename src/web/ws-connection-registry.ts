@@ -12,12 +12,15 @@
  *   2. No clientId scoping: the limit counted raw sockets, so a reconnecting
  *      client consumed a NEW slot instead of replacing its own.
  *
- * This registry tracks the live socket(s) per session keyed by clientId (`cid`,
- * parsed from the upgrade URL query). The reliable-input protocol
- * (`session.shouldApplyInput(cid, seq)`) already assumes ONE logical client per
- * `cid` per session, so a new upgrade for a `cid` that already holds a socket is
- * a SUPERSEDE — the registry evicts the stale socket and reuses its slot, which
- * makes a reconnect reclaim rather than double-count (fixes #1 and #2).
+ * This registry tracks the live socket(s) per session keyed by a per-TAB
+ * connection identity (`cid`, parsed from the upgrade URL query). The browser
+ * sends `clientId:tabNonce`, NOT the bare localStorage clientId — that one is
+ * shared by every tab/window of a profile, so keying on it would make two tabs
+ * on one session evict each other in a 4010 ping-pong. A new upgrade for a
+ * `cid` that already holds a socket is a SUPERSEDE — the registry evicts the
+ * stale socket and reuses its slot, which makes a reconnect reclaim rather
+ * than double-count (fixes #1 and #2). The cid is opaque here; input-frame
+ * dedup uses the bare clientId separately (`session.shouldApplyInput`).
  *
  * Backward-compat: an upgrade with NO `cid` (legacy clients, other tools) is
  * admitted anonymously — it counts toward the limit but never evicts another

@@ -318,6 +318,21 @@ describe('_computeConnectionDescriptor — pure render per state (COD-136)', () 
   });
 });
 
+describe('connection-dot CSS — every emitted dot class has a styles.css rule', () => {
+  // The descriptor emits these dot variants; each needs a visible rule or the
+  // 8px dot renders as an invisible blob (the base .connection-dot rule has no
+  // background). 'connected' and 'fallback' were missing when this PR shipped.
+  const DOT_CLASSES = ['connected', 'fallback', 'offline', 'reconnecting', 'draining'];
+  const css = readFileSync(resolve(import.meta.dirname, '../src/web/public/styles.css'), 'utf8');
+
+  for (const cls of DOT_CLASSES) {
+    it(`.connection-dot.${cls} is styled`, () => {
+      const rule = new RegExp(`\\.connection-dot\\.${cls}\\s*\\{[^}]*background`, 'm');
+      expect(css).toMatch(rule);
+    });
+  }
+});
+
 /** A DOM element fake that COUNTS each property write — used to detect the skip. */
 function countingElement() {
   const writes = { display: 0, className: 0, textContent: 0, title: 0 };
