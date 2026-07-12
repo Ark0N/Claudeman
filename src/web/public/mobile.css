@@ -1259,7 +1259,10 @@ html.mobile-init .file-browser-panel {
 
   .response-viewer {
     padding-bottom: var(--safe-area-bottom, 0px);
-    max-height: 92vh;
+    /* dvh tracks the visible viewport on iOS Safari (vh = large viewport and would clip
+       the header/close button off-screen); the vh line is the old-engine fallback */
+    max-height: 88vh;
+    max-height: 92dvh;
   }
 
   .response-viewer-body {
