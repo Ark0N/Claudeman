@@ -1152,8 +1152,14 @@ Object.assign(CodemanApp.prototype, {
    */
   async _fetchUnifiedSessions(limit = 60) {
     const res = await fetch('/api/sessions/unified?limit=' + limit);
-    const data = await res.json();
-    return data.data?.sessions || [];
+    // ApiResponse envelope: { success, data: { sessions } }. Throw on failure so
+    // callers (loadHistorySessions) hit their catch instead of rendering a 5xx as
+    // an empty history.
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || data.success === false || !data.data) {
+      throw new Error(data?.error || `unified sessions request failed (HTTP ${res.status})`);
+    }
+    return data.data.sessions || [];
   },
 
   /**
@@ -1385,14 +1391,15 @@ Object.assign(CodemanApp.prototype, {
    * @param {HTMLElement} detail the inline detail panel element
    */
   _openSessionRowMenu(anchorEl, s, cases, item, detail) {
-    // Close any already-open row menu first.
-    if (this._openRowMenuEl) {
+    // Close any already-open row menu first — call its own close fn so the
+    // previous menu's document/window listeners are detached (a raw .remove()
+    // would leave them dangling until the next event self-cleans).
+    if (this._openRowMenuClose) {
       try {
-        this._openRowMenuEl.remove();
+        this._openRowMenuClose();
       } catch {
         /* noop */
       }
-      this._openRowMenuEl = null;
     }
 
     const isLiveOpen =
@@ -1416,7 +1423,10 @@ Object.assign(CodemanApp.prototype, {
       } catch {
         /* noop */
       }
-      if (this._openRowMenuEl === menu) this._openRowMenuEl = null;
+      if (this._openRowMenuEl === menu) {
+        this._openRowMenuEl = null;
+        this._openRowMenuClose = null;
+      }
     };
 
     // Helper: build one menu item button.
@@ -1451,7 +1461,9 @@ Object.assign(CodemanApp.prototype, {
         if (isLiveOpen) {
           this.selectSession(s.sessionId);
         } else {
-          this.resumeHistorySession(s.sessionId, s.workingDir || '');
+          // Resume by the Claude conversation UUID when present (resumed sessions
+          // carry theirs separately from their Codeman id).
+          this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '');
         }
         this.closeSessionManager?.();
         closeMenu();
@@ -1521,6 +1533,7 @@ Object.assign(CodemanApp.prototype, {
     window.addEventListener('resize', onScrollResize, true);
 
     this._openRowMenuEl = menu;
+    this._openRowMenuClose = closeMenu;
   },
 
   /** Number of history items shown before "Show More" */

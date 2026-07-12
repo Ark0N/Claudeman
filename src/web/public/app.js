@@ -1426,8 +1426,11 @@ class CodemanApp {
     // visible welcome list) on session structural changes. Extra listeners on the
     // same EventSource — EventSource supports multiple listeners per event — so the
     // existing handlers above are untouched. Registered through addListener so they
-    // are torn down with the rest on reconnect.
-    for (const event of [SSE_EVENTS.SESSION_CREATED, SSE_EVENTS.SESSION_UPDATED, SSE_EVENTS.SESSION_DELETED]) {
+    // are torn down with the rest on reconnect. Only structural events (created /
+    // deleted) trigger a refetch: session:updated is batch-broadcast every ~500ms
+    // per active session, which would otherwise turn an open modal / visible welcome
+    // list into a sustained ~1 Hz full ~/.claude/projects rescan loop.
+    for (const event of [SSE_EVENTS.SESSION_CREATED, SSE_EVENTS.SESSION_DELETED]) {
       addListener(event, () => this._onSessionListMaybeChanged());
     }
   }
