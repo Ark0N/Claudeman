@@ -62,6 +62,7 @@ import {
 import { imageWatcher } from '../image-watcher.js';
 import { workflowRunWatcher, summarizeRun } from '../workflow-run-watcher.js';
 import { attachmentRegistry, buildFileThumbnailRoute, registerExternalAttachment } from '../attachment-registry.js';
+import { registerGeneratedArtifactAttachment } from '../generated-artifact-attachments.js';
 import {
   buildDetectedAttachmentHistoryItem,
   buildExternalAttachmentHistoryItem,
@@ -1365,7 +1366,8 @@ export class WebServer extends EventEmitter {
         }
       },
       getStore: () => this.store,
-      registerAttachment: (id: string, filePath: string) => this.registerAttachment(id, filePath),
+      registerAttachment: (id: string, filePath: string, source: 'external' | 'codex-generated') =>
+        this.registerAttachment(id, filePath, source),
     };
   }
 
@@ -1378,16 +1380,31 @@ export class WebServer extends EventEmitter {
    * session workspace — passive magic links can't expose arbitrary host files.
    * Deliberate cross-workspace attachment goes through the explicit,
    * Origin-guarded `POST /attachments` route (and `codeman attach`, which POSTs
-   * directly inside a managed session). Registration also enforces the COD-53
-   * blocklist as defense-in-depth.
+   * directly inside a managed session). Codex-mode `Saved to:` requests
+   * (`source: 'codex-generated'`) instead go through
+   * registerGeneratedArtifactAttachment, which stays force-confined unless the
+   * realpath-resolved target is inside the workspace or a home-anchored
+   * `~/.codex*` generated-artifact directory. Registration also enforces the
+   * COD-53 blocklist as defense-in-depth.
    */
-  private async registerAttachment(sessionId: string, filePath: string): Promise<void> {
+  private async registerAttachment(
+    sessionId: string,
+    filePath: string,
+    source: 'external' | 'codex-generated'
+  ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
-    const event = await registerExternalAttachment(sessionId, filePath, {
-      sessionWorkingDir: session.workingDir,
-      forceWorkspaceConfinement: true,
-    });
+    const event =
+      source === 'codex-generated'
+        ? await registerGeneratedArtifactAttachment({
+            sessionId,
+            filePath,
+            sessionWorkingDir: session.workingDir,
+          })
+        : await registerExternalAttachment(sessionId, filePath, {
+            sessionWorkingDir: session.workingDir,
+            forceWorkspaceConfinement: true,
+          });
     const record = attachmentRegistry.get(sessionId, event.attachmentId);
     if (record) {
       session.upsertAttachmentHistory(

@@ -13,9 +13,18 @@ import { runWithConversionLimit } from './document-conversion-limiter.js';
 const execFileAsync = promisify(execFile);
 const THUMBNAIL_CONVERSION_TIMEOUT_MS = 5 * 60_000;
 
+/** Browser-renderable image formats served as-is (no conversion). */
+const IMAGE_PASSTHROUGH_CONTENT_TYPES: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+};
+
 export interface ThumbnailResult {
   content: Buffer;
-  contentType: 'image/png';
+  contentType: string;
 }
 
 export async function generateFirstPageThumbnail(filePath: string, extension: string): Promise<ThumbnailResult | null> {
@@ -24,8 +33,9 @@ export async function generateFirstPageThumbnail(filePath: string, extension: st
   try {
     await fs.stat(filePath);
 
-    if (ext === 'png') {
-      return { content: await fs.readFile(filePath), contentType: 'image/png' };
+    const passthroughContentType = IMAGE_PASSTHROUGH_CONTENT_TYPES[ext];
+    if (passthroughContentType) {
+      return { content: await fs.readFile(filePath), contentType: passthroughContentType };
     }
 
     if (ext === 'pdf') {
