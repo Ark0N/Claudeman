@@ -1,5 +1,39 @@
 # aicodeman
 
+## 1.3.0
+
+### Minor Changes
+
+- Community release: 16 contributor PRs reviewed (multi-agent adversarial review), fixed, and merged. Thanks to @aakhter, @TeigenZhang, @chatgptkrylor, @kvncrw, and @pirronewantlux529-coder!
+
+  **New features**
+  - **Cron jobs** (#141, @chatgptkrylor): recurring scheduled jobs (once/interval/daily/weekly) that spawn a session and send a prompt when due — CRUD + run history (`/api/cron/*`), ⏰ modal UI, per-job concurrency policy and `autoClosePreviousSession` lifecycle, pure unit-tested next-run math. Distinct from the legacy `ScheduledRun`.
+  - **Remote host SSH cases** (#145, @aakhter): link cases on remote hosts (`remote-hosts.json`/`remote-cases.json`), launch sessions over ssh into a durable remote tmux (dedicated `-L codeman-remote` socket; adoption-safe naming), per-host command overrides, injection-guarded schemas, remote tmux probe + ConnectTimeout, remote kill on delete, recovery-safe persistence.
+  - **Command-K session palette + searchable case picker + shortcut registry** (#146, @aakhter): Ctrl/Cmd/Alt+K fuzzy session palette with "Browse all sessions" Session Manager; searchable quick-start case picker (remote-aware labels); rebindable shortcut registry with App Settings → Shortcuts tab and Ctrl+? overlay.
+  - **Unified session list** (#139, @aakhter): `GET /api/sessions/unified` merges live/persisted/lifecycle/transcript sessions into one deduped list (resumed sessions fold via claudeSessionId alias map).
+  - **Unified Session Manager UX** (#153, @aakhter): unified welcome list with mode/LIVE badges + per-row kebab menu, `projectKey` plumbing for "View all in this folder", SSE-driven live list refresh, desktop Session Manager header button.
+  - **Full-scrollback replay** (#148, @aakhter): page reload replays the entire tmux scrollback (`?full=1`, bounded capture with proper maxBuffer) with CRLF normalization for shell panes.
+  - **WebSocket resilience** (#149, @aakhter): reconnect with preserved exponential backoff, per-tab connection identity (multi-tab safe), ACK re-drive, and a truthful connection chip (WS/HTTP/reconnecting states).
+  - **PTY-exit circuit breaker + TMUX scrub** (#147, @aakhter): rapid PTY crash-loops trip a breaker (SSE + critical push notification; explicit-restart-only reset); inherited TMUX vars are scrubbed so Codeman-in-tmux doesn't nest.
+  - **Codex generated-artifact attachments** (#150, @aakhter): codex sessions surface `Saved to: file://…` outputs as attachment cards (realpath-anchored trust, codex-mode-gated, jpg/gif/webp thumbnails).
+  - **Codex response viewer** (#152, @pirronewantlux529-coder): the eye button now works for Codex sessions via 4-layer rollout resolution (history pin → originator → resume-UUID → cwd) with dedup + injected-context filtering.
+  - **HEIC paste conversion** (#151, @aakhter): iPhone HEIC pastes convert to JPEG server-side in a worker thread (concurrency-capped, 64MP decompression-bomb guard, magic-byte detection for mislabeled Android HEIFs). Deps: heic-decode + jpeg-js.
+  - **WebGL renderer toggle** (#140, @kvncrw): per-device setting to switch xterm between WebGL and DOM renderers, cooperating with the GPU-stall auto-fallback marker.
+  - **Raised terminal history defaults** (#138, @aakhter): tmux history-limit 50k→100k lines, PTY buffer 2MB/1.5MB→32MB/24MB (env-clamped so trim always stays below max).
+
+  **Mobile & input fixes**
+  - CJK input loss fixes: IME state machine, focus routing, Android InputConnection recovery — with content-free diagnostics (#143, @TeigenZhang).
+  - Tap/click/wheel restored when the server strips mouse DECSETs — version-gated wheel passthrough (claude ≥ 2.1.187), link-click double-fire fix, Shift+wheel documented (#144, @TeigenZhang).
+  - Response-viewer readability on phones + iOS dvh viewport fix (#142, @TeigenZhang).
+
+  **Docs**: CLAUDE.md accuracy audit (18 verified fixes: security hook-bypass description, env-prefix allowlist, state-file inventory, watcher/function names, counts) + documentation for all new subsystems. README gains a user walkthrough (#141).
+
+  All PRs went through adversarial multi-agent review; ~60 verified findings (including 12 blockers) were fixed on the contributors' branches before merge. Full test suite green: 3,400+ tests.
+
+### Patch Changes
+
+- bf36eb0: Add a **WebGL Renderer** toggle to Settings → Appearance (desktop). WebGL stays on by default; turning it off forces the DOM renderer for users who hit GPU glitches, without needing the `?nowebgl` URL param. Turning it back on (or `?webgl=force`) clears any stale auto-fallback marker. The existing mobile skip and long-task auto-fallback safety net are unchanged. The skip decision is factored into a pure, unit-tested `shouldSkipWebGL()` helper.
+
 ## 1.2.2
 
 ### Patch Changes
