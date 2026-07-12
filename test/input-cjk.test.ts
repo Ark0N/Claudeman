@@ -60,7 +60,10 @@ function makeTextarea(): FakeTextarea {
   };
 }
 
-function loadCjkHarness() {
+const ANDROID_UA = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0';
+const IOS_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko)';
+
+function loadCjkHarness({ ua = ANDROID_UA }: { ua?: string } = {}) {
   const textarea = makeTextarea();
   const sent: string[] = [];
   const windowObj: Record<string, unknown> = {};
@@ -74,6 +77,7 @@ function loadCjkHarness() {
   const context = vm.createContext({
     window: windowObj,
     document: documentObj,
+    navigator: { userAgent: ua },
     setTimeout: (fn: () => void, ms?: number) => setTimeout(fn, ms),
     clearTimeout: (t: ReturnType<typeof setTimeout>) => clearTimeout(t),
     performance: { now: () => performance.now() },
@@ -203,6 +207,52 @@ describe('CJK input module', () => {
     expect(blurred).toBe(1);
   });
 
+  it('does not run the wedged-IME pointerdown recovery on iOS (Android-only)', () => {
+    // On iOS, tapping the focused empty field is normal (paste callout,
+    // habitual tap), and the async refocus runs outside the user-gesture
+    // stack — the blur→focus cycle must never fire there.
+    const { textarea, documentObj } = loadCjkHarness({ ua: IOS_UA });
+    documentObj.activeElement = textarea;
+    let blurred = 0;
+    let focused = 0;
+    textarea.blur = () => {
+      blurred++;
+    };
+    textarea.focus = () => {
+      focused++;
+    };
+
+    textarea.fire('pointerdown');
+    vi.advanceTimersByTime(10);
+    expect(blurred).toBe(0);
+    expect(focused).toBe(0);
+  });
+
+  it('never records typed content in the diagnostic trace (privacy)', () => {
+    // The trace mirrors into crash-diag, which persists to localStorage and
+    // beacons to the server — it must stay content-free: lengths, key
+    // classes, and event names only. Drive every path that formerly embedded
+    // the value or key literal (composition, keydown send, input, blur).
+    const { CjkInput, textarea, sent } = loadCjkHarness();
+
+    textarea.fire('compositionstart');
+    textarea.value = PHANTOM + '秘密口令';
+    textarea.fire('input', { isComposing: true, inputType: 'insertCompositionText' });
+    textarea.fire('compositionend');
+    vi.advanceTimersByTime(10);
+
+    textarea.fire('keydown', { key: '囍', ctrlKey: false, altKey: false, metaKey: false });
+    textarea.value = PHANTOM + '秘密';
+    textarea.fire('blur');
+    expect(sent).toEqual(['秘密口令', '囍']);
+
+    const trace = CjkInput.getTrace().join('\n');
+    for (const ch of '秘密口令囍') expect(trace).not.toContain(ch);
+    // Lengths and key classes are still traced for diagnostics.
+    expect(trace).toContain('flush send len=4');
+    expect(trace).toContain('keydown printable');
+  });
+
   it('skips redundant textarea writes when already reset (Android IME desync guard)', () => {
     const { CjkInput, textarea } = loadCjkHarness();
     const before = textarea.valueWrites;
@@ -227,6 +277,15 @@ describe('CJK input module', () => {
     expect(src).toMatch(/this\.terminal\.focus = \(\) => \{/);
     expect(src).toContain("cjkEl?.classList.contains('cjk-input-visible')");
     expect(src).toContain('CJK regain-focus (onData swallowed input)');
+
+    // The self-heal must only fire for GENUINE typed input: onData also fires
+    // for xterm's self-generated query replies (DA/DSR/CPR/OSC during Ink
+    // redraws), which arrive while e.g. the rename input or search box has
+    // focus — refocusing on those steals focus mid-typing. Guard: focus must
+    // be on xterm's own textarea AND the data must not be a query reply.
+    const selfHeal = src.slice(src.indexOf('Self-heal'), src.indexOf('CJK regain-focus'));
+    expect(selfHeal).toContain('document.activeElement === this.terminal.textarea');
+    expect(selfHeal).toContain('shouldSuppressTerminalQueryResponse(data)');
   });
 
   it('sends text plus carriage return on Enter', () => {

@@ -652,8 +652,17 @@ Object.assign(CodemanApp.prototype, {
         // typed lands HERE and is swallowed — keyboard shows the IME composing
         // while both the CJK field and the terminal stay empty. Route focus
         // back so the very next keystroke lands in the CJK field again.
+        // Only GENUINE typed input qualifies: onData also fires for xterm's
+        // self-generated query replies (DA/DSR/CPR/OSC during Ink redraws),
+        // which arrive no matter what has focus — so require focus to be on
+        // xterm's own textarea and bail on query replies, or this would steal
+        // focus from the rename/search/settings inputs while output streams.
         const cjkEl = document.getElementById('cjkInput');
-        if (cjkEl?.classList.contains('cjk-input-visible') && document.activeElement !== cjkEl) {
+        if (
+          cjkEl?.classList.contains('cjk-input-visible') &&
+          document.activeElement === this.terminal.textarea &&
+          !window.CodemanTerminalInput?.shouldSuppressTerminalQueryResponse(data)
+        ) {
           _crashDiag.log('CJK regain-focus (onData swallowed input)');
           cjkEl.focus();
         }
