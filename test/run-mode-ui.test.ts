@@ -271,10 +271,9 @@ describe('case selector refresh', () => {
             }),
           };
         }
-        if (url === '/api/sessions') {
-          return { json: async () => ({ success: true, data: { session: { id: 'sess-1' } } }) };
+        if (url === '/api/quick-start') {
+          return { json: async () => ({ success: true, data: { sessionId: 'sess-1' } }) };
         }
-        if (url === '/api/sessions/sess-1/shell') return { json: async () => ({ success: true }) };
         throw new Error(`unexpected fetch: ${url}`);
       },
       console,
@@ -292,11 +291,15 @@ describe('case selector refresh', () => {
 
     await app.runShell();
 
-    expect(requests.find((req) => req.url === '/api/sessions')?.body).toMatchObject({
+    // Remote cases must ride /api/quick-start (which resolves the remote case and
+    // launches over ssh) — POST /api/sessions stat-validates workingDir locally and
+    // its schema has no caseName, so the remote display path must never reach it.
+    expect(requests.find((req) => req.url === '/api/quick-start')?.body).toMatchObject({
       caseName: 'gpu-work',
       mode: 'shell',
     });
-    expect(requests.find((req) => req.url === '/api/sessions')?.body).not.toHaveProperty('workingDir');
+    expect(requests.find((req) => req.url === '/api/quick-start')?.body).not.toHaveProperty('workingDir');
+    expect(requests.some((req) => req.url === '/api/sessions')).toBe(false);
   });
 
   it('removes a deleted selected case from the dropdown and blurs the native picker', async () => {
