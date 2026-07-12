@@ -101,7 +101,14 @@ describe('types utility functions', () => {
       const state2 = createInitialRalphTrackerState();
 
       expect(state1).not.toBe(state2);
-      expect(state1).toEqual(state2);
+      // `lastActivity` is stamped with Date.now(), so two calls that straddle a
+      // millisecond boundary differ by 1ms. Compare the rest of the initial
+      // state for equality and assert the timestamp is a number separately.
+      const { lastActivity: lastActivity1, ...rest1 } = state1;
+      const { lastActivity: lastActivity2, ...rest2 } = state2;
+      expect(rest1).toEqual(rest2);
+      expect(typeof lastActivity1).toBe('number');
+      expect(typeof lastActivity2).toBe('number');
     });
 
     it('should have correct types for all fields', () => {

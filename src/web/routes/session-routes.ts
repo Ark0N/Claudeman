@@ -55,6 +55,15 @@ import {
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { imageWatcher } from '../../image-watcher.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
+import {
+  mergeUnifiedSessions,
+  filterAndPaginate,
+  type LiveSessionInput,
+  type PersistedSessionInput,
+  type LifecycleInput,
+  type HistoryInput,
+  type MuxStatInput,
+} from '../../services/unified-session-service.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '../ports/index.js';
 import { MAX_CONCURRENT_SESSIONS } from '../../config/map-limits.js';
 import { RunSummaryTracker } from '../../run-summary.js';
@@ -1747,6 +1756,118 @@ export function registerSessionRoutes(
 
     results.sort((a, b) => new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime());
     return { sessions: results.slice(0, 50) };
+  });
+
+  // Unified, read-only session list: merges live + persisted + lifecycle +
+  // transcript history + mux stats into one de-duplicated, searchable list
+  // (COD-121). Pure merge/filter logic lives in unified-session-service.ts.
+  app.get('/api/sessions/unified', async (req) => {
+    const query = req.query as { q?: string; offset?: string; limit?: string };
+
+    if (ctx.testMode) {
+      return { sessions: [], total: 0 };
+    }
+
+    // Live (in-memory) sessions.
+    const live: LiveSessionInput[] = [...ctx.sessions.values()].map((s) => {
+      const st = s.toState();
+      return {
+        id: st.id,
+        name: st.name,
+        mode: st.mode,
+        status: st.status,
+        isWorking: s.isWorking,
+        workingDir: st.workingDir,
+        createdAt: st.createdAt,
+        lastActivityAt: st.lastActivityAt,
+        claudeSessionId: s.claudeSessionId ?? undefined,
+      };
+    });
+
+    // Persisted sessions (state.json). resumeSessionId is the Claude
+    // conversation UUID a resumed session continues — feed it to the merge's
+    // alias map so its transcript row folds into this session.
+    const persisted: PersistedSessionInput[] = Object.values(ctx.store.getState().sessions).map((p) => ({
+      id: p.id,
+      name: p.name,
+      mode: p.mode,
+      status: p.status,
+      workingDir: p.workingDir,
+      createdAt: p.createdAt,
+      lastActivityAt: p.lastActivityAt,
+      claudeSessionId: p.resumeSessionId,
+    }));
+
+    // Lifecycle audit log (newest-first, capped).
+    let lifecycle: LifecycleInput[] = [];
+    try {
+      const entries = await getLifecycleLog().query({ limit: 2000 });
+      lifecycle = entries.map((e) => ({
+        sessionId: e.sessionId,
+        name: e.name,
+        mode: e.mode,
+        ts: e.ts,
+        event: e.event,
+      }));
+    } catch {
+      // Lifecycle log may be unavailable; treat as empty.
+    }
+
+    // Transcript history (~/.claude/projects) — reuse the same scanner as the overview.
+    const history: HistoryInput[] = [];
+    try {
+      const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
+      const headBuf = Buffer.alloc(16384);
+      const projectDirs = await fs.readdir(projectsDir);
+      for (const projDir of projectDirs) {
+        const projPath = join(projectsDir, projDir);
+        const list = await scanProjectDir(projPath, projDir, headBuf);
+        for (const h of list) {
+          history.push({
+            sessionId: h.sessionId,
+            workingDir: h.workingDir,
+            sizeBytes: h.sizeBytes,
+            lastModified: h.lastModified,
+            firstPrompt: h.firstPrompt,
+          });
+        }
+      }
+    } catch {
+      // Projects dir may not exist.
+    }
+
+    // Mux process stats (best-effort; guard against mocks lacking the method).
+    let mux: MuxStatInput[] = [];
+    try {
+      const getStats = (ctx.mux as { getSessionsWithStats?: () => Promise<unknown[]> }).getSessionsWithStats;
+      if (typeof getStats === 'function') {
+        const muxSessions = (await getStats.call(ctx.mux)) as Array<{
+          sessionId: string;
+          muxName?: string;
+          mode?: string;
+          remote?: unknown;
+          stats?: { memoryMB: number; cpuPercent: number };
+        }>;
+        mux = muxSessions.map((m) => ({
+          sessionId: m.sessionId,
+          muxName: m.muxName,
+          mode: m.mode,
+          remote: m.remote !== undefined ? true : undefined,
+          stats: m.stats ? { memoryMB: m.stats.memoryMB, cpuPercent: m.stats.cpuPercent } : undefined,
+        }));
+      }
+    } catch {
+      // Mux stats are optional.
+    }
+
+    const merged = mergeUnifiedSessions({ live, persisted, lifecycle, history, mux });
+    const offset = query.offset !== undefined ? parseInt(query.offset, 10) : undefined;
+    const limit = query.limit !== undefined ? parseInt(query.limit, 10) : undefined;
+    return filterAndPaginate(merged, {
+      q: query.q,
+      offset: Number.isNaN(offset as number) ? undefined : offset,
+      limit: Number.isNaN(limit as number) ? undefined : limit,
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════
