@@ -49,6 +49,7 @@ import {
   type CodexConfig,
   type EffortLevel,
   type GeminiConfig,
+  type SessionRemote,
 } from './types.js';
 import type { TerminalMultiplexer, MuxSession } from './mux-interface.js';
 import { TaskTracker, type BackgroundTask } from './task-tracker.js';
@@ -207,6 +208,10 @@ export function queryTmuxWindowSize(muxName: string, socket: string): { cols: nu
     /* fall back below */
   }
   return { cols: DEFAULT_PTY_COLS, rows: DEFAULT_PTY_ROWS };
+}
+
+export function resolveMuxAttachCwd(workingDir: string, remote?: SessionRemote): string {
+  return remote ? '/tmp' : workingDir;
 }
 
 /**
@@ -385,6 +390,9 @@ export class Session extends EventEmitter {
   // tmux history-limit (scrollback lines) applied to this session's pane.
   private readonly _tmuxHistoryLimit: number;
 
+  // Remote execution metadata, present when this session runs over SSH through local tmux.
+  private readonly _remote?: SessionRemote;
+
   // Session color for visual differentiation
   private _color: import('./types.js').SessionColor = 'default';
 
@@ -456,6 +464,8 @@ export class Session extends EventEmitter {
       tmuxHistoryLimit?: number;
       /** Restored per-session attachment history. May include server-private external paths. */
       attachmentHistory?: SessionAttachmentHistoryItem[];
+      /** Remote execution metadata for sessions launched through SSH inside local tmux. */
+      remote?: SessionRemote;
     }
   ) {
     super();
@@ -528,6 +538,7 @@ export class Session extends EventEmitter {
       this._effort = config.effort;
     }
     this._tmuxHistoryLimit = config.tmuxHistoryLimit ?? DEFAULT_TMUX_HISTORY_LIMIT;
+    this._remote = config.remote;
     if (config.attachmentHistory && config.attachmentHistory.length > 0) {
       this.restoreAttachmentHistory(config.attachmentHistory);
     }
@@ -987,6 +998,7 @@ export class Session extends EventEmitter {
       pid: this.pid,
       status: this._status,
       workingDir: this.workingDir,
+      remote: this._remote,
       currentTaskId: this._currentTaskId,
       createdAt: this.createdAt,
       lastActivityAt: this._lastActivityAt,
@@ -1171,7 +1183,7 @@ export class Session extends EventEmitter {
         name: 'xterm-256color',
         cols: ptyCols,
         rows: ptyRows,
-        cwd: this.workingDir,
+        cwd: resolveMuxAttachCwd(this.workingDir, this._remote),
         env: buildMuxAttachEnv(),
       });
     } catch (spawnErr) {
@@ -1282,6 +1294,7 @@ export class Session extends EventEmitter {
             envOverrides: this._envOverrides,
             effort: this._effort,
             historyLimit: this._tmuxHistoryLimit,
+            remote: this._remote,
           },
           createSessionOptions: {
             sessionId: this.id,
@@ -1299,6 +1312,7 @@ export class Session extends EventEmitter {
             envOverrides: this._envOverrides,
             effort: this._effort,
             historyLimit: this._tmuxHistoryLimit,
+            remote: this._remote,
           },
           spawnErrLabel: 'mux attachment',
         });
@@ -1637,6 +1651,7 @@ export class Session extends EventEmitter {
             niceConfig: this._niceConfig,
             envOverrides: this._envOverrides,
             historyLimit: this._tmuxHistoryLimit,
+            remote: this._remote,
           },
           createSessionOptions: {
             sessionId: this.id,
@@ -1646,6 +1661,7 @@ export class Session extends EventEmitter {
             niceConfig: this._niceConfig,
             envOverrides: this._envOverrides,
             historyLimit: this._tmuxHistoryLimit,
+            remote: this._remote,
           },
           spawnErrLabel: 'shell mux attachment',
         });

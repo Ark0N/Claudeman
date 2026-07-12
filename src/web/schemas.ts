@@ -271,6 +271,94 @@ export const CreateCaseSchema = z.object({
   description: z.string().max(1000).optional(),
 });
 
+const RemoteCommandOverridesSchema = z
+  .object({
+    shell: z.string().min(1).max(300).optional(),
+    claude: z.string().min(1).max(300).optional(),
+    opencode: z.string().min(1).max(300).optional(),
+    codex: z.string().min(1).max(300).optional(),
+    gemini: z.string().min(1).max(300).optional(),
+  })
+  .strict()
+  .optional();
+
+// COD-107 — advanced SSH connection options. These ultimately exec as shell
+// (ProxyCommand etc.), but are OPERATOR-entered host config (never attacker- or
+// terminal-output-influenced), so we validate as defense-in-depth, not as the
+// security boundary. Reject newline/NUL/backtick/`$(` shell-injection vectors.
+const NO_SHELL_INJECTION = /^[^\n\r\0`]*$/;
+const noCommandSubstitution = (s: string) => !s.includes('$(');
+
+// `remotePath`/`identityFile` are shell-escaped, then the whole launch command is
+// embedded via `JSON.stringify(...)` inside `bash -c "..."` (tmux-manager). That
+// outer DOUBLE-quote layer re-exposes `$(...)`, backticks, and `$VAR` even though
+// the inner value is single-quoted — so a `$(cmd)` in the path would run LOCALLY at
+// launch. Reject `$` and backtick (and newline/CR/NUL) entirely at the boundary.
+const NO_SHELL_META = /^[^\n\r\0`$]*$/;
+
+export const RemoteHostSchema = z.object({
+  id: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid remote host id'),
+  label: z.string().min(1).max(100),
+  host: z
+    .string()
+    .min(1)
+    .max(255)
+    .regex(/^[a-zA-Z0-9._:-]+$/, 'Invalid SSH host'),
+  username: z
+    .string()
+    .min(1)
+    .max(100)
+    .regex(/^[a-zA-Z0-9._-]+$/, 'Invalid SSH username'),
+  port: z.number().int().min(1).max(65535).optional(),
+  // Identity (private-key) file PATH only — never key bytes. Reject shell
+  // metacharacters ($, backtick) that survive into the `bash -c` launch layer.
+  identityFile: z.string().min(1).max(4096).regex(NO_SHELL_META, 'Invalid identity file path').optional(),
+  // SOCKS5 proxy as host:port (e.g. 127.0.0.1:1080).
+  socksProxy: z
+    .string()
+    .regex(/^[\w.-]+:\d{1,5}$/, 'SOCKS proxy must be host:port')
+    .optional(),
+  // SSH jump host: a comma-separated chain of [user@]host[:port] hops. Structural
+  // ALLOWLIST (not an open denylist) — only chars valid in user/host/port/IPv6,
+  // so no shell metacharacter (;, |, &, space, $, quotes, …) can appear. The value
+  // is also shellescaped at command-build time (buildSshConnectionArgs); this is the
+  // belt to that suspenders.
+  jumpHost: z
+    .string()
+    .min(1)
+    .max(255)
+    .regex(
+      /^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.:[\]-]+(?::\d{1,5})?(?:,(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.:[\]-]+(?::\d{1,5})?)*$/,
+      'Jump host must be [user@]host[:port] (comma-separated for multiple hops)'
+    )
+    .optional(),
+  // Arbitrary extra -o KEY=VALUE options (escape hatch); each must be KEY=VALUE.
+  extraSshOptions: z
+    .array(
+      z
+        .string()
+        .min(3)
+        .max(1024)
+        .regex(/^[A-Za-z][A-Za-z0-9]*=.+$/, 'Extra SSH option must be KEY=VALUE')
+        .regex(NO_SHELL_INJECTION, 'Invalid characters in SSH option')
+        .refine(noCommandSubstitution, 'Invalid characters in SSH option')
+    )
+    .max(32)
+    .optional(),
+  commands: RemoteCommandOverridesSchema,
+});
+
+export const RemoteCaseLinkSchema = z.object({
+  name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format'),
+  hostId: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid remote host id'),
+  remotePath: z
+    .string()
+    .min(1)
+    .max(2000)
+    .regex(/^\//, 'Remote path must be absolute')
+    .regex(NO_SHELL_META, 'Invalid characters in remote path'),
+});
+
 // ========== Quick Start ==========
 
 /**

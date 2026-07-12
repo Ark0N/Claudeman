@@ -123,6 +123,17 @@ export interface CaseInfo {
   path: string;
   /** Whether CLAUDE.md exists */
   hasClaudeMd?: boolean;
+  /** Case storage/execution location */
+  location?: 'local' | 'linked-local' | 'remote';
+  /** Whether this is a linked local folder */
+  linked?: boolean;
+  /** Remote case metadata for display and session creation */
+  remote?: {
+    hostId: string;
+    host: string;
+    username: string;
+    path: string;
+  };
 }
 
 // ========== Error Handling Utilities ==========

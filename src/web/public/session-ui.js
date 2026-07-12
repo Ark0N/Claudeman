@@ -71,9 +71,12 @@ Object.assign(CodemanApp.prototype, {
       const maxNameLength = isMobile ? 8 : 20; // Truncate to 8 chars on mobile
 
       cases.forEach(c => {
-        const displayName = c.name.length > maxNameLength
-          ? c.name.substring(0, maxNameLength) + '…'
+        const baseLabel = c.location === 'remote' && c.remote
+          ? `${c.name} @ ${c.remote.hostId}`
           : c.name;
+        const displayName = baseLabel.length > maxNameLength
+          ? baseLabel.substring(0, maxNameLength) + '…'
+          : baseLabel;
         options += `<option value="${escapeHtml(c.name)}">${escapeHtml(displayName)}</option>`;
       });
 
@@ -328,6 +331,31 @@ Object.assign(CodemanApp.prototype, {
 
       const workingDir = caseData.path;
       if (!workingDir) throw new Error('Case path not found');
+
+      // Remote cases run over ssh — POST /api/sessions stat-validates workingDir on
+      // the LOCAL fs (a remote user@host:/path never exists locally), so route them
+      // through /api/quick-start, which resolves the remote case + launches via ssh.
+      if (caseData.location === 'remote') {
+        const remoteIds = [];
+        for (let i = 0; i < tabCount; i++) {
+          const res = await fetch('/api/quick-start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ caseName, mode: 'claude' })
+          });
+          const data = await res.json();
+          if (!data.success) throw new Error(data.error || 'Failed to start remote Claude session');
+          remoteIds.push(data.data.sessionId);
+        }
+        this.terminal.writeln(`\x1b[90m All ${tabCount} remote session(s) ready\x1b[0m`);
+        if (remoteIds[0]) {
+          await this.selectSession(remoteIds[0]);
+          this.loadQuickStartCases();
+        }
+        this.terminal.focus();
+        return;
+      }
+
       let firstSessionId = null;
 
       // Find the highest existing w-number for THIS case to avoid duplicates
@@ -486,6 +514,27 @@ Object.assign(CodemanApp.prototype, {
       const workingDir = caseData.path;
       if (!workingDir) throw new Error('Case path not found');
 
+      // Remote cases run over ssh — route through /api/quick-start (see runClaude).
+      if (caseData.location === 'remote') {
+        const remoteIds = [];
+        for (let i = 0; i < shellCount; i++) {
+          const res = await fetch('/api/quick-start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ caseName, mode: 'shell' })
+          });
+          const data = await res.json();
+          if (!data.success) throw new Error(data.error || 'Failed to start remote shell session');
+          remoteIds.push(data.data.sessionId);
+        }
+        if (remoteIds[0]) {
+          this.activeSessionId = remoteIds[0];
+          await this.selectSession(remoteIds[0]);
+        }
+        this.terminal.focus();
+        return;
+      }
+
       // Find the highest existing s-number for THIS case to avoid duplicates
       let startNumber = 1;
       for (const [, session] of this.sessions) {
@@ -551,6 +600,9 @@ Object.assign(CodemanApp.prototype, {
 
   async runOpenCode() {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
+    // Remote cases run the CLI on the REMOTE host — the local /api/opencode/status
+    // probe and the local-only config/env below don't apply (quick-start rejects them).
+    const isRemote = (this.cases || []).find(c => c.name === caseName)?.location === 'remote';
 
     this.terminal.clear();
     this.terminal.writeln(`\x1b[1;32m Starting OpenCode session in ${caseName}...\x1b[0m`);
@@ -559,13 +611,15 @@ Object.assign(CodemanApp.prototype, {
     this.terminal.focus();
 
     try {
-      // Check if OpenCode is available
-      const statusRes = await fetch('/api/opencode/status');
-      const status = (await statusRes.json()).data;
-      if (!status.available) {
-        this.terminal.writeln('\x1b[1;31m OpenCode CLI not found.\x1b[0m');
-        this.terminal.writeln('\x1b[90m Install with: curl -fsSL https://opencode.ai/install | bash\x1b[0m');
-        return;
+      // Check if OpenCode is available (local sessions only)
+      if (!isRemote) {
+        const statusRes = await fetch('/api/opencode/status');
+        const status = (await statusRes.json()).data;
+        if (!status.available) {
+          this.terminal.writeln('\x1b[1;31m OpenCode CLI not found.\x1b[0m');
+          this.terminal.writeln('\x1b[90m Install with: curl -fsSL https://opencode.ai/install | bash\x1b[0m');
+          return;
+        }
       }
 
       // Quick-start with opencode mode (auto-allow tools by default).
@@ -577,8 +631,10 @@ Object.assign(CodemanApp.prototype, {
         body: JSON.stringify({
           caseName,
           mode: 'opencode',
-          openCodeConfig: { autoAllowTools: true },
-          ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
+          ...(isRemote ? {} : {
+            openCodeConfig: { autoAllowTools: true },
+            ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
+          }),
         })
       });
       const data = await res.json();
@@ -598,6 +654,9 @@ Object.assign(CodemanApp.prototype, {
 
   async runCodex() {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
+    // Remote cases run Codex on the REMOTE host — skip the local status probe and the
+    // local-only config/env below (quick-start rejects them for remote cases).
+    const isRemote = (this.cases || []).find(c => c.name === caseName)?.location === 'remote';
 
     this.terminal.clear();
     this.terminal.writeln(`\x1b[1;32m Starting Codex session in ${caseName}...\x1b[0m`);
@@ -605,12 +664,14 @@ Object.assign(CodemanApp.prototype, {
     this.terminal.focus();
 
     try {
-      const statusRes = await fetch('/api/codex/status');
-      const status = (await statusRes.json()).data;
-      if (!status.available) {
-        this.terminal.writeln('\x1b[1;31m Codex CLI not found.\x1b[0m');
-        this.terminal.writeln('\x1b[90m Install with: npm install -g @openai/codex\x1b[0m');
-        return;
+      if (!isRemote) {
+        const statusRes = await fetch('/api/codex/status');
+        const status = (await statusRes.json()).data;
+        if (!status.available) {
+          this.terminal.writeln('\x1b[1;31m Codex CLI not found.\x1b[0m');
+          this.terminal.writeln('\x1b[90m Install with: npm install -g @openai/codex\x1b[0m');
+          return;
+        }
       }
 
       const globalSettings = this.loadAppSettingsFromStorage();
@@ -621,11 +682,13 @@ Object.assign(CodemanApp.prototype, {
         body: JSON.stringify({
           caseName,
           mode: 'codex',
-          codexConfig: {
-            dangerouslyBypassApprovals: globalSettings.codexDangerouslyBypassApprovals ?? false,
-            renderMode: 'hybrid',
-          },
-          ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
+          ...(isRemote ? {} : {
+            codexConfig: {
+              dangerouslyBypassApprovals: globalSettings.codexDangerouslyBypassApprovals ?? false,
+              renderMode: 'hybrid',
+            },
+            ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
+          }),
         })
       });
       const data = await res.json();
@@ -645,6 +708,9 @@ Object.assign(CodemanApp.prototype, {
 
   async runGemini() {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
+    // Remote cases run Gemini on the REMOTE host — skip the local status probe and the
+    // local-only config/env below (quick-start rejects them for remote cases).
+    const isRemote = (this.cases || []).find(c => c.name === caseName)?.location === 'remote';
 
     this.terminal.clear();
     this.terminal.writeln(`\x1b[1;32m Starting Gemini session in ${caseName}...\x1b[0m`);
@@ -652,12 +718,14 @@ Object.assign(CodemanApp.prototype, {
     this.terminal.focus();
 
     try {
-      const statusRes = await fetch('/api/gemini/status');
-      const status = (await statusRes.json()).data;
-      if (!status.available) {
-        this.terminal.writeln('\x1b[1;31m Gemini CLI not found.\x1b[0m');
-        this.terminal.writeln('\x1b[90m Install with: npm install -g @google/gemini-cli\x1b[0m');
-        return;
+      if (!isRemote) {
+        const statusRes = await fetch('/api/gemini/status');
+        const status = (await statusRes.json()).data;
+        if (!status.available) {
+          this.terminal.writeln('\x1b[1;31m Gemini CLI not found.\x1b[0m');
+          this.terminal.writeln('\x1b[90m Install with: npm install -g @google/gemini-cli\x1b[0m');
+          return;
+        }
       }
 
       const envOverrides = this.buildEnvOverrides(this.getCaseSettings(caseName), this.loadAppSettingsFromStorage());
@@ -667,8 +735,10 @@ Object.assign(CodemanApp.prototype, {
         body: JSON.stringify({
           caseName,
           mode: 'gemini',
-          geminiConfig: { approvalMode: 'yolo' },
-          ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
+          ...(isRemote ? {} : {
+            geminiConfig: { approvalMode: 'yolo' },
+            ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
+          }),
         })
       });
       const data = await res.json();
@@ -1254,6 +1324,23 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('newCaseDescription').value = '';
     document.getElementById('linkCaseName').value = '';
     document.getElementById('linkCasePath').value = '';
+    const remoteFields = [
+      'remoteCaseName',
+      'remoteCasePath',
+      'remoteHostId',
+      'remoteHostAddress',
+      'remoteHostUsername',
+      'remoteHostPort',
+      'remoteHostCodexCommand',
+      'remoteHostIdentityFile',
+      'remoteHostSocksProxy',
+      'remoteHostJumpHost',
+      'remoteHostExtraSshOptions',
+    ];
+    remoteFields.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
     // Reset to first tab
     this.caseModalTab = 'case-create';
     this.switchCaseModalTab('case-create');
@@ -1295,13 +1382,16 @@ Object.assign(CodemanApp.prototype, {
       this.renderCaseManageList();
     } else {
       submitBtn.style.display = '';
-      submitBtn.textContent = tabName === 'case-create' ? 'Create' : 'Link';
+      submitBtn.textContent =
+        tabName === 'case-create' ? 'Create' : tabName === 'case-remote' ? 'Link Remote' : 'Link';
     }
     // Focus appropriate input
     if (tabName === 'case-create') {
       document.getElementById('newCaseName').focus();
     } else if (tabName === 'case-link') {
       document.getElementById('linkCaseName').focus();
+    } else if (tabName === 'case-remote') {
+      document.getElementById('remoteCaseName').focus();
     }
   },
 
@@ -1317,6 +1407,8 @@ Object.assign(CodemanApp.prototype, {
     try {
       if (this.caseModalTab === 'case-create') {
         await this.createCase();
+      } else if (this.caseModalTab === 'case-remote') {
+        await this.linkRemoteCase();
       } else {
         await this.linkCase();
       }
@@ -1407,6 +1499,86 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  async linkRemoteCase() {
+    const name = document.getElementById('remoteCaseName').value.trim();
+    const remotePath = document.getElementById('remoteCasePath').value.trim();
+    const hostId = document.getElementById('remoteHostId').value.trim();
+    const host = document.getElementById('remoteHostAddress').value.trim();
+    const username = document.getElementById('remoteHostUsername').value.trim();
+    const codexCommand = document.getElementById('remoteHostCodexCommand').value.trim();
+    // COD-107 — port + advanced SSH connection options.
+    const portRaw = document.getElementById('remoteHostPort').value.trim();
+    const identityFile = document.getElementById('remoteHostIdentityFile').value.trim();
+    const socksProxy = document.getElementById('remoteHostSocksProxy').value.trim();
+    const jumpHost = document.getElementById('remoteHostJumpHost').value.trim();
+    const extraSshOptions = document.getElementById('remoteHostExtraSshOptions').value
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
+
+    if (!name || !remotePath || !hostId || !host || !username) {
+      this.showToast('Please complete all required remote fields', 'error');
+      return;
+    }
+    if (!/^[a-zA-Z0-9_-]+$/.test(name) || !/^[a-zA-Z0-9_-]+$/.test(hostId)) {
+      this.showToast('Invalid name. Use only letters, numbers, hyphens, underscores.', 'error');
+      return;
+    }
+    if (!remotePath.startsWith('/')) {
+      this.showToast('Remote path must be absolute', 'error');
+      return;
+    }
+    let port;
+    if (portRaw) {
+      port = Number(portRaw);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        this.showToast('SSH port must be a number between 1 and 65535', 'error');
+        return;
+      }
+    }
+
+    try {
+      const hostPayload = {
+        id: hostId,
+        label: hostId,
+        host,
+        username,
+        ...(port ? { port } : {}),
+        ...(identityFile ? { identityFile } : {}),
+        ...(socksProxy ? { socksProxy } : {}),
+        ...(jumpHost ? { jumpHost } : {}),
+        ...(extraSshOptions.length ? { extraSshOptions } : {}),
+        ...(codexCommand ? { commands: { codex: codexCommand } } : {}),
+      };
+      const hostRes = await fetch('/api/remote-hosts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(hostPayload)
+      });
+      const hostData = await hostRes.json();
+      if (!hostData.success && hostData.errorCode !== 'ALREADY_EXISTS') {
+        throw new Error(hostData.error || 'Failed to save remote host');
+      }
+
+      const caseRes = await fetch('/api/cases/remote-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, hostId, remotePath })
+      });
+      const caseData = await caseRes.json();
+      if (caseData.success) {
+        this.closeCreateCaseModal();
+        this.showToast(`Remote case "${name}" linked`, 'success');
+        await this.loadQuickStartCases(name);
+        await this.saveLastUsedCase(name);
+      } else {
+        this.showToast(caseData.error || 'Failed to link remote case', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to link remote case:', err);
+      this.showToast('Failed to link remote case: ' + err.message, 'error');
+    }
+  },
 
   // ═══════════════════════════════════════════════════════════════
   // Case Management (reorder + delete)

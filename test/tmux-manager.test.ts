@@ -8,7 +8,14 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { TmuxManager, formatPaneSnapshot, parsePaneList, resolveActivePaneTarget } from '../src/tmux-manager.js';
+import {
+  TmuxManager,
+  buildRemoteKillCommand,
+  buildRemoteLaunchCommand,
+  formatPaneSnapshot,
+  parsePaneList,
+  resolveActivePaneTarget,
+} from '../src/tmux-manager.js';
 import { execSync, exec } from 'node:child_process';
 
 // ============================================================================
@@ -88,6 +95,80 @@ describe('TmuxManager (unit)', () => {
   describe('backend', () => {
     it('should report tmux as backend', () => {
       expect(manager.backend).toBe('tmux');
+    });
+  });
+
+  describe('remote launch command builder', () => {
+    it('wraps codex command overrides in ssh with remote tmux launch', () => {
+      const command = buildRemoteLaunchCommand({
+        mode: 'codex',
+        remote: {
+          hostId: 'gpu-box',
+          label: 'GPU Box',
+          host: '10.0.0.42',
+          username: 'ubuntu',
+          remotePath: '/home/ubuntu/work',
+          commands: { codex: 'exec codx personal' },
+        },
+        sessionId: 'abc123def456',
+      });
+
+      expect(command).toContain('ssh');
+      expect(command).toContain('BatchMode=yes');
+      expect(command).toContain('ubuntu@10.0.0.42');
+      expect(command).toContain('/home/ubuntu/work');
+      // Dedicated socket + a name that fails a remote Codeman's SAFE_MUX_NAME_PATTERN.
+      expect(command).toContain('tmux -L codeman-remote new-session -A -s codeman-ssh-abc123de');
+      expect(command).toContain('exec codx personal');
+      // Session options are scoped per-session, never global (-g).
+      expect(command).not.toContain('set -g');
+    });
+
+    it('uses default shell command when no override is configured', () => {
+      const command = buildRemoteLaunchCommand({
+        mode: 'shell',
+        remote: {
+          hostId: 'gpu-box',
+          label: 'GPU Box',
+          host: '10.0.0.42',
+          username: 'ubuntu',
+          remotePath: '/home/ubuntu/work',
+        },
+        sessionId: 'abc123def456',
+      });
+
+      expect(command).toContain('exec bash -l');
+    });
+
+    it('defaults claude to a non-interactive launch (--dangerously-skip-permissions)', () => {
+      const command = buildRemoteLaunchCommand({
+        mode: 'claude',
+        remote: { hostId: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu', remotePath: '/w' },
+        sessionId: 'abc123def456',
+      });
+      expect(command).toContain('exec claude --dangerously-skip-permissions');
+    });
+  });
+
+  describe('remote kill command builder', () => {
+    it('kills the durable remote tmux session on the dedicated socket via ssh', () => {
+      const command = buildRemoteKillCommand({
+        remote: {
+          hostId: 'gpu-box',
+          label: 'GPU Box',
+          host: '10.0.0.42',
+          username: 'ubuntu',
+          remotePath: '/home/ubuntu/work',
+        },
+        sessionId: 'abc123def456',
+      });
+
+      expect(command).toContain('ssh');
+      // Shares the default ConnectTimeout so an unreachable host fails fast (never blocks kill).
+      expect(command).toContain('-o ConnectTimeout=10');
+      expect(command).toContain('ubuntu@10.0.0.42');
+      expect(command).toContain('tmux -L codeman-remote kill-session -t');
+      expect(command).toContain('codeman-ssh-abc123de');
     });
   });
 

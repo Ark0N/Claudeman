@@ -70,10 +70,12 @@ import { RunSummaryTracker } from '../../run-summary.js';
 
 import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal-limits.js';
 import { MAX_PASTE_IMAGE_BYTES } from '../../config/buffer-limits.js';
-import { dataPath } from '../../config/instance.js';
+import { dataPath, getDataDir } from '../../config/instance.js';
+import { checkRemoteTmuxAvailable, readRemoteCases, readRemoteHosts, toSessionRemote } from '../../remote-hosts.js';
 
 // Path to linked-cases registry (same file used by case-routes resolveCasePath)
 const LINKED_CASES_FILE = dataPath('linked-cases.json');
+const CODEMAN_CONFIG_DIR = getDataDir();
 
 // Pre-compiled regex for terminal buffer cleaning (avoids per-request compilation)
 // eslint-disable-next-line no-control-regex
@@ -1269,81 +1271,125 @@ export function registerSessionRoutes(
       effort,
     } = parseBody(QuickStartSchema, req.body);
 
-    // Check OpenCode availability if requested
-    if (mode === 'opencode') {
-      const { isOpenCodeAvailable } = await import('../../utils/opencode-cli-resolver.js');
-      if (!isOpenCodeAvailable()) {
+    // Resolve the remote case FIRST — the CLI executes on the REMOTE host over ssh,
+    // so the LOCAL availability gates below (isCodexAvailable() etc.) don't apply and
+    // would wrongly reject a machine that hasn't got the CLI installed locally.
+    let remote = undefined;
+    let casePath: string | null = null;
+    const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
+    const remoteCase = remoteCases.find((item) => item.name === caseName);
+    if (remoteCase) {
+      const host = (await readRemoteHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === remoteCase.hostId);
+      if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
+
+      // Per-session config that is applied to the LOCAL tmux/CLI wrapper (env vars via
+      // tmux setenv, effort/model CLI args, codex/gemini/opencode config) does NOT
+      // cross ssh, so it would silently no-op. Reject rather than pretend it worked —
+      // remote command/env customization goes through the per-host command override.
+      if (
+        (envOverrides && Object.keys(envOverrides).length > 0) ||
+        effort ||
+        codexConfig ||
+        geminiConfig ||
+        openCodeConfig
+      ) {
         return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash'
+          ApiErrorCode.INVALID_INPUT,
+          'envOverrides, effort, and per-CLI config are not supported for remote cases (they do not cross ssh). Configure the remote command via the host command override instead.'
         );
       }
-    }
 
-    // Check Codex availability if requested
-    if (mode === 'codex') {
-      const { isCodexAvailable } = await import('../../utils/codex-cli-resolver.js');
-      if (!isCodexAvailable()) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'Codex CLI not found. Install with: npm install -g @openai/codex'
-        );
+      // tmux is a hard prerequisite on the remote host (the agent runs inside a remote
+      // tmux server so it survives ssh drops). Probe before spawning so a missing tmux
+      // surfaces a clear, structured error instead of a dead "tmux: command not found" pane.
+      const tmuxCheck = await checkRemoteTmuxAvailable(host);
+      if (!tmuxCheck.ok) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, tmuxCheck.error || 'remote host is missing tmux');
       }
-    }
 
-    // Check Gemini availability if requested
-    if (mode === 'gemini') {
-      const { isGeminiAvailable } = await import('../../utils/gemini-cli-resolver.js');
-      if (!isGeminiAvailable()) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'Gemini CLI not found. Install with: npm install -g @google/gemini-cli'
-        );
+      casePath = remoteCase.remotePath;
+      remote = toSessionRemote(host, remoteCase);
+    } else {
+      // Check OpenCode availability if requested
+      if (mode === 'opencode') {
+        const { isOpenCodeAvailable } = await import('../../utils/opencode-cli-resolver.js');
+        if (!isOpenCodeAvailable()) {
+          return createErrorResponse(
+            ApiErrorCode.OPERATION_FAILED,
+            'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash'
+          );
+        }
       }
-    }
 
-    // Resolve case path: check linked-cases registry first, then fall back to CASES_DIR.
-    // This mirrors the behaviour of resolveCasePath() in case-routes so that linked
-    // external project directories are honoured by quick-start just like regular case routes.
-    let linkedCases: Record<string, string> = {};
-    try {
-      const raw = await fs.readFile(LINKED_CASES_FILE, 'utf-8');
-      linkedCases = JSON.parse(raw);
-    } catch {
-      // File missing or unparseable — treat as empty registry
-    }
-    const linkedCasePath = linkedCases[caseName];
-    const casePath = linkedCasePath || validatePathWithinBase(caseName, CASES_DIR);
-    if (!casePath) {
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
-    }
+      // Check Codex availability if requested
+      if (mode === 'codex') {
+        const { isCodexAvailable } = await import('../../utils/codex-cli-resolver.js');
+        if (!isCodexAvailable()) {
+          return createErrorResponse(
+            ApiErrorCode.OPERATION_FAILED,
+            'Codex CLI not found. Install with: npm install -g @openai/codex'
+          );
+        }
+      }
 
-    // Create case folder and CLAUDE.md if it doesn't exist (only for non-linked cases)
-    if (!existsSync(casePath)) {
+      // Check Gemini availability if requested
+      if (mode === 'gemini') {
+        const { isGeminiAvailable } = await import('../../utils/gemini-cli-resolver.js');
+        if (!isGeminiAvailable()) {
+          return createErrorResponse(
+            ApiErrorCode.OPERATION_FAILED,
+            'Gemini CLI not found. Install with: npm install -g @google/gemini-cli'
+          );
+        }
+      }
+
+      // Resolve case path: check linked-cases registry first, then fall back to CASES_DIR.
+      // This mirrors the behaviour of resolveCasePath() in case-routes so that linked
+      // external project directories are honoured by quick-start just like regular case routes.
+      let linkedCases: Record<string, string> = {};
       try {
-        mkdirSync(casePath, { recursive: true });
-        mkdirSync(join(casePath, 'src'), { recursive: true });
+        const raw = await fs.readFile(LINKED_CASES_FILE, 'utf-8');
+        linkedCases = JSON.parse(raw);
+      } catch {
+        // File missing or unparseable — treat as empty registry
+      }
+      casePath = linkedCases[caseName] || validatePathWithinBase(caseName, CASES_DIR);
+      if (!casePath) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
+      }
+    }
+
+    // By this point casePath is guaranteed non-null: for remote cases it was set from remoteCase.remotePath,
+    // for local cases the !casePath guard above returned early. TypeScript can't narrow across the if/else.
+    const resolvedCasePath = casePath as string;
+
+    // Create case folder and CLAUDE.md if it doesn't exist (only for non-linked, non-remote cases)
+    if (!remote && !existsSync(resolvedCasePath)) {
+      try {
+        mkdirSync(resolvedCasePath, { recursive: true });
+        mkdirSync(join(resolvedCasePath, 'src'), { recursive: true });
 
         // Read settings to get custom template path
         const templatePath = await ctx.getDefaultClaudeMdPath();
         const claudeMd = generateClaudeMd(caseName, '', templatePath);
-        writeFileSync(join(casePath, 'CLAUDE.md'), claudeMd);
+        writeFileSync(join(resolvedCasePath, 'CLAUDE.md'), claudeMd);
 
         // Write .claude/settings.local.json with hooks for desktop notifications
         // (Claude-specific — OpenCode, Codex, and Gemini use their own systems)
         if (mode !== 'opencode' && mode !== 'codex' && mode !== 'gemini') {
-          await writeHooksConfig(casePath);
+          await writeHooksConfig(resolvedCasePath);
         }
 
-        ctx.broadcast(SseEvent.CaseCreated, { name: caseName, path: casePath });
+        ctx.broadcast(SseEvent.CaseCreated, { name: caseName, path: resolvedCasePath });
       } catch (err) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create case: ${getErrorMessage(err)}`);
       }
-    } else if (mode !== 'opencode') {
+    } else if (!remote && mode !== 'opencode') {
       // COD-91 self-heal for an EXISTING case: refresh a pre-secret hooks block so the
       // now-unconditional hook-secret gate keeps accepting its hook events. No-op when
-      // the hooks aren't ours or already carry the secret.
-      await refreshStaleHookSecret(casePath).catch(() => {});
+      // the hooks aren't ours or already carry the secret. Skipped for remote cases —
+      // resolvedCasePath is a REMOTE path that doesn't exist on the local filesystem.
+      await refreshStaleHookSecret(resolvedCasePath).catch(() => {});
     }
 
     // Strip stale disk entries for keys this request is actively setting (Claude only —
@@ -1352,10 +1398,11 @@ export function registerSessionRoutes(
       mode !== 'opencode' &&
       mode !== 'codex' &&
       mode !== 'gemini' &&
+      !remote &&
       envOverrides &&
       Object.keys(envOverrides).length > 0
     ) {
-      await stripCaseEnvKeys(casePath, Object.keys(envOverrides));
+      await stripCaseEnvKeys(resolvedCasePath, Object.keys(envOverrides));
     }
 
     // Create a new session with the case as working directory
@@ -1375,7 +1422,7 @@ export function registerSessionRoutes(
     const qsClaudeModeConfig = await ctx.getClaudeModeConfig();
     const qsTerminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const session = new Session({
-      workingDir: casePath,
+      workingDir: resolvedCasePath,
       mux: ctx.mux,
       useMux: true,
       mode: mode,
@@ -1388,13 +1435,14 @@ export function registerSessionRoutes(
       geminiConfig: mode === 'gemini' ? geminiConfig : undefined,
       envOverrides,
       effort,
+      remote,
       tmuxHistoryLimit: qsTerminalHistoryConfig.tmuxHistoryLimit,
     });
 
     // Auto-detect completion phrase from CLAUDE.md BEFORE broadcasting
     // so the initial state already has the phrase configured (only if globally enabled)
-    if (mode === 'claude' && ctx.store.getConfig().ralphEnabled) {
-      autoConfigureRalph(session, casePath, ctx);
+    if (mode === 'claude' && !remote && ctx.store.getConfig().ralphEnabled) {
+      autoConfigureRalph(session, resolvedCasePath, ctx);
       if (!session.ralphTracker.enabled) {
         session.ralphTracker.enable();
         session.ralphTracker.enableAutoEnable(); // Allow re-enabling on restart
@@ -1463,7 +1511,7 @@ export function registerSessionRoutes(
 
       return {
         sessionId: session.id,
-        casePath,
+        casePath: resolvedCasePath,
         caseName,
       };
     } catch (err) {
