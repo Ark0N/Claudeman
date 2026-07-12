@@ -2140,6 +2140,12 @@ export class WebServer extends EventEmitter {
               envOverrides: savedEnvOverrides,
               effort: savedState?.effort,
               attachmentHistory: savedAttachmentHistory,
+              // Remote SSH metadata must round-trip on recovery: without it the
+              // attach cwd falls back to the (nonexistent-locally) remote path and
+              // respawn rebuilds a LOCAL command, breaking the pane and silently
+              // erasing `remote` from state.json on the next persist. mux-sessions.json
+              // round-trips MuxSession.remote; state.json carries SessionState.remote.
+              remote: muxSession.remote ?? savedState?.remote,
             });
 
             // Update session name if it was a "Restored:" placeholder or doesn't match saved name

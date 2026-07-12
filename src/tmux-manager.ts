@@ -672,15 +672,31 @@ function buildSpawnCommand(options: {
 }
 
 /**
+ * Dedicated socket for Codeman-launched REMOTE tmux servers, distinct from the
+ * canonical local `-L codeman` socket. A remote host that runs its OWN Codeman
+ * would otherwise share the `-L codeman` socket AND the `codeman-<hex>` discovery
+ * name, so its `reconcileSessions()` would ADOPT our session (attach a PTY,
+ * resize, respawn-pane it locally) — the cross-machine form of the "2nd instance
+ * attaches live sessions" hazard. A private socket keeps our remote sessions off
+ * that instance's radar entirely.
+ */
+const REMOTE_TMUX_SOCKET = 'codeman-remote';
+
+/**
  * Deterministic, reattach-stable remote tmux session name for a Codeman session.
  *
- * Derived from the same stable field the LOCAL muxName uses
- * (`codeman-${sessionId.slice(0, 8)}`), so reconnecting (which re-issues the
- * exact same `ssh … new-session -A`) lands back in the SAME remote session.
- * Must NOT be random/time-based — it has to be stable across reconnects.
+ * Derived from the same stable field the LOCAL muxName uses (the first 8 chars of
+ * the sessionId), so reconnecting (which re-issues the exact same
+ * `ssh … new-session -A`) lands back in the SAME remote session. Must NOT be
+ * random/time-based — it has to be stable across reconnects.
+ *
+ * The `codeman-ssh-` prefix is deliberately chosen to FAIL a remote Codeman's
+ * `SAFE_MUX_NAME_PATTERN` (`^codeman-[a-f0-9-]+$`) — the `s`/`h` letters mean a
+ * remote instance's discovery never treats this as one of its own sessions (belt
+ * to the dedicated-socket suspenders above).
  */
 export function remoteTmuxSessionName(sessionId: string): string {
-  return `codeman-${sessionId.slice(0, 8)}`;
+  return `codeman-ssh-${sessionId.slice(0, 8)}`;
 }
 
 /**
@@ -690,16 +706,22 @@ export function remoteTmuxSessionName(sessionId: string): string {
  *
  * Emits:
  *   ssh -o BatchMode=yes -t [<COD-107 connection opts>] user@host \
- *     'tmux -L codeman new-session -A -s codeman-<id> -c <path> "cd <path> && exec <cli>" \
- *        \; set -g status off \; set -g mouse off \; set -sg escape-time 0 \; set -g prefix C-q'
+ *     'tmux -L codeman-remote new-session -A -s codeman-ssh-<id> -c <path> "cd <path> && exec <cli>" \
+ *        \; set -t codeman-ssh-<id> status off \; set -t codeman-ssh-<id> mouse off \
+ *        \; set -t codeman-ssh-<id> prefix C-q \; set -s escape-time 0'
  *
  * COD-107 — the connection options (`-p`, `-i`, `-J`, SOCKS `-o ProxyCommand`,
  * arbitrary `-o`) come from the shared `buildSshConnectionArgs(remote)`, so the
  * prereq tmux probe and this launch connect with identical options.
  *
- * - `new-session -A -s codeman-<id>` = attach-if-exists-else-create (idempotent),
- *   so reconnect re-runs the same command and reattaches the still-running agent.
- * - `-L codeman` = canonical remote socket (for Phase 2/3 discovery).
+ * - `new-session -A -s codeman-ssh-<id>` = attach-if-exists-else-create
+ *   (idempotent), so reconnect re-runs the same command and reattaches the
+ *   still-running agent.
+ * - `-L codeman-remote` = a DEDICATED socket, NOT the canonical `-L codeman` a
+ *   remote Codeman would use, so our session never collides with / gets adopted by
+ *   an instance running on the remote host.
+ * - The `set` options are scoped per-session (`set -t <name>` / server-level
+ *   `set -s`), never `-g`, so they never mutate other sessions' prefix/mouse.
  * - The whole tmux invocation is a SINGLE ssh argument (the remote login shell
  *   runs it), so it is shell-quoted as one unit; the `cd && exec` command is in
  *   turn a single tmux argument (tmux runs it via `/bin/sh -c`), so the path is
@@ -721,13 +743,15 @@ export function buildRemoteLaunchCommand(options: {
   const paneCommand = `cd ${shellescape(remote.remotePath)} && ${modeCommand}`;
 
   // The tmux command line, with `\;` separating commands so the config `set`s
-  // apply on the SAME connection (and are idempotent on reattach).
+  // apply on the SAME connection (and are idempotent on reattach). Options are
+  // scoped per-session (`set -t <name>` / server `set -s`), NEVER `-g`, so a
+  // shared remote tmux server's other sessions keep their own prefix/mouse.
   const tmuxInvocation = [
-    `tmux -L codeman new-session -A -s ${remoteName} -c ${shellescape(remote.remotePath)} ${shellescape(paneCommand)}`,
-    'set -g status off',
-    'set -g mouse off',
-    'set -sg escape-time 0',
-    'set -g prefix C-q',
+    `tmux -L ${REMOTE_TMUX_SOCKET} new-session -A -s ${remoteName} -c ${shellescape(remote.remotePath)} ${shellescape(paneCommand)}`,
+    `set -t ${remoteName} status off`,
+    `set -t ${remoteName} mouse off`,
+    `set -t ${remoteName} prefix C-q`,
+    'set -s escape-time 0',
   ].join(' \\; ');
 
   // ssh runs its trailing args through the remote login shell, so the entire
@@ -741,6 +765,22 @@ export function buildRemoteLaunchCommand(options: {
   const [ssh, batchMode, ...connectionArgs] = buildSshConnectionArgs(remote);
   const sshParts = [ssh, batchMode, '-t', ...connectionArgs, remoteSshTarget(remote), shellescape(tmuxInvocation)];
   return sshParts.join(' ');
+}
+
+/**
+ * Build the SSH command that kills the durable remote tmux session created by
+ * `buildRemoteLaunchCommand`. Because that session lives on a private socket
+ * (`-L codeman-remote`) under a stable name, killing the LOCAL ssh wrapper alone
+ * would orphan the remote agent forever (invisible to Codeman, still burning plan
+ * quota). This is fired best-effort on session kill; the shared connection args
+ * carry the default `-o ConnectTimeout=10` so an unreachable host fails fast.
+ */
+export function buildRemoteKillCommand(options: { remote: SessionRemote; sessionId: string }): string {
+  const { remote, sessionId } = options;
+  const remoteName = remoteTmuxSessionName(sessionId);
+  const killCmd = `tmux -L ${REMOTE_TMUX_SOCKET} kill-session -t ${shellescape(remoteName)}`;
+  const [ssh, ...connectionArgs] = buildSshConnectionArgs(remote);
+  return [ssh, ...connectionArgs, remoteSshTarget(remote), shellescape(killCmd)].join(' ');
 }
 
 /**
@@ -1632,6 +1672,20 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         });
       } catch {
         // Session may already be dead
+      }
+    }
+
+    // Strategy 3b: Remote sessions run a DURABLE tmux server on the remote host
+    // (survives ssh drops), so killing only the local ssh wrapper above would
+    // orphan the remote agent forever. Fire a best-effort `ssh … tmux kill-session`
+    // — fire-and-forget so it NEVER blocks or throws the local kill (bounded by the
+    // shared ConnectTimeout on an unreachable host).
+    if (session.remote) {
+      try {
+        const remoteKillCmd = buildRemoteKillCommand({ remote: session.remote, sessionId });
+        exec(remoteKillCmd, { timeout: EXEC_TIMEOUT_MS }, () => {});
+      } catch {
+        // Best-effort — a failure here must not affect the local kill result.
       }
     }
 

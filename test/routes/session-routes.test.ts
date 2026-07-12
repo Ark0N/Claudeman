@@ -29,13 +29,19 @@ vi.mock('node:child_process', async (orig) => {
 });
 
 // In-memory remote store so remote-case tests can inject hosts/cases without real JSON files.
-const remoteStore = vi.hoisted(() => ({ hosts: [] as unknown[], cases: [] as unknown[] }));
+const remoteStore = vi.hoisted(() => ({
+  hosts: [] as unknown[],
+  cases: [] as unknown[],
+  tmuxCheck: { ok: true, tmuxPath: '/usr/bin/tmux' } as { ok: boolean; tmuxPath?: string; error?: string },
+}));
 vi.mock('../../src/remote-hosts.js', async (orig) => {
   const actual = await orig<typeof import('../../src/remote-hosts.js')>();
   return {
     ...actual,
     readRemoteHosts: vi.fn(async () => remoteStore.hosts),
     readRemoteCases: vi.fn(async () => remoteStore.cases),
+    // Stub the remote-tmux prereq probe so quick-start never shells out to ssh.
+    checkRemoteTmuxAvailable: vi.fn(async () => remoteStore.tmuxCheck),
   };
 });
 
@@ -90,9 +96,10 @@ describe('session-routes', () => {
 
   beforeEach(async () => {
     harness = await createEnvelopeHarness(registerSessionRoutes);
-    // Reset remote store so tests start with empty hosts/cases
+    // Reset remote store so tests start with empty hosts/cases and a passing tmux probe
     remoteStore.hosts = [];
     remoteStore.cases = [];
+    remoteStore.tmuxCheck = { ok: true, tmuxPath: '/usr/bin/tmux' };
   });
 
   afterEach(async () => {
@@ -858,6 +865,61 @@ describe('session-routes', () => {
         });
       } finally {
         startShell.mockRestore();
+      }
+    });
+
+    it('rejects a remote quick-start that carries envOverrides (inert over ssh)', async () => {
+      remoteStore.hosts = [{ id: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu' }];
+      remoteStore.cases = [{ name: 'gpu-work', type: 'remote', hostId: 'gpu-box', remotePath: '/home/ubuntu/work' }];
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/quick-start',
+        payload: { caseName: 'gpu-work', mode: 'claude', envOverrides: { CLAUDE_CODE_FOO: 'bar' } },
+      });
+
+      expect(res.statusCode).toBe(httpStatusForErrorCode(ApiErrorCode.INVALID_INPUT));
+      expect(JSON.parse(res.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.INVALID_INPUT });
+    });
+
+    it('rejects a remote quick-start when the remote host lacks tmux', async () => {
+      remoteStore.hosts = [{ id: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu' }];
+      remoteStore.cases = [{ name: 'gpu-work', type: 'remote', hostId: 'gpu-box', remotePath: '/home/ubuntu/work' }];
+      remoteStore.tmuxCheck = {
+        ok: false,
+        error: 'remote host 10.0.0.42 needs tmux installed for durable remote sessions',
+      };
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/quick-start',
+        payload: { caseName: 'gpu-work', mode: 'shell' },
+      });
+
+      expect(res.statusCode).toBe(httpStatusForErrorCode(ApiErrorCode.OPERATION_FAILED));
+      expect(JSON.parse(res.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.OPERATION_FAILED });
+    });
+
+    it('does not run local codex availability check for a remote codex case', async () => {
+      // A remote codex case must NOT be blocked by the LOCAL codex availability gate
+      // (the CLI runs on the remote host). Probe is stubbed ok in remoteStore.tmuxCheck.
+      const startInteractive = vi.spyOn(Session.prototype, 'startInteractive').mockResolvedValue(undefined);
+      try {
+        remoteStore.hosts = [
+          { id: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu', commands: { codex: 'exec codx' } },
+        ];
+        remoteStore.cases = [{ name: 'gpu-work', type: 'remote', hostId: 'gpu-box', remotePath: '/home/ubuntu/work' }];
+
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: '/api/quick-start',
+          payload: { caseName: 'gpu-work', mode: 'codex' },
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(res.body).success).toBe(true);
+      } finally {
+        startInteractive.mockRestore();
       }
     });
 

@@ -51,8 +51,8 @@ const aaDesktop: SessionRemote = {
 const SESSION_ID = 'cod107chk';
 
 describe('COD-107 buildSshConnectionArgs — shared ssh connection tokens', () => {
-  it('always leads with -o BatchMode=yes', () => {
-    expect(buildSshConnectionArgs(baseRemote)).toEqual(['ssh', '-o BatchMode=yes']);
+  it('always leads with -o BatchMode=yes then the default -o ConnectTimeout=10', () => {
+    expect(buildSshConnectionArgs(baseRemote)).toEqual(['ssh', '-o BatchMode=yes', '-o ConnectTimeout=10']);
   });
 
   it('emits the full aa-desktop option set in order with escaping + %h %p intact', () => {
@@ -107,10 +107,19 @@ describe('COD-107 buildSshConnectionArgs — shared ssh connection tokens', () =
     expect(args.join(' ')).toContain(`-i '${HOME}/.ssh/id_ed25519'`);
   });
 
-  it('empty options ⇒ exactly the historical token set (back-compat)', () => {
-    // Today: ssh -o BatchMode=yes (+ -p only when set). Nothing else.
-    expect(buildSshConnectionArgs(baseRemote)).toEqual(['ssh', '-o BatchMode=yes']);
-    expect(buildSshConnectionArgs({ ...baseRemote, port: 2200 })).toEqual(['ssh', '-o BatchMode=yes', '-p 2200']);
+  it('empty options ⇒ BatchMode + the default ConnectTimeout (+ -p only when set)', () => {
+    expect(buildSshConnectionArgs(baseRemote)).toEqual(['ssh', '-o BatchMode=yes', '-o ConnectTimeout=10']);
+    expect(buildSshConnectionArgs({ ...baseRemote, port: 2200 })).toEqual([
+      'ssh',
+      '-o BatchMode=yes',
+      '-o ConnectTimeout=10',
+      '-p 2200',
+    ]);
+  });
+
+  it('omits the default ConnectTimeout when extraSshOptions already sets it (operator wins)', () => {
+    const args = buildSshConnectionArgs({ ...baseRemote, extraSshOptions: ['ConnectTimeout=3'] });
+    expect(args.filter((a) => a.includes('ConnectTimeout'))).toEqual(["-o 'ConnectTimeout=3'"]);
   });
 });
 
@@ -124,7 +133,7 @@ describe('COD-107 buildRemoteLaunchCommand — threads connection args', () => {
     expect(command).toContain("-o 'StrictHostKeyChecking=accept-new'");
     expect(command).toContain('-t');
     expect(command).toContain('aakht@192.168.55.170');
-    expect(command).toContain('tmux -L codeman new-session -A');
+    expect(command).toContain('tmux -L codeman-remote new-session -A');
 
     // Connection options come BEFORE -t / the target / the tmux command.
     const idxProxy = command.indexOf('ProxyCommand=');
@@ -132,32 +141,35 @@ describe('COD-107 buildRemoteLaunchCommand — threads connection args', () => {
     expect(idxProxy).toBeLessThan(idxTarget);
   });
 
-  it('back-compat: a remote with no advanced options is byte-identical to the historical form', () => {
+  it('a remote with no advanced options is byte-identical to the expected form', () => {
     const command = buildRemoteLaunchCommand({ mode: 'shell', remote: baseRemote, sessionId: SESSION_ID });
-    // Reconstruct the historical command using the SAME nested POSIX
-    // single-quote escaping the production code uses, to prove byte-identity.
+    // Reconstruct the command using the SAME nested POSIX single-quote escaping the
+    // production code uses, to prove byte-identity. Session runs on the DEDICATED
+    // `-L codeman-remote` socket under a `codeman-ssh-` name that a remote Codeman's
+    // discovery ignores; set-options are scoped per-session (never `-g`).
     const sh = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
-    const remoteName = `codeman-${SESSION_ID.slice(0, 8)}`;
+    const remoteName = `codeman-ssh-${SESSION_ID.slice(0, 8)}`;
     const path = sh('/home/ubuntu/work');
     const paneCommand = `cd ${path} && exec bash -l`;
     const tmuxInvocation = [
-      `tmux -L codeman new-session -A -s ${remoteName} -c ${path} ${sh(paneCommand)}`,
-      'set -g status off',
-      'set -g mouse off',
-      'set -sg escape-time 0',
-      'set -g prefix C-q',
+      `tmux -L codeman-remote new-session -A -s ${remoteName} -c ${path} ${sh(paneCommand)}`,
+      `set -t ${remoteName} status off`,
+      `set -t ${remoteName} mouse off`,
+      `set -t ${remoteName} prefix C-q`,
+      'set -s escape-time 0',
     ].join(' \\; ');
-    const expected = `ssh -o BatchMode=yes -t ${remoteSshTarget(baseRemote)} ${sh(tmuxInvocation)}`;
+    // Connection args (with the default -o ConnectTimeout=10) sit after -t.
+    const expected = `ssh -o BatchMode=yes -t -o ConnectTimeout=10 ${remoteSshTarget(baseRemote)} ${sh(tmuxInvocation)}`;
     expect(command).toBe(expected);
   });
 
-  it('back-compat: port-only remote matches the historical -p placement', () => {
+  it('port-only remote places -p after the -t/ConnectTimeout tokens', () => {
     const command = buildRemoteLaunchCommand({
       mode: 'shell',
       remote: { ...baseRemote, port: 2222 },
       sessionId: SESSION_ID,
     });
-    expect(command).toMatch(/^ssh -o BatchMode=yes -t -p 2222 ubuntu@10\.0\.0\.42 /);
+    expect(command).toMatch(/^ssh -o BatchMode=yes -t -o ConnectTimeout=10 -p 2222 ubuntu@10\.0\.0\.42 /);
   });
 });
 

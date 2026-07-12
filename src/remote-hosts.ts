@@ -60,7 +60,10 @@ export async function writeRemoteCases(configDir: string, cases: RemoteCase[]): 
 export function defaultRemoteCommandForMode(mode: SessionMode): string {
   const commands: Record<RemoteCommandMode, string> = {
     shell: 'exec bash -l',
-    claude: 'exec claude',
+    // Mirror the LOCAL claude default so the remote agent runs non-interactively
+    // (no trust-folder/permission prompt that nothing on the remote answers). The
+    // per-host `commands.claude` override stays the escape hatch.
+    claude: 'exec claude --dangerously-skip-permissions',
     opencode: 'exec opencode',
     codex: 'exec codex',
     gemini: 'exec gemini',
@@ -105,6 +108,7 @@ function expandIdentityPath(identityFile: string): string {
  * Returns the leading tokens of an ssh command line (NOT including `-t`, the
  * target, or any remote command). Order:
  *   ssh -o BatchMode=yes
+ *       [-o ConnectTimeout=10]           (default; suppressed if extraSshOptions sets it)
  *       [-p <port>]
  *       [-i <abs-identity>]              (~/$HOME expanded, then shellescaped)
  *       [-J <jumpHost>]                  (shellescaped, single token)
@@ -115,11 +119,14 @@ function expandIdentityPath(identityFile: string): string {
  *  - The ProxyCommand is emitted as a single shellescaped `-o KEY=VALUE`, so the
  *    whole value (spaces + `%h`/`%p`) reaches ssh as one argument and `%h %p`
  *    survive verbatim — ssh expands them to the real host/port, not the shell.
- *  - Empty options ⇒ `['ssh', '-o BatchMode=yes']` (+ `-p` only when set), i.e.
- *    byte-identical to the historical behavior.
+ *  - A default `-o ConnectTimeout=10` bounds the wait on an unreachable/blackholed
+ *    host (else the pane hangs on the OS TCP timeout). It is omitted when the
+ *    operator already set ConnectTimeout via extraSshOptions, so their value wins.
  */
 export function buildSshConnectionArgs(remote: RemoteSshOptions & Pick<RemoteHost, 'port'>): string[] {
   const parts: string[] = ['ssh', '-o BatchMode=yes'];
+  const hasConnectTimeout = (remote.extraSshOptions ?? []).some((opt) => /^ConnectTimeout=/i.test(opt));
+  if (!hasConnectTimeout) parts.push('-o ConnectTimeout=10');
   if (remote.port) parts.push(`-p ${remote.port}`);
   if (remote.identityFile) parts.push(`-i ${shellescape(expandIdentityPath(remote.identityFile))}`);
   if (remote.jumpHost) parts.push(`-J ${shellescape(remote.jumpHost)}`);
@@ -146,10 +153,8 @@ export function buildSshConnectionArgs(remote: RemoteSshOptions & Pick<RemoteHos
 export function buildRemoteTmuxCheckCommand(
   host: Pick<RemoteHost, 'username' | 'host' | 'port'> & RemoteSshOptions
 ): string {
-  const [ssh, ...connectionArgs] = buildSshConnectionArgs(host);
-  const parts = [ssh, connectionArgs[0], '-o ConnectTimeout=10', ...connectionArgs.slice(1)];
-  parts.push(remoteSshTarget(host), "'command -v tmux'");
-  return parts.join(' ');
+  // ConnectTimeout is now a default of buildSshConnectionArgs (shared with the launch).
+  return [...buildSshConnectionArgs(host), remoteSshTarget(host), "'command -v tmux'"].join(' ');
 }
 
 export interface RemoteTmuxCheckResult {

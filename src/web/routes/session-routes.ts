@@ -62,7 +62,7 @@ import { RunSummaryTracker } from '../../run-summary.js';
 import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal-limits.js';
 import { MAX_PASTE_IMAGE_BYTES } from '../../config/buffer-limits.js';
 import { dataPath, getDataDir } from '../../config/instance.js';
-import { readRemoteCases, readRemoteHosts, toSessionRemote } from '../../remote-hosts.js';
+import { checkRemoteTmuxAvailable, readRemoteCases, readRemoteHosts, toSessionRemote } from '../../remote-hosts.js';
 
 // Path to linked-cases registry (same file used by case-routes resolveCasePath)
 const LINKED_CASES_FILE = dataPath('linked-cases.json');
@@ -1262,50 +1262,78 @@ export function registerSessionRoutes(
       effort,
     } = parseBody(QuickStartSchema, req.body);
 
-    // Check OpenCode availability if requested
-    if (mode === 'opencode') {
-      const { isOpenCodeAvailable } = await import('../../utils/opencode-cli-resolver.js');
-      if (!isOpenCodeAvailable()) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash'
-        );
-      }
-    }
-
-    // Check Codex availability if requested
-    if (mode === 'codex') {
-      const { isCodexAvailable } = await import('../../utils/codex-cli-resolver.js');
-      if (!isCodexAvailable()) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'Codex CLI not found. Install with: npm install -g @openai/codex'
-        );
-      }
-    }
-
-    // Check Gemini availability if requested
-    if (mode === 'gemini') {
-      const { isGeminiAvailable } = await import('../../utils/gemini-cli-resolver.js');
-      if (!isGeminiAvailable()) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'Gemini CLI not found. Install with: npm install -g @google/gemini-cli'
-        );
-      }
-    }
-
+    // Resolve the remote case FIRST — the CLI executes on the REMOTE host over ssh,
+    // so the LOCAL availability gates below (isCodexAvailable() etc.) don't apply and
+    // would wrongly reject a machine that hasn't got the CLI installed locally.
     let remote = undefined;
-    let linkedCasePath: string | undefined;
     let casePath: string | null = null;
     const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
     const remoteCase = remoteCases.find((item) => item.name === caseName);
     if (remoteCase) {
       const host = (await readRemoteHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === remoteCase.hostId);
       if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
+
+      // Per-session config that is applied to the LOCAL tmux/CLI wrapper (env vars via
+      // tmux setenv, effort/model CLI args, codex/gemini/opencode config) does NOT
+      // cross ssh, so it would silently no-op. Reject rather than pretend it worked —
+      // remote command/env customization goes through the per-host command override.
+      if (
+        (envOverrides && Object.keys(envOverrides).length > 0) ||
+        effort ||
+        codexConfig ||
+        geminiConfig ||
+        openCodeConfig
+      ) {
+        return createErrorResponse(
+          ApiErrorCode.INVALID_INPUT,
+          'envOverrides, effort, and per-CLI config are not supported for remote cases (they do not cross ssh). Configure the remote command via the host command override instead.'
+        );
+      }
+
+      // tmux is a hard prerequisite on the remote host (the agent runs inside a remote
+      // tmux server so it survives ssh drops). Probe before spawning so a missing tmux
+      // surfaces a clear, structured error instead of a dead "tmux: command not found" pane.
+      const tmuxCheck = await checkRemoteTmuxAvailable(host);
+      if (!tmuxCheck.ok) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, tmuxCheck.error || 'remote host is missing tmux');
+      }
+
       casePath = remoteCase.remotePath;
       remote = toSessionRemote(host, remoteCase);
     } else {
+      // Check OpenCode availability if requested
+      if (mode === 'opencode') {
+        const { isOpenCodeAvailable } = await import('../../utils/opencode-cli-resolver.js');
+        if (!isOpenCodeAvailable()) {
+          return createErrorResponse(
+            ApiErrorCode.OPERATION_FAILED,
+            'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash'
+          );
+        }
+      }
+
+      // Check Codex availability if requested
+      if (mode === 'codex') {
+        const { isCodexAvailable } = await import('../../utils/codex-cli-resolver.js');
+        if (!isCodexAvailable()) {
+          return createErrorResponse(
+            ApiErrorCode.OPERATION_FAILED,
+            'Codex CLI not found. Install with: npm install -g @openai/codex'
+          );
+        }
+      }
+
+      // Check Gemini availability if requested
+      if (mode === 'gemini') {
+        const { isGeminiAvailable } = await import('../../utils/gemini-cli-resolver.js');
+        if (!isGeminiAvailable()) {
+          return createErrorResponse(
+            ApiErrorCode.OPERATION_FAILED,
+            'Gemini CLI not found. Install with: npm install -g @google/gemini-cli'
+          );
+        }
+      }
+
       // Resolve case path: check linked-cases registry first, then fall back to CASES_DIR.
       // This mirrors the behaviour of resolveCasePath() in case-routes so that linked
       // external project directories are honoured by quick-start just like regular case routes.
@@ -1316,8 +1344,7 @@ export function registerSessionRoutes(
       } catch {
         // File missing or unparseable — treat as empty registry
       }
-      linkedCasePath = linkedCases[caseName];
-      casePath = linkedCasePath || validatePathWithinBase(caseName, CASES_DIR);
+      casePath = linkedCases[caseName] || validatePathWithinBase(caseName, CASES_DIR);
       if (!casePath) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
       }
@@ -1348,10 +1375,11 @@ export function registerSessionRoutes(
       } catch (err) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create case: ${getErrorMessage(err)}`);
       }
-    } else if (mode !== 'opencode') {
+    } else if (!remote && mode !== 'opencode') {
       // COD-91 self-heal for an EXISTING case: refresh a pre-secret hooks block so the
       // now-unconditional hook-secret gate keeps accepting its hook events. No-op when
-      // the hooks aren't ours or already carry the secret.
+      // the hooks aren't ours or already carry the secret. Skipped for remote cases —
+      // resolvedCasePath is a REMOTE path that doesn't exist on the local filesystem.
       await refreshStaleHookSecret(resolvedCasePath).catch(() => {});
     }
 

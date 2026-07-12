@@ -289,6 +289,13 @@ const RemoteCommandOverridesSchema = z
 const NO_SHELL_INJECTION = /^[^\n\r\0`]*$/;
 const noCommandSubstitution = (s: string) => !s.includes('$(');
 
+// `remotePath`/`identityFile` are shell-escaped, then the whole launch command is
+// embedded via `JSON.stringify(...)` inside `bash -c "..."` (tmux-manager). That
+// outer DOUBLE-quote layer re-exposes `$(...)`, backticks, and `$VAR` even though
+// the inner value is single-quoted — so a `$(cmd)` in the path would run LOCALLY at
+// launch. Reject `$` and backtick (and newline/CR/NUL) entirely at the boundary.
+const NO_SHELL_META = /^[^\n\r\0`$]*$/;
+
 export const RemoteHostSchema = z.object({
   id: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid remote host id'),
   label: z.string().min(1).max(100),
@@ -303,13 +310,9 @@ export const RemoteHostSchema = z.object({
     .max(100)
     .regex(/^[a-zA-Z0-9._-]+$/, 'Invalid SSH username'),
   port: z.number().int().min(1).max(65535).optional(),
-  // Identity (private-key) file PATH only — never key bytes. No newline/NUL.
-  identityFile: z
-    .string()
-    .min(1)
-    .max(4096)
-    .regex(/^[^\n\r\0]*$/, 'Invalid identity file path')
-    .optional(),
+  // Identity (private-key) file PATH only — never key bytes. Reject shell
+  // metacharacters ($, backtick) that survive into the `bash -c` launch layer.
+  identityFile: z.string().min(1).max(4096).regex(NO_SHELL_META, 'Invalid identity file path').optional(),
   // SOCKS5 proxy as host:port (e.g. 127.0.0.1:1080).
   socksProxy: z
     .string()
@@ -348,7 +351,12 @@ export const RemoteHostSchema = z.object({
 export const RemoteCaseLinkSchema = z.object({
   name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format'),
   hostId: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid remote host id'),
-  remotePath: z.string().min(1).max(2000).regex(/^\//, 'Remote path must be absolute'),
+  remotePath: z
+    .string()
+    .min(1)
+    .max(2000)
+    .regex(/^\//, 'Remote path must be absolute')
+    .regex(NO_SHELL_META, 'Invalid characters in remote path'),
 });
 
 // ========== Quick Start ==========

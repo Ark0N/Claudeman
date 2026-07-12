@@ -53,9 +53,20 @@ vi.mock('../../src/hooks-config.js', () => ({
   writeHooksConfig: vi.fn(async () => {}),
 }));
 
+// Stub the remote-tmux prereq probe so remote-link tests never shell out to ssh
+// (readRemoteHosts/writeRemoteHosts stay real, backed by the mocked fs).
+vi.mock('../../src/remote-hosts.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/remote-hosts.js')>();
+  return {
+    ...actual,
+    checkRemoteTmuxAvailable: vi.fn(async () => ({ ok: true, tmuxPath: '/usr/bin/tmux' })),
+  };
+});
+
 // Import mocked modules for test control
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import fs from 'node:fs/promises';
+import { checkRemoteTmuxAvailable } from '../../src/remote-hosts.js';
 
 const mockedExistsSync = vi.mocked(existsSync);
 const mockedMkdirSync = vi.mocked(mkdirSync);
@@ -63,6 +74,7 @@ const mockedReaddirSync = vi.mocked(readdirSync);
 const mockedReaddir = vi.mocked(fs.readdir);
 const mockedReadFile = vi.mocked(fs.readFile);
 const mockedWriteFile = vi.mocked(fs.writeFile);
+const mockedCheckRemoteTmux = vi.mocked(checkRemoteTmuxAvailable);
 
 interface CaseRouteHarness {
   app: FastifyInstance;
@@ -374,6 +386,101 @@ describe('case-routes', () => {
       const deleted = await harness.app.inject({ method: 'DELETE', url: '/api/cases/gpu-work' });
       expect(deleted.statusCode).toBe(200);
       expect(JSON.parse(deleted.body)).toEqual({ success: true, data: { name: 'gpu-work' } });
+    });
+
+    // Injection hardening: remotePath/identityFile are shell-escaped, then embedded
+    // via JSON.stringify() inside `bash -c "..."` — a DOUBLE-quote layer that
+    // re-exposes `$(...)`/backticks even inside the inner single quotes. The schema
+    // MUST reject those before they reach the launch command.
+    it('rejects an identityFile containing $(...) command substitution', async () => {
+      setupRemoteConfigStore();
+
+      const create = await harness.app.inject({
+        method: 'POST',
+        url: '/api/remote-hosts',
+        payload: {
+          id: 'evil-host',
+          label: 'evil',
+          host: '10.0.0.9',
+          username: 'ubuntu',
+          identityFile: '/home/u/$(touch /tmp/pwned)',
+        },
+      });
+      expect(create.statusCode).toBe(httpStatusForErrorCode(ApiErrorCode.INVALID_INPUT));
+      expect(JSON.parse(create.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.INVALID_INPUT });
+    });
+
+    it('rejects an identityFile containing a backtick', async () => {
+      setupRemoteConfigStore();
+
+      const create = await harness.app.inject({
+        method: 'POST',
+        url: '/api/remote-hosts',
+        payload: {
+          id: 'evil-host2',
+          label: 'evil2',
+          host: '10.0.0.9',
+          username: 'ubuntu',
+          identityFile: '/home/u/`touch /tmp/pwned`',
+        },
+      });
+      expect(create.statusCode).toBe(httpStatusForErrorCode(ApiErrorCode.INVALID_INPUT));
+      expect(JSON.parse(create.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.INVALID_INPUT });
+    });
+
+    it('rejects a remotePath containing $(...) command substitution', async () => {
+      setupRemoteConfigStore();
+
+      await harness.app.inject({
+        method: 'POST',
+        url: '/api/remote-hosts',
+        payload: { id: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu' },
+      });
+      const link = await harness.app.inject({
+        method: 'POST',
+        url: '/api/cases/remote-link',
+        payload: { name: 'gpu-work', hostId: 'gpu-box', remotePath: '/tmp/$(touch /tmp/pwned)' },
+      });
+      expect(link.statusCode).toBe(httpStatusForErrorCode(ApiErrorCode.INVALID_INPUT));
+      expect(JSON.parse(link.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.INVALID_INPUT });
+    });
+
+    it('rejects a remotePath containing a backtick', async () => {
+      setupRemoteConfigStore();
+
+      await harness.app.inject({
+        method: 'POST',
+        url: '/api/remote-hosts',
+        payload: { id: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu' },
+      });
+      const link = await harness.app.inject({
+        method: 'POST',
+        url: '/api/cases/remote-link',
+        payload: { name: 'gpu-work', hostId: 'gpu-box', remotePath: '/tmp/`touch /tmp/pwned`' },
+      });
+      expect(link.statusCode).toBe(httpStatusForErrorCode(ApiErrorCode.INVALID_INPUT));
+      expect(JSON.parse(link.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.INVALID_INPUT });
+    });
+
+    it('refuses remote-link when the remote host lacks tmux (courtesy prereq probe)', async () => {
+      setupRemoteConfigStore();
+      mockedCheckRemoteTmux.mockResolvedValueOnce({
+        ok: false,
+        error: 'remote host 10.0.0.42 needs tmux installed for durable remote sessions',
+      });
+
+      await harness.app.inject({
+        method: 'POST',
+        url: '/api/remote-hosts',
+        payload: { id: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu' },
+      });
+      const link = await harness.app.inject({
+        method: 'POST',
+        url: '/api/cases/remote-link',
+        payload: { name: 'gpu-work', hostId: 'gpu-box', remotePath: '/home/ubuntu/work' },
+      });
+      expect(link.statusCode).toBe(httpStatusForErrorCode(ApiErrorCode.OPERATION_FAILED));
+      expect(JSON.parse(link.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.OPERATION_FAILED });
     });
   });
 

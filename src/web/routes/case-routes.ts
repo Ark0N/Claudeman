@@ -25,6 +25,7 @@ import { SseEvent } from '../sse-events.js';
 import type { EventPort, ConfigPort } from '../ports/index.js';
 import { dataPath, getDataDir } from '../../config/instance.js';
 import {
+  checkRemoteTmuxAvailable,
   readRemoteCases,
   readRemoteHosts,
   remoteDisplayPath,
@@ -216,6 +217,14 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       existsSync(join(CASES_DIR, remoteCase.name))
     ) {
       return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
+    }
+
+    // Courtesy validation: tmux is a hard prerequisite for durable remote sessions.
+    // Verify it up-front so linking surfaces a clear error now instead of a dead pane
+    // at first launch (also confirms the SSH connection actually works).
+    const tmuxCheck = await checkRemoteTmuxAvailable(host);
+    if (!tmuxCheck.ok) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, tmuxCheck.error || 'remote host is missing tmux');
     }
 
     await writeRemoteCases(CODEMAN_CONFIG_DIR, [...remoteCases, remoteCase]);
