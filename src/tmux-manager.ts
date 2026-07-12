@@ -1075,6 +1075,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       'export LC_ALL=en_US.UTF-8',
       mode === 'codex' || mode === 'gemini' ? 'export COLORTERM=truecolor' : 'unset COLORTERM',
       ...(mode === 'codex' || mode === 'gemini' ? ['unset NO_COLOR'] : []),
+      // Stamp each Codex pane with a unique originator so the response-viewer
+      // can locate THIS pane's rollout exactly — codex writes the value into
+      // session_meta.originator of every rollout it creates. Without it,
+      // rollouts are matched by cwd+mtime and two panes in the same directory
+      // bleed into each other.
+      ...(mode === 'codex' ? [`export CODEX_INTERNAL_ORIGINATOR_OVERRIDE=codeman_${sessionId}`] : []),
       'export CODEMAN_MUX=1',
       `export CODEMAN_SESSION_ID=${sessionId}`,
       `export CODEMAN_MUX_NAME=${muxName}`,

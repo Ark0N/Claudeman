@@ -5,7 +5,7 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { join, dirname, extname } from 'node:path';
+import { join, dirname, extname, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
@@ -74,6 +74,7 @@ import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal
 import { MAX_PASTE_IMAGE_BYTES } from '../../config/buffer-limits.js';
 import { dataPath, getDataDir } from '../../config/instance.js';
 import { checkRemoteTmuxAvailable, readRemoteCases, readRemoteHosts, toSessionRemote } from '../../remote-hosts.js';
+import { LRUMap } from '../../utils/lru-map.js';
 
 // Path to linked-cases registry (same file used by case-routes resolveCasePath)
 const LINKED_CASES_FILE = dataPath('linked-cases.json');
@@ -909,6 +910,14 @@ export function registerSessionRoutes(
     const { id } = req.params as { id: string };
     const session = findSessionOrFail(ctx, id);
 
+    // Codex sessions don't write to ~/.claude/projects — their transcripts
+    // live in ~/.codex/sessions/**. Branch to a Codex-specific reader so the
+    // response-viewer works for Codex panes too.
+    if (session.mode === 'codex') {
+      const codexQuery = req.query as { context?: string };
+      return await readCodexLastResponse(session, codexQuery.context === 'full');
+    }
+
     // Scan ~/.claude/projects/*/ for the transcript file
     const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
 
@@ -1021,6 +1030,326 @@ export function registerSessionRoutes(
       timestamp: transcriptTimestamp,
     };
   });
+
+  function isCodexInjectedContext(text: string): boolean {
+    return (
+      /^# AGENTS\.md instructions\b/i.test(text) ||
+      /^<environment_context\b/i.test(text) ||
+      /^<turn_aborted\b/i.test(text) ||
+      /^<codex_internal_context\b/i.test(text) ||
+      /^<recommended_plugins\b/i.test(text) ||
+      /^<user_instructions\b/i.test(text) ||
+      /^# Options\b/i.test(text)
+    );
+  }
+
+  // ── Codex response-viewer support ───────────────────────────────────────────────────────
+  // Read the rollout's session_meta identity fields (plus turn_context cwd as
+  // a fallback when the huge session_meta line got truncated by the head read).
+  function readCodexRolloutMeta(head: string): { cwd?: string; originator?: string } {
+    let cwd: string | undefined;
+    let originator: string | undefined;
+    for (const line of head.split('\n')) {
+      if (!line) continue;
+      try {
+        const entry = JSON.parse(line) as {
+          type?: string;
+          payload?: { cwd?: string; originator?: string };
+        };
+        if (entry.type === 'session_meta') {
+          cwd ??= entry.payload?.cwd;
+          originator ??= entry.payload?.originator;
+        } else if (entry.type === 'turn_context') {
+          cwd ??= entry.payload?.cwd;
+        }
+      } catch {
+        // Malformed or truncated head line — keep scanning.
+      }
+      if (cwd && originator) break;
+    }
+    return { cwd, originator };
+  }
+
+  // The pane's last Enter (Session.codexLastSubmitAt) correlated against
+  // ~/.codex/history.jsonl, which logs every submitted user message as
+  // {session_id, ts}. This identifies the thread the pane is ACTUALLY on and
+  // is the only signal that survives /resume, /new and /fork typed inside the
+  // codex TUI itself. An entry is credited to this pane only when its Enter is
+  // the closest among all codex panes, so a menu keystroke in another pane
+  // can't steal the attribution.
+  const codexHistoryPinCache = new LRUMap<string, { submitAt: number; threadId: string }>({ maxSize: 1024 });
+  async function resolveCodexThreadFromHistory(
+    session: { id: string; codexLastSubmitAt?: number },
+    codexHome: string
+  ): Promise<string | null> {
+    const submitAt = session.codexLastSubmitAt || 0;
+    if (!submitAt) return null;
+    const cached = codexHistoryPinCache.get(session.id);
+    if (cached && cached.submitAt === submitAt) return cached.threadId;
+
+    const histPath = join(codexHome, 'history.jsonl');
+    const st = await fs.stat(histPath).catch(() => null);
+    if (!st || st.size === 0) return null;
+    const tail = await readFileTail(histPath, Buffer.alloc(65536), st.size);
+    if (!tail) return null;
+
+    const WINDOW_MS = 15_000;
+    const otherSubmits: number[] = [];
+    for (const s of ctx.sessions.values()) {
+      if (s.id !== session.id && s.mode === 'codex' && s.codexLastSubmitAt) {
+        otherSubmits.push(s.codexLastSubmitAt);
+      }
+    }
+
+    let best: { threadId: string; dist: number } | undefined;
+    for (const line of tail.split('\n')) {
+      if (!line) continue;
+      let e: { session_id?: string; ts?: number };
+      try {
+        e = JSON.parse(line);
+      } catch {
+        continue; // first tail line may be cut mid-JSON
+      }
+      if (!e.session_id || typeof e.ts !== 'number') continue;
+      const tsMs = e.ts * 1000; // history timestamps are unix seconds
+      const dist = Math.abs(tsMs - submitAt);
+      if (dist > WINDOW_MS) continue;
+      if (otherSubmits.some((o) => Math.abs(tsMs - o) < dist)) continue; // another pane is closer
+      if (!best || dist < best.dist) best = { threadId: e.session_id, dist };
+    }
+    if (!best) return null;
+    codexHistoryPinCache.set(session.id, { submitAt, threadId: best.threadId });
+    return best.threadId;
+  }
+
+  // Locate THIS pane's rollout, in order of confidence:
+  //   0. history match — the thread the pane last submitted a message to
+  //      (see resolveCodexThreadFromHistory); tracks the pane through
+  //      /resume //new //fork typed inside the TUI.
+  //   1. originator match — Codeman spawns codex panes with
+  //      CODEX_INTERNAL_ORIGINATOR_OVERRIDE=codeman_<sessionId>, which codex
+  //      writes into session_meta.originator of every rollout it creates
+  //      (including new files after /new in the same pane; newest match wins).
+  //   2. resume-id match — resumed rollouts keep their ORIGINAL session_meta
+  //      (codex appends without rewriting it), so originator matching can't
+  //      see them; but the rollout uuid is in the filename and we know the id.
+  //   3. legacy cwd+mtime heuristic — panes started before this feature, or
+  //      TUI-resumed threads before their first tracked submit. Case-blind
+  //      cwd compare (codex records the launch-time case, /mnt paths vary)
+  //      and rollouts claimed by OTHER codeman panes are excluded.
+  async function findActiveCodexFile(session: {
+    id: string;
+    workingDir: string;
+    codexLastSubmitAt?: number;
+    codexConfig?: { resumeSessionId?: string };
+  }): Promise<string | null> {
+    const codexHome = process.env.CODEX_HOME || join(process.env.HOME || '/tmp', '.codex');
+    const sessionsDir = join(codexHome, 'sessions');
+
+    const files: Array<{ path: string; mtimeMs: number }> = [];
+    const walk = async (dir: string): Promise<void> => {
+      let entries: import('node:fs').Dirent[];
+      try {
+        entries = await fs.readdir(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const fullPath = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await walk(fullPath);
+          continue;
+        }
+        if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
+        const st = await fs.stat(fullPath).catch(() => null);
+        if (!st || st.size < 100) continue;
+        files.push({ path: fullPath, mtimeMs: st.mtimeMs });
+      }
+    };
+    await walk(sessionsDir);
+    files.sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+    const historyThreadId = await resolveCodexThreadFromHistory(session, codexHome);
+    if (historyThreadId) {
+      const hit = files.find((f) => basename(f.path).endsWith(`-${historyThreadId}.jsonl`));
+      if (hit) return hit.path;
+    }
+
+    const rawResumeId = session.codexConfig?.resumeSessionId;
+    const resumeId =
+      rawResumeId && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(rawResumeId)
+        ? rawResumeId
+        : undefined;
+    const idMatch = resumeId ? files.find((f) => basename(f.path).endsWith(`-${resumeId}.jsonl`)) : undefined;
+
+    // Scan newest-first for our originator; anything strictly older than the
+    // id match can never beat it, so the head reads stop there (mtime ties are
+    // still scanned — a /new rollout may land in the same clock tick). The
+    // 128 KiB head budget covers the session_meta line, which embeds full
+    // base_instructions (observed max ~22 KiB on codex 0.144).
+    const originator = `codeman_${session.id}`;
+    const wantCwd = session.workingDir.toLowerCase();
+    const headBuf = Buffer.alloc(131072);
+    let cwdFallback: { path: string; mtimeMs: number } | undefined;
+    for (const f of files) {
+      if (idMatch && f.mtimeMs < idMatch.mtimeMs) break;
+      const meta = await readCodexRolloutMetaCached(f.path, headBuf);
+      if (!meta) continue;
+      if (meta.originator === originator) return f.path; // newest-first → first hit wins
+      if (
+        !cwdFallback &&
+        !idMatch &&
+        meta.cwd?.toLowerCase() === wantCwd &&
+        // A rollout stamped by another codeman pane belongs to that pane.
+        !(meta.originator?.startsWith('codeman_') && meta.originator !== originator)
+      ) {
+        cwdFallback = f;
+      }
+    }
+
+    return idMatch?.path ?? cwdFallback?.path ?? null;
+  }
+
+  // session_meta is written once when codex creates the rollout and never
+  // rewritten (verified: resume appends without touching it), so the parsed
+  // identity of a given path can be cached forever. This turns the per-request
+  // scan into stat calls plus head reads for new files only.
+  const codexRolloutMetaCache = new LRUMap<string, { cwd?: string; originator?: string }>({ maxSize: 4096 });
+  async function readCodexRolloutMetaCached(
+    filePath: string,
+    headBuf: Buffer
+  ): Promise<{ cwd?: string; originator?: string } | null> {
+    const cached = codexRolloutMetaCache.get(filePath);
+    if (cached) return cached;
+    const head = await readFileHead(filePath, headBuf);
+    if (!head) return null;
+    const meta = readCodexRolloutMeta(head);
+    // Don't cache a still-incomplete head: a rollout being created may not
+    // have flushed session_meta/turn_context yet.
+    if (!meta.cwd && !meta.originator) return meta;
+    codexRolloutMetaCache.set(filePath, meta);
+    return meta;
+  }
+
+  function extractCodexBlockText(content: unknown, kinds: string[]): string {
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+    return content
+      .filter(
+        (b): b is { type: string; text: string } =>
+          !!b &&
+          typeof b === 'object' &&
+          kinds.includes((b as { type?: string }).type || '') &&
+          typeof (b as { text?: string }).text === 'string'
+      )
+      .map((b) => b.text)
+      .join('\n\n');
+  }
+
+  // Single pass over a Codex rollout: track the last assistant message (for the
+  // default eye view) and, when `full`, the whole user/assistant thread.
+  //
+  // User turns come from event_msg/user_message when available: codex emits one
+  // per REAL user input, and injected context (AGENTS.md, environment_context,
+  // compaction summaries, …) never appears there — so no filtering heuristics.
+  // response_item user rows duplicate those inputs mixed with the injections;
+  // they are kept only as a fallback for old rollouts without event_msg rows.
+  async function readCodexLastResponse(
+    session: { id: string; workingDir: string; codexConfig?: { resumeSessionId?: string } },
+    full: boolean
+  ): Promise<{
+    text: string;
+    timestamp: string;
+    messages?: Array<{ role: string; text: string; timestamp?: string }>;
+  }> {
+    const empty = full ? { text: '', timestamp: '', messages: [] } : { text: '', timestamp: '' };
+    const filePath = await findActiveCodexFile(session);
+    if (!filePath) return empty;
+
+    let content: string;
+    try {
+      content = await fs.readFile(filePath, 'utf8');
+    } catch {
+      return empty;
+    }
+
+    let lastText = '';
+    let lastTimestamp = '';
+    const messages: Array<{ role: string; text: string; timestamp?: string; legacyUser?: boolean }> = [];
+    // Multiset of event-sourced user texts: a real input appears BOTH as an
+    // event_msg and as a response_item row, so each event text cancels exactly
+    // one legacy twin. Legacy rows without an event twin (turns written by an
+    // older codex appending to the same rollout) survive — a file-wide boolean
+    // would wrongly drop them.
+    const eventUserTexts = new Map<string, number>();
+
+    for (const line of content.split('\n')) {
+      if (!line) continue;
+      let entry: {
+        timestamp?: string;
+        type?: string;
+        payload?: {
+          type?: string;
+          role?: string;
+          content?: unknown;
+          message?: unknown;
+          images?: unknown;
+          local_images?: unknown;
+        };
+      };
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (full && entry.type === 'event_msg' && entry.payload?.type === 'user_message') {
+        let text = typeof entry.payload.message === 'string' ? entry.payload.message.trim() : '';
+        if (text && isCodexInjectedContext(text)) continue;
+        if (text) eventUserTexts.set(text, (eventUserTexts.get(text) || 0) + 1);
+        // Image-only (or image+text) inputs: the text field alone would make
+        // the turn vanish, so surface a placeholder.
+        const imageCount =
+          (Array.isArray(entry.payload.images) ? entry.payload.images.length : 0) +
+          (Array.isArray(entry.payload.local_images) ? entry.payload.local_images.length : 0);
+        if (imageCount > 0) text = text ? `${text}\n\n*[image ×${imageCount}]*` : `*[image ×${imageCount}]*`;
+        if (text) messages.push({ role: 'user', text, timestamp: entry.timestamp });
+        continue;
+      }
+      if (entry.type !== 'response_item' || entry.payload?.type !== 'message') continue;
+      const role = entry.payload?.role;
+      if (role === 'assistant') {
+        const text = extractCodexBlockText(entry.payload?.content, ['output_text', 'text']);
+        if (text) {
+          lastText = text;
+          lastTimestamp = entry.timestamp || '';
+          if (full) messages.push({ role: 'assistant', text, timestamp: entry.timestamp });
+        }
+      } else if (role === 'user' && full) {
+        const text = extractCodexBlockText(entry.payload?.content, ['input_text', 'text']).trim();
+        // Drop Codex's injected context turns (AGENTS.md, environment_context, …)
+        // so the thread shows real user prompts only.
+        if (text && !isCodexInjectedContext(text)) {
+          messages.push({ role: 'user', text, timestamp: entry.timestamp, legacyUser: true });
+        }
+      }
+    }
+
+    const thread = messages
+      .filter((m) => {
+        if (!m.legacyUser) return true;
+        const n = eventUserTexts.get(m.text) || 0;
+        if (n > 0) {
+          eventUserTexts.set(m.text, n - 1);
+          return false; // duplicate of an event_msg row already in the thread
+        }
+        return true;
+      })
+      .map(({ role, text, timestamp }) => ({ role, text, timestamp }));
+
+    return full
+      ? { text: lastText, timestamp: lastTimestamp, messages: thread }
+      : { text: lastText, timestamp: lastTimestamp };
+  }
 
   // ========== Get Terminal Buffer ==========
 

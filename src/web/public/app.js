@@ -1794,8 +1794,13 @@ class CodemanApp {
       const data = (await res.json())?.data ?? {};
       let lastResponse = data.text || '';
 
-      // Source 2: Terminal buffer fallback — strip ANSI, drop Claude CLI chrome
-      if (!lastResponse) {
+      // Source 2: Terminal buffer fallback — strip ANSI, drop Claude CLI chrome.
+      // Claude + shell only: _cleanTerminalBuffer knows Claude CLI's output, and
+      // shell sessions have no transcript source at all; for TUI modes
+      // (codex/opencode/gemini) it yields repaint garbage, so a clear
+      // placeholder beats a messy screen dump there.
+      const sessionMode = this.sessions.get(this.activeSessionId)?.mode || 'claude';
+      if (!lastResponse && (sessionMode === 'claude' || sessionMode === 'shell')) {
         const termRes = await fetch(`/api/sessions/${this.activeSessionId}/terminal`);
         const termData = (await termRes.json())?.data ?? {};
         if (termData.terminalBuffer) {
@@ -1804,8 +1809,12 @@ class CodemanApp {
       }
 
       const body = document.getElementById('responseViewerBody');
-      body.innerHTML = this._renderMarkdown(lastResponse);
-      this._bindResponseViewerInteractions(body);
+      if (lastResponse) {
+        body.innerHTML = this._renderMarkdown(lastResponse);
+        this._bindResponseViewerInteractions(body);
+      } else {
+        body.textContent = 'No response yet — send a message in this session first.';
+      }
 
       // Reset state for fresh open
       const title = document.getElementById('responseViewerTitle');
@@ -1839,6 +1848,9 @@ class CodemanApp {
       }
 
       // Render conversation thread
+      const mode = this.sessions.get(this.activeSessionId)?.mode;
+      const agentLabel =
+        mode === 'codex' ? 'Codex' : mode === 'gemini' ? 'Gemini' : mode === 'opencode' ? 'OpenCode' : 'Claude';
       body.innerHTML = '';
       for (const msg of messages) {
         const div = document.createElement('div');
@@ -1847,7 +1859,7 @@ class CodemanApp {
 
         const role = document.createElement('div');
         role.className = 'rv-role ' + (isUser ? 'rv-role-user' : 'rv-role-assistant');
-        role.textContent = isUser ? 'You' : 'Claude';
+        role.textContent = isUser ? 'You' : agentLabel;
         div.appendChild(role);
 
         const text = document.createElement('div');

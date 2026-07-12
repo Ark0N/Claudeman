@@ -2332,8 +2332,26 @@ export class Session extends EventEmitter {
    * ```
    */
   write(data: string): void {
+    this._trackCodexSubmit(data);
     if (this.ptyProcess) {
       this.ptyProcess.write(data);
+    }
+  }
+
+  // ── Codex thread tracking ─────────────────────────────────────────────
+  // When a codex pane last submitted a message (Enter). The response-viewer
+  // correlates this against ~/.codex/history.jsonl entry timestamps to find
+  // the thread the pane is ACTUALLY on — the only signal that survives
+  // /resume, /new and /fork typed inside the codex TUI itself.
+  private _codexLastSubmitAt = 0;
+
+  get codexLastSubmitAt(): number {
+    return this._codexLastSubmitAt;
+  }
+
+  private _trackCodexSubmit(data: string): void {
+    if (this.mode === 'codex' && (data.includes('\r') || data.includes('\n'))) {
+      this._codexLastSubmitAt = Date.now();
     }
   }
 
@@ -2390,6 +2408,7 @@ export class Session extends EventEmitter {
    * ```
    */
   async writeViaMux(data: string): Promise<boolean> {
+    this._trackCodexSubmit(data);
     if (this._mux && this._muxSession) {
       return this._mux.sendInput(this.id, data);
     }
