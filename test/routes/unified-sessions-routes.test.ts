@@ -11,7 +11,7 @@
 import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
@@ -92,6 +92,8 @@ describe('GET /api/sessions/unified', () => {
 
   afterEach(async () => {
     if (harness) await harness.app.close();
+    // Drop any per-test transcript fixtures so other tests see an empty home.
+    rmSync(join(tmpHome, '.claude'), { recursive: true, force: true });
   });
 
   it('returns the {sessions,total} envelope with default (testMode) ctx', async () => {
@@ -134,5 +136,32 @@ describe('GET /api/sessions/unified', () => {
     const body = res.json();
     // limit clamps to a minimum of 1, so at most 1 row is returned.
     expect(body.data.sessions.length).toBeLessThanOrEqual(1);
+  });
+
+  it('folds a resumed session transcript (claudeSessionId != id) into ONE row', async () => {
+    // Seed a real transcript fixture keyed by the Claude conversation UUID
+    // (the .jsonl filename stem), like a resumed session leaves behind.
+    const uuid = 'aabbccdd-1111-2222-3333-444455556666';
+    const projDir = join(tmpHome, '.claude', 'projects', '-tmp-test-workdir');
+    mkdirSync(projDir, { recursive: true });
+    const line = JSON.stringify({ type: 'user', message: { role: 'user', content: 'resumed prompt' } }) + '\n';
+    writeFileSync(join(projDir, `${uuid}.jsonl`), line.repeat(60)); // >4000 bytes so the scanner keeps it
+
+    const ctx = makeLiveCtx();
+    // Resumed session: the live Codeman session owns that conversation UUID.
+    const live = ctx.sessions.get('test-session-1') as unknown as { claudeSessionId?: string };
+    live.claudeSessionId = uuid;
+    harness = await createEnvelopeHarness(ctx);
+
+    const res = await harness.app.inject({ method: 'GET', url: '/api/sessions/unified' });
+    expect(res.statusCode).toBe(200);
+    const rows = res.json().data.sessions as Array<{ sessionId: string; sources: string[] }>;
+    // No separate history-only row keyed by the conversation UUID…
+    expect(rows.map((r) => r.sessionId)).not.toContain(uuid);
+    // …the transcript merged into the owning live session instead.
+    const row = rows.find((r) => r.sessionId === 'test-session-1');
+    expect(row).toBeDefined();
+    expect(row!.sources).toContain('live');
+    expect(row!.sources).toContain('history');
   });
 });

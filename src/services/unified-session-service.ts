@@ -4,8 +4,12 @@
  * Combines four read-only views of a session — live (in-memory `Session`),
  * persisted (`state.json`), transcript history (`~/.claude/projects`), and the
  * lifecycle audit log — plus mux process stats, into one de-duplicated list
- * keyed by sessionId. Higher-precedence sources overwrite scalar fields when
- * present (history < lifecycle < persisted < live), while the `sources` array
+ * keyed by sessionId. Transcript-history rows are keyed by the Claude
+ * conversation UUID (the `.jsonl` filename stem), which diverges from the
+ * Codeman id for resumed sessions — an alias map (claudeSessionId → Codeman id,
+ * built from the live/persisted views) folds them into the owning session item.
+ * Higher-precedence sources overwrite scalar fields when present
+ * (history < lifecycle < persisted < live), while the `sources` array
  * always accumulates every contributing view. A "meaningfulness floor" drops
  * noise (bare lifecycle/mux-only rows with no name and no first prompt).
  *
@@ -52,9 +56,11 @@ export type PersistedSessionInput = {
   workingDir?: string;
   createdAt?: number;
   lastActivityAt?: number;
+  /** Claude conversation ID this session resumes (`SessionState.resumeSessionId`). */
+  claudeSessionId?: string;
 };
 
-/** Lifecycle audit-log view. */
+/** Lifecycle audit-log view. Entries are expected NEWEST-first (the order `SessionLifecycleLog.query()` returns). */
 export type LifecycleInput = {
   sessionId: string;
   name?: string;
@@ -120,9 +126,23 @@ function overwrite<K extends keyof UnifiedSessionItem>(
 export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionItem[] {
   const map = new Map<string, UnifiedSessionItem>();
 
-  // 1) history (lowest precedence)
+  // Alias map: Claude conversation UUID → owning Codeman session id. Resumed
+  // (claudeSessionId = resumeSessionId != id) and /clear-respawned sessions
+  // would otherwise surface twice — once as a live/persisted row and once as a
+  // separate history-only row keyed by the conversation UUID. Live wins over
+  // persisted on conflicting entries (registered last).
+  const aliasToOwner = new Map<string, string>();
+  for (const p of sources.persisted ?? []) {
+    if (p.claudeSessionId !== undefined && p.claudeSessionId !== p.id) aliasToOwner.set(p.claudeSessionId, p.id);
+  }
+  for (const v of sources.live ?? []) {
+    if (v.claudeSessionId !== undefined && v.claudeSessionId !== v.id) aliasToOwner.set(v.claudeSessionId, v.id);
+  }
+  const resolveId = (sessionId: string): string => aliasToOwner.get(sessionId) ?? sessionId;
+
+  // 1) history (lowest precedence; keys resolve through the alias map)
   for (const h of sources.history ?? []) {
-    const item = ensureItem(map, h.sessionId);
+    const item = ensureItem(map, resolveId(h.sessionId));
     addSource(item, 'history');
     overwrite(item, 'workingDir', h.workingDir);
     overwrite(item, 'sizeBytes', h.sizeBytes);
@@ -131,12 +151,14 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
     if (!Number.isNaN(ms) && item.lastActivityAt === undefined) item.lastActivityAt = ms;
   }
 
-  // 2) lifecycle
+  // 2) lifecycle — entries arrive NEWEST-first, so first-seen wins for
+  //    name/mode (mirrors the lastActivityAt guard); unconditional overwrites
+  //    would leave the OLDEST entry in the window (stale name/mode) standing.
   for (const l of sources.lifecycle ?? []) {
-    const item = ensureItem(map, l.sessionId);
+    const item = ensureItem(map, resolveId(l.sessionId));
     addSource(item, 'lifecycle');
-    overwrite(item, 'name', l.name);
-    overwrite(item, 'mode', l.mode);
+    if (item.name === undefined) overwrite(item, 'name', l.name);
+    if (item.mode === undefined) overwrite(item, 'mode', l.mode);
     if (item.lastActivityAt === undefined && typeof l.ts === 'number') item.lastActivityAt = l.ts;
   }
 

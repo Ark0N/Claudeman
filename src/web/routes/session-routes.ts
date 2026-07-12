@@ -1784,7 +1784,9 @@ export function registerSessionRoutes(
       };
     });
 
-    // Persisted sessions (state.json).
+    // Persisted sessions (state.json). resumeSessionId is the Claude
+    // conversation UUID a resumed session continues — feed it to the merge's
+    // alias map so its transcript row folds into this session.
     const persisted: PersistedSessionInput[] = Object.values(ctx.store.getState().sessions).map((p) => ({
       id: p.id,
       name: p.name,
@@ -1793,6 +1795,7 @@ export function registerSessionRoutes(
       workingDir: p.workingDir,
       createdAt: p.createdAt,
       lastActivityAt: p.lastActivityAt,
+      claudeSessionId: p.resumeSessionId,
     }));
 
     // Lifecycle audit log (newest-first, capped).
