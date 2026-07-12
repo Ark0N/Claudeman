@@ -58,7 +58,7 @@ export interface SessionListenerRefs {
   bashToolStart: (tool: ActiveBashTool) => void;
   bashToolEnd: (tool: ActiveBashTool) => void;
   bashToolsUpdate: (tools: ActiveBashTool[]) => void;
-  attachmentRequested: (event: { path: string; source?: 'external' | 'codex-generated' }) => void;
+  attachmentRequested: (event: { path: string; source: 'external' | 'codex-generated' }) => void;
 }
 
 /** Dependencies injected by WebServer — keeps listener creation decoupled from server internals. */
@@ -78,7 +78,7 @@ interface SessionListenerDeps {
   removeSessionListenerRefs(sessionId: string): void;
   cleanupRespawnOnExit(sessionId: string): void;
   getStore(): import('../state-store.js').StateStore;
-  registerAttachment(sessionId: string, filePath: string, source?: 'external' | 'codex-generated'): Promise<void>;
+  registerAttachment(sessionId: string, filePath: string, source: 'external' | 'codex-generated'): Promise<void>;
 }
 
 /**
@@ -359,7 +359,7 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
     },
 
     /** Registers an explicit attachment card requested by terminal magic text. */
-    attachmentRequested: (event: { path: string; source?: 'external' | 'codex-generated' }) => {
+    attachmentRequested: (event: { path: string; source: 'external' | 'codex-generated' }) => {
       deps.registerAttachment(session.id, event.path, event.source).catch((err) => {
         console.error(`[Attachment] Failed to register ${event.path} for ${session.id}:`, err);
       });

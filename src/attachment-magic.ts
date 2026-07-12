@@ -5,6 +5,7 @@
 import { isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isSupportedAttachmentExtension } from './attachment-registry.js';
+import { stripAnsi } from './utils/index.js';
 
 const MAGIC_LINK_RE = /codeman:\/\/attach\?([^\s<>"']+)/g;
 const CODEX_SAVED_FILE_RE = /\bSaved to:\s*(file:\/\/[^\s<>"']+)/gi;
@@ -14,15 +15,30 @@ export interface TerminalAttachmentRequest {
   source: 'external' | 'codex-generated';
 }
 
+export interface ParseTerminalAttachmentOptions {
+  /**
+   * Enable the Codex `Saved to: file://...` scanner. Only codex-mode sessions
+   * may set this — the relaxed codex-generated trust policy must never be
+   * reachable from other modes' (prompt-injectable) terminal output.
+   */
+  codexArtifacts?: boolean;
+}
+
 export function parseAttachmentMagicLinks(data: string): string[] {
   return parseMagicAttachmentRequests(data).map((request) => request.path);
 }
 
-export function parseTerminalAttachmentRequests(data: string): TerminalAttachmentRequest[] {
+export function parseTerminalAttachmentRequests(
+  data: string,
+  options: ParseTerminalAttachmentOptions = {}
+): TerminalAttachmentRequest[] {
   const results: TerminalAttachmentRequest[] = [];
   const seen = new Set<string>();
+  const requests = options.codexArtifacts
+    ? [...parseMagicAttachmentRequests(data), ...parseCodexGeneratedArtifactRequests(data)]
+    : parseMagicAttachmentRequests(data);
 
-  for (const request of [...parseMagicAttachmentRequests(data), ...parseCodexGeneratedArtifactRequests(data)]) {
+  for (const request of requests) {
     const key = `${request.source}:${request.path}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -59,7 +75,10 @@ function parseCodexGeneratedArtifactRequests(data: string): TerminalAttachmentRe
   const results: TerminalAttachmentRequest[] = [];
   const seen = new Set<string>();
 
-  for (const match of data.matchAll(CODEX_SAVED_FILE_RE)) {
+  // Codex styles its TUI output — strip ANSI first so a trailing SGR reset
+  // (e.g. `...mockup.png\x1b[0m`) doesn't ride into the captured URL and break
+  // the extension allowlist check.
+  for (const match of stripAnsi(data).matchAll(CODEX_SAVED_FILE_RE)) {
     const rawUrl = trimTrailingPunctuation(match[1] || '');
     try {
       const filePath = fileURLToPath(rawUrl);

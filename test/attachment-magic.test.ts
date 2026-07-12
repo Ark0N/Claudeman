@@ -58,12 +58,35 @@ describe('attachment magic links', () => {
 
   it('extracts Codex generated image file URLs from saved-to terminal output', () => {
     const requests = parseTerminalAttachmentRequests(
-      'Saved to: file:///Users/aamer/.codex-personal/generated_images/mockup%20one.png'
+      'Saved to: file:///Users/aamer/.codex-personal/generated_images/mockup%20one.png',
+      { codexArtifacts: true }
     );
 
     expect(requests).toEqual([
       {
         path: '/Users/aamer/.codex-personal/generated_images/mockup one.png',
+        source: 'codex-generated',
+      },
+    ]);
+  });
+
+  it('ignores Codex saved-to output unless the codex scanner is enabled', () => {
+    const requests = parseTerminalAttachmentRequests(
+      'Saved to: file:///Users/aamer/.codex-personal/generated_images/mockup.png'
+    );
+
+    expect(requests).toEqual([]);
+  });
+
+  it('strips ANSI styling around Codex saved-to lines before capturing the URL', () => {
+    const requests = parseTerminalAttachmentRequests(
+      '\x1b[1mSaved to:\x1b[0m file:///Users/aamer/.codex/generated_images/mockup.png\x1b[0m\r\n',
+      { codexArtifacts: true }
+    );
+
+    expect(requests).toEqual([
+      {
+        path: '/Users/aamer/.codex/generated_images/mockup.png',
         source: 'codex-generated',
       },
     ]);
@@ -86,6 +109,20 @@ describe('attachment magic links', () => {
         timestamp: expect.any(Number),
       },
     ]);
+  });
+
+  it('does not emit codex-generated requests from non-codex session modes', () => {
+    for (const mode of ['claude', 'shell'] as const) {
+      const session = new Session({ id: `session-generated-artifact-${mode}`, workingDir: '/tmp', mode });
+      const requested: Array<{ path: string }> = [];
+      session.on('attachmentRequested', (event: { path: string }) => requested.push(event));
+
+      (session as unknown as { _handleTerminalOutput(data: string): void })._handleTerminalOutput(
+        'Saved to: file:///Users/aamer/.codex-personal/generated_images/output.png'
+      );
+
+      expect(requested).toEqual([]);
+    }
   });
 
   it('supports generated image attachment extensions beyond png', () => {

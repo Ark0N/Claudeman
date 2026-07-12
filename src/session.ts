@@ -1231,9 +1231,11 @@ export class Session extends EventEmitter {
     }
 
     // Scan terminal output for attachment requests. `codeman://attach?...` is an
-    // explicit magic link; Codex generated images report `Saved to: file://...`.
-    // The web server applies the trust boundary for each request source.
-    const attachmentRequests = parseTerminalAttachmentRequests(data);
+    // explicit magic link (all modes); Codex generated images report
+    // `Saved to: file://...` — that scanner (and its relaxed trust policy) is
+    // only enabled for codex-mode sessions. The web server applies the trust
+    // boundary for each request source.
+    const attachmentRequests = parseTerminalAttachmentRequests(data, { codexArtifacts: this.mode === 'codex' });
     for (const request of attachmentRequests) {
       const seenKey = `${request.source}:${request.path}`;
       if (this._attachmentMagicSeen.has(seenKey)) continue;
