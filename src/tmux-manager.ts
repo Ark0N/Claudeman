@@ -60,6 +60,7 @@ import type {
   MuxSessionWithStats,
   CreateSessionOptions,
   RespawnPaneOptions,
+  PaneCaptureOptions,
 } from './mux-interface.js';
 
 // ============================================================================
@@ -67,7 +68,15 @@ import type {
 // ============================================================================
 
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
-import { DEFAULT_TMUX_HISTORY_LIMIT } from './config/terminal-history.js';
+import { DEFAULT_TMUX_HISTORY_LIMIT, DEFAULT_TERMINAL_BUFFER_MAX_BYTES } from './config/terminal-history.js';
+
+/**
+ * Extra stdout headroom for the full-history `capture-pane` child process on
+ * top of the consumer's byte cap: raw scrollback carries per-line SGR/ANSI
+ * overhead that the route pipeline strips before applying its cap, so the
+ * capture must be allowed to exceed the final payload size.
+ */
+const FULL_HISTORY_CAPTURE_SLACK_BYTES = 8 * 1024 * 1024;
 
 /** Delay after tmux session creation — enough for detached tmux to be queryable */
 const TMUX_CREATION_WAIT_MS = 100;
@@ -430,6 +439,26 @@ function truncatePaneLineByVisibleColumns(line: string, maxColumns: number): str
     result += '\x1b[0m';
   }
   return result;
+}
+
+/**
+ * Normalize scrollback line endings to `\r\n` so a fresh xterm replays each line
+ * at column 0 (COD-138).
+ *
+ * `capture-pane -p -e -S -` (full-history capture) joins scrollback rows with a
+ * BARE `\n`. The browser xterm is created with the default `convertEol: false`
+ * (correct for the live PTY stream, which already carries real `\r\n`), so a bare
+ * `\n` drops a row without returning the cursor to column 0. Replaying that raw
+ * buffer on a full page reload makes every line start one column further right —
+ * the diagonal "staircase". The visible/tab-switch path avoids this by repainting
+ * each row with an absolute cursor CSI (`formatPaneSnapshot`); the full-history
+ * path returns raw scrollback, so it must be CRLF-normalized here.
+ *
+ * `\r?\n → \r\n` is idempotent on already-CRLF input and leaves a lone `\r` (an
+ * intentional in-line column reset / overwrite) untouched.
+ */
+export function normalizeScrollbackEol(buffer: string): string {
+  return buffer.replace(/\r?\n/g, '\r\n');
 }
 
 export function formatPaneSnapshot(
@@ -2327,30 +2356,65 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
-   * Capture the current visible text and SGR styles of a specific pane.
+   * Capture a pane's text and SGR styles.
    *
-   * `capture-pane -e` is sanitized by `formatPaneSnapshot`: SGR color/style
-   * codes are preserved, while cursor/erase/scroll-region controls are stripped
-   * before rows are repainted at absolute positions in browser xterm.
+   * Two modes:
+   * - Visible (default): `capture-pane -p -e` grabs only the on-screen frame,
+   *   then `formatPaneSnapshot` repaints each row at its absolute position so
+   *   the browser xterm reproduces the live frame. Used for fast tab switches.
+   * - Full history (`opts.fullHistory`): `capture-pane -p -e -J -S -<N>` grabs
+   *   the tmux scrollback (COD-47, bounded to the configured history limit),
+   *   returned as linear scrollback text with SGR codes preserved (NOT
+   *   repositioned — a multi-screen history can't be painted into a single
+   *   visible frame, so the snapshot repaint is skipped). `-J` re-joins lines
+   *   hard-wrapped at the pane width so they reflow in the browser xterm.
+   *   Used for full page reloads so the user gets back their scroll history.
+   *   Caveat: lines tmux has already evicted past its history-limit are gone.
    */
-  capturePaneBuffer(muxName: string, paneTarget: string): string | null {
+  capturePaneBuffer(muxName: string, paneTarget?: string, opts?: PaneCaptureOptions): string | null {
     if (IS_TEST_MODE) return '';
-    if (!isValidMuxName(muxName)) {
-      console.error('[TmuxManager] Invalid session name in capturePaneBuffer:', muxName);
-      return null;
-    }
-    if (!SAFE_PANE_TARGET_PATTERN.test(paneTarget)) {
-      console.error('[TmuxManager] Invalid pane target:', paneTarget);
+    const target = resolveTmuxPaneTarget(muxName, paneTarget);
+    if (!target) {
+      console.error('[TmuxManager] Invalid pane target in capturePaneBuffer:', { muxName, paneTarget });
       return null;
     }
 
-    const target = paneTarget.startsWith('%') ? `${muxName}.${paneTarget}` : `${muxName}.%${paneTarget}`;
+    const fullHistory = opts?.fullHistory === true;
 
     try {
-      const buffer = execSync(`${this.tmux()} capture-pane -p -e -t ${shellescape(target)}`, {
+      // `-S -<N>` starts the capture N lines above the visible frame (tmux
+      // clamps to the top of history), so tmux never serializes more scrollback
+      // than the configured history limit retains.
+      const requestedLines = opts?.historyLimitLines;
+      const historyLines =
+        typeof requestedLines === 'number' && Number.isFinite(requestedLines) && requestedLines > 0
+          ? Math.trunc(requestedLines)
+          : DEFAULT_TMUX_HISTORY_LIMIT;
+      const captureFlags = fullHistory ? `capture-pane -p -e -J -S -${historyLines}` : 'capture-pane -p -e';
+      // execSync's default maxBuffer (1MB) kills multi-MB scrollback dumps
+      // (ENOBUFS) and would silently degrade full-history capture to the byte
+      // buffer for exactly the long sessions it exists for — size it from the
+      // consumer's byte cap plus ANSI-overhead slack instead.
+      const execOpts: { encoding: 'utf-8'; timeout: number; maxBuffer?: number } = {
         encoding: 'utf-8',
         timeout: EXEC_TIMEOUT_MS,
-      }).replace(/\n+$/g, '');
+      };
+      if (fullHistory) {
+        execOpts.maxBuffer =
+          (opts?.maxCaptureBytes ?? DEFAULT_TERMINAL_BUFFER_MAX_BYTES) + FULL_HISTORY_CAPTURE_SLACK_BYTES;
+      }
+      const buffer = execSync(`${this.tmux()} ${captureFlags} -t ${shellescape(target)}`, execOpts).replace(
+        /\n+$/g,
+        ''
+      );
+      // Full-history spans many screens — return it as raw linear scrollback
+      // rather than repainting rows at single-screen absolute positions. tmux
+      // joins scrollback rows with a bare `\n`; normalize to `\r\n` so a fresh
+      // xterm (convertEol:false) starts each replayed line at column 0 instead
+      // of staircasing diagonally (COD-138).
+      if (fullHistory) {
+        return normalizeScrollbackEol(buffer);
+      }
       try {
         const cursor = execSync(
           `${this.tmux()} display-message -p -t ${shellescape(target)} '#{cursor_x} #{cursor_y} #{pane_width} #{pane_height}'`,
@@ -2375,9 +2439,19 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       } catch (cursorErr) {
         console.error('[TmuxManager] Failed to query pane cursor after capture:', cursorErr);
       }
-      return buffer;
+      // Cursor query failed or geometry was invalid, so we skip the absolute-
+      // positioned snapshot repaint and fall back to the raw capture. Normalize
+      // its bare `\n` line endings to `\r\n` so the replay doesn't staircase
+      // diagonally in a fresh xterm (COD-138, same reason as the fullHistory path).
+      return normalizeScrollbackEol(buffer);
     } catch (err) {
-      console.error('[TmuxManager] Failed to capture pane buffer:', err);
+      // ENOBUFS carries the truncated multi-MB stdout on the error object —
+      // log a concise line instead of dumping it into the journal.
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOBUFS') {
+        console.error('[TmuxManager] Pane capture exceeded maxBuffer (ENOBUFS); falling back to byte history');
+      } else {
+        console.error('[TmuxManager] Failed to capture pane buffer:', err);
+      }
       return null;
     }
   }
@@ -2388,7 +2462,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * Pane ids are not stable across respawns or restores, so callers should not
    * assume the first pane remains `%0`.
    */
-  captureActivePaneBuffer(muxName: string): string | null {
+  captureActivePaneBuffer(muxName: string, opts?: PaneCaptureOptions): string | null {
     if (IS_TEST_MODE) return '';
     if (!isValidMuxName(muxName)) {
       console.error('[TmuxManager] Invalid session name in captureActivePaneBuffer:', muxName);
@@ -2401,7 +2475,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         timeout: EXEC_TIMEOUT_MS,
       }).trim();
       const target = resolveActivePaneTarget(output);
-      return target ? this.capturePaneBuffer(muxName, target) : null;
+      return target ? this.capturePaneBuffer(muxName, target, opts) : null;
     } catch (err) {
       console.error('[TmuxManager] Failed to resolve active pane for capture:', err);
       return null;

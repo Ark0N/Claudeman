@@ -1016,10 +1016,21 @@ export function registerSessionRoutes(
 
   // Query params:
   //   tail=<bytes> - Only return last N bytes (faster initial load)
+  //   full=1       - Full page reload: replay the entire tmux scrollback (COD-47)
   app.get('/api/sessions/:id/terminal', async (req) => {
     const { id } = req.params as { id: string };
-    const query = req.query as { tail?: string };
+    const query = req.query as { tail?: string; full?: string };
     const session = findSessionOrFail(ctx, id);
+
+    // `full=1` is the EXPLICIT full-reload signal (COD-47): the browser reloaded
+    // the page and wants the whole scroll history back, so we capture the ENTIRE
+    // tmux scrollback and the user gets back history that scrolled off Codeman's
+    // byte buffer. Requests WITHOUT it — tab switches (`tail=`) and the legacy
+    // no-param callers (response-viewer fallback, clearTerminal refresh) — keep
+    // the fast visible-frame capture.
+    const tailBytes = query.tail ? parseInt(query.tail, 10) : 0;
+    const isFullReload = query.full === '1' || query.full === 'true';
+    const { tmuxHistoryLimit, terminalBufferMaxBytes } = await ctx.getTerminalHistoryConfig();
 
     // Prepend the live tmux pane buffer so tab-switch replay shows the current
     // on-screen frame, not just the accumulated byte history. This matters for
@@ -1031,24 +1042,57 @@ export function registerSessionRoutes(
     const muxName = session.muxName;
     const liveMuxBuffer =
       muxName && typeof ctx.mux.captureActivePaneBuffer === 'function'
-        ? ctx.mux.captureActivePaneBuffer(muxName)
+        ? ctx.mux.captureActivePaneBuffer(
+            muxName,
+            isFullReload
+              ? { fullHistory: true, historyLimitLines: tmuxHistoryLimit, maxCaptureBytes: terminalBufferMaxBytes }
+              : undefined
+          )
         : null;
-    const rawBuffer =
-      liveMuxBuffer !== null && liveMuxBuffer.length > 0
-        ? session.terminalBufferLength > 0
+    const hasLiveMuxBuffer = liveMuxBuffer !== null && liveMuxBuffer.length > 0;
+    const source: 'history' | 'mux-visible' | 'mux-full-history' = hasLiveMuxBuffer
+      ? isFullReload
+        ? 'mux-full-history'
+        : 'mux-visible'
+      : 'history';
+    let rawBuffer: string;
+    if (liveMuxBuffer !== null && liveMuxBuffer.length > 0) {
+      // Full-history capture is the RENDERED form of everything already in the
+      // byte buffer (up to tmux eviction) — return it alone. Prepending the byte
+      // history would replay the whole conversation twice: `\x1b[2J` clears only
+      // the viewport, not xterm scrollback. The history+clear+frame concat stays
+      // for the visible-frame path, where the single pane frame lacks history.
+      rawBuffer = isFullReload
+        ? liveMuxBuffer
+        : session.terminalBufferLength > 0
           ? `${session.terminalBuffer}\x1b[H\x1b[2J${liveMuxBuffer}`
-          : liveMuxBuffer
-        : session.terminalBuffer;
-    const tailBytes = query.tail ? parseInt(query.tail, 10) : 0;
+          : liveMuxBuffer;
+    } else {
+      rawBuffer = session.terminalBuffer;
+    }
     const fullSize = rawBuffer.length;
     let truncated = false;
     let cleanBuffer: string;
+
+    // Cap the payload EARLY — before the regex normalization passes below run
+    // over it. A full-history tmux capture can be tens of MB of scrollback;
+    // normalizing all of it would stall the event loop only to discard most
+    // bytes anyway. Keep the most RECENT bytes (slice from the end) and align
+    // to a line boundary so we never start mid-ANSI-escape.
+    if (terminalBufferMaxBytes > 0 && rawBuffer.length > terminalBufferMaxBytes) {
+      rawBuffer = rawBuffer.slice(-terminalBufferMaxBytes);
+      truncated = true;
+      const capNewline = rawBuffer.indexOf('\n');
+      if (capNewline > 0 && capNewline < 4096) {
+        rawBuffer = rawBuffer.slice(capNewline + 1);
+      }
+    }
 
     // Strip redundant Ink spinner/status redraws BEFORE tailing.
     // During long thinking phases, Ink rewrites the same rows thousands of times
     // (500KB+). Without stripping, tail mode returns only spinner frames and
     // the terminal appears empty when switching tabs.
-    let strippedBuffer = stripInkRedrawBloat(rawBuffer);
+    let strippedBuffer = session.mode === 'shell' ? rawBuffer : stripInkRedrawBloat(rawBuffer);
 
     // Strip alt-screen toggles and scrollback-erase from Codex/Claude byte
     // streams. xterm.js obeys them by switching to its scrollback-less alt
@@ -1096,6 +1140,7 @@ export function registerSessionRoutes(
       status: session.status,
       fullSize,
       truncated,
+      source,
     };
   });
 
