@@ -1359,6 +1359,9 @@ Object.assign(CodemanApp.prototype, {
     // only takes effect on reload — remember the prior value to decide below.
     const _prev = this.loadAppSettingsFromStorage();
     const _prevGestureEnabled = (_prev.gestureControlEnabled ?? false) === true;
+    // WebGL toggle: default ON (desktop), so only an explicit stored false counts
+    // as "previously off" — used below to detect a real OFF→ON flip.
+    const _prevWebglEnabled = (_prev.webglRendererEnabled ?? true) === true;
     const settings = {
       defaultClaudeMdPath: document.getElementById('appSettingsClaudeMdPath').value.trim(),
       defaultWorkingDir: document.getElementById('appSettingsDefaultDir').value.trim(),
@@ -1416,6 +1419,15 @@ Object.assign(CodemanApp.prototype, {
     // Save to localStorage
     this.saveAppSettingsToStorage(settings);
     this._updateLocalEchoState();
+
+    // A real OFF→ON flip of the WebGL toggle retires the GPU-stall auto-fallback
+    // marker so the next reload actually re-tries WebGL. Only the transition
+    // clears it — an incidental save with the checkbox default-checked must NOT
+    // defeat the sticky safety net (shouldSkipWebGL treats stored true like the
+    // untouched default at page load).
+    if (!_prevWebglEnabled && settings.webglRendererEnabled) {
+      try { localStorage.removeItem('codeman-webgl-disabled'); } catch {}
+    }
 
     // Save voice settings to localStorage + include in server payload for cross-device sync
     const voiceSettings = {
@@ -1527,6 +1539,10 @@ Object.assign(CodemanApp.prototype, {
     // Strip device-specific DISPLAY keys so they never sync across devices —
     // localEcho/cjk/extendedKeyboard/skin are per-platform, and showPlanUsageLimits
     // is per-device too (desktop can show the usage chip while mobile stays hidden).
+    // webglRendererEnabled is per-device as well (renderer choice is GPU-specific,
+    // and syncing would leak mobile's hidden-checkbox false onto desktop); it's
+    // also absent from SettingsUpdateSchema, which is .strict() — sending it
+    // would 400 the whole settings PUT.
     // Telemetry COLLECTION is requested out-of-band via statusLineTelemetry (sent on
     // ENABLE only, so a device with the chip OFF never strips the exporter that
     // another device's chip depends on — see system-routes settings handler).
@@ -1537,6 +1553,7 @@ Object.assign(CodemanApp.prototype, {
       skin: _skin,
       showPlanUsageLimits: _pul,
       showAttachmentsButton: _ahb,
+      webglRendererEnabled: _wgl,
       ...serverSettings
     } = settings;
     try {
@@ -2037,7 +2054,7 @@ Object.assign(CodemanApp.prototype, {
           'showLifecycleLog', 'showResponseViewer',
           'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
           'subagentActiveTabOnly', 'tabTwoRows', 'localEchoEnabled', 'cjkInputEnabled', 'extendedKeyboardBar',
-          'skin', 'showPlanUsageLimits', 'showAttachmentsButton',
+          'skin', 'showPlanUsageLimits', 'showAttachmentsButton', 'webglRendererEnabled',
         ]);
         // The plan-usage chip is a PER-DEVICE display setting (default OFF): desktop
         // can show it while mobile stays hidden. It used to sync, so an older

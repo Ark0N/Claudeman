@@ -272,7 +272,9 @@ Object.assign(CodemanApp.prototype, {
       stickyDisabled: _stickyDisabled,
       userPrefEnabled: _webglPref,
     });
-    // Explicit opt-in (toggle ON) or ?webgl=force retires a stale auto-fallback marker.
+    // Only ?webgl=force retires the auto-fallback marker at init — a stored
+    // toggle ON is incidental (checkbox defaults checked) and must not defeat
+    // the sticky safety net. An OFF→ON flip clears it in saveAppSettings().
     if (_clearWebglSticky) {
       try { localStorage.removeItem('codeman-webgl-disabled'); } catch {}
     }

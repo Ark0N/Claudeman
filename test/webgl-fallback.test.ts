@@ -236,9 +236,7 @@ describe('WebGL longtask auto-fallback', () => {
       );
 
     it('exposes shouldSkipWebGL on window', async () => {
-      const t = await page.evaluate(
-        () => typeof (window as unknown as { shouldSkipWebGL?: unknown }).shouldSkipWebGL
-      );
+      const t = await page.evaluate(() => typeof (window as unknown as { shouldSkipWebGL?: unknown }).shouldSkipWebGL);
       expect(t).toBe('function');
     });
 
@@ -263,10 +261,19 @@ describe('WebGL longtask auto-fallback', () => {
       });
     });
 
-    it('explicit opt-in enables and clears a stale sticky marker', async () => {
+    it('stored toggle ON still respects the sticky marker (incidental saves must not defeat auto-fallback)', async () => {
+      // The checkbox defaults checked on desktop, so any unrelated settings save
+      // stores true — that must NOT act like ?webgl=force and clear the marker.
       expect(await run({ deviceType: 'desktop', userPrefEnabled: true, stickyDisabled: true })).toEqual({
+        skip: true,
+        clearSticky: false,
+      });
+    });
+
+    it('stored toggle ON enables WebGL when no sticky marker is set', async () => {
+      expect(await run({ deviceType: 'desktop', userPrefEnabled: true, stickyDisabled: false })).toEqual({
         skip: false,
-        clearSticky: true,
+        clearSticky: false,
       });
     });
 
@@ -289,6 +296,72 @@ describe('WebGL longtask auto-fallback', () => {
         skip: false,
         clearSticky: false,
       });
+    });
+  });
+
+  describe('saveAppSettings — per-device WebGL toggle semantics', () => {
+    type SaveHarnessApp = {
+      loadAppSettingsFromStorage: () => Record<string, unknown>;
+      saveAppSettingsToStorage: (s: Record<string, unknown>) => void;
+      saveAppSettings: () => Promise<void>;
+      _apiPut: (path: string, body: Record<string, unknown>) => Promise<unknown>;
+      saveModelConfigFromSettings: () => Promise<void>;
+      _syncPushPreferences: () => void;
+    };
+
+    /**
+     * Drive the real saveAppSettings() in the page with the settings PUT stubbed
+     * out. Seeds the stored blob (via saveAppSettingsToStorage so the in-memory
+     * cache stays coherent), sets the sticky marker + checkbox, saves, and
+     * reports what happened to the marker and the captured server payload.
+     */
+    const runSave = async (opts: { storedPref: boolean | undefined }) =>
+      page.evaluate(async (o) => {
+        const app = (window as unknown as { app: SaveHarnessApp }).app;
+        const prevStored = { ...app.loadAppSettingsFromStorage() };
+        const origPut = app._apiPut;
+        const origModel = app.saveModelConfigFromSettings;
+        const origSync = app._syncPushPreferences;
+        let captured: Record<string, unknown> | null = null;
+        try {
+          const seeded = { ...prevStored };
+          if (o.storedPref === undefined) delete seeded.webglRendererEnabled;
+          else seeded.webglRendererEnabled = o.storedPref;
+          app.saveAppSettingsToStorage(seeded);
+          localStorage.setItem('codeman-webgl-disabled', JSON.stringify({ at: Date.now() }));
+          (document.getElementById('appSettingsWebglRenderer') as HTMLInputElement).checked = true;
+          app._apiPut = async (_path, body) => {
+            captured = body;
+            return { ok: true };
+          };
+          app.saveModelConfigFromSettings = async () => {};
+          app._syncPushPreferences = () => {};
+          await app.saveAppSettings();
+          return {
+            markerCleared: localStorage.getItem('codeman-webgl-disabled') === null,
+            payloadHasWebglKey: captured ? 'webglRendererEnabled' in captured : null,
+          };
+        } finally {
+          app._apiPut = origPut;
+          app.saveModelConfigFromSettings = origModel;
+          app._syncPushPreferences = origSync;
+          localStorage.removeItem('codeman-webgl-disabled');
+          app.saveAppSettingsToStorage(prevStored);
+        }
+      }, opts);
+
+    it('a real OFF→ON flip clears the sticky marker and keeps the key off the settings PUT', async () => {
+      const result = await runSave({ storedPref: false });
+      expect(result.markerCleared).toBe(true);
+      expect(result.payloadHasWebglKey).toBe(false);
+    });
+
+    it('a save with the toggle merely default-checked leaves the sticky marker alone', async () => {
+      // No stored OFF → this is the "unrelated settings save stores true" case;
+      // clearing here would permanently defeat the GPU-stall auto-fallback.
+      const result = await runSave({ storedPref: undefined });
+      expect(result.markerCleared).toBe(false);
+      expect(result.payloadHasWebglKey).toBe(false);
     });
   });
 });
