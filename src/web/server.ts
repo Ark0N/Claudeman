@@ -834,7 +834,13 @@ export class WebServer extends EventEmitter {
     // Keep the body as a RAW STRING and parse it inside the handler — a global
     // text/plain -> JSON parser would let a cross-site "simple request" (no CORS
     // preflight) submit JSON to any route. See security review C2.
-    let _crashBreadcrumbs = '';
+    // Keyed by the client's per-page-load id so (a) a page reload (fresh id)
+    // ARCHIVES the previous page's breadcrumbs instead of overwriting them —
+    // iOS PWA reloads used to wipe the trace of the very bug being chased —
+    // and (b) concurrent clients (desktop + phone) don't clobber each other.
+    // Same id replaces in place (each beacon carries the full ring buffer).
+    const MAX_CRASH_PAGES = 10;
+    const _crashPages = new Map<string, { at: number; data: string }>();
     this.app.addContentTypeParser('text/plain;charset=UTF-8', { parseAs: 'string' }, (_req, body, done) => {
       done(null, body);
     });
@@ -844,17 +850,28 @@ export class WebServer extends EventEmitter {
     this.app.post('/api/crash-diag', (req, reply) => {
       const raw = typeof req.body === 'string' ? req.body : '';
       let data = raw;
+      let pageId = 'legacy';
       try {
-        const parsed = JSON.parse(raw) as { data?: unknown };
+        const parsed = JSON.parse(raw) as { data?: unknown; id?: unknown };
         if (parsed && typeof parsed.data === 'string') data = parsed.data;
+        if (parsed && typeof parsed.id === 'string' && parsed.id) pageId = parsed.id.slice(0, 64);
       } catch {
         /* not JSON — treat the raw beacon text as the breadcrumbs */
       }
-      _crashBreadcrumbs = String(data || '');
+      _crashPages.delete(pageId); // re-insert = move to MRU end
+      _crashPages.set(pageId, { at: Date.now(), data: String(data || '') });
+      if (_crashPages.size > MAX_CRASH_PAGES) {
+        const oldest = _crashPages.keys().next().value;
+        if (oldest !== undefined) _crashPages.delete(oldest);
+      }
       reply.code(204).send();
     });
     this.app.get('/api/crash-diag', (_req, reply) => {
-      reply.code(200).send({ breadcrumbs: _crashBreadcrumbs, timestamp: Date.now() });
+      const pages = [..._crashPages.entries()].map(([id, p]) => ({ id, at: p.at, data: p.data }));
+      const breadcrumbs = pages
+        .map((p) => `═══ page ${p.id} (last beacon ${new Date(p.at).toISOString()}) ═══\n${p.data}`)
+        .join('\n\n');
+      reply.code(200).send({ breadcrumbs, pages, timestamp: Date.now() });
     });
 
     // Register all route modules
