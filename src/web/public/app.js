@@ -305,6 +305,134 @@ function parseSessionPrefix(name) {
   return null;
 }
 
+const DEFAULT_SHORTCUTS = [
+  {
+    id: 'show-shortcuts',
+    group: 'Panels',
+    label: 'Show Shortcuts',
+    bindings: [
+      { modifiers: ['ctrl'], key: '?', code: 'Slash' },
+      { modifiers: ['ctrl', 'shift'], key: '?' },
+      { modifiers: ['alt'], key: '?', code: 'Slash' },
+    ],
+    action: 'showShortcutOverlay',
+  },
+  {
+    id: 'close-session',
+    group: 'Session',
+    label: 'Close Session',
+    bindings: [{ modifiers: ['ctrl'], key: 'w' }],
+    action: 'killActiveSession',
+  },
+  {
+    id: 'next-session',
+    group: 'Session',
+    label: 'Next Session',
+    bindings: [{ modifiers: ['ctrl'], key: 'Tab' }],
+    action: 'nextSession',
+  },
+  {
+    id: 'clear-terminal',
+    group: 'Terminal',
+    label: 'Clear Terminal',
+    bindings: [{ modifiers: ['ctrl'], key: 'l' }],
+    action: 'clearTerminal',
+  },
+  {
+    id: 'increase-font',
+    group: 'Terminal',
+    label: 'Increase Font',
+    bindings: [
+      { modifiers: ['ctrl'], key: '=', code: 'Equal' },
+      { modifiers: ['ctrl'], key: '+', code: 'Equal' },
+    ],
+    action: 'increaseFontSize',
+  },
+  {
+    id: 'decrease-font',
+    group: 'Terminal',
+    label: 'Decrease Font',
+    bindings: [{ modifiers: ['ctrl'], key: '-', code: 'Minus' }],
+    action: 'decreaseFontSize',
+  },
+  {
+    id: 'voice-input',
+    group: 'Terminal',
+    label: 'Voice Input',
+    bindings: [{ modifiers: ['ctrl', 'shift'], key: 'V' }],
+    action: 'toggleVoiceInput',
+  },
+  {
+    id: 'restore-terminal-size',
+    group: 'Terminal',
+    label: 'Restore Terminal Size',
+    bindings: [{ modifiers: ['ctrl', 'shift'], key: 'R' }],
+    action: 'restoreTerminalSize',
+  },
+  {
+    id: 'move-tab-left',
+    group: 'Tabs',
+    label: 'Move Active Tab Left',
+    bindings: [{ modifiers: ['ctrl', 'shift'], key: '{', code: 'BracketLeft' }],
+    action: 'moveActiveTabLeft',
+  },
+  {
+    id: 'move-tab-right',
+    group: 'Tabs',
+    label: 'Move Active Tab Right',
+    bindings: [{ modifiers: ['ctrl', 'shift'], key: '}', code: 'BracketRight' }],
+    action: 'moveActiveTabRight',
+  },
+  {
+    id: 'command-palette',
+    group: 'Session',
+    label: 'Find Open Session',
+    bindings: [
+      { modifiers: ['ctrl'], key: 'k', code: 'KeyK' },
+      { modifiers: ['meta'], key: 'k', code: 'KeyK' },
+      { modifiers: ['alt'], key: 'k', code: 'KeyK' },
+    ],
+    action: 'openCommandPalette',
+  },
+  {
+    id: 'previous-next-session',
+    group: 'Session',
+    label: 'Previous / Next Session',
+    displayBindings: ['Alt/Option+[', 'Alt/Option+]'],
+  },
+  {
+    id: 'switch-tab-n',
+    group: 'Session',
+    label: 'Switch to Tab N',
+    displayBindings: ['Alt/Option+1-9'],
+  },
+  {
+    id: 'focus-tabs',
+    group: 'Tabs',
+    label: 'Focus Tabs',
+    displayBindings: ['ArrowLeft', 'ArrowRight', 'Home', 'End'],
+  },
+  {
+    id: 'activate-focused-tab',
+    group: 'Tabs',
+    label: 'Activate Focused Tab',
+    displayBindings: ['Enter', 'Space'],
+  },
+  {
+    id: 'insert-newline',
+    group: 'Terminal',
+    label: 'Insert Newline',
+    displayBindings: ['Shift+Enter', 'Ctrl+Enter'],
+  },
+  {
+    id: 'close-panels',
+    group: 'Panels',
+    label: 'Close Panels',
+    displayBindings: ['Escape'],
+  },
+];
+
+
 // ═══════════════════════════════════════════════════════════════
 // CodemanApp Class — constructor and global state
 // ═══════════════════════════════════════════════════════════════
@@ -807,32 +935,43 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   setupEventListeners() {
-    // Keyboard shortcut lookup table — data-driven to avoid 12 separate if-blocks.
-    // Each entry: { key, altKey? (alternative key match), ctrl? (require Ctrl/Cmd),
-    //               shift? (require Shift), action }.
-    const SHORTCUTS = [
-      { key: '?', altKey: '/', ctrl: true, action: () => this.showHelp() },
-      { key: 'w', ctrl: true, action: () => this.killActiveSession() },
-      { key: 'Tab', ctrl: true, action: () => this.nextSession() },
-      { key: 'l', ctrl: true, action: () => this.clearTerminal() },
-      { key: 'R', ctrl: true, shift: true, action: () => this.restoreTerminalSize() },
-      { key: '=', altKey: '+', ctrl: true, action: () => this.increaseFontSize() },
-      { key: '-', ctrl: true, action: () => this.decreaseFontSize() },
-      { key: 'V', ctrl: true, shift: true, action: () => VoiceInput.toggle() },
-      { key: '{', ctrl: true, shift: true, action: () => this.moveActiveTabLeft() },
-      { key: '}', ctrl: true, shift: true, action: () => this.moveActiveTabRight() },
-    ];
+    // Action name → handler map for the shortcut registry (DEFAULT_SHORTCUTS +
+    // user overrides from settings.shortcutOverrides, merged by
+    // getShortcutRegistry()). The command palette chord is deliberately NOT in
+    // this map — shouldOpenCommandPaletteFromShortcut() dispatches it above with
+    // focus-target awareness (it must fire from the terminal but not from inputs).
+    const SHORTCUT_ACTIONS = {
+      showShortcutOverlay: () => this.showShortcutOverlay(),
+      killActiveSession: () => this.killActiveSession(),
+      nextSession: () => this.nextSession(),
+      clearTerminal: () => this.clearTerminal(),
+      restoreTerminalSize: () => this.restoreTerminalSize(),
+      increaseFontSize: () => this.increaseFontSize(),
+      decreaseFontSize: () => this.decreaseFontSize(),
+      toggleVoiceInput: () => VoiceInput.toggle(),
+      moveActiveTabLeft: () => this.moveActiveTabLeft(),
+      moveActiveTabRight: () => this.moveActiveTabRight(),
+    };
 
     // Use capture to handle before terminal
     document.addEventListener('keydown', (e) => {
       // Don't intercept keys during CJK IME composition
       if (e.isComposing || e.keyCode === 229) return;
 
+      if (this.shouldOpenCommandPaletteFromShortcut?.(e)) {
+        e.preventDefault();
+        this.openCommandPalette();
+        return;
+      }
+
       // Escape - close panels and modals (different logic: no preventDefault, no return)
       if (e.key === 'Escape') {
         this.closeAllPanels();
         this.closeHelp();
         if (this.attachmentHistoryDrawerOpen) this.closeAttachmentHistory();
+        this.closeSessionManager();
+        this.closeCommandPalette?.();
+        this.closeShortcutOverlay?.();
       }
 
       // Option/Alt session navigation uses physical key CODES, not e.key, so macOS
@@ -862,14 +1001,18 @@ class CodemanApp {
         }
       }
 
-      // Match against shortcut table
-      for (const s of SHORTCUTS) {
-        const keyMatch = e.key === s.key || (s.altKey && e.key === s.altKey);
-        const ctrlMatch = s.ctrl ? (e.ctrlKey || e.metaKey) : true;
-        const shiftMatch = s.shift ? e.shiftKey : !e.shiftKey;
-        if (keyMatch && ctrlMatch && shiftMatch) {
+      // Match against the shortcut registry so user rebinds and per-shortcut
+      // disables (App Settings → Shortcuts) take effect. Every dispatchable
+      // binding requires Ctrl/Cmd/Alt (capture enforces the same), so plain
+      // typing exits early without touching the registry.
+      if (!e.ctrlKey && !e.metaKey && !e.altKey) return;
+      for (const shortcut of this.getShortcutRegistry()) {
+        if (shortcut.disabled || !shortcut.action) continue;
+        const action = SHORTCUT_ACTIONS[shortcut.action];
+        if (!action) continue;
+        if (this.matchesShortcutEvent(e, shortcut)) {
           e.preventDefault();
-          s.action();
+          action();
           return;
         }
       }
@@ -4250,6 +4393,91 @@ class CodemanApp {
         ? `Lifetime: ${this.globalStats.totalSessionsCreated} sessions created${showCost ? '\nEstimated cost based on Claude Opus pricing' : ''}`
         : `Token usage across active sessions${showCost ? '\nEstimated cost based on Claude Opus pricing' : ''}`;
     }
+  }
+
+  // ─── Shortcut Registry ───────────────────────────────────────────────────────
+  // Returns the merged shortcut list: DEFAULT_SHORTCUTS with any per-shortcut
+  // overrides from settings.shortcutOverrides applied on top.
+
+  getShortcutRegistry() {
+    const settings = this.loadAppSettingsFromStorage();
+    const shortcutOverrides = settings.shortcutOverrides || {};
+    return DEFAULT_SHORTCUTS.map((shortcut) => {
+      const override = shortcutOverrides[shortcut.id];
+      if (!override) return shortcut;
+      // Only binding-shaped fields may come from storage — id/label/group/action
+      // stay trusted so persisted data can never redirect a shortcut's action or
+      // spoof another row in the settings/overlay renderers.
+      const merged = { ...shortcut };
+      if (Array.isArray(override.bindings)) {
+        merged.bindings = override.bindings;
+        delete merged.displayBindings; // show the override, not the stale default label
+      }
+      if (typeof override.disabled === 'boolean') merged.disabled = override.disabled;
+      return merged;
+    });
+  }
+
+  matchesShortcutEvent(e, shortcut) {
+    if (!shortcut || !Array.isArray(shortcut.bindings)) return false;
+    return shortcut.bindings.some((binding) => {
+      const mods = binding.modifiers || [];
+      // Ctrl and Cmd are interchangeable as the primary modifier (parity with
+      // the legacy shortcut table), but every OTHER pressed modifier must be
+      // declared by the binding — a plain Ctrl+K binding must not also swallow
+      // Ctrl+Shift+K (the Firefox devtools chord).
+      const wantsPrimary = mods.includes('ctrl') || mods.includes('meta');
+      if (wantsPrimary !== !!(e.ctrlKey || e.metaKey)) return false;
+      if (mods.includes('shift') !== !!e.shiftKey) return false;
+      if (mods.includes('alt') !== !!e.altKey) return false;
+      // Match the physical key when the binding pins one (layout-independent),
+      // or the produced character otherwise (layout-dependent keys like '+').
+      if (binding.code && e.code === binding.code) return true;
+      if (binding.key && typeof e.key === 'string' && e.key.toLowerCase() === binding.key.toLowerCase()) return true;
+      return false;
+    });
+  }
+
+  // ─── Shortcut Overlay Modal ───────────────────────────────────────────────────
+  // Ctrl/Alt+? opens a floating overlay listing all keyboard shortcuts, grouped
+  // by category. Uses the merged registry so user overrides are reflected.
+
+  showShortcutOverlay() {
+    const modal = document.getElementById('shortcutOverlayModal');
+    if (!modal) return;
+    this.renderShortcutOverlay();
+    modal.classList.add('active');
+    modal.focus?.();
+  }
+
+  renderShortcutOverlay() {
+    const list = document.getElementById('shortcutOverlayList');
+    if (!list) return;
+    const registry = this.getShortcutRegistry();
+    const groups = {};
+    for (const shortcut of registry) {
+      const g = shortcut.group || 'General';
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(shortcut);
+    }
+    const fmtBindings = (s) => {
+      if (s.displayBindings) return s.displayBindings.map((b) => `<kbd>${escapeHtml(b)}</kbd>`).join(' / ');
+      if (!s.bindings) return '';
+      return s.bindings.map((b) => {
+        const parts = [...(b.modifiers || []).map((m) => m.charAt(0).toUpperCase() + m.slice(1)), b.key || b.code || ''];
+        return `<kbd>${escapeHtml(parts.join('+'))}</kbd>`;
+      }).join(' / ');
+    };
+    list.innerHTML = Object.entries(groups).map(([group, items]) =>
+      `<div class="shortcut-overlay-group"><div class="shortcut-overlay-group-label">${escapeHtml(group)}</div>` +
+      items.map((s) => `<div class="shortcut-overlay-row"><span class="shortcut-overlay-label">${escapeHtml(s.label)}</span><span class="shortcut-overlay-keys">${fmtBindings(s)}</span></div>`).join('') +
+      `</div>`
+    ).join('');
+  }
+
+  closeShortcutOverlay() {
+    const modal = document.getElementById('shortcutOverlayModal');
+    if (modal) modal.classList.remove('active');
   }
 
 }

@@ -250,6 +250,399 @@ Object.assign(CodemanApp.prototype, {
     this.openImagePopup(data);
   },
 
+  // ═══════════════════════════════════════════════════════════════
+  // Command Palette (COD-153)
+  // Fast Cmd/Ctrl+K switcher for currently open sessions, plus launch-new.
+  // ═══════════════════════════════════════════════════════════════
+
+  shouldOpenCommandPaletteFromShortcut(e) {
+    if (!e) return false;
+    // Every palette chord requires Ctrl/Cmd/Alt (capture enforces the same for
+    // rebinds), so plain typing exits before any registry work — this runs on
+    // the document AND xterm keydown hot paths.
+    if (!e.ctrlKey && !e.metaKey && !e.altKey) return false;
+
+    // Registry-aware chord check (COD-157): honors a rebound or disabled
+    // palette shortcut. Falls back to the default Ctrl/Cmd/Alt+K chord when the
+    // registry isn't available (isolated test harnesses).
+    const registryAvailable =
+      typeof this.getShortcutRegistry === 'function' && typeof this.matchesShortcutEvent === 'function';
+    const palette = registryAvailable
+      ? this.getShortcutRegistry().find((s) => s.id === 'command-palette')
+      : null;
+    if (palette) {
+      if (palette.disabled || !this.matchesShortcutEvent(e, palette)) return false;
+    } else {
+      const key = (e.key || '').toLowerCase();
+      if (key !== 'k' && e.code !== 'KeyK') return false;
+      // Don't hijack chords with extra modifiers (Ctrl+Shift+K is the Firefox
+      // devtools console; matchesShortcutEvent applies the same rule above).
+      if (e.shiftKey) return false;
+    }
+
+    const target = e.target;
+    if (!target) return true;
+    const tagName = (target.tagName || '').toUpperCase();
+    const className = typeof target.className === 'string' ? target.className : '';
+    const isXtermHelper =
+      target.classList?.contains?.('xterm-helper-textarea') || className.includes('xterm-helper-textarea');
+    if (isXtermHelper) return true;
+    if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') return false;
+    if (target.isContentEditable) return false;
+    if (typeof target.closest === 'function' && target.closest('[contenteditable="true"]')) return false;
+    return true;
+  },
+
+  openCommandPalette() {
+    const modal = document.getElementById('commandPaletteModal');
+    const search = document.getElementById('commandPaletteSearch');
+    if (!modal || !search) return;
+
+    this.commandPaletteActiveIndex = 0;
+    search.value = '';
+    modal.classList.add('active');
+
+    this._wireCommandPalette();
+    this.renderCommandPalette();
+
+    search.focus();
+    search.select?.();
+  },
+
+  closeCommandPalette() {
+    const modal = document.getElementById('commandPaletteModal');
+    if (modal) modal.classList.remove('active');
+  },
+
+  _wireCommandPalette() {
+    if (this._commandPaletteWired) return;
+    this._commandPaletteWired = true;
+
+    const modal = document.getElementById('commandPaletteModal');
+    const search = document.getElementById('commandPaletteSearch');
+    const list = document.getElementById('commandPaletteList');
+
+    search?.addEventListener('input', () => {
+      this.commandPaletteActiveIndex = 0;
+      this.renderCommandPalette();
+    });
+
+    search?.addEventListener('keydown', async (e) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        this.moveCommandPaletteSelection(1);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        this.moveCommandPaletteSelection(-1);
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        await this.activateCommandPaletteItem();
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        this.closeCommandPalette();
+      }
+    });
+
+    modal?.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        this.closeCommandPalette();
+      }
+    });
+
+    list?.addEventListener?.('click', (e) => {
+      const row = e.target?.closest?.('[data-command-index]');
+      if (!row) return;
+      this.commandPaletteActiveIndex = Number(row.dataset.commandIndex) || 0;
+      void this.activateCommandPaletteItem();
+    });
+  },
+
+  buildCommandPaletteItems(query = '') {
+    const needle = query.trim().toLowerCase();
+    const orderedIds = [
+      ...(Array.isArray(this.sessionOrder) ? this.sessionOrder : []),
+      ...Array.from(this.sessions?.keys?.() || []).filter((id) => !this.sessionOrder?.includes?.(id)),
+    ];
+    const seen = new Set();
+    const sessionItems = [];
+
+    for (const sessionId of orderedIds) {
+      if (seen.has(sessionId)) continue;
+      seen.add(sessionId);
+      const session = this.sessions?.get?.(sessionId);
+      if (!session) continue;
+      const title = this.getSessionName?.(session) || session.name || session.title || sessionId.slice(0, 8);
+      const subtitleParts = [session.workingDir, session.mode, session.status].filter(Boolean);
+      const haystack = [title, session.workingDir, session.mode, session.status, sessionId].filter(Boolean).join(' ').toLowerCase();
+      if (needle && !haystack.includes(needle)) continue;
+      sessionItems.push({
+        id: `session:${sessionId}`,
+        type: 'session',
+        sessionId,
+        title,
+        subtitle: subtitleParts.join(' · '),
+      });
+    }
+
+    sessionItems.push(this._buildCommandPaletteNewSessionItem(query));
+    sessionItems.push({ id: 'browse-sessions', type: 'browse-sessions', title: 'Browse all sessions…', subtitle: 'Open Session Manager' });
+    return sessionItems;
+  },
+
+  _buildCommandPaletteNewSessionItem(query = '') {
+    const mode = this.runMode || this._runMode || 'claude';
+    const labels = { claude: 'Claude', opencode: 'OpenCode', codex: 'Codex', gemini: 'Gemini' };
+    const caseName = this._findCommandPaletteCaseMatch(query) || document.getElementById('quickStartCase')?.value || 'testcase';
+    return {
+      id: 'new-session',
+      type: 'new-session',
+      caseName,
+      title: 'New session',
+      subtitle: `Run ${labels[mode] || mode} in ${caseName}`,
+    };
+  },
+
+  _findCommandPaletteCaseMatch(query = '') {
+    const needle = query.trim().toLowerCase();
+    if (!needle || !Array.isArray(this.cases)) return null;
+
+    const scoreCase = (caseItem) => {
+      const name = String(caseItem?.name || '').trim();
+      if (!name) return 0;
+      const haystack = [
+        name,
+        caseItem?.path,
+        caseItem?.casePath,
+        caseItem?.workingDir,
+        caseItem?.remote?.path,
+        caseItem?.remote?.hostId,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      const lowerName = name.toLowerCase();
+      if (lowerName === needle) return 100;
+      if (lowerName.startsWith(needle)) return 90;
+      if (lowerName.includes(needle)) return 80;
+      if (haystack.includes(needle)) return 60;
+      return 0;
+    };
+
+    let best = null;
+    let bestScore = 0;
+    for (const caseItem of this.cases) {
+      const score = scoreCase(caseItem);
+      if (score > bestScore) {
+        best = caseItem;
+        bestScore = score;
+      }
+    }
+    return best?.name || null;
+  },
+
+  renderCommandPalette() {
+    const search = document.getElementById('commandPaletteSearch');
+    const list = document.getElementById('commandPaletteList');
+    if (!list) return;
+
+    const query = search?.value || '';
+    const items = this.buildCommandPaletteItems(query);
+    this.commandPaletteItems = items;
+    this.commandPaletteActiveIndex = Math.max(0, Math.min(this.commandPaletteActiveIndex || 0, items.length - 1));
+
+    list.innerHTML = items
+      .map((item, index) => {
+        const active = index === this.commandPaletteActiveIndex ? ' active' : '';
+        const icon = item.type === 'new-session' ? '+' : item.type === 'browse-sessions' ? '≡' : '›';
+        const browse = item.type === 'browse-sessions' ? ' command-palette-item--browse' : '';
+        return `
+          <button class="command-palette-item${active}${browse}" type="button" data-command-index="${index}">
+            <span class="command-palette-icon" aria-hidden="true">${icon}</span>
+            <span class="command-palette-text">
+              <span class="command-palette-title">${escapeHtml(item.title)}</span>
+              <span class="command-palette-subtitle">${escapeHtml(item.subtitle || '')}</span>
+            </span>
+          </button>
+        `;
+      })
+      .join('');
+  },
+
+  moveCommandPaletteSelection(delta) {
+    const items = this.commandPaletteItems || this.buildCommandPaletteItems(document.getElementById('commandPaletteSearch')?.value || '');
+    if (!items.length) return;
+    this.commandPaletteActiveIndex = (this.commandPaletteActiveIndex + delta + items.length) % items.length;
+    this.renderCommandPalette();
+  },
+
+  async activateCommandPaletteItem(index = this.commandPaletteActiveIndex || 0) {
+    const item = (this.commandPaletteItems || [])[index];
+    if (!item) return;
+
+    this.closeCommandPalette();
+    if (item.type === 'session' && item.sessionId) {
+      await this.selectSession(item.sessionId);
+      return;
+    }
+    if (item.type === 'browse-sessions') {
+      this.openSessionManager();
+      return;
+    }
+    if (item.type === 'new-session') {
+      const caseSelect = document.getElementById('quickStartCase');
+      if (caseSelect && item.caseName) {
+        if (
+          caseSelect.tagName === 'SELECT' &&
+          typeof caseSelect.appendChild === 'function' &&
+          !Array.from(caseSelect.options || []).some((option) => option.value === item.caseName)
+        ) {
+          const option = document.createElement('option');
+          option.value = item.caseName;
+          option.textContent = item.caseName;
+          caseSelect.appendChild(option);
+        }
+        // selectQuickStartCase keeps the searchable combobox, dir display, and
+        // persisted last-used case in sync with the palette's pick (COD-151);
+        // fall back to a bare value set when the picker mixin isn't loaded.
+        if (typeof this.selectQuickStartCase === 'function') {
+          this.selectQuickStartCase(item.caseName);
+        } else {
+          caseSelect.value = item.caseName;
+        }
+      }
+      await this.run();
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // Session Manager Modal (COD-121)
+  // Unified session list (GET /api/sessions/unified) reachable mid-session,
+  // with a server-side search box. Reuses the history item renderer; clicking
+  // a live row switches to it, a history row resumes the conversation.
+  // ═══════════════════════════════════════════════════════════════
+
+  async openSessionManager() {
+    const modal = document.getElementById('sessionManagerModal');
+    if (modal) {
+      modal.classList.add('active');
+      // Escape closes the modal even while focus is in the search input. A
+      // modal-scoped listener is robust regardless of the global Escape chain
+      // (which runs other close handlers first and can short-circuit). Wire once.
+      if (!this._sessionManagerEscWired) {
+        this._sessionManagerEscWired = true;
+        modal.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            this.closeSessionManager();
+          }
+        });
+      }
+    }
+
+    // Ensure cases are loaded so item subtitles can show "#caseName" labels.
+    // Mirror loadHistorySessions(): prefer already-loaded this.cases.
+    if (!Array.isArray(this.cases) || this.cases.length === 0) {
+      try {
+        const r = await fetch('/api/cases');
+        const d = r.ok ? await r.json() : null;
+        this.cases = d?.data || [];
+      } catch {
+        this.cases = this.cases || [];
+      }
+    }
+
+    const search = document.getElementById('sessionManagerSearch');
+    if (search) {
+      // Wire the debounced search input once (lazy — the element exists by
+      // the time the modal is first opened, and mixin methods are bound).
+      if (!this._sessionManagerSearchWired) {
+        this._sessionManagerSearchWired = true;
+        search.addEventListener('input', () => {
+          const value = search.value.trim();
+          this._debouncedCall('sessionManagerSearch', () => this._loadSessionManagerList(value), 200);
+        });
+      }
+      search.value = '';
+      search.focus();
+    }
+    await this._loadSessionManagerList('');
+  },
+
+  closeSessionManager() {
+    const modal = document.getElementById('sessionManagerModal');
+    if (modal) modal.classList.remove('active');
+  },
+
+  /** Replace the Session Manager list body with a single status line. */
+  _setSessionManagerMessage(list, message) {
+    list.replaceChildren();
+    const line = document.createElement('p');
+    line.className = 'empty-message';
+    line.textContent = message;
+    list.appendChild(line);
+  },
+
+  async _loadSessionManagerList(q = '') {
+    this._sessionManagerQuery = q;
+    const list = document.getElementById('sessionManagerList');
+    if (!list) return;
+    try {
+      const url = '/api/sessions/unified?limit=200' + (q ? '&q=' + encodeURIComponent(q) : '');
+      const res = await fetch(url);
+      const data = await res.json().catch(() => null);
+      // ApiResponse envelope: { success: true, data: { sessions, total } }.
+      // Surface failures instead of rendering them as an empty result set.
+      if (!res.ok || !data || data.success === false || !data.data) {
+        this._setSessionManagerMessage(list, data?.error || `Failed to load sessions (HTTP ${res.status})`);
+        return;
+      }
+      const sessions = data.data.sessions || [];
+      list.replaceChildren();
+      if (sessions.length === 0) {
+        this._setSessionManagerMessage(list, q ? 'No sessions match your search' : 'No sessions found');
+        return;
+      }
+      for (const s of sessions) {
+        // Adapt UnifiedSessionItem (lastActivityAt epoch-ms, optional fields) to
+        // the history-record shape _buildHistoryItem renders (lastModified date
+        // string, sizeBytes, firstPrompt).
+        const record = {
+          sessionId: s.sessionId,
+          workingDir: s.workingDir || '',
+          sizeBytes: s.sizeBytes ?? 0,
+          lastModified: new Date(s.lastActivityAt ?? s.createdAt ?? Date.now()).toISOString(),
+          firstPrompt: s.firstPrompt || s.name || '',
+        };
+        const isLive = !!this.sessions?.has?.(s.sessionId);
+        const item = this._buildHistoryItem(record, this.cases, {
+          showViewAll: false,
+          onActivate: () => {
+            this.closeSessionManager();
+            if (isLive) {
+              void this.selectSession(s.sessionId);
+            } else if (record.workingDir) {
+              // History rows are keyed by the Claude conversation UUID; resumed
+              // sessions carry theirs separately as claudeSessionId.
+              void this.resumeHistorySession(s.claudeSessionId || s.sessionId, record.workingDir);
+            }
+          },
+        });
+        list.appendChild(item);
+      }
+    } catch (err) {
+      console.error('[_loadSessionManagerList]', err);
+      this._setSessionManagerMessage(list, 'Failed to load sessions');
+    }
+  },
 
   // ═══════════════════════════════════════════════════════════════
   // Away Digest Modal

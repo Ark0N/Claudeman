@@ -120,12 +120,28 @@ Object.assign(CodemanApp.prototype, {
     this.terminal.attachCustomKeyEventHandler((ev) => {
       if (ev.isComposing || ev.keyCode === 229) return false;
 
-      // Let the app's Alt/Option session-nav shortcuts reach the document keydown handler
+      // Let the app's Alt/Option session-nav and Command Palette shortcuts reach the document keydown handler
       // (app.js switches tabs by PHYSICAL e.code) instead of xterm injecting ESC<char> into
       // the PTY. Mirror app.js's gate exactly — same physical codes + modifier guard — so
-      // macOS Option layouts (Option+1 -> "¡", Option+[ -> "“") are suppressed here too and
+      // macOS Option layouts (Option+1 -> "¡", Option+[ -> "“", Option+K -> "˚") are suppressed here too and
       // don't leak an escape sequence into the focused terminal on every tab switch.
-      if (ev.altKey && !ev.ctrlKey && !ev.shiftKey && /^(Digit[1-9]|BracketLeft|BracketRight)$/.test(ev.code || '')) {
+      if (
+        ev.altKey &&
+        !ev.ctrlKey &&
+        !ev.shiftKey &&
+        /^(Digit[1-9]|BracketLeft|BracketRight|KeyK)$/.test(ev.code || '')
+      ) {
+        return false;
+      }
+
+      // Command palette chord (COD-153): keep it out of the PTY. The document
+      // CAPTURE handler has already opened the palette by the time xterm sees
+      // this keydown, but its preventDefault() does NOT stop xterm — without
+      // this gate Ctrl+K would ALSO write 0x0b (readline kill-line) into the
+      // live session behind the palette, truncating whatever the user had
+      // typed. Route through the registry-aware checker so a rebound or
+      // disabled palette shortcut restores normal terminal Ctrl+K.
+      if (ev.type === 'keydown' && this.shouldOpenCommandPaletteFromShortcut?.(ev)) {
         return false;
       }
 
@@ -1165,6 +1181,7 @@ Object.assign(CodemanApp.prototype, {
    * @param {Array} cases linked cases (for #caseName label)
    * @param {object} [options]
    * @param {boolean} [options.showViewAll=true] show "View all in folder" button in detail panel
+   * @param {Function} [options.onActivate] main-row click handler override (default: resume the conversation)
    */
   _buildHistoryItem(s, cases, options) {
     const showViewAll = options?.showViewAll !== false;
@@ -1186,10 +1203,14 @@ Object.assign(CodemanApp.prototype, {
     item.className = 'history-item';
     item.title = s.workingDir;
 
-    // Main row: clickable surface that triggers resume
+    // Main row: clickable surface that triggers resume (or a caller-supplied
+    // activation — the Session Manager switches to live sessions instead)
     const mainRow = document.createElement('div');
     mainRow.className = 'history-item-main';
-    mainRow.addEventListener('click', () => this.resumeHistorySession(s.sessionId, s.workingDir));
+    mainRow.addEventListener(
+      'click',
+      options?.onActivate || (() => this.resumeHistorySession(s.sessionId, s.workingDir))
+    );
 
     const textCol = document.createElement('div');
     textCol.className = 'history-item-text';

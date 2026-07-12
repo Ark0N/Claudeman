@@ -44,6 +44,203 @@ Object.assign(CodemanApp.prototype, {
   // Quick Start
   // ═══════════════════════════════════════════════════════════════
 
+  formatCasePickerLabel(c) {
+    return c?.location === 'remote' && c.remote?.hostId ? `${c.name} @ ${c.remote.hostId}` : c?.name || '';
+  },
+
+  buildCasePickerOptions(cases = []) {
+    const normalized = [];
+    const seen = new Set();
+    for (const c of cases) {
+      if (!c?.name || seen.has(c.name)) continue;
+      seen.add(c.name);
+      normalized.push(c);
+    }
+    if (!seen.has('testcase')) {
+      normalized.push({ name: 'testcase' });
+    }
+
+    return normalized
+      .map(c => {
+        const label = this.formatCasePickerLabel(c);
+        const searchText = [
+          c.name,
+          label,
+          c.path,
+          c.location,
+          c.remote?.hostId,
+          c.remote?.label,
+          c.remote?.path
+        ].filter(Boolean).join(' ').toLowerCase();
+        return { name: c.name, label, case: c, searchText };
+      })
+      .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base', numeric: true }));
+  },
+
+  filterCasePickerOptions(options, query) {
+    const terms = String(query || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return options;
+    return options.filter(option => terms.every(term => option.searchText.includes(term)));
+  },
+
+  getCasePickerOptions() {
+    return this.buildCasePickerOptions(this.cases || []);
+  },
+
+  updateCasePickerInput(caseName) {
+    const input = document.getElementById('quickStartCaseSearch');
+    if (!input) return;
+    const option = this.getCasePickerOptions().find(item => item.name === caseName);
+    input.value = option?.label || caseName || 'testcase';
+    input.title = option?.label || input.value;
+  },
+
+  renderQuickStartCaseSelectOptions(select, options) {
+    if (!select) return;
+    select.innerHTML = options
+      .map(option => `<option value="${escapeHtml(option.name)}">${escapeHtml(option.label)}</option>`)
+      .join('');
+  },
+
+  openCasePicker(filter = '') {
+    const input = document.getElementById('quickStartCaseSearch');
+    const list = document.getElementById('quickStartCaseList');
+    if (!input || !list) return;
+    this._casePickerOpen = true;
+    this._casePickerFilter = filter;
+    this._casePickerActiveIndex = 0;
+    input.setAttribute('aria-expanded', 'true');
+    this.renderCasePickerList();
+  },
+
+  closeCasePicker() {
+    const input = document.getElementById('quickStartCaseSearch');
+    const list = document.getElementById('quickStartCaseList');
+    this._casePickerOpen = false;
+    this._casePickerFilter = '';
+    input?.setAttribute('aria-expanded', 'false');
+    input?.removeAttribute('aria-activedescendant');
+    list?.classList.add('hidden');
+  },
+
+  renderCasePickerList() {
+    const input = document.getElementById('quickStartCaseSearch');
+    const list = document.getElementById('quickStartCaseList');
+    const select = document.getElementById('quickStartCase');
+    if (!input || !list || !select) return;
+
+    const options = this.filterCasePickerOptions(this.getCasePickerOptions(), this._casePickerFilter || '');
+    const selectedName = select.value || 'testcase';
+    const maxIndex = Math.max(0, options.length - 1);
+    this._casePickerActiveIndex = Math.min(Math.max(this._casePickerActiveIndex || 0, 0), maxIndex);
+
+    if (options.length === 0) {
+      list.innerHTML = '<div class="case-combobox-empty">No cases match</div>';
+      list.classList.remove('hidden');
+      input.removeAttribute('aria-activedescendant');
+      return;
+    }
+
+    list.innerHTML = options
+      .map((option, index) => {
+        const active = index === this._casePickerActiveIndex;
+        const selected = option.name === selectedName;
+        const id = `quickStartCaseOption-${index}`;
+        return `
+          <button
+            type="button"
+            id="${id}"
+            class="case-combobox-option ${active ? 'active' : ''} ${selected ? 'selected' : ''}"
+            role="option"
+            aria-selected="${selected ? 'true' : 'false'}"
+            data-case="${escapeHtml(option.name)}"
+            title="${escapeHtml(option.label)}">
+            <span class="case-combobox-check">${selected ? '✓' : ''}</span>
+            <span class="case-combobox-option-label">${escapeHtml(option.label)}</span>
+          </button>
+        `;
+      })
+      .join('');
+    list.classList.remove('hidden');
+    input.setAttribute('aria-activedescendant', `quickStartCaseOption-${this._casePickerActiveIndex}`);
+  },
+
+  selectQuickStartCase(caseName, { save = true } = {}) {
+    const select = document.getElementById('quickStartCase');
+    if (!select) return;
+    select.value = caseName || 'testcase';
+    this.updateCasePickerInput(select.value);
+    this.closeCasePicker();
+    this.updateDirDisplayForCase(select.value);
+    this.updateMobileCaseLabel(select.value);
+    if (save) {
+      this.saveLastUsedCase(select.value);
+    }
+  },
+
+  setupQuickStartCasePicker() {
+    const select = document.getElementById('quickStartCase');
+    const input = document.getElementById('quickStartCaseSearch');
+    const list = document.getElementById('quickStartCaseList');
+    const picker = document.getElementById('quickStartCasePicker');
+    if (!select || !input || !list || !picker || input.dataset.listenerAdded) return;
+
+    input.addEventListener('focus', () => {
+      input.select?.();
+      this.openCasePicker('');
+    });
+    input.addEventListener('click', () => {
+      input.select?.();
+      this.openCasePicker('');
+    });
+    input.addEventListener('input', () => {
+      this.openCasePicker(input.value);
+    });
+    input.addEventListener('keydown', event => {
+      const options = this.filterCasePickerOptions(this.getCasePickerOptions(), this._casePickerFilter || input.value);
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        this._casePickerActiveIndex = Math.min((this._casePickerActiveIndex || 0) + 1, Math.max(0, options.length - 1));
+        this._casePickerOpen ? this.renderCasePickerList() : this.openCasePicker(input.value);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        this._casePickerActiveIndex = Math.max((this._casePickerActiveIndex || 0) - 1, 0);
+        this._casePickerOpen ? this.renderCasePickerList() : this.openCasePicker(input.value);
+      } else if (event.key === 'Enter') {
+        const option = options[this._casePickerActiveIndex || 0];
+        if (option) {
+          event.preventDefault();
+          this.selectQuickStartCase(option.name);
+          this.run?.();
+        }
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        this.updateCasePickerInput(select.value);
+        this.closeCasePicker();
+      } else if (event.key === 'Tab') {
+        this.updateCasePickerInput(select.value);
+        this.closeCasePicker();
+      }
+    });
+    list.addEventListener('mousedown', event => event.preventDefault());
+    list.addEventListener('click', event => {
+      const option = event.target.closest?.('.case-combobox-option');
+      if (option?.dataset?.case) {
+        this.selectQuickStartCase(option.dataset.case);
+      }
+    });
+    if (document.addEventListener && !this._casePickerDocumentListenerAdded) {
+      document.addEventListener('pointerdown', event => {
+        if (!picker.contains(event.target)) {
+          this.updateCasePickerInput(select.value);
+          this.closeCasePicker();
+        }
+      });
+      this._casePickerDocumentListenerAdded = true;
+    }
+    input.dataset.listenerAdded = 'true';
+  },
+
   async loadQuickStartCases(selectCaseName = null, settingsPromise = null) {
     try {
       // Load settings to get lastUsedCase (reuse shared promise if provided)
@@ -64,28 +261,8 @@ Object.assign(CodemanApp.prototype, {
 
       const select = document.getElementById('quickStartCase');
 
-      // Build options - existing cases first, then testcase as fallback if not present
-      let options = '';
-      const hasTestcase = cases.some(c => c.name === 'testcase');
-      const isMobile = MobileDetection.getDeviceType() === 'mobile';
-      const maxNameLength = isMobile ? 8 : 20; // Truncate to 8 chars on mobile
-
-      cases.forEach(c => {
-        const baseLabel = c.location === 'remote' && c.remote
-          ? `${c.name} @ ${c.remote.hostId}`
-          : c.name;
-        const displayName = baseLabel.length > maxNameLength
-          ? baseLabel.substring(0, maxNameLength) + '…'
-          : baseLabel;
-        options += `<option value="${escapeHtml(c.name)}">${escapeHtml(displayName)}</option>`;
-      });
-
-      // Add testcase option if it doesn't exist (will be created on first run)
-      if (!hasTestcase) {
-        options = `<option value="testcase">testcase</option>` + options;
-      }
-
-      select.innerHTML = options;
+      const options = this.getCasePickerOptions();
+      this.renderQuickStartCaseSelectOptions(select, options);
       console.log('[loadQuickStartCases] Set options:', select.innerHTML.substring(0, 200));
 
       // If a specific case was requested, select it
@@ -110,6 +287,9 @@ Object.assign(CodemanApp.prototype, {
         document.getElementById('dirDisplay').textContent = '~/codeman-cases/testcase';
         this.updateMobileCaseLabel('testcase');
       }
+      this.updateCasePickerInput(select.value);
+      this.renderCasePickerList();
+      this.closeCasePicker();
 
       // Only add event listener once (on first load)
       if (!select.dataset.listenerAdded) {
@@ -117,9 +297,11 @@ Object.assign(CodemanApp.prototype, {
           this.updateDirDisplayForCase(select.value);
           this.saveLastUsedCase(select.value);
           this.updateMobileCaseLabel(select.value);
+          this.updateCasePickerInput(select.value);
         });
         select.dataset.listenerAdded = 'true';
       }
+      this.setupQuickStartCasePicker();
     } catch (err) {
       console.error('Failed to load cases:', err);
     }
@@ -511,6 +693,8 @@ Object.assign(CodemanApp.prototype, {
         caseData = createCaseData.data.case;
       }
 
+      const selectedCase = (this.cases || []).find(c => c.name === caseName);
+      const isRemoteCase = caseData.location === 'remote' || selectedCase?.location === 'remote';
       const workingDir = caseData.path;
       if (!workingDir) throw new Error('Case path not found');
 
@@ -558,7 +742,7 @@ Object.assign(CodemanApp.prototype, {
         fetch('/api/sessions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ workingDir, mode: 'shell', name })
+          body: JSON.stringify({ ...(isRemoteCase ? { caseName } : { workingDir }), mode: 'shell', name })
         }).then(r => r.json())
       );
       const createResults = await Promise.all(createPromises);
@@ -1656,7 +1840,14 @@ Object.assign(CodemanApp.prototype, {
         // Refresh the dropdown
         const select = document.getElementById('quickStartCase');
         const currentCase = select.value;
+        if (currentCase === name) {
+          // Blur the native picker before reload so it doesn't show the stale value
+          select.blur?.();
+        }
         await this.loadQuickStartCases(currentCase === name ? null : currentCase);
+        if (currentCase === name) {
+          await this.saveLastUsedCase(document.getElementById('quickStartCase')?.value || 'testcase');
+        }
       } else {
         this.showToast(data.error || 'Failed to delete case', 'error');
       }
@@ -1693,11 +1884,7 @@ Object.assign(CodemanApp.prototype, {
 
     // Build case list HTML
     let html = '';
-    const cases = this.cases || [];
-
-    // Add testcase if not in list
-    const hasTestcase = cases.some(c => c.name === 'testcase');
-    const allCases = hasTestcase ? cases : [{ name: 'testcase' }, ...cases];
+    const allCases = this.getCasePickerOptions();
 
     for (const c of allCases) {
       const isSelected = c.name === currentCase;
@@ -1709,7 +1896,7 @@ Object.assign(CodemanApp.prototype, {
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
             </svg>
           </span>
-          <span class="mobile-case-item-name">${escapeHtml(c.name)}</span>
+          <span class="mobile-case-item-name">${escapeHtml(c.label)}</span>
           <span class="mobile-case-item-delete" onclick="event.stopPropagation(); app.deleteCaseMobile(${escapeHtml(JSON.stringify(c.name))})" title="Delete">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>

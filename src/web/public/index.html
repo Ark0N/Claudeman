@@ -358,7 +358,7 @@
             <h3 class="history-title" id="historyTitle">Resume Conversation</h3>
             <div class="history-list" id="historyList"></div>
           </div>
-          <p class="welcome-hint">Or press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to start</p>
+          <p class="welcome-hint">Or click Run to start</p>
           <button class="welcome-ralph-link" onclick="app.showRalphWizard()">Start Ralph Loop &rarr;</button>
         </div>
       </div>
@@ -427,7 +427,7 @@
         <!-- Run AI -->
         <div class="toolbar-group">
           <div class="run-btn-group">
-            <button class="btn-toolbar btn-run" id="runBtn" onclick="app.run()" title="Run (Ctrl+Enter)">
+            <button class="btn-toolbar btn-run" id="runBtn" onclick="app.run()" title="Run">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               <span id="runBtnLabel">Run</span>
             </button>
@@ -469,7 +469,22 @@
             <button class="tab-count-btn" onclick="app.incrementShellCount()">+</button>
           </div>
           <div class="case-select-group">
-            <select id="quickStartCase" class="toolbar-select" title="Select case">
+            <div class="case-combobox" id="quickStartCasePicker">
+              <input
+                type="text"
+                id="quickStartCaseSearch"
+                class="case-combobox-input"
+                role="combobox"
+                aria-controls="quickStartCaseList"
+                aria-expanded="false"
+                aria-autocomplete="list"
+                autocomplete="off"
+                spellcheck="false"
+                title="Select case"
+              >
+              <div id="quickStartCaseList" class="case-combobox-list hidden" role="listbox"></div>
+            </div>
+            <select id="quickStartCase" class="toolbar-select case-native-select" title="Select case" aria-hidden="true" tabindex="-1">
               <option value="testcase">testcase</option>
             </select>
             <button class="btn-case-add" onclick="app.showCreateCaseModal()" title="Create new case">+</button>
@@ -555,19 +570,49 @@
           <button class="modal-close" onclick="app.closeHelp()" aria-label="Close help">&times;</button>
         </div>
         <div class="modal-body">
-          <div class="shortcuts-grid">
-            <div><kbd>Ctrl</kbd>+<kbd>W</kbd></div><div>Close Session</div>
-            <div><kbd>Ctrl</kbd>+<kbd>Tab</kbd></div><div>Next Session</div>
-            <div><kbd>Alt/Option</kbd>+<kbd>[</kbd> / <kbd>Alt/Option</kbd>+<kbd>]</kbd></div><div>Previous / Next Session</div>
-            <div><kbd>Alt/Option</kbd>+<kbd>1-9</kbd></div><div>Switch to Tab N</div>
-            <div><kbd>Ctrl</kbd>+<kbd>L</kbd></div><div>Clear Terminal</div>
-            <div><kbd>Shift</kbd>+<kbd>Wheel</kbd></div><div>Scroll local history (when mouse passthrough is active)</div>
-            <div><kbd>Ctrl</kbd>+<kbd>+</kbd></div><div>Increase Font</div>
-            <div><kbd>Ctrl</kbd>+<kbd>-</kbd></div><div>Decrease Font</div>
-            <div><kbd>Ctrl</kbd>+<kbd>?</kbd></div><div>Show Help</div>
-            <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd></div><div>Voice Input</div>
-            <div><kbd>Escape</kbd></div><div>Close Panels</div>
-          </div>
+          <section class="shortcut-section">
+            <h4>Session</h4>
+            <div class="shortcuts-grid">
+              <div><kbd>Ctrl</kbd>+<kbd>W</kbd></div><div>Close Session</div>
+              <div><kbd>Ctrl/Cmd/Option</kbd>+<kbd>K</kbd></div><div>Find Open Session</div>
+              <div><kbd>Ctrl</kbd>+<kbd>Tab</kbd></div><div>Next Session</div>
+              <div><kbd>Alt/Option</kbd>+<kbd>[</kbd> / <kbd>Alt/Option</kbd>+<kbd>]</kbd></div><div>Previous / Next Session</div>
+              <div><kbd>Alt/Option</kbd>+<kbd>1-9</kbd></div><div>Switch to Tab N</div>
+            </div>
+          </section>
+          <section class="shortcut-section">
+            <h4>Tabs</h4>
+            <div class="shortcuts-grid">
+              <div><kbd>Ctrl</kbd>+<kbd>{</kbd></div><div>Move Active Tab Left</div>
+              <div><kbd>Ctrl</kbd>+<kbd>}</kbd></div><div>Move Active Tab Right</div>
+              <div><kbd>ArrowLeft</kbd></div><div>Focus Previous Tab</div>
+              <div><kbd>ArrowRight</kbd></div><div>Focus Next Tab</div>
+              <div><kbd>Home</kbd></div><div>Focus First Tab</div>
+              <div><kbd>End</kbd></div><div>Focus Last Tab</div>
+              <div><kbd>Enter</kbd> / <kbd>Space</kbd></div><div>Activate Focused Tab</div>
+            </div>
+          </section>
+          <section class="shortcut-section">
+            <h4>Terminal</h4>
+            <div class="shortcuts-grid">
+              <div><kbd>Ctrl</kbd>+<kbd>L</kbd></div><div>Clear Terminal</div>
+              <div><kbd>Ctrl</kbd>+<kbd>+</kbd></div><div>Increase Font</div>
+              <div><kbd>Ctrl</kbd>+<kbd>-</kbd></div><div>Decrease Font</div>
+              <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd></div><div>Restore Terminal Size</div>
+              <div><kbd>Shift</kbd>+<kbd>Enter</kbd></div><div>Insert Newline</div>
+              <div><kbd>Ctrl</kbd>+<kbd>Enter</kbd></div><div>Insert Newline</div>
+              <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd></div><div>Voice Input</div>
+              <div><kbd>Shift</kbd>+<kbd>Wheel</kbd></div><div>Scroll local history (when mouse passthrough is active)</div>
+            </div>
+          </section>
+          <section class="shortcut-section">
+            <h4>Panels</h4>
+            <div class="shortcuts-grid">
+              <div><kbd>Ctrl</kbd>+<kbd>?</kbd></div><div>Show Shortcuts</div>
+              <div><kbd>Alt/Option</kbd>+<kbd>?</kbd></div><div>Show Shortcuts</div>
+              <div><kbd>Escape</kbd></div><div>Close Panels</div>
+            </div>
+          </section>
         </div>
       </div>
     </div>
@@ -1091,6 +1136,7 @@
           <button class="modal-tab-btn" data-tab="settings-paths">Paths</button>
           <button class="modal-tab-btn" data-tab="settings-notifications">Notifications</button>
           <button class="modal-tab-btn" data-tab="settings-voice">Voice</button>
+          <button class="modal-tab-btn" data-tab="settings-shortcuts">Shortcuts</button>
         </div>
         <div class="modal-body">
           <!-- Display Tab -->
@@ -1704,10 +1750,40 @@
               </div>
             </div>
           </div>
+
+          <!-- Shortcuts tab -->
+          <div class="modal-tab-content hidden" id="settings-shortcuts">
+            <div class="settings-grid">
+              <div class="settings-section-header" style="grid-column: 1 / -1;">Keyboard Shortcuts</div>
+              <p class="form-hint" style="grid-column: 1 / -1; margin: 0 0 0.5rem;">
+                Customize keyboard shortcuts. Click the binding to capture a new key combination.
+              </p>
+              <div id="appSettingsShortcutsList" style="grid-column: 1 / -1;">
+                <!-- Populated by app.renderShortcutSettingsList() -->
+              </div>
+            </div>
+          </div>
         </div>
         <div class="form-actions">
           <button class="btn-toolbar" onclick="app.closeAppSettings()">Cancel</button>
           <button class="btn-toolbar btn-primary" onclick="app.saveAppSettings()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Shortcut Overlay Modal -->
+    <div class="modal shortcut-overlay-modal" id="shortcutOverlayModal" tabindex="-1">
+      <div class="modal-backdrop" onclick="app.closeShortcutOverlay()"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <span class="modal-title">Keyboard Shortcuts</span>
+          <button class="modal-close" onclick="app.closeShortcutOverlay()" aria-label="Close">&#x2715;</button>
+        </div>
+        <div class="modal-body">
+          <div id="shortcutOverlayList"></div>
+          <div class="shortcut-overlay-footer">
+            <button class="btn btn-sm" onclick="app.closeShortcutOverlay(); app.showHelp()">Full shortcut reference</button>
+          </div>
         </div>
       </div>
     </div>
@@ -2110,6 +2186,36 @@
         </div>
       </div>
     </div>
+
+    <!-- Command Palette Modal -->
+    <div class="modal command-palette-modal" id="commandPaletteModal">
+      <div class="modal-backdrop" onclick="app.closeCommandPalette()"></div>
+      <div class="command-palette-shell" role="dialog" aria-modal="true" aria-labelledby="commandPaletteTitle">
+        <div class="command-palette-input-row">
+          <span class="command-palette-search-icon" aria-hidden="true">⌕</span>
+          <input type="search" id="commandPaletteSearch" class="command-palette-search" placeholder="Search open sessions or start a new one" autocomplete="off" maxlength="160" aria-labelledby="commandPaletteTitle">
+          <kbd>Esc</kbd>
+        </div>
+        <div class="command-palette-label" id="commandPaletteTitle">Open sessions</div>
+        <div id="commandPaletteList" class="command-palette-list"></div>
+      </div>
+    </div>
+
+    <!-- Session Manager Modal -->
+    <div class="modal" id="sessionManagerModal">
+      <div class="modal-backdrop" onclick="app.closeSessionManager()"></div>
+      <div class="modal-content session-manager-modal">
+        <div class="modal-header">
+          <h3>Sessions</h3>
+          <button class="modal-close" onclick="app.closeSessionManager()" aria-label="Close session manager">&times;</button>
+        </div>
+        <div class="modal-body">
+          <input type="search" id="sessionManagerSearch" class="search-input" placeholder="Search sessions by name, prompt, or path&hellip;" autocomplete="off" maxlength="200">
+          <div id="sessionManagerList" class="session-manager-list"></div>
+        </div>
+      </div>
+    </div>
+
 
     <!-- Token Stats Modal -->
     <div class="modal" id="tokenStatsModal">
