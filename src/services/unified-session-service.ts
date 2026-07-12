@@ -29,6 +29,7 @@ export type UnifiedSessionItem = {
   claudeSessionId?: string;
   firstPrompt?: string;
   sizeBytes?: number;
+  projectKey?: string;
   remote?: boolean;
   sources: string[];
   stats?: { memoryMB: number; cpuPercent: number };
@@ -76,6 +77,7 @@ export type HistoryInput = {
   sizeBytes: number;
   lastModified: string;
   firstPrompt?: string;
+  projectKey?: string;
 };
 
 /** Mux process-stat view. */
@@ -147,6 +149,7 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
     overwrite(item, 'workingDir', h.workingDir);
     overwrite(item, 'sizeBytes', h.sizeBytes);
     overwrite(item, 'firstPrompt', h.firstPrompt);
+    overwrite(item, 'projectKey', h.projectKey);
     const ms = Date.parse(h.lastModified);
     if (!Number.isNaN(ms) && item.lastActivityAt === undefined) item.lastActivityAt = ms;
   }

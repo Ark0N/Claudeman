@@ -147,6 +147,22 @@ describe('mergeUnifiedSessions', () => {
     expect(merged).toHaveLength(1);
     expect(merged[0].lastActivityAt).toBe(new Date('2026-01-01T00:00:00.000Z').getTime());
   });
+
+  it('surfaces projectKey from a history input onto the merged item', () => {
+    const merged = mergeUnifiedSessions({
+      history: [
+        {
+          sessionId: 'h',
+          workingDir: '/w',
+          sizeBytes: 5000,
+          lastModified: '2026-01-01T00:00:00.000Z',
+          projectKey: '-repo-alpha',
+        },
+      ],
+    });
+    expect(merged).toHaveLength(1);
+    expect(merged[0].projectKey).toBe('-repo-alpha');
+  });
 });
 
 describe('filterAndPaginate', () => {

@@ -1144,6 +1144,25 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
+   * Fetch the unified session list (live + persisted + non-Claude + closed
+   * history), already de-duplicated and sorted newest-first by the backend
+   * (`GET /api/sessions/unified`, COD-121). No client-side grouping needed.
+   * @param {number} [limit=60] max sessions to request
+   * @returns {Promise<Array>} unified session items, most recent first
+   */
+  async _fetchUnifiedSessions(limit = 60) {
+    const res = await fetch('/api/sessions/unified?limit=' + limit);
+    // ApiResponse envelope: { success, data: { sessions } }. Throw on failure so
+    // callers (loadHistorySessions) hit their catch instead of rendering a 5xx as
+    // an empty history.
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || data.success === false || !data.data) {
+      throw new Error(data?.error || `unified sessions request failed (HTTP ${res.status})`);
+    }
+    return data.data.sessions || [];
+  },
+
+  /**
    * Resolve workingDir to a case-aware short label.
    * - Exact case path match → "#caseName"
    * - workingDir under a case dir → "#caseName/subdir"
@@ -1185,31 +1204,63 @@ Object.assign(CodemanApp.prototype, {
    */
   _buildHistoryItem(s, cases, options) {
     const showViewAll = options?.showViewAll !== false;
-    const size =
-      s.sizeBytes < 1024
+
+    // Size: only render when a numeric byte count is present (unified items
+    // backed solely by a live/persisted source may omit it).
+    const hasSize = typeof s.sizeBytes === 'number';
+    const size = !hasSize
+      ? ''
+      : s.sizeBytes < 1024
         ? `${s.sizeBytes}B`
         : s.sizeBytes < 1048576
           ? `${(s.sizeBytes / 1024).toFixed(0)}K`
           : `${(s.sizeBytes / 1048576).toFixed(1)}M`;
-    const date = new Date(s.lastModified);
-    const timeStr =
-      date.toLocaleDateString('en', { month: 'short', day: 'numeric' }) +
-      ' ' +
-      date.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+    // Timestamp: unified shape carries lastActivityAt (ms epoch); the older
+    // folder-modal/history shape carries an ISO lastModified string. Prefer ms,
+    // fall back to parsing the string, and omit entirely when neither is valid.
+    const tsMs =
+      typeof s.lastActivityAt === 'number'
+        ? s.lastActivityAt
+        : s.lastModified
+          ? Date.parse(s.lastModified)
+          : NaN;
+    let timeStr = '';
+    if (!Number.isNaN(tsMs)) {
+      const date = new Date(tsMs);
+      timeStr =
+        date.toLocaleDateString('en', { month: 'short', day: 'numeric' }) +
+        ' ' +
+        date.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+
     const shortDir = this._shortenHomePath(s.workingDir);
     const caseLabel = this._resolveCaseLabel(s.workingDir, cases);
 
+    const isLive = Array.isArray(s.sources) && s.sources.includes('live');
+
     const item = document.createElement('div');
     item.className = 'history-item';
-    item.title = s.workingDir;
+    item.title = s.workingDir || '';
 
-    // Main row: clickable surface that triggers resume (or a caller-supplied
-    // activation — the Session Manager switches to live sessions instead)
+    // Main row: clickable surface. A caller-supplied onActivate wins (the
+    // Session Manager routes live rows to selectSession and history rows to
+    // resume). Otherwise the default focuses the live tab when the row is a
+    // still-running session, else resumes the conversation — keyed by the Claude
+    // conversation UUID (claudeSessionId) when present, since resumed sessions
+    // carry theirs separately from their Codeman id.
     const mainRow = document.createElement('div');
     mainRow.className = 'history-item-main';
     mainRow.addEventListener(
       'click',
-      options?.onActivate || (() => this.resumeHistorySession(s.sessionId, s.workingDir))
+      options?.onActivate ||
+        (() => {
+          if (isLive && this.sessions.has(s.sessionId)) {
+            this.selectSession(s.sessionId);
+          } else {
+            this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '');
+          }
+        })
     );
 
     const textCol = document.createElement('div');
@@ -1217,14 +1268,32 @@ Object.assign(CodemanApp.prototype, {
 
     const titleSpan = document.createElement('span');
     titleSpan.className = 'history-item-title';
-    titleSpan.textContent = s.firstPrompt || shortDir;
+    titleSpan.textContent = s.name || s.firstPrompt || shortDir;
+
+    // Badge row: mode (claude/codex/opencode/gemini/shell) + a LIVE pill.
+    const badgeRow = document.createElement('div');
+    badgeRow.className = 'history-item-badges';
+    if (s.mode) {
+      const modeBadge = document.createElement('span');
+      modeBadge.className = 'history-item-badge history-item-badge-mode';
+      modeBadge.textContent = s.mode;
+      badgeRow.appendChild(modeBadge);
+    }
+    if (isLive) {
+      const liveBadge = document.createElement('span');
+      liveBadge.className = 'history-item-badge history-item-badge-live';
+      liveBadge.textContent = 'LIVE';
+      badgeRow.appendChild(liveBadge);
+    }
 
     const subtitleSpan = document.createElement('span');
     subtitleSpan.className = 'history-item-subtitle';
     if (caseLabel.startsWith('#')) subtitleSpan.classList.add('is-case');
     subtitleSpan.textContent = caseLabel;
 
-    textCol.append(titleSpan, subtitleSpan);
+    textCol.append(titleSpan);
+    if (badgeRow.childElementCount > 0) textCol.append(badgeRow);
+    textCol.append(subtitleSpan);
 
     const metaSpan = document.createElement('span');
     metaSpan.className = 'history-item-meta';
@@ -1233,7 +1302,11 @@ Object.assign(CodemanApp.prototype, {
     const expandBtn = document.createElement('button');
     expandBtn.className = 'history-item-expand';
     expandBtn.type = 'button';
-    expandBtn.setAttribute('aria-label', 'Show details');
+    // COD-130: the ⋯ button now opens a context (kebab) menu rather than
+    // toggling the inline detail panel directly. aria-expanded still tracks
+    // the detail panel (toggled via the menu's "Show details" item).
+    expandBtn.setAttribute('aria-haspopup', 'menu');
+    expandBtn.setAttribute('aria-label', 'Session actions');
     expandBtn.setAttribute('aria-expanded', 'false');
     expandBtn.textContent = '⋯'; // ⋯
 
@@ -1266,7 +1339,11 @@ Object.assign(CodemanApp.prototype, {
 
     const metaRow = document.createElement('div');
     metaRow.className = 'history-detail-row history-detail-meta';
-    metaRow.textContent = `${timeStr} · ${size} · ${s.sessionId.slice(0, 8)}`;
+    const metaParts = [];
+    if (timeStr) metaParts.push(timeStr);
+    if (hasSize) metaParts.push(size);
+    metaParts.push(s.sessionId.slice(0, 8));
+    metaRow.textContent = metaParts.join(' · ');
 
     detail.append(promptRow, pathRow, metaRow);
 
@@ -1286,14 +1363,177 @@ Object.assign(CodemanApp.prototype, {
     }
 
     expandBtn.addEventListener('click', (ev) => {
+      // COD-130: stop both the row resume handler and the Session Manager
+      // modal's main-row close listener from firing, then open the kebab menu.
       ev.stopPropagation();
-      const expanded = item.classList.toggle('expanded');
-      detail.hidden = !expanded;
-      expandBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      ev.preventDefault();
+      this._openSessionRowMenu(ev.currentTarget, s, cases, item, detail);
     });
 
     item.append(mainRow, detail);
     return item;
+  },
+
+  /**
+   * COD-130: Open a context (kebab) menu anchored to a history item's ⋯
+   * button. Replaces the old inline detail-toggle so the same control works
+   * both in the history list and inside the Session Manager modal (where a
+   * capture-phase close listener previously swallowed the click).
+   *
+   * The menu is appended to <body> with fixed positioning so it escapes the
+   * modal's overflow/stacking context, and flips above the anchor when it
+   * would overflow the viewport bottom.
+   *
+   * @param {HTMLElement} anchorEl the ⋯ button the menu anchors to
+   * @param {object} s session record
+   * @param {Array} cases linked cases (unused but kept for parity/future)
+   * @param {HTMLElement} item the .history-item element (for detail toggle)
+   * @param {HTMLElement} detail the inline detail panel element
+   */
+  _openSessionRowMenu(anchorEl, s, cases, item, detail) {
+    // Close any already-open row menu first — call its own close fn so the
+    // previous menu's document/window listeners are detached (a raw .remove()
+    // would leave them dangling until the next event self-cleans).
+    if (this._openRowMenuClose) {
+      try {
+        this._openRowMenuClose();
+      } catch {
+        /* noop */
+      }
+    }
+
+    const isLiveOpen =
+      Array.isArray(s.sources) && s.sources.includes('live') && this.sessions.has(s.sessionId);
+
+    const menu = document.createElement('div');
+    menu.className = 'session-row-menu';
+    menu.setAttribute('role', 'menu');
+
+    // closeMenu tears down the menu and all transient listeners.
+    let onDocMouseDown = null;
+    let onKeyDown = null;
+    let onScrollResize = null;
+    const closeMenu = () => {
+      document.removeEventListener('mousedown', onDocMouseDown, true);
+      document.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('scroll', onScrollResize, true);
+      window.removeEventListener('resize', onScrollResize, true);
+      try {
+        menu.remove();
+      } catch {
+        /* noop */
+      }
+      if (this._openRowMenuEl === menu) {
+        this._openRowMenuEl = null;
+        this._openRowMenuClose = null;
+      }
+    };
+
+    // Helper: build one menu item button.
+    const addItem = (label, onActivate, opts) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'session-row-menu-item';
+      btn.setAttribute('role', 'menuitem');
+      const text = document.createElement('span');
+      text.className = 'session-row-menu-label';
+      text.textContent = label;
+      btn.appendChild(text);
+      if (opts && opts.sublabel) {
+        const sub = document.createElement('span');
+        sub.className = 'session-row-menu-sublabel';
+        sub.textContent = opts.sublabel;
+        btn.appendChild(sub);
+      }
+      btn.addEventListener('click', async (ev) => {
+        // Never let the click bubble to the row resume / modal close handlers.
+        ev.stopPropagation();
+        ev.preventDefault();
+        await onActivate();
+      });
+      menu.appendChild(btn);
+    };
+
+    // Resume / Switch to session (always).
+    addItem(
+      isLiveOpen ? 'Switch to session' : 'Resume session',
+      () => {
+        if (isLiveOpen) {
+          this.selectSession(s.sessionId);
+        } else {
+          // Resume by the Claude conversation UUID when present (resumed sessions
+          // carry theirs separately from their Codeman id).
+          this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '');
+        }
+        this.closeSessionManager?.();
+        closeMenu();
+      }
+    );
+
+    // Open folder (only for a live+open session — file browser is session-scoped).
+    if (isLiveOpen) {
+      addItem('Open folder', () => {
+        this.selectSession(s.sessionId);
+        this.loadFileBrowser?.(s.sessionId);
+        this.closeSessionManager?.();
+        closeMenu();
+      });
+    }
+
+    // Copy path (only when a workingDir is known).
+    if (s.workingDir) {
+      addItem('Copy path', async () => {
+        const ok = await this._copyText(s.workingDir);
+        this.showToast(ok ? 'Path copied' : 'Copy failed', ok ? 'success' : 'error');
+        closeMenu();
+      });
+    }
+
+    // Show details (always) — toggles the inline detail panel; keeps modal open.
+    addItem('Show details', () => {
+      const expanded = item.classList.toggle('expanded');
+      detail.hidden = !expanded;
+      anchorEl.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      closeMenu();
+    });
+
+    // Position: fixed, anchored under/over the button; flip up on overflow.
+    document.body.appendChild(menu);
+    const rect = anchorEl.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const gap = 4;
+    let top = rect.bottom + gap;
+    if (top + menuRect.height > window.innerHeight && rect.top - gap - menuRect.height >= 0) {
+      top = rect.top - gap - menuRect.height; // flip above the anchor
+    }
+    // Right-align the menu to the button, clamped into the viewport.
+    let left = rect.right - menuRect.width;
+    if (left < gap) left = gap;
+    if (left + menuRect.width > window.innerWidth - gap) {
+      left = Math.max(gap, window.innerWidth - gap - menuRect.width);
+    }
+    menu.style.top = `${Math.max(gap, top)}px`;
+    menu.style.left = `${left}px`;
+
+    // Dismissal listeners.
+    onDocMouseDown = (ev) => {
+      if (menu.contains(ev.target) || anchorEl.contains(ev.target)) return;
+      closeMenu();
+    };
+    onKeyDown = (ev) => {
+      if (ev.key === 'Escape') {
+        ev.stopPropagation();
+        closeMenu();
+      }
+    };
+    onScrollResize = () => closeMenu();
+    document.addEventListener('mousedown', onDocMouseDown, true);
+    document.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('scroll', onScrollResize, true);
+    window.addEventListener('resize', onScrollResize, true);
+
+    this._openRowMenuEl = menu;
+    this._openRowMenuClose = closeMenu;
   },
 
   /** Number of history items shown before "Show More" */
@@ -1311,7 +1551,7 @@ Object.assign(CodemanApp.prototype, {
         ? Promise.resolve(this.cases)
         : fetch('/api/cases').then((r) => (r.ok ? r.json() : null)).then((d) => d?.data || []).catch(() => []);
       const [allSessions, cases] = await Promise.all([
-        this._fetchHistorySessions(30),
+        this._fetchUnifiedSessions(60),
         casesPromise,
       ]);
       if (allSessions.length === 0) {

@@ -459,14 +459,16 @@ html.mobile-init .file-browser-panel {
     height: 12px;
   }
 
-  /* Hide header settings gear, lifecycle log, and away digest on mobile - settings
-     moved to toolbar; away digest is a secondary informational control that doesn't
-     belong on the cramped phone header.
+  /* Hide header settings gear, lifecycle log, away digest, and session manager on
+     mobile - settings moved to toolbar; away digest and the session manager are
+     secondary controls that don't belong on the cramped phone header (the session
+     manager stays reachable via the Ctrl+K palette's "Browse all sessions" item).
      (The attachments button is opt-in / default-hidden everywhere via its own
      --hidden marker, so it needs no mobile-specific rule here.) */
   .btn-icon-header.btn-settings,
   .btn-icon-header.btn-lifecycle-log,
-  .btn-icon-header.btn-away-digest {
+  .btn-icon-header.btn-away-digest,
+  .btn-icon-header.btn-session-manager {
     display: none !important;
   }
 
