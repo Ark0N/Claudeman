@@ -55,6 +55,7 @@ import {
 } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { imageWatcher } from '../../image-watcher.js';
+import { convertHeicToJpeg } from '../heic-jpeg-converter.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
 import {
   mergeUnifiedSessions,
@@ -201,6 +202,15 @@ export function imageMagicMatchesExt(data: Buffer, ext: string): boolean {
       return u32be(0) === 0x52494646 && u32be(8) === 0x57454250;
     case '.bmp':
       return data[0] === 0x42 && data[1] === 0x4d;
+    case '.heic':
+    case '.heif': {
+      // ISO Base Media File Format: size + "ftyp" + major brand. The brand
+      // list matches heic-decode's own isHeic() — accepting more brands here
+      // would only route bytes into a conversion that always throws.
+      if (u32be(4) !== 0x66747970) return false;
+      const brand = data.subarray(8, 12).toString('ascii');
+      return ['heic', 'heix', 'hevc', 'hevx', 'mif1', 'msf1'].includes(brand);
+    }
     default:
       return false;
   }
@@ -1992,7 +2002,7 @@ export function registerSessionRoutes(
   // Paste Image (clipboard / drag-drop upload)
   // ═══════════════════════════════════════════════════════════════
 
-  const ALLOWED_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']);
+  const ALLOWED_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.heic', '.heif']);
   // The per-file size cap (MAX_PASTE_IMAGE_BYTES) is enforced by @fastify/multipart (registered in server.ts).
 
   app.post('/api/sessions/:id/paste-image', async (req, reply) => {
@@ -2084,7 +2094,7 @@ export function registerSessionRoutes(
       const origExt = extname(part.filename).toLowerCase();
       if (ALLOWED_IMAGE_EXTS.has(origExt)) ext = origExt;
     }
-    const mimeMatch = (part.mimetype || '').toLowerCase().match(/^image\/(png|jpeg|jpg|webp|gif|bmp)$/);
+    const mimeMatch = (part.mimetype || '').toLowerCase().match(/^image\/(png|jpeg|jpg|webp|gif|bmp|heic|heif)$/);
     if (mimeMatch) {
       const map: Record<string, string> = {
         png: '.png',
@@ -2093,6 +2103,8 @@ export function registerSessionRoutes(
         webp: '.webp',
         gif: '.gif',
         bmp: '.bmp',
+        heic: '.heic',
+        heif: '.heif',
       };
       ext = map[mimeMatch[1]] ?? ext;
     }
@@ -2105,14 +2117,27 @@ export function registerSessionRoutes(
       );
     }
 
-    // Sniff actual bytes — filename and Content-Type are both attacker-supplied.
-    // Polyglot HTML/PNG would otherwise pass and serve back with image/png MIME.
-    if (!imageMagicMatchesExt(imageBytes, ext)) {
-      // Diagnostic: on some Android galleries (e.g. MIUI) a WebP/HEIF is
-      // mislabeled as image/jpeg, so the declared ext passes the allowlist but
-      // the magic bytes do not. Log the real header so format mismatches can be
-      // pinned down without a reproduce-and-guess loop. The client now
-      // re-encodes images to JPEG/PNG before upload, so this should be rare.
+    // Route HEIC on the raw bytes, NOT the declared ext/mime: on some Android
+    // galleries (e.g. MIUI) a HEIF comes back mislabeled as image/jpeg, and
+    // browsers that cannot decode HEIF upload the original file as-is — so a
+    // HEIC payload can arrive under any declared type. Filename and
+    // Content-Type are attacker-supplied anyway; only the bytes are trusted.
+    if (imageMagicMatchesExt(imageBytes, '.heic')) {
+      try {
+        imageBytes = await convertHeicToJpeg(imageBytes);
+        ext = '.jpg';
+      } catch (err: unknown) {
+        console.warn(
+          `[paste-image] HEIC conversion failed: filename=${JSON.stringify(part.filename)} mime=${JSON.stringify(part.mimetype)} error=${getErrorMessage(err)}`
+        );
+        reply.code(415);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Could not convert HEIC image to JPEG');
+      }
+    } else if (!imageMagicMatchesExt(imageBytes, ext)) {
+      // Sniff actual bytes — a polyglot HTML/PNG would otherwise pass and
+      // serve back with image/png MIME. Log the real header so format
+      // mismatches can be pinned down without a reproduce-and-guess loop. The
+      // client re-encodes images to JPEG/PNG before upload, so this is rare.
       console.warn(
         `[paste-image] magic mismatch: filename=${JSON.stringify(part.filename)} mime=${JSON.stringify(part.mimetype)} declaredExt=${ext} magic=${imageBytes.subarray(0, 12).toString('hex')}`
       );

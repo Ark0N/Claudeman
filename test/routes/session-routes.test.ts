@@ -16,6 +16,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
+import fastifyMultipart from '@fastify/multipart';
+import { join } from 'node:path';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { ApiErrorCode, httpStatusForErrorCode } from '../../src/types.js';
@@ -23,10 +27,15 @@ import { Session } from '../../src/session.js';
 
 // Mock execFile so the send-key route's `tmux` invocation is observable (not run for real).
 const { execFile } = vi.hoisted(() => ({ execFile: vi.fn() }));
+// The real converter spawns a worker thread (TS worker file — not loadable
+// under vitest); the conversion pipeline itself is covered by
+// test/heic-jpeg-core.test.ts against the real heic-decode WASM.
+const heicConvert = vi.hoisted(() => vi.fn(async () => Buffer.from('ffd8ffe000104a4649460001', 'hex')));
 vi.mock('node:child_process', async (orig) => {
   const actual = await orig<typeof import('node:child_process')>();
   return { ...actual, execFile };
 });
+vi.mock('../../src/web/heic-jpeg-converter.js', () => ({ convertHeicToJpeg: heicConvert }));
 
 // In-memory remote store so remote-case tests can inject hosts/cases without real JSON files.
 const remoteStore = vi.hoisted(() => ({
@@ -63,6 +72,9 @@ async function createEnvelopeHarness(
 ): Promise<LocalHarness> {
   const app = Fastify({ logger: false });
   await app.register(fastifyCookie);
+  await app.register(fastifyMultipart, {
+    limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 4, parts: 5 },
+  });
 
   const ctx = createMockRouteContext();
   registerFn(app, ctx);
@@ -141,6 +153,123 @@ describe('session-routes', () => {
       });
       expect(JSON.parse(res.body).success).toBe(false);
       expect(execFile).not.toHaveBeenCalled();
+    });
+  });
+
+  // ========== POST /api/sessions/:id/paste-image ==========
+
+  describe('POST /api/sessions/:id/paste-image', () => {
+    function imageUploadBody(boundary: string, filename: string, mimetype: string, imageBytes: Buffer): Buffer {
+      return Buffer.concat([
+        Buffer.from(
+          `--${boundary}\r\n` +
+            `Content-Disposition: form-data; name="image"; filename="${filename}"\r\n` +
+            `Content-Type: ${mimetype}\r\n\r\n`
+        ),
+        imageBytes,
+        Buffer.from(`\r\n--${boundary}--\r\n`),
+      ]);
+    }
+
+    it('converts HEIC paste images to JPEG attachments when browser-side normalization falls back', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-heic-'));
+      harness.ctx._session.workingDir = workDir;
+      heicConvert.mockClear();
+
+      const boundary = 'codeman-test-boundary';
+      const heic = Buffer.from('00000034667479706865696300000000', 'hex');
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/paste-image`,
+        headers: {
+          host: 'codeman.test',
+          origin: 'http://codeman.test',
+          'content-type': `multipart/form-data; boundary=${boundary}`,
+        },
+        payload: imageUploadBody(boundary, 'IMG_4996.HEIC', 'image/heic', heic),
+      });
+
+      await rm(workDir, { recursive: true });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.path).toMatch(/\/\.claude-images\/paste-\d+-[a-f0-9]{8}\.jpg$/);
+      expect(heicConvert).toHaveBeenCalledWith(heic);
+    });
+
+    it('converts mislabeled HEIC (declared image/jpeg, HEIF bytes — the MIUI/Android case) via magic sniff', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-heic-mislabel-'));
+      harness.ctx._session.workingDir = workDir;
+      heicConvert.mockClear();
+
+      const boundary = 'codeman-test-boundary';
+      // ftyp brand mif1 — HEIF bytes hiding under a JPEG filename + MIME.
+      const heic = Buffer.from('000000346674797061696631000000006d69663168656963', 'hex');
+      heic.write('mif1', 8, 'ascii'); // major brand
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/paste-image`,
+        headers: {
+          host: 'codeman.test',
+          origin: 'http://codeman.test',
+          'content-type': `multipart/form-data; boundary=${boundary}`,
+        },
+        payload: imageUploadBody(boundary, 'IMG_2001.jpg', 'image/jpeg', heic),
+      });
+
+      await rm(workDir, { recursive: true });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.path).toMatch(/\/\.claude-images\/paste-\d+-[a-f0-9]{8}\.jpg$/);
+      expect(heicConvert).toHaveBeenCalledWith(heic);
+    });
+
+    it('returns 415 with the error envelope when HEIC conversion fails', async () => {
+      heicConvert.mockClear();
+      heicConvert.mockRejectedValueOnce(new Error('HEIC dimensions 30000x30000 exceed the 64MP decode limit'));
+
+      const boundary = 'codeman-test-boundary';
+      const heic = Buffer.from('00000034667479706865696300000000', 'hex');
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/paste-image`,
+        headers: {
+          host: 'codeman.test',
+          origin: 'http://codeman.test',
+          'content-type': `multipart/form-data; boundary=${boundary}`,
+        },
+        payload: imageUploadBody(boundary, 'IMG_4997.HEIC', 'image/heic', heic),
+      });
+
+      expect(res.statusCode).toBe(415);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('INVALID_INPUT');
+      expect(body.error).toMatch(/HEIC/);
+    });
+
+    it('rejects ftyp brands heic-decode cannot convert (e.g. heim) without invoking the converter', async () => {
+      heicConvert.mockClear();
+
+      const boundary = 'codeman-test-boundary';
+      const heim = Buffer.from('00000034667479706865696d00000000', 'hex');
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/paste-image`,
+        headers: {
+          host: 'codeman.test',
+          origin: 'http://codeman.test',
+          'content-type': `multipart/form-data; boundary=${boundary}`,
+        },
+        payload: imageUploadBody(boundary, 'IMG_4998.HEIC', 'image/heic', heim),
+      });
+
+      expect(res.statusCode).toBe(415);
+      expect(JSON.parse(res.body).success).toBe(false);
+      expect(heicConvert).not.toHaveBeenCalled();
     });
   });
 
