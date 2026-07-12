@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   resolveTerminalHistoryConfig,
   DEFAULT_TERMINAL_SCROLLBACK_LINES,
@@ -22,11 +22,34 @@ describe('resolveTerminalHistoryConfig', () => {
     });
   });
 
-  it('defaults match the prior hardcoded values (behavior-neutral)', () => {
-    expect(DEFAULT_TMUX_HISTORY_LIMIT).toBe(50_000);
+  it('defaults raise tmux history to 100k and buffer caps to 32MB/24MB; browser scrollback stays 50k', () => {
+    expect(DEFAULT_TMUX_HISTORY_LIMIT).toBe(100_000);
+    // Matches the hardcoded browser-side DEFAULT_SCROLLBACK in src/web/public/constants.js —
+    // deliberately NOT raised (100k xterm lines per tab is a mobile-memory hazard).
     expect(DEFAULT_TERMINAL_SCROLLBACK_LINES).toBe(50_000);
-    expect(DEFAULT_TERMINAL_BUFFER_MAX_BYTES).toBe(2 * 1024 * 1024);
-    expect(DEFAULT_TERMINAL_BUFFER_TRIM_BYTES).toBe(1.5 * 1024 * 1024);
+    expect(DEFAULT_TERMINAL_BUFFER_MAX_BYTES).toBe(32 * 1024 * 1024);
+    expect(DEFAULT_TERMINAL_BUFFER_TRIM_BYTES).toBe(24 * 1024 * 1024);
+  });
+
+  it('clamps the env-derived trim default below an env-lowered max (CODEMAN_MAX_TERMINAL_BUFFER only)', async () => {
+    const originalMax = process.env.CODEMAN_MAX_TERMINAL_BUFFER;
+    const originalTrim = process.env.CODEMAN_TRIM_TERMINAL_TO;
+    vi.resetModules();
+    process.env.CODEMAN_MAX_TERMINAL_BUFFER = String(2 * 1024 * 1024);
+    delete process.env.CODEMAN_TRIM_TERMINAL_TO;
+    try {
+      const mod = await import('../src/config/terminal-history.js');
+      expect(mod.DEFAULT_TERMINAL_BUFFER_MAX_BYTES).toBe(2 * 1024 * 1024);
+      // trim >= max would make BufferAccumulator.trim() a no-op (unbounded growth + O(n²) appends).
+      expect(mod.DEFAULT_TERMINAL_BUFFER_TRIM_BYTES).toBeLessThan(mod.DEFAULT_TERMINAL_BUFFER_MAX_BYTES);
+      expect(mod.DEFAULT_TERMINAL_BUFFER_TRIM_BYTES).toBe(Math.floor(2 * 1024 * 1024 * 0.75));
+    } finally {
+      if (originalMax === undefined) delete process.env.CODEMAN_MAX_TERMINAL_BUFFER;
+      else process.env.CODEMAN_MAX_TERMINAL_BUFFER = originalMax;
+      if (originalTrim === undefined) delete process.env.CODEMAN_TRIM_TERMINAL_TO;
+      else process.env.CODEMAN_TRIM_TERMINAL_TO = originalTrim;
+      vi.resetModules();
+    }
   });
 
   it('passes valid in-range values through unchanged', () => {
@@ -80,9 +103,9 @@ describe('resolveTerminalHistoryConfig', () => {
   });
 
   it('caps the default trim to a lowered max', () => {
-    // Default trim (1.5MB) exceeds a 1MB max → trim must fall to the max.
-    const cfg = resolveTerminalHistoryConfig({ terminalBufferMaxBytes: 1 * 1024 * 1024 });
-    expect(cfg.terminalBufferTrimBytes).toBe(1 * 1024 * 1024);
+    // Default trim (24MB) exceeds a 2MB max → trim must fall to the max.
+    const cfg = resolveTerminalHistoryConfig({ terminalBufferMaxBytes: 2 * 1024 * 1024 });
+    expect(cfg.terminalBufferTrimBytes).toBe(2 * 1024 * 1024);
   });
 
   it('truncates fractional inputs to integers', () => {

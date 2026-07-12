@@ -1,19 +1,31 @@
 /**
  * Defaults, bounds, and resolution for terminal history retention.
  *
- * Centralizes the terminal scrollback, tmux history-limit, and server PTY buffer
- * byte caps that were previously scattered as hardcoded literals. Each value is
- * overridable (env var or the settings object) and clamped to a sane range via
- * resolveTerminalHistoryConfig(). Defaults intentionally match the prior
- * hardcoded values, so introducing this module is behavior-neutral.
+ * Raised defaults (the ones actually wired):
+ * - tmux history-limit: 50,000 -> 100,000 lines (applied at session spawn)
+ * - server PTY buffer cap: 2MB max / 1.5MB trim -> 32MB / 24MB (via buffer-limits.ts)
+ * Browser xterm scrollback is a separate hardcoded DEFAULT_SCROLLBACK (50,000) in
+ * src/web/public/constants.js and deliberately stays at 50k — 100k xterm lines per tab
+ * is a mobile-memory hazard — so DEFAULT_TERMINAL_SCROLLBACK_LINES stays 50,000 to match.
+ * The terminalScrollbackLines/terminalBufferMaxBytes/terminalBufferTrimBytes settings keys
+ * remain schema-validated but inert (a follow-up wires them); only tmuxHistoryLimit is live.
+ * All values remain env- and settings-overridable and bounds-clamped via
+ * resolveTerminalHistoryConfig().
  */
 
 export const DEFAULT_TERMINAL_SCROLLBACK_LINES = 50_000;
-export const DEFAULT_TMUX_HISTORY_LIMIT = 50_000;
+export const DEFAULT_TMUX_HISTORY_LIMIT = 100_000;
 export const DEFAULT_TERMINAL_BUFFER_MAX_BYTES =
-  parseInt(process.env.CODEMAN_MAX_TERMINAL_BUFFER || '', 10) || 2 * 1024 * 1024;
-export const DEFAULT_TERMINAL_BUFFER_TRIM_BYTES =
-  parseInt(process.env.CODEMAN_TRIM_TERMINAL_TO || '', 10) || 1.5 * 1024 * 1024;
+  parseInt(process.env.CODEMAN_MAX_TERMINAL_BUFFER || '', 10) || 32 * 1024 * 1024;
+// Trim must stay below the max: BufferAccumulator.trim() keeps the last trimSize chars, so a
+// trim >= max never shrinks the buffer — every append then re-joins the whole string (O(n²))
+// and memory overshoots the operator's cap (e.g. CODEMAN_MAX_TERMINAL_BUFFER=2097152 with no
+// trim env would leave the 24MB trim default in force). Clamp to 75% of the resolved max,
+// preserving the 24MB/32MB default ratio as trim hysteresis.
+export const DEFAULT_TERMINAL_BUFFER_TRIM_BYTES = Math.min(
+  parseInt(process.env.CODEMAN_TRIM_TERMINAL_TO || '', 10) || 24 * 1024 * 1024,
+  Math.floor(DEFAULT_TERMINAL_BUFFER_MAX_BYTES * 0.75)
+);
 
 export const MIN_TERMINAL_SCROLLBACK_LINES = 1_000;
 export const MAX_TERMINAL_SCROLLBACK_LINES = 1_000_000;
