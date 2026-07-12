@@ -1029,6 +1029,11 @@ export class Session extends EventEmitter {
       geminiConfig: this._geminiConfig,
       resumeSessionId: this._resumeSessionId,
       effort: this._effort,
+      // COD-118: runtime-only — surfaced so the frontend can require explicit user
+      // intent before restarting a crash-looped session. Deliberately NOT restored
+      // by the constructor: a Codeman restart starts with a fresh breaker so boot
+      // recovery can re-attach.
+      respawnBlocked: this._respawnBlocked || undefined,
       attachmentHistory: this.attachmentHistory.length > 0 ? this.attachmentHistory : undefined,
       // envOverrides intentionally NOT on the public SessionState type — they must not
       // leak into SSE / GET /api/sessions broadcasts (schema allows OPENCODE_*, which
@@ -1180,7 +1185,9 @@ export class Session extends EventEmitter {
         cols: ptyCols,
         rows: ptyRows,
         cwd: this.workingDir,
-        env: buildMuxAttachEnv(),
+        // COD-75: codex/gemini get COLORTERM=truecolor — mirrors buildEnvExports()
+        // in tmux-manager.ts so the attach client and the tmux session agree.
+        env: buildMuxAttachEnv(this.mode === 'codex' || this.mode === 'gemini'),
       });
     } catch (spawnErr) {
       console.error(`[Session] Failed to spawn PTY for ${options.spawnErrLabel}:`, spawnErr);

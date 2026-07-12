@@ -102,14 +102,12 @@ export function buildPromptArgs(prompt: string, model?: string): string[] {
  * @returns Environment variables object for pty.spawn
  */
 export function buildClaudeEnv(sessionId: string): Record<string, string | undefined> {
-  return {
+  const env: Record<string, string | undefined> = {
     ...process.env,
     LANG: 'en_US.UTF-8',
     LC_ALL: 'en_US.UTF-8',
     PATH: getAugmentedPath(),
     TERM: 'xterm-256color',
-    COLORTERM: undefined,
-    CLAUDECODE: undefined,
     // Inform Claude it's running within Codeman (helps prevent self-termination)
     CODEMAN_MUX: '1',
     CODEMAN_SESSION_ID: sessionId,
@@ -117,6 +115,11 @@ export function buildClaudeEnv(sessionId: string): Record<string, string | undef
     // Path only (not the secret value) — hook curls cat it at execution time (COD-54)
     CODEMAN_HOOK_SECRET_FILE: dataPath('hook-secret'),
   };
+  // COD-115: `delete`, not `= undefined` — node-pty serializes a present-with-undefined
+  // key as the literal string "KEY=undefined" (see buildMuxAttachEnv below).
+  delete env.COLORTERM;
+  delete env.CLAUDECODE;
+  return env;
 }
 
 /**

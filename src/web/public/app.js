@@ -3575,17 +3575,40 @@ class CodemanApp {
     // Track working directory for path normalization in Project Insights
     this.currentSessionWorkingDir = session?.workingDir || null;
     if (session && session.pid === null) {
-      // Session has no PTY attached — either restored after server restart
-      // or detached for some other reason. Re-attach regardless of status.
-      try {
-        const endpoint = session.mode === 'shell'
-          ? `/api/sessions/${sessionId}/shell`
-          : `/api/sessions/${sessionId}/interactive`;
-        await fetch(endpoint, { method: 'POST' });
-        // Update local session state
-        session.status = 'busy';
-      } catch (err) {
-        console.error('Failed to attach to restored session:', err);
+      if (session.respawnBlocked) {
+        // COD-118: the PTY-exit circuit breaker tripped for this session — the
+        // automatic re-attach must NOT silently clear it (that would re-arm the
+        // crash loop on every tab click / page load). Restart only on explicit
+        // user confirmation; the confirmed request carries clearBreaker:true.
+        const label = session.name || 'Session';
+        if (window.confirm(`${label} was stopped after crashing repeatedly. Restart it?`)) {
+          try {
+            await fetch(`/api/sessions/${sessionId}/interactive`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ clearBreaker: true }),
+            });
+            session.respawnBlocked = false;
+            session.status = 'busy';
+          } catch (err) {
+            console.error('Failed to restart crash-looped session:', err);
+          }
+        }
+      } else {
+        // Session has no PTY attached — either restored after server restart
+        // or detached for some other reason. Re-attach regardless of status.
+        // Deliberately NO body: this automatic path must never clear a tripped
+        // PTY-exit breaker (COD-118).
+        try {
+          const endpoint = session.mode === 'shell'
+            ? `/api/sessions/${sessionId}/shell`
+            : `/api/sessions/${sessionId}/interactive`;
+          await fetch(endpoint, { method: 'POST' });
+          // Update local session state
+          session.status = 'busy';
+        } catch (err) {
+          console.error('Failed to attach to restored session:', err);
+        }
       }
     }
 

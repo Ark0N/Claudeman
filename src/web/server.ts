@@ -1264,6 +1264,13 @@ export class WebServer extends EventEmitter {
   }
 
   private async setupSessionListeners(session: Session): Promise<void> {
+    // Idempotent: the wiring exit handler detaches ALL listeners on every PTY exit
+    // (removeSessionListenerRefs), so the re-attach routes (/interactive,
+    // /interactive-respawn, /shell) call this again to restore observability
+    // (terminal SSE, error/exit broadcasts, the COD-118 respawnBreakerTripped
+    // handler). Skip when the refs are still attached to avoid double-wiring.
+    if (this.sessionListenerRefs.has(session.id)) return;
+
     // Create run summary tracker for this session
     const summaryTracker = new RunSummaryTracker(session.id, session.name);
     this.runSummaryTrackers.set(session.id, summaryTracker);
@@ -1765,6 +1772,7 @@ export class WebServer extends EventEmitter {
     [SseEvent.HookStop]: { title: 'Response Complete', urgency: 'info' },
     [SseEvent.SessionError]: { title: 'Session Error', urgency: 'critical' },
     [SseEvent.RespawnBlocked]: { title: 'Respawn Blocked', urgency: 'critical' },
+    [SseEvent.SessionRespawnBreakerTripped]: { title: 'Session crash loop stopped', urgency: 'critical' },
     [SseEvent.SessionRalphCompletionDetected]: { title: 'Task Complete', urgency: 'warning' },
   };
 
@@ -1797,6 +1805,9 @@ export class WebServer extends EventEmitter {
     } else if (event === SseEvent.SessionRalphCompletionDetected && data.phrase) {
       body += body ? ' ' : '';
       body += String(data.phrase);
+    } else if (event === SseEvent.SessionRespawnBreakerTripped && data.count) {
+      body += body ? ' ' : '';
+      body += `Stopped after ${Number(data.count)} rapid crashes — restart the session to retry`;
     } else if (event === SseEvent.HookPermissionPrompt && data.tool_name) {
       body += body ? ' ' : '';
       body += `Tool: ${String(data.tool_name)}`;

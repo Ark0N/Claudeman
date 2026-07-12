@@ -608,6 +608,54 @@ describe('session-routes', () => {
       const body = JSON.parse(res.body);
       expect(body.success).toBe(false);
     });
+
+    // COD-118: this endpoint is ALSO the frontend's automatic re-attach path, so it
+    // must never clear a tripped PTY-exit breaker unless the request explicitly asks.
+    it('does NOT clear the PTY-exit breaker on an automatic re-attach (no body)', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/interactive`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(harness.ctx._session.resetRespawnBreaker).not.toHaveBeenCalled();
+      expect(harness.ctx._session.startInteractive).toHaveBeenCalled();
+    });
+
+    it('clears the PTY-exit breaker when the explicit restart flag is sent (COD-118)', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/interactive`,
+        payload: { clearBreaker: true },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(harness.ctx._session.resetRespawnBreaker).toHaveBeenCalledTimes(1);
+      expect(harness.ctx._session.startInteractive).toHaveBeenCalled();
+    });
+
+    it('rejects a non-boolean clearBreaker flag', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/interactive`,
+        payload: { clearBreaker: 'yes' },
+      });
+      expect(res.statusCode).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe(ApiErrorCode.INVALID_INPUT);
+      expect(harness.ctx._session.resetRespawnBreaker).not.toHaveBeenCalled();
+      expect(harness.ctx._session.startInteractive).not.toHaveBeenCalled();
+    });
+
+    // COD-118: the wiring exit handler detaches ALL session listeners on PTY exit;
+    // re-attach must restore them or later trips/output go unobserved.
+    it('re-runs session listener wiring before starting', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/interactive`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(harness.ctx.setupSessionListeners).toHaveBeenCalledWith(harness.ctx._session);
+    });
   });
 
   // ========== POST /api/sessions/:id/shell ==========
@@ -622,6 +670,8 @@ describe('session-routes', () => {
       const body = JSON.parse(res.body);
       expect(body.success).toBe(true);
       expect(harness.ctx._session.startShell).toHaveBeenCalled();
+      // COD-118: re-attach restores listener wiring detached by a prior PTY exit.
+      expect(harness.ctx.setupSessionListeners).toHaveBeenCalledWith(harness.ctx._session);
     });
 
     it('returns error if session is busy', async () => {

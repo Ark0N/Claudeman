@@ -246,6 +246,10 @@ export function registerRespawnRoutes(
         }
       }
 
+      // Re-attach listener wiring if a prior PTY exit detached it (the wiring exit
+      // handler removes ALL session listeners; idempotent — no-op while still attached).
+      await ctx.setupSessionListeners(session);
+
       // Start interactive session
       await session.startInteractive();
       getLifecycleLog().log({

@@ -5,14 +5,25 @@
  * INJECTED time (no real timers, fully deterministic), plus a Session-level
  * assertion via MockSession that repeated non-zero exits flip the session to
  * `error` + block respawn, and that an explicit reset re-enables spawning.
+ * Also covers the REAL listener wiring lifecycle (createSessionListeners /
+ * attach / detach): the wiring exit handler detaches everything on each PTY
+ * exit, so the re-attach routes must re-wire or the trip goes unobserved.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   InteractivePtyExitBreaker,
   DEFAULT_BREAKER_THRESHOLD,
   DEFAULT_BREAKER_WINDOW_MS,
 } from '../src/session-pty-exit-breaker.js';
 import { MockSession } from './mocks/index.js';
+import {
+  createSessionListeners,
+  attachSessionListeners,
+  detachSessionListeners,
+  type SessionListenerRefs,
+} from '../src/web/session-listener-wiring.js';
+import { SseEvent } from '../src/web/sse-events.js';
+import type { Session } from '../src/session.js';
 
 describe('InteractivePtyExitBreaker — pure logic', () => {
   it('exports sane default constants', () => {
@@ -186,5 +197,105 @@ describe('Session-level trip/reset (AC#4, via MockSession)', () => {
     harness.onExit(0, 50); // then a clean exit
     expect(harness.isRespawnBlocked()).toBe(false);
     expect(breaker.tripped).toBe(false);
+  });
+});
+
+describe('trip observability through the REAL listener wiring (COD-118)', () => {
+  // Mirrors the server: refs map + removeSessionListenerRefs (called by the wiring
+  // exit handler on EVERY PTY exit) detaching all listeners, and an idempotent
+  // setup() like WebServer.setupSessionListeners that the re-attach routes
+  // (/interactive, /interactive-respawn, /shell) now re-run.
+  function makeHarness() {
+    const session = new MockSession('wiring-breaker-session');
+    const refsMap = new Map<string, SessionListenerRefs>();
+    const deps = {
+      broadcast: vi.fn(),
+      batchTerminalData: vi.fn(),
+      batchTaskUpdate: vi.fn(),
+      broadcastSessionStateDebounced: vi.fn(),
+      sendPushNotifications: vi.fn(),
+      persistSessionState: vi.fn(),
+      getSessionStateWithRespawn: vi.fn(() => ({ id: session.id })),
+      getRunSummaryTracker: vi.fn(() => undefined),
+      stopTranscriptWatcher: vi.fn(),
+      cleanupSessionBatches: vi.fn(),
+      cancelPersistDebounce: vi.fn(),
+      removeRunSummaryTracker: vi.fn(),
+      // Same as server.ts removeSessionListenerRefs: detach ALL wiring listeners.
+      removeSessionListenerRefs: (id: string) => {
+        const refs = refsMap.get(id);
+        if (refs) detachSessionListeners(session as unknown as Session, refs);
+        refsMap.delete(id);
+      },
+      cleanupRespawnOnExit: vi.fn(),
+      getStore: vi.fn(),
+      registerAttachment: vi.fn(async () => {}),
+    };
+    const setup = () => {
+      if (refsMap.has(session.id)) return; // idempotence guard, as in server.ts
+      const refs = createSessionListeners(
+        session as unknown as Session,
+        deps as unknown as Parameters<typeof createSessionListeners>[1]
+      );
+      refsMap.set(session.id, refs);
+      attachSessionListeners(session as unknown as Session, refs);
+    };
+    return { session, deps, setup };
+  }
+
+  it('every PTY exit detaches ALL wiring listeners (the gap the re-attach routes must close)', () => {
+    const { session, setup } = makeHarness();
+    setup(); // session-create wiring
+    expect(session.listenerCount('respawnBreakerTripped')).toBe(1);
+    session.emit('exit', 1);
+    // After exit #1 the trip listener is gone — a later trip would be unobserved.
+    expect(session.listenerCount('respawnBreakerTripped')).toBe(0);
+    expect(session.listenerCount('terminal')).toBe(0);
+  });
+
+  it('re-running setup() after each exit keeps the 5th-exit trip observable (SSE + push + persist)', () => {
+    const { session, deps, setup } = makeHarness();
+    setup(); // session-create wiring
+    // Exits 1–4: each detaches the wiring; the /interactive re-attach re-wires it.
+    for (let i = 1; i <= 4; i++) {
+      session.emit('exit', 1);
+      setup(); // what the fixed re-attach routes now do
+    }
+    // 5th rapid non-zero exit: the real Session emits respawnBreakerTripped
+    // (inside its onExit handler) BEFORE emitting 'exit'.
+    session.emit('respawnBreakerTripped', { count: 5 });
+    session.emit('exit', 1);
+
+    expect(deps.broadcast).toHaveBeenCalledWith(SseEvent.SessionRespawnBreakerTripped, {
+      sessionId: session.id,
+      count: 5,
+    });
+    expect(deps.sendPushNotifications).toHaveBeenCalledWith(
+      SseEvent.SessionRespawnBreakerTripped,
+      expect.objectContaining({ sessionId: session.id, count: 5 })
+    );
+    expect(deps.persistSessionState).toHaveBeenCalled();
+  });
+
+  it('setup() is idempotent — re-running while still wired must not double-attach', () => {
+    const { session, setup } = makeHarness();
+    setup();
+    setup(); // e.g. POST /interactive on a freshly created session
+    expect(session.listenerCount('respawnBreakerTripped')).toBe(1);
+    expect(session.listenerCount('exit')).toBe(1);
+  });
+});
+
+describe('push template registration (COD-118)', () => {
+  it('SessionRespawnBreakerTripped has a PUSH_EVENT_MAP entry (sendPushNotifications silently no-ops without one)', async () => {
+    const { WebServer } = await import('../src/web/server.js');
+    const map = (WebServer as unknown as Record<string, Record<string, { title: string; urgency: string }>>)[
+      'PUSH_EVENT_MAP'
+    ];
+    expect(map).toBeDefined();
+    const entry = map[SseEvent.SessionRespawnBreakerTripped];
+    expect(entry).toBeDefined();
+    expect(entry.urgency).toBe('critical');
+    expect(entry.title.length).toBeGreaterThan(0);
   });
 });

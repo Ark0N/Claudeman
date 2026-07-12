@@ -34,6 +34,7 @@ import {
   FlickerFilterSchema,
   QuickRunSchema,
   QuickStartSchema,
+  InteractiveStartSchema,
 } from '../schemas.js';
 import {
   autoConfigureRalph,
@@ -611,6 +612,14 @@ export function registerSessionRoutes(
 
   app.post('/api/sessions/:id/interactive', async (req) => {
     const { id } = req.params as { id: string };
+    // Body is optional (auto-reattach callers send none) — same idiom as /interactive-respawn.
+    const bodyResult = req.body
+      ? InteractiveStartSchema.safeParse(req.body)
+      : { success: true as const, data: {} as { clearBreaker?: boolean } };
+    if (!bodyResult.success) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+    }
+    const { clearBreaker } = bodyResult.data;
     const session = findSessionOrFail(ctx, id);
 
     if (session.isBusy()) {
@@ -633,9 +642,20 @@ export function registerSessionRoutes(
         }
       }
 
-      // COD-118: an explicit user-initiated start clears any tripped PTY-exit
-      // circuit breaker so an intentional restart is never blocked by a prior crash-loop.
-      session.resetRespawnBreaker();
+      // COD-118: ONLY an explicit user-initiated restart (body {clearBreaker:true})
+      // clears a tripped PTY-exit circuit breaker. This endpoint is ALSO the frontend's
+      // automatic re-attach path (selectSession auto-POSTs it for any pid===null
+      // session), so an unconditional reset here would re-arm the exact crash loop
+      // the breaker exists to stop — auto-reattach sends no body and must not clear.
+      if (clearBreaker) {
+        session.resetRespawnBreaker();
+      }
+      // Re-attach listener wiring if a prior PTY exit detached it: the wiring exit
+      // handler removes ALL session listeners (incl. respawnBreakerTripped), and only
+      // session-create/boot-recovery paths ran setupSessionListeners before this fix —
+      // without this, a re-attached session's SSE/terminal/trip events go unobserved.
+      // setupSessionListeners is idempotent (no-op while refs are still attached).
+      await ctx.setupSessionListeners(session);
       await session.startInteractive();
       getLifecycleLog().log({
         event: 'started',
@@ -663,6 +683,8 @@ export function registerSessionRoutes(
     }
 
     try {
+      // Re-attach listener wiring if a prior PTY exit detached it (see /interactive).
+      await ctx.setupSessionListeners(session);
       await session.startShell();
       getLifecycleLog().log({
         event: 'started',
