@@ -466,6 +466,9 @@ Object.assign(CodemanApp.prototype, {
     modal.querySelectorAll('.modal-tab-content').forEach(content => {
       content.classList.toggle('hidden', content.id !== tabName);
     });
+    // The Shortcuts tab renders lazily so the list reflects the CURRENT
+    // registry (defaults + overrides) every time it is opened.
+    if (tabName === 'settings-shortcuts') this.renderShortcutSettingsList?.();
   },
 
   closeAppSettings() {
@@ -2365,24 +2368,61 @@ Object.assign(CodemanApp.prototype, {
 
   // ─── Shortcut Settings (App Settings → Shortcuts tab) ────────────────────────
   // Renders the list of shortcuts with capture buttons for key rebinding,
-  // and persists overrides under settings.shortcutOverrides.
+  // and persists overrides under settings.shortcutOverrides (saved through
+  // saveAppSettingsToStorage so the device key + settings cache stay coherent).
 
   renderShortcutSettingsList() {
     const list = document.getElementById('appSettingsShortcutsList');
     if (!list) return;
-    const registry = this.getShortcutRegistry ? this.getShortcutRegistry() : (typeof DEFAULT_SHORTCUTS !== 'undefined' ? DEFAULT_SHORTCUTS : []);
-    list.innerHTML = registry.map((shortcut) => {
-      const bindingLabel = shortcut.displayBindings
-        ? shortcut.displayBindings.join(' / ')
-        : (shortcut.bindings || []).map((b) => [...(b.modifiers || []), b.key || b.code || ''].join('+')).join(' / ');
-      return `<div class="shortcut-setting-row" data-shortcut-id="${escapeHtml(shortcut.id)}">
+    const registry = this.getShortcutRegistry
+      ? this.getShortcutRegistry()
+      : typeof DEFAULT_SHORTCUTS !== 'undefined'
+        ? DEFAULT_SHORTCUTS
+        : [];
+    const overrides = this.readShortcutOverridesFromSettings();
+    list.innerHTML = registry
+      .map((shortcut) => {
+        const bindingLabel = shortcut.displayBindings
+          ? shortcut.displayBindings.join(' / ')
+          : (shortcut.bindings || []).map((b) => [...(b.modifiers || []), b.key || b.code || ''].join('+')).join(' / ');
+        // Only registry entries dispatched through matchesShortcutEvent() are
+        // configurable; fixed keys (Escape, tab arrows, …) render read-only.
+        const configurable = !!shortcut.action && Array.isArray(shortcut.bindings);
+        const overridden = !!overrides[shortcut.id];
+        const controls = configurable
+          ? `<button type="button" class="shortcut-capture-btn" data-shortcut-action="capture" title="Capture new binding">Edit</button>
+        <button type="button" class="shortcut-reset-btn" data-shortcut-action="reset" title="Reset to default"${overridden ? '' : ' disabled'}>Reset</button>
+        <input class="shortcut-enabled-checkbox" type="checkbox" ${shortcut.disabled ? '' : 'checked'} data-shortcut-action="toggle" title="Enable/disable">`
+          : '';
+        return `<div class="shortcut-setting-row${configurable ? '' : ' shortcut-setting-row--fixed'}" data-shortcut-id="${escapeHtml(shortcut.id)}">
         <label class="shortcut-setting-label">${escapeHtml(shortcut.label)}</label>
         <input class="shortcut-binding-input" type="text" readonly value="${escapeHtml(bindingLabel)}" placeholder="(none)" data-id="${escapeHtml(shortcut.id)}">
-        <button class="shortcut-capture-btn" onclick="app.startShortcutCapture('${escapeHtml(shortcut.id)}')" title="Capture new binding">Edit</button>
-        <button class="shortcut-reset-btn" onclick="app.resetShortcutOverride('${escapeHtml(shortcut.id)}')" title="Reset to default">Reset</button>
-        <input class="shortcut-enabled-checkbox" type="checkbox" ${shortcut.disabled ? '' : 'checked'} onchange="app.toggleShortcutEnabled('${escapeHtml(shortcut.id)}', this.checked)" title="Enable/disable">
+        ${controls}
       </div>`;
-    }).join('');
+      })
+      .join('');
+    this._wireShortcutSettingsList(list);
+  },
+
+  // Delegated handlers (no inline onclick — registry ids never land inside a
+  // JS string context, and the listeners survive re-renders).
+  _wireShortcutSettingsList(list) {
+    if (list.dataset.shortcutListenersAdded) return;
+    list.dataset.shortcutListenersAdded = 'true';
+    list.addEventListener('click', (e) => {
+      const btn = e.target?.closest?.('[data-shortcut-action]');
+      if (!btn) return;
+      const id = btn.closest?.('[data-shortcut-id]')?.dataset?.shortcutId;
+      if (!id) return;
+      if (btn.dataset.shortcutAction === 'capture') this.startShortcutCapture(id);
+      else if (btn.dataset.shortcutAction === 'reset') this.resetShortcutOverride(id);
+    });
+    list.addEventListener('change', (e) => {
+      const box = e.target;
+      if (!box?.matches?.('[data-shortcut-action="toggle"]')) return;
+      const id = box.closest?.('[data-shortcut-id]')?.dataset?.shortcutId;
+      if (id) this.toggleShortcutEnabled(id, box.checked);
+    });
   },
 
   readShortcutOverridesFromSettings() {
@@ -2396,45 +2436,66 @@ Object.assign(CodemanApp.prototype, {
     input.value = 'Press keys…';
     input.focus();
     this._capturingShortcutId = shortcutId;
-    input.addEventListener('keydown', (e) => this.onShortcutCaptureKeydown(e, shortcutId), { once: true });
+    // Persistent listener (NOT {once}) — the first keydown of a combo like
+    // Ctrl+Shift+P is the modifier itself ('Control'), which must not end the
+    // capture. The first non-modifier key completes it.
+    const onCaptureKeydown = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'Control' || e.key === 'Shift' || e.key === 'Alt' || e.key === 'Meta') return;
+      input.removeEventListener('keydown', onCaptureKeydown);
+      this.onShortcutCaptureKeydown(e, shortcutId);
+    };
+    input.addEventListener('keydown', onCaptureKeydown);
   },
 
   onShortcutCaptureKeydown(e, shortcutId) {
     e.preventDefault();
     e.stopPropagation();
+    this._capturingShortcutId = null;
     if (e.key === 'Escape') {
       this.renderShortcutSettingsList();
       return;
     }
-    const settings = this.loadAppSettingsFromStorage();
-    const shortcutOverrides = settings.shortcutOverrides || {};
+    // Require a real chord: the dispatcher has no focus-target guard, so a
+    // bare-key binding would fire while typing in any input.
+    if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+      this.renderShortcutSettingsList();
+      this.showToast?.('Shortcut must include Ctrl, Cmd, or Alt', 'error');
+      return;
+    }
     const modifiers = [];
     if (e.ctrlKey) modifiers.push('ctrl');
     if (e.metaKey) modifiers.push('meta');
     if (e.shiftKey) modifiers.push('shift');
     if (e.altKey) modifiers.push('alt');
-    shortcutOverrides[shortcutId] = { bindings: [{ modifiers, key: e.key, code: e.code }] };
+    const settings = this.loadAppSettingsFromStorage();
+    const shortcutOverrides = { ...(settings.shortcutOverrides || {}) };
+    shortcutOverrides[shortcutId] = {
+      ...(shortcutOverrides[shortcutId] || {}),
+      bindings: [{ modifiers, key: e.key, code: e.code }],
+    };
     settings.shortcutOverrides = shortcutOverrides;
-    localStorage.setItem('codeman:settings', JSON.stringify(settings));
-    this._capturingShortcutId = null;
+    this.saveAppSettingsToStorage(settings);
     this.renderShortcutSettingsList();
   },
 
   resetShortcutOverride(shortcutId) {
     const settings = this.loadAppSettingsFromStorage();
-    const shortcutOverrides = settings.shortcutOverrides || {};
+    const shortcutOverrides = { ...(settings.shortcutOverrides || {}) };
     delete shortcutOverrides[shortcutId];
     settings.shortcutOverrides = shortcutOverrides;
-    localStorage.setItem('codeman:settings', JSON.stringify(settings));
+    this.saveAppSettingsToStorage(settings);
     this.renderShortcutSettingsList();
   },
 
   toggleShortcutEnabled(shortcutId, enabled) {
     const settings = this.loadAppSettingsFromStorage();
-    const shortcutOverrides = settings.shortcutOverrides || {};
+    const shortcutOverrides = { ...(settings.shortcutOverrides || {}) };
     shortcutOverrides[shortcutId] = { ...(shortcutOverrides[shortcutId] || {}), disabled: !enabled };
     settings.shortcutOverrides = shortcutOverrides;
-    localStorage.setItem('codeman:settings', JSON.stringify(settings));
+    this.saveAppSettingsToStorage(settings);
+    this.renderShortcutSettingsList();
   },
 
   closeAllPanels() {
@@ -2442,10 +2503,6 @@ Object.assign(CodemanApp.prototype, {
     this.closeAppSettings();
     this.cancelCloseSession();
     this.closeTokenStats();
-    // Mobile header utility tray closes alongside the other overlays so Escape
-    // (and any future closeAllPanels caller) dismisses it like every other panel
-    // instead of leaving it pinned open with only its toggle to close it.
-    this.closeMobileHeaderUtilities?.();
     document.getElementById('monitorPanel').classList.remove('open');
     // Collapse subagents panel (don't hide it permanently)
     const subagentsPanel = document.getElementById('subagentsPanel');

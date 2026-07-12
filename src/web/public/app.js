@@ -288,6 +288,7 @@ const DEFAULT_SHORTCUTS = [
     label: 'Show Shortcuts',
     bindings: [
       { modifiers: ['ctrl'], key: '?', code: 'Slash' },
+      { modifiers: ['ctrl', 'shift'], key: '?' },
       { modifiers: ['alt'], key: '?', code: 'Slash' },
     ],
     action: 'showShortcutOverlay',
@@ -336,6 +337,13 @@ const DEFAULT_SHORTCUTS = [
     label: 'Voice Input',
     bindings: [{ modifiers: ['ctrl', 'shift'], key: 'V' }],
     action: 'toggleVoiceInput',
+  },
+  {
+    id: 'restore-terminal-size',
+    group: 'Terminal',
+    label: 'Restore Terminal Size',
+    bindings: [{ modifiers: ['ctrl', 'shift'], key: 'R' }],
+    action: 'restoreTerminalSize',
   },
   {
     id: 'move-tab-left',
@@ -903,21 +911,23 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   setupEventListeners() {
-    // Keyboard shortcut lookup table — data-driven to avoid 12 separate if-blocks.
-    // Each entry: { key, altKey? (alternative key match), ctrl? (require Ctrl/Cmd),
-    //               shift? (require Shift), action }.
-    const SHORTCUTS = [
-      { key: '?', altKey: '/', ctrl: true, action: () => this.showHelp() },
-      { key: 'w', ctrl: true, action: () => this.killActiveSession() },
-      { key: 'Tab', ctrl: true, action: () => this.nextSession() },
-      { key: 'l', ctrl: true, action: () => this.clearTerminal() },
-      { key: 'R', ctrl: true, shift: true, action: () => this.restoreTerminalSize() },
-      { key: '=', altKey: '+', ctrl: true, action: () => this.increaseFontSize() },
-      { key: '-', ctrl: true, action: () => this.decreaseFontSize() },
-      { key: 'V', ctrl: true, shift: true, action: () => VoiceInput.toggle() },
-      { key: '{', ctrl: true, shift: true, action: () => this.moveActiveTabLeft() },
-      { key: '}', ctrl: true, shift: true, action: () => this.moveActiveTabRight() },
-    ];
+    // Action name → handler map for the shortcut registry (DEFAULT_SHORTCUTS +
+    // user overrides from settings.shortcutOverrides, merged by
+    // getShortcutRegistry()). The command palette chord is deliberately NOT in
+    // this map — shouldOpenCommandPaletteFromShortcut() dispatches it above with
+    // focus-target awareness (it must fire from the terminal but not from inputs).
+    const SHORTCUT_ACTIONS = {
+      showShortcutOverlay: () => this.showShortcutOverlay(),
+      killActiveSession: () => this.killActiveSession(),
+      nextSession: () => this.nextSession(),
+      clearTerminal: () => this.clearTerminal(),
+      restoreTerminalSize: () => this.restoreTerminalSize(),
+      increaseFontSize: () => this.increaseFontSize(),
+      decreaseFontSize: () => this.decreaseFontSize(),
+      toggleVoiceInput: () => VoiceInput.toggle(),
+      moveActiveTabLeft: () => this.moveActiveTabLeft(),
+      moveActiveTabRight: () => this.moveActiveTabRight(),
+    };
 
     // Use capture to handle before terminal
     document.addEventListener('keydown', (e) => {
@@ -937,6 +947,7 @@ class CodemanApp {
         if (this.attachmentHistoryDrawerOpen) this.closeAttachmentHistory();
         this.closeSessionManager();
         this.closeCommandPalette?.();
+        this.closeShortcutOverlay?.();
       }
 
       // Option/Alt session navigation uses physical key CODES, not e.key, so macOS
@@ -966,14 +977,18 @@ class CodemanApp {
         }
       }
 
-      // Match against shortcut table
-      for (const s of SHORTCUTS) {
-        const keyMatch = e.key === s.key || (s.altKey && e.key === s.altKey);
-        const ctrlMatch = s.ctrl ? (e.ctrlKey || e.metaKey) : true;
-        const shiftMatch = s.shift ? e.shiftKey : !e.shiftKey;
-        if (keyMatch && ctrlMatch && shiftMatch) {
+      // Match against the shortcut registry so user rebinds and per-shortcut
+      // disables (App Settings → Shortcuts) take effect. Every dispatchable
+      // binding requires Ctrl/Cmd/Alt (capture enforces the same), so plain
+      // typing exits early without touching the registry.
+      if (!e.ctrlKey && !e.metaKey && !e.altKey) return;
+      for (const shortcut of this.getShortcutRegistry()) {
+        if (shortcut.disabled || !shortcut.action) continue;
+        const action = SHORTCUT_ACTIONS[shortcut.action];
+        if (!action) continue;
+        if (this.matchesShortcutEvent(e, shortcut)) {
           e.preventDefault();
-          s.action();
+          action();
           return;
         }
       }
@@ -4360,21 +4375,35 @@ class CodemanApp {
     return DEFAULT_SHORTCUTS.map((shortcut) => {
       const override = shortcutOverrides[shortcut.id];
       if (!override) return shortcut;
-      return { ...shortcut, ...override };
+      // Only binding-shaped fields may come from storage — id/label/group/action
+      // stay trusted so persisted data can never redirect a shortcut's action or
+      // spoof another row in the settings/overlay renderers.
+      const merged = { ...shortcut };
+      if (Array.isArray(override.bindings)) {
+        merged.bindings = override.bindings;
+        delete merged.displayBindings; // show the override, not the stale default label
+      }
+      if (typeof override.disabled === 'boolean') merged.disabled = override.disabled;
+      return merged;
     });
   }
 
   matchesShortcutEvent(e, shortcut) {
-    if (!shortcut.bindings) return false;
+    if (!shortcut || !Array.isArray(shortcut.bindings)) return false;
     return shortcut.bindings.some((binding) => {
       const mods = binding.modifiers || [];
-      if (mods.includes('ctrl') && !e.ctrlKey) return false;
-      if (mods.includes('meta') && !e.metaKey) return false;
-      if (mods.includes('shift') && !e.shiftKey) return false;
-      if (mods.includes('alt') && !e.altKey) return false;
-      if (!mods.includes('ctrl') && !mods.includes('meta') && (e.ctrlKey || e.metaKey)) return false;
-      if (binding.code) return e.code === binding.code;
-      if (binding.key) return e.key === binding.key || e.key.toLowerCase() === binding.key.toLowerCase();
+      // Ctrl and Cmd are interchangeable as the primary modifier (parity with
+      // the legacy shortcut table), but every OTHER pressed modifier must be
+      // declared by the binding — a plain Ctrl+K binding must not also swallow
+      // Ctrl+Shift+K (the Firefox devtools chord).
+      const wantsPrimary = mods.includes('ctrl') || mods.includes('meta');
+      if (wantsPrimary !== !!(e.ctrlKey || e.metaKey)) return false;
+      if (mods.includes('shift') !== !!e.shiftKey) return false;
+      if (mods.includes('alt') !== !!e.altKey) return false;
+      // Match the physical key when the binding pins one (layout-independent),
+      // or the produced character otherwise (layout-dependent keys like '+').
+      if (binding.code && e.code === binding.code) return true;
+      if (binding.key && typeof e.key === 'string' && e.key.toLowerCase() === binding.key.toLowerCase()) return true;
       return false;
     });
   }

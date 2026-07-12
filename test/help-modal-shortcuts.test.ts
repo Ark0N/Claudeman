@@ -54,9 +54,10 @@ describe('help modal shortcuts', () => {
     expectShortcut(helpModal, ['Ctrl', '-'], 'Decrease Font');
     expectShortcut(helpModal, ['Shift', 'Enter'], 'Insert Newline');
     expectShortcut(helpModal, ['Ctrl', 'Enter'], 'Insert Newline');
+    // Ctrl+Shift+R (restore terminal size) is still dispatched — keep it documented.
+    expectShortcut(helpModal, ['Ctrl', 'Shift', 'R'], 'Restore Terminal Size');
 
     expect(helpModal).not.toMatch(/Ctrl<\/kbd>\s*\+\s*<kbd>K<\/kbd>/i);
-    expect(helpModal).not.toMatch(/Ctrl<\/kbd>\s*\+\s*<kbd>Shift<\/kbd>\s*\+\s*<kbd>R<\/kbd>/i);
     expect(helpModal).not.toMatch(/Ctrl<\/kbd>\s*\+\s*<kbd>Enter<\/kbd>.*?(Run|Start)/i);
   });
 

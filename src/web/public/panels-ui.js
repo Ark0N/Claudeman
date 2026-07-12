@@ -257,9 +257,28 @@ Object.assign(CodemanApp.prototype, {
 
   shouldOpenCommandPaletteFromShortcut(e) {
     if (!e) return false;
-    const key = (e.key || '').toLowerCase();
-    if (key !== 'k' && e.code !== 'KeyK') return false;
-    if (!(e.metaKey || e.ctrlKey || e.altKey)) return false;
+    // Every palette chord requires Ctrl/Cmd/Alt (capture enforces the same for
+    // rebinds), so plain typing exits before any registry work — this runs on
+    // the document AND xterm keydown hot paths.
+    if (!e.ctrlKey && !e.metaKey && !e.altKey) return false;
+
+    // Registry-aware chord check (COD-157): honors a rebound or disabled
+    // palette shortcut. Falls back to the default Ctrl/Cmd/Alt+K chord when the
+    // registry isn't available (isolated test harnesses).
+    const registryAvailable =
+      typeof this.getShortcutRegistry === 'function' && typeof this.matchesShortcutEvent === 'function';
+    const palette = registryAvailable
+      ? this.getShortcutRegistry().find((s) => s.id === 'command-palette')
+      : null;
+    if (palette) {
+      if (palette.disabled || !this.matchesShortcutEvent(e, palette)) return false;
+    } else {
+      const key = (e.key || '').toLowerCase();
+      if (key !== 'k' && e.code !== 'KeyK') return false;
+      // Don't hijack chords with extra modifiers (Ctrl+Shift+K is the Firefox
+      // devtools console; matchesShortcutEvent applies the same rule above).
+      if (e.shiftKey) return false;
+    }
 
     const target = e.target;
     if (!target) return true;
@@ -279,7 +298,6 @@ Object.assign(CodemanApp.prototype, {
     const search = document.getElementById('commandPaletteSearch');
     if (!modal || !search) return;
 
-    this.closeMobileHeaderUtilities?.();
     this.commandPaletteActiveIndex = 0;
     search.value = '';
     modal.classList.add('active');
@@ -491,7 +509,14 @@ Object.assign(CodemanApp.prototype, {
           option.textContent = item.caseName;
           caseSelect.appendChild(option);
         }
-        caseSelect.value = item.caseName;
+        // selectQuickStartCase keeps the searchable combobox, dir display, and
+        // persisted last-used case in sync with the palette's pick (COD-151);
+        // fall back to a bare value set when the picker mixin isn't loaded.
+        if (typeof this.selectQuickStartCase === 'function') {
+          this.selectQuickStartCase(item.caseName);
+        } else {
+          caseSelect.value = item.caseName;
+        }
       }
       await this.run();
     }
@@ -499,9 +524,9 @@ Object.assign(CodemanApp.prototype, {
 
   // ═══════════════════════════════════════════════════════════════
   // Session Manager Modal (COD-121)
-  // Persistent, header-reachable session list (GET /api/sessions/unified)
-  // reachable mid-session, with a server-side search box. Reuses the
-  // unit-2 history item renderer so clicking resumes/switches sessions.
+  // Unified session list (GET /api/sessions/unified) reachable mid-session,
+  // with a server-side search box. Reuses the history item renderer; clicking
+  // a live row switches to it, a history row resumes the conversation.
   // ═══════════════════════════════════════════════════════════════
 
   async openSessionManager() {
@@ -557,26 +582,13 @@ Object.assign(CodemanApp.prototype, {
     if (modal) modal.classList.remove('active');
   },
 
-  /**
-   * COD-121: live-refresh the unified session list when sessions change
-   * (created/updated/deleted via SSE). Only touches surfaces that are currently
-   * showing — the open Session Manager modal and/or the visible welcome list —
-   * and is debounced so an event burst collapses into one re-fetch. The current
-   * search query is preserved.
-   */
-  _onSessionListMaybeChanged() {
-    const modal = document.getElementById('sessionManagerModal');
-    if (modal && modal.classList.contains('active')) {
-      this._debouncedCall(
-        'sessionManagerRefresh',
-        () => this._loadSessionManagerList(this._sessionManagerQuery || ''),
-        400
-      );
-    }
-    const welcome = document.getElementById('welcomeOverlay');
-    if (welcome && welcome.classList.contains('visible')) {
-      this._debouncedCall('welcomeHistoryRefresh', () => this.loadHistorySessions(), 600);
-    }
+  /** Replace the Session Manager list body with a single status line. */
+  _setSessionManagerMessage(list, message) {
+    list.replaceChildren();
+    const line = document.createElement('p');
+    line.className = 'empty-message';
+    line.textContent = message;
+    list.appendChild(line);
   },
 
   async _loadSessionManagerList(q = '') {
@@ -586,31 +598,49 @@ Object.assign(CodemanApp.prototype, {
     try {
       const url = '/api/sessions/unified?limit=200' + (q ? '&q=' + encodeURIComponent(q) : '');
       const res = await fetch(url);
-      const data = await res.json();
-      const sessions = data.data?.sessions || [];
+      const data = await res.json().catch(() => null);
+      // ApiResponse envelope: { success: true, data: { sessions, total } }.
+      // Surface failures instead of rendering them as an empty result set.
+      if (!res.ok || !data || data.success === false || !data.data) {
+        this._setSessionManagerMessage(list, data?.error || `Failed to load sessions (HTTP ${res.status})`);
+        return;
+      }
+      const sessions = data.data.sessions || [];
       list.replaceChildren();
       if (sessions.length === 0) {
-        const empty = document.createElement('p');
-        empty.className = 'empty-message';
-        empty.textContent = q ? 'No sessions match your search' : 'No sessions found';
-        list.appendChild(empty);
+        this._setSessionManagerMessage(list, q ? 'No sessions match your search' : 'No sessions found');
         return;
       }
       for (const s of sessions) {
-        const item = this._buildHistoryItem(s, this.cases, { showViewAll: false });
-        // COD-130: scope the modal-close to the main (resume) row only, in the
-        // bubble phase. The ⋯ kebab button calls stopPropagation(), so clicking
-        // it (or its menu) no longer closes the Session Manager modal.
-        item.querySelector('.history-item-main')?.addEventListener('click', () => this.closeSessionManager());
+        // Adapt UnifiedSessionItem (lastActivityAt epoch-ms, optional fields) to
+        // the history-record shape _buildHistoryItem renders (lastModified date
+        // string, sizeBytes, firstPrompt).
+        const record = {
+          sessionId: s.sessionId,
+          workingDir: s.workingDir || '',
+          sizeBytes: s.sizeBytes ?? 0,
+          lastModified: new Date(s.lastActivityAt ?? s.createdAt ?? Date.now()).toISOString(),
+          firstPrompt: s.firstPrompt || s.name || '',
+        };
+        const isLive = !!this.sessions?.has?.(s.sessionId);
+        const item = this._buildHistoryItem(record, this.cases, {
+          showViewAll: false,
+          onActivate: () => {
+            this.closeSessionManager();
+            if (isLive) {
+              void this.selectSession(s.sessionId);
+            } else if (record.workingDir) {
+              // History rows are keyed by the Claude conversation UUID; resumed
+              // sessions carry theirs separately as claudeSessionId.
+              void this.resumeHistorySession(s.claudeSessionId || s.sessionId, record.workingDir);
+            }
+          },
+        });
         list.appendChild(item);
       }
     } catch (err) {
       console.error('[_loadSessionManagerList]', err);
-      list.replaceChildren();
-      const errLine = document.createElement('p');
-      errLine.className = 'empty-message';
-      errLine.textContent = 'Failed to load sessions';
-      list.appendChild(errLine);
+      this._setSessionManagerMessage(list, 'Failed to load sessions');
     }
   },
 

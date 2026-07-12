@@ -134,6 +134,17 @@ Object.assign(CodemanApp.prototype, {
         return false;
       }
 
+      // Command palette chord (COD-153): keep it out of the PTY. The document
+      // CAPTURE handler has already opened the palette by the time xterm sees
+      // this keydown, but its preventDefault() does NOT stop xterm — without
+      // this gate Ctrl+K would ALSO write 0x0b (readline kill-line) into the
+      // live session behind the palette, truncating whatever the user had
+      // typed. Route through the registry-aware checker so a rebound or
+      // disabled palette shortcut restores normal terminal Ctrl+K.
+      if (ev.type === 'keydown' && this.shouldOpenCommandPaletteFromShortcut?.(ev)) {
+        return false;
+      }
+
       // Ctrl+V / Cmd+V: intercept before xterm sends ^V to PTY.
       // Route through our paste trap which handles both images and text.
       if ((ev.ctrlKey || ev.metaKey) && ev.key === 'v' && ev.type === 'keydown') {
@@ -1074,6 +1085,7 @@ Object.assign(CodemanApp.prototype, {
    * @param {Array} cases linked cases (for #caseName label)
    * @param {object} [options]
    * @param {boolean} [options.showViewAll=true] show "View all in folder" button in detail panel
+   * @param {Function} [options.onActivate] main-row click handler override (default: resume the conversation)
    */
   _buildHistoryItem(s, cases, options) {
     const showViewAll = options?.showViewAll !== false;
@@ -1095,10 +1107,14 @@ Object.assign(CodemanApp.prototype, {
     item.className = 'history-item';
     item.title = s.workingDir;
 
-    // Main row: clickable surface that triggers resume
+    // Main row: clickable surface that triggers resume (or a caller-supplied
+    // activation — the Session Manager switches to live sessions instead)
     const mainRow = document.createElement('div');
     mainRow.className = 'history-item-main';
-    mainRow.addEventListener('click', () => this.resumeHistorySession(s.sessionId, s.workingDir));
+    mainRow.addEventListener(
+      'click',
+      options?.onActivate || (() => this.resumeHistorySession(s.sessionId, s.workingDir))
+    );
 
     const textCol = document.createElement('div');
     textCol.className = 'history-item-text';

@@ -5704,49 +5704,112 @@ kbd {
   overflow-y: auto;
 }
 
-/* COD-130: per-row ⋯ kebab context menu (appended to <body>, fixed-positioned).
-   z-index must clear the Session Manager modal (.modal is z-index: 1000). */
-.session-row-menu {
-  position: fixed;
-  z-index: 10010;
-  min-width: 180px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 4px;
-  background: rgba(22, 22, 28, 0.97);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+/* Shortcut settings rows (App Settings → Shortcuts, COD-157) */
+.shortcut-setting-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 190px) auto auto auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.session-row-menu-item {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1px;
-  width: 100%;
-  padding: 7px 12px;
-  background: none;
-  border: none;
-  border-radius: var(--btn-radius);
+.shortcut-setting-row:last-child {
+  border-bottom: none;
+}
+
+.shortcut-setting-label {
   color: var(--text);
-  cursor: pointer;
   font-size: 0.8rem;
-  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
-  transition: background var(--transition-smooth);
 }
 
-.session-row-menu-item:hover {
-  background: var(--bg-hover);
-}
-
-.session-row-menu-sublabel {
-  color: var(--text-muted);
+.shortcut-binding-input {
+  min-width: 0;
+  padding: 0.3rem 0.5rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--btn-radius);
+  color: var(--text-dim);
+  font-family: monospace;
   font-size: 0.72rem;
+  cursor: default;
+}
+
+.shortcut-binding-input:focus {
+  border-color: var(--accent);
+  color: var(--text);
+  outline: none;
+}
+
+.shortcut-capture-btn,
+.shortcut-reset-btn {
+  padding: 0.3rem 0.6rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--btn-radius);
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: all var(--transition-smooth);
+}
+
+.shortcut-capture-btn:hover,
+.shortcut-reset-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--text);
+}
+
+.shortcut-reset-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.shortcut-enabled-checkbox {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Shortcut overlay modal (registry-driven; opened with Ctrl+? / Alt+?) */
+.shortcut-overlay-modal .modal-content {
+  max-width: 560px;
+}
+
+.shortcut-overlay-group {
+  margin-bottom: 1rem;
+}
+
+.shortcut-overlay-group:last-child {
+  margin-bottom: 0;
+}
+
+.shortcut-overlay-group-label {
+  margin-bottom: 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.shortcut-overlay-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.3rem 0;
+}
+
+.shortcut-overlay-label {
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.shortcut-overlay-keys {
+  flex-shrink: 0;
+  color: var(--text-dim);
 }
 
 .away-digest-ranges {

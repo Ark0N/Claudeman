@@ -40,4 +40,22 @@ describe('keyboard shortcuts', () => {
     expect(helpHtml).toContain('<kbd>Ctrl/Cmd/Option</kbd>+<kbd>K</kbd>');
     expect(readme).toMatch(/\| `Ctrl\/Cmd\/Option\+K`\s+\| Find open session or start a new one\s+\|/);
   });
+
+  it('gates the palette chord in the xterm custom key handler (no 0x0b kill-line into the PTY)', () => {
+    // The document-level capture handler opens the palette, but preventDefault()
+    // does NOT stop xterm from evaluating Ctrl+K into 0x0b and writing it to the
+    // live PTY — terminal-ui.js must return false for the palette chord.
+    expect(terminalUiSource).toMatch(/ev\.type === 'keydown' && this\.shouldOpenCommandPaletteFromShortcut\?\.\(ev\)/);
+  });
+
+  it('dispatches document shortcuts through the shortcut registry (rebind/disable aware)', () => {
+    // The legacy hardcoded SHORTCUTS table must stay gone — dispatch goes through
+    // getShortcutRegistry() + matchesShortcutEvent() so overrides and per-shortcut
+    // disables (App Settings → Shortcuts) actually take effect.
+    expect(appSource).not.toContain('const SHORTCUTS = [');
+    expect(appSource).toContain('const SHORTCUT_ACTIONS = {');
+    expect(appSource).toContain('for (const shortcut of this.getShortcutRegistry())');
+    expect(appSource).toContain('if (this.matchesShortcutEvent(e, shortcut))');
+    expect(appSource).toContain('if (shortcut.disabled || !shortcut.action) continue;');
+  });
 });
