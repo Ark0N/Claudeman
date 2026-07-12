@@ -219,6 +219,40 @@ describe('terminal touch tap mouse guard', () => {
     expect(sent).toEqual([]);
   });
 
+  it('desktop click: skips the click while a terminal link is hovered (activate() handles it)', () => {
+    const { app } = loadTerminalUiHarness();
+    const sent: string[] = [];
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app._sendInputAsync = (_id: string, data: string) => sent.push(data);
+    app.terminal = {
+      cols: 80,
+      rows: 24,
+      modes: { mouseTrackingMode: 'none' },
+      hasSelection: () => false,
+      element: {
+        querySelector: () => ({ getBoundingClientRect: () => ({ left: 0, top: 0 }) }),
+      },
+      _core: { _renderService: { dimensions: { css: { cell: { width: 8, height: 16 } } } } },
+    };
+    const click = {
+      isTrusted: true,
+      button: 0,
+      detail: 1,
+      clientX: 50,
+      clientY: 50,
+      target: { closest: (sel: string) => (sel === '.xterm-screen' ? {} : null) },
+    };
+
+    app._linkHovered = true; // link provider hover() fired — this click opens the link
+    app._handleDesktopTerminalClick(click);
+    expect(sent).toEqual([]);
+
+    app._linkHovered = false; // leave() fired — plain clicks report again
+    app._handleDesktopTerminalClick(click);
+    expect(sent).toEqual(['\x1b[<0;7;4M\x1b[<0;7;4m']);
+  });
+
   it('desktop click: skips the compat click that follows a touch tap', () => {
     const { app, setNow } = loadTerminalUiHarness();
     const sent: string[] = [];
@@ -277,10 +311,10 @@ describe('terminal touch tap mouse guard', () => {
     expect(sent).toEqual(['\x1b[<0;7;4M\x1b[<0;7;4m']);
   });
 
-  it('wheel: forwards to the app only for strip-mode sessions at the buffer bottom without Shift', () => {
+  it('wheel: forwards to the app only for verified sessions at the buffer bottom without Shift', () => {
     const { app } = loadTerminalUiHarness();
     app.activeSessionId = 'sess-1';
-    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion: '2.1.187' }]]);
     app.terminal = {
       modes: { mouseTrackingMode: 'none' },
       buffer: { active: { viewportY: 50, baseY: 50 } },
@@ -298,6 +332,41 @@ describe('terminal touch tap mouse guard', () => {
     app.terminal.modes.mouseTrackingMode = 'none';
 
     app.sessions = new Map([['sess-1', { mode: 'shell' }]]); // not a strip mode
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
+  });
+
+  it('wheel: gates claude forwarding on CLI version 2.1.187+ (unknown or older stays local)', () => {
+    const { app } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.terminal = {
+      modes: { mouseTrackingMode: 'none' },
+      buffer: { active: { viewportY: 50, baseY: 50 } },
+    };
+    const withVersion = (cliVersion?: string) => {
+      app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion }]]);
+      return app._shouldForwardWheelToApp({ shiftKey: false });
+    };
+
+    expect(withVersion(undefined)).toBe(false); // banner not parsed yet → assume older
+    expect(withVersion('2.1.186')).toBe(false); // last version whose menus capture wheel
+    expect(withVersion('2.1.187')).toBe(true); // first version verified safe
+    expect(withVersion('2.2.0')).toBe(true);
+    expect(withVersion('3.0.0')).toBe(true);
+    expect(withVersion('garbage')).toBe(false); // unparseable → assume older
+  });
+
+  it('wheel: codex forwards without a version; gemini never forwards', () => {
+    const { app } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.terminal = {
+      modes: { mouseTrackingMode: 'none' },
+      buffer: { active: { viewportY: 50, baseY: 50 } },
+    };
+
+    app.sessions = new Map([['sess-1', { mode: 'codex' }]]); // verified TUI, no version gate
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(true);
+
+    app.sessions = new Map([['sess-1', { mode: 'gemini', cliVersion: '9.9.9' }]]); // unverified TUI
     expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
   });
 

@@ -323,12 +323,14 @@ Object.assign(CodemanApp.prototype, {
     // Register link provider for clickable file paths in Bash tool output
     this.registerFilePathLinkProvider();
 
-    // Mouse wheel: forward to the TUI for strip-mode sessions, local scrollback
-    // otherwise. Claude Code (2.1.187+) scrolls its own transcript on SGR wheel
-    // reports — scrolled-away tool blocks re-render live and stay clickable —
-    // and its select menus no longer capture wheel as option navigation
-    // (verified against 2.1.202: /model menu highlight ignores wheel reports),
-    // so the original reason to keep the wheel local is gone for claude mode.
+    // Mouse wheel: forward to the TUI only for sessions verified to handle SGR
+    // wheel reports (codex, and claude 2.1.187+ — see _shouldForwardWheelToApp),
+    // local scrollback otherwise. Claude Code 2.1.187+ scrolls its own
+    // transcript on SGR wheel reports — scrolled-away tool blocks re-render
+    // live and stay clickable — and its select menus no longer capture wheel
+    // as option navigation (verified against 2.1.202: /model menu highlight
+    // ignores wheel reports); older versions DO capture wheel as option
+    // navigation, so they keep the local wheel.
     // Shift+wheel always scrolls xterm's local scrollback (Codeman's restored
     // history lives there), and once the viewport left the bottom the wheel
     // stays local until the user scrolls back down — so both scrollbacks stay
@@ -931,6 +933,12 @@ Object.assign(CodemanApp.prototype, {
             activate(_event, text) {
               window.open(text, '_blank', 'noopener,noreferrer');
             },
+            hover() {
+              self._linkHovered = true;
+            },
+            leave() {
+              self._linkHovered = false;
+            },
           });
         };
 
@@ -968,6 +976,12 @@ Object.assign(CodemanApp.prototype, {
             },
             activate(event, text) {
               self.openLogViewerWindow(text, self.activeSessionId);
+            },
+            hover() {
+              self._linkHovered = true;
+            },
+            leave() {
+              self._linkHovered = false;
             },
           });
         };
@@ -2146,13 +2160,39 @@ Object.assign(CodemanApp.prototype, {
     this._sendInputAsync(this.activeSessionId, `\x1b[<0;${pos.col};${pos.row}M\x1b[<0;${pos.col};${pos.row}m`);
   },
 
-  // Wheel forwarding gate for the container wheel handler: strip-mode session,
-  // no Shift override, xterm's own encoder dormant, viewport at the bottom.
+  // True when a parsed CLI version string ('2.1.187' — banner-parsed on the
+  // server, delivered via session:cliInfo / SessionState.cliVersion) is known
+  // AND >= the minimum. Unknown or unparseable versions return false so
+  // callers keep the conservative behavior.
+  _cliVersionAtLeast(version, minimum) {
+    if (typeof version !== 'string') return false;
+    const parts = version.trim().replace(/^v/, '').split('.').map(Number);
+    if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return false;
+    const min = minimum.split('.').map(Number);
+    for (let i = 0; i < 3; i++) {
+      if (parts[i] !== min[i]) return parts[i] > min[i];
+    }
+    return true;
+  },
+
+  // Wheel forwarding gate for the container wheel handler: no Shift override,
+  // xterm's own encoder dormant, viewport at the bottom, and a TUI VERIFIED to
+  // scroll its transcript on SGR wheel reports: codex, or claude 2.1.187+
+  // (older Claude Code captures wheel as select-menu option navigation; an
+  // unknown version is treated as older). Gemini is a strip mode too but its
+  // wheel behavior is unverified, so it keeps the local wheel — taps/clicks
+  // are still forwarded for it (harmless no-ops at worst).
   _shouldForwardWheelToApp(ev) {
     if (ev.shiftKey) return false;
     const mode = this.terminal?.modes?.mouseTrackingMode;
     if (mode && mode !== 'none') return false;
-    if (!this._sessionUsesServerMouseStrip()) return false;
+    const session = this.sessions?.get(this.activeSessionId);
+    const sessionMode = session?.mode || 'claude';
+    if (sessionMode === 'claude') {
+      if (!this._cliVersionAtLeast(session?.cliVersion, '2.1.187')) return false;
+    } else if (sessionMode !== 'codex') {
+      return false;
+    }
     return this._terminalViewportAtBottom();
   },
 
@@ -2189,6 +2229,8 @@ Object.assign(CodemanApp.prototype, {
   // a meaning elsewhere: synthetic/compat clicks after a touch tap (touchend
   // reported already), modified clicks (shift keeps xterm's selection
   // override), double/triple clicks (word/line selection), drag-selections,
+  // clicks on hovered links (activate() already handles the click — a second
+  // synthetic SGR press could e.g. dismiss a claude permission dialog),
   // clicks outside the cell grid, and sessions where xterm's own encoder is
   // live (it reported the click itself — a second report would double-move).
   _handleDesktopTerminalClick(ev) {
@@ -2199,6 +2241,7 @@ Object.assign(CodemanApp.prototype, {
     if (mode && mode !== 'none') return;
     if (!this._sessionUsesServerMouseStrip()) return;
     if (this.terminal.hasSelection?.()) return;
+    if (this._linkHovered) return; // link provider hover/leave callbacks (registerFilePathLinkProvider)
     if (performance.now() <= (this._trustedTapMouseSuppressUntil || 0)) return;
     if (!ev.target?.closest?.('.xterm-screen')) return;
     this._sendSyntheticSgrTap(ev.clientX, ev.clientY);
