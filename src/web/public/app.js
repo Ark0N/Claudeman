@@ -183,6 +183,12 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.SCHEDULED_COMPLETED, '_onScheduledCompleted'],
   [SSE_EVENTS.SCHEDULED_STOPPED, '_onScheduledStopped'],
 
+  // Scheduled jobs (cron-style scheduler)
+  [SSE_EVENTS.CRON_JOBS_CHANGED, '_onCronJobsChanged'],
+  [SSE_EVENTS.CRON_JOB_DELETED, '_onCronJobsChanged'],
+  [SSE_EVENTS.CRON_RUN_CREATED, '_onCronRunChanged'],
+  [SSE_EVENTS.CRON_RUN_UPDATED, '_onCronRunChanged'],
+
   // Respawn
   [SSE_EVENTS.RESPAWN_STARTED, '_onRespawnStarted'],
   [SSE_EVENTS.RESPAWN_STOPPED, '_onRespawnStopped'],

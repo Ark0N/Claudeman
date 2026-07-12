@@ -603,6 +603,73 @@ export const ScheduledRunSchema = z.object({
   durationMinutes: z.number().int().min(1).max(14400).optional(),
 });
 
+// ========== Cron Jobs ==========
+
+/** 'HH:MM' 24-hour time. */
+const hhmmSchema = z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/, 'Time must be HH:MM (24-hour)');
+
+/** Prompt delivery is single-line only (writeViaMux/Ink constraint) — reject newlines outright. */
+const noNewlines = (v: string) => !/[\r\n]/.test(v);
+
+/** Shared field shape for creating/updating a scheduled job. */
+const CronJobBaseSchema = z.object({
+  name: z.string().min(1).max(200),
+  agentType: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini']),
+  workingDir: safePathSchema,
+  launchCommand: z.string().max(2000).refine(noNewlines, 'launchCommand must be a single line').optional(),
+  promptMode: z.enum(['inline_text', 'prompt_file_path']),
+  promptText: z
+    .string()
+    .max(100000)
+    .refine(noNewlines, 'promptText must be a single line (multi-line prompts are not supported)')
+    .optional(),
+  promptFilePath: safePathSchema.optional(),
+  inputMode: z.enum(['paste', 'typed']),
+  scheduleType: z.enum(['once', 'interval', 'daily', 'weekly']),
+  runAt: z.number().int().positive().optional(),
+  intervalMinutes: z.number().int().min(1).max(525600).optional(),
+  dailyTime: hhmmSchema.optional(),
+  weeklyDays: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional(),
+  weeklyTime: hhmmSchema.optional(),
+  enabled: z.boolean(),
+  notes: z.string().max(2000).optional(),
+  concurrencyPolicy: z.enum(['warn_only', 'skip_if_same_agent_running']),
+  autoClosePreviousSession: z.boolean().optional(),
+});
+
+/** Cross-field validation: required fields depend on promptMode + scheduleType. */
+function refineCronJob(val: z.infer<typeof CronJobBaseSchema>, ctx: z.RefinementCtx): void {
+  const add = (message: string, path: string) => ctx.addIssue({ code: 'custom', message, path: [path] });
+
+  if (val.promptMode === 'inline_text' && !val.promptText) {
+    add('promptText is required when promptMode is inline_text', 'promptText');
+  }
+  if (val.promptMode === 'prompt_file_path' && !val.promptFilePath) {
+    add('promptFilePath is required when promptMode is prompt_file_path', 'promptFilePath');
+  }
+  if (val.scheduleType === 'once' && val.runAt === undefined) {
+    add('runAt is required for a one-time schedule', 'runAt');
+  }
+  if (val.scheduleType === 'interval' && val.intervalMinutes === undefined) {
+    add('intervalMinutes is required for an interval schedule', 'intervalMinutes');
+  }
+  if (val.scheduleType === 'daily' && !val.dailyTime) {
+    add('dailyTime is required for a daily schedule', 'dailyTime');
+  }
+  if (val.scheduleType === 'weekly' && (!val.weeklyTime || !val.weeklyDays?.length)) {
+    add('weeklyDays and weeklyTime are required for a weekly schedule', 'weeklyTime');
+  }
+}
+
+/** POST /api/cron/jobs — full job definition. */
+export const CronJobSchema = CronJobBaseSchema.superRefine(refineCronJob);
+
+/** PUT /api/cron/jobs/:id — partial update. */
+export const CronJobUpdateSchema = CronJobBaseSchema.partial();
+
+/** PUT /api/cron/jobs/:id/enabled */
+export const CronJobEnabledSchema = z.object({ enabled: z.boolean() });
+
 /** POST /api/cases/link */
 export const LinkCaseSchema = z.object({
   name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format'),

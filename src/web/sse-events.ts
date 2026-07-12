@@ -240,6 +240,17 @@ export const ScheduledLog = 'scheduled:log' as const;
 /** Scheduled run deleted. */
 export const ScheduledDeleted = 'scheduled:deleted' as const;
 
+// ─── Cron Jobs ───────────────────────────────────
+
+/** The scheduled-jobs list changed (created/updated/enabled/run-status). Payload: { jobs }. */
+export const CronJobsChanged = 'cron:jobsChanged' as const;
+/** A scheduled job was deleted. Payload: { id }. */
+export const CronJobDeleted = 'cron:jobDeleted' as const;
+/** A scheduled-job run (history record) was created. Payload: CronJobRun. */
+export const CronRunCreated = 'cron:runCreated' as const;
+/** A scheduled-job run (history record) was updated. Payload: CronJobRun. */
+export const CronRunUpdated = 'cron:runUpdated' as const;
+
 // ─── Teams ───────────────────────────────────────────────────────────────────
 
 /** Agent team created. */
@@ -468,6 +479,12 @@ export const SseEvent = {
   ScheduledStopped,
   ScheduledLog,
   ScheduledDeleted,
+
+  // Cron jobs
+  CronJobsChanged,
+  CronJobDeleted,
+  CronRunCreated,
+  CronRunUpdated,
 
   // Teams
   TeamCreated,

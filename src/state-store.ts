@@ -272,6 +272,12 @@ export class StateStore {
     if (this.state.tokenStats) {
       parts.push(`"tokenStats":${JSON.stringify(this.state.tokenStats)}`);
     }
+    if (this.state.cronJobs) {
+      parts.push(`"cronJobs":${JSON.stringify(this.state.cronJobs)}`);
+    }
+    if (this.state.cronJobRuns) {
+      parts.push(`"cronJobRuns":${JSON.stringify(this.state.cronJobRuns)}`);
+    }
 
     return `{${parts.join(',')}}`;
   }
@@ -565,6 +571,51 @@ export class StateStore {
   /** Clears orchestrator state and triggers a debounced save. */
   clearOrchestratorState() {
     this.state.orchestrator = undefined;
+    this.save();
+  }
+
+  // ========== Cron Job Methods ==========
+
+  /** Returns all scheduled jobs keyed by job ID. */
+  getCronJobs(): Record<string, import('./types/cron.js').CronJob> {
+    if (!this.state.cronJobs) this.state.cronJobs = {};
+    return this.state.cronJobs;
+  }
+
+  /** Returns a scheduled job by ID, or null if not found. */
+  getCronJob(id: string): import('./types/cron.js').CronJob | null {
+    return this.state.cronJobs?.[id] ?? null;
+  }
+
+  /** Sets a scheduled job and triggers a debounced save. */
+  setCronJob(id: string, job: import('./types/cron.js').CronJob): void {
+    if (!this.state.cronJobs) this.state.cronJobs = {};
+    this.state.cronJobs[id] = job;
+    this.save();
+  }
+
+  /** Removes a scheduled job and triggers a debounced save. */
+  removeCronJob(id: string): void {
+    if (this.state.cronJobs) delete this.state.cronJobs[id];
+    this.save();
+  }
+
+  /** Returns all scheduled job runs keyed by run ID. */
+  getCronJobRuns(): Record<string, import('./types/cron.js').CronJobRun> {
+    if (!this.state.cronJobRuns) this.state.cronJobRuns = {};
+    return this.state.cronJobRuns;
+  }
+
+  /** Sets a scheduled job run (history record) and triggers a debounced save. */
+  setCronJobRun(id: string, run: import('./types/cron.js').CronJobRun): void {
+    if (!this.state.cronJobRuns) this.state.cronJobRuns = {};
+    this.state.cronJobRuns[id] = run;
+    this.save();
+  }
+
+  /** Removes a scheduled job run and triggers a debounced save. */
+  removeCronJobRun(id: string): void {
+    if (this.state.cronJobRuns) delete this.state.cronJobRuns[id];
     this.save();
   }
 

@@ -153,8 +153,10 @@ import {
   registerClipboardRoutes,
   registerSearchRoutes,
   registerOrchestratorRoutes,
+  registerCronRoutes,
   registerWsRoutes,
 } from './routes/index.js';
+import { CronService } from '../cron/cron-service.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -176,6 +178,7 @@ import {
   ITERATION_PAUSE_MS,
   STATS_COLLECTION_INTERVAL_MS,
   INACTIVITY_TIMEOUT_MS,
+  CRON_TICK_INTERVAL,
 } from '../config/server-timing.js';
 
 /**
@@ -224,6 +227,8 @@ export class WebServer extends EventEmitter {
   // Store session listener references for explicit cleanup (prevents memory leaks)
   private sessionListenerRefs: Map<string, SessionListenerRefs> = new Map();
   private scheduledRuns: Map<string, ScheduledRun> = new Map();
+  /** Cron service (assigned in setupRoutes). */
+  private cronService!: CronService;
   private sse: SseStreamManager;
   private store = getStore();
   private port: number;
@@ -892,6 +897,13 @@ export class WebServer extends EventEmitter {
     registerClipboardRoutes(this.app, ctx);
     registerSearchRoutes(this.app, ctx);
     registerOrchestratorRoutes(this.app, ctx);
+
+    // Cron: build the service from the same context, recompute
+    // due times for any persisted jobs, then expose it to its routes.
+    this.cronService = new CronService(ctx);
+    this.cronService.init();
+    registerCronRoutes(this.app, { ...ctx, cron: this.cronService });
+
     registerWsRoutes(this.app, ctx, () => this.getHostPolicy());
   }
 
@@ -1970,6 +1982,17 @@ export class WebServer extends EventEmitter {
       },
       SCHEDULED_CLEANUP_INTERVAL,
       { description: 'scheduled runs cleanup' }
+    );
+
+    // Start the cron loop (fires due CronJobs).
+    this.cleanup.setInterval(
+      () => {
+        this.cronService.tickDueJobs().catch((err) => {
+          console.error('[cron] tick failed:', getErrorMessage(err));
+        });
+      },
+      CRON_TICK_INTERVAL,
+      { description: 'scheduled jobs due-checker' }
     );
 
     // Start SSE client health check timer (prevents memory leaks from dead connections)

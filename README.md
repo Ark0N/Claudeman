@@ -108,6 +108,73 @@ Codeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/e
 
 ---
 
+## Using Codeman — A Human's Guide
+
+A start-to-finish walkthrough for driving Codeman from the browser. If you just installed, this is where to begin.
+
+### 1. Launch the server
+
+```bash
+codeman web                       # localhost:3000 (loopback only — safe default)
+codeman web --port 8080           # custom port (or set CODEMAN_PORT)
+codeman web --https               # self-signed TLS (only needed for remote access)
+codeman web -H 0.0.0.0            # bind LAN — REQUIRES CODEMAN_PASSWORD (see Security)
+```
+
+Open the printed URL. The page is a single dashboard; everything below happens there.
+
+### 2. Create your first session
+
+Click **+ New Session** (or **Quick Start**). A session is one AI CLI running in its own tmux-backed terminal. You choose:
+
+| Field | What it does |
+|-------|--------------|
+| **Working directory / case** | The folder the agent operates in. A "case" is just a named working dir Codeman remembers. |
+| **CLI / run mode** | `Claude` (default), `OpenCode`, `Codex`, `Gemini`, or `Terminal` (plain shell). |
+| **Model** | Per-session model (App Settings → Claude Model). A soft default — `/model` still works in-session. |
+| **Effort / Ultracode** | Reasoning effort (`low`–`max`) or `ultracode` for dynamic multi-agent workflows. Switchable anytime with `/effort`. |
+
+Hit start — Codeman spawns the CLI via a real PTY and streams it to your browser over SSE.
+
+### 3. Read the dashboard
+
+- **Tabs (top)** — one per session. `Alt+1`-`9` to jump, `Ctrl+Tab` for next, drag to reorder.
+- **Terminal (center)** — a real `xterm.js` terminal; full TUIs render correctly. Type directly and press **Enter** to send. `Shift+Enter` inserts a newline.
+- **Side panels** — Respawn, Ralph, Orchestrator, Cron, Subagents, Settings (toggled from the toolbar).
+
+### 4. Talk to the agent
+
+- **Type prompts** straight into the terminal — input is delivered exactly-once even across reconnects (a dropped link never loses or double-sends a prompt).
+- **Paste or drag-and-drop images** directly into the session.
+- **Voice input** — `Ctrl+Shift+V` (Deepgram Nova-3, with auto-silence stop).
+- **Attachments** — register external files/docs and preview Office/PDF inline.
+
+### 5. Make it autonomous
+
+| Mode | Use it for | Where |
+|------|-----------|-------|
+| **Respawn** | Long unattended runs — auto-restarts the CLI on idle/limit, with adaptive timing. Presets: `solo-work`, `overnight-autonomous`, … | Respawn tab |
+| **Ralph / Todo** | A self-driving loop that tracks a todo list and keeps working until done. | Ralph tab |
+| **Orchestrator** | Turn one goal into a phased plan and drive it to completion across agents. | Orchestrator panel |
+| **Cron** | Saved, named jobs on a schedule (`once`/`interval`/`daily`/`weekly`) that spawn a session and send a prompt when due. | ⏰ Cron button |
+| **Auto-resume** | Automatically continue after a subscription rate-limit resets. | Respawn tab (top) |
+
+### 6. Reach it from anywhere
+
+- **Phone/tablet** — the UI is fully touch-optimized; scan the desktop **QR code** to log in without typing a password.
+- **Outside your network** — `./scripts/tunnel.sh start` opens a Cloudflare tunnel (set `CODEMAN_PASSWORD` first).
+- **SSH** — the `sc` chooser attaches to any session from a terminal (`sc` interactive, `sc 2` quick-attach, `sc -l` list).
+
+### 7. Operate & maintain
+
+- **App Settings** — model, effort, theme/skin, notifications, display toggles, per-CLI options.
+- **Self-update** — git-clone installs update in place from **Settings → Updates**.
+- **Deploy your own changes** — see [Development](#development).
+
+> ⚠️ **Safety:** if you're working *inside* a Codeman-managed session (`echo $CODEMAN_MUX` → `1`), never run `tmux kill-session` / `pkill claude` directly — use the web UI or `./scripts/tmux-manager.sh`.
+
+---
+
 ## Mobile-Optimized Web UI
 
 The most responsive AI coding agent experience on any phone. Full xterm.js terminal with local echo, swipe navigation, and a touch-optimized interface designed for real remote work — not a desktop UI crammed onto a small screen.
@@ -496,17 +563,103 @@ Single-digit selection (1-9), color-coded status, token counts, auto-refresh. De
 
 ---
 
+## Driving Codeman from an Agent — Programmatic Guide
+
+For AI agents and automation that control Codeman without a browser: an agent that spins up worker sessions, a CI bot, or **Claude Code running *inside* a Codeman session orchestrating other sessions**. Everything the UI does is HTTP + a CLI, so an agent can do it too.
+
+### Detect that you're inside Codeman
+
+When a CLI runs in a Codeman-managed session, these environment variables are set — read them instead of hardcoding anything:
+
+| Variable | Meaning |
+|----------|---------|
+| `CODEMAN_MUX=1` | You're in a managed tmux session. **Never** `tmux kill-session` / `pkill claude` / `pkill tmux` — you'll kill yourself or a sibling. |
+| `CODEMAN_API_URL` | Base URL of the API (e.g. `https://127.0.0.1:3000`). Use it for every call below. |
+| `CODEMAN_SESSION_ID` | *Your own* session id. Use it to avoid acting on yourself. |
+| `CODEMAN_HOOK_SECRET_FILE` | Path to the hook secret (required on `/api/hook-event` while a managed tunnel is up). |
+
+### Rules of the road (read before you POST)
+
+1. **Single-line input only.** Programmatic input is sent as literal text **+ Enter** in one shot. Multi-line strings break the agent TUI (Ink) — send one line, or split into multiple calls.
+2. **Make input idempotent.** Include a stable `clientId` and a monotonic per-session `seq` on `POST …/input`. The server de-duplicates, so a retry after a dropped connection can't double-deliver a prompt.
+3. **Auth.** If `CODEMAN_PASSWORD` is set, send HTTP Basic auth (user `admin` or `CODEMAN_USERNAME`) or a `codeman_session` cookie. The default loopback install is passwordless. A missing `Origin` header is allowed, so plain `curl` works; cross-site browser origins are rejected (CSRF guard).
+4. **Response envelope.** Most endpoints return `{ "success": true, "data": … }` (errors: `{ "success": false, "error", "errorCode" }`). A few legacy GETs return bare bodies — **handle both** (`body.data ?? body`).
+5. **`/api/v1/*`** is a stable alias of `/api/*`.
+
+### Recipes
+
+```bash
+API="${CODEMAN_API_URL:-http://127.0.0.1:3000}"
+# (add  -u admin:"$CODEMAN_PASSWORD"  to each call if a password is set)
+
+# 1. See what's running
+curl -s "$API/api/sessions" | jq '.data // .'
+
+# 2. Spin up a worker session (a "case" = named working dir)
+curl -s -X POST "$API/api/quick-start" \
+  -H 'Content-Type: application/json' \
+  -d '{"caseName":"refactor-auth","mode":"claude","effort":"high"}' | jq
+
+# 3. Send a prompt into a session (exactly-once: clientId + seq)
+curl -s -X POST "$API/api/sessions/$SID/input" \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"Run the test suite and summarize failures","useMux":true,"clientId":"agent-1","seq":1}'
+
+# 4. Read the terminal back
+curl -s "$API/api/sessions/$SID/output" | jq -r '.data // .'
+
+# 5. Stream live events (session output, agent activity, status)
+curl -sN "$API/api/events"          # Server-Sent Events
+
+# 6. Schedule recurring work (cron-style job)
+curl -s -X POST "$API/api/cron/jobs" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"nightly-deps","agentType":"claude","workingDir":"/home/me/proj",
+       "promptMode":"inline_text","promptText":"Update dependencies and open a PR",
+       "inputMode":"typed","scheduleType":"daily","dailyTime":"03:00",
+       "enabled":true,"concurrencyPolicy":"warn_only"}' | jq
+
+# 7. Inspect background sub-agents and their transcripts
+curl -s "$API/api/subagents" | jq '.data // .'
+curl -s "$API/api/subagents/$AID/transcript" | jq -r '.data // .'
+
+# 8. Whole-system snapshot (sessions, settings, respawn, stats)
+curl -s "$API/api/status" | jq
+```
+
+### Or use the bundled CLI
+
+The same operations are available as commands (`codeman <cmd>`, aliases in parentheses) — handy from a shell tool inside a session:
+
+```bash
+codeman session start -d /path/to/repo   # (s)  start a session
+codeman session list                     #      list sessions
+codeman session logs <id>                #      tail output
+codeman task add "fix the failing test"  # (t)  queue a task
+codeman ralph start --min-hours 8        # (r)  launch the autonomous loop
+codeman attach <path>                     #      attach a Claude hook context
+```
+
+### Hooks (events flowing *back* to Codeman)
+
+Codeman registers Claude Code hooks that `POST /api/hook-event` (`permission_prompt`, `idle_prompt`, `stop`, `task_completed`, …) so the dashboard reacts in real time. This endpoint is auth-exempt on loopback but, under a managed tunnel, requires the `X-Codeman-Hook-Secret` header (read it from `$CODEMAN_HOOK_SECRET_FILE`). You normally don't call this by hand — Codeman wires it up — but it's how the autonomy layers "see" what the agent is doing.
+
+> Full endpoint list and request/response shapes follow.
+
+---
+
 ## API
 
-REST over Fastify — **~140 handlers across 15 route modules**, plus an SSE stream and a WebSocket terminal channel. A representative subset:
+REST over Fastify — **~160 handlers across 18 route modules**, plus an SSE stream and a WebSocket terminal channel. All responses use the `ApiResponse<T>` envelope (`{success, data}` / `{success, error, errorCode}`); `/api/v1/*` is a stable alias. A representative subset:
 
 ### Sessions
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/sessions` | List all |
-| `POST` | `/api/quick-start` | Create case + start session |
+| `POST` | `/api/quick-start` | Create case + start session (`{caseName?, mode?, effort?, envOverrides?}`) |
+| `POST` | `/api/sessions/:id/input` | Send input (`{input, useMux?, clientId?, seq?}` — `clientId`+`seq` = exactly-once) |
+| `GET` | `/api/sessions/:id/output` | Read terminal output |
 | `DELETE` | `/api/sessions/:id` | Delete session |
-| `POST` | `/api/sessions/:id/input` | Send input |
 
 ### Respawn
 | Method | Endpoint | Description |
@@ -528,6 +681,15 @@ REST over Fastify — **~140 handlers across 15 route modules**, plus an SSE str
 | `POST` | `/api/orchestrator/approve` | Approve the generated plan |
 | `GET` | `/api/orchestrator/status` | Current phase + progress |
 | `POST` | `/api/orchestrator/stop` | Stop and clean up |
+
+### Cron (scheduled jobs)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` / `POST` | `/api/cron/jobs` | List / create cron jobs |
+| `PUT` / `DELETE` | `/api/cron/jobs/:id` | Update / delete a job |
+| `PUT` | `/api/cron/jobs/:id/enabled` | Enable / disable |
+| `POST` | `/api/cron/jobs/:id/run` | Run now |
+| `GET` | `/api/cron/jobs/:id/runs` | Run history |
 
 ### Subagents
 | Method | Endpoint | Description |
