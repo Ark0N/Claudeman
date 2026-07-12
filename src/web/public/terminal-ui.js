@@ -252,9 +252,6 @@ Object.assign(CodemanApp.prototype, {
     // Lazy-loaded: script downloaded only on desktop (saves 244KB on mobile).
     this._webglAddon = null;
     const _params = new URLSearchParams(location.search);
-    if (_params.get('webgl') === 'force') {
-      try { localStorage.removeItem('codeman-webgl-disabled'); } catch {}
-    }
     const _stickyDisabled = (() => {
       try {
         const raw = localStorage.getItem('codeman-webgl-disabled');
@@ -269,11 +266,25 @@ Object.assign(CodemanApp.prototype, {
         return true;
       } catch { return false; }
     })();
-    const skipWebGL =
-      MobileDetection.getDeviceType() !== 'desktop' ||
-      _params.has('nowebgl') ||
-      _stickyDisabled;
-    if (_stickyDisabled) {
+    // User's "WebGL Renderer" toggle (Settings > Appearance). undefined = untouched
+    // (desktop default on); false = explicit opt-out; true = explicit opt-in.
+    const _webglSettings = this.loadAppSettingsFromStorage();
+    const _webglDefaults = this.getDefaultSettings();
+    const _webglPref = _webglSettings.webglRendererEnabled ?? _webglDefaults.webglRendererEnabled;
+    const { skip: skipWebGL, clearSticky: _clearWebglSticky } = shouldSkipWebGL({
+      deviceType: MobileDetection.getDeviceType(),
+      noWebglParam: _params.has('nowebgl'),
+      forceParam: _params.get('webgl') === 'force',
+      stickyDisabled: _stickyDisabled,
+      userPrefEnabled: _webglPref,
+    });
+    // Only ?webgl=force retires the auto-fallback marker at init — a stored
+    // toggle ON is incidental (checkbox defaults checked) and must not defeat
+    // the sticky safety net. An OFF→ON flip clears it in saveAppSettings().
+    if (_clearWebglSticky) {
+      try { localStorage.removeItem('codeman-webgl-disabled'); } catch {}
+    }
+    if (skipWebGL && _stickyDisabled) {
       console.log('[CRASH-DIAG] WebGL sticky-disabled from prior stalls — DOM renderer in use. Re-enable: ?webgl=force');
     }
     if (!skipWebGL) {

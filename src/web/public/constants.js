@@ -111,6 +111,36 @@ function evaluateWebGLLongTaskTrip(recent, entries, now, config = WEBGL_FALLBACK
   return recent.length >= config.LONGTASK_COUNT;
 }
 
+/**
+ * Pure decision for whether to skip the WebGL renderer at terminal init, and
+ * whether to clear the auto-fallback sticky marker. Keeps the interaction
+ * between device type, URL params, the sticky marker, and the user's settings
+ * toggle in one testable place (terminal-ui.js calls this).
+ *
+ * Precedence (desktop only — mobile always skips):
+ *   1. user toggle OFF        -> skip (one-shot opt-out, sticky untouched)
+ *   2. ?nowebgl               -> skip (one-shot opt-out, sticky untouched)
+ *   3. ?webgl=force           -> enable + clear stale sticky marker
+ *   4. toggle ON / untouched  -> respect the auto-fallback sticky marker
+ *
+ * A stored `true` is treated like the untouched default here: the checkbox
+ * ships checked on desktop, so any unrelated settings save stores `true` —
+ * letting it clear the marker would permanently defeat the GPU-stall
+ * auto-fallback safety net. The marker is only retired by ?webgl=force or by
+ * a real OFF->ON toggle flip, which saveAppSettings() detects at save time.
+ *
+ * @param {{deviceType?: string, noWebglParam?: boolean, forceParam?: boolean,
+ *          stickyDisabled?: boolean, userPrefEnabled?: (boolean|undefined)}} [input]
+ * @returns {{skip: boolean, clearSticky: boolean}}
+ */
+function shouldSkipWebGL(input = {}) {
+  if (input.deviceType !== 'desktop') return { skip: true, clearSticky: false };
+  if (input.userPrefEnabled === false) return { skip: true, clearSticky: false };
+  if (input.noWebglParam) return { skip: true, clearSticky: false };
+  if (input.forceParam) return { skip: false, clearSticky: true };
+  return { skip: !!input.stickyDisabled, clearSticky: false };
+}
+
 // Expose for tests. `const` declarations at the top of a non-module script
 // are global lexical bindings but not `window` properties, so explicit
 // assignment is the test-visible API surface.
@@ -129,6 +159,7 @@ function shouldAutoWrapTabs(input) {
 if (typeof window !== 'undefined') {
   window.WEBGL_FALLBACK = WEBGL_FALLBACK;
   window.evaluateWebGLLongTaskTrip = evaluateWebGLLongTaskTrip;
+  window.shouldSkipWebGL = shouldSkipWebGL;
   window.CodemanTabOverflow = {
     shouldAutoWrapTabs,
   };
