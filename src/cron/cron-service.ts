@@ -14,9 +14,13 @@ import { Session } from '../session.js';
 import { SseEvent } from '../web/sse-events.js';
 import { CronJobSchema } from '../web/schemas.js';
 import { getErrorMessage, createErrorResponse, ApiErrorCode } from '../types/api.js';
-import { MAX_CONCURRENT_SESSIONS, MAX_CRON_RUN_HISTORY } from '../config/map-limits.js';
+import { MAX_CONCURRENT_SESSIONS, MAX_CRON_JOBS, MAX_CRON_RUN_HISTORY } from '../config/map-limits.js';
 import { CRON_READY_MAX_ATTEMPTS, CRON_READY_SETTLE_MS } from '../config/server-timing.js';
-import { isBlockedAttachmentPath, loadAttachmentGuardConfig } from '../config/attachment-guard.js';
+import {
+  DEFAULT_BLOCKED_TREES,
+  isBlockedAttachmentPath,
+  loadAttachmentGuardConfig,
+} from '../config/attachment-guard.js';
 import { validateSessionFilePath } from '../web/route-helpers.js';
 import { computeNextRunAt, dueKeyFor } from './cron-time.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../web/ports/index.js';
@@ -30,6 +34,20 @@ const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 /** Hard ceiling on a prompt-file read (defends against unbounded-read DoS). */
 const MAX_PROMPT_FILE_BYTES = 1024 * 1024;
+
+/**
+ * Pseudo-filesystem trees a cron job may never touch, ON TOP of the shared
+ * attachment blocklist. `/proc` in particular defeats the workingDir
+ * confinement trick (`workingDir: '/proc'` + `promptFilePath:
+ * '/proc/self/environ'` would read the SERVER's own environment).
+ */
+const CRON_PSEUDO_FS_TREES: readonly string[] = ['/proc', '/sys', '/dev'];
+
+/** Sync blocklist for the create/update workingDir gate (no settings extras). */
+const CRON_WORKING_DIR_BLOCKED_TREES: readonly string[] = [...DEFAULT_BLOCKED_TREES, ...CRON_PSEUDO_FS_TREES];
+
+/** Prompt delivery is single-line only (writeViaMux/Ink constraint). */
+const HAS_NEWLINE = /[\r\n]/;
 
 /** Order-insensitive equality for the weekly-days arrays. */
 function sameDays(a: number[] | undefined, b: number[] | undefined): boolean {
@@ -61,16 +79,40 @@ export class CronService {
     return filtered.sort((a, b) => b.startedAt - a.startedAt);
   }
 
-  /** Number of active sessions of a given agent type (for the multi-session warning). */
-  countActiveAgents(agentType: string): number {
+  /**
+   * Number of LIVE sessions of a given agent type (for the multi-session
+   * warning and the skip_if_same_agent_running policy). Sessions whose CLI has
+   * exited (`stopped`/`error` — the tab is still open but nothing is running)
+   * don't count. When `excludeJobId` is given, sessions created by that job's
+   * own runs are also excluded — otherwise a recurring job with the skip
+   * policy would deadlock on its own previous (never-closed) session and fire
+   * exactly once, forever skipping after that.
+   */
+  countActiveAgents(agentType: string, excludeJobId?: string): number {
+    const ownSessionIds = excludeJobId
+      ? new Set(
+          this.listRuns(excludeJobId)
+            .map((r) => r.sessionId)
+            .filter((id): id is string => id !== null)
+        )
+      : null;
     let n = 0;
-    for (const s of this.deps.sessions.values()) if (s.mode === agentType) n++;
+    for (const [id, s] of this.deps.sessions.entries()) {
+      if (s.mode !== agentType) continue;
+      if (s.status === 'stopped' || s.status === 'error') continue;
+      if (ownSessionIds?.has(id)) continue;
+      n++;
+    }
     return n;
   }
 
   // ──────────────────────────── Mutations ───────────────────────────
 
   createJob(input: CronJobInput): CronJob {
+    if (Object.keys(this.store.getCronJobs()).length >= MAX_CRON_JOBS) {
+      throw this.badRequest(`Maximum number of cron jobs (${MAX_CRON_JOBS}) reached`);
+    }
+    this.assertValidWorkingDir(input.workingDir);
     const now = Date.now();
     const job: CronJob = {
       id: uuidv4(),
@@ -91,6 +133,7 @@ export class CronService {
       enabled: input.enabled,
       notes: input.notes,
       concurrencyPolicy: input.concurrencyPolicy,
+      autoClosePreviousSession: input.autoClosePreviousSession ?? true,
       createdAt: now,
       updatedAt: now,
       lastRunAt: null,
@@ -141,12 +184,9 @@ export class CronService {
     // (e.g. switching to `once` without a `runAt` → a dead `nextRunAt:null`).
     const check = CronJobSchema.safeParse(updated);
     if (!check.success) {
-      const msg = check.error.issues[0]?.message ?? 'Invalid cron job update';
-      throw Object.assign(new Error(msg), {
-        statusCode: 400,
-        body: createErrorResponse(ApiErrorCode.INVALID_INPUT, msg),
-      });
+      throw this.badRequest(check.error.issues[0]?.message ?? 'Invalid cron job update');
     }
+    if (patch.workingDir !== undefined) this.assertValidWorkingDir(patch.workingDir);
 
     updated.nextRunAt = updated.enabled ? computeNextRunAt(updated, now) : null;
     this.store.setCronJob(updated.id, updated);
@@ -199,12 +239,21 @@ export class CronService {
         continue;
       }
 
-      // Optional concurrency policy for AUTOMATIC runs.
-      if (job.concurrencyPolicy === 'skip_if_same_agent_running' && this.countActiveAgents(job.agentType) > 0) {
-        job.lastDueKey = key;
+      // Optional concurrency policy for AUTOMATIC runs. Only LIVE sessions
+      // block, and this job's own previous sessions never do (see
+      // countActiveAgents) — otherwise a recurring job would deadlock on the
+      // session it created last time.
+      if (job.concurrencyPolicy === 'skip_if_same_agent_running' && this.countActiveAgents(job.agentType, job.id) > 0) {
         // Record the skip so the job's run history isn't silently empty when it
         // keeps getting skipped (otherwise it looks like the job never ran).
         this.recordSkippedRun(job);
+        if (job.scheduleType === 'once') {
+          // A skipped one-time job is NOT consumed: leave nextRunAt armed (and
+          // the due key unconsumed) so the next tick retries once the blocking
+          // session goes away.
+          continue;
+        }
+        job.lastDueKey = key;
         this.advanceAfterFire(job, now);
         continue;
       }
@@ -279,6 +328,14 @@ export class CronService {
       return this.failRun(job, run, 'workingDir does not exist');
     }
 
+    // Recurring jobs: close the still-open session created by this job's
+    // previous run before launching the next (default ON, opt-out via
+    // autoClosePreviousSession:false) — otherwise an unattended interval/daily
+    // job accumulates a new tab per fire until the global session cap.
+    if (job.scheduleType !== 'once' && job.autoClosePreviousSession !== false) {
+      await this.closePreviousRunSessions(job, run.id);
+    }
+
     // Respect the global session cap.
     if (this.deps.sessions.size >= MAX_CONCURRENT_SESSIONS) {
       return this.failRun(job, run, `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached`);
@@ -331,13 +388,31 @@ export class CronService {
     return run;
   }
 
+  /**
+   * Resolves the prompt text and enforces the single-line constraint: prompt
+   * delivery rides writeViaMux/PTY writes where a newline is Enter, so a
+   * multi-line prompt would be silently corrupted (typed mode fuses lines,
+   * paste mode submits the first line and dribbles the rest in as separate
+   * messages). Rather than mangle an unattended agent's instructions, fail the
+   * run with a clear error. A prompt FILE may end with trailing newline(s)
+   * (every editor writes one) — those are stripped before the check.
+   */
   private async resolvePrompt(job: CronJob): Promise<string> {
     if (job.promptMode === 'prompt_file_path') {
       if (!job.promptFilePath) throw new Error('prompt file path is empty');
       const safePath = await this.resolveSafePromptPath(job.promptFilePath, job.workingDir);
-      return readFile(safePath, 'utf-8');
+      const content = (await readFile(safePath, 'utf-8')).replace(/[\r\n]+$/, '');
+      if (HAS_NEWLINE.test(content)) {
+        throw new Error('prompt file must contain a single line — multi-line prompts are not supported');
+      }
+      return content;
     }
-    return job.promptText ?? '';
+    const text = job.promptText ?? '';
+    if (HAS_NEWLINE.test(text)) {
+      // Schema-rejected since this check was added; guards legacy persisted jobs.
+      throw new Error('promptText must be a single line — multi-line prompts are not supported');
+    }
+    return text;
   }
 
   /**
@@ -364,14 +439,29 @@ export class CronService {
       throw new Error('prompt file path could not be resolved');
     }
 
-    // Defense-in-depth blocklist (secret locations, /etc, /root).
+    // workingDir is USER-CONTROLLED, so it is not a trust boundary by itself:
+    // realpath-resolve it (a symlinked workspace must not defeat containment)
+    // and reject blocked/pseudo-fs trees — otherwise workingDir '/proc' would
+    // make '/proc/self/environ' pass the containment check below.
+    let realWorkingDir: string;
+    try {
+      realWorkingDir = realpathSync(workingDir);
+    } catch {
+      throw new Error('job working directory could not be resolved');
+    }
     const guard = await loadAttachmentGuardConfig();
-    if (isBlockedAttachmentPath(resolved, guard.blockedTrees)) {
+    const blockedTrees = [...guard.blockedTrees, ...CRON_PSEUDO_FS_TREES];
+    if (realWorkingDir === '/' || isBlockedAttachmentPath(realWorkingDir, blockedTrees)) {
+      throw new Error('job working directory is blocked');
+    }
+
+    // Defense-in-depth blocklist (secret locations, /etc, /root, pseudo-fs).
+    if (isBlockedAttachmentPath(resolved, blockedTrees)) {
       throw new Error('prompt file path is blocked');
     }
 
     // Primary gate: the prompt file must live inside the job's workspace.
-    if (!validateSessionFilePath(workingDir, resolved)) {
+    if (!validateSessionFilePath(realWorkingDir, resolved)) {
       throw new Error('prompt file path must be inside the job working directory');
     }
 
@@ -402,15 +492,33 @@ export class CronService {
           await delay(CRON_READY_SETTLE_MS);
         } else {
           await delay(1000);
+          // Shell mode: deliver the optional custom launch command as the
+          // first input line (single-line, schema-enforced), then give it a
+          // moment to start before the prompt follows.
+          if (job.launchCommand) {
+            const shell = this.deps.sessions.get(sessionId);
+            if (!shell) return;
+            const sent = await shell.writeViaMux(`${job.launchCommand}\r`);
+            if (!sent) {
+              this.failRun(job, run, 'Failed to send launch command: mux write failed');
+              return;
+            }
+            await delay(1000);
+          }
         }
         const s = this.deps.sessions.get(sessionId);
         if (!s) return;
         try {
           const payload = prompt.endsWith('\r') ? prompt : `${prompt}\r`;
+          let delivered = true;
           if (job.inputMode === 'paste') {
             s.write(payload);
           } else {
-            await s.writeViaMux(payload);
+            delivered = await s.writeViaMux(payload);
+          }
+          if (!delivered) {
+            this.failRun(job, run, 'Failed to send prompt: mux write failed');
+            return;
           }
           run.status = 'prompt_sent';
           run.finishedAt = Date.now();
@@ -423,6 +531,46 @@ export class CronService {
       };
       poll().catch((err) => console.error('[cron] sendPromptWhenReady error:', getErrorMessage(err)));
     });
+  }
+
+  /** 400-shaped error for route handlers (mirrors parseBody's error contract). */
+  private badRequest(msg: string): Error {
+    return Object.assign(new Error(msg), {
+      statusCode: 400,
+      body: createErrorResponse(ApiErrorCode.INVALID_INPUT, msg),
+    });
+  }
+
+  /**
+   * Create/update gate for a job's workingDir: must exist, be a directory, and
+   * not resolve into a blocked or pseudo-filesystem tree (nor the fs root).
+   * The user-supplied workingDir doubles as the prompt-file confinement root,
+   * so an unrestricted value would defeat that boundary (e.g. '/proc').
+   */
+  private assertValidWorkingDir(workingDir: string): void {
+    let real: string;
+    try {
+      real = realpathSync(workingDir);
+    } catch {
+      throw this.badRequest('workingDir does not exist');
+    }
+    if (!statSync(real).isDirectory()) throw this.badRequest('workingDir is not a directory');
+    if (real === '/' || isBlockedAttachmentPath(real, CRON_WORKING_DIR_BLOCKED_TREES)) {
+      throw this.badRequest('workingDir is not allowed (blocked or pseudo-filesystem tree)');
+    }
+  }
+
+  /** Close still-open sessions created by this job's previous runs (normal cleanup path). */
+  private async closePreviousRunSessions(job: CronJob, currentRunId: string): Promise<void> {
+    for (const prev of this.listRuns(job.id)) {
+      if (prev.id === currentRunId || !prev.sessionId) continue;
+      if (!this.deps.sessions.has(prev.sessionId)) continue;
+      try {
+        await this.deps.cleanupSession(prev.sessionId, true, 'cron: superseded by the next run of this job');
+      } catch (err) {
+        console.error(`[cron] failed to auto-close previous session ${prev.sessionId}:`, getErrorMessage(err));
+      }
+    }
   }
 
   private failRun(job: CronJob, run: CronJobRun, message: string): CronJobRun {

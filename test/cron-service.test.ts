@@ -3,24 +3,31 @@
  * state machine of the cron. The pure next-run math lives in
  * cron-time.test.ts; this exercises the service that sits on top of it.
  *
- * Launch attempts are steered down the "workingDir does not exist" failure path
- * so no real Session/tmux objects are constructed — we assert the scheduling
- * state machine (due detection, dedup guard, schedule advance, once-completion,
- * concurrency skip, run-history recording), not the session layer it reuses.
+ * Launch attempts are steered down the "Session launch failed" path (the mock
+ * deps lack the session-construction config getters) so no real Session/tmux
+ * objects are constructed — we assert the scheduling state machine (due
+ * detection, dedup guard, schedule advance, once-completion, concurrency skip,
+ * auto-close, run-history recording), not the session layer it reuses.
  *
  * Port: N/A (no HTTP server).
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CronService, type CronDeps } from '../src/cron/cron-service.js';
+import { CronJobSchema } from '../src/web/schemas.js';
+import { MAX_CRON_JOBS } from '../src/config/map-limits.js';
 import type { CronJob, CronJobRun } from '../src/types/cron.js';
 import type { CronJobInput } from '../src/cron/cron-input.js';
 
 const MISSING_DIR = '/nonexistent-codeman-cron-test-dir';
+/** A real dir: createJob/updateJob validate workingDir existence up front. */
+const VALID_DIR = mkdtempSync(join(tmpdir(), 'codeman-cron-wd-'));
 const flush = (): Promise<void> => new Promise((r) => setImmediate(r));
+
+type FakeSession = { mode: string; status?: string };
 
 function makeStore() {
   const jobs: Record<string, CronJob> = {};
@@ -45,22 +52,26 @@ function makeStore() {
   };
 }
 
-function makeService(sessions = new Map<string, { mode: string }>()) {
+function makeService(sessions = new Map<string, FakeSession>()) {
   const store = makeStore();
   const broadcast = vi.fn();
+  const cleanupSession = vi.fn(async (id: string) => {
+    sessions.delete(id);
+  });
   const deps = {
     store,
     broadcast,
     sessions,
+    cleanupSession,
   } as unknown as CronDeps;
-  return { service: new CronService(deps), store, broadcast, sessions };
+  return { service: new CronService(deps), store, broadcast, sessions, cleanupSession };
 }
 
 function mkInput(overrides: Partial<CronJobInput> = {}): CronJobInput {
   return {
     name: 'job',
     agentType: 'claude',
-    workingDir: MISSING_DIR,
+    workingDir: VALID_DIR,
     promptMode: 'inline_text',
     promptText: 'hello',
     inputMode: 'typed',
@@ -254,7 +265,7 @@ describe('CronService', () => {
       expect(after.nextRunAt).toBeNull();
       const runs = svc.service.listRuns(job.id);
       expect(runs.length).toBe(1);
-      expect(runs[0].status).toBe('failed'); // workingDir missing → fails before session launch
+      expect(runs[0].status).toBe('failed'); // mock deps can't construct a Session → fails at launch
 
       // A second tick must not re-fire it.
       await svc.service.tickDueJobs(Date.now());
@@ -348,12 +359,28 @@ describe('CronService', () => {
       expect(svc.sessions.size).toBe(0);
     });
 
-    it('blocks /proc/self/environ (server-process env exfil) via workspace confinement', async () => {
+    it('blocks /proc/self/environ (server-process env exfil) via the pseudo-fs blocklist', async () => {
       const run = await svc.service.runNow(fileJob('/proc/self/environ', ws).id);
       expect(run!.status).toBe('failed');
       expect(run!.errorMessage).toMatch(/Prompt error/i);
-      expect(run!.errorMessage).toMatch(/inside the job working directory/i);
+      expect(run!.errorMessage).toMatch(/block/i);
     });
+
+    it.skipIf(!existsSync('/proc/self/environ'))(
+      'blocks the workingDir=/proc + /proc/self/environ confinement bypass at fire time',
+      async () => {
+        // Create-time validation rejects a /proc workingDir, so simulate a
+        // legacy/hand-edited job by mutating the stored record directly.
+        const job = fileJob('/proc/self/environ', ws);
+        const stored = svc.store.getCronJob(job.id)!;
+        stored.workingDir = '/proc';
+        svc.store.setCronJob(stored.id, stored);
+        const run = await svc.service.runNow(job.id);
+        expect(run!.status).toBe('failed');
+        expect(run!.errorMessage).toMatch(/Prompt error/i);
+        expect(run!.errorMessage).toMatch(/blocked/i);
+      }
+    );
 
     it('blocks a regular file that lives OUTSIDE the job workspace', async () => {
       const outside = mkdtempSync(join(tmpdir(), 'codeman-cron-outside-'));
@@ -418,6 +445,190 @@ describe('CronService', () => {
 
     it('returns null for an unknown id', async () => {
       expect(await svc.service.runNow('nope')).toBeNull();
+    });
+  });
+
+  describe('workingDir validation (create/update)', () => {
+    it('rejects a nonexistent workingDir at create', () => {
+      expect(() => svc.service.createJob(mkInput({ workingDir: MISSING_DIR }))).toThrow(/does not exist/);
+    });
+
+    it('rejects blocked trees and the filesystem root at create', () => {
+      expect(() => svc.service.createJob(mkInput({ workingDir: '/etc' }))).toThrow(/not allowed/);
+      expect(() => svc.service.createJob(mkInput({ workingDir: '/' }))).toThrow(/not allowed/);
+    });
+
+    it('rejects an invalid workingDir on update and leaves the job untouched', () => {
+      const job = svc.service.createJob(mkInput());
+      expect(() => svc.service.updateJob(job.id, { workingDir: MISSING_DIR })).toThrow(/does not exist/);
+      expect(svc.service.getJob(job.id)!.workingDir).toBe(VALID_DIR);
+    });
+  });
+
+  describe('single-line prompt enforcement', () => {
+    it('schema rejects a multi-line promptText and launchCommand', () => {
+      expect(CronJobSchema.safeParse(mkInput({ promptText: 'a\nb' })).success).toBe(false);
+      expect(CronJobSchema.safeParse(mkInput({ agentType: 'shell', launchCommand: 'a\nb' })).success).toBe(false);
+      expect(CronJobSchema.safeParse(mkInput()).success).toBe(true);
+    });
+
+    it('fails the run when a legacy job carries a multi-line promptText', async () => {
+      const job = svc.service.createJob(mkInput());
+      const stored = svc.store.getCronJob(job.id)!;
+      stored.promptText = 'line one\nline two';
+      svc.store.setCronJob(stored.id, stored);
+      const run = await svc.service.runNow(job.id);
+      expect(run!.status).toBe('failed');
+      expect(run!.errorMessage).toMatch(/single line/i);
+    });
+
+    it('fails the run when the prompt file is multi-line', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'codeman-cron-ml-'));
+      const file = join(ws, 'prompt.md');
+      writeFileSync(file, 'line one\nline two\n');
+      const job = svc.service.createJob(
+        mkInput({ promptMode: 'prompt_file_path', promptFilePath: file, promptText: undefined, workingDir: ws })
+      );
+      const run = await svc.service.runNow(job.id);
+      expect(run!.status).toBe('failed');
+      expect(run!.errorMessage).toMatch(/single line/i);
+    });
+
+    it('tolerates trailing newlines in a prompt file (every editor writes one)', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'codeman-cron-tn-'));
+      const file = join(ws, 'prompt.md');
+      writeFileSync(file, 'do the thing\n');
+      const job = svc.service.createJob(
+        mkInput({ promptMode: 'prompt_file_path', promptFilePath: file, promptText: undefined, workingDir: ws })
+      );
+      const run = await svc.service.runNow(job.id);
+      // Past prompt resolution; fails only at the mock-incomplete session step.
+      expect(run!.errorMessage).toMatch(/Session launch failed/i);
+    });
+  });
+
+  describe('concurrency-skip session filtering', () => {
+    const prevRun = (jobId: string, sessionId: string): CronJobRun => ({
+      id: `r-${sessionId}`,
+      cronJobId: jobId,
+      sessionId,
+      sessionName: 'job',
+      startedAt: Date.now() - 60_000,
+      finishedAt: Date.now() - 59_000,
+      status: 'prompt_sent',
+      triggerType: 'scheduled',
+      createdSessionUrl: null,
+    });
+
+    it('does not skip when the only same-mode sessions are stopped/error (dead tabs)', async () => {
+      const sessions = new Map<string, FakeSession>([
+        ['dead1', { mode: 'claude', status: 'stopped' }],
+        ['dead2', { mode: 'claude', status: 'error' }],
+      ]);
+      const local = makeService(sessions);
+      const job = local.service.createJob(
+        mkInput({ concurrencyPolicy: 'skip_if_same_agent_running', intervalMinutes: 10 })
+      );
+      await local.service.tickDueJobs(job.nextRunAt! + 1000);
+      await flush();
+      const runs = local.service.listRuns(job.id);
+      expect(runs.length).toBe(1);
+      expect(runs[0].status).toBe('failed'); // launched (mock session step), NOT skipped
+    });
+
+    it("does not skip on the job's own previous-run session (no self-deadlock)", async () => {
+      const sessions = new Map<string, FakeSession>([['own-1', { mode: 'claude' }]]);
+      const local = makeService(sessions);
+      const job = local.service.createJob(
+        mkInput({ concurrencyPolicy: 'skip_if_same_agent_running', intervalMinutes: 10 })
+      );
+      local.store.setCronJobRun('r-own-1', prevRun(job.id, 'own-1'));
+      await local.service.tickDueJobs(job.nextRunAt! + 1000);
+      await flush();
+      expect(local.service.listRuns(job.id)[0].status).not.toBe('skipped');
+    });
+
+    it('does not consume a skipped once-job — it stays armed and fires when unblocked', async () => {
+      const sessions = new Map<string, FakeSession>([['s1', { mode: 'claude' }]]);
+      const local = makeService(sessions);
+      const runAt = Date.now() - 1000;
+      const job = local.service.createJob(
+        mkInput({
+          scheduleType: 'once',
+          runAt,
+          intervalMinutes: undefined,
+          concurrencyPolicy: 'skip_if_same_agent_running',
+        })
+      );
+
+      await local.service.tickDueJobs(Date.now());
+      await flush();
+      let after = local.service.getJob(job.id)!;
+      expect(after.lastStatus).toBe('skipped');
+      expect(after.completedOnce).toBeFalsy();
+      expect(after.enabled).toBe(true);
+      expect(after.nextRunAt).toBe(runAt); // still armed
+
+      // The blocking session goes away → the next tick fires the single run.
+      sessions.delete('s1');
+      await local.service.tickDueJobs(Date.now());
+      await flush();
+      after = local.service.getJob(job.id)!;
+      expect(after.completedOnce).toBe(true);
+      expect(after.enabled).toBe(false);
+      expect(local.service.listRuns(job.id).some((r) => r.status === 'failed')).toBe(true); // it launched
+    });
+  });
+
+  describe('autoClosePreviousSession', () => {
+    const prevRun = (jobId: string, sessionId: string): CronJobRun => ({
+      id: `r-${sessionId}`,
+      cronJobId: jobId,
+      sessionId,
+      sessionName: 'job',
+      startedAt: Date.now() - 60_000,
+      finishedAt: Date.now() - 59_000,
+      status: 'prompt_sent',
+      triggerType: 'scheduled',
+      createdSessionUrl: null,
+    });
+
+    it("closes the previous run's still-open session before launching (default on)", async () => {
+      const sessions = new Map<string, FakeSession>([['prev-1', { mode: 'claude' }]]);
+      const local = makeService(sessions);
+      const job = local.service.createJob(mkInput({ intervalMinutes: 10 }));
+      local.store.setCronJobRun('r-prev-1', prevRun(job.id, 'prev-1'));
+      await local.service.runNow(job.id);
+      expect(local.cleanupSession).toHaveBeenCalledWith('prev-1', true, expect.stringContaining('cron'));
+      expect(sessions.has('prev-1')).toBe(false);
+    });
+
+    it('does not close anything when autoClosePreviousSession is false', async () => {
+      const sessions = new Map<string, FakeSession>([['prev-1', { mode: 'claude' }]]);
+      const local = makeService(sessions);
+      const job = local.service.createJob(mkInput({ intervalMinutes: 10, autoClosePreviousSession: false }));
+      local.store.setCronJobRun('r-prev-1', prevRun(job.id, 'prev-1'));
+      await local.service.runNow(job.id);
+      expect(local.cleanupSession).not.toHaveBeenCalled();
+      expect(sessions.has('prev-1')).toBe(true);
+    });
+
+    it('never auto-closes for a once schedule', async () => {
+      const sessions = new Map<string, FakeSession>([['prev-1', { mode: 'claude' }]]);
+      const local = makeService(sessions);
+      const job = local.service.createJob(
+        mkInput({ scheduleType: 'once', runAt: Date.now() + 3_600_000, intervalMinutes: undefined })
+      );
+      local.store.setCronJobRun('r-prev-1', prevRun(job.id, 'prev-1'));
+      await local.service.runNow(job.id);
+      expect(local.cleanupSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('job-count cap', () => {
+    it(`rejects creation beyond MAX_CRON_JOBS (${MAX_CRON_JOBS})`, () => {
+      for (let i = 0; i < MAX_CRON_JOBS; i++) svc.service.createJob(mkInput({ name: `j${i}` }));
+      expect(() => svc.service.createJob(mkInput({ name: 'overflow' }))).toThrow(/Maximum number of cron jobs/);
     });
   });
 });

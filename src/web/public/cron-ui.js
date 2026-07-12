@@ -126,6 +126,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('schName').value = job ? job.name || '' : '';
     document.getElementById('schAgentType').value = job ? job.agentType || 'claude' : 'claude';
     document.getElementById('schWorkingDir').value = job ? job.workingDir || '' : '';
+    document.getElementById('schLaunchCommand').value = job ? job.launchCommand || '' : '';
     document.getElementById('schPromptMode').value = job ? job.promptMode || 'inline_text' : 'inline_text';
     document.getElementById('schPromptText').value = job ? job.promptText || '' : '';
     document.getElementById('schPromptFilePath').value = job ? job.promptFilePath || '' : '';
@@ -140,9 +141,11 @@ Object.assign(CodemanApp.prototype, {
       cb.checked = weekly.includes(Number(cb.value));
     });
     document.getElementById('schConcurrencyPolicy').value = job ? job.concurrencyPolicy || 'warn_only' : 'warn_only';
+    document.getElementById('schAutoClosePrev').checked = job ? job.autoClosePreviousSession !== false : true;
     document.getElementById('schEnabled').checked = job ? !!job.enabled : true;
     document.getElementById('schNotes').value = job ? job.notes || '' : '';
 
+    this.onCronAgentTypeChange();
     this.onCronPromptModeChange();
     this.onCronScheduleTypeChange();
     form.classList.remove('hidden');
@@ -156,6 +159,12 @@ Object.assign(CodemanApp.prototype, {
   cancelCronJobForm() {
     const form = document.getElementById('cronJobForm');
     if (form) form.classList.add('hidden');
+  },
+
+  onCronAgentTypeChange() {
+    // Launch command is only meaningful for shell mode (first input line).
+    const isShell = document.getElementById('schAgentType').value === 'shell';
+    document.getElementById('schLaunchCommandRow').classList.toggle('hidden', !isShell);
   },
 
   onCronPromptModeChange() {
@@ -191,11 +200,18 @@ Object.assign(CodemanApp.prototype, {
       inputMode: document.getElementById('schInputMode').value,
       scheduleType: t,
       concurrencyPolicy: document.getElementById('schConcurrencyPolicy').value,
+      autoClosePreviousSession: document.getElementById('schAutoClosePrev').checked,
       enabled: document.getElementById('schEnabled').checked,
       notes: document.getElementById('schNotes').value.trim() || undefined,
     };
-    if (promptMode === 'inline_text') body.promptText = document.getElementById('schPromptText').value;
-    else body.promptFilePath = document.getElementById('schPromptFilePath').value.trim();
+    // Always sent for shell (an emptied field must clear a saved command on edit).
+    if (body.agentType === 'shell') body.launchCommand = document.getElementById('schLaunchCommand').value.trim();
+    if (promptMode === 'inline_text') {
+      // Prompt delivery is single-line only; trailing newlines are harmless, strip them.
+      body.promptText = document.getElementById('schPromptText').value.replace(/[\r\n]+$/, '');
+    } else {
+      body.promptFilePath = document.getElementById('schPromptFilePath').value.trim();
+    }
 
     if (t === 'once') {
       const v = document.getElementById('schRunAt').value;
@@ -223,6 +239,10 @@ Object.assign(CodemanApp.prototype, {
     }
     if (!body.workingDir) {
       errEl.textContent = 'Working directory is required.';
+      return;
+    }
+    if (body.promptText !== undefined && /[\r\n]/.test(body.promptText)) {
+      errEl.textContent = 'Prompt must be a single line — multi-line prompts are not supported.';
       return;
     }
     const id = document.getElementById('schJobId').value;
@@ -279,9 +299,13 @@ Object.assign(CodemanApp.prototype, {
   },
 
   _countActiveAgents(agentType) {
+    // Mirrors the server's countActiveAgents: only LIVE sessions count — a
+    // tab whose CLI already exited (stopped/error) doesn't block anything.
     if (!this.sessions) return 0;
     let n = 0;
-    for (const s of this.sessions.values()) if (s && s.mode === agentType) n++;
+    for (const s of this.sessions.values()) {
+      if (s && s.mode === agentType && s.status !== 'stopped' && s.status !== 'error') n++;
+    }
     return n;
   },
 

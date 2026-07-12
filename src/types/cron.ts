@@ -63,6 +63,13 @@ export interface CronJob {
   notes?: string;
   /** Applies to automatic (scheduled) runs only. Manual Run Now always warns client-side. */
   concurrencyPolicy: ConcurrencyPolicy;
+  /**
+   * Close the still-open session created by this job's previous run before the
+   * next run launches (via the normal session-cleanup path), so unattended
+   * recurring jobs don't accumulate tabs until the global session cap.
+   * Default true. Ignored for 'once' schedules.
+   */
+  autoClosePreviousSession?: boolean;
 
   // ── Bookkeeping (server-maintained) ─────────────────────────────────────
   createdAt: number;

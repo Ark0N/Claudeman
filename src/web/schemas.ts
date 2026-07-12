@@ -579,14 +579,21 @@ export const ScheduledRunSchema = z.object({
 /** 'HH:MM' 24-hour time. */
 const hhmmSchema = z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/, 'Time must be HH:MM (24-hour)');
 
+/** Prompt delivery is single-line only (writeViaMux/Ink constraint) — reject newlines outright. */
+const noNewlines = (v: string) => !/[\r\n]/.test(v);
+
 /** Shared field shape for creating/updating a scheduled job. */
 const CronJobBaseSchema = z.object({
   name: z.string().min(1).max(200),
   agentType: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini']),
   workingDir: safePathSchema,
-  launchCommand: z.string().max(2000).optional(),
+  launchCommand: z.string().max(2000).refine(noNewlines, 'launchCommand must be a single line').optional(),
   promptMode: z.enum(['inline_text', 'prompt_file_path']),
-  promptText: z.string().max(100000).optional(),
+  promptText: z
+    .string()
+    .max(100000)
+    .refine(noNewlines, 'promptText must be a single line (multi-line prompts are not supported)')
+    .optional(),
   promptFilePath: safePathSchema.optional(),
   inputMode: z.enum(['paste', 'typed']),
   scheduleType: z.enum(['once', 'interval', 'daily', 'weekly']),
@@ -598,6 +605,7 @@ const CronJobBaseSchema = z.object({
   enabled: z.boolean(),
   notes: z.string().max(2000).optional(),
   concurrencyPolicy: z.enum(['warn_only', 'skip_if_same_agent_running']),
+  autoClosePreviousSession: z.boolean().optional(),
 });
 
 /** Cross-field validation: required fields depend on promptMode + scheduleType. */

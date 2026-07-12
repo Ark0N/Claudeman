@@ -50,6 +50,12 @@ export const MAX_TODOS_PER_SESSION = 500;
  */
 export const MAX_CRON_RUN_HISTORY = 500;
 
+/**
+ * Maximum saved cron jobs. Jobs persist to state.json, so an unbounded count
+ * would grow it without limit; creation past the cap is rejected with 400.
+ */
+export const MAX_CRON_JOBS = 100;
+
 // ============================================================================
 // Pending Tool Calls Limits
 // ============================================================================

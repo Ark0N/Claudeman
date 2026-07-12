@@ -27,4 +27,6 @@ export interface CronJobInput {
   enabled: boolean;
   notes?: string;
   concurrencyPolicy: ConcurrencyPolicy;
+  /** Default true. Ignored for 'once' schedules. */
+  autoClosePreviousSession?: boolean;
 }

@@ -594,7 +594,7 @@
             <input type="hidden" id="schJobId">
             <div class="form-row"><label>Name</label><input type="text" id="schName" placeholder="My nightly job"></div>
             <div class="form-row"><label>Agent Type</label>
-              <select id="schAgentType">
+              <select id="schAgentType" onchange="app.onCronAgentTypeChange()">
                 <option value="claude">Claude</option>
                 <option value="shell">Terminal / Shell</option>
                 <option value="opencode">OpenCode</option>
@@ -603,6 +603,7 @@
               </select>
             </div>
             <div class="form-row"><label>Working Directory</label><input type="text" id="schWorkingDir" placeholder="/absolute/path"></div>
+            <div class="form-row hidden" id="schLaunchCommandRow"><label>Launch Command</label><input type="text" id="schLaunchCommand" placeholder="Optional — runs as the first command in the new shell"></div>
             <div class="form-row"><label>Prompt Source</label>
               <select id="schPromptMode" onchange="app.onCronPromptModeChange()">
                 <option value="inline_text">Inline text</option>
@@ -645,6 +646,9 @@
                 <option value="warn_only">Run anyway</option>
                 <option value="skip_if_same_agent_running">Skip this run</option>
               </select>
+            </div>
+            <div class="form-row form-row-switch"><label title="Recurring schedules only: when the next run fires, the still-open session created by this job's previous run is closed first">Auto-close previous run's session</label>
+              <label class="switch"><input type="checkbox" id="schAutoClosePrev" checked><span class="slider"></span></label>
             </div>
             <div class="form-row form-row-switch"><label>Enabled</label>
               <label class="switch"><input type="checkbox" id="schEnabled" checked><span class="slider"></span></label>

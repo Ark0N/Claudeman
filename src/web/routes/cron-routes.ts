@@ -20,7 +20,9 @@ export function registerCronRoutes(app: FastifyInstance, ctx: CronPort): void {
   });
 
   app.post('/api/cron/jobs', async (req) => {
-    const body = parseBody(CronJobSchema, req.body, 'Invalid cron job');
+    // No custom errorMessage: surface the schema's field-specific messages
+    // (e.g. "runAt is required for a one-time schedule").
+    const body = parseBody(CronJobSchema, req.body);
     return { job: ctx.cron.createJob(body) };
   });
 
@@ -33,7 +35,7 @@ export function registerCronRoutes(app: FastifyInstance, ctx: CronPort): void {
 
   app.put('/api/cron/jobs/:id', async (req) => {
     const { id } = req.params as { id: string };
-    const body = parseBody(CronJobUpdateSchema, req.body, 'Invalid cron job update');
+    const body = parseBody(CronJobUpdateSchema, req.body);
     const job = ctx.cron.updateJob(id, body);
     if (!job) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Cron job not found');
     return { job };
@@ -62,7 +64,7 @@ export function registerCronRoutes(app: FastifyInstance, ctx: CronPort): void {
     const job = ctx.cron.getJob(id);
     if (!job) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Cron job not found');
     const run = await ctx.cron.runNow(id);
-    return { run, activeAgents: ctx.cron.countActiveAgents(job.agentType) };
+    return { run, activeAgents: ctx.cron.countActiveAgents(job.agentType, job.id) };
   });
 
   // ── Run history ──────────────────────────────────────────────────────────

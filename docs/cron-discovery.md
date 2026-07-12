@@ -71,6 +71,10 @@ records), kept distinct from the existing `ScheduledRun`.
   `session.stop(killMux)` at `src/session.ts:2498-2585`.
 - The cron does **not** kill sessions it launches (the brief wants them
   visible in the normal session UI); cleanup stays user-driven.
+  _Superseded post-review:_ recurring jobs now default to
+  `autoClosePreviousSession: true` — the previous run's still-open session is
+  closed via `cleanupSession` when the next run fires (see
+  `docs/cron-guide.md` §8); opt out per job for fully user-driven cleanup.
 
 ## 6. How session state is stored / 7. Existing persistence
 
