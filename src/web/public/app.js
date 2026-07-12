@@ -324,6 +324,7 @@ class CodemanApp {
     this._initGeneration = 0;     // dedup concurrent handleInit calls
     this._initFallbackTimer = null; // fallback timer if SSE init doesn't arrive
     this._selectGeneration = 0;   // cancel stale selectSession loads
+    this._initialFullBufferLoad = true; // first buffer load after a page load fetches full tmux scrollback (COD-47)
     this.terminalLoadStates = new Map(); // Map<sessionId, { generation, phase }>
     this.respawnStatus = {};
     this.respawnTimers = {}; // Track timed respawn timers
@@ -3705,7 +3706,16 @@ class CodemanApp {
 
       this._setTerminalLoadState(sessionId, selectGen, 'fetching');
       _crashDiag.log('FETCH_START');
-      const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
+      // The FIRST buffer load after a page load requests the full tmux scrollback
+      // (?full=1, COD-47) so history that scrolled off the server's byte buffer
+      // comes back after a reload. Tab switches keep the fast ?tail= frame path.
+      const useFullHistory = this._initialFullBufferLoad === true;
+      this._initialFullBufferLoad = false;
+      const res = await fetch(
+        useFullHistory
+          ? `/api/sessions/${sessionId}/terminal?full=1`
+          : `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`
+      );
       if (this._isStaleSelect(selectGen)) {
         this._clearTerminalLoadState(sessionId, selectGen);
         return;
