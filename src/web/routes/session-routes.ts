@@ -62,6 +62,7 @@ import { RunSummaryTracker } from '../../run-summary.js';
 import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal-limits.js';
 import { MAX_PASTE_IMAGE_BYTES } from '../../config/buffer-limits.js';
 import { dataPath } from '../../config/instance.js';
+import { LRUMap } from '../../utils/lru-map.js';
 
 // Path to linked-cases registry (same file used by case-routes resolveCasePath)
 const LINKED_CASES_FILE = dataPath('linked-cases.json');
@@ -1030,7 +1031,7 @@ export function registerSessionRoutes(
   // codex TUI itself. An entry is credited to this pane only when its Enter is
   // the closest among all codex panes, so a menu keystroke in another pane
   // can't steal the attribution.
-  const codexHistoryPinCache = new Map<string, { submitAt: number; threadId: string }>();
+  const codexHistoryPinCache = new LRUMap<string, { submitAt: number; threadId: string }>({ maxSize: 1024 });
   async function resolveCodexThreadFromHistory(
     session: { id: string; codexLastSubmitAt?: number },
     codexHome: string
@@ -1071,7 +1072,6 @@ export function registerSessionRoutes(
       if (!best || dist < best.dist) best = { threadId: e.session_id, dist };
     }
     if (!best) return null;
-    if (codexHistoryPinCache.size >= 1024) codexHistoryPinCache.clear();
     codexHistoryPinCache.set(session.id, { submitAt, threadId: best.threadId });
     return best.threadId;
   }
@@ -1168,7 +1168,7 @@ export function registerSessionRoutes(
   // rewritten (verified: resume appends without touching it), so the parsed
   // identity of a given path can be cached forever. This turns the per-request
   // scan into stat calls plus head reads for new files only.
-  const codexRolloutMetaCache = new Map<string, { cwd?: string; originator?: string }>();
+  const codexRolloutMetaCache = new LRUMap<string, { cwd?: string; originator?: string }>({ maxSize: 4096 });
   async function readCodexRolloutMetaCached(
     filePath: string,
     headBuf: Buffer
@@ -1181,7 +1181,6 @@ export function registerSessionRoutes(
     // Don't cache a still-incomplete head: a rollout being created may not
     // have flushed session_meta/turn_context yet.
     if (!meta.cwd && !meta.originator) return meta;
-    if (codexRolloutMetaCache.size >= 4096) codexRolloutMetaCache.clear();
     codexRolloutMetaCache.set(filePath, meta);
     return meta;
   }
@@ -1198,7 +1197,7 @@ export function registerSessionRoutes(
           typeof (b as { text?: string }).text === 'string'
       )
       .map((b) => b.text)
-      .join('');
+      .join('\n\n');
   }
 
   // Single pass over a Codex rollout: track the last assistant message (for the

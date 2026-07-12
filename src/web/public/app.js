@@ -1613,11 +1613,12 @@ class CodemanApp {
       let lastResponse = data.text || '';
 
       // Source 2: Terminal buffer fallback — strip ANSI, drop Claude CLI chrome.
-      // Claude-only: _cleanTerminalBuffer knows Claude CLI's output; for TUI
-      // modes (codex/opencode/gemini) it yields repaint garbage, so a clear
+      // Claude + shell only: _cleanTerminalBuffer knows Claude CLI's output, and
+      // shell sessions have no transcript source at all; for TUI modes
+      // (codex/opencode/gemini) it yields repaint garbage, so a clear
       // placeholder beats a messy screen dump there.
       const sessionMode = this.sessions.get(this.activeSessionId)?.mode || 'claude';
-      if (!lastResponse && sessionMode === 'claude') {
+      if (!lastResponse && (sessionMode === 'claude' || sessionMode === 'shell')) {
         const termRes = await fetch(`/api/sessions/${this.activeSessionId}/terminal`);
         const termData = (await termRes.json())?.data ?? {};
         if (termData.terminalBuffer) {
