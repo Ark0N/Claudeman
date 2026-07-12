@@ -1458,6 +1458,9 @@ Object.assign(CodemanApp.prototype, {
     // with no UI left to turn it back off. Preserve the prior stored preference.
     if (_prev.showTokenCount !== undefined) settings.showTokenCount = _prev.showTokenCount;
     if (_prev.showCost !== undefined) settings.showCost = _prev.showCost;
+    // Shortcut overrides are edited from the Shortcuts tab (not rebuilt from the
+    // general-settings DOM), so the fresh rebuild would drop them on every save.
+    if (_prev.shortcutOverrides !== undefined) settings.shortcutOverrides = _prev.shortcutOverrides;
 
     // Save to localStorage
     this.saveAppSettingsToStorage(settings);

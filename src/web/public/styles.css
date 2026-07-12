@@ -5812,6 +5812,13 @@ kbd {
   color: var(--text-dim);
 }
 
+.shortcut-overlay-footer {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  text-align: right;
+}
+
 .away-digest-ranges {
   display: flex;
   flex-wrap: wrap;

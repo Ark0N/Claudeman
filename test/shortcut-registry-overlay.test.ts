@@ -59,6 +59,22 @@ describe('shortcut registry and overlay', () => {
     expect(css).toContain('.shortcut-capture-btn,');
     expect(css).toContain('.shortcut-overlay-row {');
   });
+
+  it('saveAppSettings preserves shortcutOverrides (rebuilt-from-DOM saves must not wipe them)', () => {
+    // Same trap as showTokenCount/showCost: saveAppSettings() rebuilds the settings
+    // object fresh from the DOM, so keys edited elsewhere (the Shortcuts tab) must be
+    // explicitly carried over from the previously stored blob.
+    expect(settingsSource).toContain(
+      'if (_prev.shortcutOverrides !== undefined) settings.shortcutOverrides = _prev.shortcutOverrides;'
+    );
+  });
+
+  it('keeps the full help modal reachable now that Ctrl+? opens the registry overlay', () => {
+    // The legacy #helpModal (full shortcut reference) lost its only opener when
+    // Ctrl+? was rerouted to the overlay; the overlay footer must link to it.
+    expect(htmlSource).toContain('shortcut-overlay-footer');
+    expect(htmlSource).toContain('app.closeShortcutOverlay(); app.showHelp()');
+  });
 });
 
 // ─── Functional coverage (vm-sandbox harness, mirrors run-mode-ui.test.ts) ────
