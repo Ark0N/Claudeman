@@ -11555,23 +11555,94 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 }
 
 /* ── Cron Jobs ───────────────────────────────── */
-.cron-job-list { display: flex; flex-direction: column; gap: 8px; }
+/* There is no global `.hidden{display:none}` utility in this stylesheet — each
+   component scopes its own. The cron modal shipped without one, so its
+   `.hidden`-toggled create form + conditional schedule/prompt rows never
+   actually collapsed (all fields showed at once). Scope one here. */
+#cronModal .hidden { display: none !important; }
+.cron-modal-hint { margin-bottom: 0.75rem; }
+.cron-toolbar {
+  display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;
+  margin-bottom: 0.9rem;
+}
+
+/* Job list — cards that echo the App Settings item look */
+.cron-job-list { display: flex; flex-direction: column; gap: 0.5rem; }
 .cron-job-row {
-  display: flex; justify-content: space-between; align-items: center; gap: 12px;
-  padding: 10px 12px; border: 1px solid var(--border, #333); border-radius: 8px;
-  background: var(--panel-bg, rgba(255,255,255,0.02));
+  display: flex; justify-content: space-between; align-items: center; gap: 0.9rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--btn-radius);
+  background: rgba(255, 255, 255, 0.03);
+  transition: background var(--transition-smooth), border-color var(--transition-smooth);
 }
+.cron-job-row:hover { background: rgba(255, 255, 255, 0.05); border-color: rgba(255, 255, 255, 0.1); }
 .cron-job-main { min-width: 0; flex: 1; }
-.cron-job-name { font-weight: 600; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.cron-job-meta { font-size: 12px; opacity: 0.7; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; }
-.cron-job-actions { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+.cron-job-name { font-weight: 600; font-size: 0.85rem; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.cron-job-meta { font-size: 0.68rem; color: var(--text-muted); margin-top: 0.35rem; overflow: hidden; text-overflow: ellipsis; }
+.cron-job-actions { display: flex; gap: 0.35rem; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
 .cron-badge {
-  font-size: 11px; padding: 1px 6px; border-radius: 10px;
-  background: var(--accent-bg, rgba(120,160,255,0.15)); opacity: 0.9;
+  font-size: 0.6rem; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase;
+  padding: 0.1rem 0.45rem; border-radius: 999px;
+  background: var(--accent-bg, rgba(120, 160, 255, 0.15)); color: var(--text-dim);
 }
-.cron-badge-off { background: rgba(200,80,80,0.18); }
-.cron-weekdays { display: flex; gap: 10px; flex-wrap: wrap; }
-.cron-weekdays label { display: inline-flex; align-items: center; gap: 3px; font-weight: 400; }
+.cron-badge-off { background: rgba(200, 80, 80, 0.18); color: #e88; }
+
+/* Create / edit form — sectioned + spaced to match the App Settings modal */
 .cron-job-form {
-  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border, #333);
+  margin-top: 1rem; padding-top: 0.85rem; border-top: 1px solid var(--border);
+}
+.cron-form-title {
+  font-size: 0.95rem; font-weight: 600; color: var(--text); margin-bottom: 0.35rem;
+}
+#cronModal .form-row { margin-bottom: 0.85rem; }
+/* datetime-local / time inputs aren't covered by the base .form-row input rule */
+#cronModal .form-row input[type="datetime-local"],
+#cronModal .form-row input[type="time"] {
+  width: 100%; padding: 0.5rem 0.75rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--btn-radius);
+  color: var(--text); font-size: 0.8rem; font-family: inherit;
+  transition: border-color var(--transition-smooth), box-shadow var(--transition-smooth);
+}
+#cronModal .form-row input[type="datetime-local"]:focus,
+#cronModal .form-row input[type="time"]:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+/* Toggle rows rendered as settings cards (label + description left, switch right) */
+#cronModal .form-row-switch.cron-switch-row {
+  justify-content: space-between; gap: 0.75rem; flex-wrap: nowrap;
+  padding: 0.55rem 0.7rem; margin-bottom: 0.5rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--btn-radius);
+}
+.cron-switch-text { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+.cron-switch-label { font-size: 0.75rem; color: var(--text); text-transform: none; letter-spacing: 0; margin: 0; }
+.cron-switch-desc { font-size: 0.62rem; color: var(--text-muted); line-height: 1.35; }
+
+/* Weekday selector — pill toggles instead of raw checkboxes */
+.cron-weekdays { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.cron-weekdays label {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 2.6rem; margin: 0; padding: 0.3rem 0.55rem;
+  font-size: 0.7rem; font-weight: 500; text-transform: none; letter-spacing: 0;
+  color: var(--text-dim); cursor: pointer;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  transition: background var(--transition-smooth), border-color var(--transition-smooth), color var(--transition-smooth);
+}
+.cron-weekdays label:hover { border-color: var(--accent); color: var(--text); }
+.cron-weekdays label input { position: absolute; opacity: 0; width: 0; height: 0; }
+.cron-weekdays label:has(input:checked) { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* Footer */
+.cron-form-error { color: var(--danger, #e55); margin-top: 0.4rem; }
+.cron-form-error:empty { display: none; }
+.cron-form-actions {
+  display: flex; gap: 0.5rem; justify-content: flex-end;
+  margin-top: 1rem; padding-top: 0.85rem; border-top: 1px solid var(--border);
 }

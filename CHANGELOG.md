@@ -1,5 +1,17 @@
 # aicodeman
 
+## 1.3.1
+
+### Patch Changes
+
+- Redesign the Cron Jobs modal to match the App Settings styling, and fix a bug that left its create form fully expanded.
+  - **Fix:** the cron modal's "New Cron Job" form and all of its conditional rows (Launch Command, Prompt File Path, and the once/interval/daily/weekly schedule fields) never actually collapsed — there is no global `.hidden` utility in the stylesheet and the cron modal never scoped its own, so the form opened fully expanded with every field visible at once. Added a scoped `#cronModal .hidden` rule; the form now stays collapsed until "+ New Job" and only shows the fields relevant to the selected agent type, prompt source, and schedule type.
+  - Sectioned the create/edit form into Basics / Prompt / Schedule / Options with the same section-header dividers used in App Settings, and increased row spacing.
+  - Styled the agent-type / prompt-source / input-mode / schedule-type dropdowns and the datetime-local / time inputs to share the bordered, rounded, focus-ringed field look.
+  - Converted the "Auto-close previous run's session" and "Enabled" toggles into App-Settings-style cards (label + description on the left, compact switch on the right).
+  - Replaced the raw weekday checkboxes with pill toggles that fill with the accent color when selected.
+  - Restyled the job list rows as hover-highlighted cards with pill badges (agent type, schedule, disabled) and right-aligned actions, and gave the modal a divider-topped Cancel / Save footer.
+
 ## 1.3.0
 
 ### Minor Changes
