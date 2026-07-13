@@ -1,5 +1,15 @@
 # aicodeman
 
+## 1.3.2
+
+### Patch Changes
+
+- Make the Cron Jobs modal fully skin-aware and consistent with App Settings' design language.
+  - **Fix white dropdowns:** `.form-select` had no `appearance` reset and the app set no `color-scheme`, so native `<select>` fields rendered as white OS widgets that ignored the active skin. Selects now use `appearance: none` with an opaque `var(--bg-input)` fill, a `var(--border)` outline, and a custom chevron, so they follow the skin (daylight `#202833`, OG `#1a1a1f`). This is on the shared `.form-select` class, so App Settings, Cron, and every other select match and are fixed together.
+  - Set `color-scheme: dark` on `:root` so native select option popups, date/time pickers, and scrollbars render dark across all three (dark) skins instead of flashing white.
+  - Themed the Cron date/time inputs with `var(--bg-input)` / `var(--border)` instead of hardcoded values.
+  - Fixed the Cron toolbar: "+ New Job" / "Refresh" and the footer Save / Cancel now use the full `btn-toolbar` size (matching the App Settings footer), with a wider gap and a divider under the toolbar for better spacing.
+
 ## 1.3.1
 
 ### Patch Changes

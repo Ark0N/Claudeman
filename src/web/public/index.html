@@ -629,8 +629,8 @@
         <div class="modal-body">
           <p class="form-hint cron-modal-hint">Times use the server's local timezone.</p>
           <div class="cron-toolbar">
-            <button class="btn-toolbar btn-sm btn-primary" onclick="app.openCronJobForm()">+ New Job</button>
-            <button class="btn-toolbar btn-sm" onclick="app.refreshCron()">Refresh</button>
+            <button class="btn-toolbar btn-primary" onclick="app.openCronJobForm()">+ New Job</button>
+            <button class="btn-toolbar" onclick="app.refreshCron()">Refresh</button>
           </div>
           <!-- Job list -->
           <div id="cronJobList" class="cron-job-list"></div>
@@ -720,8 +720,8 @@
 
             <div id="cronFormError" class="form-hint cron-form-error"></div>
             <div class="cron-form-actions">
-              <button class="btn-toolbar btn-sm" onclick="app.cancelCronJobForm()">Cancel</button>
-              <button class="btn-toolbar btn-sm btn-primary" onclick="app.saveCronJob()">Save</button>
+              <button class="btn-toolbar" onclick="app.cancelCronJobForm()">Cancel</button>
+              <button class="btn-toolbar btn-primary" onclick="app.saveCronJob()">Save</button>
             </div>
           </div>
         </div>

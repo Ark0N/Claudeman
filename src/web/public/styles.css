@@ -18,6 +18,10 @@
 }
 
 :root {
+  /* All three skins are dark — tell the UA to render native controls (select
+     option popups, date/time pickers, scrollbars) in dark mode so they don't
+     flash as white OS widgets. */
+  color-scheme: dark;
   /* Carbon Aurora · Daylight — deep-but-not-black slate, surfaces step UP into the light */
   --bg-dark: #11151c;
   --bg-card: #1b222c;
@@ -4184,6 +4188,24 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   font-size: 0.8rem;
   font-family: inherit;
   transition: border-color var(--transition-smooth), box-shadow var(--transition-smooth);
+}
+
+/* Selects: strip the native (light) control so the field follows the active
+   skin instead of rendering as a white OS widget. Opaque --bg-input fill +
+   --border, a custom chevron, and color-scheme:dark (set on :root) for a dark
+   option popup. Shared by App Settings, Cron, and every other .form-select. */
+.form-select {
+  padding-right: 2rem;
+  background-color: var(--bg-input);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2398a2b1' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.7rem center;
+  background-size: 0.75rem;
+  border-color: var(--border);
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  cursor: pointer;
 }
 
 .form-row input:focus,
@@ -11560,10 +11582,11 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
    `.hidden`-toggled create form + conditional schedule/prompt rows never
    actually collapsed (all fields showed at once). Scope one here. */
 #cronModal .hidden { display: none !important; }
-.cron-modal-hint { margin-bottom: 0.75rem; }
+.cron-modal-hint { margin-bottom: 1rem; }
 .cron-toolbar {
-  display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;
-  margin-bottom: 0.9rem;
+  display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap;
+  margin-bottom: 1.1rem; padding-bottom: 1.1rem;
+  border-bottom: 1px solid var(--border);
 }
 
 /* Job list — cards that echo the App Settings item look */
@@ -11600,8 +11623,8 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 #cronModal .form-row input[type="datetime-local"],
 #cronModal .form-row input[type="time"] {
   width: 100%; padding: 0.5rem 0.75rem;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
   border-radius: var(--btn-radius);
   color: var(--text); font-size: 0.8rem; font-family: inherit;
   transition: border-color var(--transition-smooth), box-shadow var(--transition-smooth);
