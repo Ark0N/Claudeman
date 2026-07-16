@@ -712,7 +712,8 @@ Object.assign(CodemanApp.prototype, {
           remoteIds.push(data.data.sessionId);
         }
         if (remoteIds[0]) {
-          this.activeSessionId = remoteIds[0];
+          // Don't pre-set activeSessionId — selectSession early-returns when the
+          // IDs match, skipping the buffer load, tab activation, and focus (see runCodex).
           await this.selectSession(remoteIds[0]);
         }
         this.terminal.focus();
@@ -770,9 +771,11 @@ Object.assign(CodemanApp.prototype, {
         ));
       }
 
-      // Switch to first session
+      // Switch to first session. Don't pre-set activeSessionId — selectSession
+      // early-returns when the IDs match, skipping the buffer load, tab
+      // activation, and focus (see runCodex), which left the new shell tab
+      // created but not shown until the user manually clicked it.
       if (sessionIds.length > 0) {
-        this.activeSessionId = sessionIds[0];
         await this.selectSession(sessionIds[0]);
       }
 

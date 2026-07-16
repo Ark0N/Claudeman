@@ -1,5 +1,11 @@
 # aicodeman
 
+## 1.3.4
+
+### Patch Changes
+
+- Fix "Run Shell" not switching the terminal to the newly created shell session. Clicking Run Shell created the shell tab but left the previous session's terminal on screen, so you had to manually click the new tab to actually enter it. Root cause: `runShell()` pre-set `activeSessionId` to the new session's id right before calling `selectSession()`, and `selectSession()` early-returns when the requested id already matches the active one, so it skipped the terminal buffer load, tab activation, and focus. Removed the premature assignment in both the local and remote-SSH shell branches so `selectSession()` runs to completion (matching `runClaude`/`runCodex`/`runGemini`/`runOpenCode`, which already avoid this). Verified end-to-end in a real browser with a negative/positive control.
+
 ## 1.3.3
 
 ### Patch Changes
