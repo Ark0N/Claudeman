@@ -52,7 +52,15 @@ Thumbs.db
 # Generated output
 out/
 screenshots-echo-diag/
+screenshots-readme/
+screenshots-readme-real/
+screenshots-real/
 scripts/remotion/out/
+
+# Local UI/README capture scratch (screenshot runs, design mockups). Not build
+# output, but never meant for git — an unqualified `git add -A` during a COM has
+# swept dirs like these into a release before.
+design-explorations/
 
 # Artifacts that should not be tracked
 test-results/
