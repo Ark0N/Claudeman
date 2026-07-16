@@ -151,6 +151,19 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean): Au
     // Use get() instead of has() so refreshOnGet extends the TTL on active sessions
     const sessionToken = req.cookies[AUTH_COOKIE_NAME];
     if (sessionToken && authSessions.get(sessionToken) !== undefined) {
+      // Sliding cookie: re-issue on every authenticated request so the browser
+      // cookie lifetime tracks the server-side sliding TTL (refreshOnGet above).
+      // Without this the cookie has a fixed lifetime from login; the browser
+      // drops it mid-use, the next request arrives cookie-less and falls through
+      // to Basic Auth — popping the native username/password dialog, which reads
+      // as a random logout while actively working.
+      reply.setCookie(AUTH_COOKIE_NAME, sessionToken, {
+        httpOnly: true,
+        secure: https,
+        sameSite: 'lax',
+        maxAge: AUTH_SESSION_TTL_MS / 1000, // seconds
+        path: '/',
+      });
       done();
       return;
     }
