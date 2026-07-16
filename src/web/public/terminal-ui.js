@@ -385,7 +385,7 @@ Object.assign(CodemanApp.prototype, {
       'wheel',
       (ev) => {
         ev.preventDefault();
-        const lines = Math.round(ev.deltaY / 25) || (ev.deltaY > 0 ? 1 : -1);
+        const lines = this._wheelScrollLines(ev);
         if (this._shouldForwardWheelToApp(ev)) {
           this._sendSyntheticSgrWheel(ev.clientX, ev.clientY, lines);
           return;
@@ -2520,8 +2520,25 @@ Object.assign(CodemanApp.prototype, {
   // unknown version is treated as older). Gemini is a strip mode too but its
   // wheel behavior is unverified, so it keeps the local wheel — taps/clicks
   // are still forwarded for it (harmless no-ops at worst).
+  // Wheel delta → whole scroll lines. macOS trackpads turn Shift+two-finger
+  // scroll into a HORIZONTAL wheel (deltaY≈0, deltaX carries the magnitude), and
+  // Shift routes the wheel to local scrollback (_shouldForwardWheelToApp returns
+  // false on Shift). So under Shift, read whichever axis dominates — otherwise
+  // deltaY≈0 collapses to a fixed ±1 line/tick and the gesture can't page through
+  // history on a trackpad (issue #154). Non-Shift and mouse-wheel paths are
+  // unchanged (they carry deltaY). The `|| ±1` keeps sub-25px deltas moving.
+  _wheelScrollLines(ev) {
+    const delta = ev.shiftKey && Math.abs(ev.deltaX) > Math.abs(ev.deltaY) ? ev.deltaX : ev.deltaY;
+    return Math.round(delta / 25) || (delta > 0 ? 1 : -1);
+  },
+
   _shouldForwardWheelToApp(ev) {
     if (ev.shiftKey) return false;
+    // Opt-out (App Settings → Input → "Wheel scrolls local history"): pin the
+    // plain wheel to xterm's own scrollback like pre-#144, for users who prefer
+    // it over forwarding the wheel to the CLI's transcript (issue #154). Cheap —
+    // loadAppSettingsFromStorage() is cache-backed.
+    if (this.loadAppSettingsFromStorage?.()?.terminalWheelLocalScrollback) return false;
     const mode = this.terminal?.modes?.mouseTrackingMode;
     if (mode && mode !== 'none') return false;
     const session = this.sessions?.get(this.activeSessionId);
@@ -2535,12 +2552,13 @@ Object.assign(CodemanApp.prototype, {
   },
 
   // Encode wheel ticks as SGR reports (button 64 = up, 65 = down) at the pointer
-  // cell. Reports are coalesced into one PTY write per ~40ms: a trackpad emits
-  // dozens of wheel events per second and each _sendInputAsync becomes a tmux
-  // send-keys on the server — unbatched, a single flick would spawn a process
-  // storm. Per-event tick count is capped (Claude applies its own scroll-speed
-  // multiplier and acceleration on top), and the queue is bounded so a wild
-  // scroll can't build a backlog that keeps scrolling after the finger stops.
+  // cell. Reports are coalesced into one fire-and-forget write per ~40ms: a
+  // trackpad emits dozens of wheel events per second and each send becomes a
+  // tmux send-keys on the server — unbatched, a single flick would spawn a
+  // process storm. Per-event tick count is capped (Claude applies its own
+  // scroll-speed multiplier and acceleration on top), and the queue is bounded
+  // so a wild scroll can't build a backlog that keeps scrolling after the finger
+  // stops. Flushed via _sendInputEphemeral — loss-tolerant, off the durable queue.
   _sendSyntheticSgrWheel(clientX, clientY, lines) {
     if (!this.activeSessionId || !lines) return;
     const pos = this._clientPointToCell(clientX, clientY);
@@ -2558,7 +2576,10 @@ Object.assign(CodemanApp.prototype, {
     this._wheelSgrFlushTimer = null;
     const data = this._wheelSgrQueue;
     this._wheelSgrQueue = '';
-    if (data && this.activeSessionId) this._sendInputAsync(this.activeSessionId, data);
+    // Ephemeral (fire-and-forget): wheel reports are loss-tolerant, so they skip
+    // the durable seq/ACK queue — no localStorage churn, no "Nb queued" flicker
+    // in the connection indicator on every scroll tick.
+    if (data && this.activeSessionId) this._sendInputEphemeral(this.activeSessionId, data);
   },
 
   // Desktop counterpart of the touchend tap branch: hand-encode an SGR report

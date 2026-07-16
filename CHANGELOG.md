@@ -1,5 +1,15 @@
 # aicodeman
 
+## 1.3.3
+
+### Patch Changes
+
+- Fix terminal scroll-back in Claude sessions, especially on macOS trackpads (#154).
+  - **Deterministic CLI version detection.** `cliVersion` was often `undefined` because it was scraped from the `Claude Code vX.Y.Z` startup banner, which newer Claude Code builds (2.1.187+) don't reliably print and resumed sessions never show. With the version unknown, wheel-forwarding to Claude's transcript was silently disabled — and since repaint-mode Claude keeps no local terminal scrollback, scrolling up reached nothing. A new `getClaudeCliVersion()` probe (`claude --version`, cached, local-only) seeds the version at session start so forwarding engages. Restored sessions pick it up on restart.
+  - **Trackpad Shift+scroll.** The wheel handler now reads the dominant axis, so a macOS trackpad's Shift+two-finger scroll — which the browser reports as horizontal `deltaX` — reaches xterm's local scrollback instead of collapsing to a fixed one line per tick.
+  - **Opt-out setting.** New per-device App Settings → Input → "Wheel Scrolls Local History" (default off) pins the plain wheel to local scrollback (the pre-#144 behavior) for shell and other non-repaint sessions.
+  - **No more "queued bytes" flicker on scroll.** Wheel-scroll reports now use a fire-and-forget send path (seq-less input frame) instead of the durable exactly-once input queue, so they no longer appear in the pending-bytes connection indicator or churn localStorage. Keystrokes, taps, and clicks still use the durable queue.
+
 ## 1.3.2
 
 ### Patch Changes

@@ -370,12 +370,54 @@ describe('terminal touch tap mouse guard', () => {
     expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
   });
 
+  it('wheel: the local-scrollback opt-out pins the plain wheel to local scrollback (issue #154)', () => {
+    const { app } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion: '2.1.187' }]]);
+    app.terminal = {
+      modes: { mouseTrackingMode: 'none' },
+      buffer: { active: { viewportY: 50, baseY: 50 } },
+    };
+
+    // Default (setting absent) forwards the plain wheel to the CLI transcript.
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(true);
+
+    // Opt-out ON → the plain wheel stays on xterm's own scrollback (pre-#144).
+    app.loadAppSettingsFromStorage = () => ({ terminalWheelLocalScrollback: true });
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
+
+    // OFF again → forwarding resumes.
+    app.loadAppSettingsFromStorage = () => ({ terminalWheelLocalScrollback: false });
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(true);
+  });
+
+  it('wheel: reads the dominant axis under Shift so a macOS trackpad can page scrollback (issue #154)', () => {
+    const { app } = loadTerminalUiHarness();
+
+    // Plain vertical wheel: unchanged, driven by deltaY.
+    expect(app._wheelScrollLines({ shiftKey: false, deltaX: 0, deltaY: 100 })).toBe(4);
+    expect(app._wheelScrollLines({ shiftKey: false, deltaX: 0, deltaY: -50 })).toBe(-2);
+
+    // Shift on a macOS trackpad: deltaY≈0, deltaX carries direction+magnitude.
+    // Old code collapsed this to a fixed -1; now it tracks the horizontal delta.
+    expect(app._wheelScrollLines({ shiftKey: true, deltaX: -100, deltaY: 0 })).toBe(-4); // scroll up
+    expect(app._wheelScrollLines({ shiftKey: true, deltaX: 75, deltaY: 0 })).toBe(3); // scroll down
+
+    // Shift with a real vertical wheel (mouse): deltaY dominates, deltaX ignored.
+    expect(app._wheelScrollLines({ shiftKey: true, deltaX: 2, deltaY: 100 })).toBe(4);
+
+    // Sub-25px delta still nudges one line in the gesture's direction.
+    expect(app._wheelScrollLines({ shiftKey: true, deltaX: -5, deltaY: 0 })).toBe(-1);
+  });
+
   it('wheel: encodes SGR 64/65 ticks, caps per event, and coalesces into one flush', () => {
     const { app } = loadTerminalUiHarness();
     const sent: Array<{ id: string; data: string }> = [];
     app.activeSessionId = 'sess-1';
     app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
-    app._sendInputAsync = (id: string, data: string) => sent.push({ id, data });
+    // Wheel reports flush via the ephemeral (fire-and-forget) path, not the
+    // durable queue — so they never show in the pending-bytes indicator (#154).
+    app._sendInputEphemeral = (id: string, data: string) => sent.push({ id, data });
     app.terminal = {
       cols: 80,
       rows: 24,

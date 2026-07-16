@@ -62,6 +62,7 @@ import {
   SPINNER_PATTERN,
   MAX_SESSION_TOKENS,
   execPattern,
+  getClaudeCliVersion,
 } from './utils/index.js';
 import {
   MAX_TERMINAL_BUFFER_SIZE,
@@ -1307,6 +1308,27 @@ export class Session extends EventEmitter {
     console.log(
       `[Session] Starting interactive ${modeLabel} session` + (this._useMux ? ` (with ${this._mux!.backend})` : '')
     );
+
+    // Seed the CLI version deterministically for LOCAL Claude sessions. The
+    // banner scrape in parseClaudeCodeInfo() is unreliable — newer Claude Code
+    // builds don't print "Claude Code vX.Y.Z" at startup and resumed sessions
+    // never show it — which left cliVersion undefined and silently disabled
+    // wheel-forwarding to Claude's own transcript (the only route to history in
+    // repaint/alt-screen mode; issue #154). Remote sessions run claude on
+    // another host, so a local probe wouldn't reflect their version — skip them
+    // and let the banner scrape handle those. Cached process-wide, best-effort.
+    if (this.mode === 'claude' && !this._remote && !this._cliVersion) {
+      const probedVersion = getClaudeCliVersion();
+      if (probedVersion) {
+        this._cliVersion = probedVersion;
+        this.emit('cliInfoUpdated', {
+          version: this._cliVersion,
+          model: this._cliModel,
+          accountType: this._cliAccountType,
+          latestVersion: this._cliLatestVersion,
+        });
+      }
+    }
 
     // If mux wrapping is enabled, create or attach to a mux session
     if (this._useMux && this._mux) {

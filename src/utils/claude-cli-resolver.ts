@@ -8,7 +8,7 @@
  * @module utils/claude-cli-resolver
  */
 
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -82,4 +82,44 @@ export function getAugmentedPath(): string {
 
   _augmentedPath = currentPath;
   return _augmentedPath;
+}
+
+/** Cached `claude --version` result: string = version, null = probed but unavailable, undefined = not probed */
+let _claudeVersion: string | null | undefined = undefined;
+
+/**
+ * Returns the installed Claude CLI version (e.g. `"2.1.210"`), or null if it
+ * can't be determined. Runs `claude --version` once and caches the result.
+ *
+ * This is a deterministic alternative to scraping the interactive startup
+ * banner (`parseClaudeCodeInfo` in session.ts): newer Claude Code builds don't
+ * reliably print `Claude Code vX.Y.Z` at startup, and resumed sessions never
+ * show it, which left `cliVersion` undefined and silently disabled features
+ * gated on it (e.g. wheel-forwarding to Claude's transcript — issue #154).
+ */
+export function getClaudeCliVersion(): string | null {
+  if (_claudeVersion !== undefined) return _claudeVersion;
+  // Keep the test suite hermetic — never spawn a real `claude` subprocess under
+  // vitest (matches IS_TEST_MODE in tmux-manager). Tests that need a version set
+  // it on the session directly.
+  if (process.env.VITEST) {
+    _claudeVersion = null;
+    return _claudeVersion;
+  }
+  try {
+    const dir = findClaudeDir();
+    const bin = dir ? join(dir, 'claude') : 'claude';
+    // execFileSync (no shell) — the resolved path may contain spaces, and there
+    // is no untrusted input, but avoid a shell either way.
+    const out = execFileSync(bin, ['--version'], {
+      encoding: 'utf-8',
+      timeout: EXEC_TIMEOUT_MS,
+      env: { ...process.env, PATH: getAugmentedPath() },
+    });
+    const match = out.match(/(\d+\.\d+\.\d+)/);
+    _claudeVersion = match ? match[1] : null;
+  } catch {
+    _claudeVersion = null;
+  }
+  return _claudeVersion;
 }

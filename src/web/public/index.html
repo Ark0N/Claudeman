@@ -1179,6 +1179,16 @@
               </div>
               <!-- Input Section -->
               <div class="settings-section-header">Input</div>
+              <div class="settings-item settings-item-multiline" title="Scroll the terminal's own local scrollback with a plain mouse wheel / two-finger swipe, instead of forwarding the wheel to the CLI's transcript. Turn on if scrolling back through history doesn't work (e.g. macOS trackpad in Claude sessions). Shift+wheel always reaches local scrollback regardless.">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Wheel Scrolls Local History</span>
+                  <span class="settings-item-desc">Plain wheel/trackpad pages the terminal scrollback</span>
+                </div>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsTerminalWheelLocal">
+                  <span class="slider"></span>
+                </label>
+              </div>
               <div class="settings-item settings-item-multiline" title="Shows typed characters instantly via overlay while forwarding keystrokes to the server in the background. Enables Tab completion, preserves input across tab switches, and protects against session crashes. Recommended for mobile and high-latency connections.">
                 <div class="settings-item-text">
                   <span class="settings-item-label">Local Echo</span>

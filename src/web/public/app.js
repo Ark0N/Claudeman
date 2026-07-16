@@ -2369,6 +2369,39 @@ class CodemanApp {
     this._reliableSend(sessionId, input, opts?.useMux === true);
   }
 
+  /**
+   * Fire-and-forget input for EPHEMERAL, loss-tolerant streams (e.g. wheel-scroll
+   * reports). Unlike _sendInputAsync, this never enters the durable seq/ACK queue,
+   * so it isn't persisted, retried, or counted in the pending-bytes connection
+   * indicator (which was flickering "11b/22b queued" on every scroll tick). A
+   * dropped scroll tick is harmless; keystrokes still go through _sendInputAsync.
+   * The server applies a seq-less {t:'i'} frame / seq-less POST unconditionally
+   * and sends no ACK (ws-routes.ts, session-routes input handler).
+   */
+  _sendInputEphemeral(sessionId, input) {
+    if (!sessionId || !input) return;
+    if (this._ws && this._ws.readyState === WebSocket.OPEN && this._wsSessionId === sessionId) {
+      try {
+        this._ws.send(JSON.stringify({ t: 'i', d: input }));
+        return;
+      } catch {
+        // socket died mid-send — fall through to a best-effort POST
+      }
+    }
+    // No usable WS for this session: best-effort POST, not queued. Dropped on
+    // failure — a scroll tick lost while offline needs no recovery.
+    try {
+      fetch(`/api/sessions/${sessionId}/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input }),
+        keepalive: true,
+      }).catch(() => {});
+    } catch {
+      // ignore — loss-tolerant
+    }
+  }
+
   /** Record one input frame and kick delivery. The record lives until ACKed. */
   _reliableSend(sessionId, data, useMux) {
     const seq = this._nextSeq(sessionId);
