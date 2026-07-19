@@ -35,14 +35,18 @@ RUN npm install -g \
       opencode-ai \
  && npm cache clean --force
 
-# `agent` user (uid 1000, gid 0) with an arbitrary-uid-writable HOME.
+# `agent` user (gid 0) with an arbitrary-uid-writable HOME. The uid is
+# auto-assigned (node:22-slim already occupies uid 1000 with its `node` user); at
+# runtime Codeman overrides with `--user <hostUid>:0` on Linux, so the baked uid
+# only matters for a hand-run / Docker Desktop container. gid 0 + group-writable
+# HOME (OpenShift arbitrary-uid convention) keeps $HOME writable for any uid.
 ENV HOME=/home/agent
-RUN useradd -u 1000 -g 0 -m -d /home/agent -s /bin/bash agent \
+RUN useradd -g 0 -m -d /home/agent -s /bin/bash agent \
  && mkdir -p /home/agent/.npm /home/agent/.cache /home/agent/.config /home/agent/.codeman \
  && chgrp -R 0 /home/agent \
  && chmod -R g=u /home/agent
 
-USER 1000:0
+USER agent
 WORKDIR /home/agent
 
 # Codeman overrides the command with `sleep infinity` at create time; this is the
