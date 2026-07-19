@@ -1642,16 +1642,19 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
 
-    // One-click "Run in Docker": create the case folder AND a container (default
-    // settings), then start a session inside it.
+    // One-click "Run in Docker": create the case folder AND a container, then start
+    // a session inside it. Optional expandable settings override the defaults.
     const inDocker = document.getElementById('newCaseDocker')?.checked;
     const endpoint = inDocker ? '/api/cases/docker-quickcreate' : '/api/cases';
+    const payload = inDocker
+      ? { name, description, ...this._collectDockerQuickSettings() }
+      : { name, description };
 
     try {
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, description })
+        body: JSON.stringify(payload)
       });
 
       const data = await res.json();
@@ -1676,6 +1679,54 @@ Object.assign(CodemanApp.prototype, {
       console.error('Failed to create case:', err);
       this.showToast('Failed to create case: ' + err.message, 'error');
     }
+  },
+
+  // Show/hide the expandable container-settings section under the Docker checkbox.
+  toggleDockerQuickSettings() {
+    const on = document.getElementById('newCaseDocker')?.checked;
+    const el = document.getElementById('dockerQuickSettings');
+    if (el) el.style.display = on ? '' : 'none';
+  },
+
+  // Fill the memory/cpu/gpu fields from a resource template. `medium` clears them so
+  // the server uses its defaults (no per-case host); `custom` leaves them editable.
+  applyDockerTemplate() {
+    const t = document.getElementById('quickDockerTemplate')?.value;
+    const presets = {
+      small: { m: '2g', c: '1', g: '' },
+      medium: { m: '', c: '', g: '' },
+      large: { m: '8g', c: '4', g: '' },
+      gpu: { m: '8g', c: '4', g: 'all' },
+    };
+    const p = presets[t];
+    if (!p) return; // 'custom' — leave fields as-is
+    const set = (id, v) => {
+      const el = document.getElementById(id);
+      if (el) el.value = v;
+    };
+    set('quickDockerMemory', p.m);
+    set('quickDockerCpus', p.c);
+    set('quickDockerGpus', p.g);
+  },
+
+  // Collect only the non-default docker overrides (empty fields fall back to defaults
+  // server-side; sent as undefined, never null, per the Zod .optional() gotcha).
+  _collectDockerQuickSettings() {
+    const val = (id) => (document.getElementById(id)?.value || '').trim();
+    const o = {};
+    const mem = val('quickDockerMemory');
+    if (mem) o.memory = mem;
+    const cpus = val('quickDockerCpus');
+    if (cpus) o.cpus = cpus;
+    const gpus = val('quickDockerGpus');
+    if (gpus && gpus.toLowerCase() !== 'none') o.gpus = gpus;
+    const net = document.getElementById('quickDockerNetwork')?.value;
+    if (net && net !== 'bridge') o.network = net;
+    const img = val('quickDockerImage');
+    if (img) o.image = img;
+    const mc = document.getElementById('quickDockerMountCreds');
+    if (mc && !mc.checked) o.mountCredentials = false;
+    return o;
   },
 
   async linkCase() {

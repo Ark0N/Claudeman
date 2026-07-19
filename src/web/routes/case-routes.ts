@@ -11,7 +11,7 @@ import fs from 'node:fs/promises';
 import { join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import type { ApiResponse, CaseInfo } from '../../types.js';
+import type { ApiResponse, CaseInfo, DockerHost } from '../../types.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import {
   CreateCaseSchema,
@@ -23,6 +23,7 @@ import {
   DockerHostSchema,
   DockerExportSchema,
   DockerImportSchema,
+  DockerQuickCreateSchema,
 } from '../schemas.js';
 import { exportDockerCase, importDockerBundle, listDockerExports, exportBundleName } from '../../docker-export.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
@@ -400,7 +401,8 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
   app.post(
     '/api/cases/docker-quickcreate',
     async (req): Promise<ApiResponse<{ case: unknown; capsEnforced?: boolean; isDesktop?: boolean }>> => {
-      const { name, description } = parseBody(CreateCaseSchema, req.body);
+      const body = parseBody(DockerQuickCreateSchema, req.body);
+      const { name, description } = body;
       const casePath = validatePathWithinBase(name, CASES_DIR);
       if (!casePath) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
 
@@ -417,20 +419,43 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
         return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
       }
 
-      // Auto-provision the shared `default` docker host (convenient, hardened defaults).
+      // The checkbox alone (no overrides) uses the shared `default` host; any tweaked
+      // setting gets a dedicated per-case host so it never mutates the shared default.
+      const hasOverrides = !!(
+        body.image ||
+        body.network ||
+        body.networkName ||
+        body.memory ||
+        body.cpus ||
+        body.gpus ||
+        body.mountCredentials !== undefined
+      );
+      const resources: { memory?: string; cpus?: string } = {};
+      if (body.memory) resources.memory = body.memory;
+      if (body.cpus) resources.cpus = body.cpus;
+      const desiredHost: DockerHost = {
+        id: hasOverrides ? `q-${name}` : DEFAULT_DOCKER_HOST_ID,
+        label: hasOverrides ? `Case: ${name}` : 'Default',
+        image: body.image || DEFAULT_AGENT_IMAGE,
+        network: body.network || 'bridge',
+        ...(body.networkName ? { networkName: body.networkName } : {}),
+        ...(Object.keys(resources).length ? { resources } : {}),
+        ...(body.gpus ? { gpus: body.gpus } : {}),
+        mountCredentials: body.mountCredentials ?? true,
+        resumeOnStart: true,
+        hooksEnabled: true,
+      };
       const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
-      let host = hosts.find((item) => item.id === DEFAULT_DOCKER_HOST_ID);
-      if (!host) {
-        host = {
-          id: DEFAULT_DOCKER_HOST_ID,
-          label: 'Default',
-          image: DEFAULT_AGENT_IMAGE,
-          network: 'bridge',
-          mountCredentials: true,
-          resumeOnStart: true,
-          hooksEnabled: true,
-        };
-        await writeDockerHosts(CODEMAN_CONFIG_DIR, [...hosts, host]);
+      const existing = hosts.find((item) => item.id === desiredHost.id);
+      // Reuse the shared default if present; create/refresh a per-case host for overrides.
+      const host = existing && !hasOverrides ? existing : desiredHost;
+      if (!existing) {
+        await writeDockerHosts(CODEMAN_CONFIG_DIR, [...hosts, desiredHost]);
+      } else if (hasOverrides) {
+        await writeDockerHosts(
+          CODEMAN_CONFIG_DIR,
+          hosts.map((h) => (h.id === desiredHost.id ? desiredHost : h))
+        );
       }
 
       // Probe the daemon + base image BEFORE scaffolding, so a missing docker/image

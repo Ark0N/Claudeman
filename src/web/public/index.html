@@ -1865,9 +1865,52 @@
               <input type="text" id="newCaseDescription" placeholder="A brief description..." autocomplete="off">
             </div>
             <div class="form-row">
-              <label class="checkbox-row"><input type="checkbox" id="newCaseDocker"> 🐳 Run in an isolated Docker container</label>
-              <span class="form-hint">One click: creates the case folder AND a hardened container with default settings, then starts the session inside it. Requires the base image (<code>node scripts/build-agent-image.mjs</code>).</span>
+              <label class="checkbox-row"><input type="checkbox" id="newCaseDocker" onchange="app.toggleDockerQuickSettings()"> 🐳 Run in an isolated Docker container</label>
+              <span class="form-hint">One checkbox is enough — it creates the case folder AND a hardened container with default settings, then starts the session inside it. Click to expand for optional presets. Requires the base image (<code>node scripts/build-agent-image.mjs</code>).</span>
             </div>
+            <details class="advanced-options" id="dockerQuickSettings" style="display:none;">
+              <summary>Container settings (optional — sensible defaults)</summary>
+              <div class="advanced-options-content">
+                <div class="form-row">
+                  <label>Template</label>
+                  <select id="quickDockerTemplate" onchange="app.applyDockerTemplate()">
+                    <option value="small">Small — 2 GB RAM, 1 CPU</option>
+                    <option value="medium" selected>Medium — 4 GB RAM, 2 CPU (default)</option>
+                    <option value="large">Large — 8 GB RAM, 4 CPU</option>
+                    <option value="gpu">GPU — 8 GB RAM, 4 CPU, all GPUs</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                  <span class="form-hint">Disk is elastic — storage grows automatically as data flows in (no fixed cap).</span>
+                </div>
+                <div class="form-row">
+                  <label>Memory</label>
+                  <input type="text" id="quickDockerMemory" placeholder="4g" autocomplete="off" spellcheck="false">
+                </div>
+                <div class="form-row">
+                  <label>CPUs</label>
+                  <input type="text" id="quickDockerCpus" placeholder="2" autocomplete="off" spellcheck="false">
+                </div>
+                <div class="form-row">
+                  <label>GPUs</label>
+                  <input type="text" id="quickDockerGpus" placeholder="none (e.g. all, or 1)" autocomplete="off" spellcheck="false">
+                  <span class="form-hint">Needs the NVIDIA container toolkit on the host.</span>
+                </div>
+                <div class="form-row">
+                  <label>Network</label>
+                  <select id="quickDockerNetwork">
+                    <option value="bridge">bridge (internet on)</option>
+                    <option value="none">none (fully isolated)</option>
+                  </select>
+                </div>
+                <div class="form-row">
+                  <label>Image</label>
+                  <input type="text" id="quickDockerImage" placeholder="codeman/agent:base" autocomplete="off" spellcheck="false">
+                </div>
+                <div class="form-row">
+                  <label class="checkbox-row"><input type="checkbox" id="quickDockerMountCreds" checked> Mount host credentials (~/.claude etc.)</label>
+                </div>
+              </div>
+            </details>
           </div>
           <!-- Link Existing Tab -->
           <div class="modal-tab-content hidden" id="case-link">

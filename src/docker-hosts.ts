@@ -179,6 +179,7 @@ export function dockerConfigHash(
     | 'network'
     | 'networkName'
     | 'resources'
+    | 'gpus'
     | 'mountCredentials'
     | 'extraCreateArgs'
   >
@@ -190,6 +191,7 @@ export function dockerConfigHash(
     network: docker.network,
     networkName: docker.networkName ?? null,
     resources: docker.resources ?? null,
+    gpus: docker.gpus ?? null,
     mountCredentials: docker.mountCredentials,
     extraCreateArgs: docker.extraCreateArgs ?? null,
   });
@@ -215,6 +217,7 @@ export function toSessionDocker(host: DockerHost, dockerCase: DockerCase): Sessi
     network: host.network ?? 'bridge',
     networkName: host.networkName,
     resources: host.resources ?? DEFAULT_DOCKER_RESOURCES,
+    gpus: host.gpus,
     mountCredentials: host.mountCredentials ?? true,
     hooksEnabled: host.hooksEnabled ?? true,
     resumeOnStart: host.resumeOnStart ?? true,
@@ -360,6 +363,10 @@ export function buildDockerCreateArgs(ctx: DockerCreateContext): string[] {
 
   args.push(
     ...resourceFlags(docker.resources),
+    // GPU passthrough (needs the NVIDIA container toolkit on the host). No storage
+    // cap is set, so the container's writable layer + volumes grow elastically as
+    // data flows in (bounded only by host disk).
+    ...(docker.gpus ? ['--gpus', shellescape(docker.gpus)] : []),
     '--cap-drop',
     'ALL',
     '--security-opt',
@@ -542,6 +549,29 @@ export async function checkDockerTmuxAvailable(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, error: `could not verify tmux in ${docker.image}: ${msg}` };
+  }
+}
+
+/**
+ * Resolve the host's IP on the default docker bridge (the address a container
+ * reaches as `host.docker.internal`), so the server can bind a hooks-only listener
+ * there and in-container hooks can call back. Defaults to the conventional
+ * 172.17.0.1 when the inspect fails but docker is up; null when docker is absent.
+ * No-op canned value under VITEST.
+ */
+export async function detectDockerBridgeGateway(engine: DockerEngine = 'docker'): Promise<string | null> {
+  if (IS_TEST_MODE) return '172.17.0.1';
+  const bin = engine === 'podman' ? 'podman' : 'docker';
+  try {
+    const { stdout } = await execFileAsync(
+      bin,
+      ['network', 'inspect', 'bridge', '--format', '{{(index .IPAM.Config 0).Gateway}}'],
+      { timeout: DOCKER_PROBE_TIMEOUT_MS }
+    );
+    const ip = stdout.trim();
+    return /^\d{1,3}(\.\d{1,3}){3}$/.test(ip) ? ip : '172.17.0.1';
+  } catch {
+    return null; // docker not available — nothing to bind
   }
 }
 

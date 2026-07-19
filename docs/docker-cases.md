@@ -15,7 +15,22 @@ node scripts/build-agent-image.mjs          # builds codeman/agent:base
 
 The image is **secret-free**: credentials are delivered at runtime (bind mounts or `docker exec --env`), never baked in, so exports never leak them.
 
-## Create a docker case
+## Quickest path: one-click "Run in Docker"
+
+On the **New case → Create New** tab there's a **🐳 Run in an isolated Docker container** checkbox. Checking it alone is enough: Codeman creates the case folder in `~/codeman-cases/<name>`, spins up a hardened container with sensible defaults (auto-provisioning a shared `default` host), and starts the session inside it. No host/image/network fields to fill in.
+
+Click the checkbox's **Container settings** to optionally tweak the predefined defaults, including a **Template** picker:
+
+| Template | Memory | CPUs | GPUs |
+|----------|--------|------|------|
+| Small | 2 GB | 1 | none |
+| Medium (default) | 4 GB | 2 | none |
+| Large | 8 GB | 4 | none |
+| GPU | 8 GB | 4 | all (needs the NVIDIA container toolkit) |
+
+**Disk is elastic** — the container's storage grows automatically as data flows in; there is no fixed cap (bounded only by host disk). Any tweaked setting creates a dedicated per-case host so it never changes the shared `default`.
+
+## Create a docker case (full control)
 
 App → **New case → Docker** tab:
 
@@ -64,10 +79,11 @@ The container is paused across the capture so the image and workspace are consis
 
 In-container hooks (permission events, hook-based idle/stop/task notifications) POST to `CODEMAN_API_URL`, which is derived as `https://host.docker.internal:<port>` (`host.docker.internal` → the docker bridge gateway, e.g. `172.17.0.1`, via `--add-host …:host-gateway`). For that callback to succeed, the Codeman server must be **listening on an interface the container can reach**.
 
-- If Codeman binds **loopback-only** (`127.0.0.1`, the default and the production systemd config), a container reaching `172.17.0.1:<port>` cannot connect, so **in-container hooks do not fire**. The session still works fully: idle/stop detection falls back to **output-based** detection through the `docker exec` PTY (which always works), and claude runs with `--dangerously-skip-permissions` so there are no permission prompts to forward anyway.
-- To enable in-container hooks, run Codeman where the container can reach it: bind `0.0.0.0` **with `CODEMAN_PASSWORD` set** (`CODEMAN_HOST=0.0.0.0`), or otherwise make `172.17.0.1:<port>` reachable. The host guard already allowlists `host.docker.internal` / `host.containers.internal`, and the hook secret is mounted, so hooks work as soon as the callback is reachable.
+- If Codeman binds **loopback-only** (`127.0.0.1`, the default and the production systemd config), a container reaching `172.17.0.1:<port>` cannot connect, so by default **in-container hooks do not fire**. The session still works fully: idle/stop detection falls back to **output-based** detection through the `docker exec` PTY (which always works), and claude runs with `--dangerously-skip-permissions` so there are no permission prompts to forward anyway.
+- **To enable in-container hooks on a loopback-only server, set `CODEMAN_DOCKER_BRIDGE_HOOKS=1`** (env). Codeman then starts a SECOND listener bound to the docker bridge gateway (`172.17.0.1`, auto-detected; override with `CODEMAN_DOCKER_BRIDGE_HOST`) that serves **only the hook endpoints** (`/api/hook-event`, `/api/status-telemetry`) and delegates them into the same secret-gated pipeline. The bridge is host-internal (containers + host, not the LAN), and every other path returns `403`, so this does not widen your network exposure. Add `Environment=CODEMAN_DOCKER_BRIDGE_HOOKS=1` to the systemd unit and restart.
+- Alternatively, bind `0.0.0.0` **with `CODEMAN_PASSWORD` set** (exposes on the LAN too).
 
-This is an environmental constraint, not a code limitation: the host-gateway mapping, `CODEMAN_API_URL` derivation, host-guard allowlist, and hook-secret mount are all wired correctly.
+The host-gateway mapping, `CODEMAN_API_URL` derivation, host-guard allowlist, and hook-secret mount are all wired correctly; `CODEMAN_DOCKER_BRIDGE_HOOKS` closes the last gap for loopback-only servers.
 
 ## Notes & limits
 

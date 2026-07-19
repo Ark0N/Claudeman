@@ -153,6 +153,8 @@ export interface DockerHost {
   /** Custom bridge name when network === 'custom'. */
   networkName?: string;
   resources?: DockerResourceLimits;
+  /** GPU allocation, e.g. 'all' / '1' / 'device=0,1' -> `--gpus <value>` (needs the NVIDIA container toolkit). */
+  gpus?: string;
   /** true (default) = convenient: bind-mount host cred dirs RW. false = sealed (blocks full-image export). */
   mountCredentials?: boolean;
   /** true (default) = wire in-container hooks (host-gateway callback + workspace scaffold). */
@@ -198,6 +200,8 @@ export interface SessionDocker {
   network: DockerNetworkMode;
   networkName?: string;
   resources?: DockerResourceLimits;
+  /** GPU allocation ('all' / '1' / 'device=0,1'). */
+  gpus?: string;
   mountCredentials: boolean;
   hooksEnabled: boolean;
   resumeOnStart: boolean;

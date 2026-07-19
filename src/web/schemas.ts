@@ -413,6 +413,11 @@ export const DockerHostSchema = z.object({
     .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/, 'Invalid network name')
     .optional(),
   resources: DockerResourceLimitsSchema.optional(),
+  gpus: z
+    .string()
+    .max(128)
+    .regex(/^(all|\d+|device=[a-zA-Z0-9,:._-]+)$/, 'GPUs must be all / a count / device=...')
+    .optional(),
   mountCredentials: z.boolean().optional(),
   hooksEnabled: z.boolean().optional(),
   resumeOnStart: z.boolean().optional(),
@@ -483,6 +488,41 @@ export const DockerImportSchema = z.object({
     .max(2000)
     .regex(/^\//, 'Destination path must be absolute')
     .regex(NO_SHELL_META, 'Invalid characters in destination path'),
+});
+
+// One-click "Run in Docker" case creation. name/description behave like a normal
+// case; the docker fields are OPTIONAL overrides of the predefined defaults (the
+// checkbox alone, with no overrides, uses the shared `default` host).
+export const DockerQuickCreateSchema = z.object({
+  name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format'),
+  description: z.string().max(1000).optional(),
+  image: z
+    .string()
+    .min(1)
+    .max(512)
+    .regex(/^[a-zA-Z0-9][\w./:@-]*$/, 'Invalid image reference')
+    .regex(NO_SHELL_META, 'Invalid characters in image reference')
+    .optional(),
+  network: z.enum(['bridge', 'none', 'custom']).optional(),
+  networkName: z
+    .string()
+    .max(128)
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/, 'Invalid network name')
+    .optional(),
+  memory: z
+    .string()
+    .regex(/^\d+[bkmg]?$/i, 'Memory must be like 512m / 4g')
+    .optional(),
+  cpus: z
+    .string()
+    .regex(/^\d+(\.\d+)?$/, 'CPUs must be a number')
+    .optional(),
+  gpus: z
+    .string()
+    .max(128)
+    .regex(/^(all|\d+|device=[a-zA-Z0-9,:._-]+)$/, 'GPUs must be all / a count / device=...')
+    .optional(),
+  mountCredentials: z.boolean().optional(),
 });
 
 // ========== Quick Start ==========

@@ -240,6 +240,15 @@ describe('buildDockerCreateArgs', () => {
     const docker: SessionDocker = { ...toSessionDocker(HOST, CASE), network: 'custom', networkName: 'codeman-net-x' };
     expect(buildDockerCreateArgs(ctx({ docker })).join(' ')).toContain('--network codeman-net-x');
   });
+
+  it('emits --gpus only when GPUs are requested (and never a storage cap)', () => {
+    const withGpu: SessionDocker = { ...toSessionDocker(HOST, CASE), gpus: 'all' };
+    const s = buildDockerCreateArgs(ctx({ docker: withGpu })).join(' ');
+    expect(s).toContain("--gpus 'all'");
+    // elastic disk: no fixed storage cap is ever emitted
+    expect(s).not.toContain('--storage-opt');
+    expect(buildDockerCreateArgs(ctx()).join(' ')).not.toContain('--gpus');
+  });
 });
 
 describe('resolveCredentialMounts', () => {
