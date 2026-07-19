@@ -74,6 +74,13 @@ import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal
 import { MAX_PASTE_IMAGE_BYTES } from '../../config/buffer-limits.js';
 import { dataPath, getDataDir } from '../../config/instance.js';
 import { checkRemoteTmuxAvailable, readRemoteCases, readRemoteHosts, toSessionRemote } from '../../remote-hosts.js';
+import {
+  checkDockerAvailable,
+  checkDockerTmuxAvailable,
+  readDockerCases,
+  readDockerHosts,
+  toSessionDocker,
+} from '../../docker-hosts.js';
 import { LRUMap } from '../../utils/lru-map.js';
 
 // Path to linked-cases registry (same file used by case-routes resolveCasePath)
@@ -1684,9 +1691,14 @@ export function registerSessionRoutes(
     // so the LOCAL availability gates below (isCodexAvailable() etc.) don't apply and
     // would wrongly reject a machine that hasn't got the CLI installed locally.
     let remote = undefined;
+    let docker = undefined;
+    let dockerResumeId: string | undefined;
     let casePath: string | null = null;
     const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
     const remoteCase = remoteCases.find((item) => item.name === caseName);
+    const dockerCase = remoteCase
+      ? undefined
+      : (await readDockerCases(CODEMAN_CONFIG_DIR)).find((item) => item.name === caseName);
     if (remoteCase) {
       const host = (await readRemoteHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === remoteCase.hostId);
       if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
@@ -1718,6 +1730,47 @@ export function registerSessionRoutes(
 
       casePath = remoteCase.remotePath;
       remote = toSessionRemote(host, remoteCase);
+    } else if (dockerCase) {
+      // Docker case: the CLI executes INSIDE a container via local tmux + `docker
+      // exec`, so the LOCAL availability gates below don't apply. Mirror the remote
+      // branch's rejection of per-session config that would not cross into the
+      // container (it would silently no-op).
+      const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === dockerCase.hostId);
+      if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
+      if (
+        (envOverrides && Object.keys(envOverrides).length > 0) ||
+        effort ||
+        codexConfig ||
+        geminiConfig ||
+        openCodeConfig
+      ) {
+        return createErrorResponse(
+          ApiErrorCode.INVALID_INPUT,
+          'envOverrides, effort, and per-CLI config are not supported for docker cases (they do not cross into the container). Configure the container via the docker host command override instead.'
+        );
+      }
+
+      const availability = await checkDockerAvailable(host.engine);
+      if (!availability.ok) {
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          availability.error || 'docker daemon is not available'
+        );
+      }
+      const sessionDocker = toSessionDocker(host, dockerCase);
+      // tmux is a hard prerequisite (the in-container tmux makes reconnect durable).
+      const tmuxCheck = await checkDockerTmuxAvailable(sessionDocker);
+      if (!tmuxCheck.ok) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, tmuxCheck.error || 'base image is missing tmux');
+      }
+
+      casePath = dockerCase.hostWorkspacePath; // a REAL host dir (bind-mounted into the container)
+      docker = sessionDocker;
+      // Seed resume so a relaunch resumes the case's last conversation from the
+      // bind-mounted transcript (decision: resume-on-start default ON).
+      if (sessionDocker.resumeOnStart && dockerCase.lastClaudeSessionId) {
+        dockerResumeId = dockerCase.lastClaudeSessionId;
+      }
     } else {
       // Check OpenCode availability if requested
       if (mode === 'opencode') {
@@ -1772,8 +1825,9 @@ export function registerSessionRoutes(
     // for local cases the !casePath guard above returned early. TypeScript can't narrow across the if/else.
     const resolvedCasePath = casePath as string;
 
-    // Create case folder and CLAUDE.md if it doesn't exist (only for non-linked, non-remote cases)
-    if (!remote && !existsSync(resolvedCasePath)) {
+    // Create case folder and CLAUDE.md if it doesn't exist (only for non-linked, non-remote,
+    // non-docker cases — docker workspaces are scaffolded in their own block below)
+    if (!remote && !docker && !existsSync(resolvedCasePath)) {
       try {
         mkdirSync(resolvedCasePath, { recursive: true });
         mkdirSync(join(resolvedCasePath, 'src'), { recursive: true });
@@ -1793,12 +1847,32 @@ export function registerSessionRoutes(
       } catch (err) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create case: ${getErrorMessage(err)}`);
       }
-    } else if (!remote && mode !== 'opencode') {
+    } else if (!remote && !docker && mode !== 'opencode') {
       // COD-91 self-heal for an EXISTING case: refresh a pre-secret hooks block so the
       // now-unconditional hook-secret gate keeps accepting its hook events. No-op when
       // the hooks aren't ours or already carry the secret. Skipped for remote cases —
       // resolvedCasePath is a REMOTE path that doesn't exist on the local filesystem.
       await refreshStaleHookSecret(resolvedCasePath).catch(() => {});
+    }
+
+    // Docker cases: the workspace is a REAL host dir bind-mounted into the container.
+    // Scaffold hooks (+ a CLAUDE.md) if MISSING so in-container permission prompts and
+    // hook-idle detection fire (decision: wire hooks now). Never clobbers an existing
+    // configured project. Skipped for external CLIs (they use their own systems).
+    if (docker && docker.hooksEnabled && mode !== 'opencode' && mode !== 'codex' && mode !== 'gemini') {
+      try {
+        if (!existsSync(join(resolvedCasePath, 'CLAUDE.md'))) {
+          const templatePath = await ctx.getDefaultClaudeMdPath();
+          writeFileSync(join(resolvedCasePath, 'CLAUDE.md'), generateClaudeMd(caseName, '', templatePath));
+        }
+        if (!existsSync(join(resolvedCasePath, '.claude', 'settings.local.json'))) {
+          await writeHooksConfig(resolvedCasePath);
+        } else {
+          await refreshStaleHookSecret(resolvedCasePath).catch(() => {});
+        }
+      } catch {
+        /* non-fatal — the session still runs, hooks may be degraded */
+      }
     }
 
     // Strip stale disk entries for keys this request is actively setting (Claude only —
@@ -1845,12 +1919,14 @@ export function registerSessionRoutes(
       envOverrides,
       effort,
       remote,
+      docker,
+      resumeSessionId: dockerResumeId,
       tmuxHistoryLimit: qsTerminalHistoryConfig.tmuxHistoryLimit,
     });
 
     // Auto-detect completion phrase from CLAUDE.md BEFORE broadcasting
     // so the initial state already has the phrase configured (only if globally enabled)
-    if (mode === 'claude' && !remote && ctx.store.getConfig().ralphEnabled) {
+    if (mode === 'claude' && !remote && !docker && ctx.store.getConfig().ralphEnabled) {
       autoConfigureRalph(session, resolvedCasePath, ctx);
       if (!session.ralphTracker.enabled) {
         session.ralphTracker.enable();

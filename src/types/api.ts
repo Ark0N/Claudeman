@@ -124,7 +124,7 @@ export interface CaseInfo {
   /** Whether CLAUDE.md exists */
   hasClaudeMd?: boolean;
   /** Case storage/execution location */
-  location?: 'local' | 'linked-local' | 'remote';
+  location?: 'local' | 'linked-local' | 'remote' | 'docker';
   /** Whether this is a linked local folder */
   linked?: boolean;
   /** Remote case metadata for display and session creation */
@@ -133,6 +133,14 @@ export interface CaseInfo {
     host: string;
     username: string;
     path: string;
+  };
+  /** Docker case metadata for display and session creation */
+  docker?: {
+    hostId: string;
+    container: string;
+    image?: string;
+    path: string;
+    network?: string;
   };
 }
 

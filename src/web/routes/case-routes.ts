@@ -6,6 +6,7 @@
 
 import { FastifyInstance } from 'fastify';
 import { existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
+import { exec } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -17,6 +18,8 @@ import {
   CaseOrderSchema,
   RemoteCaseLinkSchema,
   RemoteHostSchema,
+  DockerCaseLinkSchema,
+  DockerHostSchema,
 } from '../schemas.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { writeHooksConfig } from '../../hooks-config.js';
@@ -24,6 +27,18 @@ import { CASES_DIR, SETTINGS_PATH, validatePathWithinBase, parseBody, readJsonCo
 import { SseEvent } from '../sse-events.js';
 import type { EventPort, ConfigPort } from '../ports/index.js';
 import { dataPath, getDataDir } from '../../config/instance.js';
+import {
+  checkDockerAvailable,
+  checkDockerTmuxAvailable,
+  dockerContainerName,
+  dockerDisplayPath,
+  readDockerCases,
+  readDockerHosts,
+  toSessionDocker,
+  writeDockerCases,
+  writeDockerHosts,
+} from '../../docker-hosts.js';
+import { buildDockerRemoveCommand } from '../../tmux-manager.js';
 import {
   checkRemoteTmuxAvailable,
   readRemoteCases,
@@ -115,6 +130,35 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
         cases.push(remoteCaseInfo);
       } else {
         cases[existingIndex] = remoteCaseInfo;
+      }
+    }
+
+    // Get docker cases
+    const dockerHosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+    const dockerHostMap = new Map(dockerHosts.map((host) => [host.id, host]));
+    for (const dockerCase of await readDockerCases(CODEMAN_CONFIG_DIR)) {
+      const host = dockerHostMap.get(dockerCase.hostId);
+      if (!host || !SAFE_CASE_NAME.test(dockerCase.name)) continue;
+      existingNames.add(dockerCase.name);
+      const container = dockerCase.container ?? dockerContainerName(dockerCase.name);
+      const dockerCaseInfo: CaseInfo = {
+        name: dockerCase.name,
+        path: dockerDisplayPath({ container, path: dockerCase.hostWorkspacePath }),
+        hasClaudeMd: existsSync(join(dockerCase.hostWorkspacePath, 'CLAUDE.md')),
+        location: 'docker',
+        docker: {
+          hostId: host.id,
+          container,
+          image: host.image,
+          path: dockerCase.hostWorkspacePath,
+          network: host.network ?? 'bridge',
+        },
+      };
+      const existingIndex = cases.findIndex((item) => item.name === dockerCase.name);
+      if (existingIndex === -1) {
+        cases.push(dockerCaseInfo);
+      } else {
+        cases[existingIndex] = dockerCaseInfo;
       }
     }
 
@@ -232,6 +276,106 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     return { success: true, data: { case: remoteCase } };
   });
 
+  // ========== Docker hosts + docker cases (COD-Docker) ==========
+
+  app.get('/api/docker-hosts', async () => readDockerHosts(CODEMAN_CONFIG_DIR));
+
+  app.post('/api/docker-hosts', async (req): Promise<ApiResponse<{ host: unknown }>> => {
+    const host = parseBody(DockerHostSchema, req.body);
+    const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+    if (hosts.some((item) => item.id === host.id)) {
+      return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Docker host already exists');
+    }
+    await writeDockerHosts(CODEMAN_CONFIG_DIR, [...hosts, host]);
+    return { success: true, data: { host } };
+  });
+
+  app.put('/api/docker-hosts/:id', async (req): Promise<ApiResponse<{ host: unknown }>> => {
+    const { id } = req.params as { id: string };
+    const host = parseBody(DockerHostSchema, { ...(req.body as object), id });
+    const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+    const index = hosts.findIndex((item) => item.id === id);
+    if (index === -1) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
+    const next = [...hosts];
+    next[index] = host;
+    await writeDockerHosts(CODEMAN_CONFIG_DIR, next);
+    return { success: true, data: { host } };
+  });
+
+  app.delete('/api/docker-hosts/:id', async (req): Promise<ApiResponse<{ id: string }>> => {
+    const { id } = req.params as { id: string };
+    const cases = await readDockerCases(CODEMAN_CONFIG_DIR);
+    if (cases.some((item) => item.hostId === id)) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Docker host is still used by docker cases');
+    }
+    const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+    await writeDockerHosts(
+      CODEMAN_CONFIG_DIR,
+      hosts.filter((item) => item.id !== id)
+    );
+    return { success: true, data: { id } };
+  });
+
+  app.post(
+    '/api/cases/docker-link',
+    async (req): Promise<ApiResponse<{ case: unknown; capsEnforced?: boolean; isDesktop?: boolean }>> => {
+      const dockerCase = { ...parseBody(DockerCaseLinkSchema, req.body), type: 'docker' as const };
+      const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+      const host = hosts.find((item) => item.id === dockerCase.hostId);
+      if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
+
+      const linkedCases = await readLinkedCases();
+      const dockerCases = await readDockerCases(CODEMAN_CONFIG_DIR);
+      if (
+        dockerCases.some((item) => item.name === dockerCase.name) ||
+        linkedCases[dockerCase.name] ||
+        existsSync(join(CASES_DIR, dockerCase.name))
+      ) {
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
+      }
+
+      // The workspace is a REAL host directory (bind-mounted into the container), so
+      // create it now if missing. Scaffolding (.claude/settings.local.json + CLAUDE.md)
+      // is written by quick-start on first launch, matching local-case behaviour.
+      if (!existsSync(dockerCase.hostWorkspacePath)) {
+        try {
+          mkdirSync(dockerCase.hostWorkspacePath, { recursive: true });
+        } catch (err) {
+          return createErrorResponse(
+            ApiErrorCode.OPERATION_FAILED,
+            `Could not create workspace: ${getErrorMessage(err)}`
+          );
+        }
+      }
+
+      // Courtesy validation: docker daemon must be reachable AND the base image must
+      // contain tmux (a hard prerequisite for durable in-container sessions). Surfaces
+      // a clear error at link time instead of a dead pane on first launch.
+      const availability = await checkDockerAvailable(host.engine);
+      if (!availability.ok) {
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          availability.error || 'docker daemon is not available'
+        );
+      }
+      const tmuxCheck = await checkDockerTmuxAvailable(toSessionDocker(host, dockerCase));
+      if (!tmuxCheck.ok) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, tmuxCheck.error || 'base image is missing tmux');
+      }
+
+      await writeDockerCases(CODEMAN_CONFIG_DIR, [...dockerCases, dockerCase]);
+      ctx.broadcast(SseEvent.CaseLinked, {
+        name: dockerCase.name,
+        path: dockerCase.hostWorkspacePath,
+        type: 'docker',
+      });
+      return {
+        success: true,
+        data: { case: dockerCase, capsEnforced: availability.capsEnforced, isDesktop: availability.isDesktop },
+      };
+    }
+  );
+
   // Link an existing folder as a case
   app.post('/api/cases/link', async (req): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
     const { name, path: folderPath } = parseBody(LinkCaseSchema, req.body, 'Invalid request body');
@@ -292,6 +436,27 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
         remoteCases.filter((item) => item.name !== name)
       );
       ctx.broadcast(SseEvent.CaseDeleted, { name, type: 'remote-unlinked' });
+      return { success: true, data: { name } };
+    }
+
+    const dockerCases = await readDockerCases(CODEMAN_CONFIG_DIR);
+    const dockerCase = dockerCases.find((item) => item.name === name);
+    if (dockerCase) {
+      await writeDockerCases(
+        CODEMAN_CONFIG_DIR,
+        dockerCases.filter((item) => item.name !== name)
+      );
+      // Best-effort `docker rm -f` the per-case container (case-delete is the
+      // explicit teardown that removes it; the bind-mounted workspace survives).
+      const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === dockerCase.hostId);
+      if (host) {
+        try {
+          exec(buildDockerRemoveCommand(toSessionDocker(host, dockerCase)), { timeout: 15_000 }, () => {});
+        } catch {
+          /* best-effort — never blocks the unlink */
+        }
+      }
+      ctx.broadcast(SseEvent.CaseDeleted, { name, type: 'docker-unlinked' });
       return { success: true, data: { name } };
     }
 
@@ -370,6 +535,26 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
           host: host.host,
           username: host.username,
           path: remoteCase.remotePath,
+        },
+      };
+    }
+
+    const dockerCase = (await readDockerCases(CODEMAN_CONFIG_DIR)).find((item) => item.name === name);
+    if (dockerCase) {
+      const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === dockerCase.hostId);
+      if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
+      const container = dockerCase.container ?? dockerContainerName(dockerCase.name);
+      return {
+        name,
+        path: dockerDisplayPath({ container, path: dockerCase.hostWorkspacePath }),
+        hasClaudeMd: existsSync(join(dockerCase.hostWorkspacePath, 'CLAUDE.md')),
+        location: 'docker',
+        docker: {
+          hostId: host.id,
+          container,
+          image: host.image,
+          path: dockerCase.hostWorkspacePath,
+          network: host.network ?? 'bridge',
         },
       };
     }
