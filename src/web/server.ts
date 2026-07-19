@@ -2214,6 +2214,10 @@ export class WebServer extends EventEmitter {
               // erasing `remote` from state.json on the next persist. mux-sessions.json
               // round-trips MuxSession.remote; state.json carries SessionState.remote.
               remote: muxSession.remote ?? savedState?.remote,
+              // Docker metadata round-trips the same way (mux-sessions.json carries
+              // MuxSession.docker; state.json carries SessionState.docker), so recovery
+              // rebuilds the `docker exec` launch instead of a broken local command.
+              docker: muxSession.docker ?? savedState?.docker,
             });
 
             // Update session name if it was a "Restored:" placeholder or doesn't match saved name
