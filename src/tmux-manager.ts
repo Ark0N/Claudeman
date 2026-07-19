@@ -997,6 +997,12 @@ export function resolveDockerLaunchOptions(
     HOME: CONTAINER_HOME,
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',
+    // Give claude a temp dir it will own inside HOME. Its default `/tmp/claude-<uid>`
+    // is refused when that path pre-exists root-owned — which happens when the
+    // workspace bind-mount path traverses it (e.g. a workspace under /tmp/claude-<uid>).
+    // A nonexistent HOME subpath is created+owned by the running uid, so this is robust
+    // to any workspace location. Non-secret path, safe to be committed on export.
+    CLAUDE_CODE_TMPDIR: `${CONTAINER_HOME}/.cache/codeman-claude-tmp`,
   };
   if (docker.hooksEnabled) {
     // Derive a container-reachable API url (scheme + port preserved; host swapped

@@ -60,6 +60,15 @@ The container is paused across the capture so the image and workspace are consis
 
 `GET /api/docker-exports` lists bundles; `GET /api/docker-exports/:filename` downloads one; `DELETE` removes one.
 
+## Hooks require the server to be reachable from the container
+
+In-container hooks (permission events, hook-based idle/stop/task notifications) POST to `CODEMAN_API_URL`, which is derived as `https://host.docker.internal:<port>` (`host.docker.internal` → the docker bridge gateway, e.g. `172.17.0.1`, via `--add-host …:host-gateway`). For that callback to succeed, the Codeman server must be **listening on an interface the container can reach**.
+
+- If Codeman binds **loopback-only** (`127.0.0.1`, the default and the production systemd config), a container reaching `172.17.0.1:<port>` cannot connect, so **in-container hooks do not fire**. The session still works fully: idle/stop detection falls back to **output-based** detection through the `docker exec` PTY (which always works), and claude runs with `--dangerously-skip-permissions` so there are no permission prompts to forward anyway.
+- To enable in-container hooks, run Codeman where the container can reach it: bind `0.0.0.0` **with `CODEMAN_PASSWORD` set** (`CODEMAN_HOST=0.0.0.0`), or otherwise make `172.17.0.1:<port>` reachable. The host guard already allowlists `host.docker.internal` / `host.containers.internal`, and the hook secret is mounted, so hooks work as soon as the callback is reachable.
+
+This is an environmental constraint, not a code limitation: the host-gateway mapping, `CODEMAN_API_URL` derivation, host-guard allowlist, and hook-secret mount are all wired correctly.
+
 ## Notes & limits
 
 - Requires Docker (or Podman) with a reachable daemon; tmux must be present in the base image (a hard prerequisite, probed at link time).
