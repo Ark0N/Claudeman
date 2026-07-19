@@ -114,6 +114,73 @@ Codeman 依赖 tmux，因此 Windows 用户需要 [WSL](https://learn.microsoft.
 
 ---
 
+## 使用 Codeman —— 人类操作指南
+
+从头到尾走一遍如何在浏览器里驾驭 Codeman。如果你刚装好，就从这里开始。
+
+### 1. 启动服务器
+
+```bash
+codeman web                       # localhost:3000（仅环回 —— 安全默认值）
+codeman web --port 8080           # 自定义端口（或设置 CODEMAN_PORT）
+codeman web --https               # 自签名 TLS（仅远程访问时需要）
+codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_PASSWORD（见「安全」）
+```
+
+打开打印出的 URL。整个页面是一个单一仪表盘；下面的一切都在这里完成。
+
+### 2. 创建你的第一个会话
+
+点击 **+ New Session**（或 **Quick Start**）。一个会话就是一个运行在自己 tmux 终端里的 AI CLI。你可以选择：
+
+| 字段                   | 作用                                                                                        |
+| ---------------------- | ------------------------------------------------------------------------------------------- |
+| **工作目录 / case**    | 智能体操作的文件夹。「case」就是一个 Codeman 记住的命名工作目录。                           |
+| **CLI / 运行模式**     | `Claude`（默认）、`OpenCode`、`Codex`、`Gemini` 或 `Terminal`（普通 shell）。               |
+| **模型**               | 每会话模型（App Settings → Claude Model）。软默认值 —— 会话内 `/model` 依然有效。           |
+| **Effort / Ultracode** | 推理力度（`low`–`max`），或用 `ultracode` 开启动态多智能体工作流。随时可用 `/effort` 切换。 |
+
+点击启动 —— Codeman 通过真实 PTY 拉起 CLI，并经 SSE 流式传输到你的浏览器。
+
+### 3. 读懂仪表盘
+
+- **标签（顶部）** —— 每个会话一个。`Alt+1`–`9` 跳转，`Ctrl+Tab` 下一个，拖拽排序。
+- **终端（中央）** —— 真实的 `xterm.js` 终端；完整 TUI 正常渲染。直接输入并按 **Enter** 发送。`Shift+Enter` 插入换行。
+- **侧边面板** —— Respawn、Ralph、Orchestrator、Cron、Subagents、Settings（从工具栏切换）。
+
+### 4. 与智能体对话
+
+- **直接在终端输入提示** —— 即使跨越重连，输入也是精确一次送达（连接中断绝不会丢失或重复发送提示）。
+- **粘贴或拖放图片**，直接进入会话。
+- **语音输入** —— `Ctrl+Shift+V`（Deepgram Nova-3，自动静音停止）。
+- **附件** —— 注册外部文件/文档，并内联预览 Office/PDF。
+
+### 5. 让它自主运行
+
+| 模式             | 用途                                                                                                      | 位置                   |
+| ---------------- | --------------------------------------------------------------------------------------------------------- | ---------------------- |
+| **Respawn**      | 长时间无人值守运行 —— 空闲/限额时自动重启 CLI，带自适应时序。预设：`solo-work`、`overnight-autonomous` 等 | Respawn 标签页         |
+| **Ralph / Todo** | 一个自驱循环，跟踪 todo 列表并持续工作直到完成。                                                          | Ralph 标签页           |
+| **Orchestrator** | 把一个目标变成分阶段计划，并跨多个智能体推动完成。                                                        | 编排器面板             |
+| **Cron**         | 已保存的、命名的定时任务（`once`/`interval`/`daily`/`weekly`），到期时拉起会话并发送提示。                | ⏰ Cron 按钮           |
+| **Auto-resume**  | 订阅限额重置后自动继续。                                                                                  | Respawn 标签页（顶部） |
+
+### 6. 随时随地访问
+
+- **手机/平板** —— UI 完全触控优化；扫描桌面上的**二维码**即可免密码登录。
+- **网络之外** —— `./scripts/tunnel.sh start` 打开一条 Cloudflare 隧道（先设置 `CODEMAN_PASSWORD`）。
+- **SSH** —— `sc` 选择器可从终端附着任意会话（`sc` 交互式，`sc 2` 快速附着，`sc -l` 列表）。
+
+### 7. 运维与维护
+
+- **App Settings** —— 模型、effort、主题/皮肤、通知、显示开关、各 CLI 的专属选项。
+- **自更新** —— git-clone 安装可在 **Settings → Updates** 中原地更新。
+- **部署你自己的改动** —— 见[开发](#开发)。
+
+> ⚠️ **安全提示：** 如果你正在 Codeman 受管会话*内部*工作（`echo $CODEMAN_MUX` → `1`），绝不要直接运行 `tmux kill-session` / `pkill claude` —— 请使用 Web UI 或 `./scripts/tmux-manager.sh`。
+
+---
+
 ## 移动端优化的 Web UI
 
 在任意手机上都能获得最跟手的 AI 编程智能体体验。完整的 xterm.js 终端、本地回显、滑动导航，以及为真正的远程办公而设计的触控优化界面 —— 而不是把桌面 UI 硬塞进小屏幕。
@@ -452,7 +519,7 @@ URL 被刻意保持精简（`/q/` 路径 + 6 字符码 ≈ 53–56 个字符）�
 
 ## 安全
 
-Codeman 用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 在设计上对任何能访问到它的人都是一个远程代码执行面 —— 整套安全模型的存在就是为了控制*谁*能访问。近期加固（v0.9.0 + v0.9.5）封堵了那些常困扰自托管开发工具的浏览器驱动攻击路径。完整模型：[`docs/security-architecture.md`](docs/security-architecture.md)。
+Codeman 用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 在设计上对任何能访问到它的人都是一个远程代码执行面 —— 整套安全模型的存在就是为了控制*谁*能访问。近期加固（v0.9.0 + v0.9.5）封堵了那些常困扰自托管开发工具的浏览器驱动攻击路径。完整模型：[`docs/security-architecture.md`](docs/security-architecture.md)。**发现了漏洞？** 私下披露方式与已知限制清单见 [`SECURITY.md`](SECURITY.md)。
 
 ### 网络与访问
 
@@ -503,34 +570,122 @@ sc -l           # 列出会话
 
 > Ctrl 绑定在 macOS 上也接受 Cmd。
 
-| 快捷键                          | 动作                   |
-| ------------------------------- | ---------------------- |
-| `Ctrl/Cmd+W`                    | 杀掉当前会话           |
-| `Ctrl/Cmd+Tab`                  | 下一个会话             |
-| `Alt+1`–`Alt+9`                 | 切换到第 N 个标签      |
-| `Ctrl+Shift+{` / `Ctrl+Shift+}` | 将当前标签左移 / 右移  |
-| `Ctrl/Cmd+L`                    | 清屏                   |
-| `Ctrl+Shift+R`                  | 恢复终端尺寸           |
-| `Ctrl+Shift+V`                  | 切换语音输入           |
-| `Ctrl/Cmd +` / `-`              | 字体大小               |
-| `Ctrl/Cmd+?`                    | 键盘帮助               |
-| `Shift+Enter`                   | 插入换行（发送到终端） |
-| `Escape`                        | 关闭面板与模态框       |
+| 快捷键                          | 动作                                                     |
+| ------------------------------- | -------------------------------------------------------- |
+| `Ctrl/Cmd+W`                    | 杀掉当前会话                                             |
+| `Ctrl/Cmd/Option+K`             | 查找已打开的会话或新建一个                               |
+| `Ctrl/Cmd+Tab`                  | 下一个会话                                               |
+| `Alt/Option+[` / `Alt/Option+]` | 上一个 / 下一个会话                                      |
+| `Alt/Option+1`–`Alt/Option+9`   | 切换到第 N 个标签（按物理键位，macOS Option 布局也适用） |
+| `Ctrl+Shift+{` / `Ctrl+Shift+}` | 将当前标签左移 / 右移                                    |
+| `Ctrl/Cmd+L`                    | 清屏                                                     |
+| `Ctrl+Shift+R`                  | 恢复终端尺寸                                             |
+| `Ctrl+Shift+V`                  | 切换语音输入                                             |
+| `Ctrl/Cmd +` / `-`              | 字体大小                                                 |
+| `Ctrl/Cmd+?`                    | 键盘帮助                                                 |
+| `Shift+Enter`                   | 插入换行（发送到终端）                                   |
+| `Escape`                        | 关闭面板与模态框                                         |
+
+---
+
+## 从智能体驱动 Codeman —— 编程指南
+
+面向不经浏览器控制 Codeman 的 AI 智能体与自动化：一个拉起工作会话的智能体、一个 CI 机器人，或是**运行在 Codeman 会话*内部*、编排其他会话的 Claude Code**。UI 能做的一切都是 HTTP + CLI，因此智能体也能做。
+
+### 检测自己身处 Codeman 内部
+
+当 CLI 运行在 Codeman 受管会话中时，以下环境变量会被设置 —— 读取它们，别硬编码任何东西：
+
+| 变量                       | 含义                                                                                                                 |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `CODEMAN_MUX=1`            | 你在一个受管 tmux 会话里。**绝不要** `tmux kill-session` / `pkill claude` / `pkill tmux` —— 你会杀掉自己或兄弟会话。 |
+| `CODEMAN_API_URL`          | API 的基础 URL（例如 `https://127.0.0.1:3000`）。下面每个调用都用它。                                                |
+| `CODEMAN_SESSION_ID`       | *你自己的*会话 id。用它避免对自己下手。                                                                              |
+| `CODEMAN_HOOK_SECRET_FILE` | hook 密钥文件的路径（受管隧道开启时调用 `/api/hook-event` 必需）。                                                   |
+
+### 行路规则（POST 之前先读）
+
+1. **只发单行输入。** 编程输入会作为字面文本 **+ Enter** 一次性发送。多行字符串会破坏智能体 TUI（Ink）—— 发送一行，或拆成多次调用。
+2. **让输入幂等。** 在 `POST …/input` 上带上稳定的 `clientId` 和按会话单调递增的 `seq`。服务端会去重，因此连接中断后的重试不会重复投递提示。
+3. **认证。** 若设置了 `CODEMAN_PASSWORD`，发送 HTTP Basic 认证（用户 `admin` 或 `CODEMAN_USERNAME`）或 `codeman_session` cookie。默认的环回安装无密码。缺失的 `Origin` 头被允许，因此普通 `curl` 可用；跨站的浏览器 origin 会被拒绝（CSRF 防护）。
+4. **响应信封。** 多数端点返回 `{ "success": true, "data": … }`（错误：`{ "success": false, "error", "errorCode" }`）。少数遗留 GET 返回裸响应体 —— **两种都要处理**（`body.data ?? body`）。
+5. **`/api/v1/*`** 是 `/api/*` 的稳定别名。
+
+### 常用配方
+
+```bash
+API="${CODEMAN_API_URL:-http://127.0.0.1:3000}"
+# （若设置了密码，给每个调用加上  -u admin:"$CODEMAN_PASSWORD"）
+
+# 1. 看看有什么在运行
+curl -s "$API/api/sessions" | jq '.data // .'
+
+# 2. 拉起一个工作会话（「case」= 命名工作目录）
+curl -s -X POST "$API/api/quick-start" \
+  -H 'Content-Type: application/json' \
+  -d '{"caseName":"refactor-auth","mode":"claude","effort":"high"}' | jq
+
+# 3. 向会话发送提示（精确一次：clientId + seq）
+curl -s -X POST "$API/api/sessions/$SID/input" \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"Run the test suite and summarize failures","useMux":true,"clientId":"agent-1","seq":1}'
+
+# 4. 读回终端内容
+curl -s "$API/api/sessions/$SID/output" | jq -r '.data // .'
+
+# 5. 流式接收实时事件（会话输出、智能体活动、状态）
+curl -sN "$API/api/events"          # Server-Sent Events
+
+# 6. 调度周期性工作（cron 风格任务）
+curl -s -X POST "$API/api/cron/jobs" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"nightly-deps","agentType":"claude","workingDir":"/home/me/proj",
+       "promptMode":"inline_text","promptText":"Update dependencies and open a PR",
+       "inputMode":"typed","scheduleType":"daily","dailyTime":"03:00",
+       "enabled":true,"concurrencyPolicy":"warn_only"}' | jq
+
+# 7. 查看后台子智能体及其活动记录
+curl -s "$API/api/subagents" | jq '.data // .'
+curl -s "$API/api/subagents/$AID/transcript" | jq -r '.data // .'
+
+# 8. 全系统快照（会话、设置、重生、统计）
+curl -s "$API/api/status" | jq
+```
+
+### 或使用内置 CLI
+
+同样的操作也有命令形式（`codeman <cmd>`，括号内为别名）—— 在会话内的 shell 工具里很顺手：
+
+```bash
+codeman session start -d /path/to/repo   # (s)  启动会话
+codeman session list                     #      列出会话
+codeman session logs <id>                #      查看输出
+codeman task add "fix the failing test"  # (t)  排入任务
+codeman ralph start --min-hours 8        # (r)  启动自主循环
+codeman attach <path>                    #      附着 Claude hook 上下文
+```
+
+### Hook（事件*回流*到 Codeman）
+
+Codeman 会注册 Claude Code hook，它们 `POST /api/hook-event`（`permission_prompt`、`idle_prompt`、`stop`、`task_completed` 等），让仪表盘实时响应。该端点在环回上免认证，但在受管隧道下需要 `X-Codeman-Hook-Secret` 头（从 `$CODEMAN_HOOK_SECRET_FILE` 读取）。通常你不需要手动调用它 —— Codeman 会自动接好 —— 但自主层正是靠它「看见」智能体在做什么。
+
+> 完整端点列表与请求/响应形状见下文。
 
 ---
 
 ## API
 
-基于 Fastify 的 REST —— **15 个路由模块中约 140 个处理器**，外加一条 SSE 流和一条 WebSocket 终端通道。以下是一个有代表性的子集：
+基于 Fastify 的 REST —— **18 个路由模块中约 160 个处理器**，外加一条 SSE 流和一条 WebSocket 终端通道。所有响应都使用 `ApiResponse<T>` 信封（`{success, data}` / `{success, error, errorCode}`）；`/api/v1/*` 是稳定别名。以下是一个有代表性的子集：
 
 ### 会话（Sessions）
 
-| 方法     | 端点                      | 说明                 |
-| -------- | ------------------------- | -------------------- |
-| `GET`    | `/api/sessions`           | 列出全部             |
-| `POST`   | `/api/quick-start`        | 创建 case 并启动会话 |
-| `DELETE` | `/api/sessions/:id`       | 删除会话             |
-| `POST`   | `/api/sessions/:id/input` | 发送输入             |
+| 方法     | 端点                       | 说明                                                                           |
+| -------- | -------------------------- | ------------------------------------------------------------------------------ |
+| `GET`    | `/api/sessions`            | 列出全部                                                                       |
+| `POST`   | `/api/quick-start`         | 创建 case + 启动会话（`{caseName?, mode?, effort?, envOverrides?}`）           |
+| `POST`   | `/api/sessions/:id/input`  | 发送输入（`{input, useMux?, clientId?, seq?}` —— `clientId`+`seq` = 精确一次） |
+| `GET`    | `/api/sessions/:id/output` | 读取终端输出                                                                   |
+| `DELETE` | `/api/sessions/:id`        | 删除会话                                                                       |
 
 ### 重生（Respawn）
 
@@ -555,6 +710,16 @@ sc -l           # 列出会话
 | `POST` | `/api/orchestrator/approve` | 批准生成的计划  |
 | `GET`  | `/api/orchestrator/status`  | 当前阶段 + 进度 |
 | `POST` | `/api/orchestrator/stop`    | 停止并清理      |
+
+### Cron（定时任务）
+
+| 方法             | 端点                         | 说明                  |
+| ---------------- | ---------------------------- | --------------------- |
+| `GET` / `POST`   | `/api/cron/jobs`             | 列出 / 创建 cron 任务 |
+| `PUT` / `DELETE` | `/api/cron/jobs/:id`         | 更新 / 删除任务       |
+| `PUT`            | `/api/cron/jobs/:id/enabled` | 启用 / 禁用           |
+| `POST`           | `/api/cron/jobs/:id/run`     | 立即运行              |
+| `GET`            | `/api/cron/jobs/:id/runs`    | 运行历史              |
 
 ### 子智能体（Subagents）
 
@@ -681,6 +846,10 @@ npm install xterm-zerolag-input
 [完整文档](packages/xterm-zerolag-input/README.md)
 
 ---
+
+## 版本策略
+
+Codeman 遵循 [SemVer](https://semver.org/)。版本号真正承诺的内容，以及哪些算内部实现（HTTP/SSE API、磁盘上的状态、实验性特性），都写在 [`docs/versioning-policy.md`](docs/versioning-policy.md) 中。如果你的脚本依赖 HTTP API，请锁定到确切版本。
 
 ## 许可证
 
