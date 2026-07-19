@@ -98,6 +98,118 @@ export interface SessionRemote extends RemoteSshOptions {
   commands?: Partial<Record<RemoteCommandMode, string>>;
 }
 
+// ========== Docker cases (COD-Docker) ==========
+//
+// Docker mode is a LOCATION OVERLAY on cases (never a 6th SessionMode), the exact
+// analog of the remote-SSH feature above: instead of a local tmux pane running
+// `ssh host` into a durable remote tmux server, a local tmux pane runs
+// `docker exec -it` into a durable in-container tmux server. The container is
+// scoped to the CASE (not the session), so multiple sessions can `docker exec`
+// into the same long-lived container. See `docs/docker-cases-plan.md`.
+
+/** Which CLI backends a Docker case can run (same set as remote). */
+export type DockerCommandMode = Extract<SessionMode, 'shell' | 'claude' | 'opencode' | 'codex' | 'gemini'>;
+
+/** Container engine. Docker and Podman differ in the uid/userns + host-gateway alias. */
+export type DockerEngine = 'docker' | 'podman';
+
+/**
+ * Container network mode. `host` and any inbound `-p` publish are deliberately
+ * unrepresentable (never in this union, never emitted by the flag builder).
+ * - `bridge`: own netns, NAT egress, no inbound (default — every API CLI needs egress)
+ * - `none`: fully offline sandbox (breaks API CLIs; reserved for `shell`)
+ * - `custom`: a user-defined bridge `codeman-net-<slug>` (future egress-allowlist chokepoint)
+ */
+export type DockerNetworkMode = 'bridge' | 'none' | 'custom';
+
+/** Per-container resource caps. Advisory under non-delegated rootless (see `capsEnforced`). */
+export interface DockerResourceLimits {
+  /** e.g. '4g' -> --memory 4g --memory-swap 4g (swap==memory: a real OOM cap) */
+  memory?: string;
+  /** e.g. '2' -> --cpus 2 */
+  cpus?: string;
+  /** e.g. 512 -> --pids-limit 512 (fork-bomb guard) */
+  pidsLimit?: number;
+  /** e.g. '4096:8192' -> --ulimit nofile=4096:8192 */
+  nofile?: string;
+  /** e.g. '256m' -> --shm-size (only when a tool needs /dev/shm) */
+  shmSize?: string;
+}
+
+/** A reusable Docker engine/image/network/resource profile (mirror of RemoteHost). */
+export interface DockerHost {
+  id: string;
+  label: string;
+  /** Engine; when absent the availability probe resolves it (docker, else podman). */
+  engine?: DockerEngine;
+  /** Base image ref (built locally by scripts/build-agent-image.mjs, e.g. codeman/agent:base). */
+  image: string;
+  /** Advanced: remote daemon (-H ssh://user@host or a DOCKER_HOST value). */
+  daemonHost?: string;
+  /** Advanced: docker `--context` name. */
+  context?: string;
+  /** Network mode (default 'bridge'). */
+  network?: DockerNetworkMode;
+  /** Custom bridge name when network === 'custom'. */
+  networkName?: string;
+  resources?: DockerResourceLimits;
+  /** true (default) = convenient: bind-mount host cred dirs RW. false = sealed (blocks full-image export). */
+  mountCredentials?: boolean;
+  /** true (default) = wire in-container hooks (host-gateway callback + workspace scaffold). */
+  hooksEnabled?: boolean;
+  /** true (default) = a relaunch resumes the last conversation from the bind-mounted transcript. */
+  resumeOnStart?: boolean;
+  /** Per-mode command overrides (mirror RemoteHost.commands). */
+  commands?: Partial<Record<DockerCommandMode, string>>;
+  /** Escape hatch: extra `docker create` args (validated like extraSshOptions). */
+  extraCreateArgs?: string[];
+  /** Escape hatch: extra `docker exec` args. */
+  extraExecArgs?: string[];
+}
+
+/** A case linked to a Docker container (mirror of RemoteCase). */
+export interface DockerCase {
+  name: string;
+  type: 'docker';
+  hostId: string;
+  /** Absolute HOST directory: the bind-mount source AND Session.workingDir (real host bytes). */
+  hostWorkspacePath: string;
+  /** Container path (default = hostWorkspacePath: mirror -> transcript projHash correlates). */
+  containerWorkdir?: string;
+  /** Container name (default codeman-case-<slug>). */
+  container?: string;
+  /** Last captured Claude conversation id, replayed via --resume on a fresh launch. */
+  lastClaudeSessionId?: string;
+}
+
+/**
+ * Flattened Docker execution metadata carried on a live session (mirror of
+ * SessionRemote). Round-trips through MuxSession/SessionState/mux-sessions.json.
+ */
+export interface SessionDocker {
+  hostId: string;
+  label: string;
+  engine: DockerEngine;
+  image: string;
+  /** Per-CASE container name (shared by all sessions of the case). */
+  containerName: string;
+  hostWorkspacePath: string;
+  containerWorkdir: string;
+  network: DockerNetworkMode;
+  networkName?: string;
+  resources?: DockerResourceLimits;
+  mountCredentials: boolean;
+  hooksEnabled: boolean;
+  resumeOnStart: boolean;
+  daemonHost?: string;
+  context?: string;
+  commands?: Partial<Record<DockerCommandMode, string>>;
+  extraCreateArgs?: string[];
+  extraExecArgs?: string[];
+  /** Stable hash of the drift-relevant create args (recreate-on-drift detection). */
+  configHash?: string;
+}
+
 /**
  * Valid Claude CLI effort levels (claude >= 2.1.154).
  * `ultracode` = xhigh effort + standing dynamic-workflow orchestration; it is a
@@ -217,6 +329,8 @@ export interface SessionState {
   workingDir: string;
   /** Remote execution metadata, present when this session runs over SSH through local tmux */
   remote?: SessionRemote;
+  /** Docker execution metadata, present when this session runs inside a container via local tmux + docker exec */
+  docker?: SessionDocker;
   /** ID of currently assigned task, null if none */
   currentTaskId: string | null;
   /** Timestamp when session was created */

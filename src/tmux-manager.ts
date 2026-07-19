@@ -29,7 +29,8 @@ const execAsync = promisify(exec);
 import { existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { writeFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { dataPath, DEFAULT_TMUX_SOCKET } from './config/instance.js';
+import { homedir } from 'node:os';
+import { dataPath, DEFAULT_TMUX_SOCKET, CODEMAN_INSTANCE } from './config/instance.js';
 import {
   ProcessStats,
   PersistedRespawnConfig,
@@ -43,9 +44,22 @@ import {
   type EffortLevel,
   type GeminiConfig,
   type SessionRemote,
+  type SessionDocker,
+  type DockerCommandMode,
 } from './types.js';
 import { buildEffortCliArgs } from './session-cli-builder.js';
 import { buildSshConnectionArgs, defaultRemoteCommandForMode, remoteSshTarget } from './remote-hosts.js';
+import {
+  buildDockerBaseArgs,
+  buildDockerCreateArgs,
+  containerApiUrl,
+  CONTAINER_HOME,
+  defaultDockerCommandForMode,
+  hostGatewayAlias,
+  resolveCredentialMounts,
+  type DockerCreateContext,
+  type DockerMount,
+} from './docker-hosts.js';
 import {
   wrapWithNice,
   SAFE_PATH_PATTERN,
@@ -812,6 +826,220 @@ export function buildRemoteKillCommand(options: { remote: SessionRemote; session
   return [ssh, ...connectionArgs, remoteSshTarget(remote), shellescape(killCmd)].join(' ');
 }
 
+// ========== Docker cases (COD-Docker) ==========
+//
+// The docker analog of the remote-SSH launch above. Instead of a local tmux pane
+// running `ssh -t host 'tmux new-session …'`, it runs `docker exec -it <container>
+// sh -lc 'tmux new-session …'` into a DURABLE in-container tmux server. The
+// container is per-CASE, so many sessions `docker exec` into the same one. See
+// docs/docker-cases-plan.md.
+
+/**
+ * DEDICATED in-container tmux socket. A Codeman running INSIDE the container uses
+ * `-L codeman`; ours is `-L codeman-docker` with a `codeman-dkr-*` session name
+ * that deliberately FAILS SAFE_MUX_NAME_PATTERN, so an in-container Codeman never
+ * adopts/resizes/respawns our session (same defence as the remote socket).
+ */
+const DOCKER_TMUX_SOCKET = 'codeman-docker';
+
+/**
+ * Deterministic, reattach-stable in-container tmux session name. Derived from the
+ * same stable field the local muxName uses (first 8 chars of the sessionId), so a
+ * reconnect re-issues the exact same `new-session -A` and lands back in the SAME
+ * in-container session. The `dkr` letters make it fail SAFE_MUX_NAME_PATTERN.
+ */
+export function dockerTmuxSessionName(sessionId: string): string {
+  return `codeman-dkr-${sessionId.slice(0, 8)}`;
+}
+
+/** Resume ids are UUID-ish; reject anything with shell metacharacters (defensive). */
+const RESUME_ID_SAFE = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * Append the CLI-specific resume flag to a pane command. Only fires when the
+ * in-container tmux is RE-CREATED (`new-session -A` makes the flag inert on a
+ * live reattach), i.e. exactly when the previous live agent was lost and we want
+ * to resume the conversation from the bind-mounted transcript.
+ */
+function appendResumeFlag(modeCommand: string, mode: SessionMode, resumeId: string): string {
+  if (!RESUME_ID_SAFE.test(resumeId)) return modeCommand;
+  switch (mode) {
+    case 'claude':
+    case 'gemini':
+      return `${modeCommand} --resume ${resumeId}`;
+    case 'codex':
+      return `${modeCommand} resume ${resumeId}`;
+    default:
+      return modeCommand; // shell / opencode: no resume
+  }
+}
+
+/** Fully-resolved inputs for buildDockerLaunchCommand (pure). */
+export interface DockerLaunchOptions {
+  mode: SessionMode;
+  docker: SessionDocker;
+  sessionId: string;
+  resumeSessionId?: string;
+  createContext: DockerCreateContext;
+  /** exec-time inline env (non-secret): TERM, COLORTERM, CODEMAN_SESSION_ID, CODEMAN_MUX */
+  execEnv: Record<string, string>;
+  /** exec-time NAME-ONLY env forwarded from Codeman's process env (codex/gemini keys) */
+  execEnvNames: string[];
+}
+
+/**
+ * Build the ONE `bash -c` launch string for a docker session: image-check ->
+ * ensure (inspect-or-create) -> start -> `exec docker exec -it` into the durable
+ * in-container tmux (resume-aware). PURE and unit-testable. The escaping survives
+ * four layers: outer `bash -c "…"` (JSON.stringify at respawn-pane) -> the joined
+ * command -> `docker exec … sh -lc '<tmux>'` -> tmux `'<paneCommand>'`.
+ */
+export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
+  const { mode, docker, sessionId, resumeSessionId, createContext, execEnv, execEnvNames } = opts;
+  const base = buildDockerBaseArgs(docker).join(' ');
+  const createArgs = buildDockerCreateArgs(createContext).join(' ');
+  const name = shellescape(docker.containerName);
+  const workdir = shellescape(docker.containerWorkdir);
+  const image = shellescape(docker.image);
+  const dkrName = dockerTmuxSessionName(sessionId);
+  const sid = sessionId.slice(0, 8);
+
+  let modeCommand = docker.commands?.[mode as DockerCommandMode] || defaultDockerCommandForMode(mode);
+  if (resumeSessionId) modeCommand = appendResumeFlag(modeCommand, mode, resumeSessionId);
+  // Run by tmux via /bin/sh -c, so the path is shell-quoted here. `exec` makes the
+  // pane PID the agent itself.
+  const paneCommand = `cd ${workdir} && ${modeCommand}`;
+
+  // `setenv -g` primes the session id so reattaches / newly-created panes inherit
+  // it. `new-session -A` = attach-or-create (idempotent + resume-aware). Options
+  // are scoped per-session (`set -t`) or server (`set -s`), never `-g`, so a shared
+  // in-container tmux server's other sessions keep their own prefix/mouse.
+  const tmuxInvocation = [
+    `tmux -L ${DOCKER_TMUX_SOCKET} setenv -g CODEMAN_SESSION_ID ${shellescape(sid)}`,
+    'setenv -g CODEMAN_MUX 1',
+    `new-session -A -s ${dkrName} -c ${workdir} ${shellescape(paneCommand)}`,
+    `set -t ${dkrName} status off`,
+    `set -t ${dkrName} mouse off`,
+    `set -t ${dkrName} prefix C-q`,
+    'set -s escape-time 0',
+  ].join(' \\; ');
+
+  const execEnvFlags: string[] = [];
+  for (const [k, v] of Object.entries(execEnv)) execEnvFlags.push('--env', shellescape(`${k}=${v}`));
+  // NAME-ONLY forwards: docker reads the VALUE from Codeman's own process env, so
+  // the secret never appears in argv (no `ps` leak) and is not committed.
+  for (const n of execEnvNames) execEnvFlags.push('--env', n);
+  for (const extra of docker.extraExecArgs ?? []) execEnvFlags.push(shellescape(extra));
+
+  const imageMissingMsg = shellescape(
+    `Codeman: base image ${docker.image} not present (build: node scripts/build-agent-image.mjs)`
+  );
+  const startFailMsg = shellescape(`Codeman: container ${docker.containerName} failed to start (docker daemon down?)`);
+
+  const imageCheck = `${base} image inspect ${image} >/dev/null 2>&1 || { echo ${imageMissingMsg}; exit 1; }`;
+  // create-if-missing (idempotent): reconnect / boot recovery re-runs this exact chain.
+  const ensure = `${base} inspect ${name} >/dev/null 2>&1 || ${base} ${createArgs}`;
+  const start = `${base} start ${name} >/dev/null 2>&1 || { echo ${startFailMsg}; exit 1; }`;
+  const execCmd = `exec ${base} exec -it --workdir ${workdir} ${execEnvFlags.join(' ')} ${name} sh -lc ${shellescape(tmuxInvocation)}`;
+
+  return [imageCheck, ensure, start, execCmd].join(' ; ');
+}
+
+/**
+ * Kill ONLY this session's in-container tmux session. The container is shared by
+ * the case's other sessions, so this NEVER `docker stop`s it — stopping/removing
+ * the container is an explicit teardown (buildDockerStopCommand) or case-delete
+ * (buildDockerRemoveCommand). Fired best-effort on session kill.
+ */
+export function buildDockerKillCommand(options: { docker: SessionDocker; sessionId: string }): string {
+  const { docker, sessionId } = options;
+  const base = buildDockerBaseArgs(docker).join(' ');
+  const dkrName = dockerTmuxSessionName(sessionId);
+  return `${base} exec ${shellescape(docker.containerName)} tmux -L ${DOCKER_TMUX_SOCKET} kill-session -t ${shellescape(dkrName)}`;
+}
+
+/** Explicit container stop (frees RAM/CPU; conversation resumes on next launch via --resume). */
+export function buildDockerStopCommand(docker: SessionDocker): string {
+  return `${buildDockerBaseArgs(docker).join(' ')} stop -t 10 ${shellescape(docker.containerName)}`;
+}
+
+/** Explicit container removal (case-delete). Destroys in-image state; bind mounts survive. */
+export function buildDockerRemoveCommand(docker: SessionDocker): string {
+  return `${buildDockerBaseArgs(docker).join(' ')} rm -f ${shellescape(docker.containerName)}`;
+}
+
+/**
+ * Resolve the environment-dependent bits of a docker launch (host uid, existing
+ * credential mounts, derived api url, hook-secret mount, Desktop detection) into
+ * the pure buildDockerLaunchCommand inputs. IO; only ever called from the real
+ * launch path (createSession/respawnPane no-op under VITEST).
+ */
+export function resolveDockerLaunchOptions(
+  mode: SessionMode,
+  docker: SessionDocker,
+  sessionId: string,
+  resumeSessionId?: string
+): DockerLaunchOptions {
+  const home = homedir();
+  const isDesktop = process.platform === 'darwin'; // Docker Desktop translates uids + native host.docker.internal
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 1000;
+  const userArgs: string[] =
+    docker.engine === 'podman'
+      ? ['--userns=keep-id'] // rootless podman: map host uid to the image `agent` uid
+      : isDesktop
+        ? [] // Desktop: run as the image's baked uid (a mac uid wouldn't own /home/agent)
+        : ['--user', `${uid}:0`]; // Linux: host uid + GID 0 (OpenShift arbitrary-uid writable HOME)
+  const gatewayAlias = hostGatewayAlias(docker.engine);
+
+  const credentialMounts: DockerMount[] = docker.mountCredentials ? resolveCredentialMounts(home) : [];
+  const extraMounts: DockerMount[] = [];
+  const envCreate: Record<string, string> = {
+    HOME: CONTAINER_HOME,
+    TERM: 'xterm-256color',
+    COLORTERM: 'truecolor',
+  };
+  if (docker.hooksEnabled) {
+    // Derive a container-reachable API url (scheme + port preserved; host swapped
+    // for the engine gateway alias). Prod is HTTPS on 3000.
+    envCreate.CODEMAN_API_URL = containerApiUrl(process.env.CODEMAN_API_URL, docker.engine);
+    const hookSecretPath = dataPath('hook-secret');
+    if (existsSync(hookSecretPath)) {
+      const dst = `${CONTAINER_HOME}/.codeman/hook-secret`;
+      extraMounts.push({ src: hookSecretPath, dst, readonly: true });
+      envCreate.CODEMAN_HOOK_SECRET_FILE = dst; // a path is non-secret; the bytes ride the bind mount
+    }
+  }
+
+  const createContext: DockerCreateContext = {
+    docker,
+    sessionId,
+    instance: CODEMAN_INSTANCE,
+    userArgs,
+    credentialMounts,
+    extraMounts,
+    envCreate,
+    addHostGateway: !isDesktop,
+    gatewayAlias,
+  };
+
+  const execEnv: Record<string, string> = {
+    TERM: 'xterm-256color',
+    COLORTERM: 'truecolor',
+    CODEMAN_SESSION_ID: sessionId.slice(0, 8),
+    CODEMAN_MUX: '1',
+  };
+  // NAME-ONLY exec env forwarded from Codeman's process env (the docker client
+  // inherits it), so API-key CLIs get their key without it appearing in argv.
+  const execEnvNames =
+    mode === 'codex'
+      ? ['OPENAI_API_KEY', 'CODEX_API_KEY']
+      : mode === 'gemini'
+        ? ['GEMINI_API_KEY', 'GOOGLE_API_KEY']
+        : [];
+
+  return { mode, docker, sessionId, resumeSessionId, createContext, execEnv, execEnvNames };
+}
+
 /**
  * Set sensitive environment variables on a tmux session via setenv.
  * These are inherited by panes but not visible in ps output or tmux history.
@@ -1209,6 +1437,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       effort,
       historyLimit = DEFAULT_TMUX_HISTORY_LIMIT,
       remote,
+      docker,
     } = options;
     const muxName = `codeman-${sessionId.slice(0, 8)}`;
 
@@ -1228,6 +1457,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         createdAt: Date.now(),
         workingDir,
         remote,
+        docker,
         mode,
         attached: false,
         name,
@@ -1273,7 +1503,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     try {
       // Build the full command to run inside tmux
       const localFullCmd = `${buildNofileLimitCommand()} && ${pathExport}${envExportsStr} && ${cmd}`;
-      const fullCmd = remote ? buildRemoteLaunchCommand({ mode, remote, sessionId }) : localFullCmd;
+      const fullCmd = docker
+        ? buildDockerLaunchCommand(resolveDockerLaunchOptions(mode, docker, sessionId, resumeSessionId))
+        : remote
+          ? buildRemoteLaunchCommand({ mode, remote, sessionId })
+          : localFullCmd;
 
       // Create tmux session in three steps to handle cold-start (no server running)
       // and avoid the race where the command exits before remain-on-exit is set:
@@ -1324,7 +1558,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
       // Replace the shell with the actual command (no echo in terminal). Keep
       // pane launch in /tmp, then cd inside bash against the current mount table.
-      const launchCmd = remote ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
+      const launchCmd = remote || docker ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
       execSync(
         `${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${JSON.stringify(launchCmd)}`,
         {
@@ -1399,6 +1633,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         createdAt: Date.now(),
         workingDir,
         remote,
+        docker,
         mode,
         attached: false,
         name,
@@ -1484,6 +1719,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       effort,
       historyLimit = DEFAULT_TMUX_HISTORY_LIMIT,
       remote,
+      docker,
     } = options;
     const session = this.sessions.get(sessionId);
     if (!session) return null;
@@ -1521,7 +1757,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const config = niceConfig || DEFAULT_NICE_CONFIG;
     const cmd = wrapWithNice(baseCmd, config);
     const localFullCmd = `${buildNofileLimitCommand()} && ${pathExport}${envExportsStr} && ${cmd}`;
-    const fullCmd = remote ? buildRemoteLaunchCommand({ mode, remote, sessionId }) : localFullCmd;
+    const fullCmd = docker
+      ? buildDockerLaunchCommand(resolveDockerLaunchOptions(mode, docker, sessionId, resumeSessionId))
+      : remote
+        ? buildRemoteLaunchCommand({ mode, remote, sessionId })
+        : localFullCmd;
 
     try {
       // For OpenCode: set sensitive env vars via tmux setenv before respawn
@@ -1539,7 +1779,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       this.applyEnvOverrides(muxName, envOverrides);
 
       // -c /tmp + cd bounce — see createSession() for rationale (stale FUSE state).
-      const launchCmd = remote ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
+      const launchCmd = remote || docker ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
       await execAsync(
         `${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${JSON.stringify(launchCmd)}`,
         {
@@ -1722,6 +1962,18 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         exec(remoteKillCmd, { timeout: EXEC_TIMEOUT_MS }, () => {});
       } catch {
         // Best-effort — a failure here must not affect the local kill result.
+      }
+    }
+
+    // Strategy 3c: Docker sessions run a DURABLE in-container tmux session. Kill
+    // ONLY this session's in-container tmux session (best-effort). The container is
+    // PER-CASE and shared by the case's other sessions, so we deliberately do NOT
+    // `docker stop` it here — stopping/removing is an explicit teardown/case-delete.
+    if (session.docker && !IS_TEST_MODE) {
+      try {
+        exec(buildDockerKillCommand({ docker: session.docker, sessionId }), { timeout: EXEC_TIMEOUT_MS }, () => {});
+      } catch {
+        // Best-effort — never affects the local kill result.
       }
     }
 
