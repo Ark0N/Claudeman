@@ -536,6 +536,9 @@ export const QuickStartSchema = z.object({
     .string()
     .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format. Use only letters, numbers, hyphens, underscores.')
     .optional(),
+  /** Display name for the created session tab (e.g. w1-mycase). Cosmetic; the durable
+   *  mux/container names derive from the session id, not this. Defaults server-side. */
+  sessionName: z.string().max(128).optional(),
   mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini']).optional(),
   openCodeConfig: OpenCodeConfigSchema,
   codexConfig: CodexConfigSchema,

@@ -77,6 +77,8 @@ import { checkRemoteTmuxAvailable, readRemoteCases, readRemoteHosts, toSessionRe
 import {
   checkDockerAvailable,
   checkDockerTmuxAvailable,
+  ensureAgentBaseImage,
+  DEFAULT_AGENT_IMAGE,
   readDockerCases,
   readDockerHosts,
   toSessionDocker,
@@ -1679,6 +1681,7 @@ export function registerSessionRoutes(
 
     const {
       caseName = 'testcase',
+      sessionName,
       mode = 'claude',
       openCodeConfig,
       codexConfig,
@@ -1758,10 +1761,26 @@ export function registerSessionRoutes(
         );
       }
       const sessionDocker = toSessionDocker(host, dockerCase);
+      // Ensure the base image exists, auto-building the default image on first use so
+      // it is never a blocker. Dedup'd with any build kicked off at case-create, so
+      // this awaits the SAME in-flight build rather than starting a second one.
+      const ensured = await ensureAgentBaseImage(sessionDocker.engine, sessionDocker.image, {
+        onProgress: (line) => ctx.broadcast(SseEvent.DockerImageBuildProgress, { name: dockerCase.name, line }),
+      });
+      if (!ensured.ok) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, ensured.error || 'base image not available');
+      }
+      if (ensured.built) {
+        ctx.broadcast(SseEvent.DockerImageBuildComplete, { name: dockerCase.name, image: sessionDocker.image });
+      }
       // tmux is a hard prerequisite (the in-container tmux makes reconnect durable).
-      const tmuxCheck = await checkDockerTmuxAvailable(sessionDocker);
-      if (!tmuxCheck.ok) {
-        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, tmuxCheck.error || 'base image is missing tmux');
+      // Skip the extra container-run probe for our OWN default image (the baked
+      // Dockerfile always contains tmux); still verify a custom image.
+      if (sessionDocker.image !== DEFAULT_AGENT_IMAGE) {
+        const tmuxCheck = await checkDockerTmuxAvailable(sessionDocker);
+        if (!tmuxCheck.ok) {
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, tmuxCheck.error || 'base image is missing tmux');
+        }
       }
 
       casePath = dockerCase.hostWorkspacePath; // a REAL host dir (bind-mounted into the container)
@@ -1906,6 +1925,7 @@ export function registerSessionRoutes(
     const qsTerminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const session = new Session({
       workingDir: resolvedCasePath,
+      name: sessionName ? sessionName.slice(0, MAX_SESSION_NAME_LENGTH) : '',
       mux: ctx.mux,
       useMux: true,
       mode: mode,

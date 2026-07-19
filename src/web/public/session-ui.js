@@ -46,8 +46,17 @@ Object.assign(CodemanApp.prototype, {
 
   formatCasePickerLabel(c) {
     if (c?.location === 'remote' && c.remote?.hostId) return `${c.name} @ ${c.remote.hostId}`;
-    if (c?.location === 'docker' && c.docker?.container) return `${c.name} @ ${c.docker.container}`;
+    if (c?.location === 'docker') return `${c.name} (${this.dockerCaseTag(c.docker?.hostId)})`;
     return c?.name || '';
+  },
+
+  // Short parenthetical tag for a dockerized case: '(docker)' for the default /
+  // auto-provisioned host (one-click "Run in Docker", the Docker-tab 'local'
+  // default, or a per-case 'q-<name>' resource-override host), otherwise the custom
+  // docker host id the user named (e.g. '(gpu-box)'). Keeps the case name short.
+  dockerCaseTag(hostId) {
+    if (!hostId || hostId === 'default' || hostId === 'local' || /^q-/.test(hostId)) return 'docker';
+    return hostId;
   },
 
   buildCasePickerOptions(cases = []) {
@@ -485,6 +494,22 @@ Object.assign(CodemanApp.prototype, {
     input.value = Math.max(1, current - 1);
   },
 
+  // Next free <prefix><n> index for a case's session tabs (e.g. w1-<case>,
+  // w2-<case> for agents, s1-<case> for shells), shared by the local and
+  // remote/docker launch paths so all tabs follow the same naming convention.
+  _nextCaseSessionStartNumber(caseName, prefix = 'w') {
+    const re = new RegExp(`^${prefix}(\\d+)-([a-zA-Z0-9_-]+)`);
+    let startNumber = 1;
+    for (const [, session] of this.sessions || []) {
+      const match = session.name && session.name.match(re);
+      if (match && match[2] === caseName) {
+        const num = parseInt(match[1]);
+        if (num >= startNumber) startNumber = num + 1;
+      }
+    }
+    return startNumber;
+  },
+
   async runClaude() {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
     const tabCount = Math.min(20, Math.max(1, parseInt(document.getElementById('tabCount').value) || 1));
@@ -523,12 +548,15 @@ Object.assign(CodemanApp.prototype, {
       // the LOCAL fs (a remote user@host:/path never exists locally), so route them
       // through /api/quick-start, which resolves the remote case + launches via ssh.
       if (caseData.location === 'remote' || caseData.location === 'docker') {
+        // Name remote/docker tabs with the same w<n>-<case> convention as local
+        // sessions (quick-start would otherwise auto-generate codeman-<id>).
+        const startNumber = this._nextCaseSessionStartNumber(caseName);
         const remoteIds = [];
         for (let i = 0; i < tabCount; i++) {
           const res = await fetch('/api/quick-start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ caseName, mode: 'claude' })
+            body: JSON.stringify({ caseName, mode: 'claude', sessionName: `w${startNumber + i}-${caseName}` })
           });
           const data = await res.json();
           if (!data.success) throw new Error(data.error || 'Failed to start remote Claude session');
@@ -546,16 +574,7 @@ Object.assign(CodemanApp.prototype, {
       let firstSessionId = null;
 
       // Find the highest existing w-number for THIS case to avoid duplicates
-      let startNumber = 1;
-      for (const [, session] of this.sessions) {
-        const match = session.name && session.name.match(/^w(\d+)-([a-zA-Z0-9_-]+)/);
-        if (match && match[2] === caseName) {
-          const num = parseInt(match[1]);
-          if (num >= startNumber) {
-            startNumber = num + 1;
-          }
-        }
-      }
+      const startNumber = this._nextCaseSessionStartNumber(caseName);
 
       // Get global Ralph tracker setting
       const ralphEnabled = this.isRalphTrackerEnabledByDefault();
@@ -709,12 +728,13 @@ Object.assign(CodemanApp.prototype, {
 
       // Remote cases run over ssh — route through /api/quick-start (see runClaude).
       if (caseData.location === 'remote' || caseData.location === 'docker') {
+        const startNumber = this._nextCaseSessionStartNumber(caseName, 's');
         const remoteIds = [];
         for (let i = 0; i < shellCount; i++) {
           const res = await fetch('/api/quick-start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ caseName, mode: 'shell' })
+            body: JSON.stringify({ caseName, mode: 'shell', sessionName: `s${startNumber + i}-${caseName}` })
           });
           const data = await res.json();
           if (!data.success) throw new Error(data.error || 'Failed to start remote shell session');
@@ -730,16 +750,7 @@ Object.assign(CodemanApp.prototype, {
       }
 
       // Find the highest existing s-number for THIS case to avoid duplicates
-      let startNumber = 1;
-      for (const [, session] of this.sessions) {
-        const match = session.name && session.name.match(/^s(\d+)-([a-zA-Z0-9_-]+)/);
-        if (match && match[2] === caseName) {
-          const num = parseInt(match[1]);
-          if (num >= startNumber) {
-            startNumber = num + 1;
-          }
-        }
-      }
+      const startNumber = this._nextCaseSessionStartNumber(caseName, 's');
 
       // Create all shell sessions in parallel
       const sessionNames = [];
@@ -828,6 +839,7 @@ Object.assign(CodemanApp.prototype, {
         body: JSON.stringify({
           caseName,
           mode: 'opencode',
+          sessionName: `w${this._nextCaseSessionStartNumber(caseName)}-${caseName}`,
           ...(isRemote ? {} : {
             openCodeConfig: { autoAllowTools: true },
             ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
@@ -880,6 +892,7 @@ Object.assign(CodemanApp.prototype, {
         body: JSON.stringify({
           caseName,
           mode: 'codex',
+          sessionName: `w${this._nextCaseSessionStartNumber(caseName)}-${caseName}`,
           ...(isRemote ? {} : {
             codexConfig: {
               dangerouslyBypassApprovals: globalSettings.codexDangerouslyBypassApprovals ?? false,
@@ -934,6 +947,7 @@ Object.assign(CodemanApp.prototype, {
         body: JSON.stringify({
           caseName,
           mode: 'gemini',
+          sessionName: `w${this._nextCaseSessionStartNumber(caseName)}-${caseName}`,
           ...(isRemote ? {} : {
             geminiConfig: { approvalMode: 'yolo' },
             ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
@@ -1679,13 +1693,6 @@ Object.assign(CodemanApp.prototype, {
       console.error('Failed to create case:', err);
       this.showToast('Failed to create case: ' + err.message, 'error');
     }
-  },
-
-  // Show/hide the expandable container-settings section under the Docker checkbox.
-  toggleDockerQuickSettings() {
-    const on = document.getElementById('newCaseDocker')?.checked;
-    const el = document.getElementById('dockerQuickSettings');
-    if (el) el.style.display = on ? '' : 'none';
   },
 
   // Fill the memory/cpu/gpu fields from a resource template. `medium` clears them so

@@ -477,6 +477,10 @@ const SSE_EVENTS = {
   DOCKER_EXPORT_COMPLETE: 'docker:exportComplete',
   DOCKER_EXPORT_FAILED: 'docker:exportFailed',
   DOCKER_IMPORT_COMPLETE: 'docker:importComplete',
+  DOCKER_IMAGE_BUILD_STARTED: 'docker:imageBuildStarted',
+  DOCKER_IMAGE_BUILD_PROGRESS: 'docker:imageBuildProgress',
+  DOCKER_IMAGE_BUILD_COMPLETE: 'docker:imageBuildComplete',
+  DOCKER_IMAGE_BUILD_FAILED: 'docker:imageBuildFailed',
 };
 
 // ═══════════════════════════════════════════════════════════════

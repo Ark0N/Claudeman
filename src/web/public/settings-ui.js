@@ -307,6 +307,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsShowSystemStats').checked = settings.showSystemStats ?? defaults.showSystemStats ?? true;
     document.getElementById('appSettingsShowLifecycleLog').checked = settings.showLifecycleLog ?? defaults.showLifecycleLog ?? true;
     document.getElementById('appSettingsShowResponseViewer').checked = settings.showResponseViewer ?? defaults.showResponseViewer ?? false;
+    document.getElementById('appSettingsShowFileViewerButton').checked = settings.showFileViewerButton ?? defaults.showFileViewerButton ?? false;
     document.getElementById('appSettingsShowAttachmentsButton').checked = settings.showAttachmentsButton ?? defaults.showAttachmentsButton ?? false;
     document.getElementById('appSettingsSkin').value = settings.skin ?? defaults.skin ?? 'daylight-blue';
     // WebGL renderer (desktop only — mobile always uses the DOM renderer, so hide
@@ -1426,6 +1427,7 @@ Object.assign(CodemanApp.prototype, {
       showSystemStats: document.getElementById('appSettingsShowSystemStats').checked,
       showLifecycleLog: document.getElementById('appSettingsShowLifecycleLog').checked,
       showResponseViewer: document.getElementById('appSettingsShowResponseViewer').checked,
+      showFileViewerButton: document.getElementById('appSettingsShowFileViewerButton').checked,
       showAttachmentsButton: document.getElementById('appSettingsShowAttachmentsButton').checked,
       showMonitor: document.getElementById('appSettingsShowMonitor').checked,
       showProjectInsights: document.getElementById('appSettingsShowProjectInsights').checked,
@@ -1618,6 +1620,7 @@ Object.assign(CodemanApp.prototype, {
       skin: _skin,
       showPlanUsageLimits: _pul,
       showAttachmentsButton: _ahb,
+      showFileViewerButton: _fvb,
       webglRendererEnabled: _wgl,
       terminalWheelLocalScrollback: _twls,
       // Per-device header/toolbar button toggles — client-only, and absent from
@@ -1781,6 +1784,7 @@ Object.assign(CodemanApp.prototype, {
         showMultiMonitorButton: false,
         showPlanUsageLimits: false,
         showAttachmentsButton: false,
+        showFileViewerButton: false,
         showRedrawButton: false,
         showSessionButton: false,
         showAwayDigestButton: false,
@@ -1895,6 +1899,14 @@ Object.assign(CodemanApp.prototype, {
     const attachmentsBtn = document.getElementById('attachmentsHistoryBtn');
     if (attachmentsBtn) {
       attachmentsBtn.classList.toggle('btn-attachments-history--hidden', !showAttachmentsButton);
+    }
+
+    // File Viewer header button — opt-in, default OFF. Marker class (base is
+    // display:inline-flex !important); clicking it toggles the file browser panel.
+    const showFileViewerButton = settings.showFileViewerButton ?? defaults.showFileViewerButton ?? false;
+    const fileViewerBtn = document.querySelector('.btn-file-viewer');
+    if (fileViewerBtn) {
+      fileViewerBtn.classList.toggle('btn-file-viewer--hidden', !showFileViewerButton);
     }
 
     // Multi-monitor button — hidden by default (App Settings → Display → "Header
@@ -2191,7 +2203,7 @@ Object.assign(CodemanApp.prototype, {
           'showLifecycleLog', 'showResponseViewer', 'showRedrawButton',
           'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
           'subagentActiveTabOnly', 'tabTwoRows', 'localEchoEnabled', 'cjkInputEnabled', 'extendedKeyboardBar',
-          'skin', 'showPlanUsageLimits', 'showAttachmentsButton', 'webglRendererEnabled',
+          'skin', 'showPlanUsageLimits', 'showAttachmentsButton', 'showFileViewerButton', 'webglRendererEnabled',
           'terminalWheelLocalScrollback',
           'showSessionButton', 'showAwayDigestButton', 'showCronButton',
         ]);

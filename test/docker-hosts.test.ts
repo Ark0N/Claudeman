@@ -3,16 +3,19 @@
  * (src/docker-hosts.ts). Mirrors test/remote-hosts.test.ts. All docker IO no-ops
  * under VITEST, so probes return canned values and never spawn a real daemon.
  */
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  agentImageBuildArgs,
   buildDockerBaseArgs,
   buildDockerCreateArgs,
+  buildSeamlessClaudeConfig,
   checkDockerAvailable,
   checkDockerImagePresent,
   checkDockerTmuxAvailable,
+  CLAUDE_JSON_SEED,
   containerApiUrl,
   DEFAULT_AGENT_IMAGE,
   DEFAULT_DOCKER_RESOURCES,
@@ -20,11 +23,14 @@ import {
   dockerContainerName,
   dockerDisplayPath,
   defaultDockerCommandForMode,
+  ensureAgentBaseImage,
   hostGatewayAlias,
   probeDockerCliVersion,
   readDockerCases,
   readDockerHosts,
-  resolveCredentialMounts,
+  resolveClaudeJsonSeedMount,
+  resolveDockerClaudeArtifacts,
+  resolveDockerCredentialArtifacts,
   toSessionDocker,
   writeDockerCases,
   writeDockerHosts,
@@ -251,7 +257,7 @@ describe('buildDockerCreateArgs', () => {
   });
 });
 
-describe('resolveCredentialMounts', () => {
+describe('resolveDockerCredentialArtifacts (isolated codex/gemini/gcloud/opencode)', () => {
   let home: string;
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), 'codeman-home-'));
@@ -260,11 +266,169 @@ describe('resolveCredentialMounts', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it('only mounts credential paths that exist', () => {
-    mkdirSync(join(home, '.claude'), { recursive: true });
-    const mounts = resolveCredentialMounts(home);
-    expect(mounts).toContainEqual({ src: join(home, '.claude'), dst: '/home/agent/.claude' });
-    expect(mounts.find((m) => m.dst.endsWith('.codex'))).toBeUndefined();
+  it('NEVER whole-dir RW-mounts a credential store (no host pollution)', () => {
+    mkdirSync(join(home, '.codex'), { recursive: true });
+    mkdirSync(join(home, '.gemini'), { recursive: true });
+    const { mounts } = resolveDockerCredentialArtifacts(home);
+    // no wholesale RW mount at the store's HOME path
+    expect(mounts.some((m) => m.dst === '/home/agent/.codex' && !m.readonly)).toBe(false);
+    expect(mounts.some((m) => m.dst === '/home/agent/.gemini' && !m.readonly)).toBe(false);
+  });
+
+  it('codex: shares sessions/+history.jsonl RW, seeds auth.json/config.toml', () => {
+    mkdirSync(join(home, '.codex', 'sessions'), { recursive: true });
+    writeFileSync(join(home, '.codex', 'history.jsonl'), '');
+    writeFileSync(join(home, '.codex', 'auth.json'), '{}');
+    writeFileSync(join(home, '.codex', 'config.toml'), '');
+    const { mounts, seedCopies } = resolveDockerCredentialArtifacts(home);
+    expect(mounts).toContainEqual({ src: join(home, '.codex', 'sessions'), dst: '/home/agent/.codex/sessions' });
+    expect(mounts).toContainEqual({
+      src: join(home, '.codex', 'history.jsonl'),
+      dst: '/home/agent/.codex/history.jsonl',
+    });
+    const dests = seedCopies.map((s) => s.to);
+    expect(dests).toContain('/home/agent/.codex/auth.json');
+    expect(dests).toContain('/home/agent/.codex/config.toml');
+    // seed copies of individual files are NOT recursive
+    expect(seedCopies.filter((s) => s.to.startsWith('/home/agent/.codex')).every((s) => !s.recursive)).toBe(true);
+  });
+
+  it('gemini/gcloud/opencode: whole-dir seed-copy (cp -a, recursive)', () => {
+    mkdirSync(join(home, '.gemini'), { recursive: true });
+    mkdirSync(join(home, '.config', 'gcloud'), { recursive: true });
+    mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
+    const { mounts, seedCopies } = resolveDockerCredentialArtifacts(home);
+    // each is mounted read-only at a seed staging path and cp -a'd into the container HOME
+    expect(seedCopies).toContainEqual({
+      from: '/home/agent/.codeman/cred-seeds/.gemini',
+      to: '/home/agent/.gemini',
+      recursive: true,
+    });
+    expect(seedCopies).toContainEqual({
+      from: '/home/agent/.codeman/cred-seeds/.config-gcloud',
+      to: '/home/agent/.config/gcloud',
+      recursive: true,
+    });
+    expect(mounts.filter((m) => m.readonly && m.dst.includes('cred-seeds')).length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('gates every artifact on existsSync (absent stores contribute nothing)', () => {
+    const { mounts, seedCopies } = resolveDockerCredentialArtifacts(home);
+    expect(mounts).toEqual([]);
+    expect(seedCopies).toEqual([]);
+  });
+});
+
+describe('resolveDockerClaudeArtifacts (isolated claude state)', () => {
+  let home: string;
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'codeman-home-'));
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it('shares only projects (RW) and seeds .claude.json + credentials + settings + stats-cache', () => {
+    mkdirSync(join(home, '.claude', 'projects'), { recursive: true });
+    writeFileSync(join(home, '.claude.json'), JSON.stringify({ oauthAccount: { id: 1 } }));
+    writeFileSync(join(home, '.claude', '.credentials.json'), '{"claudeAiOauth":{}}');
+    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ theme: 'dark' }));
+    writeFileSync(join(home, '.claude', 'stats-cache.json'), '{}');
+
+    const art = resolveDockerClaudeArtifacts(home, 'codeman-case-x', '/ws/x');
+    // transcripts shared RW (no readonly), whole ~/.claude never mounted
+    expect(art.mounts).toContainEqual({ src: join(home, '.claude', 'projects'), dst: '/home/agent/.claude/projects' });
+    expect(art.mounts.some((m) => m.dst === '/home/agent/.claude')).toBe(false);
+    // credentials + settings + stats-cache + .claude.json seeded (copied into the container's own HOME)
+    const dests = art.seedCopies.map((s) => s.to);
+    expect(dests).toContain('/home/agent/.claude.json');
+    expect(dests).toContain('/home/agent/.claude/.credentials.json');
+    expect(dests).toContain('/home/agent/.claude/settings.json');
+    expect(dests).toContain('/home/agent/.claude/stats-cache.json'); // restores the model/effort status indicator
+    // the seed mounts are read-only
+    expect(art.mounts.filter((m) => m.readonly).length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('omits mounts/seeds for artifacts that do not exist', () => {
+    const art = resolveDockerClaudeArtifacts(home, 'codeman-case-y', '/ws/y');
+    expect(art.mounts).toEqual([]);
+    expect(art.seedCopies).toEqual([]);
+  });
+});
+
+describe('resolveClaudeJsonSeedMount', () => {
+  let home: string;
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'codeman-home-'));
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it('returns a read-only seed mount when ~/.claude.json exists', () => {
+    writeFileSync(join(home, '.claude.json'), '{}');
+    expect(resolveClaudeJsonSeedMount(home)).toEqual({
+      src: join(home, '.claude.json'),
+      dst: CLAUDE_JSON_SEED,
+      readonly: true,
+    });
+  });
+
+  it('returns null when ~/.claude.json is absent', () => {
+    expect(resolveClaudeJsonSeedMount(home)).toBeNull();
+  });
+});
+
+describe('buildSeamlessClaudeConfig', () => {
+  it('forces onboarding-complete + theme + workspace trust while preserving host fields', () => {
+    const merged = buildSeamlessClaudeConfig({ oauthAccount: { id: 1 }, projects: {} }, '/ws/proj');
+    expect(merged.hasCompletedOnboarding).toBe(true);
+    expect(merged.theme).toBe('dark');
+    expect(merged.oauthAccount).toEqual({ id: 1 }); // host auth account preserved
+    const proj = (merged.projects as Record<string, Record<string, unknown>>)['/ws/proj'];
+    expect(proj.hasTrustDialogAccepted).toBe(true);
+    expect(proj.hasCompletedProjectOnboarding).toBe(true);
+    expect(proj.projectOnboardingSeenCount).toBe(1);
+  });
+
+  it('keeps an existing theme and merges into an existing project entry', () => {
+    const merged = buildSeamlessClaudeConfig(
+      { theme: 'light', projects: { '/ws/proj': { allowedTools: ['a'], projectOnboardingSeenCount: 5 } } },
+      '/ws/proj',
+      'dark'
+    );
+    expect(merged.theme).toBe('light'); // not overwritten when already set
+    const proj = (merged.projects as Record<string, Record<string, unknown>>)['/ws/proj'];
+    expect(proj.allowedTools).toEqual(['a']); // existing project fields kept
+    expect(proj.hasTrustDialogAccepted).toBe(true);
+    expect(proj.projectOnboardingSeenCount).toBe(5); // preserved, not reset to 1
+  });
+});
+
+describe('agentImageBuildArgs', () => {
+  it('builds the docker build argv in order', () => {
+    expect(agentImageBuildArgs('/repo/docker/agent.Dockerfile', 'codeman/agent:base', '/repo')).toEqual([
+      'build',
+      '-f',
+      '/repo/docker/agent.Dockerfile',
+      '-t',
+      'codeman/agent:base',
+      '/repo',
+    ]);
+  });
+
+  it('adds --no-cache before the context dir when requested', () => {
+    const args = agentImageBuildArgs('/df', 'img', '/ctx', true);
+    expect(args).toContain('--no-cache');
+    expect(args.indexOf('--no-cache')).toBeLessThan(args.indexOf('/ctx'));
+    expect(args[args.length - 1]).toBe('/ctx');
+  });
+});
+
+describe('ensureAgentBaseImage (no-op under VITEST)', () => {
+  it('reports the image as already present without spawning a build', async () => {
+    const r = await ensureAgentBaseImage('docker', DEFAULT_AGENT_IMAGE);
+    expect(r).toEqual({ ok: true, built: false, alreadyPresent: true });
   });
 });
 
