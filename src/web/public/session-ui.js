@@ -1642,8 +1642,13 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
 
+    // One-click "Run in Docker": create the case folder AND a container (default
+    // settings), then start a session inside it.
+    const inDocker = document.getElementById('newCaseDocker')?.checked;
+    const endpoint = inDocker ? '/api/cases/docker-quickcreate' : '/api/cases';
+
     try {
-      const res = await fetch('/api/cases', {
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, description })
@@ -1652,11 +1657,18 @@ Object.assign(CodemanApp.prototype, {
       const data = await res.json();
       if (data.success) {
         this.closeCreateCaseModal();
-        this.showToast(`Case "${name}" created`, 'success');
         // Reload cases and select the new one
         await this.loadQuickStartCases(name);
         // Save as last used case
         await this.saveLastUsedCase(name);
+        if (inDocker) {
+          const caps = data.data?.capsEnforced === false ? ' (resource caps advisory on this engine)' : '';
+          this.showToast(`Docker case "${name}" created${caps} — starting session…`, 'success');
+          // Start a session INSIDE the container (routes through quick-start).
+          await this.runClaude();
+        } else {
+          this.showToast(`Case "${name}" created`, 'success');
+        }
       } else {
         this.showToast(data.error || 'Failed to create case', 'error');
       }
@@ -1985,6 +1997,12 @@ Object.assign(CodemanApp.prototype, {
             <span class="case-manage-path">${escapeHtml(pathDisplay)}</span>
           </div>
           <div class="case-manage-actions">
+            ${
+              c.location === 'docker'
+                ? `<button class="case-manage-btn" onclick="app.exportDockerCaseBundle(${escapeHtml(JSON.stringify(c.name))}, 'full')"
+                    title="Export container (full image + workspace) to move to another machine">&#x1F4E6;</button>`
+                : ''
+            }
             <button class="case-manage-btn" onclick="app.moveCaseUp(${escapeHtml(JSON.stringify(c.name))})"
                     title="Move up" ${isFirst ? 'disabled' : ''}>&#x25B2;</button>
             <button class="case-manage-btn" onclick="app.moveCaseDown(${escapeHtml(JSON.stringify(c.name))})"

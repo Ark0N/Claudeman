@@ -34,6 +34,7 @@ import { dataPath, getDataDir } from '../../config/instance.js';
 import {
   checkDockerAvailable,
   checkDockerTmuxAvailable,
+  DEFAULT_AGENT_IMAGE,
   dockerContainerName,
   dockerDisplayPath,
   readDockerCases,
@@ -56,6 +57,8 @@ const LINKED_CASES_FILE = dataPath('linked-cases.json');
 const CODEMAN_CONFIG_DIR = getDataDir();
 const SAFE_CASE_NAME = /^[a-zA-Z0-9_-]+$/;
 const DOCKER_EXPORTS_DIR = dataPath('docker-exports');
+/** Auto-created host profile for the one-click "Run in Docker" case flow. */
+const DEFAULT_DOCKER_HOST_ID = 'default';
 
 /** App version for export manifests (best-effort read of package.json). */
 const APP_VERSION = (() => {
@@ -384,6 +387,84 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
         path: dockerCase.hostWorkspacePath,
         type: 'docker',
       });
+      return {
+        success: true,
+        data: { case: dockerCase, capsEnforced: availability.capsEnforced, isDesktop: availability.isDesktop },
+      };
+    }
+  );
+
+  // One-click "Run in Docker": create a NORMAL case (folder in CASES_DIR, scaffolded)
+  // AND link it to a hardened container with default settings, auto-provisioning a
+  // shared `default` docker host so the user never touches host/image/network fields.
+  app.post(
+    '/api/cases/docker-quickcreate',
+    async (req): Promise<ApiResponse<{ case: unknown; capsEnforced?: boolean; isDesktop?: boolean }>> => {
+      const { name, description } = parseBody(CreateCaseSchema, req.body);
+      const casePath = validatePathWithinBase(name, CASES_DIR);
+      if (!casePath) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
+
+      // Collision across every case kind.
+      const linkedCases = await readLinkedCases();
+      const dockerCases = await readDockerCases(CODEMAN_CONFIG_DIR);
+      const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
+      if (
+        existsSync(casePath) ||
+        dockerCases.some((item) => item.name === name) ||
+        remoteCases.some((item) => item.name === name) ||
+        linkedCases[name]
+      ) {
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
+      }
+
+      // Auto-provision the shared `default` docker host (convenient, hardened defaults).
+      const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+      let host = hosts.find((item) => item.id === DEFAULT_DOCKER_HOST_ID);
+      if (!host) {
+        host = {
+          id: DEFAULT_DOCKER_HOST_ID,
+          label: 'Default',
+          image: DEFAULT_AGENT_IMAGE,
+          network: 'bridge',
+          mountCredentials: true,
+          resumeOnStart: true,
+          hooksEnabled: true,
+        };
+        await writeDockerHosts(CODEMAN_CONFIG_DIR, [...hosts, host]);
+      }
+
+      // Probe the daemon + base image BEFORE scaffolding, so a missing docker/image
+      // surfaces a clear error instead of leaving an orphaned case folder.
+      const availability = await checkDockerAvailable(host.engine);
+      if (!availability.ok) {
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          availability.error || 'docker daemon is not available'
+        );
+      }
+      const dockerCase = { name, type: 'docker' as const, hostId: host.id, hostWorkspacePath: casePath };
+      const tmuxCheck = await checkDockerTmuxAvailable(toSessionDocker(host, dockerCase));
+      if (!tmuxCheck.ok) {
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          tmuxCheck.error || 'base image is missing tmux (build it: node scripts/build-agent-image.mjs)'
+        );
+      }
+
+      // Scaffold the case folder exactly like a normal case.
+      try {
+        mkdirSync(casePath, { recursive: true });
+        mkdirSync(join(casePath, 'src'), { recursive: true });
+        const templatePath = await ctx.getDefaultClaudeMdPath();
+        writeFileSync(join(casePath, 'CLAUDE.md'), generateClaudeMd(name, description || '', templatePath));
+        await writeHooksConfig(casePath);
+      } catch (err) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create case: ${getErrorMessage(err)}`);
+      }
+
+      await writeDockerCases(CODEMAN_CONFIG_DIR, [...dockerCases, dockerCase]);
+      ctx.broadcast(SseEvent.CaseCreated, { name, path: casePath });
+      ctx.broadcast(SseEvent.CaseLinked, { name, path: casePath, type: 'docker' });
       return {
         success: true,
         data: { case: dockerCase, capsEnforced: availability.capsEnforced, isDesktop: availability.isDesktop },

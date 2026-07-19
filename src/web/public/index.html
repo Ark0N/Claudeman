@@ -1864,6 +1864,10 @@
               <label>Description (optional)</label>
               <input type="text" id="newCaseDescription" placeholder="A brief description..." autocomplete="off">
             </div>
+            <div class="form-row">
+              <label class="checkbox-row"><input type="checkbox" id="newCaseDocker"> 🐳 Run in an isolated Docker container</label>
+              <span class="form-hint">One click: creates the case folder AND a hardened container with default settings, then starts the session inside it. Requires the base image (<code>node scripts/build-agent-image.mjs</code>).</span>
+            </div>
           </div>
           <!-- Link Existing Tab -->
           <div class="modal-tab-content hidden" id="case-link">
