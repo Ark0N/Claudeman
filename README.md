@@ -5,7 +5,7 @@
 <h2 align="center">Mission control for AI coding agents</h2>
 
 <p align="center">
-  <em>Claude Code &bull; OpenCode &bull; Codex &bull; Terminal - One Dashboard &bull; Any Device</em>
+  <em>Claude Code &bull; OpenCode &bull; Codex &bull; Gemini &bull; Terminal - One Dashboard &bull; Any Device</em>
 </p>
 
 <p align="center">
@@ -34,7 +34,7 @@ curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | b
 
 This installs Node.js and tmux if missing, clones Codeman to `~/.codeman/app`, and builds it.
 
-You'll need at least one AI coding CLI installed — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), or [Codex](https://developers.openai.com/codex/cli) (any combination works). After install:
+You'll need at least one AI coding CLI installed — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), [Codex](https://developers.openai.com/codex/cli), or [Gemini CLI](https://github.com/google-gemini/gemini-cli) (any combination works). After install:
 
 ```bash
 codeman web
@@ -106,7 +106,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.codeman.web.plist
 wsl bash -c "curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash"
 ```
 
-Codeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). If you don't have WSL yet: run `wsl --install` in an admin PowerShell, reboot, open Ubuntu, then install your preferred AI coding CLI inside WSL ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), or [Codex](https://developers.openai.com/codex/cli)). After installing, `http://localhost:3000` is accessible from your Windows browser.
+Codeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). If you don't have WSL yet: run `wsl --install` in an admin PowerShell, reboot, open Ubuntu, then install your preferred AI coding CLI inside WSL ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), [Codex](https://developers.openai.com/codex/cli), or [Gemini CLI](https://github.com/google-gemini/gemini-cli)). After installing, `http://localhost:3000` is accessible from your Windows browser.
 
 </details>
 
@@ -365,13 +365,14 @@ PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xt
 ## More Features
 
 - **Self-update** — git-clone installs under systemd/launchd update in place from **App Settings → Updates**: it detects the latest release, auto-stashes a dirty tree, and streams build progress across the service restart (npm installs report as non-updatable)
-- **Multi-CLI** — run **Claude Code**, **OpenCode**, or **Codex** per session; env-var prefixes auto-gate (`CLAUDE_CODE_*` vs `OPENCODE_*` vs `CODEX_*`). See [`docs/opencode-integration.md`](docs/opencode-integration.md)
+- **Multi-CLI** — run **Claude Code**, **OpenCode**, **Codex**, or **Gemini** per session; env-var prefixes auto-gate (`CLAUDE_CODE_*` vs `OPENCODE_*` vs `CODEX_*` vs `GEMINI_*`/`GOOGLE_*`). See [`docs/opencode-integration.md`](docs/opencode-integration.md)
 - **Docker sessions** — run a case inside an isolated, hardened container. One checkbox on **Create New** spins up a container with sensible defaults and starts the agent inside it; multiple sessions share one per-case container; export a container + its workspace to a portable `.tar.gz` to move it to another machine. See [`docs/docker-cases.md`](docs/docker-cases.md)
 - **Effort & Ultracode** — set a per-session default effort (`low`–`max`) or enable **ultracode** (dynamic multi-agent workflows). Soft defaults only — switchable anytime with `/effort` in-session. Extended-thinking budget is configurable too
 - **Voice input** — dictate prompts with Deepgram Nova-3 (Web Speech API fallback): toggle recording, auto-silence stop, live level meter (`Ctrl+Shift+V`)
 - **Image input** — paste or drag-and-drop images straight into a session
 - **Gesture control** _(opt-in)_ — a MediaPipe hand-tracking overlay to grab/drag session windows and pinch buttons, hands-free. Enable with `CODEMAN_GESTURE=1` + App Settings → Display
 - **Multi-monitor span** _(macOS)_ — one click opens a browser window maximized across all displays, so floating agent/gesture panels can cross the physical seam
+- **File Viewer button** _(opt-in)_ — a header button that toggles the built-in file browser panel with one tap; enable under App Settings → Display → Header Displays
 - **CJK / IME input** — full composition support for Chinese / Japanese / Korean
 - **OS notifications & hostname-aware titles** — desktop alerts and tab titles are prefixed `codeman:<host>` so multi-host setups stay unambiguous
 
@@ -384,11 +385,12 @@ Run a case inside its own hardened Docker container instead of directly on your 
 - **One click** — on **New Case → Create New**, tick **🐳 Run in an isolated Docker container**. Codeman creates the case folder, spins up a container with default settings, and starts the agent inside it. No host/image/network fields to fill in.
 - **Resource templates** — expand the checkbox for a **Small / Medium / Large / GPU** preset (memory, CPUs, GPU), or set your own. **Disk is elastic** — storage grows as data flows in, no fixed cap.
 - **Shared per-case container** — many sessions can `docker exec` into the same container; killing one session never tears the container out from under the others.
-- **Hardened by default** — non-root, `--cap-drop ALL`, `no-new-privileges`, PID/memory caps, never `--privileged` or the docker socket. Your existing `~/.claude` login is bind-mounted (credentials stay on the host, never captured in exports); a **sealed** profile (no host mounts, network off) is one toggle away.
+- **Hardened by default** — non-root, `--cap-drop ALL`, `no-new-privileges`, PID/memory caps, never `--privileged` or the docker socket; a **sealed** profile (no host credentials, network off) is one toggle away.
+- **Seamless auth, isolated credentials** — your host Claude / Codex / Gemini / OpenCode logins work inside the container out of the box: credentials are seeded (copied) in at launch and onboarding/trust prompts are pre-answered, so no login wizard appears. The container keeps its own copies and never writes back to your host credential stores; only conversation transcripts are shared, and exports never capture secrets.
 - **Move it to another machine** — export a container's whole environment (toolchain + workspace) to a portable `.tar.gz`, `docker load` it on the other side, and import it into a fresh case.
 - **Durable** — reconnect after a restart lands back in the same live agent; a container stop/reboot resumes the conversation from the bind-mounted transcript.
 
-Prerequisite: Docker (or Podman) and the base image — build it once with `node scripts/build-agent-image.mjs`. Full guide: [`docs/docker-cases.md`](docs/docker-cases.md).
+Prerequisite: just Docker (or Podman). The agent base image builds itself automatically on first use, with progress streamed to the UI (or pre-build it with `node scripts/build-agent-image.mjs`). Full guide: [`docs/docker-cases.md`](docs/docker-cases.md).
 
 ---
 
@@ -535,7 +537,7 @@ These run for **every** request — before auth, even on the default no-password
 
 ### Input, files & headers
 
-- **Schema-validated inputs** — every API body is checked with Zod v4 schemas; a `CLAUDE_CODE_*` / `OPENCODE_*` / `CODEX_*` env-prefix allowlist gates which settings each CLI can receive
+- **Schema-validated inputs** — every API body is checked with Zod v4 schemas; a `CLAUDE_CODE_*` / `OPENCODE_*` / `CODEX_*` / `GEMINI_*` / `GOOGLE_*` env-prefix allowlist gates which settings each CLI can receive
 - **Path containment** — file routes `realpath` before boundary checks (no TOCTOU); `..`, absolute paths, and symlinks resolving outside the working dir are rejected. Caps: 10 MB text preview / 50 MB raw & download; `/api/download` blocklists sensitive paths (`.env`, `*credentials*`, `~/.ssh/`, `.aws/credentials`). SVG/HTML is served `octet-stream` + `nosniff` + attachment so it downloads rather than executes
 - **Security headers** — `Content-Security-Policy` (`default-src 'self'`, every exception enumerated), `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, HSTS over HTTPS, and CORS reflected **only** for `localhost` / `127.0.0.1` / `::1`
 
@@ -771,7 +773,7 @@ flowchart TB
         end
 
         subgraph External["External"]
-            CLI["AI CLI<br/><small>Claude Code / OpenCode / Codex</small>"]
+            CLI["AI CLI<br/><small>Claude Code / OpenCode / Codex / Gemini</small>"]
             BG["Background Agents<br/><small>(Task tool)</small>"]
         end
     end
