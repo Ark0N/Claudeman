@@ -1,5 +1,19 @@
 # aicodeman
 
+## 1.4.0
+
+### Minor Changes
+
+- Add **Docker session mode**: a case can now run inside an isolated Docker container instead of on the host, with configurable network / resource / credential settings, multiple sessions sharing one per-case container, and one-click export to move a container (toolchain + workspace) to another machine.
+  - Docker is a location overlay on cases (not a new session mode), mirroring the remote-SSH feature: a local tmux pane runs `docker exec -it` into a durable in-container tmux server. The container is scoped to the case (`codeman-case-<name>`), so multiple sessions share it; killing one session never stops the shared container.
+  - New `/api/docker-hosts` CRUD, `/api/cases/docker-link`, and a `/api/quick-start` docker branch. Create Case gains a **Docker** tab. Base image is built locally via `scripts/build-agent-image.mjs` (node + claude/codex/gemini/opencode + tmux, secret-free, arbitrary-uid-writable HOME).
+  - Hardened by default: `--cap-drop ALL`, `--security-opt no-new-privileges`, non-root, `--pids-limit`, `--memory`==`--memory-swap`, `--init`; never `--privileged` or the docker socket. Convenient credential default bind-mounts host `~/.claude` etc. read-write (never captured by `docker commit`); a sealed profile is opt-in.
+  - Two-layer durability: reconnect after a Codeman restart reattaches the same live agent; a container stop/reboot resumes the conversation from the bind-mounted transcript via `--resume`.
+  - Export / import: full-image (`docker commit` + `save` + workspace tar + manifest) or workspace-only, to one portable `.codeman-container.tgz`; import validates checksums, guards path traversal, and re-tags the loaded image into a quarantined namespace. Instance-scoped boot reaper cleans orphaned containers. New `docker:*` SSE events. Docs in `docs/docker-cases.md`.
+  - Robustness: sets `CLAUDE_CODE_TMPDIR` in the container so claude launches regardless of workspace path. In-container hooks require the server to be reachable from the container (documented); on a loopback-only bind, idle detection falls back to output-based.
+
+  Also wire session, away-digest, and cron header-button visibility toggles in App Settings.
+
 ## 1.3.5
 
 ### Patch Changes
