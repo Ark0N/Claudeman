@@ -45,7 +45,9 @@ Object.assign(CodemanApp.prototype, {
   // ═══════════════════════════════════════════════════════════════
 
   formatCasePickerLabel(c) {
-    return c?.location === 'remote' && c.remote?.hostId ? `${c.name} @ ${c.remote.hostId}` : c?.name || '';
+    if (c?.location === 'remote' && c.remote?.hostId) return `${c.name} @ ${c.remote.hostId}`;
+    if (c?.location === 'docker' && c.docker?.container) return `${c.name} @ ${c.docker.container}`;
+    return c?.name || '';
   },
 
   buildCasePickerOptions(cases = []) {
@@ -70,7 +72,10 @@ Object.assign(CodemanApp.prototype, {
           c.location,
           c.remote?.hostId,
           c.remote?.label,
-          c.remote?.path
+          c.remote?.path,
+          c.docker?.container,
+          c.docker?.image,
+          c.docker?.path
         ].filter(Boolean).join(' ').toLowerCase();
         return { name: c.name, label, case: c, searchText };
       })
@@ -517,7 +522,7 @@ Object.assign(CodemanApp.prototype, {
       // Remote cases run over ssh — POST /api/sessions stat-validates workingDir on
       // the LOCAL fs (a remote user@host:/path never exists locally), so route them
       // through /api/quick-start, which resolves the remote case + launches via ssh.
-      if (caseData.location === 'remote') {
+      if (caseData.location === 'remote' || caseData.location === 'docker') {
         const remoteIds = [];
         for (let i = 0; i < tabCount; i++) {
           const res = await fetch('/api/quick-start', {
@@ -694,12 +699,16 @@ Object.assign(CodemanApp.prototype, {
       }
 
       const selectedCase = (this.cases || []).find(c => c.name === caseName);
-      const isRemoteCase = caseData.location === 'remote' || selectedCase?.location === 'remote';
+      const isRemoteCase =
+        caseData.location === 'remote' ||
+        caseData.location === 'docker' ||
+        selectedCase?.location === 'remote' ||
+        selectedCase?.location === 'docker';
       const workingDir = caseData.path;
       if (!workingDir) throw new Error('Case path not found');
 
       // Remote cases run over ssh — route through /api/quick-start (see runClaude).
-      if (caseData.location === 'remote') {
+      if (caseData.location === 'remote' || caseData.location === 'docker') {
         const remoteIds = [];
         for (let i = 0; i < shellCount; i++) {
           const res = await fetch('/api/quick-start', {
@@ -789,7 +798,8 @@ Object.assign(CodemanApp.prototype, {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
     // Remote cases run the CLI on the REMOTE host — the local /api/opencode/status
     // probe and the local-only config/env below don't apply (quick-start rejects them).
-    const isRemote = (this.cases || []).find(c => c.name === caseName)?.location === 'remote';
+    const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
+    const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
 
     this.terminal.clear();
     this.terminal.writeln(`\x1b[1;32m Starting OpenCode session in ${caseName}...\x1b[0m`);
@@ -843,7 +853,8 @@ Object.assign(CodemanApp.prototype, {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
     // Remote cases run Codex on the REMOTE host — skip the local status probe and the
     // local-only config/env below (quick-start rejects them for remote cases).
-    const isRemote = (this.cases || []).find(c => c.name === caseName)?.location === 'remote';
+    const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
+    const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
 
     this.terminal.clear();
     this.terminal.writeln(`\x1b[1;32m Starting Codex session in ${caseName}...\x1b[0m`);
@@ -897,7 +908,8 @@ Object.assign(CodemanApp.prototype, {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
     // Remote cases run Gemini on the REMOTE host — skip the local status probe and the
     // local-only config/env below (quick-start rejects them for remote cases).
-    const isRemote = (this.cases || []).find(c => c.name === caseName)?.location === 'remote';
+    const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
+    const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
 
     this.terminal.clear();
     this.terminal.writeln(`\x1b[1;32m Starting Gemini session in ${caseName}...\x1b[0m`);
@@ -1567,10 +1579,17 @@ Object.assign(CodemanApp.prototype, {
     if (tabName === 'case-manage') {
       submitBtn.style.display = 'none';
       this.renderCaseManageList();
+      this.refreshDockerExports();
     } else {
       submitBtn.style.display = '';
       submitBtn.textContent =
-        tabName === 'case-create' ? 'Create' : tabName === 'case-remote' ? 'Link Remote' : 'Link';
+        tabName === 'case-create'
+          ? 'Create'
+          : tabName === 'case-remote'
+            ? 'Link Remote'
+            : tabName === 'case-docker'
+              ? 'Link Docker'
+              : 'Link';
     }
     // Focus appropriate input
     if (tabName === 'case-create') {
@@ -1579,6 +1598,8 @@ Object.assign(CodemanApp.prototype, {
       document.getElementById('linkCaseName').focus();
     } else if (tabName === 'case-remote') {
       document.getElementById('remoteCaseName').focus();
+    } else if (tabName === 'case-docker') {
+      document.getElementById('dockerCaseName').focus();
     }
   },
 
@@ -1596,6 +1617,8 @@ Object.assign(CodemanApp.prototype, {
         await this.createCase();
       } else if (this.caseModalTab === 'case-remote') {
         await this.linkRemoteCase();
+      } else if (this.caseModalTab === 'case-docker') {
+        await this.linkDockerCase();
       } else {
         await this.linkCase();
       }
@@ -1764,6 +1787,177 @@ Object.assign(CodemanApp.prototype, {
     } catch (err) {
       console.error('Failed to link remote case:', err);
       this.showToast('Failed to link remote case: ' + err.message, 'error');
+    }
+  },
+
+  async linkDockerCase() {
+    const name = document.getElementById('dockerCaseName').value.trim();
+    const hostWorkspacePath = document.getElementById('dockerWorkspacePath').value.trim();
+    const hostId = document.getElementById('dockerHostId').value.trim() || 'local';
+    const image = document.getElementById('dockerImage').value.trim() || 'codeman/agent:base';
+    const network = document.getElementById('dockerNetwork').value;
+    const memory = document.getElementById('dockerMemory').value.trim();
+    const cpus = document.getElementById('dockerCpus').value.trim();
+    const mountCredentials = document.getElementById('dockerMountCredentials').checked;
+    const resumeOnStart = document.getElementById('dockerResumeOnStart').checked;
+    const statusEl = document.getElementById('dockerLinkStatus');
+
+    if (!name || !hostWorkspacePath) {
+      this.showToast('Please enter a case name and workspace path', 'error');
+      return;
+    }
+    if (!/^[a-zA-Z0-9_-]+$/.test(name) || !/^[a-zA-Z0-9_-]+$/.test(hostId)) {
+      this.showToast('Invalid name. Use only letters, numbers, hyphens, underscores.', 'error');
+      return;
+    }
+    if (!hostWorkspacePath.startsWith('/')) {
+      this.showToast('Workspace path must be absolute', 'error');
+      return;
+    }
+
+    try {
+      if (statusEl) statusEl.textContent = 'Checking docker daemon + base image...';
+      // omitted optionals sent as UNDEFINED (never null — Zod .optional() rejects null)
+      const resources = {};
+      if (memory) resources.memory = memory;
+      if (cpus) resources.cpus = cpus;
+      const hostPayload = {
+        id: hostId,
+        label: hostId,
+        image,
+        network,
+        mountCredentials,
+        resumeOnStart,
+        ...(Object.keys(resources).length ? { resources } : {}),
+      };
+      // PUT (update-or-create) so re-linking with the same host id refreshes its settings.
+      let hostRes = await fetch('/api/docker-hosts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(hostPayload),
+      });
+      let hostData = await hostRes.json();
+      if (!hostData.success && hostData.errorCode === 'ALREADY_EXISTS') {
+        hostRes = await fetch(`/api/docker-hosts/${encodeURIComponent(hostId)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(hostPayload),
+        });
+        hostData = await hostRes.json();
+      }
+      if (!hostData.success) throw new Error(hostData.error || 'Failed to save docker host');
+
+      const caseRes = await fetch('/api/cases/docker-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, hostId, hostWorkspacePath }),
+      });
+      const caseData = await caseRes.json();
+      if (caseData.success) {
+        this.closeCreateCaseModal();
+        const caps = caseData.data?.capsEnforced === false ? ' (resource caps are advisory on this engine)' : '';
+        this.showToast(`Docker case "${name}" linked${caps}`, 'success');
+        await this.loadQuickStartCases(name);
+        await this.saveLastUsedCase(name);
+      } else {
+        if (statusEl) statusEl.textContent = caseData.error || 'Failed to link docker case';
+        this.showToast(caseData.error || 'Failed to link docker case', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to link docker case:', err);
+      if (statusEl) statusEl.textContent = err.message;
+      this.showToast('Failed to link docker case: ' + err.message, 'error');
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // Docker export / import UI
+  // ═══════════════════════════════════════════════════════════════
+
+  async refreshDockerExports() {
+    const listEl = document.getElementById('dockerExportsList');
+    if (!listEl) return;
+    try {
+      const res = await fetch('/api/docker-exports');
+      const data = await res.json();
+      const exports = data?.data?.exports || [];
+      if (exports.length === 0) {
+        listEl.innerHTML = '<span class="form-hint">No exports yet. Export a docker case from its tab.</span>';
+        return;
+      }
+      listEl.innerHTML = exports
+        .map(e => {
+          const mb = (e.sizeBytes / 1e6).toFixed(1);
+          const nm = this.escapeHtml ? this.escapeHtml(e.name) : e.name;
+          return `<div class="case-manage-item" style="display:flex; align-items:center; gap:8px; justify-content:space-between;">
+            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${nm}">${nm} <span class="form-hint">(${mb} MB)</span></span>
+            <span style="flex-shrink:0;">
+              <a class="btn-toolbar" href="/api/docker-exports/${encodeURIComponent(e.name)}" download>Download</a>
+              <button class="btn-toolbar" onclick="app.importDockerBundle('${nm.replace(/'/g, "\\'")}')">Import</button>
+              <button class="btn-toolbar" onclick="app.deleteDockerExport('${nm.replace(/'/g, "\\'")}')">Delete</button>
+            </span>
+          </div>`;
+        })
+        .join('');
+    } catch (err) {
+      listEl.innerHTML = `<span class="form-hint">Failed to load exports: ${err.message}</span>`;
+    }
+  },
+
+  async exportDockerCaseBundle(caseName, mode = 'full') {
+    try {
+      const res = await fetch(`/api/docker-cases/${encodeURIComponent(caseName)}/export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        this.showToast(`Exporting "${caseName}" (${mode})... you'll be notified when the bundle is ready`, 'info');
+      } else {
+        this.showToast(data.error || 'Export failed', 'error');
+      }
+    } catch (err) {
+      this.showToast('Export failed: ' + err.message, 'error');
+    }
+  },
+
+  async importDockerBundle(bundle) {
+    const newCaseName = prompt('New case name for the imported bundle:', bundle.split('-')[0] + '-imported');
+    if (!newCaseName) return;
+    const destWorkspacePath = prompt('Absolute host directory to restore the workspace into:', '');
+    if (!destWorkspacePath) return;
+    try {
+      const res = await fetch('/api/docker-cases/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bundle, newCaseName, destWorkspacePath }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        this.showToast(`Imported as "${newCaseName}"`, 'success');
+        await this.loadQuickStartCases(newCaseName);
+      } else {
+        this.showToast(data.error || 'Import failed', 'error');
+      }
+    } catch (err) {
+      this.showToast('Import failed: ' + err.message, 'error');
+    }
+  },
+
+  async deleteDockerExport(filename) {
+    if (!confirm(`Delete export bundle "${filename}"?`)) return;
+    try {
+      const res = await fetch(`/api/docker-exports/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        this.showToast('Export deleted', 'success');
+        this.refreshDockerExports();
+      } else {
+        this.showToast(data.error || 'Delete failed', 'error');
+      }
+    } catch (err) {
+      this.showToast('Delete failed: ' + err.message, 'error');
     }
   },
 
