@@ -11,6 +11,24 @@
 
 Adopted defaults for the remaining open items (Section 10): resume-on-restart ON; container is per-CASE and shared by multiple sessions (killing one session only kills its in-container tmux session, never `docker stop` while siblings remain; stop/remove only on explicit teardown or case-delete); rootless caps = ship-with-warning (`capsEnforced` surfaced); remote docker daemon = local-first; podman = docker-first best-effort.
 
+## Implementation status (branch `feat/docker-session-mode`)
+
+DONE and END-TO-END VERIFIED against a real docker daemon (create host, link case, quick-start shell in a real container, workspace bind-mount round-trip, hook scaffolding, session-delete keeps the shared container up, case-delete `docker rm`s it):
+
+- Phase 0-1: types (`DockerHost`/`DockerCase`/`SessionDocker`), `src/docker-hosts.ts` (storage, pure `buildDockerBaseArgs`/`buildDockerCreateArgs`, `containerApiUrl`, `hostGatewayAlias`, config-hash, credential-mount resolution, daemon probes), `DockerHostSchema`/`DockerCaseLinkSchema`. 26 unit tests.
+- Phase 2: `tmux-manager` `buildDockerLaunchCommand` (image-check -> ensure -> start -> exec, resume-aware), `buildDockerKillCommand` (in-container tmux only, multi-session safe), stop/remove; wired into `createSession`/`respawnPane`/`killSession`. 14 unit tests.
+- Phase 3: `Session` threading (`_docker`, toState, option builders, in-container cliVersion probe, `resolveMuxAttachCwd`), `server.ts` recovery round-trip.
+- Phase 4: `case-routes` `/api/docker-hosts` CRUD + `/api/cases/docker-link` + listing + docker-unlink; `session-routes` `/api/quick-start` docker branch (rejects per-session config, probes availability + tmux, scaffolds hooks, seeds resume id).
+- Phase 5 (partial): `docker/agent.Dockerfile` + `scripts/build-agent-image.mjs` (built + verified: node 22, tmux, claude/codex/gemini/opencode, arbitrary-uid HOME). Host-guard allowlists `host.docker.internal`/`host.containers.internal` for in-container hooks.
+- Full CI green (3445 tests).
+
+REMAINING:
+
+- Phase 6: export / import (`docker commit` + `save | gzip` + workspace tar + manifest; `load` + quarantined re-tag), GC / boot reaper, disk-safety prechecks, drift-recreate route, SSE `docker:*` events. THE "move to a new machine" feature.
+- Phase 7: frontend Create Case "Docker" tab + `linkDockerCase` + run wiring + case-picker labels + export/import UI.
+- Phase 8: CLAUDE.md "Docker cases" Key Pattern + `docs/docker-cases.md` + COM.
+- Deferred refinements: in-container model-picker via `settings.local.json`; live mid-run resume-id capture into `DockerCase.lastClaudeSessionId`; rootless/Desktop uid probe (currently a platform heuristic).
+
 ## 1. Goal & user stories
 
 Add "Docker cases" to Codeman: a case can point at a container instead of a local or remote-SSH path, and any of the five CLI backends (`claude` / `shell` / `opencode` / `codex` / `gemini`) runs inside that container. It is modeled as a LOCATION OVERLAY on cases, exactly like the remote-SSH feature (COD-94/#145), never as a sixth `SessionMode`.
