@@ -5,10 +5,11 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, createReadStream } from 'node:fs';
 import { exec } from 'node:child_process';
 import fs from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, resolve, basename } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import type { ApiResponse, CaseInfo } from '../../types.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
@@ -20,7 +21,10 @@ import {
   RemoteHostSchema,
   DockerCaseLinkSchema,
   DockerHostSchema,
+  DockerExportSchema,
+  DockerImportSchema,
 } from '../schemas.js';
+import { exportDockerCase, importDockerBundle, listDockerExports, exportBundleName } from '../../docker-export.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { writeHooksConfig } from '../../hooks-config.js';
 import { CASES_DIR, SETTINGS_PATH, validatePathWithinBase, parseBody, readJsonConfig } from '../route-helpers.js';
@@ -51,6 +55,17 @@ import {
 const LINKED_CASES_FILE = dataPath('linked-cases.json');
 const CODEMAN_CONFIG_DIR = getDataDir();
 const SAFE_CASE_NAME = /^[a-zA-Z0-9_-]+$/;
+const DOCKER_EXPORTS_DIR = dataPath('docker-exports');
+
+/** App version for export manifests (best-effort read of package.json). */
+const APP_VERSION = (() => {
+  try {
+    const pkgPath = fileURLToPath(new URL('../../../package.json', import.meta.url));
+    return (JSON.parse(readFileSync(pkgPath, 'utf-8')).version as string) || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
 
 /** Read and parse linked-cases.json, returning empty object on missing/invalid file. */
 async function readLinkedCases(): Promise<Record<string, string>> {
@@ -375,6 +390,136 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       };
     }
   );
+
+  // ========== Docker export / import ==========
+
+  // Export a docker case to a portable bundle. Runs in the BACKGROUND (a full image
+  // save can take minutes) and broadcasts docker:exportComplete / docker:exportFailed.
+  app.post('/api/docker-cases/:name/export', async (req): Promise<ApiResponse<{ started: true; bundle: string }>> => {
+    const { name } = req.params as { name: string };
+    const { mode = 'full' } = parseBody(DockerExportSchema, req.body ?? {});
+    const dockerCase = (await readDockerCases(CODEMAN_CONFIG_DIR)).find((item) => item.name === name);
+    if (!dockerCase) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker case not found');
+    const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === dockerCase.hostId);
+    if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
+
+    const sessionDocker = toSessionDocker(host, dockerCase);
+    if (mode === 'full' && !sessionDocker.mountCredentials) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'full-image export is refused for a sealed container (its in-container login would ride the committed layer). Use a workspace-only export.'
+      );
+    }
+
+    const timestamp = Date.now();
+    const bundle = exportBundleName(name, timestamp, mode);
+    // Fire-and-forget: the client watches for the SSE completion event.
+    void exportDockerCase({
+      docker: sessionDocker,
+      caseName: name,
+      timestamp,
+      exportsDir: DOCKER_EXPORTS_DIR,
+      mode,
+      codemanVersion: APP_VERSION,
+    })
+      .then((result) => {
+        ctx.broadcast(SseEvent.DockerExportComplete, {
+          name,
+          bundle: basename(result.bundlePath),
+          sizeBytes: result.sizeBytes,
+          mode,
+        });
+      })
+      .catch((err) => {
+        ctx.broadcast(SseEvent.DockerExportFailed, { name, mode, error: getErrorMessage(err) });
+      });
+
+    return { success: true, data: { started: true, bundle } };
+  });
+
+  app.get('/api/docker-exports', async (): Promise<ApiResponse<{ exports: unknown[] }>> => {
+    return { success: true, data: { exports: await listDockerExports(DOCKER_EXPORTS_DIR) } };
+  });
+
+  // Download an export bundle (filename resolved WITHIN the exports dir — no traversal).
+  app.get('/api/docker-exports/:filename', async (req, reply) => {
+    const { filename } = req.params as { filename: string };
+    if (!/^[a-zA-Z0-9._-]+\.tgz$/.test(filename)) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid bundle filename');
+    }
+    const full = join(DOCKER_EXPORTS_DIR, filename);
+    if (!existsSync(full)) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Export not found');
+    reply.header('Content-Type', 'application/gzip');
+    reply.header('Content-Disposition', `attachment; filename="${filename}"`);
+    reply.header('X-Content-Type-Options', 'nosniff');
+    return reply.send(createReadStream(full));
+  });
+
+  app.delete('/api/docker-exports/:filename', async (req): Promise<ApiResponse<{ filename: string }>> => {
+    const { filename } = req.params as { filename: string };
+    if (!/^[a-zA-Z0-9._-]+\.tgz$/.test(filename)) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid bundle filename');
+    }
+    const full = join(DOCKER_EXPORTS_DIR, filename);
+    if (!existsSync(full)) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Export not found');
+    await fs.rm(full, { force: true });
+    return { success: true, data: { filename } };
+  });
+
+  // Import a bundle (already present in the exports dir) into a NEW docker case.
+  app.post('/api/docker-cases/import', async (req): Promise<ApiResponse<{ case: unknown }>> => {
+    const { bundle, newCaseName, destWorkspacePath } = parseBody(DockerImportSchema, req.body);
+    const bundlePath = join(DOCKER_EXPORTS_DIR, bundle);
+    if (!existsSync(bundlePath)) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Bundle not found in exports dir');
+
+    // Name-collision guard across ALL case kinds.
+    const linkedCases = await readLinkedCases();
+    const dockerCases = await readDockerCases(CODEMAN_CONFIG_DIR);
+    if (
+      dockerCases.some((item) => item.name === newCaseName) ||
+      linkedCases[newCaseName] ||
+      existsSync(join(CASES_DIR, newCaseName))
+    ) {
+      return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
+    }
+
+    const timestamp = Date.now();
+    let result;
+    try {
+      result = await importDockerBundle({ bundlePath, destWorkspace: destWorkspacePath, engine: 'docker', timestamp });
+    } catch (err) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Import failed: ${getErrorMessage(err)}`);
+    }
+
+    // Create a dedicated docker host pointing at the quarantined imported image
+    // (full mode) or the manifest's base image (workspace-only).
+    const hostId = `imported-${newCaseName}`;
+    const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+    if (!hosts.some((h) => h.id === hostId)) {
+      await writeDockerHosts(CODEMAN_CONFIG_DIR, [
+        ...hosts,
+        {
+          id: hostId,
+          label: `Imported: ${newCaseName}`,
+          engine: result.manifest.engine,
+          image: result.importedImage ?? result.manifest.image,
+          network: (['bridge', 'none', 'custom'].includes(result.manifest.network)
+            ? result.manifest.network
+            : 'bridge') as 'bridge' | 'none' | 'custom',
+        },
+      ]);
+    }
+    const newCase = {
+      name: newCaseName,
+      type: 'docker' as const,
+      hostId,
+      hostWorkspacePath: destWorkspacePath,
+      containerWorkdir: result.manifest.containerWorkdir,
+    };
+    await writeDockerCases(CODEMAN_CONFIG_DIR, [...dockerCases, newCase]);
+    ctx.broadcast(SseEvent.DockerImportComplete, { name: newCaseName, path: destWorkspacePath, type: 'docker' });
+    return { success: true, data: { case: newCase } };
+  });
 
   // Link an existing folder as a case
   app.post('/api/cases/link', async (req): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {

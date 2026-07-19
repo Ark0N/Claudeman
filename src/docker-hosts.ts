@@ -546,6 +546,59 @@ export async function checkDockerTmuxAvailable(
 }
 
 /**
+ * Instance-scoped boot reaper: `docker rm -f` any MANAGED container that belongs
+ * to THIS instance (by the `codeman.instance` label) but whose case is no longer
+ * in `docker-cases.json`. The instance scoping is what stops a beta from reaping
+ * prod's containers (the cross-instance hazard). No-op under VITEST. Best-effort.
+ */
+export async function reapOrphanedDockerContainers(
+  configDir: string,
+  instance: string,
+  engine: DockerEngine = 'docker'
+): Promise<string[]> {
+  if (IS_TEST_MODE) return [];
+  const bin = engine === 'podman' ? 'podman' : 'docker';
+  let rows: Array<{ name: string; inst: string }> = [];
+  try {
+    const { stdout } = await execFileAsync(
+      bin,
+      [
+        'ps',
+        '-a',
+        '--filter',
+        'label=codeman.managed=1',
+        '--format',
+        '{{.Names}}\t{{index .Labels "codeman.instance"}}',
+      ],
+      { timeout: DOCKER_PROBE_TIMEOUT_MS }
+    );
+    rows = stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const [name, inst = ''] = line.split('\t');
+        return { name, inst };
+      });
+  } catch {
+    return []; // daemon down / engine absent — nothing to reap
+  }
+  const cases = await readDockerCases(configDir);
+  const expected = new Set(cases.map((c) => c.container ?? dockerContainerName(c.name)));
+  const reaped: string[] = [];
+  for (const { name, inst } of rows) {
+    if (inst !== instance) continue; // only THIS instance's containers
+    if (expected.has(name)) continue; // still referenced by a live case
+    try {
+      await execFileAsync(bin, ['rm', '-f', name], { timeout: DOCKER_PROBE_TIMEOUT_MS });
+      reaped.push(name);
+    } catch {
+      /* best-effort */
+    }
+  }
+  return reaped;
+}
+
+/**
  * Read the IN-CONTAINER Claude CLI version (`docker exec <container> claude
  * --version`). Feeds Session.cliVersion for docker sessions (the LOCAL claude
  * would report the wrong version and disable trackpad wheel-forwarding, #154).

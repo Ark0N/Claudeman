@@ -370,6 +370,14 @@ export const CaseDeleted = 'case:deleted' as const;
 /** Case ordering changed. */
 export const CaseOrderChanged = 'case:order-changed' as const;
 
+// ─── Docker cases ────────────────────────────────────────────────────────────
+/** A docker case export bundle finished writing. */
+export const DockerExportComplete = 'docker:exportComplete' as const;
+/** A docker case export failed. */
+export const DockerExportFailed = 'docker:exportFailed' as const;
+/** A docker bundle was imported into a new case. */
+export const DockerImportComplete = 'docker:importComplete' as const;
+
 // ─── Namespace Re-export ─────────────────────────────────────────────────────
 
 /**
@@ -551,4 +559,9 @@ export const SseEvent = {
   CaseLinked,
   CaseDeleted,
   CaseOrderChanged,
+
+  // Docker cases
+  DockerExportComplete,
+  DockerExportFailed,
+  DockerImportComplete,
 } as const;

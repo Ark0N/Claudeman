@@ -465,6 +465,26 @@ export const DockerCaseLinkSchema = z.object({
     .optional(),
 });
 
+export const DockerExportSchema = z.object({
+  mode: z.enum(['full', 'workspace']).optional(),
+});
+
+export const DockerImportSchema = z.object({
+  // A bare filename resolved WITHIN the exports dir (never an arbitrary path).
+  bundle: z
+    .string()
+    .min(1)
+    .max(300)
+    .regex(/^[a-zA-Z0-9._-]+\.tgz$/, 'Invalid bundle filename'),
+  newCaseName: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format'),
+  destWorkspacePath: z
+    .string()
+    .min(1)
+    .max(2000)
+    .regex(/^\//, 'Destination path must be absolute')
+    .regex(NO_SHELL_META, 'Invalid characters in destination path'),
+});
+
 // ========== Quick Start ==========
 
 /**

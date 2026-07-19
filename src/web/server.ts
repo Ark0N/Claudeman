@@ -40,7 +40,7 @@ import { existsSync, mkdirSync, readFileSync, chmodSync, rmSync, statSync } from
 import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { hostname as getHostname } from 'node:os';
-import { dataPath } from '../config/instance.js';
+import { dataPath, getDataDir, CODEMAN_INSTANCE } from '../config/instance.js';
 import { getHookSecret } from '../config/hook-secret.js';
 import { EventEmitter } from 'node:events';
 import { Session, isExternalCliMode, type BackgroundTask } from '../session.js';
@@ -1941,6 +1941,20 @@ export class WebServer extends EventEmitter {
     // CRITICAL: Skip in test mode to prevent tests from picking up user sessions
     if (!this.testMode) {
       await this.restoreMuxSessions();
+
+      // Instance-scoped reaper: after restore, `docker rm -f` managed containers of
+      // THIS instance whose case is gone from docker-cases.json (best-effort, never
+      // touches another instance's containers). Runs after restore so containers
+      // still referenced by a restored session are preserved.
+      void import('../docker-hosts.js')
+        .then(({ reapOrphanedDockerContainers }) => reapOrphanedDockerContainers(getDataDir(), CODEMAN_INSTANCE))
+        .then((reaped) => {
+          if (reaped.length > 0)
+            console.log(`[Docker] reaped ${reaped.length} orphaned container(s): ${reaped.join(', ')}`);
+        })
+        .catch(() => {
+          /* best-effort — daemon may be absent */
+        });
     }
 
     // Clean up stale sessions from state file that don't have active mux sessions
