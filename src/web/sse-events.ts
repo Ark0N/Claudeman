@@ -377,6 +377,14 @@ export const DockerExportComplete = 'docker:exportComplete' as const;
 export const DockerExportFailed = 'docker:exportFailed' as const;
 /** A docker bundle was imported into a new case. */
 export const DockerImportComplete = 'docker:importComplete' as const;
+/** The agent base image started building (first Docker case; auto-build on first use). */
+export const DockerImageBuildStarted = 'docker:imageBuildStarted' as const;
+/** A line of agent base-image build output (progress surfacing). */
+export const DockerImageBuildProgress = 'docker:imageBuildProgress' as const;
+/** The agent base image finished building successfully. */
+export const DockerImageBuildComplete = 'docker:imageBuildComplete' as const;
+/** The agent base image build failed. */
+export const DockerImageBuildFailed = 'docker:imageBuildFailed' as const;
 
 // ─── Namespace Re-export ─────────────────────────────────────────────────────
 
@@ -564,4 +572,8 @@ export const SseEvent = {
   DockerExportComplete,
   DockerExportFailed,
   DockerImportComplete,
+  DockerImageBuildStarted,
+  DockerImageBuildProgress,
+  DockerImageBuildComplete,
+  DockerImageBuildFailed,
 } as const;

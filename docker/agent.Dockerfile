@@ -40,9 +40,20 @@ RUN npm install -g \
 # runtime Codeman overrides with `--user <hostUid>:0` on Linux, so the baked uid
 # only matters for a hand-run / Docker Desktop container. gid 0 + group-writable
 # HOME (OpenShift arbitrary-uid convention) keeps $HOME writable for any uid.
+# UTF-8 locale so tmux/Ink render Unicode box-drawing instead of VT100 ACS `q`
+# glyphs (C.UTF-8 is built into glibc; no locales package needed). Codeman also
+# sets these at run time so containers built before this line still get UTF-8.
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 ENV HOME=/home/agent
+# `.claude` (+ `.claude/projects` mount point) and `.codex` (+ `.codex/sessions`) are
+# pre-created gid-0 group-writable so the container owns its OWN credential config
+# dirs: tokens/settings/config are seeded in as writable copies and each CLI's runtime
+# state (backups, tasks, refreshed tokens) stays container-local, while ONLY the shared
+# transcript/rollout dirs (`.claude/projects`, `.codex/sessions`) are bind-mounted from
+# the host. (gemini/gcloud/opencode are whole seed-copies and need no pre-created dir.)
 RUN useradd -g 0 -m -d /home/agent -s /bin/bash agent \
  && mkdir -p /home/agent/.npm /home/agent/.cache /home/agent/.config /home/agent/.codeman \
+      /home/agent/.claude/projects /home/agent/.codex/sessions \
  && chgrp -R 0 /home/agent \
  && chmod -R g=u /home/agent
 

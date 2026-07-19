@@ -56,9 +56,11 @@ import {
   CONTAINER_HOME,
   defaultDockerCommandForMode,
   hostGatewayAlias,
-  resolveCredentialMounts,
+  resolveDockerClaudeArtifacts,
+  resolveDockerCredentialArtifacts,
   type DockerCreateContext,
   type DockerMount,
+  type DockerSeedCopy,
 } from './docker-hosts.js';
 import {
   wrapWithNice,
@@ -885,6 +887,14 @@ export interface DockerLaunchOptions {
   execEnv: Record<string, string>;
   /** exec-time NAME-ONLY env forwarded from Codeman's process env (codex/gemini keys) */
   execEnvNames: string[];
+  /**
+   * Files to copy from read-only seed mounts into the container's writable HOME once
+   * before launch (guarded so reconnects never clobber). Isolates Claude state: the
+   * merged `~/.claude.json`, plus `~/.claude/.credentials.json` + `settings.json`,
+   * are writable copies (not host mounts), so the container never re-auths and never
+   * writes its runtime state back into the host `~/.claude`.
+   */
+  seedCopies?: DockerSeedCopy[];
 }
 
 /**
@@ -895,7 +905,7 @@ export interface DockerLaunchOptions {
  * command -> `docker exec … sh -lc '<tmux>'` -> tmux `'<paneCommand>'`.
  */
 export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
-  const { mode, docker, sessionId, resumeSessionId, createContext, execEnv, execEnvNames } = opts;
+  const { mode, docker, sessionId, resumeSessionId, createContext, execEnv, execEnvNames, seedCopies } = opts;
   const base = buildDockerBaseArgs(docker).join(' ');
   const createArgs = buildDockerCreateArgs(createContext).join(' ');
   const name = shellescape(docker.containerName);
@@ -932,7 +942,7 @@ export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
   for (const extra of docker.extraExecArgs ?? []) execEnvFlags.push(shellescape(extra));
 
   const imageMissingMsg = shellescape(
-    `Codeman: base image ${docker.image} not present (build: node scripts/build-agent-image.mjs)`
+    `Codeman: base image ${docker.image} not present (it is normally auto-built on first use)`
   );
   const startFailMsg = shellescape(`Codeman: container ${docker.containerName} failed to start (docker daemon down?)`);
 
@@ -940,7 +950,18 @@ export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
   // create-if-missing (idempotent): reconnect / boot recovery re-runs this exact chain.
   const ensure = `${base} inspect ${name} >/dev/null 2>&1 || ${base} ${createArgs}`;
   const start = `${base} start ${name} >/dev/null 2>&1 || { echo ${startFailMsg}; exit 1; }`;
-  const execCmd = `exec ${base} exec -it --workdir ${workdir} ${execEnvFlags.join(' ')} ${name} sh -lc ${shellescape(tmuxInvocation)}`;
+  // Seed writable credential config from read-only host mounts ONCE per container
+  // (guarded by [ -e ] so reconnects never clobber in-container config; `cp -a` for
+  // whole-dir credential seeds). mkdir -p the parent so a file seed works even when
+  // no sibling share-mount pre-created the dir. Paths are fixed CONTAINER_HOME
+  // constants (no shell metachars), so the whole inner command is shell-quoted once.
+  const seedSteps = (seedCopies ?? []).map((s) => {
+    const cp = s.recursive ? 'cp -a' : 'cp';
+    const parent = s.to.slice(0, s.to.lastIndexOf('/'));
+    return `mkdir -p ${parent} 2>/dev/null; [ -e ${s.to} ] || ${cp} ${s.from} ${s.to} 2>/dev/null || true`;
+  });
+  const innerCmd = seedSteps.length ? `${seedSteps.join(' ; ')} ; ${tmuxInvocation}` : tmuxInvocation;
+  const execCmd = `exec ${base} exec -it --workdir ${workdir} ${execEnvFlags.join(' ')} ${name} sh -lc ${shellescape(innerCmd)}`;
 
   return [imageCheck, ensure, start, execCmd].join(' ; ');
 }
@@ -991,12 +1012,29 @@ export function resolveDockerLaunchOptions(
         : ['--user', `${uid}:0`]; // Linux: host uid + GID 0 (OpenShift arbitrary-uid writable HOME)
   const gatewayAlias = hostGatewayAlias(docker.engine);
 
-  const credentialMounts: DockerMount[] = docker.mountCredentials ? resolveCredentialMounts(home) : [];
+  const credentialMounts: DockerMount[] = [];
   const extraMounts: DockerMount[] = [];
+  // Isolated credential state (Claude + codex/gemini/gcloud/opencode): each store
+  // shares ONLY what a host feature / --resume needs (Claude projects/, codex
+  // sessions/+history) and seeds everything else (tokens, settings, configs) as
+  // writable copies, so the container is authed WITHOUT re-auth and WITHOUT writing
+  // its runtime state back into the host dirs. Only when credentials are mounted.
+  let seedCopies: DockerSeedCopy[] = [];
+  if (docker.mountCredentials) {
+    const claudeArtifacts = resolveDockerClaudeArtifacts(home, docker.containerName, docker.containerWorkdir);
+    const credArtifacts = resolveDockerCredentialArtifacts(home);
+    extraMounts.push(...claudeArtifacts.mounts, ...credArtifacts.mounts);
+    seedCopies = [...claudeArtifacts.seedCopies, ...credArtifacts.seedCopies];
+  }
   const envCreate: Record<string, string> = {
     HOME: CONTAINER_HOME,
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',
+    // Force a UTF-8 locale (the base image defaults to POSIX/C). Without this, tmux
+    // runs in non-UTF-8 mode and renders Claude's Unicode box-drawing (─│┌┐) as raw
+    // VT100 ACS glyphs (`qqqq…`). `C.UTF-8` is built into glibc (no locale-gen).
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
     // Give claude a temp dir it will own inside HOME. Its default `/tmp/claude-<uid>`
     // is refused when that path pre-exists root-owned — which happens when the
     // workspace bind-mount path traverses it (e.g. a workspace under /tmp/claude-<uid>).
@@ -1031,6 +1069,11 @@ export function resolveDockerLaunchOptions(
   const execEnv: Record<string, string> = {
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',
+    // UTF-8 at exec time too, so the tmux CLIENT this exec launches is UTF-8 and
+    // renders box-drawing correctly even when reattaching to a container created
+    // before this fix (client_utf8 is per-client, resolved from the exec's locale).
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
     CODEMAN_SESSION_ID: sessionId.slice(0, 8),
     CODEMAN_MUX: '1',
   };
@@ -1043,7 +1086,7 @@ export function resolveDockerLaunchOptions(
         ? ['GEMINI_API_KEY', 'GOOGLE_API_KEY']
         : [];
 
-  return { mode, docker, sessionId, resumeSessionId, createContext, execEnv, execEnvNames };
+  return { mode, docker, sessionId, resumeSessionId, createContext, execEnv, execEnvNames, seedCopies };
 }
 
 /**

@@ -1,5 +1,28 @@
 # aicodeman
 
+## 1.4.1
+
+### Patch Changes
+
+- **Docker session mode** hardening + fixes, plus a File Viewer header button.
+
+  **What Docker session mode is** (recap): a case can run inside an isolated, hardened Docker container instead of on the host, and any of the CLI backends (Claude, Codex, Gemini, OpenCode, or a plain shell) runs inside it. It is a location overlay on cases — not a new session mode — and the container analog of remote-SSH cases: a local tmux pane `docker exec`s into a durable in-container tmux, with exactly one long-lived container per case that multiple sessions share. The workspace, credentials, and conversation transcripts are bind-mounted so the agent is authenticated and resumable; containers are hardened by default (`--cap-drop ALL`, `--security-opt no-new-privileges`, non-root, pids/memory caps, `--init`, never `--privileged` or the docker socket) and export-safe. Start one with the one-click "Run in Docker" checkbox on Create Case, or the Docker tab for full control.
+
+  This release fixes the rough edges found running it for real:
+
+  Docker cases:
+  - **Seamless Claude auth in containers**: `~/.claude.json` is no longer bind-mounted as a single file (a mount point that broke Claude's atomic-rename config writes — forcing re-auth and, via failed in-place writes, corrupting the host `~/.claude.json`). It is now seeded as a writable, onboarding-complete copy, so a docker session boots straight to the prompt (no theme picker, login, or folder-trust prompt).
+  - **Claude-state isolation**: containers no longer bind-mount the whole `~/.claude` directory (which wrote backups/tasks/teams/settings back into the host). Only `~/.claude/projects` transcripts are shared (host watchers + `--resume`); credentials, settings, and stats-cache are seeded as writable copies; everything else stays container-local.
+  - **Codex/Gemini/gcloud/opencode isolation**: same treatment — codex shares `sessions/` + `history.jsonl` (response-viewer + resume) and seeds `auth.json`/`config.toml`; gemini/gcloud/opencode are whole seed-copies. Containers never write their credential state back into the host dirs.
+  - **Base image auto-builds on first use**: a missing `codeman/agent:base` no longer blocks case creation or launch; it builds locally on first use (concurrency-safe, with SSE progress toasts).
+  - **UTF-8 locale**: containers set `LANG`/`LC_ALL=C.UTF-8` so tmux renders Claude's box-drawing correctly (fixes `qqqq` line artifacts).
+  - **Create Case UI**: larger, collapsed-by-default "Run in Docker" settings with a shorter hint; dockerized cases show a short `(docker)` tag (or the custom host id) in the case menus.
+  - **Tab naming**: docker/remote (and codex/gemini/opencode) sessions now follow the `w<n>-<case>` convention instead of `codeman-<id>`.
+
+  Other:
+  - **File Viewer header button** (opt-in via App Settings, Header Displays): toggle the file browser panel from the header.
+  - Fixed a timezone-boundary flaky test in the away-digest route suite.
+
 ## 1.4.0
 
 ### Minor Changes

@@ -21,13 +21,15 @@
  * @module docker-hosts
  */
 
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import { dataPath } from './config/instance.js';
 import type {
   DockerCase,
   DockerCommandMode,
@@ -388,33 +390,236 @@ export function buildDockerCreateArgs(ctx: DockerCreateContext): string[] {
   return args;
 }
 
+/**
+ * PURE argv for building the agent base image locally (the programmatic mirror of
+ * scripts/build-agent-image.mjs): `build -f <dockerfile> -t <image> [--no-cache]
+ * <contextDir>`. Kept pure + unit-testable; the caller prepends the engine binary.
+ */
+export function agentImageBuildArgs(dockerfile: string, image: string, contextDir: string, noCache = false): string[] {
+  return ['build', '-f', dockerfile, '-t', image, ...(noCache ? ['--no-cache'] : []), contextDir];
+}
+
 // ========== Credential mount resolution (IO) ==========
 
-/** Host cred paths mapped to their in-container HOME location. */
-const CREDENTIAL_PATHS: Array<{ rel: string }> = [
-  { rel: '.claude' },
-  { rel: '.claude.json' },
-  { rel: '.codex' },
-  { rel: '.gemini' },
-  { rel: '.config/gcloud' },
-  { rel: '.config/opencode' },
+/** Container Claude config dir (created gid-0 writable in the image). */
+export const CONTAINER_CLAUDE_DIR = `${CONTAINER_HOME}/.claude`;
+/** In-container path of the seeded (writable) `~/.claude.json`. */
+export const CLAUDE_JSON_HOME = `${CONTAINER_HOME}/.claude.json`;
+/** In-container path of the read-only host-seeded `~/.claude.json` (copied into HOME at launch). */
+export const CLAUDE_JSON_SEED = `${CONTAINER_HOME}/.codeman/claude.seed.json`;
+/** Read-only seed paths for the files copied into the container's `.claude`. */
+const CLAUDE_CREDS_SEED = `${CONTAINER_HOME}/.codeman/claude-creds.seed.json`;
+const CLAUDE_SETTINGS_SEED = `${CONTAINER_HOME}/.codeman/claude-settings.seed.json`;
+const CLAUDE_STATS_SEED = `${CONTAINER_HOME}/.codeman/claude-stats.seed.json`;
+/** Staging root for read-only host-cred seed mounts (codex/gemini/gcloud/opencode). */
+const CRED_SEED_DIR = `${CONTAINER_HOME}/.codeman/cred-seeds`;
+
+/**
+ * PURE: merge the host `~/.claude.json` into a config that makes an
+ * already-authenticated Claude skip its INTERACTIVE onboarding inside the container
+ * (the host file itself lacks these flags — the host install is grandfathered, so a
+ * verbatim copy still triggers the theme picker + login wizard + folder-trust
+ * prompt). Forces `hasCompletedOnboarding`, a `theme` (so the theme picker is
+ * skipped), and marks the workspace project trusted + onboarded. Auth still comes
+ * from the copied `oauthAccount` + the dir-mounted `~/.claude/.credentials.json`.
+ */
+export function buildSeamlessClaudeConfig(
+  hostConfig: Record<string, unknown>,
+  workspacePath: string,
+  theme = 'dark'
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...hostConfig };
+  merged.hasCompletedOnboarding = true;
+  if (typeof merged.theme !== 'string') merged.theme = theme;
+  const projects = { ...((merged.projects as Record<string, Record<string, unknown>> | undefined) ?? {}) };
+  const existing = (projects[workspacePath] as Record<string, unknown> | undefined) ?? {};
+  const seenCount = existing.projectOnboardingSeenCount;
+  projects[workspacePath] = {
+    ...existing,
+    hasTrustDialogAccepted: true,
+    hasCompletedProjectOnboarding: true,
+    projectOnboardingSeenCount: typeof seenCount === 'number' && seenCount > 0 ? seenCount : 1,
+  };
+  merged.projects = projects;
+  return merged;
+}
+
+/** Best-effort read of the host `~/.claude/settings.json` theme (drives the seed's theme). */
+function readHostClaudeTheme(home: string): string | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf-8')) as { theme?: unknown };
+    return typeof parsed.theme === 'string' ? parsed.theme : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve the read-only seed mount for `~/.claude.json`. Reads the host file, merges
+ * in the seamless-onboarding flags + workspace trust (buildSeamlessClaudeConfig),
+ * writes the result to a per-container seed file under `~/.codeman/docker-seeds/`,
+ * and returns its mount. The launch chain copies it to `~/.claude.json` inside HOME
+ * once — giving Claude a NORMAL writable, already-onboarded config (no atomic-rename
+ * EBUSY, no re-auth, no theme/trust prompts). Falls back to the RAW host file when
+ * parse/write fails (auth still works; the wizard may show). Returns null when the
+ * host has no `~/.claude.json`. IO; under VITEST returns the raw mount (no write).
+ */
+export function resolveClaudeJsonSeedMount(
+  home: string = homedir(),
+  containerName?: string,
+  workspacePath?: string
+): DockerMount | null {
+  const src = join(home, '.claude.json');
+  if (!existsSync(src)) return null;
+  const rawMount: DockerMount = { src, dst: CLAUDE_JSON_SEED, readonly: true };
+  if (IS_TEST_MODE || !containerName || !workspacePath) return rawMount;
+  try {
+    const hostConfig = JSON.parse(readFileSync(src, 'utf-8')) as Record<string, unknown>;
+    const merged = buildSeamlessClaudeConfig(hostConfig, workspacePath, readHostClaudeTheme(home) ?? 'dark');
+    const seedsDir = dataPath('docker-seeds');
+    if (!existsSync(seedsDir)) mkdirSync(seedsDir, { recursive: true });
+    const seedFile = join(seedsDir, `${containerName}.json`);
+    writeFileSync(seedFile, JSON.stringify(merged), { mode: 0o600 });
+    return { src: seedFile, dst: CLAUDE_JSON_SEED, readonly: true };
+  } catch {
+    return rawMount; // partial host write / unreadable — auth still carries, wizard may show
+  }
+}
+
+/** A file (or dir, when `recursive`) copied into the container HOME once at launch
+ *  (`[ -e to ] || cp [-a] from to`). */
+export interface DockerSeedCopy {
+  from: string;
+  to: string;
+  /** `cp -a` for whole-directory credential seeds (gemini/gcloud/opencode). */
+  recursive?: boolean;
+}
+
+export interface DockerClaudeArtifacts {
+  /** Bind mounts to add: the shared `projects/` transcripts (RW) + read-only seed files. */
+  mounts: DockerMount[];
+  /** Files copied into the container's writable HOME/.claude (+ HOME/.claude.json) at launch. */
+  seedCopies: DockerSeedCopy[];
+}
+
+/**
+ * Resolve the ISOLATED Claude artifacts for a docker session (replaces the old
+ * whole-`~/.claude` RW mount that polluted the host). Shares ONLY what must cross
+ * the boundary and seeds the rest as writable copies:
+ *  - `~/.claude/projects` → RW dir mount (transcripts: host watchers + `--resume`).
+ *  - `~/.claude.json` → merged onboarding seed, copied to HOME (no re-auth/wizard).
+ *  - `~/.claude/.credentials.json` + `~/.claude/settings.json` → read-only seeds
+ *    copied into the container's own `~/.claude` (token + global prefs carry in;
+ *    the container refreshes its own copy and never writes back to the host).
+ * Everything else Claude writes (backups, tasks, teams, session-env, history) stays
+ * container-local. IO (reads host files, writes the merged `.claude.json` seed).
+ */
+export function resolveDockerClaudeArtifacts(
+  home: string,
+  containerName: string,
+  workspacePath: string
+): DockerClaudeArtifacts {
+  const mounts: DockerMount[] = [];
+  const seedCopies: DockerSeedCopy[] = [];
+
+  // The ONE genuinely-shared part: conversation transcripts (dir mount → renames work).
+  const projectsSrc = join(home, '.claude', 'projects');
+  if (existsSync(projectsSrc)) {
+    mounts.push({ src: projectsSrc, dst: `${CONTAINER_CLAUDE_DIR}/projects` });
+  }
+
+  // ~/.claude.json → merged, onboarding-complete seed at HOME root.
+  const jsonSeed = resolveClaudeJsonSeedMount(home, containerName, workspacePath);
+  if (jsonSeed) {
+    mounts.push(jsonSeed);
+    seedCopies.push({ from: CLAUDE_JSON_SEED, to: CLAUDE_JSON_HOME });
+  }
+
+  // credentials (token) + settings (theme/model/effort/permissions) + stats-cache
+  // (drives the model/effort status indicator) → writable copies inside the
+  // container's own ~/.claude (never a wholesale mount → no host pollution).
+  const files: Array<[rel: string, seed: string, dest: string]> = [
+    ['.credentials.json', CLAUDE_CREDS_SEED, `${CONTAINER_CLAUDE_DIR}/.credentials.json`],
+    ['settings.json', CLAUDE_SETTINGS_SEED, `${CONTAINER_CLAUDE_DIR}/settings.json`],
+    ['stats-cache.json', CLAUDE_STATS_SEED, `${CONTAINER_CLAUDE_DIR}/stats-cache.json`],
+  ];
+  for (const [rel, seed, dest] of files) {
+    const src = join(home, '.claude', rel);
+    if (existsSync(src)) {
+      mounts.push({ src, dst: seed, readonly: true });
+      seedCopies.push({ from: seed, to: dest });
+    }
+  }
+
+  return { mounts, seedCopies };
+}
+
+/**
+ * Per-CLI credential-store isolation policy (the codex/gemini/gcloud/opencode analog
+ * of resolveDockerClaudeArtifacts). Codex is the direct Claude-analog: its
+ * `sessions/` rollouts + `history.jsonl` are read HOST-SIDE (response-viewer +
+ * `codex resume`), so they are SHARED (RW), while `auth.json`/`config.toml` are
+ * seeded. The other three have no host-read/resume dependency and are fully
+ * seed-copied (writable copy in the container, no write-back to the host).
+ */
+interface CredStorePolicy {
+  /** Path relative to HOME (host + container), e.g. '.codex' or '.config/gcloud'. */
+  rel: string;
+  /** Subdirs bind-mounted RW (shared: resume + host reads). */
+  shareDirs?: string[];
+  /** Files bind-mounted RW (append-only, e.g. codex history.jsonl — never renamed). */
+  shareFiles?: string[];
+  /** Files seeded (RO mount → cp) into the container's own copy. */
+  seedFiles?: string[];
+  /** Seed the WHOLE dir (RO mount → cp -a) — for stores with no shared/host-read state. */
+  seedWhole?: boolean;
+}
+
+const CRED_STORES: CredStorePolicy[] = [
+  { rel: '.codex', shareDirs: ['sessions'], shareFiles: ['history.jsonl'], seedFiles: ['auth.json', 'config.toml'] },
+  { rel: '.gemini', seedWhole: true },
+  { rel: '.config/gcloud', seedWhole: true },
+  { rel: '.config/opencode', seedWhole: true },
 ];
 
 /**
- * Resolve which host credential dirs/files EXIST and map them to their container
- * HOME location. Only-existing avoids docker auto-creating root-owned empty dirs
- * in the user's home. `~/.claude` also carries the transcripts (bind-mounted so
- * host watchers + `--resume` see them) and is therefore mounted read-WRITE.
+ * Resolve the ISOLATED codex/gemini/gcloud/opencode artifacts (replaces the old
+ * whole-dir RW mounts that let each in-container CLI write its refreshed tokens +
+ * session state back into the host). Every path is existsSync-gated (on most hosts
+ * only a subset exists). Pure-ish IO (no writes; just existence checks + mount specs).
  */
-export function resolveCredentialMounts(home: string = homedir()): DockerMount[] {
+export function resolveDockerCredentialArtifacts(home: string = homedir()): DockerClaudeArtifacts {
   const mounts: DockerMount[] = [];
-  for (const { rel } of CREDENTIAL_PATHS) {
-    const src = join(home, rel);
-    if (existsSync(src)) {
-      mounts.push({ src, dst: `${CONTAINER_HOME}/${rel}` });
+  const seedCopies: DockerSeedCopy[] = [];
+  for (const store of CRED_STORES) {
+    const hostBase = join(home, store.rel);
+    if (!existsSync(hostBase)) continue;
+    const containerBase = `${CONTAINER_HOME}/${store.rel}`;
+    const seedName = store.rel.replace(/\//g, '-'); // '.config/gcloud' → '.config-gcloud'
+    if (store.seedWhole) {
+      const seed = `${CRED_SEED_DIR}/${seedName}`;
+      mounts.push({ src: hostBase, dst: seed, readonly: true });
+      seedCopies.push({ from: seed, to: containerBase, recursive: true });
+      continue;
+    }
+    for (const sub of store.shareDirs ?? []) {
+      const src = join(hostBase, sub);
+      if (existsSync(src)) mounts.push({ src, dst: `${containerBase}/${sub}` });
+    }
+    for (const file of store.shareFiles ?? []) {
+      const src = join(hostBase, file);
+      if (existsSync(src)) mounts.push({ src, dst: `${containerBase}/${file}` });
+    }
+    for (const file of store.seedFiles ?? []) {
+      const src = join(hostBase, file);
+      if (existsSync(src)) {
+        const seed = `${CRED_SEED_DIR}/${seedName}-${file}`;
+        mounts.push({ src, dst: seed, readonly: true });
+        seedCopies.push({ from: seed, to: `${containerBase}/${file}` });
+      }
     }
   }
-  return mounts;
+  return { mounts, seedCopies };
 }
 
 // ========== Daemon probes (IO; no-op under VITEST) ==========
@@ -510,6 +715,104 @@ export async function checkDockerImagePresent(engine: DockerEngine, image: strin
   }
 }
 
+export interface EnsureImageResult {
+  ok: boolean;
+  /** true when this call actually ran a build (vs. the image already existing). */
+  built: boolean;
+  alreadyPresent: boolean;
+  error?: string;
+}
+
+/** In-flight builds keyed by `engine:image`, so concurrent callers share ONE build. */
+const inFlightImageBuilds = new Map<string, Promise<EnsureImageResult>>();
+
+/**
+ * Resolve the repo's Dockerfile + build context. Works from BOTH src (dev/tsx) and
+ * dist/index.js (esbuild prod: dist sits at repo root), since both are one level
+ * under the repo root. Returns null when the Dockerfile is absent (npm-global
+ * installs don't ship docker/ — Docker cases are a git-clone feature).
+ */
+function resolveAgentDockerfile(): { dockerfile: string; contextDir: string } | null {
+  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const dockerfile = join(repoRoot, 'docker', 'agent.Dockerfile');
+  return existsSync(dockerfile) ? { dockerfile, contextDir: repoRoot } : null;
+}
+
+/**
+ * Ensure the agent base image exists, BUILDING it locally on first use so a missing
+ * image is never a hard blocker (decision: "build locally on first use",
+ * docs/docker-cases-plan.md). Idempotent, concurrency-safe (one build per
+ * engine:image shared by concurrent callers), and a no-op under VITEST. Only the
+ * DEFAULT image is auto-built — we can never build a user's custom ref, and the
+ * `--pull=never` invariant forbids pulling. `onProgress` receives build output
+ * lines for SSE surfacing.
+ */
+export async function ensureAgentBaseImage(
+  engine: DockerEngine,
+  image: string,
+  opts: { onProgress?: (line: string) => void; noCache?: boolean } = {}
+): Promise<EnsureImageResult> {
+  if (IS_TEST_MODE) return { ok: true, built: false, alreadyPresent: true };
+  if (await checkDockerImagePresent(engine, image)) {
+    return { ok: true, built: false, alreadyPresent: true };
+  }
+  if (image !== DEFAULT_AGENT_IMAGE) {
+    return {
+      ok: false,
+      built: false,
+      alreadyPresent: false,
+      error: `image ${image} is not present and only ${DEFAULT_AGENT_IMAGE} is auto-built. Build or pull ${image} yourself.`,
+    };
+  }
+  const key = `${engine}:${image}`;
+  const existing = inFlightImageBuilds.get(key);
+  if (existing) return existing;
+  const build = buildAgentImage(engine, image, opts).finally(() => inFlightImageBuilds.delete(key));
+  inFlightImageBuilds.set(key, build);
+  return build;
+}
+
+function buildAgentImage(
+  engine: DockerEngine,
+  image: string,
+  opts: { onProgress?: (line: string) => void; noCache?: boolean }
+): Promise<EnsureImageResult> {
+  const resolved = resolveAgentDockerfile();
+  if (!resolved) {
+    return Promise.resolve({
+      ok: false,
+      built: false,
+      alreadyPresent: false,
+      error: `docker/agent.Dockerfile not found in this install; clone the repo or build ${image} manually`,
+    });
+  }
+  const args = agentImageBuildArgs(resolved.dockerfile, image, resolved.contextDir, opts.noCache);
+  return new Promise<EnsureImageResult>((resolve) => {
+    // async spawn (NEVER spawnSync) so a multi-minute build never wedges the event loop.
+    const child = spawn(engine, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const forward = (buf: Buffer) => {
+      for (const line of buf.toString('utf-8').split('\n')) {
+        const trimmed = line.trimEnd();
+        if (trimmed) opts.onProgress?.(trimmed);
+      }
+    };
+    child.stdout?.on('data', forward);
+    child.stderr?.on('data', forward);
+    child.on('error', (err) => {
+      resolve({
+        ok: false,
+        built: false,
+        alreadyPresent: false,
+        error: `could not spawn ${engine} build: ${err.message}`,
+      });
+    });
+    child.on('exit', (code) => {
+      if (code === 0) resolve({ ok: true, built: true, alreadyPresent: false });
+      else resolve({ ok: false, built: false, alreadyPresent: false, error: `${engine} build failed (exit ${code})` });
+    });
+  });
+}
+
 export interface DockerTmuxCheckResult {
   ok: boolean;
   tmuxPath?: string;
@@ -532,7 +835,7 @@ export async function checkDockerTmuxAvailable(
     return {
       ok: false,
       imageMissing: true,
-      error: `base image ${docker.image} not present: build it with 'node scripts/build-agent-image.mjs' (or pull it)`,
+      error: `image ${docker.image} not present (the default image is auto-built on first use; a custom image must be built or pulled first)`,
     };
   }
   try {

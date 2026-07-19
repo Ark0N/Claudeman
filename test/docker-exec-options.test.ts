@@ -133,6 +133,36 @@ describe('buildDockerLaunchCommand', () => {
     const cmd = buildDockerLaunchCommand(launchOpts({ docker }));
     expect(cmd).toContain('exec claude --model opus');
   });
+
+  it('seeds writable config (guarded copies, mkdir -p parent) from the read-only seed mounts', () => {
+    const cmd = buildDockerLaunchCommand(
+      launchOpts({
+        seedCopies: [
+          { from: '/home/agent/.codeman/claude.seed.json', to: '/home/agent/.claude.json' },
+          { from: '/home/agent/.codeman/claude-creds.seed.json', to: '/home/agent/.claude/.credentials.json' },
+          // whole-dir credential seed → cp -a
+          { from: '/home/agent/.codeman/cred-seeds/.gemini', to: '/home/agent/.gemini', recursive: true },
+        ],
+      })
+    );
+    // Each copy mkdir -p's its parent then is guarded so a reconnect never clobbers config.
+    expect(cmd).toContain(
+      'mkdir -p /home/agent 2>/dev/null; [ -e /home/agent/.claude.json ] || cp /home/agent/.codeman/claude.seed.json /home/agent/.claude.json'
+    );
+    expect(cmd).toContain(
+      'mkdir -p /home/agent/.claude 2>/dev/null; [ -e /home/agent/.claude/.credentials.json ] || cp /home/agent/.codeman/claude-creds.seed.json /home/agent/.claude/.credentials.json'
+    );
+    // recursive whole-dir seed uses cp -a
+    expect(cmd).toContain(
+      '[ -e /home/agent/.gemini ] || cp -a /home/agent/.codeman/cred-seeds/.gemini /home/agent/.gemini'
+    );
+    expect(cmd.indexOf('.claude.json')).toBeLessThan(cmd.indexOf('tmux -L codeman-docker'));
+  });
+
+  it('omits the seed-copy step when there are no seedCopies', () => {
+    const cmd = buildDockerLaunchCommand(launchOpts());
+    expect(cmd).not.toContain('claude.seed.json');
+  });
 });
 
 describe('buildDockerKillCommand (multi-session safe)', () => {

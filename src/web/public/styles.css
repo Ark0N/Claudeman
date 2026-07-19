@@ -9447,6 +9447,24 @@ kbd {
   padding-left: 0.5rem;
 }
 
+/* "Run in Docker" quick option — the primary one-click entry point, so its
+   label + hint read larger and brighter than the standard form label/hint. */
+.docker-quick-row .checkbox-row {
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.docker-quick-row .form-hint {
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+/* The container-settings panel is always shown + expanded (no longer gated on
+   the checkbox), so its summary header reads a touch larger too. */
+.docker-quick-settings > summary {
+  font-size: 0.85rem;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Response Viewer — native-scroll overlay for reading Claude responses
    ═══════════════════════════════════════════════════════════════ */
@@ -9486,6 +9504,17 @@ kbd {
   display: inline-flex !important;
 }
 .btn-away-digest.btn-away-digest--hidden {
+  display: none !important;
+}
+
+/* "File Viewer" header button — opt-in (App Settings → Header Displays), hidden
+   by default. Clicking it toggles the file browser panel. Same marker pattern as
+   the response viewer: a base inline-flex !important so an inline style can't
+   override it, and a more-specific marker rule to hide. */
+.btn-file-viewer {
+  display: inline-flex !important;
+}
+.btn-file-viewer.btn-file-viewer--hidden {
   display: none !important;
 }
 

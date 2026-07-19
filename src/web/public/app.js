@@ -1452,6 +1452,30 @@ class CodemanApp {
         console.error('[SSE] docker export failed:', err);
       }
     });
+    // Base image auto-build on first Docker case (build-on-first-use). A single
+    // multi-minute event; surface start/finish so the Run spinner is explained.
+    addListener(SSE_EVENTS.DOCKER_IMAGE_BUILD_STARTED, () => {
+      this.showToast('Building the Codeman agent image (first Docker case, a few minutes)...', 'info', {
+        duration: 8000,
+      });
+    });
+    addListener(SSE_EVENTS.DOCKER_IMAGE_BUILD_COMPLETE, (e) => {
+      try {
+        const d = e.data ? JSON.parse(e.data) : {};
+        if (d.error) this.showToast(`Agent image build failed: ${d.error}`, 'error');
+        else this.showToast('Agent image ready. Starting the container...', 'success');
+      } catch (err) {
+        console.error('[SSE] docker image build complete:', err);
+      }
+    });
+    addListener(SSE_EVENTS.DOCKER_IMAGE_BUILD_FAILED, (e) => {
+      try {
+        const d = e.data ? JSON.parse(e.data) : {};
+        this.showToast(`Agent image build failed: ${d.error || 'unknown error'}`, 'error');
+      } catch (err) {
+        console.error('[SSE] docker image build failed:', err);
+      }
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════

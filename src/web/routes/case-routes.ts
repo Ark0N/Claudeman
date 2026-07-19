@@ -11,7 +11,7 @@ import fs from 'node:fs/promises';
 import { join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import type { ApiResponse, CaseInfo, DockerHost } from '../../types.js';
+import type { ApiResponse, CaseInfo, DockerHost, SessionDocker } from '../../types.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import {
   CreateCaseSchema,
@@ -34,7 +34,9 @@ import type { EventPort, ConfigPort } from '../ports/index.js';
 import { dataPath, getDataDir } from '../../config/instance.js';
 import {
   checkDockerAvailable,
+  checkDockerImagePresent,
   checkDockerTmuxAvailable,
+  ensureAgentBaseImage,
   DEFAULT_AGENT_IMAGE,
   dockerContainerName,
   dockerDisplayPath,
@@ -81,6 +83,48 @@ async function resolveCasePath(name: string): Promise<string> {
   const linkedCases = await readLinkedCases();
   if (linkedCases[name]) return linkedCases[name];
   return join(CASES_DIR, name);
+}
+
+/**
+ * Gate a docker case on its base image, AUTO-BUILDING the default image on first
+ * use so a missing image is never a blocker (the user's ask: "create it when it's
+ * used for the first time"). Present image → verify tmux (hard prerequisite).
+ * Default image missing → kick off a BACKGROUND build with SSE progress and return
+ * `imageBuilding: true` (the case is created regardless; first launch awaits the
+ * same dedup'd build). Custom image missing → a real error (we can't build a
+ * foreign ref, and `--pull=never` forbids pulling).
+ */
+async function ensureCaseImage(
+  broadcast: EventPort['broadcast'],
+  sessionDocker: SessionDocker,
+  name: string
+): Promise<{ ok: true; imageBuilding: boolean } | { ok: false; error: string }> {
+  if (await checkDockerImagePresent(sessionDocker.engine, sessionDocker.image)) {
+    const tmuxCheck = await checkDockerTmuxAvailable(sessionDocker);
+    if (!tmuxCheck.ok) return { ok: false, error: tmuxCheck.error || 'base image is missing tmux' };
+    return { ok: true, imageBuilding: false };
+  }
+  if (sessionDocker.image !== DEFAULT_AGENT_IMAGE) {
+    return {
+      ok: false,
+      error: `base image ${sessionDocker.image} not present; only ${DEFAULT_AGENT_IMAGE} is auto-built. Build or pull it first.`,
+    };
+  }
+  broadcast(SseEvent.DockerImageBuildStarted, { name, image: sessionDocker.image });
+  void ensureAgentBaseImage(sessionDocker.engine, sessionDocker.image, {
+    onProgress: (line) => broadcast(SseEvent.DockerImageBuildProgress, { name, line }),
+  })
+    .then((r) =>
+      broadcast(r.ok ? SseEvent.DockerImageBuildComplete : SseEvent.DockerImageBuildFailed, {
+        name,
+        image: sessionDocker.image,
+        error: r.error,
+      })
+    )
+    .catch((err) =>
+      broadcast(SseEvent.DockerImageBuildFailed, { name, image: sessionDocker.image, error: getErrorMessage(err) })
+    );
+  return { ok: true, imageBuilding: true };
 }
 
 export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & ConfigPort): void {
@@ -337,7 +381,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
   app.post(
     '/api/cases/docker-link',
-    async (req): Promise<ApiResponse<{ case: unknown; capsEnforced?: boolean; isDesktop?: boolean }>> => {
+    async (
+      req
+    ): Promise<
+      ApiResponse<{ case: unknown; capsEnforced?: boolean; isDesktop?: boolean; imageBuilding?: boolean }>
+    > => {
       const dockerCase = { ...parseBody(DockerCaseLinkSchema, req.body), type: 'docker' as const };
       const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
       const host = hosts.find((item) => item.id === dockerCase.hostId);
@@ -367,9 +415,9 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
         }
       }
 
-      // Courtesy validation: docker daemon must be reachable AND the base image must
-      // contain tmux (a hard prerequisite for durable in-container sessions). Surfaces
-      // a clear error at link time instead of a dead pane on first launch.
+      // Courtesy validation: docker daemon must be reachable. The base image is
+      // auto-built on first use (default image) rather than being a link-time
+      // blocker, so a missing image kicks off a background build instead of erroring.
       const availability = await checkDockerAvailable(host.engine);
       if (!availability.ok) {
         return createErrorResponse(
@@ -377,9 +425,9 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
           availability.error || 'docker daemon is not available'
         );
       }
-      const tmuxCheck = await checkDockerTmuxAvailable(toSessionDocker(host, dockerCase));
-      if (!tmuxCheck.ok) {
-        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, tmuxCheck.error || 'base image is missing tmux');
+      const imageGate = await ensureCaseImage(ctx.broadcast, toSessionDocker(host, dockerCase), dockerCase.name);
+      if (!imageGate.ok) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, imageGate.error);
       }
 
       await writeDockerCases(CODEMAN_CONFIG_DIR, [...dockerCases, dockerCase]);
@@ -390,7 +438,12 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       });
       return {
         success: true,
-        data: { case: dockerCase, capsEnforced: availability.capsEnforced, isDesktop: availability.isDesktop },
+        data: {
+          case: dockerCase,
+          capsEnforced: availability.capsEnforced,
+          isDesktop: availability.isDesktop,
+          imageBuilding: imageGate.imageBuilding,
+        },
       };
     }
   );
@@ -400,7 +453,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
   // shared `default` docker host so the user never touches host/image/network fields.
   app.post(
     '/api/cases/docker-quickcreate',
-    async (req): Promise<ApiResponse<{ case: unknown; capsEnforced?: boolean; isDesktop?: boolean }>> => {
+    async (
+      req
+    ): Promise<
+      ApiResponse<{ case: unknown; capsEnforced?: boolean; isDesktop?: boolean; imageBuilding?: boolean }>
+    > => {
       const body = parseBody(DockerQuickCreateSchema, req.body);
       const { name, description } = body;
       const casePath = validatePathWithinBase(name, CASES_DIR);
@@ -458,8 +515,9 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
         );
       }
 
-      // Probe the daemon + base image BEFORE scaffolding, so a missing docker/image
-      // surfaces a clear error instead of leaving an orphaned case folder.
+      // Probe the daemon BEFORE scaffolding so a missing docker surfaces a clear
+      // error instead of leaving an orphaned case folder. The base image is NOT a
+      // blocker: a missing default image auto-builds in the background on first use.
       const availability = await checkDockerAvailable(host.engine);
       if (!availability.ok) {
         return createErrorResponse(
@@ -468,12 +526,9 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
         );
       }
       const dockerCase = { name, type: 'docker' as const, hostId: host.id, hostWorkspacePath: casePath };
-      const tmuxCheck = await checkDockerTmuxAvailable(toSessionDocker(host, dockerCase));
-      if (!tmuxCheck.ok) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          tmuxCheck.error || 'base image is missing tmux (build it: node scripts/build-agent-image.mjs)'
-        );
+      const imageGate = await ensureCaseImage(ctx.broadcast, toSessionDocker(host, dockerCase), name);
+      if (!imageGate.ok) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, imageGate.error);
       }
 
       // Scaffold the case folder exactly like a normal case.
@@ -492,7 +547,12 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       ctx.broadcast(SseEvent.CaseLinked, { name, path: casePath, type: 'docker' });
       return {
         success: true,
-        data: { case: dockerCase, capsEnforced: availability.capsEnforced, isDesktop: availability.isDesktop },
+        data: {
+          case: dockerCase,
+          capsEnforced: availability.capsEnforced,
+          isDesktop: availability.isDesktop,
+          imageBuilding: imageGate.imageBuilding,
+        },
       };
     }
   );
@@ -701,11 +761,16 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       // explicit teardown that removes it; the bind-mounted workspace survives).
       const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === dockerCase.hostId);
       if (host) {
+        const sessionDocker = toSessionDocker(host, dockerCase);
         try {
-          exec(buildDockerRemoveCommand(toSessionDocker(host, dockerCase)), { timeout: 15_000 }, () => {});
+          exec(buildDockerRemoveCommand(sessionDocker), { timeout: 15_000 }, () => {});
         } catch {
           /* best-effort — never blocks the unlink */
         }
+        // Remove the per-container claude-config seed file (account metadata copy).
+        await fs
+          .rm(join(dataPath('docker-seeds'), `${sessionDocker.containerName}.json`), { force: true })
+          .catch(() => {});
       }
       ctx.broadcast(SseEvent.CaseDeleted, { name, type: 'docker-unlinked' });
       return { success: true, data: { name } };
