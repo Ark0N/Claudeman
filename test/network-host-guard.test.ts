@@ -67,6 +67,13 @@ describe('isAllowedRequestHost — anti-DNS-rebinding', () => {
     expect(isAllowedRequestHost('eviltrycloudflare.com', loopback)).toBe(false);
   });
 
+  it('accepts the docker/podman container-to-host gateway aliases (in-container hooks)', () => {
+    expect(isAllowedRequestHost('host.docker.internal:3000', loopback)).toBe(true);
+    expect(isAllowedRequestHost('host.containers.internal:3000', loopback)).toBe(true);
+    // a lookalike is still rejected (exact match only)
+    expect(isAllowedRequestHost('host.docker.internal.evil.com', loopback)).toBe(false);
+  });
+
   it('accepts the configured bind host when it is a hostname', () => {
     const policy: HostPolicy = { bindHost: 'mybox.local', allowedHosts: [], tunnelHost: null };
     expect(isAllowedRequestHost('mybox.local:3000', policy)).toBe(true);

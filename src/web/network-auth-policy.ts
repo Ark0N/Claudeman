@@ -39,6 +39,16 @@ export function isLoopbackBindHost(host: string): boolean {
  */
 export const DEFAULT_TRUSTED_HOST_SUFFIXES = ['.ts.net', '.trycloudflare.com', '.cfargotunnel.com'];
 
+/**
+ * Container-to-host gateway aliases (Docker / Podman). A hook `curl` from INSIDE a
+ * docker case carries `Host: host.docker.internal:<port>` (the derived
+ * CODEMAN_API_URL), so the always-on host guard must allow it or every in-container
+ * hook is blocked 403. These names only resolve to the host from within a
+ * container's network namespace, so they are not a DNS-rebinding surface for a
+ * normal browser. Both engines' aliases are allowed so a mixed fleet keeps working.
+ */
+export const DOCKER_HOST_GATEWAY_ALIASES = ['host.docker.internal', 'host.containers.internal'];
+
 /** Policy inputs for the anti-DNS-rebinding Host allowlist + cross-site Origin guard. */
 export interface HostPolicy {
   /** The host the server is bound to (e.g. '127.0.0.1', '0.0.0.0', or a hostname). */
@@ -98,6 +108,8 @@ function matchesHost(hostname: string, policy: HostPolicy): boolean {
   const bind = parseAuthorityHostname(policy.bindHost);
   if (bind && hostname === bind) return true;
   if (policy.tunnelHost && hostname === policy.tunnelHost) return true;
+  // Docker/Podman container-to-host gateway aliases (for in-container hook curls).
+  if (DOCKER_HOST_GATEWAY_ALIASES.includes(hostname)) return true;
   for (const suffix of DEFAULT_TRUSTED_HOST_SUFFIXES) {
     if (hostname === suffix.slice(1) || hostname.endsWith(suffix)) return true;
   }
