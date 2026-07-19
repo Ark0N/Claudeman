@@ -5,11 +5,13 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, createReadStream } from 'node:fs';
+import { exec } from 'node:child_process';
 import fs from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, resolve, basename } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import type { ApiResponse, CaseInfo } from '../../types.js';
+import type { ApiResponse, CaseInfo, DockerHost } from '../../types.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import {
   CreateCaseSchema,
@@ -17,13 +19,32 @@ import {
   CaseOrderSchema,
   RemoteCaseLinkSchema,
   RemoteHostSchema,
+  DockerCaseLinkSchema,
+  DockerHostSchema,
+  DockerExportSchema,
+  DockerImportSchema,
+  DockerQuickCreateSchema,
 } from '../schemas.js';
+import { exportDockerCase, importDockerBundle, listDockerExports, exportBundleName } from '../../docker-export.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { writeHooksConfig } from '../../hooks-config.js';
 import { CASES_DIR, SETTINGS_PATH, validatePathWithinBase, parseBody, readJsonConfig } from '../route-helpers.js';
 import { SseEvent } from '../sse-events.js';
 import type { EventPort, ConfigPort } from '../ports/index.js';
 import { dataPath, getDataDir } from '../../config/instance.js';
+import {
+  checkDockerAvailable,
+  checkDockerTmuxAvailable,
+  DEFAULT_AGENT_IMAGE,
+  dockerContainerName,
+  dockerDisplayPath,
+  readDockerCases,
+  readDockerHosts,
+  toSessionDocker,
+  writeDockerCases,
+  writeDockerHosts,
+} from '../../docker-hosts.js';
+import { buildDockerRemoveCommand } from '../../tmux-manager.js';
 import {
   checkRemoteTmuxAvailable,
   readRemoteCases,
@@ -36,6 +57,19 @@ import {
 const LINKED_CASES_FILE = dataPath('linked-cases.json');
 const CODEMAN_CONFIG_DIR = getDataDir();
 const SAFE_CASE_NAME = /^[a-zA-Z0-9_-]+$/;
+const DOCKER_EXPORTS_DIR = dataPath('docker-exports');
+/** Auto-created host profile for the one-click "Run in Docker" case flow. */
+const DEFAULT_DOCKER_HOST_ID = 'default';
+
+/** App version for export manifests (best-effort read of package.json). */
+const APP_VERSION = (() => {
+  try {
+    const pkgPath = fileURLToPath(new URL('../../../package.json', import.meta.url));
+    return (JSON.parse(readFileSync(pkgPath, 'utf-8')).version as string) || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
 
 /** Read and parse linked-cases.json, returning empty object on missing/invalid file. */
 async function readLinkedCases(): Promise<Record<string, string>> {
@@ -115,6 +149,35 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
         cases.push(remoteCaseInfo);
       } else {
         cases[existingIndex] = remoteCaseInfo;
+      }
+    }
+
+    // Get docker cases
+    const dockerHosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+    const dockerHostMap = new Map(dockerHosts.map((host) => [host.id, host]));
+    for (const dockerCase of await readDockerCases(CODEMAN_CONFIG_DIR)) {
+      const host = dockerHostMap.get(dockerCase.hostId);
+      if (!host || !SAFE_CASE_NAME.test(dockerCase.name)) continue;
+      existingNames.add(dockerCase.name);
+      const container = dockerCase.container ?? dockerContainerName(dockerCase.name);
+      const dockerCaseInfo: CaseInfo = {
+        name: dockerCase.name,
+        path: dockerDisplayPath({ container, path: dockerCase.hostWorkspacePath }),
+        hasClaudeMd: existsSync(join(dockerCase.hostWorkspacePath, 'CLAUDE.md')),
+        location: 'docker',
+        docker: {
+          hostId: host.id,
+          container,
+          image: host.image,
+          path: dockerCase.hostWorkspacePath,
+          network: host.network ?? 'bridge',
+        },
+      };
+      const existingIndex = cases.findIndex((item) => item.name === dockerCase.name);
+      if (existingIndex === -1) {
+        cases.push(dockerCaseInfo);
+      } else {
+        cases[existingIndex] = dockerCaseInfo;
       }
     }
 
@@ -232,6 +295,338 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     return { success: true, data: { case: remoteCase } };
   });
 
+  // ========== Docker hosts + docker cases (COD-Docker) ==========
+
+  app.get('/api/docker-hosts', async () => readDockerHosts(CODEMAN_CONFIG_DIR));
+
+  app.post('/api/docker-hosts', async (req): Promise<ApiResponse<{ host: unknown }>> => {
+    const host = parseBody(DockerHostSchema, req.body);
+    const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+    if (hosts.some((item) => item.id === host.id)) {
+      return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Docker host already exists');
+    }
+    await writeDockerHosts(CODEMAN_CONFIG_DIR, [...hosts, host]);
+    return { success: true, data: { host } };
+  });
+
+  app.put('/api/docker-hosts/:id', async (req): Promise<ApiResponse<{ host: unknown }>> => {
+    const { id } = req.params as { id: string };
+    const host = parseBody(DockerHostSchema, { ...(req.body as object), id });
+    const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+    const index = hosts.findIndex((item) => item.id === id);
+    if (index === -1) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
+    const next = [...hosts];
+    next[index] = host;
+    await writeDockerHosts(CODEMAN_CONFIG_DIR, next);
+    return { success: true, data: { host } };
+  });
+
+  app.delete('/api/docker-hosts/:id', async (req): Promise<ApiResponse<{ id: string }>> => {
+    const { id } = req.params as { id: string };
+    const cases = await readDockerCases(CODEMAN_CONFIG_DIR);
+    if (cases.some((item) => item.hostId === id)) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Docker host is still used by docker cases');
+    }
+    const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+    await writeDockerHosts(
+      CODEMAN_CONFIG_DIR,
+      hosts.filter((item) => item.id !== id)
+    );
+    return { success: true, data: { id } };
+  });
+
+  app.post(
+    '/api/cases/docker-link',
+    async (req): Promise<ApiResponse<{ case: unknown; capsEnforced?: boolean; isDesktop?: boolean }>> => {
+      const dockerCase = { ...parseBody(DockerCaseLinkSchema, req.body), type: 'docker' as const };
+      const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+      const host = hosts.find((item) => item.id === dockerCase.hostId);
+      if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
+
+      const linkedCases = await readLinkedCases();
+      const dockerCases = await readDockerCases(CODEMAN_CONFIG_DIR);
+      if (
+        dockerCases.some((item) => item.name === dockerCase.name) ||
+        linkedCases[dockerCase.name] ||
+        existsSync(join(CASES_DIR, dockerCase.name))
+      ) {
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
+      }
+
+      // The workspace is a REAL host directory (bind-mounted into the container), so
+      // create it now if missing. Scaffolding (.claude/settings.local.json + CLAUDE.md)
+      // is written by quick-start on first launch, matching local-case behaviour.
+      if (!existsSync(dockerCase.hostWorkspacePath)) {
+        try {
+          mkdirSync(dockerCase.hostWorkspacePath, { recursive: true });
+        } catch (err) {
+          return createErrorResponse(
+            ApiErrorCode.OPERATION_FAILED,
+            `Could not create workspace: ${getErrorMessage(err)}`
+          );
+        }
+      }
+
+      // Courtesy validation: docker daemon must be reachable AND the base image must
+      // contain tmux (a hard prerequisite for durable in-container sessions). Surfaces
+      // a clear error at link time instead of a dead pane on first launch.
+      const availability = await checkDockerAvailable(host.engine);
+      if (!availability.ok) {
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          availability.error || 'docker daemon is not available'
+        );
+      }
+      const tmuxCheck = await checkDockerTmuxAvailable(toSessionDocker(host, dockerCase));
+      if (!tmuxCheck.ok) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, tmuxCheck.error || 'base image is missing tmux');
+      }
+
+      await writeDockerCases(CODEMAN_CONFIG_DIR, [...dockerCases, dockerCase]);
+      ctx.broadcast(SseEvent.CaseLinked, {
+        name: dockerCase.name,
+        path: dockerCase.hostWorkspacePath,
+        type: 'docker',
+      });
+      return {
+        success: true,
+        data: { case: dockerCase, capsEnforced: availability.capsEnforced, isDesktop: availability.isDesktop },
+      };
+    }
+  );
+
+  // One-click "Run in Docker": create a NORMAL case (folder in CASES_DIR, scaffolded)
+  // AND link it to a hardened container with default settings, auto-provisioning a
+  // shared `default` docker host so the user never touches host/image/network fields.
+  app.post(
+    '/api/cases/docker-quickcreate',
+    async (req): Promise<ApiResponse<{ case: unknown; capsEnforced?: boolean; isDesktop?: boolean }>> => {
+      const body = parseBody(DockerQuickCreateSchema, req.body);
+      const { name, description } = body;
+      const casePath = validatePathWithinBase(name, CASES_DIR);
+      if (!casePath) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
+
+      // Collision across every case kind.
+      const linkedCases = await readLinkedCases();
+      const dockerCases = await readDockerCases(CODEMAN_CONFIG_DIR);
+      const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
+      if (
+        existsSync(casePath) ||
+        dockerCases.some((item) => item.name === name) ||
+        remoteCases.some((item) => item.name === name) ||
+        linkedCases[name]
+      ) {
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
+      }
+
+      // The checkbox alone (no overrides) uses the shared `default` host; any tweaked
+      // setting gets a dedicated per-case host so it never mutates the shared default.
+      const hasOverrides = !!(
+        body.image ||
+        body.network ||
+        body.networkName ||
+        body.memory ||
+        body.cpus ||
+        body.gpus ||
+        body.mountCredentials !== undefined
+      );
+      const resources: { memory?: string; cpus?: string } = {};
+      if (body.memory) resources.memory = body.memory;
+      if (body.cpus) resources.cpus = body.cpus;
+      const desiredHost: DockerHost = {
+        id: hasOverrides ? `q-${name}` : DEFAULT_DOCKER_HOST_ID,
+        label: hasOverrides ? `Case: ${name}` : 'Default',
+        image: body.image || DEFAULT_AGENT_IMAGE,
+        network: body.network || 'bridge',
+        ...(body.networkName ? { networkName: body.networkName } : {}),
+        ...(Object.keys(resources).length ? { resources } : {}),
+        ...(body.gpus ? { gpus: body.gpus } : {}),
+        mountCredentials: body.mountCredentials ?? true,
+        resumeOnStart: true,
+        hooksEnabled: true,
+      };
+      const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+      const existing = hosts.find((item) => item.id === desiredHost.id);
+      // Reuse the shared default if present; create/refresh a per-case host for overrides.
+      const host = existing && !hasOverrides ? existing : desiredHost;
+      if (!existing) {
+        await writeDockerHosts(CODEMAN_CONFIG_DIR, [...hosts, desiredHost]);
+      } else if (hasOverrides) {
+        await writeDockerHosts(
+          CODEMAN_CONFIG_DIR,
+          hosts.map((h) => (h.id === desiredHost.id ? desiredHost : h))
+        );
+      }
+
+      // Probe the daemon + base image BEFORE scaffolding, so a missing docker/image
+      // surfaces a clear error instead of leaving an orphaned case folder.
+      const availability = await checkDockerAvailable(host.engine);
+      if (!availability.ok) {
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          availability.error || 'docker daemon is not available'
+        );
+      }
+      const dockerCase = { name, type: 'docker' as const, hostId: host.id, hostWorkspacePath: casePath };
+      const tmuxCheck = await checkDockerTmuxAvailable(toSessionDocker(host, dockerCase));
+      if (!tmuxCheck.ok) {
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          tmuxCheck.error || 'base image is missing tmux (build it: node scripts/build-agent-image.mjs)'
+        );
+      }
+
+      // Scaffold the case folder exactly like a normal case.
+      try {
+        mkdirSync(casePath, { recursive: true });
+        mkdirSync(join(casePath, 'src'), { recursive: true });
+        const templatePath = await ctx.getDefaultClaudeMdPath();
+        writeFileSync(join(casePath, 'CLAUDE.md'), generateClaudeMd(name, description || '', templatePath));
+        await writeHooksConfig(casePath);
+      } catch (err) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create case: ${getErrorMessage(err)}`);
+      }
+
+      await writeDockerCases(CODEMAN_CONFIG_DIR, [...dockerCases, dockerCase]);
+      ctx.broadcast(SseEvent.CaseCreated, { name, path: casePath });
+      ctx.broadcast(SseEvent.CaseLinked, { name, path: casePath, type: 'docker' });
+      return {
+        success: true,
+        data: { case: dockerCase, capsEnforced: availability.capsEnforced, isDesktop: availability.isDesktop },
+      };
+    }
+  );
+
+  // ========== Docker export / import ==========
+
+  // Export a docker case to a portable bundle. Runs in the BACKGROUND (a full image
+  // save can take minutes) and broadcasts docker:exportComplete / docker:exportFailed.
+  app.post('/api/docker-cases/:name/export', async (req): Promise<ApiResponse<{ started: true; bundle: string }>> => {
+    const { name } = req.params as { name: string };
+    const { mode = 'full' } = parseBody(DockerExportSchema, req.body ?? {});
+    const dockerCase = (await readDockerCases(CODEMAN_CONFIG_DIR)).find((item) => item.name === name);
+    if (!dockerCase) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker case not found');
+    const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === dockerCase.hostId);
+    if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
+
+    const sessionDocker = toSessionDocker(host, dockerCase);
+    if (mode === 'full' && !sessionDocker.mountCredentials) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'full-image export is refused for a sealed container (its in-container login would ride the committed layer). Use a workspace-only export.'
+      );
+    }
+
+    const timestamp = Date.now();
+    const bundle = exportBundleName(name, timestamp, mode);
+    // Fire-and-forget: the client watches for the SSE completion event.
+    void exportDockerCase({
+      docker: sessionDocker,
+      caseName: name,
+      timestamp,
+      exportsDir: DOCKER_EXPORTS_DIR,
+      mode,
+      codemanVersion: APP_VERSION,
+    })
+      .then((result) => {
+        ctx.broadcast(SseEvent.DockerExportComplete, {
+          name,
+          bundle: basename(result.bundlePath),
+          sizeBytes: result.sizeBytes,
+          mode,
+        });
+      })
+      .catch((err) => {
+        ctx.broadcast(SseEvent.DockerExportFailed, { name, mode, error: getErrorMessage(err) });
+      });
+
+    return { success: true, data: { started: true, bundle } };
+  });
+
+  app.get('/api/docker-exports', async (): Promise<ApiResponse<{ exports: unknown[] }>> => {
+    return { success: true, data: { exports: await listDockerExports(DOCKER_EXPORTS_DIR) } };
+  });
+
+  // Download an export bundle (filename resolved WITHIN the exports dir — no traversal).
+  app.get('/api/docker-exports/:filename', async (req, reply) => {
+    const { filename } = req.params as { filename: string };
+    if (!/^[a-zA-Z0-9._-]+\.tgz$/.test(filename)) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid bundle filename');
+    }
+    const full = join(DOCKER_EXPORTS_DIR, filename);
+    if (!existsSync(full)) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Export not found');
+    reply.header('Content-Type', 'application/gzip');
+    reply.header('Content-Disposition', `attachment; filename="${filename}"`);
+    reply.header('X-Content-Type-Options', 'nosniff');
+    return reply.send(createReadStream(full));
+  });
+
+  app.delete('/api/docker-exports/:filename', async (req): Promise<ApiResponse<{ filename: string }>> => {
+    const { filename } = req.params as { filename: string };
+    if (!/^[a-zA-Z0-9._-]+\.tgz$/.test(filename)) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid bundle filename');
+    }
+    const full = join(DOCKER_EXPORTS_DIR, filename);
+    if (!existsSync(full)) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Export not found');
+    await fs.rm(full, { force: true });
+    return { success: true, data: { filename } };
+  });
+
+  // Import a bundle (already present in the exports dir) into a NEW docker case.
+  app.post('/api/docker-cases/import', async (req): Promise<ApiResponse<{ case: unknown }>> => {
+    const { bundle, newCaseName, destWorkspacePath } = parseBody(DockerImportSchema, req.body);
+    const bundlePath = join(DOCKER_EXPORTS_DIR, bundle);
+    if (!existsSync(bundlePath)) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Bundle not found in exports dir');
+
+    // Name-collision guard across ALL case kinds.
+    const linkedCases = await readLinkedCases();
+    const dockerCases = await readDockerCases(CODEMAN_CONFIG_DIR);
+    if (
+      dockerCases.some((item) => item.name === newCaseName) ||
+      linkedCases[newCaseName] ||
+      existsSync(join(CASES_DIR, newCaseName))
+    ) {
+      return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
+    }
+
+    const timestamp = Date.now();
+    let result;
+    try {
+      result = await importDockerBundle({ bundlePath, destWorkspace: destWorkspacePath, engine: 'docker', timestamp });
+    } catch (err) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Import failed: ${getErrorMessage(err)}`);
+    }
+
+    // Create a dedicated docker host pointing at the quarantined imported image
+    // (full mode) or the manifest's base image (workspace-only).
+    const hostId = `imported-${newCaseName}`;
+    const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+    if (!hosts.some((h) => h.id === hostId)) {
+      await writeDockerHosts(CODEMAN_CONFIG_DIR, [
+        ...hosts,
+        {
+          id: hostId,
+          label: `Imported: ${newCaseName}`,
+          engine: result.manifest.engine,
+          image: result.importedImage ?? result.manifest.image,
+          network: (['bridge', 'none', 'custom'].includes(result.manifest.network)
+            ? result.manifest.network
+            : 'bridge') as 'bridge' | 'none' | 'custom',
+        },
+      ]);
+    }
+    const newCase = {
+      name: newCaseName,
+      type: 'docker' as const,
+      hostId,
+      hostWorkspacePath: destWorkspacePath,
+      containerWorkdir: result.manifest.containerWorkdir,
+    };
+    await writeDockerCases(CODEMAN_CONFIG_DIR, [...dockerCases, newCase]);
+    ctx.broadcast(SseEvent.DockerImportComplete, { name: newCaseName, path: destWorkspacePath, type: 'docker' });
+    return { success: true, data: { case: newCase } };
+  });
+
   // Link an existing folder as a case
   app.post('/api/cases/link', async (req): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
     const { name, path: folderPath } = parseBody(LinkCaseSchema, req.body, 'Invalid request body');
@@ -292,6 +687,27 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
         remoteCases.filter((item) => item.name !== name)
       );
       ctx.broadcast(SseEvent.CaseDeleted, { name, type: 'remote-unlinked' });
+      return { success: true, data: { name } };
+    }
+
+    const dockerCases = await readDockerCases(CODEMAN_CONFIG_DIR);
+    const dockerCase = dockerCases.find((item) => item.name === name);
+    if (dockerCase) {
+      await writeDockerCases(
+        CODEMAN_CONFIG_DIR,
+        dockerCases.filter((item) => item.name !== name)
+      );
+      // Best-effort `docker rm -f` the per-case container (case-delete is the
+      // explicit teardown that removes it; the bind-mounted workspace survives).
+      const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === dockerCase.hostId);
+      if (host) {
+        try {
+          exec(buildDockerRemoveCommand(toSessionDocker(host, dockerCase)), { timeout: 15_000 }, () => {});
+        } catch {
+          /* best-effort — never blocks the unlink */
+        }
+      }
+      ctx.broadcast(SseEvent.CaseDeleted, { name, type: 'docker-unlinked' });
       return { success: true, data: { name } };
     }
 
@@ -370,6 +786,26 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
           host: host.host,
           username: host.username,
           path: remoteCase.remotePath,
+        },
+      };
+    }
+
+    const dockerCase = (await readDockerCases(CODEMAN_CONFIG_DIR)).find((item) => item.name === name);
+    if (dockerCase) {
+      const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === dockerCase.hostId);
+      if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
+      const container = dockerCase.container ?? dockerContainerName(dockerCase.name);
+      return {
+        name,
+        path: dockerDisplayPath({ container, path: dockerCase.hostWorkspacePath }),
+        hasClaudeMd: existsSync(join(dockerCase.hostWorkspacePath, 'CLAUDE.md')),
+        location: 'docker',
+        docker: {
+          hostId: host.id,
+          container,
+          image: host.image,
+          path: dockerCase.hostWorkspacePath,
+          network: host.network ?? 'bridge',
         },
       };
     }

@@ -18,6 +18,7 @@ import type {
   EffortLevel,
   GeminiConfig,
   SessionRemote,
+  SessionDocker,
 } from './types.js';
 
 /**
@@ -36,6 +37,8 @@ export interface MuxSession {
   workingDir: string;
   /** Remote execution metadata for local tmux sessions wrapping SSH */
   remote?: SessionRemote;
+  /** Docker execution metadata for local tmux sessions wrapping `docker exec` */
+  docker?: SessionDocker;
   /** Session mode */
   mode: SessionMode;
   /** Whether webserver is attached to this session */
@@ -79,6 +82,8 @@ export interface CreateSessionOptions {
   historyLimit?: number;
   /** Remote execution metadata for local tmux sessions wrapping SSH */
   remote?: SessionRemote;
+  /** Docker execution metadata for local tmux sessions wrapping `docker exec` */
+  docker?: SessionDocker;
 }
 
 /** Options for respawning a dead pane. */
@@ -103,6 +108,8 @@ export interface RespawnPaneOptions {
   historyLimit?: number;
   /** Remote execution metadata for local tmux sessions wrapping SSH */
   remote?: SessionRemote;
+  /** Docker execution metadata for local tmux sessions wrapping `docker exec` */
+  docker?: SessionDocker;
 }
 
 /** Options for pane buffer capture (COD-47 full-history mode). */

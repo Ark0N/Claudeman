@@ -359,6 +359,172 @@ export const RemoteCaseLinkSchema = z.object({
     .regex(NO_SHELL_META, 'Invalid characters in remote path'),
 });
 
+// ========== Docker cases ==========
+//
+// Docker mode is a location overlay on cases (see docs/docker-cases-plan.md),
+// the analog of the remote-SSH schemas above. `image`, `hostWorkspacePath`,
+// `containerWorkdir`, and `container` all reach the outer `bash -c "..."` launch
+// layer, so they carry NO_SHELL_META (rejects `$`/backtick that survive the
+// double-quote layer) exactly like remotePath/identityFile. `--privileged` and
+// any docker-socket mount are structurally unrepresentable (never accepted).
+
+const DockerResourceLimitsSchema = z
+  .object({
+    memory: z
+      .string()
+      .regex(/^\d+[bkmg]?$/i, 'Memory must be like 512m / 4g')
+      .optional(),
+    cpus: z
+      .string()
+      .regex(/^\d+(\.\d+)?$/, 'CPUs must be a number')
+      .optional(),
+    pidsLimit: z.number().int().positive().max(100000).optional(),
+    nofile: z
+      .string()
+      .regex(/^\d+:\d+$/, 'nofile must be soft:hard')
+      .optional(),
+    shmSize: z
+      .string()
+      .regex(/^\d+[bkmg]?$/i, 'shm-size must be like 256m')
+      .optional(),
+  })
+  .strict();
+
+export const DockerHostSchema = z.object({
+  id: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid docker host id'),
+  label: z.string().min(1).max(100),
+  engine: z.enum(['docker', 'podman']).optional(),
+  image: z
+    .string()
+    .min(1)
+    .max(512)
+    .regex(/^[a-zA-Z0-9][\w./:@-]*$/, 'Invalid image reference')
+    .regex(NO_SHELL_META, 'Invalid characters in image reference'),
+  daemonHost: z.string().max(512).regex(NO_SHELL_META, 'Invalid daemon host').optional(),
+  context: z
+    .string()
+    .max(128)
+    .regex(/^[a-zA-Z0-9._-]+$/, 'Invalid docker context')
+    .optional(),
+  network: z.enum(['bridge', 'none', 'custom']).optional(),
+  networkName: z
+    .string()
+    .max(128)
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/, 'Invalid network name')
+    .optional(),
+  resources: DockerResourceLimitsSchema.optional(),
+  gpus: z
+    .string()
+    .max(128)
+    .regex(/^(all|\d+|device=[a-zA-Z0-9,:._-]+)$/, 'GPUs must be all / a count / device=...')
+    .optional(),
+  mountCredentials: z.boolean().optional(),
+  hooksEnabled: z.boolean().optional(),
+  resumeOnStart: z.boolean().optional(),
+  commands: RemoteCommandOverridesSchema, // same shell/claude/opencode/codex/gemini shape
+  extraCreateArgs: z
+    .array(
+      z
+        .string()
+        .min(1)
+        .max(1024)
+        .regex(NO_SHELL_INJECTION, 'Invalid characters in create arg')
+        .refine(noCommandSubstitution, 'Invalid characters in create arg')
+    )
+    .max(32)
+    .optional(),
+  extraExecArgs: z
+    .array(
+      z
+        .string()
+        .min(1)
+        .max(1024)
+        .regex(NO_SHELL_INJECTION, 'Invalid characters in exec arg')
+        .refine(noCommandSubstitution, 'Invalid characters in exec arg')
+    )
+    .max(32)
+    .optional(),
+});
+
+export const DockerCaseLinkSchema = z.object({
+  name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format'),
+  hostId: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid docker host id'),
+  hostWorkspacePath: z
+    .string()
+    .min(1)
+    .max(2000)
+    .regex(/^\//, 'Workspace path must be absolute')
+    .regex(NO_SHELL_META, 'Invalid characters in workspace path'),
+  containerWorkdir: z
+    .string()
+    .min(1)
+    .max(2000)
+    .regex(/^\//, 'Container workdir must be absolute')
+    .regex(NO_SHELL_META, 'Invalid characters in container workdir')
+    .optional(),
+  container: z
+    .string()
+    .min(2)
+    .max(128)
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/, 'Invalid container name')
+    .optional(),
+});
+
+export const DockerExportSchema = z.object({
+  mode: z.enum(['full', 'workspace']).optional(),
+});
+
+export const DockerImportSchema = z.object({
+  // A bare filename resolved WITHIN the exports dir (never an arbitrary path).
+  bundle: z
+    .string()
+    .min(1)
+    .max(300)
+    .regex(/^[a-zA-Z0-9._-]+\.tgz$/, 'Invalid bundle filename'),
+  newCaseName: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format'),
+  destWorkspacePath: z
+    .string()
+    .min(1)
+    .max(2000)
+    .regex(/^\//, 'Destination path must be absolute')
+    .regex(NO_SHELL_META, 'Invalid characters in destination path'),
+});
+
+// One-click "Run in Docker" case creation. name/description behave like a normal
+// case; the docker fields are OPTIONAL overrides of the predefined defaults (the
+// checkbox alone, with no overrides, uses the shared `default` host).
+export const DockerQuickCreateSchema = z.object({
+  name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format'),
+  description: z.string().max(1000).optional(),
+  image: z
+    .string()
+    .min(1)
+    .max(512)
+    .regex(/^[a-zA-Z0-9][\w./:@-]*$/, 'Invalid image reference')
+    .regex(NO_SHELL_META, 'Invalid characters in image reference')
+    .optional(),
+  network: z.enum(['bridge', 'none', 'custom']).optional(),
+  networkName: z
+    .string()
+    .max(128)
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/, 'Invalid network name')
+    .optional(),
+  memory: z
+    .string()
+    .regex(/^\d+[bkmg]?$/i, 'Memory must be like 512m / 4g')
+    .optional(),
+  cpus: z
+    .string()
+    .regex(/^\d+(\.\d+)?$/, 'CPUs must be a number')
+    .optional(),
+  gpus: z
+    .string()
+    .max(128)
+    .regex(/^(all|\d+|device=[a-zA-Z0-9,:._-]+)$/, 'GPUs must be all / a count / device=...')
+    .optional(),
+  mountCredentials: z.boolean().optional(),
+});
+
 // ========== Quick Start ==========
 
 /**

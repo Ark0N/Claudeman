@@ -9471,6 +9471,31 @@ kbd {
   display: none !important;
 }
 
+/* "Session Manager" + "Away Digest" header buttons — opt-in (App Settings →
+   Display), hidden by default. Same marker pattern as the response viewer: a
+   base inline-flex !important so an inline style can't override it, and a
+   more-specific marker rule to hide. Phones keep them hidden regardless via the
+   higher-specificity mobile.css rule (.btn-icon-header.btn-...). */
+.btn-session-manager {
+  display: inline-flex !important;
+}
+.btn-session-manager.btn-session-manager--hidden {
+  display: none !important;
+}
+.btn-away-digest {
+  display: inline-flex !important;
+}
+.btn-away-digest.btn-away-digest--hidden {
+  display: none !important;
+}
+
+/* "Cron" footer-toolbar button — shown by default (App Settings → Display can
+   hide it). Toolbar button, not a header icon, so only the hide marker is
+   needed; out-specify any base .btn-toolbar display. */
+.btn-toolbar.btn-cron--hidden {
+  display: none !important;
+}
+
 /* "Ultracode Agents" header launcher — opt-in (App Settings → Display), hidden by
    default everywhere (so the mobile-header-buttons-policy guard auto-excludes it).
    Base inline-flex !important + a more-specific marker rule to hide. */

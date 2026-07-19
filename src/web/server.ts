@@ -40,7 +40,7 @@ import { existsSync, mkdirSync, readFileSync, chmodSync, rmSync, statSync } from
 import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { hostname as getHostname } from 'node:os';
-import { dataPath } from '../config/instance.js';
+import { dataPath, getDataDir, CODEMAN_INSTANCE } from '../config/instance.js';
 import { getHookSecret } from '../config/hook-secret.js';
 import { EventEmitter } from 'node:events';
 import { Session, isExternalCliMode, type BackgroundTask } from '../session.js';
@@ -288,6 +288,8 @@ export class WebServer extends EventEmitter {
   private readonly allowUnauthenticatedNetwork: boolean;
   private _pasteImageGcStop: (() => void) | null = null;
   private _eventLoopMonitor: EventLoopMonitorHandle | null = null;
+  /** Opt-in hooks-only listener on the docker bridge gateway (CODEMAN_DOCKER_BRIDGE_HOOKS). */
+  private _dockerBridgeServer: import('node:http').Server | import('node:https').Server | null = null;
   private teamWatcherHandlers: {
     teamCreated: (config: unknown) => void;
     teamUpdated: (config: unknown) => void;
@@ -1941,6 +1943,20 @@ export class WebServer extends EventEmitter {
     // CRITICAL: Skip in test mode to prevent tests from picking up user sessions
     if (!this.testMode) {
       await this.restoreMuxSessions();
+
+      // Instance-scoped reaper: after restore, `docker rm -f` managed containers of
+      // THIS instance whose case is gone from docker-cases.json (best-effort, never
+      // touches another instance's containers). Runs after restore so containers
+      // still referenced by a restored session are preserved.
+      void import('../docker-hosts.js')
+        .then(({ reapOrphanedDockerContainers }) => reapOrphanedDockerContainers(getDataDir(), CODEMAN_INSTANCE))
+        .then((reaped) => {
+          if (reaped.length > 0)
+            console.log(`[Docker] reaped ${reaped.length} orphaned container(s): ${reaped.join(', ')}`);
+        })
+        .catch(() => {
+          /* best-effort — daemon may be absent */
+        });
     }
 
     // Clean up stale sessions from state file that don't have active mux sessions
@@ -1960,6 +1976,15 @@ export class WebServer extends EventEmitter {
     const protocol = this.https ? 'https' : 'http';
     const displayHost = this.host === '0.0.0.0' ? 'localhost' : this.host;
     console.log(`Codeman web interface running at ${protocol}://${displayHost}:${this.port}`);
+
+    // Opt-in: also serve the HOOK endpoints on the docker bridge gateway so
+    // in-container hooks (permission/idle/stop callbacks) can reach a loopback-bound
+    // server. Hooks-only + secret-gated, and the bridge is host-internal (not the LAN).
+    if (!this.testMode) {
+      await this._startDockerBridgeHooksListener().catch((err) =>
+        console.error(`[Docker] bridge-hooks listener error: ${err?.message || err}`)
+      );
+    }
 
     // Anti-DNS-rebinding Host allowlist is always on. Localhost, any bare IP, the
     // bind host, *.ts.net / *.trycloudflare.com / *.cfargotunnel.com, and the active
@@ -2214,6 +2239,10 @@ export class WebServer extends EventEmitter {
               // erasing `remote` from state.json on the next persist. mux-sessions.json
               // round-trips MuxSession.remote; state.json carries SessionState.remote.
               remote: muxSession.remote ?? savedState?.remote,
+              // Docker metadata round-trips the same way (mux-sessions.json carries
+              // MuxSession.docker; state.json carries SessionState.docker), so recovery
+              // rebuilds the `docker exec` launch instead of a broken local command.
+              docker: muxSession.docker ?? savedState?.docker,
             });
 
             // Update session name if it was a "Restored:" placeholder or doesn't match saved name
@@ -2399,6 +2428,58 @@ export class WebServer extends EventEmitter {
     return this._orchestratorLoop;
   }
 
+  /**
+   * Opt-in (CODEMAN_DOCKER_BRIDGE_HOOKS=1): start a SECOND listener on the docker
+   * bridge gateway IP that serves ONLY the hook endpoints and delegates them into
+   * the main Fastify pipeline. This lets in-container hooks reach a loopback-bound
+   * server (they call back via host.docker.internal = the bridge gateway) without
+   * exposing the full API or the LAN. Bind IP is auto-detected (default bridge
+   * gateway) or set via CODEMAN_DOCKER_BRIDGE_HOST.
+   */
+  private async _startDockerBridgeHooksListener(): Promise<void> {
+    if (!isExplicitlyEnabled(process.env.CODEMAN_DOCKER_BRIDGE_HOOKS)) return;
+    const { detectDockerBridgeGateway } = await import('../docker-hosts.js');
+    const bridgeHost = (process.env.CODEMAN_DOCKER_BRIDGE_HOST || '').trim() || (await detectDockerBridgeGateway());
+    if (!bridgeHost) {
+      console.log('[Docker] CODEMAN_DOCKER_BRIDGE_HOOKS set but no docker bridge gateway found — skipping');
+      return;
+    }
+    // Only the hook endpoints are served on the bridge — never the full API.
+    const HOOK_PATHS = new Set([
+      '/api/hook-event',
+      '/api/status-telemetry',
+      '/api/v1/hook-event',
+      '/api/v1/status-telemetry',
+    ]);
+    const handler = (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse): void => {
+      const path = (req.url || '').split('?')[0];
+      if (!HOOK_PATHS.has(path)) {
+        res.statusCode = 403;
+        res.end('forbidden: the docker bridge listener serves hook endpoints only');
+        return;
+      }
+      // Delegate into Fastify (host-guard, Origin/CSRF, and hook-secret gate all apply).
+      (this.app as unknown as { routing: (r: unknown, s: unknown) => void }).routing(req, res);
+    };
+    let server: import('node:http').Server | import('node:https').Server;
+    if (this.https) {
+      const https = await import('node:https');
+      const { key, cert } = getOrCreateSelfSignedCert();
+      server = https.createServer({ key, cert }, handler);
+    } else {
+      const http = await import('node:http');
+      server = http.createServer(handler);
+    }
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(this.port, bridgeHost, () => resolve());
+    });
+    this._dockerBridgeServer = server;
+    console.log(
+      `[Docker] in-container hooks reachable at ${this.https ? 'https' : 'http'}://${bridgeHost}:${this.port} (hook endpoints only)`
+    );
+  }
+
   async stop(): Promise<void> {
     getLifecycleLog().log({ event: 'server_stopped', sessionId: '*' });
     // Set stopping flag to prevent new timer creation during shutdown
@@ -2412,6 +2493,11 @@ export class WebServer extends EventEmitter {
     if (this._eventLoopMonitor) {
       this._eventLoopMonitor.stop();
       this._eventLoopMonitor = null;
+    }
+
+    if (this._dockerBridgeServer) {
+      this._dockerBridgeServer.close();
+      this._dockerBridgeServer = null;
     }
 
     // Dispose all managed timers (intervals + resettable timeouts)

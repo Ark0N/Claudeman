@@ -1433,6 +1433,25 @@ class CodemanApp {
     for (const event of [SSE_EVENTS.SESSION_CREATED, SSE_EVENTS.SESSION_DELETED]) {
       addListener(event, () => this._onSessionListMaybeChanged());
     }
+
+    // Docker export/import: toast + refresh the Manage-tab exports list on completion.
+    addListener(SSE_EVENTS.DOCKER_EXPORT_COMPLETE, (e) => {
+      try {
+        const d = e.data ? JSON.parse(e.data) : {};
+        this.showToast(`Docker export ready: ${d.bundle} (${Math.round((d.sizeBytes || 0) / 1e6)} MB)`, 'success');
+        this.refreshDockerExports?.();
+      } catch (err) {
+        console.error('[SSE] docker export complete:', err);
+      }
+    });
+    addListener(SSE_EVENTS.DOCKER_EXPORT_FAILED, (e) => {
+      try {
+        const d = e.data ? JSON.parse(e.data) : {};
+        this.showToast(`Docker export failed: ${d.error || 'unknown error'}`, 'error');
+      } catch (err) {
+        console.error('[SSE] docker export failed:', err);
+      }
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════
