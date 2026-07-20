@@ -1,5 +1,32 @@
 # aicodeman
 
+## 1.6.0
+
+### Minor Changes
+
+- Remote tmux durability, Session Manager polish, and an opt-in Cron button.
+
+  **Remote sessions: durability, discovery, and auto-reconnect** (PR #156 by @aakhter, COD-104 to COD-109)
+  - Durable remote launches survive an SSH drop: the agent runs inside `tmux -L codeman-remote new-session -A` on the remote host, and reconnecting lands back in the same session.
+  - Discover + attach: a "Discover existing sessions" action per remote host lists `codeman-*` tmux sessions on the host's canonical socket (started by the remote's own Codeman or another instance) and attaches to one. Attached (non-owned) sessions detach on tab close, never kill; a structural early-return in `killSession()` guarantees no remote `kill-session` can ever be issued for a session Codeman doesn't own (COD-105).
+  - Shared/collaborative sessions: per-session `window-size latest` so concurrent clients at different viewports don't clamp each other, plus a "shared - N clients" badge in discovery results (COD-106).
+  - Auto-reconnect watcher: a bounded-backoff (5s to 5m, ~6 attempts) watcher detects a dead remote pane and reattaches the still-running remote tmux session; intentional kills/detaches are guarded and never revived. Kill-switch setting `remoteAutoReconnect` (default on). SSE `remote:sessionDropped`/`sessionReconnected`/`reconnectExhausted`, with a manual Reconnect toast after exhaustion (COD-108).
+  - Owned durable sessions propagate `kill-session` to the remote on close (COD-109); the remote tmux prereq probe is skipped under the test runner (COD-104).
+  - All ssh command lines continue to flow through the single shell-safe `buildSshConnectionArgs()` (COD-107). New design doc: `docs/remote-sessions.md`.
+  - Maintainer additions: the discovery endpoint is admin-gated in multi-user mode, and the remote launch/attach chooser threads the multi-user permission downgrade (`claudeMode`/`allowedTools`) through to the remote agent.
+
+  **Session Manager: pinning, cross-device ordering, name/prompt retention** (PR #157 by @aakhter, COD-131/139/140/142/143/145)
+  - Session pinning: pin a session to the top of the Session Manager list (`POST /api/sessions/:id/pin`, `session:pinned` SSE, amber highlight + pin glyph). Pinned group orders most-recently-pinned first (COD-139).
+  - Pinned sessions survive kill: killing a pinned session demotes its record to a lightweight stopped entry instead of removing it, so it stays visible and resumable; cleanup skips pinned records (COD-142). The pin route also works on these persisted-only records, so a pinned-then-killed session can always be unpinned.
+  - Cross-device tab order: tab order syncs via server state (`PUT /api/session-order`, `session:orderChanged` SSE, persisted in `state.json`); the pushing device wins and server-only ids fall to the end, never dropped (COD-131).
+  - Resuming from the Session Manager keeps the session's original name instead of always synthesizing a fresh `w<N>-<dir>` one (COD-143).
+  - firstPrompt backfill for sessions whose Codeman id is not the transcript UUID (claudeSessionId join, then newest transcript in the same workingDir), and the most recent prompt is shown alongside the first and included in search (COD-140/145).
+
+  **Cron button now opt-in** (hidden by default)
+  - The Cron footer-toolbar button follows the same opt-in pattern as the Session Manager / Away Digest / File Viewer buttons: hidden by default, enable per device under App Settings -> Display -> Header Displays. Cron jobs themselves are unchanged.
+
+  Also: `docs/remote-sessions.md` synced with the shipped `-L codeman-remote` / `codeman-ssh-<id8>` naming.
+
 ## 1.5.1
 
 ### Patch Changes
