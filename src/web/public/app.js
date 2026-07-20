@@ -794,6 +794,7 @@ class CodemanApp {
     this.applyHeaderVisibilitySettings();
     this.restorePlanUsageChip();
     this.applySkin();
+    this.applyLocalization();
     this.applyTabWrapSettings();
     this.applyMonitorVisibility();
     // Remove mobile-init class now that JS has applied visibility settings.
@@ -852,6 +853,7 @@ class CodemanApp {
     this.loadAppSettingsFromServer(settingsPromise).then(() => {
       this.applyHeaderVisibilitySettings();
       this.applySkin();
+      this.applyLocalization();
       this.applyTabWrapSettings();
       this.applyMonitorVisibility();
       // ultracodeFloatingWindows syncs from the server (non-display key), but on a
@@ -1307,7 +1309,7 @@ class CodemanApp {
     if (titleEl) { titleEl.textContent = name; titleEl.style.display = ''; }
     const redock = document.getElementById('soloRedockBtn');
     if (redock) redock.style.display = '';
-    document.title = name + ' — Codeman';
+    document.title = name + ' — ' + (window.CodemanI18n?.displayName || 'Codeman');
     if (this.notificationManager) this.notificationManager.originalTitle = document.title;
     // Neutralize the dashboard-only brand click in a solo window.
     const logo = document.querySelector('.header-brand .logo');
@@ -1325,7 +1327,8 @@ class CodemanApp {
       + '<p>This session has ended or is no longer available.</p>'
       + '<button class="btn-primary" onclick="window.close()">Close window</button>';
     document.body.appendChild(el);
-    document.title = 'Session ended — Codeman';
+    document.title = (window.codemanT?.('Session ended') || 'Session ended')
+      + ' — ' + (window.CodemanI18n?.displayName || 'Codeman');
   }
 
   connectSSE() {
@@ -1919,7 +1922,9 @@ class CodemanApp {
         body.innerHTML = this._renderMarkdown(lastResponse);
         this._bindResponseViewerInteractions(body);
       } else {
-        body.textContent = 'No response yet — send a message in this session first.';
+        body.textContent =
+          window.codemanT?.('No response yet — send a message in this session first.') ||
+          'No response yet — send a message in this session first.';
       }
 
       // Reset state for fresh open

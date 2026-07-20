@@ -4530,6 +4530,24 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   text-overflow: ellipsis;
 }
 
+.settings-inline-input,
+.settings-inline-select {
+  width: min(190px, 52%);
+  min-width: 0;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+}
+
+.settings-inline-input:focus,
+.settings-inline-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 /* Skin picker: full-width row (not squeezed into a half-width grid cell) with an
    auto-width select, so the "Skin" label keeps its space instead of truncating. */
 .settings-item-skin {

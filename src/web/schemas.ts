@@ -650,6 +650,22 @@ const NotificationEventSchema = z
 
 export const SettingsUpdateSchema = z
   .object({
+    // User-facing product branding. This changes browser/UI copy only; package,
+    // CLI, API, storage, and protocol identifiers remain Codeman.
+    displayName: z
+      .string()
+      .trim()
+      .min(1)
+      .max(40)
+      .refine(
+        (value) =>
+          Array.from(value).every((character) => {
+            const codePoint = character.codePointAt(0);
+            return codePoint !== undefined && codePoint > 31 && codePoint !== 127;
+          }),
+        'Display name must not contain control characters'
+      )
+      .optional(),
     // Paths
     defaultClaudeMdPath: z.string().max(500).optional(),
     defaultWorkingDir: z.string().max(500).optional(),

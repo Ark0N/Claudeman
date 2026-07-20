@@ -67,6 +67,7 @@ appendFileSync(
 
 // 4. Minify frontend assets
 run('minify input-cjk.js', 'npx esbuild dist/web/public/input-cjk.js --minify --outfile=dist/web/public/input-cjk.js --allow-overwrite');
+run('minify i18n.js', 'npx esbuild dist/web/public/i18n.js --minify --outfile=dist/web/public/i18n.js --allow-overwrite');
 run('minify sanitize-html.js', 'npx esbuild dist/web/public/sanitize-html.js --minify --outfile=dist/web/public/sanitize-html.js --allow-overwrite');
 run('minify app.js', 'npx esbuild dist/web/public/app.js --minify --outfile=dist/web/public/app.js --allow-overwrite');
 run('minify terminal-ui.js', 'npx esbuild dist/web/public/terminal-ui.js --minify --outfile=dist/web/public/terminal-ui.js --allow-overwrite');
@@ -86,6 +87,7 @@ console.log('\n[build] content-hash cache busting');
     'styles.css',
     'mobile.css',
     'constants.js',
+    'i18n.js',
     'mobile-handlers.js',
     'voice-input.js',
     'notification-manager.js',

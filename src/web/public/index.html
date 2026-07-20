@@ -46,6 +46,10 @@
   <script>if(window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024))document.documentElement.classList.add('mobile-init');</script>
   <!-- Synchronous skin selection — runs before first paint to prevent theme flash -->
   <script>try{var s=localStorage.getItem('codeman:skin');if(s!=='og'&&s!=='daylight-green'&&s!=='daylight-blue')s='daylight-blue';document.documentElement.dataset.skin=s;window.__codemanSkin=s;}catch(e){document.documentElement.dataset.skin='daylight-blue';window.__codemanSkin='daylight-blue';}</script>
+  <!-- Apply the saved per-device language before first paint. The full translation
+       layer loads below; setting lang/dir here prevents an English accessibility
+       tree from flashing while the deferred scripts start. -->
+  <script>try{var m=window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024);var k=m?'codeman-app-settings-mobile':'codeman-app-settings';var l=JSON.parse(localStorage.getItem(k)||'{}').language;l=l==='zh-CN'?'zh-CN':'en';document.documentElement.lang=l;window.__codemanLanguage=l;}catch(e){document.documentElement.lang='en';window.__codemanLanguage='en';}</script>
   <!-- Inline critical CSS for instant skeleton paint (before styles.css loads) -->
   <style>
     .loading-skeleton{display:flex;flex-direction:column;height:100vh;height:100dvh;background:#11151c}
@@ -1165,6 +1169,20 @@
           <!-- Display Tab -->
           <div class="modal-tab-content" id="settings-display">
             <div class="settings-grid">
+              <!-- Branding & Language Section -->
+              <div class="settings-section-header">Branding &amp; Language</div>
+              <div class="settings-item" title="Name shown in the browser UI and window title. Supports Unicode, including Chinese.">
+                <span class="settings-item-label">Display Name</span>
+                <input type="text" id="appSettingsDisplayName" class="settings-inline-input" maxlength="40" placeholder="Codeman" autocomplete="off">
+              </div>
+              <div class="settings-item" title="Language for this device. Dynamic status messages and dialogs use the same language.">
+                <span class="settings-item-label">Interface Language</span>
+                <select id="appSettingsLanguage" class="form-select settings-inline-select">
+                  <option value="en">English</option>
+                  <option value="zh-CN">简体中文</option>
+                </select>
+              </div>
+
               <!-- Appearance Section -->
               <div class="settings-section-header">Appearance</div>
               <div class="settings-item settings-item-skin" title="Visual theme for this device (not synced)">
@@ -2502,6 +2520,7 @@
   </svg>
 
   <script defer src="constants.js"></script>
+  <script defer src="i18n.js"></script>
   <script defer src="mobile-handlers.js"></script>
   <script defer src="voice-input.js"></script>
   <script defer src="notification-manager.js"></script>
