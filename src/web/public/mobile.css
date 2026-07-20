@@ -2226,6 +2226,68 @@ html.mobile-init .file-browser-panel {
   }
 }
 
+/* Light-skin compatibility for mobile-only chrome. These components predate
+   the shared skin system and intentionally retain their original dark values
+   for the three dark skins above. */
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.header, .toolbar, .keyboard-accessory-bar) {
+  background: var(--glass-bg);
+  border-color: var(--glass-border);
+  color: var(--text);
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-voice-mobile, .btn-settings-mobile, .btn-toolbar.btn-shell, .toolbar .btn-case-add, .accessory-btn) {
+  background: var(--control-bg);
+  border-color: var(--control-border);
+  color: var(--text-dim);
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-voice-mobile:active, .btn-settings-mobile:active, .btn-toolbar.btn-shell:hover, .btn-toolbar.btn-shell:active, .btn-case-add:hover, .btn-case-add:active, .accessory-btn:active) {
+  background: var(--control-bg-hover);
+  border-color: var(--control-border-hover);
+  color: var(--text);
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-toolbar.btn-run.mode-claude, .btn-toolbar.btn-run-gear.mode-claude) {
+  background: linear-gradient(135deg, var(--accent-grad-a), var(--accent-grad-b));
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-toolbar.btn-run.mode-opencode, .btn-toolbar.btn-run-gear.mode-opencode) {
+  background: linear-gradient(135deg, var(--accent-d), var(--accent-grad-b));
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-toolbar.btn-run.mode-gemini, .btn-toolbar.btn-run-gear.mode-gemini) {
+  background: linear-gradient(135deg, #174ea6, #4f46e5);
+  border-color: #315fc3;
+  color: #ffffff;
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) .btn-toolbar.btn-run-gear {
+  border-left-color: var(--control-border-hover) !important;
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.case-settings-popover-mobile, .mobile-case-picker-sheet) {
+  background: var(--floating-bg);
+  border-color: var(--control-border);
+  color: var(--text);
+  box-shadow: var(--elevated-shadow);
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.case-settings-popover-mobile .checkbox-inline, #createCaseModal .form-row label) {
+  color: var(--text);
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) .case-settings-popover-mobile .form-hint {
+  color: var(--text-muted);
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) .mobile-case-picker .modal-backdrop {
+  background: var(--modal-backdrop);
+}
+
 
 /* Keyboard accessory bar + paste overlay base styles moved to styles.css
    (always loaded — covers iPad landscape where mobile.css doesn't load).
