@@ -57,6 +57,9 @@ describe('file-routes', () => {
     mockedRealpathSync.mockImplementation((p: string) => p as never);
     // Default stat
     mockedStat.mockResolvedValue({ size: 100, isFile: () => true, isDirectory: () => true } as never);
+    mockedReadFile.mockImplementation(async (path) =>
+      String(path).endsWith('settings.json') ? ('{}' as never) : ('file content' as never)
+    );
   });
 
   afterEach(async () => {
@@ -93,9 +96,15 @@ describe('file-routes', () => {
       expect(body.success).toBe(true);
       expect(body.data.path).toBe(path);
       expect(body.data.roots[0]).toEqual({ label: 'Current Folder', path });
-      expect(body.data.entries.map((entry: { name: string; type: string }) => [entry.name, entry.type])).toEqual([
-        ['src', 'directory'],
-        ['notes.txt', 'file'],
+      expect(
+        body.data.entries.map((entry: { name: string; type: string; previewKind?: string }) => [
+          entry.name,
+          entry.type,
+          entry.previewKind,
+        ])
+      ).toEqual([
+        ['src', 'directory', undefined],
+        ['notes.txt', 'file', 'text'],
       ]);
     });
 
@@ -146,6 +155,87 @@ describe('file-routes', () => {
 
       expect(res.statusCode).toBe(404);
       expect(JSON.parse(res.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.NOT_FOUND });
+    });
+
+    it('rejects direct navigation into a hidden descendant', async () => {
+      const hidden = `${harness.ctx._session.workingDir}/.git`;
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/filesystem/browse?sessionId=${harness.ctx._sessionId}&path=${encodeURIComponent(hidden)}`,
+      });
+
+      expect(res.statusCode).toBe(403);
+      expect(JSON.parse(res.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.INVALID_INPUT });
+    });
+  });
+
+  // ========== GET /api/filesystem/preview ==========
+
+  describe('GET /api/filesystem/preview', () => {
+    it('serves Markdown as inert plain text inside the active session root', async () => {
+      const path = `${harness.ctx._session.workingDir}/notes.md`;
+      mockedReadFile.mockImplementation(async (candidate) =>
+        candidate === path ? ('# Safe heading\n<script>alert(1)</script>' as never) : ('{}' as never)
+      );
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/filesystem/preview?sessionId=${harness.ctx._sessionId}&path=${encodeURIComponent(path)}`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toContain('text/plain');
+      expect(res.headers['x-content-type-options']).toBe('nosniff');
+      expect(res.body).toContain('<script>alert(1)</script>');
+    });
+
+    it('rejects unsupported file types', async () => {
+      const path = `${harness.ctx._session.workingDir}/archive.exe`;
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/filesystem/preview?sessionId=${harness.ctx._sessionId}&path=${encodeURIComponent(path)}`,
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.INVALID_INPUT });
+    });
+
+    it('rejects hidden files even when requested directly', async () => {
+      const path = `${harness.ctx._session.workingDir}/.env`;
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/filesystem/preview?sessionId=${harness.ctx._sessionId}&path=${encodeURIComponent(path)}`,
+      });
+
+      expect(res.statusCode).toBe(403);
+    });
+
+    it('rejects a preview symlink whose real path escapes every allowed root', async () => {
+      const path = `${harness.ctx._session.workingDir}/outside.png`;
+      mockedRealpathSync.mockImplementation((candidate: string) =>
+        candidate === path ? ('/etc/shadow' as never) : (candidate as never)
+      );
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/filesystem/preview?sessionId=${harness.ctx._sessionId}&path=${encodeURIComponent(path)}`,
+      });
+
+      expect(res.statusCode).toBe(403);
+    });
+
+    it('caps text previews at 2MB', async () => {
+      const path = `${harness.ctx._session.workingDir}/large.txt`;
+      mockedStat.mockImplementation(async (candidate) =>
+        candidate === path
+          ? ({ size: 2 * 1024 * 1024 + 1, isFile: () => true, isDirectory: () => false } as never)
+          : ({ size: 100, isFile: () => true, isDirectory: () => true } as never)
+      );
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/filesystem/preview?sessionId=${harness.ctx._sessionId}&path=${encodeURIComponent(path)}`,
+      });
+
+      expect(res.statusCode).toBe(413);
     });
   });
 

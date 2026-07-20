@@ -40,6 +40,9 @@ const PathPicker = {
   _previousFocus: null,
   _keydownHandler: null,
   _loadSequence: 0,
+  _previewOverlay: null,
+  _previewRequestSequence: 0,
+  _previewPreviousFocus: null,
 
   /**
    * Open the lazy filesystem browser.
@@ -108,7 +111,8 @@ const PathPicker = {
     this._keydownHandler = (event) => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        this.close(true);
+        if (this._previewOverlay) this.closePreview(true);
+        else this.close(true);
       }
     };
     document.addEventListener('keydown', this._keydownHandler);
@@ -170,7 +174,9 @@ const PathPicker = {
     for (const entry of data.entries) {
       const row = document.createElement('div');
       row.className = 'path-picker-item';
-      if (entry.type === 'file' && this._options.directoriesOnly) row.classList.add('not-selectable');
+      if (entry.type === 'file' && this._options.directoriesOnly && !entry.previewKind) {
+        row.classList.add('not-selectable');
+      }
       row.dataset.path = entry.path;
       row.dataset.type = entry.type;
       row.setAttribute('role', 'option');
@@ -197,6 +203,14 @@ const PathPicker = {
         chevron.textContent = '\u203A';
         open.appendChild(chevron);
         open.addEventListener('click', () => this.load(entry.path));
+      } else if (entry.previewKind) {
+        const preview = document.createElement('span');
+        preview.className = 'path-picker-item-preview';
+        preview.textContent = '\uD83D\uDC41';
+        open.appendChild(preview);
+        open.title = `Preview ${entry.name}`;
+        open.setAttribute('aria-label', `Preview ${entry.name}`);
+        open.addEventListener('click', () => this.openPreview(entry));
       } else if (!this._options.directoriesOnly) {
         open.addEventListener('click', () => this.select(entry.path));
       } else {
@@ -228,6 +242,102 @@ const PathPicker = {
     });
   },
 
+  openPreview(entry) {
+    this.closePreview(false);
+    this._previewPreviousFocus = document.activeElement;
+    const requestSequence = ++this._previewRequestSequence;
+    const params = new URLSearchParams({ path: entry.path });
+    if (this._options?.sessionId) params.set('sessionId', this._options.sessionId);
+    const previewUrl = `/api/filesystem/preview?${params.toString()}`;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'path-preview-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-label', `Preview ${entry.name}`);
+    overlay.innerHTML = `
+      <div class="path-preview-dialog">
+        <div class="path-preview-header">
+          <div class="path-preview-heading">
+            <strong class="path-preview-title"></strong>
+            <span class="path-preview-path"></span>
+          </div>
+          <a class="path-preview-open" target="_blank" rel="noopener noreferrer">Open</a>
+          <button type="button" class="path-preview-close" aria-label="Close preview">&times;</button>
+        </div>
+        <div class="path-preview-body"><div class="path-preview-loading">Loading preview...</div></div>
+      </div>`;
+    overlay.querySelector('.path-preview-title').textContent = entry.name;
+    overlay.querySelector('.path-preview-path').textContent = entry.path;
+    overlay.querySelector('.path-preview-open').href = previewUrl;
+    overlay.querySelector('.path-preview-close').addEventListener('click', () => this.closePreview(true));
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) this.closePreview(true);
+    });
+    document.body.appendChild(overlay);
+    this._previewOverlay = overlay;
+
+    const body = overlay.querySelector('.path-preview-body');
+    if (entry.previewKind === 'image') {
+      const image = document.createElement('img');
+      image.className = 'path-preview-image';
+      image.alt = entry.name;
+      image.addEventListener('load', () => body.querySelector('.path-preview-loading')?.remove());
+      image.addEventListener('error', () => this.showPreviewError('Image preview failed to load'));
+      image.src = previewUrl;
+      body.appendChild(image);
+    } else if (entry.previewKind === 'text') {
+      fetch(previewUrl)
+        .then(async (response) => {
+          const content = await response.text();
+          if (!response.ok) {
+            let message = 'Text preview failed to load';
+            try {
+              message = JSON.parse(content).error || message;
+            } catch {}
+            throw new Error(message);
+          }
+          return content;
+        })
+        .then((content) => {
+          if (!this._previewOverlay || requestSequence !== this._previewRequestSequence) return;
+          const pre = document.createElement('pre');
+          pre.className = 'path-preview-text';
+          pre.textContent = content;
+          body.replaceChildren(pre);
+        })
+        .catch((error) => {
+          if (requestSequence === this._previewRequestSequence) this.showPreviewError(error.message);
+        });
+    } else {
+      const frame = document.createElement('iframe');
+      frame.className = 'path-preview-frame';
+      frame.title = entry.name;
+      frame.addEventListener('load', () => body.querySelector('.path-preview-loading')?.remove());
+      frame.src = previewUrl;
+      body.appendChild(frame);
+    }
+    overlay.querySelector('.path-preview-close').focus();
+  },
+
+  showPreviewError(message) {
+    const body = this._previewOverlay?.querySelector('.path-preview-body');
+    if (!body) return;
+    const error = document.createElement('div');
+    error.className = 'path-preview-error';
+    error.textContent = message || 'Preview failed to load';
+    body.replaceChildren(error);
+  },
+
+  closePreview(restoreFocus = true) {
+    this._previewRequestSequence += 1;
+    this._previewOverlay?.remove();
+    this._previewOverlay = null;
+    const previousFocus = this._previewPreviousFocus;
+    this._previewPreviousFocus = null;
+    if (restoreFocus) previousFocus?.focus?.();
+  },
+
   confirm() {
     if (!this._selectedPath || !this._options) return;
     const selectedPath = this._selectedPath;
@@ -240,6 +350,7 @@ const PathPicker = {
     if (this._keydownHandler) document.removeEventListener('keydown', this._keydownHandler);
     this._keydownHandler = null;
     this._loadSequence += 1;
+    this.closePreview(false);
     this.overlay?.remove();
     this.overlay = null;
     const previousFocus = this._previousFocus;

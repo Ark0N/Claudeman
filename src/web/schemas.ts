@@ -72,6 +72,16 @@ export const FilesystemBrowseQuerySchema = z.object({
     .optional(),
 });
 
+/** Query validation for a single allowlisted path-picker file preview. */
+export const FilesystemPreviewQuerySchema = z.object({
+  path: filesystemPickerPathSchema,
+  sessionId: z
+    .string()
+    .max(100)
+    .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid session id')
+    .optional(),
+});
+
 // ========== Env Var Allowlist ==========
 
 /** Allowlisted env var key prefixes */

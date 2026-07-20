@@ -4,11 +4,17 @@
  */
 
 import { FastifyInstance, type FastifyReply } from 'fastify';
-import { basename as pathBasename, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename as pathBasename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createReadStream, realpathSync, type ReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import { homedir } from 'node:os';
-import type { ApiResponse, FilesystemBrowseData, FilesystemBrowseEntry, FilesystemBrowseRoot } from '../../types.js';
+import type {
+  ApiResponse,
+  FilesystemBrowseData,
+  FilesystemBrowseEntry,
+  FilesystemBrowseRoot,
+  FilesystemPreviewKind,
+} from '../../types.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import { fileStreamManager } from '../../file-stream-manager.js';
 import {
@@ -37,7 +43,7 @@ import type { SessionAttachmentHistoryItem, SessionState } from '../../types/ses
 import { isSensitivePath } from '../sensitive-path.js';
 import { SseEvent } from '../sse-events.js';
 import type { ConfigPort, EventPort, SessionPort } from '../ports/index.js';
-import { FilesystemBrowseQuerySchema } from '../schemas.js';
+import { FilesystemBrowseQuerySchema, FilesystemPreviewQuerySchema } from '../schemas.js';
 
 const MIME_TYPES: Record<string, string> = {
   png: 'image/png',
@@ -55,8 +61,14 @@ const MIME_TYPES: Record<string, string> = {
   txt: 'text/plain',
 };
 
-function sanitizeDownloadName(fileName: string): string {
-  return fileName.replace(/["\\\r\n]/g, '_');
+function buildContentDisposition(disposition: 'inline' | 'attachment', fileName: string): string {
+  const cleaned = fileName.replace(/["\\\r\n]/g, '_');
+  const fallback = cleaned.replace(/[^\x20-\x7e]/g, '_') || 'file';
+  const encoded = encodeURIComponent(cleaned).replace(
+    /['()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+  return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
 function sendRawStream(reply: FastifyReply, content: ReadStream): void {
@@ -102,13 +114,12 @@ async function serveRawFile(
     return;
   }
   const content = createReadStream(resolvedPath);
-  const safeName = sanitizeDownloadName(fileName);
   if (download || extension === 'svg') {
     reply.header(
       'Content-Type',
       extension === 'svg' ? 'application/octet-stream' : MIME_TYPES[extension] || 'application/octet-stream'
     );
-    reply.header('Content-Disposition', `attachment; filename="${safeName}"`);
+    reply.header('Content-Disposition', buildContentDisposition('attachment', fileName));
     reply.header('Content-Length', stat.size);
     reply.header('X-Content-Type-Options', 'nosniff');
     sendRawStream(reply, content);
@@ -116,7 +127,7 @@ async function serveRawFile(
   }
 
   reply.header('Content-Type', MIME_TYPES[extension] || 'application/octet-stream');
-  reply.header('Content-Disposition', `inline; filename="${safeName}"`);
+  reply.header('Content-Disposition', buildContentDisposition('inline', fileName));
   reply.header('Content-Length', stat.size);
   reply.header('X-Content-Type-Options', 'nosniff');
   sendRawStream(reply, content);
@@ -204,7 +215,10 @@ async function serveConvertedPreview(
 
     const content = await fs.readFile(previewPath);
     reply.header('Content-Type', 'application/pdf');
-    reply.header('Content-Disposition', `inline; filename="${getPreviewPdfDownloadName(fileName, extension)}"`);
+    reply.header(
+      'Content-Disposition',
+      buildContentDisposition('inline', getPreviewPdfDownloadName(fileName, extension))
+    );
     reply.header('Cache-Control', 'no-cache');
     reply.header('Content-Length', content.length);
     reply.header('X-Content-Type-Options', 'nosniff');
@@ -271,10 +285,34 @@ type AttachmentHistoryRouteItem = Omit<SessionAttachmentHistoryItem, 'externalPa
 };
 
 const FILESYSTEM_PICKER_ENTRY_LIMIT = 500;
+const FILESYSTEM_TEXT_PREVIEW_LIMIT = 2 * 1024 * 1024;
+const FILESYSTEM_BINARY_PREVIEW_LIMIT = 50 * 1024 * 1024;
+const FILESYSTEM_IMAGE_PREVIEW_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp']);
+const FILESYSTEM_TEXT_PREVIEW_EXTENSIONS = new Set(['md', 'txt', 'json']);
+const FILESYSTEM_DOCUMENT_PREVIEW_EXTENSIONS = new Set(['pdf', 'docx', 'pptx']);
 
 function isPathWithinRoot(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
+}
+
+function findMatchingPickerRoot(roots: FilesystemBrowseRoot[], candidate: string): FilesystemBrowseRoot | undefined {
+  return roots
+    .filter((root) => isPathWithinRoot(root.path, candidate))
+    .sort((a, b) => b.path.length - a.path.length)[0];
+}
+
+function containsHiddenPickerSegment(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel !== '' && rel.split(sep).some((segment) => segment.startsWith('.'));
+}
+
+function getFilesystemPreviewKind(fileName: string): FilesystemPreviewKind | undefined {
+  const extension = extname(fileName).slice(1).toLowerCase();
+  if (FILESYSTEM_IMAGE_PREVIEW_EXTENSIONS.has(extension)) return 'image';
+  if (FILESYSTEM_TEXT_PREVIEW_EXTENSIONS.has(extension)) return 'text';
+  if (FILESYSTEM_DOCUMENT_PREVIEW_EXTENSIONS.has(extension)) return 'document';
+  return undefined;
 }
 
 function isBlockedPickerPath(path: string, blockedTrees: readonly string[], directory = false): boolean {
@@ -337,6 +375,54 @@ async function resolveFilesystemPickerRoots(
     }
   }
   return roots;
+}
+
+type ResolvedFilesystemPickerPath = {
+  candidatePath: string;
+  resolvedPath: string;
+  roots: FilesystemBrowseRoot[];
+  matchingRoot: FilesystemBrowseRoot;
+  blockedTrees: readonly string[];
+};
+
+function throwFilesystemPickerError(statusCode: number, code: ApiErrorCode, message: string): never {
+  throw Object.assign(new Error(message), {
+    statusCode,
+    body: createErrorResponse(code, message),
+  });
+}
+
+async function resolveFilesystemPickerPath(
+  ctx: SessionPort & ConfigPort,
+  requestedPath: string | undefined,
+  sessionId?: string
+): Promise<ResolvedFilesystemPickerPath> {
+  const roots = await resolveFilesystemPickerRoots(ctx, sessionId);
+  if (roots.length === 0) {
+    throwFilesystemPickerError(403, ApiErrorCode.INVALID_INPUT, 'No filesystem browse roots are available');
+  }
+
+  const fallbackRoot =
+    roots.find((root) => root.label === 'Current Folder') ?? roots.find((root) => root.path === '/mnt/d') ?? roots[0];
+  const candidatePath = resolve(requestedPath ?? fallbackRoot.path);
+
+  let resolvedPath: string;
+  try {
+    resolvedPath = realpathSync(candidatePath);
+  } catch {
+    throwFilesystemPickerError(404, ApiErrorCode.NOT_FOUND, `Path not found: ${candidatePath}`);
+  }
+
+  const matchingRoot = findMatchingPickerRoot(roots, resolvedPath);
+  if (!matchingRoot) {
+    throwFilesystemPickerError(403, ApiErrorCode.INVALID_INPUT, 'Path is outside the allowed browse roots');
+  }
+  if (containsHiddenPickerSegment(matchingRoot.path, resolvedPath)) {
+    throwFilesystemPickerError(403, ApiErrorCode.INVALID_INPUT, 'Hidden paths are not available in the file picker');
+  }
+
+  const guard = await loadAttachmentGuardConfig();
+  return { candidatePath, resolvedPath, roots, matchingRoot, blockedTrees: guard.blockedTrees };
 }
 
 function appendDownloadFlag(url: string): string {
@@ -457,35 +543,13 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // Lazy filesystem listing for the Link Existing and mobile input path pickers.
   app.get('/api/filesystem/browse', async (req, reply): Promise<ApiResponse<FilesystemBrowseData>> => {
     const { path: requestedPath, sessionId } = parseBody(FilesystemBrowseQuerySchema, req.query);
-    const roots = await resolveFilesystemPickerRoots(ctx, sessionId);
-    if (roots.length === 0) {
-      reply.code(403);
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'No filesystem browse roots are available');
-    }
+    const { candidatePath, resolvedPath, roots, matchingRoot, blockedTrees } = await resolveFilesystemPickerPath(
+      ctx,
+      requestedPath,
+      sessionId
+    );
 
-    const fallbackRoot =
-      roots.find((root) => root.label === 'Current Folder') ?? roots.find((root) => root.path === '/mnt/d') ?? roots[0];
-    const candidatePath = resolve(requestedPath ?? fallbackRoot.path);
-
-    let resolvedPath: string;
-    try {
-      resolvedPath = realpathSync(candidatePath);
-    } catch {
-      reply.code(404);
-      return createErrorResponse(ApiErrorCode.NOT_FOUND, `Folder not found: ${candidatePath}`);
-    }
-
-    const matchingRoots = roots
-      .filter((root) => isPathWithinRoot(root.path, resolvedPath))
-      .sort((a, b) => b.path.length - a.path.length);
-    const matchingRoot = matchingRoots[0];
-    if (!matchingRoot) {
-      reply.code(403);
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path is outside the allowed browse roots');
-    }
-
-    const guard = await loadAttachmentGuardConfig();
-    if (isBlockedPickerPath(resolvedPath, guard.blockedTrees, true)) {
+    if (isBlockedPickerPath(resolvedPath, blockedTrees, true)) {
       reply.code(403);
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Access to this folder is blocked');
     }
@@ -532,8 +596,8 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         continue;
       }
 
-      const targetRoot = roots.some((root) => isPathWithinRoot(root.path, targetPath));
-      if (!targetRoot) continue;
+      const targetRoot = findMatchingPickerRoot(roots, targetPath);
+      if (!targetRoot || containsHiddenPickerSegment(targetRoot.path, targetPath)) continue;
 
       let type: FilesystemBrowseEntry['type'];
       let size: number | undefined;
@@ -554,7 +618,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         continue;
       }
 
-      if (isBlockedPickerPath(targetPath, guard.blockedTrees, type === 'directory')) continue;
+      if (isBlockedPickerPath(targetPath, blockedTrees, type === 'directory')) continue;
       if (type === 'file' && size === undefined) {
         try {
           size = (await fs.stat(targetPath)).size;
@@ -562,7 +626,14 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
           // The path is still selectable even when a size lookup races a change.
         }
       }
-      entries.push({ name: entry.name, path: visiblePath, type, size, symlink: symlink || undefined });
+      entries.push({
+        name: entry.name,
+        path: visiblePath,
+        type,
+        size,
+        symlink: symlink || undefined,
+        previewKind: type === 'file' ? getFilesystemPreviewKind(entry.name) : undefined,
+      });
     }
 
     const parentCandidate = resolve(candidatePath, '..');
@@ -587,6 +658,57 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         truncated,
       },
     };
+  });
+
+  // Inline preview for files selected through the root-confined filesystem picker.
+  app.get('/api/filesystem/preview', { compress: false }, async (req, reply): Promise<void> => {
+    const { path: requestedPath, sessionId } = parseBody(FilesystemPreviewQuerySchema, req.query);
+    const { candidatePath, resolvedPath, blockedTrees } = await resolveFilesystemPickerPath(
+      ctx,
+      requestedPath,
+      sessionId
+    );
+    if (isBlockedPickerPath(resolvedPath, blockedTrees)) {
+      throwFilesystemPickerError(403, ApiErrorCode.INVALID_INPUT, 'Access to this file is blocked');
+    }
+
+    let stat;
+    try {
+      stat = await fs.stat(resolvedPath);
+    } catch {
+      throwFilesystemPickerError(404, ApiErrorCode.NOT_FOUND, `File not found: ${candidatePath}`);
+    }
+    if (!stat.isFile()) {
+      throwFilesystemPickerError(400, ApiErrorCode.INVALID_INPUT, 'The preview path must be a file');
+    }
+
+    const fileName = pathBasename(candidatePath);
+    const extension = extname(fileName).slice(1).toLowerCase();
+    const previewKind = getFilesystemPreviewKind(fileName);
+    if (!previewKind) {
+      throwFilesystemPickerError(400, ApiErrorCode.INVALID_INPUT, 'This file type cannot be previewed');
+    }
+    const sizeLimit = previewKind === 'text' ? FILESYSTEM_TEXT_PREVIEW_LIMIT : FILESYSTEM_BINARY_PREVIEW_LIMIT;
+    if (stat.size > sizeLimit) {
+      throwFilesystemPickerError(
+        413,
+        ApiErrorCode.INVALID_INPUT,
+        `File too large to preview (${Math.ceil(stat.size / 1024 / 1024)}MB limit: ${sizeLimit / 1024 / 1024}MB)`
+      );
+    }
+
+    reply.header('Cache-Control', 'no-cache');
+    reply.header('X-Content-Type-Options', 'nosniff');
+    if (previewKind === 'text') {
+      const content = await fs.readFile(resolvedPath, 'utf8');
+      reply.type('text/plain; charset=utf-8').send(content);
+      return;
+    }
+    if (extension === 'docx' || extension === 'pptx') {
+      await serveConvertedPreview(reply, resolvedPath, fileName, extension);
+      return;
+    }
+    await serveRawFile(reply, resolvedPath, fileName, extension);
   });
 
   // File tree listing

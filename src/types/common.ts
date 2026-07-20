@@ -70,12 +70,15 @@ export interface ProcessStats {
 }
 
 /** A selectable entry returned by the filesystem path-picker API. */
+export type FilesystemPreviewKind = 'image' | 'text' | 'document';
+
 export interface FilesystemBrowseEntry {
   name: string;
   path: string;
   type: 'file' | 'directory';
   size?: number;
   symlink?: boolean;
+  previewKind?: FilesystemPreviewKind;
 }
 
 /** A named root the path picker may browse without escaping its allowlist. */

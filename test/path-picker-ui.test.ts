@@ -104,6 +104,15 @@ describe('mobile filesystem picker actions', () => {
     expect(sessionSource).toContain('directoriesOnly: true');
   });
 
+  it('keeps Choose separate from safe inline file preview', () => {
+    expect(keyboardSource).toContain('openPreview(entry)');
+    expect(keyboardSource).toContain('/api/filesystem/preview?');
+    expect(keyboardSource).toContain("entry.previewKind === 'image'");
+    expect(keyboardSource).toContain("entry.previewKind === 'text'");
+    expect(keyboardSource).toContain("choose.textContent = 'Choose'");
+    expect(keyboardSource).toContain('pre.textContent = content');
+  });
+
   it('inserts a selected path into the editable local-echo prompt without sending it', () => {
     const appendText = vi.fn();
     const sendInput = vi.fn();
