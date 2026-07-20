@@ -228,6 +228,8 @@ Frontend JS modules have `@fileoverview` with `@dependency`/`@loadorder` tags. L
 
 **Theme skins** (App Settings → Display): the `skin` setting selects a palette via a `data-skin` attribute on `<html>`. Values: `daylight-blue` (default), `daylight-green`, `og` (OG Codeman). CSS lives under `[data-skin="…"]` blocks in `styles.css`. To avoid a flash-of-wrong-theme, an **inline pre-paint script** in `index.html` (`<head>`) reads `localStorage['codeman:skin']` and sets `data-skin` before first paint; `settings-ui.js` `applySkin()` applies it live on save (sets `html[data-skin]` + `window.__codemanSkin`, syncs the standalone `codeman:skin` key with the settings blob, and calls terminal-ui.js `applyTerminalSkin()` to re-theme live terminals). `skin` is a **per-device/client-only** setting — it's destructured OUT of the server payload (settings-ui.js, alongside `localEchoEnabled`/`cjkInputEnabled`/`extendedKeyboardBar`), so it does NOT sync across devices.
 
+**Foldable settings identity**: responsive layout remains width-driven through `MobileDetection.getDeviceType()`, but the localStorage namespace/defaults use `MobileDetection.isHandheldDevice()` so an Android foldable keeps `codeman-app-settings-mobile` after unfolding past the desktop breakpoint. The stable handheld check prefers explicit phone/tablet/desktop UA tokens, then `navigator.userAgentData.mobile`; Android WebView is covered by the `Mobile` UA fallback. Do not switch per-device settings namespaces from instantaneous viewport width — a posture-triggered WebView reload would lose opt-in UI such as `showResponseViewer` and `extendedKeyboardBar`. Regression profile: `OPPO Find N5 (unfolded)` in `test/mobile/devices.ts`.
+
 **Respawn presets**: `solo-work` (3s/60min), `subagent-workflow` (45s/240min), `team-lead` (90s/480min), `ralph-todo` (8s/480min), `overnight-autonomous` (10s/480min).
 
 **Keyboard shortcuts**: Escape (close), Ctrl+? (shortcut overlay), Ctrl/Cmd/Alt+K (session palette), Ctrl+W (kill), Ctrl+Tab (next), Alt+[/] (prev/next tab), Alt+1-9 (switch tab), Ctrl+Shift+{/} (move tab left/right), Shift+Enter or Ctrl+Enter (newline), Ctrl+L (clear), Ctrl+Shift+R (restore size), Ctrl+Shift+V (voice input), Ctrl/Cmd +/- (font), Shift+Wheel (local scrollback when mouse passthrough is active). Rebindable via the registry (see Command palette above).
@@ -296,7 +298,7 @@ Raw `npx vitest` skips `config/vitest.config.ts`; always use `npm test --` or pa
 
 **Ports**: Pick unique ports manually. Search `const PORT =` before adding new tests.
 
-**Respawn tests**: Use `MockSession` from `test/mocks/index.ts` (defined in `test/mocks/mock-session.ts`). **Route tests**: `app.inject({ method, url, payload })` in `test/routes/` — no live port needed. **Mobile tests**: Playwright suite in `test/mobile/` (135 device profiles). Browser-testing infra and practices: `docs/browser-testing-guide.md`.
+**Respawn tests**: Use `MockSession` from `test/mocks/index.ts` (defined in `test/mocks/mock-session.ts`). **Route tests**: `app.inject({ method, url, payload })` in `test/routes/` — no live port needed. **Mobile tests**: Playwright suite in `test/mobile/` (136 device profiles). Browser-testing infra and practices: `docs/browser-testing-guide.md`.
 
 ## Debugging
 

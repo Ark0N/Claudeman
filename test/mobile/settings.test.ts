@@ -5,10 +5,8 @@ import { PORTS, SELECTORS, KEYBOARD, STORAGE_KEYS, BODY_CLASSES, WAIT } from './
 import { createTestServer, stopTestServer } from './helpers/server.js';
 import { createDevicePage, closeAllBrowsers } from './helpers/browser.js';
 import { showKeyboard, hideKeyboard } from './helpers/keyboard-sim.js';
-import {
-  assertVisible, assertHidden, getCSSProperty, getCSSNumericValue,
-} from './helpers/assertions.js';
-import { REPRESENTATIVE_DEVICES } from './devices.js';
+import { assertVisible, assertHidden, getCSSProperty, getCSSNumericValue } from './helpers/assertions.js';
+import { DEVICE_REGISTRY, REPRESENTATIVE_DEVICES } from './devices.js';
 import type { WebServer } from '../src/web/server.js';
 
 const PORT = PORTS.SETTINGS;
@@ -94,9 +92,7 @@ describe('Settings Modal', () => {
       if (gearBox && toolbarBox) {
         // Gear button should be within toolbar's vertical range
         expect(gearBox.y).toBeGreaterThanOrEqual(toolbarBox.y - 5);
-        expect(gearBox.y + gearBox.height).toBeLessThanOrEqual(
-          toolbarBox.y + toolbarBox.height + 5,
-        );
+        expect(gearBox.y + gearBox.height).toBeLessThanOrEqual(toolbarBox.y + toolbarBox.height + 5);
       }
     });
   });
@@ -304,11 +300,14 @@ describe('Settings Modal', () => {
       try {
         // Store a test setting
         await page.evaluate((key) => {
-          localStorage.setItem(key, JSON.stringify({
-            showFontControls: true,
-            showMonitor: true,
-            subagentTrackingEnabled: true,
-          }));
+          localStorage.setItem(
+            key,
+            JSON.stringify({
+              showFontControls: true,
+              showMonitor: true,
+              subagentTrackingEnabled: true,
+            })
+          );
         }, STORAGE_KEYS.SETTINGS_MOBILE);
 
         // Reload page
@@ -335,20 +334,32 @@ describe('Settings Modal', () => {
 
       try {
         // Store both mobile and desktop settings
-        await page.evaluate(({ mobileKey, desktopKey, notifKey }) => {
-          localStorage.setItem(mobileKey, JSON.stringify({ showFontControls: false }));
-          localStorage.setItem(desktopKey, JSON.stringify({ showFontControls: true }));
-          localStorage.setItem(notifKey, JSON.stringify({ mobileNotif: true }));
-        }, {
-          mobileKey: STORAGE_KEYS.SETTINGS_MOBILE,
-          desktopKey: STORAGE_KEYS.SETTINGS_DESKTOP,
-          notifKey: STORAGE_KEYS.NOTIFICATION_PREFS_MOBILE,
-        });
+        await page.evaluate(
+          ({ mobileKey, desktopKey, notifKey }) => {
+            localStorage.setItem(mobileKey, JSON.stringify({ showFontControls: false }));
+            localStorage.setItem(desktopKey, JSON.stringify({ showFontControls: true }));
+            localStorage.setItem(notifKey, JSON.stringify({ mobileNotif: true }));
+          },
+          {
+            mobileKey: STORAGE_KEYS.SETTINGS_MOBILE,
+            desktopKey: STORAGE_KEYS.SETTINGS_DESKTOP,
+            notifKey: STORAGE_KEYS.NOTIFICATION_PREFS_MOBILE,
+          }
+        );
 
         // Verify they are independent
-        const mobile = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) || '{}'), STORAGE_KEYS.SETTINGS_MOBILE);
-        const desktop = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) || '{}'), STORAGE_KEYS.SETTINGS_DESKTOP);
-        const notif = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) || '{}'), STORAGE_KEYS.NOTIFICATION_PREFS_MOBILE);
+        const mobile = await page.evaluate(
+          (key) => JSON.parse(localStorage.getItem(key) || '{}'),
+          STORAGE_KEYS.SETTINGS_MOBILE
+        );
+        const desktop = await page.evaluate(
+          (key) => JSON.parse(localStorage.getItem(key) || '{}'),
+          STORAGE_KEYS.SETTINGS_DESKTOP
+        );
+        const notif = await page.evaluate(
+          (key) => JSON.parse(localStorage.getItem(key) || '{}'),
+          STORAGE_KEYS.NOTIFICATION_PREFS_MOBILE
+        );
 
         expect(mobile.showFontControls).toBe(false);
         expect(desktop.showFontControls).toBe(true);
@@ -386,6 +397,54 @@ describe('Settings Modal', () => {
 
       try {
         await assertHidden(page, SELECTORS.SETTINGS_MOBILE);
+      } finally {
+        await context.close();
+      }
+    });
+
+    it('keeps handheld settings when a foldable unfolds past the desktop breakpoint', async () => {
+      const device = DEVICE_REGISTRY.find((entry) => entry.name === 'OPPO Find N5 (unfolded)')!;
+      const { page, context } = await createDevicePage(device, BASE_URL, 'chromium');
+
+      try {
+        // Seed the preferences while folded, exactly as a phone user does.
+        await page.setViewportSize({ width: 412, height: 915 });
+        await page.evaluate((key) => {
+          localStorage.setItem(
+            key,
+            JSON.stringify({
+              showResponseViewer: true,
+              extendedKeyboardBar: true,
+            })
+          );
+        }, STORAGE_KEYS.SETTINGS_MOBILE);
+        await page.reload({ waitUntil: WAIT.DOM_CONTENT_LOADED });
+        await page.waitForTimeout(WAIT.SSE_CONNECT);
+
+        // Unfolding can reload Android WebView. The viewport now uses desktop
+        // layout, but the physical device and its preferences have not changed.
+        await page.setViewportSize(device.viewport);
+        await page.reload({ waitUntil: WAIT.DOM_CONTENT_LOADED });
+        await page.waitForTimeout(WAIT.SSE_CONNECT);
+
+        const state = await page.evaluate(() => ({
+          deviceType: (window as any).MobileDetection.getDeviceType(),
+          handheld: (window as any).MobileDetection.isHandheldDevice(),
+          storageKey: (window as any).app.getSettingsStorageKey(),
+          responseViewerVisible: !document
+            .querySelector('.btn-response-viewer-header')
+            ?.classList.contains('btn-response-viewer-header--hidden'),
+          keyboardExtended: Boolean(document.querySelector('.keyboard-accessory-bar [data-action="arrow-left"]')),
+        }));
+
+        expect(state.deviceType).toBe('desktop');
+        expect(state.handheld).toBe(true);
+        expect(state.storageKey).toBe(STORAGE_KEYS.SETTINGS_MOBILE);
+        expect(state.responseViewerVisible).toBe(true);
+        expect(state.keyboardExtended).toBe(true);
+
+        await showKeyboard(page, KEYBOARD.TYPICAL_IOS_HEIGHT);
+        await assertVisible(page, '.keyboard-accessory-bar');
       } finally {
         await context.close();
       }

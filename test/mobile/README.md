@@ -2,11 +2,11 @@
 
 Comprehensive mobile UI testing for Codeman's web interface using Playwright with dual-engine support (Chromium + WebKit).
 
-**325 tests across 135 devices — all passing.**
+**326 tests across 136 devices — all passing.**
 
 ## Purpose
 
-Validates Codeman's mobile UI across 135 devices, covering:
+Validates Codeman's mobile UI across 136 devices, covering:
 
 - **Keyboard simulation** — 3-layer approach to emulate virtual keyboards in headless browsers
 - **Touch/swipe interactions** — CDP trusted events (Chromium) + synthetic fallback (WebKit)
@@ -26,7 +26,7 @@ npx vitest run --config test/mobile/vitest.config.ts test/mobile/keyboard.test.t
 # Quick mode — 6 representative devices, skip full matrix
 CI_QUICK=1 npx vitest run --config test/mobile/vitest.config.ts
 
-# Full device matrix only (135 devices)
+# Full device matrix only (136 devices)
 npx vitest run --config test/mobile/vitest.config.ts test/mobile/device-matrix.test.ts
 
 # Update visual baselines (delete old baselines, re-run)
@@ -43,7 +43,7 @@ npx vitest run --config test/mobile/vitest.config.ts test/mobile/visual-regressi
 | `subagent-windows.test.ts` | 3202 | Mobile subagent card dimensions, stacking, interactions |
 | `settings.test.ts` | 3203 | Settings modal, mobile defaults, persistence |
 | `layout.test.ts` | 3204 | General mobile layout, fixed elements, device classes |
-| `device-matrix.test.ts` | 3205 | Cross-device parametric tests (135 devices) |
+| `device-matrix.test.ts` | 3205 | Cross-device parametric tests (136 devices) |
 | `visual-regression.test.ts` | 3206 | Screenshot comparison at key breakpoints |
 | `accessibility.test.ts` | 3207 | WCAG touch targets, zoom, focus, ARIA |
 
@@ -58,7 +58,7 @@ npx vitest run --config test/mobile/vitest.config.ts test/mobile/visual-regressi
 | standard-tablet | 768–834px | ~8 | iPad Mini |
 | large-tablet | 835px+ | ~5 | iPad Pro 11" |
 
-135 devices are defined in `devices.ts` — 68 from Playwright's built-in device profiles plus 67 custom entries for newer devices (iPhone 16/17, Pixel 9, Galaxy S25, iPad Air M2, Surface Pro, etc.).
+136 devices are defined in `devices.ts` — 68 from Playwright's built-in device profiles plus 68 custom entries for newer devices (iPhone 16/17, Pixel 9, Galaxy S25, OPPO Find N5 unfolded, iPad Air M2, Surface Pro, etc.).
 
 ### How Devices Are Differentiated
 
@@ -98,7 +98,7 @@ Test File
   ├─ helpers/touch-sim.ts    → CDP trusted touch / synthetic fallback
   ├─ helpers/assertions.ts   → Layout, CSS, accessibility assertions
   ├─ helpers/visual.ts       → pixelmatch screenshot comparison
-  └─ devices.ts              → 135-device registry
+  └─ devices.ts              → 136-device registry
 ```
 
 ### Keyboard Simulation — 3-Layer Approach

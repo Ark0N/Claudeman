@@ -43,6 +43,35 @@ const MobileDetection = {
     );
   },
 
+  /**
+   * Check whether this browser belongs to a handheld device.
+   *
+   * Unlike getDeviceType(), this classification must remain stable when a
+   * foldable changes posture. An unfolded phone can expose a desktop-width
+   * viewport, but it still needs the same per-device settings that were saved
+   * while folded. User-Agent Client Hints are preferred where available; the
+   * legacy token fallback covers Android WebView and iPhone browsers.
+   */
+  isHandheldDevice() {
+    if (!this.isTouchDevice()) return false;
+
+    const userAgent = navigator.userAgent || '';
+
+    // Prefer explicit UA form-factor signals. Besides matching real browsers,
+    // this avoids Chromium emulation reporting userAgentData.mobile=true for
+    // an iPad/tablet context created with isMobile=true.
+    if (/iPad|Tablet|Silk|PlayBook|Kindle|Windows NT|CrOS|Macintosh/i.test(userAgent)) {
+      return false;
+    }
+    if (/Android/i.test(userAgent) && !/Mobile/i.test(userAgent)) return false;
+    if (/Mobi|iPhone|iPod/i.test(userAgent)) return true;
+
+    const uaDataMobile = navigator.userAgentData?.mobile;
+    if (typeof uaDataMobile === 'boolean') return uaDataMobile;
+
+    return false;
+  },
+
   /** Check if device is iOS (iPhone, iPad, iPod) */
   isIOS() {
     return (
