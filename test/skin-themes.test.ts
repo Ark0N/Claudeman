@@ -74,20 +74,33 @@ describe('Codeman light skins', () => {
   it('switches live terminals between light and dark contrast policies', () => {
     const main = { options: {} as Record<string, unknown>, rows: 24, refresh: vi.fn() };
     const teammate = { options: {} as Record<string, unknown>, rows: 12, refresh: vi.fn() };
+    const refreshFont = vi.fn();
     const app = {
       terminal: main,
       teammateTerminals: new Map([['agent-1', { terminal: teammate }]]),
+      _localEchoOverlay: { refreshFont },
     };
 
     terminal.mixin.applyTerminalSkin.call(app, 'paper-gray');
     expect(main.options.minimumContrastRatio).toBe(4.5);
     expect(teammate.options.minimumContrastRatio).toBe(4.5);
     expect((main.options.theme as Record<string, string>).background).toBe('#f6f8fa');
+    expect(refreshFont).toHaveBeenCalledTimes(1);
 
     terminal.mixin.applyTerminalSkin.call(app, 'daylight-blue');
     expect(main.options.minimumContrastRatio).toBe(1);
     expect(teammate.options.minimumContrastRatio).toBe(1);
     expect((main.options.theme as Record<string, string>).background).toBe('#161b23');
+    expect(refreshFont).toHaveBeenCalledTimes(2);
+  });
+
+  it('themes stateful input and response surfaces instead of pinning dark colors', () => {
+    expect(stylesSource).toContain('background: var(--bg-input);\n  color: var(--text);');
+    expect(stylesSource).toMatch(/#cjkInput \{[\s\S]*?background: var\(--bg-input\);[\s\S]*?color: var\(--text\);/);
+    expect(stylesSource).toMatch(/\.response-viewer \{[\s\S]*?background: var\(--floating-bg\);/);
+    expect(stylesSource).toMatch(/\.response-viewer-body pre \{[\s\S]*?background: var\(--bg-dark\);/);
+    expect(stylesSource).toMatch(/\.response-viewer-body pre code \{[\s\S]*?color: var\(--text\);/);
+    expect(stylesSource).toMatch(/\.file-preview-body \{[\s\S]*?background: var\(--bg-dark\);/);
   });
 
   it('uses skin variables for the pre-paint skeleton and native controls', () => {

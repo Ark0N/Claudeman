@@ -92,6 +92,22 @@
   --run-hover-a: #5cc4f5;
   --run-hover-b: #3aa3e2;
   --gear-hover: #2a93d0;
+
+  /* Compatibility aliases used by newer panels and overlays. Keep these
+     references dynamic so every skin, including light skins, inherits the
+     same semantic surface and text colors. */
+  --bg-primary: var(--bg-dark);
+  --bg-secondary: var(--bg-card);
+  --bg-tertiary: var(--bg-input);
+  --text-primary: var(--text);
+  --text-secondary: var(--text-dim);
+  --border-color: var(--border);
+  --accent-color: var(--accent);
+  --success: var(--green);
+  --error: var(--red);
+  --danger: var(--red);
+  --font-mono: 'Fira Code', 'JetBrains Mono', 'SF Mono', Menlo, Monaco, monospace;
+  --shadow-lg: var(--elevated-shadow);
 }
 
 /* ===== Skin: Daylight Blue (current default) ===== */
@@ -7650,7 +7666,7 @@ kbd {
 .subagent-id {
   font-family: var(--font-mono);
   font-size: 0.75rem;
-  color: white;
+  color: var(--text);
 }
 
 .subagent-status {
@@ -7953,7 +7969,7 @@ kbd {
 .subagent-window-title .id {
   font-family: var(--font-mono);
   font-size: 0.8rem;
-  color: white;
+  color: var(--text);
 }
 
 .subagent-window-title .status {
@@ -8002,8 +8018,8 @@ kbd {
   padding: 0.5rem;
   font-family: var(--font-mono);
   font-size: 0.75rem;
-  background: #111;
-  color: #c8c8c8;
+  background: var(--bg-dark);
+  color: var(--text);
   min-height: 0; /* Allow flex child to shrink below content size */
   scroll-behavior: smooth;
 }
@@ -8599,7 +8615,7 @@ kbd {
   flex: 1;
   overflow: auto;
   padding: 0;
-  background: #111;
+  background: var(--bg-dark);
 }
 
 .file-preview-body pre {
@@ -8608,7 +8624,7 @@ kbd {
   font-family: var(--font-mono);
   font-size: 0.8rem;
   line-height: 1.5;
-  color: #d4d4d4;
+  color: var(--text);
   white-space: pre-wrap;
   word-break: break-all;
 }
@@ -8695,7 +8711,7 @@ kbd {
 .log-viewer-window-title .filename {
   font-family: var(--font-mono);
   font-size: 0.8rem;
-  color: white;
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -9692,7 +9708,7 @@ kbd {
   padding: 0.15rem 0.4rem;
   border-radius: 3px;
   font-size: 0.75rem;
-  color: var(--green);
+  color: var(--text);
 }
 
 /* Advanced Options */
@@ -10223,10 +10239,10 @@ kbd {
   left: 0;
   right: 0;
   max-height: 88vh;
-  background: #14141f;
-  border-top: 1px solid #2a2a3a;
+  background: var(--floating-bg);
+  border-top: 1px solid var(--border);
   border-radius: 14px 14px 0 0;
-  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--elevated-shadow);
   z-index: 5000;
   flex-direction: column;
   transform: translateY(100%);
@@ -10243,11 +10259,11 @@ kbd {
   align-items: center;
   justify-content: space-between;
   padding: 14px 20px;
-  border-bottom: 1px solid #2a2a3a;
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   font-size: 14px;
   font-weight: 600;
-  color: #e8e8ec;
+  color: var(--text);
   letter-spacing: 0.2px;
 }
 
@@ -10258,9 +10274,9 @@ kbd {
 }
 
 .response-viewer-more {
-  background: #2a2a4a;
-  border: 1px solid #444;
-  color: #aaa;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  color: var(--text-dim);
   font-size: 12px;
   padding: 3px 10px;
   border-radius: 4px;
@@ -10268,13 +10284,13 @@ kbd {
 }
 
 .response-viewer-more:active {
-  background: #3a3a5a;
+  background: var(--control-bg-hover);
 }
 
 .response-viewer-close {
   background: none;
   border: none;
-  color: #888;
+  color: var(--text-muted);
   font-size: 22px;
   cursor: pointer;
   padding: 0 4px;
@@ -10286,9 +10302,9 @@ kbd {
   margin: 0 0 18px;
   padding: 14px 16px 16px;
   border-radius: 10px;
-  border: 1px solid #252538;
+  border: 1px solid var(--border);
   border-left-width: 3px;
-  background: #181826;
+  background: var(--bg-card);
   position: relative;
 }
 
@@ -10299,14 +10315,14 @@ kbd {
 /* Distinct accent per role so threads are scannable at a glance */
 .rv-message:has(.rv-role-user),
 .rv-message.rv-msg-user {
-  border-left-color: #7aa2ff;
-  background: #16182a;
+  border-left-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.055);
 }
 
 .rv-message:has(.rv-role-assistant),
 .rv-message.rv-msg-assistant {
-  border-left-color: #6ddb7f;
-  background: #161f1a;
+  border-left-color: var(--green);
+  background: color-mix(in srgb, var(--green) 6%, var(--bg-card));
 }
 
 .rv-role {
@@ -10318,17 +10334,17 @@ kbd {
   margin-bottom: 10px;
   padding: 2px 8px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--control-bg);
 }
 
 .rv-role-user {
-  color: #7aa2ff;
-  background: rgba(122, 162, 255, 0.12);
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
 }
 
 .rv-role-assistant {
-  color: #6ddb7f;
-  background: rgba(109, 219, 127, 0.12);
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
 }
 
 /* Markdown rendered content inside response viewer.
@@ -10353,7 +10369,7 @@ kbd {
 .rv-text h1, .rv-text h2, .rv-text h3, .rv-text h4,
 .response-viewer-body > h1, .response-viewer-body > h2,
 .response-viewer-body > h3, .response-viewer-body > h4 {
-  color: #f2f2f6;
+  color: var(--text);
   margin: 1.4em 0 0.5em;
   line-height: 1.3;
   font-weight: 700;
@@ -10368,27 +10384,27 @@ kbd {
 .rv-text h1, .response-viewer-body > h1 {
   font-size: 1.55em;
   padding-bottom: 0.3em;
-  border-bottom: 1px solid #2d2d40;
+  border-bottom: 1px solid var(--border);
 }
 .rv-text h2, .response-viewer-body > h2 {
   font-size: 1.3em;
-  color: #ffd27a;
+  color: var(--yellow);
 }
 .rv-text h3, .response-viewer-body > h3 {
   font-size: 1.13em;
-  color: #bfc8ff;
+  color: var(--accent);
 }
 .rv-text h4, .response-viewer-body > h4 {
   font-size: 1em;
-  color: #c9c9d5;
+  color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
 
 .rv-text code,
 .response-viewer-body > :not(pre) code {
-  background: #262638;
-  color: #ffb4a2;
+  background: var(--bg-input);
+  color: var(--red);
   padding: 1px 6px;
   border-radius: 4px;
   font-family: 'Fira Code', 'JetBrains Mono', 'SF Mono', Menlo, Monaco, monospace;
@@ -10401,14 +10417,14 @@ kbd {
    already matched via descendant; keep both in lockstep. */
 .rv-text pre,
 .response-viewer-body pre {
-  background: #0f0f1a;
-  border: 1px solid #2a2a3d;
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 14px 16px;
   overflow-x: auto;
   margin: 1em 0;
   -webkit-overflow-scrolling: touch;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+  box-shadow: inset 0 0 0 1px var(--control-border);
   position: relative;
 }
 
@@ -10418,7 +10434,7 @@ kbd {
 .rv-text pre code,
 .response-viewer-body pre code {
   background: none;
-  color: #e6e6f0;
+  color: var(--text);
   padding: 0;
   font-family: 'Fira Code', 'JetBrains Mono', 'SF Mono', Menlo, Monaco, monospace;
   font-size: 12.5px;
@@ -10468,10 +10484,7 @@ kbd {
 
 .rv-text pre.rv-diagram.rv-nowrap,
 .response-viewer-body pre.rv-diagram.rv-nowrap {
-  background:
-    linear-gradient(to left, #0f0f1a 0, rgba(15, 15, 26, 0) 28px) right / 28px 100% no-repeat,
-    linear-gradient(to left, rgba(122, 162, 255, 0.18) 0, rgba(15, 15, 26, 0) 28px) right / 28px 100% no-repeat,
-    #0f0f1a;
+  background: var(--bg-dark);
 }
 
 /* Toggle button — pinned to the wrapper's top-right, NOT affected by <pre>'s
@@ -10483,10 +10496,10 @@ kbd {
   width: 28px;
   height: 24px;
   padding: 0;
-  border: 1px solid #2f2f45;
+  border: 1px solid var(--control-border);
   border-radius: 5px;
-  background: rgba(20, 20, 32, 0.92);
-  color: #8b8b97;
+  background: var(--floating-bg);
+  color: var(--text-muted);
   font-size: 11px;
   line-height: 1;
   cursor: pointer;
@@ -10499,8 +10512,8 @@ kbd {
 
 .rv-wrap-toggle:hover,
 .rv-wrap-toggle:active {
-  color: #e0e0ec;
-  border-color: #4a4a65;
+  color: var(--text);
+  border-color: var(--control-border-hover);
 }
 
 /* Default icon = "return" (wrap is active). Clicking switches to expand/scroll. */
@@ -10557,10 +10570,10 @@ kbd {
   width: 28px;
   height: 24px;
   padding: 0;
-  border: 1px solid #2f2f45;
+  border: 1px solid var(--control-border);
   border-radius: 5px;
-  background: rgba(20, 20, 32, 0.92);
-  color: #8b8b97;
+  background: var(--floating-bg);
+  color: var(--text-muted);
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
@@ -10572,14 +10585,14 @@ kbd {
 
 .rv-copy-btn:hover,
 .rv-copy-btn:active {
-  color: #e0e0ec;
-  border-color: #4a4a65;
+  color: var(--text);
+  border-color: var(--control-border-hover);
 }
 
 .rv-copy-btn::before { content: '\2398'; }            /* ⎘ — matches file-preview copy */
-.rv-copy-btn.rv-copied { color: #9ece6a; border-color: #3a5a3a; }
+.rv-copy-btn.rv-copied { color: var(--green); border-color: var(--green); }
 .rv-copy-btn.rv-copied::before { content: '\2713'; }  /* ✓ */
-.rv-copy-btn.rv-copy-failed { color: #f7768e; border-color: #5a3a3a; }
+.rv-copy-btn.rv-copy-failed { color: var(--red); border-color: var(--red); }
 .rv-copy-btn.rv-copy-failed::before { content: '\2715'; } /* ✕ */
 
 .rv-text ul, .rv-text ol,
@@ -10597,36 +10610,36 @@ kbd {
 
 .rv-text blockquote,
 .response-viewer-body > blockquote {
-  border-left: 3px solid #5c7cfa;
-  background: rgba(92, 124, 250, 0.06);
+  border-left: 3px solid var(--accent);
+  background: rgba(var(--accent-rgb), 0.06);
   margin: 0.8em 0;
   padding: 0.5em 14px;
-  color: #b8b8c8;
+  color: var(--text-dim);
   border-radius: 0 6px 6px 0;
 }
 
 .rv-text strong,
 .response-viewer-body > p strong,
 .response-viewer-body > li strong {
-  color: #ffffff;
+  color: var(--text);
   font-weight: 700;
 }
 
 .rv-text em,
 .response-viewer-body em {
-  color: #e0e0ec;
+  color: var(--text);
 }
 
 .rv-text a,
 .response-viewer-body a {
-  color: #7aa2ff;
+  color: var(--accent);
   text-decoration: none;
-  border-bottom: 1px solid rgba(122, 162, 255, 0.35);
+  border-bottom: 1px solid rgba(var(--accent-rgb), 0.35);
 }
 
 .rv-text a:hover,
 .response-viewer-body a:hover {
-  border-bottom-color: #7aa2ff;
+  border-bottom-color: var(--accent);
 }
 
 /* Tables — scroll wrapper keeps table proper while allowing horizontal overflow */
@@ -10634,9 +10647,9 @@ kbd {
   margin: 1em 0;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
-  border: 1px solid #2a2a3d;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: #12121d;
+  background: var(--bg-card);
 }
 
 .rv-text table,
@@ -10653,8 +10666,8 @@ kbd {
 .response-viewer-body > table th,
 .response-viewer-body > table td,
 .rv-table-wrap th, .rv-table-wrap td {
-  border-bottom: 1px solid #252538;
-  border-right: 1px solid #252538;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
   padding: 8px 12px;
   text-align: left;
   vertical-align: top;
@@ -10677,29 +10690,29 @@ kbd {
 .rv-text th,
 .response-viewer-body > table th,
 .rv-table-wrap th {
-  background: #20202e;
-  color: #f0f0f5;
+  background: var(--bg-input);
+  color: var(--text);
   font-weight: 600;
-  border-bottom: 2px solid #2f2f45;
+  border-bottom: 2px solid var(--border-light);
   white-space: nowrap;
 }
 
 .rv-text tbody tr:nth-child(even) td,
 .response-viewer-body > table tbody tr:nth-child(even) td,
 .rv-table-wrap tbody tr:nth-child(even) td {
-  background: rgba(255, 255, 255, 0.022);
+  background: var(--control-bg);
 }
 
 .rv-text tbody tr:hover td,
 .response-viewer-body > table tbody tr:hover td,
 .rv-table-wrap tbody tr:hover td {
-  background: rgba(122, 162, 255, 0.06);
+  background: rgba(var(--accent-rgb), 0.06);
 }
 
 .rv-text hr,
 .response-viewer-body > hr {
   border: none;
-  border-top: 1px solid #2d2d40;
+  border-top: 1px solid var(--border);
   margin: 1.5em 0;
 }
 
@@ -10715,7 +10728,7 @@ kbd {
     'Noto Sans CJK SC', sans-serif;
   font-size: 15px;
   line-height: 1.7;
-  color: #d8d8e0;
+  color: var(--text);
   /* Comfortable reading width on wider viewports */
   --rv-content-max: 720px;
 }
@@ -10734,7 +10747,7 @@ kbd {
 
 .response-viewer-body:empty::after {
   content: 'No response yet';
-  color: #555;
+  color: var(--text-muted);
   font-style: italic;
 }
 
@@ -10742,7 +10755,7 @@ kbd {
   display: none;
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--modal-backdrop);
   z-index: 4999;
 }
 
@@ -10760,9 +10773,9 @@ kbd {
   width: 100%;
   font-family: 'Fira Code', 'Cascadia Code', 'JetBrains Mono', 'SF Mono', Monaco, monospace;
   font-size: 14px;
-  background: #1a1a2e;
-  color: #e0e0e0;
-  border: 1px solid #333;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
   border-top: none;
   padding: 6px 10px;
   outline: none;
@@ -10772,12 +10785,12 @@ kbd {
 }
 
 #cjkInput:focus {
-  border-color: #339af0;
-  background: #111;
+  border-color: var(--accent);
+  background: var(--bg-card);
 }
 
 #cjkInput::placeholder {
-  color: #495057;
+  color: var(--text-muted);
   font-size: 12px;
 }
 
@@ -10791,12 +10804,12 @@ kbd {
   min-height: 34px;
   max-height: 68px;
   padding: 6px 10px;
-  border: 1px solid rgba(80, 120, 190, 0.55);
+  border: 1px solid var(--control-border-hover);
   border-left: none;
   border-right: none;
-  background: #101827;
-  color: #f3f4f6;
-  box-shadow: 0 -8px 20px rgba(0, 0, 0, 0.35);
+  background: var(--floating-bg);
+  color: var(--text);
+  box-shadow: var(--subtle-shadow);
   transition: transform 0.15s ease-out;
   will-change: transform;
 }
@@ -10856,10 +10869,10 @@ body.touch-device.cjk-input-visible .main {
   flex-shrink: 0;
   gap: 4px;
   padding: 6px 12px;
-  background: #2a2a2a;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
   border-radius: 6px;
-  color: #e5e5e5;
+  color: var(--text-dim);
   font-size: 0.65rem;
   font-weight: 500;
   cursor: pointer;
@@ -10867,13 +10880,13 @@ body.touch-device.cjk-input-visible .main {
 }
 
 .accessory-btn.confirming {
-  background: #6b4f00;
-  border-color: #b8860b;
-  color: #ffd54f;
+  background: color-mix(in srgb, var(--yellow) 18%, var(--bg-input));
+  border-color: var(--yellow);
+  color: var(--yellow);
 }
 
 .accessory-btn:active {
-  background: #3a3a3a;
+  background: var(--control-bg-hover);
 }
 
 .accessory-btn svg {
@@ -10883,13 +10896,13 @@ body.touch-device.cjk-input-visible .main {
 
 .accessory-btn-arrow {
   padding: 6px 10px;
-  background: #2563eb;
-  border-color: rgba(59, 130, 246, 0.5);
-  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
 }
 
 .accessory-btn-arrow:active {
-  background: #1d4ed8;
+  background: var(--accent-hover);
 }
 
 .accessory-btn-dismiss {
@@ -10897,9 +10910,9 @@ body.touch-device.cjk-input-visible .main {
   flex: 1 1 0;
   max-width: 100px;
   padding: 10px 8px;
-  background: #2563eb;
-  border-color: rgba(59, 130, 246, 0.5);
-  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
   font-weight: 600;
 }
 
@@ -10909,7 +10922,7 @@ body.touch-device.cjk-input-visible .main {
 }
 
 .accessory-btn-dismiss:active {
-  background: #1d4ed8;
+  background: var(--accent-hover);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -10929,8 +10942,8 @@ body.touch-device.cjk-input-visible .main {
 }
 
 .paste-dialog {
-  background: var(--bg-secondary, #1e1e2e);
-  border: 1px solid var(--border-color, #444);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 12px;
   width: calc(100% - 24px);
@@ -10941,9 +10954,9 @@ body.touch-device.cjk-input-visible .main {
   width: 100%;
   min-height: 80px;
   max-height: 200px;
-  background: var(--bg-primary, #0d0d14);
-  color: var(--text-primary, #e0e0e0);
-  border: 1px solid var(--border-color, #444);
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px;
   font-family: inherit;
@@ -10954,7 +10967,7 @@ body.touch-device.cjk-input-visible .main {
 
 .paste-textarea:focus {
   outline: none;
-  border-color: var(--accent-color, #7aa2f7);
+  border-color: var(--accent);
 }
 
 .paste-actions {
@@ -10974,24 +10987,24 @@ body.touch-device.cjk-input-visible .main {
 
 .paste-image {
   margin-right: auto;
-  background: var(--bg-tertiary, #333);
-  color: var(--accent-color, #7aa2f7);
-  border: 1px solid var(--accent-color, #7aa2f7);
+  background: var(--bg-input);
+  color: var(--accent);
+  border: 1px solid var(--accent);
 }
 
 .paste-cancel {
-  background: var(--bg-tertiary, #333);
-  color: var(--text-secondary, #aaa);
+  background: var(--bg-input);
+  color: var(--text-dim);
 }
 
 .paste-new {
-  background: var(--bg-tertiary, #333);
-  color: var(--accent-color, #7aa2f7);
-  border: 1px solid var(--accent-color, #7aa2f7);
+  background: var(--bg-input);
+  color: var(--accent);
+  border: 1px solid var(--accent);
 }
 
 .paste-send {
-  background: var(--accent-color, #7aa2f7);
+  background: var(--accent);
   color: #fff;
   font-weight: 600;
 }

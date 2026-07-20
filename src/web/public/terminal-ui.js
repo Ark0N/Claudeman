@@ -2863,6 +2863,10 @@ Object.assign(CodemanApp.prototype, {
     if (this.terminal) {
       this.terminal.options.minimumContrastRatio = minimumContrastRatio;
       this.terminal.options.theme = theme;
+      // The zero-lag typing overlay caches the xterm foreground/background.
+      // Refresh it on live skin changes so typed text never keeps the prior
+      // theme's dark backing surface or foreground color.
+      this._localEchoOverlay?.refreshFont();
       try {
         this.terminal.refresh(0, this.terminal.rows - 1);
       } catch {}
