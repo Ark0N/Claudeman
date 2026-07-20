@@ -1,5 +1,27 @@
 # aicodeman
 
+## 1.5.1
+
+### Patch Changes
+
+- Docker session-mode deep-review fixes — the work intended for the skipped **1.4.2**, now merged onto the 1.5.x line — plus a recap of the multi-user mode shipped in 1.5.0.
+
+  **Docker resume actually works now.** `DockerCase.lastClaudeSessionId` was read at quick-start but never written, so the documented resume-after-container-stop never fired. Claude-mode docker panes now pin a deterministic conversation id (`claudeDockerPaneCommand()`): a fresh launch runs `claude --session-id <id> || claude --resume <id>` (a duplicate `--session-id` exits 1 "already in use", so the fallback resumes after a container stop/reboot — verified CLI behavior), an explicit resume runs `--resume <rid> || --session-id <sid>` so a stale id never dead-panes. The id is persisted at launch and again on hook / last-response conversation-id adoption. Verified end-to-end across a `docker stop` + relaunch and a full container recreate.
+
+  **Config-drift detection + recreate (was documented but entirely missing).** The `codeman.confighash` label was stamped but never read, so docker-host config edits silently never applied. Quick-start now compares via `checkDockerConfigDrift()` and refuses a drifted launch with `CONFLICT`; the UI confirms and calls the new `POST /api/docker-cases/:name/recreate` (refused while the case has live sessions), then relaunches with the new config. New SSE event `docker:containerRecreated`.
+
+  **Model picker now applies to docker sessions.** `modelOverride` was absent from `QuickStartSchema`, so the App Settings Claude Model choice was silently inert for docker runs. It is now accepted and applied via `updateCaseModel` for local and docker quick-starts (still rejected for remote, where the settings file would land on the wrong machine).
+
+  **Import hardening.** `importDockerBundle` validates the untrusted cross-machine manifest before trusting any field (`validateImportManifest`: engine/image/containerWorkdir/network/caseName/schemaVersion — a hostile `engine` could previously select the probe binary); the outer bundle tar gets the same member-traversal guard as the inner workspace tar; the quarantine image tag derives from the schema-validated case name.
+
+  **Remote-daemon correctness.** All docker probes and the base-image auto-build now honor a host's `context`/`daemonHost` (`dockerEngineArgv`) instead of always probing the local daemon.
+
+  **Smaller fixes:** commas are rejected in docker workspace/workdir/destination paths (a comma corrupts the `--mount type=bind,src=…` CSV spec, which shell escaping cannot protect); a dead `this.escapeHtml` reference in the exports refresh is fixed; `docker:importComplete` / `docker:containerRecreated` get frontend SSE listeners so other open tabs refresh; the File Viewer header button is hidden on phone headers like its siblings.
+
+  **Docs.** CLAUDE.md + READMEs synced with the current feature set, including a full zh-CN README re-translation.
+
+  **Multi-user mode (recap — shipped in 1.5.0).** Opt-in named users (`--multiuser` / `CODEMAN_MULTIUSER=1`, off by default) with per-user case spaces and full ownership scoping of sessions, cases, cron jobs, scheduled runs, search, file previews, and real-time SSE/WS streams. Non-admin users default to Claude's classifier-guarded `--permission-mode auto`; raw shell mode, cron `launchCommand`, skip-permissions, and the Codex/Gemini bypass switches require an explicit per-user `canBypassPermissions` grant. Machine-level resources are admin-only. Admin API (`/api/admin/users*`) with one-time passwords, last-admin invariants, and an append-only audit log; self-service `/api/me` + password change; and a `codeman users add|passwd|list|rm` CLI. Off by default is byte-identical to single-user. Note: multi-user separates workspaces for a trusted team; it is not a security boundary between mutually-distrusting users (all sessions share the host OS account) — pair with Docker cases for real isolation.
+
 ## 1.5.0
 
 ### Minor Changes
