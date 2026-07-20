@@ -18,7 +18,7 @@ export interface ConfigPort {
   getClaudeModeConfig(): Promise<{ claudeMode?: ClaudeMode; allowedTools?: string }>;
   getTerminalHistoryConfig(): Promise<TerminalHistoryConfig>;
   getDefaultClaudeMdPath(): Promise<string | undefined>;
-  getLightState(): unknown;
+  getLightState(identity?: { username: string; role: 'admin' | 'user' }): unknown;
   getLightSessionsState(): unknown[];
   startTranscriptWatcher(sessionId: string, transcriptPath: string): void;
   stopTranscriptWatcher(sessionId: string): void;

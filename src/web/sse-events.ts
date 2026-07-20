@@ -152,6 +152,15 @@ export const MuxDied = 'mux:died' as const;
 /** tmux session stats refreshed. */
 export const MuxStatsUpdated = 'mux:statsUpdated' as const;
 
+// ─── Remote auto-reconnect (COD-108) ─────────────────────────────────────────
+
+/** A remote session's local ssh pane died; an auto-reconnect attempt is starting. */
+export const RemoteSessionDropped = 'remote:sessionDropped' as const;
+/** A dropped remote session was successfully re-established (reattached). */
+export const RemoteSessionReconnected = 'remote:sessionReconnected' as const;
+/** Auto-reconnect gave up after the bounded backoff cap — manual reconnect needed. */
+export const RemoteReconnectExhausted = 'remote:reconnectExhausted' as const;
+
 // ─── Respawn ─────────────────────────────────────────────────────────────────
 
 /** Respawn loop started for a session. */
@@ -372,6 +381,31 @@ export const CaseDeleted = 'case:deleted' as const;
 /** Case ordering changed. */
 export const CaseOrderChanged = 'case:order-changed' as const;
 
+// ─── Docker cases ────────────────────────────────────────────────────────────
+/** A docker case export bundle finished writing. */
+export const DockerExportComplete = 'docker:exportComplete' as const;
+/** A docker case export failed. */
+export const DockerExportFailed = 'docker:exportFailed' as const;
+/** A docker bundle was imported into a new case. */
+export const DockerImportComplete = 'docker:importComplete' as const;
+/** The agent base image started building (first Docker case; auto-build on first use). */
+export const DockerImageBuildStarted = 'docker:imageBuildStarted' as const;
+/** A line of agent base-image build output (progress surfacing). */
+export const DockerImageBuildProgress = 'docker:imageBuildProgress' as const;
+/** The agent base image finished building successfully. */
+export const DockerImageBuildComplete = 'docker:imageBuildComplete' as const;
+/** The agent base image build failed. */
+export const DockerImageBuildFailed = 'docker:imageBuildFailed' as const;
+/** A case container was removed after a config-drift confirm (recreated with the new config on next launch). */
+export const DockerContainerRecreated = 'docker:containerRecreated' as const;
+
+// ─── Multi-user (admin-only / targeted) ──────────────────────────────────────
+
+/** The user roster changed (admin-only); the Users panel re-fetches. */
+export const AdminUsersChanged = 'admin:usersChanged' as const;
+/** A user must change their password (targeted); the frontend shows the modal. */
+export const AuthPasswordChangeRequired = 'auth:passwordChangeRequired' as const;
+
 /** Global session tab order changed (synced across devices). COD-131. */
 export const SessionOrderChanged = 'session:orderChanged' as const;
 
@@ -440,6 +474,11 @@ export const SseEvent = {
   MuxKilled,
   MuxDied,
   MuxStatsUpdated,
+
+  // Remote auto-reconnect (COD-108)
+  RemoteSessionDropped,
+  RemoteSessionReconnected,
+  RemoteReconnectExhausted,
 
   // Respawn
   RespawnStarted,
@@ -557,6 +596,18 @@ export const SseEvent = {
   CaseLinked,
   CaseDeleted,
   CaseOrderChanged,
+
+  // Docker cases
+  DockerExportComplete,
+  DockerExportFailed,
+  DockerImportComplete,
+  DockerImageBuildStarted,
+  DockerImageBuildProgress,
+  DockerImageBuildComplete,
+  DockerImageBuildFailed,
+  AdminUsersChanged,
+  AuthPasswordChangeRequired,
+  DockerContainerRecreated,
 
   // Session order (global tab order sync)
   SessionOrderChanged,

@@ -380,6 +380,11 @@ const SSE_EVENTS = {
   MUX_DIED: 'mux:died',
   MUX_STATS_UPDATED: 'mux:statsUpdated',
 
+  // Remote auto-reconnect (COD-108)
+  REMOTE_SESSION_DROPPED: 'remote:sessionDropped',
+  REMOTE_SESSION_RECONNECTED: 'remote:sessionReconnected',
+  REMOTE_RECONNECT_EXHAUSTED: 'remote:reconnectExhausted',
+
   // Ralph
   SESSION_RALPH_LOOP_UPDATE: 'session:ralphLoopUpdate',
   SESSION_RALPH_TODO_UPDATE: 'session:ralphTodoUpdate',
@@ -475,6 +480,17 @@ const SSE_EVENTS = {
   CASE_LINKED: 'case:linked',
   CASE_DELETED: 'case:deleted',
   CASE_ORDER_CHANGED: 'case:order-changed',
+  DOCKER_EXPORT_COMPLETE: 'docker:exportComplete',
+  DOCKER_EXPORT_FAILED: 'docker:exportFailed',
+  DOCKER_IMPORT_COMPLETE: 'docker:importComplete',
+  DOCKER_IMAGE_BUILD_STARTED: 'docker:imageBuildStarted',
+  DOCKER_IMAGE_BUILD_PROGRESS: 'docker:imageBuildProgress',
+  DOCKER_IMAGE_BUILD_COMPLETE: 'docker:imageBuildComplete',
+  DOCKER_IMAGE_BUILD_FAILED: 'docker:imageBuildFailed',
+  // Multi-user (admin-only / targeted)
+  ADMIN_USERS_CHANGED: 'admin:usersChanged',
+  AUTH_PASSWORD_CHANGE_REQUIRED: 'auth:passwordChangeRequired',
+  DOCKER_CONTAINER_RECREATED: 'docker:containerRecreated',
 
   // Session order (global tab order sync)
   SESSION_ORDER_CHANGED: 'session:orderChanged',

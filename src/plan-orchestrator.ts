@@ -20,7 +20,7 @@ import type { TerminalMultiplexer } from './mux-interface.js';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { RESEARCH_AGENT_PROMPT, PLANNER_PROMPT } from './prompts/index.js';
-import { getErrorMessage, type PlanItem } from './types.js';
+import { getErrorMessage, type PlanItem, type ClaudeMode } from './types.js';
 
 // Re-export for backward compatibility
 export type { PlanItem };
@@ -130,18 +130,28 @@ export class PlanOrchestrator {
   private taskDescription = '';
   private researchModel: string;
   private plannerModel: string;
+  // Multi-user permission threading: the resolved claudeMode/owner/allowedTools for the
+  // internal research/planner one-shots. Left undefined = today's single-user behavior
+  // (the caller threads the resolved global mode, byte-identical when !isMultiUserMode()).
+  private claudeMode?: ClaudeMode;
+  private owner?: string;
+  private allowedTools?: string;
 
   constructor(
     mux: TerminalMultiplexer,
     workingDir: string = process.cwd(),
     outputDir?: string,
-    modelConfig?: { defaultModel?: string; agentTypeOverrides?: Record<string, string> }
+    modelConfig?: { defaultModel?: string; agentTypeOverrides?: Record<string, string> },
+    security?: { claudeMode?: ClaudeMode; owner?: string; allowedTools?: string }
   ) {
     this.mux = mux;
     this.workingDir = workingDir;
     this.outputDir = outputDir;
     this.researchModel = modelConfig?.agentTypeOverrides?.explore || modelConfig?.defaultModel || DEFAULT_MODEL;
     this.plannerModel = modelConfig?.agentTypeOverrides?.review || modelConfig?.defaultModel || DEFAULT_MODEL;
+    this.claudeMode = security?.claudeMode;
+    this.owner = security?.owner;
+    this.allowedTools = security?.allowedTools;
   }
 
   private saveAgentOutput(agentType: string, prompt: string, result: unknown, durationMs: number): void {
@@ -424,6 +434,12 @@ export class PlanOrchestrator {
       mux: this.mux,
       useMux: false,
       mode: 'claude',
+      // Section 6.3: run this one-shot under the caller-resolved permission mode/owner so a
+      // non-granted multi-user user cannot regain --dangerously-skip-permissions. Undefined
+      // (single-user, not threaded) is byte-identical to today (Session keeps its default).
+      claudeMode: this.claudeMode,
+      allowedTools: this.allowedTools,
+      owner: this.owner,
     });
 
     this.runningSessions.add(session);
@@ -580,6 +596,10 @@ export class PlanOrchestrator {
       mux: this.mux,
       useMux: false,
       mode: 'claude',
+      // Section 6.3: same permission-mode/owner threading as the research one-shot above.
+      claudeMode: this.claudeMode,
+      allowedTools: this.allowedTools,
+      owner: this.owner,
     });
 
     this.runningSessions.add(session);

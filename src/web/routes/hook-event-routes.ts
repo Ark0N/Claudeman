@@ -8,6 +8,8 @@ import { FastifyInstance } from 'fastify';
 import { ApiErrorCode, createErrorResponse } from '../../types.js';
 import { HookEventSchema, isValidWorkingDir } from '../schemas.js';
 import { sanitizeHookData, parseBody } from '../route-helpers.js';
+import { persistDockerCaseClaudeSessionId } from '../../docker-hosts.js';
+import { getDataDir } from '../../config/instance.js';
 import type { SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort } from '../ports/index.js';
 
 export function registerHookEventRoutes(
@@ -48,7 +50,18 @@ export function registerHookEventRoutes(
     // the user ran `/clear` (which spins up a new conversation jsonl).
     if (data && typeof data.session_id === 'string' && data.session_id) {
       const session = ctx.sessions.get(sessionId);
+      const prevClaudeSessionId = session?.claudeSessionId;
       session?.adoptClaudeSessionId(data.session_id);
+      // Docker sessions: keep the case's resume seed following the LIVE
+      // conversation (post-/clear id switches), so a container stop/reboot
+      // relaunch resumes the right transcript.
+      if (session?.docker && session.claudeSessionId && session.claudeSessionId !== prevClaudeSessionId) {
+        void persistDockerCaseClaudeSessionId(
+          getDataDir(),
+          session.docker.containerName,
+          session.claudeSessionId
+        ).catch(() => {});
+      }
     }
 
     // Sanitize forwarded data: only include known safe fields, limit size

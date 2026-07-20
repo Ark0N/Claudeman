@@ -82,6 +82,33 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  // Remote auto-reconnect (COD-108)
+  _onRemoteSessionReconnected(data) {
+    const id = this.getShortId(data.sessionId);
+    this.showToast(`Remote session ${id} reconnected`, 'success');
+  },
+
+  _onRemoteReconnectExhausted(data) {
+    const sessionId = data.sessionId;
+    const id = this.getShortId(sessionId);
+    // Auto-reconnect gave up after the bounded backoff. Surface a manual
+    // "Reconnect" affordance that re-triggers the attach path (force-reload the
+    // session, which re-runs the create/attach flow against the durable remote).
+    this.showToast(`Remote session ${id} dropped — auto-reconnect gave up`, 'error', {
+      duration: 15000,
+      action: {
+        label: 'Reconnect',
+        onClick: () => {
+          if (this.sessions && this.sessions.has(sessionId)) {
+            this.selectSession(sessionId, { forceReload: true });
+          } else {
+            this.showToast('Session no longer available', 'warning');
+          }
+        },
+      },
+    });
+  },
+
 
   // Bash tools
   _onBashToolStart(data) {
@@ -3098,6 +3125,32 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  // Header "File Viewer" button (opt-in via App Settings → Header Displays →
+  // File Viewer). Toggles the file browser panel open/closed without a trip
+  // through settings. Persists via the same `showFileBrowser` flag the Panels
+  // section + the panel's own close (X) use, so the three stay in sync.
+  toggleFileBrowserButton() {
+    const panel = this.$('fileBrowserPanel');
+    const isOpen = panel?.classList.contains('visible');
+    const btn = document.querySelector('.btn-file-viewer');
+    if (isOpen) {
+      this.closeFileBrowserPanel();
+      if (btn) btn.setAttribute('aria-expanded', 'false');
+      return;
+    }
+    if (!this.activeSessionId) {
+      this.showToast('Open a session to browse its files', 'info');
+      return;
+    }
+    const settings = this.loadAppSettingsFromStorage();
+    settings.showFileBrowser = true;
+    this.saveAppSettingsToStorage(settings);
+    const checkbox = document.getElementById('appSettingsShowFileBrowser');
+    if (checkbox) checkbox.checked = true;
+    this.applyMonitorVisibility();
+    if (btn) btn.setAttribute('aria-expanded', 'true');
+  },
+
   closeFileBrowserPanel() {
     const panel = this.$('fileBrowserPanel');
     if (panel) {
@@ -3130,6 +3183,10 @@ Object.assign(CodemanApp.prototype, {
     const settings = this.loadAppSettingsFromStorage();
     settings.showFileBrowser = false;
     this.saveAppSettingsToStorage(settings);
+    const checkbox = document.getElementById('appSettingsShowFileBrowser');
+    if (checkbox) checkbox.checked = false;
+    const headerBtn = document.querySelector('.btn-file-viewer');
+    if (headerBtn) headerBtn.setAttribute('aria-expanded', 'false');
   },
 
   async openFilePreview(filePath, sessionId = this.activeSessionId, attachmentId = null) {

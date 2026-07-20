@@ -69,3 +69,4 @@ export * from './orchestrator.js';
 export * from './update.js';
 export * from './workflow-run.js';
 export * from './search.js';
+export * from './user.js';

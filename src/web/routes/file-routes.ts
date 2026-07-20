@@ -22,7 +22,8 @@ import { generateFirstPageThumbnail } from '../../document-thumbnailer.js';
 import { getOfficePreviewPdfPath, getPreviewPdfDownloadName } from '../../document-preview-cache.js';
 import { sanitizeAttachmentHistoryItem } from '../../session-attachment-history.js';
 import { isBlockedAttachmentPath, loadAttachmentGuardConfig } from '../../config/attachment-guard.js';
-import { findSessionOrFail, validateSessionFilePath } from '../route-helpers.js';
+import { canAccessOwned, findSessionOrFail, getAuthUser, validateSessionFilePath } from '../route-helpers.js';
+import type { FastifyRequest } from 'fastify';
 import type { SessionAttachmentHistoryItem, SessionState } from '../../types/session.js';
 import { isSensitivePath } from '../sensitive-path.js';
 import { SseEvent } from '../sse-events.js';
@@ -227,13 +228,17 @@ async function serveThumbnail(reply: FastifyReply, resolvedPath: string, extensi
 function getKnownSessionWorkingDir(
   ctx: SessionPort & ConfigPort,
   sessionId: string,
-  reply: FastifyReply
+  reply: FastifyReply,
+  req: FastifyRequest
 ): string | undefined {
+  // Multi-user: a non-admin may only reach their OWN session's files. A foreign
+  // (or missing) session is reported identically as 404 so existence isn't leaked.
+  const user = getAuthUser(req);
   const liveSession = ctx.sessions.get(sessionId);
-  if (liveSession) return liveSession.workingDir;
+  if (liveSession && canAccessOwned(user, liveSession.owner)) return liveSession.workingDir;
 
   const stored = ctx.store.getSession(sessionId);
-  if (stored) return stored.workingDir;
+  if (stored && canAccessOwned(user, (stored as { owner?: string }).owner)) return stored.workingDir;
 
   reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${sessionId} not found`));
   return undefined;
@@ -261,10 +266,13 @@ function appendDownloadFlag(url: string): string {
 
 function getSessionAttachmentHistory(
   ctx: SessionPort & ConfigPort,
-  sessionId: string
+  sessionId: string,
+  req: FastifyRequest
 ): { workingDir: string; history: SessionAttachmentHistoryItem[] } | undefined {
+  const user = getAuthUser(req);
   const liveSession = ctx.sessions.get(sessionId);
   if (liveSession) {
+    if (!canAccessOwned(user, liveSession.owner)) return undefined;
     return {
       workingDir: liveSession.workingDir,
       history: liveSession.getAttachmentHistoryForPersist() ?? liveSession.attachmentHistory ?? [],
@@ -272,7 +280,7 @@ function getSessionAttachmentHistory(
   }
 
   const stored = ctx.store.getSession(sessionId) as StoredSessionWithPrivateAttachmentHistory | undefined;
-  if (!stored) return undefined;
+  if (!stored || !canAccessOwned(user, (stored as { owner?: string }).owner)) return undefined;
 
   return {
     workingDir: stored.workingDir,
@@ -371,7 +379,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   app.get('/api/sessions/:id/files', async (req) => {
     const { id } = req.params as { id: string };
     const { depth, showHidden } = req.query as { depth?: string; showHidden?: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     const maxDepth = Math.min(parseInt(depth || '5', 10), 10);
     const includeHidden = showHidden === 'true';
@@ -495,7 +503,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   app.get('/api/sessions/:id/file-content', async (req) => {
     const { id } = req.params as { id: string };
     const { path: filePath, lines, raw } = req.query as { path?: string; lines?: string; raw?: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     if (!filePath) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter');
@@ -648,7 +656,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   app.get('/api/sessions/:id/file-raw', async (req, reply) => {
     const { id } = req.params as { id: string };
     const { path: filePath, download } = req.query as { path?: string; download?: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     if (!filePath) {
       reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
@@ -737,7 +745,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // attachment-history list are layered on separately.
   app.post('/api/sessions/:id/attachments', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
     const body = (req.body || {}) as { path?: string };
 
     if (!body.path || typeof body.path !== 'string') {
@@ -766,7 +774,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // each entry to current metadata + routes. External entries are re-registered.
   app.get('/api/sessions/:id/attachments', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const sessionHistory = getSessionAttachmentHistory(ctx, id);
+    const sessionHistory = getSessionAttachmentHistory(ctx, id, req);
     if (!sessionHistory) {
       reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${id} not found`));
       return;
@@ -794,7 +802,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // size/mtime as the underlying file is rewritten).
   app.get('/api/sessions/:id/attachments/:attachmentId', async (req, reply) => {
     const { id, attachmentId } = req.params as { id: string; attachmentId: string };
-    const workingDir = getKnownSessionWorkingDir(ctx, id, reply);
+    const workingDir = getKnownSessionWorkingDir(ctx, id, reply, req);
     if (!workingDir) return;
     const record = getAttachmentOr404(reply, id, attachmentId);
     if (!record) return;
@@ -831,7 +839,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   app.get('/api/sessions/:id/attachments/:attachmentId/raw', async (req, reply) => {
     const { id, attachmentId } = req.params as { id: string; attachmentId: string };
     const { download } = req.query as { download?: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
     const record = getAttachmentOr404(reply, id, attachmentId);
     if (!record) return;
     const servePath = await resolveServableAttachmentPath(reply, record, session.workingDir);
@@ -850,7 +858,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // convert server-side; PDF/PNG/text redirect to the raw route.
   app.get('/api/sessions/:id/attachments/:attachmentId/preview', async (req, reply) => {
     const { id, attachmentId } = req.params as { id: string; attachmentId: string };
-    const workingDir = getKnownSessionWorkingDir(ctx, id, reply);
+    const workingDir = getKnownSessionWorkingDir(ctx, id, reply, req);
     if (!workingDir) return;
     const record = getAttachmentOr404(reply, id, attachmentId);
     if (!record) return;
@@ -870,7 +878,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // Serve a first-page thumbnail of a registered attachment by id.
   app.get('/api/sessions/:id/attachments/:attachmentId/thumbnail', async (req, reply) => {
     const { id, attachmentId } = req.params as { id: string; attachmentId: string };
-    const workingDir = getKnownSessionWorkingDir(ctx, id, reply);
+    const workingDir = getKnownSessionWorkingDir(ctx, id, reply, req);
     if (!workingDir) return;
     const record = getAttachmentOr404(reply, id, attachmentId);
     if (!record) return;
@@ -884,7 +892,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   app.get('/api/sessions/:id/file-preview', async (req, reply) => {
     const { id } = req.params as { id: string };
     const { path: filePath } = req.query as { path?: string };
-    const workingDir = getKnownSessionWorkingDir(ctx, id, reply);
+    const workingDir = getKnownSessionWorkingDir(ctx, id, reply, req);
     if (!workingDir) return;
 
     if (!filePath) {
@@ -912,7 +920,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   app.get('/api/sessions/:id/file-thumbnail', async (req, reply) => {
     const { id } = req.params as { id: string };
     const { path: filePath } = req.query as { path?: string };
-    const workingDir = getKnownSessionWorkingDir(ctx, id, reply);
+    const workingDir = getKnownSessionWorkingDir(ctx, id, reply, req);
     if (!workingDir) return;
 
     if (!filePath) {
@@ -941,7 +949,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   app.get('/api/sessions/:id/tail-file', async (req, reply) => {
     const { id } = req.params as { id: string };
     const { path: filePath, lines } = req.query as { path?: string; lines?: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     if (!filePath) {
       reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
@@ -1003,7 +1011,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // malformed error envelope instead of wrapping it).
   app.delete('/api/sessions/:id/tail-file/:streamId', async (req) => {
     const { id, streamId } = req.params as { id: string; streamId: string };
-    findSessionOrFail(ctx, id); // Validates session exists
+    findSessionOrFail(ctx, id, req); // Validates session exists
     const closed = fileStreamManager.closeStream(streamId);
     return { closed };
   });
@@ -1024,7 +1032,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       return;
     }
 
-    const session = findSessionOrFail(ctx, sessionId);
+    const session = findSessionOrFail(ctx, sessionId, req);
     const validated = validateSessionFilePath(session.workingDir, filePath);
     if (!validated) {
       reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));

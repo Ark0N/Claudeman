@@ -15,6 +15,9 @@ import { randomBytes } from 'node:crypto';
 import { dataPath } from '../../config/instance.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type NiceConfig } from '../../types.js';
 import { isUnauthenticatedNetworkAcknowledged } from '../network-auth-policy.js';
+import { isMultiUserMode } from '../../config/multiuser.js';
+import { findUser } from '../../user-store.js';
+import { getAuthUser, requireAdmin, canAccessOwned } from '../route-helpers.js';
 import {
   ConfigUpdateSchema,
   SettingsUpdateSchema,
@@ -136,7 +139,7 @@ export function registerSystemRoutes(
 
   // ========== Status ==========
 
-  app.get('/api/status', async () => ctx.getLightState());
+  app.get('/api/status', async (req) => ctx.getLightState(req.authUser));
 
   // ========== Tunnel ==========
 
@@ -159,12 +162,19 @@ export function registerSystemRoutes(
     };
   });
 
-  app.get('/api/tunnel/qr', async (_req, reply) => {
+  app.get('/api/tunnel/qr', async (req, reply) => {
     const url = ctx.tunnelManager.getUrl();
     if (!url) {
       return reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'Tunnel not running'));
     }
     try {
+      if (isMultiUserMode()) {
+        // A rotating global token cannot carry identity — mint a single-use token
+        // bound to the requesting user so the scanned code logs THEM in.
+        const shortCode = ctx.tunnelManager.mintUserToken(getAuthUser(req).username);
+        const svg = await ctx.tunnelManager.getQrSvgForCode(url, shortCode);
+        return { svg, authEnabled: true };
+      }
       const authPassword = process.env.CODEMAN_PASSWORD;
       if (authPassword) {
         // Auth enabled — use cached SVG with embedded short code
@@ -188,10 +198,11 @@ export function registerSystemRoutes(
 
   app.get('/q/:code', async (req, reply) => {
     const shortCode = (req.params as { code: string }).code;
+    const multiUser = isMultiUserMode();
     const authPassword = process.env.CODEMAN_PASSWORD;
 
-    // No point if auth isn't enabled — just redirect
-    if (!authPassword) {
+    // No point if auth isn't enabled — just redirect. Multi-user is always "enabled".
+    if (!multiUser && !authPassword) {
       return reply.redirect('/');
     }
 
@@ -203,10 +214,26 @@ export function registerSystemRoutes(
       return reply.code(429).send('Too Many Requests');
     }
 
-    // Validate and atomically consume the token
-    if (!shortCode || !ctx.tunnelManager.consumeToken(shortCode)) {
+    // Validate and atomically consume the token (with any bound identity).
+    const consumed = shortCode ? ctx.tunnelManager.consumeTokenWithIdentity(shortCode) : { ok: false };
+    // In multi-user mode a token MUST carry an identity (an identity-less rotating
+    // token can't create a scoped session), so reject those too.
+    if (!consumed.ok || (multiUser && !consumed.username)) {
       ctx.qrAuthFailures?.set(clientIp, qrFailures + 1);
       return reply.code(401).send('Invalid or expired QR code');
+    }
+
+    // Resolve the role for the bound user (disabled/deleted users fail closed).
+    // Carry the bound user's real mustChangePassword flag out of this block so the
+    // minted cookie enforces the lockbox instead of hardcoding false.
+    let identity: { username: string; role: 'admin' | 'user'; mustChangePassword: boolean } | undefined;
+    if (multiUser && consumed.username) {
+      const user = await findUser(consumed.username);
+      if (!user || user.disabled) {
+        ctx.qrAuthFailures?.set(clientIp, qrFailures + 1);
+        return reply.code(401).send('Invalid or expired QR code');
+      }
+      identity = { username: user.username, role: user.role, mustChangePassword: !!user.mustChangePassword };
     }
 
     // Issue session cookie (same pattern as Basic Auth success path)
@@ -217,6 +244,9 @@ export function registerSystemRoutes(
       ua: clientUA,
       createdAt: Date.now(),
       method: 'qr',
+      username: identity?.username,
+      role: identity?.role,
+      mustChangePassword: !!identity?.mustChangePassword,
     });
     ctx.qrAuthFailures?.delete(clientIp);
 
@@ -465,23 +495,52 @@ export function registerSystemRoutes(
       limit: 1000,
     });
 
-    const sessions: AwayDigestSession[] = Array.from(ctx.sessions.values()).map((session) => ({
-      id: session.id,
-      name: session.name,
-      status: session.status,
-      inputTokens: session.inputTokens,
-      outputTokens: session.outputTokens,
-      totalCost: session.totalCost,
-    }));
+    // Multi-user: scope the digest's aggregated activity to sessions the caller
+    // owns (canAccessOwned is a no-op allow-all for admins/single-user).
+    const user = getAuthUser(req);
+    const sessions: AwayDigestSession[] = Array.from(ctx.sessions.values())
+      .filter((session) => canAccessOwned(user, session.owner))
+      .map((session) => ({
+        id: session.id,
+        name: session.name,
+        status: session.status,
+        inputTokens: session.inputTokens,
+        outputTokens: session.outputTokens,
+        totalCost: session.totalCost,
+      }));
 
-    const runSummaries = Array.from(ctx.runSummaryTrackers.values()).map((tracker) => tracker.getSummary());
+    // Run-summary trackers are keyed by Codeman session id → filter by that session's owner.
+    const runSummaries = Array.from(ctx.runSummaryTrackers.entries())
+      .filter(([id]) => canAccessOwned(user, ctx.sessions.get(id)?.owner))
+      .map(([, tracker]) => tracker.getSummary());
+
+    // Map each subagent's Claude conversation id back to its owning session so the
+    // recent-subagent lookback is owner-scoped too (fails closed when unattributable).
+    const ownerByClaudeSessionId = new Map<string, string | undefined>();
+    for (const s of ctx.sessions.values()) {
+      if (s.claudeSessionId) ownerByClaudeSessionId.set(s.claudeSessionId, s.owner);
+    }
+    const subagents = subagentWatcher
+      .getRecentSubagents(60)
+      .filter((sa) => canAccessOwned(user, ownerByClaudeSessionId.get(sa.sessionId))) as AwayDigestSubagent[];
+
+    // Multi-user: the lifecycle log and daily token stats carry no owner, so scope them
+    // for a non-admin: keep only lifecycle entries attributable to an owned LIVE session
+    // (fail closed — an ended session's owner can't be resolved, so it is dropped rather
+    // than leaked), and withhold the machine-wide daily token totals entirely (they can't
+    // be per-user attributed, same as globalStats in #29). Admins/single-user keep all
+    // (canAccessOwned allow-all, role check false → byte-identical).
+    const scopedLifecycle = lifecycleEntries.filter((e) =>
+      canAccessOwned(user, ctx.sessions.get(e.sessionId ?? '')?.owner)
+    );
+    const nonAdminScoped = isMultiUserMode() && user.role !== 'admin';
     const digest = buildAwayDigest({
       range,
-      lifecycleEntries,
+      lifecycleEntries: scopedLifecycle,
       runSummaries,
       sessions,
-      dailyTokenStats: ctx.store.getDailyStats(30),
-      subagents: subagentWatcher.getRecentSubagents(60) as AwayDigestSubagent[],
+      dailyTokenStats: nonAdminScoped ? [] : ctx.store.getDailyStats(30),
+      subagents,
       now: range.until,
     });
 
@@ -585,7 +644,10 @@ export function registerSystemRoutes(
     // letting an operator opt in from the browser without setting the env var.
     // Guard runs BEFORE persisting so a refused tunnelEnabled:true is not saved.
     if (settings.tunnelEnabled === true && !ctx.tunnelManager.isRunning()) {
-      const acknowledged = isUnauthenticatedNetworkAcknowledged() || settings.acknowledgeUnauthTunnel === true;
+      // Multi-user mode makes the tunnel authenticated (every person has their own
+      // credential), so it satisfies the same requirement as CODEMAN_PASSWORD.
+      const acknowledged =
+        isMultiUserMode() || isUnauthenticatedNetworkAcknowledged() || settings.acknowledgeUnauthTunnel === true;
       if (!acknowledged) {
         const msg =
           'Refusing to start the Cloudflare tunnel without authentication: it would publish ' +
@@ -727,7 +789,7 @@ export function registerSystemRoutes(
 
   app.get('/api/sessions/:id/cpu-limit', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
     return {
       nice: session.niceConfig,
     };
@@ -735,7 +797,7 @@ export function registerSystemRoutes(
 
   app.post('/api/sessions/:id/cpu-limit', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     const body = parseBody(CpuLimitSchema, req.body, 'Invalid request body') as Partial<NiceConfig>;
 
@@ -796,7 +858,10 @@ export function registerSystemRoutes(
   // ========== Workflow Run Monitoring (ultracode) ==========
 
   // LEFT-pane list: lightweight run summaries (no agents[]).
-  app.get('/api/workflows', async (req) => {
+  app.get('/api/workflows', async (req, reply) => {
+    // Multi-user stopgap: these aggregates are process-wide (no owner concept), so
+    // restrict cross-user reads to admins (no-op allow-all in single-user mode).
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const { minutes } = req.query as { minutes?: string };
     const runs = minutes
       ? workflowRunWatcher.getRecentRunSummaries(parseInt(minutes, 10))
@@ -805,7 +870,9 @@ export function registerSystemRoutes(
   });
 
   // RIGHT-pane detail: full run incl. agents[] (tokens/toolCalls/state per agent).
-  app.get('/api/workflows/:runId', async (req) => {
+  app.get('/api/workflows/:runId', async (req, reply) => {
+    // Multi-user stopgap: cross-user run detail is admin-only (no-op in single-user).
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const { runId } = req.params as { runId: string };
     const run = workflowRunWatcher.getRun(runId);
     if (!run) {
@@ -816,7 +883,10 @@ export function registerSystemRoutes(
 
   // ========== Subagent Monitoring ==========
 
-  app.get('/api/subagents', async (req) => {
+  app.get('/api/subagents', async (req, reply) => {
+    // Multi-user stopgap: the global subagent list spans all users → admin-only
+    // (no-op allow-all in single-user mode). Per-session variant below stays scoped.
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const { minutes } = req.query as { minutes?: string };
     const subagents = minutes
       ? subagentWatcher.getRecentSubagents(parseInt(minutes, 10))
@@ -826,12 +896,14 @@ export function registerSystemRoutes(
 
   app.get('/api/sessions/:id/subagents', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
     const subagents = subagentWatcher.getSubagentsForSession(session.workingDir);
     return { success: true, data: subagents };
   });
 
-  app.get('/api/subagents/:agentId', async (req) => {
+  app.get('/api/subagents/:agentId', async (req, reply) => {
+    // Multi-user stopgap: cross-user subagent metadata is admin-only (no-op single-user).
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const { agentId } = req.params as { agentId: string };
     const info = subagentWatcher.getSubagent(agentId);
     if (!info) {
@@ -840,7 +912,10 @@ export function registerSystemRoutes(
     return { success: true, data: info };
   });
 
-  app.get('/api/subagents/:agentId/transcript', async (req) => {
+  app.get('/api/subagents/:agentId/transcript', async (req, reply) => {
+    // Multi-user stopgap: transcript CONTENT of any user's subagent is admin-only
+    // (no-op allow-all in single-user mode).
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const { agentId } = req.params as { agentId: string };
     const { limit, format } = req.query as { limit?: string; format?: 'raw' | 'formatted' };
     const limitNum = limit ? parseInt(limit, 10) : undefined;
@@ -854,7 +929,10 @@ export function registerSystemRoutes(
     return { success: true, data: transcript };
   });
 
-  app.delete('/api/subagents/:agentId', async (req) => {
+  app.delete('/api/subagents/:agentId', async (req, reply) => {
+    // Multi-user stopgap: killing any user's subagent is a cross-user write → admin-only
+    // (no-op allow-all in single-user mode).
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const { agentId } = req.params as { agentId: string };
     const info = subagentWatcher.getSubagent(agentId);
     if (!info) {
@@ -868,12 +946,16 @@ export function registerSystemRoutes(
     return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Subagent not found or already completed');
   });
 
-  app.post('/api/subagents/cleanup', async () => {
+  app.post('/api/subagents/cleanup', async (req, reply) => {
+    // Multi-user stopgap: process-wide cleanup affects every user → admin-only (no-op single-user).
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const removed = subagentWatcher.cleanupNow();
     return { success: true, data: { removed, remaining: subagentWatcher.getSubagents().length } };
   });
 
-  app.delete('/api/subagents', async () => {
+  app.delete('/api/subagents', async (req, reply) => {
+    // Multi-user stopgap: clearing ALL users' subagents is a cross-user write → admin-only (no-op single-user).
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const cleared = subagentWatcher.clearAll();
     return { success: true, data: { cleared } };
   });

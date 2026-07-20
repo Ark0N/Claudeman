@@ -307,6 +307,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsShowSystemStats').checked = settings.showSystemStats ?? defaults.showSystemStats ?? true;
     document.getElementById('appSettingsShowLifecycleLog').checked = settings.showLifecycleLog ?? defaults.showLifecycleLog ?? true;
     document.getElementById('appSettingsShowResponseViewer').checked = settings.showResponseViewer ?? defaults.showResponseViewer ?? false;
+    document.getElementById('appSettingsShowFileViewerButton').checked = settings.showFileViewerButton ?? defaults.showFileViewerButton ?? false;
     document.getElementById('appSettingsShowAttachmentsButton').checked = settings.showAttachmentsButton ?? defaults.showAttachmentsButton ?? false;
     document.getElementById('appSettingsSkin').value = settings.skin ?? defaults.skin ?? 'daylight-blue';
     // WebGL renderer (desktop only — mobile always uses the DOM renderer, so hide
@@ -324,6 +325,10 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsShowMultiMonitorButton').checked = settings.showMultiMonitorButton ?? defaults.showMultiMonitorButton ?? false;
     document.getElementById('appSettingsShowPlanUsageLimits').checked = settings.showPlanUsageLimits ?? defaults.showPlanUsageLimits ?? false;
     document.getElementById('appSettingsShowRedrawButton').checked = settings.showRedrawButton ?? defaults.showRedrawButton ?? false;
+    // Session Manager + Away Digest buttons default OFF; Cron button defaults ON.
+    document.getElementById('appSettingsShowSessionButton').checked = settings.showSessionButton ?? defaults.showSessionButton ?? false;
+    document.getElementById('appSettingsShowAwayDigestButton').checked = settings.showAwayDigestButton ?? defaults.showAwayDigestButton ?? false;
+    document.getElementById('appSettingsShowCronButton').checked = settings.showCronButton ?? defaults.showCronButton ?? true;
     // Gesture control lives in the Input section (alongside Local Echo / CJK Input)
     // but is only available when the instance runs with CODEMAN_GESTURE=1 (server sets
     // window.__codemanGestureAvailable). Hide just this item otherwise so the toggle
@@ -359,6 +364,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsAgentTeams').checked = settings.agentTeamsEnabled ?? false;
     document.getElementById('appSettingsClaudeModel').value = settings.claudeModel ?? '';
     document.getElementById('appSettingsOpusContext1m').checked = settings.opusContext1mEnabled ?? false;
+    document.getElementById('appSettingsRemoteAutoReconnect').checked = settings.remoteAutoReconnect ?? true;
     document.getElementById('appSettingsThinkingEffort').value = settings.thinkingEffort ?? '';
     // CPU Priority settings
     const niceSettings = settings.nice || {};
@@ -1422,6 +1428,7 @@ Object.assign(CodemanApp.prototype, {
       showSystemStats: document.getElementById('appSettingsShowSystemStats').checked,
       showLifecycleLog: document.getElementById('appSettingsShowLifecycleLog').checked,
       showResponseViewer: document.getElementById('appSettingsShowResponseViewer').checked,
+      showFileViewerButton: document.getElementById('appSettingsShowFileViewerButton').checked,
       showAttachmentsButton: document.getElementById('appSettingsShowAttachmentsButton').checked,
       showMonitor: document.getElementById('appSettingsShowMonitor').checked,
       showProjectInsights: document.getElementById('appSettingsShowProjectInsights').checked,
@@ -1432,6 +1439,9 @@ Object.assign(CodemanApp.prototype, {
       showMultiMonitorButton: document.getElementById('appSettingsShowMultiMonitorButton').checked,
       showPlanUsageLimits: document.getElementById('appSettingsShowPlanUsageLimits').checked,
       showRedrawButton: document.getElementById('appSettingsShowRedrawButton').checked,
+      showSessionButton: document.getElementById('appSettingsShowSessionButton').checked,
+      showAwayDigestButton: document.getElementById('appSettingsShowAwayDigestButton').checked,
+      showCronButton: document.getElementById('appSettingsShowCronButton').checked,
       gestureControlEnabled: document.getElementById('appSettingsGestureControl').checked,
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
@@ -1453,6 +1463,7 @@ Object.assign(CodemanApp.prototype, {
       agentTeamsEnabled: document.getElementById('appSettingsAgentTeams').checked,
       claudeModel: document.getElementById('appSettingsClaudeModel').value,
       opusContext1mEnabled: document.getElementById('appSettingsOpusContext1m').checked,
+      remoteAutoReconnect: document.getElementById('appSettingsRemoteAutoReconnect').checked,
       thinkingEffort: document.getElementById('appSettingsThinkingEffort').value,
       // CPU Priority settings
       nice: {
@@ -1611,8 +1622,14 @@ Object.assign(CodemanApp.prototype, {
       skin: _skin,
       showPlanUsageLimits: _pul,
       showAttachmentsButton: _ahb,
+      showFileViewerButton: _fvb,
       webglRendererEnabled: _wgl,
       terminalWheelLocalScrollback: _twls,
+      // Per-device header/toolbar button toggles — client-only, and absent from
+      // SettingsUpdateSchema (.strict()), so sending them would 400 the PUT.
+      showSessionButton: _ssb,
+      showAwayDigestButton: _adb,
+      showCronButton: _crb,
       ...serverSettings
     } = settings;
     try {
@@ -1769,7 +1786,13 @@ Object.assign(CodemanApp.prototype, {
         showMultiMonitorButton: false,
         showPlanUsageLimits: false,
         showAttachmentsButton: false,
+        showFileViewerButton: false,
         showRedrawButton: false,
+        showSessionButton: false,
+        showAwayDigestButton: false,
+        showCronButton: true,
+        // Remote auto-reconnect (COD-108) — on by default
+        remoteAutoReconnect: true,
         // Input
         gestureControlEnabled: false,
         // Feature toggles - keep tracking on even on mobile
@@ -1882,6 +1905,14 @@ Object.assign(CodemanApp.prototype, {
       attachmentsBtn.classList.toggle('btn-attachments-history--hidden', !showAttachmentsButton);
     }
 
+    // File Viewer header button — opt-in, default OFF. Marker class (base is
+    // display:inline-flex !important); clicking it toggles the file browser panel.
+    const showFileViewerButton = settings.showFileViewerButton ?? defaults.showFileViewerButton ?? false;
+    const fileViewerBtn = document.querySelector('.btn-file-viewer');
+    if (fileViewerBtn) {
+      fileViewerBtn.classList.toggle('btn-file-viewer--hidden', !showFileViewerButton);
+    }
+
     // Multi-monitor button — hidden by default (App Settings → Display → "Header
     // Displays"). The server renders the correct initial state on every reload;
     // this handles a live toggle from a settings save (no reload). Toggle the
@@ -1915,6 +1946,29 @@ Object.assign(CodemanApp.prototype, {
     const redrawBtn = document.querySelector('.btn-redraw-terminal');
     if (redrawBtn) {
       redrawBtn.classList.toggle('btn-redraw-terminal--hidden', !showRedrawButton);
+    }
+
+    // Session Manager button — opt-in, hidden by default (App Settings → Display).
+    // Marker class (base is display:inline-flex !important); phones keep it hidden
+    // via mobile.css regardless. Sessions stay reachable via the Ctrl+K palette.
+    const showSessionButton = settings.showSessionButton ?? defaults.showSessionButton ?? false;
+    const sessionBtn = document.querySelector('.btn-session-manager');
+    if (sessionBtn) {
+      sessionBtn.classList.toggle('btn-session-manager--hidden', !showSessionButton);
+    }
+
+    // Away Digest button — opt-in, hidden by default. Same marker pattern.
+    const showAwayDigestButton = settings.showAwayDigestButton ?? defaults.showAwayDigestButton ?? false;
+    const awayDigestBtn = document.querySelector('.btn-away-digest');
+    if (awayDigestBtn) {
+      awayDigestBtn.classList.toggle('btn-away-digest--hidden', !showAwayDigestButton);
+    }
+
+    // Cron button (footer toolbar) — shown by default; hide when disabled.
+    const showCronButton = settings.showCronButton ?? defaults.showCronButton ?? true;
+    const cronBtn = document.querySelector('.btn-cron');
+    if (cronBtn) {
+      cronBtn.classList.toggle('btn-cron--hidden', !showCronButton);
     }
 
     // Notification bell is retired (notifications live in Settings → Notifications
@@ -2153,8 +2207,9 @@ Object.assign(CodemanApp.prototype, {
           'showLifecycleLog', 'showResponseViewer', 'showRedrawButton',
           'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
           'subagentActiveTabOnly', 'tabTwoRows', 'localEchoEnabled', 'cjkInputEnabled', 'extendedKeyboardBar',
-          'skin', 'showPlanUsageLimits', 'showAttachmentsButton', 'webglRendererEnabled',
+          'skin', 'showPlanUsageLimits', 'showAttachmentsButton', 'showFileViewerButton', 'webglRendererEnabled',
           'terminalWheelLocalScrollback',
+          'showSessionButton', 'showAwayDigestButton', 'showCronButton',
         ]);
         // The plan-usage chip is a PER-DEVICE display setting (default OFF): desktop
         // can show it while mobile stays hidden. It used to sync, so an older

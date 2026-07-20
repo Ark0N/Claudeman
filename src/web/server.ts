@@ -40,7 +40,7 @@ import { existsSync, mkdirSync, readFileSync, chmodSync, rmSync, statSync } from
 import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { hostname as getHostname } from 'node:os';
-import { dataPath } from '../config/instance.js';
+import { dataPath, getDataDir, CODEMAN_INSTANCE } from '../config/instance.js';
 import { getHookSecret } from '../config/hook-secret.js';
 import { EventEmitter } from 'node:events';
 import { Session, isExternalCliMode, type BackgroundTask } from '../session.js';
@@ -135,6 +135,8 @@ import { SseEvent } from './sse-events.js';
 import { getLatestPlanUsage } from './plan-usage-latest.js';
 import type { ScheduledRun } from './ports/index.js';
 import { registerAuthMiddleware, registerSecurityHeaders, registerHostGuard } from './middleware/auth.js';
+import { isMultiUserMode } from '../config/multiuser.js';
+import { bootstrapInitialAdmin, hasUsers, resolveClaudeModeForUsername } from '../user-store.js';
 import { installRouteErrorHandler } from './route-error-handler.js';
 import { isExplicitlyEnabled, isLoopbackBindHost, buildHostPolicy, type HostPolicy } from './network-auth-policy.js';
 import {
@@ -155,6 +157,8 @@ import {
   registerSearchRoutes,
   registerOrchestratorRoutes,
   registerCronRoutes,
+  registerMeRoutes,
+  registerAdminRoutes,
   registerWsRoutes,
 } from './routes/index.js';
 import { CronService } from '../cron/cron-service.js';
@@ -279,6 +283,7 @@ export class WebServer extends EventEmitter {
   private authFailures: StaleExpirationMap<string, number> | null = null;
   private qrAuthFailures: StaleExpirationMap<string, number> | null = null;
   private hookSecretFailures: StaleExpirationMap<string, number> | null = null;
+  private userFailures: StaleExpirationMap<string, number> | null = null;
   private pushStore: PushSubscriptionStore = new PushSubscriptionStore();
   private teamWatcher: TeamWatcher = new TeamWatcher();
   private _orchestratorLoop: import('../orchestrator-loop.js').OrchestratorLoop | null = null;
@@ -288,6 +293,8 @@ export class WebServer extends EventEmitter {
   private readonly allowUnauthenticatedNetwork: boolean;
   private _pasteImageGcStop: (() => void) | null = null;
   private _eventLoopMonitor: EventLoopMonitorHandle | null = null;
+  /** Opt-in hooks-only listener on the docker bridge gateway (CODEMAN_DOCKER_BRIDGE_HOOKS). */
+  private _dockerBridgeServer: import('node:http').Server | import('node:https').Server | null = null;
   private teamWatcherHandlers: {
     teamCreated: (config: unknown) => void;
     teamUpdated: (config: unknown) => void;
@@ -328,6 +335,7 @@ export class WebServer extends EventEmitter {
           const session = this.sessions.get(sessionId);
           return session ? this.getSessionStateWithRespawn(session) : null;
         },
+        resolveSessionOwner: (sessionId) => this.sessions.get(sessionId)?.owner,
       },
       this.cleanup
     );
@@ -349,6 +357,22 @@ export class WebServer extends EventEmitter {
     });
     this.mux.on('statsUpdated', (sessions) => {
       this.broadcast(SseEvent.MuxStatsUpdated, sessions);
+    });
+
+    // COD-108 — remote-session auto-reconnect. The TmuxManager watcher detects a
+    // dead remote pane and emits `remoteSessionDropped`; the session owner (here)
+    // reassembles the respawn options and reattaches via Session.reattachRemote()
+    // (D1: the watcher does NOT reassemble options itself). On success we reset
+    // the watcher's backoff; on failure the backoff schedules the next attempt.
+    this.mux.on('remoteSessionDropped', (data) => {
+      const { sessionId, attempt } = data as { sessionId: string; attempt: number };
+      this.broadcast(SseEvent.RemoteSessionDropped, { sessionId, attempt });
+      void this.handleRemoteSessionDropped(sessionId);
+    });
+    this.mux.on('remoteReconnectExhausted', (data) => {
+      const { sessionId } = data as { sessionId: string };
+      console.warn(`[Server] Remote auto-reconnect exhausted for session ${sessionId}`);
+      this.broadcast(SseEvent.RemoteReconnectExhausted, { sessionId });
     });
 
     // Set up subagent watcher listeners
@@ -678,6 +702,7 @@ export class WebServer extends EventEmitter {
       this.authFailures = authState.authFailures;
       this.qrAuthFailures = authState.qrAuthFailures;
       this.hookSecretFailures = authState.hookSecretFailures;
+      this.userFailures = authState.userFailures;
     }
 
     // WebSocket support (terminal I/O — low-latency bidirectional channel)
@@ -788,12 +813,12 @@ export class WebServer extends EventEmitter {
       // Track tunnel clients — cloudflared proxies locally so req.ip is always
       // 127.0.0.1; detect tunnel traffic via Cf-Connecting-Ip header instead.
       const isRemote = !!req.headers['cf-connecting-ip'];
-      this.sse.addClient(reply, sessionFilter, isRemote, clientId);
+      this.sse.addClient(reply, sessionFilter, isRemote, clientId, req.authUser);
 
       // Send initial state
       // Use light state for SSE init to avoid sending 2MB+ terminal buffers
       // Buffers are fetched on-demand when switching tabs
-      this.sse.sendSSE(reply, SseEvent.Init, this.getLightState());
+      this.sse.sendSSE(reply, SseEvent.Init, this.getLightState(req.authUser));
       // Flush Cloudflare tunnel buffer with padding — ensures the init event
       // (and any immediately following events) are delivered without proxy delay.
       this.sse.sendPadding(reply);
@@ -897,6 +922,8 @@ export class WebServer extends EventEmitter {
     registerPlanRoutes(this.app, ctx);
     registerClipboardRoutes(this.app, ctx);
     registerSearchRoutes(this.app, ctx);
+    registerMeRoutes(this.app, ctx);
+    registerAdminRoutes(this.app, ctx);
     registerOrchestratorRoutes(this.app, ctx);
 
     // Cron: build the service from the same context, recompute
@@ -1512,7 +1539,12 @@ export class WebServer extends EventEmitter {
     const claudeMode = settings.claudeMode as string | undefined;
     const allowedTools = settings.allowedTools as string | undefined;
     // Only return valid modes
-    if (claudeMode === 'dangerously-skip-permissions' || claudeMode === 'normal' || claudeMode === 'allowedTools') {
+    if (
+      claudeMode === 'dangerously-skip-permissions' ||
+      claudeMode === 'auto' ||
+      claudeMode === 'normal' ||
+      claudeMode === 'allowedTools'
+    ) {
       return { claudeMode, allowedTools };
     }
     return {};
@@ -1538,7 +1570,12 @@ export class WebServer extends EventEmitter {
     );
   }
 
-  private async startScheduledRun(prompt: string, workingDir: string, durationMinutes: number): Promise<ScheduledRun> {
+  private async startScheduledRun(
+    prompt: string,
+    workingDir: string,
+    durationMinutes: number,
+    owner?: string
+  ): Promise<ScheduledRun> {
     const id = uuidv4();
     const now = Date.now();
 
@@ -1554,6 +1591,9 @@ export class WebServer extends EventEmitter {
       completedTasks: 0,
       totalCost: 0,
       logs: [`[${new Date().toISOString()}] Scheduled run started`],
+      // Multi-user: stamp the requesting user so the spawned Session is owned +
+      // permission-downgraded, and list/delete stay owner-scoped.
+      owner,
     };
 
     this.scheduledRuns.set(id, run);
@@ -1592,8 +1632,23 @@ export class WebServer extends EventEmitter {
 
       let session: Session | null = null;
       try {
-        // Create a session for this iteration
-        session = new Session({ workingDir: run.workingDir });
+        // Create a session for this iteration.
+        if (isMultiUserMode()) {
+          // §6.3: resolve the permission mode with the RUN OWNER (a non-granted user
+          // must not regain --dangerously-skip-permissions here) and stamp the owner so
+          // list/delete stay scoped. owner + mode + allowedTools mirror quick-start.
+          const scheduledClaudeCfg = await this.getClaudeModeConfig();
+          session = new Session({
+            workingDir: run.workingDir,
+            owner: run.owner,
+            claudeMode: await resolveClaudeModeForUsername(scheduledClaudeCfg.claudeMode, run.owner),
+            allowedTools: scheduledClaudeCfg.allowedTools,
+          });
+        } else {
+          // Single-user: build EXACTLY as master (bare workingDir → Session's default
+          // mode) so the flag-off path stays byte-identical.
+          session = new Session({ workingDir: run.workingDir });
+        }
         this.sessions.set(session.id, session);
         this.store.incrementSessionsCreated();
         this.persistSessionState(session);
@@ -1738,7 +1793,54 @@ export class WebServer extends EventEmitter {
    * Get lightweight state for SSE init - excludes full terminal buffers
    * to prevent browser freezes. Terminal buffers are fetched on-demand.
    */
-  private getLightState() {
+  private getLightState(identity?: import('../types/user.js').AuthUser) {
+    const base = this.computeLightState();
+    // Multi-user: filter the shared cached blob per connection identity (the plan's
+    // "filter AFTER the cache" approach). No-op for admins / single-user.
+    if (isMultiUserMode() && identity && identity.role !== 'admin') {
+      return this.filterLightStateForUser(base, identity.username);
+    }
+    return base;
+  }
+
+  /** Shallow-filter the light-state blob to what a non-admin user may see. */
+  private filterLightStateForUser(base: Record<string, unknown>, username: string): Record<string, unknown> {
+    const ownedIds = new Set<string>();
+    const ownedClaudeIds = new Set<string>();
+    for (const [id, s] of this.sessions) {
+      if (s.owner === username) {
+        ownedIds.add(id);
+        if (s.claudeSessionId) ownedClaudeIds.add(s.claudeSessionId);
+      }
+    }
+    const sessions = Array.isArray(base.sessions)
+      ? (base.sessions as Array<{ owner?: string }>).filter((s) => s.owner === username)
+      : base.sessions;
+    const respawnStatus: Record<string, unknown> = {};
+    for (const [id, v] of Object.entries((base.respawnStatus as Record<string, unknown>) ?? {})) {
+      if (ownedIds.has(id)) respawnStatus[id] = v;
+    }
+    const bySession = (arr: unknown, key: 'sessionId' | 'sessionUuid') =>
+      Array.isArray(arr)
+        ? (arr as Array<Record<string, unknown>>).filter((x) => ownedClaudeIds.has(String(x[key])))
+        : arr;
+    const filtered: Record<string, unknown> = {
+      ...base,
+      sessions,
+      respawnStatus,
+      scheduledRuns: [], // legacy ScheduledRun has no owner yet → admin-only
+      subagents: bySession(base.subagents, 'sessionId'),
+      workflowRuns: bySession(base.workflowRuns, 'sessionUuid'),
+      planUsage: null, // host-plan telemetry is admin-only
+    };
+    // #29: globalStats is a machine-wide aggregate (all users' tokens/cost + active
+    // count) with no per-user attribution — never expose it to a non-admin. The
+    // header falls back to per-active-session totals when it is absent.
+    delete filtered.globalStats;
+    return filtered;
+  }
+
+  private computeLightState() {
     const now = Date.now();
     if (this.cachedLightState && now - this.cachedLightState.timestamp < WebServer.LIGHT_STATE_CACHE_TTL_MS) {
       return this.cachedLightState.data;
@@ -1784,7 +1886,65 @@ export class WebServer extends EventEmitter {
       this.cachedLightState = null;
       this.cachedSessionsList = null;
     }
-    this.sse.broadcast(event, data);
+    // Multi-user: derive an ownership routing hint so an event only reaches the
+    // clients entitled to it (no-op in single-user — hint stays undefined).
+    this.sse.broadcast(event, data, isMultiUserMode() ? this.deriveSseHint(event, data) : undefined);
+  }
+
+  /**
+   * Map an SSE event + payload to a routing hint (multi-user). Session-scoped
+   * families resolve the owner from a sessionId in the payload (fail closed if it
+   * can't be resolved); machine-level families are admin-only; host-plan telemetry
+   * is admin-only; everything else stays global. Default is fail-closed for the
+   * session-scoped prefixes so a missed field starves rather than leaks.
+   */
+  private deriveSseHint(event: string, data: unknown): import('./sse-stream-manager.js').SseRoutingHint | undefined {
+    // Machine-level / host-wide: admins only.
+    if (
+      event.startsWith('docker:') ||
+      event.startsWith('tunnel:') ||
+      event.startsWith('update:') ||
+      event.startsWith('system:') ||
+      event.startsWith('cron:') ||
+      event === SseEvent.SessionStatusTelemetry
+    ) {
+      return { adminOnly: true };
+    }
+    // Session-scoped families: resolve the owner from the payload's session id.
+    const SESSION_PREFIXES = [
+      'session:',
+      'ralph:',
+      'respawn:',
+      'subagent:',
+      'workflow:',
+      'attachment:',
+      'task:',
+      'mux:',
+      'transcript:',
+      'plan:',
+      'orchestrator:',
+      'hook:',
+      'image:',
+      'scheduled:',
+      'team:',
+      'case:',
+    ];
+    if (SESSION_PREFIXES.some((p) => event.startsWith(p))) {
+      const d = (data ?? {}) as { sessionId?: string; id?: string; session?: { id?: string } };
+      const sessionId = d.sessionId ?? d.id ?? d.session?.id;
+      const owner = sessionId ? this.sessions.get(sessionId)?.owner : undefined;
+      return { owner, sessionScoped: true };
+    }
+    // #20/#38: clipboard:write writes into the receiver's OS clipboard — route it to
+    // the POSTING user's own tabs only (never other users). The route stamps the
+    // trusted caller identity as `callerUsername`. sessionScoped:true fails closed
+    // (withhold from non-admins) if the caller identity is somehow unresolved, rather
+    // than falling through to global delivery.
+    if (event.startsWith('clipboard:')) {
+      return { username: (data as { callerUsername?: string }).callerUsername, sessionScoped: true };
+    }
+    // Unrecognized / genuinely global events (connection status, needsRefresh): all.
+    return undefined;
   }
 
   private batchTerminalData(sessionId: string, data: string): void {
@@ -1841,6 +2001,13 @@ export class WebServer extends EventEmitter {
     const sessionName = (data.sessionName as string) || '';
     const sessionId = (data.sessionId as string) || '';
 
+    // Multi-user: a session-scoped push (all PUSH_EVENT_MAP events carry a sessionId)
+    // must reach only the owner's devices (+ admins) — the body embeds the session
+    // name + activity, so cross-user delivery would leak it. Resolved once here; the
+    // per-subscription gate below is a no-op in single-user (send to all).
+    const multiUserPush = isMultiUserMode();
+    const pushSessionOwner = sessionId ? this.sessions.get(sessionId)?.owner : undefined;
+
     // Build body text from event data
     let body = sessionName ? `[${sessionName}]` : '';
     if (event === SseEvent.SessionError && data.error) {
@@ -1876,6 +2043,16 @@ export class WebServer extends EventEmitter {
     for (const sub of subscriptions) {
       // Check per-subscription preferences
       if (sub.pushPreferences[event] === false) continue;
+
+      // Multi-user recipient scoping: admins receive all; a session-scoped event
+      // reaches only subscriptions owned by the session owner (fail closed if the
+      // owner is unresolved — legacy subs with no stamped username are excluded);
+      // a genuinely session-less event reaches everyone.
+      if (multiUserPush && sub.role !== 'admin') {
+        if (sessionId) {
+          if (sub.username === undefined || sub.username !== pushSessionOwner) continue;
+        }
+      }
 
       // Re-validate the stored endpoint before fetching it server-side (SSRF, M7).
       // Defense-in-depth: subscribe-time validation already rejects unsafe URLs.
@@ -1924,6 +2101,24 @@ export class WebServer extends EventEmitter {
   }
 
   async start(): Promise<void> {
+    // Multi-user first boot: create the initial admin from CODEMAN_USERNAME/PASSWORD
+    // if there are no users yet, else refuse to start (there would be no way in).
+    if (isMultiUserMode() && !this.testMode) {
+      const boot = await bootstrapInitialAdmin();
+      if (boot.status === 'missing-env') {
+        throw new Error(
+          'Multi-user mode is enabled but users.json has no users. Create the first admin with ' +
+            '`codeman users add <name> --admin` (or set CODEMAN_USERNAME/CODEMAN_PASSWORD for one-time bootstrap).'
+        );
+      }
+      if (boot.status === 'created') {
+        console.log(
+          `✓ Multi-user: bootstrapped initial admin "${boot.username}" from CODEMAN_USERNAME/CODEMAN_PASSWORD`
+        );
+      }
+      console.log('✓ Multi-user mode active (per-user accounts in users.json; CODEMAN_PASSWORD is ignored for login)');
+    }
+
     await this.setupRoutes();
 
     const lifecycleLog = getLifecycleLog();
@@ -1942,6 +2137,20 @@ export class WebServer extends EventEmitter {
     // CRITICAL: Skip in test mode to prevent tests from picking up user sessions
     if (!this.testMode) {
       await this.restoreMuxSessions();
+
+      // Instance-scoped reaper: after restore, `docker rm -f` managed containers of
+      // THIS instance whose case is gone from docker-cases.json (best-effort, never
+      // touches another instance's containers). Runs after restore so containers
+      // still referenced by a restored session are preserved.
+      void import('../docker-hosts.js')
+        .then(({ reapOrphanedDockerContainers }) => reapOrphanedDockerContainers(getDataDir(), CODEMAN_INSTANCE))
+        .then((reaped) => {
+          if (reaped.length > 0)
+            console.log(`[Docker] reaped ${reaped.length} orphaned container(s): ${reaped.join(', ')}`);
+        })
+        .catch(() => {
+          /* best-effort — daemon may be absent */
+        });
     }
 
     // Clean up stale sessions from state file that don't have active mux sessions
@@ -1962,6 +2171,15 @@ export class WebServer extends EventEmitter {
     const displayHost = this.host === '0.0.0.0' ? 'localhost' : this.host;
     console.log(`Codeman web interface running at ${protocol}://${displayHost}:${this.port}`);
 
+    // Opt-in: also serve the HOOK endpoints on the docker bridge gateway so
+    // in-container hooks (permission/idle/stop callbacks) can reach a loopback-bound
+    // server. Hooks-only + secret-gated, and the bridge is host-internal (not the LAN).
+    if (!this.testMode) {
+      await this._startDockerBridgeHooksListener().catch((err) =>
+        console.error(`[Docker] bridge-hooks listener error: ${err?.message || err}`)
+      );
+    }
+
     // Anti-DNS-rebinding Host allowlist is always on. Localhost, any bare IP, the
     // bind host, *.ts.net / *.trycloudflare.com / *.cfargotunnel.com, and the active
     // managed tunnel are accepted automatically; add any other domain you front this
@@ -1977,7 +2195,10 @@ export class WebServer extends EventEmitter {
     // "just worked" before. Instead we start and warn loudly, pointing at the ways
     // to secure it. --allow-unauthenticated-network just acknowledges the risk (a
     // terser note). See docs/security-architecture.md.
-    if (!isLoopbackBindHost(this.host) && !process.env.CODEMAN_PASSWORD) {
+    // Multi-user mode with >= 1 enabled user satisfies the auth requirement even
+    // without CODEMAN_PASSWORD (every person has their own credential).
+    const authActive = !!process.env.CODEMAN_PASSWORD || (isMultiUserMode() && (await hasUsers()));
+    if (!isLoopbackBindHost(this.host) && !authActive) {
       if (this.allowUnauthenticatedNetwork) {
         console.warn(
           `\n⚠  Codeman is reachable WITHOUT a password on ${displayHost}:${this.port} ` +
@@ -2182,7 +2403,16 @@ export class WebServer extends EventEmitter {
             const sessionName = savedState?.name || muxSession.name || muxSession.muxName;
 
             // Create a session object for this mux session
-            const recoveryClaudeMode = await this.getClaudeModeConfig();
+            // Owner round-trips like remote/docker: mux-sessions.json carries
+            // MuxSession.owner, state.json carries SessionState.owner. Recovery must
+            // re-resolve the permission mode with the RECOVERED owner or a reboot
+            // would silently un-downgrade a non-granted user's restored session.
+            const recoveredOwner = muxSession.owner ?? savedState?.owner;
+            const recoveryClaudeModeConfig = await this.getClaudeModeConfig();
+            const recoveryClaudeMode = {
+              claudeMode: await resolveClaudeModeForUsername(recoveryClaudeModeConfig.claudeMode, recoveredOwner),
+              allowedTools: recoveryClaudeModeConfig.allowedTools,
+            };
             // Recover envOverrides from the internal __envOverrides field written by
             // session-manager (see updateSessionState). Cast to read the non-public field.
             // Note: a legacy CLAUDE_CODE_EFFORT_LEVEL entry is auto-migrated to `effort`
@@ -2215,6 +2445,11 @@ export class WebServer extends EventEmitter {
               // erasing `remote` from state.json on the next persist. mux-sessions.json
               // round-trips MuxSession.remote; state.json carries SessionState.remote.
               remote: muxSession.remote ?? savedState?.remote,
+              // Docker metadata round-trips the same way (mux-sessions.json carries
+              // MuxSession.docker; state.json carries SessionState.docker), so recovery
+              // rebuilds the `docker exec` launch instead of a broken local command.
+              docker: muxSession.docker ?? savedState?.docker,
+              owner: recoveredOwner,
             });
 
             // Update session name if it was a "Restored:" placeholder or doesn't match saved name
@@ -2385,6 +2620,13 @@ export class WebServer extends EventEmitter {
         (this.mux as { startMouseModeSync: (ms?: number) => void }).startMouseModeSync();
       }
 
+      // COD-108 — start the remote-session auto-reconnect watcher (tmux only).
+      // Always-on (D3) with a `remoteAutoReconnect` kill-switch the watcher reads
+      // each tick. Start even with no sessions — remote sessions may arrive later.
+      if ('startRemoteReconnectWatcher' in this.mux) {
+        (this.mux as { startRemoteReconnectWatcher: (ms?: number) => void }).startRemoteReconnectWatcher();
+      }
+
       if (dead.length > 0) {
         console.log(`[Server] Cleaned up ${dead.length} dead mux session(s)`);
       }
@@ -2393,11 +2635,98 @@ export class WebServer extends EventEmitter {
     }
   }
 
+  /**
+   * COD-108 — handle a `remoteSessionDropped` emit from the watcher: reattach
+   * the dropped remote session and report the outcome back to the watcher so it
+   * can reset/advance its backoff. Re-running the idempotent remote command
+   * REATTACHES the durable remote tmux session (does NOT recreate it).
+   */
+  private async handleRemoteSessionDropped(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    // No live Session object (e.g. detached/restored-but-not-attached) — nothing
+    // to drive the reattach; report failure so the watcher backs off and retries.
+    if (!session) {
+      this.noteRemoteReconnect(sessionId, false);
+      return;
+    }
+    let ok = false;
+    try {
+      ok = await session.reattachRemote();
+    } catch (err) {
+      console.error(`[Server] Remote reattach failed for ${sessionId}:`, err);
+      ok = false;
+    }
+    this.noteRemoteReconnect(sessionId, ok);
+    if (ok) {
+      this.persistSessionState(session);
+      this.broadcast(SseEvent.RemoteSessionReconnected, { sessionId });
+    }
+  }
+
+  /** Forward a reattach outcome to the TmuxManager watcher (resets/clears backoff). */
+  private noteRemoteReconnect(sessionId: string, success: boolean): void {
+    if ('noteRemoteReconnect' in this.mux) {
+      (this.mux as { noteRemoteReconnect: (id: string, ok: boolean) => void }).noteRemoteReconnect(sessionId, success);
+    }
+  }
+
   private initOrchestratorLoop(): import('../orchestrator-loop.js').OrchestratorLoop {
     if (this._orchestratorLoop) return this._orchestratorLoop;
 
     this._orchestratorLoop = new OrchestratorLoop(this.mux, process.cwd());
     return this._orchestratorLoop;
+  }
+
+  /**
+   * Opt-in (CODEMAN_DOCKER_BRIDGE_HOOKS=1): start a SECOND listener on the docker
+   * bridge gateway IP that serves ONLY the hook endpoints and delegates them into
+   * the main Fastify pipeline. This lets in-container hooks reach a loopback-bound
+   * server (they call back via host.docker.internal = the bridge gateway) without
+   * exposing the full API or the LAN. Bind IP is auto-detected (default bridge
+   * gateway) or set via CODEMAN_DOCKER_BRIDGE_HOST.
+   */
+  private async _startDockerBridgeHooksListener(): Promise<void> {
+    if (!isExplicitlyEnabled(process.env.CODEMAN_DOCKER_BRIDGE_HOOKS)) return;
+    const { detectDockerBridgeGateway } = await import('../docker-hosts.js');
+    const bridgeHost = (process.env.CODEMAN_DOCKER_BRIDGE_HOST || '').trim() || (await detectDockerBridgeGateway());
+    if (!bridgeHost) {
+      console.log('[Docker] CODEMAN_DOCKER_BRIDGE_HOOKS set but no docker bridge gateway found — skipping');
+      return;
+    }
+    // Only the hook endpoints are served on the bridge — never the full API.
+    const HOOK_PATHS = new Set([
+      '/api/hook-event',
+      '/api/status-telemetry',
+      '/api/v1/hook-event',
+      '/api/v1/status-telemetry',
+    ]);
+    const handler = (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse): void => {
+      const path = (req.url || '').split('?')[0];
+      if (!HOOK_PATHS.has(path)) {
+        res.statusCode = 403;
+        res.end('forbidden: the docker bridge listener serves hook endpoints only');
+        return;
+      }
+      // Delegate into Fastify (host-guard, Origin/CSRF, and hook-secret gate all apply).
+      (this.app as unknown as { routing: (r: unknown, s: unknown) => void }).routing(req, res);
+    };
+    let server: import('node:http').Server | import('node:https').Server;
+    if (this.https) {
+      const https = await import('node:https');
+      const { key, cert } = getOrCreateSelfSignedCert();
+      server = https.createServer({ key, cert }, handler);
+    } else {
+      const http = await import('node:http');
+      server = http.createServer(handler);
+    }
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(this.port, bridgeHost, () => resolve());
+    });
+    this._dockerBridgeServer = server;
+    console.log(
+      `[Docker] in-container hooks reachable at ${this.https ? 'https' : 'http'}://${bridgeHost}:${this.port} (hook endpoints only)`
+    );
   }
 
   async stop(): Promise<void> {
@@ -2413,6 +2742,11 @@ export class WebServer extends EventEmitter {
     if (this._eventLoopMonitor) {
       this._eventLoopMonitor.stop();
       this._eventLoopMonitor = null;
+    }
+
+    if (this._dockerBridgeServer) {
+      this._dockerBridgeServer.close();
+      this._dockerBridgeServer = null;
     }
 
     // Dispose all managed timers (intervals + resettable timeouts)
@@ -2546,6 +2880,10 @@ export class WebServer extends EventEmitter {
     if (this.hookSecretFailures) {
       this.hookSecretFailures.dispose();
       this.hookSecretFailures = null;
+    }
+    if (this.userFailures) {
+      this.userFailures.dispose();
+      this.userFailures = null;
     }
     this.activePlanOrchestrators.clear();
     this.cleaningUp.clear();

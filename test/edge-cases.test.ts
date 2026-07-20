@@ -221,7 +221,10 @@ describe('Edge Cases and Error Handling', () => {
       });
       const data = await response.json();
 
-      expect(data.error).toBe('Respawn controller not found');
+      // respawn/stop now owner-gates via findSessionOrFail first (multi-user #18), so a
+      // non-existent session id 404s as "Session ... not found" (same not-found semantics,
+      // matching the sibling start/config/enable handlers).
+      expect(data.error).toContain('not found');
     });
 
     it('should handle updating config on non-existent session', async () => {
