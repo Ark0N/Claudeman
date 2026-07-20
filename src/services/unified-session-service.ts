@@ -28,9 +28,15 @@ export type UnifiedSessionItem = {
   lastActivityAt?: number;
   claudeSessionId?: string;
   firstPrompt?: string;
+  /** Most recent user prompt from the transcript (COD-145), parallel to firstPrompt. */
+  lastPrompt?: string;
   sizeBytes?: number;
   projectKey?: string;
   remote?: boolean;
+  /** Pinned to the top of the session manager list (COD-139). */
+  pinned?: boolean;
+  /** When the session was pinned (epoch ms) — orders the pinned group desc. */
+  pinnedAt?: number;
   sources: string[];
   stats?: { memoryMB: number; cpuPercent: number };
 };
@@ -46,6 +52,8 @@ export type LiveSessionInput = {
   createdAt?: number;
   lastActivityAt?: number;
   claudeSessionId?: string;
+  pinned?: boolean;
+  pinnedAt?: number;
 };
 
 /** Persisted session view (subset of `SessionState`). */
@@ -59,6 +67,8 @@ export type PersistedSessionInput = {
   lastActivityAt?: number;
   /** Claude conversation ID this session resumes (`SessionState.resumeSessionId`). */
   claudeSessionId?: string;
+  pinned?: boolean;
+  pinnedAt?: number;
 };
 
 /** Lifecycle audit-log view. Entries are expected NEWEST-first (the order `SessionLifecycleLog.query()` returns). */
@@ -77,6 +87,8 @@ export type HistoryInput = {
   sizeBytes: number;
   lastModified: string;
   firstPrompt?: string;
+  /** Most recent user prompt from the transcript (COD-145). */
+  lastPrompt?: string;
   projectKey?: string;
 };
 
@@ -149,6 +161,7 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
     overwrite(item, 'workingDir', h.workingDir);
     overwrite(item, 'sizeBytes', h.sizeBytes);
     overwrite(item, 'firstPrompt', h.firstPrompt);
+    overwrite(item, 'lastPrompt', h.lastPrompt);
     overwrite(item, 'projectKey', h.projectKey);
     const ms = Date.parse(h.lastModified);
     if (!Number.isNaN(ms) && item.lastActivityAt === undefined) item.lastActivityAt = ms;
@@ -175,6 +188,8 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
     overwrite(item, 'workingDir', p.workingDir);
     overwrite(item, 'createdAt', p.createdAt);
     overwrite(item, 'lastActivityAt', p.lastActivityAt);
+    overwrite(item, 'pinned', p.pinned);
+    overwrite(item, 'pinnedAt', p.pinnedAt);
   }
 
   // 4) live (highest precedence)
@@ -189,6 +204,8 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
     overwrite(item, 'createdAt', v.createdAt);
     overwrite(item, 'lastActivityAt', v.lastActivityAt);
     overwrite(item, 'claudeSessionId', v.claudeSessionId);
+    overwrite(item, 'pinned', v.pinned);
+    overwrite(item, 'pinnedAt', v.pinnedAt);
   }
 
   // 5) mux stats + remote flag (create item if mux-only)
@@ -198,6 +215,64 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
     overwrite(item, 'mode', m.mode);
     if (m.stats) item.stats = m.stats;
     if (m.remote !== undefined) item.remote = m.remote;
+  }
+
+  // firstPrompt backfill (COD-140): the only source that sets firstPrompt is the
+  // transcript-history view, keyed by the Claude transcript file's UUID. A live/persisted
+  // row keyed by its Codeman id only inherits firstPrompt when that id happens to equal an
+  // on-disk transcript UUID. When it doesn't (stale/wrong claudeSessionId, post-/clear new
+  // uuid, resumed/attached/worktree session, transcript not yet flushed), the row shows
+  // "(no prompt captured)" even though a real transcript for that working dir exists under a
+  // different UUID. Backfill from the already-passed history: first try the claudeSessionId
+  // join, then the newest transcript in the same workingDir. Never overwrite a non-empty
+  // firstPrompt (so rows keyed to their own transcript are untouched).
+  const firstPromptByUuid = new Map<string, string>();
+  const firstPromptByWorkingDir = new Map<string, { prompt: string; ms: number }>();
+  // COD-145: lastPrompt rides the same backfill (build parallel indexes; never overwrite).
+  const lastPromptByUuid = new Map<string, string>();
+  const lastPromptByWorkingDir = new Map<string, { prompt: string; ms: number }>();
+  for (const h of sources.history ?? []) {
+    const ms = Date.parse(h.lastModified);
+    const ts = Number.isNaN(ms) ? -Infinity : ms;
+    if (h.firstPrompt) {
+      firstPromptByUuid.set(h.sessionId, h.firstPrompt);
+      if (h.workingDir) {
+        const existing = firstPromptByWorkingDir.get(h.workingDir);
+        if (!existing || ts > existing.ms) {
+          firstPromptByWorkingDir.set(h.workingDir, { prompt: h.firstPrompt, ms: ts });
+        }
+      }
+    }
+    if (h.lastPrompt) {
+      lastPromptByUuid.set(h.sessionId, h.lastPrompt);
+      if (h.workingDir) {
+        const existing = lastPromptByWorkingDir.get(h.workingDir);
+        if (!existing || ts > existing.ms) {
+          lastPromptByWorkingDir.set(h.workingDir, { prompt: h.lastPrompt, ms: ts });
+        }
+      }
+    }
+  }
+  for (const item of map.values()) {
+    if (!item.firstPrompt) {
+      // never overwrite an existing non-empty prompt
+      const byUuid = item.claudeSessionId ? firstPromptByUuid.get(item.claudeSessionId) : undefined;
+      if (byUuid) {
+        item.firstPrompt = byUuid;
+      } else if (item.workingDir) {
+        const byDir = firstPromptByWorkingDir.get(item.workingDir);
+        if (byDir) item.firstPrompt = byDir.prompt;
+      }
+    }
+    if (!item.lastPrompt) {
+      const byUuid = item.claudeSessionId ? lastPromptByUuid.get(item.claudeSessionId) : undefined;
+      if (byUuid) {
+        item.lastPrompt = byUuid;
+      } else if (item.workingDir) {
+        const byDir = lastPromptByWorkingDir.get(item.workingDir);
+        if (byDir) item.lastPrompt = byDir.prompt;
+      }
+    }
   }
 
   // Meaningfulness floor: keep real rows, drop bare lifecycle/mux-only noise.
@@ -211,8 +286,24 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
     if (isReal) kept.push(item);
   }
 
-  // Stable sort: lastActivityAt desc (undefined last), createdAt desc, sessionId asc.
+  // Stable sort (COD-139): pinned group first (pinnedAt desc, most-recently-pinned
+  // first), then unpinned by lastActivityAt desc (undefined last), createdAt desc,
+  // sessionId asc.
   kept.sort((a, b) => {
+    const pa = a.pinned === true;
+    const pb = b.pinned === true;
+    if (pa !== pb) return pa ? -1 : 1; // pinned floats above unpinned
+    if (pa && pb) {
+      // Both pinned: most-recently-pinned first (undefined pinnedAt sorts last).
+      const ta = a.pinnedAt;
+      const tb = b.pinnedAt;
+      if (ta !== tb) {
+        if (ta === undefined) return 1;
+        if (tb === undefined) return -1;
+        return tb - ta;
+      }
+      // tie-break falls through to the activity/createdAt/id rules below.
+    }
     const la = a.lastActivityAt;
     const lb = b.lastActivityAt;
     if (la !== lb) {
@@ -234,7 +325,7 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
 }
 
 /**
- * Case-insensitive substring filter (name + firstPrompt + workingDir + sessionId)
+ * Case-insensitive substring filter (name + firstPrompt + lastPrompt + workingDir + sessionId)
  * with offset/limit paging. `total` is the filtered count BEFORE paging.
  */
 export function filterAndPaginate(
@@ -244,7 +335,7 @@ export function filterAndPaginate(
   const q = (opts.q ?? '').trim().toLowerCase();
   const filtered = q
     ? items.filter((it) => {
-        const hay = [it.name, it.firstPrompt, it.workingDir, it.sessionId]
+        const hay = [it.name, it.firstPrompt, it.lastPrompt, it.workingDir, it.sessionId]
           .filter((v): v is string => typeof v === 'string')
           .join(' ')
           .toLowerCase();

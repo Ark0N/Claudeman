@@ -278,6 +278,9 @@ export class StateStore {
     if (this.state.cronJobRuns) {
       parts.push(`"cronJobRuns":${JSON.stringify(this.state.cronJobRuns)}`);
     }
+    if (this.state.sessionOrder) {
+      parts.push(`"sessionOrder":${JSON.stringify(this.state.sessionOrder)}`);
+    }
 
     return `{${parts.join(',')}}`;
   }
@@ -486,6 +489,25 @@ export class StateStore {
   }
 
   /**
+   * COD-142: Remove a session's persisted record on kill UNLESS it is pinned.
+   * A pinned session is demoted to a lightweight `stopped` record (pin retained)
+   * so it stays visible in the session-manager pinned group and survives restart.
+   * Unpinned sessions are fully removed (unchanged behavior).
+   * @returns 'preserved' if demoted to stopped+pinned, 'removed' if deleted, 'absent' if no record existed.
+   */
+  demoteOrRemoveSession(id: string): 'preserved' | 'removed' | 'absent' {
+    const existing = this.state.sessions[id];
+    if (!existing) return 'absent';
+    if (existing.pinned === true) {
+      // Demote in place: keep identity/resume fields + pin, mark stopped, clear live runtime.
+      this.setSession(id, { ...existing, status: 'stopped', pid: null });
+      return 'preserved';
+    }
+    this.removeSession(id);
+    return 'removed';
+  }
+
+  /**
    * Cleans up stale sessions from state that don't have corresponding active sessions.
    * @param activeSessionIds - Set of currently active session IDs
    * @returns Number of sessions cleaned up
@@ -499,6 +521,7 @@ export class StateStore {
 
     for (const sessionId of allSessionIds) {
       if (!activeSessionIds.has(sessionId)) {
+        if (this.state.sessions[sessionId]?.pinned === true) continue; // COD-142: pinned records persist even with no live session
         const name = this.state.sessions[sessionId]?.name;
         cleaned.push({ id: sessionId, name });
         delete this.state.sessions[sessionId];
@@ -627,6 +650,17 @@ export class StateStore {
   /** Updates configuration (partial merge) and triggers a debounced save. */
   setConfig(config: Partial<AppState['config']>) {
     this.state.config = { ...this.state.config, ...config };
+    this.save();
+  }
+
+  /** Returns the global tab order (ordered sessionIds), [] if unset. COD-131. */
+  getSessionOrder(): string[] {
+    return this.state.sessionOrder ?? [];
+  }
+
+  /** Persists the global tab order (ordered sessionIds) and triggers a debounced save. COD-131. */
+  setSessionOrder(order: string[]): void {
+    this.state.sessionOrder = order;
     this.save();
   }
 

@@ -322,6 +322,7 @@ const SSE_EVENTS = {
   SESSION_LIMIT_RESUME_CANCELLED: 'session:limitResumeCancelled',
   SESSION_RESPAWN_BREAKER_TRIPPED: 'session:respawnBreakerTripped',
   SESSION_CLI_INFO: 'session:cliInfo',
+  SESSION_PINNED: 'session:pinned',
   SESSION_MESSAGE: 'session:message',
   SESSION_INTERACTIVE: 'session:interactive',
   SESSION_RUNNING: 'session:running',
@@ -490,6 +491,9 @@ const SSE_EVENTS = {
   ADMIN_USERS_CHANGED: 'admin:usersChanged',
   AUTH_PASSWORD_CHANGE_REQUIRED: 'auth:passwordChangeRequired',
   DOCKER_CONTAINER_RECREATED: 'docker:containerRecreated',
+
+  // Session order (global tab order sync)
+  SESSION_ORDER_CHANGED: 'session:orderChanged',
 };
 
 // ═══════════════════════════════════════════════════════════════

@@ -1212,7 +1212,7 @@ export class WebServer extends EventEmitter {
       // Only remove from state.json if we're also killing the mux session.
       // When killMux=false (server shutdown), preserve state for recovery.
       if (killMux) {
-        this.store.removeSession(sessionId);
+        this.store.demoteOrRemoveSession(sessionId);
       }
     }
 
@@ -1871,6 +1871,7 @@ export class WebServer extends EventEmitter {
       timestamp: now,
       inputCjkForm: process.env.INPUT_CJK_FORM?.toUpperCase() === 'ON',
       planUsage: getLatestPlanUsage(), // last-known plan-usage telemetry, for the header chip on fresh load
+      sessionOrder: this.store.getSessionOrder(), // global tab order, synced across devices (COD-131)
     };
 
     this.cachedLightState = { data: result, timestamp: now };

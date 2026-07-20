@@ -867,6 +867,11 @@ export const AutoResumeSchema = z.object({
   enabled: z.boolean(),
 });
 
+/** POST /api/sessions/:id/pin (COD-139) — explicit pin state for idempotency. */
+export const PinSessionSchema = z.object({
+  pinned: z.boolean(),
+});
+
 /** POST /api/sessions/:id/image-watcher */
 export const ImageWatcherSchema = z.object({
   enabled: z.boolean(),
@@ -967,6 +972,14 @@ export const LinkCaseSchema = z.object({
 /** PUT /api/cases/order */
 export const CaseOrderSchema = z.object({
   order: z.array(z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format')),
+});
+
+/** PUT /api/session-order — global tab order (ordered sessionIds), COD-131 */
+export const SessionOrderUpdateSchema = z.object({
+  // Bounded defensively: ids are uuid-ish (<=100 chars) and the client pushes only
+  // its open-tab order (max sessions is 50) — 500 leaves ample headroom while
+  // keeping a hostile/buggy client from persisting megabytes into state.json.
+  order: z.array(z.string().max(100)).max(500),
 });
 
 /** POST /api/auth/revoke */

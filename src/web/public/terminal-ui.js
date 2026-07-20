@@ -1239,8 +1239,10 @@ Object.assign(CodemanApp.prototype, {
 
     const isLive = Array.isArray(s.sources) && s.sources.includes('live');
 
+    const isPinned = s.pinned === true;
+
     const item = document.createElement('div');
-    item.className = 'history-item';
+    item.className = 'history-item' + (isPinned ? ' is-pinned' : '');
     item.title = s.workingDir || '';
 
     // Main row: clickable surface. A caller-supplied onActivate wins (the
@@ -1258,7 +1260,7 @@ Object.assign(CodemanApp.prototype, {
           if (isLive && this.sessions.has(s.sessionId)) {
             this.selectSession(s.sessionId);
           } else {
-            this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '');
+            this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '', s.name);
           }
         })
     );
@@ -1268,7 +1270,16 @@ Object.assign(CodemanApp.prototype, {
 
     const titleSpan = document.createElement('span');
     titleSpan.className = 'history-item-title';
-    titleSpan.textContent = s.name || s.firstPrompt || shortDir;
+    if (isPinned) {
+      // Filled pin glyph indicating the session is pinned to the top (COD-139).
+      const pin = document.createElement('span');
+      pin.className = 'history-item-pin';
+      pin.textContent = '📌';
+      pin.setAttribute('aria-label', 'Pinned');
+      pin.title = 'Pinned';
+      titleSpan.appendChild(pin);
+    }
+    titleSpan.appendChild(document.createTextNode(s.name || s.firstPrompt || shortDir));
 
     // Badge row: mode (claude/codex/opencode/gemini/shell) + a LIVE pill.
     const badgeRow = document.createElement('div');
@@ -1327,6 +1338,21 @@ Object.assign(CodemanApp.prototype, {
     promptText.textContent = s.firstPrompt || '(no prompt captured)';
     promptRow.append(promptLabel, promptText);
 
+    // COD-145: show the most recent user prompt too, but collapse single-prompt
+    // sessions (omit when there's no last prompt or it duplicates the first).
+    let lastPromptRow = null;
+    if (s.lastPrompt && s.lastPrompt !== s.firstPrompt) {
+      lastPromptRow = document.createElement('div');
+      lastPromptRow.className = 'history-detail-row';
+      const lastPromptLabel = document.createElement('span');
+      lastPromptLabel.className = 'history-detail-label';
+      lastPromptLabel.textContent = 'Last prompt';
+      const lastPromptText = document.createElement('span');
+      lastPromptText.className = 'history-detail-value history-detail-prompt';
+      lastPromptText.textContent = s.lastPrompt;
+      lastPromptRow.append(lastPromptLabel, lastPromptText);
+    }
+
     const pathRow = document.createElement('div');
     pathRow.className = 'history-detail-row';
     const pathLabel = document.createElement('span');
@@ -1345,7 +1371,9 @@ Object.assign(CodemanApp.prototype, {
     metaParts.push(s.sessionId.slice(0, 8));
     metaRow.textContent = metaParts.join(' · ');
 
-    detail.append(promptRow, pathRow, metaRow);
+    detail.append(promptRow);
+    if (lastPromptRow) detail.append(lastPromptRow);
+    detail.append(pathRow, metaRow);
 
     if (showViewAll && s.projectKey) {
       const actionRow = document.createElement('div');
@@ -1463,12 +1491,26 @@ Object.assign(CodemanApp.prototype, {
         } else {
           // Resume by the Claude conversation UUID when present (resumed sessions
           // carry theirs separately from their Codeman id).
-          this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '');
+          this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '', s.name);
         }
         this.closeSessionManager?.();
         closeMenu();
       }
     );
+
+    // Pin / Unpin (COD-139) — floats the session to the top of the list.
+    const isPinned = s.pinned === true;
+    addItem(isPinned ? 'Unpin session' : 'Pin to top', async () => {
+      const ok = await this._setSessionPinned(s.sessionId, !isPinned);
+      if (ok) {
+        // Optimistic local flip so a re-render before the SSE event is consistent.
+        s.pinned = !isPinned;
+        this.showToast(!isPinned ? 'Pinned to top' : 'Unpinned', 'success');
+      } else {
+        this.showToast('Pin failed', 'error');
+      }
+      closeMenu();
+    });
 
     // Open folder (only for a live+open session — file browser is session-scoped).
     if (isLiveOpen) {
@@ -1534,6 +1576,32 @@ Object.assign(CodemanApp.prototype, {
 
     this._openRowMenuEl = menu;
     this._openRowMenuClose = closeMenu;
+  },
+
+  /**
+   * COD-139: Toggle a session's pin via POST /api/sessions/:id/pin.
+   * Pinned sessions float to the top of the session manager list. Returns true
+   * on success. The live re-sort happens when the session:pinned SSE event
+   * fires (handled in app.js), so callers don't need to re-render themselves.
+   * @param {string} sessionId
+   * @param {boolean} pinned explicit desired pin state (idempotent)
+   * @returns {Promise<boolean>}
+   */
+  async _setSessionPinned(sessionId, pinned) {
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/pin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ pinned }),
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      return data?.success === true;
+    } catch (err) {
+      console.error('[_setSessionPinned]', err);
+      return false;
+    }
   },
 
   /** Number of history items shown before "Show More" */
@@ -1721,7 +1789,24 @@ Object.assign(CodemanApp.prototype, {
     this._folderHistoryState = null;
   },
 
-  async resumeHistorySession(sessionId, workingDir) {
+  // Choose the name for a resumed session: keep the session's own name when it
+  // has one, otherwise synthesize a fresh w<N>-<dir> name (next free w-number
+  // across open sessions). COD-143 — resume used to always generate a new name.
+  _resolveResumeName(existingName, workingDir) {
+    if (typeof existingName === 'string' && existingName.trim()) return existingName;
+    const dirName = (workingDir || '').split('/').pop() || 'session';
+    let startNumber = 1;
+    for (const [, session] of this.sessions) {
+      const match = session.name && session.name.match(/^w(\d+)-/);
+      if (match) {
+        const num = parseInt(match[1]);
+        if (num >= startNumber) startNumber = num + 1;
+      }
+    }
+    return `w${startNumber}-${dirName}`;
+  },
+
+  async resumeHistorySession(sessionId, workingDir, existingName) {
     // Close the run mode menu if open
     document.getElementById('runModeMenu')?.classList.remove('active');
     // Close folder history modal if open
@@ -1730,17 +1815,9 @@ Object.assign(CodemanApp.prototype, {
       this.terminal.clear();
       this.terminal.writeln(`\x1b[1;32m Resuming conversation ${sessionId.slice(0, 8)}...\x1b[0m`);
 
-      // Generate a session name from the working dir
-      const dirName = workingDir.split('/').pop() || 'session';
-      let startNumber = 1;
-      for (const [, session] of this.sessions) {
-        const match = session.name && session.name.match(/^w(\d+)-/);
-        if (match) {
-          const num = parseInt(match[1]);
-          if (num >= startNumber) startNumber = num + 1;
-        }
-      }
-      const name = `w${startNumber}-${dirName}`;
+      // Keep the session's own name when resuming; only synthesize a w<N>-<dir>
+      // name when the source row had none (COD-143).
+      const name = this._resolveResumeName(existingName, workingDir);
 
       // Create session with resumeSessionId — include envOverrides so resumed
       // conversations inherit current UI settings (effort, agent teams, etc.).

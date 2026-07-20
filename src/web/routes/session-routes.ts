@@ -32,12 +32,15 @@ import {
   AutoClearSchema,
   AutoCompactSchema,
   AutoResumeSchema,
+  PinSessionSchema,
   ImageWatcherSchema,
   FlickerFilterSchema,
   QuickRunSchema,
   QuickStartSchema,
   InteractiveStartSchema,
+  SessionOrderUpdateSchema,
 } from '../schemas.js';
+import { mergeSessionOrder } from '../../session-order.js';
 import {
   autoConfigureRalph,
   canAccessOwned,
@@ -332,6 +335,18 @@ export function registerSessionRoutes(
     const user = getAuthUser(req);
     if (user.role === 'admin') return list;
     return (list as Array<{ owner?: string }>).filter((s) => canAccessOwned(user, s.owner));
+  });
+
+  // ========== Session Tab Order (global sync, COD-131) ==========
+
+  app.put('/api/session-order', async (req): Promise<ApiResponse<{ order: string[] }>> => {
+    const { order } = parseBody(SessionOrderUpdateSchema, req.body, 'Invalid session order');
+    // Server is authoritative but never drops ids it knows about that the
+    // pushing device hadn't loaded yet — those fall to the end (mergeSessionOrder).
+    const merged = mergeSessionOrder(order, ctx.store.getSessionOrder());
+    ctx.store.setSessionOrder(merged);
+    ctx.broadcast(SseEvent.SessionOrderChanged, { order: merged });
+    return { success: true, data: { order: merged } };
   });
 
   // ========== Session Creation ==========
@@ -1652,6 +1667,50 @@ export function registerSessionRoutes(
     };
   });
 
+  // ========== Pin (float to top of the session manager list, COD-139) ==========
+
+  app.post('/api/sessions/:id/pin', async (req) => {
+    const { id } = req.params as { id: string };
+    const body = parseBody(PinSessionSchema, req.body, 'Invalid request body');
+
+    const session = ctx.sessions.get(id);
+    if (session) {
+      if (!canAccessOwned(getAuthUser(req), session.owner)) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${id} not found`);
+      }
+      session.setPinned(body.pinned);
+      // Persist + broadcast session:updated (keeps tabs/state consistent), then a
+      // dedicated session:pinned event so the session manager list re-sorts live.
+      persistAndBroadcastSession(ctx, session);
+      ctx.broadcast(SseEvent.SessionPinned, {
+        id,
+        pinned: session.pinned,
+        pinnedAt: session.pinnedAt ?? undefined,
+      });
+
+      return {
+        success: true,
+        data: {
+          pinned: session.pinned,
+          pinnedAt: session.pinnedAt ?? undefined,
+        },
+      };
+    }
+
+    // COD-142 keeps a pinned session's record after kill (demoteOrRemoveSession),
+    // so pin toggles must also work WITHOUT a live Session — otherwise a
+    // pinned-then-killed record could never be unpinned (cleanup skips pinned
+    // records, and the record has no live session to route through).
+    const persisted = ctx.store.getSession(id);
+    if (!persisted || !canAccessOwned(getAuthUser(req), persisted.owner)) {
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${id} not found`);
+    }
+    const pinnedAt = body.pinned ? Date.now() : undefined;
+    ctx.store.setSession(id, { ...persisted, pinned: body.pinned || undefined, pinnedAt });
+    ctx.broadcast(SseEvent.SessionPinned, { id, pinned: body.pinned, pinnedAt });
+    return { success: true, data: { pinned: body.pinned, pinnedAt } };
+  });
+
   // ========== Image Watcher ==========
 
   app.post('/api/sessions/:id/image-watcher', async (req) => {
@@ -2250,6 +2309,59 @@ export function registerSessionRoutes(
   }
 
   /**
+   * Extract the text of the LAST user message from a JSONL transcript chunk
+   * (COD-145). Mirrors `extractFirstUserPrompt` exactly — same user-message
+   * detection, same noise/secret/slash-command filters, same 120-char cap — but
+   * keeps the last qualifying match instead of returning on the first. Scan the
+   * file tail for this (the most recent prompt lives near the end).
+   */
+  function extractLastUserPrompt(text: string): string | undefined {
+    const MAX_PROMPT_LEN = 120;
+    let result: string | undefined;
+    let start = 0;
+    while (start < text.length) {
+      const end = text.indexOf('\n', start);
+      const line = end === -1 ? text.slice(start) : text.slice(start, end);
+      start = end === -1 ? text.length : end + 1;
+      if (!line.includes('"type":"user"')) continue;
+      try {
+        const entry = JSON.parse(line);
+        if (entry.type !== 'user' || !entry.message) continue;
+        const content = entry.message.content;
+        let msgText: string | undefined;
+        if (typeof content === 'string') {
+          msgText = content;
+        } else if (Array.isArray(content)) {
+          const textBlock = content.find((b: { type: string }) => b.type === 'text');
+          if (textBlock) msgText = textBlock.text;
+        }
+        if (!msgText) continue;
+        msgText = msgText
+          .replace(/<[^>]+>/g, '')
+          .replace(new RegExp(String.raw`\x1b\[[0-9;]*[a-zA-Z]`, 'g'), '')
+          .trim()
+          .replace(/\s+/g, ' ');
+        if (!msgText) continue;
+        if (
+          /^(Caveat:|init\b|clear\b|resume\b|\/[a-z][\w-]*\b|You are a |\[Request |Set model to )/i.test(msgText) ||
+          /^(Please )?(analyze|review) this codebase/i.test(msgText) ||
+          /^(Read|Implement the following) .+, then (search|list|check) /i.test(msgText) ||
+          /^\d+ vulnerabilit/i.test(msgText) ||
+          /\btoolu_/.test(msgText) ||
+          /^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]+/.test(msgText) ||
+          /\b(sk-ant-|ANTHROPIC_API_KEY|API_KEY=|SECRET|TOKEN=)/i.test(msgText) ||
+          msgText.length < 8
+        )
+          continue;
+        result = msgText.length > MAX_PROMPT_LEN ? msgText.slice(0, MAX_PROMPT_LEN) + '…' : msgText;
+      } catch {
+        // Malformed line — skip
+      }
+    }
+    return result;
+  }
+
+  /**
    * Decode a Claude project key (e.g. "-Users-teigen-Documents-Workspace-AI-project-Mirror")
    * back to a filesystem path ("/Users/teigen/Documents/Workspace/AI_project/Mirror").
    *
@@ -2387,6 +2499,7 @@ export function registerSessionRoutes(
     sizeBytes: number;
     lastModified: string;
     firstPrompt?: string;
+    lastPrompt?: string;
   };
 
   // Scan a single project directory and return all valid history sessions in it.
@@ -2432,6 +2545,17 @@ export function registerSessionRoutes(
         if (tail) firstPrompt = extractFirstUserPrompt(tail);
       }
 
+      // COD-145: last (most recent) user prompt lives near the END of the file, so
+      // prefer the tail. For large files where no tail was read yet, read one
+      // (mirrors the firstPrompt > 65536 block). Small files fit in `head`, which
+      // then contains the whole transcript — scan it for the last match instead.
+      if (!tail && fileStat.size > 65536) {
+        const tailBuf = Buffer.alloc(32768);
+        tail = await readFileTail(filePath, tailBuf, fileStat.size);
+      }
+      const lastPrompt =
+        (tail ? extractLastUserPrompt(tail) : undefined) ?? (head ? extractLastUserPrompt(head) : undefined);
+
       out.push({
         sessionId,
         workingDir,
@@ -2439,6 +2563,7 @@ export function registerSessionRoutes(
         sizeBytes: fileStat.size,
         lastModified: fileStat.mtime.toISOString(),
         firstPrompt,
+        lastPrompt,
       });
     }
     return out;
@@ -2514,6 +2639,8 @@ export function registerSessionRoutes(
         createdAt: st.createdAt,
         lastActivityAt: st.lastActivityAt,
         claudeSessionId: s.claudeSessionId ?? undefined,
+        pinned: st.pinned,
+        pinnedAt: st.pinnedAt,
       };
     });
 
@@ -2529,6 +2656,8 @@ export function registerSessionRoutes(
       createdAt: p.createdAt,
       lastActivityAt: p.lastActivityAt,
       claudeSessionId: p.resumeSessionId,
+      pinned: p.pinned,
+      pinnedAt: p.pinnedAt,
     }));
 
     // Lifecycle audit log (newest-first, capped).
@@ -2562,6 +2691,7 @@ export function registerSessionRoutes(
             sizeBytes: h.sizeBytes,
             lastModified: h.lastModified,
             firstPrompt: h.firstPrompt,
+            lastPrompt: h.lastPrompt,
             projectKey: h.projectKey,
           });
         }

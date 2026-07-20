@@ -84,6 +84,8 @@ export const SessionLimitResumeCancelled = 'session:limitResumeCancelled' as con
 export const SessionRespawnBreakerTripped = 'session:respawnBreakerTripped' as const;
 /** CLI version/model info detected from session output. */
 export const SessionCliInfo = 'session:cliInfo' as const;
+/** Session pin state changed (COD-139): pinned/unpinned in the session manager list. */
+export const SessionPinned = 'session:pinned' as const;
 /** General session message (e.g. status text). */
 export const SessionMessage = 'session:message' as const;
 /** Session entered interactive mode (claude or shell). */
@@ -404,6 +406,9 @@ export const AdminUsersChanged = 'admin:usersChanged' as const;
 /** A user must change their password (targeted); the frontend shows the modal. */
 export const AuthPasswordChangeRequired = 'auth:passwordChangeRequired' as const;
 
+/** Global session tab order changed (synced across devices). COD-131. */
+export const SessionOrderChanged = 'session:orderChanged' as const;
+
 // ─── Namespace Re-export ─────────────────────────────────────────────────────
 
 /**
@@ -433,6 +438,7 @@ export const SseEvent = {
   SessionLimitResumeCancelled,
   SessionRespawnBreakerTripped,
   SessionCliInfo,
+  SessionPinned,
   SessionMessage,
   SessionInteractive,
   SessionRunning,
@@ -602,4 +608,7 @@ export const SseEvent = {
   AdminUsersChanged,
   AuthPasswordChangeRequired,
   DockerContainerRecreated,
+
+  // Session order (global tab order sync)
+  SessionOrderChanged,
 } as const;

@@ -163,6 +163,211 @@ describe('mergeUnifiedSessions', () => {
     expect(merged).toHaveLength(1);
     expect(merged[0].projectKey).toBe('-repo-alpha');
   });
+
+  // COD-140: firstPrompt backfill — live sessions whose Codeman id does not match an
+  // on-disk transcript UUID still surface a first prompt (by claudeSessionId join, then
+  // by newest transcript in the same workingDir).
+  it('backfills firstPrompt onto a live session by claudeSessionId join (uuid-join)', () => {
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'codeman-1', status: 'working', claudeSessionId: 'uuid-A', workingDir: '/w' }],
+      history: [
+        {
+          sessionId: 'uuid-A',
+          workingDir: '/w',
+          sizeBytes: 5000,
+          lastModified: '2026-01-01T00:00:00.000Z',
+          firstPrompt: 'fix the bug',
+        },
+      ],
+    });
+    const live = merged.find((m) => m.sessionId === 'codeman-1');
+    expect(live).toBeDefined();
+    expect(live!.firstPrompt).toBe('fix the bug');
+    // The upstream unified-service alias map (COD-160/161) folds a history row keyed
+    // by the Claude conversation UUID into the owning live session (claudeSessionId
+    // join), so it does NOT surface as a separate item — the firstPrompt reaches the
+    // live row above rather than a duplicate uuid-A entry.
+    const hist = merged.find((m) => m.sessionId === 'uuid-A');
+    expect(hist).toBeUndefined();
+  });
+
+  it('falls back to the workingDir transcript when no uuid join exists (workingDir fallback)', () => {
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'codeman-2', status: 'working', claudeSessionId: 'uuid-missing', workingDir: '/w2' }],
+      history: [
+        {
+          sessionId: 'uuid-other',
+          workingDir: '/w2',
+          sizeBytes: 5000,
+          lastModified: '2026-01-01T00:00:00.000Z',
+          firstPrompt: 'borrowed prompt',
+        },
+      ],
+    });
+    const live = merged.find((m) => m.sessionId === 'codeman-2');
+    expect(live).toBeDefined();
+    expect(live!.firstPrompt).toBe('borrowed prompt');
+  });
+
+  it('uses the newest transcript per workingDir for the fallback (newest-wins)', () => {
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'codeman-3', status: 'working', claudeSessionId: 'uuid-missing', workingDir: '/w3' }],
+      history: [
+        {
+          sessionId: 'uuid-old',
+          workingDir: '/w3',
+          sizeBytes: 5000,
+          lastModified: '2026-01-01T00:00:00.000Z',
+          firstPrompt: 'older prompt',
+        },
+        {
+          sessionId: 'uuid-new',
+          workingDir: '/w3',
+          sizeBytes: 6000,
+          lastModified: '2026-02-01T00:00:00.000Z',
+          firstPrompt: 'newer prompt',
+        },
+      ],
+    });
+    const live = merged.find((m) => m.sessionId === 'codeman-3');
+    expect(live).toBeDefined();
+    expect(live!.firstPrompt).toBe('newer prompt');
+  });
+
+  it('never overwrites a firstPrompt that already merged from the session own transcript (no overwrite)', () => {
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'self-uuid', status: 'working', claudeSessionId: 'self-uuid', workingDir: '/w4' }],
+      history: [
+        // the session's own transcript (keyed by its id) — provides the real prompt
+        {
+          sessionId: 'self-uuid',
+          workingDir: '/w4',
+          sizeBytes: 5000,
+          lastModified: '2026-01-01T00:00:00.000Z',
+          firstPrompt: 'own prompt',
+        },
+        // a newer sibling transcript in the same dir that must NOT clobber it
+        {
+          sessionId: 'sibling-uuid',
+          workingDir: '/w4',
+          sizeBytes: 6000,
+          lastModified: '2026-03-01T00:00:00.000Z',
+          firstPrompt: 'sibling prompt',
+        },
+      ],
+    });
+    const self = merged.find((m) => m.sessionId === 'self-uuid');
+    expect(self).toBeDefined();
+    expect(self!.firstPrompt).toBe('own prompt');
+  });
+
+  it('leaves firstPrompt undefined when there is no transcript at all (no transcript)', () => {
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'codeman-5', status: 'working', claudeSessionId: 'uuid-none', workingDir: '/empty' }],
+    });
+    const live = merged.find((m) => m.sessionId === 'codeman-5');
+    expect(live).toBeDefined();
+    expect(live!.firstPrompt).toBeUndefined();
+  });
+
+  // COD-145: lastPrompt backfill — mirrors the COD-140 firstPrompt path so the
+  // most-recent user prompt also reaches live rows whose id ≠ transcript UUID.
+  it('backfills lastPrompt onto a live session by claudeSessionId join (uuid-join)', () => {
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'codeman-l1', status: 'working', claudeSessionId: 'uuid-LA', workingDir: '/wl' }],
+      history: [
+        {
+          sessionId: 'uuid-LA',
+          workingDir: '/wl',
+          sizeBytes: 5000,
+          lastModified: '2026-01-01T00:00:00.000Z',
+          firstPrompt: 'fix the bug',
+          lastPrompt: 'now ship it',
+        },
+      ],
+    });
+    const live = merged.find((m) => m.sessionId === 'codeman-l1');
+    expect(live).toBeDefined();
+    expect(live!.lastPrompt).toBe('now ship it');
+    // The upstream unified-service alias map (COD-160/161) folds the UUID-keyed
+    // history row into the owning live session, so lastPrompt reaches the live row
+    // above rather than surfacing as a separate uuid-LA entry.
+    const hist = merged.find((m) => m.sessionId === 'uuid-LA');
+    expect(hist).toBeUndefined();
+  });
+
+  it('falls back to the workingDir transcript for lastPrompt when no uuid join exists (workingDir fallback)', () => {
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'codeman-l2', status: 'working', claudeSessionId: 'uuid-missing', workingDir: '/wl2' }],
+      history: [
+        {
+          sessionId: 'uuid-other',
+          workingDir: '/wl2',
+          sizeBytes: 5000,
+          lastModified: '2026-01-01T00:00:00.000Z',
+          firstPrompt: 'borrowed first',
+          lastPrompt: 'borrowed last',
+        },
+      ],
+    });
+    const live = merged.find((m) => m.sessionId === 'codeman-l2');
+    expect(live).toBeDefined();
+    expect(live!.lastPrompt).toBe('borrowed last');
+  });
+
+  it('uses the newest transcript per workingDir for the lastPrompt fallback (newest-wins)', () => {
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'codeman-l3', status: 'working', claudeSessionId: 'uuid-missing', workingDir: '/wl3' }],
+      history: [
+        {
+          sessionId: 'uuid-old',
+          workingDir: '/wl3',
+          sizeBytes: 5000,
+          lastModified: '2026-01-01T00:00:00.000Z',
+          firstPrompt: 'older first',
+          lastPrompt: 'older last',
+        },
+        {
+          sessionId: 'uuid-new',
+          workingDir: '/wl3',
+          sizeBytes: 6000,
+          lastModified: '2026-02-01T00:00:00.000Z',
+          firstPrompt: 'newer first',
+          lastPrompt: 'newer last',
+        },
+      ],
+    });
+    const live = merged.find((m) => m.sessionId === 'codeman-l3');
+    expect(live).toBeDefined();
+    expect(live!.lastPrompt).toBe('newer last');
+  });
+
+  it('never overwrites a lastPrompt that already merged from the session own transcript (no overwrite)', () => {
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'self-luuid', status: 'working', claudeSessionId: 'self-luuid', workingDir: '/wl4' }],
+      history: [
+        {
+          sessionId: 'self-luuid',
+          workingDir: '/wl4',
+          sizeBytes: 5000,
+          lastModified: '2026-01-01T00:00:00.000Z',
+          firstPrompt: 'own first',
+          lastPrompt: 'own last',
+        },
+        {
+          sessionId: 'sibling-uuid',
+          workingDir: '/wl4',
+          sizeBytes: 6000,
+          lastModified: '2026-03-01T00:00:00.000Z',
+          firstPrompt: 'sibling first',
+          lastPrompt: 'sibling last',
+        },
+      ],
+    });
+    const self = merged.find((m) => m.sessionId === 'self-luuid');
+    expect(self).toBeDefined();
+    expect(self!.lastPrompt).toBe('own last');
+  });
 });
 
 describe('filterAndPaginate', () => {
@@ -170,6 +375,14 @@ describe('filterAndPaginate', () => {
     { sessionId: 's1', name: 'Alpha build', sources: ['live'], workingDir: '/repo/alpha' },
     { sessionId: 's2', name: 'Beta', firstPrompt: 'fix the login bug', sources: ['history'], workingDir: '/repo/beta' },
     { sessionId: 's3', name: 'Gamma', sources: ['persisted'], workingDir: '/srv/gamma' },
+    {
+      sessionId: 's4',
+      name: 'Delta',
+      firstPrompt: 'start the migration',
+      lastPrompt: 'roll back the migration',
+      sources: ['history'],
+      workingDir: '/repo/delta',
+    },
   ];
 
   it('filters by name (case-insensitive)', () => {
@@ -183,18 +396,24 @@ describe('filterAndPaginate', () => {
     expect(filterAndPaginate(items, { q: '/srv/' }).sessions[0].sessionId).toBe('s3');
   });
 
+  it('filters by lastPrompt (COD-145)', () => {
+    const r = filterAndPaginate(items, { q: 'roll back' });
+    expect(r.total).toBe(1);
+    expect(r.sessions[0].sessionId).toBe('s4');
+  });
+
   it('reports total as the pre-page filtered count', () => {
     const r = filterAndPaginate(items, { q: 'repo', limit: 1 });
-    // both s1 and s2 have /repo/ workingDir
-    expect(r.total).toBe(2);
+    // s1, s2, and s4 all have /repo/ workingDir
+    expect(r.total).toBe(3);
     expect(r.sessions).toHaveLength(1);
   });
 
   it('clamps limit to a max of 500', () => {
     const r = filterAndPaginate(items, { limit: 99999 });
     expect(r.sessions).toHaveLength(items.length);
-    // clamp does not throw and returns all 3 (< 500)
-    expect(r.total).toBe(3);
+    // clamp does not throw and returns all items (< 500)
+    expect(r.total).toBe(items.length);
   });
 
   it('clamps limit to a min of 1', () => {
@@ -206,7 +425,7 @@ describe('filterAndPaginate', () => {
     const page1 = filterAndPaginate(items, { offset: 0, limit: 2 });
     const page2 = filterAndPaginate(items, { offset: 2, limit: 2 });
     expect(page1.sessions.map((s) => s.sessionId)).toEqual(['s1', 's2']);
-    expect(page2.sessions.map((s) => s.sessionId)).toEqual(['s3']);
+    expect(page2.sessions.map((s) => s.sessionId)).toEqual(['s3', 's4']);
     const overlap = page1.sessions
       .map((s) => s.sessionId)
       .filter((id) => page2.sessions.map((s2) => s2.sessionId).includes(id));

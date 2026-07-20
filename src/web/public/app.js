@@ -291,6 +291,9 @@ const _SSE_HANDLER_MAP = [
 
   // Clipboard
   [SSE_EVENTS.CLIPBOARD_WRITE, '_onClipboardWrite'],
+
+  // Session order (global tab order sync, COD-131)
+  [SSE_EVENTS.SESSION_ORDER_CHANGED, '_onSessionOrderChanged'],
 ];
 
 
@@ -1499,6 +1502,26 @@ class CodemanApp {
       } catch (err) {
         console.error('[SSE] docker image build failed:', err);
       }
+    });
+
+    // COD-139: a session:pinned event updates the local live-session pin flag (so
+    // a subsequent render is consistent) and re-sorts the open session manager /
+    // welcome list so pinned sessions float to the top.
+    addListener(SSE_EVENTS.SESSION_PINNED, (e) => {
+      let data = null;
+      try {
+        data = JSON.parse(e.data);
+      } catch {
+        /* ignore malformed payload */
+      }
+      if (data && data.id) {
+        const live = this.sessions.get(data.id);
+        if (live) {
+          live.pinned = data.pinned === true;
+          live.pinnedAt = data.pinned ? data.pinnedAt : undefined;
+        }
+      }
+      this._onSessionListMaybeChanged();
     });
   }
 
@@ -3023,6 +3046,13 @@ class CodemanApp {
     // on another device).
     try { localStorage.removeItem('codeman-tab-meta'); } catch {}
 
+    // COD-131: server is authoritative for global tab order. Seed localStorage
+    // from the server snapshot (if present) so syncSessionOrder() reconciles
+    // against the cross-device order rather than this device's stale local copy.
+    if (Array.isArray(data.sessionOrder) && data.sessionOrder.length) {
+      try { localStorage.setItem('codeman-session-order', JSON.stringify(data.sessionOrder)); } catch {}
+    }
+
     // Sync sessionOrder with current sessions (preserve order, add new, remove stale)
     this.syncSessionOrder();
 
@@ -3587,12 +3617,41 @@ class CodemanApp {
     }
   }
 
-  // Save session order to localStorage
+  // Save session order to localStorage and (debounced) sync to the server so it
+  // follows the user across devices (COD-131). localStorage stays the offline
+  // fallback; the server is authoritative and echoes back via SSE.
   saveSessionOrder() {
     try {
       localStorage.setItem('codeman-session-order', JSON.stringify(this.sessionOrder));
     } catch {
       // Ignore storage errors
+    }
+    const order = [...this.sessionOrder];
+    this._debouncedCall('saveSessionOrderServer', () => {
+      fetch('/api/session-order', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order }),
+      }).catch(() => {});
+    }, 400);
+  }
+
+  // COD-131: another device (or our own debounced push) reordered tabs. Adopt the
+  // server order as the new base and reconcile to our currently-open sessions.
+  // Guard against no-op churn so an echo of our own push doesn't flicker the tabs.
+  _onSessionOrderChanged(data) {
+    if (!data || !Array.isArray(data.order)) return;
+    try {
+      localStorage.setItem('codeman-session-order', JSON.stringify(data.order));
+    } catch {
+      // Ignore storage errors
+    }
+    const before = JSON.stringify(this.sessionOrder);
+    this.syncSessionOrder();
+    // Only re-render when the reconciled order actually changed (avoids flicker
+    // when the broadcast is just an echo of the order we already have).
+    if (JSON.stringify(this.sessionOrder) !== before) {
+      this._fullRenderSessionTabs();
     }
   }
 

@@ -342,6 +342,11 @@ export class Session extends EventEmitter {
   // Image watcher setting (per-session toggle)
   private _imageWatcherEnabled: boolean = false;
 
+  // Pin state (COD-139) — pinned sessions float to the top of the session
+  // manager list, ordered by pinnedAt descending (most-recently-pinned first).
+  private _pinned: boolean = false;
+  private _pinnedAt: number | null = null;
+
   // Flicker filter setting (per-session toggle, applied on frontend)
   private _flickerFilterEnabled: boolean = false;
 
@@ -992,6 +997,26 @@ export class Session extends EventEmitter {
     this._imageWatcherEnabled = enabled;
   }
 
+  /** Whether this session is pinned to the top of the session manager (COD-139). */
+  get pinned(): boolean {
+    return this._pinned;
+  }
+
+  /** When the session was pinned (epoch ms), or null when unpinned. */
+  get pinnedAt(): number | null {
+    return this._pinnedAt;
+  }
+
+  /**
+   * Set pin state (COD-139). Pinning stamps pinnedAt with now so the pinned
+   * group orders most-recently-pinned first; unpinning clears it. Idempotent:
+   * re-pinning an already-pinned session refreshes its pinnedAt.
+   */
+  setPinned(pinned: boolean): void {
+    this._pinned = pinned;
+    this._pinnedAt = pinned ? Date.now() : null;
+  }
+
   get flickerFilterEnabled(): boolean {
     return this._flickerFilterEnabled;
   }
@@ -1058,6 +1083,8 @@ export class Session extends EventEmitter {
       autoResumeEnabled: this._autoOps.autoResumeEnabled,
       autoResumeAt: this._autoOps.autoResumeAt ?? undefined,
       imageWatcherEnabled: this._imageWatcherEnabled,
+      pinned: this._pinned || undefined,
+      pinnedAt: this._pinned ? (this._pinnedAt ?? undefined) : undefined,
       totalCost: this._totalCost,
       inputTokens: this._totalInputTokens,
       outputTokens: this._totalOutputTokens,
