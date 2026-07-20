@@ -1437,6 +1437,69 @@ class CodemanApp {
     for (const event of [SSE_EVENTS.SESSION_CREATED, SSE_EVENTS.SESSION_DELETED]) {
       addListener(event, () => this._onSessionListMaybeChanged());
     }
+
+    // Docker export/import: toast + refresh the Manage-tab exports list on completion.
+    addListener(SSE_EVENTS.DOCKER_EXPORT_COMPLETE, (e) => {
+      try {
+        const d = e.data ? JSON.parse(e.data) : {};
+        this.showToast(`Docker export ready: ${d.bundle} (${Math.round((d.sizeBytes || 0) / 1e6)} MB)`, 'success');
+        this.refreshDockerExports?.();
+      } catch (err) {
+        console.error('[SSE] docker export complete:', err);
+      }
+    });
+    addListener(SSE_EVENTS.DOCKER_EXPORT_FAILED, (e) => {
+      try {
+        const d = e.data ? JSON.parse(e.data) : {};
+        this.showToast(`Docker export failed: ${d.error || 'unknown error'}`, 'error');
+      } catch (err) {
+        console.error('[SSE] docker export failed:', err);
+      }
+    });
+    // Import + drift-recreate completions: refresh case lists in EVERY open tab
+    // (the initiating tab already refreshes via its own fetch response).
+    addListener(SSE_EVENTS.DOCKER_IMPORT_COMPLETE, (e) => {
+      try {
+        const d = e.data ? JSON.parse(e.data) : {};
+        this.showToast(`Docker bundle imported as case "${d.name}"`, 'success');
+        this.loadQuickStartCases?.();
+        this.refreshDockerExports?.();
+      } catch (err) {
+        console.error('[SSE] docker import complete:', err);
+      }
+    });
+    addListener(SSE_EVENTS.DOCKER_CONTAINER_RECREATED, (e) => {
+      try {
+        const d = e.data ? JSON.parse(e.data) : {};
+        this.showToast(`Container for "${d.name}" removed — next launch recreates it with the new config`, 'info');
+      } catch (err) {
+        console.error('[SSE] docker container recreated:', err);
+      }
+    });
+    // Base image auto-build on first Docker case (build-on-first-use). A single
+    // multi-minute event; surface start/finish so the Run spinner is explained.
+    addListener(SSE_EVENTS.DOCKER_IMAGE_BUILD_STARTED, () => {
+      this.showToast('Building the Codeman agent image (first Docker case, a few minutes)...', 'info', {
+        duration: 8000,
+      });
+    });
+    addListener(SSE_EVENTS.DOCKER_IMAGE_BUILD_COMPLETE, (e) => {
+      try {
+        const d = e.data ? JSON.parse(e.data) : {};
+        if (d.error) this.showToast(`Agent image build failed: ${d.error}`, 'error');
+        else this.showToast('Agent image ready. Starting the container...', 'success');
+      } catch (err) {
+        console.error('[SSE] docker image build complete:', err);
+      }
+    });
+    addListener(SSE_EVENTS.DOCKER_IMAGE_BUILD_FAILED, (e) => {
+      try {
+        const d = e.data ? JSON.parse(e.data) : {};
+        this.showToast(`Agent image build failed: ${d.error || 'unknown error'}`, 'error');
+      } catch (err) {
+        console.error('[SSE] docker image build failed:', err);
+      }
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════

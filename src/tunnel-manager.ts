@@ -43,6 +43,8 @@ interface QrTokenRecord {
   shortCode: string; // 6 chars base62 (for URL path)
   createdAt: number; // Date.now()
   consumed: boolean; // single-use flag
+  /** Multi-user: the user this token logs in when redeemed (absent = rotating global token). */
+  username?: string;
 }
 
 /** Rejection-sampled base62 short code — no modulo bias */
@@ -378,23 +380,64 @@ export class TunnelManager extends EventEmitter {
    * Map.get() is hash-based — no timing side-channel from string comparison.
    */
   consumeToken(shortCode: string): boolean {
+    return this.consumeTokenWithIdentity(shortCode).ok;
+  }
+
+  /**
+   * Like consumeToken, but also returns the bound username for multi-user tokens
+   * (undefined for the rotating global token). Only the identity-less rotating
+   * token triggers an immediate re-rotation (desktop gets a fresh QR); per-user
+   * tokens are on-demand and self-expire.
+   */
+  consumeTokenWithIdentity(shortCode: string): { ok: boolean; username?: string } {
     // Global rate limit (across all IPs)
-    if (this.qrAttemptCount >= QR_RATE_LIMIT_MAX) return false;
+    if (this.qrAttemptCount >= QR_RATE_LIMIT_MAX) return { ok: false };
     this.qrAttemptCount++;
 
     const record = this.qrTokensByCode.get(shortCode);
-    if (!record) return false;
-    if (record.consumed) return false;
+    if (!record) return { ok: false };
+    if (record.consumed) return { ok: false };
 
     const now = Date.now();
-    if (now - record.createdAt > QR_TOKEN_GRACE_MS) return false;
+    if (now - record.createdAt > QR_TOKEN_GRACE_MS) return { ok: false };
 
     // Atomic consume (single-threaded JS = no race)
     record.consumed = true;
-    // Immediately rotate so desktop gets a fresh QR
-    this.rotateToken();
-    this.emit('qrTokenRegenerated');
-    return true;
+    const username = record.username;
+    if (!username) {
+      // Rotating global token — immediately rotate so desktop gets a fresh QR.
+      this.rotateToken();
+      this.emit('qrTokenRegenerated');
+    } else {
+      this.qrTokensByCode.delete(shortCode);
+    }
+    return { ok: true, username };
+  }
+
+  /**
+   * Multi-user: mint a single-use token bound to a specific user (on-demand, no
+   * rotation). Evicts expired/consumed tokens first. Returns the short code.
+   */
+  mintUserToken(username: string): string {
+    const now = Date.now();
+    for (const [code, rec] of this.qrTokensByCode) {
+      if (now - rec.createdAt > QR_TOKEN_GRACE_MS || rec.consumed) this.qrTokensByCode.delete(code);
+    }
+    const record: QrTokenRecord = {
+      token: randomBytes(32).toString('hex'),
+      shortCode: generateShortCode(),
+      createdAt: Date.now(),
+      consumed: false,
+      username,
+    };
+    this.qrTokensByCode.set(record.shortCode, record);
+    return record.shortCode;
+  }
+
+  /** Render a QR SVG for an arbitrary short code (used by per-user minting). */
+  async getQrSvgForCode(tunnelUrl: string, code: string): Promise<string> {
+    const QRCode = await import('qrcode');
+    return QRCode.toString(`${tunnelUrl}/q/${code}`, { type: 'svg', margin: 2, width: 256 });
   }
 
   /** Force-regenerate (manual revocation via API) */

@@ -3125,6 +3125,32 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  // Header "File Viewer" button (opt-in via App Settings → Header Displays →
+  // File Viewer). Toggles the file browser panel open/closed without a trip
+  // through settings. Persists via the same `showFileBrowser` flag the Panels
+  // section + the panel's own close (X) use, so the three stay in sync.
+  toggleFileBrowserButton() {
+    const panel = this.$('fileBrowserPanel');
+    const isOpen = panel?.classList.contains('visible');
+    const btn = document.querySelector('.btn-file-viewer');
+    if (isOpen) {
+      this.closeFileBrowserPanel();
+      if (btn) btn.setAttribute('aria-expanded', 'false');
+      return;
+    }
+    if (!this.activeSessionId) {
+      this.showToast('Open a session to browse its files', 'info');
+      return;
+    }
+    const settings = this.loadAppSettingsFromStorage();
+    settings.showFileBrowser = true;
+    this.saveAppSettingsToStorage(settings);
+    const checkbox = document.getElementById('appSettingsShowFileBrowser');
+    if (checkbox) checkbox.checked = true;
+    this.applyMonitorVisibility();
+    if (btn) btn.setAttribute('aria-expanded', 'true');
+  },
+
   closeFileBrowserPanel() {
     const panel = this.$('fileBrowserPanel');
     if (panel) {
@@ -3157,6 +3183,10 @@ Object.assign(CodemanApp.prototype, {
     const settings = this.loadAppSettingsFromStorage();
     settings.showFileBrowser = false;
     this.saveAppSettingsToStorage(settings);
+    const checkbox = document.getElementById('appSettingsShowFileBrowser');
+    if (checkbox) checkbox.checked = false;
+    const headerBtn = document.querySelector('.btn-file-viewer');
+    if (headerBtn) headerBtn.setAttribute('aria-expanded', 'false');
   },
 
   async openFilePreview(filePath, sessionId = this.activeSessionId, attachmentId = null) {

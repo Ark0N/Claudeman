@@ -6,17 +6,23 @@
  */
 
 import { join, resolve, relative, isAbsolute } from 'node:path';
-import { realpathSync } from 'node:fs';
+import { realpathSync, existsSync, mkdirSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { homedir } from 'node:os';
 import type { z } from 'zod';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import { Session } from '../session.js';
-import { ApiErrorCode, createErrorResponse } from '../types.js';
+import { ApiErrorCode, createErrorResponse, type AuthUser } from '../types.js';
+import { MAX_CONCURRENT_SESSIONS } from '../config/map-limits.js';
 import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
 import { SseEvent } from './sse-events.js';
 import type { SessionPort } from './ports/session-port.js';
 import type { EventPort } from './ports/event-port.js';
+import type { AuthSessionRecord } from './ports/auth-port.js';
+import type { StaleExpirationMap } from '../utils/index.js';
 import { dataPath } from '../config/instance.js';
+import { isMultiUserMode, maxSessionsPerUser, userCasesDir } from '../config/multiuser.js';
+import { SYNTHETIC_ADMIN, findUser } from '../user-store.js';
 
 // Shared path constants used across route modules. CASES_DIR (project folders)
 // stays shared across instances; SETTINGS_PATH is per-instance runtime state.
@@ -80,12 +86,185 @@ export function validateSessionFilePath(
 const MAX_HOOK_DATA_SIZE = 8 * 1024;
 
 /**
+ * Effective identity for a request. In multi-user mode this is the auth-decorated
+ * user; in single-user mode (or when unset) it defaults to a synthetic admin so
+ * downstream ownership checks are no-ops and there is ONE code path.
+ */
+export function getAuthUser(req: FastifyRequest): AuthUser {
+  return req.authUser ?? SYNTHETIC_ADMIN;
+}
+
+/**
+ * Whether an identity may see/act on a resource with the given owner. Always true
+ * in single-user mode; in multi-user, admins see everything and regular users only
+ * their own (an absent owner is legacy/unassigned = admin-only).
+ */
+export function canAccessOwned(user: AuthUser, owner: string | undefined): boolean {
+  if (!isMultiUserMode()) return true;
+  if (user.role === 'admin') return true;
+  return !!owner && owner === user.username;
+}
+
+/**
+ * The owner to stamp on a resource created by this request: the requesting user in
+ * multi-user mode, or undefined in single-user (so state stays owner-free and the
+ * flag can be removed later without leaving stray owners).
+ */
+export function ownerFor(req: FastifyRequest): string | undefined {
+  return isMultiUserMode() ? getAuthUser(req).username : undefined;
+}
+
+/**
+ * The cases directory for a request/user: the shared ~/codeman-cases in single-user
+ * mode, or the per-user ~/codeman-users/<username>/cases in multi-user (created
+ * lazily). Admins are NOT auto-scoped here — an admin acting on a specific user's
+ * case resolves through the owner-aware case resolver instead.
+ */
+export function resolveCasesDir(user?: AuthUser): string {
+  if (!isMultiUserMode() || !user) return CASES_DIR;
+  const dir = userCasesDir(user.username);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/**
+ * Realpath-confine a non-admin's requested working directory to their own case
+ * space in multi-user mode. Returns true if allowed. Admins and single-user mode
+ * are unrestricted. The path need not exist yet (checked against its nearest
+ * existing ancestor) so newly-created case dirs pass. This is the load-bearing
+ * rule (plan 6.2/14.7): every file-serving surface downstream trusts workingDir.
+ */
+export function isWorkingDirAllowed(user: AuthUser, workingDir: string): boolean {
+  if (!isMultiUserMode() || user.role === 'admin') return true;
+  const base = userCasesDir(user.username);
+  // Resolve the deepest existing ancestor to defeat symlink escapes without
+  // requiring the leaf to exist yet.
+  const resolveExisting = (p: string): string => {
+    let cur = resolve(p);
+    // walk up until an existing path is found
+    for (;;) {
+      try {
+        return realpathSync(cur);
+      } catch {
+        const parent = resolve(cur, '..');
+        if (parent === cur) return cur;
+        cur = parent;
+      }
+    }
+  };
+  let realBase: string;
+  try {
+    realBase = realpathSync(base);
+  } catch {
+    // base does not exist yet — create it so confinement has a stable anchor
+    mkdirSync(base, { recursive: true });
+    realBase = realpathSync(base);
+  }
+  const realTarget = resolveExisting(workingDir);
+  if (realTarget === realBase) return true;
+  const rel = relative(realBase, realTarget);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+/**
+ * Username-keyed variant of `isWorkingDirAllowed` for spawn sites that only carry
+ * an owner username (cron fire-time, scheduled-run loop) rather than a live request.
+ * Resolves the owner's role from the store; a missing/deleted user is treated as a
+ * non-privileged regular user (fails closed to their deterministic case space).
+ * No-op (true) in single-user mode or for an unset owner.
+ */
+export async function isWorkingDirAllowedForUsername(
+  username: string | undefined,
+  workingDir: string
+): Promise<boolean> {
+  if (!isMultiUserMode() || !username) return true;
+  const user = await findUser(username);
+  return isWorkingDirAllowed({ username, role: user?.role ?? 'user' }, workingDir);
+}
+
+/** Whether the caller is an admin (or single-user mode, where the sole user is admin). */
+export function isAdmin(req: FastifyRequest): boolean {
+  return !isMultiUserMode() || getAuthUser(req).role === 'admin';
+}
+
+/**
+ * First line of admin-only handlers: 403 FORBIDDEN + returns false when the caller
+ * is not an admin. Always true in single-user mode (the sole user is the admin).
+ */
+export function requireAdmin(req: FastifyRequest, reply: FastifyReply): boolean {
+  if (isAdmin(req)) return true;
+  reply.code(403).send(createErrorResponse(ApiErrorCode.FORBIDDEN));
+  return false;
+}
+
+/**
+ * Session-capacity check, centralized so the global cap AND the per-user cap are
+ * enforced everywhere a session is created (the check was copy-pasted at 6 sites).
+ * Pure: takes the sessions Map so it composes with ctx.sessions / this.sessions /
+ * this.deps.sessions callers. Per-user cap only applies in multi-user mode.
+ */
+export function sessionCapacityState(
+  sessions: ReadonlyMap<string, Session>,
+  owner?: string
+): { atGlobalCap: boolean; atUserCap: boolean } {
+  const atGlobalCap = sessions.size >= MAX_CONCURRENT_SESSIONS;
+  let atUserCap = false;
+  if (isMultiUserMode() && owner) {
+    let count = 0;
+    for (const s of sessions.values()) if (s.owner === owner) count++;
+    atUserCap = count >= maxSessionsPerUser();
+  }
+  return { atGlobalCap, atUserCap };
+}
+
+/**
+ * Route sugar: the human-readable error message when at capacity, else null. The
+ * caller wraps it in createErrorResponse with its own error code (OPERATION_FAILED
+ * vs SESSION_BUSY, matching the pre-existing per-route codes).
+ */
+export function sessionCapacityMessage(sessions: ReadonlyMap<string, Session>, owner?: string): string | null {
+  const { atGlobalCap, atUserCap } = sessionCapacityState(sessions, owner);
+  if (atGlobalCap) {
+    return `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached. Delete some sessions first.`;
+  }
+  if (atUserCap) {
+    return `Your session limit (${maxSessionsPerUser()}) reached. Delete some of your sessions first.`;
+  }
+  return null;
+}
+
+/**
+ * Revoke every cookie session belonging to a user (optionally keeping one token,
+ * e.g. the caller's own during a self-service password change). Returns the count.
+ */
+export function revokeUserSessions(
+  authSessions: StaleExpirationMap<string, AuthSessionRecord> | null,
+  username: string,
+  exceptToken?: string
+): number {
+  if (!authSessions) return 0;
+  const norm = username.trim().toLowerCase();
+  let removed = 0;
+  for (const [token, record] of authSessions) {
+    if (record.username === norm && token !== exceptToken) {
+      authSessions.delete(token);
+      removed++;
+    }
+  }
+  return removed;
+}
+
+/**
  * Look up a session by ID or throw a structured error.
  * Replaces the pattern: `const session = sessions.get(id); if (!session) return createErrorResponse(...)`.
+ *
+ * When `req` is passed in multi-user mode, a session the caller does not own is
+ * reported as NOT_FOUND (never 403), so existence of other users' sessions is not
+ * leaked. Single-user / admin callers are unaffected.
  */
-export function findSessionOrFail(ctx: SessionPort, sessionId: string): Session {
+export function findSessionOrFail(ctx: SessionPort, sessionId: string, req?: FastifyRequest): Session {
   const session = ctx.sessions.get(sessionId);
-  if (!session) {
+  if (!session || (req && !canAccessOwned(getAuthUser(req), session.owner))) {
     throw Object.assign(new Error(`Session ${sessionId} not found`), {
       statusCode: 404,
       body: createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${sessionId} not found`),

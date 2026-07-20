@@ -15,6 +15,8 @@ import { SseEvent } from '../web/sse-events.js';
 import { CronJobSchema } from '../web/schemas.js';
 import { getErrorMessage, createErrorResponse, ApiErrorCode } from '../types/api.js';
 import { MAX_CONCURRENT_SESSIONS, MAX_CRON_JOBS, MAX_CRON_RUN_HISTORY } from '../config/map-limits.js';
+import { canUsernameRunPrivilegedCommands, resolveClaudeModeForUsername } from '../user-store.js';
+import { sessionCapacityState, isWorkingDirAllowedForUsername } from '../web/route-helpers.js';
 import { CRON_READY_MAX_ATTEMPTS, CRON_READY_SETTLE_MS } from '../config/server-timing.js';
 import {
   DEFAULT_BLOCKED_TREES,
@@ -25,6 +27,7 @@ import { validateSessionFilePath } from '../web/route-helpers.js';
 import { computeNextRunAt, dueKeyFor } from './cron-time.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../web/ports/index.js';
 import type { CronJob, CronJobRun, CronJobRunStatus, TriggerType } from '../types/cron.js';
+import type { GeminiConfig } from '../types/session.js';
 import type { CronJobInput } from './cron-input.js';
 
 /** The subset of the route context the cron depends on. */
@@ -108,7 +111,7 @@ export class CronService {
 
   // ──────────────────────────── Mutations ───────────────────────────
 
-  createJob(input: CronJobInput): CronJob {
+  createJob(input: CronJobInput, owner?: string): CronJob {
     if (Object.keys(this.store.getCronJobs()).length >= MAX_CRON_JOBS) {
       throw this.badRequest(`Maximum number of cron jobs (${MAX_CRON_JOBS}) reached`);
     }
@@ -117,6 +120,7 @@ export class CronService {
     const job: CronJob = {
       id: uuidv4(),
       name: input.name,
+      owner,
       agentType: input.agentType,
       workingDir: input.workingDir,
       launchCommand: input.launchCommand,
@@ -328,6 +332,12 @@ export class CronService {
       return this.failRun(job, run, 'workingDir does not exist');
     }
 
+    // Section 6.3: defense-in-depth workingDir confinement re-check at FIRE time against the
+    // owner's CURRENT space (complements the create/update gate). No-op in single-user / unset owner.
+    if (!(await isWorkingDirAllowedForUsername(job.owner, job.workingDir))) {
+      return this.failRun(job, run, 'workingDir is outside the owner workspace');
+    }
+
     // Recurring jobs: close the still-open session created by this job's
     // previous run before launching the next (default ON, opt-out via
     // autoClosePreviousSession:false) — otherwise an unattended interval/daily
@@ -336,9 +346,20 @@ export class CronService {
       await this.closePreviousRunSessions(job, run.id);
     }
 
-    // Respect the global session cap.
-    if (this.deps.sessions.size >= MAX_CONCURRENT_SESSIONS) {
+    // Respect the global cap AND the owner's per-user cap (multi-user).
+    const cap = sessionCapacityState(this.deps.sessions, job.owner);
+    if (cap.atGlobalCap) {
       return this.failRun(job, run, `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached`);
+    }
+    if (cap.atUserCap) {
+      return this.failRun(job, run, `Owner's per-user session limit reached`);
+    }
+
+    // Section 6.3: re-resolve the owner's grant at FIRE time (it may have been revoked
+    // since create). Gates shell/launchCommand AND clamps the external-CLI bypass below.
+    const ownerGranted = await canUsernameRunPrivilegedCommands(job.owner);
+    if ((job.agentType === 'shell' || job.launchCommand) && !ownerGranted) {
+      return this.failRun(job, run, 'Owner lacks the can-bypass-permissions grant for shell/launchCommand jobs');
     }
 
     // Create + start the session (mirrors the quick-start route flow).
@@ -348,7 +369,15 @@ export class CronService {
       const globalNice = await this.deps.getGlobalNiceConfig();
       const modelConfig = await this.deps.getModelConfig();
       const claudeModeConfig = await this.deps.getClaudeModeConfig();
+      const effectiveClaudeMode = await resolveClaudeModeForUsername(claudeModeConfig.claudeMode, job.owner);
       const model = mode !== 'shell' ? modelConfig?.defaultModel || undefined : undefined;
+      // Section 6.3: cron carries no per-CLI config, so buildGeminiCommand(undefined)
+      // would default a non-granted owner to `--approval-mode yolo` (classifier-free) —
+      // materialize auto_edit for a non-granted gemini owner, mirroring the route clamp
+      // (#15). Granted/admin/single-user leave it undefined → yolo parity. Codex's absent
+      // config already defaults to the safe sandbox, so no clamp is needed there.
+      const geminiConfig: GeminiConfig | undefined =
+        mode === 'gemini' && !ownerGranted ? { approvalMode: 'auto_edit' } : undefined;
       session = new Session({
         workingDir: job.workingDir,
         mode,
@@ -357,8 +386,10 @@ export class CronService {
         useMux: true,
         niceConfig: globalNice,
         model,
-        claudeMode: claudeModeConfig.claudeMode,
+        claudeMode: effectiveClaudeMode,
         allowedTools: claudeModeConfig.allowedTools,
+        geminiConfig,
+        owner: job.owner,
       });
       this.deps.addSession(session);
       this.store.incrementSessionsCreated();

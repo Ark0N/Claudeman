@@ -138,6 +138,8 @@ describe('Codex quick start settings', () => {
     expect(requests.find((req) => req.url === '/api/quick-start')?.body).toMatchObject({
       caseName: 'codex-case',
       mode: 'codex',
+      // tabs follow the w<n>-<case> naming convention (quick-start would otherwise auto-name codeman-<id>)
+      sessionName: 'w1-codex-case',
       codexConfig: { dangerouslyBypassApprovals: true, renderMode: 'hybrid' },
     });
     expect(selected).toEqual(['sess-1']);
@@ -177,6 +179,30 @@ describe('case selector refresh', () => {
     expect(options.find((option: any) => option.name === 'moneytrove')?.label).toBe('moneytrove @ mac-mini');
     expect(app.filterCasePickerOptions(options, 'MAC').map((option: any) => option.name)).toEqual(['moneytrove']);
     expect(app.filterCasePickerOptions(options, 'plex').map((option: any) => option.name)).toEqual(['plex-previews']);
+  });
+
+  it('labels dockerized cases with a short "(docker)" tag (or the custom host id)', () => {
+    const CodemanApp = function CodemanApp(this: any) {};
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: () => null },
+      console,
+    });
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+    const app = new (CodemanApp as any)();
+
+    const label = (c: any) => app.formatCasePickerLabel(c);
+    // default one-click host, the 'local' Docker-tab default, and per-case override
+    // hosts all collapse to the short "(docker)" tag.
+    expect(
+      label({ name: 'sandbox', location: 'docker', docker: { hostId: 'default', container: 'codeman-case-sandbox' } })
+    ).toBe('sandbox (docker)');
+    expect(label({ name: 'sandbox', location: 'docker', docker: { hostId: 'local' } })).toBe('sandbox (docker)');
+    expect(label({ name: 'sandbox', location: 'docker', docker: { hostId: 'q-sandbox' } })).toBe('sandbox (docker)');
+    // a user-named docker host shows its id
+    expect(label({ name: 'ml', location: 'docker', docker: { hostId: 'gpu-box' } })).toBe('ml (gpu-box)');
   });
 
   it('launches the highlighted case with the current run mode when pressing Enter in the picker', () => {

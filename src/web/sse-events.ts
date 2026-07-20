@@ -379,6 +379,31 @@ export const CaseDeleted = 'case:deleted' as const;
 /** Case ordering changed. */
 export const CaseOrderChanged = 'case:order-changed' as const;
 
+// ─── Docker cases ────────────────────────────────────────────────────────────
+/** A docker case export bundle finished writing. */
+export const DockerExportComplete = 'docker:exportComplete' as const;
+/** A docker case export failed. */
+export const DockerExportFailed = 'docker:exportFailed' as const;
+/** A docker bundle was imported into a new case. */
+export const DockerImportComplete = 'docker:importComplete' as const;
+/** The agent base image started building (first Docker case; auto-build on first use). */
+export const DockerImageBuildStarted = 'docker:imageBuildStarted' as const;
+/** A line of agent base-image build output (progress surfacing). */
+export const DockerImageBuildProgress = 'docker:imageBuildProgress' as const;
+/** The agent base image finished building successfully. */
+export const DockerImageBuildComplete = 'docker:imageBuildComplete' as const;
+/** The agent base image build failed. */
+export const DockerImageBuildFailed = 'docker:imageBuildFailed' as const;
+/** A case container was removed after a config-drift confirm (recreated with the new config on next launch). */
+export const DockerContainerRecreated = 'docker:containerRecreated' as const;
+
+// ─── Multi-user (admin-only / targeted) ──────────────────────────────────────
+
+/** The user roster changed (admin-only); the Users panel re-fetches. */
+export const AdminUsersChanged = 'admin:usersChanged' as const;
+/** A user must change their password (targeted); the frontend shows the modal. */
+export const AuthPasswordChangeRequired = 'auth:passwordChangeRequired' as const;
+
 // ─── Namespace Re-export ─────────────────────────────────────────────────────
 
 /**
@@ -565,4 +590,16 @@ export const SseEvent = {
   CaseLinked,
   CaseDeleted,
   CaseOrderChanged,
+
+  // Docker cases
+  DockerExportComplete,
+  DockerExportFailed,
+  DockerImportComplete,
+  DockerImageBuildStarted,
+  DockerImageBuildProgress,
+  DockerImageBuildComplete,
+  DockerImageBuildFailed,
+  AdminUsersChanged,
+  AuthPasswordChangeRequired,
+  DockerContainerRecreated,
 } as const;

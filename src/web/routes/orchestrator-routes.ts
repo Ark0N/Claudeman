@@ -19,7 +19,8 @@
 import { FastifyInstance } from 'fastify';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import { OrchestratorStartSchema, OrchestratorRejectSchema } from '../schemas.js';
-import { parseBody } from '../route-helpers.js';
+import { parseBody, requireAdmin } from '../route-helpers.js';
+import { isMultiUserMode } from '../../config/multiuser.js';
 import { SseEvent } from '../sse-events.js';
 import type { EventPort, OrchestratorPort } from '../ports/index.js';
 
@@ -79,7 +80,10 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: Orchestrat
   // Start
   // ═══════════════════════════════════════════════════════════════
 
-  app.post('/api/orchestrator/start', async (req) => {
+  app.post('/api/orchestrator/start', async (req, reply) => {
+    // Multi-user: the orchestrator is a process-wide singleton with no per-user
+    // isolation → admin-only (requireAdmin is a no-op allow-all in single-user mode).
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const { goal, config } = parseBody(OrchestratorStartSchema, req.body, 'Invalid request body');
 
     // Initialize loop if needed
@@ -115,7 +119,9 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: Orchestrat
   // Approve / Reject Plan
   // ═══════════════════════════════════════════════════════════════
 
-  app.post('/api/orchestrator/approve', async () => {
+  app.post('/api/orchestrator/approve', async (req, reply) => {
+    // Multi-user: shared-singleton orchestrator → admin-only (no-op in single-user).
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const loop = getLoop();
 
     try {
@@ -128,7 +134,9 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: Orchestrat
     }
   });
 
-  app.post('/api/orchestrator/reject', async (req) => {
+  app.post('/api/orchestrator/reject', async (req, reply) => {
+    // Multi-user: shared-singleton orchestrator → admin-only (no-op in single-user).
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const loop = getLoop();
 
     const { feedback } = parseBody(OrchestratorRejectSchema, req.body, 'Feedback is required');
@@ -147,7 +155,9 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: Orchestrat
   // Pause / Resume / Stop
   // ═══════════════════════════════════════════════════════════════
 
-  app.post('/api/orchestrator/pause', async () => {
+  app.post('/api/orchestrator/pause', async (req, reply) => {
+    // Multi-user: shared-singleton orchestrator → admin-only (no-op in single-user).
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const loop = getLoop();
 
     try {
@@ -158,7 +168,9 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: Orchestrat
     }
   });
 
-  app.post('/api/orchestrator/resume', async () => {
+  app.post('/api/orchestrator/resume', async (req, reply) => {
+    // Multi-user: shared-singleton orchestrator → admin-only (no-op in single-user).
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const loop = getLoop();
 
     try {
@@ -171,7 +183,9 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: Orchestrat
     }
   });
 
-  app.post('/api/orchestrator/stop', async () => {
+  app.post('/api/orchestrator/stop', async (req, reply) => {
+    // Multi-user: shared-singleton orchestrator → admin-only (no-op in single-user).
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const loop = getLoop();
 
     try {
@@ -186,7 +200,9 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: Orchestrat
   // Status / Plan
   // ═══════════════════════════════════════════════════════════════
 
-  app.get('/api/orchestrator/status', async () => {
+  app.get('/api/orchestrator/status', async (req, reply) => {
+    // Multi-user: shared-singleton orchestrator → admin-only (no-op in single-user).
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const loop = ctx.orchestratorLoop;
     if (!loop) {
       return { ok: true, state: 'idle', plan: null, stats: null };
@@ -198,7 +214,9 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: Orchestrat
     };
   });
 
-  app.get('/api/orchestrator/plan', async () => {
+  app.get('/api/orchestrator/plan', async (req, reply) => {
+    // Multi-user: shared-singleton orchestrator → admin-only (no-op in single-user).
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const loop = ctx.orchestratorLoop;
     if (!loop) {
       return { ok: true, plan: null };
@@ -215,7 +233,9 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: Orchestrat
   // Phase Operations
   // ═══════════════════════════════════════════════════════════════
 
-  app.post('/api/orchestrator/phase/:id/skip', async (req) => {
+  app.post('/api/orchestrator/phase/:id/skip', async (req, reply) => {
+    // Multi-user: shared-singleton orchestrator → admin-only (no-op in single-user).
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const loop = getLoop();
     const { id } = req.params as { id: string };
 
@@ -227,7 +247,9 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: Orchestrat
     }
   });
 
-  app.post('/api/orchestrator/phase/:id/retry', async (req) => {
+  app.post('/api/orchestrator/phase/:id/retry', async (req, reply) => {
+    // Multi-user: shared-singleton orchestrator → admin-only (no-op in single-user).
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const loop = getLoop();
     const { id } = req.params as { id: string };
 

@@ -37,6 +37,16 @@ export enum ApiErrorCode {
   RATE_LIMITED = 'RATE_LIMITED',
   /** Operation could not be completed (well-formed but unprocessable) */
   OPERATION_FAILED = 'OPERATION_FAILED',
+  /** Authenticated but not permitted (e.g. non-admin hitting an admin route) */
+  FORBIDDEN = 'FORBIDDEN',
+  /** User must change their password before any other action (multi-user) */
+  PASSWORD_CHANGE_REQUIRED = 'PASSWORD_CHANGE_REQUIRED',
+  /** A user with this name already exists (multi-user) */
+  USER_EXISTS = 'USER_EXISTS',
+  /** No user with this name (multi-user) */
+  USER_NOT_FOUND = 'USER_NOT_FOUND',
+  /** Refusing to demote/disable/delete the last enabled admin (multi-user) */
+  LAST_ADMIN = 'LAST_ADMIN',
   /** Internal server error */
   INTERNAL_ERROR = 'INTERNAL_ERROR',
 }
@@ -53,6 +63,11 @@ const ErrorMessages: Record<ApiErrorCode, string> = {
   [ApiErrorCode.ALREADY_EXISTS]: 'Resource already exists',
   [ApiErrorCode.RATE_LIMITED]: 'Too many requests',
   [ApiErrorCode.OPERATION_FAILED]: 'The operation failed',
+  [ApiErrorCode.FORBIDDEN]: 'You do not have permission to perform this action',
+  [ApiErrorCode.PASSWORD_CHANGE_REQUIRED]: 'You must change your password before continuing',
+  [ApiErrorCode.USER_EXISTS]: 'A user with that name already exists',
+  [ApiErrorCode.USER_NOT_FOUND]: 'No such user',
+  [ApiErrorCode.LAST_ADMIN]: 'Cannot remove the last enabled admin',
   [ApiErrorCode.INTERNAL_ERROR]: 'An internal error occurred',
 };
 
@@ -69,6 +84,11 @@ const ErrorStatus: Record<ApiErrorCode, number> = {
   [ApiErrorCode.CONFLICT]: 409,
   [ApiErrorCode.ALREADY_EXISTS]: 409,
   [ApiErrorCode.OPERATION_FAILED]: 422,
+  [ApiErrorCode.FORBIDDEN]: 403,
+  [ApiErrorCode.PASSWORD_CHANGE_REQUIRED]: 403,
+  [ApiErrorCode.USER_EXISTS]: 409,
+  [ApiErrorCode.USER_NOT_FOUND]: 404,
+  [ApiErrorCode.LAST_ADMIN]: 409,
   [ApiErrorCode.RATE_LIMITED]: 429,
   [ApiErrorCode.INTERNAL_ERROR]: 500,
 };
@@ -124,7 +144,7 @@ export interface CaseInfo {
   /** Whether CLAUDE.md exists */
   hasClaudeMd?: boolean;
   /** Case storage/execution location */
-  location?: 'local' | 'linked-local' | 'remote';
+  location?: 'local' | 'linked-local' | 'remote' | 'docker';
   /** Whether this is a linked local folder */
   linked?: boolean;
   /** Remote case metadata for display and session creation */
@@ -133,6 +153,14 @@ export interface CaseInfo {
     host: string;
     username: string;
     path: string;
+  };
+  /** Docker case metadata for display and session creation */
+  docker?: {
+    hostId: string;
+    container: string;
+    image?: string;
+    path: string;
+    network?: string;
   };
 }
 

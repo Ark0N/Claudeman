@@ -30,7 +30,8 @@ an explicit, guided opt‑in.
 7. [Supply‑chain & build‑asset hardening](#7-supplychain--buildasset-hardening-cod28)
 8. [Multi‑instance isolation](#8-multiinstance-isolation)
 9. [Transport security headers](#9-transport-security-headers)
-10. [Quick reference](#10-quick-reference)
+10. [Docker container isolation](#10-docker-container-isolation)
+11. [Quick reference](#11-quick-reference)
 
 ---
 
@@ -471,7 +472,35 @@ production layout (`~/.codeman`, `-L codeman`, port 3000).
 
 ---
 
-## 10. Quick reference
+## 10. Docker container isolation
+
+Docker cases (1.4.0) run a session inside a per‑case container instead of on the host. The security posture:
+
+- **Hardened create flags, always** — `--cap-drop ALL`, `--security-opt no-new-privileges`, `--pids-limit` (fork‑bomb guard), `--memory` == `--memory-swap` (a real OOM cap), `--init`, and non‑root: `--user <hostUid>:0` on Linux (host uid → workspace files stay host‑owned; GID 0 keeps `$HOME` writable), `--userns=keep-id` on rootless Podman. **Never** `--privileged`, and **never** the docker socket — the pure builder in `docker-hosts.ts` cannot emit them and the schema cannot represent them.
+- **Credentials never enter an image** — the convenient default bind‑mounts host cred dirs (`~/.claude`, `~/.codex`, `~/.gemini`, `~/.config/{gcloud,opencode}`) read‑write. Bind mounts are physically excluded from `docker commit`, so exported images are secret‑free. API‑key CLIs get their key as an exec‑time NAME‑ONLY `--env OPENAI_API_KEY` (no `=value`, no `ps` leak, never committed); a create‑time `-e` for a secret is never used. The **sealed** profile (`mountCredentials:false` + `network:none`) drops the host mounts; full‑image export is then refused (an in‑container login would ride the committed layer) unless a pre‑commit scrub is opted into.
+- **Blast radius — accept it explicitly** — the convenient profile mounts an arbitrary host workspace RW plus the host credential dirs RW into a network‑enabled container, so container‑run agent code can read/modify those host trees and reach the network at once. Still a net improvement over today's on‑host `--dangerously-skip-permissions` execution; use the sealed profile for genuinely untrusted work.
+- **Import is untrusted‑bundle‑safe** — `/api/docker-cases/import` validates the manifest + per‑member SHA‑256 before extraction, rejects absolute / `..` tar members (traversal guard), and re‑tags the loaded image into a quarantined namespace so it can never overwrite `codeman/agent:base` or a pre‑existing tag.
+- **Host guard & the bridge‑hooks listener** — in‑container hook callbacks carry `Host: host.docker.internal` / `host.containers.internal`; both are on the always‑on host‑header allowlist (`DOCKER_HOST_GATEWAY_ALIASES`) and resolve to the host only from inside a container netns, so they are not a browser DNS‑rebinding surface. On a loopback‑only server, in‑container hooks are opt‑in via `CODEMAN_DOCKER_BRIDGE_HOOKS=1`, which binds a SECOND listener on the docker bridge gateway serving **only** the hook endpoints (every other path → `403`) into the same hook‑secret‑gated pipeline. The bridge is host‑internal (containers + host), not the LAN, so it does not widen network exposure; the hook secret is bind‑mounted read‑only and referenced by path.
+- **Instance isolation** — every managed container is labeled `codeman.instance=<CODEMAN_INSTANCE>`; the boot reaper reaps orphans of its OWN instance only, so a beta never removes a prod container. The in‑container tmux socket (`-L codeman-docker`) + session name (`codeman-dkr-*`) deliberately fail a nested Codeman's discovery pattern.
+
+Full feature guide: [`docker-cases.md`](docker-cases.md).
+
+---
+
+## 10a. Multi‑user mode (opt‑in)
+
+`codeman web --multiuser` (or `CODEMAN_MULTIUSER=1`) turns on named users with individually scrypt‑hashed passwords in `~/.codeman/users.json` (mode 0600). OFF by default; when off, nothing here applies and behavior is byte‑identical to single‑user. Design + phase status: [`multi-user-plan.md`](multi-user-plan.md).
+
+- **It is workspace separation, NOT a security boundary between users.** Every session still runs as the SAME OS account with agent code that can read the whole host. Any user can ask their agent to `cat` another user's files; the WEB layer enforces scoping, the AGENT layer cannot. Mitigations: give non‑admins the default `auto` permission mode (classifier‑guarded), pair users with **Docker cases** (container per case) for real isolation, or run separate Codeman instances under separate OS accounts. Stated loudly in the admin panel and the plan's threat model (section 2).
+- **It strictly improves network posture.** It removes the single shared `CODEMAN_PASSWORD` and gives each person a revocable credential; a non‑loopback bind and the tunnel‑enable guard are satisfied by "multi‑user with ≥1 enabled user" without a shared password.
+- **Auth is a parallel branch** (`middleware/auth.ts`) that leaves the single‑user path untouched: per‑user scrypt verify (`timingSafeEqual`, timing‑equalized against user enumeration), identity‑carrying cookies, a per‑username failure bucket (a botnet can't brute one account across IPs; one NATed user can't lock out the rest), and a `mustChangePassword` lockbox. The hook‑secret loopback bypass, host guard, and Origin/CSRF guard are unchanged (hooks authenticate the INSTANCE, not a user).
+- **Ownership is enforced server‑side only** and fails closed: `req.authUser` (a synthetic admin in single‑user), `findSessionOrFail` returns NOT_FOUND (never 403) for a foreign session, list/SSE/WS/file‑preview/search all filter by `session.owner`, and SSE routing defaults session‑scoped events to their owner (unresolved owner → withheld). The load‑bearing rule is **non‑admin `workingDir` confinement**: a non‑admin's session/one‑shot working dir must realpath‑resolve inside `~/codeman-users/<name>/cases`, checked BEFORE any disk write.
+- **Privileged actions are a one‑bit grant** (`canBypassPermissions`, default off): only granted users (and admins) get `--dangerously-skip-permissions` (others are silently downgraded to `--permission-mode auto`), shell‑mode sessions, cron `launchCommand`, and other CLIs' bypass flags. Machine‑level resources (remote/Docker host definitions, tunnel, self‑update, settings writes) are admin‑only.
+- **Admin actions are audited** append‑only to `~/.codeman/admin-audit.jsonl` (acting admin, action, target, IP). Passwords set by an admin create/reset are one‑time (returned once, force change). Under Basic auth, `logout` only truly ends QR‑issued sessions — to lock someone out, disable the account or reset the password (a proper login form is a deferred Phase 6).
+
+---
+
+## 11. Quick reference
 
 | Env / flag | Effect |
 |------------|--------|
@@ -482,6 +511,8 @@ production layout (`~/.codeman`, `-L codeman`, port 3000).
 | `--https` | Enable TLS (adds HSTS) |
 | `CODEMAN_INSTANCE` | Scope tmux socket + data dir for isolation |
 | `CODEMAN_GESTURE=1` | Make the gesture overlay available (widens CSP) |
+| `CODEMAN_DOCKER_BRIDGE_HOOKS=1` | Serve the hook endpoints on the docker bridge gateway (host‑internal, hooks‑only, `403` elsewhere) so in‑container hooks reach a loopback‑bound server — see §10 |
+| `CODEMAN_DOCKER_BRIDGE_HOST` | Override the bridge gateway IP the hooks listener binds (default: auto‑detect) |
 
 **Audit log:** session lifecycle and server start are recorded in
 `~/.codeman/session-lifecycle.jsonl`.

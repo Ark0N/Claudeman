@@ -5414,6 +5414,7 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
 /* Modal Tabs */
 .modal-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   padding: 0 1rem 0.75rem 1rem;
   border-bottom: 1px solid var(--border);
@@ -9478,6 +9479,24 @@ kbd {
   padding-left: 0.5rem;
 }
 
+/* "Run in Docker" quick option — the primary one-click entry point, so its
+   label + hint read larger and brighter than the standard form label/hint. */
+.docker-quick-row .checkbox-row {
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.docker-quick-row .form-hint {
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+/* The container-settings panel is always shown + expanded (no longer gated on
+   the checkbox), so its summary header reads a touch larger too. */
+.docker-quick-settings > summary {
+  font-size: 0.85rem;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Response Viewer — native-scroll overlay for reading Claude responses
    ═══════════════════════════════════════════════════════════════ */
@@ -9499,6 +9518,42 @@ kbd {
   display: inline-flex !important;
 }
 .btn-attachments-history.btn-attachments-history--hidden {
+  display: none !important;
+}
+
+/* "Session Manager" + "Away Digest" header buttons — opt-in (App Settings →
+   Display), hidden by default. Same marker pattern as the response viewer: a
+   base inline-flex !important so an inline style can't override it, and a
+   more-specific marker rule to hide. Phones keep them hidden regardless via the
+   higher-specificity mobile.css rule (.btn-icon-header.btn-...). */
+.btn-session-manager {
+  display: inline-flex !important;
+}
+.btn-session-manager.btn-session-manager--hidden {
+  display: none !important;
+}
+.btn-away-digest {
+  display: inline-flex !important;
+}
+.btn-away-digest.btn-away-digest--hidden {
+  display: none !important;
+}
+
+/* "File Viewer" header button — opt-in (App Settings → Header Displays), hidden
+   by default. Clicking it toggles the file browser panel. Same marker pattern as
+   the response viewer: a base inline-flex !important so an inline style can't
+   override it, and a more-specific marker rule to hide. */
+.btn-file-viewer {
+  display: inline-flex !important;
+}
+.btn-file-viewer.btn-file-viewer--hidden {
+  display: none !important;
+}
+
+/* "Cron" footer-toolbar button — shown by default (App Settings → Display can
+   hide it). Toolbar button, not a header icon, so only the hide marker is
+   needed; out-specify any base .btn-toolbar display. */
+.btn-toolbar.btn-cron--hidden {
   display: none !important;
 }
 

@@ -17,6 +17,7 @@
 
 import type { FastifyReply } from 'fastify';
 import type { BackgroundTask } from '../session.js';
+import type { AuthUser } from '../types.js';
 import { CleanupManager, StaleExpirationMap } from '../utils/index.js';
 import { SseEvent } from './sse-events.js';
 import {
@@ -38,6 +39,26 @@ const SSE_PADDING = ':' + 'p'.repeat(SSE_PADDING_SIZE) + '\n';
 interface SseStreamManagerDeps {
   /** Get session state with respawn info for session:updated broadcasts */
   getSessionStateWithRespawn(sessionId: string): unknown;
+  /** Resolve a session's owner (multi-user) for SSE routing; undefined = unknown. */
+  resolveSessionOwner?(sessionId: string): string | undefined;
+}
+
+/**
+ * Optional per-broadcast routing hint (multi-user). Resolved by WebServer.broadcast
+ * before delegation. When absent, an event is delivered to all clients (global).
+ */
+export interface SseRoutingHint {
+  /** Deliver only to this session's owner (+ admins). */
+  owner?: string;
+  /** Deliver only to admins (machine-level events: docker builds, tunnel, update). */
+  adminOnly?: boolean;
+  /** Deliver only to this exact user (+ admins). */
+  username?: string;
+  /**
+   * The event is session-scoped but the owner could not be resolved — non-admins
+   * are starved (fail closed) rather than leaked to.
+   */
+  sessionScoped?: boolean;
 }
 
 export class SseStreamManager {
@@ -50,6 +71,8 @@ export class SseStreamManager {
   private sseClients: Map<FastifyReply, Set<string> | null> = new Map();
   /** Optional client-supplied IDs → reply, for live filter updates without reconnecting */
   private sseClientsById: Map<string, FastifyReply> = new Map();
+  /** Per-client identity (multi-user); absent for single-user clients → no filtering. */
+  private sseClientIdentity: Map<FastifyReply, AuthUser> = new Map();
   /** SSE clients connecting from non-localhost (i.e. through tunnel) */
   private remoteSseClients: Set<FastifyReply> = new Set();
   /** Clients with backpressure — skip writes until 'drain' fires */
@@ -105,8 +128,15 @@ export class SseStreamManager {
     this._isTunnelActive = active;
   }
 
-  addClient(reply: FastifyReply, sessionFilter: Set<string> | null, isRemote: boolean, clientId?: string): void {
+  addClient(
+    reply: FastifyReply,
+    sessionFilter: Set<string> | null,
+    isRemote: boolean,
+    clientId?: string,
+    identity?: AuthUser
+  ): void {
     this.sseClients.set(reply, sessionFilter);
+    if (identity) this.sseClientIdentity.set(reply, identity);
     if (isRemote) {
       this.remoteSseClients.add(reply);
     }
@@ -117,6 +147,7 @@ export class SseStreamManager {
         this.sseClients.delete(prev);
         this.remoteSseClients.delete(prev);
         this.backpressuredClients.delete(prev);
+        this.sseClientIdentity.delete(prev);
       }
       this.sseClientsById.set(clientId, reply);
     }
@@ -126,10 +157,29 @@ export class SseStreamManager {
     this.sseClients.delete(reply);
     this.remoteSseClients.delete(reply);
     this.backpressuredClients.delete(reply);
+    this.sseClientIdentity.delete(reply);
     // Clear any clientId mappings pointing at this reply
     for (const [id, r] of this.sseClientsById) {
       if (r === reply) this.sseClientsById.delete(id);
     }
+  }
+
+  /**
+   * Whether an SSE event carrying `hint` may be delivered to `reply`. Clients with
+   * no identity (single-user) always receive everything. Admins receive everything.
+   * A non-admin receives an event only when the hint targets them (owner/username)
+   * or the event is unrouted/global; session-scoped events with an unresolved owner
+   * are withheld (fail closed).
+   */
+  private canDeliver(reply: FastifyReply, hint?: SseRoutingHint): boolean {
+    const identity = this.sseClientIdentity.get(reply);
+    if (!identity || identity.role === 'admin') return true;
+    if (!hint) return true;
+    if (hint.adminOnly) return false;
+    if (hint.username !== undefined) return hint.username === identity.username;
+    if (hint.owner !== undefined) return hint.owner === identity.username;
+    if (hint.sessionScoped) return false; // session-scoped but owner unknown → fail closed
+    return true;
   }
 
   /**
@@ -197,7 +247,7 @@ export class SseStreamManager {
 
   // ========== Broadcasting ==========
 
-  broadcast(event: string, data: unknown): void {
+  broadcast(event: string, data: unknown, hint?: SseRoutingHint): void {
     // Skip serialization entirely when no clients are listening
     if (this.sseClients.size === 0) return;
 
@@ -224,6 +274,8 @@ export class SseStreamManager {
     // active session's terminal output. Terminal events bypass this method
     // entirely (see flushSessionTerminalBatch — it applies the filter).
     for (const [client] of this.sseClients) {
+      // Multi-user ownership routing (no-op for identity-less single-user clients).
+      if (!this.canDeliver(client, hint)) continue;
       this.sendSSEPreformatted(client, message);
     }
   }
@@ -314,9 +366,15 @@ export class SseStreamManager {
       // terminal data is high-frequency and latency-sensitive.
       const padding = this._isTunnelActive ? SSE_PADDING : '';
       const message = `event: session:terminal\ndata: {"id":"${sessionId}","data":${escapedData}}\n\n` + padding;
+      // Raw terminal bytes are the highest-value payload: resolve the session owner
+      // ONCE and withhold the batch from any non-admin who is not the owner (fail
+      // closed if the owner is unknown). No-op for identity-less single-user clients.
+      const owner = this.deps.resolveSessionOwner?.(sessionId);
+      const termHint: SseRoutingHint = { owner, sessionScoped: true };
       for (const [client, filter] of this.sseClients) {
         // Skip clients that have a session filter and aren't subscribed to this session
         if (filter && !filter.has(sessionId)) continue;
+        if (!this.canDeliver(client, termHint)) continue;
         this.sendSSEPreformatted(client, message);
       }
     }
@@ -355,7 +413,11 @@ export class SseStreamManager {
       return;
     }
     for (const [, { sessionId, task }] of this.taskUpdateBatches) {
-      this.broadcast(SseEvent.TaskUpdated, { sessionId, task });
+      // Multi-user: batched task updates carry session state — route to the owner
+      // only (fail closed if unknown), matching flushSessionTerminalBatch. No-op for
+      // identity-less single-user clients (canDeliver short-circuits on no identity).
+      const owner = this.deps.resolveSessionOwner?.(sessionId);
+      this.broadcast(SseEvent.TaskUpdated, { sessionId, task }, { owner, sessionScoped: true });
     }
     this.taskUpdateBatches.clear();
   }
@@ -395,7 +457,11 @@ export class SseStreamManager {
       // Single expensive serialization per batch interval
       const state = this.deps.getSessionStateWithRespawn(sessionId);
       if (state) {
-        this.broadcast(SseEvent.SessionUpdated, state);
+        // Multi-user: the debounced session:updated blob carries name/workingDir/
+        // tokens/cost — route to the session owner only (fail closed if unknown),
+        // matching flushSessionTerminalBatch. No-op for single-user clients.
+        const owner = this.deps.resolveSessionOwner?.(sessionId);
+        this.broadcast(SseEvent.SessionUpdated, state, { owner, sessionScoped: true });
       }
     }
     this.stateUpdatePending.clear();

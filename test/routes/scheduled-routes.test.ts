@@ -174,8 +174,8 @@ describe('scheduled-routes', () => {
       // Bare { run } return (envelope-wrapped to { success:true, data:{ run } }
       // in production; harness sees the bare return).
       expect(body.run).toBeDefined();
-      // Should default to 60 minutes
-      expect(harness.ctx.startScheduledRun).toHaveBeenCalledWith('test', expect.any(String), 60);
+      // Should default to 60 minutes; 4th arg is the multi-user owner (undefined in single-user).
+      expect(harness.ctx.startScheduledRun).toHaveBeenCalledWith('test', expect.any(String), 60, undefined);
     });
   });
 

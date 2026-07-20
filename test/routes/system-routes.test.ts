@@ -225,7 +225,11 @@ describe('system-routes', () => {
       harness.ctx._session.status = 'working';
       harness.ctx.store.getDailyStats.mockReturnValue([
         {
-          date: new Date().toISOString().split('T')[0],
+          // LOCAL date (not toISOString/UTC): away-digest's dayOverlapsRange parses
+          // the date as local midnight, so a UTC date near the local-midnight boundary
+          // (e.g. running at 01:xx CEST = prior-day UTC) would fall outside the 1h
+          // window and make this assertion TZ/hour-flaky.
+          date: new Date().toLocaleDateString('en-CA'),
           inputTokens: 100,
           outputTokens: 200,
           estimatedCost: 0.02,

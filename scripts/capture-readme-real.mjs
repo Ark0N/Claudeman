@@ -51,6 +51,9 @@ async function newCtx(browser) {
         localStorage.setItem('codeman:skin', skin);
         localStorage.setItem('codeman-font-size', String(font));
         const blob = { skin, showFileBrowser: false, showProjectInsights: false };
+        // Don't auto-hide subagent windows that belong to a non-active tab — the
+        // subagent scene re-homes agents and needs both windows visible at once.
+        blob.subagentActiveTabOnly = false;
         if (planUsage) blob.showPlanUsageLimits = true;
         localStorage.setItem('codeman-app-settings', JSON.stringify(blob));
       } catch {
@@ -136,9 +139,9 @@ async function sceneSubagent(browser) {
   const sessions = await listSessions(page);
   const targetId = process.env.SUBAGENT_SID || (sessions.find((s) => s.mode === 'claude') || sessions[0])?.id;
   if (targetId) await page.evaluate((id) => window.app.selectSession(id), targetId);
-  // Wait (up to ~25s) for live subagents to arrive via SSE into app.subagents.
+  // Wait (up to ~45s) for live subagents to arrive via SSE into app.subagents.
   let agents = [];
-  for (let i = 0; i < 25; i++) {
+  for (let i = 0; i < 45; i++) {
     agents = await page.evaluate(() =>
       Array.from(window.app.subagents?.entries?.() || []).map(([id, a]) => ({ id, name: a.name ?? a.agentType ?? '' }))
     );
@@ -151,6 +154,44 @@ async function sceneSubagent(browser) {
     await context.close();
     return;
   }
+  // The window body renders from app.subagentActivity, which fills ONLY from live
+  // SSE tool-call/progress events — a fresh client never gets past activity replayed.
+  // So sit connected and wait for live activity to accumulate, then open the two
+  // agents that actually have content (otherwise the windows read "No activity yet").
+  let active = [];
+  for (let i = 0; i < 100; i++) {
+    active = await page.evaluate(() =>
+      Array.from(window.app.subagentActivity?.entries?.() || [])
+        .filter(([, arr]) => Array.isArray(arr) && arr.length >= 1)
+        .map(([id, arr]) => ({ id, n: arr.length }))
+        .sort((a, b) => b.n - a.n)
+    );
+    if (active.length >= 2) break;
+    // xhigh-effort agents churn in bursts between long thinking pauses, so be
+    // patient (~150s); accept a single populated window after ~45s if that's all.
+    if (i >= 30 && active.length >= 1) break;
+    await sleep(1500);
+  }
+  console.log('  agents with live activity:', JSON.stringify(active));
+  const openIds = (active.length ? active : agents).map((a) => a.id);
+  // Capture-only DOM nudge: on fresh dev sessions, a tab's claudeSessionId stays the
+  // Codeman id and never becomes the real Claude conversation UUID, so the window
+  // open-gate (claudeSessionId === agent.sessionId) + the activeTabOnly hide rule both
+  // fail. Re-home the chosen agents onto the active tab and align its claudeSessionId
+  // to the agents' (shared) sessionId so the windows open AND show their live activity.
+  await page.evaluate(
+    (ids) => {
+      const activeId = window.app.activeSessionId;
+      const tab = window.app.sessions.get(activeId);
+      ids.slice(0, 2).forEach((id) => {
+        const a = window.app.subagents.get(id);
+        if (!a) return;
+        a.parentSessionId = activeId;
+        if (tab && a.sessionId) tab.claudeSessionId = a.sessionId;
+      });
+    },
+    openIds
+  );
   await page.evaluate(
     (ids) => {
       ids.slice(0, 2).forEach((id) => {
@@ -159,22 +200,33 @@ async function sceneSubagent(browser) {
         } catch {}
       });
     },
-    agents.map((a) => a.id)
+    openIds
   );
   await sleep(2000);
   await page.evaluate(() => {
+    // Viewport-relative tiling: center two subagent windows over the terminal so
+    // the layout adapts to whatever VW/VH the capture uses (e.g. the HQ 1100×650
+    // recipe) instead of overflowing at narrower widths.
     const wins = Array.from(window.app.subagentWindows.values());
-    const place = [
-      { left: 360, top: 60, w: 430, h: 330 },
-      { left: 810, top: 60, w: 430, h: 330 },
-    ];
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const winW = Math.min(440, Math.floor((W - 60) / 2 - 10));
+    const winH = Math.min(360, Math.floor(H * 0.56));
+    const top = Math.floor(H * 0.16);
+    const gap = 16;
+    const totalW = winW * 2 + gap;
+    const startLeft = Math.max(16, Math.floor((W - totalW) / 2));
     wins.slice(0, 2).forEach((win, i) => {
       const el = win.element;
-      const p = place[i];
-      el.style.left = p.left + 'px';
-      el.style.top = p.top + 'px';
-      el.style.width = p.w + 'px';
-      el.style.height = p.h + 'px';
+      // Force visible: a freshly opened window may be hidden by the activeTabOnly
+      // rule before we override it (we also seed subagentActiveTabOnly:false).
+      win.hidden = false;
+      win.minimized = false;
+      el.style.display = 'flex';
+      el.style.left = startLeft + i * (winW + gap) + 'px';
+      el.style.top = top + 'px';
+      el.style.width = winW + 'px';
+      el.style.height = winH + 'px';
     });
   });
   await sleep(1500);
