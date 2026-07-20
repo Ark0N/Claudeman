@@ -15,6 +15,9 @@ import { randomBytes } from 'node:crypto';
 import { dataPath } from '../../config/instance.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type NiceConfig } from '../../types.js';
 import { isUnauthenticatedNetworkAcknowledged } from '../network-auth-policy.js';
+import { isMultiUserMode } from '../../config/multiuser.js';
+import { findUser } from '../../user-store.js';
+import { getAuthUser } from '../route-helpers.js';
 import {
   ConfigUpdateSchema,
   SettingsUpdateSchema,
@@ -159,12 +162,19 @@ export function registerSystemRoutes(
     };
   });
 
-  app.get('/api/tunnel/qr', async (_req, reply) => {
+  app.get('/api/tunnel/qr', async (req, reply) => {
     const url = ctx.tunnelManager.getUrl();
     if (!url) {
       return reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'Tunnel not running'));
     }
     try {
+      if (isMultiUserMode()) {
+        // A rotating global token cannot carry identity — mint a single-use token
+        // bound to the requesting user so the scanned code logs THEM in.
+        const shortCode = ctx.tunnelManager.mintUserToken(getAuthUser(req).username);
+        const svg = await ctx.tunnelManager.getQrSvgForCode(url, shortCode);
+        return { svg, authEnabled: true };
+      }
       const authPassword = process.env.CODEMAN_PASSWORD;
       if (authPassword) {
         // Auth enabled — use cached SVG with embedded short code
@@ -188,10 +198,11 @@ export function registerSystemRoutes(
 
   app.get('/q/:code', async (req, reply) => {
     const shortCode = (req.params as { code: string }).code;
+    const multiUser = isMultiUserMode();
     const authPassword = process.env.CODEMAN_PASSWORD;
 
-    // No point if auth isn't enabled — just redirect
-    if (!authPassword) {
+    // No point if auth isn't enabled — just redirect. Multi-user is always "enabled".
+    if (!multiUser && !authPassword) {
       return reply.redirect('/');
     }
 
@@ -203,10 +214,24 @@ export function registerSystemRoutes(
       return reply.code(429).send('Too Many Requests');
     }
 
-    // Validate and atomically consume the token
-    if (!shortCode || !ctx.tunnelManager.consumeToken(shortCode)) {
+    // Validate and atomically consume the token (with any bound identity).
+    const consumed = shortCode ? ctx.tunnelManager.consumeTokenWithIdentity(shortCode) : { ok: false };
+    // In multi-user mode a token MUST carry an identity (an identity-less rotating
+    // token can't create a scoped session), so reject those too.
+    if (!consumed.ok || (multiUser && !consumed.username)) {
       ctx.qrAuthFailures?.set(clientIp, qrFailures + 1);
       return reply.code(401).send('Invalid or expired QR code');
+    }
+
+    // Resolve the role for the bound user (disabled/deleted users fail closed).
+    let identity: { username: string; role: 'admin' | 'user' } | undefined;
+    if (multiUser && consumed.username) {
+      const user = await findUser(consumed.username);
+      if (!user || user.disabled) {
+        ctx.qrAuthFailures?.set(clientIp, qrFailures + 1);
+        return reply.code(401).send('Invalid or expired QR code');
+      }
+      identity = { username: user.username, role: user.role };
     }
 
     // Issue session cookie (same pattern as Basic Auth success path)
@@ -217,6 +242,9 @@ export function registerSystemRoutes(
       ua: clientUA,
       createdAt: Date.now(),
       method: 'qr',
+      username: identity?.username,
+      role: identity?.role,
+      mustChangePassword: false,
     });
     ctx.qrAuthFailures?.delete(clientIp);
 
@@ -585,7 +613,10 @@ export function registerSystemRoutes(
     // letting an operator opt in from the browser without setting the env var.
     // Guard runs BEFORE persisting so a refused tunnelEnabled:true is not saved.
     if (settings.tunnelEnabled === true && !ctx.tunnelManager.isRunning()) {
-      const acknowledged = isUnauthenticatedNetworkAcknowledged() || settings.acknowledgeUnauthTunnel === true;
+      // Multi-user mode makes the tunnel authenticated (every person has their own
+      // credential), so it satisfies the same requirement as CODEMAN_PASSWORD.
+      const acknowledged =
+        isMultiUserMode() || isUnauthenticatedNetworkAcknowledged() || settings.acknowledgeUnauthTunnel === true;
       if (!acknowledged) {
         const msg =
           'Refusing to start the Cloudflare tunnel without authentication: it would publish ' +

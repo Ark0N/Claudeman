@@ -135,6 +135,8 @@ import { SseEvent } from './sse-events.js';
 import { getLatestPlanUsage } from './plan-usage-latest.js';
 import type { ScheduledRun } from './ports/index.js';
 import { registerAuthMiddleware, registerSecurityHeaders, registerHostGuard } from './middleware/auth.js';
+import { isMultiUserMode } from '../config/multiuser.js';
+import { bootstrapInitialAdmin, hasUsers } from '../user-store.js';
 import { installRouteErrorHandler } from './route-error-handler.js';
 import { isExplicitlyEnabled, isLoopbackBindHost, buildHostPolicy, type HostPolicy } from './network-auth-policy.js';
 import {
@@ -155,6 +157,7 @@ import {
   registerSearchRoutes,
   registerOrchestratorRoutes,
   registerCronRoutes,
+  registerMeRoutes,
   registerWsRoutes,
 } from './routes/index.js';
 import { CronService } from '../cron/cron-service.js';
@@ -279,6 +282,7 @@ export class WebServer extends EventEmitter {
   private authFailures: StaleExpirationMap<string, number> | null = null;
   private qrAuthFailures: StaleExpirationMap<string, number> | null = null;
   private hookSecretFailures: StaleExpirationMap<string, number> | null = null;
+  private userFailures: StaleExpirationMap<string, number> | null = null;
   private pushStore: PushSubscriptionStore = new PushSubscriptionStore();
   private teamWatcher: TeamWatcher = new TeamWatcher();
   private _orchestratorLoop: import('../orchestrator-loop.js').OrchestratorLoop | null = null;
@@ -680,6 +684,7 @@ export class WebServer extends EventEmitter {
       this.authFailures = authState.authFailures;
       this.qrAuthFailures = authState.qrAuthFailures;
       this.hookSecretFailures = authState.hookSecretFailures;
+      this.userFailures = authState.userFailures;
     }
 
     // WebSocket support (terminal I/O — low-latency bidirectional channel)
@@ -899,6 +904,7 @@ export class WebServer extends EventEmitter {
     registerPlanRoutes(this.app, ctx);
     registerClipboardRoutes(this.app, ctx);
     registerSearchRoutes(this.app, ctx);
+    registerMeRoutes(this.app, ctx);
     registerOrchestratorRoutes(this.app, ctx);
 
     // Cron: build the service from the same context, recompute
@@ -1930,6 +1936,24 @@ export class WebServer extends EventEmitter {
   }
 
   async start(): Promise<void> {
+    // Multi-user first boot: create the initial admin from CODEMAN_USERNAME/PASSWORD
+    // if there are no users yet, else refuse to start (there would be no way in).
+    if (isMultiUserMode() && !this.testMode) {
+      const boot = await bootstrapInitialAdmin();
+      if (boot.status === 'missing-env') {
+        throw new Error(
+          'Multi-user mode is enabled but users.json has no users. Create the first admin with ' +
+            '`codeman users add <name> --admin` (or set CODEMAN_USERNAME/CODEMAN_PASSWORD for one-time bootstrap).'
+        );
+      }
+      if (boot.status === 'created') {
+        console.log(
+          `✓ Multi-user: bootstrapped initial admin "${boot.username}" from CODEMAN_USERNAME/CODEMAN_PASSWORD`
+        );
+      }
+      console.log('✓ Multi-user mode active (per-user accounts in users.json; CODEMAN_PASSWORD is ignored for login)');
+    }
+
     await this.setupRoutes();
 
     const lifecycleLog = getLifecycleLog();
@@ -2006,7 +2030,10 @@ export class WebServer extends EventEmitter {
     // "just worked" before. Instead we start and warn loudly, pointing at the ways
     // to secure it. --allow-unauthenticated-network just acknowledges the risk (a
     // terser note). See docs/security-architecture.md.
-    if (!isLoopbackBindHost(this.host) && !process.env.CODEMAN_PASSWORD) {
+    // Multi-user mode with >= 1 enabled user satisfies the auth requirement even
+    // without CODEMAN_PASSWORD (every person has their own credential).
+    const authActive = !!process.env.CODEMAN_PASSWORD || (isMultiUserMode() && (await hasUsers()));
+    if (!isLoopbackBindHost(this.host) && !authActive) {
       if (this.allowUnauthenticatedNetwork) {
         console.warn(
           `\n⚠  Codeman is reachable WITHOUT a password on ${displayHost}:${this.port} ` +
@@ -2636,6 +2663,10 @@ export class WebServer extends EventEmitter {
     if (this.hookSecretFailures) {
       this.hookSecretFailures.dispose();
       this.hookSecretFailures = null;
+    }
+    if (this.userFailures) {
+      this.userFailures.dispose();
+      this.userFailures = null;
     }
     this.activePlanOrchestrators.clear();
     this.cleaningUp.clear();

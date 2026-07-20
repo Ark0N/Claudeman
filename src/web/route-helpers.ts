@@ -10,13 +10,18 @@ import { realpathSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { homedir } from 'node:os';
 import type { z } from 'zod';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import { Session } from '../session.js';
-import { ApiErrorCode, createErrorResponse } from '../types.js';
+import { ApiErrorCode, createErrorResponse, type AuthUser } from '../types.js';
 import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
 import { SseEvent } from './sse-events.js';
 import type { SessionPort } from './ports/session-port.js';
 import type { EventPort } from './ports/event-port.js';
+import type { AuthSessionRecord } from './ports/auth-port.js';
+import type { StaleExpirationMap } from '../utils/index.js';
 import { dataPath } from '../config/instance.js';
+import { isMultiUserMode } from '../config/multiuser.js';
+import { SYNTHETIC_ADMIN } from '../user-store.js';
 
 // Shared path constants used across route modules. CASES_DIR (project folders)
 // stays shared across instances; SETTINGS_PATH is per-instance runtime state.
@@ -80,12 +85,68 @@ export function validateSessionFilePath(
 const MAX_HOOK_DATA_SIZE = 8 * 1024;
 
 /**
+ * Effective identity for a request. In multi-user mode this is the auth-decorated
+ * user; in single-user mode (or when unset) it defaults to a synthetic admin so
+ * downstream ownership checks are no-ops and there is ONE code path.
+ */
+export function getAuthUser(req: FastifyRequest): AuthUser {
+  return req.authUser ?? SYNTHETIC_ADMIN;
+}
+
+/**
+ * Whether an identity may see/act on a resource with the given owner. Always true
+ * in single-user mode; in multi-user, admins see everything and regular users only
+ * their own (an absent owner is legacy/unassigned = admin-only).
+ */
+export function canAccessOwned(user: AuthUser, owner: string | undefined): boolean {
+  if (!isMultiUserMode()) return true;
+  if (user.role === 'admin') return true;
+  return !!owner && owner === user.username;
+}
+
+/**
+ * First line of admin-only handlers: 403 FORBIDDEN + returns false when the caller
+ * is not an admin. Always true in single-user mode (the sole user is the admin).
+ */
+export function requireAdmin(req: FastifyRequest, reply: FastifyReply): boolean {
+  if (!isMultiUserMode()) return true;
+  if (getAuthUser(req).role === 'admin') return true;
+  reply.code(403).send(createErrorResponse(ApiErrorCode.FORBIDDEN));
+  return false;
+}
+
+/**
+ * Revoke every cookie session belonging to a user (optionally keeping one token,
+ * e.g. the caller's own during a self-service password change). Returns the count.
+ */
+export function revokeUserSessions(
+  authSessions: StaleExpirationMap<string, AuthSessionRecord> | null,
+  username: string,
+  exceptToken?: string
+): number {
+  if (!authSessions) return 0;
+  const norm = username.trim().toLowerCase();
+  let removed = 0;
+  for (const [token, record] of authSessions) {
+    if (record.username === norm && token !== exceptToken) {
+      authSessions.delete(token);
+      removed++;
+    }
+  }
+  return removed;
+}
+
+/**
  * Look up a session by ID or throw a structured error.
  * Replaces the pattern: `const session = sessions.get(id); if (!session) return createErrorResponse(...)`.
+ *
+ * When `req` is passed in multi-user mode, a session the caller does not own is
+ * reported as NOT_FOUND (never 403), so existence of other users' sessions is not
+ * leaked. Single-user / admin callers are unaffected.
  */
-export function findSessionOrFail(ctx: SessionPort, sessionId: string): Session {
+export function findSessionOrFail(ctx: SessionPort, sessionId: string, req?: FastifyRequest): Session {
   const session = ctx.sessions.get(sessionId);
-  if (!session) {
+  if (!session || (req && !canAccessOwned(getAuthUser(req), session.owner))) {
     throw Object.assign(new Error(`Session ${sessionId} not found`), {
       statusCode: 404,
       body: createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${sessionId} not found`),

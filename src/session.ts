@@ -412,6 +412,10 @@ export class Session extends EventEmitter {
   // local tmux + `docker exec`. The container is per-CASE (shared by sibling sessions).
   private readonly _docker?: SessionDocker;
 
+  // Owning username in multi-user mode (undefined in single-user). Stamped at create
+  // from req.authUser and round-tripped through recovery like _remote/_docker.
+  private _owner?: string;
+
   // Session color for visual differentiation
   private _color: import('./types.js').SessionColor = 'default';
 
@@ -487,6 +491,8 @@ export class Session extends EventEmitter {
       remote?: SessionRemote;
       /** Docker execution metadata for sessions launched inside a container via local tmux. */
       docker?: SessionDocker;
+      /** Owning username (multi-user mode); undefined in single-user. */
+      owner?: string;
     }
   ) {
     super();
@@ -561,6 +567,7 @@ export class Session extends EventEmitter {
     this._tmuxHistoryLimit = config.tmuxHistoryLimit ?? DEFAULT_TMUX_HISTORY_LIMIT;
     this._remote = config.remote;
     this._docker = config.docker;
+    this._owner = config.owner;
     if (config.attachmentHistory && config.attachmentHistory.length > 0) {
       this.restoreAttachmentHistory(config.attachmentHistory);
     }
@@ -665,6 +672,16 @@ export class Session extends EventEmitter {
   /** Docker execution metadata when this session runs inside a container, else undefined. */
   get docker(): SessionDocker | undefined {
     return this._docker;
+  }
+
+  /** Owning username in multi-user mode, else undefined. */
+  get owner(): string | undefined {
+    return this._owner;
+  }
+
+  /** Set the owning username (used by recovery to restore ownership). */
+  set owner(username: string | undefined) {
+    this._owner = username;
   }
 
   // Adopt a Claude conversation ID observed from an external source (e.g. hook
@@ -1027,6 +1044,7 @@ export class Session extends EventEmitter {
       workingDir: this.workingDir,
       remote: this._remote,
       docker: this._docker,
+      owner: this._owner,
       currentTaskId: this._currentTaskId,
       createdAt: this.createdAt,
       lastActivityAt: this._lastActivityAt,

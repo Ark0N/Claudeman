@@ -336,6 +336,8 @@ export interface SessionState {
   remote?: SessionRemote;
   /** Docker execution metadata, present when this session runs inside a container via local tmux + docker exec */
   docker?: SessionDocker;
+  /** Owning username in multi-user mode; undefined in single-user (ignored when the flag is off) */
+  owner?: string;
   /** ID of currently assigned task, null if none */
   currentTaskId: string | null;
   /** Timestamp when session was created */

@@ -202,6 +202,34 @@ export async function hasUsers(): Promise<boolean> {
   return (await readUsers()).length > 0;
 }
 
+// A precomputed dummy hash so an unknown/disabled user costs the same scrypt work
+// as a real verify (defeats username-enumeration by timing). Created once, lazily.
+let dummyHashPromise: Promise<PasswordHash> | null = null;
+function getDummyHash(): Promise<PasswordHash> {
+  if (!dummyHashPromise) dummyHashPromise = hashPassword('codeman-timing-equalization-placeholder');
+  return dummyHashPromise;
+}
+
+/**
+ * Verify a username/password against the store. Returns the record (plus whether it
+ * should be rehashed) on success, or null for wrong password / unknown / disabled
+ * user. Runs a dummy scrypt on the miss path so timing does not reveal which users
+ * exist. Never writes (the caller decides when to persist lastLogin / rehash).
+ */
+export async function verifyPassword(
+  username: string,
+  password: string
+): Promise<{ user: UserRecord; needsRehash: boolean } | null> {
+  const user = await findUser(username);
+  if (!user || user.disabled) {
+    await verifyPasswordHash(password, await getDummyHash());
+    return null;
+  }
+  const ok = await verifyPasswordHash(password, user.password);
+  if (!ok) return null;
+  return { user, needsRehash: needsRehash(user.password) };
+}
+
 export async function findUser(username: string): Promise<UserRecord | undefined> {
   const norm = normalizeUsername(username);
   if (!norm) return undefined;
