@@ -474,6 +474,13 @@ html.mobile-init .file-browser-panel {
     display: none !important;
   }
 
+  /* The big labeled Admin Panel button is desktop-only (admin-gated, revealed by
+     admin-ui.js). On phones admins still reach user management via App Settings →
+     Users, so the cramped header stays minimal. */
+  .btn-admin-panel {
+    display: none !important;
+  }
+
   /* Mobile voice input button in toolbar — initially hidden via inline style,
      shown by VoiceInput._showButtons() clearing the inline display */
   .btn-voice-mobile {

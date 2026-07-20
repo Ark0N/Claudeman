@@ -1,8 +1,12 @@
 /**
- * @fileoverview Multi-user frontend: identity boot, admin Users panel, and the
- * change-password flow. Self-contained (builds its own DOM) so it needs no
- * index.html surgery beyond the script tag and integrates with the existing App
- * Settings modal by injecting a "Users" tab (admins in multi-user mode only).
+ * @fileoverview Multi-user frontend: identity boot, admin Users panel, the
+ * change-password flow, and the full Admin Panel modal (user CRUD, per-user
+ * permissions, case-folder management) opened by the header Admin Panel button
+ * (#adminPanelBtn, revealed for admins in multi-user mode). Self-contained
+ * (builds its own DOM) so it needs no index.html surgery beyond the script tag
+ * and button; integrates with the existing App Settings modal by injecting a
+ * "Users" tab (admins in multi-user mode only). Live-refreshes on the SSE
+ * admin:usersChanged event (wired in app.js → window.codemanAdmin.onUsersChanged).
  *
  * @dependency app.js (window.app), settings-ui.js (App Settings modal + tab switch)
  * @loadorder after settings-ui.js / ultracode-panel.js, before session-ui.js
@@ -123,7 +127,10 @@
     content.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <strong>Users</strong>
-        <button class="btn btn-sm" id="adminAddUser">+ Add user</button>
+        <span>
+          <button class="btn btn-sm" id="adminOpenPanel">Open Admin Panel</button>
+          <button class="btn btn-sm" id="adminAddUser">+ Add user</button>
+        </span>
       </div>
       <p class="form-hint">Users share the host account; this separates workspaces, it does not sandbox
         users from each other. Pair with Docker cases for isolation.</p>
@@ -133,6 +140,7 @@
     // Render whenever the tab is shown (the shared switchSettingsTab toggles it).
     btn.addEventListener('click', renderUsers);
     content.querySelector('#adminAddUser').onclick = addUserFlow;
+    content.querySelector('#adminOpenPanel').onclick = openAdminPanel;
   }
 
   function esc(s) {
@@ -233,6 +241,292 @@
     renderUsers();
   }
 
+  // ── Admin Panel (big header-button modal) ─────────────────────────────────
+  let apModal = null;
+  let apUsersCache = [];
+  const apOpenDrawers = new Set(); // usernames with an expanded case-folder drawer
+
+  function fmtDate(ts) {
+    return ts ? new Date(ts).toLocaleString() : 'never';
+  }
+  function cssEsc(s) {
+    return window.CSS && window.CSS.escape ? window.CSS.escape(s) : String(s).replace(/"/g, '\\"');
+  }
+  function apSetMsg(t) {
+    const m = document.getElementById('apMsg');
+    if (m) m.textContent = t || '';
+  }
+
+  function buildAdminPanel() {
+    if (apModal) return apModal;
+    const el = document.createElement('div');
+    el.className = 'modal';
+    el.id = 'adminPanelModal';
+    el.style.zIndex = '3000';
+    el.innerHTML = `
+      <div class="modal-content" style="max-width:940px;width:min(96vw,940px)">
+        <div class="modal-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+          <h2 style="display:flex;align-items:center;gap:8px;margin:0">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            Admin Panel</h2>
+          <span id="apIdentity" style="color:var(--text-muted,#888);font-size:.85em"></span>
+        </div>
+        <div class="modal-body" style="max-height:70vh;overflow-y:auto">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <strong>Users</strong>
+            <button class="btn btn-sm btn-primary" id="apAddToggle">+ Add user</button>
+          </div>
+          <div id="apAddForm" style="display:none;border:1px solid var(--border,#333);border-radius:8px;padding:10px;margin-bottom:10px">
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+              <div class="form-row" style="margin:0"><label>Username</label>
+                <input id="apNewName" class="form-input" placeholder="lowercase a-z 0-9 _ -" style="width:170px"></div>
+              <div class="form-row" style="margin:0"><label>Role</label>
+                <select id="apNewRole" class="form-input" style="width:110px">
+                  <option value="user">user</option>
+                  <option value="admin">admin</option>
+                </select></div>
+              <div class="form-row" style="margin:0"><label>Password (optional)</label>
+                <input id="apNewPw" type="password" class="form-input" placeholder="blank = one-time pw"
+                  style="width:170px" autocomplete="new-password"></div>
+              <label style="display:flex;align-items:center;gap:5px;white-space:nowrap;margin-bottom:6px">
+                <input type="checkbox" id="apNewBypass"> allow bypass permissions</label>
+              <button class="btn btn-sm btn-primary" id="apCreateUser" style="margin-bottom:2px">Create</button>
+            </div>
+            <p class="form-hint" style="margin:6px 0 0">Without a password a one-time password is generated and shown
+              once; the user must change it on first login. "Bypass" allows shell sessions, cron launch commands, and
+              skip-permissions agents.</p>
+          </div>
+          <div id="apOtp" style="display:none;border:1px solid var(--accent,#38b6f0);border-radius:8px;padding:10px;margin-bottom:10px"></div>
+          <div id="apTable">Loading…</div>
+          <p class="form-hint" style="margin-top:10px">Users share the host OS account: this separates workspaces, it
+            does not sandbox users from each other. Pair with Docker cases for isolation.</p>
+          <p id="apMsg" style="min-height:1.2em;color:var(--text-muted,#888)"></p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" id="apClose">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(el);
+    el.querySelector('#apClose').onclick = () => (el.style.display = 'none');
+    el.addEventListener('click', (e) => {
+      if (e.target === el) el.style.display = 'none';
+    });
+    el.querySelector('#apAddToggle').onclick = () => {
+      const f = el.querySelector('#apAddForm');
+      f.style.display = f.style.display === 'none' ? '' : 'none';
+      if (f.style.display === '') f.querySelector('#apNewName').focus();
+    };
+    el.querySelector('#apCreateUser').onclick = createUserFromForm;
+    apModal = el;
+    return el;
+  }
+
+  function showOneTimePassword(username, otp) {
+    const box = document.getElementById('apOtp');
+    if (!box) return;
+    box.style.display = '';
+    box.innerHTML = `One-time password for <strong>${esc(username)}</strong> (shown once, copy it now):
+      <code style="user-select:all;font-size:1.05em;margin:0 8px">${esc(otp)}</code>
+      <button class="btn btn-xs" id="apOtpCopy">Copy</button>
+      <button class="btn btn-xs" id="apOtpDismiss">Dismiss</button>`;
+    box.querySelector('#apOtpCopy').onclick = () => {
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(otp).then(() => apSetMsg('Password copied to clipboard.'));
+      }
+    };
+    box.querySelector('#apOtpDismiss').onclick = () => {
+      box.style.display = 'none';
+      box.innerHTML = '';
+    };
+  }
+
+  async function createUserFromForm() {
+    const name = (document.getElementById('apNewName').value || '').trim().toLowerCase();
+    const role = document.getElementById('apNewRole').value;
+    const pw = document.getElementById('apNewPw').value;
+    const bypass = document.getElementById('apNewBypass').checked;
+    if (!name) return apSetMsg('Enter a username.');
+    const body = { username: name, role };
+    if (pw) body.password = pw;
+    if (bypass) body.canBypassPermissions = true;
+    const r = await apiSend('POST', '/api/admin/users', body);
+    if (!r.ok) return apSetMsg((r.body && r.body.error) || 'Create failed.');
+    document.getElementById('apNewName').value = '';
+    document.getElementById('apNewPw').value = '';
+    document.getElementById('apNewBypass').checked = false;
+    apSetMsg(`Created ${name}.`);
+    if (r.data && r.data.oneTimePassword) showOneTimePassword(name, r.data.oneTimePassword);
+    renderPanel();
+  }
+
+  async function renderPanel() {
+    const table = document.getElementById('apTable');
+    if (!table) return;
+    let users;
+    try {
+      users = await apiGet('/api/admin/users');
+    } catch {
+      table.innerHTML = 'Failed to load users.';
+      return;
+    }
+    apUsersCache = users;
+    const meName = (window.__codemanUser || {}).username;
+    const rows = users
+      .map((u) => {
+        const st = u.stats || {};
+        const you = u.username === meName ? ' <span style="color:var(--accent,#38b6f0)">(you)</span>' : '';
+        const role = `<span style="font-weight:600;color:${
+          u.role === 'admin' ? 'var(--accent,#38b6f0)' : 'var(--text-muted,#888)'
+        }">${u.role}</span>`;
+        const status = u.disabled
+          ? '<span style="color:var(--red,#c33)">disabled</span>'
+          : '<span style="color:var(--accent-soft,#4b9)">enabled</span>';
+        const pwFlag = u.mustChangePassword ? ' · must-change-pw' : '';
+        return `<tr data-u="${esc(u.username)}">
+          <td><strong>${esc(u.username)}</strong>${you}</td>
+          <td>${role}</td>
+          <td>${status}${pwFlag}</td>
+          <td>${u.canBypassPermissions ? 'yes' : 'no'}</td>
+          <td style="white-space:nowrap">${st.liveSessions ?? 0} live · ${st.activeSessions ?? 0} logins ·
+            <button class="btn btn-xs" data-act="cases">${st.caseCount ?? 0} cases</button></td>
+          <td style="font-size:.85em;color:var(--text-muted,#888)">${fmtDate(u.lastLoginAt)}</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-xs" data-act="role">${u.role === 'admin' ? 'Demote' : 'Promote'}</button>
+            <button class="btn btn-xs" data-act="disabled">${u.disabled ? 'Enable' : 'Disable'}</button>
+            <button class="btn btn-xs" data-act="bypass">${u.canBypassPermissions ? 'Revoke bypass' : 'Grant bypass'}</button>
+            <button class="btn btn-xs" data-act="reset">Reset pw</button>
+            <button class="btn btn-xs" data-act="logout">Logout</button>
+            <button class="btn btn-xs" data-act="delete" style="color:var(--red,#c33)">Delete</button>
+          </td></tr>
+          <tr data-drawer="${esc(u.username)}" style="display:none"><td colspan="7"></td></tr>`;
+      })
+      .join('');
+    table.innerHTML = `<table style="width:100%;border-collapse:collapse" class="admin-users">
+      <thead><tr>
+        <th align="left">User</th><th align="left">Role</th><th align="left">Status</th>
+        <th align="left">Bypass</th><th align="left">Activity</th><th align="left">Last login</th><th></th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
+    table.querySelectorAll('button[data-act]').forEach((b) => {
+      const username = b.closest('tr').dataset.u;
+      b.onclick = () => {
+        if (b.dataset.act === 'cases') return toggleCaseDrawer(username);
+        return panelAction(
+          username,
+          b.dataset.act,
+          apUsersCache.find((x) => x.username === username)
+        );
+      };
+    });
+    // Re-open drawers that were expanded before this refresh.
+    for (const name of [...apOpenDrawers]) {
+      if (users.some((u) => u.username === name)) void renderCaseDrawer(name);
+      else apOpenDrawers.delete(name);
+    }
+  }
+
+  async function panelAction(username, act, u) {
+    const path = `/api/admin/users/${encodeURIComponent(username)}`;
+    if (act === 'role') {
+      const r = await apiSend('PATCH', path, { role: u.role === 'admin' ? 'user' : 'admin' });
+      apSetMsg(r.ok ? `Updated ${username}.` : (r.body && r.body.error) || 'Failed.');
+    } else if (act === 'disabled') {
+      const r = await apiSend('PATCH', path, { disabled: !u.disabled });
+      apSetMsg(r.ok ? `Updated ${username}.` : (r.body && r.body.error) || 'Failed.');
+    } else if (act === 'bypass') {
+      const r = await apiSend('PATCH', path, { canBypassPermissions: !u.canBypassPermissions });
+      apSetMsg(r.ok ? `Updated ${username}.` : (r.body && r.body.error) || 'Failed.');
+    } else if (act === 'reset') {
+      if (!window.confirm(`Reset ${username}'s password? They must set a new one on next login.`)) return;
+      const r = await apiSend('POST', `${path}/reset-password`);
+      if (r.ok && r.data && r.data.oneTimePassword) showOneTimePassword(username, r.data.oneTimePassword);
+      else if (!r.ok) apSetMsg((r.body && r.body.error) || 'Reset failed.');
+    } else if (act === 'logout') {
+      const r = await apiSend('POST', `${path}/logout`);
+      apSetMsg(r.ok ? `Revoked ${(r.data && r.data.revoked) || 0} login session(s) for ${username}.` : 'Failed.');
+    } else if (act === 'delete') {
+      if (!window.confirm(`Delete user "${username}"? Their live sessions are killed and logins revoked.`)) return;
+      const deleteSpace = window.confirm(
+        `Also delete ${username}'s files (their cases/workspace folder)?\nOK = delete files too, Cancel = keep files on disk.`
+      );
+      const r = await apiSend('DELETE', path, { deleteSpace });
+      apSetMsg(r.ok ? `Deleted ${username}.` : (r.body && r.body.error) || 'Delete failed.');
+    }
+    renderPanel();
+  }
+
+  async function toggleCaseDrawer(username) {
+    if (apOpenDrawers.has(username)) {
+      apOpenDrawers.delete(username);
+      const row = apModal && apModal.querySelector(`tr[data-drawer="${cssEsc(username)}"]`);
+      if (row) row.style.display = 'none';
+      return;
+    }
+    apOpenDrawers.add(username);
+    await renderCaseDrawer(username);
+  }
+
+  async function renderCaseDrawer(username) {
+    const row = apModal && apModal.querySelector(`tr[data-drawer="${cssEsc(username)}"]`);
+    if (!row) return;
+    row.style.display = '';
+    const cell = row.firstElementChild;
+    cell.innerHTML = 'Loading folders…';
+    let data;
+    try {
+      data = await apiGet(`/api/admin/users/${encodeURIComponent(username)}/cases`);
+    } catch {
+      cell.innerHTML = 'Failed to load case folders.';
+      return;
+    }
+    const items = (data.cases || [])
+      .map(
+        (c) => `
+      <li style="display:flex;gap:10px;align-items:center;padding:2px 0">
+        <code>${esc(c.name)}</code>
+        <span style="color:var(--text-muted,#888);font-size:.85em">${fmtDate(c.modifiedAt)}</span>
+        ${c.liveSessions ? `<span style="color:var(--yellow,#ca0)">${c.liveSessions} live session(s)</span>` : ''}
+        <button class="btn btn-xs" data-case="${esc(c.name)}"
+          ${c.liveSessions ? 'disabled title="In use by a live session"' : ''}>Delete</button>
+      </li>`
+      )
+      .join('');
+    cell.innerHTML = `<div style="padding:6px 4px 6px 16px">
+      <div style="color:var(--text-muted,#888);font-size:.85em;margin-bottom:4px">${esc(data.dir || '')}</div>
+      ${items ? `<ul style="list-style:none;margin:0;padding:0">${items}</ul>` : 'No case folders yet.'}
+    </div>`;
+    cell.querySelectorAll('button[data-case]').forEach((b) => {
+      b.onclick = async () => {
+        const name = b.dataset.case;
+        if (!window.confirm(`Permanently delete ${username}'s case folder "${name}" and ALL files in it?`)) return;
+        const r = await apiSend(
+          'DELETE',
+          `/api/admin/users/${encodeURIComponent(username)}/cases/${encodeURIComponent(name)}`
+        );
+        apSetMsg(r.ok ? `Deleted folder ${name}.` : (r.body && r.body.error) || 'Delete failed.');
+        renderPanel();
+      };
+    });
+  }
+
+  function openAdminPanel() {
+    const me = window.__codemanUser || {};
+    if (!me.multiUser || me.role !== 'admin') return;
+    const el = buildAdminPanel();
+    el.querySelector('#apIdentity').textContent = `signed in as ${me.username} (admin)`;
+    apSetMsg('');
+    el.style.display = 'flex';
+    renderPanel();
+  }
+
+  /** SSE admin:usersChanged: live-refresh whichever admin views are visible. */
+  function onUsersChanged() {
+    if (apModal && apModal.style.display === 'flex') renderPanel();
+    const tab = document.getElementById('settings-users');
+    if (tab && !tab.classList.contains('hidden')) renderUsers();
+  }
+
   // ── Boot ──────────────────────────────────────────────────────────────────
   async function boot() {
     installInterceptor();
@@ -247,6 +541,9 @@
     if (window.__codemanUser.mustChangePassword) openChangePassword(true);
     if (window.__codemanUser.multiUser && window.__codemanUser.role === 'admin') {
       injectUsersTab();
+      // Reveal the big header Admin Panel button (template ships it hidden).
+      const btn = document.getElementById('adminPanelBtn');
+      if (btn) btn.classList.remove('btn-admin-panel--hidden');
     }
   }
 
@@ -256,5 +553,5 @@
     boot();
   }
 
-  window.codemanAdmin = { openChangePassword, renderUsers };
+  window.codemanAdmin = { openChangePassword, renderUsers, openAdminPanel, onUsersChanged };
 })();

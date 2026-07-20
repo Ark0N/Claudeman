@@ -27,6 +27,7 @@ function resp(status: number, body: unknown) {
 async function bootWith(me: Record<string, unknown>) {
   const dom = new JSDOM(
     `<!doctype html><body>
+      <button id="adminPanelBtn" class="btn-admin-panel btn-admin-panel--hidden"></button>
       <div class="modal" id="appSettingsModal"><div class="modal-tabs"></div><div class="modal-body"></div></div>
     </body>`,
     { url: 'http://localhost/', runScripts: 'outside-only' }
@@ -70,6 +71,65 @@ describe('admin-ui boot', () => {
     // Forced: the cancel button is hidden.
     expect((modal!.querySelector('#cpCancel') as HTMLElement).style.display).toBe('none');
   });
+
+  it('reveals the header Admin Panel button for a multi-user admin only', async () => {
+    const hidden = (w: Window) =>
+      w.document.getElementById('adminPanelBtn')!.classList.contains('btn-admin-panel--hidden');
+    const a = await bootWith({ username: 'root', role: 'admin', multiUser: true, mustChangePassword: false });
+    expect(hidden(a.win)).toBe(false);
+    const b = await bootWith({ username: 'joe', role: 'user', multiUser: true, mustChangePassword: false });
+    expect(hidden(b.win)).toBe(true);
+    const c = await bootWith({ username: 'admin', role: 'admin', multiUser: false, mustChangePassword: false });
+    expect(hidden(c.win)).toBe(true);
+  });
+});
+
+describe('admin panel modal', () => {
+  it('opens for an admin, renders users, and shows the case-folder drawer', async () => {
+    const { win } = await bootWith({ username: 'root', role: 'admin', multiUser: true, mustChangePassword: false });
+    win.fetch = (async (path: string) => {
+      if (path === '/api/admin/users')
+        return resp(200, {
+          success: true,
+          data: [
+            {
+              username: 'root',
+              role: 'admin',
+              disabled: false,
+              mustChangePassword: false,
+              canBypassPermissions: true,
+              createdAt: 1,
+              lastLoginAt: 2,
+              stats: { liveSessions: 1, activeSessions: 2, caseCount: 1 },
+            },
+          ],
+        });
+      if (path === '/api/admin/users/root/cases')
+        return resp(200, {
+          success: true,
+          data: { dir: '/tmp/spaces/root/cases', cases: [{ name: 'proj1', modifiedAt: 3, liveSessions: 0 }] },
+        });
+      return resp(200, { success: true });
+    }) as unknown as typeof fetch;
+
+    (win as unknown as { codemanAdmin: { openAdminPanel: () => void } }).codemanAdmin.openAdminPanel();
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    const modal = win.document.getElementById('adminPanelModal') as HTMLElement;
+    expect(modal).toBeTruthy();
+    expect(modal.style.display).toBe('flex');
+    expect(modal.querySelector('#apTable')!.textContent).toContain('root');
+
+    (modal.querySelector('button[data-act="cases"]') as HTMLButtonElement).click();
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    expect(modal.textContent).toContain('proj1');
+    expect(modal.textContent).toContain('/tmp/spaces/root/cases');
+  });
+
+  it('does NOT open for a regular user', async () => {
+    const { win } = await bootWith({ username: 'joe', role: 'user', multiUser: true, mustChangePassword: false });
+    (win as unknown as { codemanAdmin: { openAdminPanel: () => void } }).codemanAdmin.openAdminPanel();
+    expect(win.document.getElementById('adminPanelModal')).toBeFalsy();
+  });
 });
 
 describe('index.html wiring', () => {
@@ -79,5 +139,10 @@ describe('index.html wiring', () => {
     const session = INDEX_HTML.indexOf('session-ui.js');
     expect(admin).toBeGreaterThan(settings);
     expect(session).toBeGreaterThan(admin);
+  });
+
+  it('ships the header Admin Panel button hidden by default', () => {
+    expect(INDEX_HTML).toContain('id="adminPanelBtn"');
+    expect(INDEX_HTML).toContain('btn-admin-panel--hidden');
   });
 });

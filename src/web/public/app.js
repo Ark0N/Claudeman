@@ -1479,6 +1479,10 @@ class CodemanApp {
         console.error('[SSE] docker container recreated:', err);
       }
     });
+    // Multi-user admin: live-refresh whichever admin views (panel/Users tab) are open.
+    addListener(SSE_EVENTS.ADMIN_USERS_CHANGED, () => {
+      window.codemanAdmin?.onUsersChanged?.();
+    });
     // Base image auto-build on first Docker case (build-on-first-use). A single
     // multi-minute event; surface start/finish so the Run spinner is explained.
     addListener(SSE_EVENTS.DOCKER_IMAGE_BUILD_STARTED, () => {

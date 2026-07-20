@@ -145,3 +145,58 @@ describe('admin API', () => {
     }
   });
 });
+
+describe('admin case-folder API', () => {
+  const kim = { Authorization: basic('kim', 'kimpass1234') };
+
+  it('lists a user case folders (admin only, hidden dirs excluded)', async () => {
+    // Fresh regular user with a known password (joe's was reset above).
+    const created = await fetch(url('/api/admin/users'), {
+      method: 'POST',
+      headers: admin,
+      body: JSON.stringify({ username: 'kim', role: 'user', password: 'kimpass1234' }),
+    });
+    expect(created.status).toBe(200);
+    await fs.mkdir(path.join(spacesDir, 'kim', 'cases', 'proj1'), { recursive: true });
+    await fs.mkdir(path.join(spacesDir, 'kim', 'cases', '.hidden'), { recursive: true });
+
+    const forbidden = await fetch(url('/api/admin/users/kim/cases'), { headers: kim });
+    expect(forbidden.status).toBe(403);
+
+    const res = await fetch(url('/api/admin/users/kim/cases'), { headers: adminNoBody });
+    expect(res.status).toBe(200);
+    const { data } = await res.json();
+    expect(data.cases.map((c: { name: string }) => c.name)).toEqual(['proj1']);
+    expect(data.cases[0].liveSessions).toBe(0);
+  });
+
+  it('404s for an unknown user', async () => {
+    const res = await fetch(url('/api/admin/users/ghost/cases'), { headers: adminNoBody });
+    expect(res.status).toBe(404);
+  });
+
+  it('deletes a case folder, refusing unsafe names and symlinks', async () => {
+    // Traversal-shaped name: rejected before any filesystem access.
+    const bad = await fetch(url('/api/admin/users/kim/cases/..%2Fescape'), {
+      method: 'DELETE',
+      headers: adminNoBody,
+    });
+    expect([400, 404]).toContain(bad.status);
+
+    // A symlinked "case" is refused, never followed.
+    await fs.mkdir(path.join(spacesDir, 'outside'), { recursive: true });
+    await fs.symlink(path.join(spacesDir, 'outside'), path.join(spacesDir, 'kim', 'cases', 'link'));
+    const sl = await fetch(url('/api/admin/users/kim/cases/link'), { method: 'DELETE', headers: adminNoBody });
+    expect(sl.status).toBe(400);
+    await expect(fs.stat(path.join(spacesDir, 'outside'))).resolves.toBeTruthy();
+
+    // A real folder is deleted.
+    const del = await fetch(url('/api/admin/users/kim/cases/proj1'), { method: 'DELETE', headers: adminNoBody });
+    expect(del.status).toBe(200);
+    await expect(fs.stat(path.join(spacesDir, 'kim', 'cases', 'proj1'))).rejects.toBeTruthy();
+
+    // Deleting it again 404s.
+    const gone = await fetch(url('/api/admin/users/kim/cases/proj1'), { method: 'DELETE', headers: adminNoBody });
+    expect(gone.status).toBe(404);
+  });
+});

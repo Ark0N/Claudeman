@@ -1002,6 +1002,43 @@ body {
   transform: rotate(45deg);
 }
 
+/* Admin Panel header button: only shown to admins in multi-user mode (marker
+   class removed by admin-ui.js after identity boot). Deliberately BIG and
+   prominent: it is the entry point to user/permission management. */
+.btn-admin-panel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%);
+  color: var(--accent-ink);
+  border: none;
+  border-radius: var(--btn-radius);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 45%, transparent);
+  transition: all var(--transition-smooth);
+}
+
+.btn-admin-panel:hover {
+  filter: brightness(1.1);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 65%, transparent);
+}
+
+.btn-admin-panel--hidden {
+  display: none !important;
+}
+
+/* Admin user tables (Admin Panel modal + the App Settings Users tab). */
+.admin-users th,
+.admin-users td {
+  padding: 5px 12px 5px 0;
+  vertical-align: top;
+  border-bottom: 1px solid color-mix(in srgb, var(--text-muted) 20%, transparent);
+}
+
 /* Multi-monitor header button: hidden by default (opt-in via App Settings →
    Display → "Header Displays"). The server strips this class at render when the
    setting is on; the client toggles it live on save. */
