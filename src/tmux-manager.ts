@@ -563,6 +563,8 @@ function buildClaudePermissionFlags(claudeMode?: ClaudeMode, allowedTools?: stri
   switch (mode) {
     case 'dangerously-skip-permissions':
       return ' --dangerously-skip-permissions';
+    case 'auto':
+      return ' --permission-mode auto';
     case 'allowedTools':
       if (allowedTools) {
         // Sanitize: allow tool names with patterns like Bash(git:*), space/comma-separated
@@ -674,7 +676,7 @@ function buildEffortSettingsFlag(effort?: EffortLevel): string {
   return flag && value ? ` ${flag} '${value}'` : '';
 }
 
-function buildSpawnCommand(options: {
+export function buildSpawnCommand(options: {
   mode: SessionMode;
   sessionId: string;
   model?: string;

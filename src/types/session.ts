@@ -35,10 +35,11 @@ export type SessionStatus = 'idle' | 'busy' | 'stopped' | 'error';
 /**
  * Claude CLI startup permission mode.
  * - `'dangerously-skip-permissions'`: Bypass all permission prompts (default)
+ * - `'auto'`: Anthropic's classifier-guarded low-prompt mode (`--permission-mode auto`)
  * - `'normal'`: Standard mode with permission prompts
  * - `'allowedTools'`: Only allow specific tools (requires allowedTools list)
  */
-export type ClaudeMode = 'dangerously-skip-permissions' | 'normal' | 'allowedTools';
+export type ClaudeMode = 'dangerously-skip-permissions' | 'auto' | 'normal' | 'allowedTools';
 
 /** Session mode: which CLI backend a session runs */
 export type SessionMode = 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini';

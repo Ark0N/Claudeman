@@ -21,6 +21,8 @@ function buildPermissionArgs(claudeMode: ClaudeMode, allowedTools?: string): str
   switch (claudeMode) {
     case 'dangerously-skip-permissions':
       return ['--dangerously-skip-permissions'];
+    case 'auto':
+      return ['--permission-mode', 'auto'];
     case 'allowedTools':
       if (allowedTools) {
         return ['--allowedTools', allowedTools];
