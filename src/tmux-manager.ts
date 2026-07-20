@@ -563,6 +563,8 @@ function buildClaudePermissionFlags(claudeMode?: ClaudeMode, allowedTools?: stri
   switch (mode) {
     case 'dangerously-skip-permissions':
       return ' --dangerously-skip-permissions';
+    case 'auto':
+      return ' --permission-mode auto';
     case 'allowedTools':
       if (allowedTools) {
         // Sanitize: allow tool names with patterns like Bash(git:*), space/comma-separated
@@ -674,7 +676,7 @@ function buildEffortSettingsFlag(effort?: EffortLevel): string {
   return flag && value ? ` ${flag} '${value}'` : '';
 }
 
-function buildSpawnCommand(options: {
+export function buildSpawnCommand(options: {
   mode: SessionMode;
   sessionId: string;
   model?: string;
@@ -777,9 +779,22 @@ export function buildRemoteLaunchCommand(options: {
   mode: SessionMode;
   remote: SessionRemote;
   sessionId: string;
+  claudeMode?: ClaudeMode;
+  allowedTools?: string;
 }): string {
-  const { mode, remote, sessionId } = options;
-  const modeCommand = remote.commands?.[mode] || defaultRemoteCommandForMode(mode);
+  const { mode, remote, sessionId, claudeMode, allowedTools } = options;
+  // §6.3: honor the session's EFFECTIVE claude permission mode on remote instead of
+  // hardcoding --dangerously-skip-permissions, so a non-granted multi-user user's
+  // downgraded 'auto' actually reaches the remote agent (the default command otherwise
+  // ignored claudeMode). A per-host `commands.claude` override stays authoritative
+  // (admin's explicit choice). For the DEFAULT single-user config (skip), the emitted
+  // command is byte-identical to before. Non-claude modes are unchanged.
+  const override = remote.commands?.[mode];
+  const modeCommand = override
+    ? override
+    : mode === 'claude'
+      ? `exec claude${buildClaudePermissionFlags(claudeMode, allowedTools)}`
+      : defaultRemoteCommandForMode(mode);
   const remoteName = remoteTmuxSessionName(sessionId);
 
   // Innermost: the command tmux runs in the new pane. Run via `/bin/sh -c` by
@@ -1487,6 +1502,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       historyLimit = DEFAULT_TMUX_HISTORY_LIMIT,
       remote,
       docker,
+      owner,
     } = options;
     const muxName = `codeman-${sessionId.slice(0, 8)}`;
 
@@ -1507,6 +1523,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         workingDir,
         remote,
         docker,
+        owner,
         mode,
         attached: false,
         name,
@@ -1555,7 +1572,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       const fullCmd = docker
         ? buildDockerLaunchCommand(resolveDockerLaunchOptions(mode, docker, sessionId, resumeSessionId))
         : remote
-          ? buildRemoteLaunchCommand({ mode, remote, sessionId })
+          ? buildRemoteLaunchCommand({ mode, remote, sessionId, claudeMode, allowedTools })
           : localFullCmd;
 
       // Create tmux session in three steps to handle cold-start (no server running)
@@ -1683,6 +1700,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         workingDir,
         remote,
         docker,
+        owner,
         mode,
         attached: false,
         name,
@@ -1809,7 +1827,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const fullCmd = docker
       ? buildDockerLaunchCommand(resolveDockerLaunchOptions(mode, docker, sessionId, resumeSessionId))
       : remote
-        ? buildRemoteLaunchCommand({ mode, remote, sessionId })
+        ? buildRemoteLaunchCommand({ mode, remote, sessionId, claudeMode, allowedTools })
         : localFullCmd;
 
     try {

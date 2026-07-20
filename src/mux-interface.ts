@@ -39,6 +39,8 @@ export interface MuxSession {
   remote?: SessionRemote;
   /** Docker execution metadata for local tmux sessions wrapping `docker exec` */
   docker?: SessionDocker;
+  /** Owning username in multi-user mode (round-tripped through recovery like remote/docker) */
+  owner?: string;
   /** Session mode */
   mode: SessionMode;
   /** Whether webserver is attached to this session */
@@ -84,6 +86,8 @@ export interface CreateSessionOptions {
   remote?: SessionRemote;
   /** Docker execution metadata for local tmux sessions wrapping `docker exec` */
   docker?: SessionDocker;
+  /** Owning username in multi-user mode; persisted for recovery. */
+  owner?: string;
 }
 
 /** Options for respawning a dead pane. */
@@ -110,6 +114,8 @@ export interface RespawnPaneOptions {
   remote?: SessionRemote;
   /** Docker execution metadata for local tmux sessions wrapping `docker exec` */
   docker?: SessionDocker;
+  /** Owning username (multi-user); redundant on respawn since the Session object survives, kept for shape parity. */
+  owner?: string;
 }
 
 /** Options for pane buffer capture (COD-47 full-history mode). */

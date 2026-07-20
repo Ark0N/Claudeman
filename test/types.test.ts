@@ -375,9 +375,17 @@ describe('types utility functions', () => {
       expect(ApiErrorCode.INTERNAL_ERROR).toBe('INTERNAL_ERROR');
     });
 
-    it('should have 9 error codes', () => {
+    it('should have 14 error codes', () => {
       const codes = Object.values(ApiErrorCode);
-      expect(codes).toHaveLength(9);
+      expect(codes).toHaveLength(14);
+    });
+
+    it('includes the multi-user error codes', () => {
+      expect(ApiErrorCode.FORBIDDEN).toBe('FORBIDDEN');
+      expect(ApiErrorCode.PASSWORD_CHANGE_REQUIRED).toBe('PASSWORD_CHANGE_REQUIRED');
+      expect(ApiErrorCode.USER_EXISTS).toBe('USER_EXISTS');
+      expect(ApiErrorCode.USER_NOT_FOUND).toBe('USER_NOT_FOUND');
+      expect(ApiErrorCode.LAST_ADMIN).toBe('LAST_ADMIN');
     });
   });
 });

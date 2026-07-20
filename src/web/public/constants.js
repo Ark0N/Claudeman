@@ -481,6 +481,9 @@ const SSE_EVENTS = {
   DOCKER_IMAGE_BUILD_PROGRESS: 'docker:imageBuildProgress',
   DOCKER_IMAGE_BUILD_COMPLETE: 'docker:imageBuildComplete',
   DOCKER_IMAGE_BUILD_FAILED: 'docker:imageBuildFailed',
+  // Multi-user (admin-only / targeted)
+  ADMIN_USERS_CHANGED: 'admin:usersChanged',
+  AUTH_PASSWORD_CHANGE_REQUIRED: 'auth:passwordChangeRequired',
 };
 
 // ═══════════════════════════════════════════════════════════════

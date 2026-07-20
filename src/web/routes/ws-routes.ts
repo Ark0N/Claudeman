@@ -35,6 +35,7 @@ import type { SessionPort } from '../ports/session-port.js';
 import { MAX_INPUT_LENGTH } from '../../config/terminal-limits.js';
 import { isAllowedRequestHost, isAllowedRequestOrigin, type HostPolicy } from '../network-auth-policy.js';
 import { WsConnectionRegistry } from '../ws-connection-registry.js';
+import { canAccessOwned, getAuthUser } from '../route-helpers.js';
 
 /** Micro-batch interval for terminal output (ms). Short enough for low latency,
  *  long enough to group Ink's rapid cursor-up redraw sequences into single frames. */
@@ -90,6 +91,17 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
 
       if (!session) {
         socket.close(4004, 'Session not found');
+        return;
+      }
+
+      // Multi-user owner gate: writing to this socket injects keystrokes into the
+      // agent, so a non-admin may only attach to their OWN session. The global auth
+      // hook already ran on the upgrade request and decorated req.authUser (an
+      // unauthenticated upgrade never reaches here — the hook 401s the handshake).
+      // findSessionOrFail throws an HTTP-shaped error, so the check is inlined here
+      // as a 4003 close. No-op in single-user mode (canAccessOwned returns true).
+      if (!canAccessOwned(getAuthUser(req), session.owner)) {
+        socket.close(4003, 'Forbidden');
         return;
       }
 

@@ -35,10 +35,11 @@ export type SessionStatus = 'idle' | 'busy' | 'stopped' | 'error';
 /**
  * Claude CLI startup permission mode.
  * - `'dangerously-skip-permissions'`: Bypass all permission prompts (default)
+ * - `'auto'`: Anthropic's classifier-guarded low-prompt mode (`--permission-mode auto`)
  * - `'normal'`: Standard mode with permission prompts
  * - `'allowedTools'`: Only allow specific tools (requires allowedTools list)
  */
-export type ClaudeMode = 'dangerously-skip-permissions' | 'normal' | 'allowedTools';
+export type ClaudeMode = 'dangerously-skip-permissions' | 'auto' | 'normal' | 'allowedTools';
 
 /** Session mode: which CLI backend a session runs */
 export type SessionMode = 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini';
@@ -84,6 +85,8 @@ export interface RemoteHost extends RemoteSshOptions {
 export interface RemoteCase {
   name: string;
   type: 'remote';
+  /** Owning username in multi-user mode; absent = legacy/unassigned (admin-only). */
+  owner?: string;
   hostId: string;
   remotePath: string;
 }
@@ -173,6 +176,8 @@ export interface DockerHost {
 export interface DockerCase {
   name: string;
   type: 'docker';
+  /** Owning username in multi-user mode; absent = legacy/unassigned (admin-only). */
+  owner?: string;
   hostId: string;
   /** Absolute HOST directory: the bind-mount source AND Session.workingDir (real host bytes). */
   hostWorkspacePath: string;
@@ -335,6 +340,8 @@ export interface SessionState {
   remote?: SessionRemote;
   /** Docker execution metadata, present when this session runs inside a container via local tmux + docker exec */
   docker?: SessionDocker;
+  /** Owning username in multi-user mode; undefined in single-user (ignored when the flag is off) */
+  owner?: string;
   /** ID of currently assigned task, null if none */
   currentTaskId: string | null;
   /** Timestamp when session was created */

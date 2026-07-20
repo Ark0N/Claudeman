@@ -584,7 +584,11 @@ program
     '--allow-unauthenticated-network',
     'Allow non-loopback web access without CODEMAN_PASSWORD (dangerous; terminal control is exposed)'
   )
+  .option('--multiuser', 'Enable opt-in multi-user mode (named users in ~/.codeman/users.json; env: CODEMAN_MULTIUSER)')
   .action(async (options) => {
+    // The flag is surfaced to the rest of the process via the env var so
+    // isMultiUserMode() has a single source of truth (see config/multiuser.ts).
+    if (options.multiuser) process.env.CODEMAN_MULTIUSER = '1';
     const { startWebServer } = await import('./web/server.js');
     const host = options.host;
     const port = parseInt(options.port, 10);
@@ -622,6 +626,168 @@ program
       process.on('SIGHUP', () => shutdown('SIGHUP'));
     } catch (err) {
       console.error(chalk.red(`✗ Failed to start web server: ${getErrorMessage(err)}`));
+      process.exit(1);
+    }
+  });
+
+// ============ Multi-user Commands ============
+//
+// Operate directly on ~/.codeman/users.json (via user-store) with NO running
+// server, honoring CODEMAN_INSTANCE. This is the headless bootstrap path and the
+// recovery answer to "locked out: last admin forgot password".
+
+/** Read a password from stdin without echoing. Falls back to plain read on non-TTY. */
+function promptHiddenPassword(question: string): Promise<string> {
+  const stdin = process.stdin;
+  if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') {
+    // Non-interactive: read a single line from stdin.
+    return new Promise((resolve) => {
+      let buf = '';
+      stdin.setEncoding('utf8');
+      stdin.on('data', (d) => (buf += d));
+      stdin.on('end', () => resolve(buf.replace(/\r?\n$/, '')));
+    });
+  }
+  return new Promise((resolve) => {
+    process.stdout.write(question);
+    let input = '';
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding('utf8');
+    const onData = (chunk: string) => {
+      for (const c of chunk) {
+        if (c === '\n' || c === '\r' || c === '\u0004') {
+          stdin.setRawMode!(false);
+          stdin.pause();
+          stdin.removeListener('data', onData);
+          process.stdout.write('\n');
+          resolve(input);
+          return;
+        } else if (c === '\u0003') {
+          process.stdout.write('\n');
+          process.exit(1);
+        } else if (c === '\u007f' || c === '\b') {
+          input = input.slice(0, -1);
+        } else {
+          input += c;
+        }
+      }
+    };
+    stdin.on('data', onData);
+  });
+}
+
+function readAllStdin(): Promise<string> {
+  return new Promise((resolve) => {
+    let buf = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (d) => (buf += d));
+    process.stdin.on('end', () => resolve(buf.replace(/\r?\n$/, '')));
+  });
+}
+
+const usersCmd = program.command('users').description('Manage multi-user accounts (~/.codeman/users.json)');
+
+usersCmd
+  .command('add <name>')
+  .description('Create a user (prompts for password; use --password-stdin for scripts)')
+  .option('--admin', 'Create as an admin')
+  .option('--password-stdin', 'Read the password from stdin instead of prompting')
+  .action(async (name, options) => {
+    const { createUser, isValidUsername } = await import('./user-store.js');
+    if (!isValidUsername(name)) {
+      console.error(chalk.red('✗ Username must be lowercase, start alphanumeric, 2-32 chars ([a-z0-9_-])'));
+      process.exit(1);
+    }
+    try {
+      let password: string;
+      if (options.passwordStdin) {
+        password = await readAllStdin();
+      } else {
+        password = await promptHiddenPassword('New password: ');
+        const confirm = await promptHiddenPassword('Confirm password: ');
+        if (password !== confirm) {
+          console.error(chalk.red('✗ Passwords do not match'));
+          process.exit(1);
+        }
+      }
+      if (!password || password.length < 8) {
+        console.error(chalk.red('✗ Password must be at least 8 characters'));
+        process.exit(1);
+      }
+      const user = await createUser({ username: name, role: options.admin ? 'admin' : 'user', password });
+      console.log(chalk.green(`✓ Created ${user.role} "${user.username}"`));
+    } catch (err) {
+      console.error(chalk.red(`✗ ${getErrorMessage(err)}`));
+      process.exit(1);
+    }
+  });
+
+usersCmd
+  .command('passwd <name>')
+  .description('Reset a user password')
+  .option('--password-stdin', 'Read the new password from stdin instead of prompting')
+  .action(async (name, options) => {
+    const { setPassword } = await import('./user-store.js');
+    try {
+      let password: string;
+      if (options.passwordStdin) {
+        password = await readAllStdin();
+      } else {
+        password = await promptHiddenPassword('New password: ');
+        const confirm = await promptHiddenPassword('Confirm password: ');
+        if (password !== confirm) {
+          console.error(chalk.red('✗ Passwords do not match'));
+          process.exit(1);
+        }
+      }
+      await setPassword(name, password, { mustChangePassword: false });
+      console.log(chalk.green(`✓ Password updated for "${name}"`));
+    } catch (err) {
+      console.error(chalk.red(`✗ ${getErrorMessage(err)}`));
+      process.exit(1);
+    }
+  });
+
+usersCmd
+  .command('list')
+  .alias('ls')
+  .description('List all users')
+  .action(async () => {
+    const { readUsers } = await import('./user-store.js');
+    const users = await readUsers(true);
+    if (users.length === 0) {
+      console.log(chalk.yellow('No users defined (run: codeman users add <name> --admin)'));
+      return;
+    }
+    console.log(chalk.bold('\nUsers:'));
+    for (const u of users) {
+      const role = u.role === 'admin' ? chalk.magenta('admin') : chalk.cyan('user ');
+      const state = u.disabled ? chalk.red('disabled') : chalk.green('enabled ');
+      const flags = [u.mustChangePassword ? 'must-change-pw' : '', u.canBypassPermissions ? 'can-bypass' : '']
+        .filter(Boolean)
+        .join(' ');
+      console.log(`  ${role} ${state} ${u.username}${flags ? chalk.gray(`  [${flags}]`) : ''}`);
+    }
+    console.log('');
+  });
+
+usersCmd
+  .command('rm <name>')
+  .description('Delete a user')
+  .option('--delete-space', "Also delete the user's ~/codeman-users/<name> space")
+  .action(async (name, options) => {
+    const { deleteUser, deleteUserSpace } = await import('./user-store.js');
+    try {
+      await deleteUser(name);
+      if (options.deleteSpace) {
+        await deleteUserSpace(name);
+        console.log(chalk.green(`✓ Deleted user "${name}" and their space`));
+      } else {
+        console.log(chalk.green(`✓ Deleted user "${name}" (space left on disk)`));
+      }
+    } catch (err) {
+      console.error(chalk.red(`✗ ${getErrorMessage(err)}`));
       process.exit(1);
     }
   });

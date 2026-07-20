@@ -28,9 +28,23 @@ import {
 import { exportDockerCase, importDockerBundle, listDockerExports, exportBundleName } from '../../docker-export.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { writeHooksConfig } from '../../hooks-config.js';
-import { CASES_DIR, SETTINGS_PATH, validatePathWithinBase, parseBody, readJsonConfig } from '../route-helpers.js';
+import {
+  canAccessOwned,
+  getAuthUser,
+  isAdmin,
+  isWorkingDirAllowed,
+  ownerFor,
+  resolveCasesDir,
+  SETTINGS_PATH,
+  validatePathWithinBase,
+  parseBody,
+  readJsonConfig,
+} from '../route-helpers.js';
+import { isMultiUserMode } from '../../config/multiuser.js';
+import type { AuthUser } from '../../types.js';
 import { SseEvent } from '../sse-events.js';
 import type { EventPort, ConfigPort } from '../ports/index.js';
+import type { FastifyRequest } from 'fastify';
 import { dataPath, getDataDir } from '../../config/instance.js';
 import {
   checkDockerAvailable,
@@ -78,11 +92,16 @@ async function readLinkedCases(): Promise<Record<string, string>> {
   return readJsonConfig<Record<string, string>>(LINKED_CASES_FILE, 'linked cases', {});
 }
 
-/** Resolve a case name to its directory path, checking linked cases first, then CASES_DIR. */
-async function resolveCasePath(name: string): Promise<string> {
+/**
+ * Resolve a case name to its directory path, checking linked cases first, then the
+ * user's case space (per-user in multi-user mode, the shared CASES_DIR otherwise).
+ */
+async function resolveCasePath(name: string, user?: AuthUser): Promise<string> {
   const linkedCases = await readLinkedCases();
-  if (linkedCases[name]) return linkedCases[name];
-  return join(CASES_DIR, name);
+  // Linked cases carry no owner (legacy/admin-only registry): a non-admin must not
+  // resolve arbitrary linked paths by name in multi-user mode (path-escape guard).
+  if (linkedCases[name] && (!isMultiUserMode() || user?.role === 'admin')) return linkedCases[name];
+  return join(resolveCasesDir(user), name);
 }
 
 /**
@@ -134,47 +153,54 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
   // ========== List Cases ==========
 
-  app.get('/api/cases', async (): Promise<CaseInfo[]> => {
+  app.get('/api/cases', async (req): Promise<CaseInfo[]> => {
     const cases: CaseInfo[] = [];
+    const user = getAuthUser(req);
+    const admin = isAdmin(req);
+    // Non-admins enumerate their OWN case space; admins see the shared CASES_DIR.
+    const listBase = resolveCasesDir(user);
 
-    // Get cases from CASES_DIR
+    // Get cases from the user's (or shared) cases dir
     try {
-      const entries = await fs.readdir(CASES_DIR, { withFileTypes: true });
+      const entries = await fs.readdir(listBase, { withFileTypes: true });
       for (const e of entries) {
         if (e.isDirectory() && SAFE_CASE_NAME.test(e.name)) {
           cases.push({
             name: e.name,
-            path: join(CASES_DIR, e.name),
-            hasClaudeMd: existsSync(join(CASES_DIR, e.name, 'CLAUDE.md')),
+            path: join(listBase, e.name),
+            hasClaudeMd: existsSync(join(listBase, e.name, 'CLAUDE.md')),
             location: 'local',
           });
         }
       }
     } catch {
-      // CASES_DIR may not exist yet
+      // dir may not exist yet
     }
 
-    // Get linked cases
+    // Linked cases (v1 registry has no owner) are admin-only in multi-user mode.
     const linkedCases = await readLinkedCases();
     const existingNames = new Set(cases.map((c) => c.name));
-    for (const [name, path] of Object.entries(linkedCases)) {
-      if (!existingNames.has(name) && SAFE_CASE_NAME.test(name) && existsSync(path)) {
-        cases.push({
-          name,
-          path,
-          hasClaudeMd: existsSync(join(path, 'CLAUDE.md')),
-          linked: true,
-          location: 'linked-local',
-        });
+    if (admin) {
+      for (const [name, path] of Object.entries(linkedCases)) {
+        if (!existingNames.has(name) && SAFE_CASE_NAME.test(name) && existsSync(path)) {
+          cases.push({
+            name,
+            path,
+            hasClaudeMd: existsSync(join(path, 'CLAUDE.md')),
+            linked: true,
+            location: 'linked-local',
+          });
+        }
       }
     }
 
-    // Get remote cases
+    // Get remote cases (owner-scoped; legacy no-owner = admin-only)
     const remoteHosts = await readRemoteHosts(CODEMAN_CONFIG_DIR);
     const remoteHostMap = new Map(remoteHosts.map((host) => [host.id, host]));
     for (const remoteCase of await readRemoteCases(CODEMAN_CONFIG_DIR)) {
       const host = remoteHostMap.get(remoteCase.hostId);
       if (!host || !SAFE_CASE_NAME.test(remoteCase.name)) continue;
+      if (!admin && !canAccessOwned(user, remoteCase.owner)) continue;
       existingNames.add(remoteCase.name);
       const remoteCaseInfo: CaseInfo = {
         name: remoteCase.name,
@@ -202,6 +228,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     for (const dockerCase of await readDockerCases(CODEMAN_CONFIG_DIR)) {
       const host = dockerHostMap.get(dockerCase.hostId);
       if (!host || !SAFE_CASE_NAME.test(dockerCase.name)) continue;
+      if (!admin && !canAccessOwned(user, dockerCase.owner)) continue;
       existingNames.add(dockerCase.name);
       const container = dockerCase.container ?? dockerContainerName(dockerCase.name);
       const dockerCaseInfo: CaseInfo = {
@@ -243,7 +270,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
   app.post('/api/cases', async (req): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
     const { name, description } = parseBody(CreateCaseSchema, req.body);
 
-    const casePath = validatePathWithinBase(name, CASES_DIR);
+    const casePath = validatePathWithinBase(name, resolveCasesDir(getAuthUser(req)));
     if (!casePath) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
     }
@@ -272,9 +299,21 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     }
   });
 
-  app.get('/api/remote-hosts', async () => readRemoteHosts(CODEMAN_CONFIG_DIR));
+  // Hosts are machine-level infra config (ssh users/identity paths): non-admins get an
+  // empty list in multi-user mode, matching the admin-only write side. No-op otherwise.
+  app.get('/api/remote-hosts', async (req) =>
+    isMultiUserMode() && !isAdmin(req) ? [] : readRemoteHosts(CODEMAN_CONFIG_DIR)
+  );
 
-  app.post('/api/remote-hosts', async (req): Promise<ApiResponse<{ host: unknown }>> => {
+  // Hosts are machine-level resources: only admins may define them in multi-user mode.
+  const adminOnly = (req: FastifyRequest, reply: { code: (n: number) => unknown }): ApiResponse<never> | null =>
+    isAdmin(req)
+      ? null
+      : (reply.code(403), createErrorResponse(ApiErrorCode.FORBIDDEN, 'Admin only in multi-user mode'));
+
+  app.post('/api/remote-hosts', async (req, reply): Promise<ApiResponse<{ host: unknown }>> => {
+    const denied = adminOnly(req, reply);
+    if (denied) return denied;
     const host = parseBody(RemoteHostSchema, req.body);
     const hosts = await readRemoteHosts(CODEMAN_CONFIG_DIR);
     if (hosts.some((item) => item.id === host.id)) {
@@ -284,7 +323,9 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     return { success: true, data: { host } };
   });
 
-  app.put('/api/remote-hosts/:id', async (req): Promise<ApiResponse<{ host: unknown }>> => {
+  app.put('/api/remote-hosts/:id', async (req, reply): Promise<ApiResponse<{ host: unknown }>> => {
+    const denied = adminOnly(req, reply);
+    if (denied) return denied;
     const { id } = req.params as { id: string };
     const host = parseBody(RemoteHostSchema, { ...(req.body as object), id });
     const hosts = await readRemoteHosts(CODEMAN_CONFIG_DIR);
@@ -296,7 +337,9 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     return { success: true, data: { host } };
   });
 
-  app.delete('/api/remote-hosts/:id', async (req): Promise<ApiResponse<{ id: string }>> => {
+  app.delete('/api/remote-hosts/:id', async (req, reply): Promise<ApiResponse<{ id: string }>> => {
+    const denied = adminOnly(req, reply);
+    if (denied) return denied;
     const { id } = req.params as { id: string };
     const cases = await readRemoteCases(CODEMAN_CONFIG_DIR);
     if (cases.some((item) => item.hostId === id)) {
@@ -311,7 +354,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
   });
 
   app.post('/api/cases/remote-link', async (req): Promise<ApiResponse<{ case: unknown }>> => {
-    const remoteCase = { ...parseBody(RemoteCaseLinkSchema, req.body), type: 'remote' as const };
+    const remoteCase = { ...parseBody(RemoteCaseLinkSchema, req.body), type: 'remote' as const, owner: ownerFor(req) };
     const hosts = await readRemoteHosts(CODEMAN_CONFIG_DIR);
     const host = hosts.find((item) => item.id === remoteCase.hostId);
     if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
@@ -321,7 +364,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     if (
       remoteCases.some((item) => item.name === remoteCase.name) ||
       linkedCases[remoteCase.name] ||
-      existsSync(join(CASES_DIR, remoteCase.name))
+      existsSync(join(resolveCasesDir(getAuthUser(req)), remoteCase.name))
     ) {
       return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
     }
@@ -341,9 +384,15 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
   // ========== Docker hosts + docker cases (COD-Docker) ==========
 
-  app.get('/api/docker-hosts', async () => readDockerHosts(CODEMAN_CONFIG_DIR));
+  // Hosts are machine-level infra config (images/mounts/env): non-admins get an empty
+  // list in multi-user mode, matching the admin-only write side. No-op otherwise.
+  app.get('/api/docker-hosts', async (req) =>
+    isMultiUserMode() && !isAdmin(req) ? [] : readDockerHosts(CODEMAN_CONFIG_DIR)
+  );
 
-  app.post('/api/docker-hosts', async (req): Promise<ApiResponse<{ host: unknown }>> => {
+  app.post('/api/docker-hosts', async (req, reply): Promise<ApiResponse<{ host: unknown }>> => {
+    const denied = adminOnly(req, reply);
+    if (denied) return denied;
     const host = parseBody(DockerHostSchema, req.body);
     const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
     if (hosts.some((item) => item.id === host.id)) {
@@ -353,7 +402,9 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     return { success: true, data: { host } };
   });
 
-  app.put('/api/docker-hosts/:id', async (req): Promise<ApiResponse<{ host: unknown }>> => {
+  app.put('/api/docker-hosts/:id', async (req, reply): Promise<ApiResponse<{ host: unknown }>> => {
+    const denied = adminOnly(req, reply);
+    if (denied) return denied;
     const { id } = req.params as { id: string };
     const host = parseBody(DockerHostSchema, { ...(req.body as object), id });
     const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
@@ -365,7 +416,9 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     return { success: true, data: { host } };
   });
 
-  app.delete('/api/docker-hosts/:id', async (req): Promise<ApiResponse<{ id: string }>> => {
+  app.delete('/api/docker-hosts/:id', async (req, reply): Promise<ApiResponse<{ id: string }>> => {
+    const denied = adminOnly(req, reply);
+    if (denied) return denied;
     const { id } = req.params as { id: string };
     const cases = await readDockerCases(CODEMAN_CONFIG_DIR);
     if (cases.some((item) => item.hostId === id)) {
@@ -386,7 +439,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     ): Promise<
       ApiResponse<{ case: unknown; capsEnforced?: boolean; isDesktop?: boolean; imageBuilding?: boolean }>
     > => {
-      const dockerCase = { ...parseBody(DockerCaseLinkSchema, req.body), type: 'docker' as const };
+      const dockerCase = {
+        ...parseBody(DockerCaseLinkSchema, req.body),
+        type: 'docker' as const,
+        owner: ownerFor(req),
+      };
       const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
       const host = hosts.find((item) => item.id === dockerCase.hostId);
       if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
@@ -396,9 +453,15 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       if (
         dockerCases.some((item) => item.name === dockerCase.name) ||
         linkedCases[dockerCase.name] ||
-        existsSync(join(CASES_DIR, dockerCase.name))
+        existsSync(join(resolveCasesDir(getAuthUser(req)), dockerCase.name))
       ) {
         return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
+      }
+
+      // Confine the bind-mounted workspace to the caller's own space BEFORE creating it
+      // (also removes the arbitrary-dir-creation primitive). No-op for admins/single-user.
+      if (!isWorkingDirAllowed(getAuthUser(req), dockerCase.hostWorkspacePath)) {
+        return createErrorResponse(ApiErrorCode.FORBIDDEN, 'hostWorkspacePath is outside your workspace');
       }
 
       // The workspace is a REAL host directory (bind-mounted into the container), so
@@ -460,7 +523,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     > => {
       const body = parseBody(DockerQuickCreateSchema, req.body);
       const { name, description } = body;
-      const casePath = validatePathWithinBase(name, CASES_DIR);
+      const casePath = validatePathWithinBase(name, resolveCasesDir(getAuthUser(req)));
       if (!casePath) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
 
       // Collision across every case kind.
@@ -525,7 +588,13 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
           availability.error || 'docker daemon is not available'
         );
       }
-      const dockerCase = { name, type: 'docker' as const, hostId: host.id, hostWorkspacePath: casePath };
+      const dockerCase = {
+        name,
+        type: 'docker' as const,
+        hostId: host.id,
+        hostWorkspacePath: casePath,
+        owner: ownerFor(req),
+      };
       const imageGate = await ensureCaseImage(ctx.broadcast, toSessionDocker(host, dockerCase), name);
       if (!imageGate.ok) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, imageGate.error);
@@ -644,9 +713,15 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     if (
       dockerCases.some((item) => item.name === newCaseName) ||
       linkedCases[newCaseName] ||
-      existsSync(join(CASES_DIR, newCaseName))
+      existsSync(join(resolveCasesDir(getAuthUser(req)), newCaseName))
     ) {
       return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
+    }
+
+    // Import extracts a tar into destWorkspacePath (later becomes Session.workingDir):
+    // confine it to the caller's own space. No-op for admins/single-user.
+    if (!isWorkingDirAllowed(getAuthUser(req), destWorkspacePath)) {
+      return createErrorResponse(ApiErrorCode.FORBIDDEN, 'destWorkspacePath is outside your workspace');
     }
 
     const timestamp = Date.now();
@@ -681,6 +756,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       hostId,
       hostWorkspacePath: destWorkspacePath,
       containerWorkdir: result.manifest.containerWorkdir,
+      owner: ownerFor(req),
     };
     await writeDockerCases(CODEMAN_CONFIG_DIR, [...dockerCases, newCase]);
     ctx.broadcast(SseEvent.DockerImportComplete, { name: newCaseName, path: destWorkspacePath, type: 'docker' });
@@ -688,7 +764,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
   });
 
   // Link an existing folder as a case
-  app.post('/api/cases/link', async (req): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
+  app.post('/api/cases/link', async (req, reply): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
+    // Linking writes an arbitrary absolute path into the shared ownerless registry:
+    // admin-only in multi-user mode (mirrors host CRUD + the admin-only GET listing).
+    const denied = adminOnly(req, reply);
+    if (denied) return denied;
     const { name, path: folderPath } = parseBody(LinkCaseSchema, req.body, 'Invalid request body');
 
     // Expand ~ to home directory
@@ -700,7 +780,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     }
 
     // Check if case name already exists in CASES_DIR
-    const casePath = join(CASES_DIR, name);
+    const casePath = join(resolveCasesDir(getAuthUser(req)), name);
     if (existsSync(casePath)) {
       return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'A case with this name already exists in codeman-cases.');
     }
@@ -735,27 +815,31 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
   app.delete('/api/cases/:name', async (req): Promise<ApiResponse<{ name: string }>> => {
     const { name } = req.params as { name: string };
+    const user = getAuthUser(req);
 
-    if (!validatePathWithinBase(name, CASES_DIR)) {
+    if (!validatePathWithinBase(name, resolveCasesDir(user))) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
     }
 
+    // Fold ownership INTO the match (don't early-return): a non-owned same-named remote/
+    // docker case is skipped so control falls through to the caller's own local delete.
+    // canAccessOwned is all-true for admins/single-user, so flag-OFF stays byte-identical.
     const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
-    if (remoteCases.some((item) => item.name === name)) {
+    if (remoteCases.some((item) => item.name === name && canAccessOwned(user, item.owner))) {
       await writeRemoteCases(
         CODEMAN_CONFIG_DIR,
-        remoteCases.filter((item) => item.name !== name)
+        remoteCases.filter((item) => !(item.name === name && canAccessOwned(user, item.owner)))
       );
       ctx.broadcast(SseEvent.CaseDeleted, { name, type: 'remote-unlinked' });
       return { success: true, data: { name } };
     }
 
     const dockerCases = await readDockerCases(CODEMAN_CONFIG_DIR);
-    const dockerCase = dockerCases.find((item) => item.name === name);
+    const dockerCase = dockerCases.find((item) => item.name === name && canAccessOwned(user, item.owner));
     if (dockerCase) {
       await writeDockerCases(
         CODEMAN_CONFIG_DIR,
-        dockerCases.filter((item) => item.name !== name)
+        dockerCases.filter((item) => item !== dockerCase)
       );
       // Best-effort `docker rm -f` the per-case container (case-delete is the
       // explicit teardown that removes it; the bind-mounted workspace survives).
@@ -776,9 +860,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       return { success: true, data: { name } };
     }
 
-    // Check linked cases first — unlink only, don't delete the actual directory
+    // Check linked cases first — unlink only, don't delete the actual directory.
+    // Linked cases carry no owner (admin-only WRITE in multi-user mode), so a non-admin
+    // must not unlink one either; skip so control falls through to their local delete.
     const linkedCases = await readLinkedCases();
-    if (linkedCases[name]) {
+    if (linkedCases[name] && (!isMultiUserMode() || isAdmin(req))) {
       delete linkedCases[name];
       try {
         await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(linkedCases, null, 2));
@@ -790,7 +876,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     }
 
     // Case in CASES_DIR — delete the entire directory
-    const casePath = join(CASES_DIR, name);
+    const casePath = join(resolveCasesDir(getAuthUser(req)), name);
     if (!existsSync(casePath)) {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, `Case "${name}" not found`);
     }
@@ -832,12 +918,16 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
   app.get('/api/cases/:name', async (req) => {
     const { name } = req.params as { name: string };
 
-    if (!validatePathWithinBase(name, CASES_DIR)) {
+    if (!validatePathWithinBase(name, resolveCasesDir(getAuthUser(req)))) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
     }
 
+    // Fold ownership INTO the match (don't early-return): a non-owned same-named remote/
+    // docker case is skipped so control falls through to the caller's own LOCAL case
+    // (remote/docker names are globally unique, local names per-user). No metadata is
+    // disclosed for a foreign case. canAccessOwned is allow-all for admins/single-user.
     const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
-    const remoteCase = remoteCases.find((item) => item.name === name);
+    const remoteCase = remoteCases.find((item) => item.name === name && canAccessOwned(getAuthUser(req), item.owner));
     if (remoteCase) {
       const host = (await readRemoteHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === remoteCase.hostId);
       if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
@@ -855,7 +945,9 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       };
     }
 
-    const dockerCase = (await readDockerCases(CODEMAN_CONFIG_DIR)).find((item) => item.name === name);
+    const dockerCase = (await readDockerCases(CODEMAN_CONFIG_DIR)).find(
+      (item) => item.name === name && canAccessOwned(getAuthUser(req), item.owner)
+    );
     if (dockerCase) {
       const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === dockerCase.hostId);
       if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
@@ -875,13 +967,13 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       };
     }
 
-    const casePath = await resolveCasePath(name);
+    const casePath = await resolveCasePath(name, getAuthUser(req));
 
     if (!existsSync(casePath)) {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Case not found');
     }
 
-    const linked = casePath !== join(CASES_DIR, name);
+    const linked = casePath !== join(resolveCasesDir(getAuthUser(req)), name);
     return {
       name,
       path: casePath,
@@ -894,12 +986,12 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
   app.get('/api/cases/:name/fix-plan', async (req) => {
     const { name } = req.params as { name: string };
 
-    if (!validatePathWithinBase(name, CASES_DIR)) {
+    if (!validatePathWithinBase(name, resolveCasesDir(getAuthUser(req)))) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
     }
 
     // Get case path (check linked cases first, then CASES_DIR)
-    const casePath = await resolveCasePath(name);
+    const casePath = await resolveCasePath(name, getAuthUser(req));
 
     const fixPlanPath = join(casePath, '@fix_plan.md');
 
@@ -999,11 +1091,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
   app.get('/api/cases/:caseName/ralph-wizard/files', async (req) => {
     const { caseName } = req.params as { caseName: string };
-    if (!validatePathWithinBase(caseName, CASES_DIR)) {
+    if (!validatePathWithinBase(caseName, resolveCasesDir(getAuthUser(req)))) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
     }
 
-    const casePath = await resolveCasePath(caseName);
+    const casePath = await resolveCasePath(caseName, getAuthUser(req));
 
     const wizardDir = join(casePath, 'ralph-wizard');
 
@@ -1042,7 +1134,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
   // Cache disabled to ensure fresh prompts when starting new plan generations
   app.get('/api/cases/:caseName/ralph-wizard/file/:filePath', async (req, reply) => {
     const { caseName, filePath } = req.params as { caseName: string; filePath: string };
-    if (!validatePathWithinBase(caseName, CASES_DIR)) {
+    if (!validatePathWithinBase(caseName, resolveCasesDir(getAuthUser(req)))) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
     }
 
@@ -1051,7 +1143,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     reply.header('Pragma', 'no-cache');
     reply.header('Expires', '0');
 
-    const casePath = await resolveCasePath(caseName);
+    const casePath = await resolveCasePath(caseName, getAuthUser(req));
 
     const wizardDir = join(casePath, 'ralph-wizard');
 

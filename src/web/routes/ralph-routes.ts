@@ -13,13 +13,22 @@ import { Session, isExternalCliMode } from '../../session.js';
 import { RespawnController } from '../../respawn-controller.js';
 import { RalphConfigSchema, FixPlanImportSchema, RalphPromptWriteSchema, RalphLoopStartSchema } from '../schemas.js';
 import { SseEvent } from '../sse-events.js';
-import { autoConfigureRalph, CASES_DIR, SETTINGS_PATH, findSessionOrFail, parseBody } from '../route-helpers.js';
+import {
+  autoConfigureRalph,
+  getAuthUser,
+  ownerFor,
+  resolveCasesDir,
+  sessionCapacityMessage,
+  SETTINGS_PATH,
+  findSessionOrFail,
+  parseBody,
+} from '../route-helpers.js';
+import { resolveClaudeModeForUsername } from '../../user-store.js';
 import { writeHooksConfig, stripCaseEnvKeys } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { buildRalphLoopPrompt } from '../../prompts/index.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
 import type { SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort } from '../ports/index.js';
-import { MAX_CONCURRENT_SESSIONS } from '../../config/map-limits.js';
 
 export function registerRalphRoutes(
   app: FastifyInstance,
@@ -42,7 +51,7 @@ export function registerRalphRoutes(
         reset?: boolean | 'full';
         disableAutoEnable?: boolean;
       };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     // Ralph tracker is not supported for external-CLI sessions (opencode/codex)
     if (isExternalCliMode(session.mode)) {
@@ -118,7 +127,7 @@ export function registerRalphRoutes(
   // Reset circuit breaker for Ralph tracker
   app.post('/api/sessions/:id/ralph-circuit-breaker/reset', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     session.ralphTracker.resetCircuitBreaker();
     return {};
@@ -127,7 +136,7 @@ export function registerRalphRoutes(
   // Get Ralph status block and circuit breaker state
   app.get('/api/sessions/:id/ralph-status', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     return {
       success: true,
@@ -147,7 +156,7 @@ export function registerRalphRoutes(
   // Generate @fix_plan.md content from todos
   app.get('/api/sessions/:id/fix-plan', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     const content = session.ralphTracker.generateFixPlanMarkdown();
     return {
@@ -163,7 +172,7 @@ export function registerRalphRoutes(
   app.post('/api/sessions/:id/fix-plan/import', async (req) => {
     const { id } = req.params as { id: string };
     const { content } = parseBody(FixPlanImportSchema, req.body, 'Invalid request body');
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     const importedCount = session.ralphTracker.importFixPlanMarkdown(content);
     ctx.persistSessionState(session);
@@ -180,7 +189,7 @@ export function registerRalphRoutes(
   // Write @fix_plan.md to session's working directory
   app.post('/api/sessions/:id/fix-plan/write', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     const workingDir = session.workingDir;
     if (!workingDir) {
@@ -207,7 +216,7 @@ export function registerRalphRoutes(
   // Read @fix_plan.md from session's working directory and import
   app.post('/api/sessions/:id/fix-plan/read', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     const workingDir = session.workingDir;
     if (!workingDir) {
@@ -246,7 +255,7 @@ export function registerRalphRoutes(
   app.post('/api/sessions/:id/ralph-prompt/write', async (req) => {
     const { id } = req.params as { id: string };
     const { content } = parseBody(RalphPromptWriteSchema, req.body, 'Invalid request body');
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     const workingDir = session.workingDir;
     if (!workingDir) {
@@ -271,13 +280,9 @@ export function registerRalphRoutes(
 
   // Start a Ralph Loop — creates a new session with autonomous cycling
   app.post('/api/ralph-loop/start', async (req): Promise<ApiResponse> => {
-    // Prevent unbounded session creation
-    if (ctx.sessions.size >= MAX_CONCURRENT_SESSIONS) {
-      return createErrorResponse(
-        ApiErrorCode.SESSION_BUSY,
-        `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached.`
-      );
-    }
+    const rlOwner = ownerFor(req);
+    const capMsg = sessionCapacityMessage(ctx.sessions, rlOwner);
+    if (capMsg) return createErrorResponse(ApiErrorCode.SESSION_BUSY, capMsg);
 
     const {
       caseName,
@@ -290,11 +295,13 @@ export function registerRalphRoutes(
       effort,
     } = parseBody(RalphLoopStartSchema, req.body);
 
-    const casePath = join(CASES_DIR, caseName);
+    // Multi-user: cases live in the requesting user's space.
+    const rlCasesBase = resolveCasesDir(getAuthUser(req));
+    const casePath = join(rlCasesBase, caseName);
 
     // Security: Path traversal protection
     const rlResolvedPath = resolve(casePath);
-    const rlResolvedBase = resolve(CASES_DIR);
+    const rlResolvedBase = resolve(rlCasesBase);
     const rlRelPath = relative(rlResolvedBase, rlResolvedPath);
     if (rlRelPath.startsWith('..') || isAbsolute(rlRelPath)) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
@@ -324,6 +331,7 @@ export function registerRalphRoutes(
     const niceConfig = await ctx.getGlobalNiceConfig();
     const rlModelConfig = await ctx.getModelConfig();
     const rlClaudeModeConfig = await ctx.getClaudeModeConfig();
+    const rlClaudeMode = await resolveClaudeModeForUsername(rlClaudeModeConfig.claudeMode, rlOwner);
     const session = new Session({
       workingDir: casePath,
       mux: ctx.mux,
@@ -331,10 +339,11 @@ export function registerRalphRoutes(
       mode: 'claude',
       niceConfig,
       model: rlModelConfig?.defaultModel || undefined,
-      claudeMode: rlClaudeModeConfig.claudeMode,
+      claudeMode: rlClaudeMode,
       allowedTools: rlClaudeModeConfig.allowedTools,
       envOverrides,
       effort,
+      owner: rlOwner,
     });
 
     // Configure Ralph tracker
