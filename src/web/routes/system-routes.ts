@@ -139,7 +139,7 @@ export function registerSystemRoutes(
 
   // ========== Status ==========
 
-  app.get('/api/status', async () => ctx.getLightState());
+  app.get('/api/status', async (req) => ctx.getLightState(req.authUser));
 
   // ========== Tunnel ==========
 

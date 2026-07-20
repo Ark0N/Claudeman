@@ -22,7 +22,8 @@ import { generateFirstPageThumbnail } from '../../document-thumbnailer.js';
 import { getOfficePreviewPdfPath, getPreviewPdfDownloadName } from '../../document-preview-cache.js';
 import { sanitizeAttachmentHistoryItem } from '../../session-attachment-history.js';
 import { isBlockedAttachmentPath, loadAttachmentGuardConfig } from '../../config/attachment-guard.js';
-import { findSessionOrFail, validateSessionFilePath } from '../route-helpers.js';
+import { canAccessOwned, findSessionOrFail, getAuthUser, validateSessionFilePath } from '../route-helpers.js';
+import type { FastifyRequest } from 'fastify';
 import type { SessionAttachmentHistoryItem, SessionState } from '../../types/session.js';
 import { isSensitivePath } from '../sensitive-path.js';
 import { SseEvent } from '../sse-events.js';
@@ -227,13 +228,17 @@ async function serveThumbnail(reply: FastifyReply, resolvedPath: string, extensi
 function getKnownSessionWorkingDir(
   ctx: SessionPort & ConfigPort,
   sessionId: string,
-  reply: FastifyReply
+  reply: FastifyReply,
+  req: FastifyRequest
 ): string | undefined {
+  // Multi-user: a non-admin may only reach their OWN session's files. A foreign
+  // (or missing) session is reported identically as 404 so existence isn't leaked.
+  const user = getAuthUser(req);
   const liveSession = ctx.sessions.get(sessionId);
-  if (liveSession) return liveSession.workingDir;
+  if (liveSession && canAccessOwned(user, liveSession.owner)) return liveSession.workingDir;
 
   const stored = ctx.store.getSession(sessionId);
-  if (stored) return stored.workingDir;
+  if (stored && canAccessOwned(user, (stored as { owner?: string }).owner)) return stored.workingDir;
 
   reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${sessionId} not found`));
   return undefined;
@@ -261,10 +266,13 @@ function appendDownloadFlag(url: string): string {
 
 function getSessionAttachmentHistory(
   ctx: SessionPort & ConfigPort,
-  sessionId: string
+  sessionId: string,
+  req: FastifyRequest
 ): { workingDir: string; history: SessionAttachmentHistoryItem[] } | undefined {
+  const user = getAuthUser(req);
   const liveSession = ctx.sessions.get(sessionId);
   if (liveSession) {
+    if (!canAccessOwned(user, liveSession.owner)) return undefined;
     return {
       workingDir: liveSession.workingDir,
       history: liveSession.getAttachmentHistoryForPersist() ?? liveSession.attachmentHistory ?? [],
@@ -272,7 +280,7 @@ function getSessionAttachmentHistory(
   }
 
   const stored = ctx.store.getSession(sessionId) as StoredSessionWithPrivateAttachmentHistory | undefined;
-  if (!stored) return undefined;
+  if (!stored || !canAccessOwned(user, (stored as { owner?: string }).owner)) return undefined;
 
   return {
     workingDir: stored.workingDir,
@@ -766,7 +774,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // each entry to current metadata + routes. External entries are re-registered.
   app.get('/api/sessions/:id/attachments', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const sessionHistory = getSessionAttachmentHistory(ctx, id);
+    const sessionHistory = getSessionAttachmentHistory(ctx, id, req);
     if (!sessionHistory) {
       reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${id} not found`));
       return;
@@ -794,7 +802,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // size/mtime as the underlying file is rewritten).
   app.get('/api/sessions/:id/attachments/:attachmentId', async (req, reply) => {
     const { id, attachmentId } = req.params as { id: string; attachmentId: string };
-    const workingDir = getKnownSessionWorkingDir(ctx, id, reply);
+    const workingDir = getKnownSessionWorkingDir(ctx, id, reply, req);
     if (!workingDir) return;
     const record = getAttachmentOr404(reply, id, attachmentId);
     if (!record) return;
@@ -850,7 +858,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // convert server-side; PDF/PNG/text redirect to the raw route.
   app.get('/api/sessions/:id/attachments/:attachmentId/preview', async (req, reply) => {
     const { id, attachmentId } = req.params as { id: string; attachmentId: string };
-    const workingDir = getKnownSessionWorkingDir(ctx, id, reply);
+    const workingDir = getKnownSessionWorkingDir(ctx, id, reply, req);
     if (!workingDir) return;
     const record = getAttachmentOr404(reply, id, attachmentId);
     if (!record) return;
@@ -870,7 +878,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // Serve a first-page thumbnail of a registered attachment by id.
   app.get('/api/sessions/:id/attachments/:attachmentId/thumbnail', async (req, reply) => {
     const { id, attachmentId } = req.params as { id: string; attachmentId: string };
-    const workingDir = getKnownSessionWorkingDir(ctx, id, reply);
+    const workingDir = getKnownSessionWorkingDir(ctx, id, reply, req);
     if (!workingDir) return;
     const record = getAttachmentOr404(reply, id, attachmentId);
     if (!record) return;
@@ -884,7 +892,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   app.get('/api/sessions/:id/file-preview', async (req, reply) => {
     const { id } = req.params as { id: string };
     const { path: filePath } = req.query as { path?: string };
-    const workingDir = getKnownSessionWorkingDir(ctx, id, reply);
+    const workingDir = getKnownSessionWorkingDir(ctx, id, reply, req);
     if (!workingDir) return;
 
     if (!filePath) {
@@ -912,7 +920,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   app.get('/api/sessions/:id/file-thumbnail', async (req, reply) => {
     const { id } = req.params as { id: string };
     const { path: filePath } = req.query as { path?: string };
-    const workingDir = getKnownSessionWorkingDir(ctx, id, reply);
+    const workingDir = getKnownSessionWorkingDir(ctx, id, reply, req);
     if (!workingDir) return;
 
     if (!filePath) {

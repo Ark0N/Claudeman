@@ -23,7 +23,7 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { parseBody } from '../route-helpers.js';
+import { canAccessOwned, getAuthUser, parseBody } from '../route-helpers.js';
 import { SearchQuerySchema } from '../schemas.js';
 import {
   searchSources,
@@ -62,13 +62,14 @@ interface SessionLike {
  * Harvest the three source arrays from the live in-memory stores. Reads only
  * bounded, already-loaded data — no disk I/O, no terminal buffers.
  */
-function harvestSources(ctx: SessionPort & InfraPort): SearchSources {
+function harvestSources(ctx: SessionPort & InfraPort, canSee?: (owner?: string) => boolean): SearchSources {
   const sessions: SessionSearchInput[] = [];
   const events: EventSearchInput[] = [];
   const files: FileSearchInput[] = [];
 
   for (const raw of ctx.sessions.values()) {
-    const s = raw as unknown as SessionLike;
+    const s = raw as unknown as SessionLike & { owner?: string };
+    if (canSee && !canSee(s.owner)) continue; // multi-user ownership scope
     const sessionName = s.name ?? '';
     const timestamp = s.lastActivityAt ?? s.createdAt ?? 0;
 
@@ -96,7 +97,8 @@ function harvestSources(ctx: SessionPort & InfraPort): SearchSources {
 
   // Events: from the live run-summary trackers, keyed by session id.
   for (const [sessionId, tracker] of ctx.runSummaryTrackers) {
-    const session = ctx.sessions.get(sessionId) as unknown as SessionLike | undefined;
+    const session = ctx.sessions.get(sessionId) as unknown as (SessionLike & { owner?: string }) | undefined;
+    if (canSee && !canSee(session?.owner)) continue; // multi-user ownership scope
     const sessionName = session?.name ?? '';
     const summary = tracker.getSummary();
     // Newest events are most relevant; cap the per-session harvest.
@@ -120,6 +122,8 @@ export function registerSearchRoutes(app: FastifyInstance, ctx: SessionPort & In
   app.get('/api/search', async (req) => {
     // Zod-validate the query. parseBody throws a structured 400 on failure.
     const { q, types, limit } = parseBody(SearchQuerySchema, req.query);
+    const user = getAuthUser(req);
+    const canSee = (owner?: string) => canAccessOwned(user, owner);
 
     const allowed: Set<SearchSourceType> | null = types
       ? new Set(
@@ -130,7 +134,7 @@ export function registerSearchRoutes(app: FastifyInstance, ctx: SessionPort & In
         )
       : null;
 
-    const sources = harvestSources(ctx);
+    const sources = harvestSources(ctx, canSee);
 
     // Apply the optional source-type filter before searching so excluded
     // sources never contribute to (or consume budget in) the result set.

@@ -334,6 +334,7 @@ export class WebServer extends EventEmitter {
           const session = this.sessions.get(sessionId);
           return session ? this.getSessionStateWithRespawn(session) : null;
         },
+        resolveSessionOwner: (sessionId) => this.sessions.get(sessionId)?.owner,
       },
       this.cleanup
     );
@@ -795,12 +796,12 @@ export class WebServer extends EventEmitter {
       // Track tunnel clients — cloudflared proxies locally so req.ip is always
       // 127.0.0.1; detect tunnel traffic via Cf-Connecting-Ip header instead.
       const isRemote = !!req.headers['cf-connecting-ip'];
-      this.sse.addClient(reply, sessionFilter, isRemote, clientId);
+      this.sse.addClient(reply, sessionFilter, isRemote, clientId, req.authUser);
 
       // Send initial state
       // Use light state for SSE init to avoid sending 2MB+ terminal buffers
       // Buffers are fetched on-demand when switching tabs
-      this.sse.sendSSE(reply, SseEvent.Init, this.getLightState());
+      this.sse.sendSSE(reply, SseEvent.Init, this.getLightState(req.authUser));
       // Flush Cloudflare tunnel buffer with padding — ensures the init event
       // (and any immediately following events) are delivered without proxy delay.
       this.sse.sendPadding(reply);
@@ -1751,7 +1752,49 @@ export class WebServer extends EventEmitter {
    * Get lightweight state for SSE init - excludes full terminal buffers
    * to prevent browser freezes. Terminal buffers are fetched on-demand.
    */
-  private getLightState() {
+  private getLightState(identity?: import('../types/user.js').AuthUser) {
+    const base = this.computeLightState();
+    // Multi-user: filter the shared cached blob per connection identity (the plan's
+    // "filter AFTER the cache" approach). No-op for admins / single-user.
+    if (isMultiUserMode() && identity && identity.role !== 'admin') {
+      return this.filterLightStateForUser(base, identity.username);
+    }
+    return base;
+  }
+
+  /** Shallow-filter the light-state blob to what a non-admin user may see. */
+  private filterLightStateForUser(base: Record<string, unknown>, username: string): Record<string, unknown> {
+    const ownedIds = new Set<string>();
+    const ownedClaudeIds = new Set<string>();
+    for (const [id, s] of this.sessions) {
+      if (s.owner === username) {
+        ownedIds.add(id);
+        if (s.claudeSessionId) ownedClaudeIds.add(s.claudeSessionId);
+      }
+    }
+    const sessions = Array.isArray(base.sessions)
+      ? (base.sessions as Array<{ owner?: string }>).filter((s) => s.owner === username)
+      : base.sessions;
+    const respawnStatus: Record<string, unknown> = {};
+    for (const [id, v] of Object.entries((base.respawnStatus as Record<string, unknown>) ?? {})) {
+      if (ownedIds.has(id)) respawnStatus[id] = v;
+    }
+    const bySession = (arr: unknown, key: 'sessionId' | 'sessionUuid') =>
+      Array.isArray(arr)
+        ? (arr as Array<Record<string, unknown>>).filter((x) => ownedClaudeIds.has(String(x[key])))
+        : arr;
+    return {
+      ...base,
+      sessions,
+      respawnStatus,
+      scheduledRuns: [], // legacy ScheduledRun has no owner yet → admin-only
+      subagents: bySession(base.subagents, 'sessionId'),
+      workflowRuns: bySession(base.workflowRuns, 'sessionUuid'),
+      planUsage: null, // host-plan telemetry is admin-only
+    };
+  }
+
+  private computeLightState() {
     const now = Date.now();
     if (this.cachedLightState && now - this.cachedLightState.timestamp < WebServer.LIGHT_STATE_CACHE_TTL_MS) {
       return this.cachedLightState.data;
@@ -1796,7 +1839,57 @@ export class WebServer extends EventEmitter {
       this.cachedLightState = null;
       this.cachedSessionsList = null;
     }
-    this.sse.broadcast(event, data);
+    // Multi-user: derive an ownership routing hint so an event only reaches the
+    // clients entitled to it (no-op in single-user — hint stays undefined).
+    this.sse.broadcast(event, data, isMultiUserMode() ? this.deriveSseHint(event, data) : undefined);
+  }
+
+  /**
+   * Map an SSE event + payload to a routing hint (multi-user). Session-scoped
+   * families resolve the owner from a sessionId in the payload (fail closed if it
+   * can't be resolved); machine-level families are admin-only; host-plan telemetry
+   * is admin-only; everything else stays global. Default is fail-closed for the
+   * session-scoped prefixes so a missed field starves rather than leaks.
+   */
+  private deriveSseHint(event: string, data: unknown): import('./sse-stream-manager.js').SseRoutingHint | undefined {
+    // Machine-level / host-wide: admins only.
+    if (
+      event.startsWith('docker:') ||
+      event.startsWith('tunnel:') ||
+      event.startsWith('update:') ||
+      event.startsWith('system:') ||
+      event.startsWith('cron:') ||
+      event === SseEvent.SessionStatusTelemetry
+    ) {
+      return { adminOnly: true };
+    }
+    // Session-scoped families: resolve the owner from the payload's session id.
+    const SESSION_PREFIXES = [
+      'session:',
+      'ralph:',
+      'respawn:',
+      'subagent:',
+      'workflow:',
+      'attachment:',
+      'task:',
+      'mux:',
+      'transcript:',
+      'plan:',
+      'orchestrator:',
+      'hook:',
+      'image:',
+      'scheduled:',
+      'team:',
+      'case:',
+    ];
+    if (SESSION_PREFIXES.some((p) => event.startsWith(p))) {
+      const d = (data ?? {}) as { sessionId?: string; id?: string; session?: { id?: string } };
+      const sessionId = d.sessionId ?? d.id ?? d.session?.id;
+      const owner = sessionId ? this.sessions.get(sessionId)?.owner : undefined;
+      return { owner, sessionScoped: true };
+    }
+    // Unrecognized / genuinely global events (connection status, needsRefresh): all.
+    return undefined;
   }
 
   private batchTerminalData(sessionId: string, data: string): void {
