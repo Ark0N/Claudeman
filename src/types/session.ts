@@ -85,6 +85,8 @@ export interface RemoteHost extends RemoteSshOptions {
 export interface RemoteCase {
   name: string;
   type: 'remote';
+  /** Owning username in multi-user mode; absent = legacy/unassigned (admin-only). */
+  owner?: string;
   hostId: string;
   remotePath: string;
 }
@@ -174,6 +176,8 @@ export interface DockerHost {
 export interface DockerCase {
   name: string;
   type: 'docker';
+  /** Owning username in multi-user mode; absent = legacy/unassigned (admin-only). */
+  owner?: string;
   hostId: string;
   /** Absolute HOST directory: the bind-mount source AND Session.workingDir (real host bytes). */
   hostWorkspacePath: string;

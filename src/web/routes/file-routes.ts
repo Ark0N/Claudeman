@@ -371,7 +371,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   app.get('/api/sessions/:id/files', async (req) => {
     const { id } = req.params as { id: string };
     const { depth, showHidden } = req.query as { depth?: string; showHidden?: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     const maxDepth = Math.min(parseInt(depth || '5', 10), 10);
     const includeHidden = showHidden === 'true';
@@ -495,7 +495,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   app.get('/api/sessions/:id/file-content', async (req) => {
     const { id } = req.params as { id: string };
     const { path: filePath, lines, raw } = req.query as { path?: string; lines?: string; raw?: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     if (!filePath) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter');
@@ -648,7 +648,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   app.get('/api/sessions/:id/file-raw', async (req, reply) => {
     const { id } = req.params as { id: string };
     const { path: filePath, download } = req.query as { path?: string; download?: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     if (!filePath) {
       reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
@@ -737,7 +737,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // attachment-history list are layered on separately.
   app.post('/api/sessions/:id/attachments', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
     const body = (req.body || {}) as { path?: string };
 
     if (!body.path || typeof body.path !== 'string') {
@@ -831,7 +831,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   app.get('/api/sessions/:id/attachments/:attachmentId/raw', async (req, reply) => {
     const { id, attachmentId } = req.params as { id: string; attachmentId: string };
     const { download } = req.query as { download?: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
     const record = getAttachmentOr404(reply, id, attachmentId);
     if (!record) return;
     const servePath = await resolveServableAttachmentPath(reply, record, session.workingDir);
@@ -941,7 +941,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   app.get('/api/sessions/:id/tail-file', async (req, reply) => {
     const { id } = req.params as { id: string };
     const { path: filePath, lines } = req.query as { path?: string; lines?: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     if (!filePath) {
       reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
@@ -1003,7 +1003,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // malformed error envelope instead of wrapping it).
   app.delete('/api/sessions/:id/tail-file/:streamId', async (req) => {
     const { id, streamId } = req.params as { id: string; streamId: string };
-    findSessionOrFail(ctx, id); // Validates session exists
+    findSessionOrFail(ctx, id, req); // Validates session exists
     const closed = fileStreamManager.closeStream(streamId);
     return { closed };
   });
@@ -1024,7 +1024,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       return;
     }
 
-    const session = findSessionOrFail(ctx, sessionId);
+    const session = findSessionOrFail(ctx, sessionId, req);
     const validated = validateSessionFilePath(session.workingDir, filePath);
     if (!validated) {
       reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));

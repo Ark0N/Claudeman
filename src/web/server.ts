@@ -136,7 +136,7 @@ import { getLatestPlanUsage } from './plan-usage-latest.js';
 import type { ScheduledRun } from './ports/index.js';
 import { registerAuthMiddleware, registerSecurityHeaders, registerHostGuard } from './middleware/auth.js';
 import { isMultiUserMode } from '../config/multiuser.js';
-import { bootstrapInitialAdmin, hasUsers } from '../user-store.js';
+import { bootstrapInitialAdmin, hasUsers, resolveClaudeModeForUsername } from '../user-store.js';
 import { installRouteErrorHandler } from './route-error-handler.js';
 import { isExplicitlyEnabled, isLoopbackBindHost, buildHostPolicy, type HostPolicy } from './network-auth-policy.js';
 import {
@@ -2238,7 +2238,16 @@ export class WebServer extends EventEmitter {
             const sessionName = savedState?.name || muxSession.name || muxSession.muxName;
 
             // Create a session object for this mux session
-            const recoveryClaudeMode = await this.getClaudeModeConfig();
+            // Owner round-trips like remote/docker: mux-sessions.json carries
+            // MuxSession.owner, state.json carries SessionState.owner. Recovery must
+            // re-resolve the permission mode with the RECOVERED owner or a reboot
+            // would silently un-downgrade a non-granted user's restored session.
+            const recoveredOwner = muxSession.owner ?? savedState?.owner;
+            const recoveryClaudeModeConfig = await this.getClaudeModeConfig();
+            const recoveryClaudeMode = {
+              claudeMode: await resolveClaudeModeForUsername(recoveryClaudeModeConfig.claudeMode, recoveredOwner),
+              allowedTools: recoveryClaudeModeConfig.allowedTools,
+            };
             // Recover envOverrides from the internal __envOverrides field written by
             // session-manager (see updateSessionState). Cast to read the non-public field.
             // Note: a legacy CLAUDE_CODE_EFFORT_LEVEL entry is auto-migrated to `effort`
@@ -2275,6 +2284,7 @@ export class WebServer extends EventEmitter {
               // MuxSession.docker; state.json carries SessionState.docker), so recovery
               // rebuilds the `docker exec` launch instead of a broken local command.
               docker: muxSession.docker ?? savedState?.docker,
+              owner: recoveredOwner,
             });
 
             // Update session name if it was a "Restored:" placeholder or doesn't match saved name

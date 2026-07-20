@@ -758,7 +758,7 @@ export function registerSystemRoutes(
 
   app.get('/api/sessions/:id/cpu-limit', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
     return {
       nice: session.niceConfig,
     };
@@ -766,7 +766,7 @@ export function registerSystemRoutes(
 
   app.post('/api/sessions/:id/cpu-limit', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     const body = parseBody(CpuLimitSchema, req.body, 'Invalid request body') as Partial<NiceConfig>;
 
@@ -857,7 +857,7 @@ export function registerSystemRoutes(
 
   app.get('/api/sessions/:id/subagents', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
     const subagents = subagentWatcher.getSubagentsForSession(session.workingDir);
     return { success: true, data: subagents };
   });

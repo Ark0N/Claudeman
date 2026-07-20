@@ -82,8 +82,16 @@ export function buildInteractiveArgs(
  * @param model - Optional model override
  * @returns Array of CLI arguments
  */
-export function buildPromptArgs(prompt: string, model?: string): string[] {
-  const args = ['-p', '--verbose', '--dangerously-skip-permissions', '--output-format', 'stream-json'];
+export function buildPromptArgs(
+  prompt: string,
+  model?: string,
+  claudeMode: ClaudeMode = 'dangerously-skip-permissions',
+  allowedTools?: string
+): string[] {
+  // Respect the session's permission mode instead of always skipping, so a
+  // multi-user non-granted user's one-shot runs classifier-guarded (auto) rather
+  // than with full bypass. Defaults to skip-permissions (unchanged single-user).
+  const args = ['-p', '--verbose', ...buildPermissionArgs(claudeMode, allowedTools), '--output-format', 'stream-json'];
   if (model) {
     args.push('--model', model);
   }

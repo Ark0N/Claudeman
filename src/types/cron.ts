@@ -36,6 +36,8 @@ export type ConcurrencyPolicy = 'warn_only' | 'skip_if_same_agent_running';
 export interface CronJob {
   id: string;
   name: string;
+  /** Owning username in multi-user mode; the job launches as this user. Undefined in single-user. */
+  owner?: string;
   /** Reuses Codeman's existing session modes; 'shell' covers Terminal/custom. */
   agentType: SessionMode;
   workingDir: string;

@@ -17,7 +17,15 @@ import {
   PlanTaskUpdateSchema,
   PlanTaskAddSchema,
 } from '../schemas.js';
-import { findSessionOrFail, parseBody, CASES_DIR, validatePathWithinBase } from '../route-helpers.js';
+import {
+  findSessionOrFail,
+  getAuthUser,
+  ownerFor,
+  parseBody,
+  resolveCasesDir,
+  validatePathWithinBase,
+} from '../route-helpers.js';
+import { resolveClaudeModeForUsername } from '../../user-store.js';
 import { SseEvent } from '../sse-events.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/index.js';
 
@@ -124,12 +132,19 @@ Return ONLY a JSON array. Each item MUST have:
 
 NOW: Generate the implementation plan for the task above. Think step by step.`;
 
-    // Create temporary session for the AI call using Opus 4.5 for deep reasoning
+    // Create temporary session for the AI call using Opus 4.5 for deep reasoning.
+    // Section 6.3: downgrade a non-granted user's one-shot to a classifier-guarded mode.
+    const planOwner = ownerFor(req);
+    const planClaudeModeConfig = await ctx.getClaudeModeConfig();
+    const planClaudeMode = await resolveClaudeModeForUsername(planClaudeModeConfig.claudeMode, planOwner);
     const session = new Session({
       workingDir: process.cwd(),
       mux: ctx.mux,
       useMux: false, // No mux needed for one-shot
       mode: 'claude',
+      claudeMode: planClaudeMode,
+      allowedTools: planClaudeModeConfig.allowedTools,
+      owner: planOwner,
     });
 
     // Use configured model for plan generation, falling back to opus
@@ -228,7 +243,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Determine output directory for saving wizard results
     let outputDir: string | undefined;
     if (caseName) {
-      const casePath = validatePathWithinBase(caseName, CASES_DIR);
+      const casePath = validatePathWithinBase(caseName, resolveCasesDir(getAuthUser(req)));
       if (casePath && existsSync(casePath)) {
         outputDir = join(casePath, 'ralph-wizard');
 
@@ -359,7 +374,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
   app.patch('/api/sessions/:id/plan/task/:taskId', async (req) => {
     const { id, taskId } = req.params as { id: string; taskId: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     const tracker = session.ralphTracker;
     if (!tracker) {
@@ -385,7 +400,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
   app.post('/api/sessions/:id/plan/checkpoint', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     const tracker = session.ralphTracker;
     if (!tracker) {
@@ -401,7 +416,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
   app.get('/api/sessions/:id/plan/history', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     const tracker = session.ralphTracker;
     if (!tracker) {
@@ -415,7 +430,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
   app.post('/api/sessions/:id/plan/rollback/:version', async (req) => {
     const { id, version } = req.params as { id: string; version: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     const tracker = session.ralphTracker;
     if (!tracker) {
@@ -435,7 +450,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
   app.post('/api/sessions/:id/plan/task', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     const tracker = session.ralphTracker;
     if (!tracker) {

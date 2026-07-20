@@ -38,13 +38,21 @@ import {
 } from '../schemas.js';
 import {
   autoConfigureRalph,
+  canAccessOwned,
   CASES_DIR,
   findSessionOrFail,
+  getAuthUser,
+  isWorkingDirAllowed,
+  ownerFor,
   parseBody,
   persistAndBroadcastSession,
+  resolveCasesDir,
+  sessionCapacityMessage,
   SETTINGS_PATH,
   validatePathWithinBase,
 } from '../route-helpers.js';
+import { canRunPrivilegedCommands, resolveClaudeModeForUsername } from '../../user-store.js';
+import { isMultiUserMode } from '../../config/multiuser.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
 import {
   writeHooksConfig,
@@ -67,7 +75,6 @@ import {
   type MuxStatInput,
 } from '../../services/unified-session-service.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '../ports/index.js';
-import { MAX_CONCURRENT_SESSIONS } from '../../config/map-limits.js';
 import { RunSummaryTracker } from '../../run-summary.js';
 
 import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal-limits.js';
@@ -285,23 +292,37 @@ export function registerSessionRoutes(
 
   // ========== Session Listing ==========
 
-  app.get('/api/sessions', async () => {
-    return ctx.getLightSessionsState();
+  app.get('/api/sessions', async (req) => {
+    const list = ctx.getLightSessionsState();
+    if (!isMultiUserMode()) return list;
+    const user = getAuthUser(req);
+    if (user.role === 'admin') return list;
+    return (list as Array<{ owner?: string }>).filter((s) => canAccessOwned(user, s.owner));
   });
 
   // ========== Session Creation ==========
 
   app.post('/api/sessions', async (req) => {
-    // Prevent unbounded session creation
-    if (ctx.sessions.size >= MAX_CONCURRENT_SESSIONS) {
-      return createErrorResponse(
-        ApiErrorCode.OPERATION_FAILED,
-        `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached. Delete some sessions first.`
-      );
-    }
+    const owner = ownerFor(req);
+    // Global + per-user session cap.
+    const capMsg = sessionCapacityMessage(ctx.sessions, owner);
+    if (capMsg) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, capMsg);
 
     const body = parseBody(CreateSessionSchema, req.body);
     const workingDir = body.workingDir || process.cwd();
+
+    // Multi-user: shell mode is arbitrary command execution as the host account,
+    // gated behind the same grant as bypass (section 6.3).
+    if (body.mode === 'shell' && !canRunPrivilegedCommands(getAuthUser(req))) {
+      return createErrorResponse(ApiErrorCode.FORBIDDEN, 'Shell sessions require the can-bypass-permissions grant');
+    }
+
+    // Multi-user linchpin (section 6.2): a non-admin's workingDir must resolve
+    // inside their own case space. Enforced BEFORE any disk-mutating call below so
+    // a foreign path can never be written into.
+    if (!isWorkingDirAllowed(getAuthUser(req), workingDir)) {
+      return createErrorResponse(ApiErrorCode.FORBIDDEN, 'workingDir is outside your workspace');
+    }
 
     // Validate workingDir exists and is a directory
     if (body.workingDir) {
@@ -320,16 +341,18 @@ export function registerSessionRoutes(
     // For keys the caller is actively setting, strip any stale disk entry a prior
     // Codeman version may have written. Scope limited to:
     //   - Claude mode (OpenCode/Codex/Gemini don't read .claude/settings.local.json)
-    //   - workingDir inside CASES_DIR (Codeman's managed territory — we never mutate
-    //     .claude/settings.local.json in arbitrary user repos that POST /api/sessions
-    //     can target, because those may have hand-authored values).
+    //   - workingDir inside CASES_DIR / the per-user case space (Codeman's managed
+    //     territory — we never mutate .claude/settings.local.json in arbitrary user
+    //     repos that POST /api/sessions can target, as those may have hand-authored
+    //     values).
+    const managedCasesBase = resolveCasesDir(getAuthUser(req));
     const canStripDisk =
       body.mode !== 'opencode' &&
       body.mode !== 'codex' &&
       body.mode !== 'gemini' &&
       body.envOverrides &&
       Object.keys(body.envOverrides).length > 0 &&
-      workingDir.startsWith(CASES_DIR + '/');
+      (workingDir.startsWith(CASES_DIR + '/') || workingDir.startsWith(managedCasesBase + '/'));
     if (canStripDisk) {
       await stripCaseEnvKeys(workingDir, Object.keys(body.envOverrides!));
     }
@@ -438,6 +461,8 @@ export function registerSessionRoutes(
               ? modelConfig?.defaultModel || undefined
               : undefined;
     const claudeModeConfig = await ctx.getClaudeModeConfig();
+    // Section 6.3: force non-granted users to a classifier-guarded mode.
+    const effectiveClaudeMode = await resolveClaudeModeForUsername(claudeModeConfig.claudeMode, owner);
     const terminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const session = new Session({
       workingDir,
@@ -447,7 +472,7 @@ export function registerSessionRoutes(
       useMux: true,
       niceConfig: globalNice,
       model,
-      claudeMode: claudeModeConfig.claudeMode,
+      claudeMode: effectiveClaudeMode,
       allowedTools: claudeModeConfig.allowedTools,
       openCodeConfig: mode === 'opencode' ? body.openCodeConfig : undefined,
       codexConfig: mode === 'codex' ? body.codexConfig : undefined,
@@ -456,6 +481,7 @@ export function registerSessionRoutes(
       envOverrides: body.envOverrides,
       effort: body.effort,
       tmuxHistoryLimit: terminalHistoryConfig.tmuxHistoryLimit,
+      owner,
     });
 
     ctx.addSession(session);
@@ -476,7 +502,7 @@ export function registerSessionRoutes(
   app.put('/api/sessions/:id/name', async (req) => {
     const { id } = req.params as { id: string };
     const body = parseBody(SessionNameSchema, req.body, 'Invalid request body');
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     const name = String(body.name || '').slice(0, MAX_SESSION_NAME_LENGTH);
     session.name = name;
@@ -491,7 +517,7 @@ export function registerSessionRoutes(
   app.put('/api/sessions/:id/color', async (req) => {
     const { id } = req.params as { id: string };
     const body = parseBody(SessionColorSchema, req.body, 'Invalid request body');
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     const validColors = ['default', 'red', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink'];
     if (!validColors.includes(body.color)) {
@@ -538,7 +564,7 @@ export function registerSessionRoutes(
 
   app.get('/api/sessions/:id', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     // Use light state (no full buffers) — terminal buffer available via /terminal endpoint.
     // Full buffers were 2-3MB and caused slowness when polled frequently (e.g. Ralph wizard).
@@ -553,7 +579,7 @@ export function registerSessionRoutes(
 
   app.get('/api/sessions/:id/output', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     return {
       success: true,
@@ -569,7 +595,7 @@ export function registerSessionRoutes(
 
   app.get('/api/sessions/:id/ralph-state', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     return {
       success: true,
@@ -585,7 +611,7 @@ export function registerSessionRoutes(
 
   app.get('/api/sessions/:id/run-summary', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     const tracker = ctx.runSummaryTrackers.get(id);
     if (!tracker) {
@@ -605,7 +631,7 @@ export function registerSessionRoutes(
 
   app.get('/api/sessions/:id/active-tools', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     return {
       success: true,
@@ -624,7 +650,7 @@ export function registerSessionRoutes(
   app.post('/api/sessions/:id/run', async (req) => {
     const { id } = req.params as { id: string };
     const { prompt } = parseBody(RunPromptSchema, req.body);
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     if (session.isBusy()) {
       return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'Session is busy');
@@ -651,7 +677,7 @@ export function registerSessionRoutes(
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
     }
     const { clearBreaker } = bodyResult.data;
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     if (session.isBusy()) {
       return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'Session is busy');
@@ -707,7 +733,7 @@ export function registerSessionRoutes(
 
   app.post('/api/sessions/:id/shell', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     if (session.isBusy()) {
       return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'Session is busy');
@@ -740,7 +766,7 @@ export function registerSessionRoutes(
   app.post('/api/sessions/:id/input', async (req) => {
     const { id } = req.params as { id: string };
     const { input, useMux, seq, clientId } = parseBody(SessionInputWithLimitSchema, req.body);
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     const inputStr = String(input);
     if (inputStr.length > MAX_INPUT_LENGTH) {
@@ -799,7 +825,7 @@ export function registerSessionRoutes(
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Key not allowed: ${key}`);
     }
 
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
     const muxName = session.muxName;
     if (!muxName) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'No tmux session');
@@ -831,7 +857,7 @@ export function registerSessionRoutes(
   app.post('/api/sessions/:id/resize', async (req) => {
     const { id } = req.params as { id: string };
     const { cols, rows, viewportType, force } = parseBody(ResizeSchema, req.body);
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     session.resize(cols, rows, { viewportType, force });
     return {};
@@ -917,7 +943,7 @@ export function registerSessionRoutes(
 
   app.get('/api/sessions/:id/last-response', async (req) => {
     const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     // Codex sessions don't write to ~/.claude/projects — their transcripts
     // live in ~/.codex/sessions/**. Branch to a Codex-specific reader so the
@@ -1368,7 +1394,7 @@ export function registerSessionRoutes(
   app.get('/api/sessions/:id/terminal', async (req) => {
     const { id } = req.params as { id: string };
     const query = req.query as { tail?: string; full?: string };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     // `full=1` is the EXPLICIT full-reload signal (COD-47): the browser reloaded
     // the page and wants the whole scroll history back, so we capture the ENTIRE
@@ -1501,7 +1527,7 @@ export function registerSessionRoutes(
   app.post('/api/sessions/:id/auto-clear', async (req) => {
     const { id } = req.params as { id: string };
     const body = parseBody(AutoClearSchema, req.body, 'Invalid request body');
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     session.setAutoClear(body.enabled, body.threshold);
     persistAndBroadcastSession(ctx, session);
@@ -1522,7 +1548,7 @@ export function registerSessionRoutes(
   app.post('/api/sessions/:id/auto-compact', async (req) => {
     const { id } = req.params as { id: string };
     const body = parseBody(AutoCompactSchema, req.body, 'Invalid request body');
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     session.setAutoCompact(body.enabled, body.threshold, body.prompt);
     persistAndBroadcastSession(ctx, session);
@@ -1544,7 +1570,7 @@ export function registerSessionRoutes(
   app.post('/api/sessions/:id/auto-resume', async (req) => {
     const { id } = req.params as { id: string };
     const body = parseBody(AutoResumeSchema, req.body, 'Invalid request body');
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     session.setAutoResume(body.enabled);
     persistAndBroadcastSession(ctx, session);
@@ -1565,7 +1591,7 @@ export function registerSessionRoutes(
   app.post('/api/sessions/:id/image-watcher', async (req) => {
     const { id } = req.params as { id: string };
     const body = parseBody(ImageWatcherSchema, req.body, 'Invalid request body');
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     if (body.enabled) {
       imageWatcher.watchSession(session.id, session.workingDir);
@@ -1590,7 +1616,7 @@ export function registerSessionRoutes(
   app.post('/api/sessions/:id/flicker-filter', async (req) => {
     const { id } = req.params as { id: string };
     const body = parseBody(FlickerFilterSchema, req.body, 'Invalid request body');
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     session.flickerFilterEnabled = body.enabled;
     persistAndBroadcastSession(ctx, session);
@@ -1610,13 +1636,9 @@ export function registerSessionRoutes(
   // ========== Quick Run ==========
 
   app.post('/api/run', async (req) => {
-    // Prevent unbounded session creation
-    if (ctx.sessions.size >= MAX_CONCURRENT_SESSIONS) {
-      return createErrorResponse(
-        ApiErrorCode.SESSION_BUSY,
-        `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached`
-      );
-    }
+    const runOwner = ownerFor(req);
+    const capMsg = sessionCapacityMessage(ctx.sessions, runOwner);
+    if (capMsg) return createErrorResponse(ApiErrorCode.SESSION_BUSY, capMsg);
 
     const {
       prompt,
@@ -1628,6 +1650,11 @@ export function registerSessionRoutes(
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'prompt is required');
     }
     const dir = workingDir || process.cwd();
+
+    // Multi-user: confine a non-admin's one-shot working dir to their space.
+    if (!isWorkingDirAllowed(getAuthUser(req), dir)) {
+      return createErrorResponse(ApiErrorCode.FORBIDDEN, 'workingDir is outside your workspace');
+    }
 
     // Validate workingDir exists and is a directory
     if (workingDir) {
@@ -1641,7 +1668,17 @@ export function registerSessionRoutes(
       }
     }
 
-    const session = new Session({ workingDir: dir, envOverrides: runEnvOverrides });
+    // Section 6.3: the one-shot spawn path (runPrompt/buildPromptArgs) respects the
+    // session's claudeMode, so resolve it for the owner (bypass -> auto for non-granted).
+    const runClaudeModeConfig = await ctx.getClaudeModeConfig();
+    const runClaudeMode = await resolveClaudeModeForUsername(runClaudeModeConfig.claudeMode, runOwner);
+    const session = new Session({
+      workingDir: dir,
+      envOverrides: runEnvOverrides,
+      claudeMode: runClaudeMode,
+      allowedTools: runClaudeModeConfig.allowedTools,
+      owner: runOwner,
+    });
     ctx.addSession(session);
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
@@ -1671,13 +1708,9 @@ export function registerSessionRoutes(
   // ========== Quick Start ==========
 
   app.post('/api/quick-start', async (req) => {
-    // Prevent unbounded session creation
-    if (ctx.sessions.size >= MAX_CONCURRENT_SESSIONS) {
-      return createErrorResponse(
-        ApiErrorCode.SESSION_BUSY,
-        `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached.`
-      );
-    }
+    const owner = ownerFor(req);
+    const capMsg = sessionCapacityMessage(ctx.sessions, owner);
+    if (capMsg) return createErrorResponse(ApiErrorCode.SESSION_BUSY, capMsg);
 
     const {
       caseName = 'testcase',
@@ -1689,6 +1722,11 @@ export function registerSessionRoutes(
       envOverrides,
       effort,
     } = parseBody(QuickStartSchema, req.body);
+
+    // Multi-user: shell mode is arbitrary host-account execution, gated by the grant.
+    if (mode === 'shell' && !canRunPrivilegedCommands(getAuthUser(req))) {
+      return createErrorResponse(ApiErrorCode.FORBIDDEN, 'Shell sessions require the can-bypass-permissions grant');
+    }
 
     // Resolve the remote case FIRST — the CLI executes on the REMOTE host over ssh,
     // so the LOCAL availability gates below (isCodexAvailable() etc.) don't apply and
@@ -1834,7 +1872,8 @@ export function registerSessionRoutes(
       } catch {
         // File missing or unparseable — treat as empty registry
       }
-      casePath = linkedCases[caseName] || validatePathWithinBase(caseName, CASES_DIR);
+      // Multi-user: resolve local cases inside the requesting user's case space.
+      casePath = linkedCases[caseName] || validatePathWithinBase(caseName, resolveCasesDir(getAuthUser(req)));
       if (!casePath) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
       }
@@ -1922,6 +1961,7 @@ export function registerSessionRoutes(
               ? qsModelConfig?.defaultModel || undefined
               : undefined;
     const qsClaudeModeConfig = await ctx.getClaudeModeConfig();
+    const qsEffectiveClaudeMode = await resolveClaudeModeForUsername(qsClaudeModeConfig.claudeMode, owner);
     const qsTerminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const session = new Session({
       workingDir: resolvedCasePath,
@@ -1931,8 +1971,9 @@ export function registerSessionRoutes(
       mode: mode,
       niceConfig: niceConfig,
       model: qsModel,
-      claudeMode: qsClaudeModeConfig.claudeMode,
+      claudeMode: qsEffectiveClaudeMode,
       allowedTools: qsClaudeModeConfig.allowedTools,
+      owner,
       openCodeConfig: mode === 'opencode' ? openCodeConfig : undefined,
       codexConfig: mode === 'codex' ? codexConfig : undefined,
       geminiConfig: mode === 'gemini' ? geminiConfig : undefined,
@@ -2414,7 +2455,37 @@ export function registerSessionRoutes(
       // Mux stats are optional.
     }
 
-    const merged = mergeUnifiedSessions({ live, persisted, lifecycle, history, mux });
+    // Multi-user: a non-admin only sees their own sessions; host-wide transcript
+    // history (not tied to an owned session) is admin-only.
+    let sLive = live;
+    let sPersisted = persisted;
+    let sLifecycle = lifecycle;
+    let sHistory = history;
+    const uUser = getAuthUser(req);
+    if (isMultiUserMode() && uUser.role !== 'admin') {
+      const ownedLive = new Set(
+        [...ctx.sessions.values()].filter((s) => canAccessOwned(uUser, s.owner)).map((s) => s.id)
+      );
+      const stored = ctx.store.getState().sessions as Record<string, { id: string; owner?: string }>;
+      const ownedPersisted = new Set(
+        Object.values(stored)
+          .filter((p) => canAccessOwned(uUser, p.owner))
+          .map((p) => p.id)
+      );
+      const isOwned = (id: string) => ownedLive.has(id) || ownedPersisted.has(id);
+      sLive = live.filter((l) => isOwned(l.id));
+      sPersisted = persisted.filter((p) => isOwned(p.id));
+      sLifecycle = lifecycle.filter((e) => isOwned(e.sessionId));
+      sHistory = [];
+    }
+
+    const merged = mergeUnifiedSessions({
+      live: sLive,
+      persisted: sPersisted,
+      lifecycle: sLifecycle,
+      history: sHistory,
+      mux,
+    });
     const offset = query.offset !== undefined ? parseInt(query.offset, 10) : undefined;
     const limit = query.limit !== undefined ? parseInt(query.limit, 10) : undefined;
     return filterAndPaginate(merged, {
@@ -2473,7 +2544,7 @@ export function registerSessionRoutes(
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Rate limit exceeded (30 uploads/min per session)');
     }
 
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     if (!req.isMultipart()) {
       reply.code(400);

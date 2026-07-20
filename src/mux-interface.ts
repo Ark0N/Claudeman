@@ -114,6 +114,8 @@ export interface RespawnPaneOptions {
   remote?: SessionRemote;
   /** Docker execution metadata for local tmux sessions wrapping `docker exec` */
   docker?: SessionDocker;
+  /** Owning username (multi-user); redundant on respawn since the Session object survives, kept for shape parity. */
+  owner?: string;
 }
 
 /** Options for pane buffer capture (COD-47 full-history mode). */

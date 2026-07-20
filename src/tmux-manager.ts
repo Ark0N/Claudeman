@@ -1489,6 +1489,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       historyLimit = DEFAULT_TMUX_HISTORY_LIMIT,
       remote,
       docker,
+      owner,
     } = options;
     const muxName = `codeman-${sessionId.slice(0, 8)}`;
 
@@ -1509,6 +1510,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         workingDir,
         remote,
         docker,
+        owner,
         mode,
         attached: false,
         name,
@@ -1685,6 +1687,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         workingDir,
         remote,
         docker,
+        owner,
         mode,
         attached: false,
         name,

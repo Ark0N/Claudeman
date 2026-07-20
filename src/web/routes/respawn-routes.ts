@@ -87,7 +87,7 @@ export function registerRespawnRoutes(
     if (req.body) {
       body = parseBody(RespawnConfigSchema, req.body, 'Invalid respawn config') as Partial<RespawnConfig>;
     }
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     // Respawn is not supported for external-CLI sessions (opencode/codex)
     if (isExternalCliMode(session.mode)) {
@@ -160,7 +160,7 @@ export function registerRespawnRoutes(
     const { id } = req.params as { id: string };
     // Validate respawn config to prevent arbitrary field injection
     const config = parseBody(RespawnConfigSchema, req.body, 'Invalid respawn config') as Partial<RespawnConfig>;
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     const controller = ctx.respawnControllers.get(id);
 
@@ -226,7 +226,7 @@ export function registerRespawnRoutes(
       respawnConfig?: Partial<RespawnConfig>;
       durationMinutes?: number;
     };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     if (session.isBusy()) {
       return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'Session is busy');
@@ -299,7 +299,7 @@ export function registerRespawnRoutes(
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
     }
     const body = reResult.data as { config?: Partial<RespawnConfig>; durationMinutes?: number };
-    const session = findSessionOrFail(ctx, id);
+    const session = findSessionOrFail(ctx, id, req);
 
     // Respawn is not supported for external-CLI sessions (opencode/codex)
     if (isExternalCliMode(session.mode)) {

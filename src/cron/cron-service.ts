@@ -15,6 +15,8 @@ import { SseEvent } from '../web/sse-events.js';
 import { CronJobSchema } from '../web/schemas.js';
 import { getErrorMessage, createErrorResponse, ApiErrorCode } from '../types/api.js';
 import { MAX_CONCURRENT_SESSIONS, MAX_CRON_JOBS, MAX_CRON_RUN_HISTORY } from '../config/map-limits.js';
+import { canUsernameRunPrivilegedCommands, resolveClaudeModeForUsername } from '../user-store.js';
+import { sessionCapacityState } from '../web/route-helpers.js';
 import { CRON_READY_MAX_ATTEMPTS, CRON_READY_SETTLE_MS } from '../config/server-timing.js';
 import {
   DEFAULT_BLOCKED_TREES,
@@ -108,7 +110,7 @@ export class CronService {
 
   // ──────────────────────────── Mutations ───────────────────────────
 
-  createJob(input: CronJobInput): CronJob {
+  createJob(input: CronJobInput, owner?: string): CronJob {
     if (Object.keys(this.store.getCronJobs()).length >= MAX_CRON_JOBS) {
       throw this.badRequest(`Maximum number of cron jobs (${MAX_CRON_JOBS}) reached`);
     }
@@ -117,6 +119,7 @@ export class CronService {
     const job: CronJob = {
       id: uuidv4(),
       name: input.name,
+      owner,
       agentType: input.agentType,
       workingDir: input.workingDir,
       launchCommand: input.launchCommand,
@@ -336,9 +339,22 @@ export class CronService {
       await this.closePreviousRunSessions(job, run.id);
     }
 
-    // Respect the global session cap.
-    if (this.deps.sessions.size >= MAX_CONCURRENT_SESSIONS) {
+    // Respect the global cap AND the owner's per-user cap (multi-user).
+    const cap = sessionCapacityState(this.deps.sessions, job.owner);
+    if (cap.atGlobalCap) {
       return this.failRun(job, run, `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached`);
+    }
+    if (cap.atUserCap) {
+      return this.failRun(job, run, `Owner's per-user session limit reached`);
+    }
+
+    // Section 6.3: shell mode / launchCommand are arbitrary host-account execution.
+    // Re-check the owner's grant at FIRE time (it may have been revoked since create).
+    if (job.agentType === 'shell' || job.launchCommand) {
+      const allowed = await canUsernameRunPrivilegedCommands(job.owner);
+      if (!allowed) {
+        return this.failRun(job, run, 'Owner lacks the can-bypass-permissions grant for shell/launchCommand jobs');
+      }
     }
 
     // Create + start the session (mirrors the quick-start route flow).
@@ -348,6 +364,7 @@ export class CronService {
       const globalNice = await this.deps.getGlobalNiceConfig();
       const modelConfig = await this.deps.getModelConfig();
       const claudeModeConfig = await this.deps.getClaudeModeConfig();
+      const effectiveClaudeMode = await resolveClaudeModeForUsername(claudeModeConfig.claudeMode, job.owner);
       const model = mode !== 'shell' ? modelConfig?.defaultModel || undefined : undefined;
       session = new Session({
         workingDir: job.workingDir,
@@ -357,8 +374,9 @@ export class CronService {
         useMux: true,
         niceConfig: globalNice,
         model,
-        claudeMode: claudeModeConfig.claudeMode,
+        claudeMode: effectiveClaudeMode,
         allowedTools: claudeModeConfig.allowedTools,
+        owner: job.owner,
       });
       this.deps.addSession(session);
       this.store.incrementSessionsCreated();

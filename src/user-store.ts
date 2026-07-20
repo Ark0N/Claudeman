@@ -410,6 +410,17 @@ export async function deleteUserSpace(username: string): Promise<void> {
 export const SYNTHETIC_ADMIN: AuthUser = { username: 'admin', role: 'admin' };
 
 /**
+ * Whether a username may run arbitrary commands (shell mode, cron launchCommand,
+ * other CLIs' bypass). Single-user or an unset owner: allowed. In multi-user a
+ * MISSING user (e.g. deleted) fails closed (non-privileged). Used at cron fire time.
+ */
+export async function canUsernameRunPrivilegedCommands(username: string | undefined): Promise<boolean> {
+  if (!isMultiUserMode() || !username) return true;
+  const user = await findUser(username);
+  return canRunPrivilegedCommands(user ?? { role: 'user' });
+}
+
+/**
  * Resolve the effective Claude mode for a username by looking up the grant. In
  * single-user mode (or for an unknown owner) the global mode passes through.
  */

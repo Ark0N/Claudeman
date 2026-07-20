@@ -1413,6 +1413,7 @@ export class Session extends EventEmitter {
             historyLimit: this._tmuxHistoryLimit,
             remote: this._remote,
             docker: this._docker,
+            owner: this._owner,
           },
           createSessionOptions: {
             sessionId: this.id,
@@ -1432,6 +1433,7 @@ export class Session extends EventEmitter {
             historyLimit: this._tmuxHistoryLimit,
             remote: this._remote,
             docker: this._docker,
+            owner: this._owner,
           },
           spawnErrLabel: 'mux attachment',
         });
@@ -1803,6 +1805,7 @@ export class Session extends EventEmitter {
             historyLimit: this._tmuxHistoryLimit,
             remote: this._remote,
             docker: this._docker,
+            owner: this._owner,
           },
           createSessionOptions: {
             sessionId: this.id,
@@ -1814,6 +1817,7 @@ export class Session extends EventEmitter {
             historyLimit: this._tmuxHistoryLimit,
             remote: this._remote,
             docker: this._docker,
+            owner: this._owner,
           },
           spawnErrLabel: 'shell mux attachment',
         });
@@ -1941,7 +1945,7 @@ export class Session extends EventEmitter {
           model ? `(model: ${model})` : ''
         );
 
-        const args = buildPromptArgs(prompt, model);
+        const args = buildPromptArgs(prompt, model, this._claudeMode, this._allowedTools);
 
         try {
           this.ptyProcess = pty.spawn('claude', args, {
