@@ -91,18 +91,27 @@ builds the command that launches (or **reattaches** to) the remote session:
 
 ```
 ssh -o BatchMode=yes -t <connection-args> user@host \
-  'tmux -L codeman new-session -A -s codeman-<id> -c <remotePath> "cd <remotePath> && exec <cli>" \; \
-     set -g status off \; set -g mouse off \; set -sg escape-time 0 \; set -g prefix C-q'
+  'tmux -L codeman-remote new-session -A -s codeman-ssh-<id8> -c <remotePath> "cd <remotePath> && exec <cli>" \; \
+     set -t codeman-ssh-<id8> status off \; set -t codeman-ssh-<id8> mouse off \; \
+     set -t codeman-ssh-<id8> prefix C-q \; set -s escape-time 0 \; \
+     set -t codeman-ssh-<id8> window-size latest'
 ```
 
 Key points:
 
-- **`new-session -A -s codeman-<id>`** = attach-if-exists-else-create, so a
-  reconnect (same deterministic `remoteTmuxSessionName(sessionId)`) lands back in
+- **`new-session -A -s codeman-ssh-<id8>`** = attach-if-exists-else-create, so a
+  reconnect (same deterministic `remoteTmuxSessionName(sessionId)` — `codeman-ssh-` +
+  the first 8 chars of the session id) lands back in
   the **same** remote session rather than spawning a duplicate. This is what makes
-  the remote agent survive an SSH drop.
-- **`-L codeman`** = canonical remote socket (the remote's own tmux server, not
-  the local one).
+  the remote agent survive an SSH drop. The name deliberately fails
+  `SAFE_MUX_NAME_PATTERN` so a Codeman running ON the remote host never adopts it.
+- **`-L codeman-remote`** = a DEDICATED socket for sessions launched by remote
+  Codemans, NOT the canonical `-L codeman` socket the remote host's own Codeman
+  uses. Options are set per-session (`set -t`), never `-g`, so a shared remote
+  tmux server's other sessions are untouched (#145 hardening). Note the
+  asymmetry: **discovery/attach (COD-105) target the canonical `-L codeman`
+  socket** — they join sessions the remote's own Codeman manages, while owned
+  durable launches live on `-L codeman-remote`.
 - **`exec <cli>`** replaces the pane shell with the agent, so the pane PID *is*
   the agent. The per-mode command comes from `remote.commands?.[mode]` or
   `defaultRemoteCommandForMode(mode)` (`exec claude` / `exec opencode` /
