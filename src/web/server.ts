@@ -158,6 +158,7 @@ import {
   registerOrchestratorRoutes,
   registerCronRoutes,
   registerMeRoutes,
+  registerAdminRoutes,
   registerWsRoutes,
 } from './routes/index.js';
 import { CronService } from '../cron/cron-service.js';
@@ -906,6 +907,7 @@ export class WebServer extends EventEmitter {
     registerClipboardRoutes(this.app, ctx);
     registerSearchRoutes(this.app, ctx);
     registerMeRoutes(this.app, ctx);
+    registerAdminRoutes(this.app, ctx);
     registerOrchestratorRoutes(this.app, ctx);
 
     // Cron: build the service from the same context, recompute

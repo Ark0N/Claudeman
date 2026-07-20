@@ -1,0 +1,196 @@
+/**
+ * @fileoverview Admin user-management routes (multi-user mode only).
+ *
+ * All handlers: 404 unless multi-user mode is active, requireAdmin, and audit-logged
+ * to ~/.codeman/admin-audit.jsonl. Endpoints (docs/multi-user-plan.md section 8):
+ *   GET    /api/admin/users
+ *   POST   /api/admin/users
+ *   PATCH  /api/admin/users/:username
+ *   POST   /api/admin/users/:username/reset-password
+ *   POST   /api/admin/users/:username/logout
+ *   DELETE /api/admin/users/:username
+ *
+ * Self-service GET /api/me + POST /api/me/password live in me-routes.ts.
+ */
+
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { z } from 'zod';
+import { readdirSync } from 'node:fs';
+import { ApiErrorCode, createErrorResponse } from '../../types.js';
+import { isMultiUserMode, userCasesDir } from '../../config/multiuser.js';
+import {
+  createUser,
+  deleteUser,
+  deleteUserSpace,
+  findUser,
+  generateOneTimePassword,
+  readUsers,
+  setPassword,
+  toPublicUser,
+  updateUser,
+  UserStoreError,
+} from '../../user-store.js';
+import { getAuthUser, requireAdmin, revokeUserSessions } from '../route-helpers.js';
+import { appendAdminAudit } from '../admin-audit.js';
+import { SseEvent } from '../sse-events.js';
+import type { AuthPort } from '../ports/auth-port.js';
+import type { SessionPort } from '../ports/session-port.js';
+import type { EventPort } from '../ports/event-port.js';
+
+const CreateUserSchema = z.object({
+  username: z.string().min(1).max(64),
+  role: z.enum(['admin', 'user']).default('user'),
+  password: z.string().min(8).max(1024).optional(),
+  canBypassPermissions: z.boolean().optional(),
+});
+const UpdateUserSchema = z.object({
+  role: z.enum(['admin', 'user']).optional(),
+  disabled: z.boolean().optional(),
+  canBypassPermissions: z.boolean().optional(),
+});
+const DeleteUserSchema = z.object({ deleteSpace: z.boolean().optional() });
+
+/** Map a UserStoreError's code onto the API error code + status. */
+function storeError(reply: FastifyReply, err: unknown): ReturnType<typeof createErrorResponse> {
+  if (err instanceof UserStoreError) {
+    const code = ApiErrorCode[err.code as keyof typeof ApiErrorCode] ?? ApiErrorCode.INVALID_INPUT;
+    reply.code(
+      err.code === 'USER_EXISTS' || err.code === 'LAST_ADMIN' ? 409 : err.code === 'USER_NOT_FOUND' ? 404 : 400
+    );
+    return createErrorResponse(code, err.message);
+  }
+  reply.code(500);
+  return createErrorResponse(ApiErrorCode.INTERNAL_ERROR, err instanceof Error ? err.message : 'error');
+}
+
+export function registerAdminRoutes(app: FastifyInstance, ctx: SessionPort & AuthPort & EventPort): void {
+  // Gate: admin routes exist only in multi-user mode, and only for admins.
+  const gate = (req: FastifyRequest, reply: FastifyReply): boolean => {
+    if (!isMultiUserMode()) {
+      reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'Not found'));
+      return false;
+    }
+    return requireAdmin(req, reply);
+  };
+  const audit = (req: FastifyRequest, action: string, target?: string, detail?: Record<string, unknown>) =>
+    void appendAdminAudit({ admin: getAuthUser(req).username, action, target, ip: req.ip, detail });
+
+  // Count a user's live sessions + active cookie sessions + case folders.
+  const statsFor = (username: string) => {
+    let liveSessions = 0;
+    for (const s of ctx.sessions.values()) if (s.owner === username) liveSessions++;
+    let activeSessions = 0;
+    if (ctx.authSessions) for (const [, rec] of ctx.authSessions) if (rec.username === username) activeSessions++;
+    let caseCount = 0;
+    try {
+      caseCount = readdirSync(userCasesDir(username), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
+    } catch {
+      /* no cases dir yet */
+    }
+    return { liveSessions, activeSessions, caseCount };
+  };
+
+  app.get('/api/admin/users', async (req, reply) => {
+    if (!gate(req, reply)) return;
+    const users = await readUsers(true);
+    return {
+      success: true,
+      data: users.map((u) => ({ ...toPublicUser(u), stats: statsFor(u.username) })),
+    };
+  });
+
+  app.post('/api/admin/users', async (req, reply) => {
+    if (!gate(req, reply)) return;
+    const parsed = CreateUserSchema.safeParse(req.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, parsed.error.issues[0]?.message ?? 'Invalid input');
+    }
+    // No password given: generate a one-time password, returned ONCE, force change.
+    const oneTime = parsed.data.password ? undefined : generateOneTimePassword();
+    try {
+      const user = await createUser({
+        username: parsed.data.username,
+        role: parsed.data.role,
+        password: parsed.data.password ?? oneTime!,
+        canBypassPermissions: parsed.data.canBypassPermissions,
+        mustChangePassword: !parsed.data.password,
+      });
+      audit(req, 'user.create', user.username, { role: user.role });
+      ctx.broadcast(SseEvent.AdminUsersChanged, {});
+      return { success: true, data: { user: toPublicUser(user), oneTimePassword: oneTime } };
+    } catch (err) {
+      return storeError(reply, err);
+    }
+  });
+
+  app.patch('/api/admin/users/:username', async (req, reply) => {
+    if (!gate(req, reply)) return;
+    const { username } = req.params as { username: string };
+    const parsed = UpdateUserSchema.safeParse(req.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, parsed.error.issues[0]?.message ?? 'Invalid input');
+    }
+    try {
+      const user = await updateUser(username, parsed.data);
+      // Disabling revokes the user's cookie sessions.
+      if (parsed.data.disabled) revokeUserSessions(ctx.authSessions, username);
+      audit(req, 'user.update', user.username, parsed.data);
+      ctx.broadcast(SseEvent.AdminUsersChanged, {});
+      return { success: true, data: { user: toPublicUser(user) } };
+    } catch (err) {
+      return storeError(reply, err);
+    }
+  });
+
+  app.post('/api/admin/users/:username/reset-password', async (req, reply) => {
+    if (!gate(req, reply)) return;
+    const { username } = req.params as { username: string };
+    if (!(await findUser(username))) {
+      reply.code(404);
+      return createErrorResponse(ApiErrorCode.USER_NOT_FOUND, 'No such user');
+    }
+    const oneTime = generateOneTimePassword();
+    try {
+      await setPassword(username, oneTime, { mustChangePassword: true });
+      revokeUserSessions(ctx.authSessions, username);
+      audit(req, 'user.reset-password', username);
+      ctx.broadcast(SseEvent.AdminUsersChanged, {});
+      return { success: true, data: { oneTimePassword: oneTime } };
+    } catch (err) {
+      return storeError(reply, err);
+    }
+  });
+
+  app.post('/api/admin/users/:username/logout', async (req, reply) => {
+    if (!gate(req, reply)) return;
+    const { username } = req.params as { username: string };
+    const revoked = revokeUserSessions(ctx.authSessions, username);
+    audit(req, 'user.logout', username, { revoked });
+    return { success: true, data: { revoked } };
+  });
+
+  app.delete('/api/admin/users/:username', async (req, reply) => {
+    if (!gate(req, reply)) return;
+    const { username } = req.params as { username: string };
+    const parsed = DeleteUserSchema.safeParse(req.body ?? {});
+    const deleteSpace = parsed.success ? parsed.data.deleteSpace : false;
+    try {
+      // Kill the user's live sessions first (normal kill flow, incl. docker/remote
+      // teardown), before removing the record.
+      const owned = [...ctx.sessions.values()].filter((s) => s.owner === username).map((s) => s.id);
+      for (const id of owned) {
+        await ctx.cleanupSession(id, true, 'admin_delete_user').catch(() => {});
+      }
+      revokeUserSessions(ctx.authSessions, username);
+      await deleteUser(username); // throws LAST_ADMIN / USER_NOT_FOUND
+      if (deleteSpace) await deleteUserSpace(username);
+      audit(req, 'user.delete', username, { deleteSpace, killedSessions: owned.length });
+      ctx.broadcast(SseEvent.AdminUsersChanged, {});
+      return { success: true, data: { username, deletedSpace: !!deleteSpace } };
+    } catch (err) {
+      return storeError(reply, err);
+    }
+  });
+}

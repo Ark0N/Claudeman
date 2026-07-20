@@ -386,6 +386,13 @@ export const DockerImageBuildComplete = 'docker:imageBuildComplete' as const;
 /** The agent base image build failed. */
 export const DockerImageBuildFailed = 'docker:imageBuildFailed' as const;
 
+// ─── Multi-user (admin-only / targeted) ──────────────────────────────────────
+
+/** The user roster changed (admin-only); the Users panel re-fetches. */
+export const AdminUsersChanged = 'admin:usersChanged' as const;
+/** A user must change their password (targeted); the frontend shows the modal. */
+export const AuthPasswordChangeRequired = 'auth:passwordChangeRequired' as const;
+
 // ─── Namespace Re-export ─────────────────────────────────────────────────────
 
 /**
@@ -576,4 +583,6 @@ export const SseEvent = {
   DockerImageBuildProgress,
   DockerImageBuildComplete,
   DockerImageBuildFailed,
+  AdminUsersChanged,
+  AuthPasswordChangeRequired,
 } as const;

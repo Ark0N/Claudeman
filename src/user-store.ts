@@ -198,6 +198,22 @@ async function writeUsers(users: UserRecord[]): Promise<void> {
   cache = { users, ts: Date.now() };
 }
 
+/**
+ * Serialize every read-modify-write on users.json. Without this a fire-and-forget
+ * touchLastLogin (fired on each Basic auth) can interleave with a route's
+ * create/update and clobber records, since both do readUsers(true) → mutate →
+ * writeUsers against a single shared file + tmp path.
+ */
+let mutateChain: Promise<unknown> = Promise.resolve();
+function withUsersLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = mutateChain.then(fn, fn);
+  mutateChain = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
 export async function hasUsers(): Promise<boolean> {
   return (await readUsers()).length > 0;
 }
@@ -259,25 +275,27 @@ export async function createUser(opts: CreateUserOptions): Promise<UserRecord> {
   if (!opts.password || opts.password.length < 8) {
     throw new UserStoreError('Password must be at least 8 characters', 'INVALID_INPUT');
   }
-  const users = await readUsers(true);
-  if (users.some((u) => u.username === username)) {
-    throw new UserStoreError(`User "${username}" already exists`, 'USER_EXISTS');
-  }
-  if (users.length >= maxUsers()) {
-    throw new UserStoreError(`Maximum number of users (${maxUsers()}) reached`, 'INVALID_INPUT');
-  }
-  const record: UserRecord = {
-    username,
-    role: opts.role,
-    password: await hashPassword(opts.password),
-    disabled: false,
-    mustChangePassword: !!opts.mustChangePassword,
-    canBypassPermissions: !!opts.canBypassPermissions,
-    createdAt: Date.now(),
-  };
-  users.push(record);
-  await writeUsers(users);
-  return record;
+  return withUsersLock(async () => {
+    const users = await readUsers(true);
+    if (users.some((u) => u.username === username)) {
+      throw new UserStoreError(`User "${username}" already exists`, 'USER_EXISTS');
+    }
+    if (users.length >= maxUsers()) {
+      throw new UserStoreError(`Maximum number of users (${maxUsers()}) reached`, 'INVALID_INPUT');
+    }
+    const record: UserRecord = {
+      username,
+      role: opts.role,
+      password: await hashPassword(opts.password),
+      disabled: false,
+      mustChangePassword: !!opts.mustChangePassword,
+      canBypassPermissions: !!opts.canBypassPermissions,
+      createdAt: Date.now(),
+    };
+    users.push(record);
+    await writeUsers(users);
+    return record;
+  });
 }
 
 /** Set a user's password. `mustChangePassword` is left unchanged unless specified. */
@@ -290,13 +308,15 @@ export async function setPassword(
     throw new UserStoreError('Password must be at least 8 characters', 'INVALID_INPUT');
   }
   const norm = normalizeUsername(username);
-  const users = await readUsers(true);
-  const record = users.find((u) => u.username === norm);
-  if (!record) throw new UserStoreError(`User "${norm}" not found`, 'USER_NOT_FOUND');
-  record.password = await hashPassword(password);
-  if (opts.mustChangePassword !== undefined) record.mustChangePassword = opts.mustChangePassword;
-  await writeUsers(users);
-  return record;
+  return withUsersLock(async () => {
+    const users = await readUsers(true);
+    const record = users.find((u) => u.username === norm);
+    if (!record) throw new UserStoreError(`User "${norm}" not found`, 'USER_NOT_FOUND');
+    record.password = await hashPassword(password);
+    if (opts.mustChangePassword !== undefined) record.mustChangePassword = opts.mustChangePassword;
+    await writeUsers(users);
+    return record;
+  });
 }
 
 export interface UpdateUserPatch {
@@ -308,39 +328,48 @@ export interface UpdateUserPatch {
 
 export async function updateUser(username: string, patch: UpdateUserPatch): Promise<UserRecord> {
   const norm = normalizeUsername(username);
-  const users = await readUsers(true);
-  const record = users.find((u) => u.username === norm);
-  if (!record) throw new UserStoreError(`User "${norm}" not found`, 'USER_NOT_FOUND');
+  return withUsersLock(async () => {
+    const users = await readUsers(true);
+    const record = users.find((u) => u.username === norm);
+    if (!record) throw new UserStoreError(`User "${norm}" not found`, 'USER_NOT_FOUND');
 
-  // Guard the last-enabled-admin invariant against demote/disable.
-  const before = countEnabledAdmins(users);
-  const projected: UserRecord = {
-    ...record,
-    role: patch.role ?? record.role,
-    disabled: patch.disabled ?? record.disabled,
-  };
-  const after = countEnabledAdmins(users.map((u) => (u.username === norm ? projected : u)));
-  if (before > 0 && after === 0) {
-    throw new UserStoreError('Cannot demote or disable the last enabled admin', 'LAST_ADMIN');
-  }
+    // Guard the last-enabled-admin invariant against demote/disable.
+    const before = countEnabledAdmins(users);
+    const projected: UserRecord = {
+      ...record,
+      role: patch.role ?? record.role,
+      disabled: patch.disabled ?? record.disabled,
+    };
+    const after = countEnabledAdmins(users.map((u) => (u.username === norm ? projected : u)));
+    if (before > 0 && after === 0) {
+      throw new UserStoreError('Cannot demote or disable the last enabled admin', 'LAST_ADMIN');
+    }
 
-  if (patch.role !== undefined) record.role = patch.role;
-  if (patch.disabled !== undefined) record.disabled = patch.disabled;
-  if (patch.canBypassPermissions !== undefined) record.canBypassPermissions = patch.canBypassPermissions;
-  if (patch.mustChangePassword !== undefined) record.mustChangePassword = patch.mustChangePassword;
-  await writeUsers(users);
-  return record;
+    if (patch.role !== undefined) record.role = patch.role;
+    if (patch.disabled !== undefined) record.disabled = patch.disabled;
+    if (patch.canBypassPermissions !== undefined) record.canBypassPermissions = patch.canBypassPermissions;
+    if (patch.mustChangePassword !== undefined) record.mustChangePassword = patch.mustChangePassword;
+    await writeUsers(users);
+    return record;
+  });
 }
 
-/** Record a successful login timestamp. Best-effort; failures are swallowed. */
+/**
+ * Record a successful login timestamp. Best-effort + throttled: skips the write if
+ * the last login was within the last minute (Basic clients re-send credentials on
+ * every request, so this fires often — the throttle keeps disk churn bounded).
+ */
 export async function touchLastLogin(username: string): Promise<void> {
   const norm = normalizeUsername(username);
   try {
-    const users = await readUsers(true);
-    const record = users.find((u) => u.username === norm);
-    if (!record) return;
-    record.lastLoginAt = Date.now();
-    await writeUsers(users);
+    await withUsersLock(async () => {
+      const users = await readUsers(true);
+      const record = users.find((u) => u.username === norm);
+      if (!record) return;
+      if (record.lastLoginAt && Date.now() - record.lastLoginAt < 60_000) return;
+      record.lastLoginAt = Date.now();
+      await writeUsers(users);
+    });
   } catch {
     /* best-effort */
   }
@@ -348,16 +377,18 @@ export async function touchLastLogin(username: string): Promise<void> {
 
 export async function deleteUser(username: string): Promise<void> {
   const norm = normalizeUsername(username);
-  const users = await readUsers(true);
-  const record = users.find((u) => u.username === norm);
-  if (!record) throw new UserStoreError(`User "${norm}" not found`, 'USER_NOT_FOUND');
-  const before = countEnabledAdmins(users);
-  const remaining = users.filter((u) => u.username !== norm);
-  const after = countEnabledAdmins(remaining);
-  if (before > 0 && after === 0) {
-    throw new UserStoreError('Cannot delete the last enabled admin', 'LAST_ADMIN');
-  }
-  await writeUsers(remaining);
+  await withUsersLock(async () => {
+    const users = await readUsers(true);
+    const record = users.find((u) => u.username === norm);
+    if (!record) throw new UserStoreError(`User "${norm}" not found`, 'USER_NOT_FOUND');
+    const before = countEnabledAdmins(users);
+    const remaining = users.filter((u) => u.username !== norm);
+    const after = countEnabledAdmins(remaining);
+    if (before > 0 && after === 0) {
+      throw new UserStoreError('Cannot delete the last enabled admin', 'LAST_ADMIN');
+    }
+    await writeUsers(remaining);
+  });
 }
 
 /**
