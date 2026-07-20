@@ -392,6 +392,26 @@ Prerequisite: Docker (or Podman) and the base image — build it once with `node
 
 ---
 
+## Multi-User Mode (opt-in)
+
+Share one Codeman with a small trusted team, each person getting their own login and workspace. **Off by default** — without the flag, nothing changes.
+
+Enable with `codeman web --multiuser` (or `CODEMAN_MULTIUSER=1`). Create the first admin, then manage users from the CLI or the **Users** tab in App Settings:
+
+```bash
+codeman users add alice --admin      # prompts for a password (or --password-stdin)
+codeman users add bob                # a regular user
+codeman users list
+```
+
+- **Per-user spaces** — each user's cases live under `~/codeman-users/<name>/cases`; sessions, cases, search, and real-time events are scoped to their owner. Admins see everything.
+- **Individually revocable logins** — named users with scrypt-hashed passwords in `~/.codeman/users.json`; disable, reset (one-time password), or delete an account at any time. Admin actions are audited to `~/.codeman/admin-audit.jsonl`.
+- **Safer defaults for regular users** — non-admins run Claude in `--permission-mode auto` (Anthropic's classifier-guarded mode); raw shell sessions, cron `launchCommand`, and skip-permissions require an explicit per-user grant.
+
+> ⚠️ **This separates workspaces; it does not sandbox users from each other.** Every session runs as the same OS account, so a determined user's agent can still reach another user's files. For real isolation, pair users with **Docker cases** or run separate instances under separate OS accounts. See [`docs/multi-user-plan.md`](docs/multi-user-plan.md) and the multi-user section of [`docs/security-architecture.md`](docs/security-architecture.md).
+
+---
+
 ## Remote Access — Cloudflare Tunnel
 
 Access Codeman from your phone or any device outside your local network using a free [Cloudflare quick tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/) — no port forwarding, no DNS, no static IP required.

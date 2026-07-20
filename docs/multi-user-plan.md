@@ -1,6 +1,16 @@
 # Multi-User Mode: Design Plan
 
-Status: PLAN (nothing implemented). Target: opt-in multi-user support behind a `--multiuser` flag, with per-user case spaces and an admin panel for user management.
+Status: **IMPLEMENTED on `feat/multiuser-mode`** (phases 1-5; opt-in, off by default). Target: opt-in multi-user support behind a `--multiuser` flag, with per-user case spaces and an admin panel for user management.
+
+Shipped by phase:
+
+- **Phase 1** (user store + mode plumbing + CLI): `src/user-store.ts` (scrypt, atomic 0600 writes, last-admin invariants, serialized read-modify-write), `src/config/multiuser.ts`, `codeman users add|passwd|list|rm`, `--multiuser` flag, bootstrap-on-first-boot. Tests: `test/user-store.test.ts`.
+- **Phase 2** (multi-user auth): parallel async auth branch (`src/web/middleware/auth.ts`), `req.authUser`, per-username rate bucket, `mustChangePassword` lockbox, `GET /api/me` + `POST /api/me/password`, QR identity-bound minting, network-bind + tunnel exemptions, new error codes. Tests: `test/multiuser-auth.test.ts`.
+- **Phase 3** (ownership threading): `Session.owner` at every create path + recovery mirror; `findSessionOrFail` owner check + list filtering; §6.3 permission policy (`resolveClaudeModeForUser` at all spawn sites incl. one-shots via `buildPromptArgs`; shell/launchCommand grant); per-user case spaces (`resolveCasesDir`) + owner-scoped case list + admin-only host CRUD; `workingDir` confinement; `assertSessionCapacity` per-user cap. Tests: `test/ownership-scoping.test.ts`.
+- **Phase 4** (event fan-out): WS owner gate; SSE per-client identity + `broadcast`/terminal-batch routing (`deriveSseHint`, fail-closed); `getLightState` per-identity filtering; file-route preview/thumbnail/history + `GET /api/search` scoping.
+- **Phase 5** (admin API + frontend): `src/web/routes/admin-routes.ts` (user CRUD, one-time passwords, last-admin guards, session revoke/kill) + `src/web/admin-audit.ts`; `public/admin-ui.js` (identity boot, change-password modal + interceptor, admin Users tab). Tests: `test/admin-routes.test.ts`, `test/admin-ui.test.ts`.
+
+Deferred follow-ups (documented, non-blocking): away-digest + subagent/workflow REST-list scoping, push-subscription identity/routing, per-user screenshot subdirs, `linked-cases.json` v2 owner field, `ScheduledRun.owner`, plan-orchestrator internal one-shot mode resolution, and a Playwright browser pass. Phase 6 (login form replacing Basic) remains out of scope.
 
 ## 1. Summary
 

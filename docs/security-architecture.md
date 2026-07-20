@@ -487,6 +487,19 @@ Full feature guide: [`docker-cases.md`](docker-cases.md).
 
 ---
 
+## 10a. Multi‑user mode (opt‑in)
+
+`codeman web --multiuser` (or `CODEMAN_MULTIUSER=1`) turns on named users with individually scrypt‑hashed passwords in `~/.codeman/users.json` (mode 0600). OFF by default; when off, nothing here applies and behavior is byte‑identical to single‑user. Design + phase status: [`multi-user-plan.md`](multi-user-plan.md).
+
+- **It is workspace separation, NOT a security boundary between users.** Every session still runs as the SAME OS account with agent code that can read the whole host. Any user can ask their agent to `cat` another user's files; the WEB layer enforces scoping, the AGENT layer cannot. Mitigations: give non‑admins the default `auto` permission mode (classifier‑guarded), pair users with **Docker cases** (container per case) for real isolation, or run separate Codeman instances under separate OS accounts. Stated loudly in the admin panel and the plan's threat model (section 2).
+- **It strictly improves network posture.** It removes the single shared `CODEMAN_PASSWORD` and gives each person a revocable credential; a non‑loopback bind and the tunnel‑enable guard are satisfied by "multi‑user with ≥1 enabled user" without a shared password.
+- **Auth is a parallel branch** (`middleware/auth.ts`) that leaves the single‑user path untouched: per‑user scrypt verify (`timingSafeEqual`, timing‑equalized against user enumeration), identity‑carrying cookies, a per‑username failure bucket (a botnet can't brute one account across IPs; one NATed user can't lock out the rest), and a `mustChangePassword` lockbox. The hook‑secret loopback bypass, host guard, and Origin/CSRF guard are unchanged (hooks authenticate the INSTANCE, not a user).
+- **Ownership is enforced server‑side only** and fails closed: `req.authUser` (a synthetic admin in single‑user), `findSessionOrFail` returns NOT_FOUND (never 403) for a foreign session, list/SSE/WS/file‑preview/search all filter by `session.owner`, and SSE routing defaults session‑scoped events to their owner (unresolved owner → withheld). The load‑bearing rule is **non‑admin `workingDir` confinement**: a non‑admin's session/one‑shot working dir must realpath‑resolve inside `~/codeman-users/<name>/cases`, checked BEFORE any disk write.
+- **Privileged actions are a one‑bit grant** (`canBypassPermissions`, default off): only granted users (and admins) get `--dangerously-skip-permissions` (others are silently downgraded to `--permission-mode auto`), shell‑mode sessions, cron `launchCommand`, and other CLIs' bypass flags. Machine‑level resources (remote/Docker host definitions, tunnel, self‑update, settings writes) are admin‑only.
+- **Admin actions are audited** append‑only to `~/.codeman/admin-audit.jsonl` (acting admin, action, target, IP). Passwords set by an admin create/reset are one‑time (returned once, force change). Under Basic auth, `logout` only truly ends QR‑issued sessions — to lock someone out, disable the account or reset the password (a proper login form is a deferred Phase 6).
+
+---
+
 ## 11. Quick reference
 
 | Env / flag | Effect |
