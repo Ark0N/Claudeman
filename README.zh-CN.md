@@ -43,6 +43,15 @@ codeman web
 # 打开 http://localhost:3000，开启你的第一个会话
 ```
 
+**想和小团队共用一台？** 改用多用户模式启动：每人拥有自己的登录与工作空间。
+
+```bash
+codeman users add alice --admin      # 创建第一个管理员账号
+codeman web --multiuser              # 命名登录 + 按用户隔离的案例空间
+```
+
+详见下文[多用户模式](#多用户模式可选启用)。
+
 <details>
 <summary><strong>作为后台服务运行</strong></summary>
 
@@ -144,7 +153,7 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 
 ### 3. 读懂仪表盘
 
-- **标签（顶部）** —— 每个会话一个。`Alt+1`–`9` 跳转，`Ctrl+Tab` 下一个，拖拽排序。
+- **标签（顶部）** —— 每个会话一个。`Alt+1`–`9` 跳转，`Ctrl+Tab` 下一个，拖拽排序（标签顺序会跨设备同步）。
 - **终端（中央）** —— 真实的 `xterm.js` 终端；完整 TUI 正常渲染。直接输入并按 **Enter** 发送。`Shift+Enter` 插入换行。
 - **侧边面板** —— Respawn、Ralph、Orchestrator、Cron、Subagents、Settings（从工具栏切换）。
 
@@ -157,13 +166,13 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 
 ### 5. 让它自主运行
 
-| 模式             | 用途                                                                                                      | 位置                   |
-| ---------------- | --------------------------------------------------------------------------------------------------------- | ---------------------- |
-| **Respawn**      | 长时间无人值守运行 —— 空闲/限额时自动重启 CLI，带自适应时序。预设：`solo-work`、`overnight-autonomous` 等 | Respawn 标签页         |
-| **Ralph / Todo** | 一个自驱循环，跟踪 todo 列表并持续工作直到完成。                                                          | Ralph 标签页           |
-| **Orchestrator** | 把一个目标变成分阶段计划，并跨多个智能体推动完成。                                                        | 编排器面板             |
-| **Cron**         | 已保存的、命名的定时任务（`once`/`interval`/`daily`/`weekly`），到期时拉起会话并发送提示。                | ⏰ Cron 按钮           |
-| **Auto-resume**  | 订阅限额重置后自动继续。                                                                                  | Respawn 标签页（顶部） |
+| 模式             | 用途                                                                                                      | 位置                                                               |
+| ---------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| **Respawn**      | 长时间无人值守运行 —— 空闲/限额时自动重启 CLI，带自适应时序。预设：`solo-work`、`overnight-autonomous` 等 | Respawn 标签页                                                     |
+| **Ralph / Todo** | 一个自驱循环，跟踪 todo 列表并持续工作直到完成。                                                          | Ralph 标签页                                                       |
+| **Orchestrator** | 把一个目标变成分阶段计划，并跨多个智能体推动完成。                                                        | 编排器面板                                                         |
+| **Cron**         | 已保存的、命名的定时任务（`once`/`interval`/`daily`/`weekly`），到期时拉起会话并发送提示。                | ⏰ Cron 按钮（可选启用：App Settings → Display → Header Displays） |
+| **Auto-resume**  | 订阅限额重置后自动继续。                                                                                  | Respawn 标签页（顶部）                                             |
 
 ### 6. 随时随地访问
 
@@ -173,7 +182,7 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 
 ### 7. 运维与维护
 
-- **App Settings** —— 模型、effort、主题/皮肤、通知、显示开关、各 CLI 的专属选项。
+- **App Settings** —— 模型、effort、权限启动模式、主题/皮肤、通知、显示开关、各 CLI 的专属选项。
 - **自更新** —— git-clone 安装可在 **Settings → Updates** 中原地更新。
 - **部署你自己的改动** —— 见[开发](#开发)。
 
@@ -320,6 +329,14 @@ WATCHING → IDLE DETECTED → SEND UPDATE → /clear → /init → CONTINUE →
 
 每个会话都运行在 **tmux** 内 —— 会话可在服务器重启、网络中断与机器休眠后存续。启动时自动恢复，具备双重冗余。幽灵会话发现机制能找到孤立的 tmux 会话。受管会话带有环境标签，因此智能体不会杀掉自己的会话。
 
+### 会话管理器与命令面板
+
+`Ctrl/Cmd/Alt+K` 打开模糊搜索的会话面板；**Browse all sessions** 打开会话管理器：一份去重后的完整清单，涵盖 Codeman 所知的一切（活动会话、来自状态与生命周期历史的既往会话，以及 Claude 转录），每一行都显示其第一条与最近一条提示。
+
+- **置顶（Pin）**：把会话固定到列表顶部。被置顶的会话甚至能挺过被杀掉（降级为一条轻量的已停止记录，依然可见、可恢复）。
+- **名称保留**：从会话管理器恢复既往会话时保留其原有名称，而不是生成一个新名称。
+- **跨设备标签顺序**：拖拽排序的标签顺序保存在服务端，你的排列会从桌面跟随到手机。
+
 ### 主机名感知的窗口标题
 
 在多台主机上运行 Codeman（笔记本、开发机、NAS）？浏览器标签标题是 `codeman:<主机名>`，让你无需点进去就能分辨每个标签对应哪个后端：
@@ -369,6 +386,7 @@ PTY 输出 → 16ms 服务端批处理 → DEC 2026 包裹 → SSE → 客户端
 - **自更新** —— systemd/launchd 管理下的 git-clone 安装可在 **App Settings → Updates** 中原地更新：它会检测最新发行版，自动暂存（stash）脏工作树，并在服务重启期间流式展示构建进度（npm 安装会被报告为不可更新）
 - **多 CLI** —— 每个会话可选 **Claude Code**、**OpenCode**、**Codex** 或 **Gemini**；环境变量前缀自动隔离（`CLAUDE_CODE_*`、`OPENCODE_*`、`CODEX_*` 与 `GEMINI_*`/`GOOGLE_*`）。详见 [`docs/opencode-integration.md`](docs/opencode-integration.md)
 - **Docker 会话** —— 在隔离且加固的容器中运行案例。**Create New** 上勾选一个复选框即可用合理的默认值启动容器并在其中启动智能体；同一案例的多个会话共享一个容器；可将容器连同工作区导出为可移植的 `.tar.gz`，迁移到另一台机器。详见 [`docs/docker-cases.md`](docs/docker-cases.md)
+- **远程 SSH 会话**：把案例指向另一台机器，让智能体在那里一个持久的远程 tmux 中运行：SSH 断连不中断任务、自动重连，还能发现并附着主机上已在运行的会话。详见 [`docs/remote-sessions.md`](docs/remote-sessions.md)
 - **Effort 与 Ultracode** —— 设置每会话的默认 effort（`low`–`max`），或启用 **ultracode**（动态多智能体工作流）。这些都只是软默认值 —— 会话中可随时用 `/effort` 切换。扩展思考预算也可配置
 - **语音输入** —— 用 Deepgram Nova-3 口述提示（带 Web Speech API 回退）：切换录音、自动静音停止、实时音量表（`Ctrl+Shift+V`）
 - **图像输入** —— 直接把图片粘贴或拖放进会话
@@ -393,6 +411,40 @@ PTY 输出 → 16ms 服务端批处理 → DEC 2026 包裹 → SSE → 客户端
 - **持久耐用** —— Codeman 重启后重连会回到同一个存活的智能体；容器停止/重启后则从绑定挂载的转录恢复对话。
 
 前置条件：只需 Docker（或 Podman）。智能体基础镜像会在首次使用时自动构建，构建进度实时显示在 UI 中（也可用 `node scripts/build-agent-image.mjs` 预构建）。完整指南：[`docs/docker-cases.md`](docs/docker-cases.md)。
+
+---
+
+## 远程 SSH 会话
+
+把案例（case）指向另一台机器，通过 SSH 让智能体**在那台机器上**运行，同时保留同样的仪表盘、移动端 UI 与自主运行特性。你的笔记本只是一扇窗口，会话本体活在远程主机上。
+
+- **天生持久**：智能体运行在远程主机上一个专用的 tmux 会话里，SSH 断连、网络切换或笔记本休眠都不会中断任务。重新连接后回到同一个活跃对话。
+- **自动重连**：一个带上限退避的监视器发现 SSH 面板断开后，会静默重新附着到仍在运行的远程会话（设置中有总开关；主动杀掉的会话绝不会被复活）。
+- **发现与附着**：列出主机上已在运行的 `codeman-*` 会话（由那台机器自己的 Codeman 或其他操作者启动）并附着其一。非你所有的已附着会话在关闭标签时**只分离，绝不杀掉**。
+- **共享会话**：多个客户端可以以不同窗口尺寸同时附着同一个远程会话而互不挤压；发现列表会显示带客户端计数的「shared」徽标。
+- **注入安全**：所有 ssh 命令行都经由单一的 shell 转义构建器生成，主机/路径/身份文件字段均有模式校验。
+
+在 **New Case → Remote** 中配置（主机、用户、身份文件、可选跳板机）。完整设计：[`docs/remote-sessions.md`](docs/remote-sessions.md)。
+
+---
+
+## 多用户模式（可选启用）
+
+与一个小型互信团队共享同一个 Codeman，每人拥有自己的登录与工作空间。**默认关闭**：不加该开关时，行为与单用户完全一致。
+
+用 `codeman web --multiuser`（或 `CODEMAN_MULTIUSER=1`）启用。创建第一个管理员后，可通过 CLI 或 App Settings 中的 **Users** 标签页管理用户：
+
+```bash
+codeman users add alice --admin      # 提示输入密码（或 --password-stdin）
+codeman users add bob                # 普通用户
+codeman users list
+```
+
+- **按用户的空间**：每个用户的案例位于 `~/codeman-users/<name>/cases`；会话、案例、搜索与实时事件都按属主隔离。管理员可以看到全部。
+- **可单独吊销的登录**：命名用户的密码以 scrypt 哈希保存在 `~/.codeman/users.json`；可随时禁用、重置（一次性密码）或删除账号。管理员操作审计记录在 `~/.codeman/admin-audit.jsonl`。
+- **普通用户的更安全默认值**：非管理员以 `--permission-mode auto` 运行 Claude（Anthropic 的分类器护栏模式）；raw shell 会话、cron `launchCommand` 与跳过权限模式需要按用户显式授权。
+
+> ⚠️ **这只是工作空间的划分，不是用户之间的沙箱。** 所有会话都以同一个操作系统账户运行，因此有心用户的智能体依然能触及他人的文件。若需要真正的隔离，请结合 **Docker 案例**，或在不同的操作系统账户下运行独立实例。参见 [`docs/multi-user-plan.md`](docs/multi-user-plan.md) 与 [`docs/security-architecture.md`](docs/security-architecture.md) 的多用户章节。
 
 ---
 
@@ -519,13 +571,14 @@ URL 被刻意保持精简（`/q/` 路径 + 6 字符码 ≈ 53–56 个字符）�
 
 ## 安全
 
-Codeman 用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 在设计上对任何能访问到它的人都是一个远程代码执行面 —— 整套安全模型的存在就是为了控制*谁*能访问。近期加固（v0.9.0 + v0.9.5）封堵了那些常困扰自托管开发工具的浏览器驱动攻击路径。完整模型：[`docs/security-architecture.md`](docs/security-architecture.md)。**发现了漏洞？** 私下披露方式与已知限制清单见 [`SECURITY.md`](SECURITY.md)。
+Codeman 默认用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 在设计上对任何能访问到它的人都是一个远程代码执行面 —— 整套安全模型的存在就是为了控制*谁*能访问。（启动权限模式可配置，见下文。）近期加固（v0.9.0 + v0.9.5）封堵了那些常困扰自托管开发工具的浏览器驱动攻击路径。完整模型：[`docs/security-architecture.md`](docs/security-architecture.md)。**发现了漏洞？** 私下披露方式与已知限制清单见 [`SECURITY.md`](SECURITY.md)。
 
 ### 网络与访问
 
 - **默认仅环回** —— 绑定 `127.0.0.1`，仅可从本机访问，因此「无密码」默认配置开箱即安全。在未设置 `CODEMAN_PASSWORD` 的情况下绑定非环回主机会*启动但打印一条醒目警告*，并给出三个具体修复方案（设置密码、环回 + 一个带认证的隧道，或用 `--allow-unauthenticated-network` 显式确认）
 - **可选认证，真实会话** —— 通过 `CODEMAN_USERNAME`（默认 `admin`）/ `CODEMAN_PASSWORD` 的 HTTP Basic 认证。成功后签发一个不透明的 256 位 `codeman_session` cookie（`randomBytes(32)`）—— 服务端校验，而非客户端签名，因此无法离线伪造（24h TTL、自动延长、设备上下文审计日志）
 - **按 IP 速率限制** —— 失败 10 次 → `429` 并带 `Retry-After`（15 分钟衰减）。即便攻击者在同一 IP 上猛攻，有效 cookie 或正确密码也能*立即*恢复 —— 这很重要，因为所有隧道流量共享同一个环回 IP。二维码认证有自己独立的限制器
+- **可配置的权限模式**：`--dangerously-skip-permissions` 只是默认值。**App Settings → Claude CLI → Startup Mode** 可以把新会话切换为 Anthropic 的分类器护栏 `auto` 模式（低打扰，需要 Claude Code 2.1.207+）、`normal` 提示模式，或一份显式的允许工具列表。多用户模式下，未获授权的用户会被强制为 `auto`，shell 会话与跳过权限需要按用户显式授权
 
 ### 始终开启的浏览器加固（v0.9.5）
 
@@ -675,7 +728,7 @@ Codeman 会注册 Claude Code hook，它们 `POST /api/hook-event`（`permission
 
 ## API
 
-基于 Fastify 的 REST —— **18 个路由模块中约 160 个处理器**，外加一条 SSE 流和一条 WebSocket 终端通道。所有响应都使用 `ApiResponse<T>` 信封（`{success, data}` / `{success, error, errorCode}`）；`/api/v1/*` 是稳定别名。以下是一个有代表性的子集：
+基于 Fastify 的 REST —— **20 个路由模块中约 190 个处理器**，外加一条 SSE 流和一条 WebSocket 终端通道。所有响应都使用 `ApiResponse<T>` 信封（`{success, data}` / `{success, error, errorCode}`）；`/api/v1/*` 是稳定别名。以下是一个有代表性的子集：
 
 ### 会话（Sessions）
 
@@ -685,6 +738,9 @@ Codeman 会注册 Claude Code hook，它们 `POST /api/hook-event`（`permission
 | `POST`   | `/api/quick-start`         | 创建 case + 启动会话（`{caseName?, mode?, effort?, envOverrides?}`）           |
 | `POST`   | `/api/sessions/:id/input`  | 发送输入（`{input, useMux?, clientId?, seq?}` —— `clientId`+`seq` = 精确一次） |
 | `GET`    | `/api/sessions/:id/output` | 读取终端输出                                                                   |
+| `GET`    | `/api/sessions/unified`    | 统一的活动 + 历史清单（会话管理器）：`?q=&limit=`                              |
+| `POST`   | `/api/sessions/:id/pin`    | 在会话管理器中置顶 / 取消置顶（`{pinned}`）                                    |
+| `PUT`    | `/api/session-order`       | 跨设备同步标签顺序（`{order: [ids]}`）                                         |
 | `DELETE` | `/api/sessions/:id`        | 删除会话                                                                       |
 
 ### 重生（Respawn）
@@ -807,7 +863,7 @@ flowchart TB
 npm install
 npx tsx src/index.ts web    # 开发模式
 npm run build               # 生产构建
-npm test                    # 运行测试
+npm run test:ci             # 运行测试（CI 套件；浏览器套件需要额外环境）
 ```
 
 完整文档见 [CLAUDE.md](./CLAUDE.md)。

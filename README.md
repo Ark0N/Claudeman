@@ -41,6 +41,15 @@ codeman web
 # Open http://localhost:3000 and start your first session
 ```
 
+**Sharing with a small team?** Start it in multi-user mode instead: each person gets their own login and workspace.
+
+```bash
+codeman users add alice --admin      # create the first admin account
+codeman web --multiuser              # named logins + per-user case spaces
+```
+
+Details in [Multi-User Mode](#multi-user-mode-opt-in) below.
+
 <details>
 <summary><strong>Run as a background service</strong></summary>
 
@@ -142,7 +151,7 @@ Hit start — Codeman spawns the CLI via a real PTY and streams it to your brows
 
 ### 3. Read the dashboard
 
-- **Tabs (top)** — one per session. `Alt+1`-`9` to jump, `Ctrl+Tab` for next, drag to reorder.
+- **Tabs (top)** — one per session. `Alt+1`-`9` to jump, `Ctrl+Tab` for next, drag to reorder (tab order syncs across your devices).
 - **Terminal (center)** — a real `xterm.js` terminal; full TUIs render correctly. Type directly and press **Enter** to send. `Shift+Enter` inserts a newline.
 - **Side panels** — Respawn, Ralph, Orchestrator, Cron, Subagents, Settings (toggled from the toolbar).
 
@@ -155,13 +164,13 @@ Hit start — Codeman spawns the CLI via a real PTY and streams it to your brows
 
 ### 5. Make it autonomous
 
-| Mode             | Use it for                                                                                                                        | Where              |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
-| **Respawn**      | Long unattended runs — auto-restarts the CLI on idle/limit, with adaptive timing. Presets: `solo-work`, `overnight-autonomous`, … | Respawn tab        |
-| **Ralph / Todo** | A self-driving loop that tracks a todo list and keeps working until done.                                                         | Ralph tab          |
-| **Orchestrator** | Turn one goal into a phased plan and drive it to completion across agents.                                                        | Orchestrator panel |
-| **Cron**         | Saved, named jobs on a schedule (`once`/`interval`/`daily`/`weekly`) that spawn a session and send a prompt when due.             | ⏰ Cron button     |
-| **Auto-resume**  | Automatically continue after a subscription rate-limit resets.                                                                    | Respawn tab (top)  |
+| Mode             | Use it for                                                                                                                        | Where                                                               |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| **Respawn**      | Long unattended runs — auto-restarts the CLI on idle/limit, with adaptive timing. Presets: `solo-work`, `overnight-autonomous`, … | Respawn tab                                                         |
+| **Ralph / Todo** | A self-driving loop that tracks a todo list and keeps working until done.                                                         | Ralph tab                                                           |
+| **Orchestrator** | Turn one goal into a phased plan and drive it to completion across agents.                                                        | Orchestrator panel                                                  |
+| **Cron**         | Saved, named jobs on a schedule (`once`/`interval`/`daily`/`weekly`) that spawn a session and send a prompt when due.             | ⏰ Cron button _(opt-in: App Settings → Display → Header Displays)_ |
+| **Auto-resume**  | Automatically continue after a subscription rate-limit resets.                                                                    | Respawn tab (top)                                                   |
 
 ### 6. Reach it from anywhere
 
@@ -171,7 +180,7 @@ Hit start — Codeman spawns the CLI via a real PTY and streams it to your brows
 
 ### 7. Operate & maintain
 
-- **App Settings** — model, effort, theme/skin, notifications, display toggles, per-CLI options.
+- **App Settings** — model, effort, permission startup mode, theme/skin, notifications, display toggles, per-CLI options.
 - **Self-update** — git-clone installs update in place from **Settings → Updates**.
 - **Deploy your own changes** — see [Development](#development).
 
@@ -318,6 +327,14 @@ Run **20 parallel sessions** with full visibility — real-time xterm.js termina
 
 Every session runs inside **tmux** — sessions survive server restarts, network drops, and machine sleep. Auto-recovery on startup with dual redundancy. Ghost session discovery finds orphaned tmux sessions. Managed sessions are environment-tagged so the agent won't kill its own session.
 
+### Session Manager & Command Palette
+
+`Ctrl/Cmd/Alt+K` opens a fuzzy session palette; **Browse all sessions** opens the Session Manager: one deduped list of everything Codeman knows about (live sessions, past sessions from state and lifecycle history, and Claude transcripts), each row showing its first and most recent prompt.
+
+- **Pinning**: pin a session to float it to the top of the list. Pinned sessions even survive kill (they demote to a lightweight stopped entry that stays visible and resumable).
+- **Name retention**: resuming a past session keeps its original name instead of minting a new one.
+- **Cross-device tab order**: drag-reordered tabs persist server-side, so your ordering follows you from desktop to phone.
+
 ### Hostname-Aware Window Title
 
 Running Codeman on multiple hosts (laptop, dev box, NAS)? The browser tab title is `codeman:<hostname>` so you can tell which backend each tab points at without clicking in:
@@ -367,6 +384,7 @@ PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xt
 - **Self-update** — git-clone installs under systemd/launchd update in place from **App Settings → Updates**: it detects the latest release, auto-stashes a dirty tree, and streams build progress across the service restart (npm installs report as non-updatable)
 - **Multi-CLI** — run **Claude Code**, **OpenCode**, **Codex**, or **Gemini** per session; env-var prefixes auto-gate (`CLAUDE_CODE_*` vs `OPENCODE_*` vs `CODEX_*` vs `GEMINI_*`/`GOOGLE_*`). See [`docs/opencode-integration.md`](docs/opencode-integration.md)
 - **Docker sessions** — run a case inside an isolated, hardened container. One checkbox on **Create New** spins up a container with sensible defaults and starts the agent inside it; multiple sessions share one per-case container; export a container + its workspace to a portable `.tar.gz` to move it to another machine. See [`docs/docker-cases.md`](docs/docker-cases.md)
+- **Remote SSH sessions** — point a case at another machine and run the agent there inside a durable remote tmux: survives SSH drops, auto-reconnects, and can discover + attach sessions already running on the host. See [`docs/remote-sessions.md`](docs/remote-sessions.md)
 - **Effort & Ultracode** — set a per-session default effort (`low`–`max`) or enable **ultracode** (dynamic multi-agent workflows). Soft defaults only — switchable anytime with `/effort` in-session. Extended-thinking budget is configurable too
 - **Voice input** — dictate prompts with Deepgram Nova-3 (Web Speech API fallback): toggle recording, auto-silence stop, live level meter (`Ctrl+Shift+V`)
 - **Image input** — paste or drag-and-drop images straight into a session
@@ -391,6 +409,20 @@ Run a case inside its own hardened Docker container instead of directly on your 
 - **Durable** — reconnect after a restart lands back in the same live agent; a container stop/reboot resumes the conversation from the bind-mounted transcript.
 
 Prerequisite: just Docker (or Podman). The agent base image builds itself automatically on first use, with progress streamed to the UI (or pre-build it with `node scripts/build-agent-image.mjs`). Full guide: [`docs/docker-cases.md`](docs/docker-cases.md).
+
+---
+
+## Remote SSH Sessions
+
+Point a case at another machine and run the agent **there**, over SSH, with the same dashboard, mobile UI, and autonomy features. Your laptop is just a window onto a session that lives on the remote host.
+
+- **Durable by design**: the agent runs inside a dedicated tmux session on the remote host, so a dropped SSH connection, network change, or laptop sleep never kills the run. Reconnecting lands back in the same live conversation.
+- **Auto-reconnect**: a bounded-backoff watcher notices a dead SSH pane and silently reattaches to the still-running remote session (kill-switch in settings; intentional kills are never revived).
+- **Discover & attach**: list the `codeman-*` sessions already running on a host (started by that machine's own Codeman, or by another operator) and attach to one. Attached sessions you don't own **detach on tab close, never kill**.
+- **Shared sessions**: several clients can attach the same remote session at different window sizes without clamping each other; discovery shows a "shared" badge with the client count.
+- **Injection-safe**: every ssh command line flows through a single shell-escaping builder, and host/path/identity fields are schema-guarded.
+
+Set it up under **New Case → Remote** (host, user, identity file, optional jump host). Full design: [`docs/remote-sessions.md`](docs/remote-sessions.md).
 
 ---
 
@@ -537,13 +569,14 @@ When someone authenticates via QR, the desktop shows a notification toast with t
 
 ## Security
 
-Codeman launches sessions with `--dangerously-skip-permissions`, so the web UI is by design a remote-code-execution surface for whoever can reach it — the whole security model exists to control _who_ that is. Recent hardening (v0.9.0 + v0.9.5) closes the browser-driven attack paths that bite self-hosted dev tools. Full model: [`docs/security-architecture.md`](docs/security-architecture.md). **Found a vulnerability?** See [`SECURITY.md`](SECURITY.md) for private disclosure and the list of known limitations.
+By default Codeman launches sessions with `--dangerously-skip-permissions`, so the web UI is by design a remote-code-execution surface for whoever can reach it — the whole security model exists to control _who_ that is. (The startup permission mode is configurable; see below.) Recent hardening (v0.9.0 + v0.9.5) closes the browser-driven attack paths that bite self-hosted dev tools. Full model: [`docs/security-architecture.md`](docs/security-architecture.md). **Found a vulnerability?** See [`SECURITY.md`](SECURITY.md) for private disclosure and the list of known limitations.
 
 ### Network & access
 
 - **Loopback by default** — binds `127.0.0.1`, reachable only from the same machine, so the no-password default is safe out of the box. Binding a non-loopback host without `CODEMAN_PASSWORD` _starts but prints a loud warning_ with three concrete fixes (set a password, loopback + an authenticated tunnel, or explicitly acknowledge with `--allow-unauthenticated-network`)
 - **Optional auth, real sessions** — HTTP Basic via `CODEMAN_USERNAME` (default `admin`) / `CODEMAN_PASSWORD`. Success issues an opaque 256-bit `codeman_session` cookie (`randomBytes(32)`) — validated server-side, not client-signed, so it can't be forged offline (24h TTL, auto-extend, device-context audit log)
 - **Per-IP rate limiting** — 10 failed attempts → `429` with `Retry-After` (15-min decay). A valid cookie or correct password recovers _immediately_ even while an attacker hammers the same IP — important because all tunnel traffic shares one loopback IP. QR auth has its own separate limiter
+- **Configurable permission mode** - `--dangerously-skip-permissions` is only the default. **App Settings → Claude CLI → Startup Mode** can switch new sessions to Anthropic's classifier-guarded `auto` mode (low-prompt, needs Claude Code 2.1.207+), `normal` prompting, or an explicit allowed-tools list. In multi-user mode, non-granted users are forced to `auto`, and shell sessions / skip-permissions require an explicit per-user grant
 
 ### Always-on browser hardening (v0.9.5)
 
@@ -693,7 +726,7 @@ Codeman registers Claude Code hooks that `POST /api/hook-event` (`permission_pro
 
 ## API
 
-REST over Fastify — **~160 handlers across 18 route modules**, plus an SSE stream and a WebSocket terminal channel. All responses use the `ApiResponse<T>` envelope (`{success, data}` / `{success, error, errorCode}`); `/api/v1/*` is a stable alias. A representative subset:
+REST over Fastify — **~190 handlers across 20 route modules**, plus an SSE stream and a WebSocket terminal channel. All responses use the `ApiResponse<T>` envelope (`{success, data}` / `{success, error, errorCode}`); `/api/v1/*` is a stable alias. A representative subset:
 
 ### Sessions
 
@@ -703,6 +736,9 @@ REST over Fastify — **~160 handlers across 18 route modules**, plus an SSE str
 | `POST`   | `/api/quick-start`         | Create case + start session (`{caseName?, mode?, effort?, envOverrides?}`)         |
 | `POST`   | `/api/sessions/:id/input`  | Send input (`{input, useMux?, clientId?, seq?}` — `clientId`+`seq` = exactly-once) |
 | `GET`    | `/api/sessions/:id/output` | Read terminal output                                                               |
+| `GET`    | `/api/sessions/unified`    | Unified live + history list (Session Manager) — `?q=&limit=`                       |
+| `POST`   | `/api/sessions/:id/pin`    | Pin/unpin in the Session Manager (`{pinned}`)                                      |
+| `PUT`    | `/api/session-order`       | Sync tab order across devices (`{order: [ids]}`)                                   |
 | `DELETE` | `/api/sessions/:id`        | Delete session                                                                     |
 
 ### Respawn
@@ -825,7 +861,7 @@ flowchart TB
 npm install
 npx tsx src/index.ts web    # Dev mode
 npm run build               # Production build
-npm test                    # Run tests
+npm run test:ci             # Run tests (the CI suite; browser suites need extra setup)
 ```
 
 See [CLAUDE.md](./CLAUDE.md) for full documentation.

@@ -683,17 +683,29 @@ install_cloudflared_suse() {
 # Interactive Prompts
 # ============================================================================
 
+# `curl | bash` leaves stdin attached to the pipe, so a plain `read` never sees
+# the keyboard even though the user is sitting at a terminal. These helpers
+# prompt via /dev/tty whenever a real terminal is available, and only fall back
+# to defaults when there is genuinely none (CI, truly headless pipes).
+has_tty() {
+    [[ -t 0 ]] && return 0
+    { : < /dev/tty; } 2>/dev/null
+}
+
+read_reply() {
+    # read_reply <varname>: read one line from the user's real terminal
+    if [[ -t 0 ]]; then
+        read -r "$1"
+    else
+        read -r "$1" < /dev/tty
+    fi
+}
+
 prompt_yes_no() {
     local prompt="$1"
     local default="${2:-y}"
 
-    if [[ "$NONINTERACTIVE" == "1" ]]; then
-        [[ "$default" == "y" ]]
-        return
-    fi
-
-    # Check if stdin is a terminal
-    if [[ ! -t 0 ]]; then
+    if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
         # Non-interactive, use default
         [[ "$default" == "y" ]]
         return
@@ -708,7 +720,7 @@ prompt_yes_no() {
 
     while true; do
         echo -en "${CYAN}$prompt${NC} $yn_hint " >&2
-        read -r answer
+        read_reply answer || answer="$default"
         answer="${answer:-$default}"
         case "$answer" in
             [Yy]|[Yy][Ee][Ss]) return 0 ;;
@@ -1101,13 +1113,14 @@ main() {
         echo ""
 
         local cli_choice=""
-        if [[ "$NONINTERACTIVE" == "1" ]] || [[ ! -t 0 ]]; then
+        if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
             # Non-interactive: default to Claude Code
             cli_choice="1"
+            info "No interactive terminal detected: defaulting to Claude Code"
         else
             while true; do
                 echo -en "${CYAN}Choose [1/2/3]:${NC} " >&2
-                read -r cli_choice
+                read_reply cli_choice || { cli_choice="1"; break; }
                 case "$cli_choice" in
                     1|2|3) break ;;
                     *) echo "Please enter 1, 2, or 3." >&2 ;;
@@ -1269,12 +1282,13 @@ main() {
         echo -e "    ${CYAN}3)${NC} Don't start — I'll run it later"
         echo ""
 
-        if [[ "$NONINTERACTIVE" == "1" ]] || [[ ! -t 0 ]]; then
+        if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
             launch_choice="3"
+            info "No interactive terminal detected: not starting (run 'codeman web' when ready)"
         else
             while true; do
                 echo -en "${CYAN}Choose [1/2/3]:${NC} " >&2
-                read -r launch_choice
+                read_reply launch_choice || { launch_choice="3"; break; }
                 case "$launch_choice" in
                     1|2|3) break ;;
                     *) echo "Please enter 1, 2, or 3." >&2 ;;
@@ -1289,12 +1303,13 @@ main() {
         echo -e "    ${CYAN}2)${NC} Don't start — I'll run it later"
         echo ""
 
-        if [[ "$NONINTERACTIVE" == "1" ]] || [[ ! -t 0 ]]; then
+        if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
             launch_choice="2"
+            info "No interactive terminal detected: not starting (run 'codeman web' when ready)"
         else
             while true; do
                 echo -en "${CYAN}Choose [1/2]:${NC} " >&2
-                read -r launch_choice
+                read_reply launch_choice || { launch_choice="2"; break; }
                 case "$launch_choice" in
                     1) break ;;
                     2) break ;;
