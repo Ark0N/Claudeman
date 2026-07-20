@@ -88,11 +88,25 @@ describe('buildDockerLaunchCommand', () => {
     expect(cmd).toContain("sh -lc '");
   });
 
-  it('injects the resume flag ONLY when a resume id is passed', () => {
+  it('pins a deterministic conversation id with a reboot-surviving fallback (fresh launch)', () => {
+    const cmd = buildDockerLaunchCommand(launchOpts());
+    // --session-id first (fresh start), || --resume so a container stop/reboot
+    // relaunch of the SAME session resumes instead of dead-paning on
+    // "Session ID already in use".
+    expect(cmd).toContain(
+      'claude --dangerously-skip-permissions --session-id 1a2b3c4d5e6f || ' +
+        'claude --dangerously-skip-permissions --resume 1a2b3c4d5e6f'
+    );
+    // exec is stripped from the claude pane command — an exec'd first branch could never fall back.
+    expect(cmd).not.toContain('exec claude');
+  });
+
+  it('resumes an explicit id with a --session-id fallback (stale id never dead-panes)', () => {
     const withResume = buildDockerLaunchCommand(launchOpts({ resumeSessionId: 'abc-123-def' }));
-    expect(withResume).toContain('exec claude --dangerously-skip-permissions --resume abc-123-def');
-    const without = buildDockerLaunchCommand(launchOpts());
-    expect(without).not.toContain('--resume');
+    expect(withResume).toContain(
+      'claude --dangerously-skip-permissions --resume abc-123-def || ' +
+        'claude --dangerously-skip-permissions --session-id 1a2b3c4d5e6f'
+    );
   });
 
   it('uses codex resume syntax and drops an unsafe resume id', () => {
@@ -101,8 +115,10 @@ describe('buildDockerLaunchCommand', () => {
     );
     expect(codex).toContain('exec codex resume 01H-codex-id');
     const unsafe = buildDockerLaunchCommand(launchOpts({ resumeSessionId: 'x; rm -rf /' }));
-    expect(unsafe).not.toContain('--resume');
+    expect(unsafe).not.toContain('x; rm'); // unsafe id dropped entirely
     expect(unsafe).not.toContain('rm -rf');
+    // falls back to the deterministic fresh-launch chain on the session's own id
+    expect(unsafe).toContain('--session-id 1a2b3c4d5e6f');
   });
 
   it('forwards codex/gemini keys NAME-ONLY (no value in argv)', () => {
@@ -128,10 +144,13 @@ describe('buildDockerLaunchCommand', () => {
     expect(cmd).toContain('/home/arkon/my cases/proj');
   });
 
-  it('honors a per-host command override', () => {
+  it('honors a per-host command override (exec stripped for the session-id chain)', () => {
     const docker = { ...toSessionDocker(HOST, CASE), commands: { claude: 'exec claude --model opus' } };
     const cmd = buildDockerLaunchCommand(launchOpts({ docker }));
-    expect(cmd).toContain('exec claude --model opus');
+    expect(cmd).toContain('claude --model opus --session-id 1a2b3c4d5e6f');
+    const shellOverride = { ...toSessionDocker(HOST, CASE), commands: { shell: 'exec zsh -l' } };
+    const shellCmd = buildDockerLaunchCommand(launchOpts({ mode: 'shell' as SessionMode, docker: shellOverride }));
+    expect(shellCmd).toContain('exec zsh -l'); // non-claude overrides keep their exec
   });
 
   it('seeds writable config (guarded copies, mkdir -p parent) from the read-only seed mounts', () => {

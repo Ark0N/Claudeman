@@ -105,6 +105,45 @@ export function parseLoadedImageRef(loadOutput: string): string | null {
   return null;
 }
 
+/**
+ * Validate an imported bundle's manifest BEFORE any of its fields are trusted.
+ * A bundle is cross-machine input (potentially authored by someone else), and its
+ * fields flow into stored host/case config that the schema layer never sees:
+ * `engine` becomes the probe/launch binary selector, `image`/`containerWorkdir`
+ * reach the shellescaped launch string, `network` is a create arg. Mirror the
+ * DockerHostSchema/DockerCaseLinkSchema constraints here (throwing, since this is
+ * not a web-layer module). Exported for unit tests.
+ */
+export function validateImportManifest(manifest: DockerExportManifest): void {
+  const fail = (msg: string): never => {
+    throw new Error(`invalid bundle manifest: ${msg}`);
+  };
+  if (manifest.schemaVersion !== DOCKER_EXPORT_SCHEMA) {
+    fail(`unsupported export schema version ${manifest.schemaVersion} (expected ${DOCKER_EXPORT_SCHEMA})`);
+  }
+  if (manifest.mode !== 'full' && manifest.mode !== 'workspace') fail(`unknown mode ${String(manifest.mode)}`);
+  if (manifest.engine !== 'docker' && manifest.engine !== 'podman') fail(`unknown engine ${String(manifest.engine)}`);
+  if (typeof manifest.caseName !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(manifest.caseName)) fail('bad caseName');
+  if (
+    typeof manifest.image !== 'string' ||
+    manifest.image.length > 512 ||
+    !/^[a-zA-Z0-9][\w./:@-]*$/.test(manifest.image)
+  ) {
+    fail('bad image reference');
+  }
+  if (
+    typeof manifest.containerWorkdir !== 'string' ||
+    manifest.containerWorkdir.length > 2000 ||
+    !manifest.containerWorkdir.startsWith('/') ||
+    // comma: --mount specs are comma-delimited CSV; shell escaping cannot protect it
+    /[`$\\"'\n\r;&|<>,]/.test(manifest.containerWorkdir)
+  ) {
+    fail('bad containerWorkdir');
+  }
+  if (!['bridge', 'none', 'custom'].includes(manifest.network)) fail(`unknown network ${String(manifest.network)}`);
+  if (typeof manifest.checksums !== 'object' || manifest.checksums === null) fail('missing checksums');
+}
+
 // ========== IO helpers ==========
 
 function run(
@@ -338,25 +377,34 @@ export async function importDockerBundle(params: {
   destWorkspace: string;
   engine: DockerEngine;
   timestamp: number;
+  /** Schema-validated destination case name; the quarantine tag derives from THIS,
+   *  never from the (attacker-authored) manifest.caseName. */
+  newCaseName: string;
 }): Promise<ImportResult> {
-  const { bundlePath, destWorkspace, engine, timestamp } = params;
+  const { bundlePath, destWorkspace, engine, timestamp, newCaseName } = params;
   const argv: string[] = [engine === 'podman' ? 'podman' : 'docker'];
 
   if (IS_TEST_MODE) {
     const raw = await fs.readFile(bundlePath, 'utf-8').catch(() => '{}');
-    return { manifest: JSON.parse(raw) as DockerExportManifest, workspacePath: destWorkspace };
+    const manifest = JSON.parse(raw) as DockerExportManifest;
+    validateImportManifest(manifest);
+    return { manifest, workspacePath: destWorkspace };
   }
 
   const stageDir = `${destWorkspace}.import-stage-${timestamp}`;
   mkdirSync(stageDir, { recursive: true });
   try {
-    await run('tar', ['-xzf', bundlePath, '-C', stageDir], { timeout: 300_000 });
+    // Outer-bundle traversal guard (defense in depth: GNU/bsd tar already refuse
+    // `..`/absolute members by default, but the bundle is cross-machine input).
+    const { stdout: bundleMembers } = await run('tar', ['-tzf', bundlePath], { timeout: 60_000 });
+    for (const member of bundleMembers.split('\n').filter(Boolean)) {
+      if (!isSafeTarMember(member)) throw new Error(`unsafe path in bundle archive: ${member}`);
+    }
+    await run('tar', ['--no-same-owner', '-xzf', bundlePath, '-C', stageDir], { timeout: 300_000 });
 
     const manifestRaw = await fs.readFile(join(stageDir, 'manifest.json'), 'utf-8');
     const manifest = JSON.parse(manifestRaw) as DockerExportManifest;
-    if (manifest.schemaVersion !== DOCKER_EXPORT_SCHEMA) {
-      throw new Error(`unsupported export schema version ${manifest.schemaVersion} (expected ${DOCKER_EXPORT_SCHEMA})`);
-    }
+    validateImportManifest(manifest);
 
     // Integrity: verify checksums before trusting any member.
     const workspaceTar = join(stageDir, 'workspace.tar');
@@ -385,8 +433,9 @@ export async function importDockerBundle(params: {
       const { stdout } = await run(argv[0], [...argv.slice(1), 'load', '-i', imageTar], { timeout: 300_000 });
       const loadedRef = parseLoadedImageRef(stdout);
       if (!loadedRef) throw new Error('could not determine loaded image ref');
-      // Quarantine: re-tag by the loaded ref/id, never trusting the bundle's original tag.
-      importedImage = importedImageTag(manifest.caseName, timestamp);
+      // Quarantine: re-tag by the loaded ref/id, never trusting the bundle's original
+      // tag; the tag name derives from the caller's schema-validated newCaseName.
+      importedImage = importedImageTag(newCaseName, timestamp);
       await run(argv[0], [...argv.slice(1), 'tag', loadedRef, importedImage], { timeout: 60_000 });
     }
 

@@ -9,7 +9,7 @@
  * - SessionOutput — captured stdout/stderr/exitCode
  * - SessionStatus — 'idle' | 'busy' | 'stopped' | 'error'
  * - SessionMode — 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' (which CLI backend)
- * - ClaudeMode — CLI permission mode ('dangerously-skip-permissions' | 'normal' | 'allowedTools')
+ * - ClaudeMode — CLI permission mode ('dangerously-skip-permissions' | 'auto' | 'normal' | 'allowedTools')
  * - SessionColor — visual differentiation color
  * - OpenCodeConfig — OpenCode-specific settings (model, autoAllowTools, continueSession)
  * - CodexConfig — Codex (OpenAI CLI)-specific settings (model, resumeSessionId)
@@ -35,10 +35,12 @@ export type SessionStatus = 'idle' | 'busy' | 'stopped' | 'error';
 /**
  * Claude CLI startup permission mode.
  * - `'dangerously-skip-permissions'`: Bypass all permission prompts (default)
+ * - `'auto'`: `--permission-mode auto`: no routine prompts, background safety
+ *   classifier blocks destructive actions (Claude Code 2.1.207+, recent models)
  * - `'normal'`: Standard mode with permission prompts
  * - `'allowedTools'`: Only allow specific tools (requires allowedTools list)
  */
-export type ClaudeMode = 'dangerously-skip-permissions' | 'normal' | 'allowedTools';
+export type ClaudeMode = 'dangerously-skip-permissions' | 'auto' | 'normal' | 'allowedTools';
 
 /** Session mode: which CLI backend a session runs */
 export type SessionMode = 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini';

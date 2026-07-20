@@ -551,14 +551,50 @@ Object.assign(CodemanApp.prototype, {
         // Name remote/docker tabs with the same w<n>-<case> convention as local
         // sessions (quick-start would otherwise auto-generate codeman-<id>).
         const startNumber = this._nextCaseSessionStartNumber(caseName);
+        // Docker (NOT remote): the App Settings Claude Model choice applies — the
+        // workspace is a real host dir, so quick-start writes it to the case's
+        // .claude/settings.local.json and the in-container claude reads it.
+        // Remote quick-starts REJECT modelOverride (the file would land on the
+        // wrong machine), so never send it there.
+        let dockerModelOverride;
+        if (caseData.location === 'docker') {
+          const dockerGlobalSettings = this.loadAppSettingsFromStorage();
+          const dockerCaseSettings = this.getCaseSettings(caseName);
+          const dockerUseOpus1m = dockerCaseSettings.opusContext1m || dockerGlobalSettings.opusContext1mEnabled;
+          dockerModelOverride = dockerGlobalSettings.claudeModel || (dockerUseOpus1m ? 'opus[1m]' : '');
+        }
         const remoteIds = [];
+        let driftHandled = false;
         for (let i = 0; i < tabCount; i++) {
-          const res = await fetch('/api/quick-start', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ caseName, mode: 'claude', sessionName: `w${startNumber + i}-${caseName}` })
+          const quickStartBody = JSON.stringify({
+            caseName, mode: 'claude', sessionName: `w${startNumber + i}-${caseName}`,
+            ...(dockerModelOverride !== undefined ? { modelOverride: dockerModelOverride } : {})
           });
-          const data = await res.json();
+          const doQuickStart = async () => {
+            const res = await fetch('/api/quick-start', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: quickStartBody
+            });
+            return res.json();
+          };
+          let data = await doQuickStart();
+          // Docker config drift: the host config changed since the container was
+          // created (CONFLICT from quick-start). Confirm once, recreate, retry.
+          if (!data.success && data.errorCode === 'CONFLICT' && caseData.location === 'docker' && !driftHandled) {
+            driftHandled = true;
+            const recreate = confirm(
+              `Container config for "${caseName}" changed since its container was created.\n\n` +
+              'Recreate the container to apply the new config? Workspace files and the ' +
+              'conversation survive (the conversation resumes on launch).'
+            );
+            if (recreate) {
+              const recRes = await fetch(`/api/docker-cases/${encodeURIComponent(caseName)}/recreate`, { method: 'POST' });
+              const recData = await recRes.json();
+              if (!recData.success) throw new Error(recData.error || 'Failed to recreate container');
+              data = await doQuickStart();
+            }
+          }
           if (!data.success) throw new Error(data.error || 'Failed to start remote Claude session');
           remoteIds.push(data.data.sessionId);
         }
@@ -1958,7 +1994,8 @@ Object.assign(CodemanApp.prototype, {
       listEl.innerHTML = exports
         .map(e => {
           const mb = (e.sizeBytes / 1e6).toFixed(1);
-          const nm = this.escapeHtml ? this.escapeHtml(e.name) : e.name;
+          // escapeHtml is the free function from constants.js (never a method on `this`)
+          const nm = escapeHtml(e.name);
           return `<div class="case-manage-item" style="display:flex; align-items:center; gap:8px; justify-content:space-between;">
             <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${nm}">${nm} <span class="form-hint">(${mb} MB)</span></span>
             <span style="flex-shrink:0;">

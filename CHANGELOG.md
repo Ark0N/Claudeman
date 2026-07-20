@@ -1,5 +1,27 @@
 # aicodeman
 
+## 1.4.2
+
+### Patch Changes
+
+- Docker session-mode deep-review fixes (all e2e-verified against a real daemon), a new Auto permission mode, and docs sync.
+
+  **Docker resume actually works now.** `DockerCase.lastClaudeSessionId` was read at quick-start but never written anywhere, so the documented resume-after-container-stop never fired. Claude-mode docker panes now pin a deterministic conversation id (`claudeDockerPaneCommand()` in tmux-manager.ts): fresh launches run `claude --session-id <sessionId> || claude --resume <sessionId>` (a duplicate `--session-id` exits 1 "already in use", so the fallback resumes after a container stop/reboot; verified CLI behavior), explicit resumes run `--resume <rid> || --session-id <sid>` so a stale id never dead-panes; the leading `exec ` is stripped so the fallback can run. The id is persisted via `persistDockerCaseClaudeSessionId()` at quick-start launch and again on hook / last-response conversation-id adoption (post-`/clear` switches track). Verified end-to-end: a conversation survives `docker stop` + relaunch AND a full container recreate.
+
+  **Config drift detection + recreate (was documented but entirely missing).** The `codeman.confighash` label was stamped but never read, so docker-host config edits silently never applied. Quick-start now compares via `checkDockerConfigDrift()` and refuses a drifted launch with `CONFLICT`; the UI shows a confirm and calls the new `POST /api/docker-cases/:name/recreate` (refused while sessions of the case are live), then relaunches — verified e2e that an edited `--memory` cap is applied after recreate and the conversation resumes. New SSE event `docker:containerRecreated` (both registries).
+
+  **Model picker now applies to docker sessions.** `modelOverride` was absent from `QuickStartSchema`, so the App Settings Claude Model choice was silently inert for docker runs. It is now accepted, applied via `updateCaseModel` for local and docker quick-starts, sent by the frontend docker run path, and explicitly rejected for remote quick-starts (the settings file would land on the wrong machine).
+
+  **Import hardening.** `importDockerBundle` now validates the (cross-machine, untrusted) manifest before trusting any field (`validateImportManifest`: engine/image/containerWorkdir/network/caseName/schemaVersion — a hostile `engine` could previously select the probe binary); the outer bundle tar gets the same member traversal guard as the inner workspace tar; the quarantine image tag derives from the schema-validated `newCaseName` instead of the manifest's; re-importing a case name now refreshes the auto-created `imported-<name>` host instead of leaving it pinned to the previous import's image tag.
+
+  **Remote-daemon correctness.** All docker probes and the base-image auto-build now honor a host's `context`/`daemonHost` (`dockerEngineArgv`); previously they always probed the local daemon.
+
+  **Smaller fixes:** commas are now rejected in docker workspace/workdir/destination paths (a comma corrupts the `--mount type=bind,src=...` CSV spec, which shell escaping cannot protect); `refreshDockerExports` used a never-defined `this.escapeHtml` (dead escaping, now the real `escapeHtml`); `docker:importComplete` and `docker:containerRecreated` now have frontend SSE listeners so other open tabs refresh; the opt-in File Viewer header button is hidden on phone headers like its siblings; the Run-in-Docker hint notes that Docker/Podman must be installed; `docs/docker-cases.md` documents the resume + drift-recreate lifecycle.
+
+  **New: Auto permission mode.** App Settings → Startup Mode gains `auto` (`claude --permission-mode auto`, Claude Code 2.1.207+): no routine prompts, with the background safety classifier guarding destructive actions. Threaded through both spawn paths (direct PTY and tmux) with tests; the default stays `--dangerously-skip-permissions`.
+
+  **Docs:** multi-user mode design plan added; CLAUDE.md + READMEs (incl. zh-CN full re-translation) synced with the 1.4.1 feature set.
+
 ## 1.4.1
 
 ### Patch Changes

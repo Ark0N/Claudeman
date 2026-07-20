@@ -481,6 +481,7 @@ const SSE_EVENTS = {
   DOCKER_IMAGE_BUILD_PROGRESS: 'docker:imageBuildProgress',
   DOCKER_IMAGE_BUILD_COMPLETE: 'docker:imageBuildComplete',
   DOCKER_IMAGE_BUILD_FAILED: 'docker:imageBuildFailed',
+  DOCKER_CONTAINER_RECREATED: 'docker:containerRecreated',
 };
 
 // ═══════════════════════════════════════════════════════════════

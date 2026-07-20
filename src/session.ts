@@ -1523,7 +1523,7 @@ export class Session extends EventEmitter {
 
       // === Auto-accept workspace trust dialog ===
       // Claude CLI 2.x shows "Yes, I trust this folder" prompt on first launch per directory.
-      // Codeman sessions always use --dangerously-skip-permissions, so auto-accept.
+      // Codeman sessions run permission-skipping or classifier-guarded (auto) modes, so auto-accept.
       if (!this._trustDialogAccepted && data.includes('trust this folder')) {
         this._trustDialogAccepted = true;
         console.log(`[Session] Auto-accepting workspace trust dialog for: ${this.id}`);

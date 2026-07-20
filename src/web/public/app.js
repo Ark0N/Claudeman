@@ -1452,6 +1452,26 @@ class CodemanApp {
         console.error('[SSE] docker export failed:', err);
       }
     });
+    // Import + drift-recreate completions: refresh case lists in EVERY open tab
+    // (the initiating tab already refreshes via its own fetch response).
+    addListener(SSE_EVENTS.DOCKER_IMPORT_COMPLETE, (e) => {
+      try {
+        const d = e.data ? JSON.parse(e.data) : {};
+        this.showToast(`Docker bundle imported as case "${d.name}"`, 'success');
+        this.loadQuickStartCases?.();
+        this.refreshDockerExports?.();
+      } catch (err) {
+        console.error('[SSE] docker import complete:', err);
+      }
+    });
+    addListener(SSE_EVENTS.DOCKER_CONTAINER_RECREATED, (e) => {
+      try {
+        const d = e.data ? JSON.parse(e.data) : {};
+        this.showToast(`Container for "${d.name}" removed — next launch recreates it with the new config`, 'info');
+      } catch (err) {
+        console.error('[SSE] docker container recreated:', err);
+      }
+    });
     // Base image auto-build on first Docker case (build-on-first-use). A single
     // multi-minute event; surface start/finish so the Run spinner is explained.
     addListener(SSE_EVENTS.DOCKER_IMAGE_BUILD_STARTED, () => {

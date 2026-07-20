@@ -1514,7 +1514,12 @@ export class WebServer extends EventEmitter {
     const claudeMode = settings.claudeMode as string | undefined;
     const allowedTools = settings.allowedTools as string | undefined;
     // Only return valid modes
-    if (claudeMode === 'dangerously-skip-permissions' || claudeMode === 'normal' || claudeMode === 'allowedTools') {
+    if (
+      claudeMode === 'dangerously-skip-permissions' ||
+      claudeMode === 'auto' ||
+      claudeMode === 'normal' ||
+      claudeMode === 'allowedTools'
+    ) {
       return { claudeMode, allowedTools };
     }
     return {};

@@ -1449,10 +1449,11 @@
               <label>Startup Mode</label>
               <select id="appSettingsClaudeMode" class="form-select">
                 <option value="dangerously-skip-permissions">Skip Permissions (default)</option>
+                <option value="auto">Auto Mode (safety classifier, recommended by Anthropic)</option>
                 <option value="normal">Normal (with prompts)</option>
                 <option value="allowedTools">Allowed Tools Only</option>
               </select>
-              <span class="form-hint">How Claude CLI is started in screen sessions</span>
+              <span class="form-hint">How Claude CLI is started in screen sessions. Auto Mode runs without routine prompts behind a background safety classifier (needs Claude Code 2.1.207+ and Opus 4.6+/Sonnet 4.6+/Fable 5)</span>
             </div>
             <div class="form-row" id="allowedToolsRow" style="display: none;">
               <label>Allowed Tools</label>
@@ -1874,7 +1875,7 @@
             </div>
             <div class="form-row docker-quick-row">
               <label class="checkbox-row"><input type="checkbox" id="newCaseDocker"> 🐳 Run in an isolated Docker container</label>
-              <span class="form-hint">Runs this case in a hardened, isolated container. The base image is built automatically on first use.</span>
+              <span class="form-hint">Runs this case in a hardened, isolated container. The base image is built automatically on first use. Docker/Podman must be installed.</span>
             </div>
             <details class="advanced-options docker-quick-settings" id="dockerQuickSettings">
               <summary>Container settings (optional, sensible defaults)</summary>

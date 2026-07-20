@@ -563,6 +563,8 @@ function buildClaudePermissionFlags(claudeMode?: ClaudeMode, allowedTools?: stri
   switch (mode) {
     case 'dangerously-skip-permissions':
       return ' --dangerously-skip-permissions';
+    case 'auto':
+      return ' --permission-mode auto';
     case 'allowedTools':
       if (allowedTools) {
         // Sanitize: allow tool names with patterns like Bash(git:*), space/comma-separated
@@ -674,7 +676,7 @@ function buildEffortSettingsFlag(effort?: EffortLevel): string {
   return flag && value ? ` ${flag} '${value}'` : '';
 }
 
-function buildSpawnCommand(options: {
+export function buildSpawnCommand(options: {
   mode: SessionMode;
   sessionId: string;
   model?: string;
@@ -858,15 +860,15 @@ export function dockerTmuxSessionName(sessionId: string): string {
 const RESUME_ID_SAFE = /^[A-Za-z0-9._-]+$/;
 
 /**
- * Append the CLI-specific resume flag to a pane command. Only fires when the
- * in-container tmux is RE-CREATED (`new-session -A` makes the flag inert on a
- * live reattach), i.e. exactly when the previous live agent was lost and we want
- * to resume the conversation from the bind-mounted transcript.
+ * Append the CLI-specific resume flag to a pane command (codex/gemini). Only fires
+ * when the in-container tmux is RE-CREATED (`new-session -A` makes the flag inert
+ * on a live reattach), i.e. exactly when the previous live agent was lost and we
+ * want to resume the conversation from the bind-mounted transcript. Claude mode
+ * uses claudeDockerPaneCommand instead.
  */
 function appendResumeFlag(modeCommand: string, mode: SessionMode, resumeId: string): string {
   if (!RESUME_ID_SAFE.test(resumeId)) return modeCommand;
   switch (mode) {
-    case 'claude':
     case 'gemini':
       return `${modeCommand} --resume ${resumeId}`;
     case 'codex':
@@ -874,6 +876,30 @@ function appendResumeFlag(modeCommand: string, mode: SessionMode, resumeId: stri
     default:
       return modeCommand; // shell / opencode: no resume
   }
+}
+
+/**
+ * Claude-mode pane command with a DETERMINISTIC conversation id (the docker analog
+ * of buildSpawnCommand's --resume/--session-id logic). A fresh launch passes
+ * `--session-id <sessionId>`, so the in-container conversation id is knowable
+ * host-side (resume-id capture + subagent/workflow correlation) WITHOUT relying on
+ * hook reachability. When the in-container tmux was re-created after a container
+ * stop/reboot, the same command re-runs against the surviving transcript:
+ * `--session-id` exits 1 ("already in use") and the `||` fallback RESUMES that
+ * conversation (verified CLI behavior). An explicit resumeId gets the local
+ * builder's shape — resume first, session-id fallback — so a stale id never
+ * dead-panes. The leading `exec ` is stripped: an exec'd first branch could never
+ * fall back.
+ */
+function claudeDockerPaneCommand(modeCommand: string, sessionId: string, resumeId?: string): string {
+  if (!RESUME_ID_SAFE.test(sessionId)) return modeCommand; // defensive — ids are server-minted uuids
+  const cmd = modeCommand.replace(/^exec\s+/, '');
+  const rid = resumeId && RESUME_ID_SAFE.test(resumeId) ? resumeId : undefined;
+  if (rid && rid !== sessionId) {
+    return `${cmd} --resume ${rid} || ${cmd} --session-id ${sessionId}`;
+  }
+  const cid = rid ?? sessionId;
+  return `${cmd} --session-id ${cid} || ${cmd} --resume ${cid}`;
 }
 
 /** Fully-resolved inputs for buildDockerLaunchCommand (pure). */
@@ -915,7 +941,11 @@ export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
   const sid = sessionId.slice(0, 8);
 
   let modeCommand = docker.commands?.[mode as DockerCommandMode] || defaultDockerCommandForMode(mode);
-  if (resumeSessionId) modeCommand = appendResumeFlag(modeCommand, mode, resumeSessionId);
+  if (mode === 'claude') {
+    modeCommand = claudeDockerPaneCommand(modeCommand, sessionId, resumeSessionId);
+  } else if (resumeSessionId) {
+    modeCommand = appendResumeFlag(modeCommand, mode, resumeSessionId);
+  }
   // Run by tmux via /bin/sh -c, so the path is shell-quoted here. `exec` makes the
   // pane PID the agent itself.
   const paneCommand = `cd ${workdir} && ${modeCommand}`;

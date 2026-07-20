@@ -76,9 +76,11 @@ import { dataPath, getDataDir } from '../../config/instance.js';
 import { checkRemoteTmuxAvailable, readRemoteCases, readRemoteHosts, toSessionRemote } from '../../remote-hosts.js';
 import {
   checkDockerAvailable,
+  checkDockerConfigDrift,
   checkDockerTmuxAvailable,
   ensureAgentBaseImage,
   DEFAULT_AGENT_IMAGE,
+  persistDockerCaseClaudeSessionId,
   readDockerCases,
   readDockerHosts,
   toSessionDocker,
@@ -936,6 +938,12 @@ export function registerSessionRoutes(
     const activeId = await resolveActiveClaudeSessionIdFromHistory(session, projectsDir);
     if (activeId && activeId !== session.claudeSessionId) {
       session.adoptClaudeSessionId(activeId);
+      // Docker sessions: keep the case's resume seed following the live conversation.
+      if (session.docker) {
+        void persistDockerCaseClaudeSessionId(CODEMAN_CONFIG_DIR, session.docker.containerName, activeId).catch(
+          () => {}
+        );
+      }
     }
 
     // The Claude conversation ID (used as JSONL filename)
@@ -1683,6 +1691,7 @@ export function registerSessionRoutes(
       caseName = 'testcase',
       sessionName,
       mode = 'claude',
+      modelOverride,
       openCodeConfig,
       codexConfig,
       geminiConfig,
@@ -1713,13 +1722,14 @@ export function registerSessionRoutes(
       if (
         (envOverrides && Object.keys(envOverrides).length > 0) ||
         effort ||
+        modelOverride !== undefined ||
         codexConfig ||
         geminiConfig ||
         openCodeConfig
       ) {
         return createErrorResponse(
           ApiErrorCode.INVALID_INPUT,
-          'envOverrides, effort, and per-CLI config are not supported for remote cases (they do not cross ssh). Configure the remote command via the host command override instead.'
+          'envOverrides, effort, modelOverride, and per-CLI config are not supported for remote cases (they do not cross ssh). Configure the remote command via the host command override instead.'
         );
       }
 
@@ -1764,7 +1774,7 @@ export function registerSessionRoutes(
       // Ensure the base image exists, auto-building the default image on first use so
       // it is never a blocker. Dedup'd with any build kicked off at case-create, so
       // this awaits the SAME in-flight build rather than starting a second one.
-      const ensured = await ensureAgentBaseImage(sessionDocker.engine, sessionDocker.image, {
+      const ensured = await ensureAgentBaseImage(sessionDocker, sessionDocker.image, {
         onProgress: (line) => ctx.broadcast(SseEvent.DockerImageBuildProgress, { name: dockerCase.name, line }),
       });
       if (!ensured.ok) {
@@ -1781,6 +1791,19 @@ export function registerSessionRoutes(
         if (!tmuxCheck.ok) {
           return createErrorResponse(ApiErrorCode.OPERATION_FAILED, tmuxCheck.error || 'base image is missing tmux');
         }
+      }
+
+      // Config drift (docs/docker-cases-plan.md §4): the desired create-config no
+      // longer matches the existing container's codeman.confighash label. Refuse to
+      // silently launch into the stale container — the frontend confirms a recreate
+      // (POST /api/docker-cases/:name/recreate; workspace + transcripts ride bind
+      // mounts and the conversation resumes), or the user reverts the host edit.
+      const drift = await checkDockerConfigDrift(sessionDocker);
+      if (drift.exists && drift.drifted) {
+        return createErrorResponse(
+          ApiErrorCode.CONFLICT,
+          `Container config for case "${dockerCase.name}" changed since the container was created. Recreate the container to apply it (workspace and conversation survive), or revert the docker host edit.`
+        );
       }
 
       casePath = dockerCase.hostWorkspacePath; // a REAL host dir (bind-mounted into the container)
@@ -1894,6 +1917,13 @@ export function registerSessionRoutes(
       }
     }
 
+    // Model override → <case>/.claude/settings.local.json (claude-mode; local AND
+    // docker — the docker workspace is a real host dir, so the settings file crosses
+    // the bind mount and the in-container claude reads it). Remote was rejected above.
+    if (mode === 'claude' && modelOverride !== undefined) {
+      await updateCaseModel(resolvedCasePath, modelOverride || null);
+    }
+
     // Strip stale disk entries for keys this request is actively setting (Claude only —
     // see POST /api/sessions for full rationale).
     if (
@@ -1989,6 +2019,19 @@ export function registerSessionRoutes(
         ctx.broadcast(SseEvent.SessionInteractive, { id: session.id, mode });
       }
       ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(session) });
+
+      // Docker + claude: the pane command pins the conversation id (--session-id /
+      // --resume, claudeDockerPaneCommand), so persist it as the case's resume seed
+      // NOW — a later container stop/reboot relaunch resumes this conversation even
+      // if no in-container hook ever reaches the host (loopback bind, no bridge
+      // listener). Hook/last-response adoption updates it again after /clear.
+      if (docker && mode === 'claude') {
+        void persistDockerCaseClaudeSessionId(
+          CODEMAN_CONFIG_DIR,
+          docker.containerName,
+          session.claudeSessionId || session.id
+        ).catch(() => {});
+      }
 
       // Save lastUsedCase to settings for TUI/web sync
       try {

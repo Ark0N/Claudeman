@@ -38,7 +38,7 @@ const MOBILE_VISIBLE_ALLOWLIST = new Set<string>([]);
 // that removes a hide rule fails loudly (not silently). The attachments button is
 // NOT here: it's opt-in (default-hidden everywhere via its own --hidden marker), so
 // it's excluded from the default-visible enumeration rather than mobile-hidden.
-const KNOWN_PHONE_HIDDEN = ['btn-settings', 'btn-lifecycle-log', 'btn-session-manager'];
+const KNOWN_PHONE_HIDDEN = ['btn-settings', 'btn-lifecycle-log', 'btn-session-manager', 'btn-file-viewer'];
 
 function attrOf(openTag: string, name: string): string {
   const m = openTag.match(new RegExp(`${name}="([^"]*)"`));
