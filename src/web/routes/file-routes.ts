@@ -4,9 +4,11 @@
  */
 
 import { FastifyInstance, type FastifyReply } from 'fastify';
-import { basename as pathBasename, join } from 'node:path';
+import { basename as pathBasename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createReadStream, realpathSync, type ReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
+import { homedir } from 'node:os';
+import type { ApiResponse, FilesystemBrowseData, FilesystemBrowseEntry, FilesystemBrowseRoot } from '../../types.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import { fileStreamManager } from '../../file-stream-manager.js';
 import {
@@ -22,12 +24,20 @@ import { generateFirstPageThumbnail } from '../../document-thumbnailer.js';
 import { getOfficePreviewPdfPath, getPreviewPdfDownloadName } from '../../document-preview-cache.js';
 import { sanitizeAttachmentHistoryItem } from '../../session-attachment-history.js';
 import { isBlockedAttachmentPath, loadAttachmentGuardConfig } from '../../config/attachment-guard.js';
-import { canAccessOwned, findSessionOrFail, getAuthUser, validateSessionFilePath } from '../route-helpers.js';
+import {
+  CASES_DIR,
+  canAccessOwned,
+  findSessionOrFail,
+  getAuthUser,
+  parseBody,
+  validateSessionFilePath,
+} from '../route-helpers.js';
 import type { FastifyRequest } from 'fastify';
 import type { SessionAttachmentHistoryItem, SessionState } from '../../types/session.js';
 import { isSensitivePath } from '../sensitive-path.js';
 import { SseEvent } from '../sse-events.js';
 import type { ConfigPort, EventPort, SessionPort } from '../ports/index.js';
+import { FilesystemBrowseQuerySchema } from '../schemas.js';
 
 const MIME_TYPES: Record<string, string> = {
   png: 'image/png',
@@ -260,6 +270,75 @@ type AttachmentHistoryRouteItem = Omit<SessionAttachmentHistoryItem, 'externalPa
   attachmentId?: string;
 };
 
+const FILESYSTEM_PICKER_ENTRY_LIMIT = 500;
+
+function isPathWithinRoot(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
+}
+
+function isBlockedPickerPath(path: string, blockedTrees: readonly string[], directory = false): boolean {
+  if (isBlockedAttachmentPath(path, blockedTrees)) return true;
+  // The shared sensitive-path matcher describes file locations such as
+  // ~/.ssh/<key>. Probe a child path as well so the directory itself cannot be
+  // opened and used to enumerate those filenames.
+  return directory && isBlockedAttachmentPath(join(path, '__codeman_path_picker_probe__'), blockedTrees);
+}
+
+function configuredFilesystemPickerRoots(): Array<{ label: string; path: string }> {
+  const candidates: Array<{ label: string; path: string }> = [
+    { label: 'Home', path: homedir() },
+    { label: 'Codeman Cases', path: CASES_DIR },
+    { label: 'WSL D:', path: '/mnt/d' },
+  ];
+  const extraRoots = process.env.CODEMAN_FILE_PICKER_ROOTS;
+  if (extraRoots) {
+    for (const [index, path] of extraRoots
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .entries()) {
+      candidates.push({ label: `Configured ${index + 1}`, path });
+    }
+  }
+  return candidates;
+}
+
+async function resolveFilesystemPickerRoots(
+  ctx: SessionPort & ConfigPort,
+  sessionId?: string
+): Promise<FilesystemBrowseRoot[]> {
+  const candidates = configuredFilesystemPickerRoots();
+  if (sessionId) {
+    const session = ctx.sessions.get(sessionId) ?? ctx.store.getSession(sessionId);
+    if (!session) {
+      throw Object.assign(new Error(`Session ${sessionId} not found`), {
+        statusCode: 404,
+        body: createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${sessionId} not found`),
+      });
+    }
+    candidates.unshift({ label: 'Current Folder', path: session.workingDir });
+  }
+
+  const guard = await loadAttachmentGuardConfig();
+  const roots: FilesystemBrowseRoot[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    if (!isAbsolute(candidate.path)) continue;
+    try {
+      const resolved = realpathSync(candidate.path);
+      if (seen.has(resolved) || isBlockedPickerPath(resolved, guard.blockedTrees, true)) continue;
+      const stat = await fs.stat(resolved);
+      if (!stat.isDirectory()) continue;
+      seen.add(resolved);
+      roots.push({ label: candidate.label, path: resolved });
+    } catch {
+      // Optional roots (for example /mnt/d on non-WSL hosts) are omitted.
+    }
+  }
+  return roots;
+}
+
 function appendDownloadFlag(url: string): string {
   return `${url}${url.includes('?') ? '&' : '?'}download=true`;
 }
@@ -375,6 +454,141 @@ async function buildExternalAttachmentRouteItem(
 }
 
 export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & EventPort & ConfigPort): void {
+  // Lazy filesystem listing for the Link Existing and mobile input path pickers.
+  app.get('/api/filesystem/browse', async (req, reply): Promise<ApiResponse<FilesystemBrowseData>> => {
+    const { path: requestedPath, sessionId } = parseBody(FilesystemBrowseQuerySchema, req.query);
+    const roots = await resolveFilesystemPickerRoots(ctx, sessionId);
+    if (roots.length === 0) {
+      reply.code(403);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'No filesystem browse roots are available');
+    }
+
+    const fallbackRoot =
+      roots.find((root) => root.label === 'Current Folder') ?? roots.find((root) => root.path === '/mnt/d') ?? roots[0];
+    const candidatePath = resolve(requestedPath ?? fallbackRoot.path);
+
+    let resolvedPath: string;
+    try {
+      resolvedPath = realpathSync(candidatePath);
+    } catch {
+      reply.code(404);
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, `Folder not found: ${candidatePath}`);
+    }
+
+    const matchingRoots = roots
+      .filter((root) => isPathWithinRoot(root.path, resolvedPath))
+      .sort((a, b) => b.path.length - a.path.length);
+    const matchingRoot = matchingRoots[0];
+    if (!matchingRoot) {
+      reply.code(403);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path is outside the allowed browse roots');
+    }
+
+    const guard = await loadAttachmentGuardConfig();
+    if (isBlockedPickerPath(resolvedPath, guard.blockedTrees, true)) {
+      reply.code(403);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Access to this folder is blocked');
+    }
+
+    try {
+      const stat = await fs.stat(resolvedPath);
+      if (!stat.isDirectory()) {
+        reply.code(400);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'The browse path must be a directory');
+      }
+    } catch {
+      reply.code(404);
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, `Folder not found: ${candidatePath}`);
+    }
+
+    let dirEntries;
+    try {
+      dirEntries = await fs.readdir(resolvedPath, { withFileTypes: true });
+    } catch {
+      reply.code(403);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'This folder cannot be read');
+    }
+
+    dirEntries.sort((a, b) => {
+      if (a.isDirectory() && !b.isDirectory()) return -1;
+      if (!a.isDirectory() && b.isDirectory()) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    const entries: FilesystemBrowseEntry[] = [];
+    let truncated = false;
+    for (const entry of dirEntries) {
+      if (entry.name.startsWith('.')) continue;
+      if (entries.length >= FILESYSTEM_PICKER_ENTRY_LIMIT) {
+        truncated = true;
+        break;
+      }
+
+      const visiblePath = join(candidatePath, entry.name);
+      let targetPath: string;
+      try {
+        targetPath = realpathSync(visiblePath);
+      } catch {
+        continue;
+      }
+
+      const targetRoot = roots.some((root) => isPathWithinRoot(root.path, targetPath));
+      if (!targetRoot) continue;
+
+      let type: FilesystemBrowseEntry['type'];
+      let size: number | undefined;
+      const symlink = entry.isSymbolicLink();
+      if (entry.isDirectory()) {
+        type = 'directory';
+      } else if (entry.isFile()) {
+        type = 'file';
+      } else if (symlink) {
+        try {
+          const targetStat = await fs.stat(targetPath);
+          type = targetStat.isDirectory() ? 'directory' : 'file';
+          if (type === 'file') size = targetStat.size;
+        } catch {
+          continue;
+        }
+      } else {
+        continue;
+      }
+
+      if (isBlockedPickerPath(targetPath, guard.blockedTrees, type === 'directory')) continue;
+      if (type === 'file' && size === undefined) {
+        try {
+          size = (await fs.stat(targetPath)).size;
+        } catch {
+          // The path is still selectable even when a size lookup races a change.
+        }
+      }
+      entries.push({ name: entry.name, path: visiblePath, type, size, symlink: symlink || undefined });
+    }
+
+    const parentCandidate = resolve(candidatePath, '..');
+    let parent: string | null = null;
+    if (candidatePath !== matchingRoot.path) {
+      try {
+        const resolvedParent = realpathSync(parentCandidate);
+        if (isPathWithinRoot(matchingRoot.path, resolvedParent)) parent = parentCandidate;
+      } catch {
+        // A concurrently removed parent simply disables upward navigation.
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        path: candidatePath,
+        parent,
+        root: matchingRoot.path,
+        roots,
+        entries,
+        truncated,
+      },
+    };
+  });
+
   // File tree listing
   app.get('/api/sessions/:id/files', async (req) => {
     const { id } = req.params as { id: string };

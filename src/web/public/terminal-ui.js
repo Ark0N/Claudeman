@@ -2418,6 +2418,50 @@ Object.assign(CodemanApp.prototype, {
     this.terminal.clear();
   },
 
+  /** Insert editable text at the active prompt without pressing Enter. */
+  insertTerminalText(text) {
+    if (!this.activeSessionId || !text) return;
+    if (this._localEchoEnabled && this._localEchoOverlay) {
+      this._localEchoOverlay.appendText(text);
+    } else {
+      this.sendInput(text).catch(() => {});
+    }
+    this.terminal?.focus();
+  },
+
+  /**
+   * Clear only the current editable prompt. This is intentionally distinct
+   * from Ctrl+L (clear display) and the agent's destructive `/clear` command.
+   */
+  clearTerminalInput() {
+    if (!this.activeSessionId) return;
+
+    if (typeof CjkInput !== 'undefined') CjkInput.clear();
+    if (this._inputFlushTimeout) {
+      clearTimeout(this._inputFlushTimeout);
+      this._inputFlushTimeout = null;
+    }
+    this._pendingInput = '';
+
+    if (this._localEchoEnabled && this._localEchoOverlay) {
+      const flushed = this._localEchoOverlay.getFlushed?.() || { count: 0, text: '' };
+      this._localEchoOverlay.clear();
+      this._localEchoOverlay.suppressBufferDetection();
+      this._flushedOffsets?.delete(this.activeSessionId);
+      this._flushedTexts?.delete(this.activeSessionId);
+      if (flushed.count > 0) {
+        this.sendInput('\x7f'.repeat(flushed.count)).catch(() => {});
+      }
+    } else {
+      // In non-local-echo mode the TUI already owns the editable buffer. Ctrl+U
+      // is the conventional kill-line key supported by shells and agent TUIs.
+      this.sendInput('\x15').catch(() => {});
+    }
+
+    this.showToast?.('Input cleared', 'success');
+    this.terminal?.focus();
+  },
+
   /**
    * Restore terminal size to match web UI dimensions.
    * Use this after mobile screen attachment has squeezed the terminal.

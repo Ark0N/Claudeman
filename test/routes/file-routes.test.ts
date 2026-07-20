@@ -8,13 +8,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
 import { registerFileRoutes } from '../../src/web/routes/file-routes.js';
+import { ApiErrorCode } from '../../src/types.js';
 
 // Mock fs/promises for file operations
 vi.mock('node:fs/promises', () => ({
   default: {
     readdir: vi.fn(async () => []),
     readFile: vi.fn(async () => 'file content'),
-    stat: vi.fn(async () => ({ size: 100, isFile: () => true })),
+    stat: vi.fn(async () => ({ size: 100, isFile: () => true, isDirectory: () => true })),
   },
 }));
 
@@ -55,11 +56,97 @@ describe('file-routes', () => {
     // Default: realpathSync returns the path unchanged
     mockedRealpathSync.mockImplementation((p: string) => p as never);
     // Default stat
-    mockedStat.mockResolvedValue({ size: 100, isFile: () => true } as never);
+    mockedStat.mockResolvedValue({ size: 100, isFile: () => true, isDirectory: () => true } as never);
   });
 
   afterEach(async () => {
     await harness.app.close();
+  });
+
+  // ========== GET /api/filesystem/browse ==========
+
+  describe('GET /api/filesystem/browse', () => {
+    it('lists the active session folder lazily with directories first', async () => {
+      mockedReaddir.mockResolvedValueOnce([
+        {
+          name: 'notes.txt',
+          isDirectory: () => false,
+          isFile: () => true,
+          isSymbolicLink: () => false,
+        },
+        {
+          name: 'src',
+          isDirectory: () => true,
+          isFile: () => false,
+          isSymbolicLink: () => false,
+        },
+      ] as never);
+
+      const path = harness.ctx._session.workingDir;
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/filesystem/browse?sessionId=${harness.ctx._sessionId}&path=${encodeURIComponent(path)}`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.path).toBe(path);
+      expect(body.data.roots[0]).toEqual({ label: 'Current Folder', path });
+      expect(body.data.entries.map((entry: { name: string; type: string }) => [entry.name, entry.type])).toEqual([
+        ['src', 'directory'],
+        ['notes.txt', 'file'],
+      ]);
+    });
+
+    it('rejects paths outside the configured roots', async () => {
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/filesystem/browse?path=${encodeURIComponent('/tmp/not-an-allowed-root')}`,
+      });
+
+      expect(res.statusCode).toBe(403);
+      expect(JSON.parse(res.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.INVALID_INPUT });
+    });
+
+    it('does not expose hidden entries or symlinks that escape the allowed roots', async () => {
+      const root = harness.ctx._session.workingDir;
+      mockedReaddir.mockResolvedValueOnce([
+        {
+          name: '.secret',
+          isDirectory: () => false,
+          isFile: () => true,
+          isSymbolicLink: () => false,
+        },
+        {
+          name: 'outside-link',
+          isDirectory: () => false,
+          isFile: () => false,
+          isSymbolicLink: () => true,
+        },
+      ] as never);
+      mockedRealpathSync.mockImplementation((path: string) =>
+        path === `${root}/outside-link` ? ('/etc/shadow' as never) : (path as never)
+      );
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/filesystem/browse?sessionId=${harness.ctx._sessionId}&path=${encodeURIComponent(root)}`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body).data.entries).toEqual([]);
+    });
+
+    it('returns 404 for an unknown session scope', async () => {
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/filesystem/browse?sessionId=missing-session',
+      });
+
+      expect(res.statusCode).toBe(404);
+      expect(JSON.parse(res.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.NOT_FOUND });
+    });
   });
 
   // ========== GET /api/sessions/:id/files ==========
