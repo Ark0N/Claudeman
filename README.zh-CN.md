@@ -5,7 +5,7 @@
 <h2 align="center">AI 编程智能体的任务控制中心</h2>
 
 <p align="center">
-  <em>Claude Code &bull; OpenCode &bull; Codex —— 统一仪表盘 &bull; 任意设备</em>
+  <em>Claude Code &bull; OpenCode &bull; Codex &bull; Gemini &bull; 终端 —— 统一仪表盘 &bull; 任意设备</em>
 </p>
 
 <p align="center">
@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-1e3a5f?style=flat-square" alt="License: MIT"></a>
-  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-18%2B-22c55e?style=flat-square&logo=node.js&logoColor=white" alt="Node.js 18+"></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-22%2B-22c55e?style=flat-square&logo=node.js&logoColor=white" alt="Node.js 22+"></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.9-3b82f6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 5.9"></a>
   <a href="https://fastify.dev/"><img src="https://img.shields.io/badge/Fastify-5.x-1e3a5f?style=flat-square&logo=fastify&logoColor=white" alt="Fastify"></a>
   <img src="https://img.shields.io/badge/Tests-2861%20total-22c55e?style=flat-square" alt="Tests">
@@ -36,7 +36,7 @@ curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | b
 
 该脚本会在缺失时自动安装 Node.js 和 tmux，把 Codeman 克隆到 `~/.codeman/app` 并完成构建。
 
-你至少需要安装一个 AI 编程 CLI —— [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai) 或 [Codex](https://developers.openai.com/codex/cli)（任意组合均可）。安装完成后：
+你至少需要安装一个 AI 编程 CLI —— [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli) 或 [Gemini CLI](https://github.com/google-gemini/gemini-cli)（任意组合均可）。安装完成后：
 
 ```bash
 codeman web
@@ -47,6 +47,7 @@ codeman web
 <summary><strong>作为后台服务运行</strong></summary>
 
 **Linux（systemd）：**
+
 ```bash
 mkdir -p ~/.config/systemd/user
 cat > ~/.config/systemd/user/codeman-web.service << EOF
@@ -69,6 +70,7 @@ loginctl enable-linger $USER
 ```
 
 **macOS（launchd）：**
+
 ```bash
 mkdir -p ~/Library/LaunchAgents
 cat > ~/Library/LaunchAgents/com.codeman.web.plist << EOF
@@ -96,6 +98,7 @@ cat > ~/Library/LaunchAgents/com.codeman.web.plist << EOF
 EOF
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.codeman.web.plist
 ```
+
 </details>
 
 <details>
@@ -105,8 +108,76 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.codeman.web.plist
 wsl bash -c "curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash"
 ```
 
-Codeman 依赖 tmux，因此 Windows 用户需要 [WSL](https://learn.microsoft.com/en-us/windows/wsl/install)。如果还没装 WSL：在管理员 PowerShell 中运行 `wsl --install`，重启，打开 Ubuntu，然后在 WSL 内安装你偏好的 AI 编程 CLI（[Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai) 或 [Codex](https://developers.openai.com/codex/cli)）。安装完成后，即可从 Windows 浏览器访问 `http://localhost:3000`。
+Codeman 依赖 tmux，因此 Windows 用户需要 [WSL](https://learn.microsoft.com/en-us/windows/wsl/install)。如果还没装 WSL：在管理员 PowerShell 中运行 `wsl --install`，重启，打开 Ubuntu，然后在 WSL 内安装你偏好的 AI 编程 CLI（[Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli) 或 [Gemini CLI](https://github.com/google-gemini/gemini-cli)）。安装完成后，即可从 Windows 浏览器访问 `http://localhost:3000`。
+
 </details>
+
+---
+
+## 使用 Codeman —— 人类操作指南
+
+从头到尾走一遍如何在浏览器里驾驭 Codeman。如果你刚装好，就从这里开始。
+
+### 1. 启动服务器
+
+```bash
+codeman web                       # localhost:3000（仅环回 —— 安全默认值）
+codeman web --port 8080           # 自定义端口（或设置 CODEMAN_PORT）
+codeman web --https               # 自签名 TLS（仅远程访问时需要）
+codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_PASSWORD（见「安全」）
+```
+
+打开打印出的 URL。整个页面是一个单一仪表盘；下面的一切都在这里完成。
+
+### 2. 创建你的第一个会话
+
+点击 **+ New Session**（或 **Quick Start**）。一个会话就是一个运行在自己 tmux 终端里的 AI CLI。你可以选择：
+
+| 字段                   | 作用                                                                                        |
+| ---------------------- | ------------------------------------------------------------------------------------------- |
+| **工作目录 / case**    | 智能体操作的文件夹。「case」就是一个 Codeman 记住的命名工作目录。                           |
+| **CLI / 运行模式**     | `Claude`（默认）、`OpenCode`、`Codex`、`Gemini` 或 `Terminal`（普通 shell）。               |
+| **模型**               | 每会话模型（App Settings → Claude Model）。软默认值 —— 会话内 `/model` 依然有效。           |
+| **Effort / Ultracode** | 推理力度（`low`–`max`），或用 `ultracode` 开启动态多智能体工作流。随时可用 `/effort` 切换。 |
+
+点击启动 —— Codeman 通过真实 PTY 拉起 CLI，并经 SSE 流式传输到你的浏览器。
+
+### 3. 读懂仪表盘
+
+- **标签（顶部）** —— 每个会话一个。`Alt+1`–`9` 跳转，`Ctrl+Tab` 下一个，拖拽排序。
+- **终端（中央）** —— 真实的 `xterm.js` 终端；完整 TUI 正常渲染。直接输入并按 **Enter** 发送。`Shift+Enter` 插入换行。
+- **侧边面板** —— Respawn、Ralph、Orchestrator、Cron、Subagents、Settings（从工具栏切换）。
+
+### 4. 与智能体对话
+
+- **直接在终端输入提示** —— 即使跨越重连，输入也是精确一次送达（连接中断绝不会丢失或重复发送提示）。
+- **粘贴或拖放图片**，直接进入会话。
+- **语音输入** —— `Ctrl+Shift+V`（Deepgram Nova-3，自动静音停止）。
+- **附件** —— 注册外部文件/文档，并内联预览 Office/PDF。
+
+### 5. 让它自主运行
+
+| 模式             | 用途                                                                                                      | 位置                   |
+| ---------------- | --------------------------------------------------------------------------------------------------------- | ---------------------- |
+| **Respawn**      | 长时间无人值守运行 —— 空闲/限额时自动重启 CLI，带自适应时序。预设：`solo-work`、`overnight-autonomous` 等 | Respawn 标签页         |
+| **Ralph / Todo** | 一个自驱循环，跟踪 todo 列表并持续工作直到完成。                                                          | Ralph 标签页           |
+| **Orchestrator** | 把一个目标变成分阶段计划，并跨多个智能体推动完成。                                                        | 编排器面板             |
+| **Cron**         | 已保存的、命名的定时任务（`once`/`interval`/`daily`/`weekly`），到期时拉起会话并发送提示。                | ⏰ Cron 按钮           |
+| **Auto-resume**  | 订阅限额重置后自动继续。                                                                                  | Respawn 标签页（顶部） |
+
+### 6. 随时随地访问
+
+- **手机/平板** —— UI 完全触控优化；扫描桌面上的**二维码**即可免密码登录。
+- **网络之外** —— `./scripts/tunnel.sh start` 打开一条 Cloudflare 隧道（先设置 `CODEMAN_PASSWORD`）。
+- **SSH** —— `sc` 选择器可从终端附着任意会话（`sc` 交互式，`sc 2` 快速附着，`sc -l` 列表）。
+
+### 7. 运维与维护
+
+- **App Settings** —— 模型、effort、主题/皮肤、通知、显示开关、各 CLI 的专属选项。
+- **自更新** —— git-clone 安装可在 **Settings → Updates** 中原地更新。
+- **部署你自己的改动** —— 见[开发](#开发)。
+
+> ⚠️ **安全提示：** 如果你正在 Codeman 受管会话*内部*工作（`echo $CODEMAN_MUX` → `1`），绝不要直接运行 `tmux kill-session` / `pkill claude` —— 请使用 Web UI 或 `./scripts/tmux-manager.sh`。
 
 ---
 
@@ -216,7 +287,7 @@ WATCHING → IDLE DETECTED → SEND UPDATE → /clear → /init → CONTINUE →
 ```
 
 - **多层空闲检测** —— 完成消息、AI 驱动的空闲检查、输出静默、token 稳定性
-- **用量限额自动恢复**（*可选，默认关闭*）—— 当 Claude 因订阅用量限额而停止（"You've hit your limit · resets 3pm"）时，Codeman 会解析重置时间，等到限额刷新（外加 2 分钟安全缓冲）后自动关闭限额对话框并发送 `continue`，让通宵任务平稳跨过 5 小时窗口而不是停摆到早晨。可识别 Claude Code 各版本的全部限额消息格式；若仍受限会自动重试；计划在 Codeman 重启后依然生效；暂停期间会阻止重生循环，避免 `/clear` 清掉等待中的对话。在会话 Respawn 标签页顶部按会话启用
+- **用量限额自动恢复**（_可选，默认关闭_）—— 当 Claude 因订阅用量限额而停止（"You've hit your limit · resets 3pm"）时，Codeman 会解析重置时间，等到限额刷新（外加 2 分钟安全缓冲）后自动关闭限额对话框并发送 `continue`，让通宵任务平稳跨过 5 小时窗口而不是停摆到早晨。可识别 Claude Code 各版本的全部限额消息格式；若仍受限会自动重试；计划在 Codeman 重启后依然生效；暂停期间会阻止重生循环，避免 `/clear` 清掉等待中的对话。在会话 Respawn 标签页顶部按会话启用
 - **熔断器** —— 当 Claude 卡住时防止重生抖动（CLOSED → HALF_OPEN → OPEN 状态，跟踪连续无进展与重复错误）
 - **健康评分** —— 0–100 健康分，分项涵盖循环成功率、熔断器状态、迭代进展与卡死恢复
 - **内置预设** —— `solo-work`（3s 空闲，60min）、`subagent-workflow`（45s，240min）、`team-lead`（90s，480min）、`ralph-todo`（8s，480min）、`overnight-autonomous`（10s，480min）
@@ -262,10 +333,10 @@ codeman web --title-hostname dev-box       # codeman:dev-box（用于覆盖嘈�
 
 ### 智能 Token 管理
 
-| 阈值 | 动作 | 结果 |
-|-----------|--------|--------|
+| 阈值            | 动作            | 结果                   |
+| --------------- | --------------- | ---------------------- |
 | **110k tokens** | 自动 `/compact` | 上下文被摘要，工作继续 |
-| **140k tokens** | 自动 `/clear` | 以 `/init` 全新开始 |
+| **140k tokens** | 自动 `/clear`   | 以 `/init` 全新开始    |
 
 ### 通知
 
@@ -296,14 +367,32 @@ PTY 输出 → 16ms 服务端批处理 → DEC 2026 包裹 → SSE → 客户端
 ## 更多特性
 
 - **自更新** —— systemd/launchd 管理下的 git-clone 安装可在 **App Settings → Updates** 中原地更新：它会检测最新发行版，自动暂存（stash）脏工作树，并在服务重启期间流式展示构建进度（npm 安装会被报告为不可更新）
-- **多 CLI** —— 每个会话可选 **Claude Code**、**OpenCode** 或 **Codex**；环境变量前缀自动隔离（`CLAUDE_CODE_*`、`OPENCODE_*` 与 `CODEX_*`）。详见 [`docs/opencode-integration.md`](docs/opencode-integration.md)
+- **多 CLI** —— 每个会话可选 **Claude Code**、**OpenCode**、**Codex** 或 **Gemini**；环境变量前缀自动隔离（`CLAUDE_CODE_*`、`OPENCODE_*`、`CODEX_*` 与 `GEMINI_*`/`GOOGLE_*`）。详见 [`docs/opencode-integration.md`](docs/opencode-integration.md)
+- **Docker 会话** —— 在隔离且加固的容器中运行案例。**Create New** 上勾选一个复选框即可用合理的默认值启动容器并在其中启动智能体；同一案例的多个会话共享一个容器；可将容器连同工作区导出为可移植的 `.tar.gz`，迁移到另一台机器。详见 [`docs/docker-cases.md`](docs/docker-cases.md)
 - **Effort 与 Ultracode** —— 设置每会话的默认 effort（`low`–`max`），或启用 **ultracode**（动态多智能体工作流）。这些都只是软默认值 —— 会话中可随时用 `/effort` 切换。扩展思考预算也可配置
 - **语音输入** —— 用 Deepgram Nova-3 口述提示（带 Web Speech API 回退）：切换录音、自动静音停止、实时音量表（`Ctrl+Shift+V`）
 - **图像输入** —— 直接把图片粘贴或拖放进会话
-- **手势控制** *(可选)* —— 一个 MediaPipe 手部追踪叠加层，可徒手抓取/拖动会话窗口并捏合按钮。用 `CODEMAN_GESTURE=1` + App Settings → Display 启用
-- **多显示器横跨** *(macOS)* —— 一键打开一个横跨所有显示器最大化的浏览器窗口，让浮动的智能体/手势面板可以跨越物理拼接缝
+- **手势控制** _(可选)_ —— 一个 MediaPipe 手部追踪叠加层，可徒手抓取/拖动会话窗口并捏合按钮。用 `CODEMAN_GESTURE=1` + App Settings → Display 启用
+- **多显示器横跨** _(macOS)_ —— 一键打开一个横跨所有显示器最大化的浏览器窗口，让浮动的智能体/手势面板可以跨越物理拼接缝
+- **文件查看器按钮** _(可选)_ —— 头部新增一个按钮，一键切换内置文件浏览器面板；在 App Settings → Display → Header Displays 中启用
 - **CJK / 输入法支持** —— 完整支持中文 / 日文 / 韩文的组合输入
 - **操作系统通知与主机名感知标题** —— 桌面提醒与标签标题以 `codeman:<host>` 为前缀，使多主机配置不再含糊
+
+---
+
+## 隔离的 Docker 会话
+
+让案例（case）运行在专属的加固 Docker 容器里，而不是直接跑在主机上：获得安全隔离、可复现的工具链和一键可移植性。
+
+- **一键启动** —— 在 **New Case → Create New** 中勾选 **🐳 Run in an isolated Docker container**。Codeman 会创建案例文件夹、用默认设置启动容器，并在容器内启动智能体。无需填写任何主机/镜像/网络字段。
+- **资源模板** —— 展开复选框可选 **Small / Medium / Large / GPU** 预设（内存、CPU、GPU），也可以完全自定义。**磁盘是弹性的** —— 存储随数据增长，没有固定上限。
+- **按案例共享容器** —— 多个会话可以 `docker exec` 进同一个容器；结束某个会话绝不会影响其他会话所在的容器。
+- **默认加固** —— 非 root、`--cap-drop ALL`、`no-new-privileges`、PID/内存上限，绝不使用 `--privileged` 或 docker socket；**密封（sealed）** 配置（不注入主机凭据、关闭网络）只需一个开关。
+- **无感认证、凭据隔离** —— 主机上的 Claude / Codex / Gemini / OpenCode 登录在容器内开箱即用：凭据在启动时以只读种子方式复制注入，onboarding/信任提示已预先答复，不会弹出登录向导。容器保留自己的副本，绝不回写主机的凭据存储；跨边界共享的只有对话转录，导出文件也绝不包含机密。
+- **迁移到另一台机器** —— 把容器的完整环境（工具链 + 工作区）导出为可移植的 `.tar.gz`，在另一台机器上导入到新案例即可继续。
+- **持久耐用** —— Codeman 重启后重连会回到同一个存活的智能体；容器停止/重启后则从绑定挂载的转录恢复对话。
+
+前置条件：只需 Docker（或 Podman）。智能体基础镜像会在首次使用时自动构建，构建进度实时显示在 UI 中（也可用 `node scripts/build-agent-image.mjs` 预构建）。完整指南：[`docs/docker-cases.md`](docs/docker-cases.md)。
 
 ---
 
@@ -374,14 +463,14 @@ loginctl enable-linger $USER
 
 该设计参考了 ["Demystifying the (In)Security of QR Code-based Login"](https://www.usenix.org/conference/usenixsecurity25/presentation/zhang-xin)（USENIX Security 2025），该研究发现 Top-100 网站中有 47 个因横跨 42 个 CVE 的 6 个关键设计缺陷而易受二维码认证攻击。Codeman 全部六个都做了应对：
 
-| USENIX 缺陷 | 缓解措施 |
-|-------------|------------|
-| **缺陷 1**：缺少一次性强制 | 令牌首次扫描即原子性消费 —— 重放永远失败 |
-| **缺陷 2**：长生命周期令牌 | 60s TTL + 90s 宽限，由定时器自动轮换 |
-| **缺陷 3**：可预测的令牌生成 | `crypto.randomBytes(32)` —— 256 位熵。短码采用拒绝采样以消除取模偏差 |
-| **缺陷 4**：客户端令牌生成 | 仅服务端 —— 令牌在嵌入二维码前绝不离开服务器 |
-| **缺陷 5**：缺少状态通知 | 桌面提示：*「设备 [IP] 已通过二维码认证（Safari）。不是你？[吊销]」* —— 实时 QRLjacking 检测 |
-| **缺陷 6**：会话绑定不足 | 存储 IP + User-Agent 以供审计。通过 API 手动吊销会话。HttpOnly + Secure + SameSite=lax cookie |
+| USENIX 缺陷                  | 缓解措施                                                                                      |
+| ---------------------------- | --------------------------------------------------------------------------------------------- |
+| **缺陷 1**：缺少一次性强制   | 令牌首次扫描即原子性消费 —— 重放永远失败                                                      |
+| **缺陷 2**：长生命周期令牌   | 60s TTL + 90s 宽限，由定时器自动轮换                                                          |
+| **缺陷 3**：可预测的令牌生成 | `crypto.randomBytes(32)` —— 256 位熵。短码采用拒绝采样以消除取模偏差                          |
+| **缺陷 4**：客户端令牌生成   | 仅服务端 —— 令牌在嵌入二维码前绝不离开服务器                                                  |
+| **缺陷 5**：缺少状态通知     | 桌面提示：_「设备 [IP] 已通过二维码认证（Safari）。不是你？[吊销]」_ —— 实时 QRLjacking 检测  |
+| **缺陷 6**：会话绑定不足     | 存储 IP + User-Agent 以供审计。通过 API 手动吊销会话。HttpOnly + Secure + SameSite=lax cookie |
 
 #### 时序安全的查找
 
@@ -406,23 +495,23 @@ URL 被刻意保持精简（`/q/` 路径 + 6 字符码 ≈ 53–56 个字符）�
 
 #### 威胁覆盖
 
-| 威胁 | 为何无效 |
-|--------|-------------------|
-| **二维码截图被分享** | 一次性：首次扫描即消费。60s TTL：攻击者动手前已过期。桌面通知会立即提醒你。 |
-| **重放攻击** | 原子性一次性消费 + 60s TTL。旧 URL 始终返回 401。 |
+| 威胁                    | 为何无效                                                                             |
+| ----------------------- | ------------------------------------------------------------------------------------ |
+| **二维码截图被分享**    | 一次性：首次扫描即消费。60s TTL：攻击者动手前已过期。桌面通知会立即提醒你。          |
+| **重放攻击**            | 原子性一次性消费 + 60s TTL。旧 URL 始终返回 401。                                    |
 | **Cloudflare 边缘日志** | 短码是不透明的 6 字符查找键，而非真正的 256 位令牌。一次性意味着从日志重放永远失败。 |
-| **暴力破解** | 568 亿种组合、任意时刻约 2 个有效、双层速率限制，早在统计可行性之前就已拦截。 |
-| **QRLjacking** | 60s 轮换迫使实时转发。桌面提示提供即时检测。自托管单用户场景使钓鱼难以成立。 |
-| **时序攻击** | 基于哈希的 Map 查找 —— 无字符串比较时序泄露。 |
-| **会话 cookie 窃取** | HttpOnly + Secure + SameSite=lax + 24h TTL。可在 `POST /api/auth/revoke` 手动吊销。 |
+| **暴力破解**            | 568 亿种组合、任意时刻约 2 个有效、双层速率限制，早在统计可行性之前就已拦截。        |
+| **QRLjacking**          | 60s 轮换迫使实时转发。桌面提示提供即时检测。自托管单用户场景使钓鱼难以成立。         |
+| **时序攻击**            | 基于哈希的 Map 查找 —— 无字符串比较时序泄露。                                        |
+| **会话 cookie 窃取**    | HttpOnly + Secure + SameSite=lax + 24h TTL。可在 `POST /api/auth/revoke` 手动吊销。  |
 
 #### 横向对比
 
-| 平台 | 模型 | 对比 |
-|----------|-------|------------|
-| **Discord** | 长生命周期令牌、无确认、[屡被利用](https://owasp.org/www-community/attacks/Qrljacking) | Codeman：一次性 + TTL + 通知 |
-| **WhatsApp Web** | 手机确认「关联设备？」，约 60s 轮换 | 轮换相当；WhatsApp 额外加了显式确认（对单用户而言是可接受的取舍） |
-| **Signal** | 临时公钥、端到端加密信道 | 加密更强，但 [2025 年仍被俄罗斯国家级行为者](https://cloud.google.com/blog/topics/threat-intelligence/russia-targeting-signal-messenger)通过社会工程攻破 |
+| 平台             | 模型                                                                                   | 对比                                                                                                                                                     |
+| ---------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Discord**      | 长生命周期令牌、无确认、[屡被利用](https://owasp.org/www-community/attacks/Qrljacking) | Codeman：一次性 + TTL + 通知                                                                                                                             |
+| **WhatsApp Web** | 手机确认「关联设备？」，约 60s 轮换                                                    | 轮换相当；WhatsApp 额外加了显式确认（对单用户而言是可接受的取舍）                                                                                        |
+| **Signal**       | 临时公钥、端到端加密信道                                                               | 加密更强，但 [2025 年仍被俄罗斯国家级行为者](https://cloud.google.com/blog/topics/threat-intelligence/russia-targeting-signal-messenger)通过社会工程攻破 |
 
 > 完整设计理由、安全分析与实现细节：[`docs/qr-auth-plan.md`](docs/qr-auth-plan.md)
 
@@ -430,7 +519,7 @@ URL 被刻意保持精简（`/q/` 路径 + 6 字符码 ≈ 53–56 个字符）�
 
 ## 安全
 
-Codeman 用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 在设计上对任何能访问到它的人都是一个远程代码执行面 —— 整套安全模型的存在就是为了控制*谁*能访问。近期加固（v0.9.0 + v0.9.5）封堵了那些常困扰自托管开发工具的浏览器驱动攻击路径。完整模型：[`docs/security-architecture.md`](docs/security-architecture.md)。
+Codeman 用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 在设计上对任何能访问到它的人都是一个远程代码执行面 —— 整套安全模型的存在就是为了控制*谁*能访问。近期加固（v0.9.0 + v0.9.5）封堵了那些常困扰自托管开发工具的浏览器驱动攻击路径。完整模型：[`docs/security-architecture.md`](docs/security-architecture.md)。**发现了漏洞？** 私下披露方式与已知限制清单见 [`SECURITY.md`](SECURITY.md)。
 
 ### 网络与访问
 
@@ -450,7 +539,7 @@ Codeman 用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 在设
 
 ### 输入、文件与响应头
 
-- **模式校验的输入** —— 每个 API 请求体都用 Zod v4 模式检查；一个 `CLAUDE_CODE_*` / `OPENCODE_*` / `CODEX_*` 环境变量前缀允许列表把控每个 CLI 能接收哪些设置
+- **模式校验的输入** —— 每个 API 请求体都用 Zod v4 模式检查；一个 `CLAUDE_CODE_*` / `OPENCODE_*` / `CODEX_*` / `GEMINI_*` / `GOOGLE_*` 环境变量前缀允许列表把控每个 CLI 能接收哪些设置
 - **路径限定** —— 文件路由在边界检查前先 `realpath`（无 TOCTOU）；`..`、绝对路径、以及解析到工作目录之外的符号链接都会被拒绝。上限：10 MB 文本预览 / 50 MB 原始与下载；`/api/download` 对敏感路径（`.env`、`*credentials*`、`~/.ssh/`、`.aws/credentials`）做黑名单。SVG/HTML 以 `octet-stream` + `nosniff` + attachment 提供，因此会被下载而非执行
 - **安全响应头** —— `Content-Security-Policy`（`default-src 'self'`，每个例外都逐条列举）、`X-Content-Type-Options: nosniff`、`X-Frame-Options: SAMEORIGIN`、HTTPS 下的 HSTS，以及**仅**对 `localhost` / `127.0.0.1` / `::1` 反射的 CORS
 
@@ -481,73 +570,177 @@ sc -l           # 列出会话
 
 > Ctrl 绑定在 macOS 上也接受 Cmd。
 
-| 快捷键 | 动作 |
-|----------|--------|
-| `Ctrl/Cmd+W` | 杀掉当前会话 |
-| `Ctrl/Cmd+Tab` | 下一个会话 |
-| `Alt+1`–`Alt+9` | 切换到第 N 个标签 |
-| `Ctrl+Shift+{` / `Ctrl+Shift+}` | 将当前标签左移 / 右移 |
-| `Ctrl/Cmd+L` | 清屏 |
-| `Ctrl+Shift+R` | 恢复终端尺寸 |
-| `Ctrl+Shift+V` | 切换语音输入 |
-| `Ctrl/Cmd +` / `-` | 字体大小 |
-| `Ctrl/Cmd+?` | 键盘帮助 |
-| `Shift+Enter` | 插入换行（发送到终端） |
-| `Escape` | 关闭面板与模态框 |
+| 快捷键                          | 动作                                                     |
+| ------------------------------- | -------------------------------------------------------- |
+| `Ctrl/Cmd+W`                    | 杀掉当前会话                                             |
+| `Ctrl/Cmd/Option+K`             | 查找已打开的会话或新建一个                               |
+| `Ctrl/Cmd+Tab`                  | 下一个会话                                               |
+| `Alt/Option+[` / `Alt/Option+]` | 上一个 / 下一个会话                                      |
+| `Alt/Option+1`–`Alt/Option+9`   | 切换到第 N 个标签（按物理键位，macOS Option 布局也适用） |
+| `Ctrl+Shift+{` / `Ctrl+Shift+}` | 将当前标签左移 / 右移                                    |
+| `Ctrl/Cmd+L`                    | 清屏                                                     |
+| `Ctrl+Shift+R`                  | 恢复终端尺寸                                             |
+| `Ctrl+Shift+V`                  | 切换语音输入                                             |
+| `Ctrl/Cmd +` / `-`              | 字体大小                                                 |
+| `Ctrl/Cmd+?`                    | 键盘帮助                                                 |
+| `Shift+Enter`                   | 插入换行（发送到终端）                                   |
+| `Escape`                        | 关闭面板与模态框                                         |
+
+---
+
+## 从智能体驱动 Codeman —— 编程指南
+
+面向不经浏览器控制 Codeman 的 AI 智能体与自动化：一个拉起工作会话的智能体、一个 CI 机器人，或是**运行在 Codeman 会话*内部*、编排其他会话的 Claude Code**。UI 能做的一切都是 HTTP + CLI，因此智能体也能做。
+
+### 检测自己身处 Codeman 内部
+
+当 CLI 运行在 Codeman 受管会话中时，以下环境变量会被设置 —— 读取它们，别硬编码任何东西：
+
+| 变量                       | 含义                                                                                                                 |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `CODEMAN_MUX=1`            | 你在一个受管 tmux 会话里。**绝不要** `tmux kill-session` / `pkill claude` / `pkill tmux` —— 你会杀掉自己或兄弟会话。 |
+| `CODEMAN_API_URL`          | API 的基础 URL（例如 `https://127.0.0.1:3000`）。下面每个调用都用它。                                                |
+| `CODEMAN_SESSION_ID`       | *你自己的*会话 id。用它避免对自己下手。                                                                              |
+| `CODEMAN_HOOK_SECRET_FILE` | hook 密钥文件的路径（受管隧道开启时调用 `/api/hook-event` 必需）。                                                   |
+
+### 行路规则（POST 之前先读）
+
+1. **只发单行输入。** 编程输入会作为字面文本 **+ Enter** 一次性发送。多行字符串会破坏智能体 TUI（Ink）—— 发送一行，或拆成多次调用。
+2. **让输入幂等。** 在 `POST …/input` 上带上稳定的 `clientId` 和按会话单调递增的 `seq`。服务端会去重，因此连接中断后的重试不会重复投递提示。
+3. **认证。** 若设置了 `CODEMAN_PASSWORD`，发送 HTTP Basic 认证（用户 `admin` 或 `CODEMAN_USERNAME`）或 `codeman_session` cookie。默认的环回安装无密码。缺失的 `Origin` 头被允许，因此普通 `curl` 可用；跨站的浏览器 origin 会被拒绝（CSRF 防护）。
+4. **响应信封。** 多数端点返回 `{ "success": true, "data": … }`（错误：`{ "success": false, "error", "errorCode" }`）。少数遗留 GET 返回裸响应体 —— **两种都要处理**（`body.data ?? body`）。
+5. **`/api/v1/*`** 是 `/api/*` 的稳定别名。
+
+### 常用配方
+
+```bash
+API="${CODEMAN_API_URL:-http://127.0.0.1:3000}"
+# （若设置了密码，给每个调用加上  -u admin:"$CODEMAN_PASSWORD"）
+
+# 1. 看看有什么在运行
+curl -s "$API/api/sessions" | jq '.data // .'
+
+# 2. 拉起一个工作会话（「case」= 命名工作目录）
+curl -s -X POST "$API/api/quick-start" \
+  -H 'Content-Type: application/json' \
+  -d '{"caseName":"refactor-auth","mode":"claude","effort":"high"}' | jq
+
+# 3. 向会话发送提示（精确一次：clientId + seq）
+curl -s -X POST "$API/api/sessions/$SID/input" \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"Run the test suite and summarize failures","useMux":true,"clientId":"agent-1","seq":1}'
+
+# 4. 读回终端内容
+curl -s "$API/api/sessions/$SID/output" | jq -r '.data // .'
+
+# 5. 流式接收实时事件（会话输出、智能体活动、状态）
+curl -sN "$API/api/events"          # Server-Sent Events
+
+# 6. 调度周期性工作（cron 风格任务）
+curl -s -X POST "$API/api/cron/jobs" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"nightly-deps","agentType":"claude","workingDir":"/home/me/proj",
+       "promptMode":"inline_text","promptText":"Update dependencies and open a PR",
+       "inputMode":"typed","scheduleType":"daily","dailyTime":"03:00",
+       "enabled":true,"concurrencyPolicy":"warn_only"}' | jq
+
+# 7. 查看后台子智能体及其活动记录
+curl -s "$API/api/subagents" | jq '.data // .'
+curl -s "$API/api/subagents/$AID/transcript" | jq -r '.data // .'
+
+# 8. 全系统快照（会话、设置、重生、统计）
+curl -s "$API/api/status" | jq
+```
+
+### 或使用内置 CLI
+
+同样的操作也有命令形式（`codeman <cmd>`，括号内为别名）—— 在会话内的 shell 工具里很顺手：
+
+```bash
+codeman session start -d /path/to/repo   # (s)  启动会话
+codeman session list                     #      列出会话
+codeman session logs <id>                #      查看输出
+codeman task add "fix the failing test"  # (t)  排入任务
+codeman ralph start --min-hours 8        # (r)  启动自主循环
+codeman attach <path>                    #      附着 Claude hook 上下文
+```
+
+### Hook（事件*回流*到 Codeman）
+
+Codeman 会注册 Claude Code hook，它们 `POST /api/hook-event`（`permission_prompt`、`idle_prompt`、`stop`、`task_completed` 等），让仪表盘实时响应。该端点在环回上免认证，但在受管隧道下需要 `X-Codeman-Hook-Secret` 头（从 `$CODEMAN_HOOK_SECRET_FILE` 读取）。通常你不需要手动调用它 —— Codeman 会自动接好 —— 但自主层正是靠它「看见」智能体在做什么。
+
+> 完整端点列表与请求/响应形状见下文。
 
 ---
 
 ## API
 
-基于 Fastify 的 REST —— **15 个路由模块中约 140 个处理器**，外加一条 SSE 流和一条 WebSocket 终端通道。以下是一个有代表性的子集：
+基于 Fastify 的 REST —— **18 个路由模块中约 160 个处理器**，外加一条 SSE 流和一条 WebSocket 终端通道。所有响应都使用 `ApiResponse<T>` 信封（`{success, data}` / `{success, error, errorCode}`）；`/api/v1/*` 是稳定别名。以下是一个有代表性的子集：
 
 ### 会话（Sessions）
-| 方法 | 端点 | 说明 |
-|--------|----------|-------------|
-| `GET` | `/api/sessions` | 列出全部 |
-| `POST` | `/api/quick-start` | 创建 case 并启动会话 |
-| `DELETE` | `/api/sessions/:id` | 删除会话 |
-| `POST` | `/api/sessions/:id/input` | 发送输入 |
+
+| 方法     | 端点                       | 说明                                                                           |
+| -------- | -------------------------- | ------------------------------------------------------------------------------ |
+| `GET`    | `/api/sessions`            | 列出全部                                                                       |
+| `POST`   | `/api/quick-start`         | 创建 case + 启动会话（`{caseName?, mode?, effort?, envOverrides?}`）           |
+| `POST`   | `/api/sessions/:id/input`  | 发送输入（`{input, useMux?, clientId?, seq?}` —— `clientId`+`seq` = 精确一次） |
+| `GET`    | `/api/sessions/:id/output` | 读取终端输出                                                                   |
+| `DELETE` | `/api/sessions/:id`        | 删除会话                                                                       |
 
 ### 重生（Respawn）
-| 方法 | 端点 | 说明 |
-|--------|----------|-------------|
+
+| 方法   | 端点                               | 说明                 |
+| ------ | ---------------------------------- | -------------------- |
 | `POST` | `/api/sessions/:id/respawn/enable` | 启用，带配置与定时器 |
-| `POST` | `/api/sessions/:id/respawn/stop` | 停止控制器 |
-| `PUT` | `/api/sessions/:id/respawn/config` | 更新配置 |
+| `POST` | `/api/sessions/:id/respawn/stop`   | 停止控制器           |
+| `PUT`  | `/api/sessions/:id/respawn/config` | 更新配置             |
 
 ### Ralph / Todo
-| 方法 | 端点 | 说明 |
-|--------|----------|-------------|
-| `GET` | `/api/sessions/:id/ralph-state` | 获取循环状态 + todos |
-| `POST` | `/api/sessions/:id/ralph-config` | 配置跟踪 |
+
+| 方法   | 端点                             | 说明                 |
+| ------ | -------------------------------- | -------------------- |
+| `GET`  | `/api/sessions/:id/ralph-state`  | 获取循环状态 + todos |
+| `POST` | `/api/sessions/:id/ralph-config` | 配置跟踪             |
 
 ### 编排器（Orchestrator）
-| 方法 | 端点 | 说明 |
-|--------|----------|-------------|
-| `POST` | `/api/orchestrator/start` | 从目标启动编排 |
-| `POST` | `/api/orchestrator/approve` | 批准生成的计划 |
-| `GET` | `/api/orchestrator/status` | 当前阶段 + 进度 |
-| `POST` | `/api/orchestrator/stop` | 停止并清理 |
+
+| 方法   | 端点                        | 说明            |
+| ------ | --------------------------- | --------------- |
+| `POST` | `/api/orchestrator/start`   | 从目标启动编排  |
+| `POST` | `/api/orchestrator/approve` | 批准生成的计划  |
+| `GET`  | `/api/orchestrator/status`  | 当前阶段 + 进度 |
+| `POST` | `/api/orchestrator/stop`    | 停止并清理      |
+
+### Cron（定时任务）
+
+| 方法             | 端点                         | 说明                  |
+| ---------------- | ---------------------------- | --------------------- |
+| `GET` / `POST`   | `/api/cron/jobs`             | 列出 / 创建 cron 任务 |
+| `PUT` / `DELETE` | `/api/cron/jobs/:id`         | 更新 / 删除任务       |
+| `PUT`            | `/api/cron/jobs/:id/enabled` | 启用 / 禁用           |
+| `POST`           | `/api/cron/jobs/:id/run`     | 立即运行              |
+| `GET`            | `/api/cron/jobs/:id/runs`    | 运行历史              |
 
 ### 子智能体（Subagents）
-| 方法 | 端点 | 说明 |
-|--------|----------|-------------|
-| `GET` | `/api/subagents` | 列出所有后台智能体 |
-| `GET` | `/api/subagents/:id` | 智能体信息与状态 |
-| `GET` | `/api/subagents/:id/transcript` | 完整活动记录 |
-| `DELETE` | `/api/subagents/:id` | 杀掉智能体进程 |
+
+| 方法     | 端点                            | 说明               |
+| -------- | ------------------------------- | ------------------ |
+| `GET`    | `/api/subagents`                | 列出所有后台智能体 |
+| `GET`    | `/api/subagents/:id`            | 智能体信息与状态   |
+| `GET`    | `/api/subagents/:id/transcript` | 完整活动记录       |
+| `DELETE` | `/api/subagents/:id`            | 杀掉智能体进程     |
 
 ### 系统（System）
-| 方法 | 端点 | 说明 |
-|--------|----------|-------------|
-| `GET` | `/api/events` | SSE 流 |
-| `GET` | `/api/status` | 完整应用状态 |
-| `POST` | `/api/hook-event` | Hook 回调 |
-| `GET` | `/api/system/update/check` | 检查新发行版 |
-| `POST` | `/api/system/update` | 自更新（git-clone 安装） |
-| `POST` | `/api/clipboard` | 把文本推送到所有已连接浏览器（`{text}`） |
-| `GET` | `/api/sessions/:id/run-summary` | 时间线 + 统计 |
+
+| 方法   | 端点                            | 说明                                     |
+| ------ | ------------------------------- | ---------------------------------------- |
+| `GET`  | `/api/events`                   | SSE 流                                   |
+| `GET`  | `/api/status`                   | 完整应用状态                             |
+| `POST` | `/api/hook-event`               | Hook 回调                                |
+| `GET`  | `/api/system/update/check`      | 检查新发行版                             |
+| `POST` | `/api/system/update`            | 自更新（git-clone 安装）                 |
+| `POST` | `/api/clipboard`                | 把文本推送到所有已连接浏览器（`{text}`） |
+| `GET`  | `/api/sessions/:id/run-summary` | 时间线 + 统计                            |
 
 ---
 
@@ -582,7 +775,7 @@ flowchart TB
         end
 
         subgraph External["外部"]
-            CLI["AI CLI<br/><small>Claude Code / OpenCode / Codex</small>"]
+            CLI["AI CLI<br/><small>Claude Code / OpenCode / Codex / Gemini</small>"]
             BG["后台智能体<br/><small>(Task 工具)</small>"]
         end
     end
@@ -625,14 +818,14 @@ npm test                    # 运行测试
 
 本代码库经历了一次全面的 7 阶段重构，消除了上帝对象、集中了配置，并建立了模块化架构：
 
-| 阶段 | 改了什么 | 影响 |
-|-------|-------------|--------|
-| **性能** | 缓存端点、SSE 自适应批处理、缓冲区分块 | 终端延迟低于 16ms |
-| **路由抽取** | `server.ts` 拆分为 15 个领域路由模块 + 认证中间件 + 端口接口 | server.ts 代码量 **−67%**（6,736 → 2,254） |
-| **领域拆分** | `types.ts` → 16 个领域文件、`ralph-tracker` → 7 个文件、`respawn-controller` → 5 个文件、`session` → 6 个文件 | 不再有上帝文件 |
-| **前端模块** | `app.js` → 18 个抽取模块，横跨基础设施、领域与特性层 | app.js 核心降至 **约 3.4K 行** |
-| **配置合并** | 约 70 个散落的魔法数字 → 10 个领域聚焦的配置文件 | 零跨文件重复 |
-| **测试基础设施** | 共享 mock 库、12 个路由测试文件、统一的 MockSession | 路由处理器可通过 `app.inject()` 测试 |
+| 阶段             | 改了什么                                                                                                      | 影响                                       |
+| ---------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| **性能**         | 缓存端点、SSE 自适应批处理、缓冲区分块                                                                        | 终端延迟低于 16ms                          |
+| **路由抽取**     | `server.ts` 拆分为 15 个领域路由模块 + 认证中间件 + 端口接口                                                  | server.ts 代码量 **−67%**（6,736 → 2,254） |
+| **领域拆分**     | `types.ts` → 16 个领域文件、`ralph-tracker` → 7 个文件、`respawn-controller` → 5 个文件、`session` → 6 个文件 | 不再有上帝文件                             |
+| **前端模块**     | `app.js` → 18 个抽取模块，横跨基础设施、领域与特性层                                                          | app.js 核心降至 **约 3.4K 行**             |
+| **配置合并**     | 约 70 个散落的魔法数字 → 10 个领域聚焦的配置文件                                                              | 零跨文件重复                               |
+| **测试基础设施** | 共享 mock 库、12 个路由测试文件、统一的 MockSession                                                           | 路由处理器可通过 `app.inject()` 测试       |
 
 完整细节：[`docs/archive/code-structure-findings.md`](docs/archive/code-structure-findings.md)
 
@@ -653,6 +846,10 @@ npm install xterm-zerolag-input
 [完整文档](packages/xterm-zerolag-input/README.md)
 
 ---
+
+## 版本策略
+
+Codeman 遵循 [SemVer](https://semver.org/)。版本号真正承诺的内容，以及哪些算内部实现（HTTP/SSE API、磁盘上的状态、实验性特性），都写在 [`docs/versioning-policy.md`](docs/versioning-policy.md) 中。如果你的脚本依赖 HTTP API，请锁定到确切版本。
 
 ## 许可证
 

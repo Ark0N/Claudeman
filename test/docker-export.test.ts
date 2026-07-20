@@ -12,7 +12,9 @@ import {
   isSafeTarMember,
   parseLoadedImageRef,
   exportDockerCase,
+  validateImportManifest,
   DOCKER_EXPORT_SCHEMA,
+  type DockerExportManifest,
 } from '../src/docker-export.js';
 import { toSessionDocker } from '../src/docker-hosts.js';
 import type { DockerCase, DockerHost } from '../src/types.js';
@@ -60,6 +62,43 @@ describe('isSafeTarMember (import traversal guard)', () => {
     expect(isSafeTarMember('../outside')).toBe(false);
     expect(isSafeTarMember('a/../../b')).toBe(false);
     expect(isSafeTarMember('./../../x')).toBe(false);
+  });
+});
+
+describe('validateImportManifest (untrusted cross-machine input)', () => {
+  const good = (): DockerExportManifest => ({
+    schemaVersion: DOCKER_EXPORT_SCHEMA,
+    caseName: 'myproj',
+    mode: 'full',
+    engine: 'docker',
+    image: 'codeman/agent:base',
+    containerWorkdir: '/home/arkon/cases/myproj',
+    network: 'bridge',
+    createdAt: 1,
+    codemanVersion: '1.4.1',
+    mountCredentials: true,
+    secretFree: true,
+    checksums: {},
+  });
+
+  it('accepts a well-formed manifest', () => {
+    expect(() => validateImportManifest(good())).not.toThrow();
+  });
+
+  it('rejects a hostile engine (would select the probe/launch binary)', () => {
+    expect(() => validateImportManifest({ ...good(), engine: 'rm' as never })).toThrow(/engine/);
+  });
+
+  it('rejects shell metacharacters in containerWorkdir', () => {
+    expect(() => validateImportManifest({ ...good(), containerWorkdir: '/w; rm -rf ~' })).toThrow(/containerWorkdir/);
+    expect(() => validateImportManifest({ ...good(), containerWorkdir: 'relative/path' })).toThrow(/containerWorkdir/);
+  });
+
+  it('rejects bad image refs, case names, networks, and schema versions', () => {
+    expect(() => validateImportManifest({ ...good(), image: '-bad$(x)' })).toThrow(/image/);
+    expect(() => validateImportManifest({ ...good(), caseName: '../evil' })).toThrow(/caseName/);
+    expect(() => validateImportManifest({ ...good(), network: 'host' })).toThrow(/network/);
+    expect(() => validateImportManifest({ ...good(), schemaVersion: 99 })).toThrow(/schema version/);
   });
 });
 

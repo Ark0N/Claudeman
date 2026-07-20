@@ -9,7 +9,7 @@
  * - SessionOutput — captured stdout/stderr/exitCode
  * - SessionStatus — 'idle' | 'busy' | 'stopped' | 'error'
  * - SessionMode — 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' (which CLI backend)
- * - ClaudeMode — CLI permission mode ('dangerously-skip-permissions' | 'normal' | 'allowedTools')
+ * - ClaudeMode — CLI permission mode ('dangerously-skip-permissions' | 'auto' | 'normal' | 'allowedTools')
  * - SessionColor — visual differentiation color
  * - OpenCodeConfig — OpenCode-specific settings (model, autoAllowTools, continueSession)
  * - CodexConfig — Codex (OpenAI CLI)-specific settings (model, resumeSessionId)

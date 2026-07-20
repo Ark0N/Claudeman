@@ -43,7 +43,7 @@ import {
 import { isMultiUserMode } from '../../config/multiuser.js';
 import type { AuthUser } from '../../types.js';
 import { SseEvent } from '../sse-events.js';
-import type { EventPort, ConfigPort } from '../ports/index.js';
+import type { EventPort, ConfigPort, SessionPort } from '../ports/index.js';
 import type { FastifyRequest } from 'fastify';
 import { dataPath, getDataDir } from '../../config/instance.js';
 import {
@@ -56,6 +56,7 @@ import {
   dockerDisplayPath,
   readDockerCases,
   readDockerHosts,
+  removeDockerContainer,
   toSessionDocker,
   writeDockerCases,
   writeDockerHosts,
@@ -118,7 +119,7 @@ async function ensureCaseImage(
   sessionDocker: SessionDocker,
   name: string
 ): Promise<{ ok: true; imageBuilding: boolean } | { ok: false; error: string }> {
-  if (await checkDockerImagePresent(sessionDocker.engine, sessionDocker.image)) {
+  if (await checkDockerImagePresent(sessionDocker, sessionDocker.image)) {
     const tmuxCheck = await checkDockerTmuxAvailable(sessionDocker);
     if (!tmuxCheck.ok) return { ok: false, error: tmuxCheck.error || 'base image is missing tmux' };
     return { ok: true, imageBuilding: false };
@@ -130,7 +131,7 @@ async function ensureCaseImage(
     };
   }
   broadcast(SseEvent.DockerImageBuildStarted, { name, image: sessionDocker.image });
-  void ensureAgentBaseImage(sessionDocker.engine, sessionDocker.image, {
+  void ensureAgentBaseImage(sessionDocker, sessionDocker.image, {
     onProgress: (line) => broadcast(SseEvent.DockerImageBuildProgress, { name, line }),
   })
     .then((r) =>
@@ -146,7 +147,7 @@ async function ensureCaseImage(
   return { ok: true, imageBuilding: true };
 }
 
-export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & ConfigPort): void {
+export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & ConfigPort & SessionPort): void {
   // ═══════════════════════════════════════════════════════════════
   // Case CRUD (list, create, link, detail, fix-plan)
   // ═══════════════════════════════════════════════════════════════
@@ -727,29 +728,39 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     const timestamp = Date.now();
     let result;
     try {
-      result = await importDockerBundle({ bundlePath, destWorkspace: destWorkspacePath, engine: 'docker', timestamp });
+      result = await importDockerBundle({
+        bundlePath,
+        destWorkspace: destWorkspacePath,
+        engine: 'docker',
+        timestamp,
+        newCaseName,
+      });
     } catch (err) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Import failed: ${getErrorMessage(err)}`);
     }
 
-    // Create a dedicated docker host pointing at the quarantined imported image
-    // (full mode) or the manifest's base image (workspace-only).
+    // Create (or REFRESH) the dedicated docker host pointing at the quarantined
+    // imported image (full mode) or the manifest's base image (workspace-only).
+    // Refresh matters: after a case-delete + re-import of the same name, a stale
+    // `imported-<name>` host would silently pin the PREVIOUS import's image tag.
     const hostId = `imported-${newCaseName}`;
     const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
-    if (!hosts.some((h) => h.id === hostId)) {
-      await writeDockerHosts(CODEMAN_CONFIG_DIR, [
-        ...hosts,
-        {
-          id: hostId,
-          label: `Imported: ${newCaseName}`,
-          engine: result.manifest.engine,
-          image: result.importedImage ?? result.manifest.image,
-          network: (['bridge', 'none', 'custom'].includes(result.manifest.network)
-            ? result.manifest.network
-            : 'bridge') as 'bridge' | 'none' | 'custom',
-        },
-      ]);
-    }
+    const importedHost = {
+      id: hostId,
+      label: `Imported: ${newCaseName}`,
+      engine: result.manifest.engine,
+      image: result.importedImage ?? result.manifest.image,
+      network: (['bridge', 'none', 'custom'].includes(result.manifest.network) ? result.manifest.network : 'bridge') as
+        | 'bridge'
+        | 'none'
+        | 'custom',
+    };
+    await writeDockerHosts(
+      CODEMAN_CONFIG_DIR,
+      hosts.some((h) => h.id === hostId)
+        ? hosts.map((h) => (h.id === hostId ? { ...h, ...importedHost } : h))
+        : [...hosts, importedHost]
+    );
     const newCase = {
       name: newCaseName,
       type: 'docker' as const,
@@ -762,6 +773,47 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     ctx.broadcast(SseEvent.DockerImportComplete, { name: newCaseName, path: destWorkspacePath, type: 'docker' });
     return { success: true, data: { case: newCase } };
   });
+
+  // Recreate-on-drift confirm (docs/docker-cases-plan.md §4): remove the case
+  // container so the next launch recreates it with the CURRENT host config. The
+  // workspace + transcripts ride bind mounts and survive; the conversation resumes
+  // via the case's lastClaudeSessionId. Refused while sessions of the case are live
+  // (removal would yank the container out from under their panes).
+  app.post(
+    '/api/docker-cases/:name/recreate',
+    async (req): Promise<ApiResponse<{ name: string; container: string }>> => {
+      const { name } = req.params as { name: string };
+      const dockerCase = (await readDockerCases(CODEMAN_CONFIG_DIR)).find((item) => item.name === name);
+      if (!dockerCase) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker case not found');
+      const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === dockerCase.hostId);
+      if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
+      const sessionDocker = toSessionDocker(host, dockerCase);
+
+      for (const session of ctx.sessions.values()) {
+        if (session.docker?.containerName === sessionDocker.containerName && session.pid) {
+          return createErrorResponse(
+            ApiErrorCode.CONFLICT,
+            `Sessions of case "${name}" are still running — stop them first, then recreate the container.`
+          );
+        }
+      }
+
+      try {
+        await removeDockerContainer(sessionDocker);
+      } catch (err) {
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          `Failed to remove container: ${getErrorMessage(err)}`
+        );
+      }
+      // Drop the per-container claude-config seed; it is regenerated at next launch.
+      await fs
+        .rm(join(dataPath('docker-seeds'), `${sessionDocker.containerName}.json`), { force: true })
+        .catch(() => {});
+      ctx.broadcast(SseEvent.DockerContainerRecreated, { name, container: sessionDocker.containerName });
+      return { success: true, data: { name, container: sessionDocker.containerName } };
+    }
+  );
 
   // Link an existing folder as a case
   app.post('/api/cases/link', async (req, reply): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {

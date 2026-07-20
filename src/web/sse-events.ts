@@ -385,6 +385,8 @@ export const DockerImageBuildProgress = 'docker:imageBuildProgress' as const;
 export const DockerImageBuildComplete = 'docker:imageBuildComplete' as const;
 /** The agent base image build failed. */
 export const DockerImageBuildFailed = 'docker:imageBuildFailed' as const;
+/** A case container was removed after a config-drift confirm (recreated with the new config on next launch). */
+export const DockerContainerRecreated = 'docker:containerRecreated' as const;
 
 // ─── Multi-user (admin-only / targeted) ──────────────────────────────────────
 
@@ -585,4 +587,5 @@ export const SseEvent = {
   DockerImageBuildFailed,
   AdminUsersChanged,
   AuthPasswordChangeRequired,
+  DockerContainerRecreated,
 } as const;

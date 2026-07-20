@@ -449,17 +449,22 @@ export const DockerHostSchema = z.object({
 export const DockerCaseLinkSchema = z.object({
   name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format'),
   hostId: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid docker host id'),
+  // No commas: the path is embedded in a `--mount type=bind,src=<path>,dst=<path>`
+  // CSV spec, and docker's --mount parser splits fields on commas (shell escaping
+  // cannot protect it). Spaces are fine.
   hostWorkspacePath: z
     .string()
     .min(1)
     .max(2000)
     .regex(/^\//, 'Workspace path must be absolute')
+    .regex(/^[^,]*$/, 'Workspace path must not contain commas (docker --mount is comma-delimited)')
     .regex(NO_SHELL_META, 'Invalid characters in workspace path'),
   containerWorkdir: z
     .string()
     .min(1)
     .max(2000)
     .regex(/^\//, 'Container workdir must be absolute')
+    .regex(/^[^,]*$/, 'Container workdir must not contain commas (docker --mount is comma-delimited)')
     .regex(NO_SHELL_META, 'Invalid characters in container workdir')
     .optional(),
   container: z
@@ -487,6 +492,7 @@ export const DockerImportSchema = z.object({
     .min(1)
     .max(2000)
     .regex(/^\//, 'Destination path must be absolute')
+    .regex(/^[^,]*$/, 'Destination path must not contain commas (docker --mount is comma-delimited)')
     .regex(NO_SHELL_META, 'Invalid characters in destination path'),
 });
 
@@ -539,6 +545,11 @@ export const QuickStartSchema = z.object({
   /** Display name for the created session tab (e.g. w1-mycase). Cosmetic; the durable
    *  mux/container names derive from the session id, not this. Defaults server-side. */
   sessionName: z.string().max(128).optional(),
+  /** Model override written to <case>/.claude/settings.local.json (e.g. "opus[1m]").
+   *  Empty string clears. Applied for local AND docker cases (the docker workspace is
+   *  a real host dir, so the settings file crosses the bind mount); rejected for
+   *  remote cases (the file would be written on the WRONG machine). */
+  modelOverride: z.string().max(50).optional(),
   mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini']).optional(),
   openCodeConfig: OpenCodeConfigSchema,
   codexConfig: CodexConfigSchema,

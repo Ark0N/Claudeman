@@ -52,8 +52,9 @@ curl -X POST localhost:3000/api/quick-start -d '{"caseName":"sandbox","mode":"cl
 ## Lifecycle
 
 - **Reconnect after a Codeman restart** lands back in the same live agent (the in-container tmux survives).
-- **Container stop / host reboot** recreates the container and, when a resume id was captured, **resumes** the last conversation from the bind-mounted transcript.
+- **Container stop / host reboot** restarts the container and **resumes** the last conversation from the bind-mounted transcript. Claude sessions launch with a pinned conversation id (`--session-id <sessionId>`, with a `--resume` fallback when the transcript already exists), and the case remembers its last conversation (`lastClaudeSessionId`), so a relaunch after the container was stopped, rebooted, or recreated continues where it left off.
 - **Killing one session** only kills that session's in-container tmux session; the shared container stays up for sibling sessions.
+- **Editing the docker host config** (image, memory, network, ...) is detected on the next launch: the desired config hash is compared against the container's `codeman.confighash` label, and a mismatch refuses the launch with a "config changed, recreate?" confirm. Confirming calls `POST /api/docker-cases/:name/recreate` (refused while sessions of the case are live), which removes the container so the next launch recreates it with the new config; the workspace and the conversation survive.
 - **Deleting the case** `docker rm -f`s the container (the bind-mounted workspace on the host survives). An instance-scoped boot reaper removes containers whose case is gone.
 
 ## Isolation & security

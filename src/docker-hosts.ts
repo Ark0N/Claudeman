@@ -109,6 +109,24 @@ export async function writeDockerCases(configDir: string, cases: DockerCase[]): 
   await writeJsonArray(configDir, dockerCasesPath(configDir), cases);
 }
 
+/**
+ * Persist the case's last Claude conversation id (the `--resume` seed for the
+ * container-recreated relaunch, docs/docker-cases-plan.md two-layer durability).
+ * Keyed by container name so callers that only hold a SessionDocker can update it.
+ * No-op when the id is unchanged or the case is gone.
+ */
+export async function persistDockerCaseClaudeSessionId(
+  configDir: string,
+  containerName: string,
+  claudeSessionId: string
+): Promise<void> {
+  const cases = await readDockerCases(configDir);
+  const idx = cases.findIndex((c) => (c.container ?? dockerContainerName(c.name)) === containerName);
+  if (idx === -1 || cases[idx].lastClaudeSessionId === claudeSessionId) return;
+  cases[idx] = { ...cases[idx], lastClaudeSessionId: claudeSessionId };
+  await writeDockerCases(configDir, cases);
+}
+
 // ========== Naming / display / defaults ==========
 
 /** Per-case container name. Mirrors how remote derives a stable name from the case. */
@@ -624,6 +642,73 @@ export function resolveDockerCredentialArtifacts(home: string = homedir()): Dock
 
 // ========== Daemon probes (IO; no-op under VITEST) ==========
 
+/**
+ * UNESCAPED argv prefix for execFile-based probes. The shellescaped
+ * buildDockerBaseArgs variant is for interpolation into the `bash -c` launch
+ * string; argv arrays must NOT carry literal quotes (mirror of docker-export's
+ * dockerArgv).
+ */
+function dockerEngineArgv(docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost'>): string[] {
+  const argv: string[] = [docker.engine === 'podman' ? 'podman' : 'docker'];
+  if (docker.context) argv.push('--context', docker.context);
+  if (docker.daemonHost) argv.push('-H', docker.daemonHost);
+  return argv;
+}
+
+export interface DockerDriftStatus {
+  /** Container exists (daemon reachable AND a container with this name is present). */
+  exists: boolean;
+  running: boolean;
+  /** The desired configHash no longer matches the container's codeman.confighash label. */
+  drifted: boolean;
+  currentHash?: string;
+}
+
+/**
+ * Drift check (docs/docker-cases-plan.md §4): compare the DESIRED configHash
+ * against the existing container's `codeman.confighash` label so docker-host
+ * config edits actually take effect instead of being silently ignored by the
+ * idempotent inspect-or-create launch chain. `exists:false` (no container /
+ * daemon down) means there is nothing to drift. No-op under VITEST.
+ */
+export async function checkDockerConfigDrift(
+  docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost' | 'containerName' | 'configHash'>
+): Promise<DockerDriftStatus> {
+  if (IS_TEST_MODE) return { exists: false, running: false, drifted: false };
+  const argv = dockerEngineArgv(docker);
+  try {
+    const { stdout } = await execFileAsync(
+      argv[0],
+      [
+        ...argv.slice(1),
+        'inspect',
+        '-f',
+        '{{.State.Running}}\t{{index .Config.Labels "codeman.confighash"}}',
+        docker.containerName,
+      ],
+      { timeout: DOCKER_PROBE_TIMEOUT_MS }
+    );
+    const [running = '', hash = ''] = stdout.trim().split('\t');
+    return { exists: true, running: running === 'true', drifted: hash !== docker.configHash, currentHash: hash };
+  } catch {
+    return { exists: false, running: false, drifted: false };
+  }
+}
+
+/**
+ * `docker rm -f` the case container (the recreate-on-drift confirm action; the
+ * launch chain recreates it with the new config on next start). Workspace +
+ * transcripts ride bind mounts and survive; the conversation resumes via the
+ * case's lastClaudeSessionId. No-op under VITEST.
+ */
+export async function removeDockerContainer(
+  docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost' | 'containerName'>
+): Promise<void> {
+  if (IS_TEST_MODE) return;
+  const argv = dockerEngineArgv(docker);
+  await execFileAsync(argv[0], [...argv.slice(1), 'rm', '-f', docker.containerName], { timeout: 30_000 });
+}
+
 export interface DockerAvailability {
   ok: boolean;
   engine: DockerEngine;
@@ -702,11 +787,16 @@ export async function checkDockerAvailable(engine?: DockerEngine): Promise<Docke
   };
 }
 
-/** Is the base image present locally? (never triggers an auto-pull). */
-export async function checkDockerImagePresent(engine: DockerEngine, image: string): Promise<boolean> {
+/** Is the base image present on the host's daemon? (never triggers an auto-pull).
+ *  Honors context/daemonHost so a remote-daemon host is probed on the RIGHT daemon. */
+export async function checkDockerImagePresent(
+  docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost'>,
+  image: string
+): Promise<boolean> {
   if (IS_TEST_MODE) return true;
+  const argv = dockerEngineArgv(docker);
   try {
-    await execFileAsync(engine, ['image', 'inspect', '--format', '{{.Id}}', image], {
+    await execFileAsync(argv[0], [...argv.slice(1), 'image', 'inspect', '--format', '{{.Id}}', image], {
       timeout: DOCKER_PROBE_TIMEOUT_MS,
     });
     return true;
@@ -748,12 +838,12 @@ function resolveAgentDockerfile(): { dockerfile: string; contextDir: string } | 
  * lines for SSE surfacing.
  */
 export async function ensureAgentBaseImage(
-  engine: DockerEngine,
+  docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost'>,
   image: string,
   opts: { onProgress?: (line: string) => void; noCache?: boolean } = {}
 ): Promise<EnsureImageResult> {
   if (IS_TEST_MODE) return { ok: true, built: false, alreadyPresent: true };
-  if (await checkDockerImagePresent(engine, image)) {
+  if (await checkDockerImagePresent(docker, image)) {
     return { ok: true, built: false, alreadyPresent: true };
   }
   if (image !== DEFAULT_AGENT_IMAGE) {
@@ -764,16 +854,16 @@ export async function ensureAgentBaseImage(
       error: `image ${image} is not present and only ${DEFAULT_AGENT_IMAGE} is auto-built. Build or pull ${image} yourself.`,
     };
   }
-  const key = `${engine}:${image}`;
+  const key = `${docker.engine}:${image}`;
   const existing = inFlightImageBuilds.get(key);
   if (existing) return existing;
-  const build = buildAgentImage(engine, image, opts).finally(() => inFlightImageBuilds.delete(key));
+  const build = buildAgentImage(docker, image, opts).finally(() => inFlightImageBuilds.delete(key));
   inFlightImageBuilds.set(key, build);
   return build;
 }
 
 function buildAgentImage(
-  engine: DockerEngine,
+  docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost'>,
   image: string,
   opts: { onProgress?: (line: string) => void; noCache?: boolean }
 ): Promise<EnsureImageResult> {
@@ -786,10 +876,14 @@ function buildAgentImage(
       error: `docker/agent.Dockerfile not found in this install; clone the repo or build ${image} manually`,
     });
   }
-  const args = agentImageBuildArgs(resolved.dockerfile, image, resolved.contextDir, opts.noCache);
+  const argv = dockerEngineArgv(docker);
+  const args = [
+    ...argv.slice(1),
+    ...agentImageBuildArgs(resolved.dockerfile, image, resolved.contextDir, opts.noCache),
+  ];
   return new Promise<EnsureImageResult>((resolve) => {
     // async spawn (NEVER spawnSync) so a multi-minute build never wedges the event loop.
-    const child = spawn(engine, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(argv[0], args, { stdio: ['ignore', 'pipe', 'pipe'] });
     const forward = (buf: Buffer) => {
       for (const line of buf.toString('utf-8').split('\n')) {
         const trimmed = line.trimEnd();
@@ -803,12 +897,12 @@ function buildAgentImage(
         ok: false,
         built: false,
         alreadyPresent: false,
-        error: `could not spawn ${engine} build: ${err.message}`,
+        error: `could not spawn ${argv[0]} build: ${err.message}`,
       });
     });
     child.on('exit', (code) => {
       if (code === 0) resolve({ ok: true, built: true, alreadyPresent: false });
-      else resolve({ ok: false, built: false, alreadyPresent: false, error: `${engine} build failed (exit ${code})` });
+      else resolve({ ok: false, built: false, alreadyPresent: false, error: `${argv[0]} build failed (exit ${code})` });
     });
   });
 }
@@ -827,21 +921,21 @@ export interface DockerTmuxCheckResult {
  * (`--pull=never`). No-op under VITEST. Mirror of checkRemoteTmuxAvailable.
  */
 export async function checkDockerTmuxAvailable(
-  docker: Pick<SessionDocker, 'engine' | 'image'>
+  docker: Pick<SessionDocker, 'engine' | 'image' | 'context' | 'daemonHost'>
 ): Promise<DockerTmuxCheckResult> {
   if (IS_TEST_MODE) return { ok: true, tmuxPath: '/usr/bin/tmux' };
-  const engine = docker.engine;
-  if (!(await checkDockerImagePresent(engine, docker.image))) {
+  if (!(await checkDockerImagePresent(docker, docker.image))) {
     return {
       ok: false,
       imageMissing: true,
       error: `image ${docker.image} not present (the default image is auto-built on first use; a custom image must be built or pulled first)`,
     };
   }
+  const argv = dockerEngineArgv(docker);
   try {
     const { stdout } = await execFileAsync(
-      engine,
-      ['run', '--rm', '--pull=never', docker.image, 'sh', '-lc', 'command -v tmux'],
+      argv[0],
+      [...argv.slice(1), 'run', '--rm', '--pull=never', docker.image, 'sh', '-lc', 'command -v tmux'],
       { timeout: DOCKER_PROBE_TIMEOUT_MS }
     );
     const tmuxPath = stdout.trim();
@@ -938,16 +1032,21 @@ export async function reapOrphanedDockerContainers(
  * Returns undefined on any failure. No-op under VITEST.
  */
 export async function probeDockerCliVersion(
-  docker: Pick<SessionDocker, 'engine' | 'containerName'>,
+  docker: Pick<SessionDocker, 'engine' | 'containerName' | 'context' | 'daemonHost'>,
   mode: SessionMode
 ): Promise<string | undefined> {
   if (IS_TEST_MODE) return undefined;
   const bin = mode === 'shell' ? null : mode;
   if (!bin) return undefined;
+  const argv = dockerEngineArgv(docker);
   try {
-    const { stdout } = await execFileAsync(docker.engine, ['exec', docker.containerName, bin, '--version'], {
-      timeout: DOCKER_PROBE_TIMEOUT_MS,
-    });
+    const { stdout } = await execFileAsync(
+      argv[0],
+      [...argv.slice(1), 'exec', docker.containerName, bin, '--version'],
+      {
+        timeout: DOCKER_PROBE_TIMEOUT_MS,
+      }
+    );
     const match = stdout.trim().match(/\d+\.\d+\.\d+/);
     return match ? match[0] : stdout.trim() || undefined;
   } catch {

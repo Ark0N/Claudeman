@@ -484,6 +484,7 @@ const SSE_EVENTS = {
   // Multi-user (admin-only / targeted)
   ADMIN_USERS_CHANGED: 'admin:usersChanged',
   AUTH_PASSWORD_CHANGE_REQUIRED: 'auth:passwordChangeRequired',
+  DOCKER_CONTAINER_RECREATED: 'docker:containerRecreated',
 };
 
 // ═══════════════════════════════════════════════════════════════

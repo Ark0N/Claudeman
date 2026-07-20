@@ -25,6 +25,7 @@ import {
   defaultDockerCommandForMode,
   ensureAgentBaseImage,
   hostGatewayAlias,
+  persistDockerCaseClaudeSessionId,
   probeDockerCliVersion,
   readDockerCases,
   readDockerHosts,
@@ -66,6 +67,17 @@ describe('docker-hosts storage', () => {
   it('returns [] for a missing file', async () => {
     expect(await readDockerHosts(dir)).toEqual([]);
     expect(await readDockerCases(dir)).toEqual([]);
+  });
+
+  it('persists the last Claude conversation id keyed by container name', async () => {
+    await writeDockerCases(dir, [CASE, { ...CASE, name: 'other', container: 'custom-name' }]);
+    await persistDockerCaseClaudeSessionId(dir, dockerContainerName(CASE.name), 'conv-1');
+    await persistDockerCaseClaudeSessionId(dir, 'custom-name', 'conv-2');
+    await persistDockerCaseClaudeSessionId(dir, 'no-such-container', 'conv-3'); // no-op
+    const cases = await readDockerCases(dir);
+    expect(cases.find((c) => c.name === 'myproj')?.lastClaudeSessionId).toBe('conv-1');
+    expect(cases.find((c) => c.name === 'other')?.lastClaudeSessionId).toBe('conv-2');
+    expect(cases.some((c) => c.lastClaudeSessionId === 'conv-3')).toBe(false);
   });
 });
 
@@ -427,7 +439,7 @@ describe('agentImageBuildArgs', () => {
 
 describe('ensureAgentBaseImage (no-op under VITEST)', () => {
   it('reports the image as already present without spawning a build', async () => {
-    const r = await ensureAgentBaseImage('docker', DEFAULT_AGENT_IMAGE);
+    const r = await ensureAgentBaseImage({ engine: 'docker' }, DEFAULT_AGENT_IMAGE);
     expect(r).toEqual({ ok: true, built: false, alreadyPresent: true });
   });
 });
@@ -442,7 +454,7 @@ describe('daemon probes (no-op under VITEST)', () => {
 
   it('checkDockerTmuxAvailable + image present are canned-true', async () => {
     expect((await checkDockerTmuxAvailable({ engine: 'docker', image: DEFAULT_AGENT_IMAGE })).ok).toBe(true);
-    expect(await checkDockerImagePresent('docker', DEFAULT_AGENT_IMAGE)).toBe(true);
+    expect(await checkDockerImagePresent({ engine: 'docker' }, DEFAULT_AGENT_IMAGE)).toBe(true);
   });
 
   it('probeDockerCliVersion is undefined under test', async () => {
