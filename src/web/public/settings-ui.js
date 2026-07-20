@@ -328,7 +328,7 @@ Object.assign(CodemanApp.prototype, {
     // Session Manager + Away Digest buttons default OFF; Cron button defaults ON.
     document.getElementById('appSettingsShowSessionButton').checked = settings.showSessionButton ?? defaults.showSessionButton ?? false;
     document.getElementById('appSettingsShowAwayDigestButton').checked = settings.showAwayDigestButton ?? defaults.showAwayDigestButton ?? false;
-    document.getElementById('appSettingsShowCronButton').checked = settings.showCronButton ?? defaults.showCronButton ?? true;
+    document.getElementById('appSettingsShowCronButton').checked = settings.showCronButton ?? defaults.showCronButton ?? false;
     // Gesture control lives in the Input section (alongside Local Echo / CJK Input)
     // but is only available when the instance runs with CODEMAN_GESTURE=1 (server sets
     // window.__codemanGestureAvailable). Hide just this item otherwise so the toggle
@@ -1790,7 +1790,7 @@ Object.assign(CodemanApp.prototype, {
         showRedrawButton: false,
         showSessionButton: false,
         showAwayDigestButton: false,
-        showCronButton: true,
+        showCronButton: false,
         // Remote auto-reconnect (COD-108) — on by default
         remoteAutoReconnect: true,
         // Input
@@ -1964,8 +1964,8 @@ Object.assign(CodemanApp.prototype, {
       awayDigestBtn.classList.toggle('btn-away-digest--hidden', !showAwayDigestButton);
     }
 
-    // Cron button (footer toolbar) — shown by default; hide when disabled.
-    const showCronButton = settings.showCronButton ?? defaults.showCronButton ?? true;
+    // Cron button (footer toolbar) — opt-in, hidden by default. Same marker pattern.
+    const showCronButton = settings.showCronButton ?? defaults.showCronButton ?? false;
     const cronBtn = document.querySelector('.btn-cron');
     if (cronBtn) {
       cronBtn.classList.toggle('btn-cron--hidden', !showCronButton);

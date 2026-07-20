@@ -9569,9 +9569,9 @@ kbd {
   display: none !important;
 }
 
-/* "Cron" footer-toolbar button — shown by default (App Settings → Display can
-   hide it). Toolbar button, not a header icon, so only the hide marker is
-   needed; out-specify any base .btn-toolbar display. */
+/* "Cron" footer-toolbar button — opt-in, hidden by default (enable under App
+   Settings → Display → Header Displays). Toolbar button, not a header icon, so
+   only the hide marker is needed; out-specify any base .btn-toolbar display. */
 .btn-toolbar.btn-cron--hidden {
   display: none !important;
 }
