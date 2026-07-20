@@ -11,7 +11,7 @@ import fs from 'node:fs/promises';
 import { join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import type { ApiResponse, CaseInfo, DockerHost, SessionDocker } from '../../types.js';
+import type { ApiResponse, CaseInfo, DockerHost, RemoteSessionInfo, SessionDocker } from '../../types.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import {
   CreateCaseSchema,
@@ -64,6 +64,7 @@ import {
 import { buildDockerRemoveCommand } from '../../tmux-manager.js';
 import {
   checkRemoteTmuxAvailable,
+  listRemoteCodemanSessions,
   readRemoteCases,
   readRemoteHosts,
   remoteDisplayPath,
@@ -311,6 +312,26 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     isAdmin(req)
       ? null
       : (reply.code(403), createErrorResponse(ApiErrorCode.FORBIDDEN, 'Admin only in multi-user mode'));
+
+  // COD-105 — discover `codeman-*` tmux sessions already running on a remote
+  // host (created by the remote's own Codeman, another instance, or this one)
+  // so the operator can attach to one this Codeman didn't launch. Explicit
+  // trigger only (Decision A): the frontend calls this on a "Discover" click,
+  // never automatically on host select. listRemoteCodemanSessions never throws
+  // (returns [] on unreachable/no-tmux/no-sessions) and is ssh-guarded under test.
+  // Hosts are admin-only infra in multi-user mode, so discovery is too.
+  app.get(
+    '/api/remote-hosts/:hostId/sessions',
+    async (req, reply): Promise<ApiResponse<{ sessions: RemoteSessionInfo[] }>> => {
+      const denied = adminOnly(req, reply);
+      if (denied) return denied;
+      const { hostId } = req.params as { hostId: string };
+      const host = (await readRemoteHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === hostId);
+      if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
+      const sessions = await listRemoteCodemanSessions(host);
+      return { success: true, data: { sessions } };
+    }
+  );
 
   app.post('/api/remote-hosts', async (req, reply): Promise<ApiResponse<{ host: unknown }>> => {
     const denied = adminOnly(req, reply);

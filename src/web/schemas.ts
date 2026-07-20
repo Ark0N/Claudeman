@@ -192,6 +192,22 @@ export const CreateSessionSchema = z.object({
     .max(100)
     .regex(/^[a-f0-9-]+$/, 'resumeSessionId must be a valid UUID')
     .optional(),
+  /**
+   * COD-105 — attach to an EXISTING remote tmux session discovered via
+   * `GET /api/remote-hosts/:hostId/sessions` (one this Codeman didn't create).
+   * The resulting session is NON-owned (closing it detaches, never kills the
+   * remote). `remoteSessionName` is a discovered `codeman-*` tmux session name.
+   */
+  attachRemoteSession: z
+    .object({
+      hostId: z.string().min(1).max(200),
+      remoteSessionName: z
+        .string()
+        .min(1)
+        .max(200)
+        .regex(/^codeman-[a-zA-Z0-9._-]+$/, 'remoteSessionName must be a codeman-* tmux session name'),
+    })
+    .optional(),
 });
 
 /**
@@ -658,6 +674,10 @@ export const SettingsUpdateSchema = z
     /** Model for new Claude sessions (e.g. "claude-fable-5[1m]", "opus[1m]"); takes precedence over opusContext1mEnabled */
     claudeModel: z.string().max(50).optional(),
     opusContext1mEnabled: z.boolean().optional(),
+    // COD-108 remote-session auto-reconnect kill-switch (default ON). When false,
+    // the TmuxManager watcher does nothing — dropped remote sessions are NOT
+    // auto-reattached.
+    remoteAutoReconnect: z.boolean().optional(),
     thinkingEffort: z.string().max(20).optional(),
     // UI visibility
     showFontControls: z.boolean().optional(),

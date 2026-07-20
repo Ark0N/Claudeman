@@ -78,6 +78,13 @@ import type {
   RespawnPaneOptions,
   PaneCaptureOptions,
 } from './mux-interface.js';
+import {
+  decideReconnect,
+  advanceBackoff,
+  freshReconnectState,
+  resetReconnectState,
+  type RemoteReconnectState,
+} from './remote-reconnect.js';
 
 // ============================================================================
 // Timing Constants
@@ -110,6 +117,9 @@ const GRACEFUL_SHUTDOWN_WAIT_MS = 100;
 /** Default stats collection interval (2 seconds) */
 const DEFAULT_STATS_INTERVAL_MS = 2000;
 
+/** Default remote-reconnect watcher poll interval (5 seconds) — COD-108 */
+const DEFAULT_REMOTE_RECONNECT_INTERVAL_MS = 5000;
+
 /** Stable cwd for tmux server/pane launch; actual session cwd is reached inside the pane. */
 const TMUX_LAUNCH_CWD = '/tmp';
 
@@ -133,6 +143,20 @@ const IS_TEST_MODE = !!process.env.VITEST;
 
 /** Path to persisted mux session metadata */
 const MUX_SESSIONS_FILE = dataPath('mux-sessions.json');
+
+/**
+ * COD-108 kill-switch: `remoteAutoReconnect` app setting (default ON). Read at
+ * call time (like headroom routing) so a settings change takes effect without a
+ * restart. Absent/non-boolean ⇒ true (feature on).
+ */
+function isRemoteAutoReconnectEnabled(): boolean {
+  try {
+    const s = JSON.parse(readFileSync(dataPath('settings.json'), 'utf8')) as Record<string, unknown>;
+    return typeof s.remoteAutoReconnect === 'boolean' ? s.remoteAutoReconnect : true;
+  } catch {
+    return true;
+  }
+}
 
 /** Regex to validate tmux session names (only allow safe characters) */
 const SAFE_MUX_NAME_PATTERN = /^codeman-[a-f0-9-]+$/;
@@ -812,6 +836,13 @@ export function buildRemoteLaunchCommand(options: {
     `set -t ${remoteName} mouse off`,
     `set -t ${remoteName} prefix C-q`,
     'set -s escape-time 0',
+    // COD-106 — shared/collaborative sessions: tmux defaults to sizing a window
+    // to the SMALLEST attached client, so two Codemans at different viewports
+    // would fight (clamp to the smaller). `window-size latest` sizes to the
+    // most-recently-active client instead, so concurrent clients coexist.
+    // Per-session scoped (`set -t <name>`, matching #145's hardening) so a shared
+    // remote tmux server's other sessions keep their own sizing behavior.
+    `set -t ${remoteName} window-size latest`,
   ].join(' \\; ');
 
   // ssh runs its trailing args through the remote login shell, so the entire
@@ -1133,6 +1164,56 @@ export function resolveDockerLaunchOptions(
 }
 
 /**
+ * COD-105 — build the SSH command that ATTACHES to an EXISTING `codeman-*` tmux
+ * session on the remote host (one this Codeman didn't create — discovered via
+ * `listRemoteCodemanSessions`). Sibling of `buildRemoteLaunchCommand`.
+ *
+ * Emits:
+ *   ssh -o BatchMode=yes -t [<COD-107 connection opts>] user@host \
+ *     'tmux -L codeman attach -t <session>'
+ *
+ * - `attach` (NOT `new-session -A`) so we only join an existing session; the
+ *   remote session keeps running independent of us, which is exactly why the
+ *   resulting Codeman session is NON-OWNED (see `SessionRemote.owned`): closing
+ *   the local tab must detach, never `kill-session` the remote.
+ * - The remote session name is shell-escaped so a value with metachars stays a
+ *   single token inside the quoted tmux invocation.
+ * - COD-107 — connection options (`-p`, `-i`, `-J`, SOCKS `-o ProxyCommand`,
+ *   arbitrary `-o`) come from the shared `buildSshConnectionArgs`, so attach
+ *   connects identically to launch / discovery / the prereq probe. `-t` sits
+ *   right after `ssh -o BatchMode=yes` (a PTY is required for interactive tmux).
+ */
+export function buildRemoteAttachCommand(remote: SessionRemote, remoteSessionName: string): string {
+  const tmuxInvocation = `tmux -L codeman attach -t ${shellescape(remoteSessionName)}`;
+  const [ssh, batchMode, ...connectionArgs] = buildSshConnectionArgs(remote);
+  const sshParts = [ssh, batchMode, '-t', ...connectionArgs, remoteSshTarget(remote), shellescape(tmuxInvocation)];
+  return sshParts.join(' ');
+}
+
+/**
+ * COD-105 — choose the right remote ssh command for a session's ownership:
+ *   - NON-owned (`remote.owned === false`): ATTACH to a discovered remote tmux
+ *     session by its EXISTING name (`remote.remoteSessionName`, falling back to
+ *     this session's deterministic name). We only join — never create.
+ *   - owned (default): LAUNCH/attach-or-create via `buildRemoteLaunchCommand`
+ *     (COD-104), which we then own and may explicitly kill.
+ */
+function buildRemoteSessionCommand(options: {
+  mode: SessionMode;
+  remote: SessionRemote;
+  sessionId: string;
+  claudeMode?: ClaudeMode;
+  allowedTools?: string;
+}): string {
+  const { remote, sessionId } = options;
+  if (remote.owned === false) {
+    const target = remote.remoteSessionName || remoteTmuxSessionName(sessionId);
+    return buildRemoteAttachCommand(remote, target);
+  }
+  return buildRemoteLaunchCommand(options);
+}
+
+/**
  * Set sensitive environment variables on a tmux session via setenv.
  * These are inherited by panes but not visible in ps output or tmux history.
  */
@@ -1284,6 +1365,17 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   private mouseSyncInterval: NodeJS.Timeout | null = null;
   /** Track last-known pane count per session to avoid unnecessary tmux set-option calls */
   private lastPaneCount: Map<string, number> = new Map();
+
+  // ── COD-108 remote-reconnect watcher state ────────────────────────────────
+  /** Periodic watcher that re-establishes dropped remote sessions. */
+  private remoteReconnectInterval: NodeJS.Timeout | null = null;
+  /** Per-session backoff/attempt bookkeeping (sessionId → state). */
+  private reconnectState: Map<string, RemoteReconnectState> = new Map();
+  /**
+   * Sessions excluded from auto-reconnect because they are being intentionally
+   * torn down (killed/detached/stopping). A guarded session is NEVER revived.
+   */
+  private reconnectGuard: Set<string> = new Set();
 
   private trueColorConfigured = false;
 
@@ -1600,7 +1692,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       const fullCmd = docker
         ? buildDockerLaunchCommand(resolveDockerLaunchOptions(mode, docker, sessionId, resumeSessionId))
         : remote
-          ? buildRemoteLaunchCommand({ mode, remote, sessionId, claudeMode, allowedTools })
+          ? buildRemoteSessionCommand({ mode, remote, sessionId, claudeMode, allowedTools })
           : localFullCmd;
 
       // Create tmux session in three steps to handle cold-start (no server running)
@@ -1855,7 +1947,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const fullCmd = docker
       ? buildDockerLaunchCommand(resolveDockerLaunchOptions(mode, docker, sessionId, resumeSessionId))
       : remote
-        ? buildRemoteLaunchCommand({ mode, remote, sessionId, claudeMode, allowedTools })
+        ? buildRemoteSessionCommand({ mode, remote, sessionId, claudeMode, allowedTools })
         : localFullCmd;
 
     try {
@@ -1971,9 +2063,16 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       return false;
     }
 
+    // COD-108: an intentional kill/detach must NEVER be auto-revived by the
+    // remote-reconnect watcher. Guard BEFORE any teardown so a tick that fires
+    // mid-kill (especially the non-owned DETACH early-return below, where the
+    // dead local pane would otherwise look reconnectable) sees the guard.
+    this.guardRemoteReconnect(sessionId);
+
     // TEST MODE: Remove from memory only — NEVER touch real tmux sessions
     if (IS_TEST_MODE) {
       this.sessions.delete(sessionId);
+      this.clearRemoteReconnectState(sessionId);
       this.emit('sessionKilled', { sessionId });
       return true;
     }
@@ -1983,6 +2082,40 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     if (currentMuxName && session.muxName === currentMuxName) {
       console.error(`[TmuxManager] BLOCKED: Refusing to kill own tmux session: ${session.muxName}`);
       return false;
+    }
+
+    // COD-105 — DETACH-NOT-KILL for NON-owned remote sessions.
+    //
+    // When this session was created by ATTACHING a remote tmux session another
+    // Codeman owns (`remote.owned === false`), closing the tab must NOT propagate
+    // a remote `tmux kill-session` — that would nuke work the remote's own
+    // Codeman (or another instance) still relies on. We tear down ONLY the LOCAL
+    // pane that holds the ssh client: killing the local ssh sends SIGHUP to its
+    // remote `tmux attach`, which DETACHES (the durable remote session survives).
+    //
+    // This early return is the structural guarantee: no code below this point
+    // (now or in future for owned sessions) can ever issue a remote kill-session
+    // for a non-owned session. The only `kill-session` we run is on OUR LOCAL
+    // socket (`this.tmux()` = `tmux -L codeman` on THIS host), which kills the
+    // local pane — it does NOT reach the REMOTE socket.
+    if (session.remote && session.remote.owned === false) {
+      console.log(`[TmuxManager] DETACH (non-owned remote): tearing down local pane only for ${session.muxName}`);
+      if (isValidMuxName(session.muxName)) {
+        try {
+          // Local socket only — detaches the remote session by killing the local ssh pane.
+          execSync(`${this.tmux()} kill-session -t "${session.muxName}" 2>/dev/null`, {
+            timeout: EXEC_TIMEOUT_MS,
+          });
+        } catch {
+          // Local pane may already be gone.
+        }
+      }
+      this.lastPaneCount.delete(session.muxName);
+      this.sessions.delete(sessionId);
+      this.clearRemoteReconnectState(sessionId);
+      this.saveSessions();
+      this.emit('sessionKilled', { sessionId });
+      return true;
     }
 
     // Get current PID (may have changed)
@@ -2089,6 +2222,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     this.lastPaneCount.delete(session.muxName);
     this.sessions.delete(sessionId);
+    this.clearRemoteReconnectState(sessionId);
     this.saveSessions();
     this.emit('sessionKilled', { sessionId });
 
@@ -2155,6 +2289,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       } else {
         dead.push(sessionId);
         this.sessions.delete(sessionId);
+        this.clearRemoteReconnectState(sessionId);
         this.emit('sessionDied', { sessionId });
       }
     }
@@ -2426,9 +2561,118 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     this.lastPaneCount.clear();
   }
 
+  // ── COD-108 remote-session auto-reconnect watcher ─────────────────────────
+
+  /**
+   * Start the remote-reconnect watcher (COD-108). Each tick, for every tracked
+   * session with `session.remote` whose local pane is DEAD, not intentionally
+   * guarded, and within its backoff budget, emit `remoteSessionDropped` so the
+   * session owner reattaches (re-running the idempotent remote command rejoins
+   * the durable remote tmux session). After the attempt cap, emit
+   * `remoteReconnectExhausted` once and go quiet.
+   *
+   * No-op tick body under `IS_TEST_MODE` (mirrors `startMouseModeSync`): tests
+   * drive the logic deterministically via {@link runRemoteReconnectTick}.
+   */
+  startRemoteReconnectWatcher(intervalMs: number = DEFAULT_REMOTE_RECONNECT_INTERVAL_MS): void {
+    if (this.remoteReconnectInterval) {
+      clearInterval(this.remoteReconnectInterval);
+    }
+    this.remoteReconnectInterval = setInterval(() => {
+      if (IS_TEST_MODE) return;
+      try {
+        this.runRemoteReconnectTick(Date.now(), isRemoteAutoReconnectEnabled());
+      } catch (err) {
+        console.error('[TmuxManager] Remote reconnect watcher error:', err);
+      }
+    }, intervalMs);
+  }
+
+  stopRemoteReconnectWatcher(): void {
+    if (this.remoteReconnectInterval) {
+      clearInterval(this.remoteReconnectInterval);
+      this.remoteReconnectInterval = null;
+    }
+  }
+
+  /**
+   * Run ONE watcher tick. Extracted (and given an injected `now`/`enabled`) so
+   * the reconnect logic is deterministically testable even though the live
+   * `setInterval` body no-ops under test mode. For each remote session it
+   * applies the pure {@link decideReconnect} decision and translates the result
+   * into events + backoff/state transitions. Public for tests + the watcher.
+   */
+  runRemoteReconnectTick(now: number, enabled: boolean): void {
+    for (const session of this.sessions.values()) {
+      if (!session.remote) continue;
+      const sessionId = session.sessionId;
+      const state = this.reconnectState.get(sessionId);
+      const action = decideReconnect({
+        session: {
+          sessionId,
+          isRemote: true,
+          paneDead: this.isPaneDead(session.muxName),
+        },
+        state,
+        guarded: this.reconnectGuard.has(sessionId),
+        enabled,
+        now,
+      });
+
+      if (action.kind === 'emit') {
+        const base = state ?? freshReconnectState();
+        // Mark in-flight + advance backoff BEFORE emitting so a re-entrant tick
+        // (or a synchronous listener) can never stack a second reconnect.
+        this.reconnectState.set(sessionId, { ...advanceBackoff(base, now), inFlight: true });
+        this.emit('remoteSessionDropped', { sessionId, attempt: action.attempt });
+      } else if (action.kind === 'exhaust') {
+        const base = state ?? freshReconnectState();
+        if (!base.exhaustedEmitted) {
+          this.reconnectState.set(sessionId, { ...base, exhausted: true, exhaustedEmitted: true });
+          this.emit('remoteReconnectExhausted', { sessionId });
+        }
+      }
+      // 'skip' → nothing to do.
+    }
+  }
+
+  /**
+   * Tell the watcher a reattach attempt for `sessionId` finished. On success,
+   * reset the backoff so the session is healthy again; on failure, just clear
+   * the in-flight flag so the next due tick can retry under the existing
+   * backoff schedule. Called by the session owner after `respawnPane`.
+   */
+  noteRemoteReconnect(sessionId: string, success: boolean): void {
+    if (success) {
+      this.reconnectState.set(sessionId, resetReconnectState());
+      return;
+    }
+    const state = this.reconnectState.get(sessionId);
+    if (state) this.reconnectState.set(sessionId, { ...state, inFlight: false });
+  }
+
+  /**
+   * Exclude a session from auto-reconnect (intentional teardown). Adds it to the
+   * guard set and drops any backoff state so a closed/killed tab — especially a
+   * non-owned remote DETACH — is never auto-revived. Idempotent.
+   */
+  guardRemoteReconnect(sessionId: string): void {
+    this.reconnectGuard.add(sessionId);
+    this.reconnectState.delete(sessionId);
+  }
+
+  /** Clear all per-session reconnect + guard state (e.g. when a session is removed). */
+  clearRemoteReconnectState(sessionId: string): void {
+    this.reconnectState.delete(sessionId);
+    this.reconnectGuard.delete(sessionId);
+  }
+
   destroy(): void {
     this.stopStatsCollection();
     this.stopMouseModeSync();
+    this.stopRemoteReconnectWatcher();
+    this.reconnectState.clear();
+    this.reconnectGuard.clear();
   }
 
   registerSession(session: MuxSession): void {

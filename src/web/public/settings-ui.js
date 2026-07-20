@@ -364,6 +364,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsAgentTeams').checked = settings.agentTeamsEnabled ?? false;
     document.getElementById('appSettingsClaudeModel').value = settings.claudeModel ?? '';
     document.getElementById('appSettingsOpusContext1m').checked = settings.opusContext1mEnabled ?? false;
+    document.getElementById('appSettingsRemoteAutoReconnect').checked = settings.remoteAutoReconnect ?? true;
     document.getElementById('appSettingsThinkingEffort').value = settings.thinkingEffort ?? '';
     // CPU Priority settings
     const niceSettings = settings.nice || {};
@@ -1462,6 +1463,7 @@ Object.assign(CodemanApp.prototype, {
       agentTeamsEnabled: document.getElementById('appSettingsAgentTeams').checked,
       claudeModel: document.getElementById('appSettingsClaudeModel').value,
       opusContext1mEnabled: document.getElementById('appSettingsOpusContext1m').checked,
+      remoteAutoReconnect: document.getElementById('appSettingsRemoteAutoReconnect').checked,
       thinkingEffort: document.getElementById('appSettingsThinkingEffort').value,
       // CPU Priority settings
       nice: {
@@ -1789,6 +1791,8 @@ Object.assign(CodemanApp.prototype, {
         showSessionButton: false,
         showAwayDigestButton: false,
         showCronButton: true,
+        // Remote auto-reconnect (COD-108) — on by default
+        remoteAutoReconnect: true,
         // Input
         gestureControlEnabled: false,
         // Feature toggles - keep tracking on even on mobile

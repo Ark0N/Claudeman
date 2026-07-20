@@ -82,6 +82,33 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  // Remote auto-reconnect (COD-108)
+  _onRemoteSessionReconnected(data) {
+    const id = this.getShortId(data.sessionId);
+    this.showToast(`Remote session ${id} reconnected`, 'success');
+  },
+
+  _onRemoteReconnectExhausted(data) {
+    const sessionId = data.sessionId;
+    const id = this.getShortId(sessionId);
+    // Auto-reconnect gave up after the bounded backoff. Surface a manual
+    // "Reconnect" affordance that re-triggers the attach path (force-reload the
+    // session, which re-runs the create/attach flow against the durable remote).
+    this.showToast(`Remote session ${id} dropped — auto-reconnect gave up`, 'error', {
+      duration: 15000,
+      action: {
+        label: 'Reconnect',
+        onClick: () => {
+          if (this.sessions && this.sessions.has(sessionId)) {
+            this.selectSession(sessionId, { forceReload: true });
+          } else {
+            this.showToast('Session no longer available', 'warning');
+          }
+        },
+      },
+    });
+  },
+
 
   // Bash tools
   _onBashToolStart(data) {

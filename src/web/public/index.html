@@ -1501,6 +1501,14 @@
               </label>
               <span class="form-hint">Use 1M token context window (model: opus[1m]) for all new sessions — ignored when a Claude Model is selected above</span>
             </div>
+            <div class="form-row form-row-switch">
+              <label>Remote auto-reconnect</label>
+              <label class="switch">
+                <input type="checkbox" id="appSettingsRemoteAutoReconnect">
+                <span class="slider"></span>
+              </label>
+              <span class="form-hint">Automatically re-establish remote (SSH) sessions when the connection drops, reattaching to the durable remote tmux session (on by default; bounded backoff)</span>
+            </div>
             <div class="form-row">
               <label>Thinking Effort</label>
               <select id="appSettingsThinkingEffort" class="form-select">
@@ -1991,6 +1999,17 @@
                   <textarea id="remoteHostExtraSshOptions" rows="3" placeholder="StrictHostKeyChecking=accept-new&#10;ConnectTimeout=10" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
                   <span class="form-hint">Optional. One KEY=VALUE per line; each becomes an ssh -o option.</span>
                 </div>
+              </div>
+            </details>
+            <!-- COD-105 — discover + attach existing remote tmux sessions this Codeman didn't create. -->
+            <details class="advanced-options" id="remoteDiscoverSection">
+              <summary>Discover existing sessions</summary>
+              <div class="advanced-options-content">
+                <span class="form-hint">Find <code>codeman-*</code> tmux sessions already running on this host (started by the remote's own Codeman or another instance) and attach to one. Attaching shares the session; closing the tab detaches it — it is never killed.</span>
+                <div class="form-row" style="margin-top: 8px;">
+                  <button type="button" class="btn-toolbar" id="remoteDiscoverBtn" onclick="app.discoverRemoteSessions()">Discover existing sessions</button>
+                </div>
+                <div id="remoteDiscoverResults" class="remote-discover-results"></div>
               </div>
             </details>
           </div>

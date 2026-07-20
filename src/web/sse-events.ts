@@ -150,6 +150,15 @@ export const MuxDied = 'mux:died' as const;
 /** tmux session stats refreshed. */
 export const MuxStatsUpdated = 'mux:statsUpdated' as const;
 
+// ─── Remote auto-reconnect (COD-108) ─────────────────────────────────────────
+
+/** A remote session's local ssh pane died; an auto-reconnect attempt is starting. */
+export const RemoteSessionDropped = 'remote:sessionDropped' as const;
+/** A dropped remote session was successfully re-established (reattached). */
+export const RemoteSessionReconnected = 'remote:sessionReconnected' as const;
+/** Auto-reconnect gave up after the bounded backoff cap — manual reconnect needed. */
+export const RemoteReconnectExhausted = 'remote:reconnectExhausted' as const;
+
 // ─── Respawn ─────────────────────────────────────────────────────────────────
 
 /** Respawn loop started for a session. */
@@ -459,6 +468,11 @@ export const SseEvent = {
   MuxKilled,
   MuxDied,
   MuxStatsUpdated,
+
+  // Remote auto-reconnect (COD-108)
+  RemoteSessionDropped,
+  RemoteSessionReconnected,
+  RemoteReconnectExhausted,
 
   // Respawn
   RespawnStarted,

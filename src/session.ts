@@ -1248,6 +1248,70 @@ export class Session extends EventEmitter {
     return { isRestored };
   }
 
+  /**
+   * COD-108 — re-establish a dropped REMOTE session. Triggered by the
+   * `TmuxManager` remote-reconnect watcher (via `remoteSessionDropped`): the
+   * watcher detects a dead remote pane, the session owner reassembles the SAME
+   * `RespawnPaneOptions` used for Claude-idle respawns and calls
+   * `respawnPane()` directly. For a remote session that re-runs
+   * `buildRemoteSessionCommand` (owned → `new-session -A`, non-owned →
+   * `attach`), which idempotently REATTACHES the still-running durable remote
+   * tmux session — scrollback + agent intact (proven COD-104/105).
+   *
+   * Deliberately does NOT route through the Claude-idle respawn-controller —
+   * this is a transport re-establish, not a `/clear`/`/compact` cycle.
+   *
+   * @returns true if the pane was respawned (reattach issued), false otherwise.
+   */
+  async reattachRemote(): Promise<boolean> {
+    if (!this._remote) return false; // not a remote session
+    if (!this._useMux || !this._mux || !this._muxSession) return false;
+    const mux = this._mux;
+
+    // If tmux lost the whole session (not just a dead pane), there is nothing to
+    // respawn into — a genuine death, leave it for normal recovery/reconcile.
+    if (!mux.muxSessionExists(this._muxSession.muxName)) {
+      console.log('[Session] reattachRemote: mux session gone, skipping:', this._muxSession.muxName);
+      return false;
+    }
+
+    const newPid = await mux.respawnPane(this._buildRespawnPaneOptions());
+    if (!newPid) {
+      console.error('[Session] reattachRemote: respawnPane failed for', this._muxSession.muxName);
+      return false;
+    }
+    console.log('[Session] reattachRemote: reattached remote session', this._muxSession.muxName, 'pid', newPid);
+    return true;
+  }
+
+  /**
+   * Assemble the {@link RespawnPaneOptions} for this session. Single source of
+   * truth shared by interactive start, shell start (via their inline copies),
+   * and {@link reattachRemote} so the remote reattach path can never drift from
+   * the spawn path.
+   */
+  private _buildRespawnPaneOptions(): import('./mux-interface.js').RespawnPaneOptions {
+    return {
+      sessionId: this.id,
+      workingDir: this.workingDir,
+      mode: this.mode,
+      niceConfig: this._niceConfig,
+      model: this._model,
+      claudeMode: this._claudeMode,
+      allowedTools: this._allowedTools,
+      openCodeConfig: this._openCodeConfig,
+      codexConfig: this._codexConfig,
+      geminiConfig: this._geminiConfig,
+      resumeSessionId: this._resumeSessionId,
+      envOverrides: this._envOverrides,
+      effort: this._effort,
+      historyLimit: this._tmuxHistoryLimit,
+      remote: this._remote,
+      docker: this._docker,
+      owner: this._owner,
+    };
+  }
+
   private _handleTerminalOutput(data: string): void {
     // Codex AND Claude Code emit sequences that wipe xterm.js scrollback, plus
     // mouse-tracking enables that hijack the scroll wheel so the user can't reach
@@ -1396,25 +1460,8 @@ export class Session extends EventEmitter {
     if (this._useMux && this._mux) {
       try {
         const { isRestored } = await this._setupOrAttachMuxSession({
-          respawnPaneOptions: {
-            sessionId: this.id,
-            workingDir: this.workingDir,
-            mode: this.mode,
-            niceConfig: this._niceConfig,
-            model: this._model,
-            claudeMode: this._claudeMode,
-            allowedTools: this._allowedTools,
-            openCodeConfig: this._openCodeConfig,
-            codexConfig: this._codexConfig,
-            geminiConfig: this._geminiConfig,
-            resumeSessionId: this._resumeSessionId,
-            envOverrides: this._envOverrides,
-            effort: this._effort,
-            historyLimit: this._tmuxHistoryLimit,
-            remote: this._remote,
-            docker: this._docker,
-            owner: this._owner,
-          },
+          // Single source of truth shared with reattachRemote() (COD-108).
+          respawnPaneOptions: this._buildRespawnPaneOptions(),
           createSessionOptions: {
             sessionId: this.id,
             workingDir: this.workingDir,
