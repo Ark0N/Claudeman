@@ -1554,7 +1554,12 @@ export class WebServer extends EventEmitter {
     );
   }
 
-  private async startScheduledRun(prompt: string, workingDir: string, durationMinutes: number): Promise<ScheduledRun> {
+  private async startScheduledRun(
+    prompt: string,
+    workingDir: string,
+    durationMinutes: number,
+    owner?: string
+  ): Promise<ScheduledRun> {
     const id = uuidv4();
     const now = Date.now();
 
@@ -1570,6 +1575,9 @@ export class WebServer extends EventEmitter {
       completedTasks: 0,
       totalCost: 0,
       logs: [`[${new Date().toISOString()}] Scheduled run started`],
+      // Multi-user: stamp the requesting user so the spawned Session is owned +
+      // permission-downgraded, and list/delete stay owner-scoped.
+      owner,
     };
 
     this.scheduledRuns.set(id, run);
@@ -1608,8 +1616,23 @@ export class WebServer extends EventEmitter {
 
       let session: Session | null = null;
       try {
-        // Create a session for this iteration
-        session = new Session({ workingDir: run.workingDir });
+        // Create a session for this iteration.
+        if (isMultiUserMode()) {
+          // §6.3: resolve the permission mode with the RUN OWNER (a non-granted user
+          // must not regain --dangerously-skip-permissions here) and stamp the owner so
+          // list/delete stay scoped. owner + mode + allowedTools mirror quick-start.
+          const scheduledClaudeCfg = await this.getClaudeModeConfig();
+          session = new Session({
+            workingDir: run.workingDir,
+            owner: run.owner,
+            claudeMode: await resolveClaudeModeForUsername(scheduledClaudeCfg.claudeMode, run.owner),
+            allowedTools: scheduledClaudeCfg.allowedTools,
+          });
+        } else {
+          // Single-user: build EXACTLY as master (bare workingDir → Session's default
+          // mode) so the flag-off path stays byte-identical.
+          session = new Session({ workingDir: run.workingDir });
+        }
         this.sessions.set(session.id, session);
         this.store.incrementSessionsCreated();
         this.persistSessionState(session);
@@ -1785,7 +1808,7 @@ export class WebServer extends EventEmitter {
       Array.isArray(arr)
         ? (arr as Array<Record<string, unknown>>).filter((x) => ownedClaudeIds.has(String(x[key])))
         : arr;
-    return {
+    const filtered: Record<string, unknown> = {
       ...base,
       sessions,
       respawnStatus,
@@ -1794,6 +1817,11 @@ export class WebServer extends EventEmitter {
       workflowRuns: bySession(base.workflowRuns, 'sessionUuid'),
       planUsage: null, // host-plan telemetry is admin-only
     };
+    // #29: globalStats is a machine-wide aggregate (all users' tokens/cost + active
+    // count) with no per-user attribution — never expose it to a non-admin. The
+    // header falls back to per-active-session totals when it is absent.
+    delete filtered.globalStats;
+    return filtered;
   }
 
   private computeLightState() {
@@ -1890,6 +1918,14 @@ export class WebServer extends EventEmitter {
       const owner = sessionId ? this.sessions.get(sessionId)?.owner : undefined;
       return { owner, sessionScoped: true };
     }
+    // #20/#38: clipboard:write writes into the receiver's OS clipboard — route it to
+    // the POSTING user's own tabs only (never other users). The route stamps the
+    // trusted caller identity as `callerUsername`. sessionScoped:true fails closed
+    // (withhold from non-admins) if the caller identity is somehow unresolved, rather
+    // than falling through to global delivery.
+    if (event.startsWith('clipboard:')) {
+      return { username: (data as { callerUsername?: string }).callerUsername, sessionScoped: true };
+    }
     // Unrecognized / genuinely global events (connection status, needsRefresh): all.
     return undefined;
   }
@@ -1948,6 +1984,13 @@ export class WebServer extends EventEmitter {
     const sessionName = (data.sessionName as string) || '';
     const sessionId = (data.sessionId as string) || '';
 
+    // Multi-user: a session-scoped push (all PUSH_EVENT_MAP events carry a sessionId)
+    // must reach only the owner's devices (+ admins) — the body embeds the session
+    // name + activity, so cross-user delivery would leak it. Resolved once here; the
+    // per-subscription gate below is a no-op in single-user (send to all).
+    const multiUserPush = isMultiUserMode();
+    const pushSessionOwner = sessionId ? this.sessions.get(sessionId)?.owner : undefined;
+
     // Build body text from event data
     let body = sessionName ? `[${sessionName}]` : '';
     if (event === SseEvent.SessionError && data.error) {
@@ -1983,6 +2026,16 @@ export class WebServer extends EventEmitter {
     for (const sub of subscriptions) {
       // Check per-subscription preferences
       if (sub.pushPreferences[event] === false) continue;
+
+      // Multi-user recipient scoping: admins receive all; a session-scoped event
+      // reaches only subscriptions owned by the session owner (fail closed if the
+      // owner is unresolved — legacy subs with no stamped username are excluded);
+      // a genuinely session-less event reaches everyone.
+      if (multiUserPush && sub.role !== 'admin') {
+        if (sessionId) {
+          if (sub.username === undefined || sub.username !== pushSessionOwner) continue;
+        }
+      }
 
       // Re-validate the stored endpoint before fetching it server-side (SSRF, M7).
       // Defense-in-depth: subscribe-time validation already rejects unsafe URLs.

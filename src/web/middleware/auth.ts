@@ -21,7 +21,7 @@ import {
 } from '../../config/auth-config.js';
 import { getHookSecret, HOOK_SECRET_HEADER } from '../../config/hook-secret.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
-import { setPassword, touchLastLogin, verifyPassword } from '../../user-store.js';
+import { findUser, setPassword, touchLastLogin, verifyPassword } from '../../user-store.js';
 import { ApiErrorCode, createErrorResponse, type AuthUser } from '../../types.js';
 
 // Request-scoped identity (multi-user). Single-user leaves it undefined and the
@@ -114,6 +114,9 @@ function checkHookSecretBypass(
 function isPasswordChangeExempt(req: FastifyRequest): boolean {
   const url = (req.url ?? '').split('?')[0];
   if (url === '/api/me' || url === '/api/me/password') return true;
+  // Security: the WebSocket terminal (/ws/...) is a functional channel, not a static
+  // asset, so it must NOT be exempt, or a locked user keeps a working terminal.
+  if (url.startsWith('/ws/')) return false;
   return !url.startsWith('/api/');
 }
 
@@ -344,13 +347,40 @@ function registerMultiUserAuthHook(
     const sessionToken = req.cookies[AUTH_COOKIE_NAME];
     const record = sessionToken ? authSessions.get(sessionToken) : undefined;
     if (record && record.username) {
-      req.authUser = { username: record.username, role: record.role ?? 'user' };
+      // Security: re-validate the cookie identity against the store on every request so
+      // an out-of-band mutation the in-memory map can't see (the `codeman users` CLI,
+      // a separate process, deleting/disabling/demoting a user) takes effect promptly
+      // instead of riding the 24h cookie. findUser is cached ~1s, so this is cheap.
+      let live: Awaited<ReturnType<typeof findUser>>;
+      try {
+        live = await findUser(record.username);
+      } catch {
+        // The store is transiently unreadable/corrupt (readUsers throws on a non-ENOENT
+        // read, #23). Fall back to the cookie's snapshot for THIS request rather than
+        // 500-ing an already-authenticated client (pre-#24 behaviour); a persistently
+        // corrupt store still fails all WRITES loudly at the mutator/bootstrap layer.
+        req.authUser = { username: record.username, role: record.role ?? 'user' };
+        setSessionCookie(reply, sessionToken!);
+        enforcePasswordChange(req, reply, !!record.mustChangePassword);
+        return;
+      }
+      if (!live || live.disabled) {
+        authSessions.delete(sessionToken!);
+        reply.clearCookie(AUTH_COOKIE_NAME, { path: '/' });
+        reply.code(401).send('Unauthorized');
+        return;
+      }
+      // Trust the LIVE role/mustChangePassword, not the (possibly stale) cookie snapshot
+      // (also defends #9/#13: a CLI demotion is reflected without a revoke).
+      req.authUser = { username: live.username, role: live.role };
       setSessionCookie(reply, sessionToken!); // sliding re-issue
-      enforcePasswordChange(req, reply, !!record.mustChangePassword);
+      enforcePasswordChange(req, reply, !!live.mustChangePassword);
       return;
     }
 
     // 2. Basic Auth against the user store (scrypt verify).
+    // Per-IP pre-gate bounds scrypt CPU cost from one source (does NOT gate on the
+    // per-username bucket here; see below).
     const ipFail = authFailures.get(clientIp) ?? 0;
     if (ipFail >= AUTH_FAILURE_MAX) {
       sendAuthRateLimit(reply, authFailures, clientIp);
@@ -359,11 +389,10 @@ function registerMultiUserAuthHook(
     const creds = parseBasicAuth(req.headers.authorization);
     if (creds) {
       const normUser = creds.username.trim().toLowerCase();
-      const uFail = userFailures.get(normUser) ?? 0;
-      if (uFail >= AUTH_FAILURE_MAX) {
-        sendAuthRateLimit(reply, userFailures, normUser);
-        return;
-      }
+      // Security: VERIFY FIRST, then throttle only FAILED attempts. Consulting the
+      // per-username bucket before verifying let throwaway IPs lock out a known account
+      // (incl. admin) even with the correct password. A correct password must always
+      // win and self-heal both buckets, regardless of the username-failure count.
       const result = await verifyPassword(creds.username, creds.password);
       if (result) {
         const { user, needsRehash: rehash } = result;
@@ -388,9 +417,23 @@ function registerMultiUserAuthHook(
         enforcePasswordChange(req, reply, !!user.mustChangePassword);
         return;
       }
-      userFailures.set(normUser, uFail + 1);
+      // Failed guess: count it against BOTH buckets. Once the per-username bucket
+      // reaches the cap, further FAILED attempts get 429 (throttles distributed
+      // brute-force), but this path is only reached on a wrong password, so it can
+      // never deny a correct one.
+      const uFail = (userFailures.get(normUser) ?? 0) + 1;
+      userFailures.set(normUser, uFail);
+      authFailures.set(clientIp, ipFail + 1);
+      if (uFail >= AUTH_FAILURE_MAX) {
+        sendAuthRateLimit(reply, userFailures, normUser);
+        return;
+      }
+      reply.header('WWW-Authenticate', 'Basic realm="Codeman"');
+      reply.code(401).send('Unauthorized');
+      return;
     }
 
+    // No credentials presented: count against the per-IP bucket and challenge.
     authFailures.set(clientIp, ipFail + 1);
     reply.header('WWW-Authenticate', 'Basic realm="Codeman"');
     reply.code(401).send('Unauthorized');

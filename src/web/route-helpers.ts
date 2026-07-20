@@ -22,7 +22,7 @@ import type { AuthSessionRecord } from './ports/auth-port.js';
 import type { StaleExpirationMap } from '../utils/index.js';
 import { dataPath } from '../config/instance.js';
 import { isMultiUserMode, maxSessionsPerUser, userCasesDir } from '../config/multiuser.js';
-import { SYNTHETIC_ADMIN } from '../user-store.js';
+import { SYNTHETIC_ADMIN, findUser } from '../user-store.js';
 
 // Shared path constants used across route modules. CASES_DIR (project folders)
 // stays shared across instances; SETTINGS_PATH is per-instance runtime state.
@@ -164,6 +164,22 @@ export function isWorkingDirAllowed(user: AuthUser, workingDir: string): boolean
   if (realTarget === realBase) return true;
   const rel = relative(realBase, realTarget);
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+/**
+ * Username-keyed variant of `isWorkingDirAllowed` for spawn sites that only carry
+ * an owner username (cron fire-time, scheduled-run loop) rather than a live request.
+ * Resolves the owner's role from the store; a missing/deleted user is treated as a
+ * non-privileged regular user (fails closed to their deterministic case space).
+ * No-op (true) in single-user mode or for an unset owner.
+ */
+export async function isWorkingDirAllowedForUsername(
+  username: string | undefined,
+  workingDir: string
+): Promise<boolean> {
+  if (!isMultiUserMode() || !username) return true;
+  const user = await findUser(username);
+  return isWorkingDirAllowed({ username, role: user?.role ?? 'user' }, workingDir);
 }
 
 /** Whether the caller is an admin (or single-user mode, where the sole user is admin). */

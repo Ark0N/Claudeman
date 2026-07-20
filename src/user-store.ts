@@ -174,27 +174,46 @@ export function invalidateUsersCache(): void {
 export async function readUsers(force = false): Promise<UserRecord[]> {
   const now = Date.now();
   if (!force && cache && now - cache.ts < CACHE_TTL_MS) return cache.users;
+  let raw: string;
   try {
-    const raw = await fs.readFile(dataPath(USERS_FILE), 'utf-8');
-    const parsed = JSON.parse(raw) as Partial<UsersFile>;
-    const users = Array.isArray(parsed.users) ? parsed.users : [];
-    cache = { users, ts: now };
-    return users;
-  } catch {
-    cache = { users: [], ts: now };
-    return [];
+    raw = await fs.readFile(dataPath(USERS_FILE), 'utf-8');
+  } catch (err) {
+    // ENOENT is the ONLY legitimately-empty store (first boot). Any other read
+    // error (EIO/EACCES/EMFILE/EBUSY) is a transient/permission failure, NOT an
+    // empty store — do NOT cache [] and do NOT let it look empty, or a following
+    // createUser/bootstrap would overwrite users.json and destroy every account.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      cache = { users: [], ts: now };
+      return [];
+    }
+    throw err;
   }
+  // A present-but-corrupt file (invalid JSON) must also fail loud rather than
+  // read as empty, so mutators/bootstrap abort instead of clobbering it.
+  const parsed = JSON.parse(raw) as Partial<UsersFile>;
+  const users = Array.isArray(parsed.users) ? parsed.users : [];
+  cache = { users, ts: now };
+  return users;
 }
 
 async function writeUsers(users: UserRecord[]): Promise<void> {
   const dir = getDataDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const finalPath = dataPath(USERS_FILE);
-  const tmpPath = `${finalPath}.tmp`;
+  // Unique per-writer tmp name (pid + random) so the CLI (`codeman users …`) and
+  // the live server — designed to write this file concurrently across processes —
+  // never share a single `users.json.tmp` inode and tear each other's payload.
+  // Matches the state-store.ts / self-update.ts convention.
+  const tmpPath = `${finalPath}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
   const payload: UsersFile = { version: 1, users };
-  await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
-  await fs.chmod(tmpPath, 0o600).catch(() => {});
-  await fs.rename(tmpPath, finalPath);
+  try {
+    await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
+    await fs.chmod(tmpPath, 0o600).catch(() => {});
+    await fs.rename(tmpPath, finalPath);
+  } catch (err) {
+    await fs.unlink(tmpPath).catch(() => {});
+    throw err;
+  }
   cache = { users, ts: Date.now() };
 }
 
@@ -461,7 +480,9 @@ export async function resolveClaudeModeForUsername(
 ): Promise<ClaudeMode> {
   const fallback: ClaudeMode = globalMode ?? 'dangerously-skip-permissions';
   if (!isMultiUserMode() || !username) return fallback;
+  // Fail closed: an unknown/deleted owner in multi-user mode is treated as a
+  // non-granted regular user so a stale-owned spawn (e.g. an orphaned cron job)
+  // is downgraded to `auto` rather than inheriting the global bypass.
   const user = await findUser(username);
-  if (!user) return fallback;
-  return resolveClaudeModeForUser(globalMode, user);
+  return resolveClaudeModeForUser(globalMode, user ?? { role: 'user' });
 }

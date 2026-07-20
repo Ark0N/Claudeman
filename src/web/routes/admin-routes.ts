@@ -134,8 +134,12 @@ export function registerAdminRoutes(app: FastifyInstance, ctx: SessionPort & Aut
     }
     try {
       const user = await updateUser(username, parsed.data);
-      // Disabling revokes the user's cookie sessions.
-      if (parsed.data.disabled) revokeUserSessions(ctx.authSessions, username);
+      // Security: revoke the target's cookie sessions on ANY successful update. role,
+      // disabled, and canBypassPermissions are all authorization-relevant, and the
+      // cookie snapshots role, so a stale cookie could otherwise retain old privileges
+      // (a demoted admin staying admin). Idempotent, affects only the target, and
+      // forces a re-auth that re-snapshots the new record.
+      revokeUserSessions(ctx.authSessions, user.username);
       audit(req, 'user.update', user.username, parsed.data);
       ctx.broadcast(SseEvent.AdminUsersChanged, {});
       return { success: true, data: { user: toPublicUser(user) } };
@@ -177,14 +181,18 @@ export function registerAdminRoutes(app: FastifyInstance, ctx: SessionPort & Aut
     const parsed = DeleteUserSchema.safeParse(req.body ?? {});
     const deleteSpace = parsed.success ? parsed.data.deleteSpace : false;
     try {
-      // Kill the user's live sessions first (normal kill flow, incl. docker/remote
-      // teardown), before removing the record.
+      // Security: validate BEFORE any teardown. deleteUser runs the authoritative
+      // existence + last-admin guard under lock with no side effects, so a refusal
+      // (409 LAST_ADMIN / 404 USER_NOT_FOUND) leaves the user's live sessions and
+      // cookies untouched. Only after it succeeds do we irreversibly kill sessions and
+      // revoke cookies. (owned is captured from the in-memory map, independent of the
+      // record, so it is safe to read before the delete.)
       const owned = [...ctx.sessions.values()].filter((s) => s.owner === username).map((s) => s.id);
+      await deleteUser(username); // throws LAST_ADMIN / USER_NOT_FOUND (no side effects)
       for (const id of owned) {
         await ctx.cleanupSession(id, true, 'admin_delete_user').catch(() => {});
       }
       revokeUserSessions(ctx.authSessions, username);
-      await deleteUser(username); // throws LAST_ADMIN / USER_NOT_FOUND
       if (deleteSpace) await deleteUserSpace(username);
       audit(req, 'user.delete', username, { deleteSpace, killedSessions: owned.length });
       ctx.broadcast(SseEvent.AdminUsersChanged, {});

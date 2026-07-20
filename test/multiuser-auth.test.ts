@@ -17,6 +17,7 @@ import { WebServer } from '../src/web/server.js';
 import { TmuxManager } from '../src/tmux-manager.js';
 import { TunnelManager } from '../src/tunnel-manager.js';
 import { createUser, invalidateUsersCache } from '../src/user-store.js';
+import { AUTH_FAILURE_MAX } from '../src/config/auth-config.js';
 
 vi.spyOn(TmuxManager, 'isTmuxAvailable').mockReturnValue(true);
 
@@ -159,17 +160,32 @@ describe('multi-user auth', () => {
     expect(after.status).toBe(200);
   });
 
-  it('rate-limits repeated failures for an account', async () => {
+  it('verify-first: a correct password is never rate-limited and self-heals failures (#17)', async () => {
     rateServer = new WebServer(RATE_PORT, false, true);
     await rateServer.start();
     const rurl = (p: string) => `http://localhost:${RATE_PORT}${p}`;
-    for (let i = 0; i < 10; i++) {
+
+    // Nine wrong passwords (one below the cap) are each rejected 401 — not throttled yet.
+    for (let i = 0; i < AUTH_FAILURE_MAX - 1; i++) {
       const res = await fetch(rurl('/api/status'), { headers: { Authorization: basic('bob', `bad-${i}`) } });
       expect(res.status).toBe(401);
     }
-    // 11th attempt (even with correct creds) is rate-limited.
-    const limited = await fetch(rurl('/api/status'), { headers: { Authorization: basic('bob', 'bobpass123') } });
-    expect(limited.status).toBe(429);
+    // Finding #17: the CORRECT password must ALWAYS win (verified BEFORE the per-username
+    // throttle) — the accumulated failures can never lock the account out — and success
+    // clears the failure buckets. Previously this returned 429 (the DoS being fixed).
+    const good = await fetch(rurl('/api/status'), { headers: { Authorization: basic('bob', 'bobpass123') } });
+    expect(good.status).toBe(200);
+    // Self-heal: a fresh wrong attempt is 401 again (the counter was reset by the success).
+    const afterReset = await fetch(rurl('/api/status'), { headers: { Authorization: basic('bob', 'nope') } });
+    expect(afterReset.status).toBe(401);
+
+    // Sustained wrong passwords ARE still throttled: 429 once the cap is reached.
+    let limited = false;
+    for (let i = 0; i < AUTH_FAILURE_MAX + 1 && !limited; i++) {
+      const res = await fetch(rurl('/api/status'), { headers: { Authorization: basic('bob', `x-${i}`) } });
+      limited = res.status === 429;
+    }
+    expect(limited).toBe(true);
   });
 });
 

@@ -17,6 +17,8 @@ import {
   getErrorMessage,
   type ApiResponse,
   type SessionColor,
+  type CodexConfig,
+  type GeminiConfig,
 } from '../../types.js';
 import { Session, isAltScreenStripMode } from '../../session.js';
 import { SseEvent } from '../sse-events.js';
@@ -42,6 +44,7 @@ import {
   CASES_DIR,
   findSessionOrFail,
   getAuthUser,
+  isAdmin,
   isWorkingDirAllowed,
   ownerFor,
   parseBody,
@@ -51,7 +54,7 @@ import {
   SETTINGS_PATH,
   validatePathWithinBase,
 } from '../route-helpers.js';
-import { canRunPrivilegedCommands, resolveClaudeModeForUsername } from '../../user-store.js';
+import { canUsernameRunPrivilegedCommands, resolveClaudeModeForUsername } from '../../user-store.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
 import {
@@ -266,6 +269,29 @@ export function _resetPasteRateBuckets(): void {
   pasteRateBuckets.clear();
 }
 
+/**
+ * Security (multi-user §6.3): the Claude-only permission-mode downgrade does not
+ * cover the other CLIs' bypass switches. Codex `--dangerously-bypass-approvals-and-sandbox`
+ * and Gemini `--approval-mode yolo` disable the safety classifier the non-granted-user
+ * downgrade is meant to keep on, so clamp them for a non-granted owner. buildGeminiCommand
+ * defaults an ABSENT approvalMode to yolo, so the gemini config must be MATERIALIZED
+ * (auto_edit) even when the request sent none. No-op in single-user mode / for a granted
+ * owner (canUsernameRunPrivilegedCommands returns true when !isMultiUserMode()).
+ */
+async function clampExternalCliBypassForOwner(
+  owner: string | undefined,
+  codexConfig: CodexConfig | undefined,
+  geminiConfig: GeminiConfig | undefined
+): Promise<{ codexConfig: CodexConfig | undefined; geminiConfig: GeminiConfig | undefined }> {
+  const granted = await canUsernameRunPrivilegedCommands(owner);
+  if (granted) return { codexConfig, geminiConfig };
+  // Non-granted: force codex bypass off (only meaningful when a config was sent) and
+  // materialize gemini to auto_edit (clamps an explicit 'yolo' and the yolo default).
+  const clampedCodex = codexConfig ? { ...codexConfig, dangerouslyBypassApprovals: false } : codexConfig;
+  const clampedGemini: GeminiConfig = { ...(geminiConfig ?? {}), approvalMode: 'auto_edit' };
+  return { codexConfig: clampedCodex, geminiConfig: clampedGemini };
+}
+
 export function registerSessionRoutes(
   app: FastifyInstance,
   ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort
@@ -312,8 +338,9 @@ export function registerSessionRoutes(
     const workingDir = body.workingDir || process.cwd();
 
     // Multi-user: shell mode is arbitrary command execution as the host account,
-    // gated behind the same grant as bypass (section 6.3).
-    if (body.mode === 'shell' && !canRunPrivilegedCommands(getAuthUser(req))) {
+    // gated behind the same grant as bypass (section 6.3). Resolve the owner's grant
+    // from the store so a GRANTED regular user is not wrongly denied (AuthUser role alone can't tell).
+    if (body.mode === 'shell' && !(await canUsernameRunPrivilegedCommands(owner))) {
       return createErrorResponse(ApiErrorCode.FORBIDDEN, 'Shell sessions require the can-bypass-permissions grant');
     }
 
@@ -463,6 +490,12 @@ export function registerSessionRoutes(
     const claudeModeConfig = await ctx.getClaudeModeConfig();
     // Section 6.3: force non-granted users to a classifier-guarded mode.
     const effectiveClaudeMode = await resolveClaudeModeForUsername(claudeModeConfig.claudeMode, owner);
+    // Section 6.3: clamp Codex/Gemini bypass switches for a non-granted owner (no-op single-user/granted).
+    const { codexConfig: gatedCodexConfig, geminiConfig: gatedGeminiConfig } = await clampExternalCliBypassForOwner(
+      owner,
+      body.codexConfig,
+      body.geminiConfig
+    );
     const terminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const session = new Session({
       workingDir,
@@ -475,8 +508,8 @@ export function registerSessionRoutes(
       claudeMode: effectiveClaudeMode,
       allowedTools: claudeModeConfig.allowedTools,
       openCodeConfig: mode === 'opencode' ? body.openCodeConfig : undefined,
-      codexConfig: mode === 'codex' ? body.codexConfig : undefined,
-      geminiConfig: mode === 'gemini' ? body.geminiConfig : undefined,
+      codexConfig: mode === 'codex' ? gatedCodexConfig : undefined,
+      geminiConfig: mode === 'gemini' ? gatedGeminiConfig : undefined,
       resumeSessionId: validatedResumeId,
       envOverrides: body.envOverrides,
       effort: body.effort,
@@ -536,18 +569,22 @@ export function registerSessionRoutes(
     const query = req.query as { killMux?: string };
     const killMux = query.killMux !== 'false'; // Default to true
 
-    if (!ctx.sessions.has(id)) {
-      return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
-    }
+    // Security: owner-scoped lookup 404s foreign/missing sessions uniformly (no existence leak, no cross-user kill).
+    const session = findSessionOrFail(ctx, id, req);
 
-    await ctx.cleanupSession(id, killMux, 'user_delete');
+    await ctx.cleanupSession(session.id, killMux, 'user_delete');
     return {};
   });
 
   // ========== Delete All Sessions ==========
 
-  app.delete('/api/sessions', async (): Promise<ApiResponse<{ killed: number }>> => {
-    const sessionIds = Array.from(ctx.sessions.keys());
+  app.delete('/api/sessions', async (req): Promise<ApiResponse<{ killed: number }>> => {
+    // Security: scope the bulk sweep to sessions the caller can access — a non-admin
+    // must not wipe other users' sessions (canAccessOwned is allow-all for admin/single-user).
+    const user = getAuthUser(req);
+    const sessionIds = Array.from(ctx.sessions.values())
+      .filter((s) => canAccessOwned(user, s.owner))
+      .map((s) => s.id);
     let killed = 0;
 
     for (const id of sessionIds) {
@@ -1724,7 +1761,8 @@ export function registerSessionRoutes(
     } = parseBody(QuickStartSchema, req.body);
 
     // Multi-user: shell mode is arbitrary host-account execution, gated by the grant.
-    if (mode === 'shell' && !canRunPrivilegedCommands(getAuthUser(req))) {
+    // Resolve the owner's grant from the store so a GRANTED regular user is not wrongly denied.
+    if (mode === 'shell' && !(await canUsernameRunPrivilegedCommands(owner))) {
       return createErrorResponse(ApiErrorCode.FORBIDDEN, 'Shell sessions require the can-bypass-permissions grant');
     }
 
@@ -1735,11 +1773,20 @@ export function registerSessionRoutes(
     let docker = undefined;
     let dockerResumeId: string | undefined;
     let casePath: string | null = null;
+    // Security: fold ownership INTO the match (don't early-return) so a NON-OWNED
+    // same-named remote/docker case is skipped and control falls through to the caller's
+    // own LOCAL case — remote/docker names are globally unique but local names are
+    // per-user, so a name collision must not shadow the caller's own case. canAccessOwned
+    // is allow-all for admins/single-user, so flag-OFF stays byte-identical.
     const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
-    const remoteCase = remoteCases.find((item) => item.name === caseName);
+    const remoteCase = remoteCases.find(
+      (item) => item.name === caseName && canAccessOwned(getAuthUser(req), item.owner)
+    );
     const dockerCase = remoteCase
       ? undefined
-      : (await readDockerCases(CODEMAN_CONFIG_DIR)).find((item) => item.name === caseName);
+      : (await readDockerCases(CODEMAN_CONFIG_DIR)).find(
+          (item) => item.name === caseName && canAccessOwned(getAuthUser(req), item.owner)
+        );
     if (remoteCase) {
       const host = (await readRemoteHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === remoteCase.hostId);
       if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
@@ -1775,7 +1822,7 @@ export function registerSessionRoutes(
       // Docker case: the CLI executes INSIDE a container via local tmux + `docker
       // exec`, so the LOCAL availability gates below don't apply. Mirror the remote
       // branch's rejection of per-session config that would not cross into the
-      // container (it would silently no-op).
+      // container (it would silently no-op). (Ownership is enforced in the .find above.)
       const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === dockerCase.hostId);
       if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
       if (
@@ -1872,8 +1919,11 @@ export function registerSessionRoutes(
       } catch {
         // File missing or unparseable — treat as empty registry
       }
-      // Multi-user: resolve local cases inside the requesting user's case space.
-      casePath = linkedCases[caseName] || validatePathWithinBase(caseName, resolveCasesDir(getAuthUser(req)));
+      // Multi-user: the linked-cases registry is ownerless/global, so only admins may
+      // resolve a name to an arbitrary linked path. A non-admin resolves inside their
+      // OWN case space only (single-user: isAdmin true, so linked cases still honoured).
+      const linked = isAdmin(req) ? linkedCases[caseName] : undefined;
+      casePath = linked || validatePathWithinBase(caseName, resolveCasesDir(getAuthUser(req)));
       if (!casePath) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
       }
@@ -1882,6 +1932,15 @@ export function registerSessionRoutes(
     // By this point casePath is guaranteed non-null: for remote cases it was set from remoteCase.remotePath,
     // for local cases the !casePath guard above returned early. TypeScript can't narrow across the if/else.
     const resolvedCasePath = casePath as string;
+
+    // Multi-user linchpin (section 6.2): confine the resolved workingDir to the caller's
+    // own case space BEFORE any mkdir/scaffold below creates or mutates it. Applies to
+    // LOCAL and DOCKER cases (docker.hostWorkspacePath is a real host dir the file routes
+    // trust); skipped for REMOTE, whose path is an ssh path that would spuriously fail
+    // realpath confinement. No-op for admins / single-user mode.
+    if (!remote && !isWorkingDirAllowed(getAuthUser(req), resolvedCasePath)) {
+      return createErrorResponse(ApiErrorCode.FORBIDDEN, 'case path is outside your workspace');
+    }
 
     // Create case folder and CLAUDE.md if it doesn't exist (only for non-linked, non-remote,
     // non-docker cases — docker workspaces are scaffolded in their own block below)
@@ -1962,6 +2021,12 @@ export function registerSessionRoutes(
               : undefined;
     const qsClaudeModeConfig = await ctx.getClaudeModeConfig();
     const qsEffectiveClaudeMode = await resolveClaudeModeForUsername(qsClaudeModeConfig.claudeMode, owner);
+    // Section 6.3: clamp Codex/Gemini bypass switches for a non-granted owner (no-op single-user/granted).
+    const { codexConfig: qsGatedCodexConfig, geminiConfig: qsGatedGeminiConfig } = await clampExternalCliBypassForOwner(
+      owner,
+      codexConfig,
+      geminiConfig
+    );
     const qsTerminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const session = new Session({
       workingDir: resolvedCasePath,
@@ -1975,8 +2040,8 @@ export function registerSessionRoutes(
       allowedTools: qsClaudeModeConfig.allowedTools,
       owner,
       openCodeConfig: mode === 'opencode' ? openCodeConfig : undefined,
-      codexConfig: mode === 'codex' ? codexConfig : undefined,
-      geminiConfig: mode === 'gemini' ? geminiConfig : undefined,
+      codexConfig: mode === 'codex' ? qsGatedCodexConfig : undefined,
+      geminiConfig: mode === 'gemini' ? qsGatedGeminiConfig : undefined,
       envOverrides,
       effort,
       remote,
@@ -2319,6 +2384,12 @@ export function registerSessionRoutes(
     const query = req.query as { projectKey?: string; offset?: string; limit?: string };
     const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
     const headBuf = Buffer.alloc(16384);
+    // Multi-user: this scans the host-wide ~/.claude/projects tree, so a non-admin
+    // must only see history whose decoded workingDir is inside their own case space.
+    // Do NOT trust the caller-supplied projectKey — confine on the decoded path.
+    // No-op for admins / single-user mode.
+    const user = getAuthUser(req);
+    const scopeHistory = isMultiUserMode() && user.role !== 'admin';
 
     // Single-folder drill-down: when projectKey is provided, scan only that
     // directory, bypass the 50-cap, and honor offset/limit pagination.
@@ -2330,13 +2401,15 @@ export function registerSessionRoutes(
       const offset = Math.max(0, parseInt(query.offset || '0', 10) || 0);
       const limit = Math.min(100, Math.max(1, parseInt(query.limit || '20', 10) || 20));
       const projPath = join(projectsDir, query.projectKey);
-      const all = await scanProjectDir(projPath, query.projectKey, headBuf);
+      let all = await scanProjectDir(projPath, query.projectKey, headBuf);
+      // Confine to the caller's workspace (a projectKey maps to a single foreign cwd).
+      if (scopeHistory) all = all.filter((r) => isWorkingDirAllowed(user, r.workingDir));
       all.sort((a, b) => new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime());
       return { sessions: all.slice(offset, offset + limit), total: all.length };
     }
 
     // Global overview: scan all projects, return up to 50 most-recent sessions.
-    const results: HistorySession[] = [];
+    let results: HistorySession[] = [];
     try {
       const projectDirs = await fs.readdir(projectsDir);
       for (const projDir of projectDirs) {
@@ -2348,6 +2421,8 @@ export function registerSessionRoutes(
       // Projects dir may not exist
     }
 
+    // Multi-user: drop rows outside the non-admin caller's own case space.
+    if (scopeHistory) results = results.filter((r) => isWorkingDirAllowed(user, r.workingDir));
     results.sort((a, b) => new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime());
     return { sessions: results.slice(0, 50) };
   });

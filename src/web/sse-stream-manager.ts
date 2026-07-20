@@ -413,7 +413,11 @@ export class SseStreamManager {
       return;
     }
     for (const [, { sessionId, task }] of this.taskUpdateBatches) {
-      this.broadcast(SseEvent.TaskUpdated, { sessionId, task });
+      // Multi-user: batched task updates carry session state — route to the owner
+      // only (fail closed if unknown), matching flushSessionTerminalBatch. No-op for
+      // identity-less single-user clients (canDeliver short-circuits on no identity).
+      const owner = this.deps.resolveSessionOwner?.(sessionId);
+      this.broadcast(SseEvent.TaskUpdated, { sessionId, task }, { owner, sessionScoped: true });
     }
     this.taskUpdateBatches.clear();
   }
@@ -453,7 +457,11 @@ export class SseStreamManager {
       // Single expensive serialization per batch interval
       const state = this.deps.getSessionStateWithRespawn(sessionId);
       if (state) {
-        this.broadcast(SseEvent.SessionUpdated, state);
+        // Multi-user: the debounced session:updated blob carries name/workingDir/
+        // tokens/cost — route to the session owner only (fail closed if unknown),
+        // matching flushSessionTerminalBatch. No-op for single-user clients.
+        const owner = this.deps.resolveSessionOwner?.(sessionId);
+        this.broadcast(SseEvent.SessionUpdated, state, { owner, sessionScoped: true });
       }
     }
     this.stateUpdatePending.clear();

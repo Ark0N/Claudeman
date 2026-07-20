@@ -23,6 +23,9 @@ export interface ScheduledRun {
   completedTasks: number;
   totalCost: number;
   logs: string[];
+  /** Multi-user owner (username) — undefined in single-user mode. Used to scope
+   * list/delete and to downgrade the spawned Session's permission mode. */
+  owner?: string;
 }
 
 export interface InfraPort {
@@ -33,6 +36,6 @@ export interface InfraPort {
   readonly teamWatcher: TeamWatcher;
   readonly tunnelManager: TunnelManager;
   readonly pushStore: PushSubscriptionStore;
-  startScheduledRun(prompt: string, workingDir: string, durationMinutes: number): Promise<ScheduledRun>;
+  startScheduledRun(prompt: string, workingDir: string, durationMinutes: number, owner?: string): Promise<ScheduledRun>;
   stopScheduledRun(id: string): Promise<void>;
 }

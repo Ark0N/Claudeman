@@ -13,9 +13,12 @@ export interface AuthSessionRecord {
   method: 'qr' | 'basic';
   /**
    * Multi-user identity carried by the cookie (single-user leaves these unset).
-   * Snapshotted at mint time; state transitions that would change them (password
-   * reset, disable, delete) revoke the user's sessions so a stale snapshot can't
-   * outlive the change. See docs/multi-user-plan.md section 5.
+   * Snapshotted at mint time. Authorization-relevant admin changes (password reset,
+   * disable, delete, role change, bypass-grant change) revoke the user's sessions so
+   * a stale snapshot can't outlive the change; additionally the cookie fast-path
+   * re-reads role/disabled/mustChangePassword live from the store each request, so an
+   * out-of-band CLI mutation also takes effect promptly. See docs/multi-user-plan.md
+   * section 5.
    */
   username?: string;
   role?: 'admin' | 'user';

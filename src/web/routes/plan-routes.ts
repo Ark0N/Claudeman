@@ -261,7 +261,18 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     }
 
     const detailedModelConfig = await ctx.getModelConfig();
-    const orchestrator = new PlanOrchestrator(ctx.mux, process.cwd(), outputDir, detailedModelConfig ?? undefined);
+    // Section 6.3: resolve the owner's permission mode (mirrors /api/generate-plan above) and
+    // thread it + owner + allowedTools into the orchestrator's internal research/planner one-shots
+    // so a non-granted multi-user user cannot run them under --dangerously-skip-permissions.
+    // In single-user, resolveClaudeModeForUsername returns the global mode = byte-identical.
+    const detailedOwner = ownerFor(req);
+    const detailedClaudeModeConfig = await ctx.getClaudeModeConfig();
+    const detailedClaudeMode = await resolveClaudeModeForUsername(detailedClaudeModeConfig.claudeMode, detailedOwner);
+    const orchestrator = new PlanOrchestrator(ctx.mux, process.cwd(), outputDir, detailedModelConfig ?? undefined, {
+      claudeMode: detailedClaudeMode,
+      owner: detailedOwner,
+      allowedTools: detailedClaudeModeConfig.allowedTools,
+    });
 
     // Store orchestrator for potential cancellation via API (not on disconnect)
     // Plan generation continues even if browser disconnects - only explicit cancel stops it

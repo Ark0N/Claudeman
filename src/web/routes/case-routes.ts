@@ -32,6 +32,7 @@ import {
   canAccessOwned,
   getAuthUser,
   isAdmin,
+  isWorkingDirAllowed,
   ownerFor,
   resolveCasesDir,
   SETTINGS_PATH,
@@ -39,6 +40,7 @@ import {
   parseBody,
   readJsonConfig,
 } from '../route-helpers.js';
+import { isMultiUserMode } from '../../config/multiuser.js';
 import type { AuthUser } from '../../types.js';
 import { SseEvent } from '../sse-events.js';
 import type { EventPort, ConfigPort } from '../ports/index.js';
@@ -96,7 +98,9 @@ async function readLinkedCases(): Promise<Record<string, string>> {
  */
 async function resolveCasePath(name: string, user?: AuthUser): Promise<string> {
   const linkedCases = await readLinkedCases();
-  if (linkedCases[name]) return linkedCases[name];
+  // Linked cases carry no owner (legacy/admin-only registry): a non-admin must not
+  // resolve arbitrary linked paths by name in multi-user mode (path-escape guard).
+  if (linkedCases[name] && (!isMultiUserMode() || user?.role === 'admin')) return linkedCases[name];
   return join(resolveCasesDir(user), name);
 }
 
@@ -295,7 +299,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     }
   });
 
-  app.get('/api/remote-hosts', async () => readRemoteHosts(CODEMAN_CONFIG_DIR));
+  // Hosts are machine-level infra config (ssh users/identity paths): non-admins get an
+  // empty list in multi-user mode, matching the admin-only write side. No-op otherwise.
+  app.get('/api/remote-hosts', async (req) =>
+    isMultiUserMode() && !isAdmin(req) ? [] : readRemoteHosts(CODEMAN_CONFIG_DIR)
+  );
 
   // Hosts are machine-level resources: only admins may define them in multi-user mode.
   const adminOnly = (req: FastifyRequest, reply: { code: (n: number) => unknown }): ApiResponse<never> | null =>
@@ -376,7 +384,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
   // ========== Docker hosts + docker cases (COD-Docker) ==========
 
-  app.get('/api/docker-hosts', async () => readDockerHosts(CODEMAN_CONFIG_DIR));
+  // Hosts are machine-level infra config (images/mounts/env): non-admins get an empty
+  // list in multi-user mode, matching the admin-only write side. No-op otherwise.
+  app.get('/api/docker-hosts', async (req) =>
+    isMultiUserMode() && !isAdmin(req) ? [] : readDockerHosts(CODEMAN_CONFIG_DIR)
+  );
 
   app.post('/api/docker-hosts', async (req, reply): Promise<ApiResponse<{ host: unknown }>> => {
     const denied = adminOnly(req, reply);
@@ -444,6 +456,12 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
         existsSync(join(resolveCasesDir(getAuthUser(req)), dockerCase.name))
       ) {
         return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
+      }
+
+      // Confine the bind-mounted workspace to the caller's own space BEFORE creating it
+      // (also removes the arbitrary-dir-creation primitive). No-op for admins/single-user.
+      if (!isWorkingDirAllowed(getAuthUser(req), dockerCase.hostWorkspacePath)) {
+        return createErrorResponse(ApiErrorCode.FORBIDDEN, 'hostWorkspacePath is outside your workspace');
       }
 
       // The workspace is a REAL host directory (bind-mounted into the container), so
@@ -700,6 +718,12 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
     }
 
+    // Import extracts a tar into destWorkspacePath (later becomes Session.workingDir):
+    // confine it to the caller's own space. No-op for admins/single-user.
+    if (!isWorkingDirAllowed(getAuthUser(req), destWorkspacePath)) {
+      return createErrorResponse(ApiErrorCode.FORBIDDEN, 'destWorkspacePath is outside your workspace');
+    }
+
     const timestamp = Date.now();
     let result;
     try {
@@ -740,7 +764,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
   });
 
   // Link an existing folder as a case
-  app.post('/api/cases/link', async (req): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
+  app.post('/api/cases/link', async (req, reply): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
+    // Linking writes an arbitrary absolute path into the shared ownerless registry:
+    // admin-only in multi-user mode (mirrors host CRUD + the admin-only GET listing).
+    const denied = adminOnly(req, reply);
+    if (denied) return denied;
     const { name, path: folderPath } = parseBody(LinkCaseSchema, req.body, 'Invalid request body');
 
     // Expand ~ to home directory
@@ -787,27 +815,31 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
   app.delete('/api/cases/:name', async (req): Promise<ApiResponse<{ name: string }>> => {
     const { name } = req.params as { name: string };
+    const user = getAuthUser(req);
 
-    if (!validatePathWithinBase(name, resolveCasesDir(getAuthUser(req)))) {
+    if (!validatePathWithinBase(name, resolveCasesDir(user))) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
     }
 
+    // Fold ownership INTO the match (don't early-return): a non-owned same-named remote/
+    // docker case is skipped so control falls through to the caller's own local delete.
+    // canAccessOwned is all-true for admins/single-user, so flag-OFF stays byte-identical.
     const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
-    if (remoteCases.some((item) => item.name === name)) {
+    if (remoteCases.some((item) => item.name === name && canAccessOwned(user, item.owner))) {
       await writeRemoteCases(
         CODEMAN_CONFIG_DIR,
-        remoteCases.filter((item) => item.name !== name)
+        remoteCases.filter((item) => !(item.name === name && canAccessOwned(user, item.owner)))
       );
       ctx.broadcast(SseEvent.CaseDeleted, { name, type: 'remote-unlinked' });
       return { success: true, data: { name } };
     }
 
     const dockerCases = await readDockerCases(CODEMAN_CONFIG_DIR);
-    const dockerCase = dockerCases.find((item) => item.name === name);
+    const dockerCase = dockerCases.find((item) => item.name === name && canAccessOwned(user, item.owner));
     if (dockerCase) {
       await writeDockerCases(
         CODEMAN_CONFIG_DIR,
-        dockerCases.filter((item) => item.name !== name)
+        dockerCases.filter((item) => item !== dockerCase)
       );
       // Best-effort `docker rm -f` the per-case container (case-delete is the
       // explicit teardown that removes it; the bind-mounted workspace survives).
@@ -828,9 +860,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       return { success: true, data: { name } };
     }
 
-    // Check linked cases first — unlink only, don't delete the actual directory
+    // Check linked cases first — unlink only, don't delete the actual directory.
+    // Linked cases carry no owner (admin-only WRITE in multi-user mode), so a non-admin
+    // must not unlink one either; skip so control falls through to their local delete.
     const linkedCases = await readLinkedCases();
-    if (linkedCases[name]) {
+    if (linkedCases[name] && (!isMultiUserMode() || isAdmin(req))) {
       delete linkedCases[name];
       try {
         await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(linkedCases, null, 2));
@@ -888,8 +922,12 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
     }
 
+    // Fold ownership INTO the match (don't early-return): a non-owned same-named remote/
+    // docker case is skipped so control falls through to the caller's own LOCAL case
+    // (remote/docker names are globally unique, local names per-user). No metadata is
+    // disclosed for a foreign case. canAccessOwned is allow-all for admins/single-user.
     const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
-    const remoteCase = remoteCases.find((item) => item.name === name);
+    const remoteCase = remoteCases.find((item) => item.name === name && canAccessOwned(getAuthUser(req), item.owner));
     if (remoteCase) {
       const host = (await readRemoteHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === remoteCase.hostId);
       if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
@@ -907,7 +945,9 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       };
     }
 
-    const dockerCase = (await readDockerCases(CODEMAN_CONFIG_DIR)).find((item) => item.name === name);
+    const dockerCase = (await readDockerCases(CODEMAN_CONFIG_DIR)).find(
+      (item) => item.name === name && canAccessOwned(getAuthUser(req), item.owner)
+    );
     if (dockerCase) {
       const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === dockerCase.hostId);
       if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
