@@ -26,10 +26,12 @@ const PasswordChangeSchema = z.object({
 });
 
 export function registerMeRoutes(app: FastifyInstance, ctx: AuthPort): void {
-  // GET /api/me — identity probe. Synthetic admin in single-user mode.
+  // GET /api/me — identity probe. Synthetic admin in single-user mode. The
+  // `multiUser` flag lets the frontend distinguish a single-user admin (no admin
+  // UI) from a real multi-user admin.
   app.get('/api/me', async (req) => {
     if (!isMultiUserMode()) {
-      return { success: true, data: { username: 'admin', role: 'admin', mustChangePassword: false } };
+      return { success: true, data: { username: 'admin', role: 'admin', mustChangePassword: false, multiUser: false } };
     }
     const user = getAuthUser(req);
     const record = await findUser(user.username);
@@ -39,6 +41,7 @@ export function registerMeRoutes(app: FastifyInstance, ctx: AuthPort): void {
         username: user.username,
         role: user.role,
         mustChangePassword: !!record?.mustChangePassword,
+        multiUser: true,
       },
     };
   });
