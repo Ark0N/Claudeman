@@ -5,7 +5,11 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash
 #
 # Environment variables:
-#   CODEMAN_NONINTERACTIVE=1  - Skip all prompts (for CI/automation)
+#   CODEMAN_NONINTERACTIVE=1  - Skip all prompts and accept their defaults
+#                               (CI/automation). Required for headless runs
+#                               that need system changes (sudo package
+#                               installs, AI CLI download); without it those
+#                               steps abort instead of running silently.
 #   CODEMAN_INSTALL_DIR       - Custom install directory (default: ~/.codeman/app)
 #   CODEMAN_SKIP_SYSTEMD=1    - Skip systemd/launchd service setup prompt
 #   CODEMAN_NODE_VERSION      - Node.js major version to install (default: 22)
@@ -51,6 +55,26 @@ OPENCODE_SEARCH_PATHS=(
     "$HOME/.bun/bin/opencode"
     "$HOME/.npm-global/bin/opencode"
     "$HOME/bin/opencode"
+)
+
+# Codex CLI search paths (from src/utils/codex-cli-resolver.ts)
+CODEX_SEARCH_PATHS=(
+    "$HOME/.codex/bin/codex"
+    "$HOME/.local/bin/codex"
+    "/usr/local/bin/codex"
+    "$HOME/.bun/bin/codex"
+    "$HOME/.npm-global/bin/codex"
+    "$HOME/bin/codex"
+)
+
+# Gemini CLI search paths (from src/utils/gemini-cli-resolver.ts)
+GEMINI_SEARCH_PATHS=(
+    "$HOME/.gemini/bin/gemini"
+    "$HOME/.local/bin/gemini"
+    "/usr/local/bin/gemini"
+    "$HOME/.bun/bin/gemini"
+    "$HOME/.npm-global/bin/gemini"
+    "$HOME/bin/gemini"
 )
 
 # ============================================================================
@@ -329,6 +353,62 @@ get_opencode_path() {
     fi
 
     for path in "${OPENCODE_SEARCH_PATHS[@]}"; do
+        if [[ -x "$path" ]]; then
+            echo "$path"
+            return
+        fi
+    done
+}
+
+check_codex() {
+    if command -v codex &>/dev/null; then
+        return 0
+    fi
+
+    for path in "${CODEX_SEARCH_PATHS[@]}"; do
+        if [[ -x "$path" ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+get_codex_path() {
+    if command -v codex &>/dev/null; then
+        command -v codex
+        return
+    fi
+
+    for path in "${CODEX_SEARCH_PATHS[@]}"; do
+        if [[ -x "$path" ]]; then
+            echo "$path"
+            return
+        fi
+    done
+}
+
+check_gemini() {
+    if command -v gemini &>/dev/null; then
+        return 0
+    fi
+
+    for path in "${GEMINI_SEARCH_PATHS[@]}"; do
+        if [[ -x "$path" ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+get_gemini_path() {
+    if command -v gemini &>/dev/null; then
+        command -v gemini
+        return
+    fi
+
+    for path in "${GEMINI_SEARCH_PATHS[@]}"; do
         if [[ -x "$path" ]]; then
             echo "$path"
             return
@@ -701,6 +781,21 @@ read_reply() {
     fi
 }
 
+# headless_guard <action>: refuse consequential system changes (sudo package
+# installs, third-party curl | bash installers) when nobody can consent, i.e.
+# no terminal AND no explicit CODEMAN_NONINTERACTIVE=1 opt-in. Interactive
+# runs fall through to their normal prompt; opted-in automation proceeds with
+# the prompt defaults as before.
+headless_guard() {
+    local action="$1"
+    if [[ "$NONINTERACTIVE" == "1" ]] || has_tty; then
+        return 0
+    fi
+    error "No interactive terminal, but the installer would need to: $action."
+    error "Re-run from a terminal to be prompted, or set CODEMAN_NONINTERACTIVE=1 to approve such steps in automation."
+    exit 1
+}
+
 prompt_yes_no() {
     local prompt="$1"
     local default="${2:-y}"
@@ -835,6 +930,20 @@ setup_sc_alias() {
 # Service Setup (Linux systemd / macOS launchd)
 # ============================================================================
 
+# Wait briefly for codeman-web.service to report active. A bad node path or a
+# busy port makes the unit crash within the first seconds (then sit in
+# activating/auto-restart), so a blind "started!" message would be a lie.
+verify_systemd_active() {
+    local attempt
+    for attempt in 1 2 3; do
+        sleep 2
+        if systemctl --user is-active --quiet codeman-web.service 2>/dev/null; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 setup_launchd_service() {
     local plist_label="com.codeman.web"
     local agent_dir="$HOME/Library/LaunchAgents"
@@ -907,7 +1016,15 @@ EOF
 
     launchctl load "$agent_plist" 2>/dev/null || true
 
-    success "LaunchAgent installed and started"
+    # launchctl load is silent about many failures: confirm the agent is loaded
+    sleep 2
+    if launchctl list "$plist_label" &>/dev/null; then
+        success "LaunchAgent installed and started"
+        return 0
+    fi
+    warn "LaunchAgent did not load."
+    warn "Inspect: launchctl list | grep codeman ; tail -20 /tmp/codeman.log"
+    return 1
 }
 
 setup_systemd_service() {
@@ -941,8 +1058,15 @@ Environment=PATH=$PATH
 WantedBy=default.target
 EOF
 
-    # Reload systemd
-    systemctl --user daemon-reload
+    # Reload systemd. A user D-Bus session is required for systemctl --user
+    # (missing under bare `ssh host 'curl | bash'` provisioning), so detect
+    # that up front instead of dying mid-setup with a cryptic trap message.
+    if ! systemctl --user daemon-reload 2>/dev/null; then
+        warn "systemctl --user is unavailable (no user D-Bus session?); cannot manage user services here."
+        warn "Unit written to $service_file. From a normal login shell, enable it with:"
+        warn "  systemctl --user daemon-reload && systemctl --user enable --now codeman-web"
+        return 1
+    fi
 
     # Enable service
     systemctl --user enable codeman-web.service 2>/dev/null || true
@@ -952,10 +1076,17 @@ EOF
         loginctl enable-linger "$USER" 2>/dev/null || true
     fi
 
-    # Start the service immediately
-    systemctl --user start codeman-web.service 2>/dev/null || true
+    # (Re)start the service. restart, not start: on a re-run over an existing
+    # running service, start would be a no-op and leave the OLD build running.
+    systemctl --user restart codeman-web.service 2>/dev/null || true
 
-    success "Systemd service installed and started"
+    if verify_systemd_active; then
+        success "Systemd service installed and started"
+        return 0
+    fi
+    warn "codeman-web.service did not become active."
+    warn "Inspect: systemctl --user status codeman-web ; journalctl --user -u codeman-web -e"
+    return 1
 }
 
 setup_tunnel_service() {
@@ -1039,6 +1170,7 @@ main() {
     # Git
     info "Checking Git..."
     if ! check_git; then
+        headless_guard "install Git (system package via sudo)"
         if prompt_yes_no "Git is not installed. Install it now?"; then
             install_dependency "git" "$os" "$distro"
         else
@@ -1057,6 +1189,7 @@ main() {
             warn "Node.js $node_version is installed but version $MIN_NODE_VERSION+ is required."
         fi
 
+        headless_guard "install Node.js v$TARGET_NODE_VERSION (system package via sudo)"
         if prompt_yes_no "Install Node.js v$TARGET_NODE_VERSION?"; then
             install_dependency "node" "$os" "$distro"
 
@@ -1081,6 +1214,7 @@ main() {
     if check_tmux; then
         success "tmux is installed"
     else
+        headless_guard "install tmux (system package via sudo)"
         if prompt_yes_no "tmux is not installed. Install it now?"; then
             install_dependency "tmux" "$os" "$distro"
         else
@@ -1088,9 +1222,11 @@ main() {
         fi
     fi
 
-    # AI CLI (at least one required: Claude Code or OpenCode)
+    # AI CLI (Codeman drives one of: Claude Code, OpenCode, Codex, Gemini)
     local has_claude=false
     local has_opencode=false
+    local has_codex=false
+    local has_gemini=false
 
     info "Checking AI CLI tools..."
     if check_claude; then
@@ -1101,29 +1237,39 @@ main() {
         has_opencode=true
         success "OpenCode found at $(get_opencode_path)"
     fi
+    if check_codex; then
+        has_codex=true
+        success "Codex found at $(get_codex_path)"
+    fi
+    if check_gemini; then
+        has_gemini=true
+        success "Gemini CLI found at $(get_gemini_path)"
+    fi
 
-    if [[ "$has_claude" == "false" ]] && [[ "$has_opencode" == "false" ]]; then
+    if [[ "$has_claude" == "false" && "$has_opencode" == "false" && "$has_codex" == "false" && "$has_gemini" == "false" ]]; then
         echo ""
-        warn "No AI CLI found. Codeman requires at least one: Claude Code or OpenCode."
+        warn "No AI CLI found. Codeman needs at least one: Claude Code, OpenCode, Codex, or Gemini."
+        headless_guard "install an AI CLI (curl | bash from its vendor)"
         echo ""
         echo -e "  ${BOLD}Which AI CLI would you like to install?${NC}"
         echo -e "    ${CYAN}1)${NC} Claude Code  (Anthropic)"
         echo -e "    ${CYAN}2)${NC} OpenCode     (open-source)"
         echo -e "    ${CYAN}3)${NC} Both"
+        echo -e "    ${CYAN}4)${NC} Skip         (I'll install one myself, e.g. Codex or Gemini)"
         echo ""
 
         local cli_choice=""
         if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
-            # Non-interactive: default to Claude Code
+            # Explicit automation opt-in: default to Claude Code
             cli_choice="1"
-            info "No interactive terminal detected: defaulting to Claude Code"
+            info "CODEMAN_NONINTERACTIVE=1: defaulting to Claude Code"
         else
             while true; do
-                echo -en "${CYAN}Choose [1/2/3]:${NC} " >&2
+                echo -en "${CYAN}Choose [1/2/3/4]:${NC} " >&2
                 read_reply cli_choice || { cli_choice="1"; break; }
                 case "$cli_choice" in
-                    1|2|3) break ;;
-                    *) echo "Please enter 1, 2, or 3." >&2 ;;
+                    1|2|3|4) break ;;
+                    *) echo "Please enter 1, 2, 3, or 4." >&2 ;;
                 esac
             done
         fi
@@ -1152,8 +1298,12 @@ main() {
             fi
         fi
 
-        if [[ "$has_claude" == "false" ]] && [[ "$has_opencode" == "false" ]]; then
-            die "At least one AI CLI is required. Install manually and re-run the installer."
+        if [[ "$cli_choice" == "4" ]]; then
+            warn "Skipping AI CLI install. Codeman will run, but sessions need a CLI to drive."
+            info "Install one later, e.g.: npm install -g @openai/codex        (Codex)"
+            info "                    or: npm install -g @google/gemini-cli   (Gemini)"
+        elif [[ "$has_claude" == "false" ]] && [[ "$has_opencode" == "false" ]]; then
+            die "The selected AI CLI failed to install. Install one manually and re-run the installer."
         fi
     fi
 
@@ -1250,6 +1400,16 @@ main() {
     fi
 
     # ========================================================================
+    # Mark install complete
+    # ========================================================================
+
+    # The dispatcher at the bottom only routes a bare re-run to the quiet
+    # update path when this marker exists, so an aborted first install
+    # (failed npm install/build, Ctrl+C) re-runs the full setup flow
+    # (symlinks, PATH, launch menu) instead of silently "updating".
+    date -u +%Y-%m-%dT%H:%M:%SZ > "$INSTALL_DIR/.install-complete"
+
+    # ========================================================================
     # Launch Options
     # ========================================================================
 
@@ -1325,14 +1485,16 @@ main() {
 
     # Handle service setup
     if [[ "$launch_choice" == "2" ]]; then
+        local service_ok=true
         if [[ "$service_type" == "launchd" ]]; then
-            setup_launchd_service
+            setup_launchd_service || service_ok=false
         else
-            setup_systemd_service
+            setup_systemd_service || service_ok=false
         fi
 
-        # Offer tunnel service if cloudflared is available (Linux only — systemd tunnel service)
-        if [[ "$service_type" == "systemd" ]] && check_cloudflared && [[ -f "$INSTALL_DIR/scripts/codeman-tunnel.service" ]]; then
+        # Offer tunnel service if cloudflared is available (Linux only: systemd tunnel service).
+        # Skipped when service setup failed: it needs the same systemctl --user access.
+        if [[ "$service_ok" == "true" ]] && [[ "$service_type" == "systemd" ]] && check_cloudflared && [[ -f "$INSTALL_DIR/scripts/codeman-tunnel.service" ]]; then
             echo ""
             if prompt_yes_no "Also set up Cloudflare tunnel service? (requires CODEMAN_PASSWORD)" "n"; then
                 setup_tunnel_service
@@ -1340,10 +1502,15 @@ main() {
         fi
 
         echo ""
-        echo -e "  ${GREEN}${BOLD}Codeman is running now!${NC}"
-        echo ""
-        echo -e "    ${CYAN}# Open in browser${NC}"
-        echo -e "    http://localhost:3000"
+        if [[ "$service_ok" == "true" ]]; then
+            echo -e "  ${GREEN}${BOLD}Codeman is running now!${NC}"
+            echo ""
+            echo -e "    ${CYAN}# Open in browser${NC}"
+            echo -e "    http://localhost:3000"
+        else
+            echo -e "  ${YELLOW}${BOLD}The service was set up but is not running yet${NC} (see warnings above)."
+            echo -e "  ${DIM}You can always run it directly:${NC} ${CYAN}codeman web${NC}"
+        fi
         echo ""
         echo -e "  ${BOLD}Manage the service:${NC}"
         echo ""
@@ -1392,10 +1559,12 @@ main() {
     echo -e "    https://github.com/Ark0N/Codeman"
     echo ""
 
-    if ! check_claude && ! check_opencode; then
+    if ! check_claude && ! check_opencode && ! check_codex && ! check_gemini; then
         echo -e "  ${YELLOW}${BOLD}Reminder:${NC} Install at least one AI CLI to start using Codeman:"
         echo -e "    ${CYAN}curl -fsSL https://claude.ai/install.sh | bash${NC}  # Claude Code"
         echo -e "    ${CYAN}curl -fsSL https://opencode.ai/install | bash${NC}   # OpenCode"
+        echo -e "    ${CYAN}npm install -g @openai/codex${NC}                    # Codex"
+        echo -e "    ${CYAN}npm install -g @google/gemini-cli${NC}               # Gemini"
         echo ""
     fi
 
@@ -1427,10 +1596,26 @@ update() {
     info "Updating Codeman..."
     cd "$INSTALL_DIR"
     git remote set-url origin "$REPO_URL" 2>/dev/null || true
+
+    # Never blow away local changes silently (this used to be an unconditional
+    # reset --hard). Interactive users get a choice; headless runs auto-stash
+    # so the changes stay recoverable, the same policy as scripts/self-update.sh.
+    if ! git diff --quiet 2>/dev/null || ! git diff --staged --quiet 2>/dev/null; then
+        warn "Local changes detected in $INSTALL_DIR"
+        if prompt_yes_no "Stash local changes and update? (recover with: git stash pop)"; then
+            git stash push --quiet -m "codeman-installer auto-stash $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            info "Local changes stashed (see 'git stash list' in $INSTALL_DIR)"
+        else
+            info "Keeping local changes; update skipped."
+            return 0
+        fi
+    fi
+
     git fetch --quiet origin
     git reset --hard "origin/$BRANCH" --quiet
     npm install --quiet --no-fund --no-audit 2>/dev/null || npm install --no-fund --no-audit
     npm run build --quiet 2>/dev/null || npm run build
+    date -u +%Y-%m-%dT%H:%M:%SZ > "$INSTALL_DIR/.install-complete"
     success "Updated to $(node -e "console.log(require('./package.json').version)")"
     echo ""
 
@@ -1438,8 +1623,13 @@ update() {
     local agent_plist="$HOME/Library/LaunchAgents/com.codeman.web.plist"
     if systemctl --user is-active codeman-web.service &>/dev/null 2>&1; then
         info "Restarting codeman-web service..."
-        systemctl --user restart codeman-web.service
-        success "codeman-web service restarted"
+        systemctl --user restart codeman-web.service 2>/dev/null || true
+        if verify_systemd_active; then
+            success "codeman-web service restarted"
+        else
+            warn "codeman-web.service did not come back up."
+            warn "Inspect: systemctl --user status codeman-web ; journalctl --user -u codeman-web -e"
+        fi
     elif [[ -f "$agent_plist" ]]; then
         info "Restarting LaunchAgent..."
         launchctl unload "$agent_plist" 2>/dev/null || true
@@ -1508,6 +1698,9 @@ uninstall() {
             rm -rf "$INSTALL_DIR"
             success "Removed $INSTALL_DIR"
         else
+            # Clear the marker so a future installer run does full setup again
+            # (the symlinks and services being removed here need recreating).
+            rm -f "$INSTALL_DIR/.install-complete"
             info "Kept $INSTALL_DIR"
         fi
     fi
@@ -1537,7 +1730,10 @@ case "${1:-}" in
     update)    update ;;
     uninstall) uninstall ;;
     *)
-        if [[ -z "${1:-}" && -d "$INSTALL_DIR/.git" ]]; then
+        # Only a COMPLETED install re-runs as a quiet update. A partial one
+        # (clone succeeded but build/menu never finished) lacks the marker and
+        # re-runs the full flow, so a failed first attempt can actually finish.
+        if [[ -z "${1:-}" && -d "$INSTALL_DIR/.git" && -f "$INSTALL_DIR/.install-complete" ]]; then
             print_banner
             update
         else

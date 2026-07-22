@@ -1,5 +1,18 @@
 # aicodeman
 
+## 1.6.2
+
+### Patch Changes
+
+- Installer (install.sh) reliability and safety overhaul, prompted by a review of the Linux flow:
+  - Install-completion marker (`.install-complete`): a bare re-run only takes the quiet update path when a previous install actually finished. Previously, a first install that failed during npm install/build (or was interrupted) left `.git` behind, so the retry silently became an "update" and the user never got the launch menu, the `codeman`/`tmux-chooser` symlinks, the PATH entry, or the `sc` alias. The marker is refreshed by updates and cleared by uninstall when the app dir is kept; added to .gitignore for end-user clones.
+  - `update` no longer runs an unconditional `git reset --hard` over local changes: interactive runs are asked to stash (declining keeps everything and skips the update), headless runs auto-stash with a dated message (same policy as scripts/self-update.sh).
+  - Service setup is verified instead of asserted: after starting codeman-web, the installer polls `systemctl --user is-active` (up to 6s) and only then prints "Codeman is running now!"; failures print an honest warning plus status/journalctl hints. Uses `restart` instead of `start` so re-running the installer over an already-running service actually loads the new build. A missing user D-Bus session (e.g. bare `ssh host 'curl | bash'`) is detected up front with copy-paste recovery commands instead of dying mid-setup via `set -e`. macOS gets the equivalent `launchctl list` verification, and the update path verifies its service restart too. The Cloudflare tunnel-service offer is skipped when service setup failed.
+  - Headless consent guard: with no interactive terminal AND no explicit `CODEMAN_NONINTERACTIVE=1`, the installer now refuses (with instructions) to run sudo package installs (git/node/tmux) or third-party `curl | bash` AI CLI installers, instead of silently taking the default-yes prompts. Explicit `CODEMAN_NONINTERACTIVE=1` keeps the previous full-auto behavior for CI/automation.
+  - AI CLI gate now recognizes Codex and Gemini (search paths mirrored from the CLI resolvers), so a box with only Codex or Gemini installed is no longer forced to install Claude Code/OpenCode. The install menu gains a "Skip" option (with npm install hints for Codex/Gemini), and the final reminder lists all four CLIs.
+
+  Docs: CLAUDE.md documents `src/remote-reconnect.ts` (pure COD-108 auto-reconnect backoff/eligibility logic) in the Infra table and the remote-sessions pattern.
+
 ## 1.6.1
 
 ### Patch Changes
