@@ -60,7 +60,7 @@ export function stripAnsi(text: string): string {
  */
 export const SPINNER_PATTERN = /[⠋⠙⠹⠸⠼⠴⠦⠧]/;
 
-export const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_/\-. ~]+$/;
+export const SAFE_PATH_PATTERN = /^[\p{L}\p{N}_/\-. ~]+$/u;
 
 /**
  * Execute a global regex pattern against data, calling the callback for each match.
