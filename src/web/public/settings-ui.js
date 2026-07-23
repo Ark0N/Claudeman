@@ -1768,17 +1768,21 @@ Object.assign(CodemanApp.prototype, {
     return settings.ralphTrackerEnabled ?? false;
   },
 
-  // Get the settings storage key based on device type (mobile vs desktop)
+  // Keep the settings namespace stable across foldable posture changes. Layout
+  // still follows viewport width, but an unfolded phone remains the same
+  // handheld device and must not silently switch to desktop preferences.
   getSettingsStorageKey() {
-    const isMobile = MobileDetection.getDeviceType() === 'mobile';
-    return isMobile ? 'codeman-app-settings-mobile' : 'codeman-app-settings';
+    const isHandheld =
+      MobileDetection.isHandheldDevice?.() ?? MobileDetection.getDeviceType() === 'mobile';
+    return isHandheld ? 'codeman-app-settings-mobile' : 'codeman-app-settings';
   },
 
   // Get default settings based on device type
   // Note: Notification prefs are handled separately by NotificationManager
   getDefaultSettings() {
-    const isMobile = MobileDetection.getDeviceType() === 'mobile';
-    if (isMobile) {
+    const isHandheld =
+      MobileDetection.isHandheldDevice?.() ?? MobileDetection.getDeviceType() === 'mobile';
+    if (isHandheld) {
       // Mobile defaults: minimal UI for small screens
       return {
         // Header visibility - hide everything on mobile
@@ -2203,7 +2207,7 @@ Object.assign(CodemanApp.prototype, {
     // so mobile defaults to OFF; the desktop blob is untouched and keeps its value.
     try {
       if (
-        MobileDetection.getDeviceType() === 'mobile' &&
+        (MobileDetection.isHandheldDevice?.() ?? MobileDetection.getDeviceType() === 'mobile') &&
         !localStorage.getItem('codeman:planUsagePerDeviceMigrated')
       ) {
         const s = this.loadAppSettingsFromStorage();

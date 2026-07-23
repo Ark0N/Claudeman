@@ -350,19 +350,60 @@ Object.assign(CodemanApp.prototype, {
     return this.run();
   },
 
+  /** Ensure a newly-created session is visible without waiting for the SSE event.
+   *  The POST response and session:created can arrive in either order, so the
+   *  normal idempotent SSE handler remains the single state-upsert path. */
+  async _ensureCreatedSessionVisible(sessionId, sessionSnapshot) {
+    if (!sessionId) return;
+
+    let session = sessionSnapshot;
+    if (!session && !this.sessions?.has(sessionId)) {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to load the new session');
+      session = data.data?.session || data.data;
+    }
+
+    if (session?.id) this._onSessionCreated(session);
+    // session:created normally uses the debounced renderer. The direct POST path
+    // needs the tab in the DOM before selectSession() marks it active.
+    this._renderSessionTabsImmediate?.();
+  },
+
   /** Run using the selected mode (Claude Code, OpenCode, Codex, or Gemini) */
   async run() {
-    const mode = this._runMode || 'claude';
-    if (mode === 'opencode') {
-      return this.runOpenCode();
+    if (this._runInFlight) return;
+
+    const startedAt = Date.now();
+    const minLockMs = Number.isFinite(this._runMinLockMs) ? this._runMinLockMs : 500;
+    const runBtn = document.getElementById('runBtn');
+    this._runInFlight = true;
+    if (runBtn) {
+      runBtn.disabled = true;
+      runBtn.setAttribute('aria-busy', 'true');
     }
-    if (mode === 'codex') {
-      return this.runCodex();
+
+    try {
+      const mode = this._runMode || 'claude';
+      if (mode === 'opencode') {
+        return await this.runOpenCode();
+      }
+      if (mode === 'codex') {
+        return await this.runCodex();
+      }
+      if (mode === 'gemini') {
+        return await this.runGemini();
+      }
+      return await this.runClaude();
+    } finally {
+      const remaining = minLockMs - (Date.now() - startedAt);
+      if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
+      this._runInFlight = false;
+      if (runBtn) {
+        runBtn.disabled = false;
+        runBtn.removeAttribute('aria-busy');
+      }
     }
-    if (mode === 'gemini') {
-      return this.runGemini();
-    }
-    return this.runClaude();
   },
 
   // Note: `runMode` is an accessor defined via Object.defineProperty at the bottom of
@@ -596,6 +637,7 @@ Object.assign(CodemanApp.prototype, {
             }
           }
           if (!data.success) throw new Error(data.error || 'Failed to start remote Claude session');
+          await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
           remoteIds.push(data.data.sessionId);
         }
         this.terminal.writeln(`\x1b[90m All ${tabCount} remote session(s) ready\x1b[0m`);
@@ -659,6 +701,7 @@ Object.assign(CodemanApp.prototype, {
       const sessionIds = [];
       for (const result of createResults) {
         if (!result.success) throw new Error(result.error);
+        await this._ensureCreatedSessionVisible(result.data.session.id, result.data.session);
         sessionIds.push(result.data.session.id);
       }
       firstSessionId = sessionIds[0];
@@ -774,6 +817,7 @@ Object.assign(CodemanApp.prototype, {
           });
           const data = await res.json();
           if (!data.success) throw new Error(data.error || 'Failed to start remote shell session');
+          await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
           remoteIds.push(data.data.sessionId);
         }
         if (remoteIds[0]) {
@@ -807,6 +851,7 @@ Object.assign(CodemanApp.prototype, {
       const sessionIds = [];
       for (const result of createResults) {
         if (!result.success) throw new Error(result.error);
+        await this._ensureCreatedSessionVisible(result.data.session.id, result.data.session);
         sessionIds.push(result.data.session.id);
       }
 
@@ -884,6 +929,7 @@ Object.assign(CodemanApp.prototype, {
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Failed to start OpenCode');
+      await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
 
       // Switch to the new session (don't pre-set activeSessionId — selectSession
       // early-returns when IDs match, skipping buffer load and sendResize)
@@ -940,6 +986,7 @@ Object.assign(CodemanApp.prototype, {
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Failed to start Codex');
+      await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
 
       // Switch to the new session (don't pre-set activeSessionId — selectSession
       // early-returns when IDs match, skipping buffer load and sendResize)
@@ -992,6 +1039,7 @@ Object.assign(CodemanApp.prototype, {
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Failed to start Gemini');
+      await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
 
       if (data.data.sessionId) {
         await this.selectSession(data.data.sessionId);

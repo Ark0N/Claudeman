@@ -1226,7 +1226,11 @@ export class WebServer extends EventEmitter {
     const configuredDisplayName =
       typeof persistedSettings.displayName === 'string' ? persistedSettings.displayName.trim() : '';
     const displayName = configuredDisplayName || 'Codeman';
-    this.windowTitle = `${displayName === 'Codeman' ? 'codeman' : displayName}:${this.titleHostname}`;
+    // Solo renders read no settings; recomputing here would reset the shared
+    // push-notification prefix (hostTitle) to the default name.
+    if (!soloSessionId) {
+      this.windowTitle = `${displayName === 'Codeman' ? 'codeman' : displayName}:${this.titleHostname}`;
+    }
     let html = this.indexHtmlTemplate.replace(
       '<title>Codeman</title>',
       `<title>${escapeHtmlText(this.windowTitle)}</title>`

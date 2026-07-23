@@ -34,9 +34,13 @@
 curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash
 ```
 
-该脚本会在缺失时自动安装 Node.js 和 tmux，把 Codeman 克隆到 `~/.codeman/app` 并完成构建。
+该脚本会在缺失时自动安装 Node.js 和 tmux，把 Codeman 克隆到 `~/.codeman/app` 并完成构建。几点须知：
 
-你至少需要安装一个 AI 编程 CLI —— [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli) 或 [Gemini CLI](https://github.com/google-gemini/gemini-cli)（任意组合均可）。安装完成后：
+- **先询问，后改动。** 所有系统级改动（安装软件包、下载 AI CLI）都会先征求确认；结束时的菜单可选择：直接在本终端运行、安装为后台服务（systemd/launchd，开机自启），或暂不启动。不选就不会有任何后台进程。
+- **重跑即更新。** 再次运行同一条命令即可原地更新已完成的安装：`~/.codeman/app` 中的本地改动会被 stash（绝不丢弃），运行中的服务会自动重启并校验。若首次安装中途失败，重跑会继续完成完整的安装流程。也可以使用 `install.sh update` 与 `install.sh uninstall`。
+- **CI / 无终端环境：** 没有终端时，涉及系统改动的步骤会带着说明中止，而不是静默执行；在自动化场景设置 `CODEMAN_NONINTERACTIVE=1` 即可批准这些步骤。
+
+你至少需要安装一个 AI 编程 CLI —— [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli) 或 [Gemini CLI](https://github.com/google-gemini/gemini-cli)（任意组合均可）。安装器会自动检测这四个中已安装的任意一个；若一个都没有，会提供安装 Claude Code 或 OpenCode 的选项，也可以选择跳过、稍后自行安装。安装完成后：
 
 ```bash
 codeman web
@@ -54,6 +58,8 @@ codeman web --multiuser              # 命名登录 + 按用户隔离的案例�
 
 <details>
 <summary><strong>作为后台服务运行</strong></summary>
+
+安装器结尾的菜单（选项 2）可以帮你完成这一步，并在宣告成功前校验服务确实已启动。如需手动配置：
 
 **Linux（systemd）：**
 

@@ -32,9 +32,13 @@
 curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash
 ```
 
-This installs Node.js and tmux if missing, clones Codeman to `~/.codeman/app`, and builds it.
+This installs Node.js and tmux if missing, clones Codeman to `~/.codeman/app`, and builds it. A few things worth knowing:
 
-You'll need at least one AI coding CLI installed — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), [Codex](https://developers.openai.com/codex/cli), or [Gemini CLI](https://github.com/google-gemini/gemini-cli) (any combination works). After install:
+- **It asks first.** Every system change (package installs, AI CLI download) is prompted, and a menu at the end lets you choose: run Codeman in this terminal, install it as a background service (systemd/launchd, auto-start on boot), or don't start yet. Nothing runs in the background unless you pick it.
+- **Re-run to update.** The same one-liner updates a finished install in place: local changes in `~/.codeman/app` are stashed (never discarded), and a running service is restarted and verified. If a first install was interrupted, re-running resumes the full setup instead. `install.sh update` and `install.sh uninstall` also exist.
+- **CI / headless:** without a terminal attached, steps that would change your system abort with instructions instead of running silently. Set `CODEMAN_NONINTERACTIVE=1` to approve them for automation.
+
+You'll need at least one AI coding CLI installed — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), [Codex](https://developers.openai.com/codex/cli), or [Gemini CLI](https://github.com/google-gemini/gemini-cli) (any combination works). The installer detects whichever of the four is present; if none is found, it offers to install Claude Code or OpenCode, or you can skip and install one yourself later. After install:
 
 ```bash
 codeman web
@@ -52,6 +56,8 @@ Details in [Multi-User Mode](#multi-user-mode-opt-in) below.
 
 <details>
 <summary><strong>Run as a background service</strong></summary>
+
+The installer's final menu sets this up for you (option 2) and verifies the service actually comes up before claiming success. To configure it manually instead:
 
 **Linux (systemd):**
 
