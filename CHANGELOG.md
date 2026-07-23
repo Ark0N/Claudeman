@@ -1,5 +1,14 @@
 # aicodeman
 
+## 1.7.1
+
+### Patch Changes
+
+- Mobile and UI polish plus docs refresh.
+  - Mobile: the header brand collapses to a single "C" home button on phones (<430px), freeing header space for session tabs while keeping the same tap target. The compact letter lives in its own span so i18n custom branding keeps rewriting only the full wordmark.
+  - UI fix: the absolutely-centered toolbar voice button no longer overlaps the case picker's chevron and "+" button. Below ~1500px (or with long case names widening the left toolbar group) it now falls back into normal flex flow where overlap is impossible; wide viewports keep the centered layout.
+  - Docs: README gains a hero pitch block with deep links, npm version + GitHub stars badges, and a star CTA; CLAUDE.md core-files table synced (Infra docker modules, app.js line count); blog article images added under docs/images/blog/.
+
 ## 1.7.0
 
 ### Minor Changes
