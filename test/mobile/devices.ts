@@ -1,7 +1,12 @@
 import { devices as playwrightDevices } from 'playwright';
 
 export type DeviceCategory =
-  'small-phone' | 'standard-phone' | 'large-phone' | 'small-tablet' | 'standard-tablet' | 'large-tablet';
+  | 'small-phone'
+  | 'standard-phone'
+  | 'large-phone'
+  | 'small-tablet'
+  | 'standard-tablet'
+  | 'large-tablet';
 
 export interface DeviceEntry {
   name: string;

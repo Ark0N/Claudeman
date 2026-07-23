@@ -297,6 +297,8 @@ Object.assign(CodemanApp.prototype, {
   openAppSettings() {
     // Load current settings
     const settings = this.loadAppSettingsFromStorage();
+    document.getElementById('appSettingsDisplayName').value = settings.displayName || 'Codeman';
+    document.getElementById('appSettingsLanguage').value = settings.language === 'zh-CN' ? 'zh-CN' : 'en';
     document.getElementById('appSettingsClaudeMdPath').value = settings.defaultClaudeMdPath || '';
     document.getElementById('appSettingsDefaultDir').value = settings.defaultWorkingDir || '';
     // Use device-aware defaults for display settings (mobile has different defaults)
@@ -1420,6 +1422,12 @@ Object.assign(CodemanApp.prototype, {
     // as "previously off" — used below to detect a real OFF→ON flip.
     const _prevWebglEnabled = (_prev.webglRendererEnabled ?? true) === true;
     const settings = {
+      displayName: window.CodemanI18n?.normalizeDisplayName(
+        document.getElementById('appSettingsDisplayName').value
+      ) || 'Codeman',
+      language: window.CodemanI18n?.normalizeLanguage(
+        document.getElementById('appSettingsLanguage').value
+      ) || 'en',
       defaultClaudeMdPath: document.getElementById('appSettingsClaudeMdPath').value.trim(),
       defaultWorkingDir: document.getElementById('appSettingsDefaultDir').value.trim(),
       ralphTrackerEnabled: document.getElementById('appSettingsRalphEnabled').checked,
@@ -1592,6 +1600,7 @@ Object.assign(CodemanApp.prototype, {
     // Apply header visibility immediately
     this.applyHeaderVisibilitySettings();
     this.applySkin();
+    this.applyLocalization();
     this.applyTabWrapSettings();
     this._updateTokensImmediate();  // Re-render token display (picks up showCost change)
     this.applyMonitorVisibility();
@@ -1620,6 +1629,7 @@ Object.assign(CodemanApp.prototype, {
       cjkInputEnabled: _cjk,
       extendedKeyboardBar: _ekb,
       skin: _skin,
+      language: _language,
       showPlanUsageLimits: _pul,
       showAttachmentsButton: _ahb,
       showFileViewerButton: _fvb,
@@ -1862,6 +1872,19 @@ Object.assign(CodemanApp.prototype, {
       /* private mode */
     }
     if (typeof this.applyTerminalSkin === 'function') this.applyTerminalSkin(skin);
+  },
+
+  // Apply the per-device language and the synced user-facing product name.
+  // The i18n layer updates both existing static nodes and future dynamic DOM.
+  applyLocalization() {
+    const settings = this.loadAppSettingsFromStorage();
+    const result = window.CodemanI18n?.configure({
+      language: settings.language,
+      displayName: settings.displayName,
+    });
+    if (result && this.notificationManager) {
+      this.notificationManager.originalTitle = document.title;
+    }
   },
 
   applyHeaderVisibilitySettings() {
@@ -2212,6 +2235,7 @@ Object.assign(CodemanApp.prototype, {
           'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
           'subagentActiveTabOnly', 'tabTwoRows', 'localEchoEnabled', 'cjkInputEnabled', 'extendedKeyboardBar',
           'skin', 'showPlanUsageLimits', 'showAttachmentsButton', 'showFileViewerButton', 'webglRendererEnabled',
+          'language',
           'terminalWheelLocalScrollback',
           'showSessionButton', 'showAwayDigestButton', 'showCronButton',
         ]);

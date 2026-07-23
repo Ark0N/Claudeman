@@ -288,7 +288,7 @@ export class WebServer extends EventEmitter {
   private teamWatcher: TeamWatcher = new TeamWatcher();
   private _orchestratorLoop: import('../orchestrator-loop.js').OrchestratorLoop | null = null;
   private readonly titleHostname: string;
-  private readonly windowTitle: string;
+  private windowTitle: string;
   private readonly indexHtmlTemplate: string;
   private readonly allowUnauthenticatedNetwork: boolean;
   private _pasteImageGcStop: (() => void) | null = null;
@@ -1220,6 +1220,17 @@ export class WebServer extends EventEmitter {
   }
 
   private async renderIndexHtml(soloSessionId?: string): Promise<string> {
+    // Detached-session windows intentionally skip App Settings during server
+    // rendering (their client bootstrap loads the synced name moments later).
+    const persistedSettings: Record<string, unknown> = soloSessionId ? {} : await this.readSettings(true);
+    const configuredDisplayName =
+      typeof persistedSettings.displayName === 'string' ? persistedSettings.displayName.trim() : '';
+    const displayName = configuredDisplayName || 'Codeman';
+    // Solo renders read no settings; recomputing here would reset the shared
+    // push-notification prefix (hostTitle) to the default name.
+    if (!soloSessionId) {
+      this.windowTitle = `${displayName === 'Codeman' ? 'codeman' : displayName}:${this.titleHostname}`;
+    }
     let html = this.indexHtmlTemplate.replace(
       '<title>Codeman</title>',
       `<title>${escapeHtmlText(this.windowTitle)}</title>`
@@ -1233,7 +1244,7 @@ export class WebServer extends EventEmitter {
     // moments ago triggers a reload here, and the cached value would render the
     // pre-toggle state (e.g. the gesture bundle wouldn't inject until a 2nd
     // reload). Skipped for solo popups (their header differs).
-    const settings: Record<string, unknown> = soloSessionId ? {} : await this.readSettings(true);
+    const settings: Record<string, unknown> = soloSessionId ? {} : persistedSettings;
     // Multi-monitor header button: carries the `btn-multimonitor--hidden` class
     // in the template by default (App Settings → Display → "Header Displays");
     // reveal by stripping that class when the user enabled it. Matching a unique

@@ -330,8 +330,10 @@ class NotificationManager {
     if (now - this.lastBrowserNotifTime < BROWSER_NOTIF_RATE_LIMIT_MS) return;
     this.lastBrowserNotifTime = now;
 
-    const notif = new Notification(`${this.originalTitle}: ${title}`, {
-      body,
+    const localizedTitle = window.codemanT?.(title) || title;
+    const localizedBody = window.codemanT?.(body) || body;
+    const notif = new Notification(`${this.originalTitle}: ${localizedTitle}`, {
+      body: localizedBody,
       tag, // Groups same-tag notifications
       icon: '/favicon.ico',
       silent: true, // We handle audio ourselves

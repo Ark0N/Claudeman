@@ -186,7 +186,7 @@ Hit start — Codeman spawns the CLI via a real PTY and streams it to your brows
 
 ### 7. Operate & maintain
 
-- **App Settings** — model, effort, permission startup mode, theme/skin, notifications, display toggles, per-CLI options.
+- **App Settings** — model, effort, permission startup mode, theme/skin, notifications, display toggles, per-CLI options, a synced custom display name, and per-device English/Simplified Chinese UI language.
 - **Self-update** — git-clone installs update in place from **Settings → Updates**.
 - **Deploy your own changes** — see [Development](#development).
 
