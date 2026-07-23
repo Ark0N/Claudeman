@@ -3152,6 +3152,17 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   transform: translateX(-50%);
 }
 
+/* Below ~1500px the absolutely-centered group can land on top of the case
+   picker (the left group widens with the case name), so fall back to normal
+   flex flow where overlap is impossible */
+@media (max-width: 1500px) {
+  .toolbar-center {
+    position: static;
+    transform: none;
+    margin-left: 0.4rem;
+  }
+}
+
 .version-display {
   font-family: 'SF Mono', Monaco, monospace;
   font-size: 0.6rem;
