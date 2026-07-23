@@ -73,6 +73,101 @@ describe('run mode UI', () => {
   });
 });
 
+describe('Run launch synchronization', () => {
+  it('coalesces overlapping Run activations and disables the button while the request is active', async () => {
+    const runBtn = {
+      disabled: false,
+      setAttribute: vi.fn(),
+      removeAttribute: vi.fn(),
+    };
+    const CodemanApp = function CodemanApp(this: any) {};
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: (id: string) => (id === 'runBtn' ? runBtn : null) },
+      console,
+    });
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+
+    const app = new (CodemanApp as any)();
+    app._runMinLockMs = 0;
+    let finishRun!: () => void;
+    app.runClaude = vi.fn(
+      () =>
+        new Promise<void>((resolveRun) => {
+          finishRun = resolveRun;
+        })
+    );
+
+    const first = app.run();
+    const duplicate = app.run();
+
+    expect(app.runClaude).toHaveBeenCalledTimes(1);
+    expect(runBtn.disabled).toBe(true);
+    expect(runBtn.setAttribute).toHaveBeenCalledWith('aria-busy', 'true');
+
+    finishRun();
+    await Promise.all([first, duplicate]);
+
+    expect(runBtn.disabled).toBe(false);
+    expect(runBtn.removeAttribute).toHaveBeenCalledWith('aria-busy');
+  });
+
+  it('renders a POST response session immediately without waiting for SSE', async () => {
+    const CodemanApp = function CodemanApp(this: any) {};
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: () => null },
+      fetch: vi.fn(),
+      console,
+    });
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+
+    const app = new (CodemanApp as any)();
+    app.sessions = new Map();
+    app._onSessionCreated = vi.fn((session: any) => app.sessions.set(session.id, session));
+    app._renderSessionTabsImmediate = vi.fn();
+    const snapshot = { id: 'sess-new', name: 'w1-case', workingDir: '/tmp/case' };
+
+    await app._ensureCreatedSessionVisible(snapshot.id, snapshot);
+
+    expect(context.fetch).not.toHaveBeenCalled();
+    expect(app.sessions.get(snapshot.id)).toEqual(snapshot);
+    expect(app._renderSessionTabsImmediate).toHaveBeenCalledTimes(1);
+  });
+
+  it('loads the new session when a quick-start response wins the race with SSE', async () => {
+    const snapshot = { id: 'sess-race', name: 'w1-remote', workingDir: '/remote/work' };
+    const fetchMock = vi.fn(async () => ({
+      json: async () => ({ success: true, data: snapshot }),
+    }));
+    const CodemanApp = function CodemanApp(this: any) {};
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: () => null },
+      fetch: fetchMock,
+      console,
+    });
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+
+    const app = new (CodemanApp as any)();
+    app.sessions = new Map();
+    app._onSessionCreated = vi.fn((session: any) => app.sessions.set(session.id, session));
+    app._renderSessionTabsImmediate = vi.fn();
+
+    await app._ensureCreatedSessionVisible(snapshot.id);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-race');
+    expect(app.sessions.get(snapshot.id)).toEqual(snapshot);
+    expect(app._renderSessionTabsImmediate).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('Codex quick start settings', () => {
   it('renders Codex CLI settings in a dedicated app settings tab', () => {
     const html = readFileSync(resolve(import.meta.dirname, '../src/web/public/index.html'), 'utf8');
@@ -113,6 +208,8 @@ describe('Codex quick start settings', () => {
         requests.push({ url, body: init?.body ? JSON.parse(init.body) : undefined });
         if (url === '/api/codex/status') return { json: async () => ({ success: true, data: { available: true } }) };
         if (url === '/api/quick-start') return { json: async () => ({ success: true, data: { sessionId: 'sess-1' } }) };
+        if (url === '/api/sessions/sess-1')
+          return { json: async () => ({ success: true, data: { id: 'sess-1', name: 'w1-codex-case' } }) };
         throw new Error(`unexpected fetch: ${url}`);
       },
       console,
@@ -128,6 +225,9 @@ describe('Codex quick start settings', () => {
     });
     app.getCaseSettings = () => ({});
     app.buildEnvOverrides = () => ({});
+    app.sessions = new Map();
+    app._onSessionCreated = (session: any) => app.sessions.set(session.id, session);
+    app._renderSessionTabsImmediate = vi.fn();
     const selected: string[] = [];
     app.selectSession = async (id: string) => {
       selected.push(id);
@@ -424,6 +524,8 @@ describe('Gemini quick start', () => {
         if (url === '/api/gemini/status') return { json: async () => ({ success: true, data: { available: true } }) };
         if (url === '/api/quick-start')
           return { json: async () => ({ success: true, data: { sessionId: 'sess-gm' } }) };
+        if (url === '/api/sessions/sess-gm')
+          return { json: async () => ({ success: true, data: { id: 'sess-gm', name: 'w1-gemini-case' } }) };
         throw new Error(`unexpected fetch: ${url}`);
       },
       console,
@@ -437,6 +539,9 @@ describe('Gemini quick start', () => {
     app.loadAppSettingsFromStorage = () => ({});
     app.getCaseSettings = () => ({});
     app.buildEnvOverrides = () => ({});
+    app.sessions = new Map();
+    app._onSessionCreated = (session: any) => app.sessions.set(session.id, session);
+    app._renderSessionTabsImmediate = vi.fn();
     const selected: string[] = [];
     app.selectSession = async (id: string) => {
       selected.push(id);
