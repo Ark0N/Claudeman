@@ -14,6 +14,8 @@
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.9-3b82f6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 5.9"></a>
   <a href="https://fastify.dev/"><img src="https://img.shields.io/badge/Fastify-5.x-1e3a5f?style=flat-square&logo=fastify&logoColor=white" alt="Fastify"></a>
   <img src="https://img.shields.io/badge/Tests-2861%20total-22c55e?style=flat-square" alt="Tests">
+  <a href="https://www.npmjs.com/package/aicodeman"><img src="https://img.shields.io/npm/v/aicodeman?style=flat-square&label=npm&color=22c55e" alt="npm version"></a>
+  <a href="https://github.com/Ark0N/Codeman/stargazers"><img src="https://img.shields.io/github/stars/Ark0N/Codeman?style=flat-square&color=eab308" alt="GitHub stars"></a>
 </p>
 
 <p align="center">
@@ -23,6 +25,15 @@
 <p align="center">
   <img src="docs/images/subagent-demo.gif" alt="Codeman — parallel subagent visualization" width="900">
 </p>
+
+**Codeman** is a self-hosted mission control for AI coding agents. It spawns Claude Code, OpenCode, Codex, or Gemini CLI inside persistent tmux sessions, streams the real terminal to any browser, and keeps agents productive after you walk away: it re-prompts on idle, resumes when a usage limit resets, runs scheduled jobs, and shows every background agent working in real time.
+
+- **One dashboard, four CLIs** - run [Claude Code, OpenCode, Codex, or Gemini](#more-features) per session (plus plain shell), locally, [in Docker](#isolated-docker-sessions), or [over SSH](#remote-ssh-sessions)
+- **Truly phone-friendly** - a [touch-optimized terminal](#mobile-optimized-web-ui) with instant local echo, QR login, swipe navigation, and push notifications
+- **Runs while you sleep** - [idle detection + respawn cycling](#respawn-controller) and auto-resume when a subscription limit resets, for 24+ hour unattended runs
+- **See your agents think** - [live floating windows](#live-agent-visualization) for every subagent and teammate, with real-time transcripts
+- **Nothing gets lost** - tmux persistence across restarts and network drops, exactly-once input delivery, full-scrollback replay
+- **Self-hosted and boring on purpose** - loopback-only by default, MIT licensed, no telemetry, runs entirely on your machine
 
 ---
 
@@ -923,4 +934,9 @@ MIT — see [LICENSE](LICENSE)
 
 <p align="center">
   <strong>Track sessions. Visualize agents. Control respawn. Let it run while you sleep.</strong>
+</p>
+
+<p align="center">
+  If Codeman saves you time, <a href="https://github.com/Ark0N/Codeman/stargazers">a star</a> helps other people find it.<br>
+  Bug reports and feature ideas are welcome in <a href="https://github.com/Ark0N/Codeman/issues">Issues</a>.
 </p>
