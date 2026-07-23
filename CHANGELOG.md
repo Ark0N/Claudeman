@@ -1,5 +1,20 @@
 # aicodeman
 
+## 1.7.0
+
+### Minor Changes
+
+- Community release (thanks @shenlvkang-collab for all four PRs) plus documentation fixes.
+  - fix(mobile): per-device settings now key off a stable handheld classification (`MobileDetection.isHandheldDevice()`: touch plus UA form-factor tokens, with User-Agent Client Hints fallback) instead of the instantaneous viewport width, so an Android foldable that unfolds past the desktop breakpoint keeps `codeman-app-settings-mobile` and opt-ins such as the Response Viewer and Extended Keyboard Bar. Responsive layout stays width-driven. Adds an OPPO Find N5 (unfolded) device profile and a fold/unfold/reload Playwright regression test (mobile suite now 136 devices). (#162)
+  - fix(paths): `SAFE_PATH_PATTERN` now accepts Unicode letters and numbers (`\p{L}\p{N}` with the `u` flag), so working directories like `/mnt/d/AI/中文项目` validate in Create Session, Quick Run, and Scheduled Run. All shell-metacharacter, traversal, and absolute-path protections are unchanged. (#163)
+  - fix(ui): newly created run sessions render their tab immediately instead of waiting for the `session:created` SSE event (idempotent upsert from the POST response, with a `GET /api/sessions/:id` fallback for quick-start modes), and the Run button holds an in-flight lock (min 500 ms) so a double click cannot create duplicate sessions. (#164)
+  - feat(ui): the synced custom display name and per-device English/Simplified Chinese UI language are described in their own entry (#165); on top of that PR, `renderIndexHtml` no longer recomputes `windowTitle` on solo-session renders, so a detached window cannot reset the push-notification `hostTitle` prefix to the default name.
+  - docs: corrected the `sse-events.ts` fileoverview breakdown (148 event constants, was stale at 120; per-category counts refreshed, including Cron, Docker, Remote auto-reconnect, and Multi-user) and the CLAUDE.md SSE registry count; READMEs synced with the 1.6.2 installer behavior.
+
+### Patch Changes
+
+- 8d9fc41: Add a synced custom display name and a per-device English/Simplified Chinese browser UI language picker under App Settings → Display.
+
 ## 1.6.2
 
 ### Patch Changes

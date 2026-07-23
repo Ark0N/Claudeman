@@ -5,27 +5,31 @@
  * and referenced by the frontend (`SSE_EVENTS` in `constants.js`).
  * Both files MUST be kept in sync.
  *
- * 120 event constants organized by category:
+ * 148 event constants organized by category:
  * - **Core** (1): init
- * - **Session lifecycle** (17): created, updated, deleted, terminal, idle, working, ...
+ * - **Session lifecycle** (23): created, updated, deleted, terminal, idle, working, ...
  * - **Session: Ralph** (6): ralphLoopUpdate, todoUpdate, completionDetected, ...
  * - **Session: Bash tools** (3): bashToolStart, bashToolEnd, bashToolsUpdate
  * - **Session: Plan** (4): planTaskUpdate, planCheckpoint, planRollback, planTaskAdded
  * - **Tasks** (4): created, completed, failed, updated
  * - **Mux** (4): created, killed, died, statsUpdated
+ * - **Remote auto-reconnect** (3): sessionDropped, sessionReconnected, reconnectExhausted
  * - **Respawn** (24): stateChanged, cycleStarted/Completed, step*, aiCheck*, planCheck*, timer*, log, ...
  * - **Subagents** (7): discovered, updated, tool_call, tool_result, progress, message, completed
  * - **Workflow runs** (3): run_discovered, run_updated, run_removed (ultracode / Workflow tool)
  * - **Scheduled** (6): created, updated, completed, stopped, log, deleted
+ * - **Cron jobs** (4): jobsChanged, jobDeleted, runCreated, runUpdated
  * - **Teams** (4): created, updated, removed, taskUpdated
  * - **Transcript** (4): complete, plan_mode, tool_start, tool_end
  * - **Plan orchestration** (5): started, progress, subagent, completed, cancelled
  * - **Tunnel** (7): started, stopped, progress, error, qrRotated, qrRegenerated, qrAuthUsed
- * - **Image** (1): detected
+ * - **Image / attachments** (2): image:detected, attachment:detected
  * - **Hooks** (6): idle_prompt, permission_prompt, elicitation_dialog, stop, teammate_idle, task_completed
  * - **Orchestrator** (12): stateChanged, planProgress, planReady, phase*, verification, task*, completed, error
  * - **Clipboard** (1): write
  * - **Cases** (4): created, linked, deleted, order-changed
+ * - **Docker cases** (8): exportComplete/Failed, importComplete, imageBuild*, containerRecreated
+ * - **Multi-user** (3): admin:usersChanged, auth:passwordChangeRequired, session:orderChanged
  *
  * Naming convention: `domain:action` (e.g., `session:created`, `respawn:stateChanged`)
  *

@@ -60,7 +60,7 @@ When user says "COM":
 
 CI runs `npm run check:lockfile` on every push/PR, so lockfile drift fails the build even if the `version-packages` script is bypassed.
 
-**Version**: 1.6.2 (must match `package.json`)
+**Version**: 1.7.0 (must match `package.json`)
 
 ## Project Overview
 
@@ -257,7 +257,7 @@ Frontend JS modules have `@fileoverview` with `@dependency`/`@loadorder` tags. L
 
 ### SSE Event Registry
 
-~146 event types in `src/web/sse-events.ts` (backend) and `SSE_EVENTS` in `constants.js` (frontend), incl. `docker:exportComplete`/`exportFailed`/`importComplete` and `docker:imageBuildStarted`/`imageBuildProgress`/`imageBuildComplete`/`imageBuildFailed`. Both must be kept in sync.
+148 event constants in `src/web/sse-events.ts` (backend) and `SSE_EVENTS` in `constants.js` (frontend), incl. `docker:exportComplete`/`exportFailed`/`importComplete` and `docker:imageBuildStarted`/`imageBuildProgress`/`imageBuildComplete`/`imageBuildFailed`. Both must be kept in sync.
 
 ### API Routes
 
