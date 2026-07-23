@@ -289,6 +289,11 @@ body {
   transition: color var(--transition-smooth), text-shadow var(--transition-smooth), filter var(--transition-smooth);
 }
 
+/* Single-letter brand shown only on phones (see mobile.css phone breakpoint) */
+.logo .logo-compact {
+  display: none;
+}
+
 .logo:hover {
   color: #93c5fd;
   text-shadow: 0 0 12px rgba(96, 165, 250, 0.5), 0 0 24px rgba(96, 165, 250, 0.2);

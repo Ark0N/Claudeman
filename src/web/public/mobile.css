@@ -350,7 +350,8 @@ html.mobile-init .file-browser-panel {
    Phone Breakpoint (<430px)
    ============================================================================ */
 @media (max-width: 430px) {
-  /* Compact header brand on phones — acts as home button */
+  /* Phone brand collapses to a single "C" home button: hide the wordmark,
+     keep the tap target */
   .header-brand {
     padding-right: 0.25rem;
     margin-right: 0.2rem;
@@ -358,7 +359,15 @@ html.mobile-init .file-browser-panel {
   }
 
   .header-brand .logo {
-    font-size: 0.7rem;
+    font-size: 0.85rem;
+  }
+
+  .header-brand .logo .logo-text {
+    display: none;
+  }
+
+  .header-brand .logo .logo-compact {
+    display: inline;
   }
 
   /* Font controls - compact on phones, visibility controlled by JS */
