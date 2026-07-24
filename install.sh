@@ -15,6 +15,12 @@
 #   CODEMAN_NODE_VERSION      - Node.js major version to install (default: 22)
 #   CODEMAN_REPO_URL          - Custom git repository URL (default: upstream Codeman)
 #   CODEMAN_BRANCH            - Git branch to install (default: master)
+#   CODEMAN_HOST              - Preset the network binding and skip the prompt
+#                               (e.g. 0.0.0.0 for LAN access, 127.0.0.1 for
+#                               local-only; interactive default is 0.0.0.0,
+#                               non-interactive default is 127.0.0.1)
+#   CODEMAN_PASSWORD          - Preset the dashboard password (skips the
+#                               password prompt when binding to the network)
 
 set -euo pipefail
 
@@ -29,6 +35,13 @@ MIN_NODE_VERSION=18
 TARGET_NODE_VERSION="${CODEMAN_NODE_VERSION:-22}"
 NONINTERACTIVE="${CODEMAN_NONINTERACTIVE:-0}"
 SKIP_SYSTEMD="${CODEMAN_SKIP_SYSTEMD:-0}"
+
+# Network binding chosen during install (choose_network_binding). Empty
+# BIND_HOST means "not chosen" (e.g. the update path) and falls back to the
+# server's own loopback default.
+BIND_HOST=""
+BIND_PASSWORD=""
+BIND_ACK="0"
 
 # puppeteer is a devDependency used only by scripts/browser-comparison.mjs — its
 # ~150MB chrome-headless-shell download is never needed to build or run Codeman.
@@ -131,16 +144,39 @@ die() {
 }
 
 # Security notice — printed at the very end of install/update so it is the last
-# thing the user sees (the default loopback bind + how to expose it safely).
+# thing the user sees. Adapts to the binding chosen during install; the update
+# path (BIND_HOST empty) gets the generic text.
 print_security_notice() {
     echo ""
-    echo -e "  ${YELLOW}${BOLD}Security:${NC}"
-    echo -e "    Codeman binds ${BOLD}127.0.0.1${NC} (this machine only) — no password needed by default."
-    echo -e "    To reach it from another device, do ONE of:"
-    echo -e "      ${CYAN}•${NC} tailscale serve / cloudflared tunnel   ${DIM}(recommended)${NC}, or"
-    echo -e "      ${CYAN}•${NC} ${CYAN}codeman web --host 0.0.0.0${NC}  AND set ${CYAN}CODEMAN_PASSWORD${NC}"
-    echo -e "    A non-loopback bind without a password still starts, but warns loudly."
-    echo -e "    ${DIM}Details: docs/security-architecture.md${NC}"
+    if [[ "$BIND_HOST" == "0.0.0.0" && -z "$BIND_PASSWORD" ]]; then
+        echo -e "  ${RED}${BOLD}============================================================${NC}"
+        echo -e "  ${RED}${BOLD}  WARNING: NETWORK ACCESS WITHOUT A PASSWORD${NC}"
+        echo -e "  ${RED}${BOLD}============================================================${NC}"
+        echo -e "  ${RED}The dashboard is reachable by EVERY device on your network,${NC}"
+        echo -e "  ${RED}and whoever opens it can run commands as ${BOLD}$USER${NC}${RED} through${NC}"
+        echo -e "  ${RED}your AI agents. Anyone on your Wi-Fi owns this machine.${NC}"
+        echo ""
+        echo -e "  Fix it by setting a password (takes 30 seconds):"
+        echo -e "    ${CYAN}•${NC} re-run the installer and choose a password, or"
+        echo -e "    ${CYAN}•${NC} add ${CYAN}Environment=CODEMAN_PASSWORD=<yours>${NC} to the service"
+        echo -e "  Or switch back to local-only: ${CYAN}CODEMAN_HOST=127.0.0.1${NC}"
+        echo -e "  ${DIM}Details: docs/security-architecture.md${NC}"
+    elif [[ "$BIND_HOST" == "0.0.0.0" ]]; then
+        echo -e "  ${YELLOW}${BOLD}Security:${NC}"
+        echo -e "    The dashboard is reachable from your network at port 3000 and is"
+        echo -e "    password-protected (user ${BOLD}admin${NC}). Keep that password strong:"
+        echo -e "    whoever logs in can run commands through your agents."
+        echo -e "    For access from OUTSIDE your network, prefer Tailscale or a tunnel."
+        echo -e "    ${DIM}Details: docs/security-architecture.md${NC}"
+    else
+        echo -e "  ${YELLOW}${BOLD}Security:${NC}"
+        echo -e "    Codeman binds ${BOLD}127.0.0.1${NC} (this machine only) — no password needed by default."
+        echo -e "    To reach it from another device, do ONE of:"
+        echo -e "      ${CYAN}•${NC} tailscale serve / cloudflared tunnel   ${DIM}(recommended)${NC}, or"
+        echo -e "      ${CYAN}•${NC} ${CYAN}codeman web --host 0.0.0.0${NC}  AND set ${CYAN}CODEMAN_PASSWORD${NC}"
+        echo -e "    A non-loopback bind without a password still starts, but warns loudly."
+        echo -e "    ${DIM}Details: docs/security-architecture.md${NC}"
+    fi
     echo ""
 }
 
@@ -781,6 +817,16 @@ read_reply() {
     fi
 }
 
+read_secret() {
+    # read_secret <varname>: like read_reply but without echoing (passwords)
+    if [[ -t 0 ]]; then
+        read -rs "$1"
+    else
+        read -rs "$1" < /dev/tty
+    fi
+    echo "" >&2
+}
+
 # headless_guard <action>: refuse consequential system changes (sudo package
 # installs, third-party curl | bash installers) when nobody can consent, i.e.
 # no terminal AND no explicit CODEMAN_NONINTERACTIVE=1 opt-in. Interactive
@@ -927,6 +973,117 @@ setup_sc_alias() {
 }
 
 # ============================================================================
+# Network Binding
+# ============================================================================
+
+# Best-effort LAN IP for "open this URL from your phone" hints.
+detect_lan_ip() {
+    local ip=""
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        ip=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)
+    else
+        ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    fi
+    echo "${ip:-<your-ip>}"
+}
+
+# Escape a value for a quoted systemd Environment="KEY=value" assignment.
+systemd_env_escape() {
+    printf '%s' "$1" | sed 's/[\\"]/\\&/g'
+}
+
+# Escape a value for embedding in a launchd plist <string>.
+xml_escape() {
+    printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+# Ask how the dashboard should be reachable and set BIND_HOST/BIND_PASSWORD/
+# BIND_ACK. Interactive default is network access (0.0.0.0) because that is
+# what most installs need; loopback is offered as the safer alternative.
+# Non-interactive runs keep the safe loopback default unless CODEMAN_HOST is
+# preset. The server binary itself still defaults to 127.0.0.1 either way.
+choose_network_binding() {
+    # Preset via environment: honor it and skip the prompt entirely.
+    if [[ -n "${CODEMAN_HOST:-}" ]]; then
+        BIND_HOST="$CODEMAN_HOST"
+        BIND_PASSWORD="${CODEMAN_PASSWORD:-}"
+        if [[ "$BIND_HOST" != "127.0.0.1" && -z "$BIND_PASSWORD" ]]; then
+            BIND_ACK="1"
+        fi
+        info "Network binding preset via CODEMAN_HOST: $BIND_HOST"
+        return 0
+    fi
+
+    if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
+        BIND_HOST="127.0.0.1"
+        info "Non-interactive install: binding 127.0.0.1 (preset CODEMAN_HOST=0.0.0.0 to override)"
+        return 0
+    fi
+
+    echo -e "  ${BOLD}Network access${NC}"
+    echo ""
+    echo -e "  How should the Codeman dashboard be reachable?"
+    echo ""
+    echo -e "    ${CYAN}1)${NC} ${BOLD}Any device on your network${NC} ${DIM}(0.0.0.0)${NC}  [default]"
+    echo -e "       Open it straight from your phone or laptop."
+    echo -e "       ${YELLOW}Less safe: set a password so only you control your agents.${NC}"
+    echo -e "    ${CYAN}2)${NC} ${BOLD}This machine only${NC} ${DIM}(127.0.0.1)${NC}"
+    echo -e "       Safest. Reach it remotely via Tailscale or a tunnel."
+    echo ""
+
+    local bind_choice=""
+    while true; do
+        echo -en "${CYAN}Choose [1/2] (default 1):${NC} " >&2
+        read_reply bind_choice || bind_choice="1"
+        bind_choice="${bind_choice:-1}"
+        case "$bind_choice" in
+            1|2) break ;;
+            *) echo "Please enter 1 or 2." >&2 ;;
+        esac
+    done
+
+    if [[ "$bind_choice" == "2" ]]; then
+        BIND_HOST="127.0.0.1"
+        success "Binding 127.0.0.1 (this machine only)"
+        return 0
+    fi
+
+    BIND_HOST="0.0.0.0"
+
+    if [[ -n "${CODEMAN_PASSWORD:-}" ]]; then
+        BIND_PASSWORD="$CODEMAN_PASSWORD"
+        info "Using CODEMAN_PASSWORD from the environment"
+        return 0
+    fi
+
+    echo ""
+    local pw="" pw2=""
+    while true; do
+        echo -en "${CYAN}Set a dashboard password (recommended; Enter to skip):${NC} " >&2
+        read_secret pw || pw=""
+        if [[ -z "$pw" ]]; then
+            echo ""
+            warn "Without a password, EVERY device on your network gets full access"
+            warn "to your agents (they run commands as $USER)."
+            if prompt_yes_no "Continue WITHOUT a password?" "n"; then
+                BIND_ACK="1"
+                break
+            fi
+            continue
+        fi
+        echo -en "${CYAN}Confirm password:${NC} " >&2
+        read_secret pw2 || pw2=""
+        if [[ "$pw" == "$pw2" ]]; then
+            BIND_PASSWORD="$pw"
+            success "Password set (login user: admin)"
+            break
+        fi
+        echo "Passwords do not match, try again." >&2
+    done
+    return 0
+}
+
+# ============================================================================
 # Service Setup (Linux systemd / macOS launchd)
 # ============================================================================
 
@@ -976,6 +1133,21 @@ setup_launchd_service() {
     local node_path
     node_path=$(command -v node)
 
+    # Binding chosen during install (empty on paths that never asked)
+    local bind_plist=""
+    if [[ -n "$BIND_HOST" ]]; then
+        bind_plist="    <key>CODEMAN_HOST</key>
+    <string>$BIND_HOST</string>"
+        if [[ -n "$BIND_PASSWORD" ]]; then
+            bind_plist+=$'\n'"    <key>CODEMAN_PASSWORD</key>
+    <string>$(xml_escape "$BIND_PASSWORD")</string>"
+        fi
+        if [[ "$BIND_ACK" == "1" ]]; then
+            bind_plist+=$'\n'"    <key>CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK</key>
+    <string>1</string>"
+        fi
+    fi
+
     cat > "$agent_plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -997,6 +1169,7 @@ setup_launchd_service() {
     <string>$HOME</string>
     <key>LANG</key>
     <string>en_US.UTF-8</string>
+$bind_plist
   </dict>
   <key>WorkingDirectory</key>
   <string>$HOME</string>
@@ -1039,6 +1212,18 @@ setup_systemd_service() {
     local node_path
     node_path=$(command -v node)
 
+    # Binding chosen during install (empty on paths that never asked)
+    local bind_env=""
+    if [[ -n "$BIND_HOST" ]]; then
+        bind_env="Environment=CODEMAN_HOST=$BIND_HOST"
+        if [[ -n "$BIND_PASSWORD" ]]; then
+            bind_env+=$'\n'"Environment=\"CODEMAN_PASSWORD=$(systemd_env_escape "$BIND_PASSWORD")\""
+        fi
+        if [[ "$BIND_ACK" == "1" ]]; then
+            bind_env+=$'\n'"Environment=CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK=1"
+        fi
+    fi
+
     # Create service file
     cat > "$service_file" << EOF
 [Unit]
@@ -1053,6 +1238,7 @@ Restart=always
 RestartSec=10
 Environment=NODE_ENV=production
 Environment=PATH=$PATH
+$bind_env
 
 [Install]
 WantedBy=default.target
@@ -1419,6 +1605,11 @@ main() {
     echo -e "${GREEN}${BOLD}============================================================${NC}"
     echo ""
 
+    # Ask how the dashboard should be reachable BEFORE the launch menu, so the
+    # service files and the run-now path all inherit the choice.
+    choose_network_binding
+    echo ""
+
     local launch_choice=""
     local has_service=false
     local service_type=""
@@ -1506,7 +1697,12 @@ main() {
             echo -e "  ${GREEN}${BOLD}Codeman is running now!${NC}"
             echo ""
             echo -e "    ${CYAN}# Open in browser${NC}"
-            echo -e "    http://localhost:3000"
+            if [[ "$BIND_HOST" == "0.0.0.0" ]]; then
+                echo -e "    http://$(detect_lan_ip):3000   ${DIM}(any device on your network)${NC}"
+                echo -e "    http://localhost:3000       ${DIM}(this machine)${NC}"
+            else
+                echo -e "    http://localhost:3000"
+            fi
         else
             echo -e "  ${YELLOW}${BOLD}The service was set up but is not running yet${NC} (see warnings above)."
             echo -e "  ${DIM}You can always run it directly:${NC} ${CYAN}codeman web${NC}"
@@ -1531,11 +1727,23 @@ main() {
     if [[ "$launch_choice" != "2" ]]; then
         echo -e "  ${BOLD}Quick Start:${NC}"
         echo ""
-        echo -e "    ${CYAN}codeman web${NC}            # Start the web server"
-        echo -e "    ${CYAN}codeman web --https${NC}    # With HTTPS (for remote access)"
-        echo ""
-        echo -e "    ${CYAN}# Open in browser${NC}"
-        echo -e "    http://localhost:3000"
+        if [[ "$BIND_HOST" == "0.0.0.0" ]]; then
+            if [[ -n "$BIND_PASSWORD" ]]; then
+                echo -e "    ${CYAN}CODEMAN_HOST=0.0.0.0 CODEMAN_PASSWORD='<your-password>' codeman web${NC}"
+            else
+                echo -e "    ${CYAN}CODEMAN_HOST=0.0.0.0 codeman web${NC}"
+            fi
+            echo -e "    ${DIM}(a bare 'codeman web' binds 127.0.0.1, this machine only)${NC}"
+            echo ""
+            echo -e "    ${CYAN}# Open in browser${NC}"
+            echo -e "    http://$(detect_lan_ip):3000   ${DIM}(any device on your network)${NC}"
+        else
+            echo -e "    ${CYAN}codeman web${NC}            # Start the web server"
+            echo -e "    ${CYAN}codeman web --https${NC}    # With HTTPS (for remote access)"
+            echo ""
+            echo -e "    ${CYAN}# Open in browser${NC}"
+            echo -e "    http://localhost:3000"
+        fi
         echo ""
     fi
 
@@ -1584,6 +1792,11 @@ main() {
         # Source profile to pick up PATH changes, then exec codeman
         # shellcheck disable=SC1090
         source "$profile" 2>/dev/null || true
+        if [[ -n "$BIND_HOST" ]]; then
+            export CODEMAN_HOST="$BIND_HOST"
+            [[ -n "$BIND_PASSWORD" ]] && export CODEMAN_PASSWORD="$BIND_PASSWORD"
+            [[ "$BIND_ACK" == "1" ]] && export CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK=1
+        fi
         exec node "$INSTALL_DIR/dist/index.js" web
     fi
 }
