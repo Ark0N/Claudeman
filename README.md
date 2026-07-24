@@ -33,7 +33,7 @@
 - **Runs while you sleep** - [idle detection + respawn cycling](#respawn-controller) and auto-resume when a subscription limit resets, for 24+ hour unattended runs
 - **See your agents think** - [live floating windows](#live-agent-visualization) for every subagent and teammate, with real-time transcripts
 - **Nothing gets lost** - tmux persistence across restarts and network drops, exactly-once input delivery, full-scrollback replay
-- **Self-hosted and boring on purpose** - loopback-only by default, MIT licensed, no telemetry, runs entirely on your machine
+- **Self-hosted and private** - loopback-only by default, MIT licensed, no telemetry, runs entirely on your machine
 
 <p align="center">
   <img src="docs/images/codeman-tour-20260724.png" alt="Codeman dashboard tour: session tabs per case, one-click Run for new agents, live plan usage in the header" width="900">
