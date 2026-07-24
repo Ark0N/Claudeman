@@ -1,5 +1,17 @@
 # aicodeman
 
+## 1.8.0
+
+### Minor Changes
+
+- Installer: choose your network binding, with LAN access as the new guided default.
+
+  The install script now asks at the end of setup how the dashboard should be reachable:
+  1. Any device on your network (0.0.0.0), the default. The installer prompts for a dashboard password (hidden input, confirmed twice); declining a password requires an explicit confirmation and the install ends with a prominent warning explaining the exposure.
+  2. This machine only (127.0.0.1), the safer option for tunnel/Tailscale setups.
+
+  The choice is wired into the generated systemd unit and launchd plist (values escaped for each format), the run-now launch path, and the printed URLs, which now include the detected LAN IP for instant phone access. Non-interactive installs keep the safe loopback default unless CODEMAN_HOST is preset, and the server binary's own default binding (127.0.0.1) is unchanged, so npm and manual installs behave exactly as before. New installer env presets: CODEMAN_HOST and CODEMAN_PASSWORD skip the prompts for automation.
+
 ## 1.7.1
 
 ### Patch Changes
