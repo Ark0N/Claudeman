@@ -274,7 +274,7 @@ codeman web --https
 Watch background agents work in real-time. Codeman monitors agent activity and displays each agent in a draggable floating window with animated Matrix-style connection lines back to the parent session.
 
 <p align="center">
-  <img src="docs/images/subagent-spawn.png" alt="Subagent Visualization" width="900">
+  <img src="docs/images/subagent-windows-20260724.png" alt="Subagent Visualization: three parallel Explore agents as floating windows with live tool-call feeds" width="900">
 </p>
 
 - **Floating terminal windows** — draggable, resizable panels for each agent with a live activity log showing every tool call, file read, and progress update as it happens
@@ -282,6 +282,12 @@ Watch background agents work in real-time. Codeman monitors agent activity and d
 - **Status & model badges** — green (active), yellow (idle), blue (completed) indicators with Haiku/Sonnet/Opus model color coding
 - **Auto-behavior** — windows auto-open on spawn, auto-minimize on completion, tab badge shows "AGENT" or "AGENTS (n)" count
 - **Nested agents** — supports 3-level hierarchies (lead session -> teammate agents -> sub-subagents)
+
+Multi-agent Workflow runs ("ultracode") get the same treatment: a floating run window tracks the whole workflow live, with phases, per-agent token counts, and the current tool of every agent:
+
+<p align="center">
+  <img src="docs/images/ultracode-window-20260724.png" alt="Ultracode workflow visualization: a live run window with per-agent tokens and phases" width="900">
+</p>
 
 **Agent Teams** — first-class support for Claude Code's native multi-agent teams (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`). `TeamWatcher` polls `~/.claude/teams/`, matches teammates to their lead session, and surfaces them as live subagent windows with **team-aware idle detection** — so the Respawn Controller won't fire while teammates are still working. See [`docs/agent-teams/`](docs/agent-teams/).
 

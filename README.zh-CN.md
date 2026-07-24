@@ -264,7 +264,7 @@ codeman web --https
 实时观看后台智能体工作。Codeman 监控智能体活动，将每个智能体显示在一个可拖拽的浮动窗口中，并用「黑客帝国」风格的动态连接线连回父会话。
 
 <p align="center">
-  <img src="docs/images/subagent-spawn.png" alt="子智能体可视化" width="900">
+  <img src="docs/images/subagent-windows-20260724.png" alt="子智能体可视化 —— 三个并行 Explore 智能体的浮动窗口与实时工具调用日志" width="900">
 </p>
 
 - **浮动终端窗口** —— 每个智能体一个可拖拽、可调整大小的面板，带实时活动日志，逐条展示每一次工具调用、文件读取与进度更新
@@ -272,6 +272,12 @@ codeman web --https
 - **状态与模型徽标** —— 绿色（活动）、黄色（空闲）、蓝色（已完成）指示，并以 Haiku/Sonnet/Opus 的颜色编码区分模型
 - **自动行为** —— 窗口在产生时自动打开、完成时自动最小化，标签徽标显示「AGENT」或「AGENTS (n)」计数
 - **嵌套智能体** —— 支持 3 层层级（主会话 → 团队成员智能体 → 子-子智能体）
+
+多智能体 Workflow 运行（「ultracode」）同样可视化：一个浮动运行窗口实时跟踪整个工作流，展示阶段、各智能体的 token 用量与当前工具：
+
+<p align="center">
+  <img src="docs/images/ultracode-window-20260724.png" alt="Ultracode 工作流可视化 —— 实时运行窗口，含各智能体 token 与阶段" width="900">
+</p>
 
 **智能体团队（Agent Teams）** —— 一等公民式支持 Claude Code 原生的多智能体团队（`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`）。`TeamWatcher` 轮询 `~/.claude/teams/`，将团队成员匹配到其主会话，并以实时子智能体窗口呈现，且具备**团队感知的空闲检测** —— 因此当团队成员仍在工作时，重生控制器不会被触发。详见 [`docs/agent-teams/`](docs/agent-teams/)。
 
