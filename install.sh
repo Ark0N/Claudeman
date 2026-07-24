@@ -43,6 +43,14 @@ BIND_HOST=""
 BIND_PASSWORD=""
 BIND_ACK="0"
 
+# Binding found in an already-installed service (read_existing_binding), used
+# so updates and re-installs preserve the user's previous choice instead of
+# silently loosening it to the new network-access default.
+EXISTING_FOUND="0"
+EXISTING_HOST=""
+EXISTING_PASSWORD=""
+EXISTING_ACK="0"
+
 # puppeteer is a devDependency used only by scripts/browser-comparison.mjs — its
 # ~150MB chrome-headless-shell download is never needed to build or run Codeman.
 # Skipping it avoids a slow download and a fatal install failure when a prior
@@ -997,6 +1005,44 @@ xml_escape() {
     printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
 }
 
+systemd_env_unescape() {
+    printf '%s' "$1" | sed 's/\\\(["\\]\)/\1/g'
+}
+
+xml_unescape() {
+    printf '%s' "$1" | sed -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&amp;/\&/g'
+}
+
+# Read the binding out of an already-installed service file, if any. A service
+# file WITHOUT our CODEMAN_HOST line is a pre-1.8 install, which effectively
+# ran loopback (the server default), so it reports 127.0.0.1.
+read_existing_binding() {
+    EXISTING_FOUND="0"; EXISTING_HOST=""; EXISTING_PASSWORD=""; EXISTING_ACK="0"
+    local unit="$HOME/.config/systemd/user/codeman-web.service"
+    local plist="$HOME/Library/LaunchAgents/com.codeman.web.plist"
+
+    if [[ -f "$unit" ]]; then
+        EXISTING_FOUND="1"
+        EXISTING_HOST=$(sed -n 's/^Environment=CODEMAN_HOST=//p' "$unit" | head -1)
+        local pwline
+        pwline=$(sed -n 's/^Environment="CODEMAN_PASSWORD=\(.*\)"$/\1/p' "$unit" | head -1)
+        [[ -n "$pwline" ]] && EXISTING_PASSWORD=$(systemd_env_unescape "$pwline")
+        grep -q '^Environment=CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK=1' "$unit" && EXISTING_ACK="1"
+    elif [[ -f "$plist" ]]; then
+        EXISTING_FOUND="1"
+        EXISTING_HOST=$(awk '/<key>CODEMAN_HOST<\/key>/{getline; print}' "$plist" | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')
+        local pwraw
+        pwraw=$(awk '/<key>CODEMAN_PASSWORD<\/key>/{getline; print}' "$plist" | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')
+        [[ -n "$pwraw" ]] && EXISTING_PASSWORD=$(xml_unescape "$pwraw")
+        grep -q '<key>CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK</key>' "$plist" && EXISTING_ACK="1"
+    fi
+
+    if [[ "$EXISTING_FOUND" == "1" && -z "$EXISTING_HOST" ]]; then
+        EXISTING_HOST="127.0.0.1"
+    fi
+    return 0
+}
+
 # Ask how the dashboard should be reachable and set BIND_HOST/BIND_PASSWORD/
 # BIND_ACK. Interactive default is network access (0.0.0.0) because that is
 # what most installs need; loopback is offered as the safer alternative.
@@ -1014,28 +1060,49 @@ choose_network_binding() {
         return 0
     fi
 
+    # A previous install's choice is the baseline: re-installing must never
+    # silently loosen it.
+    read_existing_binding
+
     if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
-        BIND_HOST="127.0.0.1"
-        info "Non-interactive install: binding 127.0.0.1 (preset CODEMAN_HOST=0.0.0.0 to override)"
+        if [[ "$EXISTING_FOUND" == "1" ]]; then
+            BIND_HOST="$EXISTING_HOST"
+            BIND_PASSWORD="$EXISTING_PASSWORD"
+            BIND_ACK="$EXISTING_ACK"
+            info "Non-interactive install: preserving existing binding ($BIND_HOST)"
+        else
+            BIND_HOST="127.0.0.1"
+            info "Non-interactive install: binding 127.0.0.1 (preset CODEMAN_HOST=0.0.0.0 to override)"
+        fi
         return 0
+    fi
+
+    # Default follows the existing setup when there is one, else network.
+    local default_choice="1"
+    if [[ "$EXISTING_FOUND" == "1" && "$EXISTING_HOST" == "127.0.0.1" ]]; then
+        default_choice="2"
     fi
 
     echo -e "  ${BOLD}Network access${NC}"
     echo ""
     echo -e "  How should the Codeman dashboard be reachable?"
     echo ""
-    echo -e "    ${CYAN}1)${NC} ${BOLD}Any device on your network${NC} ${DIM}(0.0.0.0)${NC}  [default]"
+    echo -e "    ${CYAN}1)${NC} ${BOLD}Any device on your network${NC} ${DIM}(0.0.0.0)${NC}"
     echo -e "       Open it straight from your phone or laptop."
     echo -e "       ${YELLOW}Less safe: set a password so only you control your agents.${NC}"
     echo -e "    ${CYAN}2)${NC} ${BOLD}This machine only${NC} ${DIM}(127.0.0.1)${NC}"
     echo -e "       Safest. Reach it remotely via Tailscale or a tunnel."
     echo ""
+    if [[ "$EXISTING_FOUND" == "1" ]]; then
+        echo -e "  ${DIM}Current setup: $EXISTING_HOST$([[ -n "$EXISTING_PASSWORD" ]] && echo ", password set"). Enter keeps it.${NC}"
+        echo ""
+    fi
 
     local bind_choice=""
     while true; do
-        echo -en "${CYAN}Choose [1/2] (default 1):${NC} " >&2
-        read_reply bind_choice || bind_choice="1"
-        bind_choice="${bind_choice:-1}"
+        echo -en "${CYAN}Choose [1/2] (default $default_choice):${NC} " >&2
+        read_reply bind_choice || bind_choice="$default_choice"
+        bind_choice="${bind_choice:-$default_choice}"
         case "$bind_choice" in
             1|2) break ;;
             *) echo "Please enter 1 or 2." >&2 ;;
@@ -1048,7 +1115,13 @@ choose_network_binding() {
         return 0
     fi
 
-    BIND_HOST="0.0.0.0"
+    # Keep a custom non-loopback host from a previous install (e.g. a specific
+    # interface IP); otherwise bind all interfaces.
+    if [[ "$EXISTING_FOUND" == "1" && -n "$EXISTING_HOST" && "$EXISTING_HOST" != "127.0.0.1" ]]; then
+        BIND_HOST="$EXISTING_HOST"
+    else
+        BIND_HOST="0.0.0.0"
+    fi
 
     if [[ -n "${CODEMAN_PASSWORD:-}" ]]; then
         BIND_PASSWORD="$CODEMAN_PASSWORD"
@@ -1057,11 +1130,17 @@ choose_network_binding() {
     fi
 
     echo ""
-    local pw="" pw2=""
+    local pw="" pw2="" keep_hint=""
+    [[ -n "$EXISTING_PASSWORD" ]] && keep_hint="Enter to keep the current one" || keep_hint="Enter to skip"
     while true; do
-        echo -en "${CYAN}Set a dashboard password (recommended; Enter to skip):${NC} " >&2
+        echo -en "${CYAN}Set a dashboard password (recommended; $keep_hint):${NC} " >&2
         read_secret pw || pw=""
         if [[ -z "$pw" ]]; then
+            if [[ -n "$EXISTING_PASSWORD" ]]; then
+                BIND_PASSWORD="$EXISTING_PASSWORD"
+                success "Keeping the existing password"
+                break
+            fi
             echo ""
             warn "Without a password, EVERY device on your network gets full access"
             warn "to your agents (they run commands as $USER)."
@@ -1853,6 +1932,15 @@ update() {
         echo -e "    ${CYAN}pkill -f 'codeman.*web'; codeman web &${NC}"
     fi
     echo ""
+
+    # Reflect the service's actual binding in the closing notice. Updates
+    # never rewrite the service files, so the existing choice is authoritative.
+    read_existing_binding
+    if [[ "$EXISTING_FOUND" == "1" ]]; then
+        BIND_HOST="$EXISTING_HOST"
+        BIND_PASSWORD="$EXISTING_PASSWORD"
+        BIND_ACK="$EXISTING_ACK"
+    fi
 
     print_security_notice
 }
