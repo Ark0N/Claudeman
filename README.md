@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/subagent-demo.gif" alt="Codeman — parallel subagent visualization" width="900">
+  <img src="docs/images/subagent-demo-20260724.gif" alt="Codeman — parallel subagent visualization" width="900">
 </p>
 
 **Codeman** is a self-hosted mission control for AI coding agents. It spawns Claude Code, OpenCode, Codex, or Gemini CLI inside persistent tmux sessions, streams the real terminal to any browser, and keeps agents productive after you walk away: it re-prompts on idle, resumes when a usage limit resets, runs scheduled jobs, and shows every background agent working in real time.
@@ -34,6 +34,10 @@
 - **See your agents think** - [live floating windows](#live-agent-visualization) for every subagent and teammate, with real-time transcripts
 - **Nothing gets lost** - tmux persistence across restarts and network drops, exactly-once input delivery, full-scrollback replay
 - **Self-hosted and boring on purpose** - loopback-only by default, MIT licensed, no telemetry, runs entirely on your machine
+
+<p align="center">
+  <img src="docs/images/codeman-tour-20260724.png" alt="Codeman dashboard tour: session tabs per case, one-click Run for new agents, live plan usage in the header" width="900">
+</p>
 
 ---
 

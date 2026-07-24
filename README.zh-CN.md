@@ -21,7 +21,11 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/subagent-demo.gif" alt="Codeman — 并行子智能体可视化" width="900">
+  <img src="docs/images/subagent-demo-20260724.gif" alt="Codeman — 并行子智能体可视化" width="900">
+</p>
+
+<p align="center">
+  <img src="docs/images/codeman-tour-20260724.png" alt="Codeman 仪表盘导览：按项目分组的会话标签页、一键 Run 启动新智能体、页头实时用量" width="900">
 </p>
 
 > 本文档由英文版 [`README.md`](README.md) 翻译而来。如有出入，以英文版为准。
