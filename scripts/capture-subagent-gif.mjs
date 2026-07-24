@@ -126,6 +126,7 @@ async function capture() {
         showMonitor: false,
         showProjectInsights: false,
         showFileBrowser: false,
+        showTokenCount: false,
       });
       localStorage.setItem('codeman-app-settings', JSON.stringify(existing));
     });
@@ -230,6 +231,7 @@ async function capture() {
         showMonitor: false,
         showProjectInsights: false,
         showFileBrowser: false,
+        showTokenCount: false,
       });
       localStorage.setItem('codeman-app-settings', JSON.stringify(existing));
     });

@@ -221,6 +221,7 @@ async function configureSettings(page) {
       subagentTrackingEnabled: true,
       subagentActiveTabOnly: false, // Show all subagents regardless of active tab
       showMonitor: true,
+      showTokenCount: false,
     };
     localStorage.setItem('codeman-app-settings', JSON.stringify(settings));
   });

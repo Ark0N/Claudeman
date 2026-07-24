@@ -50,7 +50,7 @@ async function newCtx(browser) {
       try {
         localStorage.setItem('codeman:skin', skin);
         localStorage.setItem('codeman-font-size', String(font));
-        const blob = { skin, showFileBrowser: false, showProjectInsights: false };
+        const blob = { skin, showFileBrowser: false, showProjectInsights: false, showTokenCount: false };
         // Don't auto-hide subagent windows that belong to a non-active tab — the
         // subagent scene re-homes agents and needs both windows visible at once.
         blob.subagentActiveTabOnly = false;

@@ -307,9 +307,9 @@ Object.assign(CodemanApp.prototype, {
     // Header visibility settings
     document.getElementById('appSettingsShowFontControls').checked = settings.showFontControls ?? defaults.showFontControls ?? false;
     document.getElementById('appSettingsShowSystemStats').checked = settings.showSystemStats ?? defaults.showSystemStats ?? true;
-    document.getElementById('appSettingsShowLifecycleLog').checked = settings.showLifecycleLog ?? defaults.showLifecycleLog ?? true;
+    document.getElementById('appSettingsShowLifecycleLog').checked = settings.showLifecycleLog ?? defaults.showLifecycleLog ?? false;
     document.getElementById('appSettingsShowResponseViewer').checked = settings.showResponseViewer ?? defaults.showResponseViewer ?? false;
-    document.getElementById('appSettingsShowFileViewerButton').checked = settings.showFileViewerButton ?? defaults.showFileViewerButton ?? false;
+    document.getElementById('appSettingsShowFileViewerButton').checked = settings.showFileViewerButton ?? defaults.showFileViewerButton ?? true;
     document.getElementById('appSettingsShowAttachmentsButton').checked = settings.showAttachmentsButton ?? defaults.showAttachmentsButton ?? false;
     document.getElementById('appSettingsSkin').value = settings.skin ?? defaults.skin ?? 'daylight-blue';
     // WebGL renderer (desktop only — mobile always uses the DOM renderer, so hide
@@ -1893,7 +1893,9 @@ Object.assign(CodemanApp.prototype, {
     const compactHeader = MobileDetection.getDeviceType() !== 'desktop';
     const showFontControls = compactHeader ? false : (settings.showFontControls ?? defaults.showFontControls ?? false);
     const showSystemStats = compactHeader ? false : (settings.showSystemStats ?? defaults.showSystemStats ?? true);
-    const showTokenCount = compactHeader ? false : (settings.showTokenCount ?? defaults.showTokenCount ?? true);
+    // Default OFF: the header stays gear + usage chips + files button unless a
+    // stored preference explicitly re-enables the token chip (no UI toggle exists).
+    const showTokenCount = compactHeader ? false : (settings.showTokenCount ?? defaults.showTokenCount ?? false);
 
     const fontControlsEl = document.querySelector('.header-font-controls');
     const systemStatsEl = document.getElementById('headerSystemStats');
@@ -1910,7 +1912,9 @@ Object.assign(CodemanApp.prototype, {
     }
 
     // Hide lifecycle log button when setting is disabled
-    const showLifecycleLog = settings.showLifecycleLog ?? defaults.showLifecycleLog ?? true;
+    // Default OFF: the lifecycle-log document icon is opt-in; the default header
+    // keeps only WS/CPU/MEM, the file-viewer folder, usage chips, and the gear.
+    const showLifecycleLog = settings.showLifecycleLog ?? defaults.showLifecycleLog ?? false;
     const lifecycleBtn = document.querySelector('.btn-lifecycle-log');
     if (lifecycleBtn) {
       lifecycleBtn.style.display = showLifecycleLog ? '' : 'none';
@@ -1934,7 +1938,9 @@ Object.assign(CodemanApp.prototype, {
 
     // File Viewer header button — opt-in, default OFF. Marker class (base is
     // display:inline-flex !important); clicking it toggles the file browser panel.
-    const showFileViewerButton = settings.showFileViewerButton ?? defaults.showFileViewerButton ?? false;
+    // Default ON (desktop): the folder button is part of the standard header now;
+    // phones still hide it via mobile.css (btn-file-viewer in the phone-hidden set).
+    const showFileViewerButton = settings.showFileViewerButton ?? defaults.showFileViewerButton ?? true;
     const fileViewerBtn = document.querySelector('.btn-file-viewer');
     if (fileViewerBtn) {
       fileViewerBtn.classList.toggle('btn-file-viewer--hidden', !showFileViewerButton);

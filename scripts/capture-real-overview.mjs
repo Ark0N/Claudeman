@@ -79,6 +79,7 @@ const main = async () => {
           showMonitor: false,
           showSubagents: false,
           showProjectInsights: false,
+          showTokenCount: false,
         };
         if (planUsage) blob.showPlanUsageLimits = true;
         localStorage.setItem('codeman-app-settings', JSON.stringify(blob));
