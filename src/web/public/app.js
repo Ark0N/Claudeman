@@ -41,7 +41,7 @@
  * @dependency mobile-handlers.js (MobileDetection, KeyboardHandler, SwipeHandler)
  * @dependency voice-input.js (VoiceInput, DeepgramProvider)
  * @dependency notification-manager.js (NotificationManager class)
- * @dependency keyboard-accessory.js (KeyboardAccessoryBar, FocusTrap)
+ * @dependency keyboard-accessory.js (MobileTerminalControls, FocusTrap)
  * @dependency vendor/xterm.js, vendor/xterm-addon-fit.js, vendor/xterm-addon-webgl.js
  * @dependency vendor/xterm-zerolag-input.iife.js (LocalEchoOverlay)
  * @loadorder 6 of 15 — loaded after keyboard-accessory.js, before terminal-ui.js
@@ -787,10 +787,14 @@ class CodemanApp {
     KeyboardHandler.init();
     SwipeHandler.init();
     VoiceInput.init();
-    KeyboardAccessoryBar.init();
-    // Apply keyboard bar mode from settings
+    // One setting controls both mobile terminal-control surfaces: the
+    // keyboard-hidden menu pad and the keyboard-open accessory bar.
     const _kbSettings = this.loadAppSettingsFromStorage();
-    if (_kbSettings.extendedKeyboardBar) KeyboardAccessoryBar.setMode('extended');
+    const _kbDefaults = this.getDefaultSettings();
+    MobileTerminalControls.configureFeedback(_kbSettings, _kbDefaults);
+    MobileTerminalControls.init(
+      MobileTerminalControls.resolveEnabled(_kbSettings, _kbDefaults)
+    );
     this.applyHeaderVisibilitySettings();
     this.restorePlanUsageChip();
     this.applySkin();

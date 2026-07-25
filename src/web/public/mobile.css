@@ -439,14 +439,17 @@ html.mobile-init .file-browser-panel {
   }
 
   .main {
-    padding-bottom: calc(40px + var(--safe-area-bottom));
+    padding-bottom: calc(var(--mobile-toolbar-height) + var(--safe-area-bottom));
   }
 
   /* iOS Safari: toolbar is pushed up by (100vh - --app-height) to clear the
      browser's bottom bar. Match that offset in main's padding so the terminal
      doesn't extend behind the toolbar. */
   .ios-device.safari-browser .main {
-    padding-bottom: calc(40px + var(--safe-area-bottom) + (100vh - var(--app-height, 100vh)));
+    padding-bottom: calc(
+      var(--mobile-toolbar-height) + var(--safe-area-bottom) +
+        (100vh - var(--app-height, 100vh))
+    );
   }
 
   .header-right {
@@ -568,19 +571,6 @@ html.mobile-init .file-browser-panel {
     position: relative;
   }
 
-  /* When keyboard is visible, pin the app container to the viewport.
-     iOS Safari scrolls the page to bring the focused input (xterm's hidden
-     textarea) into view, even with overflow:hidden. position:fixed prevents
-     the browser from scrolling the document under the app. */
-  .keyboard-visible .app {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: auto;
-    height: var(--app-height, 100dvh);
-  }
-
   /* Ultra-compact session tabs — .tabs-two-rows override needed to match
      specificity of .session-tabs.tabs-two-rows in styles.css (0,2,0) */
   .session-tabs,
@@ -695,7 +685,7 @@ html.mobile-init .file-browser-panel {
     bottom: var(--safe-area-bottom);
   }
   .keyboard-visible.ios-device.safari-browser .keyboard-accessory-bar {
-    bottom: calc(var(--safe-area-bottom) + 40px);
+    bottom: 0;
   }
 
   /* Show case selector in center */
@@ -898,7 +888,7 @@ html.mobile-init .file-browser-panel {
   /* Simplified toolbar layout — Run, Shell, and Case */
   .toolbar-left .toolbar-group:first-child {
     width: 100%;
-    gap: 8px;
+    gap: 4px;
   }
 
   .btn-toolbar.btn-shell {
@@ -1012,13 +1002,13 @@ html.mobile-init .file-browser-panel {
   .keyboard-accessory-bar {
     display: none;
     position: fixed;
-    bottom: calc(var(--safe-area-bottom) + 40px); /* Above toolbar */
+    bottom: calc(var(--safe-area-bottom) + var(--mobile-toolbar-height)); /* Above toolbar */
     left: 0;
     right: 0;
-    height: 44px;
+    height: var(--mobile-terminal-accessory-height);
     background: #1a1a1a;
     border-top: 1px solid rgba(255, 255, 255, 0.1);
-    padding: 6px 8px;
+    padding: 0 8px;
     padding-left: calc(8px + var(--safe-area-left));
     padding-right: calc(8px + var(--safe-area-right));
     gap: 8px;
@@ -1042,11 +1032,13 @@ html.mobile-init .file-browser-panel {
 
   .accessory-btn {
     display: inline-flex;
+    min-width: 40px;
+    height: 100%;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
     gap: 4px;
-    padding: 6px 12px;
+    padding: 0 8px;
     background: #2a2a2a;
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 6px;
@@ -1074,10 +1066,15 @@ html.mobile-init .file-browser-panel {
   }
 
   .accessory-btn-arrow {
-    padding: 6px 10px;
+    padding: 0 6px;
     background: #2563eb;
     border-color: rgba(59, 130, 246, 0.5);
     color: #fff;
+  }
+
+  .keyboard-accessory-bar [data-action='opt-enter'] {
+    min-width: 58px;
+    padding: 0 6px;
   }
 
   .accessory-btn-arrow:active {
@@ -1088,7 +1085,7 @@ html.mobile-init .file-browser-panel {
     margin-left: auto;
     flex: 1 1 0;
     max-width: 100px;
-    padding: 10px 8px;
+    padding: 0 8px;
     background: #2563eb;
     border-color: rgba(59, 130, 246, 0.5);
     color: #fff;
@@ -2230,6 +2227,126 @@ html.mobile-init .file-browser-panel {
 /* Keyboard accessory bar + paste overlay base styles moved to styles.css
    (always loaded — covers iPad landscape where mobile.css doesn't load).
    Phone-specific overrides remain in @media (max-width: 430px) above. */
+
+/* ============================================================================
+   Keyboard-hidden terminal menu navigation
+   A dedicated band keeps vertical terminal gestures available for scrollback.
+   The empty space around the buttons is also a vertical swipe surface.
+   ============================================================================ */
+@media (max-width: 768px) {
+  .mobile-terminal-nav {
+    display: none;
+    position: fixed;
+    right: 0;
+    bottom: calc(var(--safe-area-bottom) + var(--mobile-toolbar-height));
+    left: 0;
+    box-sizing: border-box;
+    height: var(--mobile-terminal-nav-height);
+    padding: 0 calc(8px + var(--safe-area-right)) 0
+      calc(8px + var(--safe-area-left));
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    background: var(--term-bg, #161b23);
+    border-top: 0;
+    z-index: 51;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  .touch-device .mobile-terminal-nav.visible {
+    display: flex;
+  }
+
+  .keyboard-visible .mobile-terminal-nav {
+    display: none !important;
+  }
+
+  .mobile-terminal-nav-btn {
+    display: inline-flex;
+    width: var(--mobile-terminal-nav-height);
+    min-width: var(--mobile-terminal-nav-height);
+    height: var(--mobile-terminal-nav-height);
+    min-height: var(--mobile-terminal-nav-height);
+    padding: 0;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    background: #2563eb;
+    border: 1px solid rgba(147, 197, 253, 0.55);
+    border-radius: 6px;
+    touch-action: none;
+  }
+
+  .mobile-terminal-nav [data-nav-key="esc"] {
+    margin-right: auto;
+  }
+
+  .mobile-terminal-nav [data-nav-key="tab"] {
+    margin-left: auto;
+  }
+
+  .mobile-terminal-nav-btn svg {
+    width: 22px;
+    height: 22px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.25;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    pointer-events: none;
+  }
+
+  .mobile-terminal-nav-enter {
+    color: #e5e7eb;
+    background: #2f333b;
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+
+  .mobile-terminal-nav-key {
+    color: #e5e7eb;
+    background: #2f333b;
+    border-color: rgba(255, 255, 255, 0.2);
+    font: 600 0.75rem/1 var(--ui-font);
+  }
+
+  .mobile-terminal-nav-btn.pressed {
+    background: #1d4ed8;
+    transform: translateY(1px);
+  }
+
+  .mobile-terminal-nav.chord-active .mobile-terminal-nav-enter {
+    color: #fff;
+    background: #15803d;
+    border-color: #4ade80;
+  }
+
+  .mobile-terminal-nav-btn:focus-visible {
+    outline: 2px solid #f8fafc;
+    outline-offset: -3px;
+  }
+
+  .mobile-terminal-nav-btn:disabled {
+    opacity: 0.45;
+  }
+
+  body.mobile-nav-visible:not(.keyboard-visible) .main {
+    padding-bottom: calc(
+      var(--mobile-toolbar-height) + var(--mobile-terminal-nav-height) +
+        var(--safe-area-bottom)
+    );
+    background: var(--term-bg, #161b23);
+  }
+
+  body.mobile-nav-visible:not(.keyboard-visible).ios-device.safari-browser .main {
+    padding-bottom: calc(
+      var(--mobile-toolbar-height) + var(--mobile-terminal-nav-height) +
+        var(--safe-area-bottom) + (100vh - var(--app-height, 100vh))
+    );
+  }
+}
 
 /* ============================================================================
    iOS Safari Specific Fixes

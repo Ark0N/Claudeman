@@ -60,7 +60,7 @@ describe('Settings Modal', () => {
       }
     });
 
-    it('mobile defaults: all panels hidden, subagent tracking OFF, ralph OFF', async () => {
+    it('mobile defaults: panels hidden, subagent tracking ON, ralph OFF', async () => {
       const defaults = await page.evaluate(() => {
         const fn = (window as any).app?.getDefaultSettings;
         if (fn) return fn.call((window as any).app);
@@ -76,8 +76,11 @@ describe('Settings Modal', () => {
         expect(defaults.showProjectInsights).toBe(false);
         expect(defaults.showFileBrowser).toBe(false);
         expect(defaults.showSubagents).toBe(false);
-        expect(defaults.subagentTrackingEnabled).toBe(false);
+        expect(defaults.subagentTrackingEnabled).toBe(true);
         expect(defaults.ralphTrackerEnabled).toBe(false);
+        expect(defaults.mobileTerminalControlsEnabled).toBe(true);
+        expect(defaults.mobileControlHaptics).toBe(true);
+        expect(defaults.mobileControlSound).toBe(false);
       }
     });
 
@@ -305,7 +308,6 @@ describe('Settings Modal', () => {
             JSON.stringify({
               showFontControls: true,
               showMonitor: true,
-              subagentTrackingEnabled: true,
             })
           );
         }, STORAGE_KEYS.SETTINGS_MOBILE);
@@ -323,7 +325,6 @@ describe('Settings Modal', () => {
         expect(settings).not.toBeNull();
         expect(settings?.showFontControls).toBe(true);
         expect(settings?.showMonitor).toBe(true);
-        expect(settings?.subagentTrackingEnabled).toBe(true);
       } finally {
         await context.close();
       }
@@ -414,7 +415,8 @@ describe('Settings Modal', () => {
             key,
             JSON.stringify({
               showResponseViewer: true,
-              extendedKeyboardBar: true,
+              // Legacy false meant the compact accessory layout, not disabled.
+              extendedKeyboardBar: false,
             })
           );
         }, STORAGE_KEYS.SETTINGS_MOBILE);
@@ -434,16 +436,56 @@ describe('Settings Modal', () => {
           responseViewerVisible: !document
             .querySelector('.btn-response-viewer-header')
             ?.classList.contains('btn-response-viewer-header--hidden'),
-          keyboardExtended: Boolean(document.querySelector('.keyboard-accessory-bar [data-action="arrow-left"]')),
         }));
 
         expect(state.deviceType).toBe('desktop');
         expect(state.handheld).toBe(true);
         expect(state.storageKey).toBe(STORAGE_KEYS.SETTINGS_MOBILE);
         expect(state.responseViewerVisible).toBe(true);
-        expect(state.keyboardExtended).toBe(true);
+        expect(await page.evaluate('MobileTerminalControls.enabled')).toBe(true);
 
-        await showKeyboard(page, KEYBOARD.TYPICAL_IOS_HEIGHT);
+        await page.evaluate(() => (window as any).app.openAppSettings());
+        await assertVisible(page, '#appSettingsMobileTerminalControlsItem');
+        expect(await page.locator('#appSettingsMobileTerminalControls').isChecked()).toBe(true);
+        await page.evaluate(() => (window as any).app.closeAppSettings());
+
+        await page.evaluate(`
+          app.activeSessionId = 'foldable-controls-test';
+          app.hideWelcome();
+          MobileTerminalControls.syncVisibility();
+        `);
+
+        await showKeyboard(page, KEYBOARD.TYPICAL_IOS_HEIGHT, { preferredLayer: 'dom' });
+        await assertVisible(page, '.keyboard-accessory-bar');
+        const alignment = await page.evaluate(() => {
+          const appBox = document.querySelector('.app')!.getBoundingClientRect();
+          const accessoryBox = document.querySelector('.keyboard-accessory-bar')!.getBoundingClientRect();
+          return Math.abs(accessoryBox.bottom - appBox.bottom);
+        });
+        expect(alignment).toBeLessThanOrEqual(1);
+      } finally {
+        await context.close();
+      }
+    });
+
+    it('enables the unified controls by default on touch tablets', async () => {
+      const device = REPRESENTATIVE_DEVICES['standard-tablet'];
+      const { page, context } = await createDevicePage(device, BASE_URL, 'chromium');
+
+      try {
+        expect(await page.evaluate('MobileTerminalControls.enabled')).toBe(true);
+
+        await page.evaluate(() => (window as any).app.openAppSettings());
+        await assertVisible(page, '#appSettingsMobileTerminalControlsItem');
+        expect(await page.locator('#appSettingsMobileTerminalControls').isChecked()).toBe(true);
+        await page.evaluate(() => (window as any).app.closeAppSettings());
+
+        await page.evaluate(`
+          app.activeSessionId = 'tablet-controls-test';
+          app.hideWelcome();
+          MobileTerminalControls.syncVisibility();
+        `);
+        await showKeyboard(page, KEYBOARD.TYPICAL_IOS_HEIGHT, { preferredLayer: 'dom' });
         await assertVisible(page, '.keyboard-accessory-bar');
       } finally {
         await context.close();

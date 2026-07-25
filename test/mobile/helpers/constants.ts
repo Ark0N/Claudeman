@@ -9,6 +9,7 @@ export const PORTS = {
   VISUAL_REGRESSION: 3206,
   ACCESSIBILITY: 3207,
   HEADER_BUTTONS: 3208,
+  NAVIGATION_PAD: 3209,
 } as const;
 
 // CSS Selectors
@@ -36,6 +37,7 @@ export const SELECTORS = {
   // Keyboard
   KEYBOARD_ACCESSORY: '.keyboard-accessory-bar',
   KEYBOARD_ACCESSORY_VISIBLE: '.keyboard-accessory-bar.visible',
+  MOBILE_NAVIGATION: '.mobile-terminal-nav',
 
   // Terminal
   TERMINAL_CONTAINER: '.terminal-container',
@@ -68,6 +70,7 @@ export const KEYBOARD = {
   SHOW_THRESHOLD: 150, // heightDiff > 150px triggers show
   HIDE_THRESHOLD: 100, // heightDiff < 100px triggers hide
   TYPICAL_IOS_HEIGHT: 336,
+  TYPICAL_ANDROID_HEIGHT: 300,
   FOCUSIN_DELAY: 400,
   ANIMATION_DELAY: 150,
   RESIZE_DELAY_SHOW: 150,

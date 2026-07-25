@@ -347,7 +347,21 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsTerminalWheelLocal').checked =
       settings.terminalWheelLocalScrollback ?? defaults.terminalWheelLocalScrollback ?? false;
     document.getElementById('appSettingsCjkInput').checked = settings.cjkInputEnabled ?? defaults.cjkInputEnabled ?? false;
-    document.getElementById('appSettingsExtendedKeyboardBar').checked = settings.extendedKeyboardBar ?? false;
+    const mobileControlsItem = document.getElementById('appSettingsMobileTerminalControlsItem');
+    const mobileControlItems = [
+      mobileControlsItem,
+      document.getElementById('appSettingsMobileControlHapticsItem'),
+      document.getElementById('appSettingsMobileControlSoundItem'),
+    ];
+    for (const item of mobileControlItems) {
+      if (item) item.style.display = MobileDetection.isTouchDevice() ? '' : 'none';
+    }
+    document.getElementById('appSettingsMobileTerminalControls').checked =
+      MobileTerminalControls.resolveEnabled(settings, defaults);
+    document.getElementById('appSettingsMobileControlHaptics').checked =
+      settings.mobileControlHaptics ?? defaults.mobileControlHaptics ?? true;
+    document.getElementById('appSettingsMobileControlSound').checked =
+      settings.mobileControlSound ?? defaults.mobileControlSound ?? false;
     document.getElementById('appSettingsTabTwoRows').checked = settings.tabTwoRows ?? defaults.tabTwoRows ?? false;
     // Claude CLI settings
     const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
@@ -1458,8 +1472,10 @@ Object.assign(CodemanApp.prototype, {
       localEchoEnabled: document.getElementById('appSettingsLocalEcho').checked,
       terminalWheelLocalScrollback: document.getElementById('appSettingsTerminalWheelLocal').checked,
       cjkInputEnabled: document.getElementById('appSettingsCjkInput').checked,
+      mobileTerminalControlsEnabled: document.getElementById('appSettingsMobileTerminalControls').checked,
+      mobileControlHaptics: document.getElementById('appSettingsMobileControlHaptics').checked,
+      mobileControlSound: document.getElementById('appSettingsMobileControlSound').checked,
       webglRendererEnabled: document.getElementById('appSettingsWebglRenderer').checked,
-      extendedKeyboardBar: document.getElementById('appSettingsExtendedKeyboardBar').checked,
       tabTwoRows: document.getElementById('appSettingsTabTwoRows').checked,
       skin: document.getElementById('appSettingsSkin').value,
       // Claude CLI settings
@@ -1610,12 +1626,13 @@ Object.assign(CodemanApp.prototype, {
     // Apply CJK input visibility immediately
     this._updateCjkInputState();
 
-    // Apply keyboard bar mode
-    KeyboardAccessoryBar.setMode(settings.extendedKeyboardBar ? 'extended' : 'simple');
+    // Apply both responsive surfaces of the unified mobile terminal controls.
+    MobileTerminalControls.configureFeedback(settings, this.getDefaultSettings());
+    MobileTerminalControls.setEnabled(settings.mobileTerminalControlsEnabled);
 
     // Save to server (includes notification prefs for cross-browser persistence).
     // Strip device-specific DISPLAY keys so they never sync across devices —
-    // localEcho/cjk/extendedKeyboard/skin are per-platform, and showPlanUsageLimits
+    // localEcho/cjk/mobile terminal controls/skin are per-platform, and showPlanUsageLimits
     // is per-device too (desktop can show the usage chip while mobile stays hidden).
     // webglRendererEnabled is per-device as well (renderer choice is GPU-specific,
     // and syncing would leak mobile's hidden-checkbox false onto desktop); it's
@@ -1627,7 +1644,9 @@ Object.assign(CodemanApp.prototype, {
     const {
       localEchoEnabled: _leo,
       cjkInputEnabled: _cjk,
-      extendedKeyboardBar: _ekb,
+      mobileTerminalControlsEnabled: _mtc,
+      mobileControlHaptics: _mch,
+      mobileControlSound: _mcs,
       skin: _skin,
       language: _language,
       showPlanUsageLimits: _pul,
@@ -1809,6 +1828,9 @@ Object.assign(CodemanApp.prototype, {
         remoteAutoReconnect: true,
         // Input
         gestureControlEnabled: false,
+        mobileTerminalControlsEnabled: true,
+        mobileControlHaptics: true,
+        mobileControlSound: false,
         // Feature toggles - keep tracking on even on mobile
         subagentTrackingEnabled: true,
         subagentActiveTabOnly: true, // Only show subagents for active tab
@@ -2239,7 +2261,9 @@ Object.assign(CodemanApp.prototype, {
           'showFontControls', 'showSystemStats', 'showTokenCount', 'showCost',
           'showLifecycleLog', 'showResponseViewer', 'showRedrawButton',
           'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
-          'subagentActiveTabOnly', 'tabTwoRows', 'localEchoEnabled', 'cjkInputEnabled', 'extendedKeyboardBar',
+          'subagentActiveTabOnly', 'tabTwoRows', 'localEchoEnabled', 'cjkInputEnabled',
+          'mobileTerminalControlsEnabled', 'mobileNavigationPadEnabled', 'extendedKeyboardBar',
+          'mobileControlHaptics', 'mobileControlSound',
           'skin', 'showPlanUsageLimits', 'showAttachmentsButton', 'showFileViewerButton', 'webglRendererEnabled',
           'language',
           'terminalWheelLocalScrollback',
