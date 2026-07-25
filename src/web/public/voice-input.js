@@ -610,7 +610,7 @@ const VoiceInput = {
         app._localEchoOverlay.clear();
         app._localEchoOverlay.suppressBufferDetection();
         if (text) app.sendInput(text).catch(() => {});
-        setTimeout(() => app.sendInput('\r').catch(() => {}), 80);
+        app.sendInput('\r').catch(() => {});
       } else {
         app.sendInput('\r').catch(() => {});
       }

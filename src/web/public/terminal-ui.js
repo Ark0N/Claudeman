@@ -766,7 +766,7 @@ Object.assign(CodemanApp.prototype, {
             return;
           }
           if (/^[\r\n]+$/.test(data)) {
-            // Enter: send full buffered text + \r to PTY in one shot
+            // Enter: queue the buffered text followed by \r.
             const text = this._localEchoOverlay?.pendingText || '';
             this._localEchoOverlay?.clear();
             // Suppress detection so PTY-echoed text isn't re-detected as user input
@@ -782,11 +782,10 @@ Object.assign(CodemanApp.prototype, {
               this._pendingInput += text;
               flushInput();
             }
-            // Send \r after a short delay so text arrives first
-            setTimeout(() => {
-              this._pendingInput += '\r';
-              flushInput();
-            }, 80);
+            // The durable input queue preserves call order. Queue Enter
+            // immediately so another fast submission cannot interleave before it.
+            this._pendingInput += '\r';
+            flushInput();
             return;
           }
           if (data.length > 1 && data.charCodeAt(0) >= 32) {

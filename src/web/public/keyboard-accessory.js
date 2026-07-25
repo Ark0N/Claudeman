@@ -247,10 +247,9 @@ const KeyboardAccessoryBar = {
    *  Sends text and Enter separately so Ink processes them as distinct events. */
   sendCommand(command) {
     if (!app.activeSessionId) return;
-    // Send command text first (without Enter)
+    // The durable input queue preserves these as two ordered records.
     app.sendInput(command);
-    // Send Enter separately after a brief delay so Ink has time to process the text.
-    setTimeout(() => app.sendInput('\r'), 120);
+    app.sendInput('\r');
   },
 
   /** Send a special key (arrow, escape, etc.) directly to the PTY.
@@ -304,7 +303,7 @@ const KeyboardAccessoryBar = {
       close();
       if (text) {
         app.sendInput(text);
-        setTimeout(() => app.sendInput('\r'), 80);
+        app.sendInput('\r');
       }
     };
 

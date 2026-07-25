@@ -742,6 +742,38 @@ describe('Virtual Keyboard', () => {
       expect(afterEnter.sentInputs.join('')).toBe('find bug\r');
     });
 
+    it('keeps back-to-back local echo submissions in text-then-Enter order', async () => {
+      await page.evaluate(() => {
+        window.__sentInputs = [];
+        app.activeSessionId = 'mobile-rapid-submit-test';
+        app.sessions.set('mobile-rapid-submit-test', {
+          id: 'mobile-rapid-submit-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app._sendInputAsync = (_sessionId: string, input: string) => {
+          window.__sentInputs.push(input);
+        };
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app.terminal.focus();
+      });
+
+      await page.keyboard.type('first');
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('second');
+      await page.keyboard.press('Enter');
+
+      await expect
+        .poll(() => page.evaluate(() => window.__sentInputs))
+        .toEqual(['first', '\r', 'second', '\r']);
+    });
+
     it('shows terminal local echo at the cursor when no prompt marker is visible', async () => {
       await page.evaluate(async () => {
         app.activeSessionId = 'mobile-cursor-fallback-test';
