@@ -699,8 +699,53 @@ describe('Virtual Keyboard', () => {
       expect(state?.bodyClass).toBe(false);
     });
 
-    it('focuses the terminal helper textarea when the terminal is tapped', async () => {
-      await page.evaluate(() => {
+    it('collapses a terminal readback without focusing the hidden textarea', async () => {
+      const point = await page.evaluate(async () => {
+        window.__sentInputs = [];
+        app.activeSessionId = 'mobile-readback-tap-test';
+        app.sessions.set('mobile-readback-tap-test', {
+          id: 'mobile-readback-tap-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app._sendInputAsync = (_sessionId: string, input: string) => {
+          window.__sentInputs.push(input);
+        };
+        app.hideWelcome();
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app.terminal.reset();
+        await new Promise<void>((resolve) =>
+          app.terminal.write('Agent readback\r\n  tap to collapse\r\n\r\n› ask', resolve)
+        );
+        app.terminal.focus();
+
+        const screen = app.terminal.element?.querySelector('.xterm-screen');
+        const cell = app.terminal._core?._renderService?.dimensions?.css?.cell;
+        const rect = screen?.getBoundingClientRect();
+        if (!rect || !cell?.width || !cell?.height) return null;
+        return {
+          x: rect.left + cell.width * 2,
+          y: rect.top + cell.height / 2,
+        };
+      });
+      expect(point).not.toBeNull();
+
+      await page.touchscreen.tap(point!.x, point!.y);
+
+      const state = await page.evaluate(() => ({
+        activeClass: document.activeElement?.className,
+        sentInputs: window.__sentInputs,
+      }));
+      expect(state.activeClass).not.toContain('xterm-helper-textarea');
+      expect(state.sentInputs).toHaveLength(1);
+      expect(state.sentInputs[0]).toMatch(/^\x1b\[<0;\d+;1M\x1b\[<0;\d+;1m$/);
+    });
+
+    it('focuses the terminal helper textarea when the visible prompt is tapped', async () => {
+      const point = await page.evaluate(async () => {
         window.__sentInputs = [];
         app.activeSessionId = 'mobile-focus-visible-input-test';
         app.sessions.set('mobile-focus-visible-input-test', {
@@ -716,9 +761,24 @@ describe('Virtual Keyboard', () => {
         settings.cjkInputEnabled = false;
         app.saveAppSettingsToStorage(settings);
         app._updateCjkInputState();
-      });
+        app.terminal.reset();
+        await new Promise<void>((resolve) =>
+          app.terminal.write('Agent readback\r\n  tap to collapse\r\n\r\n› ask', resolve)
+        );
+        (document.activeElement as HTMLElement | null)?.blur?.();
 
-      await page.locator('#terminalContainer').tap({ position: { x: 40, y: 40 } });
+        const screen = app.terminal.element?.querySelector('.xterm-screen');
+        const cell = app.terminal._core?._renderService?.dimensions?.css?.cell;
+        const rect = screen?.getBoundingClientRect();
+        if (!rect || !cell?.width || !cell?.height) return null;
+        return {
+          x: rect.left + cell.width * 2,
+          y: rect.top + cell.height * (app.terminal.buffer.active.cursorY + 0.5),
+        };
+      });
+      expect(point).not.toBeNull();
+
+      await page.touchscreen.tap(point!.x, point!.y);
 
       const state = await page.evaluate(() => ({
         activeClass: document.activeElement?.className,

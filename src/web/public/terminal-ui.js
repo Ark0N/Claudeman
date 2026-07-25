@@ -432,7 +432,7 @@ Object.assign(CodemanApp.prototype, {
 
       let didScroll = false; // track whether touchmove fired (tap vs scroll)
       let touchStartY = 0;
-      let tapCanActivateTerminal = false;
+      let tapStartedWithTerminalFocus = false;
       const TAP_THRESHOLD = 8; // px — ignore micro-drift to distinguish tap from scroll
       container.addEventListener(
         'touchstart',
@@ -444,7 +444,7 @@ Object.assign(CodemanApp.prototype, {
             pixelAccum = 0;
             isTouching = true;
             didScroll = false;
-            tapCanActivateTerminal = this._shouldForwardMobileTapToApp();
+            tapStartedWithTerminalFocus = this._isMobileTerminalInputFocused();
             lastTime = 0;
             if (scrollFrame) {
               cancelAnimationFrame(scrollFrame);
@@ -496,49 +496,13 @@ Object.assign(CodemanApp.prototype, {
             scrollFrame = requestAnimationFrame(scrollLoop);
           }
           if (!didScroll && this.terminal) {
-            // ── Tap-to-position cursor ──────────────────────────────────
-            // Synthesize a click from the real touch point so the foreground app
-            // moves its cursor to the tapped cell (iOS doesn't reliably do this
-            // itself under touch-action:none). CRITICAL: only when mouse tracking
-            // is ON. xterm disables its local SelectionService while mouse events
-            // are active, so the synthetic click is forwarded to the PTY as an SGR
-            // report (cursor moves). But when tracking is OFF, that same click
-            // drives xterm's LOCAL selection (detail 1/2/3 → char/word/line) — a
-            // tap on CJK text would select & copy it instead of positioning. So
-            // gate strictly on the live mouse-tracking mode.
             const touch = ev.changedTouches && ev.changedTouches[0];
-            const mouseMode = this.terminal.modes?.mouseTrackingMode;
-            const mouseTrackingOn = !!mouseMode && mouseMode !== 'none';
             if (touch) {
               this._suppressTrustedTapMouseEvents();
-            }
-            if (touch && tapCanActivateTerminal && mouseTrackingOn) {
-              this._dispatchSyntheticTerminalClick(touch.clientX, touch.clientY);
-            } else if (
-              touch &&
-              tapCanActivateTerminal &&
-              this._sessionUsesServerMouseStrip()
-            ) {
-              // The server strips mouse-tracking DECSETs from claude/codex/gemini
-              // output (isAltScreenStripMode, session.ts) so the wheel keeps
-              // scrolling scrollback — which leaves THIS xterm permanently at
-              // mouseTrackingMode 'none' even though the TUI on the PTY side has
-              // tracking ON and still understands SGR reports. Encode the report
-              // ourselves and send it straight to the PTY: no DOM click is
-              // dispatched, so xterm's local selection can't trigger either.
-              this._sendSyntheticSgrTap(touch.clientX, touch.clientY);
-            }
-            this._syncMobileHelperTextareaToCursor();
-            // Route subsequent typing to the right place: keep the CJK input
-            // field focused when Chinese input is on, otherwise the terminal.
-            const cjkInput = document.getElementById('cjkInput');
-            if (cjkInput?.classList.contains('cjk-input-visible')) {
-              cjkInput.focus();
-            } else {
-              this.terminal.focus();
+              this._handleMobileTerminalTap(touch, tapStartedWithTerminalFocus);
             }
           }
-          tapCanActivateTerminal = false;
+          tapStartedWithTerminalFocus = false;
         },
         { passive: true }
       );
@@ -549,6 +513,7 @@ Object.assign(CodemanApp.prototype, {
           isTouching = false;
           velocity = 0;
           pixelAccum = 0;
+          tapStartedWithTerminalFocus = false;
         },
         { passive: true }
       );
@@ -2495,24 +2460,138 @@ Object.assign(CodemanApp.prototype, {
     } catch {}
   },
 
-  /**
-   * A tap that opens the phone keyboard is focus-only. Forwarding that same
-   * gesture as a mouse click would activate the highlighted CLI menu option.
-   * Once the keyboard and terminal input were already active at touchstart,
-   * later taps may intentionally position the cursor or select a TUI row.
-   */
-  _shouldForwardMobileTapToApp() {
-    const keyboardVisible =
-      (typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible) ||
-      document.body?.classList?.contains('keyboard-visible');
-    if (!keyboardVisible) return false;
-
+  _isMobileTerminalInputFocused() {
     const active = document.activeElement;
     return (
       active === this.terminal?.textarea ||
       active?.classList?.contains('xterm-helper-textarea') ||
       active?.id === 'cjkInput'
     );
+  },
+
+  /**
+   * Separate terminal input from TUI-owned content on touch devices. A hidden
+   * keyboard must not consume taps on expandable readbacks, tool results, or
+   * decision rows; those taps belong to the foreground CLI. The visible prompt
+   * row remains the deliberate keyboard target.
+   */
+  _classifyMobileTerminalTap(clientX, clientY) {
+    if (!this._terminalViewportAtBottom()) return 'history';
+
+    const pos = this._clientPointToCell(clientX, clientY);
+    if (!pos || !this.terminal) return 'input';
+
+    const mouseMode = this.terminal.modes?.mouseTrackingMode;
+    const mouseTrackingOn = !!mouseMode && mouseMode !== 'none';
+    if (!mouseTrackingOn && !this._sessionUsesServerMouseStrip()) return 'input';
+
+    // Permission/elicitation prompts own the full live terminal until answered.
+    if (document.body?.classList?.contains('terminal-action-pending')) return 'content';
+
+    const buffer = this.terminal.buffer?.active;
+    if (!buffer?.getLine) return 'input';
+
+    const rows = Math.max(1, this.terminal.rows || 1);
+    const lines = [];
+    let hasVisibleContent = false;
+    for (let row = 0; row < rows; row++) {
+      const line = buffer.getLine(buffer.viewportY + row);
+      const text = line?.translateToString?.(true) || '';
+      lines.push(text);
+      if (text.trim()) hasVisibleContent = true;
+    }
+    if (!hasVisibleContent) return 'input';
+
+    const cursorRow = Math.max(0, Math.min(rows - 1, buffer.cursorY || 0));
+    const mode = this.sessions?.get(this.activeSessionId)?.mode || 'claude';
+    let promptRow = -1;
+    let menuSelectionVisible = false;
+
+    if (mode === 'opencode') {
+      if (lines[cursorRow]?.includes('\u2503')) promptRow = cursorRow;
+    } else {
+      for (let row = rows - 1; row >= 0; row--) {
+        const promptMatch = lines[row].match(/^\s*[❯›]/);
+        if (!promptMatch) continue;
+        const tail = lines[row].slice(promptMatch[0].length).trim();
+        // A highlighted numbered choice is a menu row, not an editable prompt.
+        const hasSiblingChoice = lines.some(
+          (line, choiceRow) => choiceRow !== row && /^\s+\d+[.)]\s/.test(line)
+        );
+        if (/^\d+[.)]\s/.test(tail) && hasSiblingChoice) {
+          menuSelectionVisible = true;
+          break;
+        }
+        promptRow = row;
+        break;
+      }
+    }
+
+    const tappedRow = pos.row - 1;
+    if (menuSelectionVisible) return 'content';
+    if (promptRow >= 0) {
+      const inputEnd = cursorRow >= promptRow ? cursorRow : promptRow;
+      if (tappedRow >= promptRow && tappedRow <= inputEnd) return 'input';
+    } else if (tappedRow === cursorRow && cursorRow >= rows - 3) {
+      // During redraws a CLI can temporarily omit its prompt marker. Keep the
+      // live cursor row usable without turning arbitrary transcript rows into
+      // keyboard targets.
+      return 'input';
+    }
+
+    return 'content';
+  },
+
+  _blurMobileTerminalInput() {
+    const active = document.activeElement;
+    if (
+      active === this.terminal?.textarea ||
+      active?.classList?.contains('xterm-helper-textarea') ||
+      active?.id === 'cjkInput'
+    ) {
+      active.blur?.();
+    }
+  },
+
+  _focusMobileTerminalInput() {
+    this._syncMobileHelperTextareaToCursor();
+    const cjkInput = document.getElementById('cjkInput');
+    if (cjkInput?.classList.contains('cjk-input-visible')) {
+      cjkInput.focus();
+    } else {
+      this.terminal?.focus();
+    }
+  },
+
+  _handleMobileTerminalTap(touch, startedWithTerminalFocus) {
+    if (!touch || !this.terminal) return 'history';
+    const intent = this._classifyMobileTerminalTap(touch.clientX, touch.clientY);
+    if (intent === 'history') {
+      this._blurMobileTerminalInput();
+      return intent;
+    }
+
+    const mouseMode = this.terminal.modes?.mouseTrackingMode;
+    const mouseTrackingOn = !!mouseMode && mouseMode !== 'none';
+    const shouldActivate = intent === 'content' || startedWithTerminalFocus;
+    if (shouldActivate && mouseTrackingOn) {
+      // xterm's mouse encoder owns live DECSET modes. The synthetic DOM click
+      // follows the same path as a desktop click.
+      this._dispatchSyntheticTerminalClick(touch.clientX, touch.clientY);
+    } else if (shouldActivate && this._sessionUsesServerMouseStrip()) {
+      // Claude/Codex/Gemini DECSETs are stripped from the browser stream, so
+      // report directly to the PTY while retaining local touch scrollback.
+      this._sendSyntheticSgrTap(touch.clientX, touch.clientY);
+    }
+
+    if (intent === 'content') {
+      // A synthetic xterm click can focus its helper textarea. Blur after the
+      // report so collapsing a readback never opens or retains the keyboard.
+      this._blurMobileTerminalInput();
+    } else {
+      this._focusMobileTerminalInput();
+    }
+    return intent;
   },
 
   // ═══════════════════════════════════════════════════════════════
