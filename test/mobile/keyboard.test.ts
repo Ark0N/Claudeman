@@ -326,6 +326,30 @@ describe('Virtual Keyboard', () => {
       expect(newPx).toBe(0);
     });
 
+    it('marks keyboard-driven resizing as active viewport control', async () => {
+      const call = await page.evaluate(`(async function() {
+        var originalSendResize = app.sendResize;
+        var captured = null;
+        app.activeSessionId = 'mobile-keyboard-takeover';
+        app.sendResize = function(sessionId, options) {
+          captured = { sessionId: sessionId, options: options };
+          return Promise.resolve(false);
+        };
+        try {
+          KeyboardHandler._sendTerminalResize();
+          await Promise.resolve();
+          return captured;
+        } finally {
+          app.sendResize = originalSendResize;
+        }
+      })()`);
+
+      expect(call).toEqual({
+        sessionId: 'mobile-keyboard-takeover',
+        options: { takeControl: true },
+      });
+    });
+
     it('does not reserve the keyboard height as visible terminal dead space', async () => {
       await showKeyboard(page, KEYBOARD.TYPICAL_IOS_HEIGHT);
       await page.waitForTimeout(WAIT.KEYBOARD_ANIMATION);
@@ -796,6 +820,11 @@ describe('Virtual Keyboard', () => {
       });
 
       await page.locator('#terminalContainer').tap({ position: { x: 40, y: 40 } });
+      // The tap itself emits a valid SGR mouse report. This assertion is about
+      // typed text, so discard pointer setup traffic before entering text.
+      await page.evaluate(() => {
+        window.__sentInputs = [];
+      });
       await page.keyboard.type('find bug');
 
       const beforeEnter = await page.evaluate(() => ({
@@ -847,9 +876,7 @@ describe('Virtual Keyboard', () => {
       await page.keyboard.type('second');
       await page.keyboard.press('Enter');
 
-      await expect
-        .poll(() => page.evaluate(() => window.__sentInputs))
-        .toEqual(['first', '\r', 'second', '\r']);
+      await expect.poll(() => page.evaluate(() => window.__sentInputs)).toEqual(['first', '\r', 'second', '\r']);
     });
 
     it('shows terminal local echo at the cursor when no prompt marker is visible', async () => {

@@ -3199,6 +3199,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * Check if tmux is available on the system.
    */
   static isTmuxAvailable(): boolean {
+    // Tests construct the in-memory no-op manager and must not depend on the
+    // host executable or on child-process permission inside the test runner.
+    if (IS_TEST_MODE) return true;
     try {
       execSync('which tmux', { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS });
       return true;

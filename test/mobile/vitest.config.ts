@@ -9,7 +9,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['test/mobile/**/*.test.ts'],
-    setupFiles: ['./test/setup.ts'],
+    setupFiles: ['./test/setup.ts', './test/mobile/setup.ts'],
     fileParallelism: false,
     testTimeout: 60_000,
     teardownTimeout: 60_000,

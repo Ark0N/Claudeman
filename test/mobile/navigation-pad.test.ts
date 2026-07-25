@@ -164,6 +164,12 @@ describe('Mobile Navigation Pad', () => {
     await vi.waitFor(() => {
       expect(inputLog).toEqual(['\x1b[A']);
     });
+    expect(resizeLog).toEqual([
+      expect.objectContaining({
+        takeControl: true,
+        refit: true,
+      }),
+    ]);
     const state = await page.evaluate(`
       ({
         keyboardVisible: KeyboardHandler.keyboardVisible,
@@ -399,11 +405,21 @@ describe('Mobile Navigation Pad', () => {
     expect(keyboardLayout.accessoryScrollLeft).toBe(0);
     expect(keyboardLayout.primaryButtonsContained).toBe(true);
 
+    await vi.waitFor(() => {
+      expect(resizeLog).toContainEqual({ takeControl: true });
+    });
+    resizeLog.length = 0;
     inputLog.length = 0;
     await page.locator('.keyboard-accessory-bar [data-action="arrow-left"]').click();
     await vi.waitFor(() => {
       expect(inputLog).toEqual(['\x1b[D']);
     });
+    expect(resizeLog).toEqual([
+      expect.objectContaining({
+        takeControl: true,
+        refit: false,
+      }),
+    ]);
     const afterKey = await page.evaluate(`({
       keyboardVisible: KeyboardHandler.keyboardVisible,
       viewportHeight: window.visualViewport?.height,

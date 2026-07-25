@@ -448,6 +448,14 @@ const KeyboardHandler = {
     }
   },
 
+  /** Clear stale mobile keyboard state before a non-touch viewport measures xterm. */
+  resetForDesktopViewport() {
+    if (MobileDetection.isTouchDevice()) return;
+    this.keyboardVisible = false;
+    document.body.classList.remove('keyboard-visible');
+    this.resetLayout();
+  },
+
   /** Called when keyboard appears */
   onKeyboardShow() {
     if (typeof MobileTerminalControls !== 'undefined') {
@@ -518,20 +526,7 @@ const KeyboardHandler = {
   _sendTerminalResize() {
     if (typeof app === 'undefined' || !app.activeSessionId || !app.fitAddon) return;
     try {
-      const dims = app.fitAddon.proposeDimensions();
-      if (dims) {
-        const cols = Math.max(dims.cols, 40);
-        const rows = Math.max(dims.rows, 10);
-        app._lastResizeDims = { cols, rows };
-        // Declare the viewport type so resize arbitration can ignore this
-        // while a desktop connection is sizing the same session.
-        const viewportType = MobileDetection.getDeviceType ? MobileDetection.getDeviceType() : 'mobile';
-        fetch(`/api/sessions/${app.activeSessionId}/resize`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cols, rows, viewportType }),
-        }).catch(() => {});
-      }
+      app.sendResize(app.activeSessionId, { takeControl: true }).catch(() => {});
     } catch {}
   },
 

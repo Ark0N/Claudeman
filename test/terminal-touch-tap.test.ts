@@ -6,11 +6,17 @@ import { describe, expect, it, vi } from 'vitest';
 function loadTerminalUiHarness() {
   const CodemanApp = function CodemanApp(this: any) {};
   let now = 1_000;
+  let frameCallback: (() => void) | null = null;
   let keyboardVisible = false;
   let activeElement: unknown = null;
+  const cancelAnimationFrame = vi.fn(() => {
+    frameCallback = null;
+  });
   const context = vm.createContext({
     window: {},
     document: {
+      visibilityState: 'visible',
+      documentElement: { dataset: {} },
       body: { classList: { contains: () => false } },
       get activeElement() {
         return activeElement;
@@ -20,7 +26,11 @@ function loadTerminalUiHarness() {
     console: { warn: vi.fn(), log: vi.fn() },
     _crashDiag: { log: vi.fn() },
     performance: { now: () => now },
-    requestAnimationFrame: (_fn: () => void) => 1,
+    requestAnimationFrame: (fn: () => void) => {
+      frameCallback = fn;
+      return 1;
+    },
+    cancelAnimationFrame,
     setTimeout: (_fn: () => void) => 1,
     Blob: function Blob() {},
     URL: {
@@ -32,6 +42,10 @@ function loadTerminalUiHarness() {
     },
     MobileDetection: {
       isTouchDevice: () => true,
+      getDeviceType: () => 'desktop',
+    },
+    MobileTerminalControls: {
+      isKeyControlTarget: (target: { terminalKeyControl?: boolean } | null) => target?.terminalKeyControl === true,
     },
     KeyboardHandler: {
       get keyboardVisible() {
@@ -51,12 +65,18 @@ function loadTerminalUiHarness() {
     setNow: (value: number) => {
       now = value;
     },
+    runFrame: () => {
+      const callback = frameCallback;
+      frameCallback = null;
+      callback?.();
+    },
     setKeyboardVisible: (visible: boolean) => {
       keyboardVisible = visible;
     },
     setActiveElement: (element: unknown) => {
       activeElement = element;
     },
+    cancelAnimationFrame,
   };
 }
 
@@ -488,5 +508,80 @@ describe('terminal touch tap mouse guard', () => {
 
     expect(event.preventDefault).not.toHaveBeenCalled();
     expect(event.stopImmediatePropagation).not.toHaveBeenCalled();
+  });
+});
+
+describe('terminal viewport sizing claims', () => {
+  it('forces one redraw for a trusted desktop terminal pointer and skips semantic key controls', async () => {
+    const { app, runFrame } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.fitAddon = {};
+    app.sendResize = vi.fn(() => Promise.resolve(true));
+
+    app._handleTerminalSizingPointerDown({
+      isTrusted: true,
+      button: 0,
+      isPrimary: true,
+      target: { closest: () => ({ id: 'terminalContainer' }) },
+    });
+    runFrame();
+    expect(app.sendResize).toHaveBeenCalledOnce();
+    expect(app.sendResize).toHaveBeenCalledWith('sess-1', {
+      force: true,
+      takeControl: true,
+      refit: true,
+    });
+
+    app.sendResize.mockClear();
+    app._handleTerminalSizingPointerDown({
+      isTrusted: true,
+      button: 0,
+      isPrimary: true,
+      target: { terminalKeyControl: true },
+    });
+    runFrame();
+    expect(app.sendResize).not.toHaveBeenCalled();
+  });
+
+  it('upgrades an already queued passive claim when a terminal click arrives', () => {
+    const { app, runFrame } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.fitAddon = {};
+    app.sendResize = vi.fn(() => Promise.resolve(true));
+
+    app._scheduleTerminalSizingClaim();
+    app._handleTerminalSizingPointerDown({
+      isTrusted: true,
+      button: 0,
+      isPrimary: true,
+      target: { closest: () => ({ id: 'terminalContainer' }) },
+    });
+    runFrame();
+
+    expect(app.sendResize).toHaveBeenCalledOnce();
+    expect(app.sendResize).toHaveBeenCalledWith('sess-1', {
+      force: true,
+      takeControl: true,
+      refit: true,
+    });
+  });
+
+  it('sends a keyboard-open control key with one no-refit takeover', () => {
+    const { app, setKeyboardVisible, cancelAnimationFrame } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.sendResize = vi.fn(() => Promise.resolve(true));
+    app._sendInputAsync = vi.fn();
+    app._terminalSizingClaimFrame = 7;
+    setKeyboardVisible(true);
+
+    app.sendTerminalKey('\x1b[A');
+
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(7);
+    expect(app.sendResize).toHaveBeenCalledOnce();
+    expect(app.sendResize).toHaveBeenCalledWith('sess-1', {
+      takeControl: true,
+      refit: false,
+    });
+    expect(app._sendInputAsync).toHaveBeenCalledWith('sess-1', '\x1b[A');
   });
 });

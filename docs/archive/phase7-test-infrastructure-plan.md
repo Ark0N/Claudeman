@@ -120,7 +120,7 @@ This avoids port conflicts entirely and runs fast. Only tests that need SSE or W
 | 3223 | `test/routes/ralph-routes.test.ts` | Ralph API |
 | 3224–3229 | Reserved | Future route tests |
 
-Most tests should NOT need real ports — `app.inject()` is preferred. Verified: ports 3220–3229 are completely unused by existing tests (highest used port is 3211 in `opencode-resize.test.ts`).
+Most tests should NOT need real ports — `app.inject()` is preferred. Verified: ports 3220–3229 are completely unused by existing tests (highest used port is 3211 in `terminal-viewport-resize.test.ts`).
 
 ---
 

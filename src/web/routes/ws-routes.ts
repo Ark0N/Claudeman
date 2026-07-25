@@ -26,7 +26,10 @@
  *     {"t":"i","d":"...","seq":N,"cid":"..."} — input (keystroke or paste). seq+cid are
  *                          optional reliable-delivery tags: the server applies each
  *                          (cid,seq) at-most-once and ACKs with {"t":"ia","seq":N}.
- *     {"t":"z","c":N,"r":N,"f":bool} — resize terminal (f=true forces SIGWINCH even if dims unchanged)
+ *                          Input also reasserts the connection's last announced viewport.
+ *     {"t":"z","c":N,"r":N,"v":"mobile|tablet|desktop","f":bool,"a":bool}
+ *                          — resize terminal. f forces SIGWINCH; a explicitly takes
+ *                          shared PTY sizing control for this viewport.
  */
 
 import { FastifyInstance } from 'fastify';
@@ -164,7 +167,9 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
       // can ignore small-viewport resizes only while a desktop is actually
       // connected (see Session._desktopSizeClaims).
       const sizingToken = Symbol('ws-desktop-sizing');
-      let holdsDesktopClaim = false;
+      let announcedViewport: 'mobile' | 'tablet' | 'desktop' | undefined;
+      let announcedCols = 0;
+      let announcedRows = 0;
 
       // Attach message handler synchronously BEFORE any async work
       // (@fastify/websocket requirement to avoid dropped messages).
@@ -181,9 +186,15 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
             const seq = Number.isInteger(msg.seq) ? (msg.seq as number) : null;
             const apply = cid && seq !== null ? session.shouldApplyInput(cid, seq) : true;
             if (apply) {
-              // Typed input from a claim-holding desktop keeps the claim "hot"
-              // and re-asserts the desktop layout after a mobile override.
-              if (holdsDesktopClaim) session.noteDesktopActivity();
+              // The most recently active viewport wins the shared PTY. Reuse
+              // this socket's announced dimensions so ordinary soft-keyboard
+              // input can reclaim mobile sizing without refitting the page.
+              if (announcedViewport && announcedCols > 0 && announcedRows > 0) {
+                session.resize(announcedCols, announcedRows, {
+                  viewportType: announcedViewport,
+                  takeControl: true,
+                });
+              }
               session.write(msg.d);
             }
             if (seq !== null && socket.readyState === 1) {
@@ -199,17 +210,22 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
             msg.r <= 200
           ) {
             const viewportType = msg.v === 'mobile' || msg.v === 'tablet' || msg.v === 'desktop' ? msg.v : undefined;
+            announcedViewport = viewportType;
+            announcedCols = msg.c;
+            announcedRows = msg.r;
             if (viewportType === 'desktop') {
               session.claimDesktopSizing(sizingToken);
-              holdsDesktopClaim = true;
             } else if (viewportType) {
               // The connection's viewport can change (e.g. browser window
               // narrowed past the tablet breakpoint) — drop a stale claim.
               session.releaseDesktopSizing(sizingToken);
-              holdsDesktopClaim = false;
             }
             const force = msg.f === true;
-            session.resize(msg.c, msg.r, { viewportType, force });
+            session.resize(msg.c, msg.r, {
+              viewportType,
+              force,
+              ...(msg.a === true ? { takeControl: true } : {}),
+            });
           }
         } catch {
           // Ignore malformed messages

@@ -2592,12 +2592,10 @@ export class Session extends EventEmitter {
 
   /**
    * Live WebSocket connections that have announced a desktop viewport for this
-   * session. While at least one is registered, small-viewport (mobile/tablet)
-   * resizes are ignored so a phone glancing at the session can't reflow the
-   * PTY under an active desktop view. Claims are connection-scoped: ws-routes
-   * registers them on a desktop-typed resize and releases them on socket
-   * close, so a mobile-only session (no desktop connected) keeps full control
-   * of its own size — including narrowing below the spawn default.
+   * session. Presence and activity are deliberately separate: reconnecting a
+   * background desktop may register here, but only explicit interaction/input
+   * refreshes _lastDesktopActivityAt. This prevents an automatic page restore
+   * from taking sizing control away from an active phone.
    *
    * Deliberate tradeoff: claims are WS-only because only a socket has a
    * liveness signal. A desktop degraded to the stateless HTTP resize fallback
@@ -2609,7 +2607,7 @@ export class Session extends EventEmitter {
 
   /**
    * A desktop sizing claim only blocks small-viewport resizes while the
-   * desktop is RECENTLY ACTIVE (claim registration or typed input within this
+   * desktop is RECENTLY ACTIVE (explicit sizing takeover or typed input within this
    * window). An abandoned-but-connected desktop tab (left open at home, screen
    * locked) must not hold a phone's view hostage: without this, the phone
    * renders a desktop-width stream in a narrow xterm — mid-word wraps, tmux
@@ -2617,19 +2615,15 @@ export class Session extends EventEmitter {
    */
   private static readonly DESKTOP_CLAIM_IDLE_MS = 90_000;
 
-  /** Last evidence of a live desktop user (claim registered / typed input). */
+  /** Last evidence of explicit desktop interaction or typed input. */
   private _lastDesktopActivityAt = 0;
-
-  /** Last desktop-typed dimensions, for re-asserting after a mobile override. */
-  private _lastDesktopDims: { cols: number; rows: number } | null = null;
 
   /** True while a small viewport reflowed the pane past an idle desktop claim. */
   private _mobileSizeOverride = false;
 
-  /** Register a live desktop sizing claim (see _desktopSizeClaims). */
+  /** Register live desktop presence without treating a reconnect as user activity. */
   claimDesktopSizing(token: symbol): void {
     this._desktopSizeClaims.add(token);
-    this._lastDesktopActivityAt = Date.now();
   }
 
   /** Release a desktop sizing claim when its connection goes away. */
@@ -2638,49 +2632,47 @@ export class Session extends EventEmitter {
   }
 
   /**
-   * Record desktop user activity (typed input over a claim-holding socket).
-   * If a phone reflowed the pane while the desktop was idle, the desktop
-   * layout is restored — "whoever is actively using the session wins".
-   */
-  noteDesktopActivity(): void {
-    this._lastDesktopActivityAt = Date.now();
-    if (this._mobileSizeOverride && this._lastDesktopDims) {
-      this._mobileSizeOverride = false;
-      this.resize(this._lastDesktopDims.cols, this._lastDesktopDims.rows, { viewportType: 'desktop' });
-    }
-  }
-
-  /**
    * Resizes the PTY terminal dimensions.
    * Skips the resize if dimensions haven't changed to avoid triggering
    * unnecessary Ink full-screen redraws (visible flicker on tab switch).
    *
    * Arbitration: while a desktop connection holds a sizing claim AND has been
-   * active within DESKTOP_CLAIM_IDLE_MS, resizes from small viewports
+   * active within DESKTOP_CLAIM_IDLE_MS, passive resizes from small viewports
    * (mobile/tablet) are ignored — shrink AND grow would both reflow the
-   * desktop view. Once the desktop goes idle, a phone may take the pane (the
-   * desktop re-asserts its size on its next typed input via
-   * noteDesktopActivity). Without a desktop connected, small viewports
-   * control the PTY size freely.
+   * desktop view. A trusted interaction can explicitly take control. Once the
+   * desktop goes idle, a phone may also take the pane passively (the desktop
+   * re-asserts its size on its next interaction). Without a desktop connected,
+   * small viewports control the PTY size freely.
    *
    * @param cols - Number of columns (width in characters)
    * @param rows - Number of rows (height in lines)
    */
-  resize(cols: number, rows: number, options: { viewportType?: ResizeViewportType; force?: boolean } = {}): void {
+  resize(
+    cols: number,
+    rows: number,
+    options: { viewportType?: ResizeViewportType; force?: boolean; takeControl?: boolean } = {}
+  ): void {
+    const isDesktopViewport = options.viewportType === 'desktop';
     const isSmallViewport = options.viewportType === 'mobile' || options.viewportType === 'tablet';
-    if (options.viewportType === 'desktop') {
-      this._lastDesktopDims = { cols, rows };
-      this._lastDesktopActivityAt = Date.now();
+    const restoresMobileOverride = isDesktopViewport && this._mobileSizeOverride && options.takeControl === true;
+    if (isDesktopViewport) {
+      // Passive desktop restores must not displace a phone that explicitly
+      // took control of the shared PTY.
+      if (this._mobileSizeOverride && !options.takeControl) return;
+      if (options.takeControl) this._lastDesktopActivityAt = Date.now();
       this._mobileSizeOverride = false;
     }
+    if (isSmallViewport && options.takeControl) {
+      this._mobileSizeOverride = true;
+    }
     if (isSmallViewport && this._desktopSizeClaims.size > 0) {
-      if (Date.now() - this._lastDesktopActivityAt < Session.DESKTOP_CLAIM_IDLE_MS) {
+      if (!options.takeControl && Date.now() - this._lastDesktopActivityAt < Session.DESKTOP_CLAIM_IDLE_MS) {
         return;
       }
       this._mobileSizeOverride = true;
     }
     const dimsChanged = cols !== this._ptyCols || rows !== this._ptyRows;
-    if (this.ptyProcess && (dimsChanged || options.force)) {
+    if (this.ptyProcess && (dimsChanged || options.force || restoresMobileOverride)) {
       this._ptyCols = cols;
       this._ptyRows = rows;
       if (this._mux && this._muxSession) {

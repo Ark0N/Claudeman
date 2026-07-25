@@ -12,7 +12,8 @@ export async function createTestServer(port: number): Promise<WebServer> {
   return server;
 }
 
-export async function stopTestServer(server: WebServer): Promise<void> {
+export async function stopTestServer(server?: WebServer): Promise<void> {
+  if (!server) return;
   await server.stop();
   for (const [port, s] of servers) {
     if (s === server) {

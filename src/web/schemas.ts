@@ -227,6 +227,7 @@ export const ResizeSchema = z.object({
   rows: z.number().int().min(1).max(200),
   viewportType: z.enum(['mobile', 'tablet', 'desktop']).optional(),
   force: z.boolean().optional(),
+  takeControl: z.boolean().optional(),
 });
 
 /**

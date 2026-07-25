@@ -564,6 +564,19 @@ Object.assign(CodemanApp.prototype, {
     // Hand-encode the SGR report for plain left-clicks on those sessions.
     container.addEventListener('click', (ev) => this._handleDesktopTerminalClick(ev));
 
+    // The PTY has one shared size across all connected viewports. Let the page
+    // receiving a real interaction claim it at that viewport's dimensions.
+    if (!this._terminalSizingPointerHandler) {
+      this._terminalSizingPointerHandler = (ev) => this._handleTerminalSizingPointerDown(ev);
+      document.addEventListener('pointerdown', this._terminalSizingPointerHandler, true);
+      this._terminalSizingFocusHandler = () => this._scheduleTerminalSizingClaim();
+      this._terminalSizingVisibilityHandler = () => {
+        if (document.visibilityState === 'visible') this._scheduleTerminalSizingClaim();
+      };
+      window.addEventListener('focus', this._terminalSizingFocusHandler);
+      document.addEventListener('visibilitychange', this._terminalSizingVisibilityHandler);
+    }
+
     // Welcome message
     this.showWelcome();
 
@@ -579,10 +592,6 @@ Object.assign(CodemanApp.prototype, {
     // Handle resize with throttling for performance
     this._resizeTimeout = null;
     this._lastResizeDims = null;
-
-    // Minimum terminal dimensions to prevent vertical text wrapping
-    const MIN_COLS = 40;
-    const MIN_ROWS = 10;
 
     const throttledResize = () => {
       // Trailing-edge debounce: ALL resize work (fit + clear + SIGWINCH) happens
@@ -619,12 +628,14 @@ Object.assign(CodemanApp.prototype, {
         // Local fit() still runs so xterm knows the viewport size for scrolling.
         const keyboardUp = typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible;
         if (this.activeSessionId && !keyboardUp) {
-          const dims = this.fitAddon.proposeDimensions();
-          // Enforce minimum dimensions to prevent layout issues
-          const cols = dims ? Math.max(dims.cols, MIN_COLS) : MIN_COLS;
-          const rows = dims ? Math.max(dims.rows, MIN_ROWS) : MIN_ROWS;
+          const dims = this.getTerminalDimensions();
           // Only send resize if dimensions actually changed
-          if (!this._lastResizeDims || cols !== this._lastResizeDims.cols || rows !== this._lastResizeDims.rows) {
+          if (
+            dims &&
+            (!this._lastResizeDims ||
+              dims.cols !== this._lastResizeDims.cols ||
+              dims.rows !== this._lastResizeDims.rows)
+          ) {
             // Clear viewport + scrollback ONLY when dimensions actually change.
             // fitAddon.fit() reflows content: lines at old width may wrap to more rows,
             // pushing overflow into scrollback. Ink's cursor-up count is based on the
@@ -642,31 +653,9 @@ Object.assign(CodemanApp.prototype, {
             ) {
               this.terminal.write('\x1b[3J\x1b[H\x1b[2J');
             }
-            this._lastResizeDims = { cols, rows };
-            // Typed + WS-first like sendResize: the viewport type feeds resize
-            // arbitration (a phone rotating must not bypass a desktop claim),
-            // and a desktop window narrowing past the tablet breakpoint must
-            // send a typed WS frame so its stale desktop claim is released.
-            const viewportType =
-              typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType
-                ? MobileDetection.getDeviceType()
-                : 'desktop';
-            let sentViaWs = false;
-            if (this._wsReady && this._wsSessionId === this.activeSessionId) {
-              try {
-                this._ws.send(JSON.stringify({ t: 'z', c: cols, r: rows, v: viewportType }));
-                sentViaWs = true;
-              } catch {
-                // Fall through to HTTP POST
-              }
-            }
-            if (!sentViaWs) {
-              fetch(`/api/sessions/${this.activeSessionId}/resize`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cols, rows, viewportType }),
-              }).catch(() => {});
-            }
+            // sendResize owns dimension tracking, viewport classification, and
+            // the WebSocket-first transport with HTTP fallback.
+            this.sendResize(this.activeSessionId, { refit: false }).catch(() => {});
           }
         }
         // Update subagent connection lines and local echo at new dimensions
@@ -1106,6 +1095,9 @@ Object.assign(CodemanApp.prototype, {
     // Home screen has no input target — hide the CJK textarea (activeSessionId
     // is null by the time we get here). Guarded: defined on the app object.
     this._updateCjkInputState?.();
+    if (typeof MobileTerminalControls !== 'undefined') {
+      MobileTerminalControls.syncVisibility();
+    }
   },
 
   hideWelcome() {
@@ -1122,6 +1114,9 @@ Object.assign(CodemanApp.prototype, {
     // Entering a session — restore CJK textarea if the user has it enabled
     // (activeSessionId is already set by selectSession before this call).
     this._updateCjkInputState?.();
+    if (typeof MobileTerminalControls !== 'undefined') {
+      MobileTerminalControls.syncVisibility();
+    }
   },
 
   /**
@@ -2443,7 +2438,7 @@ Object.assign(CodemanApp.prototype, {
       // Force resize even when dimensions match the server's last known state —
       // another device may have changed the PTY size since this client last sent,
       // and force guarantees a SIGWINCH → Ink redraw at the current device's size.
-      await this.sendResize(this.activeSessionId, { force: true });
+      await this.sendResize(this.activeSessionId, { force: true, takeControl: true });
 
       this.showToast(`Terminal restored to ${dims.cols}x${dims.rows}`, 'success');
     } catch (err) {
@@ -2706,13 +2701,70 @@ Object.assign(CodemanApp.prototype, {
     this._sendSyntheticSgrTap(ev.clientX, ev.clientY);
   },
 
+  _handleTerminalSizingPointerDown(ev) {
+    if (!ev?.isTrusted || ev.button !== 0 || ev.isPrimary === false) return;
+    // Semantic terminal controls claim ownership when they emit their key.
+    // Skipping their pointerdown avoids a second refit/resize on normal taps
+    // that last longer than one animation frame.
+    if (
+      typeof MobileTerminalControls !== 'undefined' &&
+      MobileTerminalControls.isKeyControlTarget(ev.target)
+    ) {
+      return;
+    }
+    const isDesktopViewport =
+      typeof MobileDetection !== 'undefined' &&
+      MobileDetection.getDeviceType?.() === 'desktop';
+    const forceRedraw =
+      isDesktopViewport &&
+      Boolean(ev.target?.closest?.('#terminalContainer, .session-tab'));
+    this._scheduleTerminalSizingClaim({ force: forceRedraw });
+  },
+
+  _scheduleTerminalSizingClaim(options = {}) {
+    if (!this.activeSessionId || !this.fitAddon) return;
+    // Multiple focus/pointer signals can land in the same animation frame.
+    // Preserve the strongest request so an earlier passive focus claim cannot
+    // swallow a later explicit desktop terminal takeover.
+    if (options.force) this._terminalSizingClaimForce = true;
+    if (this._terminalSizingClaimFrame) return;
+
+    this._terminalSizingClaimFrame = requestAnimationFrame(() => {
+      this._terminalSizingClaimFrame = null;
+      const force = this._terminalSizingClaimForce === true;
+      this._terminalSizingClaimForce = false;
+      if (document.visibilityState === 'hidden' || !this.activeSessionId || !this.fitAddon) return;
+      const keyboardVisible =
+        typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible;
+      this.sendResize(this.activeSessionId, {
+        ...(force ? { force: true } : {}),
+        takeControl: true,
+        refit: !keyboardVisible,
+      }).catch(() => {});
+    });
+  },
+
   /**
-   * Send one terminal control key without focusing xterm.
-   * The existing durable input queue preserves ordering and reconnect safety.
+   * Send one terminal control key without focusing xterm. The active viewport
+   * requests PTY-size ownership while the key enters the existing reliable
+   * input queue immediately.
    */
   sendTerminalKey(input) {
     const sessionId = this.activeSessionId;
     if (!sessionId || !input) return;
+    if (this._terminalSizingClaimFrame) {
+      if (typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(this._terminalSizingClaimFrame);
+      }
+      this._terminalSizingClaimFrame = null;
+    }
+    this._terminalSizingClaimForce = false;
+    const keyboardVisible =
+      typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible;
+    this.sendResize(sessionId, {
+      takeControl: true,
+      refit: !keyboardVisible,
+    }).catch(() => {});
     this._sendInputAsync(sessionId, input);
   },
 
@@ -2785,14 +2837,22 @@ Object.assign(CodemanApp.prototype, {
   /**
    * Send resize to a session with minimum dimension enforcement.
    * @param {string} sessionId
-   * @param {{ forceHttp?: boolean, force?: boolean }} [options]
+   * @param {{ forceHttp?: boolean, force?: boolean, takeControl?: boolean, refit?: boolean }} [options]
    * @returns {Promise<boolean>} Whether dimensions changed from the last send
    */
   async sendResize(sessionId, options = {}) {
     // Fit terminal to container before reading dimensions — ensures local
     // terminal size matches what we report to the server PTY.
-    if (this.fitAddon) this.fitAddon.fit();
-    const dims = this.getTerminalDimensions();
+    if (options.refit !== false && this.fitAddon) this.fitAddon.fit();
+    const dims =
+      options.refit === false &&
+      Number.isInteger(this.terminal?.cols) &&
+      Number.isInteger(this.terminal?.rows)
+        ? {
+            cols: Math.max(this.terminal.cols, 40),
+            rows: Math.max(this.terminal.rows, 10),
+          }
+        : this.getTerminalDimensions();
     if (!dims) return false;
     // Did the dimensions actually change since the last resize we sent? Callers
     // use this to skip work (e.g. the post-resize TUI-redraw settle) when no
@@ -2817,6 +2877,7 @@ Object.assign(CodemanApp.prototype, {
       try {
         const msg = { t: 'z', c: dims.cols, r: dims.rows, v: viewportType };
         if (options.force) msg.f = true;
+        if (options.takeControl) msg.a = true;
         this._ws.send(JSON.stringify(msg));
         return changed;
       } catch {
@@ -2825,6 +2886,7 @@ Object.assign(CodemanApp.prototype, {
     }
     const body = { ...dims, viewportType };
     if (options.force) body.force = true;
+    if (options.takeControl) body.takeControl = true;
     await fetch(`/api/sessions/${sessionId}/resize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
