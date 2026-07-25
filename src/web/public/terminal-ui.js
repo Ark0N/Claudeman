@@ -432,6 +432,7 @@ Object.assign(CodemanApp.prototype, {
 
       let didScroll = false; // track whether touchmove fired (tap vs scroll)
       let touchStartY = 0;
+      let tapCanActivateTerminal = false;
       const TAP_THRESHOLD = 8; // px — ignore micro-drift to distinguish tap from scroll
       container.addEventListener(
         'touchstart',
@@ -443,6 +444,7 @@ Object.assign(CodemanApp.prototype, {
             pixelAccum = 0;
             isTouching = true;
             didScroll = false;
+            tapCanActivateTerminal = this._shouldForwardMobileTapToApp();
             lastTime = 0;
             if (scrollFrame) {
               cancelAnimationFrame(scrollFrame);
@@ -510,9 +512,13 @@ Object.assign(CodemanApp.prototype, {
             if (touch) {
               this._suppressTrustedTapMouseEvents();
             }
-            if (touch && mouseTrackingOn) {
+            if (touch && tapCanActivateTerminal && mouseTrackingOn) {
               this._dispatchSyntheticTerminalClick(touch.clientX, touch.clientY);
-            } else if (touch && this._sessionUsesServerMouseStrip()) {
+            } else if (
+              touch &&
+              tapCanActivateTerminal &&
+              this._sessionUsesServerMouseStrip()
+            ) {
               // The server strips mouse-tracking DECSETs from claude/codex/gemini
               // output (isAltScreenStripMode, session.ts) so the wheel keeps
               // scrolling scrollback — which leaves THIS xterm permanently at
@@ -532,6 +538,7 @@ Object.assign(CodemanApp.prototype, {
               this.terminal.focus();
             }
           }
+          tapCanActivateTerminal = false;
         },
         { passive: true }
       );
@@ -2491,6 +2498,26 @@ Object.assign(CodemanApp.prototype, {
       xtermEl.style.setProperty('--xterm-helper-left', `${left}px`);
       xtermEl.style.setProperty('--xterm-helper-top', `${top}px`);
     } catch {}
+  },
+
+  /**
+   * A tap that opens the phone keyboard is focus-only. Forwarding that same
+   * gesture as a mouse click would activate the highlighted CLI menu option.
+   * Once the keyboard and terminal input were already active at touchstart,
+   * later taps may intentionally position the cursor or select a TUI row.
+   */
+  _shouldForwardMobileTapToApp() {
+    const keyboardVisible =
+      (typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible) ||
+      document.body?.classList?.contains('keyboard-visible');
+    if (!keyboardVisible) return false;
+
+    const active = document.activeElement;
+    return (
+      active === this.terminal?.textarea ||
+      active?.classList?.contains('xterm-helper-textarea') ||
+      active?.id === 'cjkInput'
+    );
   },
 
   // ═══════════════════════════════════════════════════════════════
