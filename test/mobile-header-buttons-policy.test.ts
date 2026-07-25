@@ -29,10 +29,9 @@ const PUBLIC = join(HERE, '../src/web/public');
 // Matches the device the browser-based test emulates (iPhone 14 Pro = 393px CSS).
 const PHONE_WIDTH = 393;
 
-// Header buttons intentionally kept VISIBLE in the phone header. Empty today: the
-// mobile header is deliberately minimal and essential controls (settings, case)
-// live in the toolbar. Add a class here ONLY with a justifying comment.
-const MOBILE_VISIBLE_ALLOWLIST = new Set<string>([]);
+// Header buttons intentionally kept VISIBLE in the phone header. Instance shutdown
+// is a process-level safety control and must remain reachable without opening settings.
+const MOBILE_VISIBLE_ALLOWLIST = new Set<string>(['btn-instance-shutdown']);
 
 // Buttons we expect to STAY hidden on phones — an explicit lock so a future edit
 // that removes a hide rule fails loudly (not silently). The attachments button is

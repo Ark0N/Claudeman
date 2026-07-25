@@ -739,6 +739,10 @@ const MobileTerminalControls = {
     MobileNavigationPad.syncVisibility();
   },
 
+  blurTerminalInput() {
+    MobileNavigationPad.blurTerminalInput();
+  },
+
   sendKey(action) {
     const sequence = TERMINAL_CONTROL_SEQUENCES[action];
     if (!sequence || typeof app === 'undefined' || !app.activeSessionId) return;

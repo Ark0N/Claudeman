@@ -129,6 +129,13 @@ export function createMockRouteContext(options?: { sessionId?: string }) {
     orchestratorLoop: null,
     initOrchestratorLoop: vi.fn(),
 
+    // -- InstanceControlPort --
+    requestInstanceShutdown: vi.fn(async () => ({
+      accepted: true as const,
+      strategy: 'manual' as const,
+      alreadyScheduled: false,
+    })),
+
     // Convenience accessors (not part of any port interface)
     _session: session,
     _sessionId: sessionId,

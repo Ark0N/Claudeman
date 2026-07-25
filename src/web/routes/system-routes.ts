@@ -48,7 +48,7 @@ import {
 } from '../route-helpers.js';
 import { SseEvent } from '../sse-events.js';
 import { getInstallInfo, checkForUpdate, startUpdate, getUpdateStatusForApi } from '../self-update.js';
-import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '../ports/index.js';
+import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort, InstanceControlPort } from '../ports/index.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
 import { QR_AUTH_FAILURE_MAX } from '../../config/tunnel-config.js';
 import { AUTH_SESSION_TTL_MS } from '../../config/auth-config.js';
@@ -128,7 +128,7 @@ export function resolveSpanUrl(hostHeader: string | undefined, fallbackPort = '3
 
 export function registerSystemRoutes(
   app: FastifyInstance,
-  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort
+  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & InstanceControlPort
 ): void {
   const windowStatesPath = dataPath('subagent-window-states.json');
   const parentMapPath = dataPath('subagent-parents.json');
@@ -140,6 +140,16 @@ export function registerSystemRoutes(
   // ========== Status ==========
 
   app.get('/api/status', async (req) => ctx.getLightState(req.authUser));
+
+  app.post('/api/system/shutdown', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+
+    const result = await ctx.requestInstanceShutdown();
+    if (!result.accepted) {
+      return reply.code(409).send(createErrorResponse(ApiErrorCode.CONFLICT, result.reason));
+    }
+    return reply.code(202).send(result);
+  });
 
   // ========== Tunnel ==========
 

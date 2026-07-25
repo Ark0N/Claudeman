@@ -143,6 +143,38 @@ describe('system-routes', () => {
     });
   });
 
+  // ========== POST /api/system/shutdown ==========
+
+  describe('POST /api/system/shutdown', () => {
+    it('accepts a graceful instance shutdown request', async () => {
+      const res = await harness.app.inject({ method: 'POST', url: '/api/system/shutdown' });
+
+      expect(res.statusCode).toBe(202);
+      expect(JSON.parse(res.body)).toEqual({
+        accepted: true,
+        strategy: 'manual',
+        alreadyScheduled: false,
+      });
+      expect(harness.ctx.requestInstanceShutdown).toHaveBeenCalledOnce();
+    });
+
+    it('reports when the owning supervisor requires administrator access', async () => {
+      harness.ctx.requestInstanceShutdown.mockResolvedValueOnce({
+        accepted: false,
+        reason: 'Stopping this service requires administrator access',
+      });
+
+      const res = await harness.app.inject({ method: 'POST', url: '/api/system/shutdown' });
+
+      expect(res.statusCode).toBe(409);
+      expect(JSON.parse(res.body)).toMatchObject({
+        success: false,
+        errorCode: 'CONFLICT',
+        error: 'Stopping this service requires administrator access',
+      });
+    });
+  });
+
   // ========== GET /api/config ==========
 
   describe('GET /api/config', () => {

@@ -502,6 +502,9 @@ class CodemanApp {
     this.terminalBuffers = new Map(); // Store terminal content per session
     this.editingSessionId = null; // Session being edited in options modal
     this.pendingCloseSessionId = null; // Session pending close confirmation
+    this._instanceShutdownState = 'idle'; // idle | confirming | submitting | accepted
+    this._instanceShutdownFocusTrap = null;
+    this._instanceShutdownRequested = false;
     this.muxSessions = []; // Screen sessions for process monitor
 
     // Ralph loop/todo state per session
@@ -994,6 +997,7 @@ class CodemanApp {
 
       // Escape - close panels and modals (different logic: no preventDefault, no return)
       if (e.key === 'Escape') {
+        this.cancelInstanceShutdown();
         this.closeAllPanels();
         this.closeHelp();
         if (this.attachmentHistoryDrawerOpen) this.closeAttachmentHistory();
@@ -1336,6 +1340,8 @@ class CodemanApp {
   }
 
   connectSSE() {
+    if (this._instanceShutdownRequested) return;
+
     // Check if browser is offline
     if (!navigator.onLine) {
       this.setConnectionStatus('offline');
@@ -1394,6 +1400,11 @@ class CodemanApp {
       this.setConnectionStatus('connected');
     };
     this.eventSource.onerror = () => {
+      if (this._instanceShutdownRequested) {
+        this.eventSource?.close();
+        this.eventSource = null;
+        return;
+      }
       this.reconnectAttempts++;
       if (this.reconnectAttempts >= this.maxReconnectAttempts) {
         this.setConnectionStatus('disconnected');
@@ -4608,6 +4619,99 @@ class CodemanApp {
 
     if (sessionId) {
       await this.closeSession(sessionId, killMux);
+    }
+  }
+
+  requestInstanceShutdown() {
+    if (this._instanceShutdownState === 'submitting' || this._instanceShutdownState === 'accepted') return;
+
+    MobileTerminalControls.blurTerminalInput();
+    const modal = document.getElementById('instanceShutdownModal');
+    const status = document.getElementById('instanceShutdownStatus');
+    const closeButton = document.getElementById('instanceShutdownCloseBtn');
+    const cancelButton = document.getElementById('instanceShutdownCancelBtn');
+    const confirmButton = document.getElementById('instanceShutdownConfirmBtn');
+    if (!modal || !status || !closeButton || !cancelButton || !confirmButton) return;
+
+    this._instanceShutdownState = 'confirming';
+    status.hidden = true;
+    status.classList.remove('error');
+    status.textContent = '';
+    closeButton.disabled = false;
+    cancelButton.disabled = false;
+    confirmButton.disabled = false;
+    confirmButton.textContent = 'Shut down';
+    modal.classList.add('active');
+    modal.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('terminal-action-pending');
+
+    this._instanceShutdownFocusTrap?.deactivate();
+    this._instanceShutdownFocusTrap = new FocusTrap(modal);
+    this._instanceShutdownFocusTrap.activate();
+    requestAnimationFrame(() => cancelButton.focus());
+  }
+
+  cancelInstanceShutdown() {
+    if (this._instanceShutdownState === 'submitting' || this._instanceShutdownState === 'accepted') return;
+
+    const modal = document.getElementById('instanceShutdownModal');
+    modal?.classList.remove('active');
+    modal?.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('terminal-action-pending');
+    this._instanceShutdownFocusTrap?.deactivate();
+    this._instanceShutdownFocusTrap = null;
+    this._instanceShutdownState = 'idle';
+  }
+
+  async confirmInstanceShutdown() {
+    if (this._instanceShutdownState !== 'confirming') return;
+
+    const modal = document.getElementById('instanceShutdownModal');
+    const status = document.getElementById('instanceShutdownStatus');
+    const closeButton = document.getElementById('instanceShutdownCloseBtn');
+    const cancelButton = document.getElementById('instanceShutdownCancelBtn');
+    const confirmButton = document.getElementById('instanceShutdownConfirmBtn');
+    if (!modal || !status || !closeButton || !cancelButton || !confirmButton) return;
+
+    this._instanceShutdownState = 'submitting';
+    closeButton.disabled = true;
+    cancelButton.disabled = true;
+    confirmButton.disabled = true;
+    confirmButton.textContent = 'Stopping...';
+    status.hidden = false;
+    status.classList.remove('error');
+    status.textContent = 'Requesting a graceful shutdown...';
+
+    try {
+      const response = await fetch('/api/system/shutdown', { method: 'POST' });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.error || 'Codeman could not be stopped');
+      }
+
+      const result = payload?.success === true ? payload.data : payload;
+      this._instanceShutdownState = 'accepted';
+      this._instanceShutdownRequested = true;
+      status.textContent = result?.alreadyScheduled
+        ? 'Codeman shutdown is already in progress.'
+        : 'Codeman is stopping. You can close this page.';
+      confirmButton.textContent = 'Stopping...';
+      this._clearTimer('sseReconnectTimeout');
+      this.eventSource?.close();
+      this.eventSource = null;
+      this._disconnectWs();
+      modal.focus();
+    } catch (error) {
+      this._instanceShutdownState = 'confirming';
+      closeButton.disabled = false;
+      cancelButton.disabled = false;
+      confirmButton.disabled = false;
+      confirmButton.textContent = 'Try again';
+      status.hidden = false;
+      status.classList.add('error');
+      status.textContent = error?.message || 'Codeman could not be stopped';
+      this.showToast?.(status.textContent, 'error');
+      cancelButton.focus();
     }
   }
 
