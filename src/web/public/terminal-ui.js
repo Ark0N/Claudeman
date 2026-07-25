@@ -259,7 +259,7 @@ Object.assign(CodemanApp.prototype, {
 
     // WebGL renderer for GPU-accelerated terminal rendering.
     // Previously caused "page unresponsive" crashes from synchronous GPU stalls,
-    // but the 48KB/frame flush cap in flushPendingWrites() now prevents
+    // but the mode-aware 32/64KB frame cap in flushPendingWrites() now prevents
     // oversized terminal.write() calls that triggered the stalls.
     // Disable with ?nowebgl URL param if GPU issues return.
     // Auto-fallback: _initWebGL installs a long-task watchdog that disables
@@ -1942,17 +1942,26 @@ Object.assign(CodemanApp.prototype, {
 
     // Accumulate raw data (may contain DEC 2026 markers)
     this.pendingWrites.push(data);
+    this._scheduleTerminalWriteFlush();
+  },
 
-    if (!this.writeFrameScheduled) {
-      this.writeFrameScheduled = true;
-      this._safeYield(() => {
-        // xterm.js 6.0 handles DEC 2026 sync markers natively — it buffers
-        // content between 2026h/2026l and renders atomically. No need for
-        // client-side incomplete-block detection; just flush every frame.
-        this.flushPendingWrites();
-        this.writeFrameScheduled = false;
-      });
-    }
+  /**
+   * Schedule one render-budgeted terminal flush.
+   *
+   * Clear the scheduled flag before flushing so flushPendingWrites() can queue
+   * another yield when a large final batch leaves bytes behind. Keeping the
+   * flag set through the flush stranded that remainder until unrelated output
+   * arrived, which looked like truncated responses and idle shell commands.
+   */
+  _scheduleTerminalWriteFlush() {
+    if (this.writeFrameScheduled || this.pendingWrites.length === 0) return;
+    this.writeFrameScheduled = true;
+    this._safeYield(() => {
+      this.writeFrameScheduled = false;
+      // xterm.js 6.0 handles DEC 2026 sync markers natively — it buffers
+      // content between 2026h/2026l and renders atomically.
+      this.flushPendingWrites();
+    });
   },
 
   /**
@@ -1968,13 +1977,7 @@ Object.assign(CodemanApp.prototype, {
     this.flickerFilterActive = false;
 
     // Trigger a normal flush
-    if (!this.writeFrameScheduled) {
-      this.writeFrameScheduled = true;
-      this._safeYield(() => {
-        this.flushPendingWrites();
-        this.writeFrameScheduled = false;
-      });
-    }
+    this._scheduleTerminalWriteFlush();
   },
 
   /**
@@ -2100,13 +2103,7 @@ Object.assign(CodemanApp.prototype, {
       this.terminal.write(joined.slice(0, MAX_FRAME_BYTES));
       this.pendingWrites.push(joined.slice(MAX_FRAME_BYTES));
       deferred = true;
-      if (!this.writeFrameScheduled) {
-        this.writeFrameScheduled = true;
-        this._safeYield(() => {
-          this.flushPendingWrites();
-          this.writeFrameScheduled = false;
-        });
-      }
+      this._scheduleTerminalWriteFlush();
     }
     if (
       preserveViewportY !== null &&

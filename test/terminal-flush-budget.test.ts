@@ -47,6 +47,26 @@ function loadTerminalUiHarness(mode: string) {
 }
 
 describe('terminal flush budget', () => {
+  it('drains a large final batch without waiting for unrelated terminal output', () => {
+    const { app, writes } = loadTerminalUiHarness('codex');
+    const scheduled: Array<() => void> = [];
+    app._safeYield = (callback: () => void) => {
+      scheduled.push(callback);
+    };
+    app.isTerminalAtBottom = () => true;
+
+    app.batchTerminalWrite('x'.repeat(96 * 1024));
+    expect(scheduled).toHaveLength(1);
+
+    while (scheduled.length > 0) {
+      scheduled.shift()?.();
+    }
+
+    expect(writes.map((write) => write.length)).toEqual([32 * 1024, 32 * 1024, 32 * 1024]);
+    expect(app.pendingWrites).toEqual([]);
+    expect(app.writeFrameScheduled).toBe(false);
+  });
+
   it('uses a smaller first-frame write budget for Codex output to reduce renderer stalls', () => {
     const { app, writes } = loadTerminalUiHarness('codex');
     app.pendingWrites.push('x'.repeat(96 * 1024));
