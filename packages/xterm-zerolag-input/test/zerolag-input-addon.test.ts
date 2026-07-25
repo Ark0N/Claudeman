@@ -122,14 +122,21 @@ describe('ZerolagInputAddon', () => {
       expect(addon.hasPending).toBe(false);
     });
 
-    it('detects buffer text and removes from it when both empty', () => {
+    it('does not infer editable text from the terminal buffer', () => {
       const { addon } = tracked(['$ hello']);
-      // Both pending and flushed are empty, but buffer has text
+
       const source = addon.removeChar();
-      expect(source).toBe('flushed');
-      // "hello" (5 chars) detected, then one removed = 4
-      expect(addon.getFlushed().count).toBe(4);
-      expect(addon.getFlushed().text).toBe('hell');
+
+      expect(source).toBe(false);
+      expect(addon.getFlushed()).toEqual({ count: 0, text: '' });
+    });
+
+    it('removes explicitly detected completion text as flushed input', () => {
+      const { addon } = tracked(['$ hello']);
+      expect(addon.detectBufferText()).toBe('hello');
+
+      expect(addon.removeChar()).toBe('flushed');
+      expect(addon.getFlushed()).toEqual({ count: 4, text: 'hell' });
     });
 
     it('returns false on empty prompt with no buffer text', () => {
@@ -295,22 +302,19 @@ describe('ZerolagInputAddon', () => {
       expect(addon.getFlushed().count).toBe(0);
     });
 
-    it('suppressBufferDetection also blocks implicit detection in addChar', () => {
+    it('suppressBufferDetection keeps explicit detection disabled while typing', () => {
       const { addon } = tracked(['$ ink status bar']);
       addon.suppressBufferDetection();
 
-      // addChar calls _detectBufferText internally on first keystroke
       addon.addChar('x');
-      // Should have only 'x' pending, NOT the buffer text as flushed
       expect(addon.pendingText).toBe('x');
       expect(addon.getFlushed().count).toBe(0);
     });
 
-    it('suppressBufferDetection also blocks detection in removeChar cascade', () => {
+    it('suppressBufferDetection keeps explicit detection disabled before backspace', () => {
       const { addon } = tracked(['$ buffer text']);
       addon.suppressBufferDetection();
 
-      // removeChar step 3 calls _detectBufferText — should be blocked
       expect(addon.removeChar()).toBe(false);
       expect(addon.getFlushed().count).toBe(0);
     });
@@ -705,23 +709,21 @@ describe('ZerolagInputAddon', () => {
     });
   });
 
-  describe('addChar implicit buffer detection', () => {
-    it('first keystroke detects existing buffer text as flushed', () => {
+  describe('typing with pre-existing buffer content', () => {
+    it('does not adopt existing buffer text on the first keystroke', () => {
       const { addon } = tracked(['$ existing']);
-      // First addChar should trigger _detectBufferText
+
       addon.addChar('!');
       expect(addon.pendingText).toBe('!');
-      expect(addon.getFlushed().count).toBe(8); // 'existing'
-      expect(addon.getFlushed().text).toBe('existing');
+      expect(addon.getFlushed()).toEqual({ count: 0, text: '' });
     });
 
-    it('second keystroke does NOT re-detect', () => {
+    it('does not adopt existing buffer text on appendText', () => {
       const { addon } = tracked(['$ existing']);
-      addon.addChar('a');
-      addon.addChar('b');
-      // Should NOT detect again — flushed from first char remains
-      expect(addon.pendingText).toBe('ab');
-      expect(addon.getFlushed().count).toBe(8); // still 'existing'
+
+      addon.appendText('pasted');
+      expect(addon.pendingText).toBe('pasted');
+      expect(addon.getFlushed()).toEqual({ count: 0, text: '' });
     });
   });
 });

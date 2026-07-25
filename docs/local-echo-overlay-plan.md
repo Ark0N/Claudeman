@@ -1,6 +1,8 @@
 # Local Echo Overlay — Implementation Plan
 
-> **Status: SHIPPED.** Implementation lives in `packages/xterm-zerolag-input/src/` (overlay-renderer.ts, prompt-finder.ts, cell-dimensions.ts, zerolag-input-addon.ts) with the embedded copy in `src/web/public/app.js`. This document is retained as historical design context.
+> **Status: SHIPPED.** Source lives in `packages/xterm-zerolag-input/src/` and is bundled into the gitignored public vendor asset by the package/build scripts. This document is retained as historical design context.
+
+> **Current input rule:** ordinary typing and Backspace never infer editable text from the rendered terminal buffer. Consumers explicitly call `detectBufferText()` after Tab completion or `setFlushed()` when restoring known input. Full-screen TUIs can render status text after a prompt glyph, so implicit buffer adoption causes ghost deletion and stale text submission.
 
 ## Context
 

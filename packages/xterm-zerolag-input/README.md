@@ -162,7 +162,7 @@ Implements xterm.js `ITerminalAddon`. The addon does **not** hook `terminal.onDa
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `addChar(char)` | `void` | Add a single printable character. Auto-detects existing buffer text on first keystroke. |
+| `addChar(char)` | `void` | Add a single printable character. |
 | `appendText(text)` | `void` | Append multiple characters (paste). |
 | `removeChar()` | `'pending'` \| `'flushed'` \| `false` | Remove last char. See [backspace handling](#backspace-handling). |
 | `clear()` | `void` | Clear all state, hide overlay. Call on Enter/Ctrl+C/Escape. |
@@ -177,7 +177,7 @@ Implements xterm.js `ITerminalAddon`. The addon does **not** hook `terminal.onDa
 | `'flushed'` | Text already sent to PTY | Send `\x7f` backspace to PTY |
 | `false` | Nothing to remove | Do nothing |
 
-The cascade: pending text first, then flushed text, then auto-detect buffer text (handles tab completion). This means backspace "just works" through any combination of typed, flushed, and tab-completed text.
+The cascade is pending text first, then explicitly tracked flushed text. The addon never infers editable input during ordinary typing or Backspace because full-screen terminal UIs can render status text after a prompt glyph. For Tab completion, call `detectBufferText()` after the completion response is rendered; for session restoration, call `setFlushed()`.
 
 ### Flushed Text
 
@@ -195,7 +195,7 @@ Scan the terminal for text that exists after the prompt but wasn't typed through
 
 | Method | Description |
 |--------|-------------|
-| `detectBufferText()` | Scan and return detected text (or `null`). Sets it as flushed. Guarded: runs once per `clear()` cycle. |
+| `detectBufferText()` | Explicitly scan and return detected text (or `null`). Sets it as flushed. Guarded: runs once per `clear()` cycle. |
 | `resetBufferDetection()` | Re-enable detection. |
 | `suppressBufferDetection()` | Block detection until next `clear()`. Use for sessions with UI framework text after the prompt. |
 | `undoDetection()` | Undo last detection — clears flushed state, re-enables detection. For tab completion retry. |

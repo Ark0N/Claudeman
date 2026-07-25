@@ -176,7 +176,6 @@ export class ZerolagInputAddon implements XtermAddon {
    * Call this when the user types a character (charCode >= 32, length === 1).
    */
   addChar(char: string): void {
-    if (!this._pendingText && !this._flushedOffset) this._detectBufferText();
     this._pendingText += char;
     this._render();
   }
@@ -186,7 +185,6 @@ export class ZerolagInputAddon implements XtermAddon {
    */
   appendText(text: string): void {
     if (!text) return;
-    if (!this._pendingText && !this._flushedOffset) this._detectBufferText();
     this._pendingText += text;
     this._render();
   }
@@ -197,7 +195,6 @@ export class ZerolagInputAddon implements XtermAddon {
    * Cascade order:
    * 1. Remove from `pendingText` if non-empty → returns `'pending'`
    * 2. Decrement `flushedOffset` if pending is empty but flushed exists → returns `'flushed'`
-   * 3. Try `detectBufferText()` if both are empty, then decrement → returns `'flushed'`
    *
    * @returns The source of the removed character, or `false` if nothing to remove.
    *
@@ -218,20 +215,6 @@ export class ZerolagInputAddon implements XtermAddon {
       return 'pending';
     }
 
-    if (this._flushedOffset > 0) {
-      this._flushedOffset--;
-      this._flushedText = this._flushedText.slice(0, -1);
-      if (this._flushedOffset > 0) {
-        this._render();
-      } else {
-        this._hide();
-      }
-      return 'flushed';
-    }
-
-    // Both empty — try detecting text already on the prompt line
-    // (handles tab completion, arrow-key edits, etc.)
-    this._detectBufferText();
     if (this._flushedOffset > 0) {
       this._flushedOffset--;
       this._flushedText = this._flushedText.slice(0, -1);
