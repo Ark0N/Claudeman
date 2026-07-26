@@ -2192,6 +2192,7 @@ Object.assign(CodemanApp.prototype, {
       this._localEchoOverlay?.clear();
     }
     this._localEchoEnabled = shouldEnable;
+    this.terminal?.element?.classList.toggle('codeman-local-echo', shouldEnable);
 
     // Swap prompt finder based on session mode
     if (this._localEchoOverlay && session) {

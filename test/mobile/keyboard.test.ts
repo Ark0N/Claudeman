@@ -1210,15 +1210,22 @@ describe('Virtual Keyboard', () => {
           })
         );
         await new Promise((resolve) => setTimeout(resolve, 100));
+        const nativeComposition = app.terminal.element.querySelector('.composition-view');
         return {
           pendingText: app._localEchoOverlay.pendingText,
           compositionText: app._localEchoOverlay.compositionText,
+          nativeCompositionActive: nativeComposition?.classList.contains('active'),
+          nativeCompositionDisplay: nativeComposition ? getComputedStyle(nativeComposition).display : null,
+          localEchoClass: app.terminal.element.classList.contains('codeman-local-echo'),
         };
       });
 
       expect(nextPreview).toEqual({
         pendingText: 'first second',
         compositionText: 'third',
+        nativeCompositionActive: true,
+        nativeCompositionDisplay: 'none',
+        localEchoClass: true,
       });
     });
 
