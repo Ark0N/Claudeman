@@ -66,6 +66,7 @@ const IOS_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebK
 function loadCjkHarness({ ua = ANDROID_UA }: { ua?: string } = {}) {
   const textarea = makeTextarea();
   const sent: string[] = [];
+  const pasted: string[] = [];
   const windowObj: Record<string, unknown> = {};
   const documentObj = {
     getElementById: (id: string) => (id === 'cjkInput' ? textarea : null),
@@ -88,10 +89,13 @@ function loadCjkHarness({ ua = ANDROID_UA }: { ua?: string } = {}) {
   vm.runInContext(src, context, { filename: 'input-cjk.js' });
   const CjkInput = vm.runInContext('CjkInput', context);
 
-  CjkInput.init({ send: (text: string) => sent.push(text) });
+  CjkInput.init({
+    send: (text: string) => sent.push(text),
+    paste: (text: string) => pasted.push(text),
+  });
   textarea.fire('focus');
 
-  return { CjkInput, textarea, sent, windowObj, documentObj };
+  return { CjkInput, textarea, sent, pasted, windowObj, documentObj };
 }
 
 describe('CJK input module', () => {
@@ -181,6 +185,23 @@ describe('CJK input module', () => {
     vi.advanceTimersByTime(300);
 
     expect(sent).toEqual(['a']);
+    expect(textarea.value).toBe(PHANTOM);
+  });
+
+  it('routes multiline clipboard text through the dedicated paste boundary', () => {
+    const { textarea, sent, pasted } = loadCjkHarness();
+    const preventDefault = vi.fn();
+
+    textarea.fire('paste', {
+      preventDefault,
+      clipboardData: {
+        getData: (type: string) => (type === 'text/plain' ? 'first\n\nsecond' : ''),
+      },
+    });
+
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(pasted).toEqual(['first\n\nsecond']);
+    expect(sent).toEqual([]);
     expect(textarea.value).toBe(PHANTOM);
   });
 

@@ -252,6 +252,33 @@ Object.assign(CodemanApp.prototype, {
       }
     }
 
+    // xterm's browser-side bracketedPasteMode can be false after a session
+    // replay because the CLI enabled DECSET 2004 before the retained tail.
+    // Intercept textual paste for TUI sessions so blank lines cannot degrade
+    // into separate Enter keys. Shells keep xterm's native paste semantics.
+    {
+      const xtermTextarea = container.querySelector('.xterm-helper-textarea');
+      xtermTextarea?.addEventListener(
+        'paste',
+        (event) => {
+          const mode = this.activeSessionId
+            ? this.sessions?.get(this.activeSessionId)?.mode
+            : null;
+          if (!this.activeSessionId || mode === 'shell') return;
+          const text = event.clipboardData?.getData?.('text/plain') || '';
+          if (!text) return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          if (this._localEchoEnabled && this._localEchoOverlay) {
+            this._localEchoOverlay.appendText(text);
+          } else {
+            this.sendPastedText(text);
+          }
+        },
+        true
+      );
+    }
+
     // WebGL renderer for GPU-accelerated terminal rendering.
     // Previously caused "page unresponsive" crashes from synchronous GPU stalls,
     // but the mode-aware 32/64KB frame cap in flushPendingWrites() now prevents
@@ -323,6 +350,9 @@ Object.assign(CodemanApp.prototype, {
       this._cjkInput = CjkInput.init({
         send: (text) => {
           this._handleCjkInput(text);
+        },
+        paste: (text) => {
+          this.sendPastedText(text);
         },
       });
     }
@@ -758,7 +788,10 @@ Object.assign(CodemanApp.prototype, {
               this._inputFlushTimeout = null;
             }
             if (text) {
-              this._pendingInput += text;
+              const mode = this.sessions?.get(this.activeSessionId)?.mode;
+              this._pendingInput += /[\r\n]/.test(text) && mode !== 'shell'
+                ? this._prepareTerminalPaste(text, true)
+                : text;
               flushInput();
             }
             // The durable input queue preserves call order. Queue Enter
@@ -2014,27 +2047,36 @@ Object.assign(CodemanApp.prototype, {
         this._localEchoOverlay.clear();
         this._localEchoEnabled = false;
       } else {
-        // Codex/Claude-style TUIs usually expose a ❯ prompt. During active
-        // redraws or compact mobile layouts that marker may not be present in
-        // the viewport, while xterm's cursor still marks the editable input
-        // position. Fall back to cursor coordinates so phone typing appears at
-        // the terminal cursor instead of disappearing into pending state.
+        // Codex/Claude-style TUIs expose an editable prompt as › or ❯. During
+        // initial buffer replay xterm's provisional cursor is at row zero; it
+        // is parser state, not an input anchor, so retain the draft invisibly
+        // until the authoritative frame has loaded. Once loaded, cursor fallback
+        // is allowed only near the bottom where these TUIs place marker-less
+        // input during compact redraws.
         this._localEchoOverlay.setPrompt({
           type: 'custom',
           offset: 0,
           find: (terminal) => {
             try {
+              if (this._isLoadingBuffer) return null;
               const buf = terminal.buffer.active;
+              const rows = Math.max(1, terminal.rows || 1);
+              let hasVisibleContent = false;
               for (let row = terminal.rows - 1; row >= 0; row--) {
                 const line = buf.getLine(buf.viewportY + row);
                 if (!line) continue;
                 const text = line.translateToString(true);
-                const idx = text.lastIndexOf('\u276f');
-                if (idx >= 0) return { row, col: idx + 2 };
+                if (text.trim()) hasVisibleContent = true;
+                const prompt = text.match(/^(\s*)[\u203a\u276f]/);
+                if (prompt) return { row, col: prompt[1].length + 2 };
               }
+              const cursorRow = Math.max(0, Math.min(rows - 1, buf.cursorY || 0));
+              const cursorCol = Math.max(0, Math.min(terminal.cols - 1, buf.cursorX || 0));
+              if (!hasVisibleContent && cursorRow === 0 && cursorCol === 0) return null;
+              if (cursorRow < Math.max(0, rows - 3)) return null;
               return {
-                row: Math.max(0, Math.min(terminal.rows - 1, buf.cursorY)),
-                col: Math.max(0, Math.min(terminal.cols - 1, buf.cursorX)),
+                row: cursorRow,
+                col: cursorCol,
               };
             } catch {
               return null;
@@ -2400,6 +2442,18 @@ Object.assign(CodemanApp.prototype, {
       for (const data of queued) {
         this.batchTerminalWrite(data);
       }
+    }
+    // A user can type while selectSession() is replaying its initial frame.
+    // Local echo retains those characters but deliberately hides them while
+    // xterm's cursor is provisional. Re-anchor after all already-queued writes
+    // are parsed; queued live prompt events schedule their own later rerender.
+    const overlay = this._localEchoOverlay;
+    if (overlay?.hasPending && this.terminal?.write) {
+      this.terminal.write('', () => {
+        if (!this._isLoadingBuffer && overlay === this._localEchoOverlay && overlay.hasPending) {
+          overlay.rerender();
+        }
+      });
     }
     return true;
   },
@@ -3038,6 +3092,37 @@ Object.assign(CodemanApp.prototype, {
     // POST fallback) so voice / keyboard-accessory / paste input also survives a
     // dropped link instead of being lost in a single best-effort fetch.
     this._sendInputAsync(this.activeSessionId, input, { useMux: true });
+  },
+
+  /**
+   * Normalize clipboard line endings and optionally wrap them in the terminal's
+   * bracketed-paste protocol. Replayed TUI buffers often omit the one-time
+   * DECSET 2004 enable, so browser xterm state alone cannot be trusted here.
+   */
+  _prepareTerminalPaste(text, bracketed) {
+    const normalized = String(text ?? '').replace(/\r?\n/g, '\r');
+    return bracketed ? `\x1b[200~${normalized}\x1b[201~` : normalized;
+  },
+
+  /**
+   * Deliver clipboard/compose text as one ordered terminal paste operation.
+   * TUI sessions receive explicit bracketed-paste framing so embedded blank
+   * lines remain part of the draft instead of acting as Enter submissions.
+   *
+   * @param {string} text
+   * @param {{submit?: boolean}} [options]
+   */
+  async sendPastedText(text, options = {}) {
+    const sessionId = this.activeSessionId;
+    if (!sessionId || !text) return;
+    const mode = this.sessions?.get(sessionId)?.mode;
+    const input = this._prepareTerminalPaste(text, mode !== 'shell');
+    this._sendInputAsync(sessionId, input, { useMux: true });
+    if (options.submit) {
+      // A separate reliable record preserves paste-before-submit ordering on
+      // both WebSocket and serialized POST fallback transports.
+      this._sendInputAsync(sessionId, '\r', { useMux: true });
+    }
   },
 
   // ═══════════════════════════════════════════════════════════════

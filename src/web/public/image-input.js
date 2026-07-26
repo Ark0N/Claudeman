@@ -87,15 +87,12 @@ Object.assign(CodemanApp.prototype, {
         e.preventDefault();
         self._uploadAndInsertImages(imageFiles);
       } else {
-        // No image -- route text through xterm's paste() so bracketed-paste
-        // markers (CSI 200~ ... CSI 201~) survive when the inner application
-        // has enabled bracketed-paste mode (Claude Code does). Sending text
-        // via raw sendInput() strips those markers and makes pasted input
-        // indistinguishable from typed input, weakening the CLI's
-        // prompt-injection defenses.
+        // No image: route through Codeman's session-aware paste boundary.
+        // Replayed browser buffers can miss the CLI's one-time DECSET 2004
+        // enable, so relying on xterm's local mode would omit bracket framing.
         var text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
         e.preventDefault();
-        if (text && self.terminal) self.terminal.paste(text);
+        if (text) self.sendPastedText(text);
       }
     });
 

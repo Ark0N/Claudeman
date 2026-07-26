@@ -50,6 +50,7 @@
 const CjkInput = (() => {
   let _textarea = null;
   let _send = null;
+  let _paste = null;
   let _initialized = false;
   let _composing = false;
   let _flushTimer = null;
@@ -192,10 +193,11 @@ const CjkInput = (() => {
   }
 
   return {
-    init({ send }) {
+    init({ send, paste }) {
       if (_initialized) this.destroy();
 
       _send = send;
+      _paste = typeof paste === 'function' ? paste : send;
       _composing = false;
       _flushTimer = null;
       _textarea = document.getElementById('cjkInput');
@@ -248,6 +250,23 @@ const CjkInput = (() => {
       _textarea.addEventListener('mousedown', _listeners.mousedown);
       _textarea.addEventListener('focus', _listeners.focus);
       _textarea.addEventListener('blur', _listeners.blur);
+
+      // Clipboard text is a single semantic paste, even when it contains blank
+      // lines. Route it separately so the app can add bracketed-paste framing
+      // instead of flushing each newline as a real Enter key.
+      _listeners.paste = (e) => {
+        const text = e.clipboardData?.getData?.('text/plain') || '';
+        if (!text) return;
+        e.preventDefault();
+        _t(`paste len=${text.length}`);
+        _composing = false;
+        _cancelDebouncedFlush();
+        clearTimeout(_compositionFlushTimer);
+        _compositionFlushTimer = null;
+        _paste(text);
+        _resetToPhantom();
+      };
+      _textarea.addEventListener('paste', _listeners.paste);
 
       // ── Composition tracking (keyboard IME — works for CJK typing) ──
       _listeners.compositionstart = () => {
@@ -446,6 +465,8 @@ const CjkInput = (() => {
       }
       window.cjkActive = false;
       _composing = false;
+      _send = null;
+      _paste = null;
       for (const key of Object.keys(_listeners)) delete _listeners[key];
       _initialized = false;
     },

@@ -291,8 +291,7 @@ const KeyboardAccessoryBar = {
       const text = textarea.value;
       close();
       if (text) {
-        app.sendInput(text);
-        app.sendInput('\r');
+        app.sendPastedText(text, { submit: true });
       }
     };
 

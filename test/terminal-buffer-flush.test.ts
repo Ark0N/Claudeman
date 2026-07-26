@@ -169,4 +169,27 @@ describe('buffer-load flush (COD-144)', () => {
     expect(app.batchTerminalWrite).not.toHaveBeenCalled();
     expect(writes).toEqual([]);
   });
+
+  it('repositions a pending local draft after the loaded frame becomes authoritative', () => {
+    const { app } = makeApp();
+    const rerender = vi.fn();
+    let writeDone: (() => void) | undefined;
+    Object.assign(app, {
+      _localEchoOverlay: { hasPending: true, rerender },
+      terminal: {
+        write: vi.fn((_data: string, callback?: () => void) => {
+          writeDone = callback;
+        }),
+      },
+    });
+    const owner = app._beginBufferLoad('load-with-draft');
+
+    expect(app._finishBufferLoad(owner)).toBe(true);
+    expect(writeDone).toBeTypeOf('function');
+    expect(rerender).not.toHaveBeenCalled();
+
+    writeDone?.();
+
+    expect(rerender).toHaveBeenCalledOnce();
+  });
 });

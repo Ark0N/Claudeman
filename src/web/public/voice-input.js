@@ -609,8 +609,11 @@ const VoiceInput = {
         const text = app._localEchoOverlay.pendingText || '';
         app._localEchoOverlay.clear();
         app._localEchoOverlay.suppressBufferDetection();
-        if (text) app.sendInput(text).catch(() => {});
-        app.sendInput('\r').catch(() => {});
+        if (text) {
+          app.sendPastedText(text, { submit: true }).catch(() => {});
+        } else {
+          app.sendInput('\r').catch(() => {});
+        }
       } else {
         app.sendInput('\r').catch(() => {});
       }
@@ -656,7 +659,7 @@ const VoiceInput = {
     const send = () => {
       const val = textarea.value.trim();
       overlay.remove();
-      if (val) app.sendInput(val + '\r').catch(() => {});
+      if (val) app.sendPastedText(val, { submit: true }).catch(() => {});
     };
     const cancel = () => overlay.remove();
     const newInput = () => {

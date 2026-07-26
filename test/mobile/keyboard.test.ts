@@ -1155,6 +1155,65 @@ describe('Virtual Keyboard', () => {
       expect(state.sentInputs).toEqual([]);
     });
 
+    it('submits multiline local echo as one bracketed paste frame', async () => {
+      await page.evaluate(() => {
+        window.__sentInputs = [];
+        app.activeSessionId = 'mobile-multiline-paste-test';
+        app.sessions.set('mobile-multiline-paste-test', {
+          id: 'mobile-multiline-paste-test',
+          mode: 'claude',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app._sendInputAsync = (_sessionId: string, input: string) => {
+          window.__sentInputs.push(input);
+        };
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app._localEchoOverlay.clear();
+        const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+        Object.defineProperty(pasteEvent, 'clipboardData', {
+          value: {
+            getData: (type: string) => (type === 'text/plain' ? 'first paragraph\n\nsecond paragraph' : ''),
+          },
+        });
+        app.terminal.textarea.dispatchEvent(pasteEvent);
+        app.terminal.input('\r');
+      });
+
+      await expect
+        .poll(() => page.evaluate(() => window.__sentInputs))
+        .toEqual(['\x1b[200~first paragraph\r\rsecond paragraph\x1b[201~', '\r']);
+    });
+
+    it('routes the mobile paste dialog through the multiline paste boundary', async () => {
+      await page.evaluate(`(() => {
+        window.__pasteCalls = [];
+        app.activeSessionId = 'mobile-paste-dialog-test';
+        app.sendPastedText = (text, options) => {
+          window.__pasteCalls.push({ text, options });
+        };
+        KeyboardAccessoryBar.pasteFromClipboard();
+      })()`);
+
+      await page.locator('.paste-textarea').fill('first paragraph\n\nsecond paragraph');
+      await page.locator('.paste-send').click();
+
+      await expect
+        .poll(() => page.evaluate(() => window.__pasteCalls))
+        .toEqual([
+          {
+            text: 'first paragraph\n\nsecond paragraph',
+            options: { submit: true },
+          },
+        ]);
+      expect(await page.locator('.paste-overlay').count()).toBe(0);
+    });
+
     it('keeps back-to-back local echo submissions in text-then-Enter order', async () => {
       await page.evaluate(() => {
         window.__sentInputs = [];
@@ -1185,6 +1244,60 @@ describe('Virtual Keyboard', () => {
       await expect.poll(() => page.evaluate(() => window.__sentInputs)).toEqual(['first', '\r', 'second', '\r']);
     });
 
+    it('holds the first phone draft until the initial prompt frame is loaded', async () => {
+      await page.evaluate(() => {
+        window.__sentInputs = [];
+        app.activeSessionId = 'mobile-initial-draft-test';
+        app.sessions.set('mobile-initial-draft-test', {
+          id: 'mobile-initial-draft-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app._sendInputAsync = (_sessionId: string, input: string) => {
+          window.__sentInputs.push(input);
+        };
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app.terminal.reset();
+        app._beginBufferLoad('mobile-initial-draft-load');
+        app.terminal.focus();
+      });
+
+      await page.keyboard.type('first draft');
+
+      const loadingState = await page.evaluate(() => ({
+        pendingText: app._localEchoOverlay?.pendingText,
+        overlayState: app._localEchoOverlay?.state,
+        sentInputs: window.__sentInputs,
+      }));
+      expect(loadingState.pendingText).toBe('first draft');
+      expect(loadingState.overlayState?.visible).toBe(false);
+      expect(loadingState.overlayState?.promptPosition).toBeNull();
+      expect(loadingState.sentInputs).toEqual([]);
+
+      await page.evaluate(async () => {
+        await new Promise<void>((resolve) => {
+          app.terminal.write('\x1b[2J\x1b[Hagent output\r\nready\r\n\u203a ', resolve);
+        });
+        app._finishBufferLoad('mobile-initial-draft-load');
+      });
+
+      await expect.poll(() => page.evaluate(() => app._localEchoOverlay?.state.promptPosition?.row)).toBe(2);
+      const readyState = await page.evaluate(() => ({
+        pendingText: app._localEchoOverlay?.pendingText,
+        visible: app._localEchoOverlay?.state.visible,
+        sentInputs: window.__sentInputs,
+      }));
+      expect(readyState.pendingText).toBe('first draft');
+      expect(readyState.visible).toBe(true);
+      expect(readyState.sentInputs).toEqual([]);
+    });
+
     it('shows terminal local echo at the cursor when no prompt marker is visible', async () => {
       await page.evaluate(async () => {
         app.activeSessionId = 'mobile-cursor-fallback-test';
@@ -1201,7 +1314,10 @@ describe('Virtual Keyboard', () => {
         app._updateCjkInputState();
         app._updateLocalEchoState();
         app.terminal.reset();
-        await new Promise<void>((resolve) => app.terminal.write('working without prompt marker', resolve));
+        window.__cursorFallbackRow = Math.max(0, app.terminal.rows - 2);
+        await new Promise<void>((resolve) => {
+          app.terminal.write(`\x1b[${window.__cursorFallbackRow + 1};1Hworking without prompt marker`, resolve);
+        });
         app.terminal.focus();
       });
 
@@ -1211,12 +1327,13 @@ describe('Virtual Keyboard', () => {
         cjkDisplay: getComputedStyle(document.getElementById('cjkInput') as HTMLElement).display,
         pendingText: app._localEchoOverlay?.pendingText,
         overlayState: app._localEchoOverlay?.state,
+        expectedRow: window.__cursorFallbackRow,
       }));
 
       expect(state.cjkDisplay).toBe('none');
       expect(state.pendingText).toBe('abc');
       expect(state.overlayState?.visible).toBe(true);
-      expect(state.overlayState?.promptPosition).not.toBeNull();
+      expect(state.overlayState?.promptPosition?.row).toBe(state.expectedRow);
     });
   });
 
