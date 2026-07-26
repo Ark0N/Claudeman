@@ -20,6 +20,7 @@
   // reach xterm.
   const TOUCH_COMPAT_MOUSE_SUPPRESS_MS = 450;
   const MOBILE_COMPOSITION_COMMIT_TIMEOUT_MS = 80;
+  const MOBILE_COMPOSITION_DEDUPE_TIMEOUT_MS = 1000;
 
   function isTerminalQueryResponse(data) {
     return TERMINAL_QUERY_RESPONSE_PATTERN.test(data) || TERMINAL_OSC_RESPONSE_PATTERN.test(data);
@@ -47,6 +48,8 @@
     isTerminalQueryResponse,
     shouldSuppressTerminalQueryResponse,
     TOUCH_COMPAT_MOUSE_SUPPRESS_MS,
+    MOBILE_COMPOSITION_COMMIT_TIMEOUT_MS,
+    MOBILE_COMPOSITION_DEDUPE_TIMEOUT_MS,
   };
   global.CODEMAN_XTERM_THEMES = CODEMAN_XTERM_THEMES;
   global.codemanCurrentXtermTheme = currentXtermTheme;
@@ -201,11 +204,15 @@ Object.assign(CodemanApp.prototype, {
         let compositionEpoch = 0;
         let lastKeydownHandled = 0;
         let lastBackspaceKeydownAt = -Infinity;
+        this._mobileCompositionPending = false;
+        this._mobileCompositionFallbackCommit = null;
         xtermTextarea.addEventListener('compositionstart', () => {
           composing = true;
           compositionEpoch += 1;
           this._mobileCompositionPending = false;
+          this._mobileCompositionFallbackCommit = null;
           this._clearTimer('_mobileCompositionCommitTimer');
+          this._clearTimer('_mobileCompositionFallbackTimer');
           if (this._localEchoEnabled) {
             this._localEchoOverlay?.setCompositionText('');
           }
@@ -214,10 +221,11 @@ Object.assign(CodemanApp.prototype, {
           if (!this._localEchoEnabled) return;
           this._localEchoOverlay?.setCompositionText(event.data || '');
         });
-        xtermTextarea.addEventListener('compositionend', () => {
+        xtermTextarea.addEventListener('compositionend', (event) => {
           composing = false;
           if (!this._localEchoEnabled) return;
           const endedEpoch = compositionEpoch;
+          const fallbackText = event.data || this._localEchoOverlay?.compositionText || '';
           this._mobileCompositionPending = true;
           this._clearTimer('_mobileCompositionCommitTimer');
           // xterm reads the finalized textarea value in a zero-delay task.
@@ -225,9 +233,8 @@ Object.assign(CodemanApp.prototype, {
           this._mobileCompositionCommitTimer = setTimeout(() => {
             this._mobileCompositionCommitTimer = null;
             if (!this._mobileCompositionPending || endedEpoch !== compositionEpoch) return;
-            this._mobileCompositionPending = false;
-            this._localEchoOverlay?.clearComposition();
-          }, MOBILE_COMPOSITION_COMMIT_TIMEOUT_MS);
+            this._commitMobileCompositionFallback(fallbackText);
+          }, window.CodemanTerminalInput.MOBILE_COMPOSITION_COMMIT_TIMEOUT_MS);
         });
         // Track when xterm handles a keydown normally (non-229 keyCode).
         // If xterm processed the keydown, it will emit onData itself --
@@ -910,6 +917,12 @@ Object.assign(CodemanApp.prototype, {
         // instant visual feedback.  Nothing is sent to the PTY until Enter
         // (or a control char) is pressed — avoids out-of-order char delivery.
         if (this._localEchoEnabled) {
+          const fallbackCommit = this._mobileCompositionFallbackCommit;
+          if (fallbackCommit !== null && data === fallbackCommit) {
+            this._mobileCompositionFallbackCommit = null;
+            this._clearTimer('_mobileCompositionFallbackTimer');
+            return;
+          }
           if (
             this._mobileCompositionPending &&
             data &&
@@ -2388,6 +2401,29 @@ Object.assign(CodemanApp.prototype, {
         }
       });
     }
+  },
+
+  _commitMobileCompositionFallback(text) {
+    if (!this._mobileCompositionPending) return false;
+    this._mobileCompositionPending = false;
+    const finalText =
+      typeof text === 'string' && text.length > 0
+        ? text
+        : this._localEchoOverlay?.compositionText || '';
+    if (!finalText) {
+      this._localEchoOverlay?.clearComposition();
+      return false;
+    }
+    this._localEchoOverlay?.commitComposition(finalText);
+    this._mobileCompositionFallbackCommit = finalText;
+    this._clearTimer('_mobileCompositionFallbackTimer');
+    this._mobileCompositionFallbackTimer = setTimeout(() => {
+      this._mobileCompositionFallbackTimer = null;
+      if (this._mobileCompositionFallbackCommit === finalText) {
+        this._mobileCompositionFallbackCommit = null;
+      }
+    }, window.CodemanTerminalInput.MOBILE_COMPOSITION_DEDUPE_TIMEOUT_MS);
+    return true;
   },
 
   /**

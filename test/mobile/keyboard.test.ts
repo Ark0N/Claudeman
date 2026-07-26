@@ -1227,6 +1227,37 @@ describe('Virtual Keyboard', () => {
         nativeCompositionDisplay: 'none',
         localEchoClass: true,
       });
+
+      const fallback = await page.evaluate(async () => {
+        const textarea = app.terminal.textarea;
+        const coreService = app.terminal._core.coreService;
+        const triggerDataEvent = coreService.triggerDataEvent;
+        coreService.triggerDataEvent = () => {};
+        try {
+          textarea.dispatchEvent(
+            new CompositionEvent('compositionend', {
+              bubbles: true,
+              data: 'third',
+            })
+          );
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        } finally {
+          coreService.triggerDataEvent = triggerDataEvent;
+        }
+        triggerDataEvent.call(coreService, ' ', true);
+        triggerDataEvent.call(coreService, 'third', true);
+        return {
+          pendingText: app._localEchoOverlay.pendingText,
+          compositionText: app._localEchoOverlay.compositionText,
+          fallbackCommit: app._mobileCompositionFallbackCommit,
+        };
+      });
+
+      expect(fallback).toEqual({
+        pendingText: 'first secondthird ',
+        compositionText: '',
+        fallbackCommit: null,
+      });
     });
 
     it('routes Backspace past a stale autocomplete textarea buffer', async () => {
