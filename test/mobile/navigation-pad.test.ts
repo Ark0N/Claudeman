@@ -406,7 +406,7 @@ describe('Mobile Navigation Pad', () => {
     expect(keyboardLayout.primaryButtonsContained).toBe(true);
 
     await vi.waitFor(() => {
-      expect(resizeLog).toContainEqual({ takeControl: true });
+      expect(resizeLog).toContainEqual({ takeControl: true, refit: false });
     });
     resizeLog.length = 0;
     inputLog.length = 0;

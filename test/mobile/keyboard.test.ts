@@ -346,7 +346,7 @@ describe('Virtual Keyboard', () => {
 
       expect(call).toEqual({
         sessionId: 'mobile-keyboard-takeover',
-        options: { takeControl: true },
+        options: { takeControl: true, refit: false },
       });
     });
 
@@ -399,6 +399,44 @@ describe('Virtual Keyboard', () => {
         return main?.style.paddingBottom ?? '';
       });
       expect(mainPadding).toBe('');
+    });
+
+    it('coalesces keyboard animation frames into one final terminal fit', async () => {
+      const result = await page.evaluate(async () => {
+        const originalFit = app.fitAddon.fit.bind(app.fitAddon);
+        const originalSendResize = KeyboardHandler._sendTerminalResize.bind(KeyboardHandler);
+        const originalScrollToBottom = app.terminal.scrollToBottom.bind(app.terminal);
+        let fits = 0;
+        let resizes = 0;
+        let bottomRestores = 0;
+        app.fitAddon.fit = () => {
+          fits++;
+        };
+        KeyboardHandler._sendTerminalResize = () => {
+          resizes++;
+        };
+        app.terminal.scrollToBottom = () => {
+          bottomRestores++;
+        };
+
+        KeyboardHandler._scheduleViewportSettle({ scrollToBottom: true });
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        KeyboardHandler._scheduleViewportSettle();
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        KeyboardHandler._scheduleViewportSettle();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const beforeFinalSettle = { fits, resizes, bottomRestores };
+        await new Promise((resolve) => setTimeout(resolve, KeyboardHandler.VIEWPORT_SETTLE_MS));
+        const afterFinalSettle = { fits, resizes, bottomRestores };
+
+        app.fitAddon.fit = originalFit;
+        KeyboardHandler._sendTerminalResize = originalSendResize;
+        app.terminal.scrollToBottom = originalScrollToBottom;
+        return { beforeFinalSettle, afterFinalSettle };
+      });
+
+      expect(result.beforeFinalSettle).toEqual({ fits: 0, resizes: 0, bottomRestores: 0 });
+      expect(result.afterFinalSettle).toEqual({ fits: 1, resizes: 1, bottomRestores: 1 });
     });
 
     it('accessory bar has the unified terminal-control action set', async () => {
