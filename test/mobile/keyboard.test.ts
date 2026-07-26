@@ -1113,6 +1113,48 @@ describe('Virtual Keyboard', () => {
       expect(afterEnter.sentInputs.join('')).toBe('find bug\r');
     });
 
+    it('keeps a pending phone draft anchored to the prompt after agent output', async () => {
+      await page.evaluate(async () => {
+        window.__sentInputs = [];
+        app.activeSessionId = 'mobile-draft-anchor-test';
+        app.sessions.set('mobile-draft-anchor-test', {
+          id: 'mobile-draft-anchor-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app._sendInputAsync = (_sessionId: string, input: string) => {
+          window.__sentInputs.push(input);
+        };
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app.terminal.reset();
+        await new Promise<void>((resolve) => {
+          app.terminal.write('\x1b[2J\x1b[H\u276f ', resolve);
+        });
+        app.terminal.focus();
+      });
+
+      await page.keyboard.type('keep this draft');
+      await expect.poll(() => page.evaluate(() => app._localEchoOverlay?.state.promptPosition?.row)).toBe(0);
+
+      await page.evaluate(() => {
+        app.batchTerminalWrite('\x1b[2J\x1b[Hagent output\r\ncontinues here\r\n\u276f ');
+      });
+
+      await expect.poll(() => page.evaluate(() => app._localEchoOverlay?.state.promptPosition?.row)).toBe(2);
+      const state = await page.evaluate(() => ({
+        pendingText: app._localEchoOverlay?.pendingText,
+        sentInputs: window.__sentInputs,
+      }));
+      expect(state.pendingText).toBe('keep this draft');
+      expect(state.sentInputs).toEqual([]);
+    });
+
     it('keeps back-to-back local echo submissions in text-then-Enter order', async () => {
       await page.evaluate(() => {
         window.__sentInputs = [];

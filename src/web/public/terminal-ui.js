@@ -2080,6 +2080,13 @@ Object.assign(CodemanApp.prototype, {
     const activeSession = this.activeSessionId && this.sessions ? this.sessions.get(this.activeSessionId) : null;
     const MAX_FRAME_BYTES = activeSession?.mode === 'codex' ? 32768 : 65536;
     let deferred = false;
+    const rerenderPendingDraft = this._localEchoOverlay?.hasPending
+      ? () => {
+          if (this._localEchoOverlay?.hasPending) {
+            this._localEchoOverlay.rerender();
+          }
+        }
+      : undefined;
     // While the reader owns history, remember the viewport so Codex status
     // redraws cannot move it.
     const preserveViewportY =
@@ -2088,10 +2095,10 @@ Object.assign(CodemanApp.prototype, {
         : null;
 
     if (_joinedLen <= MAX_FRAME_BYTES) {
-      this.terminal.write(joined);
+      this.terminal.write(joined, rerenderPendingDraft);
     } else {
       // Write first chunk now, defer rest to next frame
-      this.terminal.write(joined.slice(0, MAX_FRAME_BYTES));
+      this.terminal.write(joined.slice(0, MAX_FRAME_BYTES), rerenderPendingDraft);
       this.pendingWrites.push(joined.slice(MAX_FRAME_BYTES));
       deferred = true;
       this._scheduleTerminalWriteFlush();
@@ -2114,12 +2121,6 @@ Object.assign(CodemanApp.prototype, {
     // A manual history scroll owns the viewport until it reaches the bottom.
     if (this._wasAtBottomBeforeWrite && !this._shouldPreserveTerminalScroll()) {
       this.terminal.scrollToBottom();
-    }
-
-    // Re-position local echo overlay after terminal writes — Ink redraws can
-    // move the ❯ prompt to a different row, making the overlay invisible.
-    if (this._localEchoOverlay?.hasPending) {
-      this._localEchoOverlay.rerender();
     }
 
     // After Tab completion: detect the completed text in the overlay.

@@ -89,6 +89,28 @@ describe('terminal flush budget', () => {
     expect(app.pendingWrites.join('')).toHaveLength(32 * 1024);
   });
 
+  it('repositions a pending local draft only after xterm applies agent output', () => {
+    const { app, writes } = loadTerminalUiHarness('claude');
+    let writeDone: (() => void) | undefined;
+    const rerender = vi.fn();
+    app._localEchoOverlay = { hasPending: true, rerender };
+    app.terminal.write = (data: string, callback?: () => void) => {
+      writes.push(data);
+      writeDone = callback;
+    };
+    app.pendingWrites.push('agent output that moves the prompt');
+
+    app.flushPendingWrites();
+
+    expect(writes).toEqual(['agent output that moves the prompt']);
+    expect(writeDone).toBeTypeOf('function');
+    expect(rerender).not.toHaveBeenCalled();
+
+    writeDone?.();
+
+    expect(rerender).toHaveBeenCalledOnce();
+  });
+
   it('waits for xterm to process small buffer replays before completing buffer load', async () => {
     const { app, writes } = loadTerminalUiHarness('codex');
     let writeDone: (() => void) | undefined;
