@@ -19,6 +19,7 @@
   // short window, only the app's synthetic tap-to-position mouse event should
   // reach xterm.
   const TOUCH_COMPAT_MOUSE_SUPPRESS_MS = 450;
+  const MOBILE_COMPOSITION_COMMIT_TIMEOUT_MS = 80;
 
   function isTerminalQueryResponse(data) {
     return TERMINAL_QUERY_RESPONSE_PATTERN.test(data) || TERMINAL_OSC_RESPONSE_PATTERN.test(data);
@@ -197,10 +198,37 @@ Object.assign(CodemanApp.prototype, {
       const xtermTextarea = container.querySelector('.xterm-helper-textarea');
       if (xtermTextarea && MobileDetection.isTouchDevice()) {
         let composing = false;
+        let compositionEpoch = 0;
         let lastKeydownHandled = 0;
         let lastBackspaceKeydownAt = -Infinity;
-        xtermTextarea.addEventListener('compositionstart', () => { composing = true; });
-        xtermTextarea.addEventListener('compositionend', () => { composing = false; });
+        xtermTextarea.addEventListener('compositionstart', () => {
+          composing = true;
+          compositionEpoch += 1;
+          this._mobileCompositionPending = false;
+          this._clearTimer('_mobileCompositionCommitTimer');
+          if (this._localEchoEnabled) {
+            this._localEchoOverlay?.setCompositionText('');
+          }
+        });
+        xtermTextarea.addEventListener('compositionupdate', (event) => {
+          if (!this._localEchoEnabled) return;
+          this._localEchoOverlay?.setCompositionText(event.data || '');
+        });
+        xtermTextarea.addEventListener('compositionend', () => {
+          composing = false;
+          if (!this._localEchoEnabled) return;
+          const endedEpoch = compositionEpoch;
+          this._mobileCompositionPending = true;
+          this._clearTimer('_mobileCompositionCommitTimer');
+          // xterm reads the finalized textarea value in a zero-delay task.
+          // Keep its preview visible until onData atomically commits that text.
+          this._mobileCompositionCommitTimer = setTimeout(() => {
+            this._mobileCompositionCommitTimer = null;
+            if (!this._mobileCompositionPending || endedEpoch !== compositionEpoch) return;
+            this._mobileCompositionPending = false;
+            this._localEchoOverlay?.clearComposition();
+          }, MOBILE_COMPOSITION_COMMIT_TIMEOUT_MS);
+        });
         // Track when xterm handles a keydown normally (non-229 keyCode).
         // If xterm processed the keydown, it will emit onData itself --
         // the input event handler below must NOT re-send the character.
@@ -882,6 +910,16 @@ Object.assign(CodemanApp.prototype, {
         // instant visual feedback.  Nothing is sent to the PTY until Enter
         // (or a control char) is pressed — avoids out-of-order char delivery.
         if (this._localEchoEnabled) {
+          if (
+            this._mobileCompositionPending &&
+            data &&
+            data.charCodeAt(0) >= 32
+          ) {
+            this._mobileCompositionPending = false;
+            this._clearTimer('_mobileCompositionCommitTimer');
+            this._localEchoOverlay?.commitComposition(data);
+            return;
+          }
           if (data === '\x7f') {
             const source = this._localEchoOverlay?.removeChar();
             if (source === 'flushed') {

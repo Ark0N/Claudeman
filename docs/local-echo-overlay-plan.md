@@ -4,6 +4,8 @@
 
 > **Current input rule:** ordinary typing and Backspace never infer editable text from the rendered terminal buffer. Consumers explicitly call `detectBufferText()` after Tab completion or `setFlushed()` when restoring known input. Full-screen TUIs can render status text after a prompt glyph, so implicit buffer adoption causes ghost deletion and stale text submission.
 
+> **IME rule:** live composition candidates occupy a separate transient overlay slot. `compositionupdate` replaces that slot, and xterm's finalized `onData` payload atomically commits it to pending text. Candidate text is never submitted or deleted as if it were already committed.
+
 ## Context
 
 User accesses Codeman remotely from Thailand to Switzerland over Tailscale (~200-300ms RTT).

@@ -130,6 +130,8 @@ export interface ZerolagInputOptions {
 export interface ZerolagInputState {
   /** Characters typed but not yet acknowledged by the server */
   pendingText: string;
+  /** Current uncommitted IME candidate text */
+  compositionText: string;
   /** Number of characters flushed to PTY but echo not yet received */
   flushedLength: number;
   /** Text content of the flushed portion */

@@ -64,6 +64,7 @@ export class ZerolagInputAddon implements XtermAddon {
 
   // Text state
   private _pendingText = '';
+  private _compositionText = '';
   private _flushedOffset = 0;
   private _flushedText = '';
   private _bufferDetectDone = false;
@@ -130,7 +131,7 @@ export class ZerolagInputAddon implements XtermAddon {
             clearTimeout(this._scrollTimer);
             this._scrollTimer = null;
           }
-        } else if (this._pendingText || this._flushedOffset > 0) {
+        } else if (this._pendingText || this._compositionText || this._flushedOffset > 0) {
           if (this._scrollTimer) clearTimeout(this._scrollTimer);
           this._scrollTimer = setTimeout(() => {
             this._scrollTimer = null;
@@ -190,6 +191,38 @@ export class ZerolagInputAddon implements XtermAddon {
   }
 
   /**
+   * Replace the transient IME candidate shown after committed pending text.
+   * Candidate updates are replacements, not appends: mobile keyboards rewrite
+   * the whole composing word as suggestions change.
+   */
+  setCompositionText(text: string): void {
+    this._compositionText = text;
+    if (text || this._pendingText || this._flushedOffset > 0) {
+      this._render();
+    } else {
+      this._hide();
+    }
+  }
+
+  /**
+   * Atomically replace the transient IME candidate with finalized input.
+   */
+  commitComposition(text: string): void {
+    this._compositionText = '';
+    if (text) this._pendingText += text;
+    if (this._pendingText || this._flushedOffset > 0) {
+      this._render();
+    } else {
+      this._hide();
+    }
+  }
+
+  /** Remove an unfinished IME candidate without changing committed input. */
+  clearComposition(): void {
+    this.commitComposition('');
+  }
+
+  /**
    * Remove the last character from the overlay.
    *
    * Cascade order:
@@ -235,6 +268,7 @@ export class ZerolagInputAddon implements XtermAddon {
    */
   clear(): void {
     this._pendingText = '';
+    this._compositionText = '';
     this._flushedOffset = 0;
     this._flushedText = '';
     this._bufferDetectDone = false;
@@ -280,7 +314,7 @@ export class ZerolagInputAddon implements XtermAddon {
   clearFlushed(): void {
     this._flushedOffset = 0;
     this._flushedText = '';
-    if (this._pendingText) {
+    if (this._pendingText || this._compositionText) {
       this._render();
     } else {
       this._hide();
@@ -295,7 +329,7 @@ export class ZerolagInputAddon implements XtermAddon {
    * that move the prompt.
    */
   rerender(): void {
-    if (this._pendingText || this._flushedOffset > 0) {
+    if (this._pendingText || this._compositionText || this._flushedOffset > 0) {
       this._lastRenderKey = '';
       this._render();
     }
@@ -308,7 +342,7 @@ export class ZerolagInputAddon implements XtermAddon {
   refreshFont(): void {
     this._cacheFont();
     this._lastRenderKey = '';
-    if (this._pendingText || this._flushedOffset > 0) this._render();
+    if (this._pendingText || this._compositionText || this._flushedOffset > 0) this._render();
   }
 
   // ─── Buffer detection ─────────────────────────────────────────────
@@ -374,7 +408,7 @@ export class ZerolagInputAddon implements XtermAddon {
     this._options.prompt = finder;
     this._lastPromptPos = null;
     this._lastRenderKey = '';
-    if (this._pendingText || this._flushedOffset > 0) this._render();
+    if (this._pendingText || this._compositionText || this._flushedOffset > 0) this._render();
   }
 
   // ─── Prompt utilities ─────────────────────────────────────────────
@@ -408,15 +442,21 @@ export class ZerolagInputAddon implements XtermAddon {
     return this._pendingText;
   }
 
-  /** Whether there is any overlay content (pending or flushed). */
+  /** Current uncommitted IME candidate text. */
+  get compositionText(): string {
+    return this._compositionText;
+  }
+
+  /** Whether there is any overlay content (pending, composing, or flushed). */
   get hasPending(): boolean {
-    return this._pendingText.length > 0 || this._flushedOffset > 0;
+    return this._pendingText.length > 0 || this._compositionText.length > 0 || this._flushedOffset > 0;
   }
 
   /** Read-only state snapshot. */
   get state(): ZerolagInputState {
     return {
       pendingText: this._pendingText,
+      compositionText: this._compositionText,
       flushedLength: this._flushedOffset,
       flushedText: this._flushedText,
       visible: this._overlay !== null && this._overlay.style.display !== 'none',
@@ -488,7 +528,7 @@ export class ZerolagInputAddon implements XtermAddon {
 
   private _render(): void {
     if (!this._terminal || !this._overlay) return;
-    if (!this._pendingText && !(this._flushedOffset > 0)) {
+    if (!this._pendingText && !this._compositionText && !(this._flushedOffset > 0)) {
       this._overlay.style.display = 'none';
       return;
     }
@@ -530,10 +570,10 @@ export class ZerolagInputAddon implements XtermAddon {
       const startCol = activePrompt.col + offset;
 
       // Build display text: flushed chars + pending chars
-      let displayText = this._pendingText;
+      let displayText = this._pendingText + this._compositionText;
       if (this._flushedOffset > 0) {
         if (this._flushedText && this._flushedText.length === this._flushedOffset) {
-          displayText = this._flushedText + this._pendingText;
+          displayText = this._flushedText + this._pendingText + this._compositionText;
         } else {
           // Fallback: read flushed chars from terminal buffer
           const absRow = buf.viewportY + activePrompt.row;
@@ -541,7 +581,7 @@ export class ZerolagInputAddon implements XtermAddon {
           if (line) {
             const lineText = line.translateToString(true);
             const flushedChars = lineText.slice(startCol, startCol + this._flushedOffset);
-            displayText = flushedChars + this._pendingText;
+            displayText = flushedChars + this._pendingText + this._compositionText;
           }
         }
       }

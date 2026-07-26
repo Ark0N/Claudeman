@@ -1113,6 +1113,115 @@ describe('Virtual Keyboard', () => {
       expect(afterEnter.sentInputs.join('')).toBe('find bug\r');
     });
 
+    it('shows and commits each live Android composition after the first word', async () => {
+      const preview = await page.evaluate(async () => {
+        app.activeSessionId = 'mobile-composition-test';
+        app.sessions.set('mobile-composition-test', {
+          id: 'mobile-composition-test',
+          mode: 'claude',
+          status: 'running',
+        });
+        app.hideWelcome();
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app.terminal.reset();
+        await new Promise<void>((resolve) => {
+          app.terminal.write('\x1b[2J\x1b[H\u276f ', resolve);
+        });
+        app._localEchoOverlay.clear();
+        app._localEchoOverlay.appendText('first ');
+
+        const textarea = app.terminal.textarea;
+        textarea.value = '';
+        textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+        textarea.value = 'sec';
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionupdate', {
+            bubbles: true,
+            data: 'sec',
+          })
+        );
+
+        const overlay = Array.from(app.terminal.element.querySelector('.xterm-screen')?.children || []).find(
+          (element) => (element as HTMLElement).style.zIndex === '7'
+        );
+        return {
+          pendingText: app._localEchoOverlay.pendingText,
+          compositionText: app._localEchoOverlay.compositionText,
+          visibleText: overlay?.textContent,
+        };
+      });
+
+      expect(preview).toEqual({
+        pendingText: 'first ',
+        compositionText: 'sec',
+        visibleText: expect.stringContaining('first sec'),
+      });
+
+      await page.evaluate(() => {
+        const textarea = app.terminal.textarea;
+        textarea.value = 'second';
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionupdate', {
+            bubbles: true,
+            data: 'second',
+          })
+        );
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionend', {
+            bubbles: true,
+            data: 'second',
+          })
+        );
+      });
+
+      await expect
+        .poll(() =>
+          page.evaluate(() => ({
+            pendingText: app._localEchoOverlay.pendingText,
+            compositionText: app._localEchoOverlay.compositionText,
+          }))
+        )
+        .toEqual({
+          pendingText: 'first second',
+          compositionText: '',
+        });
+
+      const nextPreview = await page.evaluate(async () => {
+        const textarea = app.terminal.textarea;
+        textarea.value = '';
+        textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionupdate', {
+            bubbles: true,
+            data: 'abandoned',
+          })
+        );
+        textarea.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '' }));
+        textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionupdate', {
+            bubbles: true,
+            data: 'third',
+          })
+        );
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        return {
+          pendingText: app._localEchoOverlay.pendingText,
+          compositionText: app._localEchoOverlay.compositionText,
+        };
+      });
+
+      expect(nextPreview).toEqual({
+        pendingText: 'first second',
+        compositionText: 'third',
+      });
+    });
+
     it('routes Backspace past a stale autocomplete textarea buffer', async () => {
       const state = await page.evaluate(() => {
         window.__sentInputs = [];

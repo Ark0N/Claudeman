@@ -164,8 +164,13 @@ Implements xterm.js `ITerminalAddon`. The addon does **not** hook `terminal.onDa
 |--------|---------|-------------|
 | `addChar(char)` | `void` | Add a single printable character. |
 | `appendText(text)` | `void` | Append multiple characters (paste). |
+| `setCompositionText(text)` | `void` | Replace the visible, uncommitted IME candidate. |
+| `commitComposition(text)` | `void` | Atomically replace the candidate with finalized pending text. |
+| `clearComposition()` | `void` | Remove an unfinished candidate without changing pending text. |
 | `removeChar()` | `'pending'` \| `'flushed'` \| `false` | Remove last char. See [backspace handling](#backspace-handling). |
 | `clear()` | `void` | Clear all state, hide overlay. Call on Enter/Ctrl+C/Escape. |
+
+Composition text is rendered after `pendingText` but remains transient. Call `setCompositionText()` for each `compositionupdate`, then `commitComposition()` with xterm's finalized `onData` payload. This prevents candidate rewrites from duplicating partially composed words.
 
 ### Backspace Handling
 

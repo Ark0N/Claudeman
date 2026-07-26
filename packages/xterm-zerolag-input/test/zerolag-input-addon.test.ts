@@ -81,6 +81,43 @@ describe('ZerolagInputAddon', () => {
     });
   });
 
+  describe('composition text', () => {
+    it('renders changing IME candidates without committing them to pending text', () => {
+      const { addon, mock } = tracked();
+      addon.appendText('first ');
+
+      addon.setCompositionText('sec');
+      addon.setCompositionText('second');
+
+      const overlay = mock.terminal.element.querySelector('.xterm-screen')!.lastElementChild as HTMLDivElement;
+      expect(addon.pendingText).toBe('first ');
+      expect(addon.compositionText).toBe('second');
+      expect(overlay.textContent).toContain('first second');
+    });
+
+    it('commits the finalized composition atomically', () => {
+      const { addon } = tracked();
+      addon.appendText('first ');
+      addon.setCompositionText('second');
+
+      addon.commitComposition('second');
+
+      expect(addon.pendingText).toBe('first second');
+      expect(addon.compositionText).toBe('');
+      expect(addon.hasPending).toBe(true);
+    });
+
+    it('clear removes an unfinished composition', () => {
+      const { addon } = tracked();
+      addon.setCompositionText('candidate');
+
+      addon.clear();
+
+      expect(addon.compositionText).toBe('');
+      expect(addon.state.visible).toBe(false);
+    });
+  });
+
   describe('removeChar', () => {
     it('returns "pending" when removing from pendingText', () => {
       const { addon } = tracked();
