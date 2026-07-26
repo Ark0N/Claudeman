@@ -1190,6 +1190,127 @@ describe('Virtual Keyboard', () => {
         .toEqual(['\x1b[200~first paragraph\r\rsecond paragraph\x1b[201~', '\r']);
     });
 
+    it('captures Android xterm input-only paste before newline segmentation', async () => {
+      const pastedText = 'References\nfirst line after references\n\nfinal paragraph';
+      const captured = await page.evaluate((text) => {
+        window.__sentInputs = [];
+        app.activeSessionId = 'mobile-xterm-input-paste-test';
+        app.sessions.set('mobile-xterm-input-paste-test', {
+          id: 'mobile-xterm-input-paste-test',
+          mode: 'claude',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app._sendInputAsync = (_sessionId: string, input: string) => {
+          window.__sentInputs.push(input);
+        };
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app._localEchoOverlay.clear();
+
+        const textarea = app.terminal.textarea;
+        textarea.value = text;
+        textarea.dispatchEvent(
+          new InputEvent('input', {
+            bubbles: true,
+            inputType: 'insertFromPaste',
+            // Some Android builds expose only the first segment here. The
+            // helper textarea still contains the full inserted value.
+            data: 'References',
+          })
+        );
+        const pendingText = app._localEchoOverlay.pendingText;
+        const helperValue = textarea.value;
+        app.terminal.input('\r');
+        return { pendingText, helperValue };
+      }, pastedText);
+
+      expect(captured).toEqual({
+        pendingText: pastedText,
+        helperValue: '',
+      });
+      await expect
+        .poll(() => page.evaluate(() => window.__sentInputs))
+        .toEqual(['\x1b[200~References\rfirst line after references\r\rfinal paragraph\x1b[201~', '\r']);
+    });
+
+    it('confirms Android paste on a line break without duplicating word-space input', async () => {
+      const captured = await page.evaluate(() => {
+        window.__sentInputs = [];
+        app.activeSessionId = 'mobile-xterm-segmented-paste-test';
+        app.sessions.set('mobile-xterm-segmented-paste-test', {
+          id: 'mobile-xterm-segmented-paste-test',
+          mode: 'claude',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app._sendInputAsync = (_sessionId: string, input: string) => {
+          window.__sentInputs.push(input);
+        };
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app._localEchoOverlay.clear();
+
+        const textarea = app.terminal.textarea;
+        const dispatchMutation = (inputType: string, data: string | null = null) => {
+          const accepted = textarea.dispatchEvent(
+            new InputEvent('beforeinput', {
+              bubbles: true,
+              cancelable: true,
+              inputType,
+              data,
+            })
+          );
+          if (accepted && inputType === 'insertText' && data) {
+            app.terminal.input(data);
+          }
+          return accepted;
+        };
+
+        const wordInputAccepted = dispatchMutation('insertText', 'writing');
+        const spaceInputAccepted = dispatchMutation('insertText', ' ');
+        const typedText = app._localEchoOverlay.pendingText;
+        app._localEchoOverlay.clear();
+
+        dispatchMutation('insertText', 'References');
+        dispatchMutation('insertLineBreak');
+        dispatchMutation('insertText', 'first line after references');
+        dispatchMutation('insertLineBreak');
+        dispatchMutation('insertLineBreak');
+        dispatchMutation('insertText', 'final paragraph');
+
+        const pendingText = app._localEchoOverlay.pendingText;
+        const helperValue = textarea.value;
+        app.terminal.input('\r');
+        return {
+          wordInputAccepted,
+          spaceInputAccepted,
+          typedText,
+          pendingText,
+          helperValue,
+        };
+      });
+
+      expect(captured).toEqual({
+        wordInputAccepted: true,
+        spaceInputAccepted: true,
+        typedText: 'writing ',
+        pendingText: 'References\nfirst line after references\n\nfinal paragraph',
+        helperValue: '',
+      });
+      await expect
+        .poll(() => page.evaluate(() => window.__sentInputs))
+        .toEqual(['\x1b[200~References\rfirst line after references\r\rfinal paragraph\x1b[201~', '\r']);
+    });
+
     it('routes the mobile paste dialog through the multiline paste boundary', async () => {
       await page.evaluate(`(() => {
         window.__pasteCalls = [];
@@ -1484,6 +1605,36 @@ describe('Virtual Keyboard', () => {
         expect(state.exists).toBe(true);
         expect(state.keyboardVisible).toBe(false);
         expect(state.hasViewportHandler).toBe(false);
+
+        const inputState = await page.evaluate(() => {
+          app.activeSessionId = 'desktop-input-event-test';
+          app.sessions.set('desktop-input-event-test', {
+            id: 'desktop-input-event-test',
+            mode: 'claude',
+            status: 'running',
+          });
+          const settings = app.loadAppSettingsFromStorage();
+          settings.localEchoEnabled = true;
+          app.saveAppSettingsToStorage(settings);
+          app._updateLocalEchoState();
+          app._localEchoOverlay.clear();
+          const accepted = app.terminal.textarea.dispatchEvent(
+            new InputEvent('beforeinput', {
+              bubbles: true,
+              cancelable: true,
+              inputType: 'insertText',
+              data: 'autocomplete',
+            })
+          );
+          return {
+            accepted,
+            pendingText: app._localEchoOverlay.pendingText,
+          };
+        });
+        expect(inputState).toEqual({
+          accepted: true,
+          pendingText: '',
+        });
       } finally {
         await context.close();
       }

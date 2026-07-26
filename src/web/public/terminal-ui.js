@@ -258,22 +258,123 @@ Object.assign(CodemanApp.prototype, {
     // into separate Enter keys. Shells keep xterm's native paste semantics.
     {
       const xtermTextarea = container.querySelector('.xterm-helper-textarea');
+      let lastRoutedPaste = '';
+      let lastRoutedPasteAt = 0;
+      let lastRoutedPasteSource = '';
+      let multipartPasteUntil = 0;
+      let multipartPasteCandidateUntil = 0;
+      const MULTIPART_PASTE_GAP_MS = 40;
+      const supportsSegmentedPasteFallback = MobileDetection.isTouchDevice();
+      const readInputPasteText = (event) => {
+        const candidates = [
+          event.clipboardData?.getData?.('text/plain'),
+          event.dataTransfer?.getData?.('text/plain'),
+          typeof event.data === 'string' ? event.data : '',
+          xtermTextarea?.value,
+        ];
+        return candidates.reduce(
+          (longest, value) => (typeof value === 'string' && value.length > longest.length ? value : longest),
+          ''
+        );
+      };
+      const routeTextPaste = (event, source, explicitText) => {
+        const mode = this.activeSessionId
+          ? this.sessions?.get(this.activeSessionId)?.mode
+          : null;
+        if (!this.activeSessionId || mode === 'shell') return false;
+        const text = explicitText ?? readInputPasteText(event);
+        if (!text) return false;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (xtermTextarea) xtermTextarea.value = '';
+        const now = performance.now();
+        const duplicateInputAfterCapture =
+          text === lastRoutedPaste &&
+          now - lastRoutedPasteAt < 100 &&
+          source.startsWith('input:') &&
+          (lastRoutedPasteSource === 'clipboard' || lastRoutedPasteSource.startsWith('beforeinput:'));
+        if (duplicateInputAfterCapture) {
+          return true;
+        }
+        lastRoutedPaste = text;
+        lastRoutedPasteAt = now;
+        lastRoutedPasteSource = source;
+        const lineBreaks = text.match(/\r\n|\r|\n/g)?.length || 0;
+        _crashDiag.log(`XTERM_PASTE source=${source} len=${text.length} breaks=${lineBreaks}`);
+        if (this._localEchoEnabled && this._localEchoOverlay) {
+          this._localEchoOverlay.appendText(text);
+        } else {
+          this.sendPastedText(text);
+        }
+        return true;
+      };
+      const routeInputPasteMutation = (event, phase) => {
+        const inputType = event.inputType || '';
+        const mutationText = typeof event.data === 'string' ? event.data : '';
+        const now = performance.now();
+        const continuesMultipartPaste = now <= multipartPasteUntil;
+
+        if (inputType === 'insertFromPaste') {
+          const routed = routeTextPaste(event, `${phase}:paste`);
+          if (routed) {
+            multipartPasteCandidateUntil = 0;
+            multipartPasteUntil = now + MULTIPART_PASTE_GAP_MS;
+          }
+          return;
+        }
+
+        // Some Android clipboard providers expose a paste as a synchronous
+        // burst of ordinary insertText + insertLineBreak mutations. Keep the
+        // first multi-character segment on xterm's normal path, then confirm
+        // the paste only if an immediate line break follows. Gboard also emits
+        // whole-word insertText events during ordinary typing, so the first
+        // segment alone is not enough evidence of a paste.
+        if (supportsSegmentedPasteFallback && inputType === 'insertText' && mutationText) {
+          if (!continuesMultipartPaste) {
+            multipartPasteCandidateUntil =
+              mutationText.length > 1 ? now + MULTIPART_PASTE_GAP_MS : 0;
+            return;
+          }
+          // The helper textarea may retain whitespace from ordinary typing.
+          // event.data is the current mutation and cannot include that stale
+          // value, so use it exclusively for segmented insertText events.
+          const routed = routeTextPaste(event, `${phase}:text`, mutationText);
+          if (routed) multipartPasteUntil = now + MULTIPART_PASTE_GAP_MS;
+          return;
+        }
+        if (
+          supportsSegmentedPasteFallback &&
+          (continuesMultipartPaste || now <= multipartPasteCandidateUntil) &&
+          (inputType === 'insertLineBreak' || inputType === 'insertParagraph')
+        ) {
+          const routed = routeTextPaste(event, `${phase}:break`, '\n');
+          if (routed) {
+            multipartPasteCandidateUntil = 0;
+            multipartPasteUntil = now + MULTIPART_PASTE_GAP_MS;
+          }
+          return;
+        }
+        multipartPasteCandidateUntil = 0;
+      };
+
       xtermTextarea?.addEventListener(
         'paste',
         (event) => {
-          const mode = this.activeSessionId
-            ? this.sessions?.get(this.activeSessionId)?.mode
-            : null;
-          if (!this.activeSessionId || mode === 'shell') return;
-          const text = event.clipboardData?.getData?.('text/plain') || '';
-          if (!text) return;
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          if (this._localEchoEnabled && this._localEchoOverlay) {
-            this._localEchoOverlay.appendText(text);
-          } else {
-            this.sendPastedText(text);
-          }
+          routeTextPaste(event, 'clipboard');
+        },
+        true
+      );
+      xtermTextarea?.addEventListener(
+        'beforeinput',
+        (event) => {
+          routeInputPasteMutation(event, 'beforeinput');
+        },
+        true
+      );
+      xtermTextarea?.addEventListener(
+        'input',
+        (event) => {
+          routeInputPasteMutation(event, 'input');
         },
         true
       );
@@ -777,6 +878,10 @@ Object.assign(CodemanApp.prototype, {
           if (/^[\r\n]+$/.test(data)) {
             // Enter: queue the buffered text followed by \r.
             const text = this._localEchoOverlay?.pendingText || '';
+            if (text) {
+              const lineBreaks = text.match(/\r\n|\r|\n/g)?.length || 0;
+              _crashDiag.log(`LOCAL_ECHO_SUBMIT len=${text.length} breaks=${lineBreaks}`);
+            }
             this._localEchoOverlay?.clear();
             // Suppress detection so PTY-echoed text isn't re-detected as user input
             this._localEchoOverlay?.suppressBufferDetection();
@@ -3116,6 +3221,8 @@ Object.assign(CodemanApp.prototype, {
     const sessionId = this.activeSessionId;
     if (!sessionId || !text) return;
     const mode = this.sessions?.get(sessionId)?.mode;
+    const lineBreaks = String(text).match(/\r\n|\r|\n/g)?.length || 0;
+    _crashDiag.log(`PASTE_SEND mode=${mode || 'unknown'} len=${String(text).length} breaks=${lineBreaks}`);
     const input = this._prepareTerminalPaste(text, mode !== 'shell');
     // The HTTP fallback must write directly to the PTY. TmuxManager.sendInput()
     // intentionally strips CR/LF for ordinary one-line prompts, which corrupts
