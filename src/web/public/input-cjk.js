@@ -159,7 +159,11 @@ const CjkInput = (() => {
     const val = _strip(_textarea.value);
     _t(`flush ${val ? 'send len=' + val.length : 'empty'}`);
     if (val) {
-      _send(val);
+      if (/[\r\n]/.test(val)) {
+        _paste(val);
+      } else {
+        _send(val);
+      }
     }
     _resetToPhantom();
   }
@@ -302,7 +306,12 @@ const CjkInput = (() => {
           _cancelDebouncedFlush();
           const val = _strip(_textarea.value);
           if (val) {
-            _send(val + '\r');
+            if (/[\r\n]/.test(val)) {
+              _paste(val);
+              _send('\r');
+            } else {
+              _send(val + '\r');
+            }
           } else {
             _send('\r');
           }
@@ -376,6 +385,17 @@ const CjkInput = (() => {
         ) {
           _t('UNSTICK composing');
           _composing = false;
+        }
+
+        // Some Android clipboard surfaces emit no ClipboardEvent. They insert
+        // the complete value and report only inputType=insertFromPaste.
+        if (e.inputType === 'insertFromPaste') {
+          _cancelDebouncedFlush();
+          const text = _strip(_textarea.value);
+          _t(`input-paste len=${text.length}`);
+          if (text) _paste(text);
+          _resetToPhantom();
+          return;
         }
 
         // ── Backspace / delete detection ──

@@ -1214,6 +1214,36 @@ describe('Virtual Keyboard', () => {
       expect(await page.locator('.paste-overlay').count()).toBe(0);
     });
 
+    it('keeps multiline paste on the newline-preserving fallback transport', async () => {
+      const calls = await page.evaluate(() => {
+        const sent = [];
+        app.activeSessionId = 'mobile-paste-fallback-test';
+        app.sessions.set('mobile-paste-fallback-test', {
+          id: 'mobile-paste-fallback-test',
+          mode: 'claude',
+          status: 'running',
+        });
+        app._sendInputAsync = (sessionId: string, input: string, options?: { useMux?: boolean }) => {
+          sent.push({ sessionId, input, options });
+        };
+        app.sendPastedText('first\n\nReferences\nmore after references', { submit: true });
+        return sent;
+      });
+
+      expect(calls).toEqual([
+        {
+          sessionId: 'mobile-paste-fallback-test',
+          input: '\x1b[200~first\r\rReferences\rmore after references\x1b[201~',
+          options: { useMux: false },
+        },
+        {
+          sessionId: 'mobile-paste-fallback-test',
+          input: '\r',
+          options: { useMux: false },
+        },
+      ]);
+    });
+
     it('keeps back-to-back local echo submissions in text-then-Enter order', async () => {
       await page.evaluate(() => {
         window.__sentInputs = [];

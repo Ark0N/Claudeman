@@ -3117,11 +3117,14 @@ Object.assign(CodemanApp.prototype, {
     if (!sessionId || !text) return;
     const mode = this.sessions?.get(sessionId)?.mode;
     const input = this._prepareTerminalPaste(text, mode !== 'shell');
-    this._sendInputAsync(sessionId, input, { useMux: true });
+    // The HTTP fallback must write directly to the PTY. TmuxManager.sendInput()
+    // intentionally strips CR/LF for ordinary one-line prompts, which corrupts
+    // bracketed multiline paste whenever the WebSocket is reconnecting.
+    this._sendInputAsync(sessionId, input, { useMux: false });
     if (options.submit) {
       // A separate reliable record preserves paste-before-submit ordering on
       // both WebSocket and serialized POST fallback transports.
-      this._sendInputAsync(sessionId, '\r', { useMux: true });
+      this._sendInputAsync(sessionId, '\r', { useMux: false });
     }
   },
 

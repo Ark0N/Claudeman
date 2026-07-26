@@ -205,6 +205,36 @@ describe('CJK input module', () => {
     expect(textarea.value).toBe(PHANTOM);
   });
 
+  it('routes Android input-only paste events through the dedicated paste boundary', () => {
+    const { textarea, sent, pasted } = loadCjkHarness();
+    textarea.value = PHANTOM + 'first\n\nReferences\nmore after references';
+
+    textarea.fire('input', {
+      isComposing: false,
+      inputType: 'insertFromPaste',
+    });
+
+    expect(pasted).toEqual(['first\n\nReferences\nmore after references']);
+    expect(sent).toEqual([]);
+    expect(textarea.value).toBe(PHANTOM);
+  });
+
+  it('keeps multiline text bracketed when Enter wins the race with the paste event', () => {
+    const { textarea, sent, pasted } = loadCjkHarness();
+    textarea.value = PHANTOM + 'first\n\nReferences\nmore after references';
+
+    textarea.fire('keydown', {
+      key: 'Enter',
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+    });
+
+    expect(pasted).toEqual(['first\n\nReferences\nmore after references']);
+    expect(sent).toEqual(['\r']);
+    expect(textarea.value).toBe(PHANTOM);
+  });
+
   it('re-tapping the focused empty field restarts the IME session (wedged-IME recovery)', () => {
     const { textarea, documentObj } = loadCjkHarness();
     documentObj.activeElement = textarea;
