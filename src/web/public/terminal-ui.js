@@ -271,15 +271,27 @@ Object.assign(CodemanApp.prototype, {
         xtermTextarea.addEventListener('input', (e) => {
           // Only handle insertText events outside of composition -- these are
           // the ones xterm.js misses on Android virtual keyboards.
-          if (composing || e.isComposing) return;
+          if (e.isComposing) return;
           if (e.inputType !== 'insertText') return;
           // Some Android keyboards expose the inserted text only through the
           // helper textarea while InputEvent.data is null.
           const data = e.data || xtermTextarea.value;
           if (!data) return;
+          const recoveringInterruptedComposition = composing;
+          if (recoveringInterruptedComposition) {
+            // Android can omit compositionend after Enter or a focus change.
+            // A later explicitly non-composing mutation is authoritative.
+            composing = false;
+            compositionEpoch += 1;
+            this._mobileCompositionPending = false;
+            this._mobileCompositionFallbackCommit = null;
+            this._clearTimer('_mobileCompositionCommitTimer');
+            this._clearTimer('_mobileCompositionFallbackTimer');
+            this._localEchoOverlay?.clearComposition();
+          }
           // If xterm just handled a keydown (within 50ms), it already sent the
           // char via onData. Skip to avoid double-send (e.g., Shift+A => AA).
-          if (Date.now() - lastKeydownHandled < 50) {
+          if (!recoveringInterruptedComposition && Date.now() - lastKeydownHandled < 50) {
             xtermTextarea.value = '';
             return;
           }

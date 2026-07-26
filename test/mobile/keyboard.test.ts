@@ -1260,7 +1260,7 @@ describe('Virtual Keyboard', () => {
       });
     });
 
-    it('keeps routing Android textarea text when InputEvent data is missing', async () => {
+    it('keeps routing Android textarea text after an interrupted composition', async () => {
       const state = await page.evaluate(async () => {
         app.activeSessionId = 'mobile-null-input-data-test';
         app.sessions.set('mobile-null-input-data-test', {
@@ -1295,14 +1295,35 @@ describe('Virtual Keyboard', () => {
           await Promise.resolve();
         }
 
+        const firstSequence = app._localEchoOverlay.pendingText;
+        textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionupdate', {
+            bubbles: true,
+            data: 'interrupted',
+          })
+        );
+        app._localEchoOverlay.clear();
+        textarea.value = 'd';
+        textarea.dispatchEvent(
+          new InputEvent('input', {
+            bubbles: true,
+            inputType: 'insertText',
+            data: null,
+          })
+        );
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
         return {
+          firstSequence,
           pendingText: app._localEchoOverlay.pendingText,
           helperValue: textarea.value,
         };
       });
 
       expect(state).toEqual({
-        pendingText: 'abc',
+        firstSequence: 'abc',
+        pendingText: 'd',
         helperValue: '',
       });
     });
