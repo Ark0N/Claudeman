@@ -1113,6 +1113,65 @@ describe('Virtual Keyboard', () => {
       expect(afterEnter.sentInputs.join('')).toBe('find bug\r');
     });
 
+    it('routes Backspace past a stale autocomplete textarea buffer', async () => {
+      const state = await page.evaluate(() => {
+        window.__sentInputs = [];
+        app.activeSessionId = 'mobile-autocomplete-delete-test';
+        app.sessions.set('mobile-autocomplete-delete-test', {
+          id: 'mobile-autocomplete-delete-test',
+          mode: 'claude',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app._sendInputAsync = (_sessionId: string, input: string) => {
+          window.__sentInputs.push(input);
+        };
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app._localEchoOverlay.clear();
+        app._localEchoOverlay.appendText('draft');
+
+        const textarea = app.terminal.textarea;
+        const dispatchDelete = (inputType: string) => {
+          textarea.value = 'invisible autocomplete';
+          return textarea.dispatchEvent(
+            new InputEvent('beforeinput', {
+              bubbles: true,
+              cancelable: true,
+              inputType,
+            })
+          );
+        };
+
+        const firstAccepted = dispatchDelete('deleteContentBackward');
+        const secondAccepted = dispatchDelete('deleteWordBackward');
+        const pendingText = app._localEchoOverlay.pendingText;
+        app._localEchoOverlay.clear();
+        const remoteAccepted = dispatchDelete('deleteContentBackward');
+        return {
+          firstAccepted,
+          secondAccepted,
+          remoteAccepted,
+          pendingText,
+          helperValue: textarea.value,
+          sentInputs: window.__sentInputs,
+        };
+      });
+
+      expect(state).toEqual({
+        firstAccepted: false,
+        secondAccepted: false,
+        remoteAccepted: false,
+        pendingText: 'dra',
+        helperValue: '',
+        sentInputs: ['\x7f'],
+      });
+    });
+
     it('keeps a pending phone draft anchored to the prompt after agent output', async () => {
       await page.evaluate(async () => {
         window.__sentInputs = [];

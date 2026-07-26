@@ -198,6 +198,7 @@ Object.assign(CodemanApp.prototype, {
       if (xtermTextarea && MobileDetection.isTouchDevice()) {
         let composing = false;
         let lastKeydownHandled = 0;
+        let lastBackspaceKeydownAt = -Infinity;
         xtermTextarea.addEventListener('compositionstart', () => { composing = true; });
         xtermTextarea.addEventListener('compositionend', () => { composing = false; });
         // Track when xterm handles a keydown normally (non-229 keyCode).
@@ -206,8 +207,32 @@ Object.assign(CodemanApp.prototype, {
         xtermTextarea.addEventListener('keydown', (e) => {
           if (!e.isComposing && e.keyCode !== 229) {
             lastKeydownHandled = Date.now();
+            if (e.key === 'Backspace') {
+              lastBackspaceKeydownAt = performance.now();
+            }
           }
         });
+        xtermTextarea.addEventListener(
+          'beforeinput',
+          (e) => {
+            if (
+              composing ||
+              e.isComposing ||
+              !this.activeSessionId ||
+              (e.inputType !== 'deleteContentBackward' && e.inputType !== 'deleteWordBackward')
+            ) {
+              return;
+            }
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            xtermTextarea.value = '';
+            // A physical Backspace was already handled by xterm's keydown
+            // path. Android keyCode 229 skips that path and reaches here.
+            if (performance.now() - lastBackspaceKeydownAt < 50) return;
+            this.terminal._core.coreService.triggerDataEvent('\x7f', true);
+          },
+          true
+        );
         xtermTextarea.addEventListener('input', (e) => {
           // Only handle insertText events outside of composition -- these are
           // the ones xterm.js misses on Android virtual keyboards.
@@ -215,7 +240,10 @@ Object.assign(CodemanApp.prototype, {
           if (e.inputType !== 'insertText' || !e.data) return;
           // If xterm just handled a keydown (within 50ms), it already sent the
           // char via onData. Skip to avoid double-send (e.g., Shift+A => AA).
-          if (Date.now() - lastKeydownHandled < 50) return;
+          if (Date.now() - lastKeydownHandled < 50) {
+            xtermTextarea.value = '';
+            return;
+          }
           // xterm.js may have already processed this via its own input handler.
           // Check if the textarea was cleared by xterm (value is empty or just
           // whitespace) -- if so, xterm handled it and we should not double-send.
@@ -868,11 +896,16 @@ Object.assign(CodemanApp.prototype, {
                   this._flushedTexts?.set(this.activeSessionId, text);
                 }
               }
+            }
+            if (source !== 'pending') {
+              // No locally buffered character means the editable text may
+              // already live in the PTY (for example, typed from desktop).
+              // Forward one Backspace instead of swallowing it.
               this._pendingInput += data;
               flushInput();
             }
             // 'pending' = removed unsent text (no PTY backspace needed)
-            // false = nothing to remove (swallow the backspace)
+            // 'flushed'/false = text may already be in the PTY
             return;
           }
           if (/^[\r\n]+$/.test(data)) {
