@@ -15,10 +15,6 @@
 (function (global) {
   const TERMINAL_QUERY_RESPONSE_PATTERN = /^\x1b\[[\?>=]?[\d;]*[cnR]$/;
   const TERMINAL_OSC_RESPONSE_PATTERN = /^\x1b\][\d;]*[^\x07\x1b]*(?:\x07|\x1b\\)$/;
-  // Grace window after a manual scroll-up gesture during which sticky-scroll is
-  // suppressed, so high-frequency Codex status redraws don't snap the viewport
-  // back to the bottom while the user is inspecting earlier output.
-  const USER_SCROLL_STICKY_SUPPRESS_MS = 1500;
   // Mobile browsers synthesize trusted mouse events after touchend. During this
   // short window, only the app's synthetic tap-to-position mouse event should
   // reach xterm.
@@ -49,7 +45,6 @@
   global.CodemanTerminalInput = {
     isTerminalQueryResponse,
     shouldSuppressTerminalQueryResponse,
-    USER_SCROLL_STICKY_SUPPRESS_MS,
     TOUCH_COMPAT_MOUSE_SUPPRESS_MS,
   };
   global.CODEMAN_XTERM_THEMES = CODEMAN_XTERM_THEMES;
@@ -390,8 +385,7 @@ Object.assign(CodemanApp.prototype, {
           this._sendSyntheticSgrWheel(ev.clientX, ev.clientY, lines);
           return;
         }
-        this._noteTerminalUserScroll(lines);
-        this.terminal.scrollLines(lines);
+        this._scrollTerminalLines(lines);
       },
       { passive: false }
     );
@@ -416,7 +410,7 @@ Object.assign(CodemanApp.prototype, {
         if (!isTouching && Math.abs(velocity) > 0.3) {
           // Momentum phase — convert pixel velocity to lines
           const lines = Math.round(velocity / cellHeight());
-          if (lines !== 0) this.terminal.scrollLines(lines);
+          if (lines !== 0) this._scrollTerminalLines(lines);
           velocity *= 0.92;
           scrollFrame = requestAnimationFrame(scrollLoop);
         } else if (!isTouching) {
@@ -479,8 +473,7 @@ Object.assign(CodemanApp.prototype, {
             const ch = cellHeight();
             const lines = Math.trunc(pixelAccum / ch);
             if (lines !== 0) {
-              this._noteTerminalUserScroll(lines);
-              this.terminal.scrollLines(lines);
+              this._scrollTerminalLines(lines);
               pixelAccum -= lines * ch;
             }
           }
@@ -552,7 +545,7 @@ Object.assign(CodemanApp.prototype, {
     this._chunkedWriteGen = 0;
     this._bufferLoadSeq = 0;
     this._bufferLoadOwner = null;
-    this._lastUserScrollUpAt = null;
+    this._terminalScrollLocked = false;
 
     // Handle resize with throttling for performance
     this._resizeTimeout = null;
@@ -1837,20 +1830,25 @@ Object.assign(CodemanApp.prototype, {
     return buffer.viewportY >= buffer.baseY - 2;
   },
 
-  // Record manual scroll gestures so sticky-scroll can give an upward scroll a
-  // short grace window (see _hasRecentUserScrollUp). A downward scroll that
-  // lands back at the bottom clears the suppression immediately.
+  // Keep history anchored after an upward gesture until the reader explicitly
+  // returns to the bottom. A timer is insufficient here: long-running terminal
+  // output used to reclaim the viewport after 1.5s while the user was reading.
   _noteTerminalUserScroll(lines) {
     if (lines < 0) {
-      this._lastUserScrollUpAt = performance.now();
+      this._terminalScrollLocked = true;
     } else if (this.isTerminalAtBottom()) {
-      this._lastUserScrollUpAt = null;
+      this._terminalScrollLocked = false;
     }
   },
 
-  _hasRecentUserScrollUp() {
-    if (typeof this._lastUserScrollUpAt !== 'number') return false;
-    return performance.now() - this._lastUserScrollUpAt < window.CodemanTerminalInput.USER_SCROLL_STICKY_SUPPRESS_MS;
+  _scrollTerminalLines(lines) {
+    if (!lines || !this.terminal) return;
+    this.terminal.scrollLines(lines);
+    this._noteTerminalUserScroll(lines);
+  },
+
+  _shouldPreserveTerminalScroll() {
+    return this._terminalScrollLocked === true;
   },
 
   batchTerminalWrite(data) {
@@ -2057,10 +2055,12 @@ Object.assign(CodemanApp.prototype, {
     const activeSession = this.activeSessionId && this.sessions ? this.sessions.get(this.activeSessionId) : null;
     const MAX_FRAME_BYTES = activeSession?.mode === 'codex' ? 32768 : 65536;
     let deferred = false;
-    // If the user recently scrolled up, remember the viewport so we can restore
-    // it after the write — Codex status redraws would otherwise jump it.
+    // While the reader owns history, remember the viewport so Codex status
+    // redraws cannot move it.
     const preserveViewportY =
-      this._hasRecentUserScrollUp() && this.terminal.buffer?.active ? this.terminal.buffer.active.viewportY : null;
+      this._shouldPreserveTerminalScroll() && this.terminal.buffer?.active
+        ? this.terminal.buffer.active.viewportY
+        : null;
 
     if (_joinedLen <= MAX_FRAME_BYTES) {
       this.terminal.write(joined);
@@ -2086,10 +2086,8 @@ Object.assign(CodemanApp.prototype, {
       );
 
     // Sticky scroll: if user was at bottom, keep them there after new output.
-    // Give manual scroll-up gestures a short grace window so high-frequency
-    // Codex status ticks do not snap the viewport back while the user is
-    // trying to inspect earlier output.
-    if (this._wasAtBottomBeforeWrite && !this._hasRecentUserScrollUp()) {
+    // A manual history scroll owns the viewport until it reaches the bottom.
+    if (this._wasAtBottomBeforeWrite && !this._shouldPreserveTerminalScroll()) {
       this.terminal.scrollToBottom();
     }
 
