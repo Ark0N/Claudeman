@@ -107,6 +107,20 @@ describe('SSE Subscription Filtering', () => {
     expect((initEvent?.data as any).sessions).toBeDefined();
   });
 
+  it('should treat an explicitly empty sessions filter as terminal receive-none', async () => {
+    const collecting = collectSSEEvents(baseUrl, '?sessions=', 400);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    (
+      server as unknown as {
+        sse: { batchTerminalData: (sessionId: string, data: string) => void };
+      }
+    ).sse.batchTerminalData('empty-filter-session', 'must-not-arrive');
+
+    const events = await collecting;
+    expect(events.find((event) => event.event === 'init')).toBeDefined();
+    expect(events.find((event) => event.event === 'session:terminal')).toBeUndefined();
+  });
+
   it('should receive all events when no sessions param is provided (backwards-compatible)', async () => {
     // Start two SSE listeners: one with no filter, one with a filter for a nonexistent session
     const controller1 = new AbortController();

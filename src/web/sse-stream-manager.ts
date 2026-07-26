@@ -189,7 +189,7 @@ export class SseStreamManager {
   updateClientFilter(clientId: string, sessions: string[] | null): boolean {
     const reply = this.sseClientsById.get(clientId);
     if (!reply || !this.sseClients.has(reply)) return false;
-    const filter = sessions && sessions.length > 0 ? new Set(sessions) : null;
+    const filter = sessions === null ? null : new Set(sessions);
     this.sseClients.set(reply, filter);
     return true;
   }
