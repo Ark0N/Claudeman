@@ -3179,6 +3179,17 @@ Object.assign(CodemanApp.prototype, {
       takeControl: true,
       refit: !keyboardVisible,
     }).catch(() => {});
+    // Mobile-control Enter must pass through local echo so buffered text is
+    // delivered before the control byte and the next draft starts cleanly.
+    if (input === '\r' && this._localEchoEnabled && this.terminal) {
+      const compositionText = this._localEchoOverlay?.compositionText || '';
+      if (compositionText) {
+        this._mobileCompositionPending = true;
+        this._commitMobileCompositionFallback(compositionText);
+      }
+      this.terminal.input(input);
+      return;
+    }
     this._sendInputAsync(sessionId, input);
   },
 

@@ -1669,6 +1669,56 @@ describe('Virtual Keyboard', () => {
       await expect.poll(() => page.evaluate(() => window.__sentInputs)).toEqual(['first', '\r', 'second', '\r']);
     });
 
+    it('flushes local echo before mobile-control Enter and accepts the next draft', async () => {
+      const state = await page.evaluate(async () => {
+        window.__sentInputs = [];
+        app.activeSessionId = 'mobile-control-enter-test';
+        app.sessions.set('mobile-control-enter-test', {
+          id: 'mobile-control-enter-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app._sendInputAsync = (_sessionId: string, input: string) => {
+          window.__sentInputs.push(input);
+        };
+        app.sendResize = async () => false;
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app.terminal.reset();
+        await new Promise<void>((resolve) => {
+          app.terminal.write('\x1b[2J\x1b[H\u276f ', resolve);
+        });
+        app._localEchoOverlay.clear();
+
+        app.terminal._core.coreService.triggerDataEvent('stringA ', true);
+        app._localEchoOverlay.setCompositionText('stringB');
+        app.terminal.blur();
+        app.sendTerminalKey('\r');
+        app.terminal._core.coreService.triggerDataEvent('stringC', true);
+
+        return {
+          sentInputs: window.__sentInputs,
+          pendingText: app._localEchoOverlay.pendingText,
+          compositionText: app._localEchoOverlay.compositionText,
+          visible: app._localEchoOverlay.state.visible,
+          terminalFocused: document.activeElement === app.terminal.textarea,
+        };
+      });
+
+      expect(state).toEqual({
+        sentInputs: ['stringA stringB', '\r'],
+        pendingText: 'stringC',
+        compositionText: '',
+        visible: true,
+        terminalFocused: false,
+      });
+    });
+
     it('holds the first phone draft until the initial prompt frame is loaded', async () => {
       await page.evaluate(() => {
         window.__sentInputs = [];
