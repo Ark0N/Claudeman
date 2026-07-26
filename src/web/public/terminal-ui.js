@@ -272,7 +272,11 @@ Object.assign(CodemanApp.prototype, {
           // Only handle insertText events outside of composition -- these are
           // the ones xterm.js misses on Android virtual keyboards.
           if (composing || e.isComposing) return;
-          if (e.inputType !== 'insertText' || !e.data) return;
+          if (e.inputType !== 'insertText') return;
+          // Some Android keyboards expose the inserted text only through the
+          // helper textarea while InputEvent.data is null.
+          const data = e.data || xtermTextarea.value;
+          if (!data) return;
           // If xterm just handled a keydown (within 50ms), it already sent the
           // char via onData. Skip to avoid double-send (e.g., Shift+A => AA).
           if (Date.now() - lastKeydownHandled < 50) {
@@ -283,7 +287,6 @@ Object.assign(CodemanApp.prototype, {
           // Check if the textarea was cleared by xterm (value is empty or just
           // whitespace) -- if so, xterm handled it and we should not double-send.
           // Use a microtask to check after xterm's own handlers have run.
-          const data = e.data;
           const pendingBefore = this._localEchoOverlay?.pendingText || '';
           Promise.resolve().then(() => {
             if (

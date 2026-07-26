@@ -1260,6 +1260,53 @@ describe('Virtual Keyboard', () => {
       });
     });
 
+    it('keeps routing Android textarea text when InputEvent data is missing', async () => {
+      const state = await page.evaluate(async () => {
+        app.activeSessionId = 'mobile-null-input-data-test';
+        app.sessions.set('mobile-null-input-data-test', {
+          id: 'mobile-null-input-data-test',
+          mode: 'claude',
+          status: 'running',
+        });
+        app.hideWelcome();
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app.terminal.reset();
+        await new Promise<void>((resolve) => {
+          app.terminal.write('\x1b[2J\x1b[H\u276f ', resolve);
+        });
+        app._localEchoOverlay.clear();
+        app.terminal._core.coreService.triggerDataEvent('a', true);
+
+        const textarea = app.terminal.textarea;
+        for (const data of ['b', 'c']) {
+          textarea.value = data;
+          textarea.dispatchEvent(
+            new InputEvent('input', {
+              bubbles: true,
+              inputType: 'insertText',
+              data: null,
+            })
+          );
+          await Promise.resolve();
+        }
+
+        return {
+          pendingText: app._localEchoOverlay.pendingText,
+          helperValue: textarea.value,
+        };
+      });
+
+      expect(state).toEqual({
+        pendingText: 'abc',
+        helperValue: '',
+      });
+    });
+
     it('routes Backspace past a stale autocomplete textarea buffer', async () => {
       const state = await page.evaluate(() => {
         window.__sentInputs = [];
