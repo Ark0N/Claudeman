@@ -4351,9 +4351,9 @@ class CodemanApp {
         bufferWasEmpty = true;
       }
 
-      // Buffer load complete — unblock live SSE writes. chunkedTerminalWrite calls
-      // _finishBufferLoad internally (discarding queued events to prevent duplicate
-      // content); if we skipped the write (cache hit or empty), call it here.
+      // Buffer load complete — unblock live SSE writes. selectSession owns this
+      // gate across every cache/fetch/replay stage, so its chunked writes leave
+      // the transaction open and we finish it exactly once here.
       // COD-144: when the load painted nothing, FLUSH the queued events instead of
       // discarding — a new session's prompt arrives only as a queued SSE event.
       if (this._isLoadingBuffer) {

@@ -118,6 +118,20 @@ describe('terminal flush budget', () => {
     expect(finishBufferLoad).toHaveBeenCalledOnce();
   });
 
+  it('leaves a caller-owned buffer load open after replaying a chunk', async () => {
+    const { app } = loadTerminalUiHarness('codex');
+    const beginBufferLoad = vi.fn(() => 'nested-owner');
+    const finishBufferLoad = vi.fn();
+    app._beginBufferLoad = beginBufferLoad;
+    app._finishBufferLoad = finishBufferLoad;
+    app.terminal.write = (_data: string, callback?: () => void) => callback?.();
+
+    await app.chunkedTerminalWrite('cached frame', 32 * 1024, 'select-owner');
+
+    expect(beginBufferLoad).not.toHaveBeenCalled();
+    expect(finishBufferLoad).not.toHaveBeenCalled();
+  });
+
   it('keeps stale buffer load owners from finishing a newer load', () => {
     const { app } = loadTerminalUiHarness('codex');
 

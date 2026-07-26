@@ -2251,11 +2251,18 @@ Object.assign(CodemanApp.prototype, {
     // Generation counter: if a newer chunkedTerminalWrite starts (tab switch),
     // older writes abort instead of continuing to push stale data into the terminal.
     const writeGen = ++this._chunkedWriteGen;
-    const bufferLoadOwner = this._beginBufferLoad(loadOwner);
+    // A caller-provided owner means a wider operation (selectSession) already
+    // owns the live-output gate. Do not close that transaction after this one
+    // replay; the caller still has resize/fetch/reconciliation work to finish.
+    const ownsBufferLoad = loadOwner == null;
+    const bufferLoadOwner = ownsBufferLoad ? this._beginBufferLoad() : loadOwner;
+    const finishOwnedBufferLoad = () => {
+      if (ownsBufferLoad) this._finishBufferLoad(bufferLoadOwner);
+    };
 
     return new Promise((resolve) => {
       if (!buffer || buffer.length === 0) {
-        this._finishBufferLoad(bufferLoadOwner);
+        finishOwnedBufferLoad();
         resolve();
         return;
       }
@@ -2267,7 +2274,7 @@ Object.assign(CodemanApp.prototype, {
       const finish = () => {
         // Only finish if we're still the active write — a newer write owns buffer load state
         if (this._chunkedWriteGen === writeGen) {
-          this._finishBufferLoad(bufferLoadOwner);
+          finishOwnedBufferLoad();
         }
         resolve();
       };
