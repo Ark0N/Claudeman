@@ -793,14 +793,12 @@ export class WebServer extends EventEmitter {
       //   POST /api/events/subscribe without reconnecting.
       const query = req.query as { sessions?: string; clientId?: string };
       let sessionFilter: Set<string> | null = null;
-      if (query.sessions) {
+      if (query.sessions !== undefined) {
         const ids = query.sessions
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean);
-        if (ids.length > 0) {
-          sessionFilter = new Set(ids);
-        }
+        sessionFilter = new Set(ids);
       }
       const clientId =
         typeof query.clientId === 'string' && SSE_CLIENT_ID_RE.test(query.clientId) ? query.clientId : undefined;
@@ -832,7 +830,7 @@ export class WebServer extends EventEmitter {
 
     // Live subscription update — change a connected client's session filter
     // without forcing an SSE reconnect. Body: { clientId, sessions: string[] | null }
-    // Empty/null sessions array = remove filter (receive all session:terminal events).
+    // Empty array = receive no terminal events; null = legacy unfiltered mode.
     this.app.post('/api/events/subscribe', (req, reply) => {
       const body = (req.body || {}) as { clientId?: string; sessions?: string[] | null };
       if (typeof body.clientId !== 'string' || !SSE_CLIENT_ID_RE.test(body.clientId)) {
