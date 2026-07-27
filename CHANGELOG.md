@@ -1,5 +1,21 @@
 # aicodeman
 
+## 1.8.1
+
+### Patch Changes
+
+- Mobile toolbar: a dedicated Enter button, and Shell moves into the Run dropdown.
+
+  Submitting is a constant need on a touch keyboard, so on phones (≤430px) the toolbar slot that held "Shell" now holds a dark blue **Enter** button. Starting a shell, the far rarer action, moves into the expandable Run dropdown as `Terminal / Shell` (the Run button then reads "Run SH"). Desktop and tablet are unchanged: the green Run Shell button stays exactly where it was.
+
+  Enter is replayed through the terminal's own input path rather than posted to the input API. This matters because local echo is on by default on touch devices: the characters you type are buffered client-side and have not yet reached the PTY, so sending a bare carriage return would submit an empty line and leave your text stranded on screen. Replaying the keypress flushes the buffered text first, then submits.
+
+  Installer: re-runs and updates now preserve the existing network binding instead of silently reverting it, so upgrading no longer changes how the dashboard is reachable.
+
+  Default desktop header is cleaner: the file viewer is shown by default and the plan-usage chip is unchanged, while the token-count chip and lifecycle-log button now default off. Stored preferences are still honored.
+
+  Docs and repo housekeeping: fresh phone screenshots and a new hero GIF in both READMEs, contributor and total-commit badges, and a much shorter repo root. `SECURITY.md` moved to `.github/` (GitHub resolves it there, so the Security policy tab is unaffected), `SPEEDRUN.md` to `docs/`, the knip config to `config/`, and Prettier's config into the `"prettier"` key of `package.json`. `CLAUDE.md` was split so the always-loaded guidance is roughly half its former size, with the deep implementation detail preserved verbatim in `docs/architecture-invariants.md`.
+
 ## 1.8.0
 
 ### Minor Changes
