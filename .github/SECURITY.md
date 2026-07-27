@@ -4,7 +4,7 @@ Codeman launches AI coding sessions with `--dangerously-skip-permissions`, so th
 web UI is **by design a remote-code-execution surface for whoever can reach it**.
 The entire security model exists to control *who* that is. Please read this before
 exposing an instance beyond `localhost`. The full model lives in
-[`docs/security-architecture.md`](docs/security-architecture.md).
+[`docs/security-architecture.md`](../docs/security-architecture.md).
 
 ## Supported versions
 
@@ -75,4 +75,4 @@ subscribe and send time), and tmux session names discovered on the shared socket
 are validated against the safe-name pattern before reaching any shell call site.
 
 For the detailed rationale, defenses, and recommended secure setups, see
-[`docs/security-architecture.md`](docs/security-architecture.md).
+[`docs/security-architecture.md`](../docs/security-architecture.md).
