@@ -75,5 +75,5 @@ allowance. The commitments above take effect at `1.0.0`.
 ## See also
 
 - `CLAUDE.md` — the COM release workflow (changesets, version bump, deploy)
-- `SECURITY.md` — security reporting and the supported-version policy
+- `.github/SECURITY.md` — security reporting and the supported-version policy
 - `docs/security-architecture.md` — the full trust model

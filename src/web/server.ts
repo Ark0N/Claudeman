@@ -160,6 +160,8 @@ import {
   registerMeRoutes,
   registerAdminRoutes,
   registerWsRoutes,
+  registerWebviewRoutes,
+  tryWebviewRefererFallback,
 } from './routes/index.js';
 import { CronService } from '../cron/cron-service.js';
 
@@ -851,13 +853,17 @@ export class WebServer extends EventEmitter {
     // Stable-contract 404 for unknown /api routes — without this, Fastify's
     // default not-found payload {message,error,statusCode} would be wrapped by
     // the envelope hook into a contradictory HTTP 404 {success:true,...}.
-    this.app.setNotFoundHandler((req, reply) => {
+    this.app.setNotFoundHandler(async (req, reply) => {
       const notFound = `Route ${req.method}:${req.url} not found`;
       if (req.url.startsWith('/api')) {
-        reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, notFound));
-        return;
+        return reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, notFound));
       }
-      reply.code(404).send({ message: notFound, error: 'Not Found', statusCode: 404 });
+      // A web-tab dashboard asking for a root-absolute asset (`fetch('/api/data')`,
+      // `import('/chunk.js')`) lands here, because `<base href>` cannot rewrite a URL
+      // built at runtime. Its Referer says which dashboard to relay to. Deliberately
+      // placed on the 404 path so every real Codeman route still wins.
+      if (await tryWebviewRefererFallback(req, reply)) return reply;
+      return reply.code(404).send({ message: notFound, error: 'Not Found', statusCode: 404 });
     });
 
     // Crash diagnostics beacon — frontend POSTs breadcrumbs, GET to read them.
@@ -925,6 +931,7 @@ export class WebServer extends EventEmitter {
     registerMeRoutes(this.app, ctx);
     registerAdminRoutes(this.app, ctx);
     registerOrchestratorRoutes(this.app, ctx);
+    registerWebviewRoutes(this.app, ctx);
 
     // Cron: build the service from the same context, recompute
     // due times for any persisted jobs, then expose it to its routes.

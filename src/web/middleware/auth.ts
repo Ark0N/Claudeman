@@ -22,6 +22,8 @@ import {
 import { getHookSecret, HOOK_SECRET_HEADER } from '../../config/hook-secret.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { findUser, setPassword, touchLastLogin, verifyPassword } from '../../user-store.js';
+import { webviewCapabilities } from '../../webview-capabilities.js';
+import { capabilityFromProxyPath, capabilityFromReferer } from '../webview-proxy.js';
 import { ApiErrorCode, createErrorResponse, type AuthUser } from '../../types.js';
 
 // Request-scoped identity (multi-user). Single-user leaves it undefined and the
@@ -121,6 +123,49 @@ function isPasswordChangeExempt(req: FastifyRequest): boolean {
 }
 
 /**
+ * Whether this request carries a VALID web-tab proxy capability.
+ *
+ * Requests under `/webview/<cap>/` cannot authenticate the normal way. The iframe
+ * rendering a dashboard is sandboxed without `allow-same-origin`, so it runs in an
+ * opaque origin: every request it makes is cross-site, meaning the `SameSite=lax`
+ * `codeman_session` cookie is never attached, and non-GET requests and WebSocket
+ * upgrades arrive with `Origin: null`. Both the cookie check and the CSRF Origin
+ * guard would therefore reject a perfectly legitimate dashboard asset load.
+ *
+ * The capability in the path is the credential instead: 192 bits of entropy, held
+ * in memory only (a restart invalidates it), rolling TTL, bound to the user who
+ * minted it through an already-authenticated `POST /api/webviews/:id/open`, and
+ * granting nothing but "relay bytes to this one saved URL".
+ *
+ * The exemption is deliberately narrow: it requires the capability to RESOLVE, so
+ * a bare `/webview/anything` reaches nothing, and a `/webviewfoo` path does not
+ * match the prefix at all. The Host allowlist is NOT bypassed, so DNS-rebinding
+ * protection still applies to these requests.
+ */
+function hasValidWebviewCapability(req: FastifyRequest): boolean {
+  const url = (req.url ?? '').split('?')[0];
+
+  const fromPath = capabilityFromProxyPath(url);
+  if (fromPath) return webviewCapabilities.resolve(fromPath) !== undefined;
+
+  // Referer form: a dashboard subresource requested with a ROOT-ABSOLUTE URL, which
+  // lands on Codeman's root and is relayed by the 404 fallback. Without this the
+  // asset would be rejected here, before the fallback ever runs.
+  //
+  // This is the only exemption decided by a header the request itself supplies, so
+  // it is fenced in hard: safe methods only, and never for Codeman's own functional
+  // surfaces. Without those fences a page could present a webview Referer and skip
+  // auth on /api. It is not a privilege escalation even so, holding a live
+  // capability already implies an authenticated `POST /api/webviews/:id/open`, but
+  // the exemption should stay no wider than the problem it solves.
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+  if (url.startsWith('/api/') || url.startsWith('/ws/') || url.startsWith('/q/')) return false;
+
+  const fromReferer = capabilityFromReferer(typeof req.headers.referer === 'string' ? req.headers.referer : undefined);
+  return !!fromReferer && webviewCapabilities.resolve(fromReferer) !== undefined;
+}
+
+/**
  * Register HTTP Basic Auth middleware with session cookies and rate limiting.
  * Only active when CODEMAN_PASSWORD is set.
  *
@@ -207,6 +252,12 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean): Au
 
     // QR auth path — handled by the route itself (token validation + rate limiting)
     if (req.url?.startsWith('/q/')) {
+      done();
+      return;
+    }
+
+    // Web-tab proxy, authenticated by the capability in the path, not the cookie.
+    if (hasValidWebviewCapability(req)) {
       done();
       return;
     }
@@ -341,6 +392,12 @@ function registerMultiUserAuthHook(
     // QR redemption path — handled by the route itself.
     if (req.url?.startsWith('/q/')) return;
 
+    // Web-tab proxy, authenticated by the capability in the path, not the cookie.
+    // `req.authUser` stays undefined here on purpose: the proxy handler enforces
+    // ownership against the identity BOUND TO THE CAPABILITY, which is stricter
+    // than re-deriving it from a request that carries no credentials.
+    if (hasValidWebviewCapability(req)) return;
+
     const clientIp = req.ip;
 
     // 1. Cookie session (carries identity + mustChangePassword snapshot).
@@ -466,7 +523,17 @@ export function registerHostGuard(app: FastifyInstance, getPolicy: () => HostPol
       reply.code(403).send('Forbidden: host not allowed');
       return;
     }
-    if (!SAFE_HTTP_METHODS.has(req.method) && !isAllowedRequestOrigin(req.headers.origin, policy)) {
+    // The Host allowlist above is NEVER bypassed. The Origin (CSRF) check is,
+    // but only for a request carrying a valid web-tab capability: a sandboxed
+    // dashboard is opaque-origin, so its form posts and uploads arrive with
+    // `Origin: null`, which this guard rejects by design. The capability is the
+    // credential in that case, and it is unguessable, see
+    // hasValidWebviewCapability.
+    if (
+      !SAFE_HTTP_METHODS.has(req.method) &&
+      !isAllowedRequestOrigin(req.headers.origin, policy) &&
+      !hasValidWebviewCapability(req)
+    ) {
       reply.code(403).send('Forbidden: cross-site request blocked');
       return;
     }
@@ -521,8 +588,17 @@ export function registerSecurityHeaders(app: FastifyInstance, https: boolean): v
       }
     }
 
-    // Handle CORS preflight
-    if (req.method === 'OPTIONS') {
+    // Handle CORS preflight.
+    //
+    // EXCEPT for the web-tab proxy, which must answer its own preflight. A
+    // sandboxed dashboard iframe is opaque-origin, so it sends `Origin: null`;
+    // the CORS block above only emits headers for localhost origins, so a bare
+    // 204 from here carries no `Access-Control-Allow-Origin` and the browser
+    // rejects the preflight. Every dashboard fetch then fails with an opaque
+    // net::ERR_FAILED while the page itself renders fine (script/css/img loads
+    // are not CORS-checked). Falling through lets the proxy route reply with the
+    // right headers.
+    if (req.method === 'OPTIONS' && !hasValidWebviewCapability(req)) {
       reply.code(204).send();
       done();
       return;

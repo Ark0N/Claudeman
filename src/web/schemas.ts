@@ -9,6 +9,7 @@
 
 import { z } from 'zod';
 import { SAFE_PATH_PATTERN, isSafePushEndpoint } from '../utils/index.js';
+import { isValidWebviewUrl } from './webview-proxy.js';
 import {
   MAX_TERMINAL_BUFFER_BYTES,
   MAX_TERMINAL_SCROLLBACK_LINES,
@@ -1217,3 +1218,42 @@ export const SearchQuerySchema = z.object({
     ),
   limit: z.coerce.number().int().min(1).max(60).optional(),
 });
+
+// ========== Web Tabs (dashboard URLs) ==========
+
+/**
+ * A dashboard URL. `isValidWebviewUrl` rejects anything that is not plain
+ * http/https, anything carrying embedded credentials, and anything without a
+ * hostname. See `src/web/webview-proxy.ts` for why each of those matters.
+ */
+const webviewUrlSchema = z
+  .string()
+  .trim()
+  .min(1, 'URL is required')
+  .max(2000, 'URL too long (max 2000 chars)')
+  .refine(isValidWebviewUrl, {
+    message: 'Invalid URL: must be http(s), with a hostname and no embedded credentials',
+  });
+
+const WebviewBaseSchema = z.object({
+  name: z.string().trim().min(1, 'Name is required').max(60, 'Name too long (max 60 chars)'),
+  url: webviewUrlSchema,
+  /** A single glyph shown on the tab. Bounded generously: one emoji can be several code units. */
+  icon: z.string().max(8).optional(),
+  embedMode: z.enum(['proxy', 'direct']).optional(),
+  /**
+   * Opt out of the iframe sandbox. Defaults to false: a proxied page is served
+   * from Codeman's own origin, so `allow-same-origin` would let it read this page
+   * and call the API that spawns agents.
+   */
+  trusted: z.boolean().optional(),
+});
+
+/** POST /api/webviews */
+export const WebviewCreateSchema = WebviewBaseSchema;
+
+/** PATCH /api/webviews/:id, partial update. */
+export const WebviewUpdateSchema = WebviewBaseSchema.partial();
+
+/** POST /api/webviews/probe: reachability + framing check for the editor's Test button. */
+export const WebviewProbeSchema = z.object({ url: webviewUrlSchema });

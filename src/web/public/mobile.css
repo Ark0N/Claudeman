@@ -875,19 +875,44 @@ html.mobile-init .file-browser-panel {
     margin-right: 0;
   }
 
-  /* Secondary action - Run Shell - right side */
+  /* Shell is NOT a toolbar button on phones — it moved into the Run dropdown
+     (Terminal / Shell), freeing this slot for Enter. Starting a shell is a rare,
+     deliberate act; sending Enter is a constant one, so the scarce phone real
+     estate goes to Enter. */
   .btn-toolbar.btn-shell {
-    flex: 0 0 auto;
-    background: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: #9ca3af;
-    order: 4; /* Right position */
+    display: none !important;
   }
 
-  .btn-toolbar.btn-shell:hover,
-  .btn-toolbar.btn-shell:active {
-    background: rgba(255, 255, 255, 0.1);
-    color: #fff;
+  /* Secondary action - Enter - right side. Takes the slot (and the order) the
+     Shell button used to hold, so the toolbar rhythm is unchanged. */
+  .btn-toolbar.btn-enter {
+    display: flex !important;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    min-width: 54px;
+    width: 54px;
+    white-space: nowrap;
+    padding: 0 8px !important;
+    overflow: hidden;
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    /* !important is REQUIRED here, not defensive habit: styles.css nests its skin
+       overrides inside `html:not([data-skin="og"]) { … }`, so a plain `.btn-toolbar`
+       in that block resolves to (0,2,1) and outranks this (0,2,0) rule. Without
+       !important the button silently renders in generic toolbar grey. */
+    background: rgba(30, 58, 95, 0.85) !important;
+    border: 1px solid rgba(59, 130, 246, 0.45) !important;
+    color: #dbeafe !important;
+    order: 4; /* Right position — same slot Shell used to occupy */
+  }
+
+  .btn-toolbar.btn-enter:hover,
+  .btn-toolbar.btn-enter:active {
+    background: rgba(37, 74, 122, 0.95) !important;
+    border-color: rgba(59, 130, 246, 0.7) !important;
+    color: #fff !important;
   }
 
   /* Hide case selector on mobile - simplified toolbar */
@@ -895,25 +920,10 @@ html.mobile-init .file-browser-panel {
     display: none !important;
   }
 
-  /* Simplified toolbar layout — Run, Shell, and Case */
+  /* Simplified toolbar layout — Run, Enter, and Case */
   .toolbar-left .toolbar-group:first-child {
     width: 100%;
     gap: 8px;
-  }
-
-  .btn-toolbar.btn-shell {
-    flex: 0 0 auto;
-    min-width: 54px;
-    width: 54px;
-    white-space: nowrap;
-    padding: 0 8px !important;
-    overflow: hidden;
-    font-size: 0 !important;
-  }
-
-  .btn-toolbar.btn-shell::after {
-    content: "Shell";
-    font-size: 0.65rem;
   }
 
   /* Mobile case button - visible on mobile */
@@ -2224,6 +2234,68 @@ html.mobile-init .file-browser-panel {
     border-radius: 8px;
     transform: none !important;
   }
+}
+
+/* Light-skin compatibility for mobile-only chrome. These components predate
+   the shared skin system and intentionally retain their original dark values
+   for the three dark skins above. */
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.header, .toolbar, .keyboard-accessory-bar) {
+  background: var(--glass-bg);
+  border-color: var(--glass-border);
+  color: var(--text);
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-voice-mobile, .btn-settings-mobile, .btn-toolbar.btn-shell, .toolbar .btn-case-add, .accessory-btn) {
+  background: var(--control-bg);
+  border-color: var(--control-border);
+  color: var(--text-dim);
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-voice-mobile:active, .btn-settings-mobile:active, .btn-toolbar.btn-shell:hover, .btn-toolbar.btn-shell:active, .btn-case-add:hover, .btn-case-add:active, .accessory-btn:active) {
+  background: var(--control-bg-hover);
+  border-color: var(--control-border-hover);
+  color: var(--text);
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-toolbar.btn-run.mode-claude, .btn-toolbar.btn-run-gear.mode-claude) {
+  background: linear-gradient(135deg, var(--accent-grad-a), var(--accent-grad-b));
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-toolbar.btn-run.mode-opencode, .btn-toolbar.btn-run-gear.mode-opencode) {
+  background: linear-gradient(135deg, var(--accent-d), var(--accent-grad-b));
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-toolbar.btn-run.mode-gemini, .btn-toolbar.btn-run-gear.mode-gemini) {
+  background: linear-gradient(135deg, #174ea6, #4f46e5);
+  border-color: #315fc3;
+  color: #ffffff;
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) .btn-toolbar.btn-run-gear {
+  border-left-color: var(--control-border-hover) !important;
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.case-settings-popover-mobile, .mobile-case-picker-sheet) {
+  background: var(--floating-bg);
+  border-color: var(--control-border);
+  color: var(--text);
+  box-shadow: var(--elevated-shadow);
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.case-settings-popover-mobile .checkbox-inline, #createCaseModal .form-row label) {
+  color: var(--text);
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) .case-settings-popover-mobile .form-hint {
+  color: var(--text-muted);
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) .mobile-case-picker .modal-backdrop {
+  background: var(--modal-backdrop);
 }
 
 

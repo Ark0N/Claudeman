@@ -16,6 +16,8 @@
   <img src="https://img.shields.io/badge/Tests-2861%20total-22c55e?style=flat-square" alt="Tests">
   <a href="https://www.npmjs.com/package/aicodeman"><img src="https://img.shields.io/npm/v/aicodeman?style=flat-square&label=npm&color=22c55e" alt="npm version"></a>
   <a href="https://github.com/Ark0N/Codeman/stargazers"><img src="https://img.shields.io/github/stars/Ark0N/Codeman?style=flat-square&color=eab308" alt="GitHub stars"></a>
+  <a href="https://github.com/Ark0N/Codeman/graphs/contributors"><img src="https://img.shields.io/github/contributors/Ark0N/Codeman?style=flat-square&color=3b82f6" alt="Contributors"></a>
+  <a href="https://github.com/Ark0N/Codeman/commits/master"><img src="https://img.shields.io/github/commit-activity/t/Ark0N/Codeman?style=flat-square&color=1e3a5f" alt="Total commits"></a>
 </p>
 
 <p align="center">
@@ -217,12 +219,12 @@ The most responsive AI coding agent experience on any phone. Full xterm.js termi
 <table>
 <tr>
 <td align="center" width="33%"><img src="docs/screenshots/mobile-landing-qr.png" alt="Mobile — landing page with QR auth" width="260"></td>
-<td align="center" width="33%"><img src="docs/screenshots/mobile-session-idle.png" alt="Mobile — idle session with keyboard accessory" width="260"></td>
+<td align="center" width="33%"><img src="docs/screenshots/mobile-session-keyboard-20260727.png" alt="Mobile — answering an agent's plan prompt with the keyboard accessory bar and Enter button" width="260"></td>
 <td align="center" width="33%"><img src="docs/screenshots/mobile-session-active.png" alt="Mobile — active agent session" width="260"></td>
 </tr>
 <tr>
 <td align="center"><em>Landing page with QR auth</em></td>
-<td align="center"><em>Keyboard accessory bar</em></td>
+<td align="center"><em>Answering prompts by touch</em></td>
 <td align="center"><em>Agent working in real-time</em></td>
 </tr>
 </table>
@@ -252,7 +254,12 @@ The security design addresses all 6 critical QR auth flaws identified in ["Demys
 
 ### Touch-Optimized Interface
 
+<p align="center">
+  <img src="docs/screenshots/mobile-toolbar-enter-20260727.png" alt="Mobile toolbar: accessory bar with /init, /clear, clipboard and Esc above the Run, case, stop, Enter, voice and settings controls" width="560">
+</p>
+
 - **Keyboard accessory bar** — `/init`, `/clear`, `/compact` quick-action buttons above the virtual keyboard. Destructive commands (`/clear`, `/compact`) require a double-press to confirm — first tap arms the button, second tap executes — so you never fire one by accident on a bumpy commute
+- **Dedicated Enter button** — submitting is a constant need on a touch keyboard, so the phone toolbar gives it a button of its own. It replays the keypress through the terminal, so text buffered by local echo is flushed first rather than stranded. Starting a shell moves into the Run dropdown (`Terminal / Shell`), which is the rarer action
 - **Swipe navigation** — left/right on the terminal to switch sessions (80px threshold, 300ms)
 - **Smart keyboard handling** — toolbar and terminal shift up when keyboard opens (uses `visualViewport` API with 100px threshold for iOS address bar drift)
 - **Safe area support** — respects iPhone notch and home indicator via `env(safe-area-inset-*)`
@@ -597,7 +604,7 @@ When someone authenticates via QR, the desktop shows a notification toast with t
 
 ## Security
 
-By default Codeman launches sessions with `--dangerously-skip-permissions`, so the web UI is by design a remote-code-execution surface for whoever can reach it — the whole security model exists to control _who_ that is. (The startup permission mode is configurable; see below.) Recent hardening (v0.9.0 + v0.9.5) closes the browser-driven attack paths that bite self-hosted dev tools. Full model: [`docs/security-architecture.md`](docs/security-architecture.md). **Found a vulnerability?** See [`SECURITY.md`](SECURITY.md) for private disclosure and the list of known limitations.
+By default Codeman launches sessions with `--dangerously-skip-permissions`, so the web UI is by design a remote-code-execution surface for whoever can reach it — the whole security model exists to control _who_ that is. (The startup permission mode is configurable; see below.) Recent hardening (v0.9.0 + v0.9.5) closes the browser-driven attack paths that bite self-hosted dev tools. Full model: [`docs/security-architecture.md`](docs/security-architecture.md). **Found a vulnerability?** See [`SECURITY.md`](.github/SECURITY.md) for private disclosure and the list of known limitations.
 
 ### Network & access
 

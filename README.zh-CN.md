@@ -18,6 +18,8 @@
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.9-3b82f6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 5.9"></a>
   <a href="https://fastify.dev/"><img src="https://img.shields.io/badge/Fastify-5.x-1e3a5f?style=flat-square&logo=fastify&logoColor=white" alt="Fastify"></a>
   <img src="https://img.shields.io/badge/Tests-2861%20total-22c55e?style=flat-square" alt="Tests">
+  <a href="https://github.com/Ark0N/Codeman/graphs/contributors"><img src="https://img.shields.io/github/contributors/Ark0N/Codeman?style=flat-square&color=3b82f6" alt="Contributors"></a>
+  <a href="https://github.com/Ark0N/Codeman/commits/master"><img src="https://img.shields.io/github/commit-activity/t/Ark0N/Codeman?style=flat-square&color=1e3a5f" alt="Total commits"></a>
 </p>
 
 <p align="center">
@@ -207,12 +209,12 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 <table>
 <tr>
 <td align="center" width="33%"><img src="docs/screenshots/mobile-landing-qr.png" alt="移动端 — 带二维码认证的登录页" width="260"></td>
-<td align="center" width="33%"><img src="docs/screenshots/mobile-session-idle.png" alt="移动端 — 带键盘配件栏的空闲会话" width="260"></td>
+<td align="center" width="33%"><img src="docs/screenshots/mobile-session-keyboard-20260727.png" alt="移动端 — 通过键盘配件栏与 Enter 按钮回答智能体的方案提示" width="260"></td>
 <td align="center" width="33%"><img src="docs/screenshots/mobile-session-active.png" alt="移动端 — 活动中的智能体会话" width="260"></td>
 </tr>
 <tr>
 <td align="center"><em>带二维码认证的登录页</em></td>
-<td align="center"><em>键盘配件栏</em></td>
+<td align="center"><em>触控回答提示</em></td>
 <td align="center"><em>智能体实时工作中</em></td>
 </tr>
 </table>
@@ -242,7 +244,12 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 
 ### 触控优化界面
 
+<p align="center">
+  <img src="docs/screenshots/mobile-toolbar-enter-20260727.png" alt="移动端工具栏：配件栏的 /init、/clear、剪贴板与 Esc，下方是 Run、案例、停止、Enter、语音与设置控件" width="560">
+</p>
+
 - **键盘配件栏** —— 在虚拟键盘上方提供 `/init`、`/clear`、`/compact` 快捷按钮。破坏性命令（`/clear`、`/compact`）需双击确认 —— 第一次点击「上膛」，第二次点击执行 —— 这样在颠簸的通勤路上也不会误触
+- **独立的 Enter 按钮** —— 在触控键盘上提交是高频操作，因此手机工具栏为它单独设了一个按钮。它会以按键的方式回放，从而先冲刷本地回显缓冲的文本，不会让内容滞留在屏幕上。启动 Shell 这类低频操作则移入 Run 下拉菜单（`Terminal / Shell`）
 - **滑动导航** —— 在终端上左右滑动切换会话（阈值 80px，300ms）
 - **智能键盘处理** —— 键盘弹出时工具栏与终端整体上移（使用 `visualViewport` API，并对 iOS 地址栏漂移设置 100px 阈值）
 - **安全区适配** —— 通过 `env(safe-area-inset-*)` 适配 iPhone 刘海与底部 Home 指示条
@@ -587,7 +594,7 @@ URL 被刻意保持精简（`/q/` 路径 + 6 字符码 ≈ 53–56 个字符）�
 
 ## 安全
 
-Codeman 默认用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 在设计上对任何能访问到它的人都是一个远程代码执行面 —— 整套安全模型的存在就是为了控制*谁*能访问。（启动权限模式可配置，见下文。）近期加固（v0.9.0 + v0.9.5）封堵了那些常困扰自托管开发工具的浏览器驱动攻击路径。完整模型：[`docs/security-architecture.md`](docs/security-architecture.md)。**发现了漏洞？** 私下披露方式与已知限制清单见 [`SECURITY.md`](SECURITY.md)。
+Codeman 默认用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 在设计上对任何能访问到它的人都是一个远程代码执行面 —— 整套安全模型的存在就是为了控制*谁*能访问。（启动权限模式可配置，见下文。）近期加固（v0.9.0 + v0.9.5）封堵了那些常困扰自托管开发工具的浏览器驱动攻击路径。完整模型：[`docs/security-architecture.md`](docs/security-architecture.md)。**发现了漏洞？** 私下披露方式与已知限制清单见 [`SECURITY.md`](.github/SECURITY.md)。
 
 ### 网络与访问
 

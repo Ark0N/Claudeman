@@ -5,7 +5,7 @@
  * and referenced by the frontend (`SSE_EVENTS` in `constants.js`).
  * Both files MUST be kept in sync.
  *
- * 148 event constants organized by category:
+ * 149 event constants organized by category:
  * - **Core** (1): init
  * - **Session lifecycle** (23): created, updated, deleted, terminal, idle, working, ...
  * - **Session: Ralph** (6): ralphLoopUpdate, todoUpdate, completionDetected, ...
@@ -30,6 +30,7 @@
  * - **Cases** (4): created, linked, deleted, order-changed
  * - **Docker cases** (8): exportComplete/Failed, importComplete, imageBuild*, containerRecreated
  * - **Multi-user** (3): admin:usersChanged, auth:passwordChangeRequired, session:orderChanged
+ * - **Web tabs** (1): webview:changed
  *
  * Naming convention: `domain:action` (e.g., `session:created`, `respawn:stateChanged`)
  *
@@ -413,6 +414,11 @@ export const AuthPasswordChangeRequired = 'auth:passwordChangeRequired' as const
 /** Global session tab order changed (synced across devices). COD-131. */
 export const SessionOrderChanged = 'session:orderChanged' as const;
 
+/** A saved web tab (dashboard URL) was created, updated or deleted.
+ *  Payload: `{ action: 'created' | 'updated' | 'deleted', id }`. The client
+ *  re-fetches the list rather than patching from the payload. */
+export const WebviewChanged = 'webview:changed' as const;
+
 // ─── Namespace Re-export ─────────────────────────────────────────────────────
 
 /**
@@ -615,4 +621,7 @@ export const SseEvent = {
 
   // Session order (global tab order sync)
   SessionOrderChanged,
+
+  // Web tabs (dashboard URLs)
+  WebviewChanged,
 } as const;
