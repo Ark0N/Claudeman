@@ -40,10 +40,21 @@
     og: { background: '#0d0d0d', foreground: '#e0e0e0', cursor: '#e0e0e0', cursorAccent: '#0d0d0d', selection: 'rgba(255,255,255,0.3)', black: '#0d0d0d', red: '#ff6b6b', green: '#51cf66', yellow: '#ffd43b', blue: '#339af0', magenta: '#cc5de8', cyan: '#22b8cf', white: '#e0e0e0', brightBlack: '#495057', brightRed: '#ff8787', brightGreen: '#69db7c', brightYellow: '#ffe066', brightBlue: '#5c7cfa', brightMagenta: '#da77f2', brightCyan: '#66d9e8', brightWhite: '#ffffff' },
     'daylight-green': { background: '#161b23', foreground: '#dfe6ef', cursor: '#2fd3aa', cursorAccent: '#161b23', selection: 'rgba(47,211,170,0.22)', black: '#161b23', red: '#ff8585', green: '#34d8a0', yellow: '#f0c25a', blue: '#5cc6e8', magenta: '#c79af2', cyan: '#2bcbbb', white: '#dfe6ef', brightBlack: '#5b6675', brightRed: '#ffa0a0', brightGreen: '#5fe6b8', brightYellow: '#ffd884', brightBlue: '#82d4ee', brightMagenta: '#d6b3f7', brightCyan: '#5ee0d4', brightWhite: '#f3f6fa' },
     'daylight-blue': { background: '#161b23', foreground: '#dfe6ef', cursor: '#38b6f0', cursorAccent: '#161b23', selection: 'rgba(56,182,240,0.22)', black: '#161b23', red: '#ff8585', green: '#34d8a0', yellow: '#f0c25a', blue: '#5cc6e8', magenta: '#c79af2', cyan: '#2bcbbb', white: '#dfe6ef', brightBlack: '#5b6675', brightRed: '#ffa0a0', brightGreen: '#5fe6b8', brightYellow: '#ffd884', brightBlue: '#82d4ee', brightMagenta: '#d6b3f7', brightCyan: '#5ee0d4', brightWhite: '#f3f6fa' },
+    'paper-gray': { background: '#f6f8fa', foreground: '#1f2328', cursor: '#0969da', cursorAccent: '#ffffff', selection: 'rgba(9,105,218,0.2)', black: '#24292f', red: '#cf222e', green: '#1a7f37', yellow: '#9a6700', blue: '#0969da', magenta: '#8250df', cyan: '#1b7c83', white: '#59636e', brightBlack: '#6e7781', brightRed: '#a40e26', brightGreen: '#116329', brightYellow: '#7d4e00', brightBlue: '#0550ae', brightMagenta: '#6639ba', brightCyan: '#116b75', brightWhite: '#1f2328' },
+    'solarized-light': { background: '#fdf6e3', foreground: '#586e75', cursor: '#147ba3', cursorAccent: '#fdf6e3', selection: 'rgba(38,139,210,0.2)', black: '#eee8d5', red: '#dc322f', green: '#758600', yellow: '#9b7800', blue: '#147ba3', magenta: '#d33682', cyan: '#2a9189', white: '#073642', brightBlack: '#93a1a1', brightRed: '#cb4b16', brightGreen: '#657b83', brightYellow: '#586e75', brightBlue: '#268bd2', brightMagenta: '#6c71c4', brightCyan: '#2aa198', brightWhite: '#002b36' },
+    'catppuccin-latte': { background: '#eff1f5', foreground: '#4c4f69', cursor: '#1e66f5', cursorAccent: '#ffffff', selection: 'rgba(30,102,245,0.18)', black: '#5c5f77', red: '#d20f39', green: '#3b8f2b', yellow: '#a86605', blue: '#1e66f5', magenta: '#8839ef', cyan: '#177f86', white: '#6c6f85', brightBlack: '#7c7f93', brightRed: '#b50930', brightGreen: '#2f7622', brightYellow: '#8b5604', brightBlue: '#174fbf', brightMagenta: '#6f2bc5', brightCyan: '#116b71', brightWhite: '#4c4f69' },
+    'rose-pine-dawn': { background: '#faf4ed', foreground: '#575279', cursor: '#286983', cursorAccent: '#fffaf3', selection: 'rgba(40,105,131,0.2)', black: '#575279', red: '#b4637a', green: '#286983', yellow: '#96681f', blue: '#477f91', magenta: '#907aa9', cyan: '#3f7f8b', white: '#6e6a86', brightBlack: '#797593', brightRed: '#984d66', brightGreen: '#1f5266', brightYellow: '#7d5417', brightBlue: '#386b7c', brightMagenta: '#765f90', brightCyan: '#326b76', brightWhite: '#575279' },
   };
+  const CODEMAN_LIGHT_SKINS = new Set(['paper-gray', 'solarized-light', 'catppuccin-latte', 'rose-pine-dawn']);
+  function currentSkin() {
+    return (typeof document !== 'undefined' && document.documentElement.dataset.skin) || 'daylight-blue';
+  }
   function currentXtermTheme() {
-    const skin = (typeof document !== 'undefined' && document.documentElement.dataset.skin) || 'daylight-blue';
+    const skin = currentSkin();
     return CODEMAN_XTERM_THEMES[skin] || CODEMAN_XTERM_THEMES['daylight-blue'];
+  }
+  function currentSkinIsLight(skin = currentSkin()) {
+    return CODEMAN_LIGHT_SKINS.has(skin);
   }
 
   global.CodemanTerminalInput = {
@@ -54,6 +65,7 @@
   };
   global.CODEMAN_XTERM_THEMES = CODEMAN_XTERM_THEMES;
   global.codemanCurrentXtermTheme = currentXtermTheme;
+  global.codemanCurrentSkinIsLight = currentSkinIsLight;
 })(window);
 
 Object.assign(CodemanApp.prototype, {
@@ -75,6 +87,7 @@ Object.assign(CodemanApp.prototype, {
       lineHeight: 1.2,
       cursorBlink: false,
       cursorStyle: 'block',
+      minimumContrastRatio: window.codemanCurrentSkinIsLight() ? 4.5 : 1,
       scrollback: scrollback,
       allowTransparency: true,
       allowProposedApi: true,
@@ -2921,8 +2934,14 @@ Object.assign(CodemanApp.prototype, {
   // DOM and WebGL renderers) plus a belt-and-suspenders refresh().
   applyTerminalSkin(skin) {
     const theme = { ...(window.CODEMAN_XTERM_THEMES[skin] || window.CODEMAN_XTERM_THEMES['daylight-blue']) };
+    const minimumContrastRatio = window.codemanCurrentSkinIsLight(skin) ? 4.5 : 1;
     if (this.terminal) {
+      this.terminal.options.minimumContrastRatio = minimumContrastRatio;
       this.terminal.options.theme = theme;
+      // The zero-lag typing overlay caches the xterm foreground/background.
+      // Refresh it on live skin changes so typed text never keeps the prior
+      // theme's dark backing surface or foreground color.
+      this._localEchoOverlay?.refreshFont();
       try {
         this.terminal.refresh(0, this.terminal.rows - 1);
       } catch {}
@@ -2930,6 +2949,7 @@ Object.assign(CodemanApp.prototype, {
     if (this.teammateTerminals) {
       for (const [, entry] of this.teammateTerminals) {
         if (entry && entry.terminal) {
+          entry.terminal.options.minimumContrastRatio = minimumContrastRatio;
           entry.terminal.options.theme = { ...theme };
           try {
             entry.terminal.refresh(0, entry.terminal.rows - 1);
