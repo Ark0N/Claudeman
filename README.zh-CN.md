@@ -209,12 +209,12 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 <table>
 <tr>
 <td align="center" width="33%"><img src="docs/screenshots/mobile-landing-qr.png" alt="移动端 — 带二维码认证的登录页" width="260"></td>
-<td align="center" width="33%"><img src="docs/screenshots/mobile-session-idle.png" alt="移动端 — 带键盘配件栏的空闲会话" width="260"></td>
+<td align="center" width="33%"><img src="docs/screenshots/mobile-session-question-20260727.png" alt="移动端 — 通过键盘配件栏回答智能体的选择题提示" width="260"></td>
 <td align="center" width="33%"><img src="docs/screenshots/mobile-session-active.png" alt="移动端 — 活动中的智能体会话" width="260"></td>
 </tr>
 <tr>
 <td align="center"><em>带二维码认证的登录页</em></td>
-<td align="center"><em>键盘配件栏</em></td>
+<td align="center"><em>触控回答提示</em></td>
 <td align="center"><em>智能体实时工作中</em></td>
 </tr>
 </table>

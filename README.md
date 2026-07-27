@@ -219,12 +219,12 @@ The most responsive AI coding agent experience on any phone. Full xterm.js termi
 <table>
 <tr>
 <td align="center" width="33%"><img src="docs/screenshots/mobile-landing-qr.png" alt="Mobile — landing page with QR auth" width="260"></td>
-<td align="center" width="33%"><img src="docs/screenshots/mobile-session-idle.png" alt="Mobile — idle session with keyboard accessory" width="260"></td>
+<td align="center" width="33%"><img src="docs/screenshots/mobile-session-question-20260727.png" alt="Mobile — answering an agent's multiple-choice prompt with the keyboard accessory bar" width="260"></td>
 <td align="center" width="33%"><img src="docs/screenshots/mobile-session-active.png" alt="Mobile — active agent session" width="260"></td>
 </tr>
 <tr>
 <td align="center"><em>Landing page with QR auth</em></td>
-<td align="center"><em>Keyboard accessory bar</em></td>
+<td align="center"><em>Answering prompts by touch</em></td>
 <td align="center"><em>Agent working in real-time</em></td>
 </tr>
 </table>
