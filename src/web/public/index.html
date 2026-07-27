@@ -300,6 +300,11 @@
           autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
       </div>
 
+      <!-- Web tab layer: one iframe per open dashboard, shown in place of the
+           terminal while a web tab is active. Frames stay mounted while hidden so
+           switching tabs does not reload (and re-authenticate) a dashboard. -->
+      <div class="webview-layer" id="webviewLayer"></div>
+
       <!-- Welcome Overlay (shown when no session active) -->
       <div class="welcome-overlay" id="welcomeOverlay">
         <div class="welcome-content">
@@ -460,6 +465,18 @@
                 <span class="run-mode-dot gemini"></span>Gemini
               </button>
               <div class="run-mode-sep"></div>
+              <button class="run-mode-option" data-mode="shell" onclick="app.setRunMode('shell')">
+                <span class="run-mode-dot shell"></span>Terminal / Shell
+              </button>
+              <div class="run-mode-sep"></div>
+              <!-- Web tabs: dashboards open as tabs beside agent sessions. These do NOT
+                   set runMode: the Run button always means "start an agent". -->
+              <div class="run-mode-header">Web / URL</div>
+              <div class="run-mode-webviews" id="runModeWebviews"></div>
+              <button class="run-mode-option run-mode-option--add" onclick="app.showWebviewModal()">
+                <span class="run-mode-dot web"></span>Add URL&hellip;
+              </button>
+              <div class="run-mode-sep"></div>
               <div class="run-mode-header">Recent Sessions</div>
               <div class="run-mode-history" id="runModeHistory"></div>
             </div>
@@ -474,6 +491,12 @@
           </button>
           <button class="btn-toolbar btn-shell" onclick="app.runShell()" title="Run Shell">
             Run Shell
+          </button>
+          <!-- Phone-only: replaces the Shell button on ≤430px (Shell moves into the Run
+               dropdown there). Sends a bare Enter to the active session, the complement
+               to the accessory bar's Esc. Hidden everywhere else — see styles.css. -->
+          <button class="btn-toolbar btn-enter" onclick="app.sendEnterKey()" title="Send Enter">
+            Enter
           </button>
           <div class="tab-count-group" title="Instance count">
             <button class="tab-count-btn" onclick="app.decrementShellCount()">−</button>
@@ -625,6 +648,56 @@
               <div><kbd>Escape</kbd></div><div>Close Panels</div>
             </div>
           </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- Web Tab (dashboard URL) editor -->
+    <div class="modal" id="webviewModal">
+      <div class="modal-backdrop" onclick="app.closeWebviewModal()"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 id="webviewModalTitle">Add URL</h3>
+          <button class="modal-close" onclick="app.closeWebviewModal()" aria-label="Close URL editor">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-row">
+            <label for="webviewName">Name</label>
+            <input type="text" id="webviewName" placeholder="Grafana" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="form-row">
+            <label for="webviewUrl">URL</label>
+            <input type="text" id="webviewUrl" placeholder="http://100.70.56.18:4000/" autocomplete="off"
+                   autocapitalize="off" spellcheck="false">
+            <span class="form-hint">
+              Reached from the Codeman server, so a tailnet or localhost address works even when
+              this browser cannot see it. Plain HTTP is fine: the dashboard is proxied through
+              Codeman, which is also what gets past dashboards that refuse to be embedded.
+            </span>
+          </div>
+          <div class="form-row">
+            <label for="webviewIcon">Icon</label>
+            <!-- Click to pick; the field stays editable so any emoji still works. -->
+            <div class="webview-icon-picker" id="webviewIconPicker" role="group" aria-label="Choose an icon"></div>
+            <input type="text" id="webviewIcon" placeholder="Or paste any emoji" maxlength="8" autocomplete="off">
+          </div>
+          <div class="form-row">
+            <label class="checkbox-row"><input type="checkbox" id="webviewSandboxed" checked> Open sandboxed</label>
+            <span class="form-hint">
+              Recommended. A proxied dashboard is served from Codeman's own address, so unchecking
+              this lets its JavaScript read this page and call the API that starts agents. Uncheck
+              only for a dashboard you fully trust, or one whose own login needs cookies.
+            </span>
+          </div>
+          <div class="form-row">
+            <button class="btn-secondary" onclick="app.testWebviewUrl()">Test</button>
+            <span class="form-hint webview-probe-result" id="webviewProbeResult"></span>
+          </div>
+        </div>
+        <div class="form-actions webview-modal-actions">
+          <button class="btn-danger" id="webviewDeleteBtn" onclick="app.deleteWebview()">Delete</button>
+          <button class="btn-secondary" onclick="app.closeWebviewModal()">Cancel</button>
+          <button class="btn-primary" onclick="app.saveWebview()">Save</button>
         </div>
       </div>
     </div>
@@ -2549,6 +2622,7 @@
   <script defer src="ultracode-panel.js"></script>
   <script defer src="admin-ui.js"></script>
   <script defer src="session-ui.js"></script>
+  <script defer src="webview-tabs.js"></script>
   <script defer src="ralph-wizard.js"></script>
   <script defer src="api-client.js"></script>
   <script defer src="subagent-windows.js"></script>

@@ -3297,6 +3297,12 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   /* contain: style only — layout/paint containment clips the case-settings popover
      that extends above the toolbar (popover uses position:absolute + bottom:100%) */
   contain: style;
+  /* backdrop-filter above makes this a stacking context, which TRAPS the
+     z-index:1000 on .run-mode-menu inside it. Without an explicit z-index here the
+     toolbar resolves to auto (0) and .welcome-overlay (z-index:10, inside <main>)
+     paints over the popped-up Run menu: with no session open, every item in that
+     menu is unclickable. Must stay below .modal (1000). */
+  z-index: 20;
 }
 
 /* backdrop-filter creates a stacking context, trapping the popover's
@@ -3538,6 +3544,14 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
 .run-mode-dot.opencode { background: #10b981; }
 .run-mode-dot.codex { background: #a855f7; }
 .run-mode-dot.gemini { background: #8ab4f8; }
+.run-mode-dot.shell { background: #94a3b8; }
+
+/* Phone-only Enter button (see index.html). Hidden by default at every width;
+   mobile.css turns it on inside @media (max-width: 430px), where it takes over
+   the slot the Shell button occupies on wider screens. */
+.btn-toolbar.btn-enter {
+  display: none;
+}
 
 .run-mode-sep {
   height: 1px;
@@ -11782,6 +11796,7 @@ html:not([data-skin="og"]) {
 .run-mode-dot.claude { background: var(--accent); }
 .run-mode-dot.opencode { background: var(--accent-soft); }
 .run-mode-dot.codex { background: var(--accent-grad-b); }
+.run-mode-dot.shell { background: var(--text-dim); }
 
 /* ---- Shell button: quiet neutral with a calm green tint ---- */
 .btn-toolbar.btn-shell {
@@ -12009,3 +12024,118 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   display: flex; gap: 0.5rem; justify-content: flex-end;
   margin-top: 1rem; padding-top: 0.85rem; border-top: 1px solid var(--border);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Web tabs (dashboard URLs embedded as tabs)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* The iframe layer sits alongside .terminal-wrap inside <main> and only one of
+   the two is visible at a time. Frames stay in the DOM while hidden so switching
+   tabs does not reload a dashboard. */
+.webview-layer {
+  display: none;
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  background: var(--term-bg, #161b23);
+}
+.main.webview-active .webview-layer { display: flex; }
+.main.webview-active .terminal-wrap { display: none; }
+
+.webview-frame {
+  display: none;
+  position: absolute;
+  inset: 0;
+}
+.webview-frame.active { display: block; }
+
+.webview-iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  background: #fff;
+}
+
+/* Shown only when the frame never signalled load: a refused embed or an
+   unreachable host would otherwise be an unexplained blank rectangle. */
+.webview-failure { display: none; }
+.webview-frame--failed .webview-failure {
+  display: flex;
+  position: absolute;
+  inset: 0;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg, #0f1319);
+  padding: 1.5rem;
+  text-align: center;
+}
+.webview-failure-inner { max-width: 380px; }
+.webview-failure-inner h3 { margin: 0 0 0.5rem; font-size: 1rem; color: var(--text); }
+.webview-failure-inner p { margin: 0 0 1rem; font-size: 0.85rem; color: var(--text-dim); line-height: 1.5; }
+.webview-failure-actions { display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; }
+
+/* Tab styling: same shape as a session tab, distinguished by the globe icon and
+   a cool accent so a dashboard never reads as a running agent. */
+.session-tab--web .tab-web-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.session-tab--web.active .tab-web-icon { color: var(--accent, #3ec8ee); }
+.session-tab--web.active { border-bottom-color: var(--accent, #3ec8ee); }
+
+.run-mode-dot.web { background: #38bdf8; }
+.run-mode-webviews { max-height: 180px; overflow-y: auto; }
+.run-mode-empty {
+  padding: 4px 10px 6px;
+  font-size: 0.75em;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+/* Icon picker: a compact grid above the free-text field, so the common case is a
+   click and the escape hatch (any emoji at all) stays available. */
+.webview-icon-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.webview-icon-choice {
+  width: 34px;
+  height: 34px;
+  font-size: 1.05rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-soft, rgba(255, 255, 255, 0.03));
+  cursor: pointer;
+  padding: 0;
+}
+.webview-icon-choice:hover { border-color: var(--accent, #3ec8ee); }
+.webview-icon-choice.selected {
+  border-color: var(--accent, #3ec8ee);
+  box-shadow: 0 0 0 1px var(--accent, #3ec8ee) inset;
+}
+
+/* Saved-URL rows in the Run dropdown show their chosen icon in the dot's slot. */
+.run-mode-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  margin-right: 6px;
+  font-size: 0.95em;
+  flex-shrink: 0;
+}
+
+.webview-probe-result.ok { color: var(--success, #10b981); }
+.webview-probe-result.bad { color: var(--danger, #ef4444); }
+/* Delete sits apart from Cancel/Save so it is not fat-fingered on the way to Save. */
+.webview-modal-actions { justify-content: space-between; }
+.webview-modal-actions .btn-danger { margin-right: auto; }

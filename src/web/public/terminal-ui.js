@@ -982,8 +982,66 @@ Object.assign(CodemanApp.prototype, {
           return;
         }
 
-        // Get line text - translateToString handles wrapped lines
-        const lineText = line.translateToString(true);
+        // Stitch the LOGICAL line back together.
+        //
+        // xterm invokes this provider per visible ROW, and translateToString returns
+        // that row alone (the old comment here claimed otherwise). A URL or path
+        // longer than the terminal is wide therefore matched only as far as the row
+        // boundary, and the link opened a PREFIX of the real target. Walk out to both
+        // ends of the continuation, match against the joined text, and map offsets
+        // back to (x, y) so a link can span rows.
+        //
+        // Two different kinds of continuation, and handling only the first is not
+        // enough:
+        //   1. SOFT wrap: the emulator ran out of columns and flags the next row
+        //      `isWrapped`.
+        //   2. HARD wrap: the program did its own wrapping and emitted a real
+        //      newline, so nothing is flagged. Ink does this, which is why Claude
+        //      Code's own `/login` URL was cut at the window edge, and why the
+        //      clickable part grew when the window was widened.
+        // A row that fills the full width is treated as continuing into the next:
+        // that is the signal a hard wrap leaves behind, and a line that genuinely
+        // ended would stop short of the last column.
+        const cols = self.terminal.cols;
+        const rowAt = (r) => buffer.getLine(r - 1);
+        const continuesPrevious = (r) => {
+          if (r <= 1) return false;
+          if (rowAt(r)?.isWrapped) return true;
+          const prev = rowAt(r - 1);
+          return !!prev && prev.translateToString(true).length >= cols;
+        };
+
+        // Bounded so a screenful of full-width output (wide tables, box drawing)
+        // cannot make every hover stitch and re-scan the entire viewport.
+        const MAX_STITCHED_ROWS = 12;
+        let startRow = bufferLineNumber;
+        while (startRow > 1 && bufferLineNumber - startRow < MAX_STITCHED_ROWS && continuesPrevious(startRow)) {
+          startRow--;
+        }
+        let endRow = bufferLineNumber;
+        while (endRow < buffer.length && endRow - startRow < MAX_STITCHED_ROWS && continuesPrevious(endRow + 1)) {
+          endRow++;
+        }
+
+        const rowTexts = [];
+        for (let r = startRow; r <= endRow; r++) {
+          const row = rowAt(r);
+          if (!row) break;
+          // Only the final row may be trimmed. Continuation rows fill the width by
+          // definition, and trimming one would shift every later offset.
+          rowTexts.push(row.translateToString(r === endRow));
+        }
+        const lineText = rowTexts.join('');
+
+        /** Map an offset in the stitched text back to a 1-based terminal cell. */
+        const coordAt = (index) => {
+          let rest = index;
+          for (let i = 0; i < rowTexts.length - 1; i++) {
+            if (rest < rowTexts[i].length) return { x: rest + 1, y: startRow + i };
+            rest -= rowTexts[i].length;
+          }
+          return { x: rest + 1, y: startRow + rowTexts.length - 1 };
+        };
 
         if (!lineText || !lineText.includes('/')) {
           callback(undefined);
@@ -993,22 +1051,27 @@ Object.assign(CodemanApp.prototype, {
         const links = [];
 
         // Pattern 0: URLs (https://, http://) — matched first so they take priority
-        const urlPattern = /https?:\/\/[^\s"'<>|;&)\]\x00-\x1f]+/g;
+        //
+        // A single `&` is PART of the URL: it separates query parameters, so excluding
+        // it truncated every real query string (`?post=1479&action=edit` linked only
+        // through `1479`, landing on the wrong page). `&&` is still a boundary, since
+        // that is the shell operator and never appears inside a URL. A lone trailing
+        // `&` is trimmed below with the other trailing punctuation.
+        const urlPattern = /https?:\/\/(?:[^\s"'<>|;&)\]\x00-\x1f]|&(?!&))+/g;
 
         const addUrlLink = (url, matchIndex) => {
           // Strip trailing punctuation that's likely not part of the URL
-          const cleaned = url.replace(/[.,;:!?)]+$/, '');
+          const cleaned = url.replace(/[.,;:!?)&]+$/, '');
           const startCol = lineText.indexOf(cleaned, matchIndex);
           if (startCol === -1) return;
 
-          if (links.some((l) => l.range.start.x === startCol + 1)) return;
+          const start = coordAt(startCol);
+          const end = coordAt(startCol + cleaned.length);
+          if (links.some((l) => l.range.start.x === start.x && l.range.start.y === start.y)) return;
 
           links.push({
             text: cleaned,
-            range: {
-              start: { x: startCol + 1, y: bufferLineNumber },
-              end: { x: startCol + cleaned.length + 1, y: bufferLineNumber },
-            },
+            range: { start, end },
             decorations: { pointerCursor: true, underline: true },
             activate(_event, text) {
               window.open(text, '_blank', 'noopener,noreferrer');
@@ -1030,31 +1093,43 @@ Object.assign(CodemanApp.prototype, {
         // the whole tab on hover. Non-empty token + bounded reps is O(n).
         const cmdPattern = /\b(tail|cat|head|less|grep|watch|vim|nano)\s+(?:[^\s\/]+\s+){0,4}(\/[^\s"'<>|;&\n\x00-\x1f]+)/g;
 
-        // Pattern 2: Paths with common extensions
+        // Pattern 2: Paths with common extensions.
+        // Image/PDF extensions are included so pasted-attachment paths
+        // (`.claude-images/paste-*.png`) are clickable; they open the file preview
+        // rather than the log viewer (see addLink).
         const extPattern =
-          /(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|yaml|yml|csv|xml|sh|py|ts|js))\b/g;
+          /(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|yaml|yml|csv|xml|sh|py|ts|js|png|jpe?g|gif|webp|bmp|svg|pdf))\b/g;
 
         // Pattern 3: Bash() tool output
         const bashPattern = /Bash\([^)]*?(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\)\n\x00-\x1f]+)/g;
+
+        /** Extensions that should open the image/document preview, not the log viewer. */
+        const PREVIEW_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'pdf']);
 
         const addLink = (filePath, matchIndex) => {
           const startCol = lineText.indexOf(filePath, matchIndex);
           if (startCol === -1) return;
 
+          const start = coordAt(startCol);
+          const end = coordAt(startCol + filePath.length);
           // Skip if already have link at this position
-          if (links.some((l) => l.range.start.x === startCol + 1)) return;
+          if (links.some((l) => l.range.start.x === start.x && l.range.start.y === start.y)) return;
 
           links.push({
             text: filePath,
-            range: {
-              start: { x: startCol + 1, y: bufferLineNumber }, // 1-based
-              end: { x: startCol + filePath.length + 1, y: bufferLineNumber },
-            },
+            range: { start, end }, // 1-based, may span wrapped rows
             decorations: {
               pointerCursor: true,
               underline: true,
             },
             activate(event, text) {
+              // Tailing a PNG in the log viewer shows binary noise; the file preview
+              // already renders images and PDFs inline.
+              const ext = (text.split('.').pop() || '').toLowerCase();
+              if (PREVIEW_EXTS.has(ext)) {
+                self.openFilePreview(text, self.activeSessionId);
+                return;
+              }
               self.openLogViewerWindow(text, self.activeSessionId);
             },
             hover() {
