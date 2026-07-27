@@ -1,5 +1,24 @@
 # aicodeman
 
+## 1.8.2
+
+### Patch Changes
+
+- Web tabs: open dashboard URLs as tabs beside agent sessions, plus terminal link fixes.
+
+  **Web tabs.** The Run dropdown gains a "Web / URL" section. A saved URL renders as a tab in the same strip as Claude/Codex/Gemini sessions, with the same Alt+1-9 numbering, an icon picker, and per-device tab order. Frames stay mounted while hidden (LRU-bounded), so switching tabs never reloads a dashboard.
+
+  Dashboards are proxied through Codeman's own origin, because a direct iframe fails three ways at once: an HTTPS Codeman cannot embed a plain-HTTP target (mixed content, with no override at all on iOS Safari), many dashboards send `X-Frame-Options: DENY`, and Codeman's own `default-src 'self'` CSP blocks cross-origin frames. Proxying dissolves all three and leaves the production CSP unchanged. The fetch happens server-side, so a tailnet-only or localhost-only dashboard is reachable from any device that can reach Codeman.
+
+  The proxy is not an API surface: it authenticates on a 192-bit capability in the path (memory-only, rolling TTL, bound to the minting user, revoked on edit or delete) and is exempt from the cookie and Origin checks, because a sandboxed iframe is opaque-origin and sends neither. The Host allowlist is never bypassed. Iframes omit `allow-same-origin` unless a URL is explicitly marked trusted, and `Authorization` plus the session cookie are stripped upstream in both modes so `CODEMAN_PASSWORD` cannot leak into a dashboard. Includes an HTTP and WebSocket proxy, redirect/cookie/`<base>` rewriting, a runtime URL shim for requests built by dashboard JavaScript, and CORS handling for the opaque-origin frame. New endpoints under `/api/webviews`, storage in `~/.codeman/webviews.json`, user guide in `docs/web-tabs.md`.
+
+  **Terminal links no longer truncate.** Three separate cuts, each producing a link that opened the wrong target or none at all:
+  - A single `&` ended the match, so every query string was cut. A WordPress edit link resolved to `?post=1479` and Claude Code's own `/login` URL was unusable. `&` is now part of a URL while `&&` remains a boundary.
+  - Links wider than the terminal were cut at the row boundary. The link provider now stitches continuation rows into one logical line and maps offsets back across rows. Handles both soft wraps (emulator, `isWrapped`) and hard wraps (a program wrapping its own output and emitting a newline, as Ink does), the latter being why the `/login` URL grew longer as the window was widened.
+  - Image and PDF paths were not matched at all, so pasted-screenshot paths rendered as plain text. They now link and open the file preview, which renders images inline.
+
+  **Also fixes** a pre-existing bug where `.toolbar`'s `backdrop-filter` created a stacking context that trapped the Run menu's z-index, letting the welcome overlay cover it: with no session open, every item in that menu (Claude Code included) was unclickable.
+
 ## 1.8.1
 
 ### Patch Changes
