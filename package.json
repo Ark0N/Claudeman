@@ -32,8 +32,16 @@
     "changeset": "changeset",
     "version-packages": "changeset version && npm install --package-lock-only && node scripts/check-lockfile-sync.mjs",
     "check:lockfile": "node scripts/check-lockfile-sync.mjs",
-    "knip": "npx --yes knip@latest",
+    "knip": "npx --yes knip@latest --config config/knip.json",
     "release": "changeset publish"
+  },
+  "prettier": {
+    "singleQuote": true,
+    "semi": true,
+    "tabWidth": 2,
+    "printWidth": 120,
+    "trailingComma": "es5",
+    "endOfLine": "lf"
   },
   "workspaces": [
     ".",
