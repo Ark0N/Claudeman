@@ -159,6 +159,10 @@ html[data-skin="og"] {
   --term-bg: #0d0d0d;
   --green: #22c55e; --yellow: #eab308; --red: #ef4444;
   --glass-bg: rgba(19, 19, 22, 0.85); --glass-border: rgba(255, 255, 255, 0.06);
+  /* OG is a neutral near-black palette with no blue in it. Without this the
+     :root slate default would repaint every modal/palette/floating window
+     rgba(31,38,48,.96) and quietly break the skin's identity. */
+  --floating-bg: rgba(19, 19, 22, 0.96);
   /* daylight-only extras left at sane neutral defaults (unused — override block does not apply to og) */
   --accent-d: #3b82f6; --emerald: #3b82f6; --teal: #2563eb;
   --accent-soft: #22c55e; --accent-ink: #0b1220;
@@ -313,6 +317,43 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 ) {
   background: var(--control-bg-hover);
   border-color: var(--control-border-hover);
+}
+
+/* Status badges and accent-tinted pills bake in pale light-on-dark ink
+   (#cdddff, #9dc0ff, #ffc107, #fff, …) over a low-alpha tint. That reads at
+   1.0–1.9:1 once the tint sits on a light surface — the search filter chips
+   literally vanish. Re-point the ink at each skin's own dark tokens and keep
+   the tint as the category signal. */
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(
+  .search-filter-chip.active,
+  .search-badge-session,
+  .history-view-all-btn,
+  .session-tab .tab-mode.gemini
+) {
+  color: var(--accent-d);
+}
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(
+  .search-badge-file,
+  .tunnel-panel-btn.btn-start,
+  .voice-provider-status.active
+) {
+  color: var(--green);
+}
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(
+  .ralph-task-priority.priority-p1,
+  .ralph-circuit-breaker.half-open
+) {
+  color: var(--yellow);
+}
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(
+  .search-badge-event,
+  .respawn-state,
+  .history-detail-path,
+  .mobile-case-item,
+  .mobile-case-picker-header h3,
+  .btn-toolbar.btn-case-mobile:hover
+) {
+  color: var(--text);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
