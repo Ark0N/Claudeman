@@ -394,6 +394,9 @@ Object.assign(CodemanApp.prototype, {
       if (mode === 'gemini') {
         return await this.runGemini();
       }
+      if (mode === 'shell') {
+        return await this.runShell();
+      }
       return await this.runClaude();
     } finally {
       const remaining = minLockMs - (Date.now() - startedAt);
@@ -500,8 +503,30 @@ Object.assign(CodemanApp.prototype, {
       gearBtn.className = `btn-toolbar btn-run-gear mode-${mode}`;
     }
     if (label) {
-      label.textContent = mode === 'opencode' ? 'Run OC' : mode === 'codex' ? 'Run CX' : mode === 'gemini' ? 'Run GM' : 'Run';
+      label.textContent = mode === 'opencode' ? 'Run OC' : mode === 'codex' ? 'Run CX' : mode === 'gemini' ? 'Run GM' : mode === 'shell' ? 'Run SH' : 'Run';
     }
+  },
+
+  /** Send Enter to the active session (phone toolbar button).
+   *
+   *  MUST go through xterm's onData path, NOT straight to sendInput()/the API.
+   *  With local echo on (the mobile default) the characters you typed are still
+   *  buffered in the LocalEchoOverlay and have NEVER reached the PTY. The onData
+   *  Enter branch (terminal-ui.js) is what flushes that pending text and only
+   *  then sends \r. Send a bare \r instead and you submit an empty line while the
+   *  typed text stays stranded on screen — which reads as "the button does
+   *  nothing". triggerDataEvent replays it exactly as if the key were pressed,
+   *  so overlay flush, flushed-offset cleanup and ordering are all reused. */
+  sendEnterKey() {
+    if (!this.activeSessionId) return;
+    const coreService = this.terminal?._core?.coreService;
+    if (coreService && typeof coreService.triggerDataEvent === 'function') {
+      coreService.triggerDataEvent('\r', true);
+      return;
+    }
+    // Fallback only if xterm's private core API moves: correct when local echo
+    // is off, and still better than doing nothing.
+    this.sendInput('\r');
   },
 
   _initRunMode() {

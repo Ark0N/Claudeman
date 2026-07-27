@@ -460,6 +460,10 @@
                 <span class="run-mode-dot gemini"></span>Gemini
               </button>
               <div class="run-mode-sep"></div>
+              <button class="run-mode-option" data-mode="shell" onclick="app.setRunMode('shell')">
+                <span class="run-mode-dot shell"></span>Terminal / Shell
+              </button>
+              <div class="run-mode-sep"></div>
               <div class="run-mode-header">Recent Sessions</div>
               <div class="run-mode-history" id="runModeHistory"></div>
             </div>
@@ -474,6 +478,12 @@
           </button>
           <button class="btn-toolbar btn-shell" onclick="app.runShell()" title="Run Shell">
             Run Shell
+          </button>
+          <!-- Phone-only: replaces the Shell button on ≤430px (Shell moves into the Run
+               dropdown there). Sends a bare Enter to the active session, the complement
+               to the accessory bar's Esc. Hidden everywhere else — see styles.css. -->
+          <button class="btn-toolbar btn-enter" onclick="app.sendEnterKey()" title="Send Enter">
+            Enter
           </button>
           <div class="tab-count-group" title="Instance count">
             <button class="tab-count-btn" onclick="app.decrementShellCount()">−</button>

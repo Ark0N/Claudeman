@@ -3370,6 +3370,14 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
 .run-mode-dot.opencode { background: #10b981; }
 .run-mode-dot.codex { background: #a855f7; }
 .run-mode-dot.gemini { background: #8ab4f8; }
+.run-mode-dot.shell { background: #94a3b8; }
+
+/* Phone-only Enter button (see index.html). Hidden by default at every width;
+   mobile.css turns it on inside @media (max-width: 430px), where it takes over
+   the slot the Shell button occupies on wider screens. */
+.btn-toolbar.btn-enter {
+  display: none;
+}
 
 .run-mode-sep {
   height: 1px;
@@ -11618,6 +11626,7 @@ html:not([data-skin="og"]) {
 .run-mode-dot.claude { background: var(--accent); }
 .run-mode-dot.opencode { background: var(--accent-soft); }
 .run-mode-dot.codex { background: var(--accent-grad-b); }
+.run-mode-dot.shell { background: var(--text-dim); }
 
 /* ---- Shell button: quiet neutral with a calm green tint ---- */
 .btn-toolbar.btn-shell {
