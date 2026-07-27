@@ -2,9 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> Deep implementation detail lives in [`docs/architecture-invariants.md`](docs/architecture-invariants.md). This file holds the rules that prevent mistakes; that file holds the mechanisms, file inventories, and the history behind each rule. Pointers below are written as `→ architecture-invariants#anchor`.
+> Deep implementation detail lives in [`docs/architecture-invariants.md`](docs/architecture-invariants.md). This file holds the rules that prevent mistakes; that file holds the mechanisms, file inventories, and the history behind each rule. Pointers below are written as `→ architecture-invariants#anchor`. When the goal is raw throughput, [`docs/SPEEDRUN.md`](docs/SPEEDRUN.md) is the fast-execution protocol (it removes ceremony, never the safety rules here).
 >
 > **This file is in `.prettierignore` on purpose.** Prettier's markdown printer escapes underscores inside the glob-heavy paths used throughout (`agent-*.jsonl` became `agent-\_.jsonl`, collapsing backtick spans and corrupting a whole paragraph). Do not remove the ignore entry, and do not run `prettier --write` on it.
+>
+> **Repo root is kept short on purpose** (the README sits below the file listing on GitHub). Config lives in `config/` (`eslint.config.js`, `knip.json`, the vitest configs), Prettier's config is the `"prettier"` key in `package.json`, and `SECURITY.md` is under `.github/`. Root-only files are the ones tools genuinely require there: `CLAUDE.md` + `AGENTS.md` (loaded from the root by Claude Code / Codex), `CHANGELOG.md` (changesets writes it next to `package.json`), `tsconfig.json`, `.editorconfig`, `.nvmrc`/`.npmrc`, `.prettierignore` (resolved relative to cwd), `LICENSE` (GitHub detection) and `install.sh` (its raw URL is the published install one-liner). Don't relocate those.
 
 ## Quick Reference
 
@@ -25,6 +27,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 1. Check: `echo $CODEMAN_MUX` - if `1`, you're in a managed session
 2. **NEVER** run `tmux kill-session`, `pkill tmux`, or `pkill claude` without confirming
 3. Use the web UI or `./scripts/tmux-manager.sh` instead of direct kill commands
+
+**The working tree is shared with other agent sessions.** Several Codeman sessions run against THIS one checkout, so another session can `git checkout` a different branch, or leave half-finished untracked files, while you are mid-task.
+
+- **Always `git branch --show-current` immediately before committing.** Observed 2026-07-27: another session ran `git checkout -b feat/web-tabs`, a commit silently landed there instead of master, and the follow-up `git push origin master` cheerfully reported "Everything up-to-date".
+- To land a commit on master **without** switching branches (which would yank the tree out from under the other session): `git push origin HEAD:master` then `git branch -f master HEAD`. Never `git checkout master` to "fix" it.
+- **Never `git add -A`/`git add .`** — stage explicit paths. A sweep will pick up another session's WIP.
+- Another session's broken WIP can block `npm run build`, since `tsc` is the first step and the build gates on it. That is not your bug to fix. ⚠️ `tsc` still EMITS on type errors, so a failed `npm run build` leaves a rebuilt `dist/index.js` compiled from their tree; check what it pulled in before restarting the service. To deploy frontend-only changes past a blocked `tsc`, run the asset stage of `scripts/build.mjs` (everything after the `tsc`/`chmod` lines is independent of it).
 
 ## CRITICAL: Always Test Before Deploying
 
@@ -59,7 +68,8 @@ When user says "COM":
 
 3. **Consume the changeset**: `npm run version-packages` (auto-bumps `package.json` files, updates `CHANGELOG.md`, runs `npm install --package-lock-only`, and verifies lockfile sync via `scripts/check-lockfile-sync.mjs` — all in one command; never hand-edit `CHANGELOG.md` or `package-lock.json` versions)
 4. **Sync CLAUDE.md version**: Update the `**Version**` line below to match the new version from `package.json`
-5. **Commit and deploy**: `git add -A && git commit -m "chore: version packages" && git push && npm run build && systemctl --user restart codeman-web`
+5. **Commit and deploy**: verify the branch first (`git branch --show-current`), then stage EXPLICIT paths — never `git add -A`, which has swept another session's WIP into a release. `git status --short` and account for every line before committing:
+   `git add <paths> && git commit -m "chore: version packages" && git push && npm run build && systemctl --user restart codeman-web`
 6. **Wait for CI**: after `git push`, TWO workflows fire per master push — `CI` and `Release` (the npm publish + GitHub release). List both runs for the pushed commit with `gh run list --commit $(git rev-parse HEAD) --json databaseId,workflowName` and watch EACH with `gh run watch <id> --exit-status`. Confirm both pass before considering the release done (`gh run list -L 1` returns only one of the two).
 
 CI runs `npm run check:lockfile` on every push/PR, so lockfile drift fails the build even if the `version-packages` script is bypassed.
@@ -230,6 +240,12 @@ Frontend JS modules have `@fileoverview` with `@dependency`/`@loadorder` tags. L
 
 **WebGL renderer toggle** (`webglRendererEnabled`, per-device): the GPU-stall watchdog's sticky `codeman-webgl-disabled` marker survives page loads and is cleared only by an explicit OFF→ON save or `?webgl=force`. `?nowebgl` forces the DOM renderer per-load. → [architecture-invariants#webgl-renderer-toggle](docs/architecture-invariants.md#webgl-renderer-toggle)
 
+**Phone toolbar: Enter replaces Shell** (post-1.8.0): inside `@media (max-width: 430px)` `btn-shell` is `display:none` and `btn-enter` takes its slot (`order: 4`); starting a shell moved into the Run dropdown (`Terminal / Shell` → `setRunMode('shell')` → `run()` → `runShell()`, button label "Run SH"). `runMode` is `z.string().max(20)` server-side, so new modes need no schema change. Desktop and tablet keep the green Run Shell button unchanged.
+
+⚠️ **`sendEnterKey()` MUST go through `terminal._core.coreService.triggerDataEvent('\r', true)`** — not `sendInput()`, and never a raw POST to `/api/sessions/:id/input`. `localEchoEnabled` defaults to `MobileDetection.isTouchDevice()`, so on every phone the characters you type are buffered in the `LocalEchoOverlay` and have **never reached the PTY**; the `onData` Enter branch in terminal-ui.js is what flushes `pendingText` first and only then sends `\r` (after an 80ms delay so text lands first). Sending a bare `\r` submits an empty line and strands the typed text on screen, so the button looks dead. Replaying the keypress reuses the overlay flush, the flushed-offset cleanup and the ordering instead of reimplementing them. `KeyboardAccessory.sendKey()` is for escape sequences (arrows/Esc) and is the WRONG template to copy for input.
+
+⚠️ **Skin overrides outrank plain class rules.** `styles.css` nests its skin block inside `html:not([data-skin="og"]) { … }`, so a bare `.btn-toolbar` rule in there resolves to specificity **(0,2,1)** and beats a `.btn-toolbar.btn-x` rule **(0,2,0)** in `mobile.css` regardless of load order. Toolbar-button colors set from mobile.css therefore need `!important` — that is why mobile.css leans on it so heavily. Symptom: only your `!important` properties land and everything else silently renders in generic toolbar grey.
+
 **Z-index layers**: subagent windows (1000), plan agents (1100), mobile/tablet fixed header (1200, `mobile.css`), modals on ≤768px (1300 — must beat the fixed header or the modal close button is buried), log viewers (2000), image popups (3000), local echo overlay (7).
 
 **Respawn presets**: `solo-work` (3s/60min), `subagent-workflow` (45s/240min), `team-lead` (90s/480min), `ralph-todo` (8s/480min), `overnight-autonomous` (10s/480min).
@@ -302,6 +318,10 @@ Raw `npx vitest` skips `config/vitest.config.ts`; always use `npm test --` or pa
 **Tmux safety**: under vitest (`VITEST` env var, set automatically), `TmuxManager` no-ops ALL shell commands and becomes a pure in-memory mock — tests physically cannot create/kill/attach real tmux sessions (`IS_TEST_MODE` in `src/tmux-manager.ts`). Every docker IO path is no-op'd the same way. `test/setup.ts` additionally strips `CODEMAN_PASSWORD`/`CODEMAN_USERNAME` (so auth state from the running instance can't leak into tests) and `CODEMAN_GESTURE` (a shell-exported gesture flag would flip render-injection assertions).
 
 **Ports**: Pick unique ports manually, 3150+. Search `const PORT =` before adding new tests. Never 3000 (the live instance).
+
+⚠️ **Browser tests can pass vacuously on mobile input paths.** Two traps, both hit on 2026-07-27 while fixing the phone Enter button: **(1)** driving input with `app.sendInput('…')` writes PAST the `LocalEchoOverlay`, so `pendingText` stays empty and any overlay bug is invisible — type with `page.keyboard.type()` instead; **(2)** headless Chromium reports `MobileDetection.isTouchDevice()` **false even with `hasTouch: true`**, so `_localEchoEnabled` is off and the local-echo branch never executes. Force it (`app._localEchoEnabled = true`) or the test proves nothing. Assert on real state (`app._localEchoOverlay.pendingText`, plus `tmux -L codeman capture-pane -p -t <pane>` for what actually reached the PTY), not on HTTP 200.
+
+**Testing against the live instance**: prod is HTTPS-only on :3000 (`curl -sk https://localhost:3000/...`). ⚠️ `w1`/`w2`/`w3` are the user's REAL sessions — never send input to them. Create your own throwaway session (`POST /api/sessions` then `POST /api/sessions/:id/shell`; creation alone leaves `pid: null` and no pane), test against that, and `DELETE` it by exact id when done.
 
 **Respawn tests**: Use `MockSession` from `test/mocks/index.ts` (defined in `test/mocks/mock-session.ts`). **Route tests**: `app.inject({ method, url, payload })` in `test/routes/` — no live port needed. **Mobile tests**: Playwright suite in `test/mobile/` (136 device profiles). Browser-testing infra and practices: `docs/browser-testing-guide.md`.
 
