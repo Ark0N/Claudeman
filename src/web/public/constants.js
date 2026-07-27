@@ -494,6 +494,9 @@ const SSE_EVENTS = {
 
   // Session order (global tab order sync)
   SESSION_ORDER_CHANGED: 'session:orderChanged',
+
+  // Web tabs (dashboard URLs)
+  WEBVIEW_CHANGED: 'webview:changed',
 };
 
 // ═══════════════════════════════════════════════════════════════
