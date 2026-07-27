@@ -219,7 +219,7 @@ The most responsive AI coding agent experience on any phone. Full xterm.js termi
 <table>
 <tr>
 <td align="center" width="33%"><img src="docs/screenshots/mobile-landing-qr.png" alt="Mobile — landing page with QR auth" width="260"></td>
-<td align="center" width="33%"><img src="docs/screenshots/mobile-session-question-20260727.png" alt="Mobile — answering an agent's multiple-choice prompt with the keyboard accessory bar" width="260"></td>
+<td align="center" width="33%"><img src="docs/screenshots/mobile-session-keyboard-20260727.png" alt="Mobile — answering an agent's plan prompt with the keyboard accessory bar and Enter button" width="260"></td>
 <td align="center" width="33%"><img src="docs/screenshots/mobile-session-active.png" alt="Mobile — active agent session" width="260"></td>
 </tr>
 <tr>
@@ -254,7 +254,12 @@ The security design addresses all 6 critical QR auth flaws identified in ["Demys
 
 ### Touch-Optimized Interface
 
+<p align="center">
+  <img src="docs/screenshots/mobile-toolbar-enter-20260727.png" alt="Mobile toolbar: accessory bar with /init, /clear, clipboard and Esc above the Run, case, stop, Enter, voice and settings controls" width="560">
+</p>
+
 - **Keyboard accessory bar** — `/init`, `/clear`, `/compact` quick-action buttons above the virtual keyboard. Destructive commands (`/clear`, `/compact`) require a double-press to confirm — first tap arms the button, second tap executes — so you never fire one by accident on a bumpy commute
+- **Dedicated Enter button** — submitting is a constant need on a touch keyboard, so the phone toolbar gives it a button of its own. It replays the keypress through the terminal, so text buffered by local echo is flushed first rather than stranded. Starting a shell moves into the Run dropdown (`Terminal / Shell`), which is the rarer action
 - **Swipe navigation** — left/right on the terminal to switch sessions (80px threshold, 300ms)
 - **Smart keyboard handling** — toolbar and terminal shift up when keyboard opens (uses `visualViewport` API with 100px threshold for iOS address bar drift)
 - **Safe area support** — respects iPhone notch and home indicator via `env(safe-area-inset-*)`

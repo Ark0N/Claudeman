@@ -209,7 +209,7 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 <table>
 <tr>
 <td align="center" width="33%"><img src="docs/screenshots/mobile-landing-qr.png" alt="移动端 — 带二维码认证的登录页" width="260"></td>
-<td align="center" width="33%"><img src="docs/screenshots/mobile-session-question-20260727.png" alt="移动端 — 通过键盘配件栏回答智能体的选择题提示" width="260"></td>
+<td align="center" width="33%"><img src="docs/screenshots/mobile-session-keyboard-20260727.png" alt="移动端 — 通过键盘配件栏与 Enter 按钮回答智能体的方案提示" width="260"></td>
 <td align="center" width="33%"><img src="docs/screenshots/mobile-session-active.png" alt="移动端 — 活动中的智能体会话" width="260"></td>
 </tr>
 <tr>
@@ -244,7 +244,12 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 
 ### 触控优化界面
 
+<p align="center">
+  <img src="docs/screenshots/mobile-toolbar-enter-20260727.png" alt="移动端工具栏：配件栏的 /init、/clear、剪贴板与 Esc，下方是 Run、案例、停止、Enter、语音与设置控件" width="560">
+</p>
+
 - **键盘配件栏** —— 在虚拟键盘上方提供 `/init`、`/clear`、`/compact` 快捷按钮。破坏性命令（`/clear`、`/compact`）需双击确认 —— 第一次点击「上膛」，第二次点击执行 —— 这样在颠簸的通勤路上也不会误触
+- **独立的 Enter 按钮** —— 在触控键盘上提交是高频操作，因此手机工具栏为它单独设了一个按钮。它会以按键的方式回放，从而先冲刷本地回显缓冲的文本，不会让内容滞留在屏幕上。启动 Shell 这类低频操作则移入 Run 下拉菜单（`Terminal / Shell`）
 - **滑动导航** —— 在终端上左右滑动切换会话（阈值 80px，300ms）
 - **智能键盘处理** —— 键盘弹出时工具栏与终端整体上移（使用 `visualViewport` API，并对 iOS 地址栏漂移设置 100px 阈值）
 - **安全区适配** —— 通过 `env(safe-area-inset-*)` 适配 iPhone 刘海与底部 Home 指示条
