@@ -9,6 +9,7 @@
  * - CleanupRegistration / CleanupResourceType — entries for the centralized CleanupManager
  * - NiceConfig / DEFAULT_NICE_CONFIG — process priority settings for `nice`/`ionice`
  * - ProcessStats — memory/CPU/child-count snapshot for resource monitoring
+ * - FilesystemBrowseData — bounded path-picker directory listing returned to the web UI
  */
 
 /**
@@ -66,6 +67,34 @@ export interface ProcessStats {
   childCount: number;
   /** Timestamp of stats collection */
   updatedAt: number;
+}
+
+/** A selectable entry returned by the filesystem path-picker API. */
+export type FilesystemPreviewKind = 'image' | 'text' | 'document';
+
+export interface FilesystemBrowseEntry {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  size?: number;
+  symlink?: boolean;
+  previewKind?: FilesystemPreviewKind;
+}
+
+/** A named root the path picker may browse without escaping its allowlist. */
+export interface FilesystemBrowseRoot {
+  label: string;
+  path: string;
+}
+
+/** Response payload for `GET /api/filesystem/browse`. */
+export interface FilesystemBrowseData {
+  path: string;
+  parent: string | null;
+  root: string;
+  roots: FilesystemBrowseRoot[];
+  entries: FilesystemBrowseEntry[];
+  truncated: boolean;
 }
 
 export type CleanupResourceType = 'timer' | 'interval' | 'watcher' | 'listener' | 'stream';

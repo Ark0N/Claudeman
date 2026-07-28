@@ -758,6 +758,8 @@ describe('Virtual Keyboard', () => {
         'tab',
         'shift-tab',
         'paste',
+        'pick-path',
+        'clear-input',
         'effort-max',
         'ctrl-o',
         'init',

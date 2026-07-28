@@ -1,7 +1,7 @@
 /**
  * @fileoverview Mobile keyboard controls and modal focus trap.
  *
- * Defines four exports:
+ * Defines five exports:
  *
  * - MobileTerminalControls (singleton object) — Product-level facade that owns
  *   initialization, enablement, modal visibility, and shared key mappings for
@@ -14,6 +14,8 @@
  *   Destructive actions (/clear, /compact) require double-tap confirmation (2s amber state).
  *   Commands are sent as text + Enter separately for Ink compatibility.
  *   Only initializes on touch devices (MobileDetection.isTouchDevice guard).
+ * - PathPicker (singleton object) — Lazy server-side file/folder browser shared
+ *   by Link Existing and the extended mobile keyboard bar.
  *
  * - MobileNavigationPad (singleton object) — Keyboard-hidden Esc/Up/Enter/Down/Tab controls
  *   for terminal menus plus a contextual jump-to-latest action. A simultaneous Up+Down
@@ -25,6 +27,7 @@
  *   and other modal dialogs.
  *
  * @globals {object} KeyboardAccessoryBar
+ * @globals {object} PathPicker
  * @globals {object} MobileNavigationPad
  * @globals {object} MobileTerminalControls
  * @globals {class} FocusTrap
@@ -61,6 +64,338 @@ const TERMINAL_ACCESSORY_KEY_ACTIONS = Object.freeze({
   'shift-tab': 'shiftTab',
   'ctrl-o': 'ctrlO',
 });
+
+// ═══════════════════════════════════════════════════════════════
+// Shared Filesystem Path Picker
+// ═══════════════════════════════════════════════════════════════
+
+const PathPicker = {
+  overlay: null,
+  _options: null,
+  _selectedPath: '',
+  _previousFocus: null,
+  _keydownHandler: null,
+  _loadSequence: 0,
+  _previewOverlay: null,
+  _previewRequestSequence: 0,
+  _previewPreviousFocus: null,
+
+  /**
+   * Open the lazy filesystem browser.
+   * @param {{sessionId?: string, initialPath?: string, directoriesOnly?: boolean,
+   *   title?: string, onSelect: (path: string) => void}} options
+   */
+  open(options) {
+    this.close(false);
+    this._options = options;
+    this._selectedPath = '';
+    this._previousFocus = document.activeElement;
+    this._previousFocus?.blur?.();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'path-picker-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-label', options.title || 'Select a path');
+    overlay.innerHTML = `
+      <div class="path-picker-dialog">
+        <div class="path-picker-header">
+          <strong class="path-picker-title"></strong>
+          <button type="button" class="path-picker-close" aria-label="Close">&times;</button>
+        </div>
+        <div class="path-picker-roots-row">
+          <label for="pathPickerRoot">Location</label>
+          <select id="pathPickerRoot" class="path-picker-roots"></select>
+        </div>
+        <div class="path-picker-nav">
+          <button type="button" class="path-picker-up" title="Parent folder" aria-label="Parent folder">&#x2191;</button>
+          <div class="path-picker-current" title="Current folder"></div>
+          <button type="button" class="path-picker-refresh" title="Refresh" aria-label="Refresh">&#x21BB;</button>
+        </div>
+        <div class="path-picker-status" aria-live="polite">Loading...</div>
+        <div class="path-picker-list" role="listbox"></div>
+        <div class="path-picker-selection">
+          <span class="path-picker-selection-label">Selected</span>
+          <span class="path-picker-selection-value">None</span>
+        </div>
+        <div class="path-picker-actions">
+          <button type="button" class="path-picker-current-select">Select Current Folder</button>
+          <span class="path-picker-action-spacer"></span>
+          <button type="button" class="path-picker-cancel">Cancel</button>
+          <button type="button" class="path-picker-confirm" disabled>Select</button>
+        </div>
+      </div>`;
+
+    this.overlay = overlay;
+    overlay.querySelector('.path-picker-title').textContent = options.title || 'Select a Path';
+    overlay.querySelector('.path-picker-close').addEventListener('click', () => this.close(true));
+    overlay.querySelector('.path-picker-cancel').addEventListener('click', () => this.close(true));
+    overlay.querySelector('.path-picker-confirm').addEventListener('click', () => this.confirm());
+    overlay.querySelector('.path-picker-current-select').addEventListener('click', () => {
+      const current = overlay.querySelector('.path-picker-current').textContent;
+      if (current) this.select(current);
+    });
+    overlay.querySelector('.path-picker-refresh').addEventListener('click', () => this.load());
+    overlay.querySelector('.path-picker-up').addEventListener('click', () => {
+      const parent = overlay.querySelector('.path-picker-up').dataset.parent;
+      if (parent) this.load(parent);
+    });
+    overlay.querySelector('.path-picker-roots').addEventListener('change', (event) => this.load(event.target.value));
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) this.close(true);
+    });
+    this._keydownHandler = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        if (this._previewOverlay) this.closePreview(true);
+        else this.close(true);
+      }
+    };
+    document.addEventListener('keydown', this._keydownHandler);
+    document.body.appendChild(overlay);
+    this.load(options.initialPath || '');
+  },
+
+  async load(path) {
+    if (!this.overlay || !this._options) return;
+    const loadSequence = ++this._loadSequence;
+    const list = this.overlay.querySelector('.path-picker-list');
+    const status = this.overlay.querySelector('.path-picker-status');
+    list.replaceChildren();
+    status.textContent = 'Loading...';
+
+    const params = new URLSearchParams();
+    if (path) params.set('path', path);
+    if (this._options.sessionId) params.set('sessionId', this._options.sessionId);
+    try {
+      const response = await fetch(`/api/filesystem/browse?${params.toString()}`);
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || 'Failed to browse this folder');
+      if (!this.overlay || loadSequence !== this._loadSequence) return;
+      this.render(result.data);
+    } catch (error) {
+      if (!this.overlay || loadSequence !== this._loadSequence) return;
+      if (path) {
+        this.load('');
+        return;
+      }
+      status.textContent = error.message || 'Failed to browse this folder';
+      status.classList.add('error');
+    }
+  },
+
+  render(data) {
+    const rootSelect = this.overlay.querySelector('.path-picker-roots');
+    rootSelect.replaceChildren();
+    for (const root of data.roots) {
+      const option = document.createElement('option');
+      option.value = root.path;
+      option.textContent = `${root.label} — ${root.path}`;
+      option.selected = data.path === root.path || data.root === root.path;
+      rootSelect.appendChild(option);
+    }
+
+    this.overlay.querySelector('.path-picker-current').textContent = data.path;
+    const up = this.overlay.querySelector('.path-picker-up');
+    up.dataset.parent = data.parent || '';
+    up.disabled = !data.parent;
+    const status = this.overlay.querySelector('.path-picker-status');
+    status.classList.remove('error');
+    status.textContent = data.entries.length === 0
+      ? 'This folder is empty'
+      : `${data.entries.length} item${data.entries.length === 1 ? '' : 's'}${data.truncated ? ' (first 500)' : ''}`;
+
+    const list = this.overlay.querySelector('.path-picker-list');
+    list.replaceChildren();
+    for (const entry of data.entries) {
+      const row = document.createElement('div');
+      row.className = 'path-picker-item';
+      if (entry.type === 'file' && this._options.directoriesOnly && !entry.previewKind) {
+        row.classList.add('not-selectable');
+      }
+      row.dataset.path = entry.path;
+      row.dataset.type = entry.type;
+      row.setAttribute('role', 'option');
+
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'path-picker-item-main';
+      const icon = document.createElement('span');
+      icon.className = 'path-picker-item-icon';
+      icon.textContent = entry.type === 'directory' ? '\uD83D\uDCC1' : '\uD83D\uDCC4';
+      const name = document.createElement('span');
+      name.className = 'path-picker-item-name';
+      name.textContent = entry.name;
+      open.append(icon, name);
+      if (entry.symlink) {
+        const link = document.createElement('span');
+        link.className = 'path-picker-item-link';
+        link.textContent = '\u2197';
+        open.appendChild(link);
+      }
+      if (entry.type === 'directory') {
+        const chevron = document.createElement('span');
+        chevron.className = 'path-picker-item-chevron';
+        chevron.textContent = '\u203A';
+        open.appendChild(chevron);
+        open.addEventListener('click', () => this.load(entry.path));
+      } else if (entry.previewKind) {
+        const preview = document.createElement('span');
+        preview.className = 'path-picker-item-preview';
+        preview.textContent = '\uD83D\uDC41';
+        open.appendChild(preview);
+        open.title = `Preview ${entry.name}`;
+        open.setAttribute('aria-label', `Preview ${entry.name}`);
+        open.addEventListener('click', () => this.openPreview(entry));
+      } else if (!this._options.directoriesOnly) {
+        open.addEventListener('click', () => this.select(entry.path));
+      } else {
+        open.disabled = true;
+      }
+      row.appendChild(open);
+
+      if (entry.type === 'directory' || !this._options.directoriesOnly) {
+        const choose = document.createElement('button');
+        choose.type = 'button';
+        choose.className = 'path-picker-item-select';
+        choose.textContent = 'Choose';
+        choose.addEventListener('click', () => this.select(entry.path));
+        row.appendChild(choose);
+      }
+      list.appendChild(row);
+    }
+  },
+
+  select(path) {
+    if (!this.overlay) return;
+    this._selectedPath = path;
+    this.overlay.querySelector('.path-picker-selection-value').textContent = path;
+    this.overlay.querySelector('.path-picker-confirm').disabled = false;
+    this.overlay.querySelectorAll('.path-picker-item').forEach((row) => {
+      const selected = row.dataset.path === path;
+      row.classList.toggle('selected', selected);
+      row.setAttribute('aria-selected', selected ? 'true' : 'false');
+    });
+  },
+
+  openPreview(entry) {
+    this.closePreview(false);
+    this._previewPreviousFocus = document.activeElement;
+    const requestSequence = ++this._previewRequestSequence;
+    const params = new URLSearchParams({ path: entry.path });
+    if (this._options?.sessionId) params.set('sessionId', this._options.sessionId);
+    const previewUrl = `/api/filesystem/preview?${params.toString()}`;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'path-preview-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-label', `Preview ${entry.name}`);
+    overlay.innerHTML = `
+      <div class="path-preview-dialog">
+        <div class="path-preview-header">
+          <div class="path-preview-heading">
+            <strong class="path-preview-title"></strong>
+            <span class="path-preview-path"></span>
+          </div>
+          <a class="path-preview-open" target="_blank" rel="noopener noreferrer">Open</a>
+          <button type="button" class="path-preview-close" aria-label="Close preview">&times;</button>
+        </div>
+        <div class="path-preview-body"><div class="path-preview-loading">Loading preview...</div></div>
+      </div>`;
+    overlay.querySelector('.path-preview-title').textContent = entry.name;
+    overlay.querySelector('.path-preview-path').textContent = entry.path;
+    overlay.querySelector('.path-preview-open').href = previewUrl;
+    overlay.querySelector('.path-preview-close').addEventListener('click', () => this.closePreview(true));
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) this.closePreview(true);
+    });
+    document.body.appendChild(overlay);
+    this._previewOverlay = overlay;
+
+    const body = overlay.querySelector('.path-preview-body');
+    if (entry.previewKind === 'image') {
+      const image = document.createElement('img');
+      image.className = 'path-preview-image';
+      image.alt = entry.name;
+      image.addEventListener('load', () => body.querySelector('.path-preview-loading')?.remove());
+      image.addEventListener('error', () => this.showPreviewError('Image preview failed to load'));
+      image.src = previewUrl;
+      body.appendChild(image);
+    } else if (entry.previewKind === 'text') {
+      fetch(previewUrl)
+        .then(async (response) => {
+          const content = await response.text();
+          if (!response.ok) {
+            let message = 'Text preview failed to load';
+            try {
+              message = JSON.parse(content).error || message;
+            } catch {}
+            throw new Error(message);
+          }
+          return content;
+        })
+        .then((content) => {
+          if (!this._previewOverlay || requestSequence !== this._previewRequestSequence) return;
+          const pre = document.createElement('pre');
+          pre.className = 'path-preview-text';
+          pre.textContent = content;
+          body.replaceChildren(pre);
+        })
+        .catch((error) => {
+          if (requestSequence === this._previewRequestSequence) this.showPreviewError(error.message);
+        });
+    } else {
+      const frame = document.createElement('iframe');
+      frame.className = 'path-preview-frame';
+      frame.title = entry.name;
+      frame.addEventListener('load', () => body.querySelector('.path-preview-loading')?.remove());
+      frame.src = previewUrl;
+      body.appendChild(frame);
+    }
+    overlay.querySelector('.path-preview-close').focus();
+  },
+
+  showPreviewError(message) {
+    const body = this._previewOverlay?.querySelector('.path-preview-body');
+    if (!body) return;
+    const error = document.createElement('div');
+    error.className = 'path-preview-error';
+    error.textContent = message || 'Preview failed to load';
+    body.replaceChildren(error);
+  },
+
+  closePreview(restoreFocus = true) {
+    this._previewRequestSequence += 1;
+    this._previewOverlay?.remove();
+    this._previewOverlay = null;
+    const previousFocus = this._previewPreviousFocus;
+    this._previewPreviousFocus = null;
+    if (restoreFocus) previousFocus?.focus?.();
+  },
+
+  confirm() {
+    if (!this._selectedPath || !this._options) return;
+    const selectedPath = this._selectedPath;
+    const onSelect = this._options.onSelect;
+    this.close(false);
+    onSelect(selectedPath);
+  },
+
+  close(restoreFocus = true) {
+    if (this._keydownHandler) document.removeEventListener('keydown', this._keydownHandler);
+    this._keydownHandler = null;
+    this._loadSequence += 1;
+    this.closePreview(false);
+    this.overlay?.remove();
+    this.overlay = null;
+    const previousFocus = this._previousFocus;
+    this._previousFocus = null;
+    this._options = null;
+    this._selectedPath = '';
+    if (restoreFocus) previousFocus?.focus?.();
+  },
+};
 
 // ═══════════════════════════════════════════════════════════════
 // Mobile Keyboard Accessory Bar
@@ -105,6 +440,8 @@ const KeyboardAccessoryBar = {
           <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
         </svg>
       </button>
+      <button class="accessory-btn" data-action="pick-path" title="Insert a file or folder path">&#x1F4C1; Path</button>
+      <button class="accessory-btn" data-action="clear-input" title="Clear the current unsent input">&#x232B; All</button>
       <button class="accessory-btn" data-action="effort-max" title="/effort max">Max</button>
       <button class="accessory-btn" data-action="ctrl-o" title="Ctrl+O">⌃O</button>
       <button class="accessory-btn" data-action="init" title="/init">/init</button>
@@ -137,7 +474,7 @@ const KeyboardAccessoryBar = {
       this.handleAction(action, btn);
 
       // Refocus terminal so keyboard stays open (tap blurs terminal → keyboard dismisses → toolbar shifts)
-      const refocusActions = new Set(['scroll-up', 'scroll-down', 'arrow-left', 'arrow-right', 'tab', 'shift-tab', 'ctrl-o', 'opt-enter', 'esc', 'effort-max']);
+      const refocusActions = new Set(['scroll-up', 'scroll-down', 'arrow-left', 'arrow-right', 'tab', 'shift-tab', 'ctrl-o', 'opt-enter', 'esc', 'effort-max', 'clear-input']);
       if (refocusActions.has(action) ||
           ((action === 'clear' || action === 'compact') && this._confirmAction)) {
         if (typeof app !== 'undefined' && app.terminal) {
@@ -207,6 +544,12 @@ const KeyboardAccessoryBar = {
       case 'paste':
         this.pasteFromClipboard();
         break;
+      case 'pick-path':
+        this.pickPath();
+        break;
+      case 'clear-input':
+        app.clearTerminalInput?.();
+        break;
       case 'dismiss':
         // Blur active element to dismiss keyboard
         document.activeElement?.blur();
@@ -253,6 +596,22 @@ const KeyboardAccessoryBar = {
     // The durable input queue preserves these as two ordered records.
     app.sendInput(command);
     app.sendInput('\r');
+  },
+
+  /** Browse the active session's workspace and insert a selected path without Enter. */
+  pickPath() {
+    if (!app.activeSessionId) return;
+    const session = app.sessions?.get(app.activeSessionId);
+    PathPicker.open({
+      title: 'Insert File or Folder Path',
+      sessionId: app.activeSessionId,
+      initialPath: session?.workingDir || '',
+      directoriesOnly: false,
+      onSelect: (path) => {
+        app.insertTerminalText?.(path);
+        setTimeout(() => app.terminal?.focus(), 100);
+      },
+    });
   },
 
   /** Show a paste overlay for iOS compatibility.
@@ -797,14 +1156,18 @@ const MobileTerminalControls = {
   },
 
   feedback(action) {
-    if (this.hapticsEnabled && navigator.vibrate) {
+    if (
+      this.hapticsEnabled &&
+      typeof navigator !== 'undefined' &&
+      typeof navigator.vibrate === 'function'
+    ) {
       try {
         navigator.vibrate(action === 'enter' ? 18 : 10);
       } catch {
         // Vibration is optional and may be blocked by browser policy.
       }
     }
-    if (!this.soundEnabled) return;
+    if (!this.soundEnabled || typeof window === 'undefined') return;
 
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     if (!AudioContext) return;

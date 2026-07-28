@@ -20,17 +20,27 @@ export interface RouteTestHarness {
  * @param registerFn - The route registration function (e.g., registerSessionRoutes).
  *   Uses `any` for ctx parameter because route functions expect typed port intersections
  *   that MockRouteContext satisfies structurally but not nominally.
- * @param ctxOptions - Optional overrides for the mock context
+ * @param ctxOptions - Optional overrides for the mock context. `authUser` stands
+ *   in for what the auth middleware would attach in multi-user mode; without it
+ *   `getAuthUser()` falls back to a synthetic admin, which passes every
+ *   ownership check and would make a scoping test pass vacuously.
  */
 export async function createRouteTestHarness(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   registerFn: (app: FastifyInstance, ctx: any) => void,
-  ctxOptions?: { sessionId?: string }
+  ctxOptions?: { sessionId?: string; authUser?: { username: string; role: 'admin' | 'user' } }
 ): Promise<RouteTestHarness> {
   const app = Fastify({ logger: false });
 
   // Register cookie plugin — some routes access req.cookies
   await app.register(fastifyCookie);
+
+  if (ctxOptions?.authUser) {
+    const authUser = ctxOptions.authUser;
+    app.addHook('onRequest', async (req) => {
+      (req as unknown as { authUser: typeof authUser }).authUser = authUser;
+    });
+  }
 
   const ctx = createMockRouteContext(ctxOptions);
 

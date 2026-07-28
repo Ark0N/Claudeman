@@ -13,7 +13,6 @@
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-22%2B-22c55e?style=flat-square&logo=node.js&logoColor=white" alt="Node.js 22+"></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.9-3b82f6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 5.9"></a>
   <a href="https://fastify.dev/"><img src="https://img.shields.io/badge/Fastify-5.x-1e3a5f?style=flat-square&logo=fastify&logoColor=white" alt="Fastify"></a>
-  <img src="https://img.shields.io/badge/Tests-2861%20total-22c55e?style=flat-square" alt="Tests">
   <a href="https://www.npmjs.com/package/aicodeman"><img src="https://img.shields.io/npm/v/aicodeman?style=flat-square&label=npm&color=22c55e" alt="npm version"></a>
   <a href="https://github.com/Ark0N/Codeman/stargazers"><img src="https://img.shields.io/github/stars/Ark0N/Codeman?style=flat-square&color=eab308" alt="GitHub stars"></a>
   <a href="https://github.com/Ark0N/Codeman/graphs/contributors"><img src="https://img.shields.io/github/contributors/Ark0N/Codeman?style=flat-square&color=3b82f6" alt="Contributors"></a>
@@ -29,6 +28,19 @@
 </p>
 
 **Codeman** is a self-hosted mission control for AI coding agents. It spawns Claude Code, OpenCode, Codex, or Gemini CLI inside persistent tmux sessions, streams the real terminal to any browser, and keeps agents productive after you walk away: it re-prompts on idle, resumes when a usage limit resets, runs scheduled jobs, and shows every background agent working in real time.
+
+Get started in one line (macOS & Linux, Windows via WSL):
+
+```bash
+curl -fsSL https://getcodeman.com/install | bash
+```
+
+```bash
+codeman web
+# Open http://localhost:3000 and start your first session
+```
+
+The installer asks before every system change, and re-running the same line updates in place. Full details: [Quick Start - Installation](#quick-start---installation).
 
 - **One dashboard, four CLIs** - run [Claude Code, OpenCode, Codex, or Gemini](#more-features) per session (plus plain shell), locally, [in Docker](#isolated-docker-sessions), or [over SSH](#remote-ssh-sessions)
 - **Truly phone-friendly** - a [touch-optimized terminal](#mobile-optimized-web-ui) with instant local echo, QR login, swipe navigation, and push notifications
@@ -46,7 +58,7 @@
 ## Quick Start - Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash
+curl -fsSL https://getcodeman.com/install | bash
 ```
 
 This installs Node.js and tmux if missing, clones Codeman to `~/.codeman/app`, and builds it. A few things worth knowing:
@@ -136,12 +148,64 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.codeman.web.plist
 <summary><strong>Windows (WSL)</strong></summary>
 
 ```powershell
-wsl bash -c "curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash"
+wsl bash -c "curl -fsSL https://getcodeman.com/install | bash"
 ```
 
 Codeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). If you don't have WSL yet: run `wsl --install` in an admin PowerShell, reboot, open Ubuntu, then install your preferred AI coding CLI inside WSL ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), [Codex](https://developers.openai.com/codex/cli), or [Gemini CLI](https://github.com/google-gemini/gemini-cli)). After installing, `http://localhost:3000` is accessible from your Windows browser.
 
 </details>
+
+---
+
+## Mobile-Optimized Web UI
+
+The most responsive AI coding agent experience on any phone. Full xterm.js terminal with local echo, swipe navigation, and a touch-optimized interface designed for real remote work — not a desktop UI crammed onto a small screen.
+
+<table>
+<tr>
+<td align="center" width="40%"><img src="docs/screenshots/mobile-session-keyboard-20260727.png" alt="Mobile — answering an agent's plan prompt with the keyboard accessory bar and Enter button" width="300"></td>
+<td align="center" width="60%"><img src="docs/screenshots/mobile-toolbar-enter-20260727.png" alt="Mobile toolbar: accessory bar with /init, /clear, clipboard and Esc above the Run, case, stop, Enter, voice and settings controls" width="440"></td>
+</tr>
+<tr>
+<td align="center"><em>Answering prompts by touch</em></td>
+<td align="center"><em>Accessory bar + dedicated Enter button</em></td>
+</tr>
+</table>
+
+<table>
+<tr>
+<th>Terminal Apps</th>
+<th>Codeman Mobile</th>
+</tr>
+<tr><td>200-300ms input lag over remote</td><td><b>Local echo — instant feedback</b></td></tr>
+<tr><td>Tiny text, no context</td><td>Full xterm.js terminal</td></tr>
+<tr><td>No session management</td><td>Swipe between sessions</td></tr>
+<tr><td>No notifications</td><td>Push alerts for approvals and idle</td></tr>
+<tr><td>Manual reconnect</td><td>tmux persistence</td></tr>
+<tr><td>No agent visibility</td><td>Background agents in real-time</td></tr>
+<tr><td>Copy-paste slash commands</td><td>One-tap <code>/init</code>, <code>/clear</code>, <code>/compact</code></td></tr>
+<tr><td>Password typing on phone</td><td><b>QR code scan — instant auth</b></td></tr>
+</table>
+
+- **Keyboard accessory bar** — `/init`, `/clear`, `/compact` quick-action buttons above the virtual keyboard; destructive commands require a double-press to confirm, so you never fire one by accident
+- **Dedicated Enter button** — replays the keypress through the terminal, so text buffered by local echo is flushed first rather than stranded
+- **Swipe navigation & smart keyboard handling** — swipe left/right to switch sessions; toolbar and terminal shift up when the keyboard opens (`visualViewport` API)
+- **Built for phones** — safe-area insets for notch and home indicator, 44px touch targets, bottom-sheet case picker, native momentum scrolling
+
+```bash
+codeman web --https
+# Open on your phone: https://<your-ip>:3000
+```
+
+> `localhost` works over plain HTTP. Use `--https` when accessing from another device, or use [Tailscale](https://tailscale.com/) (recommended) — it provides a private network so you can access `http://<tailscale-ip>:3000` from your phone without TLS certificates.
+
+### Secure QR Code Authentication
+
+Typing passwords on a phone keyboard is miserable. Codeman replaces it with **cryptographically secure single-use QR tokens** — scan the code displayed on your desktop and your phone is authenticated instantly.
+
+Each QR encodes a URL containing a 6-character short code that maps to a 256-bit secret (`crypto.randomBytes(32)`) on the server. Tokens auto-rotate every **60 seconds**, are **atomically consumed on first scan** (replays always fail), and use **hash-based `Map.get()` lookup** that leaks nothing through response timing. The short code is an opaque pointer — the real secret never appears in browser history, `Referer` headers, or Cloudflare edge logs.
+
+The security design addresses all 6 critical QR auth flaws identified in ["Demystifying the (In)Security of QR Code-based Login"](https://www.usenix.org/conference/usenixsecurity25/presentation/zhang-xin) (USENIX Security 2025, which found 47 of the top-100 websites vulnerable): single-use enforcement, short TTL, cryptographic randomness, server-side generation, real-time desktop notification on scan (QRLjacking detection), and IP + User-Agent session binding with manual revocation. Dual-layer rate limiting (per-IP + global) makes brute force infeasible across 62^6 = 56.8 billion possible codes. Full security analysis: [`docs/qr-auth-plan.md`](docs/qr-auth-plan.md)
 
 ---
 
@@ -177,7 +241,7 @@ Hit start — Codeman spawns the CLI via a real PTY and streams it to your brows
 
 - **Tabs (top)** — one per session. `Alt+1`-`9` to jump, `Ctrl+Tab` for next, drag to reorder (tab order syncs across your devices).
 - **Terminal (center)** — a real `xterm.js` terminal; full TUIs render correctly. Type directly and press **Enter** to send. `Shift+Enter` inserts a newline.
-- **Side panels** — Respawn, Ralph, Orchestrator, Cron, Subagents, Settings (toggled from the toolbar).
+- **Side panels** — Respawn, Orchestrator, Cron, Subagents, Settings (toggled from the toolbar).
 
 ### 4. Talk to the agent
 
@@ -191,7 +255,6 @@ Hit start — Codeman spawns the CLI via a real PTY and streams it to your brows
 | Mode             | Use it for                                                                                                                        | Where                                                               |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | **Respawn**      | Long unattended runs — auto-restarts the CLI on idle/limit, with adaptive timing. Presets: `solo-work`, `overnight-autonomous`, … | Respawn tab                                                         |
-| **Ralph / Todo** | A self-driving loop that tracks a todo list and keeps working until done.                                                         | Ralph tab                                                           |
 | **Orchestrator** | Turn one goal into a phased plan and drive it to completion across agents.                                                        | Orchestrator panel                                                  |
 | **Cron**         | Saved, named jobs on a schedule (`once`/`interval`/`daily`/`weekly`) that spawn a session and send a prompt when due.             | ⏰ Cron button _(opt-in: App Settings → Display → Header Displays)_ |
 | **Auto-resume**  | Automatically continue after a subscription rate-limit resets.                                                                    | Respawn tab (top)                                                   |
@@ -212,67 +275,23 @@ Hit start — Codeman spawns the CLI via a real PTY and streams it to your brows
 
 ---
 
-## Mobile-Optimized Web UI
-
-The most responsive AI coding agent experience on any phone. Full xterm.js terminal with local echo, swipe navigation, and a touch-optimized interface designed for real remote work — not a desktop UI crammed onto a small screen.
-
-<table>
-<tr>
-<td align="center" width="33%"><img src="docs/screenshots/mobile-landing-qr.png" alt="Mobile — landing page with QR auth" width="260"></td>
-<td align="center" width="33%"><img src="docs/screenshots/mobile-session-keyboard-20260727.png" alt="Mobile — answering an agent's plan prompt with the keyboard accessory bar and Enter button" width="260"></td>
-<td align="center" width="33%"><img src="docs/screenshots/mobile-session-active.png" alt="Mobile — active agent session" width="260"></td>
-</tr>
-<tr>
-<td align="center"><em>Landing page with QR auth</em></td>
-<td align="center"><em>Answering prompts by touch</em></td>
-<td align="center"><em>Agent working in real-time</em></td>
-</tr>
-</table>
-
-<table>
-<tr>
-<th>Terminal Apps</th>
-<th>Codeman Mobile</th>
-</tr>
-<tr><td>200-300ms input lag over remote</td><td><b>Local echo — instant feedback</b></td></tr>
-<tr><td>Tiny text, no context</td><td>Full xterm.js terminal</td></tr>
-<tr><td>No session management</td><td>Swipe between sessions</td></tr>
-<tr><td>No notifications</td><td>Push alerts for approvals and idle</td></tr>
-<tr><td>Manual reconnect</td><td>tmux persistence</td></tr>
-<tr><td>No agent visibility</td><td>Background agents in real-time</td></tr>
-<tr><td>Copy-paste slash commands</td><td>One-tap <code>/init</code>, <code>/clear</code>, <code>/compact</code></td></tr>
-<tr><td>Password typing on phone</td><td><b>QR code scan — instant auth</b></td></tr>
-</table>
-
-### Secure QR Code Authentication
-
-Typing passwords on a phone keyboard is miserable. Codeman replaces it with **cryptographically secure single-use QR tokens** — scan the code displayed on your desktop and your phone is authenticated instantly.
-
-Each QR encodes a URL containing a 6-character short code that maps to a 256-bit secret (`crypto.randomBytes(32)`) on the server. Tokens auto-rotate every **60 seconds**, are **atomically consumed on first scan** (replays always fail), and use **hash-based `Map.get()` lookup** that leaks nothing through response timing. The short code is an opaque pointer — the real secret never appears in browser history, `Referer` headers, or Cloudflare edge logs.
-
-The security design addresses all 6 critical QR auth flaws identified in ["Demystifying the (In)Security of QR Code-based Login"](https://www.usenix.org/conference/usenixsecurity25/presentation/zhang-xin) (USENIX Security 2025, which found 47 of the top-100 websites vulnerable): single-use enforcement, short TTL, cryptographic randomness, server-side generation, real-time desktop notification on scan (QRLjacking detection), and IP + User-Agent session binding with manual revocation. Dual-layer rate limiting (per-IP + global) makes brute force infeasible across 62^6 = 56.8 billion possible codes. Full security analysis: [`docs/qr-auth-plan.md`](docs/qr-auth-plan.md)
-
-### Touch-Optimized Interface
+## Zero-Lag Input Overlay
 
 <p align="center">
-  <img src="docs/screenshots/mobile-toolbar-enter-20260727.png" alt="Mobile toolbar: accessory bar with /init, /clear, clipboard and Esc above the Run, case, stop, Enter, voice and settings controls" width="560">
+  <img src="docs/images/zerolag-demo-20260728.gif" alt="Zerolag demo: instant local echo next to 600ms-2.7s server echo, side by side on two phones" width="900">
 </p>
 
-- **Keyboard accessory bar** — `/init`, `/clear`, `/compact` quick-action buttons above the virtual keyboard. Destructive commands (`/clear`, `/compact`) require a double-press to confirm — first tap arms the button, second tap executes — so you never fire one by accident on a bumpy commute
-- **Dedicated Enter button** — submitting is a constant need on a touch keyboard, so the phone toolbar gives it a button of its own. It replays the keypress through the terminal, so text buffered by local echo is flushed first rather than stranded. Starting a shell moves into the Run dropdown (`Terminal / Shell`), which is the rarer action
-- **Swipe navigation** — left/right on the terminal to switch sessions (80px threshold, 300ms)
-- **Smart keyboard handling** — toolbar and terminal shift up when keyboard opens (uses `visualViewport` API with 100px threshold for iOS address bar drift)
-- **Safe area support** — respects iPhone notch and home indicator via `env(safe-area-inset-*)`
-- **44px touch targets** — all buttons meet iOS Human Interface Guidelines minimum sizes
-- **Bottom sheet case picker** — slide-up modal replaces the desktop dropdown
-- **Native momentum scrolling** — `-webkit-overflow-scrolling: touch` for buttery scroll
+When accessing your coding agent remotely (VPN, Tailscale, SSH tunnel), every keystroke normally takes 200-300ms to round-trip. Codeman implements a **Mosh-inspired local echo system** that makes typing feel instant regardless of latency.
 
-```bash
-codeman web --https
-# Open on your phone: https://<your-ip>:3000
-```
+A pixel-perfect DOM overlay inside xterm.js renders keystrokes at 0ms. Background forwarding silently sends every character to the PTY in 50ms debounced batches, so Tab completion, `Ctrl+R` history search, and all shell features work normally. When the server echo arrives 200-300ms later, the overlay seamlessly disappears and the real terminal text takes over — the transition is invisible.
 
-> `localhost` works over plain HTTP. Use `--https` when accessing from another device, or use [Tailscale](https://tailscale.com/) (recommended) — it provides a private network so you can access `http://<tailscale-ip>:3000` from your phone without TLS certificates.
+- **Ink-proof architecture** — lives as a `<span>` at z-index 7 inside `.xterm-screen`, completely immune to Ink's constant screen redraws (two previous attempts using `terminal.write()` failed because Ink corrupts injected buffer content)
+- **Font-matched rendering** — reads `fontFamily`, `fontSize`, `fontWeight`, and `letterSpacing` from xterm.js computed styles so overlay text is visually indistinguishable from real terminal output
+- **Full editing** — backspace, retype, paste (multi-char), cursor tracking, multi-line wrap when input exceeds terminal width
+- **Persistent across reconnects** — unsent input survives page reloads via localStorage
+- **Enabled by default** — works on both desktop and mobile, during idle and busy sessions
+
+> Extracted as a standalone library: [`xterm-zerolag-input`](https://www.npmjs.com/package/xterm-zerolag-input) — see [Published Packages](#published-packages).
 
 ---
 
@@ -297,26 +316,6 @@ Multi-agent Workflow runs ("ultracode") get the same treatment: a floating run w
 </p>
 
 **Agent Teams** — first-class support for Claude Code's native multi-agent teams (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`). `TeamWatcher` polls `~/.claude/teams/`, matches teammates to their lead session, and surfaces them as live subagent windows with **team-aware idle detection** — so the Respawn Controller won't fire while teammates are still working. See [`docs/agent-teams/`](docs/agent-teams/).
-
----
-
-## Zero-Lag Input Overlay
-
-<p align="center">
-  <img src="docs/images/zerolag-demo.gif" alt="Zerolag Demo — local echo vs server echo side-by-side" width="900">
-</p>
-
-When accessing your coding agent remotely (VPN, Tailscale, SSH tunnel), every keystroke normally takes 200-300ms to round-trip. Codeman implements a **Mosh-inspired local echo system** that makes typing feel instant regardless of latency.
-
-A pixel-perfect DOM overlay inside xterm.js renders keystrokes at 0ms. Background forwarding silently sends every character to the PTY in 50ms debounced batches, so Tab completion, `Ctrl+R` history search, and all shell features work normally. When the server echo arrives 200-300ms later, the overlay seamlessly disappears and the real terminal text takes over — the transition is invisible.
-
-- **Ink-proof architecture** — lives as a `<span>` at z-index 7 inside `.xterm-screen`, completely immune to Ink's constant screen redraws (two previous attempts using `terminal.write()` failed because Ink corrupts injected buffer content)
-- **Font-matched rendering** — reads `fontFamily`, `fontSize`, `fontWeight`, and `letterSpacing` from xterm.js computed styles so overlay text is visually indistinguishable from real terminal output
-- **Full editing** — backspace, retype, paste (multi-char), cursor tracking, multi-line wrap when input exceeds terminal width
-- **Persistent across reconnects** — unsent input survives page reloads via localStorage
-- **Enabled by default** — works on both desktop and mobile, during idle and busy sessions
-
-> Extracted as a standalone library: [`xterm-zerolag-input`](https://www.npmjs.com/package/xterm-zerolag-input) — see [Published Packages](#published-packages).
 
 ---
 
@@ -346,17 +345,13 @@ Beyond single-session respawn, the **Orchestrator** turns a high-level goal into
 - **Crash-safe** — full state persists under the `orchestrator` key in `state.json`, so it survives restarts
 - **Driven from the UI or API** — the Orchestrator panel, or `POST /api/orchestrator/start` → `/approve` → `/status` (10 endpoints)
 
-> Distinct from Ralph (a single-session autonomous loop): the orchestrator coordinates multi-phase, multi-agent execution. Full design: [`docs/orchestrator-loop-architecture.md`](docs/orchestrator-loop-architecture.md).
+> Full design: [`docs/orchestrator-loop-architecture.md`](docs/orchestrator-loop-architecture.md).
 
 ---
 
 ## Multi-Session Dashboard
 
 Run **20 parallel sessions** with full visibility — real-time xterm.js terminals at 60fps, per-session token and cost tracking, tab-based navigation, and one-click management.
-
-<p align="center">
-  <img src="docs/screenshots/multi-session-dashboard.png" alt="Multi-Session Dashboard" width="800">
-</p>
 
 ### Persistent Sessions
 
@@ -391,14 +386,6 @@ The title is templated into the served HTML on first byte, so it's correct from 
 ### Notifications
 
 Real-time desktop alerts when sessions need attention — `permission_prompt` and `elicitation_dialog` trigger critical red tab blinks, `idle_prompt` triggers yellow blinks. Click any notification to jump directly to the affected session. Hooks auto-configured per case directory.
-
-### Ralph / Todo Tracking
-
-Auto-detects Ralph Loops, `<promise>` tags, TodoWrite progress (`4/9 complete`), and iteration counters (`[5/50]`) with real-time progress rings and elapsed time tracking.
-
-<p align="center">
-  <img src="docs/images/ralph-tracker-8tasks-44percent.png" alt="Ralph Loop Tracking" width="800">
-</p>
 
 ### Run Summary
 
@@ -747,7 +734,6 @@ codeman session start -d /path/to/repo   # (s)  start a session
 codeman session list                     #      list sessions
 codeman session logs <id>                #      tail output
 codeman task add "fix the failing test"  # (t)  queue a task
-codeman ralph start --min-hours 8        # (r)  launch the autonomous loop
 codeman attach <path>                     #      attach a Claude hook context
 ```
 
@@ -783,13 +769,6 @@ REST over Fastify — **~190 handlers across 20 route modules**, plus an SSE str
 | `POST` | `/api/sessions/:id/respawn/enable` | Enable with config + timer |
 | `POST` | `/api/sessions/:id/respawn/stop`   | Stop controller            |
 | `PUT`  | `/api/sessions/:id/respawn/config` | Update config              |
-
-### Ralph / Todo
-
-| Method | Endpoint                         | Description            |
-| ------ | -------------------------------- | ---------------------- |
-| `GET`  | `/api/sessions/:id/ralph-state`  | Get loop state + todos |
-| `POST` | `/api/sessions/:id/ralph-config` | Configure tracking     |
 
 ### Orchestrator
 
@@ -853,7 +832,6 @@ flowchart TB
         end
 
         subgraph Detection["Detection Layer"]
-            RT["Ralph Tracker"]
             SW["Subagent Watcher<br/><small>~/.claude/projects/*/subagents</small>"]
             TW["Team Watcher<br/><small>~/.claude/teams/*</small>"]
         end
@@ -877,7 +855,6 @@ flowchart TB
     SM --> RC
     SM --> ORC
     SM --> SS
-    S1 --> RT
     S1 --> SCR
     S2 --> SCR
     RC --> SCR
