@@ -92,6 +92,47 @@ describe('refreshStaleCodemanHooks', () => {
     expect(readFileSync(settingsPath, 'utf-8')).toBe(foreign);
   });
 
+  it('preserves user handlers and events in a mixed stale configuration', async () => {
+    const hooks = staleCodemanHooks();
+    hooks.Stop[0].hooks.push({
+      type: 'command',
+      command: './notify-user.sh',
+      timeout: 10,
+    });
+    const customPostToolUse = {
+      matcher: 'Write',
+      hooks: [{ type: 'command', command: './format.sh' }],
+    };
+    const customEvent = [
+      {
+        hooks: [{ type: 'command', command: './audit.sh' }],
+      },
+    ];
+    writeFileSync(
+      settingsPath,
+      JSON.stringify(
+        {
+          hooks: {
+            ...hooks,
+            PostToolUse: [customPostToolUse],
+            CustomEvent: customEvent,
+          },
+        },
+        null,
+        2
+      )
+    );
+
+    await refreshStaleCodemanHooks(dir);
+
+    const after = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+    expect(JSON.stringify(after.hooks)).toContain(SECRET_HEADER);
+    expect(JSON.stringify(after.hooks)).toContain('CODEMAN_BACKGROUND_REWAKE_V1');
+    expect(JSON.stringify(after.hooks.Stop)).toContain('./notify-user.sh');
+    expect(after.hooks.PostToolUse).toEqual(expect.arrayContaining([customPostToolUse]));
+    expect(after.hooks.CustomEvent).toEqual(customEvent);
+  });
+
   it('is a no-op when settings.local.json is absent (does not create one)', async () => {
     await refreshStaleCodemanHooks(dir);
     expect(existsSync(settingsPath)).toBe(false);

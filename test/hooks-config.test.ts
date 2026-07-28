@@ -222,7 +222,7 @@ describe('writeHooksConfig', () => {
     expect(parsed.hooks).toEqual(userHooks);
   });
 
-  it('should overwrite existing hooks key', async () => {
+  it('should preserve user hook events while installing Codeman hooks', async () => {
     const claudeDir = join(testDir, '.claude');
     mkdirSync(claudeDir, { recursive: true });
     writeFileSync(join(claudeDir, 'settings.local.json'), JSON.stringify({ hooks: { oldHook: [] } }, null, 2));
@@ -230,7 +230,7 @@ describe('writeHooksConfig', () => {
     await writeHooksConfig(testDir);
 
     const parsed = JSON.parse(readFileSync(join(claudeDir, 'settings.local.json'), 'utf-8'));
-    expect(parsed.hooks.oldHook).toBeUndefined();
+    expect(parsed.hooks.oldHook).toEqual([]);
     expect(parsed.hooks.Notification).toBeDefined();
   });
 

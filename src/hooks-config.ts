@@ -209,6 +209,73 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
   };
 }
 
+function isCodemanHookHandler(value: unknown): boolean {
+  try {
+    const serialized = JSON.stringify(value);
+    return serialized.includes('/api/hook-event') || serialized.includes(BACKGROUND_WAKE_MARKER);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Replace only Codeman-owned command handlers while preserving user events,
+ * matcher entries, and sibling handlers in mixed entries.
+ */
+function mergeCodemanHooks(existingValue: unknown, generated: Record<string, unknown[]>): Record<string, unknown[]> {
+  const existing =
+    existingValue && typeof existingValue === 'object' && !Array.isArray(existingValue)
+      ? (existingValue as Record<string, unknown>)
+      : {};
+  const merged: Record<string, unknown[]> = {};
+
+  for (const eventName of new Set([...Object.keys(existing), ...Object.keys(generated)])) {
+    const existingEntries = Array.isArray(existing[eventName]) ? (existing[eventName] as unknown[]) : [];
+    const generatedEntries = generated[eventName];
+    if (!generatedEntries) {
+      merged[eventName] = existingEntries;
+      continue;
+    }
+
+    const entries: unknown[] = [];
+    let insertedGenerated = false;
+    for (const entry of existingEntries) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        if (!isCodemanHookHandler(entry)) entries.push(entry);
+        continue;
+      }
+
+      const record = entry as Record<string, unknown>;
+      if (!Array.isArray(record.hooks)) {
+        if (isCodemanHookHandler(record)) {
+          if (!insertedGenerated) {
+            entries.push(...generatedEntries);
+            insertedGenerated = true;
+          }
+        } else {
+          entries.push(entry);
+        }
+        continue;
+      }
+
+      const retainedHandlers = record.hooks.filter((handler) => !isCodemanHookHandler(handler));
+      const removedCodemanHandler = retainedHandlers.length !== record.hooks.length;
+      if (removedCodemanHandler && !insertedGenerated) {
+        entries.push(...generatedEntries);
+        insertedGenerated = true;
+      }
+      if (retainedHandlers.length > 0 || !removedCodemanHandler) {
+        entries.push(retainedHandlers.length === record.hooks.length ? entry : { ...record, hooks: retainedHandlers });
+      }
+    }
+
+    if (!insertedGenerated) entries.push(...generatedEntries);
+    merged[eventName] = entries;
+  }
+
+  return merged;
+}
+
 /**
  * Remove a subset of env keys from .claude/settings.local.json.env if present.
  * Used during the disk→tmux-setenv migration: when the caller is actively setting
@@ -330,7 +397,10 @@ export async function writeHooksConfig(casePath: string): Promise<void> {
     }
 
     const hooksConfig = generateHooksConfig();
-    const merged = { ...existing, ...hooksConfig };
+    const merged = {
+      ...existing,
+      hooks: mergeCodemanHooks(existing.hooks, hooksConfig.hooks),
+    };
 
     await writeFile(settingsPath, JSON.stringify(merged, null, 2) + '\n');
   });
@@ -368,7 +438,11 @@ export async function refreshStaleCodemanHooks(casePath: string): Promise<void> 
     const hasSecret = hooksJson.includes('X-Codeman-Hook-Secret');
     const hasBackgroundWake = hooksJson.includes(BACKGROUND_WAKE_MARKER);
     if (!isOurs || (hasSecret && hasBackgroundWake)) return;
-    const merged = { ...existing, ...generateHooksConfig() };
+    const generated = generateHooksConfig();
+    const merged = {
+      ...existing,
+      hooks: mergeCodemanHooks(existing.hooks, generated.hooks),
+    };
     await writeFile(settingsPath, JSON.stringify(merged, null, 2) + '\n');
   });
 }
