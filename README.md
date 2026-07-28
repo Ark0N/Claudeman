@@ -157,6 +157,58 @@ Codeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/e
 
 ---
 
+## Mobile-Optimized Web UI
+
+The most responsive AI coding agent experience on any phone. Full xterm.js terminal with local echo, swipe navigation, and a touch-optimized interface designed for real remote work — not a desktop UI crammed onto a small screen.
+
+<table>
+<tr>
+<td align="center" width="40%"><img src="docs/screenshots/mobile-session-keyboard-20260727.png" alt="Mobile — answering an agent's plan prompt with the keyboard accessory bar and Enter button" width="300"></td>
+<td align="center" width="60%"><img src="docs/screenshots/mobile-toolbar-enter-20260727.png" alt="Mobile toolbar: accessory bar with /init, /clear, clipboard and Esc above the Run, case, stop, Enter, voice and settings controls" width="440"></td>
+</tr>
+<tr>
+<td align="center"><em>Answering prompts by touch</em></td>
+<td align="center"><em>Accessory bar + dedicated Enter button</em></td>
+</tr>
+</table>
+
+<table>
+<tr>
+<th>Terminal Apps</th>
+<th>Codeman Mobile</th>
+</tr>
+<tr><td>200-300ms input lag over remote</td><td><b>Local echo — instant feedback</b></td></tr>
+<tr><td>Tiny text, no context</td><td>Full xterm.js terminal</td></tr>
+<tr><td>No session management</td><td>Swipe between sessions</td></tr>
+<tr><td>No notifications</td><td>Push alerts for approvals and idle</td></tr>
+<tr><td>Manual reconnect</td><td>tmux persistence</td></tr>
+<tr><td>No agent visibility</td><td>Background agents in real-time</td></tr>
+<tr><td>Copy-paste slash commands</td><td>One-tap <code>/init</code>, <code>/clear</code>, <code>/compact</code></td></tr>
+<tr><td>Password typing on phone</td><td><b>QR code scan — instant auth</b></td></tr>
+</table>
+
+- **Keyboard accessory bar** — `/init`, `/clear`, `/compact` quick-action buttons above the virtual keyboard; destructive commands require a double-press to confirm, so you never fire one by accident
+- **Dedicated Enter button** — replays the keypress through the terminal, so text buffered by local echo is flushed first rather than stranded
+- **Swipe navigation & smart keyboard handling** — swipe left/right to switch sessions; toolbar and terminal shift up when the keyboard opens (`visualViewport` API)
+- **Built for phones** — safe-area insets for notch and home indicator, 44px touch targets, bottom-sheet case picker, native momentum scrolling
+
+```bash
+codeman web --https
+# Open on your phone: https://<your-ip>:3000
+```
+
+> `localhost` works over plain HTTP. Use `--https` when accessing from another device, or use [Tailscale](https://tailscale.com/) (recommended) — it provides a private network so you can access `http://<tailscale-ip>:3000` from your phone without TLS certificates.
+
+### Secure QR Code Authentication
+
+Typing passwords on a phone keyboard is miserable. Codeman replaces it with **cryptographically secure single-use QR tokens** — scan the code displayed on your desktop and your phone is authenticated instantly.
+
+Each QR encodes a URL containing a 6-character short code that maps to a 256-bit secret (`crypto.randomBytes(32)`) on the server. Tokens auto-rotate every **60 seconds**, are **atomically consumed on first scan** (replays always fail), and use **hash-based `Map.get()` lookup** that leaks nothing through response timing. The short code is an opaque pointer — the real secret never appears in browser history, `Referer` headers, or Cloudflare edge logs.
+
+The security design addresses all 6 critical QR auth flaws identified in ["Demystifying the (In)Security of QR Code-based Login"](https://www.usenix.org/conference/usenixsecurity25/presentation/zhang-xin) (USENIX Security 2025, which found 47 of the top-100 websites vulnerable): single-use enforcement, short TTL, cryptographic randomness, server-side generation, real-time desktop notification on scan (QRLjacking detection), and IP + User-Agent session binding with manual revocation. Dual-layer rate limiting (per-IP + global) makes brute force infeasible across 62^6 = 56.8 billion possible codes. Full security analysis: [`docs/qr-auth-plan.md`](docs/qr-auth-plan.md)
+
+---
+
 ## Using Codeman — A Human's Guide
 
 A start-to-finish walkthrough for driving Codeman from the browser. If you just installed, this is where to begin.
@@ -220,58 +272,6 @@ Hit start — Codeman spawns the CLI via a real PTY and streams it to your brows
 - **Deploy your own changes** — see [Development](#development).
 
 > ⚠️ **Safety:** if you're working _inside_ a Codeman-managed session (`echo $CODEMAN_MUX` → `1`), never run `tmux kill-session` / `pkill claude` directly — use the web UI or `./scripts/tmux-manager.sh`.
-
----
-
-## Mobile-Optimized Web UI
-
-The most responsive AI coding agent experience on any phone. Full xterm.js terminal with local echo, swipe navigation, and a touch-optimized interface designed for real remote work — not a desktop UI crammed onto a small screen.
-
-<table>
-<tr>
-<td align="center" width="40%"><img src="docs/screenshots/mobile-session-keyboard-20260727.png" alt="Mobile — answering an agent's plan prompt with the keyboard accessory bar and Enter button" width="300"></td>
-<td align="center" width="60%"><img src="docs/screenshots/mobile-toolbar-enter-20260727.png" alt="Mobile toolbar: accessory bar with /init, /clear, clipboard and Esc above the Run, case, stop, Enter, voice and settings controls" width="440"></td>
-</tr>
-<tr>
-<td align="center"><em>Answering prompts by touch</em></td>
-<td align="center"><em>Accessory bar + dedicated Enter button</em></td>
-</tr>
-</table>
-
-<table>
-<tr>
-<th>Terminal Apps</th>
-<th>Codeman Mobile</th>
-</tr>
-<tr><td>200-300ms input lag over remote</td><td><b>Local echo — instant feedback</b></td></tr>
-<tr><td>Tiny text, no context</td><td>Full xterm.js terminal</td></tr>
-<tr><td>No session management</td><td>Swipe between sessions</td></tr>
-<tr><td>No notifications</td><td>Push alerts for approvals and idle</td></tr>
-<tr><td>Manual reconnect</td><td>tmux persistence</td></tr>
-<tr><td>No agent visibility</td><td>Background agents in real-time</td></tr>
-<tr><td>Copy-paste slash commands</td><td>One-tap <code>/init</code>, <code>/clear</code>, <code>/compact</code></td></tr>
-<tr><td>Password typing on phone</td><td><b>QR code scan — instant auth</b></td></tr>
-</table>
-
-- **Keyboard accessory bar** — `/init`, `/clear`, `/compact` quick-action buttons above the virtual keyboard; destructive commands require a double-press to confirm, so you never fire one by accident
-- **Dedicated Enter button** — replays the keypress through the terminal, so text buffered by local echo is flushed first rather than stranded
-- **Swipe navigation & smart keyboard handling** — swipe left/right to switch sessions; toolbar and terminal shift up when the keyboard opens (`visualViewport` API)
-- **Built for phones** — safe-area insets for notch and home indicator, 44px touch targets, bottom-sheet case picker, native momentum scrolling
-
-```bash
-codeman web --https
-# Open on your phone: https://<your-ip>:3000
-```
-
-> `localhost` works over plain HTTP. Use `--https` when accessing from another device, or use [Tailscale](https://tailscale.com/) (recommended) — it provides a private network so you can access `http://<tailscale-ip>:3000` from your phone without TLS certificates.
-
-### Secure QR Code Authentication
-
-Typing passwords on a phone keyboard is miserable. Codeman replaces it with **cryptographically secure single-use QR tokens** — scan the code displayed on your desktop and your phone is authenticated instantly.
-
-Each QR encodes a URL containing a 6-character short code that maps to a 256-bit secret (`crypto.randomBytes(32)`) on the server. Tokens auto-rotate every **60 seconds**, are **atomically consumed on first scan** (replays always fail), and use **hash-based `Map.get()` lookup** that leaks nothing through response timing. The short code is an opaque pointer — the real secret never appears in browser history, `Referer` headers, or Cloudflare edge logs.
-
-The security design addresses all 6 critical QR auth flaws identified in ["Demystifying the (In)Security of QR Code-based Login"](https://www.usenix.org/conference/usenixsecurity25/presentation/zhang-xin) (USENIX Security 2025, which found 47 of the top-100 websites vulnerable): single-use enforcement, short TTL, cryptographic randomness, server-side generation, real-time desktop notification on scan (QRLjacking detection), and IP + User-Agent session binding with manual revocation. Dual-layer rate limiting (per-IP + global) makes brute force infeasible across 62^6 = 56.8 billion possible codes. Full security analysis: [`docs/qr-auth-plan.md`](docs/qr-auth-plan.md)
 
 ---
 

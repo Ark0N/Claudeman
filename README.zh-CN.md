@@ -147,6 +147,58 @@ Codeman 依赖 tmux，因此 Windows 用户需要 [WSL](https://learn.microsoft.
 
 ---
 
+## 移动端优化的 Web UI
+
+在任意手机上都能获得最跟手的 AI 编程智能体体验。完整的 xterm.js 终端、本地回显、滑动导航，以及为真正的远程办公而设计的触控优化界面 —— 而不是把桌面 UI 硬塞进小屏幕。
+
+<table>
+<tr>
+<td align="center" width="40%"><img src="docs/screenshots/mobile-session-keyboard-20260727.png" alt="移动端 — 通过键盘配件栏与 Enter 按钮回答智能体的方案提示" width="300"></td>
+<td align="center" width="60%"><img src="docs/screenshots/mobile-toolbar-enter-20260727.png" alt="移动端工具栏：配件栏的 /init、/clear、剪贴板与 Esc，下方是 Run、案例、停止、Enter、语音与设置控件" width="440"></td>
+</tr>
+<tr>
+<td align="center"><em>触控回答提示</em></td>
+<td align="center"><em>配件栏 + 独立 Enter 按钮</em></td>
+</tr>
+</table>
+
+<table>
+<tr>
+<th>普通终端 App</th>
+<th>Codeman 移动端</th>
+</tr>
+<tr><td>远程输入延迟 200–300 毫秒</td><td><b>本地回显 —— 即时反馈</b></td></tr>
+<tr><td>字小、无上下文</td><td>完整 xterm.js 终端</td></tr>
+<tr><td>无会话管理</td><td>滑动切换会话</td></tr>
+<tr><td>无通知</td><td>审批 / 空闲时推送提醒</td></tr>
+<tr><td>需手动重连</td><td>tmux 持久化</td></tr>
+<tr><td>看不到智能体</td><td>实时查看后台智能体</td></tr>
+<tr><td>斜杠命令靠复制粘贴</td><td>一键 <code>/init</code>、<code>/clear</code>、<code>/compact</code></td></tr>
+<tr><td>在手机上手打密码</td><td><b>扫二维码 —— 即时认证</b></td></tr>
+</table>
+
+- **键盘配件栏** —— 在虚拟键盘上方提供 `/init`、`/clear`、`/compact` 快捷按钮；破坏性命令需双击确认，绝不误触
+- **独立的 Enter 按钮** —— 以按键方式回放，先冲刷本地回显缓冲的文本，不会让内容滞留在屏幕上
+- **滑动导航与智能键盘处理** —— 左右滑动切换会话；键盘弹出时工具栏与终端整体上移（`visualViewport` API）
+- **为手机而生** —— 刘海与 Home 指示条的安全区适配、44px 触控目标、底部抽屉式 case 选择器、原生惯性滚动
+
+```bash
+codeman web --https
+# 在手机上打开：https://<你的IP>:3000
+```
+
+> `localhost` 走纯 HTTP 即可。从其他设备访问时请使用 `--https`，或使用 [Tailscale](https://tailscale.com/)（推荐）—— 它提供私有网络，让你无需 TLS 证书即可从手机访问 `http://<tailscale-ip>:3000`。
+
+### 安全的二维码认证
+
+在手机键盘上输密码太痛苦了。Codeman 用**密码学安全的一次性二维码令牌**取而代之 —— 扫描桌面上显示的二维码，手机即刻完成认证。
+
+每个二维码编码的是一个包含 6 字符短码的 URL，该短码在服务端映射到一个 256 位密钥（`crypto.randomBytes(32)`）。令牌每 **60 秒**自动轮换，**首次扫描即原子性消费**（重放永远失败），并采用**基于哈希的 `Map.get()` 查找**，不会通过响应时延泄露任何信息。短码只是一个不透明指针 —— 真正的密钥永远不会出现在浏览器历史、`Referer` 头或 Cloudflare 边缘日志中。
+
+该安全设计覆盖了 ["Demystifying the (In)Security of QR Code-based Login"](https://www.usenix.org/conference/usenixsecurity25/presentation/zhang-xin)（USENIX Security 2025，该研究发现 Top-100 网站中有 47 个存在漏洞）所指出的全部 6 个关键二维码认证缺陷：强制一次性使用、短 TTL、密码学随机性、服务端生成、扫描时桌面实时通知（QRLjacking 检测），以及 IP + User-Agent 会话绑定与手动吊销。双层速率限制（按 IP + 全局）使得在 62^6 = 568 亿种可能短码空间内进行暴力破解变得不可行。完整安全分析见：[`docs/qr-auth-plan.md`](docs/qr-auth-plan.md)
+
+---
+
 ## 使用 Codeman —— 人类操作指南
 
 从头到尾走一遍如何在浏览器里驾驭 Codeman。如果你刚装好，就从这里开始。
@@ -210,58 +262,6 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 - **部署你自己的改动** —— 见[开发](#开发)。
 
 > ⚠️ **安全提示：** 如果你正在 Codeman 受管会话*内部*工作（`echo $CODEMAN_MUX` → `1`），绝不要直接运行 `tmux kill-session` / `pkill claude` —— 请使用 Web UI 或 `./scripts/tmux-manager.sh`。
-
----
-
-## 移动端优化的 Web UI
-
-在任意手机上都能获得最跟手的 AI 编程智能体体验。完整的 xterm.js 终端、本地回显、滑动导航，以及为真正的远程办公而设计的触控优化界面 —— 而不是把桌面 UI 硬塞进小屏幕。
-
-<table>
-<tr>
-<td align="center" width="40%"><img src="docs/screenshots/mobile-session-keyboard-20260727.png" alt="移动端 — 通过键盘配件栏与 Enter 按钮回答智能体的方案提示" width="300"></td>
-<td align="center" width="60%"><img src="docs/screenshots/mobile-toolbar-enter-20260727.png" alt="移动端工具栏：配件栏的 /init、/clear、剪贴板与 Esc，下方是 Run、案例、停止、Enter、语音与设置控件" width="440"></td>
-</tr>
-<tr>
-<td align="center"><em>触控回答提示</em></td>
-<td align="center"><em>配件栏 + 独立 Enter 按钮</em></td>
-</tr>
-</table>
-
-<table>
-<tr>
-<th>普通终端 App</th>
-<th>Codeman 移动端</th>
-</tr>
-<tr><td>远程输入延迟 200–300 毫秒</td><td><b>本地回显 —— 即时反馈</b></td></tr>
-<tr><td>字小、无上下文</td><td>完整 xterm.js 终端</td></tr>
-<tr><td>无会话管理</td><td>滑动切换会话</td></tr>
-<tr><td>无通知</td><td>审批 / 空闲时推送提醒</td></tr>
-<tr><td>需手动重连</td><td>tmux 持久化</td></tr>
-<tr><td>看不到智能体</td><td>实时查看后台智能体</td></tr>
-<tr><td>斜杠命令靠复制粘贴</td><td>一键 <code>/init</code>、<code>/clear</code>、<code>/compact</code></td></tr>
-<tr><td>在手机上手打密码</td><td><b>扫二维码 —— 即时认证</b></td></tr>
-</table>
-
-- **键盘配件栏** —— 在虚拟键盘上方提供 `/init`、`/clear`、`/compact` 快捷按钮；破坏性命令需双击确认，绝不误触
-- **独立的 Enter 按钮** —— 以按键方式回放，先冲刷本地回显缓冲的文本，不会让内容滞留在屏幕上
-- **滑动导航与智能键盘处理** —— 左右滑动切换会话；键盘弹出时工具栏与终端整体上移（`visualViewport` API）
-- **为手机而生** —— 刘海与 Home 指示条的安全区适配、44px 触控目标、底部抽屉式 case 选择器、原生惯性滚动
-
-```bash
-codeman web --https
-# 在手机上打开：https://<你的IP>:3000
-```
-
-> `localhost` 走纯 HTTP 即可。从其他设备访问时请使用 `--https`，或使用 [Tailscale](https://tailscale.com/)（推荐）—— 它提供私有网络，让你无需 TLS 证书即可从手机访问 `http://<tailscale-ip>:3000`。
-
-### 安全的二维码认证
-
-在手机键盘上输密码太痛苦了。Codeman 用**密码学安全的一次性二维码令牌**取而代之 —— 扫描桌面上显示的二维码，手机即刻完成认证。
-
-每个二维码编码的是一个包含 6 字符短码的 URL，该短码在服务端映射到一个 256 位密钥（`crypto.randomBytes(32)`）。令牌每 **60 秒**自动轮换，**首次扫描即原子性消费**（重放永远失败），并采用**基于哈希的 `Map.get()` 查找**，不会通过响应时延泄露任何信息。短码只是一个不透明指针 —— 真正的密钥永远不会出现在浏览器历史、`Referer` 头或 Cloudflare 边缘日志中。
-
-该安全设计覆盖了 ["Demystifying the (In)Security of QR Code-based Login"](https://www.usenix.org/conference/usenixsecurity25/presentation/zhang-xin)（USENIX Security 2025，该研究发现 Top-100 网站中有 47 个存在漏洞）所指出的全部 6 个关键二维码认证缺陷：强制一次性使用、短 TTL、密码学随机性、服务端生成、扫描时桌面实时通知（QRLjacking 检测），以及 IP + User-Agent 会话绑定与手动吊销。双层速率限制（按 IP + 全局）使得在 62^6 = 568 亿种可能短码空间内进行暴力破解变得不可行。完整安全分析见：[`docs/qr-auth-plan.md`](docs/qr-auth-plan.md)
 
 ---
 
