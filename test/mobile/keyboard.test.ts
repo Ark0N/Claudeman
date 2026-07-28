@@ -1391,7 +1391,7 @@ describe('Virtual Keyboard', () => {
       expect(result!.viewportY).toBeLessThan(result!.baseY);
     });
 
-    it('keeps the previous terminal frame over a keyboard refit until nonblank output renders', async () => {
+    it('keeps the previous terminal frame until nonblank Codex output settles', async () => {
       const state = await page.evaluate(async () => {
         app.activeSessionId = 'mobile-keyboard-frame-cover-test';
         app.sessions.set('mobile-keyboard-frame-cover-test', {
@@ -1418,9 +1418,12 @@ describe('Virtual Keyboard', () => {
 
         app.batchTerminalWrite('frame after keyboard\r\n› ');
         await new Promise((resolve) => setTimeout(resolve, 100));
+        const survivedCodexQuietWindow = Boolean(app.terminal.element?.querySelector('.terminal-resize-frame-cover'));
+        await new Promise((resolve) => setTimeout(resolve, KeyboardHandler.FRAME_COVER_CODEX_QUIET_MS + 80));
         return {
           before,
           survivedBlank,
+          survivedCodexQuietWindow,
           removedAfterFrame: !app.terminal.element?.querySelector('.terminal-resize-frame-cover'),
         };
       });
@@ -1428,6 +1431,7 @@ describe('Virtual Keyboard', () => {
       expect(state.before.exists).toBe(true);
       expect(state.before.text).toContain('frame before keyboard');
       expect(state.survivedBlank).toBe(true);
+      expect(state.survivedCodexQuietWindow).toBe(true);
       expect(state.removedAfterFrame).toBe(true);
     });
 
@@ -1446,31 +1450,50 @@ describe('Virtual Keyboard', () => {
 
         KeyboardHandler._beginTerminalFrameCover();
         KeyboardHandler._armTerminalFrameCover();
+        const coverTexts: string[] = [];
+        const readCoverText = () => {
+          const cover = app.terminal.element?.querySelector('.terminal-resize-frame-cover');
+          if (cover) coverTexts.push(cover.textContent || '');
+          return cover;
+        };
+        readCoverText();
         app.terminal.refresh(0, app.terminal.rows - 1);
         await new Promise((resolve) => setTimeout(resolve, KeyboardHandler.FRAME_COVER_MIN_MS + 80));
         const survivedLocalRender = Boolean(app.terminal.element?.querySelector('.terminal-resize-frame-cover'));
 
         const opacitySamples: Array<number | null> = [];
         app.batchTerminalWrite('\x1b[2J\x1b[Hnew stable frame\r\n› ');
-        for (let frame = 0; frame < 12; frame++) {
+        for (let frame = 0; frame < 5; frame++) {
           await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-          const cover = app.terminal.element?.querySelector('.terminal-resize-frame-cover') as HTMLElement | null;
+          const cover = readCoverText() as HTMLElement | null;
           opacitySamples.push(cover ? Number(getComputedStyle(cover).opacity) : null);
         }
+        const survivedInitialCodexFrame = Boolean(app.terminal.element?.querySelector('.terminal-resize-frame-cover'));
+        app.batchTerminalWrite('\x1b[2J\x1b[Hfinal stable frame\r\n› ');
+        await new Promise((resolve) => setTimeout(resolve, KeyboardHandler.FRAME_COVER_CODEX_QUIET_MS - 40));
+        readCoverText();
+        await new Promise((resolve) => setTimeout(resolve, 120));
 
         return {
           survivedLocalRender,
+          survivedInitialCodexFrame,
+          coverTexts,
           opacitySamples,
           removedAfterOutput: !app.terminal.element?.querySelector('.terminal-resize-frame-cover'),
         };
       });
 
       expect(state.survivedLocalRender).toBe(true);
+      expect(state.survivedInitialCodexFrame).toBe(true);
+      expect(state.coverTexts.length).toBeGreaterThan(2);
+      expect(state.coverTexts.every((text) => text.includes('old stable frame'))).toBe(true);
+      expect(state.coverTexts.every((text) => !text.includes('new stable frame'))).toBe(true);
+      expect(state.coverTexts.every((text) => !text.includes('final stable frame'))).toBe(true);
       expect(state.opacitySamples.every((opacity) => opacity === null || opacity === 1)).toBe(true);
       expect(state.removedAfterOutput).toBe(true);
     });
 
-    it('slides the captured frame during keyboard shrink instead of snapping its bottom edge', async () => {
+    it('crops the captured frame in place instead of panning history during keyboard shrink', async () => {
       const state = await page.evaluate(async () => {
         app.activeSessionId = 'mobile-keyboard-frame-motion-test';
         app.sessions.set('mobile-keyboard-frame-motion-test', {
@@ -1488,29 +1511,65 @@ describe('Virtual Keyboard', () => {
         const frame = cover?.querySelector('.terminal-resize-frame') as HTMLElement | null;
         if (!cover || !frame) return null;
         const initialHeight = cover.getBoundingClientRect().height;
+        const initialTop = frame.getBoundingClientRect().top;
         const nextHeight = Math.max(180, initialHeight - 180);
 
         KeyboardHandler.keyboardVisible = true;
         document.body.classList.add('keyboard-visible');
         document.documentElement.style.setProperty('--app-height', `${nextHeight + 42}px`);
-        KeyboardHandler._updateTerminalFrameCoverGeometry();
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
         const style = getComputedStyle(frame);
         return {
-          shift: parseFloat(frame.style.getPropertyValue('--terminal-frame-shift') || '0'),
+          topDelta: frame.getBoundingClientRect().top - initialTop,
           top: style.top,
           bottom: style.bottom,
-          transitionProperty: style.transitionProperty,
-          transitionDuration: parseFloat(style.transitionDuration) || 0,
+          transform: style.transform,
         };
       });
 
       expect(state).not.toBeNull();
-      expect(state!.shift).toBeLessThan(-100);
+      expect(Math.abs(state!.topDelta)).toBeLessThan(1);
       expect(state!.top).toBe('0px');
       expect(state!.bottom).not.toBe('0px');
-      expect(state!.transitionProperty).toContain('transform');
-      expect(state!.transitionDuration).toBeGreaterThan(0);
+      expect(state!.transform).toBe('none');
+    });
+
+    it('uses an atomic final-frame swap when the keyboard cover reaches its safety timeout', async () => {
+      const state = await page.evaluate(async () => {
+        app.activeSessionId = 'mobile-keyboard-frame-timeout-test';
+        app.sessions.set('mobile-keyboard-frame-timeout-test', {
+          id: 'mobile-keyboard-frame-timeout-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app.terminal.reset();
+        await new Promise<void>((resolve) => app.terminal.write('timeout source frame\r\n› ', resolve));
+        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+
+        const originalMax = KeyboardHandler.FRAME_COVER_MAX_MS;
+        KeyboardHandler.FRAME_COVER_MAX_MS = 40;
+        try {
+          KeyboardHandler._beginTerminalFrameCover();
+          KeyboardHandler._armTerminalFrameCover();
+          await new Promise<void>((resolve) => app.terminal.write('\x1b[2J\x1b[Htimeout final frame\r\n› ', resolve));
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          const coverText = app.terminal.element?.querySelector('.terminal-resize-frame-cover')?.textContent || '';
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          return {
+            coverText,
+            removed: !app.terminal.element?.querySelector('.terminal-resize-frame-cover'),
+          };
+        } finally {
+          KeyboardHandler.FRAME_COVER_MAX_MS = originalMax;
+          KeyboardHandler._discardTerminalFrameCover();
+        }
+      });
+
+      expect(state.coverText).toContain('timeout source frame');
+      expect(state.coverText).not.toContain('timeout final frame');
+      expect(state.removed).toBe(true);
     });
 
     it('holds the outgoing frame and avoids a second keyboard fit during a tab switch', async () => {
@@ -1592,13 +1651,15 @@ describe('Virtual Keyboard', () => {
       expect(state.keyboardFitCalls).toBe(0);
     });
 
-    it('shows the latest frame while a bounded history page downloads off-screen', async () => {
+    it('keeps the outgoing frame immutable while bounded target history loads off-screen', async () => {
       const state = await page.evaluate(async () => {
         const sourceId = 'history-replay-source';
         const targetId = 'history-replay-target';
         const originalFetch = window.fetch;
         const originalSendResize = app.sendResize;
         const originalConnectWs = app._connectWs;
+        const originalCaptureCover = app._captureTerminalHistoryReplayCover;
+        let coverCaptureCount = 0;
         const streamHeaders = (end: number, extra: Record<string, string> = {}) => ({
           'content-type': 'text/plain; charset=utf-8',
           'x-codeman-terminal-format': 'stream-v1',
@@ -1654,6 +1715,11 @@ describe('Virtual Keyboard', () => {
 
           app.sendResize = async () => false;
           app._connectWs = () => {};
+          app._captureTerminalHistoryReplayCover = function () {
+            const captured = originalCaptureCover.call(this);
+            if (captured) coverCaptureCount += 1;
+            return captured;
+          };
           window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
             const url = String(input);
             if (!url.includes(`/api/sessions/${targetId}/terminal`)) {
@@ -1705,7 +1771,9 @@ describe('Virtual Keyboard', () => {
           for (let attempt = 0; attempt < 40; attempt++) {
             await new Promise((resolve) => setTimeout(resolve, 25));
             const cover = app.terminal.element?.querySelector('.terminal-history-replay-cover') as HTMLElement | null;
-            if (!cover || !cover.textContent?.includes('LATEST TARGET FRAME')) continue;
+            if (historyChunksSent < 1 || !cover || !cover.textContent?.includes('OUTGOING SOURCE FRAME')) {
+              continue;
+            }
             const screen = app.terminal.element?.querySelector('.xterm-screen') as HTMLElement | null;
             const buffer = app.terminal.buffer.active;
             const coverRect = cover.getBoundingClientRect();
@@ -1735,6 +1803,7 @@ describe('Virtual Keyboard', () => {
             finalBaseY: buffer.baseY,
             finalViewportY: buffer.viewportY,
             finalVisibleRows: visibleRows,
+            coverCaptureCount,
             paging: paging
               ? {
                   start: paging.start,
@@ -1749,12 +1818,14 @@ describe('Virtual Keyboard', () => {
           window.fetch = originalFetch;
           app.sendResize = originalSendResize;
           app._connectWs = originalConnectWs;
+          app._captureTerminalHistoryReplayCover = originalCaptureCover;
         }
       });
 
       expect(state.historyChunksSent).toBeGreaterThan(2);
       expect(state.samples.length).toBeGreaterThan(2);
-      expect(state.samples.every((sample) => sample.coverText.includes('LATEST TARGET FRAME'))).toBe(true);
+      expect(state.samples.every((sample) => sample.coverText.includes('OUTGOING SOURCE FRAME'))).toBe(true);
+      expect(state.samples.every((sample) => !sample.coverText.includes('LATEST TARGET FRAME'))).toBe(true);
       expect(state.samples.every((sample) => !sample.coverText.includes('HISTORY_'))).toBe(true);
       expect(state.samples.every((sample) => sample.viewportY === sample.baseY)).toBe(true);
       expect(Math.max(...state.samples.map((sample) => sample.baseY))).toBe(
@@ -1764,6 +1835,7 @@ describe('Virtual Keyboard', () => {
       expect(state.finalBaseY).toBeGreaterThan(state.samples[0].baseY);
       expect(state.finalViewportY).toBe(state.finalBaseY);
       expect(state.finalVisibleRows).toContain('LATEST TARGET FRAME');
+      expect(state.coverCaptureCount).toBe(1);
       expect(state.paging).toEqual({ start: 0, end: 360, total: 360, pages: 1 });
       expect(state.coverRemoved).toBe(true);
     });

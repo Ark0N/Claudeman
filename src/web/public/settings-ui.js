@@ -2063,6 +2063,8 @@ Object.assign(CodemanApp.prototype, {
     const skin = settings.skin ?? defaults.skin ?? 'daylight-blue';
     document.documentElement.setAttribute('data-skin', skin);
     window.__codemanSkin = skin;
+    const themeColor = getComputedStyle(document.documentElement).getPropertyValue('--bg-dark').trim();
+    if (themeColor) document.querySelector('meta[name="theme-color"]')?.setAttribute('content', themeColor);
     try {
       localStorage.setItem('codeman:skin', skin);
     } catch (_e) {

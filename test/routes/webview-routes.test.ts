@@ -1,0 +1,216 @@
+/**
+ * CRUD + capability behaviour for /api/webviews.
+ *
+ * Uses app.inject() (no port) against a temp CODEMAN_DATA_DIR, so nothing touches
+ * the developer's real ~/.codeman/webviews.json.
+ */
+
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import Fastify, { type FastifyInstance } from 'fastify';
+import fastifyCookie from '@fastify/cookie';
+import fastifyWebsocket from '@fastify/websocket';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { registerWebviewRoutes } from '../../src/web/routes/webview-routes.js';
+import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
+import { webviewCapabilities } from '../../src/webview-capabilities.js';
+import { capabilityFromProxyPath } from '../../src/web/webview-proxy.js';
+
+let app: FastifyInstance;
+let tmpDir: string;
+let savedDataDir: string | undefined;
+const broadcasts: Array<{ event: string; data: unknown }> = [];
+
+beforeEach(async () => {
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codeman-webviews-'));
+  savedDataDir = process.env.CODEMAN_DATA_DIR;
+  process.env.CODEMAN_DATA_DIR = tmpDir;
+  broadcasts.length = 0;
+
+  app = Fastify({ logger: false });
+  await app.register(fastifyCookie);
+  // The proxy route declares a wsHandler, so the plugin must be present.
+  await app.register(fastifyWebsocket);
+  registerWebviewRoutes(app, {
+    broadcast: (event: string, data: unknown) => broadcasts.push({ event, data }),
+  } as never);
+  installRouteErrorHandler(app);
+  await app.ready();
+});
+
+afterEach(async () => {
+  await app.close();
+  if (savedDataDir === undefined) delete process.env.CODEMAN_DATA_DIR;
+  else process.env.CODEMAN_DATA_DIR = savedDataDir;
+  await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+});
+
+const create = (payload: Record<string, unknown>) => app.inject({ method: 'POST', url: '/api/webviews', payload });
+
+describe('GET /api/webviews', () => {
+  it('starts empty and reports the frame budget the client must honour', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/webviews' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.success).toBe(true);
+    expect(body.data.webviews).toEqual([]);
+    expect(typeof body.data.maxLiveFrames).toBe('number');
+  });
+});
+
+describe('POST /api/webviews', () => {
+  it('creates a dashboard that defaults to proxied and sandboxed', async () => {
+    const res = await create({ name: 'Grafana', url: 'http://127.0.0.1:4000/' });
+    expect(res.statusCode).toBe(200);
+    const w = res.json().data;
+    // Proxy + untrusted are the safe defaults and must not drift.
+    expect(w.embedMode).toBe('proxy');
+    expect(w.trusted).toBe(false);
+    expect(w.id).toBeTruthy();
+  });
+
+  it('broadcasts the change so other devices re-fetch', async () => {
+    await create({ name: 'G', url: 'http://127.0.0.1:4000/' });
+    expect(broadcasts.map((b) => b.event)).toContain('webview:changed');
+  });
+
+  it('persists across a fresh read of the store', async () => {
+    await create({ name: 'G', url: 'http://127.0.0.1:4000/' });
+    const list = (await app.inject({ method: 'GET', url: '/api/webviews' })).json().data.webviews;
+    expect(list).toHaveLength(1);
+    expect(list[0].name).toBe('G');
+  });
+
+  it('rejects URLs that are not plain http(s)', async () => {
+    for (const url of ['javascript:alert(1)', 'file:///etc/passwd', 'data:text/html,x']) {
+      const res = await create({ name: 'bad', url });
+      expect(res.statusCode, url).toBe(400);
+      expect(res.json().errorCode).toBe('INVALID_INPUT');
+    }
+  });
+
+  it('rejects URLs carrying embedded credentials', async () => {
+    const res = await create({ name: 'bad', url: 'http://user:pass@host:4000/' });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('requires a name', async () => {
+    expect((await create({ url: 'http://127.0.0.1:4000/' })).statusCode).toBe(400);
+    expect((await create({ name: '   ', url: 'http://127.0.0.1:4000/' })).statusCode).toBe(400);
+  });
+});
+
+describe('PATCH /api/webviews/:id', () => {
+  it('updates fields and revokes the outstanding capability', async () => {
+    const id = (await create({ name: 'G', url: 'http://127.0.0.1:4000/' })).json().data.id;
+    const opened = await app.inject({ method: 'POST', url: `/api/webviews/${id}/open` });
+    const cap = capabilityFromProxyPath(opened.json().data.embedUrl)!;
+    expect(webviewCapabilities.resolve(cap)).toBeDefined();
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/webviews/${id}`,
+      payload: { url: 'http://127.0.0.1:4001/' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.url).toBe('http://127.0.0.1:4001/');
+    // A token minted against the OLD url must not survive the repoint.
+    expect(webviewCapabilities.resolve(cap)).toBeUndefined();
+  });
+
+  it('404s an unknown id', async () => {
+    const res = await app.inject({ method: 'PATCH', url: '/api/webviews/nope', payload: { name: 'x' } });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('still validates the URL on update', async () => {
+    const id = (await create({ name: 'G', url: 'http://127.0.0.1:4000/' })).json().data.id;
+    const res = await app.inject({ method: 'PATCH', url: `/api/webviews/${id}`, payload: { url: 'file:///etc' } });
+    expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('DELETE /api/webviews/:id', () => {
+  it('removes it and revokes its capability', async () => {
+    const id = (await create({ name: 'G', url: 'http://127.0.0.1:4000/' })).json().data.id;
+    const opened = await app.inject({ method: 'POST', url: `/api/webviews/${id}/open` });
+    const cap = capabilityFromProxyPath(opened.json().data.embedUrl)!;
+
+    expect((await app.inject({ method: 'DELETE', url: `/api/webviews/${id}` })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/api/webviews' })).json().data.webviews).toEqual([]);
+    expect(webviewCapabilities.resolve(cap)).toBeUndefined();
+  });
+
+  it('404s an unknown id', async () => {
+    expect((await app.inject({ method: 'DELETE', url: '/api/webviews/nope' })).statusCode).toBe(404);
+  });
+});
+
+describe('POST /api/webviews/:id/open', () => {
+  it('mints a same-origin embed path for a proxied dashboard', async () => {
+    const id = (await create({ name: 'G', url: 'http://127.0.0.1:4000/' })).json().data.id;
+    const data = (await app.inject({ method: 'POST', url: `/api/webviews/${id}/open` })).json().data;
+    expect(data.embedUrl).toMatch(/^\/webview\/[A-Za-z0-9_-]{16,}\/$/);
+    expect(capabilityFromProxyPath(data.embedUrl)).toBeTruthy();
+  });
+
+  it('returns no embed path in direct mode, where the iframe uses the real URL', async () => {
+    const id = (await create({ name: 'G', url: 'https://ok.example/', embedMode: 'direct' })).json().data.id;
+    const data = (await app.inject({ method: 'POST', url: `/api/webviews/${id}/open` })).json().data;
+    expect(data.embedUrl).toBeUndefined();
+    expect(data.webview.url).toBe('https://ok.example/');
+  });
+
+  it('reuses the capability across repeated opens instead of leaking one per click', async () => {
+    const id = (await create({ name: 'G', url: 'http://127.0.0.1:4000/' })).json().data.id;
+    const first = (await app.inject({ method: 'POST', url: `/api/webviews/${id}/open` })).json().data.embedUrl;
+    const second = (await app.inject({ method: 'POST', url: `/api/webviews/${id}/open` })).json().data.embedUrl;
+    expect(second).toBe(first);
+  });
+
+  it('records lastOpenedAt', async () => {
+    const id = (await create({ name: 'G', url: 'http://127.0.0.1:4000/' })).json().data.id;
+    await app.inject({ method: 'POST', url: `/api/webviews/${id}/open` });
+    const list = (await app.inject({ method: 'GET', url: '/api/webviews' })).json().data.webviews;
+    expect(typeof list[0].lastOpenedAt).toBe('number');
+  });
+
+  it('404s an unknown id', async () => {
+    expect((await app.inject({ method: 'POST', url: '/api/webviews/nope/open' })).statusCode).toBe(404);
+  });
+});
+
+describe('proxy route', () => {
+  it('refuses an unknown or expired capability', async () => {
+    const res = await app.inject({ method: 'GET', url: `/webview/${'Z'.repeat(32)}/` });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('redirects the prefix without a trailing slash, so relative URLs resolve inside it', async () => {
+    const cap = 'Y'.repeat(32);
+    const res = await app.inject({ method: 'GET', url: `/webview/${cap}` });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe(`/webview/${cap}/`);
+  });
+});
+
+describe('POST /api/webviews/probe', () => {
+  it('reports an unreachable target as a normal answer, not a 500', async () => {
+    // Port 1 is reserved and refuses instantly.
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/webviews/probe',
+      payload: { url: 'http://127.0.0.1:1/' },
+    });
+    expect(res.statusCode).toBe(200);
+    const probe = res.json().data;
+    expect(probe.reachable).toBe(false);
+    expect(probe.recommendedMode).toBe('proxy');
+  });
+
+  it('rejects an invalid URL up front', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/webviews/probe', payload: { url: 'file:///etc' } });
+    expect(res.statusCode).toBe(400);
+  });
+});

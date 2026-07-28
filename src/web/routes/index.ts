@@ -22,3 +22,4 @@ export { registerSearchRoutes } from './search-routes.js';
 export { registerMeRoutes } from './me-routes.js';
 export { registerAdminRoutes } from './admin-routes.js';
 export { registerWsRoutes } from './ws-routes.js';
+export { registerWebviewRoutes, tryWebviewRefererFallback } from './webview-routes.js';

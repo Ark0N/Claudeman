@@ -165,7 +165,8 @@ const KeyboardAccessoryBar = {
     const keyboardVisible =
       (typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible) ||
       document.body.classList.contains('keyboard-visible');
-    const hasSession = typeof app !== 'undefined' && Boolean(app.activeSessionId);
+    const hasSession =
+      typeof app !== 'undefined' && Boolean(app.activeSessionId) && !app.activeWebviewId;
     const hasOpenDialog = MobileTerminalControls.hasOpenDialog();
     const visible = this.enabled && hasSession && keyboardVisible && !hasOpenDialog;
     this.element.classList.toggle('visible', visible);
@@ -437,7 +438,8 @@ const MobileNavigationPad = {
       typeof MobileDetection !== 'undefined' &&
       MobileDetection.isTouchDevice() &&
       MobileDetection.getDeviceType() !== 'desktop';
-    const hasSession = typeof app !== 'undefined' && Boolean(app.activeSessionId);
+    const hasSession =
+      typeof app !== 'undefined' && Boolean(app.activeSessionId) && !app.activeWebviewId;
     const hasOpenDialog = MobileTerminalControls.hasOpenDialog();
     const visible =
       this.enabled && isPhoneLayout && hasSession && !keyboardVisible && !hasOpenDialog;
@@ -460,7 +462,8 @@ const MobileNavigationPad = {
     const button = this.element?.querySelector('[data-nav-key="jump-bottom"]');
     if (!(button instanceof HTMLButtonElement)) return;
 
-    const hasSession = typeof app !== 'undefined' && Boolean(app.activeSessionId);
+    const hasSession =
+      typeof app !== 'undefined' && Boolean(app.activeSessionId) && !app.activeWebviewId;
     const readingHistory =
       typeof app !== 'undefined' && typeof app.isTerminalReadingHistory === 'function'
         ? app.isTerminalReadingHistory()
@@ -781,7 +784,14 @@ const MobileTerminalControls = {
 
   sendKey(action) {
     const sequence = TERMINAL_CONTROL_SEQUENCES[action];
-    if (!sequence || typeof app === 'undefined' || !app.activeSessionId) return;
+    if (
+      !sequence ||
+      typeof app === 'undefined' ||
+      !app.activeSessionId ||
+      app.activeWebviewId
+    ) {
+      return;
+    }
     app.sendTerminalKey(sequence);
     this.feedback(action);
   },

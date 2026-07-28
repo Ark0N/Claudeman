@@ -221,6 +221,7 @@ const KeyboardHandler = {
   FRAME_COVER_MIN_MS: 220,
   FRAME_COVER_MAX_MS: 1600,
   FRAME_COVER_LOAD_POLL_MS: 100,
+  FRAME_COVER_CODEX_QUIET_MS: 180,
   KEYBOARD_OPEN_INTENT_MS: 1200,
   lastViewportHeight: 0,
   keyboardVisible: false,
@@ -232,14 +233,15 @@ const KeyboardHandler = {
   _settleFocusInput: false,
   _terminalInputRequested: false,
   _terminalFrameCover: null,
-  _terminalFrameCoverHeight: 0,
   _terminalFrameCoverStartedAt: 0,
   _terminalFrameCoverArmed: false,
   _terminalFrameCoverReady: false,
+  _terminalFrameCoverReadyAt: 0,
   _terminalFrameCoverReadyVersion: 0,
   _terminalFrameCoverSwapVersion: 0,
   _terminalFrameCoverMinTimer: null,
   _terminalFrameCoverMaxTimer: null,
+  _terminalFrameCoverQuietTimer: null,
 
   /** Initialize keyboard handling */
   init() {
@@ -278,7 +280,6 @@ const KeyboardHandler = {
       };
       this._viewportScrollHandler = () => {
         this.updateLayoutForKeyboard();
-        this._updateTerminalFrameCoverGeometry();
         if (this._terminalInputRequested) window.scrollTo(0, 0);
       };
       window.visualViewport.addEventListener('resize', this._viewportResizeHandler);
@@ -397,7 +398,6 @@ const KeyboardHandler = {
     }
 
     this.updateLayoutForKeyboard();
-    this._updateTerminalFrameCoverGeometry();
     this._scheduleViewportSettle();
     this.lastViewportHeight = currentHeight;
   },
@@ -675,14 +675,13 @@ const KeyboardHandler = {
     terminalElement.appendChild(cover);
 
     this._terminalFrameCover = cover;
-    this._terminalFrameCoverHeight = rect.height;
     this._terminalFrameCoverStartedAt = Date.now();
     this._terminalFrameCoverArmed = false;
     this._terminalFrameCoverReady = false;
+    this._terminalFrameCoverReadyAt = 0;
     this._terminalFrameCoverReadyVersion += 1;
     this._terminalFrameCoverSwapVersion = 0;
     this._scheduleTerminalFrameCoverExpiry();
-    this._updateTerminalFrameCoverGeometry();
     if (arm) this._armTerminalFrameCover();
   },
 
@@ -693,10 +692,10 @@ const KeyboardHandler = {
     this._terminalFrameCoverStartedAt = Date.now();
     this._terminalFrameCoverArmed = false;
     this._terminalFrameCoverReady = false;
+    this._terminalFrameCoverReadyAt = 0;
     this._terminalFrameCoverReadyVersion += 1;
     this._terminalFrameCoverSwapVersion = 0;
     this._scheduleTerminalFrameCoverExpiry();
-    this._updateTerminalFrameCoverGeometry();
   },
 
   _scheduleTerminalFrameCoverExpiry(delay = this.FRAME_COVER_MAX_MS) {
@@ -707,7 +706,7 @@ const KeyboardHandler = {
         this._scheduleTerminalFrameCoverExpiry(this.FRAME_COVER_LOAD_POLL_MS);
         return;
       }
-      this._finishTerminalFrameCover();
+      this._forceTerminalFrameCoverSwap();
     }, delay);
   },
 
@@ -717,22 +716,17 @@ const KeyboardHandler = {
     return Boolean(state && state.phase !== 'failed');
   },
 
-  _updateTerminalFrameCoverGeometry() {
-    const cover = this._terminalFrameCover;
-    const frame = cover?.querySelector?.('.terminal-resize-frame');
-    if (!(cover instanceof HTMLElement) || !(frame instanceof HTMLElement)) return;
-    const sourceHeight = this._terminalFrameCoverHeight || parseFloat(frame.style.height) || 0;
-    const visibleHeight = cover.getBoundingClientRect().height;
-    const shift = Math.min(0, visibleHeight - sourceHeight);
-    frame.style.setProperty('--terminal-frame-shift', `${shift}px`);
-  },
-
   _armTerminalFrameCover() {
     if (!this._terminalFrameCover) return;
     this._terminalFrameCoverArmed = true;
     this._terminalFrameCoverReady = false;
+    this._terminalFrameCoverReadyAt = 0;
     this._terminalFrameCoverReadyVersion += 1;
     this._terminalFrameCoverSwapVersion = 0;
+    if (this._terminalFrameCoverQuietTimer) {
+      clearTimeout(this._terminalFrameCoverQuietTimer);
+      this._terminalFrameCoverQuietTimer = null;
+    }
     if (this._terminalFrameCoverMinTimer) clearTimeout(this._terminalFrameCoverMinTimer);
     const elapsed = Date.now() - this._terminalFrameCoverStartedAt;
     this._terminalFrameCoverMinTimer = setTimeout(
@@ -744,9 +738,22 @@ const KeyboardHandler = {
     );
   },
 
+  onTerminalFramePending() {
+    if (!this._terminalFrameCover || !this._terminalFrameCoverArmed) return;
+    this._terminalFrameCoverReady = false;
+    this._terminalFrameCoverReadyAt = 0;
+    this._terminalFrameCoverReadyVersion += 1;
+    this._terminalFrameCoverSwapVersion = 0;
+    if (this._terminalFrameCoverQuietTimer) {
+      clearTimeout(this._terminalFrameCoverQuietTimer);
+      this._terminalFrameCoverQuietTimer = null;
+    }
+  },
+
   onTerminalFrameReady() {
     if (!this._terminalFrameCoverArmed) return;
     this._terminalFrameCoverReady = true;
+    this._terminalFrameCoverReadyAt = Date.now();
     this._terminalFrameCoverReadyVersion += 1;
     this._tryFinishTerminalFrameCover();
   },
@@ -757,6 +764,19 @@ const KeyboardHandler = {
     }
     if (Date.now() - this._terminalFrameCoverStartedAt < this.FRAME_COVER_MIN_MS) return;
     if (!this._terminalHasVisibleFrame()) return;
+    const activeSession =
+      typeof app !== 'undefined' && app.activeSessionId ? app.sessions?.get?.(app.activeSessionId) : null;
+    const quietMs = activeSession?.mode === 'codex' ? this.FRAME_COVER_CODEX_QUIET_MS : 0;
+    const quietRemaining = this._terminalFrameCoverReadyAt + quietMs - Date.now();
+    if (quietRemaining > 0) {
+      if (!this._terminalFrameCoverQuietTimer) {
+        this._terminalFrameCoverQuietTimer = setTimeout(() => {
+          this._terminalFrameCoverQuietTimer = null;
+          this._tryFinishTerminalFrameCover();
+        }, quietRemaining);
+      }
+      return;
+    }
     this._scheduleTerminalFrameCoverSwap();
   },
 
@@ -775,6 +795,16 @@ const KeyboardHandler = {
           return;
         }
         this._finishTerminalFrameCover();
+      });
+    });
+  },
+
+  _forceTerminalFrameCoverSwap() {
+    const cover = this._terminalFrameCover;
+    if (!cover) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (this._terminalFrameCover === cover) this._finishTerminalFrameCover();
       });
     });
   },
@@ -809,18 +839,20 @@ const KeyboardHandler = {
   _clearTerminalFrameCoverTimers() {
     if (this._terminalFrameCoverMinTimer) clearTimeout(this._terminalFrameCoverMinTimer);
     if (this._terminalFrameCoverMaxTimer) clearTimeout(this._terminalFrameCoverMaxTimer);
+    if (this._terminalFrameCoverQuietTimer) clearTimeout(this._terminalFrameCoverQuietTimer);
     this._terminalFrameCoverMinTimer = null;
     this._terminalFrameCoverMaxTimer = null;
+    this._terminalFrameCoverQuietTimer = null;
   },
 
   _discardTerminalFrameCover() {
     this._clearTerminalFrameCoverTimers();
     this._terminalFrameCover?.remove();
     this._terminalFrameCover = null;
-    this._terminalFrameCoverHeight = 0;
     this._terminalFrameCoverStartedAt = 0;
     this._terminalFrameCoverArmed = false;
     this._terminalFrameCoverReady = false;
+    this._terminalFrameCoverReadyAt = 0;
     this._terminalFrameCoverReadyVersion += 1;
     this._terminalFrameCoverSwapVersion = 0;
   },

@@ -79,6 +79,61 @@ describe('terminal link-provider regexes (shipped source)', () => {
     }
   });
 
+  it('urlPattern keeps query strings whole (a single & is part of the URL)', () => {
+    // Excluding `&` truncated every real query string: a WordPress edit link
+    // resolved to `?post=1479` and opened the wrong page, and Claude Code's OAuth
+    // login URL (many `&` params) was not clickable at all.
+    const url = shippedPattern('urlPattern');
+    const strip = (u: string) => u.replace(/[.,;:!?)&]+$/, '');
+    const cases: Array<[string, string]> = [
+      [
+        'updated in place: https://bio-hacking.blog/wp-admin/post.php?post=1479&action=edit',
+        'https://bio-hacking.blog/wp-admin/post.php?post=1479&action=edit',
+      ],
+      [
+        'open https://claude.ai/oauth/authorize?code=true&client_id=abc&scope=user%3Ainference&state=xyz',
+        'https://claude.ai/oauth/authorize?code=true&client_id=abc&scope=user%3Ainference&state=xyz',
+      ],
+      ['see https://x.com/a?b=1&c=2&d=3 ok', 'https://x.com/a?b=1&c=2&d=3'],
+      // A lone trailing & is punctuation, not part of the target.
+      ['trailing https://x.com/a?b=1& next', 'https://x.com/a?b=1'],
+    ];
+    for (const [line, want] of cases) {
+      url.lastIndex = 0;
+      const m = url.exec(line);
+      expect(m, line).not.toBeNull();
+      expect(strip(m![0]), line).toBe(want);
+    }
+  });
+
+  it('urlPattern still stops at the shell && operator', () => {
+    // `&&` never appears inside a URL, so it must remain a boundary or a link
+    // would swallow the next command.
+    const url = shippedPattern('urlPattern');
+    for (const line of ['curl https://x.com/api && echo done', 'curl https://x.com/api&&echo done']) {
+      url.lastIndex = 0;
+      expect(url.exec(line)![0], line).toBe('https://x.com/api');
+    }
+  });
+
+  it('extPattern links pasted image/PDF attachment paths', () => {
+    // `.claude-images/paste-*.png` is what Codeman writes for a pasted screenshot;
+    // without image extensions the path rendered as plain, unclickable text.
+    const ext = shippedPattern('extPattern');
+    const cases = [
+      '/home/arkon/default/claudeman/.claude-images/paste-1785164958410-d11eb7d0.png',
+      '/tmp/shot.jpeg',
+      '/opt/app/report.pdf',
+      '/home/a/diagram.svg',
+    ];
+    for (const path of cases) {
+      ext.lastIndex = 0;
+      const m = ext.exec(`see ${path} here`);
+      expect(m, path).not.toBeNull();
+      expect(m![1], path).toBe(path);
+    }
+  });
+
   it('cmdPattern arg group cannot match empty tokens (the exponential trigger)', () => {
     // structural guard: the dangerous construct is an empty-matchable token
     // inside a repeated group — `[^\s\/]*\s+` repeated. Check the pattern

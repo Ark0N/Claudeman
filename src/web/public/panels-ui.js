@@ -2267,6 +2267,7 @@ Object.assign(CodemanApp.prototype, {
 
       const terminal = new Terminal({
         theme: { ...window.codemanCurrentXtermTheme() },
+        minimumContrastRatio: window.codemanCurrentSkinIsLight() ? 4.5 : 1,
         fontFamily: '"Fira Code", "Cascadia Code", "JetBrains Mono", "SF Mono", Monaco, monospace',
         fontSize: 12,
         lineHeight: 1.2,

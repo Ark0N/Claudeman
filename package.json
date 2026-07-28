@@ -1,6 +1,6 @@
 {
   "name": "aicodeman",
-  "version": "1.8.0",
+  "version": "1.8.3",
   "description": "Mission control for AI coding agents - run 20 autonomous agents with real-time monitoring and session persistence",
   "type": "module",
   "main": "dist/index.js",
@@ -32,8 +32,16 @@
     "changeset": "changeset",
     "version-packages": "changeset version && npm install --package-lock-only && node scripts/check-lockfile-sync.mjs",
     "check:lockfile": "node scripts/check-lockfile-sync.mjs",
-    "knip": "npx --yes knip@latest",
+    "knip": "npx --yes knip@latest --config config/knip.json",
     "release": "changeset publish"
+  },
+  "prettier": {
+    "singleQuote": true,
+    "semi": true,
+    "tabWidth": 2,
+    "printWidth": 120,
+    "trailingComma": "es5",
+    "endOfLine": "lf"
   },
   "workspaces": [
     ".",
@@ -75,6 +83,7 @@
     "qrcode": "^1.5.4",
     "uuid": "^14.0.0",
     "web-push": "^3.6.7",
+    "ws": "^8.21.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

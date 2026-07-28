@@ -54,6 +54,7 @@ describe('Mobile Navigation Pad', () => {
       clearTimeout(KeyboardHandler._keyboardOpeningTimer);
       KeyboardHandler._keyboardOpeningTimer = null;
       KeyboardHandler._discardTerminalFrameCover?.();
+      app.activeWebviewId = null;
       app.sendResize = function(_sessionId, options = {}) {
         window.__recordMobileNavigationResize(options);
         return Promise.resolve(true);
@@ -142,6 +143,39 @@ describe('Mobile Navigation Pad', () => {
       await page.waitForTimeout(100);
       await page.screenshot({ path: process.env.CODEMAN_NAV_SCREENSHOT });
     }
+  });
+
+  it('hides terminal controls over web tabs and restores the already-active terminal', async () => {
+    await page.evaluate(() => {
+      app.activeWebviewId = 'mobile-webview-test';
+      document.querySelector('.main')?.classList.add('webview-active');
+      MobileTerminalControls.syncVisibility();
+    });
+    expect(await page.locator(SELECTORS.MOBILE_NAVIGATION).isVisible()).toBe(false);
+
+    await page.evaluate(async (sessionId) => {
+      MobileTerminalControls.sendKey('up');
+      await app.selectSession(sessionId);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }, SESSION_ID);
+
+    expect(inputLog).toEqual([]);
+    expect(
+      await page.evaluate(() => ({
+        activeWebviewId: app.activeWebviewId,
+        webviewActive: document.querySelector('.main')?.classList.contains('webview-active'),
+      }))
+    ).toEqual({
+      activeWebviewId: null,
+      webviewActive: false,
+    });
+    expect(await page.locator(SELECTORS.MOBILE_NAVIGATION).isVisible()).toBe(true);
+    expect(resizeLog).toEqual([
+      expect.objectContaining({
+        force: true,
+        takeControl: true,
+      }),
+    ]);
   });
 
   it('shows jump-to-latest above the three central controls only while reading history', async () => {
@@ -341,6 +375,9 @@ describe('Mobile Navigation Pad', () => {
   });
 
   it('is controlled from the mobile App Settings Input options', async () => {
+    expect(await page.locator(SELECTORS.MOBILE_NAVIGATION).isVisible()).toBe(true);
+    expect(await page.locator('.btn-toolbar.btn-enter').isVisible()).toBe(false);
+
     await page.evaluate(`app.openAppSettings()`);
     const settingRow = page.locator('#appSettingsMobileTerminalControlsItem');
     const setting = page.locator('#appSettingsMobileTerminalControls');
@@ -380,6 +417,7 @@ describe('Mobile Navigation Pad', () => {
       )
     ).toBe(true);
     expect(await page.locator(SELECTORS.MOBILE_NAVIGATION).isVisible()).toBe(false);
+    expect(await page.locator('.btn-toolbar.btn-enter').isVisible()).toBe(true);
 
     await page.evaluate(`app.openAppSettings()`);
     expect(await setting.isChecked()).toBe(false);
@@ -398,6 +436,7 @@ describe('Mobile Navigation Pad', () => {
       )
     ).toBe(true);
     expect(await page.locator(SELECTORS.MOBILE_NAVIGATION).isVisible()).toBe(true);
+    expect(await page.locator('.btn-toolbar.btn-enter').isVisible()).toBe(false);
   });
 
   it('switches to the extended accessory bar while the phone keyboard is visible', async () => {
