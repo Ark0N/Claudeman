@@ -29,16 +29,20 @@ const PUBLIC = join(HERE, '../src/web/public');
 // Matches the device the browser-based test emulates (iPhone 14 Pro = 393px CSS).
 const PHONE_WIDTH = 393;
 
-// Header buttons intentionally kept VISIBLE in the phone header. Instance shutdown
-// is a process-level safety control; File Viewer is opt-in and now has a dedicated
-// phone layout for following repository changes without reopening Settings.
-const MOBILE_VISIBLE_ALLOWLIST = new Set<string>(['btn-instance-shutdown', 'btn-file-viewer']);
+// Header buttons intentionally kept VISIBLE in the phone header.
+const MOBILE_VISIBLE_ALLOWLIST = new Set<string>();
 
 // Buttons we expect to STAY hidden on phones — an explicit lock so a future edit
 // that removes a hide rule fails loudly (not silently). The attachments button is
 // NOT here: it's opt-in (default-hidden everywhere via its own --hidden marker), so
 // it's excluded from the default-visible enumeration rather than mobile-hidden.
-const KNOWN_PHONE_HIDDEN = ['btn-settings', 'btn-lifecycle-log', 'btn-session-manager'];
+const KNOWN_PHONE_HIDDEN = [
+  'btn-settings',
+  'btn-lifecycle-log',
+  'btn-session-manager',
+  'btn-file-viewer',
+  'btn-instance-shutdown',
+];
 
 function attrOf(openTag: string, name: string): string {
   const m = openTag.match(new RegExp(`${name}="([^"]*)"`));

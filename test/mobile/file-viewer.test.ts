@@ -132,11 +132,6 @@ describe('Mobile File Viewer', () => {
       const secondLoad = app.loadFileBrowser('session-b');
       await Promise.allSettled([firstLoad, secondLoad]);
 
-      const settings = app.loadAppSettingsFromStorage();
-      settings.showFileViewerButton = true;
-      app.saveAppSettingsToStorage(settings);
-      app.applyHeaderVisibilitySettings();
-      const fileViewerButton = document.querySelector('.btn-file-viewer');
       const scope = document.getElementById('fileBrowserScope') as HTMLSelectElement;
       return {
         sessionId: app.fileBrowserSessionId,
@@ -145,7 +140,6 @@ describe('Mobile File Viewer', () => {
         treeText: document.getElementById('fileBrowserTree')?.textContent,
         scopeOptions: Array.from(scope.options).map((option) => option.textContent),
         selectedScope: scope.value,
-        fileViewerVisible: fileViewerButton ? getComputedStyle(fileViewerButton).display !== 'none' : false,
       };
     });
 
@@ -154,7 +148,6 @@ describe('Mobile File Viewer', () => {
       scopeId: 'session-b-current',
       root: '/repos/session-b',
       selectedScope: 'session-b-current',
-      fileViewerVisible: true,
     });
     expect(state.treeText).toContain('session-b.txt');
     expect(state.treeText).not.toContain('session-a.txt');

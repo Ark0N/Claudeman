@@ -142,6 +142,11 @@ export function registerSystemRoutes(
   app.get('/api/status', async (req) => ctx.getLightState(req.authUser));
 
   app.post('/api/system/shutdown', async (req, reply) => {
+    if (!isMultiUserMode() && !process.env.CODEMAN_PASSWORD) {
+      return reply
+        .code(403)
+        .send(createErrorResponse(ApiErrorCode.FORBIDDEN, 'Remote shutdown requires CODEMAN_PASSWORD authentication'));
+    }
     if (!requireAdmin(req, reply)) return;
 
     const result = await ctx.requestInstanceShutdown();

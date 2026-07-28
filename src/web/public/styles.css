@@ -10459,6 +10459,15 @@ kbd {
   display: none !important;
 }
 
+/* File browsing remains available from the mobile options surface, but these
+   cramped/destructive header actions stay off modern wide-phone headers too. */
+@media (max-width: 480px) {
+  body.touch-device .btn-file-viewer,
+  body.touch-device .btn-instance-shutdown {
+    display: none !important;
+  }
+}
+
 /* "Cron" footer-toolbar button — opt-in, hidden by default (enable under App
    Settings → Display → Header Displays). Toolbar button, not a header icon, so
    only the hide marker is needed; out-specify any base .btn-toolbar display. */
@@ -11499,6 +11508,16 @@ body.touch-device.cjk-input-visible .main {
     var(--mobile-toolbar-height) + var(--mobile-terminal-accessory-height) +
       var(--safe-area-bottom)
   );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Keyboard-Hidden Terminal Navigation
+   Keep the dynamically-created control hidden unless mobile.css supplies the
+   supported <=768px layout and explicitly reveals its .visible state.
+   ═══════════════════════════════════════════════════════════════ */
+
+.mobile-terminal-nav {
+  display: none;
 }
 
 /* ═══════════════════════════════════════════════════════════════

@@ -471,17 +471,18 @@ html.mobile-init .file-browser-panel {
     height: 12px;
   }
 
-  /* Hide header settings gear, lifecycle log, away digest, and session manager
+  /* Hide secondary and destructive header controls
      on mobile - settings moved to toolbar; the others are secondary controls
      that don't belong on the cramped phone header (the session manager stays
-     reachable via the Ctrl+K palette's "Browse all sessions" item). The opt-in
-     File Viewer remains available because its panel has a dedicated phone layout.
-     (The attachments button is opt-in / default-hidden everywhere via its own
-     --hidden marker, so it needs no mobile-specific rule here.) */
+     reachable via the Ctrl+K palette's "Browse all sessions" item). File Viewer
+     remains available from the mobile options surface. Instance shutdown stays
+     off the phone header to avoid an accidental process-level action. */
   .btn-icon-header.btn-settings,
   .btn-icon-header.btn-lifecycle-log,
   .btn-icon-header.btn-away-digest,
-  .btn-icon-header.btn-session-manager {
+  .btn-icon-header.btn-session-manager,
+  .btn-icon-header.btn-file-viewer,
+  .btn-icon-header.btn-instance-shutdown {
     display: none !important;
   }
 

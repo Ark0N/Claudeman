@@ -35,12 +35,24 @@ describe('Header button visibility (E2E)', () => {
     await page.waitForTimeout(WAIT.PAGE_SETTLE);
     await assertHidden(page, '.btn-icon-header.btn-settings');
     await assertHidden(page, '.btn-icon-header.btn-lifecycle-log');
-    await assertVisible(page, '#instanceShutdownBtn');
+    await assertHidden(page, '.btn-icon-header.btn-file-viewer');
+    await assertHidden(page, '#instanceShutdownBtn');
   });
 
   it('confirms instance shutdown without restoring terminal keyboard focus', async () => {
-    const { page } = await createDevicePage(REPRESENTATIVE_DEVICES['standard-phone'], BASE_URL);
+    const { page } = await createDevicePage(REPRESENTATIVE_DEVICES['large-tablet'], BASE_URL);
     await page.waitForTimeout(WAIT.PAGE_SETTLE);
+    await page.route('**/api/system/shutdown', async (route) => {
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          accepted: true,
+          strategy: 'manual',
+          alreadyScheduled: false,
+        }),
+      });
+    });
 
     await page.locator('.xterm-helper-textarea').focus();
     await page.locator('#instanceShutdownBtn').click();

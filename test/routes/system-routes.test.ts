@@ -101,8 +101,14 @@ const mockedResolveGeminiDir = vi.mocked(resolveGeminiDir);
 
 describe('system-routes', () => {
   let harness: RouteTestHarness;
+  let savedPassword: string | undefined;
+  let savedMultiUser: string | undefined;
 
   beforeEach(async () => {
+    savedPassword = process.env.CODEMAN_PASSWORD;
+    savedMultiUser = process.env.CODEMAN_MULTIUSER;
+    delete process.env.CODEMAN_PASSWORD;
+    delete process.env.CODEMAN_MULTIUSER;
     harness = await createRouteTestHarness(registerSystemRoutes);
     vi.clearAllMocks();
 
@@ -131,6 +137,10 @@ describe('system-routes', () => {
 
   afterEach(async () => {
     await harness.app.close();
+    if (savedPassword === undefined) delete process.env.CODEMAN_PASSWORD;
+    else process.env.CODEMAN_PASSWORD = savedPassword;
+    if (savedMultiUser === undefined) delete process.env.CODEMAN_MULTIUSER;
+    else process.env.CODEMAN_MULTIUSER = savedMultiUser;
   });
 
   // ========== GET /api/status ==========
@@ -147,6 +157,7 @@ describe('system-routes', () => {
 
   describe('POST /api/system/shutdown', () => {
     it('accepts a graceful instance shutdown request', async () => {
+      process.env.CODEMAN_PASSWORD = 'test-password';
       const res = await harness.app.inject({ method: 'POST', url: '/api/system/shutdown' });
 
       expect(res.statusCode).toBe(202);
@@ -159,6 +170,7 @@ describe('system-routes', () => {
     });
 
     it('reports when the owning supervisor requires administrator access', async () => {
+      process.env.CODEMAN_PASSWORD = 'test-password';
       harness.ctx.requestInstanceShutdown.mockResolvedValueOnce({
         accepted: false,
         reason: 'Stopping this service requires administrator access',
@@ -172,6 +184,36 @@ describe('system-routes', () => {
         errorCode: 'CONFLICT',
         error: 'Stopping this service requires administrator access',
       });
+    });
+
+    it('rejects remote shutdown when single-user authentication is disabled', async () => {
+      const res = await harness.app.inject({ method: 'POST', url: '/api/system/shutdown' });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({
+        success: false,
+        errorCode: 'FORBIDDEN',
+        error: expect.stringContaining('CODEMAN_PASSWORD'),
+      });
+      expect(harness.ctx.requestInstanceShutdown).not.toHaveBeenCalled();
+    });
+
+    it('rejects a non-admin in multi-user mode', async () => {
+      process.env.CODEMAN_MULTIUSER = '1';
+      const userHarness = await createRouteTestHarness(registerSystemRoutes, {
+        authUser: { username: 'viewer', role: 'user' },
+      });
+      try {
+        const res = await userHarness.app.inject({
+          method: 'POST',
+          url: '/api/system/shutdown',
+        });
+
+        expect(res.statusCode).toBe(403);
+        expect(userHarness.ctx.requestInstanceShutdown).not.toHaveBeenCalled();
+      } finally {
+        await userHarness.app.close();
+      }
     });
   });
 
