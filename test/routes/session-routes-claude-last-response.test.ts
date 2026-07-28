@@ -1,0 +1,178 @@
+/**
+ * @fileoverview Claude transcript normalization tests for the response viewer.
+ *
+ * Uses app.inject() with a temporary HOME; no real ports or user transcripts.
+ * Port: N/A
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import Fastify, { type FastifyInstance } from 'fastify';
+import fastifyCookie from '@fastify/cookie';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
+import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
+import { ApiErrorCode, httpStatusForErrorCode } from '../../src/types.js';
+import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
+
+interface LocalHarness {
+  app: FastifyInstance;
+  ctx: MockRouteContext;
+}
+
+async function createEnvelopeHarness(): Promise<LocalHarness> {
+  const app = Fastify({ logger: false });
+  await app.register(fastifyCookie);
+  const ctx = createMockRouteContext();
+  registerSessionRoutes(app, ctx);
+
+  app.addHook('preSerialization', (req, reply, payload: unknown, done) => {
+    if (!req.url.startsWith('/api') || payload === null || typeof payload !== 'object') {
+      return done(null, payload);
+    }
+    const response = payload as { success?: unknown; errorCode?: unknown };
+    if (response.success === false) {
+      if (reply.statusCode === 200 && typeof response.errorCode === 'string') {
+        reply.code(httpStatusForErrorCode(response.errorCode as ApiErrorCode));
+      }
+      return done(null, payload);
+    }
+    if (response.success === true) return done(null, payload);
+    return done(null, { success: true, data: payload });
+  });
+
+  installRouteErrorHandler(app);
+  await app.ready();
+  return { app, ctx };
+}
+
+const userEntry = (text: string, extras: Record<string, unknown> = {}) => ({
+  type: 'user',
+  timestamp: '2026-07-21T00:00:00Z',
+  message: { content: [{ type: 'text', text }] },
+  ...extras,
+});
+
+const assistantEntry = (text: string, timestamp: string) => ({
+  type: 'assistant',
+  timestamp,
+  message: { content: [{ type: 'text', text }] },
+});
+
+describe('GET /api/sessions/:id/last-response (claude)', () => {
+  let harness: LocalHarness;
+  let testHome: string;
+  let previousHome: string | undefined;
+
+  beforeEach(async () => {
+    testHome = mkdtempSync(join(tmpdir(), 'codeman-claude-rv-'));
+    previousHome = process.env.HOME;
+    process.env.HOME = testHome;
+    harness = await createEnvelopeHarness();
+  });
+
+  afterEach(async () => {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    rmSync(testHome, { recursive: true, force: true });
+    await harness.app.close();
+  });
+
+  function writeTranscript(sessionId: string, entries: unknown[]): void {
+    const projectDir = join(testHome, '.claude', 'projects', '-workspace');
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(join(projectDir, `${sessionId}.jsonl`), entries.map((entry) => JSON.stringify(entry)).join('\n'));
+  }
+
+  async function getLastResponse(sessionId: string, full = false) {
+    const response = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/last-response${full ? '?context=full' : ''}`,
+    });
+    return { response, body: JSON.parse(response.body) };
+  }
+
+  it('recovers a placeholder tmux session by UUID prefix and groups JSONL fragments into turns', async () => {
+    const restoredId = 'restored-40568a29';
+    const conversationId = '40568a29-d4eb-4eb6-b671-8401428e4f39';
+    const session = harness.ctx._session as typeof harness.ctx._session & {
+      claudeSessionId: string;
+      adoptClaudeSessionId: ReturnType<typeof vi.fn>;
+    };
+    harness.ctx.sessions.delete(session.id);
+    session.id = restoredId;
+    session.mode = 'claude';
+    session.workingDir = '/wrong/recovered/cwd';
+    session.claudeSessionId = restoredId;
+    session.adoptClaudeSessionId = vi.fn((newId: string) => {
+      session.claudeSessionId = newId;
+    });
+    harness.ctx.sessions.set(restoredId, session);
+
+    writeTranscript(conversationId, [
+      userEntry('first prompt'),
+      userEntry('first prompt'), // restore replay before any assistant output
+      { type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'hidden' }] } },
+      assistantEntry('Checking the files.', '2026-07-21T00:00:01Z'),
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-1' }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool-1' }] } },
+      assistantEntry('Checking the files.', '2026-07-21T00:00:02Z'), // replayed snapshot
+      assistantEntry('The first result is ready.', '2026-07-21T00:00:03Z'),
+      userEntry('[Image dimensions generated by the CLI]', { isMeta: true }),
+      userEntry('<command-name>/status</command-name>'),
+      userEntry('Another Claude session sent a message: <teammate-message>done</teammate-message>'),
+      userEntry('<task-notification>background agent completed</task-notification>'),
+      userEntry('This session is being continued from a previous conversation', { isCompactSummary: true }),
+      userEntry('second prompt'),
+      assistantEntry('First half.', '2026-07-21T00:00:04Z'),
+      { ...assistantEntry('sidechain text', '2026-07-21T00:00:05Z'), isSidechain: true },
+      assistantEntry('Second half.', '2026-07-21T00:00:06Z'),
+    ]);
+
+    const full = await getLastResponse(restoredId, true);
+    expect(full.response.statusCode).toBe(200);
+    expect(full.body.data).toEqual({
+      text: 'Second half.',
+      timestamp: '2026-07-21T00:00:06Z',
+      messages: [
+        { role: 'user', text: 'first prompt', timestamp: '2026-07-21T00:00:00Z' },
+        {
+          role: 'assistant',
+          text: 'Checking the files.\n\nThe first result is ready.',
+          timestamp: '2026-07-21T00:00:03Z',
+        },
+        { role: 'user', text: 'second prompt', timestamp: '2026-07-21T00:00:00Z' },
+        { role: 'assistant', text: 'First half.\n\nSecond half.', timestamp: '2026-07-21T00:00:06Z' },
+      ],
+    });
+    expect(session.adoptClaudeSessionId).toHaveBeenCalledWith(conversationId);
+
+    const brief = await getLastResponse(restoredId);
+    expect(brief.body.data).toEqual({ text: 'Second half.', timestamp: '2026-07-21T00:00:06Z' });
+  });
+
+  it('keeps an identical user prompt when it occurs again after an assistant response', async () => {
+    const sessionId = harness.ctx._session.id;
+    const session = harness.ctx._session as typeof harness.ctx._session & {
+      claudeSessionId: string;
+      adoptClaudeSessionId: ReturnType<typeof vi.fn>;
+    };
+    session.claudeSessionId = sessionId;
+    session.adoptClaudeSessionId = vi.fn();
+    writeTranscript(sessionId, [
+      userEntry('continue'),
+      assistantEntry('First answer.', '2026-07-21T00:00:01Z'),
+      userEntry('continue'),
+      assistantEntry('Second answer.', '2026-07-21T00:00:02Z'),
+    ]);
+
+    const { body } = await getLastResponse(sessionId, true);
+    expect(body.data.messages.map((message: { role: string; text: string }) => [message.role, message.text])).toEqual([
+      ['user', 'continue'],
+      ['assistant', 'First answer.'],
+      ['user', 'continue'],
+      ['assistant', 'Second answer.'],
+    ]);
+  });
+});
