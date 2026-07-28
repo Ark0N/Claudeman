@@ -18,6 +18,8 @@
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.9-3b82f6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 5.9"></a>
   <a href="https://fastify.dev/"><img src="https://img.shields.io/badge/Fastify-5.x-1e3a5f?style=flat-square&logo=fastify&logoColor=white" alt="Fastify"></a>
   <img src="https://img.shields.io/badge/Tests-2861%20total-22c55e?style=flat-square" alt="Tests">
+  <a href="https://github.com/Ark0N/Codeman/graphs/contributors"><img src="https://img.shields.io/github/contributors/Ark0N/Codeman?style=flat-square&color=3b82f6" alt="Contributors"></a>
+  <a href="https://github.com/Ark0N/Codeman/commits/master"><img src="https://img.shields.io/github/commit-activity/t/Ark0N/Codeman?style=flat-square&color=1e3a5f" alt="Total commits"></a>
 </p>
 
 <p align="center">
@@ -30,12 +32,25 @@
 
 > 本文档由英文版 [`README.md`](README.md) 翻译而来。如有出入，以英文版为准。
 
+一行命令即可安装（macOS 和 Linux，Windows 通过 WSL）：
+
+```bash
+curl -fsSL https://getcodeman.com/install | bash
+```
+
+```bash
+codeman web
+# 打开 http://localhost:3000，开启你的第一个会话
+```
+
+安装器在每次系统改动前都会先询问；重跑同一条命令即可原地更新。详见[快速开始 — 安装](#快速开始--安装)。
+
 ---
 
 ## 快速开始 — 安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash
+curl -fsSL https://getcodeman.com/install | bash
 ```
 
 该脚本会在缺失时自动安装 Node.js 和 tmux，把 Codeman 克隆到 `~/.codeman/app` 并完成构建。几点须知：
@@ -124,7 +139,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.codeman.web.plist
 <summary><strong>Windows（WSL）</strong></summary>
 
 ```powershell
-wsl bash -c "curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash"
+wsl bash -c "curl -fsSL https://getcodeman.com/install | bash"
 ```
 
 Codeman 依赖 tmux，因此 Windows 用户需要 [WSL](https://learn.microsoft.com/en-us/windows/wsl/install)。如果还没装 WSL：在管理员 PowerShell 中运行 `wsl --install`，重启，打开 Ubuntu，然后在 WSL 内安装你偏好的 AI 编程 CLI（[Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli) 或 [Gemini CLI](https://github.com/google-gemini/gemini-cli)）。安装完成后，即可从 Windows 浏览器访问 `http://localhost:3000`。
@@ -165,7 +180,7 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 
 - **标签（顶部）** —— 每个会话一个。`Alt+1`–`9` 跳转，`Ctrl+Tab` 下一个，拖拽排序（标签顺序会跨设备同步）。
 - **终端（中央）** —— 真实的 `xterm.js` 终端；完整 TUI 正常渲染。直接输入并按 **Enter** 发送。`Shift+Enter` 插入换行。
-- **侧边面板** —— Respawn、Ralph、Orchestrator、Cron、Subagents、Settings（从工具栏切换）。
+- **侧边面板** —— Respawn、Orchestrator、Cron、Subagents、Settings（从工具栏切换）。
 
 ### 4. 与智能体对话
 
@@ -179,7 +194,6 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 | 模式             | 用途                                                                                                      | 位置                                                               |
 | ---------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | **Respawn**      | 长时间无人值守运行 —— 空闲/限额时自动重启 CLI，带自适应时序。预设：`solo-work`、`overnight-autonomous` 等 | Respawn 标签页                                                     |
-| **Ralph / Todo** | 一个自驱循环，跟踪 todo 列表并持续工作直到完成。                                                          | Ralph 标签页                                                       |
 | **Orchestrator** | 把一个目标变成分阶段计划，并跨多个智能体推动完成。                                                        | 编排器面板                                                         |
 | **Cron**         | 已保存的、命名的定时任务（`once`/`interval`/`daily`/`weekly`），到期时拉起会话并发送提示。                | ⏰ Cron 按钮（可选启用：App Settings → Display → Header Displays） |
 | **Auto-resume**  | 订阅限额重置后自动继续。                                                                                  | Respawn 标签页（顶部）                                             |
@@ -207,12 +221,12 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 <table>
 <tr>
 <td align="center" width="33%"><img src="docs/screenshots/mobile-landing-qr.png" alt="移动端 — 带二维码认证的登录页" width="260"></td>
-<td align="center" width="33%"><img src="docs/screenshots/mobile-session-idle.png" alt="移动端 — 带键盘配件栏的空闲会话" width="260"></td>
+<td align="center" width="33%"><img src="docs/screenshots/mobile-session-keyboard-20260727.png" alt="移动端 — 通过键盘配件栏与 Enter 按钮回答智能体的方案提示" width="260"></td>
 <td align="center" width="33%"><img src="docs/screenshots/mobile-session-active.png" alt="移动端 — 活动中的智能体会话" width="260"></td>
 </tr>
 <tr>
 <td align="center"><em>带二维码认证的登录页</em></td>
-<td align="center"><em>键盘配件栏</em></td>
+<td align="center"><em>触控回答提示</em></td>
 <td align="center"><em>智能体实时工作中</em></td>
 </tr>
 </table>
@@ -242,7 +256,12 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 
 ### 触控优化界面
 
+<p align="center">
+  <img src="docs/screenshots/mobile-toolbar-enter-20260727.png" alt="移动端工具栏：配件栏的 /init、/clear、剪贴板与 Esc，下方是 Run、案例、停止、Enter、语音与设置控件" width="560">
+</p>
+
 - **键盘配件栏** —— 在虚拟键盘上方提供 `/init`、`/clear`、`/compact` 快捷按钮。破坏性命令（`/clear`、`/compact`）需双击确认 —— 第一次点击「上膛」，第二次点击执行 —— 这样在颠簸的通勤路上也不会误触
+- **独立的 Enter 按钮** —— 在触控键盘上提交是高频操作，因此手机工具栏为它单独设了一个按钮。它会以按键的方式回放，从而先冲刷本地回显缓冲的文本，不会让内容滞留在屏幕上。启动 Shell 这类低频操作则移入 Run 下拉菜单（`Terminal / Shell`）
 - **滑动导航** —— 在终端上左右滑动切换会话（阈值 80px，300ms）
 - **智能键盘处理** —— 键盘弹出时工具栏与终端整体上移（使用 `visualViewport` API，并对 iOS 地址栏漂移设置 100px 阈值）
 - **安全区适配** —— 通过 `env(safe-area-inset-*)` 适配 iPhone 刘海与底部 Home 指示条
@@ -286,7 +305,7 @@ codeman web --https
 ## 零延迟输入叠加层
 
 <p align="center">
-  <img src="docs/images/zerolag-demo.gif" alt="Zerolag 演示 —— 本地回显与服务端回显并排对比" width="900">
+  <img src="docs/images/zerolag-demo-20260728.gif" alt="Zerolag 演示：两台手机并排对比，即时本地回显与 600ms-2.7s 服务端回显" width="900">
 </p>
 
 远程访问你的编程智能体时（VPN、Tailscale、SSH 隧道），每次按键通常需要 200–300 毫秒往返。Codeman 实现了一套**受 Mosh 启发的本地回显系统**，无论延迟多高，打字都感觉即时。
@@ -329,17 +348,13 @@ WATCHING → IDLE DETECTED → SEND UPDATE → /clear → /init → CONTINUE →
 - **崩溃安全** —— 完整状态持久化在 `state.json` 的 `orchestrator` 键下，可在重启后存续
 - **可从 UI 或 API 驱动** —— 编排器面板，或 `POST /api/orchestrator/start` → `/approve` → `/status`（共 10 个端点）
 
-> 与 Ralph（单会话自主循环）不同：编排器协调多阶段、多智能体执行。完整设计：[`docs/orchestrator-loop-architecture.md`](docs/orchestrator-loop-architecture.md)。
+> 完整设计：[`docs/orchestrator-loop-architecture.md`](docs/orchestrator-loop-architecture.md)。
 
 ---
 
 ## 多会话仪表盘
 
 运行 **20 个并行会话**且全程可见 —— 60fps 的实时 xterm.js 终端、按会话的 token 与成本跟踪、基于标签的导航，以及一键管理。
-
-<p align="center">
-  <img src="docs/screenshots/multi-session-dashboard.png" alt="多会话仪表盘" width="800">
-</p>
 
 ### 持久化会话
 
@@ -374,14 +389,6 @@ codeman web --title-hostname dev-box       # codeman:dev-box（用于覆盖嘈�
 ### 通知
 
 当会话需要关注时实时桌面提醒 —— `permission_prompt` 与 `elicitation_dialog` 触发关键的红色标签闪烁，`idle_prompt` 触发黄色闪烁。点击任意通知即可直接跳转到相关会话。Hook 按 case 目录自动配置。
-
-### Ralph / Todo 跟踪
-
-自动检测 Ralph 循环、`<promise>` 标签、TodoWrite 进度（`4/9 complete`）以及迭代计数器（`[5/50]`），并提供实时进度环与已用时间跟踪。
-
-<p align="center">
-  <img src="docs/images/ralph-tracker-8tasks-44percent.png" alt="Ralph 循环跟踪" width="800">
-</p>
 
 ### 运行摘要（Run Summary）
 
@@ -587,7 +594,7 @@ URL 被刻意保持精简（`/q/` 路径 + 6 字符码 ≈ 53–56 个字符）�
 
 ## 安全
 
-Codeman 默认用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 在设计上对任何能访问到它的人都是一个远程代码执行面 —— 整套安全模型的存在就是为了控制*谁*能访问。（启动权限模式可配置，见下文。）近期加固（v0.9.0 + v0.9.5）封堵了那些常困扰自托管开发工具的浏览器驱动攻击路径。完整模型：[`docs/security-architecture.md`](docs/security-architecture.md)。**发现了漏洞？** 私下披露方式与已知限制清单见 [`SECURITY.md`](SECURITY.md)。
+Codeman 默认用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 在设计上对任何能访问到它的人都是一个远程代码执行面 —— 整套安全模型的存在就是为了控制*谁*能访问。（启动权限模式可配置，见下文。）近期加固（v0.9.0 + v0.9.5）封堵了那些常困扰自托管开发工具的浏览器驱动攻击路径。完整模型：[`docs/security-architecture.md`](docs/security-architecture.md)。**发现了漏洞？** 私下披露方式与已知限制清单见 [`SECURITY.md`](.github/SECURITY.md)。
 
 ### 网络与访问
 
@@ -730,7 +737,6 @@ codeman session start -d /path/to/repo   # (s)  启动会话
 codeman session list                     #      列出会话
 codeman session logs <id>                #      查看输出
 codeman task add "fix the failing test"  # (t)  排入任务
-codeman ralph start --min-hours 8        # (r)  启动自主循环
 codeman attach <path>                    #      附着 Claude hook 上下文
 ```
 
@@ -766,13 +772,6 @@ Codeman 会注册 Claude Code hook，它们 `POST /api/hook-event`（`permission
 | `POST` | `/api/sessions/:id/respawn/enable` | 启用，带配置与定时器 |
 | `POST` | `/api/sessions/:id/respawn/stop`   | 停止控制器           |
 | `PUT`  | `/api/sessions/:id/respawn/config` | 更新配置             |
-
-### Ralph / Todo
-
-| 方法   | 端点                             | 说明                 |
-| ------ | -------------------------------- | -------------------- |
-| `GET`  | `/api/sessions/:id/ralph-state`  | 获取循环状态 + todos |
-| `POST` | `/api/sessions/:id/ralph-config` | 配置跟踪             |
 
 ### 编排器（Orchestrator）
 
@@ -836,7 +835,6 @@ flowchart TB
         end
 
         subgraph Detection["检测层"]
-            RT["Ralph 跟踪器"]
             SW["子智能体监视器<br/><small>~/.claude/projects/*/subagents</small>"]
             TW["团队监视器<br/><small>~/.claude/teams/*</small>"]
         end
@@ -860,7 +858,6 @@ flowchart TB
     SM --> RC
     SM --> ORC
     SM --> SS
-    S1 --> RT
     S1 --> SCR
     S2 --> SCR
     RC --> SCR

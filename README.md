@@ -16,6 +16,8 @@
   <img src="https://img.shields.io/badge/Tests-2861%20total-22c55e?style=flat-square" alt="Tests">
   <a href="https://www.npmjs.com/package/aicodeman"><img src="https://img.shields.io/npm/v/aicodeman?style=flat-square&label=npm&color=22c55e" alt="npm version"></a>
   <a href="https://github.com/Ark0N/Codeman/stargazers"><img src="https://img.shields.io/github/stars/Ark0N/Codeman?style=flat-square&color=eab308" alt="GitHub stars"></a>
+  <a href="https://github.com/Ark0N/Codeman/graphs/contributors"><img src="https://img.shields.io/github/contributors/Ark0N/Codeman?style=flat-square&color=3b82f6" alt="Contributors"></a>
+  <a href="https://github.com/Ark0N/Codeman/commits/master"><img src="https://img.shields.io/github/commit-activity/t/Ark0N/Codeman?style=flat-square&color=1e3a5f" alt="Total commits"></a>
 </p>
 
 <p align="center">
@@ -27,6 +29,19 @@
 </p>
 
 **Codeman** is a self-hosted mission control for AI coding agents. It spawns Claude Code, OpenCode, Codex, or Gemini CLI inside persistent tmux sessions, streams the real terminal to any browser, and keeps agents productive after you walk away: it re-prompts on idle, resumes when a usage limit resets, runs scheduled jobs, and shows every background agent working in real time.
+
+Get started in one line (macOS & Linux, Windows via WSL):
+
+```bash
+curl -fsSL https://getcodeman.com/install | bash
+```
+
+```bash
+codeman web
+# Open http://localhost:3000 and start your first session
+```
+
+The installer asks before every system change, and re-running the same line updates in place. Full details: [Quick Start - Installation](#quick-start---installation).
 
 - **One dashboard, four CLIs** - run [Claude Code, OpenCode, Codex, or Gemini](#more-features) per session (plus plain shell), locally, [in Docker](#isolated-docker-sessions), or [over SSH](#remote-ssh-sessions)
 - **Truly phone-friendly** - a [touch-optimized terminal](#mobile-optimized-web-ui) with instant local echo, QR login, swipe navigation, and push notifications
@@ -44,7 +59,7 @@
 ## Quick Start - Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash
+curl -fsSL https://getcodeman.com/install | bash
 ```
 
 This installs Node.js and tmux if missing, clones Codeman to `~/.codeman/app`, and builds it. A few things worth knowing:
@@ -134,7 +149,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.codeman.web.plist
 <summary><strong>Windows (WSL)</strong></summary>
 
 ```powershell
-wsl bash -c "curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash"
+wsl bash -c "curl -fsSL https://getcodeman.com/install | bash"
 ```
 
 Codeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). If you don't have WSL yet: run `wsl --install` in an admin PowerShell, reboot, open Ubuntu, then install your preferred AI coding CLI inside WSL ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), [Codex](https://developers.openai.com/codex/cli), or [Gemini CLI](https://github.com/google-gemini/gemini-cli)). After installing, `http://localhost:3000` is accessible from your Windows browser.
@@ -175,7 +190,7 @@ Hit start — Codeman spawns the CLI via a real PTY and streams it to your brows
 
 - **Tabs (top)** — one per session. `Alt+1`-`9` to jump, `Ctrl+Tab` for next, drag to reorder (tab order syncs across your devices).
 - **Terminal (center)** — a real `xterm.js` terminal; full TUIs render correctly. Type directly and press **Enter** to send. `Shift+Enter` inserts a newline.
-- **Side panels** — Respawn, Ralph, Orchestrator, Cron, Subagents, Settings (toggled from the toolbar).
+- **Side panels** — Respawn, Orchestrator, Cron, Subagents, Settings (toggled from the toolbar).
 
 ### 4. Talk to the agent
 
@@ -189,7 +204,6 @@ Hit start — Codeman spawns the CLI via a real PTY and streams it to your brows
 | Mode             | Use it for                                                                                                                        | Where                                                               |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | **Respawn**      | Long unattended runs — auto-restarts the CLI on idle/limit, with adaptive timing. Presets: `solo-work`, `overnight-autonomous`, … | Respawn tab                                                         |
-| **Ralph / Todo** | A self-driving loop that tracks a todo list and keeps working until done.                                                         | Ralph tab                                                           |
 | **Orchestrator** | Turn one goal into a phased plan and drive it to completion across agents.                                                        | Orchestrator panel                                                  |
 | **Cron**         | Saved, named jobs on a schedule (`once`/`interval`/`daily`/`weekly`) that spawn a session and send a prompt when due.             | ⏰ Cron button _(opt-in: App Settings → Display → Header Displays)_ |
 | **Auto-resume**  | Automatically continue after a subscription rate-limit resets.                                                                    | Respawn tab (top)                                                   |
@@ -217,12 +231,12 @@ The most responsive AI coding agent experience on any phone. Full xterm.js termi
 <table>
 <tr>
 <td align="center" width="33%"><img src="docs/screenshots/mobile-landing-qr.png" alt="Mobile — landing page with QR auth" width="260"></td>
-<td align="center" width="33%"><img src="docs/screenshots/mobile-session-idle.png" alt="Mobile — idle session with keyboard accessory" width="260"></td>
+<td align="center" width="33%"><img src="docs/screenshots/mobile-session-keyboard-20260727.png" alt="Mobile — answering an agent's plan prompt with the keyboard accessory bar and Enter button" width="260"></td>
 <td align="center" width="33%"><img src="docs/screenshots/mobile-session-active.png" alt="Mobile — active agent session" width="260"></td>
 </tr>
 <tr>
 <td align="center"><em>Landing page with QR auth</em></td>
-<td align="center"><em>Keyboard accessory bar</em></td>
+<td align="center"><em>Answering prompts by touch</em></td>
 <td align="center"><em>Agent working in real-time</em></td>
 </tr>
 </table>
@@ -252,7 +266,12 @@ The security design addresses all 6 critical QR auth flaws identified in ["Demys
 
 ### Touch-Optimized Interface
 
+<p align="center">
+  <img src="docs/screenshots/mobile-toolbar-enter-20260727.png" alt="Mobile toolbar: accessory bar with /init, /clear, clipboard and Esc above the Run, case, stop, Enter, voice and settings controls" width="560">
+</p>
+
 - **Keyboard accessory bar** — `/init`, `/clear`, `/compact` quick-action buttons above the virtual keyboard. Destructive commands (`/clear`, `/compact`) require a double-press to confirm — first tap arms the button, second tap executes — so you never fire one by accident on a bumpy commute
+- **Dedicated Enter button** — submitting is a constant need on a touch keyboard, so the phone toolbar gives it a button of its own. It replays the keypress through the terminal, so text buffered by local echo is flushed first rather than stranded. Starting a shell moves into the Run dropdown (`Terminal / Shell`), which is the rarer action
 - **Swipe navigation** — left/right on the terminal to switch sessions (80px threshold, 300ms)
 - **Smart keyboard handling** — toolbar and terminal shift up when keyboard opens (uses `visualViewport` API with 100px threshold for iOS address bar drift)
 - **Safe area support** — respects iPhone notch and home indicator via `env(safe-area-inset-*)`
@@ -296,7 +315,7 @@ Multi-agent Workflow runs ("ultracode") get the same treatment: a floating run w
 ## Zero-Lag Input Overlay
 
 <p align="center">
-  <img src="docs/images/zerolag-demo.gif" alt="Zerolag Demo — local echo vs server echo side-by-side" width="900">
+  <img src="docs/images/zerolag-demo-20260728.gif" alt="Zerolag demo: instant local echo next to 600ms-2.7s server echo, side by side on two phones" width="900">
 </p>
 
 When accessing your coding agent remotely (VPN, Tailscale, SSH tunnel), every keystroke normally takes 200-300ms to round-trip. Codeman implements a **Mosh-inspired local echo system** that makes typing feel instant regardless of latency.
@@ -339,17 +358,13 @@ Beyond single-session respawn, the **Orchestrator** turns a high-level goal into
 - **Crash-safe** — full state persists under the `orchestrator` key in `state.json`, so it survives restarts
 - **Driven from the UI or API** — the Orchestrator panel, or `POST /api/orchestrator/start` → `/approve` → `/status` (10 endpoints)
 
-> Distinct from Ralph (a single-session autonomous loop): the orchestrator coordinates multi-phase, multi-agent execution. Full design: [`docs/orchestrator-loop-architecture.md`](docs/orchestrator-loop-architecture.md).
+> Full design: [`docs/orchestrator-loop-architecture.md`](docs/orchestrator-loop-architecture.md).
 
 ---
 
 ## Multi-Session Dashboard
 
 Run **20 parallel sessions** with full visibility — real-time xterm.js terminals at 60fps, per-session token and cost tracking, tab-based navigation, and one-click management.
-
-<p align="center">
-  <img src="docs/screenshots/multi-session-dashboard.png" alt="Multi-Session Dashboard" width="800">
-</p>
 
 ### Persistent Sessions
 
@@ -384,14 +399,6 @@ The title is templated into the served HTML on first byte, so it's correct from 
 ### Notifications
 
 Real-time desktop alerts when sessions need attention — `permission_prompt` and `elicitation_dialog` trigger critical red tab blinks, `idle_prompt` triggers yellow blinks. Click any notification to jump directly to the affected session. Hooks auto-configured per case directory.
-
-### Ralph / Todo Tracking
-
-Auto-detects Ralph Loops, `<promise>` tags, TodoWrite progress (`4/9 complete`), and iteration counters (`[5/50]`) with real-time progress rings and elapsed time tracking.
-
-<p align="center">
-  <img src="docs/images/ralph-tracker-8tasks-44percent.png" alt="Ralph Loop Tracking" width="800">
-</p>
 
 ### Run Summary
 
@@ -597,7 +604,7 @@ When someone authenticates via QR, the desktop shows a notification toast with t
 
 ## Security
 
-By default Codeman launches sessions with `--dangerously-skip-permissions`, so the web UI is by design a remote-code-execution surface for whoever can reach it — the whole security model exists to control _who_ that is. (The startup permission mode is configurable; see below.) Recent hardening (v0.9.0 + v0.9.5) closes the browser-driven attack paths that bite self-hosted dev tools. Full model: [`docs/security-architecture.md`](docs/security-architecture.md). **Found a vulnerability?** See [`SECURITY.md`](SECURITY.md) for private disclosure and the list of known limitations.
+By default Codeman launches sessions with `--dangerously-skip-permissions`, so the web UI is by design a remote-code-execution surface for whoever can reach it — the whole security model exists to control _who_ that is. (The startup permission mode is configurable; see below.) Recent hardening (v0.9.0 + v0.9.5) closes the browser-driven attack paths that bite self-hosted dev tools. Full model: [`docs/security-architecture.md`](docs/security-architecture.md). **Found a vulnerability?** See [`SECURITY.md`](.github/SECURITY.md) for private disclosure and the list of known limitations.
 
 ### Network & access
 
@@ -740,7 +747,6 @@ codeman session start -d /path/to/repo   # (s)  start a session
 codeman session list                     #      list sessions
 codeman session logs <id>                #      tail output
 codeman task add "fix the failing test"  # (t)  queue a task
-codeman ralph start --min-hours 8        # (r)  launch the autonomous loop
 codeman attach <path>                     #      attach a Claude hook context
 ```
 
@@ -776,13 +782,6 @@ REST over Fastify — **~190 handlers across 20 route modules**, plus an SSE str
 | `POST` | `/api/sessions/:id/respawn/enable` | Enable with config + timer |
 | `POST` | `/api/sessions/:id/respawn/stop`   | Stop controller            |
 | `PUT`  | `/api/sessions/:id/respawn/config` | Update config              |
-
-### Ralph / Todo
-
-| Method | Endpoint                         | Description            |
-| ------ | -------------------------------- | ---------------------- |
-| `GET`  | `/api/sessions/:id/ralph-state`  | Get loop state + todos |
-| `POST` | `/api/sessions/:id/ralph-config` | Configure tracking     |
 
 ### Orchestrator
 
@@ -846,7 +845,6 @@ flowchart TB
         end
 
         subgraph Detection["Detection Layer"]
-            RT["Ralph Tracker"]
             SW["Subagent Watcher<br/><small>~/.claude/projects/*/subagents</small>"]
             TW["Team Watcher<br/><small>~/.claude/teams/*</small>"]
         end
@@ -870,7 +868,6 @@ flowchart TB
     SM --> RC
     SM --> ORC
     SM --> SS
-    S1 --> RT
     S1 --> SCR
     S2 --> SCR
     RC --> SCR

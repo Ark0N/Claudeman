@@ -1,5 +1,52 @@
 # aicodeman
 
+## 1.8.3
+
+### Patch Changes
+
+- 8c089a4: Add four light UI and terminal skins: Paper Gray, Solarized Light, Catppuccin Latte, and Rosé Pine Dawn. The Skin picker now groups Light and Dark options, and each light skin ships a matching xterm ANSI palette plus `color-scheme: light` so native selects, date pickers and scrollbars stop rendering as dark OS widgets on a light page. Terminals set `minimumContrastRatio: 4.5` under a light skin (main terminal and teammate terminals both), which keeps CLI output that assumes a dark background readable, and `applyTerminalSkin()` now refreshes the zero-lag input overlay so typed-but-unflushed text does not keep the previous theme's colors.
+
+  Elevated surfaces (modals, command palette, dropdowns, subagent and ultracode windows, file preview, attachment tray, mobile sheets) now resolve through shared `--floating-bg` / `--control-*` / `--banner-bg-*` / `--modal-backdrop` / `--elevated-shadow` tokens instead of hardcoded near-black rgba, so they follow whichever skin is active. On the Daylight skins this lifts modals slightly off the page background; OG Codeman pins its own near-black value to keep that palette neutral.
+
+  Also defines twelve CSS compatibility aliases (`--bg-primary`, `--bg-secondary`, `--bg-tertiary`, `--text-primary`, `--text-secondary`, `--border-color`, `--accent-color`, `--success`, `--error`, `--danger`, `--font-mono`, `--shadow-lg`) that panels and overlays already referenced in about 79 places but which were never actually declared, so those rules silently resolved to nothing. Status badges and accent-tinted pills (search filter chips and result badges, session tab mode pills, respawn state, Ralph priority and circuit-breaker badges, tunnel and voice status, mobile case picker) no longer keep their pale light-on-dark ink under a light skin, where it measured 1.0 to 1.9:1 and made the search filter chips invisible.
+
+  New static regression `test/skin-themes.test.ts` guards the four-way parity between the CSS token block, the xterm palette, the pre-paint allowlist and the Settings picker.
+
+## 1.8.2
+
+### Patch Changes
+
+- Web tabs: open dashboard URLs as tabs beside agent sessions, plus terminal link fixes.
+
+  **Web tabs.** The Run dropdown gains a "Web / URL" section. A saved URL renders as a tab in the same strip as Claude/Codex/Gemini sessions, with the same Alt+1-9 numbering, an icon picker, and per-device tab order. Frames stay mounted while hidden (LRU-bounded), so switching tabs never reloads a dashboard.
+
+  Dashboards are proxied through Codeman's own origin, because a direct iframe fails three ways at once: an HTTPS Codeman cannot embed a plain-HTTP target (mixed content, with no override at all on iOS Safari), many dashboards send `X-Frame-Options: DENY`, and Codeman's own `default-src 'self'` CSP blocks cross-origin frames. Proxying dissolves all three and leaves the production CSP unchanged. The fetch happens server-side, so a tailnet-only or localhost-only dashboard is reachable from any device that can reach Codeman.
+
+  The proxy is not an API surface: it authenticates on a 192-bit capability in the path (memory-only, rolling TTL, bound to the minting user, revoked on edit or delete) and is exempt from the cookie and Origin checks, because a sandboxed iframe is opaque-origin and sends neither. The Host allowlist is never bypassed. Iframes omit `allow-same-origin` unless a URL is explicitly marked trusted, and `Authorization` plus the session cookie are stripped upstream in both modes so `CODEMAN_PASSWORD` cannot leak into a dashboard. Includes an HTTP and WebSocket proxy, redirect/cookie/`<base>` rewriting, a runtime URL shim for requests built by dashboard JavaScript, and CORS handling for the opaque-origin frame. New endpoints under `/api/webviews`, storage in `~/.codeman/webviews.json`, user guide in `docs/web-tabs.md`.
+
+  **Terminal links no longer truncate.** Three separate cuts, each producing a link that opened the wrong target or none at all:
+  - A single `&` ended the match, so every query string was cut. A WordPress edit link resolved to `?post=1479` and Claude Code's own `/login` URL was unusable. `&` is now part of a URL while `&&` remains a boundary.
+  - Links wider than the terminal were cut at the row boundary. The link provider now stitches continuation rows into one logical line and maps offsets back across rows. Handles both soft wraps (emulator, `isWrapped`) and hard wraps (a program wrapping its own output and emitting a newline, as Ink does), the latter being why the `/login` URL grew longer as the window was widened.
+  - Image and PDF paths were not matched at all, so pasted-screenshot paths rendered as plain text. They now link and open the file preview, which renders images inline.
+
+  **Also fixes** a pre-existing bug where `.toolbar`'s `backdrop-filter` created a stacking context that trapped the Run menu's z-index, letting the welcome overlay cover it: with no session open, every item in that menu (Claude Code included) was unclickable.
+
+## 1.8.1
+
+### Patch Changes
+
+- Mobile toolbar: a dedicated Enter button, and Shell moves into the Run dropdown.
+
+  Submitting is a constant need on a touch keyboard, so on phones (≤430px) the toolbar slot that held "Shell" now holds a dark blue **Enter** button. Starting a shell, the far rarer action, moves into the expandable Run dropdown as `Terminal / Shell` (the Run button then reads "Run SH"). Desktop and tablet are unchanged: the green Run Shell button stays exactly where it was.
+
+  Enter is replayed through the terminal's own input path rather than posted to the input API. This matters because local echo is on by default on touch devices: the characters you type are buffered client-side and have not yet reached the PTY, so sending a bare carriage return would submit an empty line and leave your text stranded on screen. Replaying the keypress flushes the buffered text first, then submits.
+
+  Installer: re-runs and updates now preserve the existing network binding instead of silently reverting it, so upgrading no longer changes how the dashboard is reachable.
+
+  Default desktop header is cleaner: the file viewer is shown by default and the plan-usage chip is unchanged, while the token-count chip and lifecycle-log button now default off. Stored preferences are still honored.
+
+  Docs and repo housekeeping: fresh phone screenshots and a new hero GIF in both READMEs, contributor and total-commit badges, and a much shorter repo root. `SECURITY.md` moved to `.github/` (GitHub resolves it there, so the Security policy tab is unaffected), `SPEEDRUN.md` to `docs/`, the knip config to `config/`, and Prettier's config into the `"prettier"` key of `package.json`. `CLAUDE.md` was split so the always-loaded guidance is roughly half its former size, with the deep implementation detail preserved verbatim in `docs/architecture-invariants.md`.
+
 ## 1.8.0
 
 ### Minor Changes

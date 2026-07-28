@@ -45,20 +45,20 @@
   <!-- Synchronous mobile detection — runs before first paint to prevent panel flash -->
   <script>if(window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024))document.documentElement.classList.add('mobile-init');</script>
   <!-- Synchronous skin selection — runs before first paint to prevent theme flash -->
-  <script>try{var s=localStorage.getItem('codeman:skin');if(s!=='og'&&s!=='daylight-green'&&s!=='daylight-blue')s='daylight-blue';document.documentElement.dataset.skin=s;window.__codemanSkin=s;}catch(e){document.documentElement.dataset.skin='daylight-blue';window.__codemanSkin='daylight-blue';}</script>
+  <script>try{var s=localStorage.getItem('codeman:skin'),a=['og','daylight-green','daylight-blue','paper-gray','solarized-light','catppuccin-latte','rose-pine-dawn'];if(a.indexOf(s)<0)s='daylight-blue';document.documentElement.dataset.skin=s;window.__codemanSkin=s;}catch(e){document.documentElement.dataset.skin='daylight-blue';window.__codemanSkin='daylight-blue';}</script>
   <!-- Apply the saved per-device language before first paint. The full translation
        layer loads below; setting lang/dir here prevents an English accessibility
        tree from flashing while the deferred scripts start. -->
   <script>try{var m=window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024);var k=m?'codeman-app-settings-mobile':'codeman-app-settings';var l=JSON.parse(localStorage.getItem(k)||'{}').language;l=l==='zh-CN'?'zh-CN':'en';document.documentElement.lang=l;window.__codemanLanguage=l;}catch(e){document.documentElement.lang='en';window.__codemanLanguage='en';}</script>
   <!-- Inline critical CSS for instant skeleton paint (before styles.css loads) -->
   <style>
-    .loading-skeleton{display:flex;flex-direction:column;height:100vh;height:100dvh;background:#11151c}
-    .skeleton-header{height:40px;background:rgba(31,38,48,0.85);border-bottom:1px solid rgba(255,255,255,0.08);display:flex;align-items:center;padding:0 12px}
-    .skeleton-brand{color:#38b6f0;font-size:14px;font-weight:700;font-family:'Manrope',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;opacity:.85}
+    .loading-skeleton{display:flex;flex-direction:column;height:100vh;height:100dvh;background:var(--bg-dark,#11151c)}
+    .skeleton-header{height:40px;background:var(--glass-bg,rgba(31,38,48,0.85));border-bottom:1px solid var(--glass-border,rgba(255,255,255,0.08));display:flex;align-items:center;padding:0 12px}
+    .skeleton-brand{color:var(--accent,#38b6f0);font-size:14px;font-weight:700;font-family:'Manrope',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;opacity:.85}
     .skeleton-tabs{display:flex;gap:4px;margin-left:16px}
-    .skeleton-tab{width:80px;height:24px;background:rgba(255,255,255,0.04);border-radius:6px}
-    .skeleton-terminal{flex:1;background:#161b23}
-    .skeleton-toolbar{height:42px;background:rgba(31,38,48,0.85);border-top:1px solid rgba(255,255,255,0.08)}
+    .skeleton-tab{width:80px;height:24px;background:var(--control-bg,rgba(255,255,255,0.04));border-radius:6px}
+    .skeleton-terminal{flex:1;background:var(--term-bg,#161b23)}
+    .skeleton-toolbar{height:42px;background:var(--glass-bg,rgba(31,38,48,0.85));border-top:1px solid var(--glass-border,rgba(255,255,255,0.08))}
     .app-loaded .loading-skeleton{display:none}
   </style>
 </head>
@@ -300,6 +300,11 @@
           autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
       </div>
 
+      <!-- Web tab layer: one iframe per open dashboard, shown in place of the
+           terminal while a web tab is active. Frames stay mounted while hidden so
+           switching tabs does not reload (and re-authenticate) a dashboard. -->
+      <div class="webview-layer" id="webviewLayer"></div>
+
       <!-- Welcome Overlay (shown when no session active) -->
       <div class="welcome-overlay" id="welcomeOverlay">
         <div class="welcome-content">
@@ -460,6 +465,18 @@
                 <span class="run-mode-dot gemini"></span>Gemini
               </button>
               <div class="run-mode-sep"></div>
+              <button class="run-mode-option" data-mode="shell" onclick="app.setRunMode('shell')">
+                <span class="run-mode-dot shell"></span>Terminal / Shell
+              </button>
+              <div class="run-mode-sep"></div>
+              <!-- Web tabs: dashboards open as tabs beside agent sessions. These do NOT
+                   set runMode: the Run button always means "start an agent". -->
+              <div class="run-mode-header">Web / URL</div>
+              <div class="run-mode-webviews" id="runModeWebviews"></div>
+              <button class="run-mode-option run-mode-option--add" onclick="app.showWebviewModal()">
+                <span class="run-mode-dot web"></span>Add URL&hellip;
+              </button>
+              <div class="run-mode-sep"></div>
               <div class="run-mode-header">Recent Sessions</div>
               <div class="run-mode-history" id="runModeHistory"></div>
             </div>
@@ -474,6 +491,12 @@
           </button>
           <button class="btn-toolbar btn-shell" onclick="app.runShell()" title="Run Shell">
             Run Shell
+          </button>
+          <!-- Phone-only: replaces the Shell button on ≤430px (Shell moves into the Run
+               dropdown there). Sends a bare Enter to the active session, the complement
+               to the accessory bar's Esc. Hidden everywhere else — see styles.css. -->
+          <button class="btn-toolbar btn-enter" onclick="app.sendEnterKey()" title="Send Enter">
+            Enter
           </button>
           <div class="tab-count-group" title="Instance count">
             <button class="tab-count-btn" onclick="app.decrementShellCount()">−</button>
@@ -625,6 +648,56 @@
               <div><kbd>Escape</kbd></div><div>Close Panels</div>
             </div>
           </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- Web Tab (dashboard URL) editor -->
+    <div class="modal" id="webviewModal">
+      <div class="modal-backdrop" onclick="app.closeWebviewModal()"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 id="webviewModalTitle">Add URL</h3>
+          <button class="modal-close" onclick="app.closeWebviewModal()" aria-label="Close URL editor">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-row">
+            <label for="webviewName">Name</label>
+            <input type="text" id="webviewName" placeholder="Grafana" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="form-row">
+            <label for="webviewUrl">URL</label>
+            <input type="text" id="webviewUrl" placeholder="http://100.70.56.18:4000/" autocomplete="off"
+                   autocapitalize="off" spellcheck="false">
+            <span class="form-hint">
+              Reached from the Codeman server, so a tailnet or localhost address works even when
+              this browser cannot see it. Plain HTTP is fine: the dashboard is proxied through
+              Codeman, which is also what gets past dashboards that refuse to be embedded.
+            </span>
+          </div>
+          <div class="form-row">
+            <label for="webviewIcon">Icon</label>
+            <!-- Click to pick; the field stays editable so any emoji still works. -->
+            <div class="webview-icon-picker" id="webviewIconPicker" role="group" aria-label="Choose an icon"></div>
+            <input type="text" id="webviewIcon" placeholder="Or paste any emoji" maxlength="8" autocomplete="off">
+          </div>
+          <div class="form-row">
+            <label class="checkbox-row"><input type="checkbox" id="webviewSandboxed" checked> Open sandboxed</label>
+            <span class="form-hint">
+              Recommended. A proxied dashboard is served from Codeman's own address, so unchecking
+              this lets its JavaScript read this page and call the API that starts agents. Uncheck
+              only for a dashboard you fully trust, or one whose own login needs cookies.
+            </span>
+          </div>
+          <div class="form-row">
+            <button class="btn-secondary" onclick="app.testWebviewUrl()">Test</button>
+            <span class="form-hint webview-probe-result" id="webviewProbeResult"></span>
+          </div>
+        </div>
+        <div class="form-actions webview-modal-actions">
+          <button class="btn-danger" id="webviewDeleteBtn" onclick="app.deleteWebview()">Delete</button>
+          <button class="btn-secondary" onclick="app.closeWebviewModal()">Cancel</button>
+          <button class="btn-primary" onclick="app.saveWebview()">Save</button>
         </div>
       </div>
     </div>
@@ -1190,9 +1263,17 @@
               <div class="settings-item settings-item-skin" title="Visual theme for this device (not synced)">
                 <span class="settings-item-label">Skin</span>
                 <select id="appSettingsSkin" class="form-select">
-                  <option value="daylight-blue">Daylight Blue</option>
-                  <option value="daylight-green">Daylight Green</option>
-                  <option value="og">OG Codeman</option>
+                  <optgroup label="Light">
+                    <option value="paper-gray">Paper Gray</option>
+                    <option value="solarized-light">Solarized Light</option>
+                    <option value="catppuccin-latte">Catppuccin Latte</option>
+                    <option value="rose-pine-dawn">Rosé Pine Dawn</option>
+                  </optgroup>
+                  <optgroup label="Dark">
+                    <option value="daylight-blue">Daylight Blue</option>
+                    <option value="daylight-green">Daylight Green</option>
+                    <option value="og">OG Codeman</option>
+                  </optgroup>
                 </select>
               </div>
               <div class="settings-item" id="appSettingsWebglRendererItem" title="Use the GPU-accelerated WebGL terminal renderer (desktop only). Turn off to force the DOM renderer if you hit GPU glitches. Codeman also auto-falls-back to the DOM renderer after repeated GPU stalls.">
@@ -1962,8 +2043,11 @@
             </div>
             <div class="form-row">
               <label>Folder Path</label>
-              <input type="text" id="linkCasePath" placeholder="/home/user/projects/my-project" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
-              <span class="form-hint">Absolute path to an existing project folder, e.g. /home/you/my-project</span>
+              <div class="path-input-group">
+                <input type="text" id="linkCasePath" placeholder="/mnt/d/AI/my-project" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+                <button type="button" class="btn path-input-browse" onclick="app.openLinkCasePathPicker()">Browse&hellip;</button>
+              </div>
+              <span class="form-hint">Choose an existing folder from this computer or enter its absolute path</span>
             </div>
           </div>
           <!-- Remote Tab -->
@@ -2541,6 +2625,7 @@
   <script defer src="ultracode-panel.js"></script>
   <script defer src="admin-ui.js"></script>
   <script defer src="session-ui.js"></script>
+  <script defer src="webview-tabs.js"></script>
   <script defer src="ralph-wizard.js"></script>
   <script defer src="api-client.js"></script>
   <script defer src="subagent-windows.js"></script>
