@@ -40,6 +40,7 @@ interface TranscriptContentBlock {
   text?: string;
   name?: string;
   input?: Record<string, unknown>;
+  tool_use_id?: string;
   content?: string;
   is_error?: boolean;
 }
@@ -328,10 +329,7 @@ export class TranscriptWatcher extends EventEmitter {
         this.handleResultEntry(entry);
         break;
       case 'user':
-        // User message means new turn, reset some state
-        this.state.isComplete = false;
-        this.state.hasError = false;
-        this.state.errorMessage = null;
+        this.handleUserEntry(entry);
         break;
       case 'system':
         // System messages are informational
@@ -360,20 +358,39 @@ export class TranscriptWatcher extends EventEmitter {
           this.state.currentTool = block.name;
           this.emit('transcript:tool_start', block.name);
         } else if (block.type === 'tool_result') {
-          // Tool completed
-          const wasError = block.is_error === true;
-          const toolName = this.state.currentTool;
-          this.state.toolExecuting = false;
-          this.state.currentTool = null;
-          if (toolName) {
-            this.emit('transcript:tool_end', toolName, wasError);
-          }
-          if (wasError && block.content) {
-            this.state.hasError = true;
-            this.state.errorMessage = String(block.content).slice(0, 200);
-          }
+          this.handleToolResult(block);
         }
       }
+    }
+  }
+
+  private handleUserEntry(entry: TranscriptEntry): void {
+    // A user-authored prompt starts a turn, while Claude tool results also use
+    // user entries. Reset turn state first, then close any completed tool.
+    this.state.isComplete = false;
+    this.state.hasError = false;
+    this.state.errorMessage = null;
+
+    const content = entry.message?.content;
+    if (!Array.isArray(content)) return;
+    for (const block of content) {
+      if (block.type === 'tool_result') {
+        this.handleToolResult(block);
+      }
+    }
+  }
+
+  private handleToolResult(block: TranscriptContentBlock): void {
+    const wasError = block.is_error === true;
+    const toolName = this.state.currentTool;
+    this.state.toolExecuting = false;
+    this.state.currentTool = null;
+    if (toolName) {
+      this.emit('transcript:tool_end', toolName, wasError);
+    }
+    if (wasError && block.content) {
+      this.state.hasError = true;
+      this.state.errorMessage = String(block.content).slice(0, 200);
     }
   }
 
