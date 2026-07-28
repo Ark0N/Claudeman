@@ -16,8 +16,9 @@
  *   Only initializes on touch devices (MobileDetection.isTouchDevice guard).
  *
  * - MobileNavigationPad (singleton object) — Keyboard-hidden Esc/Up/Enter/Down/Tab controls
- *   for terminal menus. A simultaneous Up+Down press emits Enter, and vertical swipes on
- *   the surrounding bar emit arrow keys without focusing xterm or opening the keyboard.
+ *   for terminal menus plus a contextual jump-to-latest action. A simultaneous Up+Down
+ *   press emits Enter, and vertical swipes on the surrounding bar emit arrow keys without
+ *   focusing xterm or opening the keyboard.
  *
  * - FocusTrap (class) — Traps Tab/Shift+Tab keyboard focus within a modal element.
  *   Saves and restores previously focused element on deactivate. Used by Ralph wizard
@@ -358,6 +359,16 @@ const MobileNavigationPad = {
   _swipeTime: 600,
 
   _buttons: `
+    <button type="button"
+            class="mobile-terminal-nav-btn mobile-terminal-nav-jump"
+            data-nav-key="jump-bottom" aria-label="Jump to latest output"
+            title="Jump to latest output" aria-hidden="true" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 17V3"/>
+        <path d="m6 11 6 6 6-6"/>
+        <path d="M19 21H5"/>
+      </svg>
+    </button>
     <button type="button" class="mobile-terminal-nav-btn mobile-terminal-nav-key"
             data-nav-key="esc" aria-label="Escape" title="Escape">Esc</button>
     <button type="button" class="mobile-terminal-nav-btn" data-nav-key="up"
@@ -436,12 +447,31 @@ const MobileNavigationPad = {
     for (const button of this.element.querySelectorAll('button')) {
       button.disabled = !visible;
     }
+    this.syncJumpVisibility(visible);
     document.body.classList.toggle('mobile-nav-visible', visible);
 
     if (!visible) {
       this.resetPointers();
       this.resetVolumeKeys();
     }
+  },
+
+  syncJumpVisibility(navigationVisible = this.element?.classList.contains('visible')) {
+    const button = this.element?.querySelector('[data-nav-key="jump-bottom"]');
+    if (!(button instanceof HTMLButtonElement)) return;
+
+    const hasSession = typeof app !== 'undefined' && Boolean(app.activeSessionId);
+    const readingHistory =
+      typeof app !== 'undefined' && typeof app.isTerminalReadingHistory === 'function'
+        ? app.isTerminalReadingHistory()
+        : typeof app !== 'undefined' && typeof app.isTerminalAtBottom === 'function'
+          ? !app.isTerminalAtBottom()
+          : false;
+    const visible = Boolean(navigationVisible && hasSession && readingHistory);
+    button.hidden = !visible;
+    button.disabled = !visible;
+    button.setAttribute('aria-hidden', visible ? 'false' : 'true');
+    this.element.classList.toggle('jump-visible', visible);
   },
 
   blurTerminalInput() {
@@ -635,6 +665,13 @@ const MobileNavigationPad = {
   },
 
   sendKey(key) {
+    if (key === 'jump-bottom') {
+      if (typeof app === 'undefined' || !app.activeSessionId) return;
+      app.jumpTerminalToLatest?.();
+      MobileTerminalControls.feedback(key);
+      this.syncJumpVisibility();
+      return;
+    }
     MobileTerminalControls.sendKey(key);
   },
 

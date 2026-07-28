@@ -5,19 +5,19 @@ Claude Code uses [Ink](https://github.com/vadimdemedes/ink) (React for terminals
 ## Pipeline Overview
 
 ```
-PTY Output → Server Batching → DEC 2026 Wrap → SSE → Client rAF → Sync Parser → xterm.js
+PTY Output → Server Batching → DEC 2026 Wrap → WS/SSE → Client rAF → Sync Parser → xterm.js
 ```
 
-| Layer                    | Location                           | Technique                                          | Latency  |
-| ------------------------ | ---------------------------------- | -------------------------------------------------- | -------- |
-| **1. Server Batching**   | `server.ts:batchTerminalData()`    | Adaptive 16-50ms collection window                 | 16-50ms  |
-| **2. DEC Mode 2026**     | `server.ts:flushTerminalBatches()` | Wraps with `\x1b[?2026h`...`\x1b[?2026l`           | 0ms      |
-| **3. SSE Broadcast**     | `server.ts:broadcast()`            | JSON serialize once, send to all clients           | 0ms      |
-| **4. Client rAF**        | `app.js:batchTerminalWrite()`      | `requestAnimationFrame` batching                   | 0-16ms   |
-| **5. Sync Block Parser** | `app.js:extractSyncSegments()`     | Strips DEC 2026 markers, waits for complete blocks | 0-50ms   |
-| **6. Chunked Loading**   | `app.js:chunkedTerminalWrite()`    | 64KB/frame for large buffers                       | variable |
+| Layer                    | Location                                            | Technique                                           | Latency  |
+| ------------------------ | --------------------------------------------------- | --------------------------------------------------- | -------- |
+| **1. Server Batching**   | `sse-stream-manager.ts:batchTerminalData()`         | Adaptive 16-50ms collection window                  | 16-50ms  |
+| **2. DEC Mode 2026**     | `sse-stream-manager.ts:flushSessionTerminalBatch()` | Wraps with `\x1b[?2026h`...`\x1b[?2026l`            | 0ms      |
+| **3. SSE Broadcast**     | `server.ts:broadcast()`                             | JSON serialize once, send to all clients            | 0ms      |
+| **4. Client pacing**     | `terminal-ui.js:flushPendingWrites()`               | One in-flight xterm parse followed by a paint yield | 0-16ms   |
+| **5. Sync Block Parser** | xterm.js                                            | Native DEC 2026 synchronized-update parsing         | variable |
+| **6. Chunked Loading**   | `terminal-ui.js:chunkedTerminalWrite()`             | 32KB per parsed-and-painted replay chunk            | variable |
 
-## Server-Side Implementation (`server.ts`)
+## Server-Side Implementation (`sse-stream-manager.ts`)
 
 ### Constants
 
@@ -52,30 +52,85 @@ this.broadcast('session:terminal', { id: sessionId, data: syncData });
 3. Accumulates data in `pendingWrites`
 4. Calls `_scheduleTerminalWriteFlush()` if no flush is pending
 5. The yielded callback clears its scheduled flag before calling `flushPendingWrites()`
-6. Large batches schedule their own next chunk until the queue is empty
+6. One xterm write remains in flight until its parse callback runs
+7. Large batches schedule their next chunk only after that callback and a paint yield
 
 ### `flushPendingWrites()`
 
 - Joins the queued terminal data and passes DEC 2026 markers through to xterm.js 6, which handles synchronized output natively.
-- Writes at most 32KB per yield for Codex and 64KB for other modes.
-- Requeues the remainder and immediately schedules another safe yield. A final large response therefore drains without waiting for another SSE event.
+- Writes at most 16KB per yield on mobile, 32KB for desktop Codex, or 64KB for other desktop modes.
+- Prefers the last complete DEC-2026 block inside that budget, publishing one coherent state per display frame.
+- Requeues the remainder, waits for xterm's write callback, then gives visible pages a compositor frame before scheduling the next slice.
+- Hidden pages use a timer/Worker fallback so output continues to drain when animation frames are throttled.
+- Records parse callbacks above 100ms as `XTERM_PARSE` diagnostics.
 
-### `chunkedTerminalWrite(buffer, chunkSize=128KB)`
+### `chunkedTerminalWrite(buffer, chunkSize=32KB)`
 
 - For large buffer restoration (session switch, reconnect)
-- Writes 128KB per `requestAnimationFrame` to avoid UI jank
+- Waits for each xterm parse callback before yielding and writing the next 32KB
 - Strips any embedded DEC 2026 markers from historical data
+- In history-follow mode, pins the viewport to `baseY` after every parsed chunk
 
 ### `selectSession()` Optimizations
 
-- Starts buffer fetch immediately before other setup
-- Shows "Loading session..." indicator while fetching
-- Parallelizes session attach with buffer fetch
-- Fire-and-forget resize (doesn't block tab switch)
+- Pauses client writes and crosses an xterm parser fence before snapshotting or
+  resetting the shared terminal, so bytes queued by the outgoing session cannot
+  render into the destination session.
+- Restores a bounded in-memory xterm snapshot plus its warm live delta without refetching.
+- Keeps a valid cached frame visible while a fresh stream is downloaded and compared.
+- Starts bounded `latest=1` and newest tmux history-page requests concurrently.
+- Requests 400 physical history rows at a time and starts edge loads three screenfuls early.
+- Paints and captures the latest pane first, limited to `.xterm-screen` so the scrollbar stays live.
+- Assembles the compressed page off-screen, then performs one bounded replay under the stable frame.
+- Loads adjacent history pages only near a reading-window edge and retains at most six pages plus the latest pane.
+- Reconciles live SSE batches against the snapshot cursor, including partial overlap.
+- Removes the stable frame only after replay and queued live output cross an xterm paint fence.
+- An unexpected terminal transport loss freezes the last composited Codex frame
+  until an authoritative init identifies the reconnect as same-process or
+  replacement-process. Reconnect bytes may parse underneath but cannot become
+  visible before that decision.
+- A replacement-process reload carries a one-shot recovery marker in
+  `sessionStorage`. The new page uses a wider quiet window and bounded cover
+  hold for the restored pane's post-attach redraw bursts, then clears the marker
+  after revealing a settled frame.
+- Terminal output arriving after cover removal was armed invalidates that paint
+  fence generation. An older xterm callback therefore cannot reveal a frame
+  after newer output extended the quiet deadline.
+
+The snapshot transport and cursor contract are documented in
+[terminal-streaming.md](terminal-streaming.md).
+
+### Mobile Keyboard Transitions
+
+- `KeyboardHandler` records whether terminal input or a regular form field opened the soft keyboard.
+- Terminal focus adds a short-lived `keyboard-opening` state before the first `visualViewport` resize, pinning the handheld app before the browser can auto-scroll the layout viewport.
+- A terminal-owned keyboard immediately unlocks local history, scrolls to the live prompt, and retains focus on the xterm/CJK input surface.
+- `visualViewport` animation frames are coalesced into one settled layout pass. The generic terminal `ResizeObserver` returns while the keyboard is visible so it cannot trigger a delayed second reflow.
+- Keyboard resize claims never use the force-redraw flag. The server therefore suppresses a same-size resize instead of sending an unnecessary `SIGWINCH`.
+- Before a terminal-owned keyboard transition changes the viewport, Codeman clones the already-painted xterm DOM rows into an inert frame cover. Its frame translates toward the new bottom as the viewport shrinks instead of snapping with a bottom anchor. Local xterm resize renders cannot release the cover; parsed terminal output or completed session selection marks the destination frame ready. After two stable compositor frames, Codeman swaps the fully opaque cover out atomically, with a bounded timeout if the TUI does not repaint.
+- Touch tab switches initially reuse the keyboard cover, then hand off to the destination's screen-only latest-frame cover while history loads. The completed selection restores focus, prompt anchoring, and local echo without scheduling a redundant second keyboard fit.
+- Codex tab switches keep that latest-frame cover through WebSocket attachment and
+  the immediately following redraw burst. All stateful ANSI bytes still parse
+  underneath; only the settled pane is revealed after a short quiet window.
+- Provider mode is part of that rendering contract. New tmux sessions persist it
+  in the `@codeman-mode` session option so a server restart cannot restore Codex
+  as Claude and skip the quiet window. Legacy panes without the option are
+  identified once from their live process and immediately upgraded in place.
+- A keyboard-open drag that begins over transcript content keeps terminal focus and pins the local draft overlay to the visible viewport. A plain content tap still activates the touched TUI element and dismisses the keyboard.
+- A form-owned keyboard may resize the local layout, but it does not steal focus, scroll terminal history, or resize the PTY behind the form.
 
 ## Optional Flicker Filter
 
 Per-session toggle via Session Settings. Adds ~50ms latency but eliminates remaining flicker on problematic terminals.
+
+## Codex Status Animation
+
+Codex CLI's decorative working animation can emit about 30 small cursor-update
+frames per second while changing terminal state much less often. On remote and
+mobile clients this consumes render budget without adding useful information.
+App Settings → Codex CLI → **Animated Status Effects** controls Codex's native
+`tui.animations` setting for new local sessions and defaults off. This is a
+source-level motion control: Codeman does not discard or rewrite terminal output.
 
 ### Detection Patterns
 
@@ -88,23 +143,32 @@ When detected, buffers 50ms of subsequent output before flushing atomically.
 
 ## Latency Analysis
 
-| Source          | Best Case      | Worst Case          | Notes                               |
-| --------------- | -------------- | ------------------- | ----------------------------------- |
-| Server batching | 0ms (flush)    | 50ms (rapid events) | Immediate flush if >32KB            |
-| Sync block wait | 0ms            | 50ms                | Only if marker split across packets |
-| Flicker filter  | 0ms (disabled) | 50ms (enabled)      | Optional per-session                |
-| rAF scheduling  | 0ms            | 16ms                | Display refresh sync                |
-| **Total**       | **0ms**        | **~115ms**          | Worst case rare in practice         |
+| Source                | Best Case      | Worst Case          | Notes                               |
+| --------------------- | -------------- | ------------------- | ----------------------------------- |
+| Active WebSocket      | 0ms (flush)    | 50ms                | Desktop 8ms/8KB; mobile 50ms/16KB   |
+| Inactive/fallback SSE | 0ms (flush)    | 50ms (rapid events) | Immediate flush if >32KB            |
+| Sync block wait       | 0ms            | 50ms                | Only if marker split across packets |
+| Flicker filter        | 0ms (disabled) | 50ms (enabled)      | Optional per-session                |
+| rAF scheduling        | 0ms            | 16ms                | Display refresh sync                |
+| **Total**             | **0ms**        | **~115ms**          | Worst case rare in practice         |
 
 **Typical latency:** 16-32ms (server batch + rAF)
 
 ## Edge Cases
 
 - **Incomplete sync blocks**: xterm.js retains synchronized output until its closing marker
-- **Large buffers**: Chunked writing prevents UI freeze
+- **Large histories**: Demand-paged tmux rows prevent full-history transfer and parsing; serial chunk budgets remain as a bounded fallback
+- **Hidden tabs**: Worker wake-ups keep replay moving without racing the compositor while visible
 - **Server shutdown**: Skips batching via `_isStopping` flag
-- **Session switch**: Clears flicker filter state, pending writes, and sync timeout (prevents cross-session data bleed)
-- **SSE reconnect**: `handleInit()` clears all pending write state
+- **Session switch**: Drains xterm's shared parser first, then clears flicker
+  filter state, pending writes, and sync timeout. A replay epoch also suppresses
+  stale viewport and local-echo callbacks.
+- **Same-process SSE reconnect**: Reconciles session metadata without clearing the
+  active terminal, scrollback, input draft, snapshots, or warm buffers
+- **Server restart/deploy**: A changed `serverStartedAt` epoch persists input and
+  reloads the page once so an open tab cannot continue running stale frontend
+  code. The old page remains frame-frozen through epoch detection; the new page
+  retains its stable frame through restored-session redraw settling.
 
 ## DEC Mode 2026 Compatibility
 
@@ -114,7 +178,9 @@ Terminals that natively support DEC 2026 buffer and render atomically. Codeman u
 
 ## Files Involved
 
-| File                            | Key Functions                                                                                                                     |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `src/web/server.ts`             | `batchTerminalData()`, `flushTerminalBatches()`, `broadcast()`                                                                    |
-| `src/web/public/terminal-ui.js` | `batchTerminalWrite()`, `_scheduleTerminalWriteFlush()`, `flushPendingWrites()`, `flushFlickerBuffer()`, `chunkedTerminalWrite()` |
+| File                               | Key Functions                                                                                               |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `src/web/sse-stream-manager.ts`    | `batchTerminalData()`, `flushSessionTerminalBatch()`                                                        |
+| `src/web/routes/session-routes.ts` | Streamed terminal snapshot endpoint                                                                         |
+| `src/web/public/terminal-ui.js`    | `batchTerminalWrite()`, `flushPendingWrites()`, `chunkedTerminalWrite()`, `_readTerminalSnapshotResponse()` |
+| `src/tmux-manager.ts`              | Durable provider-mode metadata and legacy pane recovery                                                     |

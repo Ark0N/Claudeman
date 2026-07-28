@@ -50,12 +50,7 @@ export async function showKeyboardViaCDP(page: Page, keyboardHeight: number): Pr
     const cdp = await getCDP(page);
     const viewport = page.viewportSize()!;
     const newHeight = viewport.height - keyboardHeight;
-    await setVisualViewportHeight(
-      cdp,
-      viewport.width,
-      newHeight,
-      1,
-    );
+    await setVisualViewportHeight(cdp, viewport.width, newHeight, 1);
     await page.waitForTimeout(100);
 
     await page.evaluate(`(function(newH, origH) {
@@ -148,10 +143,7 @@ export async function setupViewportMock(page: Page): Promise<void> {
     const realVV = window.visualViewport;
     if (!realVV) return;
 
-    const origDesc = Object.getOwnPropertyDescriptor(
-      Object.getPrototypeOf(realVV),
-      'height',
-    );
+    const origDesc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(realVV), 'height');
 
     Object.defineProperty(realVV, 'height', {
       get() {
@@ -228,9 +220,11 @@ export async function showKeyboardViaDOM(page: Page, keyboardHeight: number): Pr
 export async function hideKeyboardViaDOM(page: Page): Promise<boolean> {
   try {
     await page.evaluate(`(function() {
-      document.body.classList.remove('keyboard-visible');
+      document.body.classList.remove('keyboard-visible', 'keyboard-opening');
       if (typeof KeyboardHandler !== 'undefined') {
         KeyboardHandler.keyboardVisible = false;
+        clearTimeout(KeyboardHandler._keyboardOpeningTimer);
+        KeyboardHandler._keyboardOpeningTimer = null;
         if (typeof KeyboardHandler.resetLayout === 'function') KeyboardHandler.resetLayout();
       }
 
@@ -258,7 +252,7 @@ export async function hideKeyboardViaDOM(page: Page): Promise<boolean> {
 export async function showKeyboard(
   page: Page,
   keyboardHeight: number,
-  options: KeyboardSimOptions = {},
+  options: KeyboardSimOptions = {}
 ): Promise<KeyboardSimResult> {
   const { preferredLayer, isChromium = true } = options;
 
@@ -282,18 +276,21 @@ export async function showKeyboard(
 }
 
 /** Hide keyboard using the best available simulation layer */
-export async function hideKeyboard(
-  page: Page,
-  options: KeyboardSimOptions = {},
-): Promise<KeyboardSimResult> {
+export async function hideKeyboard(page: Page, options: KeyboardSimOptions = {}): Promise<KeyboardSimResult> {
   const { preferredLayer, isChromium = true } = options;
 
   if (preferredLayer) {
     let success = false;
     switch (preferredLayer) {
-      case 'cdp': success = await hideKeyboardViaCDP(page); break;
-      case 'mock': success = await hideKeyboardViaMock(page); break;
-      case 'dom': success = await hideKeyboardViaDOM(page); break;
+      case 'cdp':
+        success = await hideKeyboardViaCDP(page);
+        break;
+      case 'mock':
+        success = await hideKeyboardViaMock(page);
+        break;
+      case 'dom':
+        success = await hideKeyboardViaDOM(page);
+        break;
     }
     return { layer: preferredLayer, success };
   }
@@ -314,7 +311,7 @@ async function tryLayer(
   page: Page,
   keyboardHeight: number,
   layer: KeyboardLayer,
-  isChromium: boolean,
+  isChromium: boolean
 ): Promise<boolean> {
   switch (layer) {
     case 'cdp':

@@ -223,11 +223,15 @@ textarea:focus-visible {
   font-size: 16px !important; /* prevent iOS auto-zoom on focus */
 }
 
-/* Local echo owns IME candidate rendering at the detected CLI prompt.
- * Keep xterm's composition helper active for input finalization, but suppress
- * its cursor-anchored duplicate once the prompt-aware overlay is enabled. */
+/* Local echo owns IME candidate rendering at the detected CLI prompt. Keep
+ * xterm's native composition element measurable because it positions the
+ * hidden textarea used by Android IMEs; display:none collapses that anchor to
+ * zero height and Gboard stops emitting text mutations after the first char. */
 .touch-device .xterm.codeman-local-echo .composition-view.active {
-  display: none !important;
+  opacity: 0 !important;
+  color: transparent !important;
+  background: transparent !important;
+  pointer-events: none;
 }
 
 /* Session tab focus */
@@ -2312,6 +2316,54 @@ body.solo-mode .btn-lifecycle-log {
   background: transparent !important;
 }
 
+/* Keep the newest session frame visually stable while xterm parses older
+   scrollback underneath it. The cover matches only .xterm-screen so the real
+   scrollbar remains visible and its thumb can shrink as history arrives. */
+.terminal-history-replay-cover {
+  position: absolute;
+  z-index: 5;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--term-bg, #161b23);
+  opacity: 1;
+}
+
+.terminal-history-replay-frame {
+  position: absolute !important;
+  inset: 0 auto auto 0 !important;
+  pointer-events: none !important;
+}
+
+/* Preserve the last painted terminal rows while a mobile keyboard resize
+   refits xterm and waits for the foreground TUI's SIGWINCH redraw. */
+.terminal-resize-frame-cover {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--term-bg, #161b23);
+  opacity: 1;
+}
+
+.terminal-resize-frame {
+  position: absolute !important;
+  top: 0 !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: 0 !important;
+  pointer-events: none !important;
+  transform: translateY(var(--terminal-frame-shift, 0px));
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .terminal-resize-frame {
+    transition-duration: 0ms;
+  }
+}
+
 /* Touch devices: prevent browser from claiming the touch gesture before
    our JS touchmove handler fires. Without this, the browser starts native
    scrolling during the first few px of finger travel and ignores our
@@ -3847,13 +3899,21 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   display: none;
 }
 
+.case-combobox-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
 .case-combobox-option {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
+  flex: 1;
+  min-width: 0;
   width: 100%;
   min-height: 34px;
-  padding: 0.35rem 0.45rem;
+  padding: 0.35rem 4.2rem 0.35rem 0.45rem;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -3885,6 +3945,58 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.case-combobox-actions {
+  position: absolute;
+  right: 0.3rem;
+  display: flex;
+  gap: 0.15rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-smooth);
+}
+
+.case-combobox-row:hover .case-combobox-actions,
+.case-combobox-row:focus-within .case-combobox-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.case-combobox-action {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  background: #242a34;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.case-combobox-action:hover,
+.case-combobox-action:focus-visible {
+  color: var(--text);
+  background: #303846;
+}
+
+.case-combobox-action-delete:hover,
+.case-combobox-action-delete:focus-visible {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
+.case-combobox-action svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .case-combobox-empty {
@@ -4854,29 +4966,43 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
 .mobile-case-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 20px;
+  gap: 4px;
+  padding: 6px 12px 6px 8px;
   background: transparent;
-  border: none;
   color: #e5e5e5;
-  font-size: 0.95rem;
-  text-align: left;
-  cursor: pointer;
   transition: background 0.1s;
   width: 100%;
 }
 
-.mobile-case-item:hover {
+.mobile-case-item:hover,
+.mobile-case-item:focus-within {
   background: rgba(255, 255, 255, 0.05);
 }
 
-.mobile-case-item:active {
+.mobile-case-item:has(.mobile-case-item-select:active) {
   background: rgba(255, 255, 255, 0.1);
 }
 
 .mobile-case-item.selected {
   background: rgba(34, 197, 94, 0.15);
   color: #22c55e;
+}
+
+.mobile-case-item-select {
+  display: flex;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 4px 8px 12px;
+  align-items: center;
+  flex: 1;
+  gap: 12px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: 0.95rem;
+  text-align: left;
+  cursor: pointer;
 }
 
 .mobile-case-item-icon {
@@ -4915,21 +5041,43 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   opacity: 1;
 }
 
-.mobile-case-item-delete {
-  width: 28px;
-  height: 28px;
+.mobile-case-item-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+}
+
+.mobile-case-item-action {
+  width: 36px;
+  height: 36px;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--text-dim);
-  opacity: 0.4;
   flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 4px;
   transition: all var(--transition-smooth);
 }
 
+.mobile-case-item-action svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mobile-case-item-edit:active {
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.15);
+}
+
 .mobile-case-item-delete:active {
-  opacity: 1;
   color: #ef4444;
   background: rgba(239, 68, 68, 0.15);
 }
@@ -8227,11 +8375,11 @@ kbd {
   position: fixed;
   top: calc(var(--header-height) + 10px);
   right: 20px;
-  width: 280px;
+  width: min(380px, calc(100vw - 40px));
   height: calc(100vh - var(--header-height) - var(--toolbar-height) - 40px);
   height: calc(100dvh - var(--header-height) - var(--toolbar-height) - 40px);
   max-height: 600px;
-  min-width: 200px;
+  min-width: 280px;
   min-height: 300px;
   background: rgba(19, 19, 22, 0.95);
   backdrop-filter: blur(20px);
@@ -8271,6 +8419,140 @@ kbd {
 .file-browser-actions {
   display: flex;
   gap: 0.25rem;
+}
+
+.file-browser-actions .btn-icon-sm[hidden] {
+  display: none;
+}
+
+.file-browser-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.file-browser-tab {
+  min-width: 0;
+  min-height: 34px;
+  padding: 0.35rem 0.25rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.file-browser-tab:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.file-browser-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  background: var(--bg-input);
+}
+
+.file-browser-tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  margin-left: 0.2rem;
+  padding: 0 0.25rem;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.18);
+  color: #f4bf75;
+  font-size: 0.62rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.file-browser-tab-count[hidden],
+.file-browser-scope[hidden],
+.file-browser-search[hidden] {
+  display: none;
+}
+
+.file-browser-scope {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.015);
+  flex-shrink: 0;
+}
+
+.file-browser-scope select {
+  min-width: 0;
+  width: 100%;
+  height: 30px;
+  padding: 0 1.7rem 0 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-dark);
+  color: var(--text);
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+}
+
+.file-browser-root {
+  max-width: 92px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.working-directory-form {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.working-directory-form label {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.working-directory-form input {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  padding: 0 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-dark);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.working-directory-form input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.working-directory-status {
+  margin: 0;
+  color: var(--red);
+  font-size: 0.7rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.working-directory-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  padding-top: 0.35rem;
 }
 
 .file-browser-search {
@@ -8338,6 +8620,178 @@ kbd {
   text-align: center;
   color: var(--text-dim);
   font-size: 0.75rem;
+}
+
+/* Repository changes */
+.repo-change-row,
+.repo-commit-summary,
+.repo-commit-file {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.repo-change-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 46px;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+}
+
+.repo-change-row:hover,
+.repo-commit-summary:hover,
+.repo-commit-file:hover {
+  background: var(--bg-hover);
+}
+
+.repo-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.repo-status-m,
+.repo-status-r,
+.repo-status-c {
+  border-color: rgba(96, 165, 250, 0.45);
+  color: #8fc4ff;
+}
+
+.repo-status-a,
+.repo-status-new {
+  border-color: rgba(74, 222, 128, 0.42);
+  color: #80db96;
+}
+
+.repo-status-d {
+  border-color: rgba(248, 113, 113, 0.45);
+  color: #ff9494;
+}
+
+.repo-status-u {
+  border-color: rgba(245, 158, 11, 0.48);
+  color: #f4bf75;
+}
+
+.repo-change-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.repo-change-path,
+.repo-commit-file > span:last-child {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-change-stage {
+  color: var(--text-muted);
+  font-size: 0.61rem;
+}
+
+.repo-change-stats {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.repo-add {
+  color: #80db96;
+}
+
+.repo-del {
+  color: #ff9494;
+}
+
+/* Repository history */
+.repo-commit {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.repo-commit-summary {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 0.3rem;
+  min-height: 48px;
+  padding: 0.38rem 0.5rem;
+}
+
+.repo-commit-chevron {
+  align-self: center;
+  color: var(--text-muted);
+  font-size: 0.55rem;
+  transition: transform 120ms ease;
+}
+
+.repo-commit.expanded .repo-commit-chevron {
+  transform: rotate(90deg);
+}
+
+.repo-commit-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.repo-commit-subject {
+  overflow: hidden;
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-commit-meta {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.61rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-commit-meta code {
+  color: #8fc4ff;
+}
+
+.repo-commit-files {
+  padding: 0 0 0.3rem 1.1rem;
+}
+
+.repo-commit-file {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 34px;
+  padding: 0.2rem 0.5rem;
+}
+
+.repo-commit-loading {
+  padding: 0.45rem 0.6rem 0.55rem 1.6rem;
+  color: var(--text-muted);
+  font-size: 0.65rem;
 }
 
 /* File Tree Item */
@@ -8486,7 +8940,41 @@ kbd {
 
 .file-preview-actions {
   display: flex;
+  align-items: center;
   gap: 0.25rem;
+}
+
+.file-preview-mode {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.file-preview-mode[hidden] {
+  display: none;
+}
+
+.file-preview-mode-btn {
+  height: 100%;
+  padding: 0 0.48rem;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  cursor: pointer;
+}
+
+.file-preview-mode-btn:last-child {
+  border-right: 0;
+}
+
+.file-preview-mode-btn.active {
+  background: var(--bg-hover);
+  color: var(--text);
 }
 
 .file-preview-body {
@@ -8509,6 +8997,79 @@ kbd {
 
 .file-preview-body pre code {
   font-family: inherit;
+}
+
+.repository-diff {
+  min-width: 100%;
+  width: max-content;
+  padding: 0.35rem 0;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.repository-diff-line {
+  display: grid;
+  grid-template-columns: 42px 42px minmax(max-content, 1fr);
+  min-height: 21px;
+}
+
+.repository-diff-line code {
+  display: block;
+  min-width: 0;
+  padding: 0 0.7rem 0 0.35rem;
+  color: #d8d8df;
+  font: inherit;
+  white-space: pre;
+}
+
+.diff-gutter {
+  padding: 0 0.35rem;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  color: #777781;
+  text-align: right;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.diff-prefix {
+  display: inline-block;
+  width: 1.2ch;
+  user-select: none;
+}
+
+.repository-diff-line.diff-add {
+  background: rgba(46, 160, 67, 0.16);
+}
+
+.repository-diff-line.diff-add code,
+.repository-diff-line.diff-add .diff-gutter {
+  color: #9be9a8;
+}
+
+.repository-diff-line.diff-del {
+  background: rgba(248, 81, 73, 0.15);
+}
+
+.repository-diff-line.diff-del code,
+.repository-diff-line.diff-del .diff-gutter {
+  color: #ffb0aa;
+}
+
+.repository-diff-line.diff-hunk {
+  background: rgba(56, 139, 253, 0.11);
+}
+
+.repository-diff-line.diff-hunk code {
+  color: #8fc4ff;
+}
+
+.repository-diff-line.diff-meta code {
+  color: #8b8b95;
+}
+
+.repository-diff-full .diff-context {
+  background: #111;
 }
 
 .file-preview-body img {
@@ -10234,6 +10795,27 @@ kbd {
   line-height: 1.7;
 }
 
+/* Double-click/double-tap reply copy feedback. `manipulation` keeps panning and
+   pinch zoom while preventing browser double-tap zoom from stealing the gesture. */
+.response-viewer-body,
+.rv-message {
+  touch-action: manipulation;
+}
+
+.response-viewer-body.rv-copy-feedback,
+.rv-message.rv-copy-feedback {
+  animation: rv-copy-confirm 700ms ease-out;
+}
+
+@keyframes rv-copy-confirm {
+  from {
+    box-shadow: inset 0 0 0 2px rgba(109, 219, 127, 0.8);
+  }
+  to {
+    box-shadow: inset 0 0 0 1px rgba(109, 219, 127, 0);
+  }
+}
+
 .rv-text p,
 .response-viewer-body > p {
   margin: 0 0 0.85em;
@@ -10752,6 +11334,7 @@ body.touch-device.cjk-input-visible .main {
 /* Android scaling, phone landscape, and foldables can expose a desktop-width
    viewport. These rules live in the always-loaded stylesheet so keyboard
    geometry follows stable handheld identity at every posture. */
+body.handheld-device.keyboard-opening .app,
 body.handheld-device.keyboard-visible .app {
   position: fixed;
   top: 0;

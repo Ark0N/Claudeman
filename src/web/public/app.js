@@ -42,9 +42,10 @@
  * @dependency voice-input.js (VoiceInput, DeepgramProvider)
  * @dependency notification-manager.js (NotificationManager class)
  * @dependency keyboard-accessory.js (MobileTerminalControls, FocusTrap)
+ * @dependency terminal-input-state.js (TerminalInputStateStore)
  * @dependency vendor/xterm.js, vendor/xterm-addon-fit.js, vendor/xterm-addon-webgl.js
  * @dependency vendor/xterm-zerolag-input.iife.js (LocalEchoOverlay)
- * @loadorder 6 of 15 — loaded after keyboard-accessory.js, before terminal-ui.js
+ * @loadorder 6 of 16 — loaded after terminal-input-state.js, before terminal-ui.js
  */
 
 // Codeman App - Tab-based Terminal UI
@@ -462,10 +463,11 @@ class CodemanApp {
     this._clientId = (typeof crypto !== 'undefined' && crypto.randomUUID)
       ? crypto.randomUUID()
       : 'c-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
-    // Per-TAB nonce for the WS registry key (COD-137). _loadReliableState()
+    // Per-tab nonce for the SSE/WS handoff and WS registry (COD-137).
+    // _loadReliableState()
     // later replaces _clientId with the browser-wide localStorage identity
-    // (shared by every tab/window of this profile), so the WS upgrade sends
-    // `clientId:nonce` instead — a same-tab reconnect still supersedes its own
+    // (shared by every tab/window of this profile), so terminal transports append
+    // this original page-local value — a same-tab reconnect still supersedes its own
     // socket, but two tabs on one session coexist instead of evicting each
     // other in a 4010 ping-pong. Input frames keep the bare clientId for seq
     // dedup.
@@ -491,8 +493,16 @@ class CodemanApp {
 
     this._initGeneration = 0;     // dedup concurrent handleInit calls
     this._initFallbackTimer = null; // fallback timer if SSE init doesn't arrive
+    this._serverStartedAt = null; // process epoch from init/status snapshots
+    this._serverReloadRequested = false;
+    this._serverRestartRecovery = false;
+    try {
+      this._serverRestartRecovery =
+        sessionStorage.getItem(SERVER_RESTART_RECOVERY_KEY) === '1';
+    } catch {
+      /* sessionStorage can be unavailable in hardened browser contexts */
+    }
     this._selectGeneration = 0;   // cancel stale selectSession loads
-    this._initialFullBufferLoad = true; // first buffer load after a page load fetches full tmux scrollback (COD-47)
     this.terminalLoadStates = new Map(); // Map<sessionId, { generation, phase }>
     this.respawnStatus = {};
     this.respawnTimers = {}; // Track timed respawn timers
@@ -547,6 +557,8 @@ class CodemanApp {
     this.teammateTerminals = new Map(); // Map<agentId, { terminal, fitAddon, paneTarget, sessionId, resizeObserver }>
 
     this.terminalBufferCache = new Map(); // Map<sessionId, string> — client-side cache for instant tab re-visits (max 20)
+    this._warmTerminalCache = new WarmTerminalCache();
+    this._warmTerminalExpiryTimer = null;
 
     this.ralphStatePanelCollapsed = true; // Default to collapsed
     this.ralphClosedSessions = new Set(); // Sessions where user explicitly closed Ralph panel
@@ -588,7 +600,19 @@ class CodemanApp {
     this.fileBrowserFilter = '';
     this.fileBrowserAllExpanded = false;
     this.fileBrowserDragListeners = null;
+    this.fileBrowserView = 'files';
+    this.fileBrowserRepositoryData = null;
+    this.fileBrowserScopeId = 'current';
+    this.fileBrowserSessionId = null;
+    this.fileBrowserLoadGeneration = 0;
+    this.fileBrowserAbortController = null;
+    this.fileBrowserCommitCache = new Map();
+    this.fileBrowserExpandedCommit = null;
+    this.fileBrowserAutoRefreshTimer = null;
     this.filePreviewContent = '';
+    this.fileDiffData = null;
+    this.fileDiffMode = 'compact';
+    this.fileDiffLoadGeneration = 0;
 
     // Toast container cache (methods in panels-ui.js)
     this._toastContainer = null;
@@ -613,12 +637,26 @@ class CodemanApp {
     // Terminal write batching with DEC 2026 sync support
     this.pendingWrites = [];
     this.writeFrameScheduled = false;
+    this._terminalWritesPaused = false;
     this._wasAtBottomBeforeWrite = true; // Default to true for sticky scroll
     this.syncWaitTimeout = null; // Timeout for incomplete sync blocks
     this._isLoadingBuffer = false; // true during chunkedTerminalWrite — blocks live SSE writes
     this._loadBufferQueue = null;  // queued SSE events during buffer load
     this._bufferLoadSeq = 0;
     this._bufferLoadOwner = null;
+    this._terminalHistoryReplayCover = null;
+    this._terminalHistoryReplayCoverOwner = null;
+    this._terminalHistoryReplayCoverComplete = false;
+    this._terminalHistoryReplayCoverCompleteAt = 0;
+    this._terminalHistoryReplayCoverVersion = 0;
+    this._terminalHistoryReplayCoverCheckScheduled = false;
+    this._terminalHistoryReplayFencePending = false;
+    this._terminalHistoryReplayQuietUntil = 0;
+    this._terminalTransportFreezeSessionId = null;
+    this._terminalTransportFreezeOwner = null;
+    this._terminalTransportFreezeSeq = 0;
+    this._terminalHistoryPaging = new Map(); // sessionId -> bounded tmux history-page window
+    this._terminalHistoryPageSeq = 0;
 
     // Flicker filter state (buffers output after screen clears)
     this.flickerFilterBuffer = '';
@@ -642,6 +680,11 @@ class CodemanApp {
     this.maxReconnectAttempts = 10;
     this.isOnline = navigator.onLine;
 
+    // Editable input is one session-scoped state record, kept separate from
+    // submitted delivery records below. Terminal/CJK modules are view adapters;
+    // this store owns normalization, handoff transitions, and persistence.
+    this._inputState = new TerminalInputStateStore();
+
     // Reliable, durable input delivery (replaces the old best-effort queue).
     // Every input byte is recorded with a stable clientId + a monotonic
     // per-session seq, persisted to localStorage, and only dropped once the
@@ -663,16 +706,24 @@ class CodemanApp {
     this._reliableSweepTimer = setInterval(() => this._redeliverSweep(), 2000);
     // Flush the durable queue synchronously when the page is hidden/closed —
     // debounced persistence may have a pending write we mustn't lose on reload.
-    window.addEventListener('pagehide', () => this._persistReliableNow());
+    window.addEventListener('pagehide', () => {
+      this._captureActiveSessionDraft();
+      this._inputState.persistNow();
+      this._persistReliableNow();
+    });
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') this._persistReliableNow();
+      if (document.visibilityState === 'hidden') {
+        this._captureActiveSessionDraft();
+        this._inputState.persistNow();
+        this._persistReliableNow();
+      }
     });
 
     // Local echo overlay — DOM overlay positioned at the visible ❯ prompt
     // (not at buffer.cursorY, which reflects Ink's internal cursor position)
     this._localEchoOverlay = null;  // created after terminal.open()
     this._localEchoEnabled = false; // true when setting on + session active
-    this._restoringFlushedState = false; // true during selectSession buffer load — protects flushed Maps
+    this._restoringFlushedState = false; // true during selectSession buffer load - protects restored draft state
 
     // Accessibility: Focus trap for modals
     this.activeFocusTrap = null;
@@ -1066,18 +1117,37 @@ class CodemanApp {
   // SSE Connection
   // ═══════════════════════════════════════════════════════════════
 
+  _scheduleWarmTerminalExpiry() {
+    this._clearTimer('_warmTerminalExpiryTimer');
+    const delay = this._warmTerminalCache.nextExpiryDelay();
+    if (delay === null) return;
+    this._warmTerminalExpiryTimer = setTimeout(() => {
+      this._warmTerminalExpiryTimer = null;
+      this._updateSseSubscription();
+    }, Math.max(1, delay));
+  }
+
   /**
-   * POST a live subscription update so the server filters terminal events
-   * to the given session(s) for this client. Fire-and-forget — failures
-   * are non-fatal because we'll still get every event we don't want
-   * (just at higher cost), and the next reconnect carries the filter via
-   * the SSE query string.
+   * Keep the active terminal plus a short, bounded recent-session range on the
+   * live stream. This makes a quick switch-back a snapshot + delta operation
+   * while expiry and byte caps prevent background sessions consuming bandwidth
+   * indefinitely.
    */
+  _terminalSseSubscriptionIds() {
+    return this._warmTerminalCache.ids();
+  }
+
+  _terminalStreamClientId() {
+    return this._clientId ? `${this._clientId}:${this._wsTabNonce}` : '';
+  }
+
   _updateSseSubscription(sessionId) {
     try {
+      if (sessionId) this._warmTerminalCache.activate(sessionId);
+      const sessions = this._terminalSseSubscriptionIds();
       const body = JSON.stringify({
-        clientId: this._clientId,
-        sessions: sessionId ? [sessionId] : null,
+        clientId: this._terminalStreamClientId(),
+        sessions,
       });
       fetch('/api/events/subscribe', {
         method: 'POST',
@@ -1085,7 +1155,19 @@ class CodemanApp {
         body,
         keepalive: true,
       }).catch(() => { /* non-fatal */ });
+      this._scheduleWarmTerminalExpiry();
     } catch { /* non-fatal */ }
+  }
+
+  _dropWarmTerminalSession(sessionId, discardSnapshot = false) {
+    if (!sessionId) return;
+    this._warmTerminalCache.remove(sessionId);
+    if (discardSnapshot) {
+      this._xtermSnapshots?.delete(sessionId);
+      this.terminalBufferCache.delete(sessionId);
+      try { localStorage.removeItem(`codeman-xs-${sessionId}`); } catch {}
+    }
+    this._updateSseSubscription();
   }
 
   // ══════════════════════════════════════════════════════════════════════
@@ -1370,12 +1452,12 @@ class CodemanApp {
       this.setConnectionStatus('reconnecting');
     }
 
-    // Build URL with stable client ID and (if known) the active-session
-    // filter so the server only streams session:terminal events for the
-    // session we're rendering. Lifecycle/metadata events are sent globally
-    // regardless of filter (server side).
-    const _sseParams = new URLSearchParams({ clientId: this._clientId });
-    if (this.activeSessionId) _sseParams.set('sessions', this.activeSessionId);
+    // Build the URL with a stable client ID and an explicit terminal filter.
+    // An empty value means no terminal events (welcome screen or active WS);
+    // lifecycle/metadata events still arrive globally.
+    const _sseParams = new URLSearchParams({ clientId: this._terminalStreamClientId() });
+    const _warmSessionIds = this._terminalSseSubscriptionIds();
+    _sseParams.set('sessions', _warmSessionIds.join(','));
     this.eventSource = new EventSource(`/api/events?${_sseParams.toString()}`);
 
     // Store all event listeners for cleanup on reconnect
@@ -1404,6 +1486,9 @@ class CodemanApp {
         this.eventSource?.close();
         this.eventSource = null;
         return;
+      }
+      if (!this._wsReady && this.activeSessionId) {
+        this._freezeTerminalForTransportLoss?.(this.activeSessionId);
       }
       this.reconnectAttempts++;
       if (this.reconnectAttempts >= this.maxReconnectAttempts) {
@@ -1575,6 +1660,9 @@ class CodemanApp {
     const session = data.session || data;
     const oldSession = this.sessions.get(session.id);
     const claudeSessionIdJustSet = session.claudeSessionId && (!oldSession || !oldSession.claudeSessionId);
+    const workingDirectoryChanged = Boolean(
+      oldSession && session.workingDir && oldSession.workingDir !== session.workingDir
+    );
     this.sessions.set(session.id, session);
     this.renderSessionTabs();
     this.updateCost();
@@ -1593,6 +1681,11 @@ class CodemanApp {
       requestAnimationFrame(() => {
         this.updateConnectionLines();
       });
+    }
+    const locallySavingWorkingDirectory =
+      this._pendingWorkingDirectoryChange?.sessionId === session.id;
+    if (workingDirectoryChanged && session.id === this.activeSessionId && !locallySavingWorkingDirectory) {
+      void this.syncFileBrowserSession?.(session.id, { force: true });
     }
   }
 
@@ -1634,7 +1727,10 @@ class CodemanApp {
   }
 
   _onSessionTerminal(data) {
+    if (!data?.id || typeof data.data !== 'string') return;
+    if (this._serverReloadRequested) return;
     if (data.id === this.activeSessionId) {
+      this._deferTerminalHistoryReplayCover?.(data.id);
       if (data.data.length > 32768) _crashDiag.log(`TERMINAL: ${(data.data.length/1024).toFixed(0)}KB`);
 
       // Hard cap: track total bytes queued in render buffers (pendingWrites +
@@ -1656,7 +1752,11 @@ class CodemanApp {
         return;
       }
 
-      this.batchTerminalWrite(data.data);
+      this.batchTerminalWrite(data.data, data.cursor);
+    } else if (this._warmTerminalCache.isWarm(data.id)) {
+      if (!this._warmTerminalCache.append(data.id, data.data)) {
+        this._dropWarmTerminalSession(data.id, true);
+      }
     }
   }
 
@@ -1842,6 +1942,9 @@ class CodemanApp {
   _bindResponseViewerInteractions(body) {
     if (!body || body.dataset.rvBound === '1') return;
     body.dataset.rvBound = '1';
+    body.addEventListener('dblclick', (ev) => {
+      void this._copyResponseViewerChunk(body, ev);
+    });
     body.addEventListener('click', async (ev) => {
       // One-click copy: lift the raw source from the sibling <pre><code>.
       const copyBtn = ev.target.closest('.rv-copy-btn');
@@ -1869,6 +1972,51 @@ class CodemanApp {
       const nowrap = pre.classList.toggle('rv-nowrap');
       wrap.classList.toggle('rv-wrap-nowrap', nowrap);
     });
+  }
+
+  /**
+   * Copy one semantic response chunk. Transcript source is stored directly on
+   * the owning DOM node so Markdown rendering cannot change clipboard content.
+   */
+  async _copyResponseViewerChunk(body, ev) {
+    const target = ev?.target?.closest ? ev.target : ev?.target?.parentElement;
+    if (!body || !target?.closest) return false;
+    if (
+      target.closest(
+        'button, a, input, textarea, select, [contenteditable="true"], [data-no-reply-copy]'
+      )
+    ) {
+      return false;
+    }
+
+    const message = target.closest('.rv-message');
+    const sourceElement = message && body.contains(message) ? message : body;
+    const text = sourceElement._codemanCopyText;
+    if (typeof text !== 'string' || !text) return false;
+
+    ev.preventDefault?.();
+    ev.stopPropagation?.();
+    const ok = await this._copyText(text);
+    if (ok) {
+      sourceElement.classList.remove('rv-copy-feedback');
+      // Restart the confirmation animation on intentional repeated copies.
+      void sourceElement.offsetWidth;
+      sourceElement.classList.add('rv-copy-feedback');
+      clearTimeout(sourceElement._rvCopyFeedbackTimer);
+      sourceElement._rvCopyFeedbackTimer = setTimeout(() => {
+        sourceElement.classList.remove('rv-copy-feedback');
+      }, 700);
+      if (typeof MobileTerminalControls !== 'undefined') {
+        MobileTerminalControls.feedback?.('copy');
+      }
+    }
+    this.showToast(
+      ok
+        ? window.codemanT?.('Copied to clipboard') || 'Copied to clipboard'
+        : 'Copy failed',
+      ok ? 'success' : 'error'
+    );
+    return ok;
   }
 
   /**
@@ -1916,23 +2064,10 @@ class CodemanApp {
       // Source 1: Transcript JSONL (best quality — clean structured text from Claude)
       const res = await fetch(`/api/sessions/${this.activeSessionId}/last-response`);
       const data = (await res.json())?.data ?? {};
-      let lastResponse = data.text || '';
-
-      // Source 2: Terminal buffer fallback — strip ANSI, drop Claude CLI chrome.
-      // Claude + shell only: _cleanTerminalBuffer knows Claude CLI's output, and
-      // shell sessions have no transcript source at all; for TUI modes
-      // (codex/opencode/gemini) it yields repaint garbage, so a clear
-      // placeholder beats a messy screen dump there.
-      const sessionMode = this.sessions.get(this.activeSessionId)?.mode || 'claude';
-      if (!lastResponse && (sessionMode === 'claude' || sessionMode === 'shell')) {
-        const termRes = await fetch(`/api/sessions/${this.activeSessionId}/terminal`);
-        const termData = (await termRes.json())?.data ?? {};
-        if (termData.terminalBuffer) {
-          lastResponse = this._cleanTerminalBuffer(termData.terminalBuffer);
-        }
-      }
+      const lastResponse = data.text || '';
 
       const body = document.getElementById('responseViewerBody');
+      body._codemanCopyText = lastResponse;
       if (lastResponse) {
         body.innerHTML = this._renderMarkdown(lastResponse);
         this._bindResponseViewerInteractions(body);
@@ -1968,6 +2103,7 @@ class CodemanApp {
       const title = document.getElementById('responseViewerTitle');
       if (!body) return;
 
+      body._codemanCopyText = '';
       if (messages.length === 0) {
         body.textContent = 'No conversation history available';
         return;
@@ -1982,6 +2118,7 @@ class CodemanApp {
         const div = document.createElement('div');
         const isUser = msg.role === 'user';
         div.className = 'rv-message ' + (isUser ? 'rv-msg-user' : 'rv-msg-assistant');
+        div._codemanCopyText = typeof msg.text === 'string' ? msg.text : '';
 
         const role = document.createElement('div');
         role.className = 'rv-role ' + (isUser ? 'rv-role-user' : 'rv-role-assistant');
@@ -2008,10 +2145,15 @@ class CodemanApp {
     }
   }
 
-  async _onSessionNeedsRefresh() {
+  async _onSessionNeedsRefresh(data) {
     // Server sends this after SSE backpressure clears — terminal data was dropped,
     // so reload the buffer to recover from any display corruption.
+    if (data?.id && data.id !== this.activeSessionId) {
+      this._dropWarmTerminalSession(data.id, true);
+      return;
+    }
     if (!this.activeSessionId || !this.terminal) return;
+    this._terminalHistoryPaging.delete(this.activeSessionId);
     // Skip if buffer load already in progress — avoids competing clear+rewrite cycles
     if (this._isLoadingBuffer) return;
     try {
@@ -2036,7 +2178,12 @@ class CodemanApp {
   }
 
   async _onSessionClearTerminal(data) {
+    if (data.id !== this.activeSessionId) {
+      this._dropWarmTerminalSession(data.id, true);
+      return;
+    }
     if (data.id === this.activeSessionId) {
+      this._terminalHistoryPaging.delete(data.id);
       // Skip if selectSession is already loading the buffer — clearTerminal arriving
       // during buffer load would clear the terminal mid-write, causing visible flicker
       // and a race between two concurrent chunkedTerminalWrite calls (especially on mobile
@@ -2297,15 +2444,16 @@ class CodemanApp {
     this._updateConnectionIndicator();
 
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // Pass a per-TAB identity on the upgrade URL so the server's connection
-    // registry scopes the per-session limit by connection (COD-137): a same-tab
+    // Pass the same per-page identity used by SSE so the server can atomically
+    // hand terminal delivery between transports. It also scopes the WS
+    // registry's per-session limit by connection (COD-137): a same-tab
     // reconnect supersedes its own socket instead of consuming a new slot and
     // tripping a spurious 4008, while two tabs of the same browser (which share
     // the localStorage clientId) each keep their own socket. The bare clientId
     // still rides the input frames for seq dedup. Omitted if clientId is
     // unavailable (server then treats the upgrade as anonymous — still admitted
     // up to the limit).
-    const cid = this._clientId ? `${this._clientId}:${this._wsTabNonce}` : '';
+    const cid = this._terminalStreamClientId();
     const cidQuery = cid ? `?cid=${encodeURIComponent(cid)}` : '';
     const url = `${proto}//${location.host}/ws/sessions/${sessionId}/terminal${cidQuery}`;
     const ws = new WebSocket(url);
@@ -2319,6 +2467,13 @@ class CodemanApp {
         this._wsState = 'connected';
         this._wsReconnectAttempts = 0;
         this._updateConnectionIndicator();
+        // Codex commonly emits several stateful full-screen redraws immediately
+        // after a tab's WS transport attaches. Keep the stable target frame over
+        // those bytes while xterm parses them, then reveal only the settled pane.
+        this._deferTerminalHistoryReplayCover?.(sessionId);
+        // WS now owns the active terminal stream; keep SSE only for warm
+        // inactive sessions so the same bytes are not sent twice.
+        this._updateSseSubscription();
         // Send a typed resize over the fresh socket: syncs PTY dims after
         // (re)connects AND registers the desktop sizing claim server-side —
         // selectSession's earlier resizes ran before this WS existed, so they
@@ -2376,6 +2531,14 @@ class CodemanApp {
       );
 
       const stillActive = this.activeSessionId === sessionId;
+      if (stillActive && plan.action !== 'give-up') {
+        this._freezeTerminalForTransportLoss?.(sessionId);
+      }
+      if (stillActive) {
+        // Re-add the active session to SSE before retrying the socket so output
+        // remains live throughout the fallback window.
+        this._updateSseSubscription();
+      }
       if (plan.action === 'give-up') {
         this._wsState = stillActive ? 'fallback' : 'disconnected';
         this._updateConnectionIndicator();
@@ -2427,11 +2590,33 @@ class CodemanApp {
     this._wsState = 'disconnected';
     this._stopMobileResizeRetry();
     if (this._ws) {
-      this._ws.onclose = null; // Prevent re-entrant cleanup
-      this._ws.close();
+      const ws = this._ws;
+      ws.onclose = null; // Prevent re-entrant cleanup
       this._ws = null;
       this._wsSessionId = null;
       this._wsReady = false;
+      const close = () => {
+        ws.removeEventListener?.('message', onHandoffAck);
+        clearTimeout(handoffTimer);
+        try { ws.close(); } catch {}
+      };
+      const onHandoffAck = (event) => {
+        try {
+          if (JSON.parse(event.data)?.t === 'ha') close();
+        } catch {}
+      };
+      let handoffTimer = 0;
+      if (ws.readyState === 1 && typeof ws.addEventListener === 'function') {
+        ws.addEventListener('message', onHandoffAck);
+        handoffTimer = setTimeout(close, WS_HANDOFF_TIMEOUT_MS);
+        try {
+          ws.send('{"t":"h"}');
+        } catch {
+          close();
+        }
+      } else {
+        close();
+      }
     }
   }
 
@@ -2788,6 +2973,60 @@ class CodemanApp {
     }
   }
 
+  // ---- durable editable drafts (localStorage; separate from submitted input) --
+
+  _setSessionDraft(sessionId, candidate, persist = true) {
+    return this._inputState.set(sessionId, candidate, { persist });
+  }
+
+  _captureActiveSessionDraft() {
+    const sessionId = this.activeSessionId;
+    const overlay = this._localEchoOverlay;
+    if (!sessionId || !overlay) return null;
+    const state = overlay.state || {};
+    let cjkText = '';
+    try {
+      cjkText = typeof CjkInput !== 'undefined' ? CjkInput.getPendingText?.() || '' : '';
+    } catch {
+      /* the optional textarea may not be initialized yet */
+    }
+    return this._inputState.capture(sessionId, {
+      pendingText: state.pendingText || '',
+      compositionText: state.compositionText || '',
+      flushedText: state.flushedText || '',
+      cjkText,
+    });
+  }
+
+  _restoreSessionDraft(sessionId, render = true) {
+    const draft = this._inputState.get(sessionId) || {
+      pendingText: '',
+      flushedText: '',
+      cjkText: '',
+    };
+    if (this._localEchoOverlay?.restoreDraft) {
+      this._localEchoOverlay.restoreDraft(
+        {
+          pendingText: draft.pendingText,
+          flushedText: draft.flushedText,
+        },
+        render
+      );
+    }
+    try {
+      if (typeof CjkInput !== 'undefined') {
+        CjkInput.restorePendingText?.(draft.cjkText);
+      }
+    } catch {
+      /* optional CJK input is unavailable */
+    }
+    return this._inputState.has(sessionId);
+  }
+
+  _clearSessionDraft(sessionId) {
+    this._inputState.clear(sessionId);
+  }
+
   // Pure render of the header connection indicator: reads only `this.*` state,
   // touches NO DOM. Returns the exact { display, dotClass, text, title } tuple the
   // writer applies. When hidden (display:'none') the other three are normalized to
@@ -2941,6 +3180,9 @@ class CodemanApp {
     this.terminalBuffers.clear();
     this.terminalBufferCache.clear();
     this._xtermSnapshots?.clear();
+    this._warmTerminalCache.clear();
+    this._terminalHistoryPaging.clear();
+    this._clearTimer('_warmTerminalExpiryTimer');
     this.projectInsights.clear();
     this.teams.clear();
     this.teamTasks.clear();
@@ -3022,9 +3264,112 @@ class CodemanApp {
     }
   }
 
+  /**
+   * Classify an init snapshot without conflating transport reconnects with page
+   * initialization. A changed process epoch means the server may now serve
+   * different hashed assets, so preserve drafts and replace this stale page.
+   */
+  _handleServerInitEpoch(serverStartedAt) {
+    if (!Number.isSafeInteger(serverStartedAt) || serverStartedAt <= 0) return 'legacy';
+    if (this._serverReloadRequested) return 'reload';
+
+    const previous = this._serverStartedAt;
+    this._serverStartedAt = serverStartedAt;
+    if (!Number.isSafeInteger(previous) || previous <= 0) return 'initial';
+    if (previous === serverStartedAt) return 'reconnect';
+
+    if (!this._serverReloadRequested) {
+      this._serverReloadRequested = true;
+      this._serverRestartRecovery = true;
+      this._captureActiveSessionDraft?.();
+      this._inputState?.persistNow?.();
+      this._persistReliableNow?.();
+      try { sessionStorage.setItem(SERVER_RESTART_RECOVERY_KEY, '1'); } catch {}
+      window.location.reload();
+    }
+    return 'reload';
+  }
+
+  /**
+   * Reconcile authoritative session metadata after a same-process SSE reconnect
+   * while leaving the active xterm frame, scrollback, input, and warm caches
+   * untouched. Replaying terminal history here caused the visible old-to-new
+   * traversal after brief mobile network interruptions.
+   */
+  _reconcileSameServerInit(data) {
+    const incomingSessions = Array.isArray(data.sessions) ? data.sessions : [];
+    const incomingIds = new Set(incomingSessions.map((session) => session.id));
+
+    for (const sessionId of Array.from(this.sessions.keys())) {
+      if (!incomingIds.has(sessionId)) this._onSessionDeleted({ id: sessionId });
+    }
+
+    for (const session of incomingSessions) {
+      this.sessions.set(session.id, session);
+      if ((session.ralphLoop || session.ralphTodos) && !this.ralphClosedSessions.has(session.id)) {
+        this.ralphStates.set(session.id, {
+          loop: session.ralphLoop || null,
+          todos: session.ralphTodos || [],
+        });
+      }
+    }
+
+    if (Array.isArray(data.sessionOrder) && data.sessionOrder.length) {
+      try { localStorage.setItem('codeman-session-order', JSON.stringify(data.sessionOrder)); } catch {}
+    }
+    this.syncSessionOrder();
+
+    this.respawnStatus = data.respawnStatus || {};
+    if (data.globalStats) this.globalStats = data.globalStats;
+
+    const scheduledRuns = Array.isArray(data.scheduledRuns) ? data.scheduledRuns : [];
+    this.totalCost = incomingSessions.reduce((sum, session) => sum + (session.totalCost || 0), 0);
+    this.totalCost += scheduledRuns.reduce((sum, run) => sum + (run.totalCost || 0), 0);
+
+    const activeRun = scheduledRuns.find((run) => run.status === 'running');
+    if (activeRun) {
+      this.currentRun = activeRun;
+      this.showTimer();
+    }
+
+    if (data.planUsage) this.updatePlanUsageChip(data.planUsage);
+
+    if (Array.isArray(data.subagents)) {
+      const incomingAgentIds = new Set(data.subagents.map((agent) => agent.agentId));
+      for (const agentId of Array.from(this.subagents.keys())) {
+        if (!incomingAgentIds.has(agentId)) {
+          this.subagents.delete(agentId);
+          this.subagentActivity.delete(agentId);
+          this.subagentToolResults.delete(agentId);
+        }
+      }
+      for (const agent of data.subagents) {
+        const previous = this.subagents.get(agent.agentId);
+        this.subagents.set(agent.agentId, previous ? { ...previous, ...agent } : agent);
+      }
+      this.renderSubagentPanel();
+    }
+
+    if (Array.isArray(data.workflowRuns)) this.seedWorkflowRuns(data.workflowRuns);
+
+    this.updateCost();
+    this.renderSessionTabs();
+    if (this.sessions.size > 0) this.startSystemStatsPolling();
+    else this.stopSystemStatsPolling();
+  }
+
   handleInit(data) {
     // Clear the init fallback timer since we got data
     this._clearTimer('_initFallbackTimer');
+
+    const initAction = this._handleServerInitEpoch(data.serverStartedAt);
+    if (initAction === 'reload') return;
+    if (initAction === 'reconnect') {
+      this._releaseTerminalTransportFreeze?.(this.activeSessionId);
+      this._reconcileSameServerInit(data);
+      return;
+    }
+
     const gen = ++this._initGeneration;
 
     // CJK input form: controlled by user setting (with server env as override)
@@ -3885,6 +4230,18 @@ class CodemanApp {
   }
 
   _cleanupPreviousSession(newSessionId) {
+    const outgoingSessionId = this.activeSessionId;
+    const outgoingOverlayState = this._localEchoOverlay?.state || null;
+    let outgoingCjkText = '';
+    try {
+      outgoingCjkText =
+        typeof CjkInput !== 'undefined' ? CjkInput.getPendingText?.() || '' : '';
+    } catch {
+      /* optional CJK input is unavailable */
+    }
+    const deferredOutput =
+      (this.pendingWrites?.length ? this.pendingWrites.join('') : '') +
+      (this.flickerFilterBuffer || '');
     // Snapshot the OUTGOING session's xterm rendered state (viewport + scrollback +
     // colors/attrs) before the terminal gets cleared/reset. Lets us restore the
     // exact view on switch-back rather than replaying codex's byte stream, which
@@ -3901,7 +4258,7 @@ class CodemanApp {
       this._xtermSnapshots
     ) {
       try {
-        const snapshot = this._serializeAddon.serialize({ scrollback: 1000 });
+        const snapshot = this._serializeAddon.serialize({ scrollback: TERMINAL_SNAPSHOT_SCROLLBACK });
         if (this._isUsableXtermSnapshot(snapshot)) {
           // Delete-before-set so re-touching a session moves it to the end of
           // the Map's insertion order — otherwise eviction is FIFO and can drop
@@ -3928,6 +4285,18 @@ class CodemanApp {
       } catch (_err) {
         /* Serialize failed — fall back to server buffer replay */
       }
+    }
+
+    // Output that reached the render budget queue but not xterm is not part of
+    // the serialized snapshot. Preserve it as the first warm delta instead of
+    // dropping it with the outgoing session's pending write state below.
+    if (
+      outgoingSessionId &&
+      deferredOutput &&
+      this._warmTerminalCache.isWarm(outgoingSessionId) &&
+      !this._warmTerminalCache.append(outgoingSessionId, deferredOutput)
+    ) {
+      this._dropWarmTerminalSession(outgoingSessionId, true);
     }
 
     // Close WebSocket for previous session (new one opens after buffer load)
@@ -3985,20 +4354,16 @@ class CodemanApp {
     // Track flushed length so _render() offsets the overlay correctly even before
     // the PTY echo arrives in the terminal buffer.
     if (this.activeSessionId) {
-      const echoText = this._localEchoOverlay?.pendingText || '';
-      // Include buffer-detected flushed text (from Tab completion, etc.)
-      // so it's preserved across tab switches.
-      const existingFlushed = this._localEchoOverlay?.getFlushed()?.count || 0;
-      const existingFlushedText = this._localEchoOverlay?.getFlushed()?.text || '';
-      if (echoText) {
-        this._sendInputAsync(this.activeSessionId, echoText);
-      }
-      const totalOffset = existingFlushed + echoText.length;
-      if (totalOffset > 0) {
-        if (!this._flushedOffsets) this._flushedOffsets = new Map();
-        if (!this._flushedTexts) this._flushedTexts = new Map();
-        this._flushedOffsets.set(this.activeSessionId, totalOffset);
-        this._flushedTexts.set(this.activeSessionId, existingFlushedText + echoText);
+      const handoff = this._inputState.handoff(this.activeSessionId, {
+        pendingText: outgoingOverlayState?.pendingText || '',
+        compositionText: outgoingOverlayState?.compositionText || '',
+        // Include buffer-detected flushed text (from Tab completion, etc.)
+        // so it remains editable across tab switches.
+        flushedText: outgoingOverlayState?.flushedText || '',
+        cjkText: outgoingCjkText,
+      });
+      if (handoff.flushText) {
+        this._sendInputAsync(this.activeSessionId, handoff.flushText);
       }
     }
     this._localEchoOverlay?.clear();
@@ -4007,12 +4372,15 @@ class CodemanApp {
     // Only sessions with prior flushed text (from tab-switch-away) need detection.
     // After the user's first Enter, clear() resets _bufferDetectDone = false,
     // re-enabling detection for tab completion and other legitimate cases.
-    if (this._localEchoOverlay && !this._flushedOffsets?.has(newSessionId)) {
+    if (this._localEchoOverlay && !this._inputState.hasFlushed(newSessionId)) {
       this._localEchoOverlay.suppressBufferDetection();
     }
   }
 
   _resetTerminalForReplay() {
+    if (typeof KeyboardHandler !== 'undefined') {
+      KeyboardHandler._armTerminalFrameCover?.();
+    }
     this.terminal.reset();
     this.terminal.write('\x1b[3J\x1b[H\x1b[2J');
   }
@@ -4040,9 +4408,21 @@ class CodemanApp {
     const forceReload = options?.forceReload === true;
     const takeControl = options?.takeControl !== false;
     if (this.activeSessionId === sessionId && !forceReload) return;
+    if (
+      this.activeSessionId &&
+      this.activeSessionId !== sessionId &&
+      typeof KeyboardHandler !== 'undefined'
+    ) {
+      KeyboardHandler._beginTerminalFrameCover?.({
+        includeShell: true,
+        restart: true,
+        arm: true,
+      });
+    }
     if (this.activeSessionId === sessionId && forceReload) {
       this.terminalBufferCache?.delete(sessionId);
       this._xtermSnapshots?.delete(sessionId);
+      this._terminalHistoryPaging?.delete(sessionId);
       try { localStorage.removeItem(`codeman-xs-${sessionId}`); } catch {}
       this._clearTimer('syncWaitTimeout');
       this.pendingWrites = [];
@@ -4067,7 +4447,11 @@ class CodemanApp {
     console.log(`[CRASH-DIAG] selectSession START: ${sessionId.slice(0,8)}`);
 
     const selectGen = ++this._selectGeneration;
+    this._beginTerminalHistoryReplayCover?.(selectGen);
     this._setTerminalLoadState(sessionId, selectGen, 'resizing');
+    const targetWasWarm = this._warmTerminalCache.isWarm(sessionId);
+    this._pauseTerminalWrites();
+    await this._waitForTerminalParserFence();
 
     if (selectGen !== this._selectGeneration) {
       this._clearTerminalLoadState(sessionId, selectGen);
@@ -4076,12 +4460,16 @@ class CodemanApp {
 
     this._cleanupPreviousSession(sessionId);
     this.activeSessionId = sessionId;
+    // Gate destination output before attach/resize can yield to the event loop.
+    // A fresh or restored TUI may emit immediately; those bytes must reconcile
+    // against its snapshot instead of entering the shared xterm parser directly.
+    const bufferLoadOwner = this._beginBufferLoad(selectGen);
+    this._resumeTerminalWrites();
+    this.syncFileBrowserSession?.(sessionId);
     try { localStorage.setItem('codeman-active-session', sessionId); } catch {}
-    // Narrow SSE filter to the active session — server stops streaming
-    // session:terminal events for other sessions to this client. Cuts
-    // SSE traffic ~Nx for N concurrent sessions. Fire-and-forget; on the
-    // rare race where server doesn't know our clientId yet, the next
-    // selectSession or reconnect catches up.
+    // Subscribe to the active session plus the bounded warm range. The server
+    // withholds terminal events for every other session, while recent sessions
+    // retain just enough delta output for an instant switch-back.
     this._updateSseSubscription(sessionId);
     this.hideWelcome();
     // Clear idle hooks on view, but keep action hooks until user interacts
@@ -4099,13 +4487,7 @@ class CodemanApp {
     // the async buffer load.  Without this, the offset is 0 during the
     // fetch() gap: backspace is swallowed, and typing a space covers the
     // canvas text with an opaque overlay showing only the new char.
-    if (this._flushedOffsets?.has(sessionId) && this._localEchoOverlay) {
-      this._localEchoOverlay.setFlushed(
-        this._flushedOffsets.get(sessionId),
-        this._flushedTexts?.get(sessionId) || '',
-        false  // render=false: buffer not loaded yet
-      );
-    }
+    this._restoreSessionDraft(sessionId, false);
 
     // Glow the newly-active tab
     const activeTab = document.querySelector(`.session-tab.active[data-id="${sessionId}"]`);
@@ -4159,7 +4541,7 @@ class CodemanApp {
 
     // Load terminal buffer for this session
     // Show cached content instantly while fetching fresh data in background.
-    // Use tail mode for faster initial load (128KB is enough for recent visible content).
+    // Non-warm tab switches use the bounded terminal tail; warm revisits skip it.
     //
     // Protect flushed state during buffer load: terminal.write() can trigger
     // xterm.js onData responses (DA, OSC, etc.) that would otherwise clear
@@ -4171,10 +4553,10 @@ class CodemanApp {
     // Without this, SSE events arriving during the fetch() gap compete with
     // the buffer write, causing 70KB+ single-frame flushes that stall WebGL.
     // chunkedTerminalWrite also sets this, but we need it before the fetch too.
-    const bufferLoadOwner = this._beginBufferLoad(selectGen);
     // COD-144: track whether the load painted nothing (empty fetch + no cache).
     // For that just-created-session case we flush (not discard) queued SSE events.
     let bufferWasEmpty = false;
+    let snapshotCursor = null;
     try {
       // Fit terminal to container BEFORE writing any buffer data.
       // If the browser was resized while viewing another session, the terminal
@@ -4214,9 +4596,11 @@ class CodemanApp {
       // Try in-memory first (fast); fall back to localStorage so snapshots
       // survive tab discards / browser reloads.
       let snapshot = this._xtermSnapshots?.get(sessionId);
+      let snapshotWasInMemory = !!snapshot;
       if (snapshot && !this._isUsableXtermSnapshot(snapshot)) {
         this._xtermSnapshots?.delete(sessionId);
         snapshot = null;
+        snapshotWasInMemory = false;
       }
       if (!snapshot) {
         try {
@@ -4235,8 +4619,10 @@ class CodemanApp {
         }
       }
       const sessionIsBusy = session && (session.status === 'busy' || session.status === 'working');
+      const canWarmRestore = targetWasWarm && snapshotWasInMemory;
       let restoredSnapshot = false;
-      if (snapshot && !sessionIsBusy && session?.mode !== 'shell') {
+      let usedWarmRestore = false;
+      if (snapshot && (canWarmRestore || !sessionIsBusy) && session?.mode !== 'shell') {
         _crashDiag.log(`SNAPSHOT_RESTORE: ${(snapshot.length/1024).toFixed(0)}KB`);
         this._setTerminalLoadState(sessionId, selectGen, 'replaying');
         this._resetTerminalForReplay();
@@ -4245,27 +4631,53 @@ class CodemanApp {
           this._clearTerminalLoadState(sessionId, selectGen);
           return;
         }
-        this.scrollToLastNonEmptyLine();
+        this.terminal.scrollToBottom();
         _crashDiag.log('SNAPSHOT_RESTORE_DONE');
-        // Snapshot restore is only first paint. Inactive tabs intentionally
-        // unsubscribe from high-volume terminal output, so they can miss bytes
-        // emitted while away. Keep going and replace the snapshot with the
-        // canonical live tmux pane frame from /terminal.
+        // A warm in-memory snapshot is followed by only the bounded terminal
+        // delta collected while away. Persisted/non-warm snapshots still use
+        // the canonical terminal endpoint to reconcile missed output.
         restoredSnapshot = true;
+        usedWarmRestore = canWarmRestore;
       }
 
-      // Instant cache restore for IDLE sessions only.
+      if (usedWarmRestore) {
+        const warmDelta = this._warmTerminalCache.consume(sessionId);
+        if (warmDelta === null) {
+          usedWarmRestore = false;
+        } else if (warmDelta.length > 0) {
+          _crashDiag.log(`WARM_DELTA: ${(warmDelta.length/1024).toFixed(0)}KB`);
+          await this.chunkedTerminalWrite(
+            warmDelta,
+            TERMINAL_CHUNK_SIZE,
+            bufferLoadOwner,
+            { followBottom: true }
+          );
+          if (this._isStaleSelect(selectGen)) {
+            this._clearTerminalLoadState(sessionId, selectGen);
+            return;
+          }
+        }
+      }
+
+      // Instant byte-cache restore for IDLE sessions without a warm xterm view.
       // For busy sessions, the cache is always stale — writing it first causes a
       // jarring double-render: stale content appears, then the terminal flashes
       // blank and rewrites with fresh data. Skip the cache and write the fresh
       // buffer once for a single clean transition.
       const cachedBuffer = this.terminalBufferCache.get(sessionId);
       let clearedForBusy = false;
-      if (cachedBuffer && !sessionIsBusy && !restoredSnapshot) {
+      if (usedWarmRestore) {
+        _crashDiag.log('WARM_RESTORE_DONE');
+      } else if (cachedBuffer && !sessionIsBusy && !restoredSnapshot) {
         _crashDiag.log(`CACHE_WRITE: ${(cachedBuffer.length/1024).toFixed(0)}KB`);
         this._setTerminalLoadState(sessionId, selectGen, 'replaying');
         this._resetTerminalForReplay();
-        await this.chunkedTerminalWrite(cachedBuffer, TERMINAL_CHUNK_SIZE, bufferLoadOwner);
+        await this.chunkedTerminalWrite(
+          cachedBuffer,
+          TERMINAL_CHUNK_SIZE,
+          bufferLoadOwner,
+          { followBottom: true }
+        );
         if (this._isStaleSelect(selectGen)) {
           this._clearTerminalLoadState(sessionId, selectGen);
           return;
@@ -4284,7 +4696,7 @@ class CodemanApp {
       // dimensions (a real SIGWINCH → Ink redraw); a same-size tab switch sent
       // no resize, so waiting would just add latency. Shell sessions never need
       // it, so terminal content can appear immediately when switching shells.
-      if (session?.mode !== 'shell' && dimsChanged) {
+      if (!usedWarmRestore && session?.mode !== 'shell' && dimsChanged) {
         await new Promise((resolve) => setTimeout(resolve, TUI_REDRAW_SETTLE_MS));
         if (this._isStaleSelect(selectGen)) {
           this._clearTerminalLoadState(sessionId, selectGen);
@@ -4292,63 +4704,168 @@ class CodemanApp {
         }
       }
 
-      this._setTerminalLoadState(sessionId, selectGen, 'fetching');
-      _crashDiag.log('FETCH_START');
-      // The FIRST buffer load after a page load requests the full tmux scrollback
-      // (?full=1, COD-47) so history that scrolled off the server's byte buffer
-      // comes back after a reload. Tab switches keep the fast ?tail= frame path.
-      const useFullHistory = this._initialFullBufferLoad === true;
-      this._initialFullBufferLoad = false;
-      const res = await fetch(
-        useFullHistory
-          ? `/api/sessions/${sessionId}/terminal?full=1`
-          : `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`
-      );
-      if (this._isStaleSelect(selectGen)) {
-        this._clearTerminalLoadState(sessionId, selectGen);
-        return;
-      }
-      const data = (await res.json())?.data ?? {};
-      _crashDiag.log(`FETCH_DONE: ${data.terminalBuffer ? (data.terminalBuffer.length/1024).toFixed(0) + 'KB' : 'empty'} truncated=${data.truncated}`);
-
-      if (data.terminalBuffer) {
-        // Skip rewrite if fresh buffer matches cache — avoids visible clear+rewrite flash.
-        // On slow connections (mobile 5G), the gap between clear() and chunkedWrite() is
-        // very visible, causing the terminal to flash blank then repaint.
-        // A snapshot restore or a busy-clear leaves the terminal showing
-        // something other than the cache, so the fetched buffer must be
-        // replayed even when it byte-matches the cache.
-        const needsRewrite =
-          restoredSnapshot || clearedForBusy || data.terminalBuffer !== cachedBuffer;
-        if (needsRewrite) {
-          _crashDiag.log(`REWRITE: ${(data.terminalBuffer.length/1024).toFixed(0)}KB`);
-          this._setTerminalLoadState(sessionId, selectGen, 'replaying');
-          this._resetTerminalForReplay();
-          // Show truncation indicator if buffer was cut
-          if (data.truncated) {
-            this.terminal.write('\x1b[90m... (earlier output truncated for performance) ...\x1b[0m\r\n\r\n');
-          }
-          // Use chunked write for large buffers to avoid UI jank
-          await this.chunkedTerminalWrite(data.terminalBuffer, TERMINAL_CHUNK_SIZE, bufferLoadOwner);
-          if (this._isStaleSelect(selectGen)) {
+      if (!usedWarmRestore) {
+        this._setTerminalLoadState(sessionId, selectGen, 'fetching');
+        _crashDiag.log('FETCH_START');
+        // Cold loads request only the newest physical tmux history page. Older
+        // pages are fetched on upward scroll; the current pane is requested in
+        // parallel so first paint never waits for history.
+        const historyUrl =
+          `/api/sessions/${sessionId}/terminal?historyPage=1` +
+          `&lines=${TERMINAL_HISTORY_PAGE_LINES}&format=stream`;
+        const latestUrl =
+          `/api/sessions/${sessionId}/terminal?latest=1` +
+          `&tail=${TERMINAL_LATEST_FRAME_SIZE}&format=stream`;
+        const latestResponsePromise = fetch(latestUrl);
+        const historyResponsePromise = fetch(historyUrl);
+        // Attach a rejection handler immediately while the latest frame is
+        // awaited; the original promise still rejects when consumed below.
+        void historyResponsePromise.catch(() => {});
+        let paintedLatestFrame = false;
+        let latestFrame = null;
+        try {
+          const latestResponse = await latestResponsePromise;
+          latestFrame = await this._readTerminalSnapshotResponse(latestResponse, {
+            paint: false,
+            isCancelled: () => this._isStaleSelect(selectGen),
+          });
+          if (latestFrame.aborted || this._isStaleSelect(selectGen)) {
             this._clearTerminalLoadState(sessionId, selectGen);
             return;
           }
-          // Ensure terminal is scrolled to bottom after buffer load
-          this.terminal.scrollToBottom();
+          if (latestFrame.terminalBuffer) {
+            _crashDiag.log(`LATEST_FRAME: ${(latestFrame.terminalBuffer.length/1024).toFixed(0)}KB`);
+            this._setTerminalLoadState(sessionId, selectGen, 'replaying');
+            this._resetTerminalForReplay();
+            await this.chunkedTerminalWrite(
+              latestFrame.terminalBuffer,
+              TERMINAL_CHUNK_SIZE,
+              bufferLoadOwner,
+              { followBottom: true }
+            );
+            if (this._isStaleSelect(selectGen)) {
+              this._clearTerminalLoadState(sessionId, selectGen);
+              return;
+            }
+            this.terminal.scrollToBottom();
+            await this._waitForTerminalPaint();
+            if (this._isStaleSelect(selectGen)) {
+              this._clearTerminalLoadState(sessionId, selectGen);
+              return;
+            }
+            if (this._replaceTerminalHistoryReplayCover(selectGen)) {
+              if (typeof KeyboardHandler !== 'undefined') {
+                KeyboardHandler._discardTerminalFrameCover?.();
+              }
+            }
+            paintedLatestFrame = true;
+          }
+        } catch (err) {
+          console.warn('Failed to load latest terminal frame; continuing with history:', err);
         }
 
-        // Update cache (cap at 20 entries)
-        this.terminalBufferCache.set(sessionId, data.terminalBuffer);
-        if (this.terminalBufferCache.size > 20) {
-          // Evict oldest entry (first key in Map iteration order)
-          const oldest = this.terminalBufferCache.keys().next().value;
-          this.terminalBufferCache.delete(oldest);
+        const res = await historyResponsePromise;
+        if (this._isStaleSelect(selectGen)) {
+          this._clearTerminalLoadState(sessionId, selectGen);
+          return;
         }
-      } else if (!cachedBuffer) {
-        // No fresh buffer and no cache — clear any stale content
-        this._resetTerminalForReplay();
-        bufferWasEmpty = true;
+        const data = await this._readTerminalSnapshotResponse(res, {
+          paint: false,
+          isCancelled: () => this._isStaleSelect(selectGen),
+        });
+        if (data.aborted || this._isStaleSelect(selectGen)) {
+          this._clearTerminalLoadState(sessionId, selectGen);
+          return;
+        }
+
+        let canonicalBuffer = data.terminalBuffer || '';
+        if (data.historyPage && !latestFrame?.terminalBuffer) {
+          // A history page excludes the visible pane by design. If its parallel
+          // latest-frame request failed, recover with the bounded legacy tail
+          // rather than exposing the last historical rows as the live prompt.
+          try {
+            const fallbackResponse = await fetch(
+              `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}&format=stream`
+            );
+            const fallback = await this._readTerminalSnapshotResponse(fallbackResponse, {
+              paint: false,
+              isCancelled: () => this._isStaleSelect(selectGen),
+            });
+            if (fallback.aborted || this._isStaleSelect(selectGen)) {
+              this._clearTerminalLoadState(sessionId, selectGen);
+              return;
+            }
+            canonicalBuffer = fallback.terminalBuffer || canonicalBuffer;
+            snapshotCursor = fallback.cursor ?? data.cursor ?? null;
+          } catch (err) {
+            console.warn('Latest-frame fallback failed; using the bounded history page:', err);
+            snapshotCursor = data.cursor ?? null;
+          }
+          this._terminalHistoryPaging.delete(sessionId);
+        } else if (data.historyPage && latestFrame?.terminalBuffer) {
+          const paging = this._installTerminalHistoryPage(sessionId, data);
+          canonicalBuffer = this._composeTerminalHistoryWindow(
+            paging?.pages || [],
+            latestFrame.terminalBuffer,
+            false
+          );
+          snapshotCursor = latestFrame.cursor ?? data.cursor ?? null;
+        } else {
+          this._terminalHistoryPaging.delete(sessionId);
+          snapshotCursor = data.cursor ?? latestFrame?.cursor ?? null;
+        }
+        _crashDiag.log(
+          `FETCH_DONE: ${canonicalBuffer ? (canonicalBuffer.length/1024).toFixed(0) + 'KB' : 'empty'} ` +
+          `truncated=${data.truncated} streamed=${data.streamed} paged=${!!data.historyPage}`
+        );
+
+        if (canonicalBuffer) {
+          // Skip rewrite if fresh buffer matches cache — avoids visible clear+rewrite flash.
+          // On slow connections (mobile 5G), the gap between clear() and chunkedWrite() is
+          // very visible, causing the terminal to flash blank then repaint.
+          // A snapshot restore or a busy-clear leaves the terminal showing
+          // something other than the cache, so the fetched buffer must be
+          // replayed even when it byte-matches the cache.
+          const needsRewrite =
+            paintedLatestFrame ||
+            restoredSnapshot ||
+            clearedForBusy ||
+            canonicalBuffer !== cachedBuffer;
+          if (needsRewrite) {
+            _crashDiag.log(`REWRITE: ${(canonicalBuffer.length/1024).toFixed(0)}KB`);
+            this._setTerminalLoadState(sessionId, selectGen, 'replaying');
+            this._resetTerminalForReplay();
+            // Show truncation indicator if buffer was cut
+            if (data.truncated && !data.historyPage) {
+              this.terminal.write('\x1b[90m... (earlier output truncated for performance) ...\x1b[0m\r\n\r\n');
+            }
+            // Use chunked write for large buffers to avoid UI jank
+            await this.chunkedTerminalWrite(
+              canonicalBuffer,
+              TERMINAL_CHUNK_SIZE,
+              bufferLoadOwner,
+              { followBottom: true }
+            );
+            if (this._isStaleSelect(selectGen)) {
+              this._clearTerminalLoadState(sessionId, selectGen);
+              return;
+            }
+            // Ensure terminal is scrolled to bottom after buffer load
+            this.terminal.scrollToBottom();
+          }
+
+          // Update cache (cap at 20 entries)
+          this.terminalBufferCache.set(sessionId, canonicalBuffer);
+          if (this.terminalBufferCache.size > 20) {
+            // Evict oldest entry (first key in Map iteration order)
+            const oldest = this.terminalBufferCache.keys().next().value;
+            this.terminalBufferCache.delete(oldest);
+          }
+        } else if (!cachedBuffer) {
+          // No fresh buffer and no cache — clear any stale content
+          this._resetTerminalForReplay();
+          bufferWasEmpty = true;
+        }
       }
 
       // Buffer load complete — unblock live SSE writes. selectSession owns this
@@ -4357,19 +4874,17 @@ class CodemanApp {
       // COD-144: when the load painted nothing, FLUSH the queued events instead of
       // discarding — a new session's prompt arrives only as a queued SSE event.
       if (this._isLoadingBuffer) {
-        this._finishBufferLoad(bufferLoadOwner, { flushQueued: bufferWasEmpty });
+        this._finishBufferLoad(bufferLoadOwner, {
+          snapshotCursor,
+          flushQueued: bufferWasEmpty || usedWarmRestore,
+        });
       }
       // Drop the guard so user input clears state normally
       this._restoringFlushedState = false;
 
       // Restore flushed offset and text for this session so the overlay positions
       // correctly even before the PTY echo arrives in the terminal buffer.
-      if (this._flushedOffsets?.has(sessionId) && this._localEchoOverlay) {
-        this._localEchoOverlay.setFlushed(
-          this._flushedOffsets.get(sessionId),
-          this._flushedTexts?.get(sessionId) || '',
-          false  // render=false: buffer just loaded, defer to rerender
-        );
+      if (this._restoreSessionDraft(sessionId, false) && this._localEchoOverlay) {
         // Trigger render after xterm.js finishes processing the buffer data.
         // terminal.write('', callback) fires the callback after ALL previously
         // queued writes have been parsed — so findPrompt() can find ❯ in the buffer.
@@ -4441,8 +4956,11 @@ class CodemanApp {
         if (settings.showFileBrowser) {
           const fileBrowserPanel = this.$('fileBrowserPanel');
           if (fileBrowserPanel) {
+            const wasVisible = fileBrowserPanel.classList.contains('visible');
             fileBrowserPanel.classList.add('visible');
-            this.loadFileBrowser(sessionId);
+            if (!wasVisible || this.fileBrowserSessionId !== sessionId) {
+              this.loadFileBrowser(sessionId);
+            }
             // Attach drag listeners if not already attached
             if (!this.fileBrowserDragListeners) {
               const header = fileBrowserPanel.querySelector('.file-browser-header');
@@ -4470,24 +4988,24 @@ class CodemanApp {
 
       _crashDiag.log('FOCUS');
       if (shouldFocusTerminal && this.terminal) this.terminal.focus();
-      this.scrollToLastNonEmptyLine();
-      // If we switched INTO this tab while the soft keyboard is already up, no
-      // viewport-resize transition fires (handleViewportResize only runs
-      // onKeyboardShow on a hidden→visible change), so the newly-active
-      // session never gets that heal: fit() + scrollToBottom() + local-echo
-      // overlay rerender() + one-shot SIGWINCH. Without it the overlay renders
-      // against stale, off-bottom state and typed input stays INVISIBLE until
-      // the user manually toggles the keyboard. Replicate the heal here so
-      // local echo paints on the first keystroke after a keyboard-up tab switch.
+      this.terminal.scrollToBottom();
+      // A keyboard-up tab switch still needs focus, prompt anchoring, and local
+      // echo restoration. selectSession() already fitted and resized the target,
+      // so use the no-refit handoff instead of scheduling onKeyboardShow() again.
       if (typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible) {
-        KeyboardHandler.onKeyboardShow();
+        KeyboardHandler.restoreTerminalInputAfterSessionSwitch?.();
       }
+      if (typeof KeyboardHandler !== 'undefined') {
+        KeyboardHandler.onTerminalFrameReady?.();
+      }
+      this._completeTerminalHistoryReplayCover(selectGen);
       this._clearTerminalLoadState(sessionId, selectGen);
       _crashDiag.log(`SELECT_DONE: ${(performance.now() - _selStart).toFixed(0)}ms`);
       console.log(`[CRASH-DIAG] selectSession DONE: ${sessionId.slice(0,8)} in ${(performance.now() - _selStart).toFixed(0)}ms`);
     } catch (err) {
       if (this._isLoadingBuffer) this._finishBufferLoad(bufferLoadOwner);
       this._restoringFlushedState = false;
+      this._discardTerminalHistoryReplayCover(selectGen);
       this._setTerminalLoadState(sessionId, selectGen, 'failed');
       console.error('Failed to load session terminal:', err);
     }
@@ -4510,10 +5028,12 @@ class CodemanApp {
     this.terminalBuffers.delete(sessionId);
     this.terminalBufferCache.delete(sessionId);
     this._xtermSnapshots?.delete(sessionId);
+    this._terminalHistoryPaging.delete(sessionId);
+    this._warmTerminalCache.remove(sessionId);
+    this._scheduleWarmTerminalExpiry();
     try { localStorage.removeItem(`codeman-xs-${sessionId}`); } catch {}
 
-    this._flushedOffsets?.delete(sessionId);
-    this._flushedTexts?.delete(sessionId);
+    this._clearSessionDraft(sessionId);
     // Drop any durably-queued input for a session that's actually gone (deleted/
     // exited). Not a lost prompt — the target no longer exists. Only reached on
     // real session removal, never on a tab switch.
@@ -4737,6 +5257,7 @@ class CodemanApp {
 
   goHome() {
     // Deselect active session and show welcome screen
+    this._cleanupPreviousSession(null);
     this.activeSessionId = null;
     try { localStorage.removeItem('codeman-active-session'); } catch {}
     this.terminal.clear();
@@ -4791,6 +5312,11 @@ class CodemanApp {
       this.terminalBufferCache.clear();
       this.terminalLoadStates.clear();
       this._xtermSnapshots?.clear();
+      this._warmTerminalCache.clear();
+      this._terminalHistoryPaging.clear();
+      this._clearTimer('_warmTerminalExpiryTimer');
+      this._inputState.clearAll({ persist: false });
+      this._inputState.persistNow();
       try {
         for (const k of Object.keys(localStorage)) {
           if (k.startsWith('codeman-xs-')) localStorage.removeItem(k);

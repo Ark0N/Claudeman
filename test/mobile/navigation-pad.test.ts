@@ -48,8 +48,12 @@ describe('Mobile Navigation Pad', () => {
     resizeLog.length = 0;
     await page.evaluate(`
       document.getElementById('appSettingsModal')?.classList.remove('active');
-      document.body.classList.remove('keyboard-visible');
+      document.body.classList.remove('keyboard-visible', 'keyboard-opening');
       KeyboardHandler.keyboardVisible = false;
+      KeyboardHandler._terminalInputRequested = false;
+      clearTimeout(KeyboardHandler._keyboardOpeningTimer);
+      KeyboardHandler._keyboardOpeningTimer = null;
+      KeyboardHandler._discardTerminalFrameCover?.();
       app.sendResize = function(_sessionId, options = {}) {
         window.__recordMobileNavigationResize(options);
         return Promise.resolve(true);
@@ -88,8 +92,9 @@ describe('Mobile Navigation Pad', () => {
     expect((navBox?.y ?? 0) + (navBox?.height ?? 0)).toBeLessThanOrEqual((toolbarBox?.y ?? 0) + 1);
     expect(navBox?.height).toBe(48);
 
-    const buttons = navigation.locator('button');
-    expect(await buttons.count()).toBe(5);
+    expect(await navigation.locator('button').count()).toBe(6);
+    expect(await navigation.locator('[data-nav-key="jump-bottom"]').isHidden()).toBe(true);
+    const buttons = navigation.locator('button:not([data-nav-key="jump-bottom"])');
     const buttonBoxes = [];
     for (let index = 0; index < 5; index++) {
       const box = await buttons.nth(index).boundingBox();
@@ -137,6 +142,44 @@ describe('Mobile Navigation Pad', () => {
       await page.waitForTimeout(100);
       await page.screenshot({ path: process.env.CODEMAN_NAV_SCREENSHOT });
     }
+  });
+
+  it('shows jump-to-latest above the three central controls only while reading history', async () => {
+    const navigation = page.locator(SELECTORS.MOBILE_NAVIGATION);
+    const jump = navigation.locator('[data-nav-key="jump-bottom"]');
+
+    await page.evaluate(async () => {
+      app.terminal.reset();
+      const lines = Array.from({ length: app.terminal.rows + 24 }, (_, index) => `history line ${index + 1}`).join(
+        '\r\n'
+      );
+      await new Promise<void>((resolve) => app.terminal.write(lines, resolve));
+    });
+    expect(await jump.isHidden()).toBe(true);
+
+    await page.evaluate(() => app._scrollTerminalLines(-8));
+    await page.waitForFunction(
+      () => !(document.querySelector('[data-nav-key="jump-bottom"]') as HTMLButtonElement)?.hidden
+    );
+
+    const navBox = await navigation.boundingBox();
+    const jumpBox = await jump.boundingBox();
+    const upBox = await navigation.locator('[data-nav-key="up"]').boundingBox();
+    const downBox = await navigation.locator('[data-nav-key="down"]').boundingBox();
+    expect(navBox).not.toBeNull();
+    expect(jumpBox).not.toBeNull();
+    expect(jumpBox?.height).toBeGreaterThanOrEqual(44);
+    expect((jumpBox?.y ?? 0) + (jumpBox?.height ?? 0)).toBeLessThanOrEqual((navBox?.y ?? 0) - 4);
+
+    const navigationCenter = (navBox?.x ?? 0) + (navBox?.width ?? 0) / 2;
+    const centralControlsCenter = (upBox?.x ?? 0) + ((downBox?.x ?? 0) + (downBox?.width ?? 0) - (upBox?.x ?? 0)) / 2;
+    const jumpCenter = (jumpBox?.x ?? 0) + (jumpBox?.width ?? 0) / 2;
+    expect(Math.abs(navigationCenter - centralControlsCenter)).toBeLessThanOrEqual(1);
+    expect(Math.abs(jumpCenter - centralControlsCenter)).toBeLessThanOrEqual(1);
+
+    await jump.click();
+    await page.waitForFunction(() => app.isTerminalAtBottom());
+    expect(await jump.isHidden()).toBe(true);
   });
 
   it('sends raw Up without focusing xterm or showing the keyboard', async () => {
@@ -361,6 +404,7 @@ describe('Mobile Navigation Pad', () => {
     const viewportHeight = await page.evaluate(() => window.visualViewport?.height);
     await page.evaluate(`
       KeyboardHandler.keyboardVisible = true;
+      KeyboardHandler._terminalInputRequested = true;
       document.body.classList.add('keyboard-visible');
       KeyboardHandler.onKeyboardShow();
     `);
@@ -406,7 +450,12 @@ describe('Mobile Navigation Pad', () => {
     expect(keyboardLayout.primaryButtonsContained).toBe(true);
 
     await vi.waitFor(() => {
-      expect(resizeLog).toContainEqual({ takeControl: true, refit: false });
+      expect(resizeLog).toContainEqual(
+        expect.objectContaining({
+          takeControl: true,
+          refit: false,
+        })
+      );
     });
     resizeLog.length = 0;
     inputLog.length = 0;

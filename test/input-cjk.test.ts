@@ -316,6 +316,21 @@ describe('CJK input module', () => {
     expect(textarea.valueWrites).toBe(before);
   });
 
+  it('round-trips a restored CJK draft without submitting it', () => {
+    const { CjkInput, textarea, sent, pasted } = loadCjkHarness();
+
+    CjkInput.restorePendingText('未提交\n草稿');
+
+    expect(CjkInput.getPendingText()).toBe('未提交\n草稿');
+    expect(textarea.value).toBe(PHANTOM + '未提交\n草稿');
+    expect(sent).toEqual([]);
+    expect(pasted).toEqual([]);
+
+    CjkInput.clear();
+    expect(CjkInput.getPendingText()).toBe('');
+    expect(textarea.value).toBe(PHANTOM);
+  });
+
   it('routes terminal.focus() to the CJK field while it is visible (focus router)', () => {
     // Regression guard for the intermittent "Chinese input goes nowhere" bug:
     // session-select / SSE-reconnect paths call terminal.focus(), which lands

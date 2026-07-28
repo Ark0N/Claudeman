@@ -41,6 +41,8 @@ function loadTerminalMixin(): Record<string, unknown> {
     setInterval: vi.fn(),
     clearInterval: vi.fn(),
     requestAnimationFrame: vi.fn(),
+    TextDecoder,
+    TERMINAL_CHUNK_SIZE: 32 * 1024,
     CodemanApp: FakeCodemanApp,
     // terminal-ui.js IIFE is invoked with `window`; it reads/writes a few globals.
     window: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
@@ -56,10 +58,48 @@ type BufferLoadApp = {
   _bufferLoadSeq: number;
   _bufferLoadOwner: string | null;
   _isLoadingBuffer: boolean;
-  _loadBufferQueue: string[] | null;
-  batchTerminalWrite: (data: string) => void;
+  _loadBufferQueue: Array<string | { data: string; cursor: TerminalCursor }> | null;
+  batchTerminalWrite: (data: string, cursor?: TerminalCursor) => void;
   _beginBufferLoad: (owner?: string) => string;
-  _finishBufferLoad: (owner?: string, opts?: { flushQueued?: boolean }) => boolean;
+  _finishBufferLoad: (owner?: string, opts?: { flushQueued?: boolean; snapshotCursor?: TerminalCursor }) => boolean;
+  _isTerminalCursor: (cursor: unknown) => boolean;
+  _terminalEventAfterSnapshot: (
+    item: { data: string; cursor: TerminalCursor },
+    snapshotCursor: TerminalCursor
+  ) => { data: string; cursor: TerminalCursor } | null;
+  _terminalSnapshotCursorFromHeaders: (headers: Headers) => TerminalCursor | null;
+  _terminalHistoryPageFromHeaders: (headers: Headers) => {
+    start: number;
+    end: number;
+    total: number;
+    hasMoreBefore: boolean;
+    hasMoreAfter: boolean;
+    origin: string;
+  } | null;
+  _readTerminalSnapshotResponse: (
+    response: Response,
+    options?: {
+      paint?: boolean;
+      loadOwner?: string;
+      chunkSize?: number;
+      beforePaint?: () => void;
+      isCancelled?: () => boolean;
+      followBottom?: boolean;
+    }
+  ) => Promise<{
+    terminalBuffer: string;
+    cursor?: TerminalCursor;
+    streamed: boolean;
+    painted: boolean;
+    aborted: boolean;
+  }>;
+};
+
+type TerminalCursor = {
+  stream: string;
+  generation: number;
+  start: number;
+  end: number;
 };
 
 /**
@@ -80,14 +120,24 @@ function makeApp() {
     }),
     _beginBufferLoad: mixin._beginBufferLoad as BufferLoadApp['_beginBufferLoad'],
     _finishBufferLoad: mixin._finishBufferLoad as BufferLoadApp['_finishBufferLoad'],
+    _isTerminalCursor: mixin._isTerminalCursor as BufferLoadApp['_isTerminalCursor'],
+    _terminalEventAfterSnapshot: mixin._terminalEventAfterSnapshot as BufferLoadApp['_terminalEventAfterSnapshot'],
+    _terminalSnapshotCursorFromHeaders:
+      mixin._terminalSnapshotCursorFromHeaders as BufferLoadApp['_terminalSnapshotCursorFromHeaders'],
+    _terminalHistoryPageFromHeaders:
+      mixin._terminalHistoryPageFromHeaders as BufferLoadApp['_terminalHistoryPageFromHeaders'],
+    _readTerminalSnapshotResponse:
+      mixin._readTerminalSnapshotResponse as BufferLoadApp['_readTerminalSnapshotResponse'],
   };
   return { app, writes };
 }
 
 /** Simulate live SSE events arriving while a buffer load is in progress (the queue path). */
-function pushWhileLoading(app: BufferLoadApp, data: string) {
+function pushWhileLoading(app: BufferLoadApp, data: string, cursor?: TerminalCursor) {
   // Mirrors batchTerminalWrite's queue branch: if loading, push to the queue.
-  if (app._isLoadingBuffer && app._loadBufferQueue) app._loadBufferQueue.push(data);
+  if (app._isLoadingBuffer && app._loadBufferQueue) {
+    app._loadBufferQueue.push(cursor ? { data, cursor } : data);
+  }
 }
 
 describe('buffer-load flush (COD-144)', () => {
@@ -168,6 +218,167 @@ describe('buffer-load flush (COD-144)', () => {
     expect(app._loadBufferQueue).toBeNull();
     expect(app.batchTerminalWrite).not.toHaveBeenCalled();
     expect(writes).toEqual([]);
+  });
+
+  it('discards cursor-covered events and replays only a batch suffix beyond the snapshot', () => {
+    const { app, writes } = makeApp();
+    const owner = app._beginBufferLoad('cursor-overlap');
+    pushWhileLoading(app, 'covered', { stream: 'stream-a', generation: 1, start: 0, end: 7 });
+    pushWhileLoading(app, 'abcdefgh', { stream: 'stream-a', generation: 1, start: 7, end: 15 });
+    pushWhileLoading(app, 'after', { stream: 'stream-a', generation: 1, start: 15, end: 20 });
+
+    expect(
+      app._finishBufferLoad(owner, {
+        snapshotCursor: { stream: 'stream-a', generation: 1, start: 0, end: 10 },
+      })
+    ).toBe(true);
+
+    expect(writes).toEqual(['defgh', 'after']);
+    expect(app.batchTerminalWrite).toHaveBeenNthCalledWith(1, 'defgh', {
+      stream: 'stream-a',
+      generation: 1,
+      start: 10,
+      end: 15,
+    });
+    expect(app.batchTerminalWrite).toHaveBeenNthCalledWith(2, 'after', {
+      stream: 'stream-a',
+      generation: 1,
+      start: 15,
+      end: 20,
+    });
+  });
+
+  it('drops stale stream/generation events and preserves output from a newer generation', () => {
+    const { app, writes } = makeApp();
+    const owner = app._beginBufferLoad('cursor-generation');
+    pushWhileLoading(app, 'old stream', { stream: 'old-stream', generation: 9, start: 0, end: 10 });
+    pushWhileLoading(app, 'old generation', { stream: 'stream-a', generation: 1, start: 0, end: 14 });
+    pushWhileLoading(app, 'new generation', { stream: 'stream-a', generation: 3, start: 0, end: 14 });
+
+    app._finishBufferLoad(owner, {
+      snapshotCursor: { stream: 'stream-a', generation: 2, start: 0, end: 5 },
+    });
+
+    expect(writes).toEqual(['new generation']);
+  });
+
+  it('slices overlap inside the SSE synchronized-output wrapper', () => {
+    const { app, writes } = makeApp();
+    const owner = app._beginBufferLoad('cursor-sync-overlap');
+    pushWhileLoading(app, '\x1b[?2026habcdefgh\x1b[?2026l', {
+      stream: 'stream-a',
+      generation: 1,
+      start: 7,
+      end: 15,
+    });
+
+    app._finishBufferLoad(owner, {
+      snapshotCursor: { stream: 'stream-a', generation: 1, start: 0, end: 10 },
+    });
+
+    expect(writes).toEqual(['\x1b[?2026hdefgh\x1b[?2026l']);
+  });
+
+  it('decodes a streamed snapshot losslessly across UTF-8 chunk boundaries while painting', async () => {
+    const { app } = makeApp();
+    const text = 'alpha \u05e9\u05dc\u05d5\u05dd \ud83d\ude80 omega';
+    const bytes = new TextEncoder().encode(text);
+    const wireChunks = [bytes.slice(0, 8), bytes.slice(8, 13), bytes.slice(13)];
+    let index = 0;
+    const headers = new Headers({
+      'x-codeman-terminal-format': 'stream-v1',
+      'x-codeman-terminal-stream': 'stream-a',
+      'x-codeman-terminal-generation': '4',
+      'x-codeman-terminal-start': '0',
+      'x-codeman-terminal-end': String(text.length),
+      'x-codeman-terminal-truncated': '0',
+    });
+    const response = {
+      ok: true,
+      headers,
+      body: {
+        getReader: () => ({
+          read: async () =>
+            index < wireChunks.length ? { done: false, value: wireChunks[index++] } : { done: true, value: undefined },
+          cancel: async () => {},
+        }),
+      },
+    } as unknown as Response;
+    const painted: string[] = [];
+    const beforePaint = vi.fn();
+    Object.assign(app, {
+      chunkedTerminalWrite: vi.fn(async (chunk: string) => {
+        painted.push(chunk);
+      }),
+    });
+
+    const result = await app._readTerminalSnapshotResponse(response, {
+      paint: true,
+      loadOwner: 'stream-load',
+      beforePaint,
+      followBottom: true,
+    });
+
+    expect(result.terminalBuffer).toBe(text);
+    expect(painted.join('')).toBe(text);
+    expect(beforePaint).toHaveBeenCalledOnce();
+    expect(app.chunkedTerminalWrite).toHaveBeenCalledWith(expect.any(String), 32 * 1024, 'stream-load', {
+      followBottom: true,
+    });
+    expect(result).toMatchObject({
+      streamed: true,
+      painted: true,
+      aborted: false,
+      cursor: { stream: 'stream-a', generation: 4, start: 0, end: text.length },
+    });
+  });
+
+  it('exposes bounded history-page coordinates from streamed response headers', async () => {
+    const { app } = makeApp();
+    const response = new Response('bounded history page', {
+      status: 200,
+      headers: {
+        'x-codeman-terminal-format': 'stream-v1',
+        'x-codeman-terminal-stream': 'stream-a',
+        'x-codeman-terminal-generation': '2',
+        'x-codeman-terminal-start': '100',
+        'x-codeman-terminal-end': '120',
+        'x-codeman-history-start': '3000',
+        'x-codeman-history-end': '4000',
+        'x-codeman-history-total': '9000',
+        'x-codeman-history-more-before': '1',
+        'x-codeman-history-more-after': '1',
+        'x-codeman-history-origin': 'pane-1:origin',
+      },
+    });
+
+    await expect(app._readTerminalSnapshotResponse(response)).resolves.toMatchObject({
+      terminalBuffer: 'bounded history page',
+      historyPage: {
+        start: 3000,
+        end: 4000,
+        total: 9000,
+        hasMoreBefore: true,
+        hasMoreAfter: true,
+        origin: 'pane-1:origin',
+      },
+    });
+  });
+
+  it('keeps the JSON terminal response as a non-streaming fallback', async () => {
+    const { app } = makeApp();
+    const response = {
+      ok: true,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({ data: { terminalBuffer: 'legacy snapshot', truncated: false } }),
+    } as unknown as Response;
+
+    await expect(app._readTerminalSnapshotResponse(response, { paint: true })).resolves.toMatchObject({
+      terminalBuffer: 'legacy snapshot',
+      truncated: false,
+      streamed: false,
+      painted: false,
+    });
   });
 
   it('repositions a pending local draft after the loaded frame becomes authoritative', () => {

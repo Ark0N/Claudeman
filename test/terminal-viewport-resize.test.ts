@@ -36,7 +36,7 @@ async function freshPage(): Promise<{ context: BrowserContext; page: Page }> {
 }
 
 async function navigateAndWait(page: Page): Promise<void> {
-  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${BASE_URL}?nowebgl`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => document.body.classList.contains('app-loaded'), {
     timeout: 5000,
   });
@@ -387,6 +387,114 @@ describe('Session initialization and viewport resize', () => {
     }, sessionId);
   });
 
+  it('restores a recent busy session from its snapshot and streamed delta without refetching', async () => {
+    ({ context, page } = await freshPage());
+    await navigateAndWait(page);
+
+    const terminalRequests: string[] = [];
+    await page.route('**/api/sessions/*/terminal*', async (route) => {
+      const url = new URL(route.request().url());
+      const sessionId = url.pathname.split('/')[3];
+      terminalRequests.push(sessionId);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: {
+            terminalBuffer: `${sessionId} initial history\r\n${sessionId} prompt`,
+            truncated: false,
+          },
+        }),
+      });
+    });
+
+    await page.evaluate(async () => {
+      const app = (
+        window as unknown as {
+          app: {
+            sessions: Map<string, object>;
+            sessionOrder: string[];
+            renderSessionTabs: () => void;
+            selectSession: (id: string) => Promise<void>;
+            _onSessionTerminal: (data: { id: string; data: string }) => void;
+          };
+        }
+      ).app;
+      app.sessions.set('warm-a', {
+        id: 'warm-a',
+        name: 'Warm A',
+        mode: 'codex',
+        status: 'working',
+        pid: 1,
+        workingDir: '/tmp',
+      });
+      app.sessions.set('warm-b', {
+        id: 'warm-b',
+        name: 'Warm B',
+        mode: 'codex',
+        status: 'working',
+        pid: 1,
+        workingDir: '/tmp',
+      });
+      app.sessionOrder = ['warm-a', 'warm-b'];
+      app.renderSessionTabs();
+
+      await app.selectSession('warm-a');
+      await app.selectSession('warm-b');
+      app._onSessionTerminal({ id: 'warm-a', data: '\r\nwarm-a streamed while away\r\n' });
+    });
+
+    const requestsBeforeReturn = terminalRequests.length;
+    const restored = await page.evaluate(async () => {
+      const app = (
+        window as unknown as {
+          app: {
+            selectSession: (id: string) => Promise<void>;
+            terminal: {
+              buffer: {
+                active: {
+                  length: number;
+                  getLine: (index: number) => { translateToString: (trimRight: boolean) => string } | undefined;
+                };
+              };
+            };
+            _warmTerminalCache: { ids: () => string[] };
+            _terminalSseSubscriptionIds: () => string[];
+            _wsReady: boolean;
+            _wsSessionId: string | null;
+          };
+        }
+      ).app;
+      await app.selectSession('warm-a');
+      const buffer = app.terminal.buffer.active;
+      const lines: string[] = [];
+      for (let index = 0; index < buffer.length; index++) {
+        lines.push(buffer.getLine(index)?.translateToString(true) || '');
+      }
+      const previousWsReady = app._wsReady;
+      const previousWsSessionId = app._wsSessionId;
+      app._wsReady = true;
+      app._wsSessionId = 'warm-a';
+      const sseIdsWithActiveWs = app._terminalSseSubscriptionIds();
+      app._wsReady = previousWsReady;
+      app._wsSessionId = previousWsSessionId;
+      return {
+        text: lines.join('\n'),
+        warmIds: app._warmTerminalCache.ids(),
+        sseIdsWithActiveWs,
+      };
+    });
+
+    expect(terminalRequests).toHaveLength(requestsBeforeReturn);
+    expect(terminalRequests).toEqual(['warm-a', 'warm-a', 'warm-b', 'warm-b']);
+    expect(restored.text).toContain('warm-a initial history');
+    expect(restored.text).toContain('warm-a streamed while away');
+    expect(restored.warmIds).toEqual(expect.arrayContaining(['warm-a', 'warm-b']));
+    // The desired SSE filter keeps both sessions. The server suppresses warm-a
+    // while its WebSocket owns output and resumes it atomically on handoff.
+    expect(restored.sseIdsWithActiveWs).toEqual(expect.arrayContaining(['warm-a', 'warm-b']));
+  });
+
   it('needsRefresh handler sends resize after restoring buffered output', async () => {
     ({ context, page } = await freshPage());
     await navigateAndWait(page);
@@ -438,6 +546,156 @@ describe('Session initialization and viewport resize', () => {
 
     expect(resizeCalls).toEqual([sessionId]);
     console.log(`[terminal-viewport-resize] needsRefresh triggered ${resizeCalls.length} resize call(s)`);
+  });
+
+  it('cold-loads bounded history and preserves the reader anchor when prepending a page', async () => {
+    ({ context, page } = await freshPage());
+    await navigateAndWait(page);
+
+    const result = await page.evaluate(async () => {
+      const app = (window as unknown as { app: any }).app;
+      const sessionId = 'paged-history-browser-test';
+      const originalFetch = window.fetch;
+      const originalSendResize = app.sendResize;
+      const originalConnectWs = app._connectWs;
+      const requested: string[] = [];
+      const latestFrame = '\x1b[1;1HLATEST PAGED FRAME' + '\x1b[2;1H› current prompt' + '\x1b[2;17H';
+      const rows = (prefix: string, start: number, end: number) =>
+        Array.from({ length: end - start }, (_, offset) => `${prefix}_${String(start + offset).padStart(4, '0')}`).join(
+          '\r\n'
+        );
+      const recentPage = rows('RECENT', 800, 1200);
+      const olderPage = rows('OLDER', 400, 800);
+      const streamHeaders = (body: string, extra: Record<string, string> = {}): Record<string, string> => ({
+        'content-type': 'text/plain; charset=utf-8',
+        'x-codeman-terminal-format': 'stream-v1',
+        'x-codeman-terminal-stream': 'paged-browser-stream',
+        'x-codeman-terminal-generation': '1',
+        'x-codeman-terminal-start': '0',
+        'x-codeman-terminal-end': String(body.length),
+        'x-codeman-terminal-status': 'idle',
+        'x-codeman-terminal-full-size': String(body.length),
+        'x-codeman-terminal-truncated': '0',
+        'x-codeman-terminal-source': 'mux-history-page',
+        ...extra,
+      });
+      const pageHeaders = (body: string, start: number, end: number): Record<string, string> =>
+        streamHeaders(body, {
+          'x-codeman-history-start': String(start),
+          'x-codeman-history-end': String(end),
+          'x-codeman-history-total': '1200',
+          'x-codeman-history-more-before': start > 0 ? '1' : '0',
+          'x-codeman-history-more-after': end < 1200 ? '1' : '0',
+          'x-codeman-history-origin': 'stable-browser-origin',
+        });
+      const visibleText = () => {
+        const buffer = app.terminal.buffer.active;
+        return Array.from(
+          { length: app.terminal.rows },
+          (_, row) => buffer.getLine(buffer.viewportY + row)?.translateToString(true) || ''
+        ).join('\n');
+      };
+
+      try {
+        app.sessions.set(sessionId, {
+          id: sessionId,
+          name: 'Paged browser history',
+          mode: 'codex',
+          status: 'idle',
+          pid: 1,
+          workingDir: '/tmp',
+        });
+        app.sessionOrder = [sessionId];
+        app.activeSessionId = null;
+        app.terminalBufferCache.delete(sessionId);
+        app._xtermSnapshots.delete(sessionId);
+        app._warmTerminalCache.remove(sessionId);
+        app._terminalHistoryPaging.delete(sessionId);
+        app.renderSessionTabs();
+
+        app.sendResize = async () => false;
+        app._connectWs = () => {};
+        window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (!url.includes(`/api/sessions/${sessionId}/terminal`)) {
+            return originalFetch.call(window, input, init);
+          }
+          requested.push(url);
+          if (url.includes('latest=1')) {
+            return new Response(latestFrame, {
+              status: 200,
+              headers: streamHeaders(latestFrame, {
+                'x-codeman-terminal-source': 'mux-visible',
+              }),
+            });
+          }
+          if (url.includes('before=800')) {
+            return new Response(olderPage, {
+              status: 200,
+              headers: pageHeaders(olderPage, 400, 800),
+            });
+          }
+          return new Response(recentPage, {
+            status: 200,
+            headers: pageHeaders(recentPage, 800, 1200),
+          });
+        }) as typeof window.fetch;
+
+        await app.selectSession(sessionId);
+        const initialState = app._terminalHistoryPaging.get(sessionId);
+        const initialStart = initialState.start;
+        initialState.loading = true;
+        const buffer = app.terminal.buffer.active;
+        let markerRow = -1;
+        for (let row = 0; row < buffer.length; row++) {
+          if (buffer.getLine(row)?.translateToString(true).includes('RECENT_0800')) {
+            markerRow = row;
+            break;
+          }
+        }
+        if (markerRow >= 0) app.terminal.scrollToLine(markerRow);
+        await new Promise<void>((resolve) => app.terminal.write('', resolve));
+        const beforeText = visibleText();
+        initialState.loading = false;
+
+        const loaded = await app._loadTerminalHistoryPage('older');
+        const afterState = app._terminalHistoryPaging.get(sessionId);
+        const afterText = visibleText();
+        app.terminal.scrollToBottom();
+        const latestText = visibleText();
+
+        return {
+          loaded,
+          requested,
+          initialStart,
+          markerRow,
+          afterStart: afterState.start,
+          afterEnd: afterState.end,
+          pageCount: afterState.pages.length,
+          beforeText,
+          afterText,
+          latestText,
+        };
+      } finally {
+        window.fetch = originalFetch;
+        app.sendResize = originalSendResize;
+        app._connectWs = originalConnectWs;
+        app.sessions.delete(sessionId);
+        app._terminalHistoryPaging.delete(sessionId);
+      }
+    });
+
+    expect(result.loaded).toBe(true);
+    expect(result.requested.some((url: string) => url.includes('historyPage=1'))).toBe(true);
+    expect(result.requested.every((url: string) => !url.includes('full=1'))).toBe(true);
+    expect(result.initialStart).toBe(800);
+    expect(result.markerRow).toBeGreaterThanOrEqual(0);
+    expect(result.afterStart).toBe(400);
+    expect(result.afterEnd).toBe(1200);
+    expect(result.pageCount).toBe(2);
+    expect(result.beforeText).toContain('RECENT_0800');
+    expect(result.afterText).toContain('RECENT_0800');
+    expect(result.latestText).toContain('LATEST PAGED FRAME');
   });
 });
 

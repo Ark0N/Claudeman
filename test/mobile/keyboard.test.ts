@@ -307,6 +307,170 @@ describe('Virtual Keyboard', () => {
       expect(accessoryState.display).toBe('none');
     });
 
+    it('copies a whole raw response chunk on double-click without stealing control actions', async () => {
+      const state = await page.evaluate(async () => {
+        const body = document.createElement('div') as HTMLDivElement & {
+          _codemanCopyText?: string;
+          _rvCopyFeedbackTimer?: ReturnType<typeof setTimeout>;
+        };
+        body.className = 'response-viewer-body';
+
+        const reply = document.createElement('div') as HTMLDivElement & {
+          _codemanCopyText?: string;
+          _rvCopyFeedbackTimer?: ReturnType<typeof setTimeout>;
+        };
+        reply.className = 'rv-message rv-msg-assistant';
+        reply._codemanCopyText = '**Raw reply**\n\n```js\nconst answer = 42;\n```';
+        reply.innerHTML =
+          '<div class="rv-role">Claude</div>' +
+          '<div class="rv-text"><p><strong>Rendered reply</strong></p></div>' +
+          '<button type="button">Existing action</button>';
+        body.appendChild(reply);
+        document.body.appendChild(body);
+
+        const copied: string[] = [];
+        const originalCopy = app._copyText;
+        const originalToast = app.showToast;
+        const originalFeedback = MobileTerminalControls.feedback;
+        app._copyText = async (text: string) => {
+          copied.push(text);
+          return true;
+        };
+        app.showToast = () => {};
+        MobileTerminalControls.feedback = () => {};
+        app._bindResponseViewerInteractions(body);
+
+        const replyText = reply.querySelector('.rv-text')!;
+        const replyDispatchResult = replyText.dispatchEvent(
+          new MouseEvent('dblclick', {
+            bubbles: true,
+            cancelable: true,
+            detail: 2,
+          })
+        );
+        await Promise.resolve();
+
+        reply.querySelector('button')!.dispatchEvent(
+          new MouseEvent('dblclick', {
+            bubbles: true,
+            cancelable: true,
+            detail: 2,
+          })
+        );
+        await Promise.resolve();
+
+        const replyFeedback = reply.classList.contains('rv-copy-feedback');
+        const touchAction = getComputedStyle(reply).touchAction;
+        if (reply._rvCopyFeedbackTimer) clearTimeout(reply._rvCopyFeedbackTimer);
+
+        body.innerHTML = '<p>Rendered last response</p>';
+        body._codemanCopyText = '# Raw last response';
+        body.querySelector('p')!.dispatchEvent(
+          new MouseEvent('dblclick', {
+            bubbles: true,
+            cancelable: true,
+            detail: 2,
+          })
+        );
+        await Promise.resolve();
+
+        if (body._rvCopyFeedbackTimer) clearTimeout(body._rvCopyFeedbackTimer);
+        app._copyText = originalCopy;
+        app.showToast = originalToast;
+        MobileTerminalControls.feedback = originalFeedback;
+        body.remove();
+
+        return {
+          copied,
+          replyDefaultPrevented: !replyDispatchResult,
+          replyFeedback,
+          touchAction,
+        };
+      });
+
+      expect(state).toEqual({
+        copied: ['**Raw reply**\n\n```js\nconst answer = 42;\n```', '# Raw last response'],
+        replyDefaultPrevented: true,
+        replyFeedback: true,
+        touchAction: 'manipulation',
+      });
+    });
+
+    it('copies a whole response chunk from two real mobile touch taps', async () => {
+      await page.evaluate(() => {
+        const testWindow = window as typeof window & {
+          __rvDoubleTapCopyTest?: {
+            copied: string[];
+            originalCopy: typeof app._copyText;
+            originalToast: typeof app.showToast;
+            originalFeedback: typeof MobileTerminalControls.feedback;
+          };
+        };
+        const body = document.createElement('div');
+        body.id = 'rv-double-tap-copy-test';
+        body.className = 'response-viewer-body';
+        body.style.cssText =
+          'position:fixed;inset:16px auto auto 16px;width:280px;height:120px;z-index:2147483647;background:#111';
+
+        const reply = document.createElement('div') as HTMLDivElement & {
+          _codemanCopyText?: string;
+        };
+        reply.className = 'rv-message rv-msg-assistant';
+        reply._codemanCopyText = 'Raw touch reply';
+        reply.innerHTML = '<div class="rv-text">Rendered touch reply</div>';
+        body.appendChild(reply);
+        document.body.appendChild(body);
+
+        testWindow.__rvDoubleTapCopyTest = {
+          copied: [],
+          originalCopy: app._copyText,
+          originalToast: app.showToast,
+          originalFeedback: MobileTerminalControls.feedback,
+        };
+        app._copyText = async (text: string) => {
+          testWindow.__rvDoubleTapCopyTest!.copied.push(text);
+          return true;
+        };
+        app.showToast = () => {};
+        MobileTerminalControls.feedback = () => {};
+        app._bindResponseViewerInteractions(body);
+      });
+
+      try {
+        const replyText = page.locator('#rv-double-tap-copy-test .rv-text');
+        await replyText.tap();
+        await page.waitForTimeout(80);
+        await replyText.tap();
+        await page.waitForTimeout(50);
+
+        const copied = await page.evaluate(() => {
+          const testWindow = window as typeof window & {
+            __rvDoubleTapCopyTest?: { copied: string[] };
+          };
+          return testWindow.__rvDoubleTapCopyTest?.copied ?? [];
+        });
+        expect(copied).toEqual(['Raw touch reply']);
+      } finally {
+        await page.evaluate(() => {
+          const testWindow = window as typeof window & {
+            __rvDoubleTapCopyTest?: {
+              originalCopy: typeof app._copyText;
+              originalToast: typeof app.showToast;
+              originalFeedback: typeof MobileTerminalControls.feedback;
+            };
+          };
+          const state = testWindow.__rvDoubleTapCopyTest;
+          if (state) {
+            app._copyText = state.originalCopy;
+            app.showToast = state.originalToast;
+            MobileTerminalControls.feedback = state.originalFeedback;
+          }
+          document.getElementById('rv-double-tap-copy-test')?.remove();
+          delete testWindow.__rvDoubleTapCopyTest;
+        });
+      }
+    });
+
     it('clears main padding when the phone keyboard opens', async () => {
       const initialPadding = await page.evaluate(() => {
         const main = document.querySelector('.main') as HTMLElement | null;
@@ -324,6 +488,36 @@ describe('Virtual Keyboard', () => {
       const newPx = parseFloat(newPadding) || 0;
       expect(initialPx).toBeGreaterThan(0);
       expect(newPx).toBe(0);
+    });
+
+    it('locks the handheld app as soon as terminal focus requests the keyboard', async () => {
+      const state = await page.evaluate(() => {
+        const focusTarget = document.createElement('button');
+        document.body.appendChild(focusTarget);
+        focusTarget.focus();
+        KeyboardHandler.keyboardVisible = false;
+        KeyboardHandler._terminalInputRequested = false;
+        document.body.classList.remove('keyboard-visible', 'keyboard-opening');
+
+        app.terminal.focus();
+
+        const appElement = document.querySelector('.app');
+        const result = {
+          terminalRequested: KeyboardHandler._terminalInputRequested,
+          openingClass: document.body.classList.contains('keyboard-opening'),
+          appPosition: appElement ? getComputedStyle(appElement).position : '',
+        };
+        clearTimeout(KeyboardHandler._keyboardOpeningTimer);
+        KeyboardHandler._keyboardOpeningTimer = null;
+        focusTarget.remove();
+        return result;
+      });
+
+      expect(state).toEqual({
+        terminalRequested: true,
+        openingClass: true,
+        appPosition: 'fixed',
+      });
     });
 
     it('marks keyboard-driven resizing as active viewport control', async () => {
@@ -401,14 +595,59 @@ describe('Virtual Keyboard', () => {
       expect(mainPadding).toBe('');
     });
 
+    it('reveals and focuses the live terminal input as soon as its keyboard opens', async () => {
+      const state = await page.evaluate(() => {
+        const originalScrollToBottom = app.terminal.scrollToBottom.bind(app.terminal);
+        const originalFocusInput = app._focusMobileTerminalInput.bind(app);
+        let bottomRestores = 0;
+        let inputFocusRestores = 0;
+        app.terminal.scrollToBottom = () => {
+          bottomRestores++;
+        };
+        app._focusMobileTerminalInput = () => {
+          inputFocusRestores++;
+        };
+        app._terminalScrollLocked = true;
+        app._wasAtBottomBeforeWrite = false;
+        KeyboardHandler.keyboardVisible = true;
+        KeyboardHandler._terminalInputRequested = true;
+        document.body.classList.add('keyboard-visible');
+
+        KeyboardHandler.onKeyboardShow();
+        const immediate = {
+          bottomRestores,
+          inputFocusRestores,
+          scrollLocked: app._terminalScrollLocked,
+          followsBottom: app._wasAtBottomBeforeWrite,
+        };
+
+        clearTimeout(KeyboardHandler._viewportSettleTimer);
+        KeyboardHandler._viewportSettleTimer = null;
+        KeyboardHandler._settleScrollToBottom = false;
+        KeyboardHandler._settleFocusInput = false;
+        app.terminal.scrollToBottom = originalScrollToBottom;
+        app._focusMobileTerminalInput = originalFocusInput;
+        return immediate;
+      });
+
+      expect(state).toEqual({
+        bottomRestores: 1,
+        inputFocusRestores: 1,
+        scrollLocked: false,
+        followsBottom: true,
+      });
+    });
+
     it('coalesces keyboard animation frames into one final terminal fit', async () => {
       const result = await page.evaluate(async () => {
         const originalFit = app.fitAddon.fit.bind(app.fitAddon);
         const originalSendResize = KeyboardHandler._sendTerminalResize.bind(KeyboardHandler);
         const originalScrollToBottom = app.terminal.scrollToBottom.bind(app.terminal);
+        const originalFocusInput = app._focusMobileTerminalInput.bind(app);
         let fits = 0;
         let resizes = 0;
         let bottomRestores = 0;
+        let inputFocusRestores = 0;
         app.fitAddon.fit = () => {
           fits++;
         };
@@ -418,25 +657,89 @@ describe('Virtual Keyboard', () => {
         app.terminal.scrollToBottom = () => {
           bottomRestores++;
         };
+        app._focusMobileTerminalInput = () => {
+          inputFocusRestores++;
+        };
+        app._terminalScrollLocked = true;
+        app._wasAtBottomBeforeWrite = false;
+        KeyboardHandler.keyboardVisible = true;
+        document.body.classList.add('keyboard-visible');
 
-        KeyboardHandler._scheduleViewportSettle({ scrollToBottom: true });
+        KeyboardHandler._scheduleViewportSettle({ scrollToBottom: true, focusInput: true });
         await new Promise((resolve) => setTimeout(resolve, 30));
         KeyboardHandler._scheduleViewportSettle();
         await new Promise((resolve) => setTimeout(resolve, 30));
         KeyboardHandler._scheduleViewportSettle();
         await new Promise((resolve) => setTimeout(resolve, 50));
-        const beforeFinalSettle = { fits, resizes, bottomRestores };
+        const beforeFinalSettle = { fits, resizes, bottomRestores, inputFocusRestores };
         await new Promise((resolve) => setTimeout(resolve, KeyboardHandler.VIEWPORT_SETTLE_MS));
-        const afterFinalSettle = { fits, resizes, bottomRestores };
+        const afterFinalSettle = {
+          fits,
+          resizes,
+          bottomRestores,
+          inputFocusRestores,
+          scrollLocked: app._terminalScrollLocked,
+          followsBottom: app._wasAtBottomBeforeWrite,
+        };
 
         app.fitAddon.fit = originalFit;
         KeyboardHandler._sendTerminalResize = originalSendResize;
         app.terminal.scrollToBottom = originalScrollToBottom;
+        app._focusMobileTerminalInput = originalFocusInput;
         return { beforeFinalSettle, afterFinalSettle };
       });
 
-      expect(result.beforeFinalSettle).toEqual({ fits: 0, resizes: 0, bottomRestores: 0 });
-      expect(result.afterFinalSettle).toEqual({ fits: 1, resizes: 1, bottomRestores: 1 });
+      expect(result.beforeFinalSettle).toEqual({
+        fits: 0,
+        resizes: 0,
+        bottomRestores: 0,
+        inputFocusRestores: 0,
+      });
+      expect(result.afterFinalSettle).toEqual({
+        fits: 1,
+        resizes: 1,
+        bottomRestores: 1,
+        inputFocusRestores: 1,
+        scrollLocked: false,
+        followsBottom: true,
+      });
+    });
+
+    it('does not steal focus or resize the PTY when the keyboard belongs to a form field', async () => {
+      const state = await page.evaluate(async () => {
+        const originalFocusInput = app._focusMobileTerminalInput.bind(app);
+        const originalScrollToBottom = app.terminal.scrollToBottom.bind(app.terminal);
+        const originalSendResize = KeyboardHandler._sendTerminalResize.bind(KeyboardHandler);
+        let inputFocusRestores = 0;
+        let bottomRestores = 0;
+        let resizes = 0;
+        app._focusMobileTerminalInput = () => {
+          inputFocusRestores++;
+        };
+        app.terminal.scrollToBottom = () => {
+          bottomRestores++;
+        };
+        KeyboardHandler._sendTerminalResize = () => {
+          resizes++;
+        };
+        KeyboardHandler.keyboardVisible = true;
+        KeyboardHandler._terminalInputRequested = false;
+        document.body.classList.add('keyboard-visible');
+
+        KeyboardHandler.onKeyboardShow();
+        await new Promise((resolve) => setTimeout(resolve, KeyboardHandler.VIEWPORT_SETTLE_MS + 20));
+
+        app._focusMobileTerminalInput = originalFocusInput;
+        app.terminal.scrollToBottom = originalScrollToBottom;
+        KeyboardHandler._sendTerminalResize = originalSendResize;
+        return { inputFocusRestores, bottomRestores, resizes };
+      });
+
+      expect(state).toEqual({
+        inputFocusRestores: 0,
+        bottomRestores: 0,
+        resizes: 0,
+      });
     });
 
     it('accessory bar has the unified terminal-control action set', async () => {
@@ -550,14 +853,16 @@ describe('Virtual Keyboard', () => {
       expect(activeTag).toBe('BODY');
     });
 
-    it('terminal fit called on keyboard toggle', async () => {
+    it('keeps keyboard fits inside the coalesced keyboard settle', async () => {
       // Inject spy on fitAddon.fit
       await page.evaluate(`
         if (typeof app !== 'undefined' && app.fitAddon) {
           window.__fitCallCount = 0;
+          window.__fitCallStacks = [];
           var orig = app.fitAddon.fit;
           app.fitAddon.fit = function () {
             window.__fitCallCount++;
+            window.__fitCallStacks.push(String(new Error().stack || ''));
             try { orig.call(this); } catch(e) {}
           };
         }
@@ -567,9 +872,14 @@ describe('Virtual Keyboard', () => {
       // Wait for the setTimeout(150) in onKeyboardShow
       await page.waitForTimeout(300);
 
-      const callCount = await page.evaluate(() => (window as any).__fitCallCount ?? 0);
-      // Soft assertion — fitAddon may not be initialized without real terminal
-      expect(callCount).toBeGreaterThanOrEqual(0);
+      const calls = await page.evaluate(() => ({
+        count: (window as any).__fitCallCount ?? 0,
+        stacks: (window as any).__fitCallStacks ?? [],
+      }));
+      // One settled fit plus, when needed, one synchronous row-gap correction.
+      expect(calls.count).toBeGreaterThanOrEqual(1);
+      expect(calls.count).toBeLessThanOrEqual(2);
+      expect(calls.stacks.every((stack: string) => stack.includes('mobile-handlers.js'))).toBe(true);
     });
 
     it('keeps xterm helper textarea focusable near the terminal cursor on touch devices', async () => {
@@ -990,6 +1300,592 @@ describe('Virtual Keyboard', () => {
       expect(calls.some((lines) => lines !== 0)).toBe(true);
     });
 
+    it('keeps a focused draft visible while a keyboard-open transcript drag reads history', async () => {
+      const result = await page.evaluate(async () => {
+        app.activeSessionId = 'mobile-focused-draft-scroll-test';
+        app.sessions.set('mobile-focused-draft-scroll-test', {
+          id: 'mobile-focused-draft-scroll-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app.terminal.reset();
+        const history = Array.from(
+          { length: app.terminal.rows + 20 },
+          (_, index) => `conversation line ${index + 1}`
+        ).join('\r\n');
+        await new Promise<void>((resolve) => app.terminal.write(`${history}\r\n› `, resolve));
+        app.terminal.focus();
+        app._localEchoOverlay.appendText('draft remains visible');
+        KeyboardHandler.keyboardVisible = true;
+        KeyboardHandler._terminalInputRequested = true;
+        document.body.classList.add('keyboard-visible');
+
+        const target =
+          document.querySelector('#terminalContainer .xterm-screen') ?? document.getElementById('terminalContainer');
+        if (!target) return null;
+        const rect = target.getBoundingClientRect();
+        const x = rect.left + rect.width / 2;
+        const startY = rect.top + Math.min(80, rect.height / 3);
+        const endY = Math.min(rect.bottom - 10, startY + 120);
+
+        const createTouch = (y: number) =>
+          new Touch({
+            identifier: 8,
+            target,
+            clientX: x,
+            clientY: y,
+            pageX: x,
+            pageY: y,
+          });
+        target.dispatchEvent(
+          new TouchEvent('touchstart', {
+            touches: [createTouch(startY)],
+            changedTouches: [createTouch(startY)],
+            bubbles: true,
+            cancelable: true,
+          })
+        );
+        target.dispatchEvent(
+          new TouchEvent('touchmove', {
+            touches: [createTouch(endY)],
+            changedTouches: [createTouch(endY)],
+            bubbles: true,
+            cancelable: true,
+          })
+        );
+        target.dispatchEvent(
+          new TouchEvent('touchend', {
+            touches: [],
+            changedTouches: [createTouch(endY)],
+            bubbles: true,
+            cancelable: true,
+          })
+        );
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        return {
+          keyboardVisible: KeyboardHandler.keyboardVisible,
+          terminalFocused: document.activeElement === app.terminal.textarea,
+          viewportY: app.terminal.buffer.active.viewportY,
+          baseY: app.terminal.buffer.active.baseY,
+          pendingText: app._localEchoOverlay.pendingText,
+          draftVisible: app._localEchoOverlay.state.visible,
+        };
+      });
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          keyboardVisible: true,
+          terminalFocused: true,
+          pendingText: 'draft remains visible',
+          draftVisible: true,
+        })
+      );
+      expect(result!.viewportY).toBeLessThan(result!.baseY);
+    });
+
+    it('keeps the previous terminal frame over a keyboard refit until nonblank output renders', async () => {
+      const state = await page.evaluate(async () => {
+        app.activeSessionId = 'mobile-keyboard-frame-cover-test';
+        app.sessions.set('mobile-keyboard-frame-cover-test', {
+          id: 'mobile-keyboard-frame-cover-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app.terminal.reset();
+        await new Promise<void>((resolve) => app.terminal.write('frame before keyboard\r\n› ', resolve));
+        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+
+        KeyboardHandler._beginTerminalFrameCover();
+        KeyboardHandler._armTerminalFrameCover();
+        const cover = app.terminal.element?.querySelector('.terminal-resize-frame-cover');
+        const before = {
+          exists: Boolean(cover),
+          text: cover?.textContent || '',
+        };
+
+        await new Promise<void>((resolve) => app.terminal.write('\x1b[2J\x1b[H', resolve));
+        await new Promise((resolve) => setTimeout(resolve, KeyboardHandler.FRAME_COVER_MIN_MS + 30));
+        const survivedBlank = Boolean(app.terminal.element?.querySelector('.terminal-resize-frame-cover'));
+
+        app.batchTerminalWrite('frame after keyboard\r\n› ');
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        return {
+          before,
+          survivedBlank,
+          removedAfterFrame: !app.terminal.element?.querySelector('.terminal-resize-frame-cover'),
+        };
+      });
+
+      expect(state.before.exists).toBe(true);
+      expect(state.before.text).toContain('frame before keyboard');
+      expect(state.survivedBlank).toBe(true);
+      expect(state.removedAfterFrame).toBe(true);
+    });
+
+    it('keeps the frame opaque through local resize renders and swaps only after terminal output paints', async () => {
+      const state = await page.evaluate(async () => {
+        app.activeSessionId = 'mobile-keyboard-atomic-frame-test';
+        app.sessions.set('mobile-keyboard-atomic-frame-test', {
+          id: 'mobile-keyboard-atomic-frame-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app.terminal.reset();
+        await new Promise<void>((resolve) => app.terminal.write('old stable frame\r\n› ', resolve));
+        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+
+        KeyboardHandler._beginTerminalFrameCover();
+        KeyboardHandler._armTerminalFrameCover();
+        app.terminal.refresh(0, app.terminal.rows - 1);
+        await new Promise((resolve) => setTimeout(resolve, KeyboardHandler.FRAME_COVER_MIN_MS + 80));
+        const survivedLocalRender = Boolean(app.terminal.element?.querySelector('.terminal-resize-frame-cover'));
+
+        const opacitySamples: Array<number | null> = [];
+        app.batchTerminalWrite('\x1b[2J\x1b[Hnew stable frame\r\n› ');
+        for (let frame = 0; frame < 12; frame++) {
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          const cover = app.terminal.element?.querySelector('.terminal-resize-frame-cover') as HTMLElement | null;
+          opacitySamples.push(cover ? Number(getComputedStyle(cover).opacity) : null);
+        }
+
+        return {
+          survivedLocalRender,
+          opacitySamples,
+          removedAfterOutput: !app.terminal.element?.querySelector('.terminal-resize-frame-cover'),
+        };
+      });
+
+      expect(state.survivedLocalRender).toBe(true);
+      expect(state.opacitySamples.every((opacity) => opacity === null || opacity === 1)).toBe(true);
+      expect(state.removedAfterOutput).toBe(true);
+    });
+
+    it('slides the captured frame during keyboard shrink instead of snapping its bottom edge', async () => {
+      const state = await page.evaluate(async () => {
+        app.activeSessionId = 'mobile-keyboard-frame-motion-test';
+        app.sessions.set('mobile-keyboard-frame-motion-test', {
+          id: 'mobile-keyboard-frame-motion-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app.terminal.reset();
+        await new Promise<void>((resolve) => app.terminal.write('stable frame before keyboard\r\n› ', resolve));
+        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+
+        KeyboardHandler._beginTerminalFrameCover();
+        const cover = app.terminal.element?.querySelector('.terminal-resize-frame-cover') as HTMLElement | null;
+        const frame = cover?.querySelector('.terminal-resize-frame') as HTMLElement | null;
+        if (!cover || !frame) return null;
+        const initialHeight = cover.getBoundingClientRect().height;
+        const nextHeight = Math.max(180, initialHeight - 180);
+
+        KeyboardHandler.keyboardVisible = true;
+        document.body.classList.add('keyboard-visible');
+        document.documentElement.style.setProperty('--app-height', `${nextHeight + 42}px`);
+        KeyboardHandler._updateTerminalFrameCoverGeometry();
+
+        const style = getComputedStyle(frame);
+        return {
+          shift: parseFloat(frame.style.getPropertyValue('--terminal-frame-shift') || '0'),
+          top: style.top,
+          bottom: style.bottom,
+          transitionProperty: style.transitionProperty,
+          transitionDuration: parseFloat(style.transitionDuration) || 0,
+        };
+      });
+
+      expect(state).not.toBeNull();
+      expect(state!.shift).toBeLessThan(-100);
+      expect(state!.top).toBe('0px');
+      expect(state!.bottom).not.toBe('0px');
+      expect(state!.transitionProperty).toContain('transform');
+      expect(state!.transitionDuration).toBeGreaterThan(0);
+    });
+
+    it('holds the outgoing frame and avoids a second keyboard fit during a tab switch', async () => {
+      await page.route('**/api/sessions/*/terminal*', async (route) => {
+        const sessionId = new URL(route.request().url()).pathname.split('/')[3];
+        if (sessionId === 'smooth-tab-b') {
+          await new Promise((resolve) => setTimeout(resolve, 140));
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            data: {
+              terminalBuffer: `${sessionId} stable frame\r\n${sessionId} prompt`,
+              truncated: false,
+            },
+          }),
+        });
+      });
+
+      const state = await page.evaluate(async () => {
+        app._initialFullBufferLoad = false;
+        app.sessions.set('smooth-tab-a', {
+          id: 'smooth-tab-a',
+          name: 'Smooth A',
+          mode: 'codex',
+          status: 'idle',
+          pid: 1,
+          workingDir: '/tmp',
+        });
+        app.sessions.set('smooth-tab-b', {
+          id: 'smooth-tab-b',
+          name: 'Smooth B',
+          mode: 'codex',
+          status: 'idle',
+          pid: 1,
+          workingDir: '/tmp',
+        });
+        app.sessionOrder = ['smooth-tab-a', 'smooth-tab-b'];
+        app.renderSessionTabs();
+        await app.selectSession('smooth-tab-a');
+        await new Promise<void>((resolve) => app.terminal.write('\r\nsmooth-tab-a outgoing frame\r\n', resolve));
+        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+
+        KeyboardHandler.keyboardVisible = true;
+        KeyboardHandler._terminalInputRequested = true;
+        document.body.classList.add('keyboard-visible');
+        const originalFit = app.fitAddon.fit.bind(app.fitAddon);
+        const originalFrameCoverMax = KeyboardHandler.FRAME_COVER_MAX_MS;
+        KeyboardHandler.FRAME_COVER_MAX_MS = 60;
+        const fitStacks: string[] = [];
+        app.fitAddon.fit = () => {
+          fitStacks.push(String(new Error().stack || ''));
+          originalFit();
+        };
+
+        const switching = app.selectSession('smooth-tab-b');
+        await new Promise((resolve) => setTimeout(resolve, 90));
+        const cover = app.terminal.element?.querySelector('.terminal-resize-frame-cover');
+        const duringSwitch = {
+          coverVisible: Boolean(cover),
+          coverText: cover?.textContent || '',
+        };
+        await switching;
+        await new Promise((resolve) => setTimeout(resolve, KeyboardHandler.FRAME_COVER_MIN_MS + 30));
+        app.fitAddon.fit = originalFit;
+        KeyboardHandler.FRAME_COVER_MAX_MS = originalFrameCoverMax;
+
+        return {
+          duringSwitch,
+          removedAfterTargetFrame: !app.terminal.element?.querySelector('.terminal-resize-frame-cover'),
+          keyboardFitCalls: fitStacks.filter((stack) => stack.includes('mobile-handlers.js')).length,
+        };
+      });
+
+      expect(state.duringSwitch.coverVisible).toBe(true);
+      expect(state.duringSwitch.coverText).toContain('smooth-tab-a');
+      expect(state.removedAfterTargetFrame).toBe(true);
+      expect(state.keyboardFitCalls).toBe(0);
+    });
+
+    it('shows the latest frame while a bounded history page downloads off-screen', async () => {
+      const state = await page.evaluate(async () => {
+        const sourceId = 'history-replay-source';
+        const targetId = 'history-replay-target';
+        const originalFetch = window.fetch;
+        const originalSendResize = app.sendResize;
+        const originalConnectWs = app._connectWs;
+        const streamHeaders = (end: number, extra: Record<string, string> = {}) => ({
+          'content-type': 'text/plain; charset=utf-8',
+          'x-codeman-terminal-format': 'stream-v1',
+          'x-codeman-terminal-stream': 'history-replay-stream',
+          'x-codeman-terminal-generation': '1',
+          'x-codeman-terminal-start': '0',
+          'x-codeman-terminal-end': String(end),
+          'x-codeman-terminal-status': 'idle',
+          'x-codeman-terminal-full-size': String(end),
+          'x-codeman-terminal-truncated': '0',
+          'x-codeman-terminal-source': 'mux-visible',
+          ...extra,
+        });
+        const latestFrame = 'LATEST TARGET FRAME\r\n› current prompt';
+        const historicalChunks = Array.from(
+          { length: 4 },
+          (_, chunkIndex) =>
+            Array.from(
+              { length: 90 },
+              (_, lineIndex) => `HISTORY_${chunkIndex}_${String(lineIndex).padStart(3, '0')} background scrollback`
+            ).join('\r\n') + '\r\n'
+        );
+        let historyChunksSent = 0;
+
+        try {
+          app.sessions.set(sourceId, {
+            id: sourceId,
+            name: 'Replay source',
+            mode: 'codex',
+            status: 'idle',
+            pid: 1,
+            workingDir: '/tmp',
+          });
+          app.sessions.set(targetId, {
+            id: targetId,
+            name: 'Replay target',
+            mode: 'codex',
+            status: 'idle',
+            pid: 1,
+            workingDir: '/tmp',
+          });
+          app.sessionOrder = [sourceId, targetId];
+          app.activeSessionId = sourceId;
+          app._initialFullBufferLoad = false;
+          app.terminalBufferCache.delete(targetId);
+          app._xtermSnapshots.delete(targetId);
+          app._warmTerminalCache.remove(targetId);
+          app.renderSessionTabs();
+          app.hideWelcome();
+          app.terminal.reset();
+          await new Promise<void>((resolve) => app.terminal.write('OUTGOING SOURCE FRAME\r\n› source prompt', resolve));
+          await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+
+          app.sendResize = async () => false;
+          app._connectWs = () => {};
+          window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = String(input);
+            if (!url.includes(`/api/sessions/${targetId}/terminal`)) {
+              return originalFetch.call(window, input, init);
+            }
+            if (url.includes('latest=1')) {
+              return new Response(latestFrame, {
+                status: 200,
+                headers: streamHeaders(latestFrame.length),
+              });
+            }
+
+            const encoder = new TextEncoder();
+            const body = new ReadableStream<Uint8Array>({
+              start(controller) {
+                void (async () => {
+                  for (const chunk of historicalChunks) {
+                    await new Promise((resolve) => setTimeout(resolve, 70));
+                    controller.enqueue(encoder.encode(chunk));
+                    historyChunksSent += 1;
+                  }
+                  controller.close();
+                })();
+              },
+            });
+            const totalLength = historicalChunks.reduce((sum, chunk) => sum + chunk.length, 0);
+            return new Response(body, {
+              status: 200,
+              headers: streamHeaders(totalLength, {
+                'x-codeman-terminal-source': 'mux-history-page',
+                'x-codeman-history-start': '0',
+                'x-codeman-history-end': '360',
+                'x-codeman-history-total': '360',
+                'x-codeman-history-more-before': '0',
+                'x-codeman-history-more-after': '0',
+                'x-codeman-history-origin': 'mobile-history-origin',
+              }),
+            });
+          }) as typeof window.fetch;
+
+          const switching = app.selectSession(targetId);
+          const samples: Array<{
+            coverText: string;
+            baseY: number;
+            viewportY: number;
+            coverRight: number;
+            screenRight: number;
+          }> = [];
+          for (let attempt = 0; attempt < 40; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 25));
+            const cover = app.terminal.element?.querySelector('.terminal-history-replay-cover') as HTMLElement | null;
+            if (!cover || !cover.textContent?.includes('LATEST TARGET FRAME')) continue;
+            const screen = app.terminal.element?.querySelector('.xterm-screen') as HTMLElement | null;
+            const buffer = app.terminal.buffer.active;
+            const coverRect = cover.getBoundingClientRect();
+            const screenRect = screen?.getBoundingClientRect();
+            samples.push({
+              coverText: cover.textContent || '',
+              baseY: buffer.baseY,
+              viewportY: buffer.viewportY,
+              coverRight: coverRect.right,
+              screenRight: screenRect?.right || 0,
+            });
+            if (historyChunksSent >= historicalChunks.length - 1) break;
+          }
+
+          await switching;
+          await new Promise((resolve) => setTimeout(resolve, 180));
+          const buffer = app.terminal.buffer.active;
+          const visibleRows = Array.from(
+            { length: app.terminal.rows },
+            (_, row) => buffer.getLine(buffer.viewportY + row)?.translateToString(true) || ''
+          ).join('\n');
+          const paging = app._terminalHistoryPaging.get(targetId);
+
+          return {
+            samples,
+            historyChunksSent,
+            finalBaseY: buffer.baseY,
+            finalViewportY: buffer.viewportY,
+            finalVisibleRows: visibleRows,
+            paging: paging
+              ? {
+                  start: paging.start,
+                  end: paging.end,
+                  total: paging.total,
+                  pages: paging.pages.length,
+                }
+              : null,
+            coverRemoved: !app.terminal.element?.querySelector('.terminal-history-replay-cover'),
+          };
+        } finally {
+          window.fetch = originalFetch;
+          app.sendResize = originalSendResize;
+          app._connectWs = originalConnectWs;
+        }
+      });
+
+      expect(state.historyChunksSent).toBeGreaterThan(2);
+      expect(state.samples.length).toBeGreaterThan(2);
+      expect(state.samples.every((sample) => sample.coverText.includes('LATEST TARGET FRAME'))).toBe(true);
+      expect(state.samples.every((sample) => !sample.coverText.includes('HISTORY_'))).toBe(true);
+      expect(state.samples.every((sample) => sample.viewportY === sample.baseY)).toBe(true);
+      expect(Math.max(...state.samples.map((sample) => sample.baseY))).toBe(
+        Math.min(...state.samples.map((sample) => sample.baseY))
+      );
+      expect(state.samples.every((sample) => Math.abs(sample.coverRight - sample.screenRight) < 1)).toBe(true);
+      expect(state.finalBaseY).toBeGreaterThan(state.samples[0].baseY);
+      expect(state.finalViewportY).toBe(state.finalBaseY);
+      expect(state.finalVisibleRows).toContain('LATEST TARGET FRAME');
+      expect(state.paging).toEqual({ start: 0, end: 360, total: 360, pages: 1 });
+      expect(state.coverRemoved).toBe(true);
+    });
+
+    it('does not reset the shared terminal while the previous session is still parsing', async () => {
+      await page.route('**/api/sessions/parser-fence-target/terminal*', async (route) => {
+        const frame = '\x1b[2J\x1b[HDESTINATION FRAME\r\n› target prompt';
+        const end = String(frame.length);
+        await route.fulfill({
+          status: 200,
+          contentType: 'text/plain; charset=utf-8',
+          headers: {
+            'x-codeman-terminal-format': 'stream-v1',
+            'x-codeman-terminal-stream': 'parser-fence-stream',
+            'x-codeman-terminal-generation': '1',
+            'x-codeman-terminal-start': '0',
+            'x-codeman-terminal-end': end,
+            'x-codeman-terminal-status': 'idle',
+            'x-codeman-terminal-full-size': end,
+            'x-codeman-terminal-truncated': '0',
+            'x-codeman-terminal-source': route.request().url().includes('historyPage=1')
+              ? 'mux-history-page'
+              : 'mux-visible',
+            ...(route.request().url().includes('historyPage=1')
+              ? {
+                  'x-codeman-history-start': '0',
+                  'x-codeman-history-end': '1',
+                  'x-codeman-history-total': '1',
+                  'x-codeman-history-more-before': '0',
+                  'x-codeman-history-more-after': '0',
+                  'x-codeman-history-origin': 'parser-fence-origin',
+                }
+              : {}),
+          },
+          body: frame,
+        });
+      });
+
+      const state = await page.evaluate(async () => {
+        const sourceId = 'parser-fence-source';
+        const targetId = 'parser-fence-target';
+        app.sessions.set(sourceId, {
+          id: sourceId,
+          name: 'Parser source',
+          mode: 'codex',
+          status: 'busy',
+          pid: 1,
+          workingDir: '/tmp',
+        });
+        app.sessions.set(targetId, {
+          id: targetId,
+          name: 'Parser target',
+          mode: 'codex',
+          status: 'idle',
+          pid: 1,
+          workingDir: '/tmp',
+        });
+        app.sessionOrder = [sourceId, targetId];
+        app.activeSessionId = sourceId;
+        app._initialFullBufferLoad = false;
+        app._warmTerminalCache.remove(targetId);
+        app._xtermSnapshots.delete(targetId);
+        app.terminalBufferCache.delete(targetId);
+        app.sendResize = async () => false;
+        app._connectWs = () => {};
+        app.hideWelcome();
+        app.terminal.reset();
+        await new Promise<void>((resolve) => app.terminal.write('SOURCE FRAME\r\n', resolve));
+
+        let releaseParser: ((value: boolean) => void) | null = null;
+        let parserEnteredResolve: (() => void) | null = null;
+        const parserEntered = new Promise<void>((resolve) => {
+          parserEnteredResolve = resolve;
+        });
+        const parserBlock = new Promise<boolean>((resolve) => {
+          releaseParser = resolve;
+        });
+        const blocker = app.terminal.parser.registerOscHandler(777, () => {
+          parserEnteredResolve?.();
+          return parserBlock;
+        });
+
+        const originalReset = app.terminal.reset.bind(app.terminal);
+        let resetCount = 0;
+        app.terminal.reset = () => {
+          resetCount += 1;
+          originalReset();
+        };
+
+        try {
+          app.batchTerminalWrite('\x1b]777;hold\x07OLD SESSION DATA AFTER BLOCK');
+          await parserEntered;
+
+          const switching = app.selectSession(targetId, { takeControl: false });
+          await new Promise((resolve) => setTimeout(resolve, 80));
+          const resetBeforeRelease = resetCount;
+
+          releaseParser?.(true);
+          await switching;
+          await new Promise<void>((resolve) => app.terminal.write('', resolve));
+
+          const buffer = app.terminal.buffer.active;
+          const visibleRows = Array.from(
+            { length: app.terminal.rows },
+            (_, row) => buffer.getLine(buffer.viewportY + row)?.translateToString(true) || ''
+          ).join('\n');
+          return {
+            resetBeforeRelease,
+            visibleRows,
+          };
+        } finally {
+          releaseParser?.(true);
+          blocker.dispose();
+          app.terminal.reset = originalReset;
+        }
+      });
+
+      expect(state.resetBeforeRelease).toBe(0);
+      expect(state.visibleRows).toContain('DESTINATION FRAME');
+      expect(state.visibleRows).not.toContain('OLD SESSION DATA AFTER BLOCK');
+    });
+
     it('routes Claude touch drags to its transcript without moving local xterm history', async () => {
       const result = await page.evaluate(async () => {
         app.activeSessionId = 'mobile-claude-scroll-test';
@@ -1113,6 +2009,124 @@ describe('Virtual Keyboard', () => {
       expect(afterEnter.sentInputs.join('')).toBe('find bug\r');
     });
 
+    it('rehydrates an unsent session draft after the page is backgrounded', async () => {
+      const state = await page.evaluate(() => {
+        const sessionId = 'mobile-durable-draft-test';
+        localStorage.removeItem('codeman:sessionDrafts');
+        app._inputState.clearAll({ persist: false });
+        app.activeSessionId = sessionId;
+        app.sessions.set(sessionId, {
+          id: sessionId,
+          mode: 'codex',
+          status: 'running',
+        });
+        app._localEchoOverlay.clear();
+        app._localEchoOverlay.appendText('first paragraph\n\nsecond paragraph');
+
+        window.dispatchEvent(new PageTransitionEvent('pagehide'));
+        const persisted = JSON.parse(localStorage.getItem('codeman:sessionDrafts') || '{}');
+
+        // Simulate the in-memory state loss caused by a discarded mobile tab.
+        app._localEchoOverlay.clear();
+        app._inputState.clearAll({ persist: false });
+        app._inputState.load();
+        app._restoreSessionDraft(sessionId, false);
+
+        return {
+          persisted: persisted.drafts?.[sessionId],
+          restored: app._localEchoOverlay.state,
+        };
+      });
+
+      expect(state.persisted).toMatchObject({
+        pendingText: 'first paragraph\n\nsecond paragraph',
+        flushedText: '',
+        cjkText: '',
+      });
+      expect(state.restored).toMatchObject({
+        pendingText: 'first paragraph\n\nsecond paragraph',
+        flushedLength: 0,
+        flushedText: '',
+      });
+    });
+
+    it('keeps a switched-away draft editable after browser state is reloaded', async () => {
+      const state = await page.evaluate(() => {
+        const firstId = 'mobile-draft-session-a';
+        const secondId = 'mobile-draft-session-b';
+        localStorage.removeItem('codeman:sessionDrafts');
+        app._inputState.clearAll({ persist: false });
+        app.sessions.set(firstId, { id: firstId, mode: 'codex', status: 'running' });
+        app.sessions.set(secondId, { id: secondId, mode: 'codex', status: 'running' });
+        app.activeSessionId = firstId;
+        app._localEchoEnabled = true;
+        app._localEchoOverlay.clear();
+        app._localEchoOverlay.appendText('switch-safe draft');
+        const sent: string[] = [];
+        app._sendInputAsync = (_sessionId: string, input: string) => sent.push(input);
+
+        app._cleanupPreviousSession(secondId);
+        app._inputState.persistNow();
+
+        // Rehydrate the input store exactly as a fresh browser page does.
+        app._localEchoOverlay.clear();
+        app._inputState.clearAll({ persist: false });
+        app._inputState.load();
+        app.activeSessionId = firstId;
+        app._restoreSessionDraft(firstId, false);
+        const restoredDraft = app._inputState.get(firstId);
+
+        return {
+          sent,
+          restored: app._localEchoOverlay.state,
+          flushedOffset: restoredDraft?.flushedText.length,
+          flushedText: restoredDraft?.flushedText,
+        };
+      });
+
+      expect(state).toMatchObject({
+        sent: ['switch-safe draft'],
+        restored: {
+          pendingText: '',
+          flushedLength: 'switch-safe draft'.length,
+          flushedText: 'switch-safe draft',
+        },
+        flushedOffset: 'switch-safe draft'.length,
+        flushedText: 'switch-safe draft',
+      });
+    });
+
+    it('removes a persisted draft once Enter submits it', async () => {
+      const state = await page.evaluate(() => {
+        const sessionId = 'mobile-cleared-draft-test';
+        localStorage.removeItem('codeman:sessionDrafts');
+        app._inputState.clearAll({ persist: false });
+        app.activeSessionId = sessionId;
+        app.sessions.set(sessionId, { id: sessionId, mode: 'codex', status: 'running' });
+        app._localEchoEnabled = true;
+        app._localEchoOverlay.clear();
+        app._localEchoOverlay.appendText('submit me');
+        app._captureActiveSessionDraft();
+        app._inputState.persistNow();
+        const before = JSON.parse(localStorage.getItem('codeman:sessionDrafts') || '{}');
+
+        app._sendInputAsync = () => {};
+        app.terminal.input('\r');
+        app._inputState.persistNow();
+        const after = JSON.parse(localStorage.getItem('codeman:sessionDrafts') || '{}');
+
+        return {
+          before: before.drafts?.[sessionId]?.pendingText,
+          after: after.drafts?.[sessionId] ?? null,
+        };
+      });
+
+      expect(state).toEqual({
+        before: 'submit me',
+        after: null,
+      });
+    });
+
     it('shows and commits each live Android composition after the first word', async () => {
       const preview = await page.evaluate(async () => {
         app.activeSessionId = 'mobile-composition-test';
@@ -1216,6 +2230,9 @@ describe('Virtual Keyboard', () => {
           compositionText: app._localEchoOverlay.compositionText,
           nativeCompositionActive: nativeComposition?.classList.contains('active'),
           nativeCompositionDisplay: nativeComposition ? getComputedStyle(nativeComposition).display : null,
+          nativeCompositionOpacity: nativeComposition ? getComputedStyle(nativeComposition).opacity : null,
+          nativeCompositionMeasurable: (nativeComposition?.getBoundingClientRect().height || 0) > 0,
+          helperLineHeightPositive: parseFloat(app.terminal.textarea.style.lineHeight || '0') > 0,
           localEchoClass: app.terminal.element.classList.contains('codeman-local-echo'),
         };
       });
@@ -1224,7 +2241,10 @@ describe('Virtual Keyboard', () => {
         pendingText: 'first second',
         compositionText: 'third',
         nativeCompositionActive: true,
-        nativeCompositionDisplay: 'none',
+        nativeCompositionDisplay: 'block',
+        nativeCompositionOpacity: '0',
+        nativeCompositionMeasurable: true,
+        helperLineHeightPositive: true,
         localEchoClass: true,
       });
 
@@ -1257,6 +2277,68 @@ describe('Virtual Keyboard', () => {
         pendingText: 'first secondthird ',
         compositionText: '',
         fallbackCommit: null,
+      });
+    });
+
+    it('commits an Android word once when a delayed insertText follows composition finalization', async () => {
+      const state = await page.evaluate(async () => {
+        app.activeSessionId = 'mobile-composition-late-input-test';
+        app.sessions.set('mobile-composition-late-input-test', {
+          id: 'mobile-composition-late-input-test',
+          mode: 'claude',
+          status: 'running',
+        });
+        app.hideWelcome();
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app.terminal.reset();
+        await new Promise<void>((resolve) => app.terminal.write('\x1b[2J\x1b[H\u276f ', resolve));
+        app._localEchoOverlay.clear();
+
+        const textarea = app.terminal.textarea;
+        textarea.value = '';
+        textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+        textarea.value = 'its';
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionupdate', {
+            bubbles: true,
+            data: 'its',
+          })
+        );
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionend', {
+            bubbles: true,
+            data: 'its',
+          })
+        );
+
+        // xterm finalizes composition in a zero-delay task. Some Android
+        // keyboards then emit the same committed word as a late insertText.
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        textarea.value = 'its';
+        textarea.dispatchEvent(
+          new InputEvent('input', {
+            bubbles: true,
+            composed: false,
+            inputType: 'insertText',
+            data: 'its',
+          })
+        );
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        return {
+          pendingText: app._localEchoOverlay.pendingText,
+          compositionText: app._localEchoOverlay.compositionText,
+        };
+      });
+
+      expect(state).toEqual({
+        pendingText: 'its',
+        compositionText: '',
       });
     });
 
@@ -1325,6 +2407,111 @@ describe('Virtual Keyboard', () => {
         firstSequence: 'abc',
         pendingText: 'd',
         helperValue: '',
+      });
+    });
+
+    it('applies only the new Android helper-textarea mutation from cumulative values', async () => {
+      const state = await page.evaluate(async () => {
+        app.activeSessionId = 'mobile-cumulative-input-test';
+        app.sessions.set('mobile-cumulative-input-test', {
+          id: 'mobile-cumulative-input-test',
+          mode: 'claude',
+          status: 'running',
+        });
+        app.hideWelcome();
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app._localEchoOverlay.clear();
+        app._localEchoOverlay.appendText('seed');
+
+        const textarea = app.terminal.textarea;
+        const beginMutation = (value: string) => {
+          textarea.value = value;
+          textarea.setSelectionRange(value.length, value.length);
+          textarea.dispatchEvent(
+            new KeyboardEvent('keydown', {
+              bubbles: true,
+              key: 'Process',
+              keyCode: 229,
+            })
+          );
+          textarea.dispatchEvent(
+            new InputEvent('beforeinput', {
+              bubbles: true,
+              cancelable: true,
+              inputType: 'insertText',
+              data: null,
+            })
+          );
+        };
+
+        beginMutation('seed');
+        textarea.value = 'seed next';
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+        textarea.dispatchEvent(
+          new InputEvent('input', {
+            bubbles: true,
+            composed: true,
+            inputType: 'insertText',
+            data: null,
+          })
+        );
+        await Promise.resolve();
+        const afterNullData = app._localEchoOverlay.pendingText;
+
+        beginMutation('seed next');
+        textarea.value = 'seed next more';
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+        textarea.dispatchEvent(
+          new InputEvent('input', {
+            bubbles: true,
+            composed: false,
+            inputType: 'insertText',
+            data: 'seed next more',
+          })
+        );
+        await Promise.resolve();
+
+        return {
+          afterNullData,
+          pendingText: app._localEchoOverlay.pendingText,
+          helperValue: textarea.value,
+        };
+      });
+
+      expect(state).toEqual({
+        afterNullData: 'seed next',
+        pendingText: 'seed next more',
+        helperValue: '',
+      });
+    });
+
+    it('filters xterm status replies without swallowing user navigation keys', async () => {
+      const state = await page.evaluate(() => {
+        const suppress = window.CodemanTerminalInput.shouldSuppressTerminalQueryResponse;
+        return {
+          deviceAttributes: suppress('\x1b[>0;276;0c'),
+          modeReport: suppress('\x1b[?2026;1$y'),
+          windowReport: suppress('\x1b[8;24;80t'),
+          statusString: suppress('\x1bP1$r0m\x1b\\'),
+          oscColor: suppress('\x1b]10;rgb:ffff/ffff/ffff\x1b\\'),
+          arrowUp: suppress('\x1b[A'),
+          escape: suppress('\x1b'),
+        };
+      });
+
+      expect(state).toEqual({
+        deviceAttributes: true,
+        modeReport: true,
+        windowReport: true,
+        statusString: true,
+        oscColor: true,
+        arrowUp: false,
+        escape: false,
       });
     });
 
@@ -1407,20 +2594,28 @@ describe('Virtual Keyboard', () => {
         app._updateCjkInputState();
         app._updateLocalEchoState();
         app.terminal.reset();
+        window.__draftPromptRow = Math.max(2, app.terminal.rows - 5);
         await new Promise<void>((resolve) => {
-          app.terminal.write('\x1b[2J\x1b[H\u276f ', resolve);
+          app.terminal.write(`\x1b[2J\x1b[H\x1b[${window.__draftPromptRow + 1};1H\u276f `, resolve);
         });
         app.terminal.focus();
       });
 
       await page.keyboard.type('keep this draft');
-      await expect.poll(() => page.evaluate(() => app._localEchoOverlay?.state.promptPosition?.row)).toBe(0);
+      await expect
+        .poll(() => page.evaluate(() => app._localEchoOverlay?.state.promptPosition?.row))
+        .toBe(await page.evaluate(() => window.__draftPromptRow));
 
       await page.evaluate(() => {
-        app.batchTerminalWrite('\x1b[2J\x1b[Hagent output\r\ncontinues here\r\n\u276f ');
+        window.__updatedDraftPromptRow = Math.max(2, app.terminal.rows - 4);
+        app.batchTerminalWrite(
+          `\x1b[2J\x1b[Hagent output\r\ncontinues here\x1b[${window.__updatedDraftPromptRow + 1};1H\u276f `
+        );
       });
 
-      await expect.poll(() => page.evaluate(() => app._localEchoOverlay?.state.promptPosition?.row)).toBe(2);
+      await expect
+        .poll(() => page.evaluate(() => app._localEchoOverlay?.state.promptPosition?.row))
+        .toBe(await page.evaluate(() => window.__updatedDraftPromptRow));
       const state = await page.evaluate(() => ({
         pendingText: app._localEchoOverlay?.pendingText,
         sentInputs: window.__sentInputs,
@@ -1669,6 +2864,137 @@ describe('Virtual Keyboard', () => {
       await expect.poll(() => page.evaluate(() => window.__sentInputs)).toEqual(['first', '\r', 'second', '\r']);
     });
 
+    it('inserts Android keyCode 229 line-break input into the current draft', async () => {
+      const state = await page.evaluate(async () => {
+        window.__sentInputs = [];
+        app.activeSessionId = 'mobile-android-enter-test';
+        app.sessions.set('mobile-android-enter-test', {
+          id: 'mobile-android-enter-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app._sendInputAsync = (_sessionId: string, input: string) => {
+          window.__sentInputs.push(input);
+        };
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app.terminal.reset();
+        await new Promise<void>((resolve) => {
+          app.terminal.write('\x1b[2J\x1b[H\u276f ', resolve);
+        });
+        app._localEchoOverlay.clear();
+
+        app.terminal._core.coreService.triggerDataEvent('stringA stringB', true);
+        const textarea = app.terminal.textarea;
+        textarea.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            bubbles: true,
+            key: 'Enter',
+            code: 'Enter',
+            keyCode: 229,
+          })
+        );
+        textarea.dispatchEvent(
+          new InputEvent('beforeinput', {
+            bubbles: true,
+            cancelable: true,
+            inputType: 'insertLineBreak',
+          })
+        );
+        textarea.dispatchEvent(
+          new InputEvent('input', {
+            bubbles: true,
+            inputType: 'insertLineBreak',
+          })
+        );
+        app.terminal._core.coreService.triggerDataEvent('stringC', true);
+        await Promise.resolve();
+
+        return {
+          sentInputs: window.__sentInputs,
+          pendingText: app._localEchoOverlay.pendingText,
+        };
+      });
+
+      expect(state).toEqual({
+        sentInputs: [],
+        pendingText: 'stringA stringB\nstringC',
+      });
+    });
+
+    it('inserts an Android line break when compositionend is omitted', async () => {
+      const state = await page.evaluate(async () => {
+        window.__sentInputs = [];
+        app.activeSessionId = 'mobile-android-composing-enter-test';
+        app.sessions.set('mobile-android-composing-enter-test', {
+          id: 'mobile-android-composing-enter-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app._sendInputAsync = (_sessionId: string, input: string) => {
+          window.__sentInputs.push(input);
+        };
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app.terminal.reset();
+        await new Promise<void>((resolve) => {
+          app.terminal.write('\x1b[2J\x1b[H\u276f ', resolve);
+        });
+        app._localEchoOverlay.clear();
+
+        app.terminal._core.coreService.triggerDataEvent('stringA ', true);
+        const textarea = app.terminal.textarea;
+        textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionupdate', {
+            bubbles: true,
+            data: 'stringB',
+          })
+        );
+        textarea.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            bubbles: true,
+            key: 'Enter',
+            code: 'Enter',
+            keyCode: 229,
+            isComposing: true,
+          })
+        );
+        textarea.dispatchEvent(
+          new InputEvent('beforeinput', {
+            bubbles: true,
+            cancelable: true,
+            inputType: 'insertLineBreak',
+            isComposing: true,
+          })
+        );
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        app.terminal._core.coreService.triggerDataEvent('stringC', true);
+
+        return {
+          sentInputs: window.__sentInputs,
+          pendingText: app._localEchoOverlay.pendingText,
+          compositionText: app._localEchoOverlay.compositionText,
+        };
+      });
+
+      expect(state).toEqual({
+        sentInputs: [],
+        pendingText: 'stringA stringB\nstringC',
+        compositionText: '',
+      });
+    });
+
     it('flushes local echo before mobile-control Enter and accepts the next draft', async () => {
       const state = await page.evaluate(async () => {
         window.__sentInputs = [];
@@ -1756,13 +3082,19 @@ describe('Virtual Keyboard', () => {
       expect(loadingState.sentInputs).toEqual([]);
 
       await page.evaluate(async () => {
+        window.__loadedPromptRow = Math.max(2, app.terminal.rows - 5);
         await new Promise<void>((resolve) => {
-          app.terminal.write('\x1b[2J\x1b[Hagent output\r\nready\r\n\u203a ', resolve);
+          app.terminal.write(
+            `\x1b[2J\x1b[Hagent output\r\nready\x1b[${window.__loadedPromptRow + 1};1H\u203a `,
+            resolve
+          );
         });
         app._finishBufferLoad('mobile-initial-draft-load');
       });
 
-      await expect.poll(() => page.evaluate(() => app._localEchoOverlay?.state.promptPosition?.row)).toBe(2);
+      await expect
+        .poll(() => page.evaluate(() => app._localEchoOverlay?.state.promptPosition?.row))
+        .toBe(await page.evaluate(() => window.__loadedPromptRow));
       const readyState = await page.evaluate(() => ({
         pendingText: app._localEchoOverlay?.pendingText,
         visible: app._localEchoOverlay?.state.visible,
@@ -1791,7 +3123,10 @@ describe('Virtual Keyboard', () => {
         app.terminal.reset();
         window.__cursorFallbackRow = Math.max(0, app.terminal.rows - 2);
         await new Promise<void>((resolve) => {
-          app.terminal.write(`\x1b[${window.__cursorFallbackRow + 1};1Hworking without prompt marker`, resolve);
+          app.terminal.write(
+            `\x1b[2J\x1b[Hworking without prompt marker\x1b[${window.__cursorFallbackRow + 1};1H`,
+            resolve
+          );
         });
         app.terminal.focus();
       });
@@ -1809,6 +3144,313 @@ describe('Virtual Keyboard', () => {
       expect(state.pendingText).toBe('abc');
       expect(state.overlayState?.visible).toBe(true);
       expect(state.overlayState?.promptPosition?.row).toBe(state.expectedRow);
+    });
+
+    it('ignores a stale historical prompt above the live input cursor', async () => {
+      await page.evaluate(async () => {
+        app.activeSessionId = 'mobile-stale-prompt-test';
+        app.sessions.set('mobile-stale-prompt-test', {
+          id: 'mobile-stale-prompt-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app.terminal.reset();
+        app._localEchoOverlay.clear();
+        window.__liveInputRow = Math.max(2, app.terminal.rows - 2);
+        await new Promise<void>((resolve) => {
+          app.terminal.write(
+            `\x1b[2J\x1b[H\u276f old submitted input\r\nagent output\r\nworking without prompt marker\x1b[${window.__liveInputRow + 1};1H`,
+            resolve
+          );
+        });
+        app.terminal.focus();
+      });
+
+      await page.keyboard.type('abc');
+
+      const state = await page.evaluate(() => ({
+        pendingText: app._localEchoOverlay?.pendingText,
+        promptRow: app._localEchoOverlay?.state.promptPosition?.row,
+        expectedRow: window.__liveInputRow,
+      }));
+
+      expect(state.pendingText).toBe('abc');
+      expect(state.promptRow).toBe(state.expectedRow);
+    });
+
+    it('prefers the live cursor when a short keyboard viewport makes a stale prompt look current', async () => {
+      await page.evaluate(async () => {
+        app.activeSessionId = 'mobile-short-viewport-prompt-test';
+        app.sessions.set('mobile-short-viewport-prompt-test', {
+          id: 'mobile-short-viewport-prompt-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app.terminal.resize(app.terminal.cols, 6);
+        app.terminal.reset();
+        app._localEchoOverlay.clear();
+        app._localEchoPromptAnchor = null;
+        await new Promise<void>((resolve) => {
+          app.terminal.write('\x1b[2J\x1b[H\u276f old submitted input\x1b[6;3H', resolve);
+        });
+        app.terminal.focus();
+      });
+
+      await page.keyboard.type('abc');
+
+      const state = await page.evaluate(() => ({
+        pendingText: app._localEchoOverlay?.pendingText,
+        promptRow: app._localEchoOverlay?.state.promptPosition?.row,
+        cursorRow: app.terminal.buffer.active.cursorY,
+      }));
+
+      expect(state.pendingText).toBe('abc');
+      expect(state.promptRow).toBe(state.cursorRow);
+      expect(state.cursorRow).toBe(5);
+    });
+
+    it('discards a remembered prompt anchor that no longer fits after keyboard shrink', async () => {
+      await page.evaluate(async () => {
+        app.activeSessionId = 'mobile-invalid-prompt-anchor-test';
+        app.sessions.set('mobile-invalid-prompt-anchor-test', {
+          id: 'mobile-invalid-prompt-anchor-test',
+          mode: 'claude',
+          status: 'running',
+        });
+        app.hideWelcome();
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app.terminal.resize(app.terminal.cols, 6);
+        app.terminal.reset();
+        app._localEchoOverlay.clear();
+        app._localEchoPromptAnchor = {
+          sessionId: 'mobile-invalid-prompt-anchor-test',
+          rowsFromBottom: 7,
+          col: 2,
+        };
+        await new Promise<void>((resolve) => {
+          app.terminal.write('\x1b[2J\x1b[H\x1b[3;1Hagent output\x1b[6;3H', resolve);
+        });
+        app.terminal.focus();
+      });
+
+      await page.keyboard.type('abc');
+
+      const state = await page.evaluate(() => ({
+        pendingText: app._localEchoOverlay?.pendingText,
+        promptRow: app._localEchoOverlay?.state.promptPosition?.row,
+        cursorRow: app.terminal.buffer.active.cursorY,
+      }));
+
+      expect(state.pendingText).toBe('abc');
+      expect(state.promptRow).toBe(state.cursorRow);
+      expect(state.cursorRow).toBe(5);
+    });
+
+    it('uses a bottom fallback for the first mobile draft when the replay prompt remains at row zero', async () => {
+      await page.evaluate(async () => {
+        app.activeSessionId = 'mobile-row-zero-prompt-test';
+        app.sessions.set('mobile-row-zero-prompt-test', {
+          id: 'mobile-row-zero-prompt-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app.terminal.reset();
+        app._localEchoOverlay.clear();
+        app._localEchoPromptAnchor = null;
+        window.__fallbackPromptRow = Math.max(0, app.terminal.rows - 5);
+        await new Promise<void>((resolve) => {
+          app.terminal.write('\x1b[2J\x1b[H\u276f replayed prompt\x1b[H', resolve);
+        });
+        app.terminal.focus();
+      });
+
+      await page.keyboard.type('first draft');
+
+      const state = await page.evaluate(() => ({
+        pendingText: app._localEchoOverlay?.pendingText,
+        promptRow: app._localEchoOverlay?.state.promptPosition?.row,
+        expectedRow: window.__fallbackPromptRow,
+      }));
+
+      expect(state.pendingText).toBe('first draft');
+      expect(state.promptRow).toBe(state.expectedRow);
+    });
+
+    it('keeps the first post-Enter draft at the remembered prompt while a resized frame is stale', async () => {
+      await page.evaluate(async () => {
+        window.__sentInputs = [];
+        app.activeSessionId = 'mobile-stale-resize-prompt-test';
+        app.sessions.set('mobile-stale-resize-prompt-test', {
+          id: 'mobile-stale-resize-prompt-test',
+          mode: 'claude',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app._sendInputAsync = (_sessionId: string, input: string) => {
+          window.__sentInputs.push(input);
+        };
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app.terminal.reset();
+        app._localEchoOverlay.clear();
+        window.__rememberedPromptRow = Math.max(2, app.terminal.rows - 5);
+        await new Promise<void>((resolve) => {
+          app.terminal.write(`\x1b[2J\x1b[H\x1b[${window.__rememberedPromptRow + 1};1H\u276f `, resolve);
+        });
+        window.__promptAnchorCaptured = app._captureLocalEchoPromptAnchor?.();
+        app.terminal._core.coreService.triggerDataEvent('stringA', true);
+        app.terminal._core.coreService.triggerDataEvent('\r', true);
+
+        await new Promise<void>((resolve) => {
+          app.terminal.write('\x1b[2J\x1b[H\u276f old submitted input\x1b[H', resolve);
+        });
+        app.terminal.focus();
+      });
+
+      await page.keyboard.type('first draft');
+
+      const state = await page.evaluate(() => ({
+        pendingText: app._localEchoOverlay?.pendingText,
+        promptRow: app._localEchoOverlay?.state.promptPosition?.row,
+        expectedRow: window.__rememberedPromptRow,
+        captured: window.__promptAnchorCaptured,
+        sentInputs: window.__sentInputs,
+      }));
+
+      expect(state).toMatchObject({
+        pendingText: 'first draft',
+        captured: true,
+        promptRow: state.expectedRow,
+        sentInputs: ['stringA', '\r'],
+      });
+    });
+
+    it('does not paint a mobile draft over output while the resized prompt frame is pending', async () => {
+      await page.evaluate(async () => {
+        app.activeSessionId = 'mobile-occupied-anchor-test';
+        app.sessions.set('mobile-occupied-anchor-test', {
+          id: 'mobile-occupied-anchor-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app.terminal.reset();
+        app._localEchoOverlay.clear();
+        window.__occupiedAnchorRow = Math.max(2, app.terminal.rows - 3);
+        await new Promise<void>((resolve) => {
+          app.terminal.write(`\x1b[2J\x1b[H\x1b[${window.__occupiedAnchorRow + 1};1H\u276f `, resolve);
+        });
+        window.__occupiedAnchorCaptured = app._captureLocalEchoPromptAnchor?.();
+        await new Promise<void>((resolve) => {
+          app.terminal.write(`\x1b[2J\x1b[Hagent output\x1b[${window.__occupiedAnchorRow + 1};1Hstill output`, resolve);
+        });
+        app.terminal.focus();
+      });
+
+      await page.keyboard.type('held draft');
+
+      const pendingFrame = await page.evaluate(() => ({
+        captured: window.__occupiedAnchorCaptured,
+        pendingText: app._localEchoOverlay.pendingText,
+        visible: app._localEchoOverlay.state.visible,
+        promptRow: app._localEchoOverlay.state.promptPosition?.row ?? null,
+      }));
+      expect(pendingFrame).toEqual({
+        captured: true,
+        pendingText: 'held draft',
+        visible: false,
+        promptRow: null,
+      });
+
+      await page.evaluate(async () => {
+        await new Promise<void>((resolve) => {
+          app.terminal.write(`\x1b[2J\x1b[H\x1b[${window.__occupiedAnchorRow + 1};1H\u276f `, resolve);
+        });
+        app._localEchoOverlay.rerender();
+      });
+
+      await expect
+        .poll(() => page.evaluate(() => app._localEchoOverlay.state.promptPosition?.row))
+        .toBe(await page.evaluate(() => window.__occupiedAnchorRow));
+      await expect.poll(() => page.evaluate(() => app._localEchoOverlay.state.visible)).toBe(true);
+    });
+
+    it('follows the live mobile cursor when it diverges from a remembered anchor', async () => {
+      await page.evaluate(async () => {
+        app.activeSessionId = 'mobile-remembered-anchor-drift-test';
+        app.sessions.set('mobile-remembered-anchor-drift-test', {
+          id: 'mobile-remembered-anchor-drift-test',
+          mode: 'claude',
+          status: 'running',
+        });
+        app.hideWelcome();
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app.terminal.reset();
+        app._localEchoOverlay.clear();
+        window.__stableAnchorRow = Math.max(2, app.terminal.rows - 3);
+        window.__driftCursorRow = Math.max(2, app.terminal.rows - 8);
+        await new Promise<void>((resolve) => {
+          app.terminal.write(`\x1b[2J\x1b[H\x1b[${window.__stableAnchorRow + 1};1H\u276f `, resolve);
+        });
+        window.__stableAnchorCaptured = app._captureLocalEchoPromptAnchor?.();
+        await new Promise<void>((resolve) => {
+          app.terminal.write(`\x1b[2J\x1b[Hagent output\x1b[${window.__driftCursorRow + 1};1H`, resolve);
+        });
+        app.terminal.focus();
+      });
+
+      await page.keyboard.type('stable draft');
+
+      const state = await page.evaluate(() => ({
+        captured: window.__stableAnchorCaptured,
+        promptRow: app._localEchoOverlay.state.promptPosition?.row,
+        expectedRow: window.__driftCursorRow,
+      }));
+      expect(state).toMatchObject({
+        captured: true,
+        promptRow: state.expectedRow,
+      });
     });
   });
 

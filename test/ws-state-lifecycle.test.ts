@@ -106,6 +106,7 @@ type LifecycleApp = {
   _wsReady: boolean;
   _wsReconnectAttempts: number | undefined;
   _ws: FakeWebSocket | null;
+  _freezeTerminalForTransportLoss: ReturnType<typeof vi.fn>;
   activeSessionId: string | null;
 };
 
@@ -134,6 +135,7 @@ function makeApp(
   app.isOnline = true;
   app.sendResize = vi.fn();
   app._onWsReady = vi.fn();
+  app._freezeTerminalForTransportLoss = vi.fn();
   Object.assign(app, overrides);
   return { app: app as LifecycleApp, els };
 }
@@ -254,6 +256,25 @@ describe('WS reconnect backoff — attempts survive the _connectWs → _disconne
     ws2.onopen?.();
     expect(app._wsReconnectAttempts).toBe(0);
     expect(app._wsState).toBe('connected');
+  });
+});
+
+describe('WS reconnect frame ownership', () => {
+  it('freezes the active Codex frame before a transient reconnect can deliver output', () => {
+    const { CodemanApp } = loadHarness();
+    const freeze = vi.fn();
+    const { app } = makeApp(CodemanApp, {
+      _freezeTerminalForTransportLoss: freeze,
+    });
+
+    app._connectWs('s1');
+    const ws = FakeWebSocket.instances[0];
+    ws.readyState = 1;
+    ws.onopen?.();
+    ws.onclose?.({ code: 1006, reason: '' });
+
+    expect(freeze).toHaveBeenCalledOnce();
+    expect(freeze).toHaveBeenCalledWith('s1');
   });
 });
 

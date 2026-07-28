@@ -8,10 +8,16 @@ type NavigationPad = {
   element: HTMLElement | null;
   init: (enabled: boolean) => void;
   syncVisibility: () => void;
+  syncJumpVisibility: () => void;
+};
+
+type AccessoryBar = {
+  element: HTMLElement | null;
 };
 
 type MobileControls = {
   init: (enabled: boolean) => void;
+  cleanup: () => void;
   configureFeedback: (settings?: Record<string, unknown>, defaults?: Record<string, unknown>) => void;
   feedback: (action: string) => void;
   resolveEnabled: (
@@ -57,8 +63,13 @@ function loadHarness() {
       KeyboardHandler: { keyboardVisible: boolean };
       app: {
         activeSessionId: string | null;
-        terminal: { focus: ReturnType<typeof vi.fn> };
+        terminal: {
+          focus: ReturnType<typeof vi.fn>;
+          scrollToBottom: ReturnType<typeof vi.fn>;
+        };
         sendTerminalKey: ReturnType<typeof vi.fn>;
+        jumpTerminalToLatest: ReturnType<typeof vi.fn>;
+        isTerminalAtBottom: ReturnType<typeof vi.fn>;
       };
     };
 
@@ -74,17 +85,24 @@ function loadHarness() {
   });
   win.app = {
     activeSessionId: 'session-1',
-    terminal: { focus: vi.fn() },
+    terminal: {
+      focus: vi.fn(),
+      scrollToBottom: vi.fn(),
+    },
     sendTerminalKey: vi.fn(),
+    jumpTerminalToLatest: vi.fn(),
+    isTerminalAtBottom: vi.fn(() => true),
   };
   win.fetch = vi.fn(async () => ({ ok: true, status: 200 })) as unknown as typeof fetch;
   win.eval(`
     ${SOURCE}
     window.__testMobileNavigationPad = MobileNavigationPad;
+    window.__testKeyboardAccessoryBar = KeyboardAccessoryBar;
     window.__testMobileTerminalControls = MobileTerminalControls;
   `);
 
   const pad = (win as unknown as { __testMobileNavigationPad: NavigationPad }).__testMobileNavigationPad;
+  const accessory = (win as unknown as { __testKeyboardAccessoryBar: AccessoryBar }).__testKeyboardAccessoryBar;
   const controls = (win as unknown as { __testMobileTerminalControls: MobileControls }).__testMobileTerminalControls;
   controls.init(true);
 
@@ -92,6 +110,7 @@ function loadHarness() {
     dom,
     win,
     pad,
+    accessory,
     controls,
     sendKey: win.app.sendTerminalKey,
     vibrate,
@@ -106,6 +125,7 @@ describe('MobileTerminalControls settings migration', () => {
   });
 
   afterEach(() => {
+    harness?.controls.cleanup();
     harness?.dom.window.close();
   });
 
@@ -134,6 +154,7 @@ describe('MobileNavigationPad', () => {
   });
 
   afterEach(() => {
+    harness?.controls.cleanup();
     harness?.dom.window.close();
   });
 
@@ -375,5 +396,27 @@ describe('MobileNavigationPad', () => {
 
     expect(sendKey).not.toHaveBeenCalled();
     expect(down.classList.contains('pressed')).toBe(false);
+  });
+
+  it('shows jump-to-latest only away from the bottom and never focuses xterm', () => {
+    const { pad, accessory, sendKey, win } = harness;
+    const jump = pad.element!.querySelector('[data-nav-key="jump-bottom"]') as HTMLButtonElement;
+
+    expect(jump).not.toBeNull();
+    expect(jump.hidden).toBe(true);
+    expect(accessory.element!.querySelector('[data-action="jump-bottom"]')).toBeNull();
+
+    win.app.isTerminalAtBottom.mockReturnValue(false);
+    pad.syncJumpVisibility();
+    expect(jump.hidden).toBe(false);
+    jump.click();
+
+    expect(win.app.jumpTerminalToLatest).toHaveBeenCalledOnce();
+    expect(win.app.terminal.focus).not.toHaveBeenCalled();
+    expect(sendKey).not.toHaveBeenCalled();
+
+    win.app.isTerminalAtBottom.mockReturnValue(true);
+    pad.syncJumpVisibility();
+    expect(jump.hidden).toBe(true);
   });
 });

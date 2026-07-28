@@ -43,7 +43,7 @@
  *
  * @dependency index.html (#cjkInput textarea)
  * @globals {object} CjkInput — window.cjkActive (boolean) signals app.js to block xterm onData
- * @loadorder 5.5 of 15 — loaded after keyboard-accessory.js, before app.js
+ * @loadorder 5.5 of 16 — loaded after keyboard-accessory.js, before terminal-input-state.js
  */
 
 // eslint-disable-next-line no-unused-vars
@@ -51,6 +51,7 @@ const CjkInput = (() => {
   let _textarea = null;
   let _send = null;
   let _paste = null;
+  let _draftChanged = null;
   let _initialized = false;
   let _composing = false;
   let _flushTimer = null;
@@ -139,6 +140,7 @@ const CjkInput = (() => {
     }
     _textarea.value = PHANTOM;
     _textarea.setSelectionRange(1, 1);
+    _draftChanged?.();
   }
 
   function _isEffectivelyEmpty() {
@@ -197,11 +199,12 @@ const CjkInput = (() => {
   }
 
   return {
-    init({ send, paste }) {
+    init({ send, paste, draftChanged }) {
       if (_initialized) this.destroy();
 
       _send = send;
       _paste = typeof paste === 'function' ? paste : send;
+      _draftChanged = typeof draftChanged === 'function' ? draftChanged : null;
       _composing = false;
       _flushTimer = null;
       _textarea = document.getElementById('cjkInput');
@@ -370,6 +373,10 @@ const CjkInput = (() => {
 
       // ── Input event: primary path for virtual keyboards + dictation ──
       _listeners.input = (e) => {
+        // The DOM value has already changed by the time this event runs. Capture
+        // it before an immediate flush/reset so a lifecycle event in this turn
+        // cannot lose an unfinished IME or dictation update.
+        _draftChanged?.();
         _t(`input ${e.inputType || '?'} ic=${e.isComposing} c=${_composing} ${_vdesc(_textarea.value)}`);
         // ── Stuck-composition recovery ──
         // Some IMEs (WeChat/Sogou keyboards) fire compositionstart without a
@@ -467,6 +474,31 @@ const CjkInput = (() => {
       _resetToPhantom();
     },
 
+    /** Real editable text currently held behind the phantom character. */
+    getPendingText() {
+      return _initialized && _textarea ? _strip(_textarea.value) : '';
+    },
+
+    /**
+     * Restore committed draft text without trying to recreate an OS-level IME
+     * composition. The next input/Enter event treats it as ordinary text.
+     */
+    restorePendingText(text) {
+      if (!_initialized || !_textarea) return;
+      _cancelDebouncedFlush();
+      clearTimeout(_compositionFlushTimer);
+      _compositionFlushTimer = null;
+      _composing = false;
+      const restored = String(text || '');
+      if (!restored) {
+        _resetToPhantom();
+        return;
+      }
+      _textarea.value = PHANTOM + restored;
+      const end = _textarea.value.length;
+      _textarea.setSelectionRange(end, end);
+    },
+
     /** Diagnostic: recent IME event trace (ring buffer). */
     getTrace() {
       return _trace.slice();
@@ -487,6 +519,7 @@ const CjkInput = (() => {
       _composing = false;
       _send = null;
       _paste = null;
+      _draftChanged = null;
       for (const key of Object.keys(_listeners)) delete _listeners[key];
       _initialized = false;
     },

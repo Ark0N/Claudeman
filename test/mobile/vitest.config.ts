@@ -12,6 +12,7 @@ export default defineConfig({
     setupFiles: ['./test/setup.ts', './test/mobile/setup.ts'],
     fileParallelism: false,
     testTimeout: 60_000,
+    hookTimeout: 60_000,
     teardownTimeout: 60_000,
   },
 });

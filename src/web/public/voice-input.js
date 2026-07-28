@@ -572,6 +572,7 @@ const VoiceInput = {
       // Direct mode: inject into local echo overlay if available, else send to PTY
       if (app._localEchoEnabled && app._localEchoOverlay) {
         app._localEchoOverlay.appendText(trimmed);
+        app._captureActiveSessionDraft();
       } else {
         app.sendInput(trimmed).catch(() => {});
       }
@@ -609,6 +610,7 @@ const VoiceInput = {
         const text = app._localEchoOverlay.pendingText || '';
         app._localEchoOverlay.clear();
         app._localEchoOverlay.suppressBufferDetection();
+        app._clearSessionDraft(app.activeSessionId);
         if (text) {
           app.sendPastedText(text, { submit: true }).catch(() => {});
         } else {

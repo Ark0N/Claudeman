@@ -126,6 +126,56 @@ function createTerminalGrid(lines: string[], cursorY: number, wrappedRows = new 
 }
 
 describe('terminal touch tap mouse guard', () => {
+  it('returns local scrollback to the bottom and unlocks live-output following', () => {
+    const { app } = loadTerminalUiHarness();
+    const scrollToBottom = vi.fn();
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'codex', cliVersion: '1.0.0' }]]);
+    app.terminal = { scrollToBottom };
+    app._terminalScrollLocked = true;
+    app._wasAtBottomBeforeWrite = false;
+    app.sendTerminalKey = vi.fn();
+
+    app.jumpTerminalToLatest();
+
+    expect(scrollToBottom).toHaveBeenCalledOnce();
+    expect(app._terminalScrollLocked).toBe(false);
+    expect(app._wasAtBottomBeforeWrite).toBe(true);
+    expect(app.sendTerminalKey).not.toHaveBeenCalled();
+  });
+
+  it('also asks Claude fullscreen history to jump to its latest message', () => {
+    const { app } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion: '2.1.220' }]]);
+    app.terminal = { scrollToBottom: vi.fn() };
+    app.sendTerminalKey = vi.fn();
+
+    app.jumpTerminalToLatest();
+
+    expect(app.sendTerminalKey).toHaveBeenCalledWith('\x1b[1;5F');
+  });
+
+  it('tracks Claude-owned transcript history until jump-to-latest clears it', () => {
+    const { app } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion: '2.1.220' }]]);
+    app.terminal = {
+      rows: 10,
+      buffer: { active: { viewportY: 20, baseY: 20 } },
+      scrollToBottom: vi.fn(),
+    };
+    app._clientPointToCell = () => ({ col: 1, row: 1 });
+    app.sendTerminalKey = vi.fn();
+
+    app._sendSyntheticSgrWheel(8, 8, -3);
+    expect(app.isTerminalAtBottom()).toBe(true);
+    expect(app.isTerminalReadingHistory()).toBe(true);
+
+    app.jumpTerminalToLatest();
+    expect(app.isTerminalReadingHistory()).toBe(false);
+  });
+
   it('recognizes focus only when a terminal input owns the active element', () => {
     const { app, setActiveElement } = loadTerminalUiHarness();
     const textarea = { classList: { contains: () => true } };
@@ -681,6 +731,30 @@ describe('terminal viewport sizing claims', () => {
     expect(app.sendResize).toHaveBeenCalledOnce();
     expect(app.sendResize).toHaveBeenCalledWith('sess-1', {
       force: true,
+      takeControl: true,
+      refit: true,
+    });
+  });
+
+  it('does not force a second redraw when the trusted pointer selects a session tab', () => {
+    const { app, runFrame } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.fitAddon = {};
+    app.sendResize = vi.fn(() => Promise.resolve(true));
+
+    app._handleTerminalSizingPointerDown({
+      isTrusted: true,
+      button: 0,
+      isPrimary: true,
+      target: {
+        closest: (selector: string) =>
+          selector === '#terminalContainer, .session-tab' ? { className: 'session-tab' } : null,
+      },
+    });
+    runFrame();
+
+    expect(app.sendResize).toHaveBeenCalledOnce();
+    expect(app.sendResize).toHaveBeenCalledWith('sess-1', {
       takeControl: true,
       refit: true,
     });

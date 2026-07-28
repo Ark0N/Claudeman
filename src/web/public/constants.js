@@ -14,8 +14,8 @@
  * @globals {Array} BUILTIN_RESPAWN_PRESETS - Built-in respawn configuration presets
  *
  * @dependency None (first in load order)
- * @loadorder 1 of 15 — constants.js → mobile-handlers.js → voice-input.js → notification-manager.js
- *   → keyboard-accessory.js → input-cjk.js → app.js → terminal-ui.js → respawn-ui.js
+ * @loadorder 1 of 16 — constants.js → mobile-handlers.js → voice-input.js → notification-manager.js
+ *   → keyboard-accessory.js → input-cjk.js → terminal-input-state.js → app.js → terminal-ui.js → respawn-ui.js
  *   → ralph-panel.js → settings-ui.js → panels-ui.js → session-ui.js → ralph-wizard.js
  *   → api-client.js → subagent-windows.js
  */
@@ -52,13 +52,133 @@ const NOTIFICATION_LIST_CAP = 100;          // Max notifications in list
 const TITLE_FLASH_INTERVAL_MS = 1500;       // Title flash rate
 const BROWSER_NOTIF_RATE_LIMIT_MS = 3000;   // Rate limit for browser notifications
 const MOBILE_RESIZE_RETRY_MS = 30000;       // Small-viewport resize re-send while a desktop sizing claim is hot
+const WS_HANDOFF_TIMEOUT_MS = 250;           // Bound graceful WS → SSE terminal handoff
 const AUTO_CLOSE_NOTIFICATION_MS = 8000;    // Auto-close browser notifications
 const THROTTLE_DELAY_MS = 100;              // General UI throttle delay
 const TERMINAL_CHUNK_SIZE = 32 * 1024;      // 32KB chunks for terminal buffer loading
 const TERMINAL_TAIL_SIZE = 1024 * 1024;     // 1MB tail for initial load (more scrollback on tab switch)
+const TERMINAL_LATEST_FRAME_SIZE = 128 * 1024; // Bounded current-pane request shown before history replay
+const TERMINAL_HISTORY_PAGE_LINES = 400;     // Small physical-row pages keep mobile history fetches responsive
+const TERMINAL_HISTORY_WINDOW_PAGES = 6;     // Bound rendered/readable history while retaining the latest frame
+const TERMINAL_SNAPSHOT_SCROLLBACK = 10_000; // Stable switch-back history without serializing all 50k mobile lines
+const CODEX_POST_SWITCH_QUIET_MS = 180;       // Hide stateful Codex redraw bursts immediately after tab activation
+const CODEX_POST_SWITCH_MAX_HOLD_MS = 1500;   // Bound ordinary switch cover time during continuous output
+const CODEX_RESTART_RECOVERY_QUIET_MS = 500;  // Restarted Codex panes emit redraw bursts with wider inter-burst gaps
+const CODEX_RESTART_RECOVERY_MAX_HOLD_MS = 3000; // Keep the persisted frame through restored-pane replay
+const SERVER_RESTART_RECOVERY_KEY = 'codeman-server-restart-recovery';
 const SYNC_WAIT_TIMEOUT_MS = 50;            // Wait timeout for terminal sync
 const STATS_POLLING_INTERVAL_MS = 2000;     // System stats polling
 const TUI_REDRAW_SETTLE_MS = 400;           // Grace for a TUI to redraw after a real resize, before fetching its buffer
+
+/**
+ * Bounded cache for recently viewed terminal sessions.
+ *
+ * The active session never expires. Sessions demoted by a tab switch remain
+ * warm briefly so their live terminal deltas can be applied to the serialized
+ * xterm snapshot instead of downloading and replaying the full terminal tail.
+ */
+class WarmTerminalCache {
+  constructor({ limit = 3, ttlMs = 30_000, maxDeltaBytes = 256 * 1024 } = {}) {
+    this.limit = limit;
+    this.ttlMs = ttlMs;
+    this.maxDeltaBytes = maxDeltaBytes;
+    this.entries = new Map();
+  }
+
+  activate(sessionId, now = Date.now()) {
+    if (!sessionId) return;
+
+    for (const [id, entry] of this.entries) {
+      if (id !== sessionId && entry.expiresAt === null) {
+        entry.expiresAt = now + this.ttlMs;
+      }
+    }
+
+    const entry = this.entries.get(sessionId) || {
+      expiresAt: null,
+      chunks: [],
+      deltaBytes: 0,
+      valid: true,
+    };
+    entry.expiresAt = null;
+    this.entries.delete(sessionId);
+    this.entries.set(sessionId, entry);
+    this._prune(now);
+  }
+
+  append(sessionId, data, now = Date.now()) {
+    this._prune(now);
+    const entry = this.entries.get(sessionId);
+    if (!entry || !entry.valid || typeof data !== 'string' || data.length === 0) {
+      return !!entry?.valid;
+    }
+
+    if (entry.deltaBytes + data.length > this.maxDeltaBytes) {
+      entry.valid = false;
+      entry.chunks = [];
+      entry.deltaBytes = 0;
+      return false;
+    }
+
+    entry.chunks.push(data);
+    entry.deltaBytes += data.length;
+    return true;
+  }
+
+  consume(sessionId, now = Date.now()) {
+    this._prune(now);
+    const entry = this.entries.get(sessionId);
+    if (!entry?.valid) return null;
+
+    const data = entry.chunks.join('');
+    entry.chunks = [];
+    entry.deltaBytes = 0;
+    return data;
+  }
+
+  isWarm(sessionId, now = Date.now()) {
+    this._prune(now);
+    return this.entries.get(sessionId)?.valid === true;
+  }
+
+  ids(now = Date.now()) {
+    this._prune(now);
+    return Array.from(this.entries.keys());
+  }
+
+  nextExpiryDelay(now = Date.now()) {
+    this._prune(now);
+    let earliest = Infinity;
+    for (const entry of this.entries.values()) {
+      if (entry.expiresAt !== null) earliest = Math.min(earliest, entry.expiresAt);
+    }
+    return Number.isFinite(earliest) ? Math.max(0, earliest - now) : null;
+  }
+
+  remove(sessionId) {
+    this.entries.delete(sessionId);
+  }
+
+  clear() {
+    this.entries.clear();
+  }
+
+  _prune(now) {
+    for (const [id, entry] of this.entries) {
+      if (entry.expiresAt !== null && entry.expiresAt <= now) {
+        this.entries.delete(id);
+      }
+    }
+
+    while (this.entries.size > this.limit) {
+      const oldestInactive = Array.from(this.entries).find(([, entry]) => entry.expiresAt !== null);
+      if (!oldestInactive) break;
+      this.entries.delete(oldestInactive[0]);
+    }
+  }
+}
+
+globalThis.WarmTerminalCache = WarmTerminalCache;
 
 // Z-index base values for layered floating windows
 const ZINDEX_SUBAGENT_BASE = 1000;
