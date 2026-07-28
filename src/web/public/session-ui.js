@@ -1888,6 +1888,25 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  openLinkCasePathPicker() {
+    const pathInput = document.getElementById('linkCasePath');
+    PathPicker.open({
+      title: 'Select Existing Project Folder',
+      initialPath: pathInput.value.trim(),
+      directoriesOnly: true,
+      onSelect: (path) => {
+        pathInput.value = path;
+        const nameInput = document.getElementById('linkCaseName');
+        if (!nameInput.value.trim()) {
+          const folderName = path.split('/').filter(Boolean).pop() || '';
+          if (/^[\p{L}\p{N}_-]+$/u.test(folderName)) nameInput.value = folderName;
+        }
+        pathInput.focus();
+        pathInput.setSelectionRange(path.length, path.length);
+      },
+    });
+  },
+
   async linkRemoteCase() {
     const name = document.getElementById('remoteCaseName').value.trim();
     const remotePath = document.getElementById('remoteCasePath').value.trim();

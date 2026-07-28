@@ -50,6 +50,39 @@ const safePathSchema = z.string().max(1000).refine(isValidWorkingDir, {
   message: 'Invalid path: must be absolute, no shell metacharacters or traversal',
 });
 
+/**
+ * Filesystem picker paths are never interpolated into a shell command, so legal
+ * filename characters such as spaces, quotes, and parentheses are accepted.
+ * Containment and symlink resolution are enforced by the route after parsing.
+ */
+const filesystemPickerPathSchema = z
+  .string()
+  .max(4096)
+  .refine((p) => p.startsWith('/') && !p.includes('\0') && !p.includes('\n') && !p.includes('\r'), {
+    message: 'Path must be an absolute filesystem path',
+  })
+  .refine((p) => !p.split('/').includes('..'), { message: 'Path traversal is not allowed' });
+
+/** Query validation for the lazy, allowlisted filesystem path picker. */
+export const FilesystemBrowseQuerySchema = z.object({
+  path: filesystemPickerPathSchema.optional(),
+  sessionId: z
+    .string()
+    .max(100)
+    .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid session id')
+    .optional(),
+});
+
+/** Query validation for a single allowlisted path-picker file preview. */
+export const FilesystemPreviewQuerySchema = z.object({
+  path: filesystemPickerPathSchema,
+  sessionId: z
+    .string()
+    .max(100)
+    .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid session id')
+    .optional(),
+});
+
 // ========== Env Var Allowlist ==========
 
 /** Allowlisted env var key prefixes */

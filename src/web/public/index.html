@@ -2043,8 +2043,11 @@
             </div>
             <div class="form-row">
               <label>Folder Path</label>
-              <input type="text" id="linkCasePath" placeholder="/home/user/projects/my-project" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
-              <span class="form-hint">Absolute path to an existing project folder, e.g. /home/you/my-project</span>
+              <div class="path-input-group">
+                <input type="text" id="linkCasePath" placeholder="/mnt/d/AI/my-project" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+                <button type="button" class="btn path-input-browse" onclick="app.openLinkCasePathPicker()">Browse&hellip;</button>
+              </div>
+              <span class="form-hint">Choose an existing folder from this computer or enter its absolute path</span>
             </div>
           </div>
           <!-- Remote Tab -->
