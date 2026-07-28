@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -135,5 +135,30 @@ describe('git-repository-browser', () => {
     await expect(getGitDiffDetail(nestedWorkingDir, 'current', '../outside.txt')).rejects.toThrow(
       'outside the selected worktree'
     );
+  });
+
+  it('rejects symlink escapes and bounds binary or oversized previews', async () => {
+    const outsideSecret = join(fixtureRoot, 'outside-secret.txt');
+    writeFileSync(outsideSecret, 'do not expose\n');
+    symlinkSync(outsideSecret, join(featureWorktree, 'secret-link.txt'));
+    writeFileSync(join(featureWorktree, 'binary.dat'), Buffer.from([0x00, 0x01, 0x02]));
+    writeFileSync(join(featureWorktree, 'large.txt'), 'x'.repeat(1024 * 1024 + 1));
+
+    await expect(getGitDiffDetail(nestedWorkingDir, 'current', 'secret-link.txt')).rejects.toThrow(
+      'resolves outside the selected worktree'
+    );
+
+    const binary = await getGitDiffDetail(nestedWorkingDir, 'current', 'binary.dat');
+    expect(binary).toMatchObject({
+      binary: true,
+      afterContent: null,
+      truncated: false,
+    });
+
+    const large = await getGitDiffDetail(nestedWorkingDir, 'current', 'large.txt');
+    expect(large).toMatchObject({
+      afterContent: null,
+      truncated: true,
+    });
   });
 });

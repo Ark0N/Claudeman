@@ -42,6 +42,7 @@ import {
   canAccessOwned,
   findSessionOrFail,
   getAuthUser,
+  isWorkingDirAllowed,
   parseBody,
   validateSessionFilePath,
 } from '../route-helpers.js';
@@ -459,12 +460,24 @@ function appendDownloadFlag(url: string): string {
   return `${url}${url.includes('?') ? '&' : '?'}download=true`;
 }
 
-async function resolveFileBrowserWorkingDir(workingDir: string, scope?: string): Promise<string> {
-  if (!scope) return workingDir;
-  const repositoryRoot = await resolveRepositoryBrowseRoot(workingDir, scope);
-  if (repositoryRoot) return repositoryRoot;
-  if (scope === 'current') return workingDir;
-  throw new Error('Repository worktree scope not found');
+async function resolveFileBrowserWorkingDir(
+  workingDir: string,
+  scope: string | undefined,
+  req: FastifyRequest
+): Promise<string> {
+  let resolvedRoot = workingDir;
+  if (scope) {
+    const repositoryRoot = await resolveRepositoryBrowseRoot(workingDir, scope);
+    if (repositoryRoot) {
+      resolvedRoot = repositoryRoot;
+    } else if (scope !== 'current') {
+      throw new Error('Repository worktree scope not found');
+    }
+  }
+  if (!isWorkingDirAllowed(getAuthUser(req), resolvedRoot)) {
+    throw new Error('Repository worktree scope is outside the allowed workspace');
+  }
+  return resolvedRoot;
 }
 
 function appendFileBrowserScope(url: string, scope?: string): string {
@@ -589,9 +602,16 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     const { scope } = req.query as { scope?: string };
     const session = findSessionOrFail(ctx, id, req);
     try {
+      const selectedRoot = await resolveFileBrowserWorkingDir(session.workingDir, scope, req);
+      const user = getAuthUser(req);
+      const overview = await getGitRepositoryOverview(session.workingDir, scope);
+      overview.worktrees = overview.worktrees.filter((worktree) => isWorkingDirAllowed(user, worktree.path));
+      if (overview.repositoryRoot && !isWorkingDirAllowed(user, overview.repositoryRoot)) {
+        overview.repositoryRoot = selectedRoot;
+      }
       return {
         success: true,
-        data: await getGitRepositoryOverview(session.workingDir, scope),
+        data: overview,
       };
     } catch (err) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, getErrorMessage(err));
@@ -606,9 +626,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing commit parameter');
     }
     try {
+      const selectedRoot = await resolveFileBrowserWorkingDir(session.workingDir, scope, req);
       return {
         success: true,
-        data: await getGitCommitDetails(session.workingDir, scope, commit),
+        data: await getGitCommitDetails(selectedRoot, 'current', commit),
       };
     } catch (err) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, getErrorMessage(err));
@@ -631,9 +652,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter');
     }
     try {
+      const selectedRoot = await resolveFileBrowserWorkingDir(session.workingDir, scope, req);
       return {
         success: true,
-        data: await getGitDiffDetail(session.workingDir, scope, filePath, commit),
+        data: await getGitDiffDetail(selectedRoot, 'current', filePath, commit),
       };
     } catch (err) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, getErrorMessage(err));
@@ -827,7 +849,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     const includeHidden = showHidden === 'true';
     let workingDir: string;
     try {
-      workingDir = await resolveFileBrowserWorkingDir(session.workingDir, scope);
+      workingDir = await resolveFileBrowserWorkingDir(session.workingDir, scope, req);
     } catch (err) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, getErrorMessage(err));
     }
@@ -968,7 +990,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
 
     let workingDir: string;
     try {
-      workingDir = await resolveFileBrowserWorkingDir(session.workingDir, scope);
+      workingDir = await resolveFileBrowserWorkingDir(session.workingDir, scope, req);
     } catch (err) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, getErrorMessage(err));
     }
@@ -1141,7 +1163,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
 
     let workingDir: string;
     try {
-      workingDir = await resolveFileBrowserWorkingDir(session.workingDir, scope);
+      workingDir = await resolveFileBrowserWorkingDir(session.workingDir, scope, req);
     } catch (err) {
       reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, getErrorMessage(err)));
       return;
@@ -1387,7 +1409,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
 
     let workingDir: string;
     try {
-      workingDir = await resolveFileBrowserWorkingDir(sessionWorkingDir, scope);
+      workingDir = await resolveFileBrowserWorkingDir(sessionWorkingDir, scope, req);
     } catch (err) {
       reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, getErrorMessage(err)));
       return;
@@ -1425,7 +1447,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
 
     let workingDir: string;
     try {
-      workingDir = await resolveFileBrowserWorkingDir(sessionWorkingDir, scope);
+      workingDir = await resolveFileBrowserWorkingDir(sessionWorkingDir, scope, req);
     } catch (err) {
       reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, getErrorMessage(err)));
       return;

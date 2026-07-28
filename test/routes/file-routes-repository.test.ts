@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { registerFileRoutes } from '../../src/web/routes/file-routes.js';
+import { discoverGitRepository } from '../../src/git-repository-browser.js';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
 
 function git(cwd: string, ...args: string[]): string {
@@ -27,8 +28,14 @@ describe('file-routes repository browsing', () => {
   let fixtureRoot: string;
   let repositoryRoot: string;
   let harness: RouteTestHarness;
+  let savedMultiUser: string | undefined;
+  let savedUserSpaces: string | undefined;
 
   beforeEach(async () => {
+    savedMultiUser = process.env.CODEMAN_MULTIUSER;
+    savedUserSpaces = process.env.CODEMAN_USER_SPACES_DIR;
+    delete process.env.CODEMAN_MULTIUSER;
+    delete process.env.CODEMAN_USER_SPACES_DIR;
     fixtureRoot = mkdtempSync(join(tmpdir(), 'codeman-file-routes-git-'));
     repositoryRoot = join(fixtureRoot, 'repository');
     mkdirSync(repositoryRoot);
@@ -49,6 +56,13 @@ describe('file-routes repository browsing', () => {
   afterEach(async () => {
     await harness.app.close();
     rmSync(fixtureRoot, { recursive: true, force: true });
+    if (savedMultiUser === undefined) delete process.env.CODEMAN_MULTIUSER;
+    else process.env.CODEMAN_MULTIUSER = savedMultiUser;
+    if (savedUserSpaces === undefined) {
+      delete process.env.CODEMAN_USER_SPACES_DIR;
+    } else {
+      process.env.CODEMAN_USER_SPACES_DIR = savedUserSpaces;
+    }
   });
 
   it('returns repository metadata and roots the scoped file tree at the worktree', async () => {
@@ -121,6 +135,64 @@ describe('file-routes repository browsing', () => {
     expect(response.json()).toMatchObject({
       success: false,
       error: expect.stringContaining('scope not found'),
+    });
+  });
+
+  it('filters and rejects linked worktrees outside a regular user workspace', async () => {
+    const userSpaces = join(fixtureRoot, 'user-spaces');
+    const allowedRoot = join(userSpaces, 'alice', 'cases', 'allowed-repository');
+    const outsideRoot = join(fixtureRoot, 'outside-worktree');
+    mkdirSync(allowedRoot, { recursive: true });
+    git(allowedRoot, 'init', '-b', 'main');
+    git(allowedRoot, 'config', 'user.name', 'Codeman Test');
+    git(allowedRoot, 'config', 'user.email', 'codeman@example.invalid');
+    writeFileSync(join(allowedRoot, 'README.md'), 'allowed\n');
+    git(allowedRoot, 'add', 'README.md');
+    git(allowedRoot, 'commit', '-m', 'allowed root');
+    git(allowedRoot, 'worktree', 'add', '-b', 'outside', outsideRoot);
+    writeFileSync(join(outsideRoot, 'secret.txt'), 'outside secret\n');
+
+    process.env.CODEMAN_MULTIUSER = '1';
+    process.env.CODEMAN_USER_SPACES_DIR = userSpaces;
+    await harness.app.close();
+    harness = await createRouteTestHarness(registerFileRoutes, {
+      authUser: { username: 'alice', role: 'user' },
+    });
+    harness.ctx._session.workingDir = allowedRoot;
+    harness.ctx._session.owner = 'alice';
+
+    const discovery = await discoverGitRepository(allowedRoot);
+    const outsideScope = discovery?.worktrees.find((worktree) => worktree.path === outsideRoot);
+    expect(outsideScope).toBeDefined();
+
+    const overviewResponse = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${harness.ctx._sessionId}/repository?scope=current`,
+    });
+    const overview = overviewResponse.json();
+    expect(overview.success).toBe(true);
+    expect(overview.data.worktrees).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: outsideRoot })])
+    );
+
+    const filesResponse = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${harness.ctx._sessionId}/files?depth=1&scope=` + encodeURIComponent(outsideScope!.id),
+    });
+    expect(filesResponse.json()).toMatchObject({
+      success: false,
+      error: expect.stringContaining('outside the allowed workspace'),
+    });
+
+    const diffResponse = await harness.app.inject({
+      method: 'GET',
+      url:
+        `/api/sessions/${harness.ctx._sessionId}/repository/diff?path=secret.txt&scope=` +
+        encodeURIComponent(outsideScope!.id),
+    });
+    expect(diffResponse.json()).toMatchObject({
+      success: false,
+      error: expect.stringContaining('outside the allowed workspace'),
     });
   });
 });
