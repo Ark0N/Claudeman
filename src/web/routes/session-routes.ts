@@ -1016,6 +1016,180 @@ export function registerSessionRoutes(
     return candidateSid;
   }
 
+  interface ClaudeResponseMessage {
+    role: 'user' | 'assistant';
+    text: string;
+    timestamp?: string;
+  }
+
+  interface ClaudeTranscriptEntry {
+    type?: string;
+    timestamp?: string;
+    isMeta?: boolean;
+    isSidechain?: boolean;
+    isCompactSummary?: boolean;
+    message?: { content?: unknown };
+  }
+
+  function extractClaudeText(content: unknown, separator: string): string {
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+    return content
+      .filter(
+        (block): block is { type: string; text: string } =>
+          !!block &&
+          typeof block === 'object' &&
+          (block as { type?: string }).type === 'text' &&
+          typeof (block as { text?: string }).text === 'string'
+      )
+      .map((block) => block.text)
+      .join(separator);
+  }
+
+  function isClaudeSyntheticUserMessage(entry: ClaudeTranscriptEntry, text: string): boolean {
+    if (entry.isMeta || entry.isCompactSummary) return true;
+    return /^(?:<local-command|<command-name>|<task-notification>|<system-reminder>|<teammate-message\b|Another Claude session sent a message:|Base directory for this skill:)/i.test(
+      text
+    );
+  }
+
+  /**
+   * Claude writes one logical turn as many JSONL rows: text, thinking and tool
+   * blocks share message ids, while tool results are represented as user rows.
+   * Build viewer cards from real user boundaries instead of treating every row
+   * as a separate chat message.
+   */
+  function parseClaudeResponseTranscript(
+    content: string,
+    full: boolean
+  ): { text: string; timestamp: string; messages?: ClaudeResponseMessage[] } {
+    let lastText = '';
+    let lastTimestamp = '';
+    const messages: ClaudeResponseMessage[] = [];
+    let currentUserFragments = new Set<string>();
+    let currentAssistantFragments = new Set<string>();
+
+    for (const line of content.split('\n')) {
+      if (!line) continue;
+      let entry: ClaudeTranscriptEntry;
+      try {
+        entry = JSON.parse(line) as ClaudeTranscriptEntry;
+      } catch {
+        continue;
+      }
+      // Sidechains belong to agents/forks, not the main conversation. Meta user
+      // rows include repeated image dimensions and other UI-generated context.
+      if (entry.isSidechain) continue;
+
+      if (entry.type === 'user') {
+        const text = extractClaudeText(entry.message?.content, '\n').trim();
+        // A tool_result block has no text block and naturally drops out here.
+        if (!text || isClaudeSyntheticUserMessage(entry, text)) continue;
+        if (!full) continue;
+
+        const previous = messages.at(-1);
+        if (previous?.role === 'user') {
+          // Claude can replay the initial user row while restoring a transcript.
+          // Only collapse duplicates within the same unanswered user turn; the
+          // same prompt after an assistant response remains a legitimate turn.
+          if (currentUserFragments.has(text)) continue;
+          previous.text += `\n\n${text}`;
+          currentUserFragments.add(text);
+        } else {
+          messages.push({ role: 'user', text, timestamp: entry.timestamp });
+          currentUserFragments = new Set([text]);
+        }
+        currentAssistantFragments.clear();
+        continue;
+      }
+
+      if (entry.type !== 'assistant') continue;
+      const text = extractClaudeText(entry.message?.content, '\n\n').trim();
+      if (!text) continue;
+      lastText = text;
+      lastTimestamp = entry.timestamp || '';
+      if (!full) continue;
+
+      const previous = messages.at(-1);
+      if (previous?.role === 'assistant') {
+        // Replayed snapshots sometimes repeat an identical text block. Distinct
+        // progress/final blocks are kept, but remain inside one Claude card.
+        if (currentAssistantFragments.has(text)) continue;
+        previous.text += `\n\n${text}`;
+        previous.timestamp = entry.timestamp || previous.timestamp;
+        currentAssistantFragments.add(text);
+      } else {
+        messages.push({ role: 'assistant', text, timestamp: entry.timestamp });
+        currentAssistantFragments = new Set([text]);
+      }
+      currentUserFragments.clear();
+    }
+
+    return full ? { text: lastText, timestamp: lastTimestamp, messages } : { text: lastText, timestamp: lastTimestamp };
+  }
+
+  /** Locate a top-level Claude transcript, including recovered tmux sessions. */
+  async function findClaudeTranscript(
+    projectsDir: string,
+    conversationId: string,
+    codemanSessionId: string
+  ): Promise<{ sessionId: string; path: string } | null> {
+    let projectDirs: import('node:fs').Dirent[];
+    try {
+      projectDirs = await fs.readdir(projectsDir, { withFileTypes: true });
+    } catch {
+      return null;
+    }
+
+    const safeIds = [...new Set([conversationId, codemanSessionId])].filter((value) => /^[a-zA-Z0-9._-]+$/.test(value));
+    for (const candidateId of safeIds) {
+      for (const projectDir of projectDirs) {
+        if (!projectDir.isDirectory()) continue;
+        const jsonlPath = join(projectsDir, projectDir.name, `${candidateId}.jsonl`);
+        try {
+          const stat = await fs.stat(jsonlPath);
+          if (stat.isFile()) return { sessionId: candidateId, path: jsonlPath };
+        } catch {
+          /* continue */
+        }
+      }
+    }
+
+    // If mux-sessions.json was lost or stale, reconcileSessions() historically
+    // recovered `codeman-40568a29` as `restored-40568a29` and used the server cwd.
+    // The tmux name still carries the first eight UUID characters, which safely
+    // reconnects the viewer when exactly one matching top-level transcript exists.
+    const restoredMatch = /^restored-([a-f0-9]{8,})$/i.exec(codemanSessionId);
+    if (!restoredMatch) return null;
+    const fragment = restoredMatch[1].toLowerCase();
+    const candidates: Array<{ sessionId: string; path: string; mtimeMs: number }> = [];
+    const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
+
+    for (const projectDir of projectDirs) {
+      if (!projectDir.isDirectory()) continue;
+      const dirPath = join(projectsDir, projectDir.name);
+      let files: import('node:fs').Dirent[];
+      try {
+        files = await fs.readdir(dirPath, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const file of files) {
+        if (!file.isFile() || !file.name.endsWith('.jsonl')) continue;
+        const candidateId = file.name.slice(0, -'.jsonl'.length);
+        if (!candidateId.toLowerCase().startsWith(fragment) || !uuidPattern.test(candidateId)) continue;
+        const path = join(dirPath, file.name);
+        const stat = await fs.stat(path).catch(() => null);
+        if (stat) candidates.push({ sessionId: candidateId, path, mtimeMs: stat.mtimeMs });
+      }
+    }
+
+    const candidateIds = new Set(candidates.map((candidate) => candidate.sessionId));
+    if (candidateIds.size !== 1) return null;
+    candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    return candidates[0] ?? null;
+  }
+
   app.get('/api/sessions/:id/last-response', async (req) => {
     const { id } = req.params as { id: string };
     const session = findSessionOrFail(ctx, id, req);
@@ -1045,106 +1219,30 @@ export function registerSessionRoutes(
       }
     }
 
-    // The Claude conversation ID (used as JSONL filename)
+    const query = req.query as { context?: string };
     const claudeSessionId = session.claudeSessionId || session.id;
-    let transcriptText = '';
-    let transcriptTimestamp = '';
+    const transcript = await findClaudeTranscript(projectsDir, claudeSessionId, session.id);
+    if (!transcript) {
+      return query.context === 'full' ? { text: '', timestamp: '', messages: [] } : { text: '', timestamp: '' };
+    }
+
+    if (transcript.sessionId !== session.claudeSessionId && transcript.sessionId !== session.id) {
+      session.adoptClaudeSessionId(transcript.sessionId);
+      if (session.docker) {
+        void persistDockerCaseClaudeSessionId(
+          CODEMAN_CONFIG_DIR,
+          session.docker.containerName,
+          transcript.sessionId
+        ).catch(() => {});
+      }
+    }
 
     try {
-      const projectDirs = await fs.readdir(projectsDir);
-      for (const projDir of projectDirs) {
-        const jsonlPath = join(projectsDir, projDir, `${claudeSessionId}.jsonl`);
-        try {
-          const content = await fs.readFile(jsonlPath, 'utf8');
-          const lines = content.trim().split('\n');
-
-          // Search from end for last assistant message with text
-          for (let i = lines.length - 1; i >= 0; i--) {
-            try {
-              const entry = JSON.parse(lines[i]);
-              if (entry.type === 'assistant' && entry.message?.content) {
-                const blocks = Array.isArray(entry.message.content)
-                  ? entry.message.content
-                  : [{ type: 'text', text: String(entry.message.content) }];
-                const textBlocks = blocks
-                  .filter((b: { type: string; text?: string }) => b.type === 'text' && b.text)
-                  .map((b: { type: string; text?: string }) => b.text);
-                if (textBlocks.length > 0) {
-                  transcriptText = textBlocks.join('\n\n');
-                  transcriptTimestamp = entry.timestamp || '';
-                  break;
-                }
-              }
-            } catch {
-              // Skip unparseable lines
-            }
-          }
-          if (transcriptText) break; // Found it, stop scanning directories
-        } catch {
-          // File doesn't exist in this project dir, continue
-        }
-      }
+      const content = await fs.readFile(transcript.path, 'utf8');
+      return parseClaudeResponseTranscript(content, query.context === 'full');
     } catch {
-      // projects dir doesn't exist
+      return query.context === 'full' ? { text: '', timestamp: '', messages: [] } : { text: '', timestamp: '' };
     }
-
-    // If ?context=full, return all user+assistant messages for conversation view
-    const query = req.query as { context?: string };
-    if (query.context === 'full' && transcriptText) {
-      const allMessages: Array<{ role: string; text: string; timestamp?: string }> = [];
-      try {
-        const projectDirs = await fs.readdir(projectsDir);
-        for (const projDir of projectDirs) {
-          const jsonlPath = join(projectsDir, projDir, `${claudeSessionId}.jsonl`);
-          try {
-            const content = await fs.readFile(jsonlPath, 'utf8');
-            const lines = content.trim().split('\n');
-            for (const line of lines) {
-              try {
-                const entry = JSON.parse(line);
-                if (entry.type === 'user' && entry.message?.content) {
-                  const text =
-                    typeof entry.message.content === 'string'
-                      ? entry.message.content
-                      : (entry.message.content as Array<{ type: string; text?: string }>)
-                          .filter((b) => b.type === 'text' && b.text)
-                          .map((b) => b.text)
-                          .join('\n');
-                  // Skip system/command messages
-                  if (text && !text.startsWith('<local-command') && !text.startsWith('<command-name>')) {
-                    allMessages.push({ role: 'user', text, timestamp: entry.timestamp });
-                  }
-                } else if (entry.type === 'assistant' && entry.message?.content) {
-                  const blocks = Array.isArray(entry.message.content)
-                    ? entry.message.content
-                    : [{ type: 'text', text: String(entry.message.content) }];
-                  const text = blocks
-                    .filter((b: { type: string; text?: string }) => b.type === 'text' && b.text)
-                    .map((b: { type: string; text?: string }) => b.text)
-                    .join('\n\n');
-                  if (text) {
-                    allMessages.push({ role: 'assistant', text, timestamp: entry.timestamp });
-                  }
-                }
-              } catch {
-                /* skip */
-              }
-            }
-            if (allMessages.length > 0) break;
-          } catch {
-            /* continue */
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-      return { text: transcriptText, timestamp: transcriptTimestamp, messages: allMessages };
-    }
-
-    return {
-      text: transcriptText,
-      timestamp: transcriptTimestamp,
-    };
   });
 
   function isCodexInjectedContext(text: string): boolean {
