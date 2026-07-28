@@ -1,8 +1,8 @@
 # Mobile Experience Change-Set Audit
 
-**Date:** 2026-07-28  
-**Scope:** `origin/master..agent/mobile-terminal-experience` plus the pending terminal input controller extraction  
-**Mode:** Full, with architecture, code-quality, and test specialists  
+**Date:** 2026-07-28
+**Scope:** `origin/master..agent/mobile-terminal-experience` plus the pending terminal input controller extraction
+**Mode:** Full, with architecture, code-quality, and test specialists
 **Size:** 112 tracked and pending files, 43 existing commits, approximately 21,000 added lines before audit commits
 
 ## Assessment
