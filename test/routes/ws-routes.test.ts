@@ -19,6 +19,21 @@ import { registerWsRoutes } from '../../src/web/routes/ws-routes.js';
 import { MAX_INPUT_LENGTH } from '../../src/config/terminal-limits.js';
 
 const PORT = 3170;
+const DEC_2026_START = '\x1b[?2026h';
+const DEC_2026_END = '\x1b[?2026l';
+
+function synchronizedPayload(messages: Array<{ d: string }>): string {
+  const transaction = messages.map((message) => message.d).join('');
+  expect(transaction.startsWith(DEC_2026_START)).toBe(true);
+  expect(transaction.endsWith(DEC_2026_END)).toBe(true);
+  return transaction.slice(DEC_2026_START.length, -DEC_2026_END.length);
+}
+
+function transportPayload(message: { d: string }, index: number, count: number): string {
+  const start = index === 0 ? DEC_2026_START.length : 0;
+  const end = index === count - 1 ? message.d.length - DEC_2026_END.length : message.d.length;
+  return message.d.slice(start, end);
+}
 
 /** Helper: open a WebSocket connection and wait for it to reach OPEN state. */
 function connectWs(path: string, timeoutMs = 5000): Promise<WebSocket> {
@@ -160,6 +175,29 @@ describe('ws-routes', () => {
       }
     });
 
+    it('carries the terminal stream cursor with WebSocket output', async () => {
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
+      try {
+        const cursor = {
+          stream: 'ws-cursor-stream',
+          generation: 3,
+          start: 40,
+          end: 51,
+        };
+        ctx._session.emit('terminal', 'hello world', cursor);
+
+        const msg = (await nextMessage(ws)) as {
+          t: string;
+          d: string;
+          cursor?: typeof cursor;
+        };
+        expect(msg.t).toBe('o');
+        expect(msg.cursor).toEqual(cursor);
+      } finally {
+        ws.close();
+      }
+    });
+
     it('sends clearTerminal event as {"t":"c"}', async () => {
       const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
       try {
@@ -227,7 +265,39 @@ describe('ws-routes', () => {
       }
     });
 
-    it('splits mobile bulk output into lossless 16KB synchronized frames', async () => {
+    it('keeps large adjacent mobile redraw chunks in one synchronized transaction', async () => {
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
+      try {
+        const session = ctx._session;
+        ws.send(JSON.stringify({ t: 'z', c: 48, r: 28, v: 'mobile' }));
+        await vi.waitFor(() => {
+          expect(session.resize).toHaveBeenCalledWith(48, 28, {
+            viewportType: 'mobile',
+            force: false,
+          });
+        });
+
+        const first = 'A'.repeat(24 * 1024);
+        const second = 'B'.repeat(24 * 1024);
+        const messagesPromise = collectMessages(ws, 3, 500);
+        session.emit('terminal', first);
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        session.emit('terminal', second);
+
+        const messages = (await messagesPromise) as Array<{ t: string; d: string }>;
+        expect(synchronizedPayload(messages)).toBe(first + second);
+        expect(messages[0].d.startsWith(DEC_2026_START)).toBe(true);
+        expect(messages[0].d.endsWith(DEC_2026_END)).toBe(false);
+        expect(messages[1].d.includes(DEC_2026_START)).toBe(false);
+        expect(messages[1].d.includes(DEC_2026_END)).toBe(false);
+        expect(messages[2].d.startsWith(DEC_2026_START)).toBe(false);
+        expect(messages[2].d.endsWith(DEC_2026_END)).toBe(true);
+      } finally {
+        ws.close();
+      }
+    });
+
+    it('splits mobile bulk output into one lossless synchronized transaction', async () => {
       const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
       try {
         const session = ctx._session;
@@ -240,13 +310,31 @@ describe('ws-routes', () => {
         });
 
         const largeData = 'X'.repeat(24 * 1024);
+        const cursor = {
+          stream: 'mobile-bulk-stream',
+          generation: 4,
+          start: 100,
+          end: 100 + largeData.length,
+        };
         const messagesPromise = collectMessages(ws, 2, 500);
-        session.emit('terminal', largeData);
+        session.emit('terminal', largeData, cursor);
 
-        const messages = (await messagesPromise) as Array<{ t: string; d: string }>;
-        const payloads = messages.map((message) => message.d.slice('\x1b[?2026h'.length, -'\x1b[?2026l'.length));
+        const messages = (await messagesPromise) as Array<{
+          t: string;
+          d: string;
+          cursor: typeof cursor;
+        }>;
+        const payloads = messages.map((message, index) => transportPayload(message, index, messages.length));
         expect(payloads.every((payload) => Buffer.byteLength(payload, 'utf8') <= 16 * 1024)).toBe(true);
-        expect(payloads.join('')).toBe(largeData);
+        expect(synchronizedPayload(messages)).toBe(largeData);
+        expect(messages[0].cursor.start).toBe(cursor.start);
+        expect(messages[0].cursor.end).toBe(messages[1].cursor.start);
+        expect(messages[1].cursor.end).toBe(cursor.end);
+        expect(
+          messages.every((message, index) => message.cursor.end - message.cursor.start === payloads[index].length)
+        ).toBe(true);
+        expect(messages[0].d.endsWith(DEC_2026_END)).toBe(false);
+        expect(messages[1].d.startsWith(DEC_2026_START)).toBe(false);
       } finally {
         ws.close();
       }
@@ -262,10 +350,10 @@ describe('ws-routes', () => {
         session.emit('terminal', largeData);
 
         const messages = (await messagesPromise) as Array<{ t: string; d: string }>;
-        const payloads = messages.map((message) => message.d.slice('\x1b[?2026h'.length, -'\x1b[?2026l'.length));
+        const payloads = messages.map((message, index) => transportPayload(message, index, messages.length));
         expect(messages.every((message) => message.t === 'o')).toBe(true);
         expect(payloads.every((payload) => Buffer.byteLength(payload, 'utf8') <= 8 * 1024)).toBe(true);
-        expect(payloads.join('')).toBe(largeData);
+        expect(synchronizedPayload(messages)).toBe(largeData);
       } finally {
         ws.close();
       }
@@ -283,10 +371,10 @@ describe('ws-routes', () => {
         session.emit('terminal', firstPayload + atomicPayload);
 
         const messages = (await messagesPromise) as Array<{ t: string; d: string }>;
-        const payloads = messages.map((message) => message.d.slice('\x1b[?2026h'.length, -'\x1b[?2026l'.length));
+        const payloads = messages.map((message, index) => transportPayload(message, index, messages.length));
         expect(payloads[0]).toBe(firstPayload);
         expect(payloads[1]).toBe(atomicPayload);
-        expect(payloads.join('')).toBe(firstPayload + atomicPayload);
+        expect(synchronizedPayload(messages)).toBe(firstPayload + atomicPayload);
       } finally {
         ws.close();
       }

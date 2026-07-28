@@ -19,7 +19,7 @@
  *
  * Protocol (all JSON text frames):
  *   Server -> Client:
- *     {"t":"o","d":"..."} — terminal output
+ *     {"t":"o","d":"...","cursor":{...}} — terminal output with an optional stream cursor
  *     {"t":"c"}           — clear terminal
  *     {"t":"r"}           — needs refresh (reload buffer)
  *     {"t":"ia","seq":N}  — input ACK (echoes the seq of an applied/deduped input frame)
@@ -37,6 +37,7 @@
 
 import { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
+import type { TerminalCursor } from '../../session.js';
 import type { SessionPort } from '../ports/session-port.js';
 import { MAX_INPUT_LENGTH } from '../../config/terminal-limits.js';
 import { isAllowedRequestHost, isAllowedRequestOrigin, type HostPolicy } from '../network-auth-policy.js';
@@ -55,6 +56,9 @@ const WS_MOBILE_BATCH_INTERVAL_MS = 50;
 
 /** Match the browser's mobile xterm parse budget while retaining progressive bulk output. */
 const WS_MOBILE_BATCH_FLUSH_THRESHOLD = 16 * 1024;
+
+/** Bound one phone render transaction without defeating the 50ms redraw grouping window. */
+const WS_MOBILE_BATCH_HARD_LIMIT = 256 * 1024;
 
 /** How often to ping each WebSocket client (ms). Detects stale connections that
  *  TCP keepalive won't catch for minutes, especially through tunnels/proxies. */
@@ -323,6 +327,7 @@ export function registerWsRoutes(
       // Per-connection micro-batch state
       let batchChunks: string[] = [];
       let batchSize = 0;
+      let batchCursor: TerminalCursor | undefined;
       let batchTimer: ReturnType<typeof setTimeout> | null = null;
       const batchIntervalMs = () =>
         announcedViewport === 'mobile' ? WS_MOBILE_BATCH_INTERVAL_MS : WS_BATCH_INTERVAL_MS;
@@ -334,22 +339,54 @@ export function registerWsRoutes(
         if (batchChunks.length === 0 || socket.readyState !== 1) {
           batchChunks = [];
           batchSize = 0;
+          batchCursor = undefined;
           return;
         }
         const data = batchChunks.join('');
+        const cursor = batchCursor;
         const { frames, remainder } = splitTerminalPayload(data, batchFlushThreshold(), flushSafeTail);
         batchChunks = remainder ? [remainder] : [];
         batchSize = Buffer.byteLength(remainder, 'utf8');
-        for (const frame of frames) {
-          socket.send(`{"t":"o","d":${JSON.stringify(DEC_2026_START + frame + DEC_2026_END)}}`);
+        let cursorOffset = 0;
+        for (let index = 0; index < frames.length; index += 1) {
+          // Transport fragments from one flush are one render transaction. Keep
+          // the DEC synchronized update open across WS messages so xterm can
+          // parse bounded chunks without exposing each partial Codex redraw.
+          const synchronizedFrame =
+            (index === 0 ? DEC_2026_START : '') + frames[index] + (index === frames.length - 1 ? DEC_2026_END : '');
+          const frameCursor = cursor
+            ? {
+                ...cursor,
+                start: cursor.start + cursorOffset,
+                end: cursor.start + cursorOffset + frames[index].length,
+              }
+            : undefined;
+          socket.send(
+            JSON.stringify({
+              t: 'o',
+              d: synchronizedFrame,
+              ...(frameCursor ? { cursor: frameCursor } : {}),
+            })
+          );
+          cursorOffset += frames[index].length;
         }
+        batchCursor =
+          cursor && remainder
+            ? {
+                ...cursor,
+                start: cursor.start + cursorOffset,
+              }
+            : undefined;
       };
       const flushBatchNow = () => {
         if (batchTimer) {
           clearTimeout(batchTimer);
           batchTimer = null;
         }
-        flushBatch(false);
+        // A threshold flush is still one logical PTY emission. Send its safe
+        // tail in the same synchronized transaction; splitTerminalPayload keeps
+        // only a genuinely incomplete ANSI/control sequence for the next event.
+        flushBatch();
       };
 
       // Per-connection desktop sizing claim — registered on the first
@@ -432,11 +469,27 @@ export function registerWsRoutes(
       });
 
       // Terminal output -> micro-batched WS send
-      const onTerminal = (data: string) => {
+      const onTerminal = (data: string, cursor?: TerminalCursor) => {
         if (socket.readyState !== 1) return;
+        const cursorIsContiguous =
+          cursor &&
+          batchCursor &&
+          cursor.stream === batchCursor.stream &&
+          cursor.generation === batchCursor.generation &&
+          cursor.start === batchCursor.end;
+        if (
+          batchChunks.length > 0 &&
+          ((cursor && !batchCursor) || (!cursor && batchCursor) || (cursor && batchCursor && !cursorIsContiguous))
+        ) {
+          flushBatchNow();
+        }
         batchChunks.push(data);
         batchSize += Buffer.byteLength(data, 'utf8');
-        if (batchSize >= batchFlushThreshold()) flushBatchNow();
+        if (cursor) {
+          batchCursor = batchCursor ? { ...batchCursor, end: cursor.end } : { ...cursor };
+        }
+        const immediateFlushLimit = announcedViewport === 'mobile' ? WS_MOBILE_BATCH_HARD_LIMIT : batchFlushThreshold();
+        if (batchSize >= immediateFlushLimit) flushBatchNow();
 
         // Start timer if not already running
         if (batchChunks.length > 0 && !batchTimer) {
@@ -501,6 +554,7 @@ export function registerWsRoutes(
         if (pongTimeout) clearTimeout(pongTimeout);
         if (batchTimer) clearTimeout(batchTimer);
         batchChunks = [];
+        batchCursor = undefined;
         detachTerminalTransport();
         session.off('exit', onSessionExit);
         session.releaseDesktopSizing(sizingToken);
