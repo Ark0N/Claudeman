@@ -220,14 +220,12 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 
 <table>
 <tr>
-<td align="center" width="33%"><img src="docs/screenshots/mobile-landing-qr.png" alt="移动端 — 带二维码认证的登录页" width="260"></td>
-<td align="center" width="33%"><img src="docs/screenshots/mobile-session-keyboard-20260727.png" alt="移动端 — 通过键盘配件栏与 Enter 按钮回答智能体的方案提示" width="260"></td>
-<td align="center" width="33%"><img src="docs/screenshots/mobile-session-active.png" alt="移动端 — 活动中的智能体会话" width="260"></td>
+<td align="center" width="40%"><img src="docs/screenshots/mobile-session-keyboard-20260727.png" alt="移动端 — 通过键盘配件栏与 Enter 按钮回答智能体的方案提示" width="300"></td>
+<td align="center" width="60%"><img src="docs/screenshots/mobile-toolbar-enter-20260727.png" alt="移动端工具栏：配件栏的 /init、/clear、剪贴板与 Esc，下方是 Run、案例、停止、Enter、语音与设置控件" width="440"></td>
 </tr>
 <tr>
-<td align="center"><em>带二维码认证的登录页</em></td>
 <td align="center"><em>触控回答提示</em></td>
-<td align="center"><em>智能体实时工作中</em></td>
+<td align="center"><em>配件栏 + 独立 Enter 按钮</em></td>
 </tr>
 </table>
 
@@ -246,28 +244,10 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 <tr><td>在手机上手打密码</td><td><b>扫二维码 —— 即时认证</b></td></tr>
 </table>
 
-### 安全的二维码认证
-
-在手机键盘上输密码太痛苦了。Codeman 用**密码学安全的一次性二维码令牌**取而代之 —— 扫描桌面上显示的二维码，手机即刻完成认证。
-
-每个二维码编码的是一个包含 6 字符短码的 URL，该短码在服务端映射到一个 256 位密钥（`crypto.randomBytes(32)`）。令牌每 **60 秒**自动轮换，**首次扫描即原子性消费**（重放永远失败），并采用**基于哈希的 `Map.get()` 查找**，不会通过响应时延泄露任何信息。短码只是一个不透明指针 —— 真正的密钥永远不会出现在浏览器历史、`Referer` 头或 Cloudflare 边缘日志中。
-
-该安全设计覆盖了 ["Demystifying the (In)Security of QR Code-based Login"](https://www.usenix.org/conference/usenixsecurity25/presentation/zhang-xin)（USENIX Security 2025，该研究发现 Top-100 网站中有 47 个存在漏洞）所指出的全部 6 个关键二维码认证缺陷：强制一次性使用、短 TTL、密码学随机性、服务端生成、扫描时桌面实时通知（QRLjacking 检测），以及 IP + User-Agent 会话绑定与手动吊销。双层速率限制（按 IP + 全局）使得在 62^6 = 568 亿种可能短码空间内进行暴力破解变得不可行。完整安全分析见：[`docs/qr-auth-plan.md`](docs/qr-auth-plan.md)
-
-### 触控优化界面
-
-<p align="center">
-  <img src="docs/screenshots/mobile-toolbar-enter-20260727.png" alt="移动端工具栏：配件栏的 /init、/clear、剪贴板与 Esc，下方是 Run、案例、停止、Enter、语音与设置控件" width="560">
-</p>
-
-- **键盘配件栏** —— 在虚拟键盘上方提供 `/init`、`/clear`、`/compact` 快捷按钮。破坏性命令（`/clear`、`/compact`）需双击确认 —— 第一次点击「上膛」，第二次点击执行 —— 这样在颠簸的通勤路上也不会误触
-- **独立的 Enter 按钮** —— 在触控键盘上提交是高频操作，因此手机工具栏为它单独设了一个按钮。它会以按键的方式回放，从而先冲刷本地回显缓冲的文本，不会让内容滞留在屏幕上。启动 Shell 这类低频操作则移入 Run 下拉菜单（`Terminal / Shell`）
-- **滑动导航** —— 在终端上左右滑动切换会话（阈值 80px，300ms）
-- **智能键盘处理** —— 键盘弹出时工具栏与终端整体上移（使用 `visualViewport` API，并对 iOS 地址栏漂移设置 100px 阈值）
-- **安全区适配** —— 通过 `env(safe-area-inset-*)` 适配 iPhone 刘海与底部 Home 指示条
-- **44px 触控目标** —— 所有按钮均满足 iOS 人机界面指南的最小尺寸
-- **底部抽屉式 case 选择器** —— 用上滑模态框替代桌面端下拉菜单
-- **原生惯性滚动** —— `-webkit-overflow-scrolling: touch`，丝滑流畅
+- **键盘配件栏** —— 在虚拟键盘上方提供 `/init`、`/clear`、`/compact` 快捷按钮；破坏性命令需双击确认，绝不误触
+- **独立的 Enter 按钮** —— 以按键方式回放，先冲刷本地回显缓冲的文本，不会让内容滞留在屏幕上
+- **滑动导航与智能键盘处理** —— 左右滑动切换会话；键盘弹出时工具栏与终端整体上移（`visualViewport` API）
+- **为手机而生** —— 刘海与 Home 指示条的安全区适配、44px 触控目标、底部抽屉式 case 选择器、原生惯性滚动
 
 ```bash
 codeman web --https
@@ -275,6 +255,14 @@ codeman web --https
 ```
 
 > `localhost` 走纯 HTTP 即可。从其他设备访问时请使用 `--https`，或使用 [Tailscale](https://tailscale.com/)（推荐）—— 它提供私有网络，让你无需 TLS 证书即可从手机访问 `http://<tailscale-ip>:3000`。
+
+### 安全的二维码认证
+
+在手机键盘上输密码太痛苦了。Codeman 用**密码学安全的一次性二维码令牌**取而代之 —— 扫描桌面上显示的二维码，手机即刻完成认证。
+
+每个二维码编码的是一个包含 6 字符短码的 URL，该短码在服务端映射到一个 256 位密钥（`crypto.randomBytes(32)`）。令牌每 **60 秒**自动轮换，**首次扫描即原子性消费**（重放永远失败），并采用**基于哈希的 `Map.get()` 查找**，不会通过响应时延泄露任何信息。短码只是一个不透明指针 —— 真正的密钥永远不会出现在浏览器历史、`Referer` 头或 Cloudflare 边缘日志中。
+
+该安全设计覆盖了 ["Demystifying the (In)Security of QR Code-based Login"](https://www.usenix.org/conference/usenixsecurity25/presentation/zhang-xin)（USENIX Security 2025，该研究发现 Top-100 网站中有 47 个存在漏洞）所指出的全部 6 个关键二维码认证缺陷：强制一次性使用、短 TTL、密码学随机性、服务端生成、扫描时桌面实时通知（QRLjacking 检测），以及 IP + User-Agent 会话绑定与手动吊销。双层速率限制（按 IP + 全局）使得在 62^6 = 568 亿种可能短码空间内进行暴力破解变得不可行。完整安全分析见：[`docs/qr-auth-plan.md`](docs/qr-auth-plan.md)
 
 ---
 
