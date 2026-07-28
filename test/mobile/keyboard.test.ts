@@ -1435,6 +1435,314 @@ describe('Virtual Keyboard', () => {
       expect(state.removedAfterFrame).toBe(true);
     });
 
+    it('replaces keyboard resize redraws with the authoritative pane without losing scrollback', async () => {
+      const state = await page.evaluate(async () => {
+        const sessionId = 'mobile-keyboard-authoritative-pane-test';
+        const originalFetch = window.fetch;
+        const originalSendResize = app.sendResize;
+        const snapshot = `\x1b[1;1HAUTHORITATIVE CURRENT PANE\x1b[${app.terminal.rows};1H› `;
+        const snapshotCursor = {
+          stream: 'keyboard-frame-stream',
+          generation: 1,
+          start: 0,
+          end: 500,
+        };
+        const headers = {
+          'content-type': 'text/plain; charset=utf-8',
+          'x-codeman-terminal-format': 'stream-v1',
+          'x-codeman-terminal-stream': snapshotCursor.stream,
+          'x-codeman-terminal-generation': String(snapshotCursor.generation),
+          'x-codeman-terminal-start': String(snapshotCursor.start),
+          'x-codeman-terminal-end': String(snapshotCursor.end),
+          'x-codeman-terminal-status': 'idle',
+          'x-codeman-terminal-full-size': String(snapshot.length),
+          'x-codeman-terminal-truncated': '0',
+          'x-codeman-terminal-source': 'mux-visible',
+        };
+        app.activeSessionId = sessionId;
+        app.sessions.set(sessionId, {
+          id: sessionId,
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app.terminal.reset();
+        const history = Array.from(
+          { length: app.terminal.rows + 20 },
+          (_, index) => `KEEP_HISTORY_${String(index).padStart(3, '0')}`
+        ).join('\r\n');
+        await new Promise<void>((resolve) => {
+          app.terminal.write(`${history}\r\nstable frame before resize\r\n› `, resolve);
+        });
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+
+        try {
+          app.sendResize = async () => true;
+          window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+            if (String(input).includes(`/api/sessions/${sessionId}/terminal?latest=1`)) {
+              return new Response(snapshot, { status: 200, headers });
+            }
+            return originalFetch.call(window, input, init);
+          }) as typeof window.fetch;
+
+          KeyboardHandler._beginTerminalFrameCover({ restart: true, arm: true });
+          const startedAt = performance.now();
+          const reconcile = KeyboardHandler._sendTerminalResize();
+          const gatedImmediately = app._isLoadingBuffer;
+          app.batchTerminalWrite('\x1b[2J\x1b[HSTALE HISTORY REDRAW', {
+            stream: snapshotCursor.stream,
+            generation: snapshotCursor.generation,
+            start: 100,
+            end: 130,
+          });
+          await reconcile;
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          });
+
+          const buffer = app.terminal.buffer.active;
+          const allText = Array.from(
+            { length: buffer.length },
+            (_, index) => buffer.getLine(index)?.translateToString(true) || ''
+          ).join('\n');
+          const visibleText = Array.from(
+            { length: app.terminal.rows },
+            (_, row) => buffer.getLine(buffer.viewportY + row)?.translateToString(true) || ''
+          ).join('\n');
+          return {
+            allText,
+            elapsedMs: performance.now() - startedAt,
+            gatedImmediately,
+            removed: !app.terminal.element?.querySelector('.terminal-resize-frame-cover'),
+            visibleText,
+          };
+        } finally {
+          window.fetch = originalFetch;
+          app.sendResize = originalSendResize;
+          KeyboardHandler._discardTerminalFrameCover();
+        }
+      });
+
+      expect(state.gatedImmediately).toBe(true);
+      expect(state.visibleText).toContain('AUTHORITATIVE CURRENT PANE');
+      expect(state.visibleText).not.toContain('STALE HISTORY REDRAW');
+      expect(state.allText).toContain('KEEP_HISTORY_000');
+      expect(state.removed).toBe(true);
+      expect(state.elapsedMs).toBeLessThan(1000);
+    });
+
+    it('reconciles the pane after a touch decision is submitted without relying on hooks', async () => {
+      const state = await page.evaluate(async () => {
+        const sessionId = 'mobile-dialogue-authoritative-pane-test';
+        const originalFetch = window.fetch;
+        const originalReliableSend = app._reliableSend;
+        const sent: string[] = [];
+        const snapshot = '\x1b[1;1HDIALOGUE RESOLVED\x1b[3;1H› ';
+        const snapshotCursor = {
+          stream: 'dialogue-frame-stream',
+          generation: 2,
+          start: 0,
+          end: 300,
+        };
+        const headers = {
+          'content-type': 'text/plain; charset=utf-8',
+          'x-codeman-terminal-format': 'stream-v1',
+          'x-codeman-terminal-stream': snapshotCursor.stream,
+          'x-codeman-terminal-generation': String(snapshotCursor.generation),
+          'x-codeman-terminal-start': String(snapshotCursor.start),
+          'x-codeman-terminal-end': String(snapshotCursor.end),
+          'x-codeman-terminal-status': 'idle',
+          'x-codeman-terminal-full-size': String(snapshot.length),
+          'x-codeman-terminal-truncated': '0',
+          'x-codeman-terminal-source': 'mux-visible',
+        };
+
+        app.activeSessionId = sessionId;
+        app.sessions.set(sessionId, {
+          id: sessionId,
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app.terminal.reset();
+        await new Promise<void>((resolve) => {
+          app.terminal.write('Approve this action?\r\n› 1. Approve\r\n  2. Reject\r\nPress enter to confirm', resolve);
+        });
+        app.terminal.scrollToBottom();
+
+        try {
+          app._reliableSend = (_target: string, input: string) => sent.push(input);
+          window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+            if (String(input).includes(`/api/sessions/${sessionId}/terminal?latest=1`)) {
+              return new Response(snapshot, { status: 200, headers });
+            }
+            return originalFetch.call(window, input, init);
+          }) as typeof window.fetch;
+
+          const decisionDetected = app._hasForegroundTerminalDecision(sessionId);
+          app._sendInputAsync(sessionId, '\r');
+          const reconcile = app._terminalFrameReconcilePromise;
+          const gatedImmediately = app._isLoadingBuffer;
+          app.batchTerminalWrite('\x1b[2J\x1b[HOLD DIALOGUE HISTORY', {
+            stream: snapshotCursor.stream,
+            generation: snapshotCursor.generation,
+            start: 100,
+            end: 125,
+          });
+          await reconcile;
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          });
+
+          const buffer = app.terminal.buffer.active;
+          const visibleText = Array.from(
+            { length: app.terminal.rows },
+            (_, row) => buffer.getLine(buffer.viewportY + row)?.translateToString(true) || ''
+          ).join('\n');
+          return {
+            decisionDetected,
+            gatedImmediately,
+            removed: !app.terminal.element?.querySelector('.terminal-resize-frame-cover'),
+            sent,
+            visibleText,
+          };
+        } finally {
+          window.fetch = originalFetch;
+          app._reliableSend = originalReliableSend;
+          KeyboardHandler._discardTerminalFrameCover();
+        }
+      });
+
+      expect(state.decisionDetected).toBe(true);
+      expect(state.gatedImmediately).toBe(true);
+      expect(state.sent).toEqual(['\r']);
+      expect(state.visibleText).toContain('DIALOGUE RESOLVED');
+      expect(state.visibleText).not.toContain('OLD DIALOGUE HISTORY');
+      expect(state.removed).toBe(true);
+    });
+
+    it('restarts an opening frame cover when keyboard close begins', async () => {
+      const state = await page.evaluate(async () => {
+        const sessionId = 'mobile-keyboard-close-cover-race-test';
+        app.activeSessionId = sessionId;
+        app.sessions.set(sessionId, {
+          id: sessionId,
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app.terminal.reset();
+        await new Promise<void>((resolve) => {
+          app.terminal.write('stable frame before keyboard close\r\n› ', resolve);
+        });
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+
+        KeyboardHandler.keyboardVisible = true;
+        KeyboardHandler._terminalInputRequested = true;
+        document.body.classList.add('keyboard-visible');
+        const baseline = KeyboardHandler.initialViewportHeight || window.innerHeight;
+        Object.defineProperty(window.visualViewport, 'height', {
+          get: () => baseline,
+          configurable: true,
+        });
+
+        KeyboardHandler._beginTerminalFrameCover();
+        KeyboardHandler._armTerminalFrameCover();
+        KeyboardHandler._terminalFrameCoverReady = true;
+        KeyboardHandler._terminalFrameCoverReadyVersion += 1;
+        KeyboardHandler._scheduleTerminalFrameCoverSwap();
+        const releaseVersion = KeyboardHandler._terminalFrameCoverReadyVersion;
+
+        KeyboardHandler.handleViewportResize();
+        const restartedVersion = KeyboardHandler._terminalFrameCoverReadyVersion;
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        });
+
+        const cover = app.terminal.element?.querySelector('.terminal-resize-frame-cover');
+        return {
+          keyboardVisible: KeyboardHandler.keyboardVisible,
+          coverExists: Boolean(cover),
+          coverText: cover?.textContent || '',
+          releaseInvalidated: restartedVersion > releaseVersion,
+        };
+      });
+
+      expect(state.keyboardVisible).toBe(false);
+      expect(state.coverExists).toBe(true);
+      expect(state.coverText).toContain('stable frame before keyboard close');
+      expect(state.releaseInvalidated).toBe(true);
+    });
+
+    it('covers the first keyboard-closing growth before the hidden threshold', async () => {
+      const state = await page.evaluate(async () => {
+        const sessionId = 'mobile-keyboard-close-growth-cover-test';
+        app.activeSessionId = sessionId;
+        app.sessions.set(sessionId, {
+          id: sessionId,
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app.terminal.reset();
+        await new Promise<void>((resolve) => {
+          app.terminal.write('stable frame before viewport growth\r\n› ', resolve);
+        });
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+
+        const baseline = KeyboardHandler.initialViewportHeight || window.innerHeight;
+        const openHeight = baseline - 300;
+        KeyboardHandler.keyboardVisible = true;
+        KeyboardHandler._terminalInputRequested = true;
+        KeyboardHandler._keyboardOpenMinHeight = openHeight;
+        KeyboardHandler._keyboardClosing = false;
+        KeyboardHandler.lastViewportHeight = openHeight;
+        document.body.classList.add('keyboard-visible');
+
+        Object.defineProperty(window.visualViewport, 'height', {
+          get: () => openHeight + 24,
+          configurable: true,
+        });
+        KeyboardHandler.handleViewportResize();
+        const ignoredAddressBarDrift = !app.terminal.element?.querySelector('.terminal-resize-frame-cover');
+
+        Object.defineProperty(window.visualViewport, 'height', {
+          get: () => openHeight + 60,
+          configurable: true,
+        });
+        KeyboardHandler.handleViewportResize();
+        const cover = app.terminal.element?.querySelector('.terminal-resize-frame-cover');
+        const result = {
+          coverExists: Boolean(cover),
+          coverText: cover?.textContent || '',
+          ignoredAddressBarDrift,
+          keyboardClosing: KeyboardHandler._keyboardClosing,
+          keyboardVisible: KeyboardHandler.keyboardVisible,
+        };
+
+        if (KeyboardHandler._viewportSettleTimer) {
+          clearTimeout(KeyboardHandler._viewportSettleTimer);
+          KeyboardHandler._viewportSettleTimer = null;
+        }
+        KeyboardHandler._settleScrollToBottom = false;
+        KeyboardHandler._settleFocusInput = false;
+        KeyboardHandler._discardTerminalFrameCover();
+        return result;
+      });
+
+      expect(state.ignoredAddressBarDrift).toBe(true);
+      expect(state.keyboardVisible).toBe(true);
+      expect(state.keyboardClosing).toBe(true);
+      expect(state.coverExists).toBe(true);
+      expect(state.coverText).toContain('stable frame before viewport growth');
+    });
+
     it('keeps the frame opaque through local resize renders and swaps only after terminal output paints', async () => {
       const state = await page.evaluate(async () => {
         app.activeSessionId = 'mobile-keyboard-atomic-frame-test';

@@ -37,12 +37,10 @@ function loadTerminalUiHarness(
     Worker: function Worker(this: any) {
       this.postMessage = () => {};
     },
-    DEC_SYNC_STRIP_RE: /\x1b\[\?2026[hl]/g,
-    TERMINAL_CHUNK_SIZE: 32 * 1024,
-    CODEX_POST_SWITCH_MAX_HOLD_MS: 1500,
-    CODEX_RESTART_RECOVERY_MAX_HOLD_MS: 3000,
   });
 
+  const constantsCode = readFileSync(resolve(import.meta.dirname, '../src/web/public/constants.js'), 'utf8');
+  vm.runInContext(constantsCode, context, { filename: 'constants.js' });
   const code = readFileSync(resolve(import.meta.dirname, '../src/web/public/terminal-ui.js'), 'utf8');
   vm.runInContext(code, context, { filename: 'terminal-ui.js' });
 

@@ -69,6 +69,7 @@ const SERVER_RESTART_RECOVERY_KEY = 'codeman-server-restart-recovery';
 const SYNC_WAIT_TIMEOUT_MS = 50;            // Wait timeout for terminal sync
 const STATS_POLLING_INTERVAL_MS = 2000;     // System stats polling
 const TUI_REDRAW_SETTLE_MS = 400;           // Grace for a TUI to redraw after a real resize, before fetching its buffer
+const TUI_ACTION_REDRAW_SETTLE_MS = 180;     // Grace before capturing the pane after a decision is submitted
 
 /**
  * Bounded cache for recently viewed terminal sessions.

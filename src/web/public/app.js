@@ -659,6 +659,9 @@ class CodemanApp {
     this._terminalTransportFreezeSessionId = null;
     this._terminalTransportFreezeOwner = null;
     this._terminalTransportFreezeSeq = 0;
+    this._terminalFrameReconcileSeq = 0;
+    this._terminalFrameReconcilePending = null;
+    this._terminalFrameReconcilePromise = null;
     this._terminalHistoryPaging = new Map(); // sessionId -> bounded tmux history-page window
     this._terminalHistoryPageSeq = 0;
 
@@ -2492,7 +2495,21 @@ class CodemanApp {
         // (re)connects AND registers the desktop sizing claim server-side —
         // selectSession's earlier resizes ran before this WS existed, so they
         // went over HTTP, which never claims (see ws-routes sizingToken).
-        this.sendResize(sessionId)?.catch?.(() => {});
+        const session = this.sessions?.get?.(sessionId);
+        const reconcileMobileCodex =
+          session?.mode === 'codex' &&
+          typeof MobileDetection !== 'undefined' &&
+          MobileDetection.isTouchDevice?.();
+        if (reconcileMobileCodex) {
+          void this._requestTerminalFrameReconcile?.({
+            captureWhenUnchanged: true,
+            reason: 'ws-attach',
+            resizeOptions: {},
+            settleMs: TUI_REDRAW_SETTLE_MS,
+          });
+        } else {
+          this.sendResize(sessionId)?.catch?.(() => {});
+        }
         this._startMobileResizeRetry(sessionId);
         // Flush any durably-queued input over the fresh socket (covers frames a
         // prior half-open socket silently dropped, and input typed while offline).
@@ -2509,7 +2526,7 @@ class CodemanApp {
         const msg = JSON.parse(event.data);
         if (msg.t === 'o') {
           // Terminal output — route through the same batching pipeline as SSE
-          this._onSessionTerminal({ id: sessionId, data: msg.d });
+          this._onSessionTerminal({ id: sessionId, data: msg.d, cursor: msg.cursor });
         } else if (msg.t === 'c') {
           this._onSessionClearTerminal({ id: sessionId });
         } else if (msg.t === 'r') {
@@ -2679,6 +2696,15 @@ class CodemanApp {
    */
   _sendInputAsync(sessionId, input, opts) {
     if (!sessionId || !input) return;
+    if (this._shouldReconcileTerminalAction?.(sessionId, input)) {
+      if (typeof KeyboardHandler !== 'undefined') {
+        KeyboardHandler._beginTerminalFrameCover?.({ restart: true, arm: true });
+      }
+      void this._requestTerminalFrameReconcile?.({
+        reason: 'dialogue-selection',
+        settleMs: TUI_ACTION_REDRAW_SETTLE_MS,
+      });
+    }
     this._reliableSend(sessionId, input, opts?.useMux === true);
   }
 
@@ -3216,6 +3242,8 @@ class CodemanApp {
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
     this._bufferLoadOwner = null;
+    this._terminalFrameReconcileSeq = (this._terminalFrameReconcileSeq || 0) + 1;
+    this._terminalFrameReconcilePending = null;
     // Abort any in-flight chunkedTerminalWrite (SSE reconnect reloads buffers)
     this._chunkedWriteGen = (this._chunkedWriteGen || 0) + 1;
     // Preserve local echo overlay text across SSE reconnect — just hide until
@@ -4449,6 +4477,8 @@ class CodemanApp {
       this._restoreTerminalFromWebview?.(sessionId, { takeControl });
       return;
     }
+    this._terminalFrameReconcileSeq = (this._terminalFrameReconcileSeq || 0) + 1;
+    this._terminalFrameReconcilePending = null;
     if (
       this.activeSessionId &&
       this.activeSessionId !== sessionId &&

@@ -233,8 +233,8 @@ describe('buffer-load flush (COD-144)', () => {
       })
     ).toBe(true);
 
-    expect(writes).toEqual(['defgh', 'after']);
-    expect(app.batchTerminalWrite).toHaveBeenNthCalledWith(1, 'defgh', {
+    expect(writes).toEqual(['\x1b[?2026hdefgh\x1b[?2026l', 'after']);
+    expect(app.batchTerminalWrite).toHaveBeenNthCalledWith(1, '\x1b[?2026hdefgh\x1b[?2026l', {
       stream: 'stream-a',
       generation: 1,
       start: 10,
@@ -277,6 +277,33 @@ describe('buffer-load flush (COD-144)', () => {
     });
 
     expect(writes).toEqual(['\x1b[?2026hdefgh\x1b[?2026l']);
+  });
+
+  it.each([
+    ['opening fragment', '\x1b[?2026habcdefgh'],
+    ['middle fragment', 'abcdefgh'],
+    ['closing fragment', 'abcdefgh\x1b[?2026l'],
+  ])('rewraps an overlap inside a fragmented WS synchronized update (%s)', (_label, data) => {
+    const { app, writes } = makeApp();
+    const owner = app._beginBufferLoad('cursor-fragment-overlap');
+    pushWhileLoading(app, data, {
+      stream: 'stream-a',
+      generation: 1,
+      start: 7,
+      end: 15,
+    });
+
+    app._finishBufferLoad(owner, {
+      snapshotCursor: { stream: 'stream-a', generation: 1, start: 0, end: 10 },
+    });
+
+    expect(writes).toEqual(['\x1b[?2026hdefgh\x1b[?2026l']);
+    expect(app.batchTerminalWrite).toHaveBeenCalledWith('\x1b[?2026hdefgh\x1b[?2026l', {
+      stream: 'stream-a',
+      generation: 1,
+      start: 10,
+      end: 15,
+    });
   });
 
   it('decodes a streamed snapshot losslessly across UTF-8 chunk boundaries while painting', async () => {

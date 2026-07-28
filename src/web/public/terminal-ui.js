@@ -1016,6 +1016,9 @@ Object.assign(CodemanApp.prototype, {
     this._terminalRenderEpoch = 0;
     this._bufferLoadSeq = 0;
     this._bufferLoadOwner = null;
+    this._terminalFrameReconcileSeq = 0;
+    this._terminalFrameReconcilePending = null;
+    this._terminalFrameReconcilePromise = null;
     this._terminalScrollLocked = false;
     this._terminalAppScrollSessions = new Set();
 
@@ -3803,6 +3806,217 @@ Object.assign(CodemanApp.prototype, {
     return result;
   },
 
+  _isTerminalActionSubmission(input) {
+    if (typeof input !== 'string' || !input || input.startsWith('\x1b[200~')) return false;
+    if (input === '\r' || input === '\n') return true;
+    return /\x1b\[<0;\d+;\d+[Mm]/.test(input);
+  },
+
+  _hasForegroundTerminalDecision(sessionId = this.activeSessionId) {
+    const hooks = sessionId ? this.pendingHooks?.get?.(sessionId) : null;
+    if (hooks?.has?.('permission_prompt') || hooks?.has?.('elicitation_dialog')) return true;
+    if (
+      !sessionId ||
+      sessionId !== this.activeSessionId ||
+      !this.terminal ||
+      !this._terminalViewportAtBottom()
+    ) {
+      return false;
+    }
+
+    const buffer = this.terminal.buffer?.active;
+    if (!buffer?.getLine) return false;
+    const rows = Math.max(1, this.terminal.rows || 1);
+    let choices = 0;
+    let selectedChoice = false;
+    let selectionInstruction = false;
+    for (let row = 0; row < rows; row++) {
+      const line = buffer.getLine(buffer.viewportY + row)?.translateToString?.(true) || '';
+      if (/^\s*(?:[❯›]\s*)?\d+[.)]\s+\S/.test(line)) choices += 1;
+      if (/^\s*[❯›]\s*\d+[.)]\s+\S/.test(line)) selectedChoice = true;
+      if (
+        /(?:enter|return).*(?:select|confirm)|(?:select|confirm).*(?:enter|return)|esc\s+to\s+(?:cancel|go back)/i.test(
+          line
+        )
+      ) {
+        selectionInstruction = true;
+      }
+    }
+    return choices >= 2 && (selectedChoice || selectionInstruction);
+  },
+
+  _shouldReconcileTerminalAction(sessionId, input) {
+    const isTouch =
+      typeof MobileDetection !== 'undefined' && MobileDetection.isTouchDevice?.();
+    const session = sessionId ? this.sessions?.get?.(sessionId) : null;
+    return Boolean(
+      isTouch &&
+        sessionId === this.activeSessionId &&
+        session?.mode !== 'shell' &&
+        this._isTerminalActionSubmission(input) &&
+        this._hasForegroundTerminalDecision(sessionId)
+    );
+  },
+
+  _isTerminalFrameReconcileCurrent(request) {
+    return Boolean(
+      request &&
+        request.id === this._terminalFrameReconcileSeq &&
+        request.sessionId === this.activeSessionId
+    );
+  },
+
+  _requestTerminalFrameReconcile(options = {}) {
+    const sessionId = this.activeSessionId;
+    const session = sessionId ? this.sessions?.get?.(sessionId) : null;
+    if (!sessionId || !this.terminal || session?.mode === 'shell') {
+      return Promise.resolve(false);
+    }
+
+    const request = {
+      captureWhenUnchanged: options.captureWhenUnchanged === true,
+      id: ++this._terminalFrameReconcileSeq,
+      reason: options.reason || 'terminal-transition',
+      resizeOptions: options.resizeOptions || null,
+      sessionId,
+      settleMs: Math.max(0, Number(options.settleMs) || 0),
+    };
+    this._terminalFrameReconcilePending = request;
+    if (!this._terminalFrameReconcilePromise) {
+      let trackedPromise;
+      trackedPromise = this._drainTerminalFrameReconciles().finally(() => {
+        if (this._terminalFrameReconcilePromise === trackedPromise) {
+          this._terminalFrameReconcilePromise = null;
+        }
+      });
+      this._terminalFrameReconcilePromise = trackedPromise;
+    }
+    return this._terminalFrameReconcilePromise;
+  },
+
+  async _drainTerminalFrameReconciles() {
+    let result = false;
+    while (this._terminalFrameReconcilePending) {
+      const request = this._terminalFrameReconcilePending;
+      this._terminalFrameReconcilePending = null;
+      result = await this._runTerminalFrameReconcile(request);
+    }
+    return result;
+  },
+
+  async _runTerminalFrameReconcile(request) {
+    if (!this._isTerminalFrameReconcileCurrent(request) || this._isLoadingBuffer) return false;
+
+    let loadOwner = this._beginBufferLoad(`frame-reconcile-${request.id}`);
+    let authoritative = false;
+    try {
+      if (request.resizeOptions) {
+        const dimensionsChanged = await this.sendResize(request.sessionId, request.resizeOptions);
+        if (!this._isTerminalFrameReconcileCurrent(request)) return false;
+        if (!dimensionsChanged && !request.captureWhenUnchanged) {
+          this._finishBufferLoad(loadOwner, { flushQueued: true });
+          loadOwner = null;
+          await this._waitForTerminalPaint();
+          if (
+            this._isTerminalFrameReconcileCurrent(request) &&
+            typeof KeyboardHandler !== 'undefined'
+          ) {
+            KeyboardHandler.onTerminalFrameAuthoritative?.();
+          }
+          return false;
+        }
+      }
+
+      if (request.settleMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, request.settleMs));
+        if (!this._isTerminalFrameReconcileCurrent(request)) return false;
+      }
+
+      const response = await fetch(
+        `/api/sessions/${request.sessionId}/terminal?latest=1` +
+          `&tail=${TERMINAL_LATEST_FRAME_SIZE}&format=stream`
+      );
+      const latest = await this._readTerminalSnapshotResponse(response, {
+        paint: false,
+        isCancelled: () => !this._isTerminalFrameReconcileCurrent(request),
+      });
+      if (
+        latest.aborted ||
+        !this._isTerminalFrameReconcileCurrent(request) ||
+        latest.source !== 'mux-visible' ||
+        !latest.terminalBuffer ||
+        !this._isTerminalCursor(latest.cursor)
+      ) {
+        return false;
+      }
+
+      // The pane snapshot includes everything accepted by the PTY through its
+      // cursor boundary. Drop pre-snapshot browser work, cross xterm's parser
+      // fence, then repaint only the visible rows so existing scrollback stays.
+      this.pendingWrites = [];
+      this.writeFrameScheduled = false;
+      this._clearTimer('flickerFilterTimeout');
+      this.flickerFilterBuffer = '';
+      this.flickerFilterActive = false;
+      await this._waitForTerminalParserFence();
+      if (!this._isTerminalFrameReconcileCurrent(request)) return false;
+
+      // A size-bounded WS transaction may have parsed its opening DEC-2026
+      // marker while its closing fragment is still queued in pendingWrites.
+      // Close that transport transaction before dropping the queue, then paint
+      // the replacement pane inside a fresh synchronized update. The inert
+      // frame cover keeps both parser operations invisible to the user.
+      const syncStart = '\x1b[?2026h';
+      const syncEnd = '\x1b[?2026l';
+      await new Promise((resolve) =>
+        this.terminal.write(`${syncEnd}${syncStart}\x1b[0m\x1b[H\x1b[2J`, resolve)
+      );
+      await this.chunkedTerminalWrite(
+        latest.terminalBuffer,
+        TERMINAL_CHUNK_SIZE,
+        loadOwner,
+        { followBottom: true }
+      );
+      if (!this._isTerminalFrameReconcileCurrent(request)) return false;
+      await new Promise((resolve) => this.terminal.write(syncEnd, resolve));
+
+      this._terminalScrollLocked = false;
+      this._wasAtBottomBeforeWrite = true;
+      this.terminal.scrollToBottom();
+      await this._waitForTerminalPaint();
+      if (!this._isTerminalFrameReconcileCurrent(request)) return false;
+
+      this._finishBufferLoad(loadOwner, { snapshotCursor: latest.cursor });
+      loadOwner = null;
+      this._syncMobileHelperTextareaToCursor?.();
+      this._localEchoOverlay?.rerender?.();
+      await this._waitForTerminalPaint();
+      if (this._isTerminalFrameReconcileCurrent(request)) {
+        authoritative = true;
+        if (typeof KeyboardHandler !== 'undefined') {
+          KeyboardHandler.onTerminalFrameAuthoritative?.();
+        }
+      }
+      _crashDiag.log(`FRAME_RECONCILE: ${request.reason}`);
+      return true;
+    } catch (err) {
+      console.warn(`Failed to reconcile terminal frame after ${request.reason}:`, err);
+      return false;
+    } finally {
+      if (loadOwner !== null) {
+        this._finishBufferLoad(loadOwner, { flushQueued: true });
+      }
+      if (
+        !authoritative &&
+        this._isTerminalFrameReconcileCurrent(request) &&
+        !this._terminalFrameReconcilePending &&
+        typeof KeyboardHandler !== 'undefined'
+      ) {
+        KeyboardHandler.onTerminalFrameReady?.();
+      }
+    }
+  },
+
   /**
    * Complete a buffer load: unblock live SSE writes.
    * Called when chunkedTerminalWrite finishes (or is skipped for empty buffers).
@@ -3889,15 +4103,17 @@ Object.assign(CodemanApp.prototype, {
     let suffix;
     const syncStart = '\x1b[?2026h';
     const syncEnd = '\x1b[?2026l';
-    const hasOuterSync =
-      item.data.startsWith(syncStart) &&
-      item.data.endsWith(syncEnd) &&
-      item.data.length - syncStart.length - syncEnd.length === cursor.end - cursor.start;
-    if (hasOuterSync) {
-      suffix =
-        syncStart +
-        item.data.slice(syncStart.length + coveredLength, item.data.length - syncEnd.length) +
-        syncEnd;
+    const payloadStart = item.data.startsWith(syncStart) ? syncStart.length : 0;
+    const payloadEnd = item.data.endsWith(syncEnd)
+      ? item.data.length - syncEnd.length
+      : item.data.length;
+    const hasCursorAlignedPayload =
+      payloadEnd - payloadStart === cursor.end - cursor.start;
+    if (hasCursorAlignedPayload) {
+      // A WS transaction can span several size-bounded messages, so the item
+      // crossing the snapshot boundary may carry only one outer marker. Rewrap
+      // its uncovered payload as a complete synchronized update.
+      suffix = syncStart + item.data.slice(payloadStart + coveredLength, payloadEnd) + syncEnd;
     } else {
       suffix = item.data.slice(coveredLength);
     }
