@@ -134,7 +134,7 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
           <span class="attachment-history-badge" id="attachmentHistoryBadge" style="display:none;">0</span>
         </button>
-        <button class="btn-icon-header btn-file-viewer" onclick="app.toggleFileBrowserButton()" title="File Viewer" aria-label="Open file viewer" aria-expanded="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
+        <button class="btn-icon-header btn-file-viewer btn-file-viewer--hidden" onclick="app.toggleFileBrowserButton()" title="File Viewer" aria-label="Open file viewer" aria-expanded="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
         <button class="btn-icon-header btn-multimonitor btn-multimonitor--hidden" onclick="app.launchMultiMonitor()" title="Open Codeman across all displays" aria-label="Open Codeman across all displays"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="13" height="9" rx="1.5"/><rect x="11" y="9" width="11" height="8" rx="1.5"/></svg></button>
         <button class="btn-icon-header btn-ultracode-agents btn-ultracode-agents--hidden" onclick="app.toggleUltracodeAgentsPanel()" title="Ultracode / Workflow agents" aria-label="Open ultracode workflow agents"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.2 7.2 15.6 11M8.2 16.8 15.6 13"/></svg></button>
         <div class="header-plan-usage header-plan-usage--hidden" id="planUsageChip" title="Claude plan usage limits">—</div>
@@ -392,14 +392,24 @@
     <!-- File Browser Panel -->
     <div class="file-browser-panel" id="fileBrowserPanel">
       <div class="file-browser-header">
-        <span class="file-browser-title">Files</span>
+        <span class="file-browser-title">Repository</span>
         <div class="file-browser-actions">
-          <button class="btn-icon-sm" onclick="app.refreshFileBrowser()" title="Refresh">&#x21BB;</button>
-          <button class="btn-icon-sm" onclick="app.toggleFileBrowserExpand()" title="Expand/Collapse All" id="fileBrowserExpandBtn">&#x229E;</button>
-          <button class="btn-icon-sm" onclick="app.closeFileBrowserPanel()" title="Close">&times;</button>
+          <button type="button" class="btn-icon-sm" id="fileBrowserWorkingDirectoryBtn" onclick="app.openFileBrowserWorkingDirectoryEditor()" title="Set session work path" aria-label="Set session work path">&#x270E;</button>
+          <button type="button" class="btn-icon-sm" onclick="app.refreshFileBrowser()" title="Refresh" aria-label="Refresh repository">&#x21BB;</button>
+          <button type="button" class="btn-icon-sm" onclick="app.toggleFileBrowserExpand()" title="Expand/Collapse All" aria-label="Expand or collapse all directories" id="fileBrowserExpandBtn">&#x229E;</button>
+          <button type="button" class="btn-icon-sm" onclick="app.closeFileBrowserPanel()" title="Close" aria-label="Close file viewer">&times;</button>
         </div>
       </div>
-      <div class="file-browser-search">
+      <div class="file-browser-tabs" role="tablist" aria-label="Repository view">
+        <button type="button" class="file-browser-tab active" data-view="files" role="tab" aria-selected="true" onclick="app.switchFileBrowserView('files')">Files</button>
+        <button type="button" class="file-browser-tab" data-view="changes" role="tab" aria-selected="false" onclick="app.switchFileBrowserView('changes')">Changes <span class="file-browser-tab-count" id="fileBrowserChangesCount" hidden>0</span></button>
+        <button type="button" class="file-browser-tab" data-view="history" role="tab" aria-selected="false" onclick="app.switchFileBrowserView('history')">History</button>
+      </div>
+      <div class="file-browser-scope" id="fileBrowserScopeRow" hidden>
+        <select id="fileBrowserScope" aria-label="Repository worktree" onchange="app.changeFileBrowserScope(this.value)"></select>
+        <span class="file-browser-root" id="fileBrowserRoot"></span>
+      </div>
+      <div class="file-browser-search" id="fileBrowserSearchRow">
         <input type="text" id="fileBrowserSearch" placeholder="Filter files..." oninput="app.filterFileBrowser(this.value)">
       </div>
       <div class="file-browser-body" id="fileBrowserTree">
@@ -408,14 +418,38 @@
       <div class="file-browser-status" id="fileBrowserStatus"></div>
     </div>
 
+    <!-- Session Working Directory Editor -->
+    <div class="modal" id="workingDirectoryModal" role="dialog" aria-modal="true" aria-labelledby="workingDirectoryTitle" aria-hidden="true">
+      <div class="modal-backdrop" onclick="app.closeFileBrowserWorkingDirectoryEditor()"></div>
+      <form class="modal-content modal-sm" onsubmit="app.saveFileBrowserWorkingDirectory(event)">
+        <div class="modal-header">
+          <h3 id="workingDirectoryTitle">Session Work Path</h3>
+          <button type="button" class="modal-close" onclick="app.closeFileBrowserWorkingDirectoryEditor()" aria-label="Close work path editor">&times;</button>
+        </div>
+        <div class="modal-body working-directory-form">
+          <label for="workingDirectoryInput">Path</label>
+          <input type="text" id="workingDirectoryInput" autocomplete="off" autocapitalize="off" spellcheck="false">
+          <p class="working-directory-status" id="workingDirectoryStatus" role="status" aria-live="polite" hidden></p>
+          <div class="working-directory-actions">
+            <button type="button" class="btn-toolbar" onclick="app.closeFileBrowserWorkingDirectoryEditor()">Cancel</button>
+            <button type="submit" class="btn-toolbar btn-primary" id="workingDirectorySaveBtn">Apply</button>
+          </div>
+        </div>
+      </form>
+    </div>
+
     <!-- File Preview Overlay -->
-    <div class="file-preview-overlay" id="filePreviewOverlay">
-      <div class="file-preview-window">
+    <div class="file-preview-overlay" id="filePreviewOverlay" onclick="if (event.target === this) app.closeFilePreview()">
+      <div class="file-preview-window" role="dialog" aria-modal="true" aria-labelledby="filePreviewTitle">
         <div class="file-preview-header">
           <span class="file-preview-title" id="filePreviewTitle">file.ts</span>
           <div class="file-preview-actions">
-            <button class="btn-icon-sm" onclick="app.copyFilePreviewContent()" title="Copy content">&#x2398;</button>
-            <button class="btn-icon-sm" onclick="app.closeFilePreview()" title="Close">&times;</button>
+            <div class="file-preview-mode" id="filePreviewMode" role="group" aria-label="Diff view" hidden>
+              <button type="button" class="file-preview-mode-btn active" data-mode="compact" onclick="app.setRepositoryDiffMode('compact')" aria-pressed="true">Compact</button>
+              <button type="button" class="file-preview-mode-btn" data-mode="full" onclick="app.setRepositoryDiffMode('full')" aria-pressed="false">Full</button>
+            </div>
+            <button type="button" class="btn-icon-sm" onclick="app.copyFilePreviewContent()" title="Copy content" aria-label="Copy content">&#x2398;</button>
+            <button type="button" class="btn-icon-sm" onclick="app.closeFilePreview()" title="Close" aria-label="Close preview">&times;</button>
           </div>
         </div>
         <div class="file-preview-body" id="filePreviewBody"></div>
