@@ -265,6 +265,26 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 
 ---
 
+## 零延迟输入叠加层
+
+<p align="center">
+  <img src="docs/images/zerolag-demo-20260728.gif" alt="Zerolag 演示：两台手机并排对比，即时本地回显与 600ms-2.7s 服务端回显" width="900">
+</p>
+
+远程访问你的编程智能体时（VPN、Tailscale、SSH 隧道），每次按键通常需要 200–300 毫秒往返。Codeman 实现了一套**受 Mosh 启发的本地回显系统**，无论延迟多高，打字都感觉即时。
+
+xterm.js 内部一个像素级精准的 DOM 叠加层以 0ms 渲染按键。后台转发会以 50ms 防抖批次静默地把每个字符送往 PTY，因此 Tab 补全、`Ctrl+R` 历史搜索以及所有 shell 特性都正常工作。当服务端回显在 200–300ms 后到达时，叠加层无缝消失、真实终端文本接管 —— 整个切换过程不可见。
+
+- **抗 Ink 架构** —— 它作为 `.xterm-screen` 内 z-index 7 的一个 `<span>` 存在，完全不受 Ink 持续重绘屏幕的影响（此前两次使用 `terminal.write()` 的尝试都失败了，因为 Ink 会破坏注入的缓冲区内容）
+- **字体匹配渲染** —— 从 xterm.js 的计算样式读取 `fontFamily`、`fontSize`、`fontWeight` 与 `letterSpacing`，使叠加层文本与真实终端输出在视觉上无法区分
+- **完整编辑** —— 退格、重打、粘贴（多字符）、光标跟踪，输入超过终端宽度时多行换行
+- **重连后持久** —— 未发送的输入通过 localStorage 在页面刷新后保留
+- **默认启用** —— 桌面端与移动端均可用，会话空闲或繁忙时都生效
+
+> 已抽取为独立库：[`xterm-zerolag-input`](https://www.npmjs.com/package/xterm-zerolag-input) —— 见[已发布的包](#已发布的包)。
+
+---
+
 ## 实时智能体可视化
 
 实时观看后台智能体工作。Codeman 监控智能体活动，将每个智能体显示在一个可拖拽的浮动窗口中，并用「黑客帝国」风格的动态连接线连回父会话。
@@ -286,26 +306,6 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 </p>
 
 **智能体团队（Agent Teams）** —— 一等公民式支持 Claude Code 原生的多智能体团队（`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`）。`TeamWatcher` 轮询 `~/.claude/teams/`，将团队成员匹配到其主会话，并以实时子智能体窗口呈现，且具备**团队感知的空闲检测** —— 因此当团队成员仍在工作时，重生控制器不会被触发。详见 [`docs/agent-teams/`](docs/agent-teams/)。
-
----
-
-## 零延迟输入叠加层
-
-<p align="center">
-  <img src="docs/images/zerolag-demo-20260728.gif" alt="Zerolag 演示：两台手机并排对比，即时本地回显与 600ms-2.7s 服务端回显" width="900">
-</p>
-
-远程访问你的编程智能体时（VPN、Tailscale、SSH 隧道），每次按键通常需要 200–300 毫秒往返。Codeman 实现了一套**受 Mosh 启发的本地回显系统**，无论延迟多高，打字都感觉即时。
-
-xterm.js 内部一个像素级精准的 DOM 叠加层以 0ms 渲染按键。后台转发会以 50ms 防抖批次静默地把每个字符送往 PTY，因此 Tab 补全、`Ctrl+R` 历史搜索以及所有 shell 特性都正常工作。当服务端回显在 200–300ms 后到达时，叠加层无缝消失、真实终端文本接管 —— 整个切换过程不可见。
-
-- **抗 Ink 架构** —— 它作为 `.xterm-screen` 内 z-index 7 的一个 `<span>` 存在，完全不受 Ink 持续重绘屏幕的影响（此前两次使用 `terminal.write()` 的尝试都失败了，因为 Ink 会破坏注入的缓冲区内容）
-- **字体匹配渲染** —— 从 xterm.js 的计算样式读取 `fontFamily`、`fontSize`、`fontWeight` 与 `letterSpacing`，使叠加层文本与真实终端输出在视觉上无法区分
-- **完整编辑** —— 退格、重打、粘贴（多字符）、光标跟踪，输入超过终端宽度时多行换行
-- **重连后持久** —— 未发送的输入通过 localStorage 在页面刷新后保留
-- **默认启用** —— 桌面端与移动端均可用，会话空闲或繁忙时都生效
-
-> 已抽取为独立库：[`xterm-zerolag-input`](https://www.npmjs.com/package/xterm-zerolag-input) —— 见[已发布的包](#已发布的包)。
 
 ---
 
