@@ -250,6 +250,9 @@ describe('QR Token Manager (unit)', () => {
   });
 });
 
+/** Must match the alphabet in `generateShortCode` (tunnel-manager.ts). */
+const BASE62_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+
 describe('Short code distribution (bias check)', () => {
   it('should produce roughly uniform character distribution', () => {
     // Generate 6000 codes (36000 chars) and check distribution
@@ -265,17 +268,36 @@ describe('Short code distribution (bias check)', () => {
       }
     }
 
-    // Expected count per char: 36000 / 62 ≈ 580.6
-    const expected = 36000 / 62;
-    let maxDeviation = 0;
-    for (const [, count] of charCounts) {
-      const deviation = Math.abs(count - expected) / expected;
-      maxDeviation = Math.max(maxDeviation, deviation);
+    // Chi-square goodness-of-fit against a uniform base62 alphabet.
+    //
+    // This deliberately does NOT assert on the max per-character deviation.
+    // That statistic is the maximum of 62 correlated near-normal cells, so its
+    // tail is fat: with n=36000 the per-cell relative SD is ~4.1%, which puts a
+    // 15% bound at |z| ~ 3.65 and, taken as a max over 62 cells, fails on a
+    // perfectly uniform generator about 1.6% of the time. Measured over 3000
+    // simulated runs: 48 spurious failures. That is the flake.
+    //
+    // Chi-square is the right tool for "is this multinomial uniform", and its
+    // threshold is derivable rather than eyeballed. df = 62 - 1 = 61, so under
+    // the null E[X²] = 61 and SD = sqrt(2*61) ~ 11.05; the Wilson-Hilferty
+    // approximation puts the p = 1e-6 critical value at ~129. Rounding to 130
+    // gives a false-positive rate around one run in a million.
+    //
+    // Power is unaffected. Dropping rejection sampling reintroduces modulo bias
+    // (256 % 62 = 8, so the first 8 characters draw 5 chances per 256 instead
+    // of 4, ~25% overrepresented), which scores X² ~ 237. Simulated: 3000 clean
+    // runs peaked at 104, while 200 biased runs bottomed out at 174.5, so the
+    // threshold sits in a wide empty gap between the two.
+    const alphabetSize = 62;
+    const expected = 36000 / alphabetSize;
+    let chiSquare = 0;
+    for (let i = 0; i < alphabetSize; i++) {
+      const count = charCounts.get(BASE62_ALPHABET[i]) ?? 0;
+      chiSquare += (count - expected) ** 2 / expected;
     }
 
-    // With rejection sampling, deviation should be < 15% (generous)
-    // Without rejection sampling (modulo bias), first 6 chars would be ~25% overrepresented
-    expect(maxDeviation).toBeLessThan(0.15);
+    expect(charCounts.size).toBe(alphabetSize);
+    expect(chiSquare).toBeLessThan(130);
 
     tm.stopTokenRotation();
   });
