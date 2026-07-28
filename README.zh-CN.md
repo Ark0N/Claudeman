@@ -32,12 +32,45 @@
 
 > 本文档由英文版 [`README.md`](README.md) 翻译而来。如有出入，以英文版为准。
 
+一行命令即可安装（macOS 和 Linux，Windows 通过 WSL）：
+
+```bash
+curl -fsSL https://getcodeman.com/install | bash
+```
+
+```bash
+codeman web
+# 打开 http://localhost:3000，开启你的第一个会话
+```
+
+安装器在每次系统改动前都会先询问；重跑同一条命令即可原地更新。详见[快速开始 — 安装](#快速开始--安装)。
+
+---
+
+## 零延迟输入叠加层
+
+<p align="center">
+  <img src="docs/images/zerolag-demo-20260728.gif" alt="Zerolag 演示：两台手机并排对比，即时本地回显与 600ms-2.7s 服务端回显" width="900">
+</p>
+
+远程访问你的编程智能体时（VPN、Tailscale、SSH 隧道），每次按键通常需要 200–300 毫秒往返。Codeman 实现了一套**受 Mosh 启发的本地回显系统**，无论延迟多高，打字都感觉即时。
+
+xterm.js 内部一个像素级精准的 DOM 叠加层以 0ms 渲染按键。后台转发会以 50ms 防抖批次静默地把每个字符送往 PTY，因此 Tab 补全、`Ctrl+R` 历史搜索以及所有 shell 特性都正常工作。当服务端回显在 200–300ms 后到达时，叠加层无缝消失、真实终端文本接管 —— 整个切换过程不可见。
+
+- **抗 Ink 架构** —— 它作为 `.xterm-screen` 内 z-index 7 的一个 `<span>` 存在，完全不受 Ink 持续重绘屏幕的影响（此前两次使用 `terminal.write()` 的尝试都失败了，因为 Ink 会破坏注入的缓冲区内容）
+- **字体匹配渲染** —— 从 xterm.js 的计算样式读取 `fontFamily`、`fontSize`、`fontWeight` 与 `letterSpacing`，使叠加层文本与真实终端输出在视觉上无法区分
+- **完整编辑** —— 退格、重打、粘贴（多字符）、光标跟踪，输入超过终端宽度时多行换行
+- **重连后持久** —— 未发送的输入通过 localStorage 在页面刷新后保留
+- **默认启用** —— 桌面端与移动端均可用，会话空闲或繁忙时都生效
+
+> 已抽取为独立库：[`xterm-zerolag-input`](https://www.npmjs.com/package/xterm-zerolag-input) —— 见[已发布的包](#已发布的包)。
+
 ---
 
 ## 快速开始 — 安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash
+curl -fsSL https://getcodeman.com/install | bash
 ```
 
 该脚本会在缺失时自动安装 Node.js 和 tmux，把 Codeman 克隆到 `~/.codeman/app` 并完成构建。几点须知：
@@ -126,7 +159,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.codeman.web.plist
 <summary><strong>Windows（WSL）</strong></summary>
 
 ```powershell
-wsl bash -c "curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash"
+wsl bash -c "curl -fsSL https://getcodeman.com/install | bash"
 ```
 
 Codeman 依赖 tmux，因此 Windows 用户需要 [WSL](https://learn.microsoft.com/en-us/windows/wsl/install)。如果还没装 WSL：在管理员 PowerShell 中运行 `wsl --install`，重启，打开 Ubuntu，然后在 WSL 内安装你偏好的 AI 编程 CLI（[Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli) 或 [Gemini CLI](https://github.com/google-gemini/gemini-cli)）。安装完成后，即可从 Windows 浏览器访问 `http://localhost:3000`。
@@ -167,7 +200,7 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 
 - **标签（顶部）** —— 每个会话一个。`Alt+1`–`9` 跳转，`Ctrl+Tab` 下一个，拖拽排序（标签顺序会跨设备同步）。
 - **终端（中央）** —— 真实的 `xterm.js` 终端；完整 TUI 正常渲染。直接输入并按 **Enter** 发送。`Shift+Enter` 插入换行。
-- **侧边面板** —— Respawn、Ralph、Orchestrator、Cron、Subagents、Settings（从工具栏切换）。
+- **侧边面板** —— Respawn、Orchestrator、Cron、Subagents、Settings（从工具栏切换）。
 
 ### 4. 与智能体对话
 
@@ -181,7 +214,6 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 | 模式             | 用途                                                                                                      | 位置                                                               |
 | ---------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | **Respawn**      | 长时间无人值守运行 —— 空闲/限额时自动重启 CLI，带自适应时序。预设：`solo-work`、`overnight-autonomous` 等 | Respawn 标签页                                                     |
-| **Ralph / Todo** | 一个自驱循环，跟踪 todo 列表并持续工作直到完成。                                                          | Ralph 标签页                                                       |
 | **Orchestrator** | 把一个目标变成分阶段计划，并跨多个智能体推动完成。                                                        | 编排器面板                                                         |
 | **Cron**         | 已保存的、命名的定时任务（`once`/`interval`/`daily`/`weekly`），到期时拉起会话并发送提示。                | ⏰ Cron 按钮（可选启用：App Settings → Display → Header Displays） |
 | **Auto-resume**  | 订阅限额重置后自动继续。                                                                                  | Respawn 标签页（顶部）                                             |
@@ -290,26 +322,6 @@ codeman web --https
 
 ---
 
-## 零延迟输入叠加层
-
-<p align="center">
-  <img src="docs/images/zerolag-demo.gif" alt="Zerolag 演示 —— 本地回显与服务端回显并排对比" width="900">
-</p>
-
-远程访问你的编程智能体时（VPN、Tailscale、SSH 隧道），每次按键通常需要 200–300 毫秒往返。Codeman 实现了一套**受 Mosh 启发的本地回显系统**，无论延迟多高，打字都感觉即时。
-
-xterm.js 内部一个像素级精准的 DOM 叠加层以 0ms 渲染按键。后台转发会以 50ms 防抖批次静默地把每个字符送往 PTY，因此 Tab 补全、`Ctrl+R` 历史搜索以及所有 shell 特性都正常工作。当服务端回显在 200–300ms 后到达时，叠加层无缝消失、真实终端文本接管 —— 整个切换过程不可见。
-
-- **抗 Ink 架构** —— 它作为 `.xterm-screen` 内 z-index 7 的一个 `<span>` 存在，完全不受 Ink 持续重绘屏幕的影响（此前两次使用 `terminal.write()` 的尝试都失败了，因为 Ink 会破坏注入的缓冲区内容）
-- **字体匹配渲染** —— 从 xterm.js 的计算样式读取 `fontFamily`、`fontSize`、`fontWeight` 与 `letterSpacing`，使叠加层文本与真实终端输出在视觉上无法区分
-- **完整编辑** —— 退格、重打、粘贴（多字符）、光标跟踪，输入超过终端宽度时多行换行
-- **重连后持久** —— 未发送的输入通过 localStorage 在页面刷新后保留
-- **默认启用** —— 桌面端与移动端均可用，会话空闲或繁忙时都生效
-
-> 已抽取为独立库：[`xterm-zerolag-input`](https://www.npmjs.com/package/xterm-zerolag-input) —— 见[已发布的包](#已发布的包)。
-
----
-
 ## 重生控制器（Respawn Controller）
 
 自主工作的核心。当智能体进入空闲，重生控制器会检测到，发送继续提示，循环执行上下文管理命令以获得全新上下文，然后恢复工作 —— 可完全无人值守运行 **24 小时以上**。
@@ -336,17 +348,13 @@ WATCHING → IDLE DETECTED → SEND UPDATE → /clear → /init → CONTINUE →
 - **崩溃安全** —— 完整状态持久化在 `state.json` 的 `orchestrator` 键下，可在重启后存续
 - **可从 UI 或 API 驱动** —— 编排器面板，或 `POST /api/orchestrator/start` → `/approve` → `/status`（共 10 个端点）
 
-> 与 Ralph（单会话自主循环）不同：编排器协调多阶段、多智能体执行。完整设计：[`docs/orchestrator-loop-architecture.md`](docs/orchestrator-loop-architecture.md)。
+> 完整设计：[`docs/orchestrator-loop-architecture.md`](docs/orchestrator-loop-architecture.md)。
 
 ---
 
 ## 多会话仪表盘
 
 运行 **20 个并行会话**且全程可见 —— 60fps 的实时 xterm.js 终端、按会话的 token 与成本跟踪、基于标签的导航，以及一键管理。
-
-<p align="center">
-  <img src="docs/screenshots/multi-session-dashboard.png" alt="多会话仪表盘" width="800">
-</p>
 
 ### 持久化会话
 
@@ -381,14 +389,6 @@ codeman web --title-hostname dev-box       # codeman:dev-box（用于覆盖嘈�
 ### 通知
 
 当会话需要关注时实时桌面提醒 —— `permission_prompt` 与 `elicitation_dialog` 触发关键的红色标签闪烁，`idle_prompt` 触发黄色闪烁。点击任意通知即可直接跳转到相关会话。Hook 按 case 目录自动配置。
-
-### Ralph / Todo 跟踪
-
-自动检测 Ralph 循环、`<promise>` 标签、TodoWrite 进度（`4/9 complete`）以及迭代计数器（`[5/50]`），并提供实时进度环与已用时间跟踪。
-
-<p align="center">
-  <img src="docs/images/ralph-tracker-8tasks-44percent.png" alt="Ralph 循环跟踪" width="800">
-</p>
 
 ### 运行摘要（Run Summary）
 
@@ -737,7 +737,6 @@ codeman session start -d /path/to/repo   # (s)  启动会话
 codeman session list                     #      列出会话
 codeman session logs <id>                #      查看输出
 codeman task add "fix the failing test"  # (t)  排入任务
-codeman ralph start --min-hours 8        # (r)  启动自主循环
 codeman attach <path>                    #      附着 Claude hook 上下文
 ```
 
@@ -773,13 +772,6 @@ Codeman 会注册 Claude Code hook，它们 `POST /api/hook-event`（`permission
 | `POST` | `/api/sessions/:id/respawn/enable` | 启用，带配置与定时器 |
 | `POST` | `/api/sessions/:id/respawn/stop`   | 停止控制器           |
 | `PUT`  | `/api/sessions/:id/respawn/config` | 更新配置             |
-
-### Ralph / Todo
-
-| 方法   | 端点                             | 说明                 |
-| ------ | -------------------------------- | -------------------- |
-| `GET`  | `/api/sessions/:id/ralph-state`  | 获取循环状态 + todos |
-| `POST` | `/api/sessions/:id/ralph-config` | 配置跟踪             |
 
 ### 编排器（Orchestrator）
 
@@ -843,7 +835,6 @@ flowchart TB
         end
 
         subgraph Detection["检测层"]
-            RT["Ralph 跟踪器"]
             SW["子智能体监视器<br/><small>~/.claude/projects/*/subagents</small>"]
             TW["团队监视器<br/><small>~/.claude/teams/*</small>"]
         end
@@ -867,7 +858,6 @@ flowchart TB
     SM --> RC
     SM --> ORC
     SM --> SS
-    S1 --> RT
     S1 --> SCR
     S2 --> SCR
     RC --> SCR
