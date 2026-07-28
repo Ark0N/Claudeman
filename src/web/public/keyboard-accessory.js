@@ -593,9 +593,7 @@ const KeyboardAccessoryBar = {
    *  Sends text and Enter separately so Ink processes them as distinct events. */
   sendCommand(command) {
     if (!app.activeSessionId) return;
-    // The durable input queue preserves these as two ordered records.
-    app.sendInput(command);
-    app.sendInput('\r');
+    app.sendTerminalCommand(command);
   },
 
   /** Browse the active session's workspace and insert a selected path without Enter. */
@@ -1090,7 +1088,8 @@ const MobileTerminalControls = {
   /**
    * Resolve the canonical per-device setting while preserving both shipped
    * legacy formats. The old extendedKeyboardBar=false selected a smaller bar;
-   * it never disabled mobile controls, so touch devices still default on.
+   * it never disabled mobile controls. Only explicit canonical or legacy
+   * enablement turns the consolidated controls on.
    */
   resolveEnabled(settings = {}, defaults = {}, isTouchDevice = null) {
     if (typeof settings?.mobileTerminalControlsEnabled === 'boolean') {
@@ -1105,11 +1104,7 @@ const MobileTerminalControls = {
     if (settings?.extendedKeyboardBar === true || defaults?.extendedKeyboardBar === true) {
       return true;
     }
-    const touchDevice =
-      typeof isTouchDevice === 'boolean'
-        ? isTouchDevice
-        : typeof MobileDetection !== 'undefined' && MobileDetection.isTouchDevice();
-    return touchDevice;
+    return false;
   },
 
   init(enabled = false) {

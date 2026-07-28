@@ -163,7 +163,7 @@ Object.assign(CodemanApp.prototype, {
     const paths = results.filter(Boolean);
     if (paths.length > 0) {
       // Insert all paths in one shot, space-separated, in selection order.
-      await this.sendInput(paths.join(' '));
+      this.insertTerminalText(paths.join(' '));
     }
 
     // Final status: successes, plus any failures / cap so nothing is silent.

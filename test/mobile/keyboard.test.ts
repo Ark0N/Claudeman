@@ -1233,6 +1233,44 @@ describe('Virtual Keyboard', () => {
       expect(state.sentInputs).toEqual([]);
     });
 
+    it('focuses the live Claude cursor when a redraw omits the prompt glyph', async () => {
+      const point = await page.evaluate(async () => {
+        window.__sentInputs = [];
+        app.activeSessionId = 'mobile-focus-promptless-claude-test';
+        app.sessions.set('mobile-focus-promptless-claude-test', {
+          id: 'mobile-focus-promptless-claude-test',
+          mode: 'claude',
+          status: 'running',
+        });
+        app._sendInputAsync = (_sessionId: string, input: string) => {
+          window.__sentInputs.push(input);
+        };
+        app.hideWelcome();
+        app.terminal.reset();
+        await new Promise<void>((resolve) => app.terminal.write('Claude response\r\nready for input', resolve));
+        (document.activeElement as HTMLElement | null)?.blur?.();
+
+        const screen = app.terminal.element?.querySelector('.xterm-screen');
+        const cell = app.terminal._core?._renderService?.dimensions?.css?.cell;
+        const rect = screen?.getBoundingClientRect();
+        if (!rect || !cell?.width || !cell?.height) return null;
+        return {
+          x: rect.left + cell.width * 2,
+          y: rect.top + cell.height * (app.terminal.buffer.active.cursorY + 0.5),
+        };
+      });
+      expect(point).not.toBeNull();
+
+      await page.touchscreen.tap(point!.x, point!.y);
+
+      const state = await page.evaluate(() => ({
+        activeClass: document.activeElement?.className,
+        sentInputs: window.__sentInputs,
+      }));
+      expect(state.activeClass).toContain('xterm-helper-textarea');
+      expect(state.sentInputs).toEqual([]);
+    });
+
     it('keeps terminal touch drag available for scrollback with the visible textarea enabled', async () => {
       const calls = await page.evaluate(async () => {
         app.activeSessionId = 'mobile-touch-scroll-test';
@@ -2432,6 +2470,178 @@ describe('Virtual Keyboard', () => {
       });
     });
 
+    it('preserves a live composition when session replay finishes late', async () => {
+      const state = await page.evaluate(() => {
+        const sessionId = 'mobile-replay-composition-race-test';
+        app.activeSessionId = sessionId;
+        app.sessions.set(sessionId, {
+          id: sessionId,
+          mode: 'codex',
+          status: 'running',
+        });
+        app._localEchoEnabled = true;
+        app._localEchoOverlay.clear();
+        app._localEchoOverlay.appendText('cd hom');
+        app._localEchoOverlay.setCompositionText('e cd hom');
+
+        // Crash recovery deliberately folds the visible composition into its
+        // persisted snapshot. A late session replay must not feed that folded
+        // snapshot back into the still-live overlay.
+        app._captureActiveSessionDraft();
+        const persisted = app._inputState.get(sessionId);
+        const restored = app._restoreSessionDraft(sessionId, false, {
+          preserveLiveComposition: true,
+        });
+
+        return {
+          persisted,
+          restored,
+          overlay: app._localEchoOverlay.state,
+        };
+      });
+
+      expect(state).toMatchObject({
+        persisted: {
+          pendingText: 'cd home cd hom',
+        },
+        restored: true,
+        overlay: {
+          pendingText: 'cd hom',
+          compositionText: 'e cd hom',
+        },
+      });
+    });
+
+    it('does not commit Android DEL as finalized composition text', async () => {
+      const state = await page.evaluate(() => {
+        const sessionId = 'mobile-composition-delete-test';
+        app.activeSessionId = sessionId;
+        app.sessions.set(sessionId, {
+          id: sessionId,
+          mode: 'codex',
+          status: 'running',
+        });
+        app._localEchoEnabled = true;
+        app._localEchoOverlay.clear();
+        app._localEchoOverlay.appendText('cd');
+        app._localEchoOverlay.setCompositionText('candidate');
+        app._terminalInputController.clearCompositionDelivery();
+        app._terminalInputController.setCompositionPending(true, 'candidate');
+
+        app.terminal._core.coreService.triggerDataEvent('\x7f', true);
+
+        return {
+          pendingText: app._localEchoOverlay.pendingText,
+          compositionText: app._localEchoOverlay.compositionText,
+          compositionPending: app._terminalInputController.state.compositionPending,
+          fallbackCommit: app._terminalInputController.state.fallbackCommit,
+        };
+      });
+
+      expect(state).toEqual({
+        pendingText: 'c',
+        compositionText: '',
+        compositionPending: false,
+        fallbackCommit: null,
+      });
+    });
+
+    it('does not append interim xterm data during an active composition', async () => {
+      const state = await page.evaluate(async () => {
+        const sessionId = 'mobile-active-composition-data-test';
+        app.activeSessionId = sessionId;
+        app.sessions.set(sessionId, {
+          id: sessionId,
+          mode: 'codex',
+          status: 'running',
+        });
+        app._localEchoEnabled = true;
+        app._localEchoOverlay.clear();
+        app._terminalInputController.clearCompositionDelivery();
+        app._terminalInputController.setCompositionPending(false);
+
+        const textarea = app.terminal.textarea;
+        textarea.value = '';
+        textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+        textarea.value = 'home';
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionupdate', {
+            bubbles: true,
+            data: 'home',
+          })
+        );
+        app.terminal._core.coreService.triggerDataEvent('home', true);
+        const duringComposition = app._localEchoOverlay.pendingText;
+
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionend', {
+            bubbles: true,
+            data: 'home',
+          })
+        );
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        return {
+          duringComposition,
+          pendingText: app._localEchoOverlay.pendingText,
+          compositionText: app._localEchoOverlay.compositionText,
+        };
+      });
+
+      expect(state).toEqual({
+        duringComposition: '',
+        pendingText: 'home',
+        compositionText: '',
+      });
+    });
+
+    it('strips a stale helper prefix from finalized Android composition data', async () => {
+      const state = await page.evaluate(async () => {
+        const sessionId = 'mobile-stale-composition-prefix-test';
+        app.activeSessionId = sessionId;
+        app.sessions.set(sessionId, {
+          id: sessionId,
+          mode: 'codex',
+          status: 'running',
+        });
+        app._localEchoEnabled = true;
+        app._localEchoOverlay.clear();
+        app._localEchoOverlay.appendText('cd');
+        app._terminalInputController.clearCompositionDelivery();
+        app._terminalInputController.setCompositionPending(false);
+
+        const textarea = app.terminal.textarea;
+        textarea.value = '';
+        textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+        textarea.value = 'hcd home';
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionupdate', {
+            bubbles: true,
+            data: ' home',
+          })
+        );
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionend', {
+            bubbles: true,
+            data: ' home',
+          })
+        );
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        return {
+          pendingText: app._localEchoOverlay.pendingText,
+          compositionText: app._localEchoOverlay.compositionText,
+          helperValue: textarea.value,
+        };
+      });
+
+      expect(state).toEqual({
+        pendingText: 'cd home',
+        compositionText: '',
+        helperValue: '',
+      });
+    });
+
     it('keeps a switched-away draft editable after browser state is reloaded', async () => {
       const state = await page.evaluate(() => {
         const firstId = 'mobile-draft-session-a';
@@ -2651,7 +2861,7 @@ describe('Virtual Keyboard', () => {
         return {
           pendingText: app._localEchoOverlay.pendingText,
           compositionText: app._localEchoOverlay.compositionText,
-          fallbackCommit: app._mobileCompositionFallbackCommit,
+          fallbackCommit: app._terminalInputController.state.fallbackCommit,
         };
       });
 
@@ -2721,6 +2931,314 @@ describe('Virtual Keyboard', () => {
       expect(state).toEqual({
         pendingText: 'its',
         compositionText: '',
+      });
+    });
+
+    it('dedupes Android suggestion acceptance after the user pauses before Space', async () => {
+      const state = await page.evaluate(async () => {
+        app.activeSessionId = 'mobile-composition-paused-space-test';
+        app.sessions.set('mobile-composition-paused-space-test', {
+          id: 'mobile-composition-paused-space-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app._localEchoOverlay.clear();
+
+        const textarea = app.terminal.textarea;
+        textarea.value = '';
+        textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+        textarea.value = 'cd';
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionupdate', {
+            bubbles: true,
+            data: 'cd',
+          })
+        );
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionend', {
+            bubbles: true,
+            data: 'cd',
+          })
+        );
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const afterComposition = app._localEchoOverlay.pendingText;
+
+        // The user can pause on a completed Gboard suggestion for any length of
+        // time. Pressing Space later may replay that finalized word as insertText.
+        await new Promise((resolve) => setTimeout(resolve, 1100));
+        app.terminal.input(' ');
+        textarea.value = 'cd';
+        textarea.dispatchEvent(
+          new InputEvent('input', {
+            bubbles: true,
+            composed: false,
+            inputType: 'insertText',
+            data: 'cd',
+          })
+        );
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        return {
+          afterComposition,
+          pendingText: app._localEchoOverlay.pendingText,
+        };
+      });
+
+      expect(state).toEqual({
+        afterComposition: 'cd',
+        pendingText: 'cd ',
+      });
+    });
+
+    it('dedupes an Android replay delayed after the accepting Space', async () => {
+      const state = await page.evaluate(async () => {
+        app.activeSessionId = 'mobile-composition-delayed-replay-test';
+        app.sessions.set('mobile-composition-delayed-replay-test', {
+          id: 'mobile-composition-delayed-replay-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app._localEchoOverlay.clear();
+
+        const textarea = app.terminal.textarea;
+        textarea.value = '';
+        textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+        textarea.value = 'cd';
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionupdate', {
+            bubbles: true,
+            data: 'cd',
+          })
+        );
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionend', {
+            bubbles: true,
+            data: 'cd',
+          })
+        );
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        app.terminal.input(' ');
+
+        // Browser/IME scheduling can defer the alternate callback even after
+        // Space. Elapsed time must not turn the same finalized word into input.
+        await new Promise((resolve) => setTimeout(resolve, 1100));
+        textarea.value = 'cd';
+        textarea.dispatchEvent(
+          new InputEvent('input', {
+            bubbles: true,
+            composed: false,
+            inputType: 'insertText',
+            data: 'cd',
+          })
+        );
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        return {
+          pendingText: app._localEchoOverlay.pendingText,
+        };
+      });
+
+      expect(state).toEqual({
+        pendingText: 'cd ',
+      });
+    });
+
+    it('does not recommit Android final input when compositionend arrives afterward', async () => {
+      const state = await page.evaluate(async () => {
+        app.activeSessionId = 'mobile-input-before-compositionend-test';
+        app.sessions.set('mobile-input-before-compositionend-test', {
+          id: 'mobile-input-before-compositionend-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app._localEchoOverlay.clear();
+
+        const textarea = app.terminal.textarea;
+        textarea.value = '';
+        textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+        textarea.value = 'cd';
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionupdate', {
+            bubbles: true,
+            data: 'cd',
+          })
+        );
+
+        // Some Android keyboards expose the finalized word as a non-composing
+        // input mutation before they dispatch compositionend.
+        textarea.dispatchEvent(
+          new InputEvent('input', {
+            bubbles: true,
+            composed: false,
+            inputType: 'insertText',
+            data: 'cd',
+          })
+        );
+        const afterInput = app._localEchoOverlay.pendingText;
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionend', {
+            bubbles: true,
+            data: 'cd',
+          })
+        );
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        return {
+          afterInput,
+          pendingText: app._localEchoOverlay.pendingText,
+          compositionText: app._localEchoOverlay.compositionText,
+        };
+      });
+
+      expect(state).toEqual({
+        afterInput: 'cd',
+        pendingText: 'cd',
+        compositionText: '',
+      });
+    });
+
+    it('delivers an Android composition once to an immediate-echo shell', async () => {
+      const state = await page.evaluate(async () => {
+        window.__sentInputs = [];
+        app.activeSessionId = 'mobile-shell-composition-test';
+        app.sessions.set('mobile-shell-composition-test', {
+          id: 'mobile-shell-composition-test',
+          mode: 'shell',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app._sendInputAsync = (_sessionId: string, input: string) => {
+          window.__sentInputs.push(input);
+        };
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+
+        const textarea = app.terminal.textarea;
+        textarea.value = '';
+        textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+        textarea.value = 'cd';
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionupdate', {
+            bubbles: true,
+            data: 'cd',
+          })
+        );
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        textarea.dispatchEvent(
+          new CompositionEvent('compositionend', {
+            bubbles: true,
+            data: 'cd',
+          })
+        );
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        // Gboard can repeat the finalized word as a non-composing input event
+        // when the following space accepts its suggestion.
+        textarea.value = 'cd';
+        textarea.dispatchEvent(
+          new InputEvent('input', {
+            bubbles: true,
+            composed: false,
+            inputType: 'insertText',
+            data: 'cd',
+          })
+        );
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        app.terminal.input(' ');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        // xterm's helper textarea is an IME scratch buffer and may retain the
+        // earlier command prefix. InputEvent.data still identifies the newly
+        // inserted word; routing the whole textarea would resend "cd ".
+        textarea.value = 'cd home';
+        textarea.dispatchEvent(
+          new InputEvent('input', {
+            bubbles: true,
+            composed: false,
+            inputType: 'insertText',
+            data: 'home',
+          })
+        );
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        return {
+          sentInputs: window.__sentInputs,
+          localEchoEnabled: app._localEchoEnabled,
+          localEchoClass: app.terminal.element?.classList.contains('codeman-local-echo'),
+        };
+      });
+
+      expect(state).toEqual({
+        sentInputs: ['cd', ' ', 'home'],
+        localEchoEnabled: false,
+        localEchoClass: false,
+      });
+    });
+
+    it('routes retained Android helper text once for a local-echo agent', async () => {
+      const state = await page.evaluate(async () => {
+        app.activeSessionId = 'mobile-agent-retained-helper-test';
+        app.sessions.set('mobile-agent-retained-helper-test', {
+          id: 'mobile-agent-retained-helper-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        app._localEchoOverlay.clear();
+        app._localEchoOverlay.appendText('cd ');
+
+        const textarea = app.terminal.textarea;
+        textarea.value = 'cd home';
+        textarea.dispatchEvent(
+          new InputEvent('input', {
+            bubbles: true,
+            composed: false,
+            inputType: 'insertText',
+            data: 'home',
+          })
+        );
+        await Promise.resolve();
+
+        return {
+          pendingText: app._localEchoOverlay.pendingText,
+          helperValue: textarea.value,
+        };
+      });
+
+      expect(state).toEqual({
+        pendingText: 'cd home',
+        helperValue: '',
       });
     });
 
@@ -2856,10 +3374,12 @@ describe('Virtual Keyboard', () => {
             data: 'seed next more',
           })
         );
+        const immediateAfterCumulative = app._localEchoOverlay.pendingText;
         await Promise.resolve();
 
         return {
           afterNullData,
+          immediateAfterCumulative,
           pendingText: app._localEchoOverlay.pendingText,
           helperValue: textarea.value,
         };
@@ -2867,6 +3387,7 @@ describe('Virtual Keyboard', () => {
 
       expect(state).toEqual({
         afterNullData: 'seed next',
+        immediateAfterCumulative: 'seed next more',
         pendingText: 'seed next more',
         helperValue: '',
       });

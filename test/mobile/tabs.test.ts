@@ -556,7 +556,7 @@ describe('Tab Navigation', () => {
           if (typeof KeyboardHandler !== 'undefined') KeyboardHandler.keyboardVisible = false;
 
           let selected: string | null = null;
-          let selectedOptions: { preserveKeyboard?: boolean } | null = null;
+          let selectedOptions: { forceReload?: boolean; preserveKeyboard?: boolean } | null = null;
           const originalSelect = app.selectSession;
           app.selectSession = function (id, options) {
             selected = id;
@@ -573,6 +573,7 @@ describe('Tab Navigation', () => {
           return {
             hasHandler: typeof app.handleSessionTabClick === 'function',
             selected: selected,
+            forceReload: selectedOptions ? selectedOptions.forceReload : undefined,
             preserveKeyboard: selectedOptions ? selectedOptions.preserveKeyboard : undefined,
             activeIsTextarea: activeIsTextarea,
           };
@@ -580,7 +581,8 @@ describe('Tab Navigation', () => {
 
         expect(result.hasHandler).toBe(true);
         expect(result.selected).toBe('mock-session-2');
-        expect(result.preserveKeyboard).toBe(false);
+        expect(result.forceReload).toBe(true);
+        expect(result.preserveKeyboard).toBeUndefined();
         expect(result.activeIsTextarea).toBe(false);
       } finally {
         await context.close();

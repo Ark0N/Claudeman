@@ -15,7 +15,8 @@
  *
  * @dependency None (first in load order)
  * @loadorder 1 of 16 — constants.js → mobile-handlers.js → voice-input.js → notification-manager.js
- *   → keyboard-accessory.js → input-cjk.js → terminal-input-state.js → app.js → terminal-ui.js → respawn-ui.js
+ *   → keyboard-accessory.js → input-cjk.js → terminal-input-state.js → terminal-input-controller.js
+ *   → app.js → terminal-ui.js → respawn-ui.js
  *   → ralph-panel.js → settings-ui.js → panels-ui.js → session-ui.js → ralph-wizard.js
  *   → api-client.js → subagent-windows.js
  */

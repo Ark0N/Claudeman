@@ -25,6 +25,30 @@ submits it.
 
 ## How it works
 
+### Input arbitration (`terminal-input-controller.js`)
+
+- `TerminalInputController` is the single pre-delivery owner for interactive
+  browser input. Native xterm data, Android helper-textarea mutations, IME
+  composition, CJK/voice text, clipboard paste, accessory controls, and
+  modified Enter all enter its public API before anything reaches a draft or
+  delivery record.
+- The controller owns transient composition epochs, helper-textarea mutation
+  snapshots, alternate-path deduplication, local-echo edits, paste segmentation,
+  normal-mode batching, and control-key ordering. `terminal-ui.js` remains a
+  thin adapter for terminal focus/query filtering and Tab-completion rendering.
+- A finalized composition atomically commits one value and then clears xterm's
+  hidden helper textarea. This is load-bearing on Android: retaining old helper
+  context lets a later Gboard commit include earlier words, producing delayed
+  `cdcd`/`homecd` duplication even when transport delivers each event once.
+- xterm's delayed composition callback and Android's follow-up `insertText` can
+  expose the same finalized word twice. The controller accepts the first path
+  and drops the matching alternate callback. The marker survives Space and
+  punctuation, but is invalidated by a matching replay, a new composition,
+  different substantive input, or a session reset.
+- Draft storage and submitted delivery are injected ports, not controller
+  state. `TerminalInputStateStore` remains the sole durable draft owner and
+  `_sendInputAsync` remains the exactly-once transport owner.
+
 ### Client (`app.js`)
 
 - A stable **`clientId`** (`localStorage['codeman:clientId']`) identifies this
@@ -102,8 +126,12 @@ across the narrow restart window.
 - `test/routes/session-routes.test.ts` — POST `/input` applies a tagged
   `(clientId, seq)` once on redelivery; untagged input always applies.
 - `test/mobile/keyboard.test.ts` — background/reload rehydration, switched
-  session editability, and submit cleanup for per-session drafts.
+  session editability, submit cleanup for per-session drafts, and single-delivery
+  Android composition in immediate-echo shells.
 - `test/terminal-input-state.test.ts` — pure capture, handoff, persistence,
   clearing, and quota-recovery semantics without a server or browser manager.
+- `test/terminal-input-controller.test.ts` — pure composition reconciliation,
+  helper reset, replay deduplication, delete/control ordering, paste framing,
+  external input, and session-reset semantics.
 - `packages/xterm-zerolag-input/test/zerolag-input-addon.test.ts` — atomic
   no-render draft restoration against a stale terminal frame.

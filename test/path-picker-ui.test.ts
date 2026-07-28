@@ -114,54 +114,36 @@ describe('mobile filesystem picker actions', () => {
   });
 
   it('inserts a selected path into the editable local-echo prompt without sending it', () => {
-    const appendText = vi.fn();
-    const sendInput = vi.fn();
+    const insertText = vi.fn();
     const focus = vi.fn();
     const app = {
       activeSessionId: 'session-1',
-      _localEchoEnabled: true,
-      _localEchoOverlay: { appendText },
+      _terminalInputController: { insertText },
       terminal: { focus },
-      sendInput,
     };
 
     terminalHarness.mixin.insertTerminalText.call(app, '/mnt/d/AI/project');
 
-    expect(appendText).toHaveBeenCalledWith('/mnt/d/AI/project');
-    expect(sendInput).not.toHaveBeenCalled();
+    expect(insertText).toHaveBeenCalledWith('/mnt/d/AI/project');
     expect(focus).toHaveBeenCalledOnce();
   });
 
   it('clears pending and already-flushed prompt text without invoking /clear', () => {
-    const clear = vi.fn();
-    const suppressBufferDetection = vi.fn();
-    const sendInput = vi.fn(() => Promise.resolve());
+    const clearInput = vi.fn();
     const showToast = vi.fn();
     const focus = vi.fn();
     const app = {
       activeSessionId: 'session-1',
-      _inputFlushTimeout: null,
-      _pendingInput: 'pending text',
-      _localEchoEnabled: true,
-      _localEchoOverlay: {
-        getFlushed: () => ({ count: 4, text: 'sent' }),
-        clear,
-        suppressBufferDetection,
-      },
+      _terminalInputController: { clearInput },
       _flushedOffsets: new Map([['session-1', 4]]),
       _flushedTexts: new Map([['session-1', 'sent']]),
-      sendInput,
       showToast,
       terminal: { focus },
     };
 
     terminalHarness.mixin.clearTerminalInput.call(app);
 
-    expect(app._pendingInput).toBe('');
-    expect(clear).toHaveBeenCalledOnce();
-    expect(suppressBufferDetection).toHaveBeenCalledOnce();
-    expect(sendInput).toHaveBeenCalledWith('\x7f'.repeat(4));
-    expect(sendInput).not.toHaveBeenCalledWith('/clear');
+    expect(clearInput).toHaveBeenCalledOnce();
     expect(app._flushedOffsets.size).toBe(0);
     expect(app._flushedTexts.size).toBe(0);
     expect(showToast).toHaveBeenCalledWith('Input cleared', 'success');
@@ -169,21 +151,19 @@ describe('mobile filesystem picker actions', () => {
     expect(terminalHarness.cjkClear).toHaveBeenCalled();
   });
 
-  it('uses Ctrl+U to clear the TUI-owned prompt when local echo is disabled', () => {
-    const sendInput = vi.fn(() => Promise.resolve());
+  it('delegates non-local prompt clearing to the controller', () => {
+    const clearInput = vi.fn();
     const app = {
       activeSessionId: 'session-1',
-      _inputFlushTimeout: null,
-      _pendingInput: '',
-      _localEchoEnabled: false,
-      _localEchoOverlay: null,
-      sendInput,
+      _terminalInputController: { clearInput },
+      _flushedOffsets: new Map(),
+      _flushedTexts: new Map(),
       showToast: vi.fn(),
       terminal: { focus: vi.fn() },
     };
 
     terminalHarness.mixin.clearTerminalInput.call(app);
 
-    expect(sendInput).toHaveBeenCalledWith('\x15');
+    expect(clearInput).toHaveBeenCalledOnce();
   });
 });

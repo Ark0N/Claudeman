@@ -349,9 +349,9 @@ describe('CJK input module', () => {
     // redraws), which arrive while e.g. the rename input or search box has
     // focus — refocusing on those steals focus mid-typing. Guard: focus must
     // be on xterm's own textarea AND the data must not be a query reply.
-    const selfHeal = src.slice(src.indexOf('Self-heal'), src.indexOf('CJK regain-focus'));
-    expect(selfHeal).toContain('document.activeElement === this.terminal.textarea');
-    expect(selfHeal).toContain('shouldSuppressTerminalQueryResponse(data)');
+    expect(src).toMatch(
+      /document\.activeElement === this\.terminal\.textarea[\s\S]*?!window\.CodemanTerminalInput\?\.shouldSuppressTerminalQueryResponse\([\s\S]*?data[\s\S]*?\)[\s\S]*?CJK regain-focus \(onData swallowed input\)/
+    );
   });
 
   it('sends text plus carriage return on Enter', () => {

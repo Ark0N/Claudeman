@@ -43,9 +43,10 @@
  * @dependency notification-manager.js (NotificationManager class)
  * @dependency keyboard-accessory.js (MobileTerminalControls, FocusTrap)
  * @dependency terminal-input-state.js (TerminalInputStateStore)
+ * @dependency terminal-input-controller.js (TerminalInputController)
  * @dependency vendor/xterm.js, vendor/xterm-addon-fit.js, vendor/xterm-addon-webgl.js
  * @dependency vendor/xterm-zerolag-input.iife.js (LocalEchoOverlay)
- * @loadorder 6 of 16 — loaded after terminal-input-state.js, before terminal-ui.js
+ * @loadorder 6 of 16 — loaded after terminal-input-controller.js, before terminal-ui.js
  */
 
 // Codeman App - Tab-based Terminal UI
@@ -3038,7 +3039,16 @@ class CodemanApp {
     });
   }
 
-  _restoreSessionDraft(sessionId, render = true) {
+  _restoreSessionDraft(sessionId, render = true, options = {}) {
+    if (
+      options.preserveLiveComposition &&
+      sessionId === this.activeSessionId &&
+      this._localEchoOverlay?.compositionText
+    ) {
+      _crashDiag.log('DRAFT_RESTORE_SKIP_ACTIVE_COMPOSITION');
+      if (render) this._localEchoOverlay.rerender();
+      return this._inputState.has(sessionId);
+    }
     const draft = this._inputState.get(sessionId) || {
       pendingText: '',
       flushedText: '',
@@ -4433,6 +4443,7 @@ class CodemanApp {
       }
     }
     this._localEchoOverlay?.clear();
+    this._terminalInputController?.reset?.();
     // Prevent _detectBufferText() from picking up Claude's Ink UI text
     // (status bar, model info, etc.) as "user input" on fresh sessions.
     // Only sessions with prior flushed text (from tab-switch-away) need detection.
@@ -4958,7 +4969,12 @@ class CodemanApp {
 
       // Restore flushed offset and text for this session so the overlay positions
       // correctly even before the PTY echo arrives in the terminal buffer.
-      if (this._restoreSessionDraft(sessionId, false) && this._localEchoOverlay) {
+      if (
+        this._restoreSessionDraft(sessionId, false, {
+          preserveLiveComposition: true,
+        }) &&
+        this._localEchoOverlay
+      ) {
         // Trigger render after xterm.js finishes processing the buffer data.
         // terminal.write('', callback) fires the callback after ALL previously
         // queued writes have been parsed — so findPrompt() can find ❯ in the buffer.

@@ -7,6 +7,7 @@
  * @dependency app.js (CodemanApp class, this.terminal, this.fitAddon, this.sessions)
  * @dependency constants.js (DEC_SYNC_STRIP_RE, TIMING constants)
  * @dependency mobile-handlers.js (MobileDetection)
+ * @dependency terminal-input-controller.js (TerminalInputController)
  * @dependency vendor/xterm.js, vendor/xterm-addon-fit.js, vendor/xterm-addon-webgl.js
  * @dependency vendor/xterm-zerolag-input.js (LocalEchoOverlay)
  * @loadorder 7 of 15 — loaded after app.js, before respawn-ui.js
@@ -21,9 +22,6 @@
   // short window, only the app's synthetic tap-to-position mouse event should
   // reach xterm.
   const TOUCH_COMPAT_MOUSE_SUPPRESS_MS = 450;
-  const MOBILE_COMPOSITION_COMMIT_TIMEOUT_MS = 80;
-  const MOBILE_COMPOSITION_DEDUPE_TIMEOUT_MS = 1000;
-  const MOBILE_ENTER_KEYDOWN_WINDOW_MS = 500;
   const TUI_PROMPT_BOTTOM_BAND_ROWS = 8;
   const TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM = 4;
 
@@ -37,57 +35,6 @@
 
   function shouldSuppressTerminalQueryResponse(data) {
     return isTerminalQueryResponse(data);
-  }
-
-  function deriveMobileTextareaMutation(snapshot, currentValue) {
-    const current = String(currentValue ?? '');
-    if (!snapshot) {
-      return { insertedText: current, removedText: '' };
-    }
-
-    const previous = String(snapshot.value ?? '');
-    const start = Math.max(0, Math.min(previous.length, snapshot.start ?? previous.length));
-    const end = Math.max(start, Math.min(previous.length, snapshot.end ?? start));
-    const prefix = previous.slice(0, start);
-    const suffix = previous.slice(end);
-    if (
-      current.startsWith(prefix) &&
-      current.endsWith(suffix) &&
-      current.length >= prefix.length + suffix.length
-    ) {
-      return {
-        insertedText: current.slice(prefix.length, current.length - suffix.length),
-        removedText: previous.slice(start, end),
-      };
-    }
-
-    let commonPrefix = 0;
-    while (
-      commonPrefix < previous.length &&
-      commonPrefix < current.length &&
-      previous[commonPrefix] === current[commonPrefix]
-    ) {
-      commonPrefix += 1;
-    }
-    let commonSuffix = 0;
-    while (
-      commonSuffix < previous.length - commonPrefix &&
-      commonSuffix < current.length - commonPrefix &&
-      previous[previous.length - 1 - commonSuffix] ===
-        current[current.length - 1 - commonSuffix]
-    ) {
-      commonSuffix += 1;
-    }
-    return {
-      insertedText: current.slice(
-        commonPrefix,
-        current.length - commonSuffix
-      ),
-      removedText: previous.slice(
-        commonPrefix,
-        previous.length - commonSuffix
-      ),
-    };
   }
 
   // Per-skin xterm.js palettes. The 'daylight-blue' object equals the legacy hardcoded
@@ -118,11 +65,7 @@
   global.CodemanTerminalInput = {
     isTerminalQueryResponse,
     shouldSuppressTerminalQueryResponse,
-    deriveMobileTextareaMutation,
     TOUCH_COMPAT_MOUSE_SUPPRESS_MS,
-    MOBILE_COMPOSITION_COMMIT_TIMEOUT_MS,
-    MOBILE_COMPOSITION_DEDUPE_TIMEOUT_MS,
-    MOBILE_ENTER_KEYDOWN_WINDOW_MS,
     TUI_PROMPT_BOTTOM_BAND_ROWS,
     TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM,
   };
@@ -189,6 +132,47 @@ Object.assign(CodemanApp.prototype, {
     const container = document.getElementById('terminalContainer');
     this.terminal.open(container);
     this._installMobileTapMouseGuard();
+    this._terminalInputController?.destroy?.();
+    this._terminalInputController = new TerminalInputController({
+      textarea: this.terminal.textarea,
+      terminal: this.terminal,
+      getOverlay: () => this._localEchoOverlay,
+      getSessionId: () => this.activeSessionId,
+      getSessionMode: () =>
+        this.activeSessionId
+          ? this.sessions?.get(this.activeSessionId)?.mode || ''
+          : '',
+      isLocalEchoEnabled: () => this._localEchoEnabled,
+      isRestoringDraft: () => this._restoringFlushedState,
+      captureDraft: () => this._captureActiveSessionDraft(),
+      setDraft: (sessionId, draft) =>
+        this._setSessionDraft(sessionId, draft),
+      clearDraft: (sessionId) =>
+        this._clearSessionDraft(sessionId),
+      deliver: (sessionId, data, options) =>
+        this._sendInputAsync(sessionId, data, options),
+      preparePaste: (text, bracketed) =>
+        this._prepareTerminalPaste(text, bracketed),
+      sendNamedKey: (sessionId, key, delay) => {
+        const send = () =>
+          fetch(`/api/sessions/${sessionId}/send-key`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key }),
+          }).catch(() => {});
+        if (delay > 0) {
+          setTimeout(send, delay);
+        } else {
+          send();
+        }
+      },
+      onTab: (context) =>
+        this._handleTerminalInputTab(context),
+      log: (message) => _crashDiag.log(message),
+    });
+    this._terminalInputController.attachTextarea(container, {
+      mobile: MobileDetection.isTouchDevice(),
+    });
 
     // Suppress xterm key handling during CJK IME composition.
     // Without this, xterm processes raw keyDown events (e.g., "Process" key)
@@ -235,439 +219,19 @@ Object.assign(CodemanApp.prototype, {
       // distinguish them. We use tmux send-keys -H to send a line feed byte (0x0a)
       // which the inner application recognizes as "insert newline" vs carriage return.
       if (ev.key === 'Enter' && (ev.shiftKey || ev.ctrlKey) && ev.type === 'keydown') {
-        if (this.activeSessionId) {
-          if (this._localEchoEnabled) {
-            const text = this._localEchoOverlay?.pendingText || '';
-            this._localEchoOverlay?.clear();
-            this._localEchoOverlay?.suppressBufferDetection();
-            this._setSessionDraft(this.activeSessionId, {
-              pendingText: '',
-              flushedText: text + '\n',
-              cjkText: '',
-              updatedAt: Date.now(),
-            });
-            if (text) {
-              this._pendingInput += text;
-              flushInput();
-            }
-            setTimeout(() => {
-              fetch(`/api/sessions/${this.activeSessionId}/send-key`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key: ev.ctrlKey ? 'C-Enter' : 'S-Enter' }),
-              });
-            }, text ? 80 : 0);
-          } else {
-            fetch(`/api/sessions/${this.activeSessionId}/send-key`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ key: ev.ctrlKey ? 'C-Enter' : 'S-Enter' }),
-            });
-          }
-        }
+        this._terminalInputController.sendModifiedEnter(
+          ev.ctrlKey ? 'C-Enter' : 'S-Enter'
+        );
         return false;
       }
 
       return true;
     });
 
-    // Android virtual keyboard fix: catch non-composition input events.
-    // On Android Chrome, typing symbols (e.g., "/" from Gboard's symbol keyboard)
-    // sends keyCode 229 + input event WITHOUT compositionstart/end wrapping.
-    // The custom key handler above returns false for keyCode 229, telling xterm
-    // to ignore the keydown. xterm.js expects the character to arrive via
-    // composition events, but since there's no composition, the character is lost.
-    // This listener catches those orphaned input events and forwards them to onData.
-    {
-      const xtermTextarea = container.querySelector('.xterm-helper-textarea');
-      if (xtermTextarea && MobileDetection.isTouchDevice()) {
-        let composing = false;
-        let compositionEpoch = 0;
-        let lastKeydownHandled = 0;
-        let lastBackspaceKeydownAt = -Infinity;
-        let lastMobileEnterKeydownAt = -Infinity;
-        let mobileLineBreakPending = false;
-        let mobileLineBreakFallbackTimer = null;
-        let ignoredCompositionEndEpoch = -1;
-        let helperMutationSnapshot = null;
-        const captureHelperMutationSnapshot = () => ({
-          value: xtermTextarea.value,
-          start: xtermTextarea.selectionStart ?? xtermTextarea.value.length,
-          end: xtermTextarea.selectionEnd ?? xtermTextarea.selectionStart ?? xtermTextarea.value.length,
-          pendingText: this._localEchoOverlay?.pendingText || '',
-        });
-        const insertMobileDraftLineBreak = (fallbackText = '') => {
-          if (!this._localEchoEnabled) {
-            xtermTextarea.value = '';
-            this.sendTerminalKey('\r');
-            return;
-          }
-          const compositionText =
-            fallbackText || this._localEchoOverlay?.compositionText || '';
-          if (compositionText) {
-            this._mobileCompositionPending = true;
-            this._commitMobileCompositionFallback(compositionText);
-          } else {
-            this._localEchoOverlay?.clearComposition();
-          }
-          this._localEchoOverlay?.appendText('\n');
-          this._captureActiveSessionDraft();
-          xtermTextarea.value = '';
-        };
-        this._mobileCompositionPending = false;
-        this._mobileCompositionFallbackCommit = null;
-        xtermTextarea.addEventListener('compositionstart', () => {
-          composing = true;
-          compositionEpoch += 1;
-          helperMutationSnapshot = null;
-          this._mobileCompositionPending = false;
-          this._mobileCompositionFallbackCommit = null;
-          this._clearTimer('_mobileCompositionCommitTimer');
-          this._clearTimer('_mobileCompositionFallbackTimer');
-          if (this._localEchoEnabled) {
-            this._localEchoOverlay?.setCompositionText('');
-            this._captureActiveSessionDraft();
-          }
-        });
-        xtermTextarea.addEventListener('compositionupdate', (event) => {
-          if (!this._localEchoEnabled) return;
-          this._localEchoOverlay?.setCompositionText(event.data || '');
-          this._captureActiveSessionDraft();
-        });
-        xtermTextarea.addEventListener('compositionend', (event) => {
-          composing = false;
-          if (ignoredCompositionEndEpoch === compositionEpoch) {
-            ignoredCompositionEndEpoch = -1;
-            return;
-          }
-          if (!this._localEchoEnabled) return;
-          const endedEpoch = compositionEpoch;
-          const fallbackText = event.data || this._localEchoOverlay?.compositionText || '';
-          this._mobileCompositionPending = true;
-          this._clearTimer('_mobileCompositionCommitTimer');
-          if (mobileLineBreakPending) {
-            mobileLineBreakPending = false;
-            if (mobileLineBreakFallbackTimer) {
-              clearTimeout(mobileLineBreakFallbackTimer);
-              mobileLineBreakFallbackTimer = null;
-            }
-            insertMobileDraftLineBreak(fallbackText);
-            return;
-          }
-          // xterm reads the finalized textarea value in a zero-delay task.
-          // Keep its preview visible until onData atomically commits that text.
-          this._mobileCompositionCommitTimer = setTimeout(() => {
-            this._mobileCompositionCommitTimer = null;
-            if (!this._mobileCompositionPending || endedEpoch !== compositionEpoch) return;
-            this._commitMobileCompositionFallback(fallbackText);
-          }, window.CodemanTerminalInput.MOBILE_COMPOSITION_COMMIT_TIMEOUT_MS);
-        });
-        // Track when xterm handles a keydown normally (non-229 keyCode).
-        // If xterm processed the keydown, it will emit onData itself --
-        // the input event handler below must NOT re-send the character.
-        xtermTextarea.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') {
-            lastMobileEnterKeydownAt = performance.now();
-          }
-          if (!e.isComposing && e.keyCode === 229) {
-            helperMutationSnapshot = captureHelperMutationSnapshot();
-          }
-          if (!e.isComposing && e.keyCode !== 229) {
-            lastKeydownHandled = Date.now();
-            if (e.key === 'Backspace') {
-              lastBackspaceKeydownAt = performance.now();
-            }
-          }
-        });
-        xtermTextarea.addEventListener(
-          'beforeinput',
-          (e) => {
-            if (
-              !e.isComposing &&
-              (e.inputType === 'insertText' || e.inputType === 'insertReplacementText')
-            ) {
-              helperMutationSnapshot = captureHelperMutationSnapshot();
-            }
-            const isLineBreak =
-              e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph';
-            const followsMobileEnter =
-              isLineBreak &&
-              performance.now() - lastMobileEnterKeydownAt <
-                window.CodemanTerminalInput.MOBILE_ENTER_KEYDOWN_WINDOW_MS;
-            if (followsMobileEnter && this.activeSessionId) {
-              e.preventDefault();
-              e.stopImmediatePropagation();
-              lastMobileEnterKeydownAt = -Infinity;
-              if (!this._localEchoEnabled) {
-                insertMobileDraftLineBreak();
-                return;
-              }
-              if (composing || e.isComposing) {
-                mobileLineBreakPending = true;
-                const lineBreakEpoch = compositionEpoch;
-                const fallbackText = this._localEchoOverlay?.compositionText || '';
-                if (mobileLineBreakFallbackTimer) clearTimeout(mobileLineBreakFallbackTimer);
-                mobileLineBreakFallbackTimer = setTimeout(() => {
-                  mobileLineBreakFallbackTimer = null;
-                  if (!mobileLineBreakPending || lineBreakEpoch !== compositionEpoch) return;
-                  mobileLineBreakPending = false;
-                  ignoredCompositionEndEpoch = lineBreakEpoch;
-                  composing = false;
-                  insertMobileDraftLineBreak(fallbackText);
-                }, window.CodemanTerminalInput.MOBILE_COMPOSITION_COMMIT_TIMEOUT_MS);
-              } else {
-                insertMobileDraftLineBreak();
-              }
-              return;
-            }
-            if (
-              composing ||
-              e.isComposing ||
-              !this.activeSessionId ||
-              (e.inputType !== 'deleteContentBackward' && e.inputType !== 'deleteWordBackward')
-            ) {
-              return;
-            }
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            xtermTextarea.value = '';
-            // A physical Backspace was already handled by xterm's keydown
-            // path. Android keyCode 229 skips that path and reaches here.
-            if (performance.now() - lastBackspaceKeydownAt < 50) return;
-            this.terminal._core.coreService.triggerDataEvent('\x7f', true);
-          },
-          true
-        );
-        xtermTextarea.addEventListener('input', (e) => {
-          // Only handle insertText events outside of composition -- these are
-          // the ones xterm.js misses on Android virtual keyboards.
-          if (e.isComposing) return;
-          if (e.inputType !== 'insertText' && e.inputType !== 'insertReplacementText') return;
-          const snapshot = helperMutationSnapshot;
-          helperMutationSnapshot = null;
-          // Some Android keyboards expose the inserted text only through the
-          // helper textarea while InputEvent.data is null.
-          const mutation = window.CodemanTerminalInput.deriveMobileTextareaMutation(
-            snapshot,
-            xtermTextarea.value
-          );
-          const data =
-            mutation.insertedText ||
-            (typeof e.data === 'string' ? e.data : '') ||
-            (!snapshot ? xtermTextarea.value : '');
-          if (!data && !mutation.removedText) return;
-          const recoveringInterruptedComposition = composing;
-          if (recoveringInterruptedComposition) {
-            // Android can omit compositionend after Enter or a focus change.
-            // A later explicitly non-composing mutation is authoritative.
-            composing = false;
-            compositionEpoch += 1;
-            this._mobileCompositionPending = false;
-            this._mobileCompositionFallbackCommit = null;
-            this._clearTimer('_mobileCompositionCommitTimer');
-            this._clearTimer('_mobileCompositionFallbackTimer');
-            this._localEchoOverlay?.clearComposition();
-          }
-          // If xterm just handled a keydown (within 50ms), it already sent the
-          // char via onData. Skip to avoid double-send (e.g., Shift+A => AA).
-          if (!recoveringInterruptedComposition && Date.now() - lastKeydownHandled < 50) {
-            xtermTextarea.value = '';
-            return;
-          }
-          // xterm.js may have already processed this via its own input handler.
-          // Check if the textarea was cleared by xterm (value is empty or just
-          // whitespace) -- if so, xterm handled it and we should not double-send.
-          // Use a microtask to check after xterm's own handlers have run.
-          const pendingBefore =
-            snapshot?.pendingText ?? this._localEchoOverlay?.pendingText ?? '';
-          Promise.resolve().then(() => {
-            const recentTerminalData =
-              performance.now() - (this._lastTerminalData?.time ?? -Infinity) < 100
-                ? this._lastTerminalData?.data
-                : null;
-            if (
-              recentTerminalData === data
-            ) {
-              xtermTextarea.value = '';
-              return;
-            }
-            const pendingAfter = this._localEchoOverlay?.pendingText || '';
-            if (
-              snapshot &&
-              this._localEchoEnabled &&
-              recentTerminalData &&
-              recentTerminalData !== data &&
-              recentTerminalData.charCodeAt(0) >= 32 &&
-              pendingAfter === pendingBefore + recentTerminalData
-            ) {
-              for (const _char of recentTerminalData) {
-                this.terminal._core.coreService.triggerDataEvent('\x7f', true);
-              }
-            } else if (
-              !mutation.removedText &&
-              this._localEchoEnabled &&
-              pendingAfter.length > pendingBefore.length &&
-              pendingAfter.endsWith(data)
-            ) {
-              xtermTextarea.value = '';
-              return;
-            }
-            // If xterm cleared the textarea, it processed the input -- skip.
-            const val = xtermTextarea.value;
-            if (!val || (val.trim() === '' && data !== ' ')) return;
-            // xterm didn't process it -- forward to terminal as if typed.
-            // Apply a replacement only when its removed suffix is still the
-            // locally buffered draft; otherwise another event already handled
-            // that deletion and repeating it would erase unrelated text.
-            const pendingText = this._localEchoOverlay?.pendingText || '';
-            if (
-              mutation.removedText &&
-              pendingText.endsWith(mutation.removedText)
-            ) {
-              for (const _char of mutation.removedText) {
-                this.terminal._core.coreService.triggerDataEvent('\x7f', true);
-              }
-            }
-            if (data) {
-              // Emit via onData path by writing to terminal's input handler.
-              this.terminal._core.coreService.triggerDataEvent(data, true);
-            }
-            // Clear the textarea to prevent xterm from processing it later.
-            xtermTextarea.value = '';
-          });
-        });
-      }
-    }
-
-    // xterm's browser-side bracketedPasteMode can be false after a session
-    // replay because the CLI enabled DECSET 2004 before the retained tail.
-    // Intercept textual paste for TUI sessions so blank lines cannot degrade
-    // into separate Enter keys. Shells keep xterm's native paste semantics.
-    {
-      const xtermTextarea = container.querySelector('.xterm-helper-textarea');
-      let lastRoutedPaste = '';
-      let lastRoutedPasteAt = 0;
-      let lastRoutedPasteSource = '';
-      let multipartPasteUntil = 0;
-      let multipartPasteCandidateUntil = 0;
-      const MULTIPART_PASTE_GAP_MS = 40;
-      const supportsSegmentedPasteFallback = MobileDetection.isTouchDevice();
-      const readInputPasteText = (event) => {
-        const candidates = [
-          event.clipboardData?.getData?.('text/plain'),
-          event.dataTransfer?.getData?.('text/plain'),
-          typeof event.data === 'string' ? event.data : '',
-          xtermTextarea?.value,
-        ];
-        return candidates.reduce(
-          (longest, value) => (typeof value === 'string' && value.length > longest.length ? value : longest),
-          ''
-        );
-      };
-      const routeTextPaste = (event, source, explicitText) => {
-        const mode = this.activeSessionId
-          ? this.sessions?.get(this.activeSessionId)?.mode
-          : null;
-        if (!this.activeSessionId || mode === 'shell') return false;
-        const text = explicitText ?? readInputPasteText(event);
-        if (!text) return false;
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        if (xtermTextarea) xtermTextarea.value = '';
-        const now = performance.now();
-        const duplicateInputAfterCapture =
-          text === lastRoutedPaste &&
-          now - lastRoutedPasteAt < 100 &&
-          source.startsWith('input:') &&
-          (lastRoutedPasteSource === 'clipboard' || lastRoutedPasteSource.startsWith('beforeinput:'));
-        if (duplicateInputAfterCapture) {
-          return true;
-        }
-        lastRoutedPaste = text;
-        lastRoutedPasteAt = now;
-        lastRoutedPasteSource = source;
-        const lineBreaks = text.match(/\r\n|\r|\n/g)?.length || 0;
-        _crashDiag.log(`XTERM_PASTE source=${source} len=${text.length} breaks=${lineBreaks}`);
-        if (this._localEchoEnabled && this._localEchoOverlay) {
-          this._localEchoOverlay.appendText(text);
-          this._captureActiveSessionDraft();
-        } else {
-          this.sendPastedText(text);
-        }
-        return true;
-      };
-      const routeInputPasteMutation = (event, phase) => {
-        const inputType = event.inputType || '';
-        const mutationText = typeof event.data === 'string' ? event.data : '';
-        const now = performance.now();
-        const continuesMultipartPaste = now <= multipartPasteUntil;
-
-        if (inputType === 'insertFromPaste') {
-          const routed = routeTextPaste(event, `${phase}:paste`);
-          if (routed) {
-            multipartPasteCandidateUntil = 0;
-            multipartPasteUntil = now + MULTIPART_PASTE_GAP_MS;
-          }
-          return;
-        }
-
-        // Some Android clipboard providers expose a paste as a synchronous
-        // burst of ordinary insertText + insertLineBreak mutations. Keep the
-        // first multi-character segment on xterm's normal path, then confirm
-        // the paste only if an immediate line break follows. Gboard also emits
-        // whole-word insertText events during ordinary typing, so the first
-        // segment alone is not enough evidence of a paste.
-        if (supportsSegmentedPasteFallback && inputType === 'insertText' && mutationText) {
-          if (!continuesMultipartPaste) {
-            multipartPasteCandidateUntil =
-              mutationText.length > 1 ? now + MULTIPART_PASTE_GAP_MS : 0;
-            return;
-          }
-          // The helper textarea may retain whitespace from ordinary typing.
-          // event.data is the current mutation and cannot include that stale
-          // value, so use it exclusively for segmented insertText events.
-          const routed = routeTextPaste(event, `${phase}:text`, mutationText);
-          if (routed) multipartPasteUntil = now + MULTIPART_PASTE_GAP_MS;
-          return;
-        }
-        if (
-          supportsSegmentedPasteFallback &&
-          (continuesMultipartPaste || now <= multipartPasteCandidateUntil) &&
-          (inputType === 'insertLineBreak' || inputType === 'insertParagraph')
-        ) {
-          const routed = routeTextPaste(event, `${phase}:break`, '\n');
-          if (routed) {
-            multipartPasteCandidateUntil = 0;
-            multipartPasteUntil = now + MULTIPART_PASTE_GAP_MS;
-          }
-          return;
-        }
-        multipartPasteCandidateUntil = 0;
-      };
-
-      xtermTextarea?.addEventListener(
-        'paste',
-        (event) => {
-          routeTextPaste(event, 'clipboard');
-        },
-        true
-      );
-      xtermTextarea?.addEventListener(
-        'beforeinput',
-        (event) => {
-          routeInputPasteMutation(event, 'beforeinput');
-        },
-        true
-      );
-      xtermTextarea?.addEventListener(
-        'input',
-        (event) => {
-          routeInputPasteMutation(event, 'input');
-        },
-        true
-      );
-    }
-
+    // Android IME, helper-textarea mutation, and composition arbitration
+    // are installed by TerminalInputController.attachTextarea() above.
+    // Paste capture and Android segmented-paste fallback use the same
+    // controller so clipboard mutations cannot race ordinary IME input.
     // WebGL renderer for GPU-accelerated terminal rendering.
     // Previously caused "page unresponsive" crashes from synchronous GPU stalls,
     // but the mode-aware 32/64KB frame cap in flushPendingWrites() now prevents
@@ -1111,285 +675,42 @@ Object.assign(CodemanApp.prototype, {
     this.terminalResizeObserver = new ResizeObserver(throttledResize);
     this.terminalResizeObserver.observe(container);
 
-    // Handle keyboard input — send to PTY immediately, no local echo.
-    // PTY/Ink handles all character echoing to avoid desync ("typing visible below" bug).
-    this._pendingInput = '';
-    this._inputFlushTimeout = null;
-    this._lastKeystrokeTime = 0;
-
-    const flushInput = () => {
-      this._inputFlushTimeout = null;
-      if (this._pendingInput && this.activeSessionId) {
-        const input = this._pendingInput;
-        const sessionId = this.activeSessionId;
-        this._pendingInput = '';
-        this._sendInputAsync(sessionId, input);
-      }
-    };
-
-    // Local echo mode: buffer keystrokes locally (shown in overlay) and only
-    // send to PTY on Enter.  Avoids out-of-order delivery on high-latency
-    // mobile connections.  The overlay + localStorage persistence ensure input
-    // survives tab switches and reconnects.
-
+    // xterm is an adapter only. The controller owns semantic input state,
+    // local echo, batching, control ordering, and IME deduplication.
     this.terminal.onData((data) => {
-      // Mouse SGR reports (tap-to-position) are NOT IME input — they must reach
-      // the PTY even while the CJK input field owns focus. Without this exception
-      // tapping to move the cursor silently does nothing whenever Chinese input
-      // is on, because cjkActive stays true the whole time the field is visible.
       const isMouseReport = /^\x1b\[<\d+;\d+;\d+[Mm]$/.test(data);
-      // CJK input has focus — block xterm from sending keystrokes to PTY
-      if (!isMouseReport && (window.cjkActive || document.activeElement?.id === 'cjkInput')) {
-        // Self-heal: if the CJK field is visible but focus drifted to xterm's
-        // hidden textarea (e.g. something called terminal.focus()), everything
-        // typed lands HERE and is swallowed — keyboard shows the IME composing
-        // while both the CJK field and the terminal stay empty. Route focus
-        // back so the very next keystroke lands in the CJK field again.
-        // Only GENUINE typed input qualifies: onData also fires for xterm's
-        // self-generated query replies (DA/DSR/CPR/OSC during Ink redraws),
-        // which arrive no matter what has focus — so require focus to be on
-        // xterm's own textarea and bail on query replies, or this would steal
-        // focus from the rename/search/settings inputs while output streams.
+      if (
+        !isMouseReport &&
+        (window.cjkActive ||
+          document.activeElement?.id === 'cjkInput')
+      ) {
         const cjkEl = document.getElementById('cjkInput');
         if (
           cjkEl?.classList.contains('cjk-input-visible') &&
           document.activeElement === this.terminal.textarea &&
-          !window.CodemanTerminalInput?.shouldSuppressTerminalQueryResponse(data)
+          !window.CodemanTerminalInput?.shouldSuppressTerminalQueryResponse(
+            data
+          )
         ) {
-          _crashDiag.log('CJK regain-focus (onData swallowed input)');
+          _crashDiag.log(
+            'CJK regain-focus (onData swallowed input)'
+          );
           cjkEl.focus();
         }
         return;
       }
-      if (this.activeSessionId) {
-        // Filter terminal query replies generated by xterm.js itself.
-        // Forwarding them through the WebSocket injects DA/DSR/CPR replies
-        // into the foreground process as typed input (for example "0;276;0c").
-        if (
-          window.CodemanTerminalInput?.shouldSuppressTerminalQueryResponse(data)
-        ) {
-          return;
-        }
-        this._lastTerminalData = { data, time: performance.now() };
-
-        // ── Local Echo Mode ──
-        // When enabled, keystrokes are buffered locally in the overlay for
-        // instant visual feedback.  Nothing is sent to the PTY until Enter
-        // (or a control char) is pressed — avoids out-of-order char delivery.
-        if (this._localEchoEnabled) {
-          const fallbackCommit = this._mobileCompositionFallbackCommit;
-          if (fallbackCommit !== null && data === fallbackCommit) {
-            this._mobileCompositionFallbackCommit = null;
-            this._clearTimer('_mobileCompositionFallbackTimer');
-            return;
-          }
-          if (
-            this._mobileCompositionPending &&
-            data &&
-            data.charCodeAt(0) >= 32
-          ) {
-            this._acceptMobileCompositionCommit(data);
-            return;
-          }
-          if (data === '\x7f') {
-            const source = this._localEchoOverlay?.removeChar();
-            if (source !== 'pending') {
-              // No locally buffered character means the editable text may
-              // already live in the PTY (for example, typed from desktop).
-              // Forward one Backspace instead of swallowing it.
-              this._pendingInput += data;
-              flushInput();
-            }
-            this._captureActiveSessionDraft();
-            // 'pending' = removed unsent text (no PTY backspace needed)
-            // 'flushed'/false = text may already be in the PTY
-            return;
-          }
-          if (/^[\r\n]+$/.test(data)) {
-            // Enter: queue the buffered text followed by \r.
-            const text = this._localEchoOverlay?.pendingText || '';
-            if (text) {
-              const lineBreaks = text.match(/\r\n|\r|\n/g)?.length || 0;
-              _crashDiag.log(`LOCAL_ECHO_SUBMIT len=${text.length} breaks=${lineBreaks}`);
-            }
-            this._localEchoOverlay?.clear();
-            // Suppress detection so PTY-echoed text isn't re-detected as user input
-            this._localEchoOverlay?.suppressBufferDetection();
-            // Enter commits all editable and flushed draft text.
-            this._clearSessionDraft(this.activeSessionId);
-            if (this._inputFlushTimeout) {
-              clearTimeout(this._inputFlushTimeout);
-              this._inputFlushTimeout = null;
-            }
-            if (text) {
-              const mode = this.sessions?.get(this.activeSessionId)?.mode;
-              this._pendingInput += /[\r\n]/.test(text) && mode !== 'shell'
-                ? this._prepareTerminalPaste(text, true)
-                : text;
-              flushInput();
-            }
-            // The durable input queue preserves call order. Queue Enter
-            // immediately so another fast submission cannot interleave before it.
-            this._pendingInput += '\r';
-            flushInput();
-            return;
-          }
-          if (data.length > 1 && data.charCodeAt(0) >= 32) {
-            // Paste: append to overlay only (sent on Enter)
-            this._localEchoOverlay?.appendText(data);
-            this._captureActiveSessionDraft();
-            return;
-          }
-          if (data.charCodeAt(0) < 32) {
-            // Skip xterm-generated terminal responses.
-            // These arrive via triggerDataEvent when the terminal processes
-            // buffer data (DA responses, OSC color queries, mode reports, etc.).
-            // They are NOT user input and must not clear flushed text state.
-            // Covers: CSI (\x1b[), OSC (\x1b]), DCS (\x1bP), APC (\x1b_),
-            // PM (\x1b^), SOS (\x1bX), and any other multi-byte ESC sequence.
-            // Single-byte ESC (user pressing Escape) still falls through to
-            // the control char handler below.
-            if (data.length > 1 && data.charCodeAt(0) === 27) {
-              // Multi-byte escape sequence — forward to PTY without clearing
-              // overlay/flushed state (terminal response, not user input)
-              this._pendingInput += data;
-              flushInput();
-              return;
-            }
-            // During buffer load (tab switch), stray control chars from
-            // terminal response processing must not wipe the flushed state
-            // that selectSession() is actively restoring.
-            if (this._restoringFlushedState) {
-              this._pendingInput += data;
-              flushInput();
-              return;
-            }
-            // Tab key: send pending text + Tab to PTY for tab completion.
-            // Set a flag so flushPendingWrites() re-detects buffer text when
-            // the PTY response arrives (event-driven, no fixed timer).
-            if (data === '\t') {
-              const text = this._localEchoOverlay?.pendingText || '';
-              this._localEchoOverlay?.clear();
-              if (text) {
-                this._pendingInput += text;
-                this._setSessionDraft(this.activeSessionId, {
-                  pendingText: '',
-                  flushedText: text,
-                  cjkText: '',
-                  updatedAt: Date.now(),
-                });
-              } else {
-                this._clearSessionDraft(this.activeSessionId);
-              }
-              this._pendingInput += data;
-              if (this._inputFlushTimeout) {
-                clearTimeout(this._inputFlushTimeout);
-                this._inputFlushTimeout = null;
-              }
-              // Snapshot prompt line text BEFORE flushing — used to distinguish
-              // real Tab completions from pre-existing Claude UI text.
-              let baseText = '';
-              try {
-                const p = this._localEchoOverlay?.findPrompt?.();
-                if (p) {
-                  const buf = this.terminal.buffer.active;
-                  const line = buf.getLine(buf.viewportY + p.row);
-                  if (line)
-                    baseText = line
-                      .translateToString(true)
-                      .slice(p.col + 2)
-                      .trimEnd();
-                }
-              } catch {}
-              this._tabCompletionBaseText = baseText;
-              flushInput();
-              this._tabCompletionSessionId = this.activeSessionId;
-              this._tabCompletionRetries = 0;
-              // Fallback: if flushPendingWrites() detection misses the completion
-              // (e.g., flicker filter delays data, or xterm hasn't processed writes
-              // by the time the callback fires), retry detection after a delay.
-              // This ensures the overlay renders even without further terminal data.
-              if (this._tabCompletionFallback) clearTimeout(this._tabCompletionFallback);
-              const selfTab = this;
-              this._tabCompletionFallback = setTimeout(() => {
-                selfTab._tabCompletionFallback = null;
-                if (!selfTab._tabCompletionSessionId || selfTab._tabCompletionSessionId !== selfTab.activeSessionId)
-                  return;
-                const ov = selfTab._localEchoOverlay;
-                if (!ov || ov.pendingText) return;
-                selfTab.terminal.write('', () => {
-                  if (!selfTab._tabCompletionSessionId) return;
-                  ov.resetBufferDetection();
-                  const detected = ov.detectBufferText();
-                  if (detected && detected !== selfTab._tabCompletionBaseText) {
-                    selfTab._tabCompletionSessionId = null;
-                    selfTab._tabCompletionRetries = 0;
-                    selfTab._tabCompletionBaseText = null;
-                    ov.rerender();
-                    selfTab._captureActiveSessionDraft();
-                  }
-                });
-              }, 300);
-              return;
-            }
-            // Control chars (Ctrl+C, single ESC): send buffered text + control char immediately
-            const text = this._localEchoOverlay?.pendingText || '';
-            this._localEchoOverlay?.clear();
-            // Suppress detection so PTY-echoed text isn't re-detected as user input
-            this._localEchoOverlay?.suppressBufferDetection();
-            // Control chars (Ctrl+C, Escape) invalidate the complete draft.
-            this._clearSessionDraft(this.activeSessionId);
-            if (text) {
-              this._pendingInput += text;
-            }
-            this._pendingInput += data;
-            if (this._inputFlushTimeout) {
-              clearTimeout(this._inputFlushTimeout);
-              this._inputFlushTimeout = null;
-            }
-            flushInput();
-            return;
-          }
-          if (data.length === 1 && data.charCodeAt(0) >= 32) {
-            // Printable char: add to overlay only (sent on Enter)
-            this._localEchoOverlay?.addChar(data);
-            this._captureActiveSessionDraft();
-            return;
-          }
-        }
-
-        // ── Normal Mode (echo disabled) ──
-        this._pendingInput += data;
-
-        // Control chars (Enter, Ctrl+C, escape sequences) — flush immediately
-        if (data.charCodeAt(0) < 32 || data.length > 1) {
-          if (this._inputFlushTimeout) {
-            clearTimeout(this._inputFlushTimeout);
-            this._inputFlushTimeout = null;
-          }
-          flushInput();
-          return;
-        }
-
-        // Regular chars — flush immediately if typed after a gap (>50ms),
-        // otherwise batch via microtask to coalesce rapid keystrokes (paste).
-        const now = performance.now();
-        if (now - this._lastKeystrokeTime > 50) {
-          // Single char after a gap — send immediately, no setTimeout latency
-          if (this._inputFlushTimeout) {
-            clearTimeout(this._inputFlushTimeout);
-            this._inputFlushTimeout = null;
-          }
-          this._lastKeystrokeTime = now;
-          flushInput();
-        } else {
-          // Rapid sequence (paste or fast typing) — coalesce via microtask
-          this._lastKeystrokeTime = now;
-          if (!this._inputFlushTimeout) {
-            this._inputFlushTimeout = setTimeout(flushInput, 0);
-          }
-        }
+      if (!this.activeSessionId) return;
+      if (
+        window.CodemanTerminalInput?.shouldSuppressTerminalQueryResponse(
+          data
+        )
+      ) {
+        return;
       }
+      this._terminalInputController.handleTerminalData(
+        data,
+        'xterm'
+      );
     });
   },
 
@@ -2841,7 +2162,7 @@ Object.assign(CodemanApp.prototype, {
     const settings = this.loadAppSettingsFromStorage();
     const session = this.activeSessionId ? this.sessions.get(this.activeSessionId) : null;
     const echoEnabled = settings.localEchoEnabled ?? MobileDetection.isTouchDevice();
-    const shouldEnable = !!(echoEnabled && session);
+    const shouldEnable = !!(echoEnabled && session && session.mode !== 'shell');
     if (this._localEchoEnabled && !shouldEnable) {
       this._localEchoOverlay?.clear();
     }
@@ -3014,7 +2335,7 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
     _crashDiag.log(`CJK send→${this.activeSessionId.slice(0, 8)} len=${text.length}`);
-    this._sendInputAsync(this.activeSessionId, text);
+    this._terminalInputController.sendExternalText(text);
   },
 
   /**
@@ -3181,39 +2502,69 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  _commitMobileCompositionFallback(text) {
-    if (!this._mobileCompositionPending) return false;
-    const finalText =
-      typeof text === 'string' && text.length > 0
-        ? text
-        : this._localEchoOverlay?.compositionText || '';
-    if (!finalText) {
-      this._mobileCompositionPending = false;
-      this._localEchoOverlay?.clearComposition();
-      this._captureActiveSessionDraft();
-      return false;
+  _handleTerminalInputTab({ overlay, sessionId, text }) {
+    overlay?.clear?.();
+    if (text) {
+      this._setSessionDraft(sessionId, {
+        pendingText: '',
+        flushedText: text,
+        cjkText: '',
+        updatedAt: Date.now(),
+      });
+    } else {
+      this._clearSessionDraft(sessionId);
     }
-    this._acceptMobileCompositionCommit(finalText);
-    return true;
-  },
 
-  /**
-   * Commit one IME result and remember it until xterm's alternate Android
-   * input path either repeats that same result or the next composition starts.
-   */
-  _acceptMobileCompositionCommit(finalText) {
-    this._mobileCompositionPending = false;
-    this._clearTimer('_mobileCompositionCommitTimer');
-    this._localEchoOverlay?.commitComposition(finalText);
-    this._captureActiveSessionDraft();
-    this._mobileCompositionFallbackCommit = finalText;
-    this._clearTimer('_mobileCompositionFallbackTimer');
-    this._mobileCompositionFallbackTimer = setTimeout(() => {
-      this._mobileCompositionFallbackTimer = null;
-      if (this._mobileCompositionFallbackCommit === finalText) {
-        this._mobileCompositionFallbackCommit = null;
+    let baseText = '';
+    try {
+      const prompt = overlay?.findPrompt?.();
+      if (prompt) {
+        const buffer = this.terminal.buffer.active;
+        const line = buffer.getLine(
+          buffer.viewportY + prompt.row
+        );
+        if (line) {
+          baseText = line
+            .translateToString(true)
+            .slice(prompt.col + 2)
+            .trimEnd();
+        }
       }
-    }, window.CodemanTerminalInput.MOBILE_COMPOSITION_DEDUPE_TIMEOUT_MS);
+    } catch {}
+    this._tabCompletionBaseText = baseText;
+    this._sendInputAsync(sessionId, text + '\t');
+    this._tabCompletionSessionId = sessionId;
+    this._tabCompletionRetries = 0;
+
+    this._clearTimer('_tabCompletionFallback');
+    this._tabCompletionFallback = setTimeout(() => {
+      this._tabCompletionFallback = null;
+      if (
+        !this._tabCompletionSessionId ||
+        this._tabCompletionSessionId !==
+          this.activeSessionId
+      ) {
+        return;
+      }
+      const liveOverlay = this._localEchoOverlay;
+      if (!liveOverlay || liveOverlay.pendingText) return;
+      this.terminal.write('', () => {
+        if (!this._tabCompletionSessionId) return;
+        liveOverlay.resetBufferDetection();
+        const detected = liveOverlay.detectBufferText();
+        if (
+          detected &&
+          detected !== this._tabCompletionBaseText
+        ) {
+          this._tabCompletionSessionId = null;
+          this._tabCompletionRetries = 0;
+          this._tabCompletionBaseText = null;
+          liveOverlay.rerender();
+          this._captureActiveSessionDraft();
+        }
+      });
+    }, 300);
+    return true;
   },
 
   /**
@@ -4135,11 +3486,7 @@ Object.assign(CodemanApp.prototype, {
   /** Insert editable text at the active prompt without pressing Enter. */
   insertTerminalText(text) {
     if (!this.activeSessionId || !text) return;
-    if (this._localEchoEnabled && this._localEchoOverlay) {
-      this._localEchoOverlay.appendText(text);
-    } else {
-      this.sendInput(text).catch(() => {});
-    }
+    this._terminalInputController.insertText(text);
     this.terminal?.focus();
   },
 
@@ -4151,27 +3498,9 @@ Object.assign(CodemanApp.prototype, {
     if (!this.activeSessionId) return;
 
     if (typeof CjkInput !== 'undefined') CjkInput.clear();
-    if (this._inputFlushTimeout) {
-      clearTimeout(this._inputFlushTimeout);
-      this._inputFlushTimeout = null;
-    }
-    this._pendingInput = '';
-
-    if (this._localEchoEnabled && this._localEchoOverlay) {
-      const flushed = this._localEchoOverlay.getFlushed?.() || { count: 0, text: '' };
-      this._localEchoOverlay.clear();
-      this._localEchoOverlay.suppressBufferDetection();
-      this._flushedOffsets?.delete(this.activeSessionId);
-      this._flushedTexts?.delete(this.activeSessionId);
-      if (flushed.count > 0) {
-        this.sendInput('\x7f'.repeat(flushed.count)).catch(() => {});
-      }
-    } else {
-      // In non-local-echo mode the TUI already owns the editable buffer. Ctrl+U
-      // is the conventional kill-line key supported by shells and agent TUIs.
-      this.sendInput('\x15').catch(() => {});
-    }
-
+    this._terminalInputController.clearInput();
+    this._flushedOffsets?.delete(this.activeSessionId);
+    this._flushedTexts?.delete(this.activeSessionId);
     this.showToast?.('Input cleared', 'success');
     this.terminal?.focus();
   },
@@ -4340,10 +3669,20 @@ Object.assign(CodemanApp.prototype, {
     if (promptRow >= 0) {
       const inputEnd = cursorRow >= promptRow ? cursorRow : promptRow;
       if (tappedRow >= promptRow && tappedRow <= inputEnd) return 'input';
-    } else if (tappedRow === cursorRow && cursorRow >= rows - 3) {
-      // During redraws a CLI can temporarily omit its prompt marker. Keep the
-      // live cursor row usable without turning arbitrary transcript rows into
-      // keyboard targets.
+    } else if (
+      tappedRow === cursorRow ||
+      tappedRow >=
+        Math.max(
+          0,
+          rows -
+            window.CodemanTerminalInput
+              .TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM
+        )
+    ) {
+      // During redraws a CLI can temporarily omit its prompt marker or place
+      // the cursor above a status footer. Keep the live cursor and a stable
+      // lower-screen focus band usable without turning transcript rows above
+      // that band into keyboard targets.
       return 'input';
     }
 
@@ -4668,18 +4007,7 @@ Object.assign(CodemanApp.prototype, {
       takeControl: true,
       refit: !keyboardVisible,
     }).catch(() => {});
-    // Mobile-control Enter must pass through local echo so buffered text is
-    // delivered before the control byte and the next draft starts cleanly.
-    if (input === '\r' && this._localEchoEnabled && this.terminal) {
-      const compositionText = this._localEchoOverlay?.compositionText || '';
-      if (compositionText) {
-        this._mobileCompositionPending = true;
-        this._commitMobileCompositionFallback(compositionText);
-      }
-      this.terminal.input(input);
-      return;
-    }
-    this._sendInputAsync(sessionId, input);
+    this._terminalInputController.sendControl(input);
   },
 
   _installMobileTapMouseGuard() {
@@ -4816,10 +4144,12 @@ Object.assign(CodemanApp.prototype, {
    */
   async sendInput(input) {
     if (!this.activeSessionId || !input) return;
-    // Route through the durable, exactly-once delivery layer (useMux for the
-    // POST fallback) so voice / keyboard-accessory / paste input also survives a
-    // dropped link instead of being lost in a single best-effort fetch.
-    this._sendInputAsync(this.activeSessionId, input, { useMux: true });
+    this._terminalInputController.sendExternalText(input);
+  },
+
+  /** Submit a command through the same draft and Enter ordering as typed input. */
+  sendTerminalCommand(command) {
+    this._terminalInputController?.sendCommand(command);
   },
 
   /**
@@ -4846,16 +4176,7 @@ Object.assign(CodemanApp.prototype, {
     const mode = this.sessions?.get(sessionId)?.mode;
     const lineBreaks = String(text).match(/\r\n|\r|\n/g)?.length || 0;
     _crashDiag.log(`PASTE_SEND mode=${mode || 'unknown'} len=${String(text).length} breaks=${lineBreaks}`);
-    const input = this._prepareTerminalPaste(text, mode !== 'shell');
-    // The HTTP fallback must write directly to the PTY. TmuxManager.sendInput()
-    // intentionally strips CR/LF for ordinary one-line prompts, which corrupts
-    // bracketed multiline paste whenever the WebSocket is reconnecting.
-    this._sendInputAsync(sessionId, input, { useMux: false });
-    if (options.submit) {
-      // A separate reliable record preserves paste-before-submit ordering on
-      // both WebSocket and serialized POST fallback transports.
-      this._sendInputAsync(sessionId, '\r', { useMux: false });
-    }
+    this._terminalInputController.sendPaste(text, options);
   },
 
   // ═══════════════════════════════════════════════════════════════

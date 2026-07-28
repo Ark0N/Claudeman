@@ -216,6 +216,16 @@ describe('terminal touch tap mouse guard', () => {
     expect(app._classifyMobileTerminalTap(9, 65)).toBe('content');
   });
 
+  it('keeps the live cursor focusable when Claude temporarily omits its prompt glyph', () => {
+    const { app } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app.terminal = createTerminalGrid(['Prior response', '', 'ready for input', '', 'status footer', ''], 2);
+
+    expect(app._classifyMobileTerminalTap(9, 33)).toBe('input');
+    expect(app._classifyMobileTerminalTap(9, 1)).toBe('content');
+  });
+
   it('treats a highlighted numbered choice as TUI content, not an input prompt', () => {
     const { app } = loadTerminalUiHarness();
     app.activeSessionId = 'sess-1';
@@ -764,7 +774,7 @@ describe('terminal viewport sizing claims', () => {
     const { app, setKeyboardVisible, cancelAnimationFrame } = loadTerminalUiHarness();
     app.activeSessionId = 'sess-1';
     app.sendResize = vi.fn(() => Promise.resolve(true));
-    app._sendInputAsync = vi.fn();
+    app._terminalInputController = { sendControl: vi.fn() };
     app._terminalSizingClaimFrame = 7;
     setKeyboardVisible(true);
 
@@ -776,6 +786,6 @@ describe('terminal viewport sizing claims', () => {
       takeControl: true,
       refit: false,
     });
-    expect(app._sendInputAsync).toHaveBeenCalledWith('sess-1', '\x1b[A');
+    expect(app._terminalInputController.sendControl).toHaveBeenCalledWith('\x1b[A');
   });
 });

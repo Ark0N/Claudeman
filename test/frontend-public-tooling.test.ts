@@ -30,7 +30,25 @@ describe('frontend public asset tooling', () => {
       .map((file) => relative(repoRoot, file));
 
     expect(files).toContain('src/web/public/terminal-input-state.js');
+    expect(files).toContain('src/web/public/terminal-input-controller.js');
     expect(checker.findNullByte(Buffer.from('valid source'))).toBe(-1);
     expect(checker.findNullByte(Buffer.from([0x61, 0, 0x62]))).toBe(1);
+  });
+
+  it('routes interactive producers through the terminal input facade', () => {
+    const producerPaths = [
+      'src/web/public/image-input.js',
+      'src/web/public/keyboard-accessory.js',
+      'src/web/public/session-ui.js',
+      'src/web/public/voice-input.js',
+    ];
+
+    for (const path of producerPaths) {
+      const source = readFileSync(resolve(repoRoot, path), 'utf8');
+      expect(source, `${path} bypasses TerminalInputController via sendInput()`).not.toMatch(
+        /\b(?:app|this)\.sendInput\(/
+      );
+      expect(source, `${path} bypasses TerminalInputController transport`).not.toContain('._sendInputAsync(');
+    }
   });
 });
