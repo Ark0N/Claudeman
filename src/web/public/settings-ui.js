@@ -2003,8 +2003,8 @@ Object.assign(CodemanApp.prototype, {
         remoteAutoReconnect: true,
         // Input
         gestureControlEnabled: false,
-        mobileTerminalControlsEnabled: true,
-        mobileControlHaptics: true,
+        mobileTerminalControlsEnabled: false,
+        mobileControlHaptics: false,
         mobileControlSound: false,
         // Feature toggles - keep tracking on even on mobile
         subagentTrackingEnabled: true,
@@ -2136,8 +2136,8 @@ Object.assign(CodemanApp.prototype, {
     }
 
     // File Viewer header button — opt-in, default OFF. Marker class (base is
-    // display:inline-flex !important); clicking it toggles the repository panel.
-    // Phones allow the enabled button because the panel has a dedicated mobile layout.
+    // display:inline-flex !important); phone-width touch layouts keep the header
+    // action hidden because the repository panel is launched from mobile options.
     const showFileViewerButton = settings.showFileViewerButton ?? defaults.showFileViewerButton ?? true;
     const fileViewerBtn = document.querySelector('.btn-file-viewer');
     if (fileViewerBtn) {

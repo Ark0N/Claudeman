@@ -135,7 +135,7 @@ describe('MobileTerminalControls settings migration', () => {
     [{ mobileNavigationPadEnabled: true }, {}, true, true],
     [{ mobileNavigationPadEnabled: false }, { mobileTerminalControlsEnabled: true }, true, false],
     [{ extendedKeyboardBar: true }, {}, false, true],
-    [{ extendedKeyboardBar: false }, {}, true, true],
+    [{ extendedKeyboardBar: false }, {}, true, false],
     [{ extendedKeyboardBar: false }, {}, false, false],
     [{}, { mobileTerminalControlsEnabled: true }, false, true],
   ])(

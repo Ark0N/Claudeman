@@ -78,8 +78,8 @@ describe('Settings Modal', () => {
         expect(defaults.showSubagents).toBe(false);
         expect(defaults.subagentTrackingEnabled).toBe(true);
         expect(defaults.ralphTrackerEnabled).toBe(false);
-        expect(defaults.mobileTerminalControlsEnabled).toBe(true);
-        expect(defaults.mobileControlHaptics).toBe(true);
+        expect(defaults.mobileTerminalControlsEnabled).toBe(false);
+        expect(defaults.mobileControlHaptics).toBe(false);
         expect(defaults.mobileControlSound).toBe(false);
       }
     });
@@ -459,8 +459,7 @@ describe('Settings Modal', () => {
             key,
             JSON.stringify({
               showResponseViewer: true,
-              // Legacy false meant the compact accessory layout, not disabled.
-              extendedKeyboardBar: false,
+              mobileTerminalControlsEnabled: true,
             })
           );
         }, STORAGE_KEYS.SETTINGS_MOBILE);
@@ -512,19 +511,23 @@ describe('Settings Modal', () => {
       }
     });
 
-    it('enables the unified controls by default on touch tablets', async () => {
+    it('keeps unified controls opt-in on touch tablets', async () => {
       const device = REPRESENTATIVE_DEVICES['standard-tablet'];
       const { page, context } = await createDevicePage(device, BASE_URL, 'chromium');
 
       try {
-        expect(await page.evaluate('MobileTerminalControls.enabled')).toBe(true);
+        expect(await page.evaluate('MobileTerminalControls.enabled')).toBe(false);
 
         await page.evaluate(() => (window as any).app.openAppSettings());
         await assertVisible(page, '#appSettingsMobileTerminalControlsItem');
-        expect(await page.locator('#appSettingsMobileTerminalControls').isChecked()).toBe(true);
+        expect(await page.locator('#appSettingsMobileTerminalControls').isChecked()).toBe(false);
         await page.evaluate(() => (window as any).app.closeAppSettings());
 
         await page.evaluate(`
+          const settings = app.loadAppSettingsFromStorage();
+          settings.mobileTerminalControlsEnabled = true;
+          app.saveAppSettingsToStorage(settings);
+          MobileTerminalControls.setEnabled(true);
           app.activeSessionId = 'tablet-controls-test';
           app.hideWelcome();
           MobileTerminalControls.syncVisibility();

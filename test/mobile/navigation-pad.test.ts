@@ -389,10 +389,10 @@ describe('Mobile Navigation Pad', () => {
     expect(await page.locator(SELECTORS.MOBILE_NAVIGATION).isVisible()).toBe(false);
     expect(await settingRow.isVisible()).toBe(true);
     expect(await settingSlider.isVisible()).toBe(true);
-    expect(await setting.isChecked()).toBe(true);
+    expect(await setting.isChecked()).toBe(false);
     expect(await hapticsRow.isVisible()).toBe(true);
     expect(await hapticsRow.locator('.slider').isVisible()).toBe(true);
-    expect(await haptics.isChecked()).toBe(true);
+    expect(await haptics.isChecked()).toBe(false);
     expect(await soundRow.isVisible()).toBe(true);
     expect(await soundRow.locator('.slider').isVisible()).toBe(true);
     expect(await sound.isChecked()).toBe(false);
@@ -402,25 +402,6 @@ describe('Mobile Navigation Pad', () => {
       await page.screenshot({ path: process.env.CODEMAN_NAV_MODAL_SCREENSHOT });
     }
 
-    await settingSlider.click();
-    expect(await setting.isChecked()).toBe(false);
-    await page.evaluate(`app.saveAppSettings()`);
-    await page.waitForFunction(() => {
-      const saved = JSON.parse(localStorage.getItem('codeman-app-settings-mobile') || '{}');
-      return saved.mobileTerminalControlsEnabled === false;
-    });
-    expect(
-      await page.evaluate(
-        `MobileTerminalControls.enabled === false &&
-          MobileNavigationPad.enabled === false &&
-          KeyboardAccessoryBar.enabled === false`
-      )
-    ).toBe(true);
-    expect(await page.locator(SELECTORS.MOBILE_NAVIGATION).isVisible()).toBe(false);
-    expect(await page.locator('.btn-toolbar.btn-enter').isVisible()).toBe(true);
-
-    await page.evaluate(`app.openAppSettings()`);
-    expect(await setting.isChecked()).toBe(false);
     await settingSlider.click();
     expect(await setting.isChecked()).toBe(true);
     await page.evaluate(`app.saveAppSettings()`);
@@ -437,6 +418,25 @@ describe('Mobile Navigation Pad', () => {
     ).toBe(true);
     expect(await page.locator(SELECTORS.MOBILE_NAVIGATION).isVisible()).toBe(true);
     expect(await page.locator('.btn-toolbar.btn-enter').isVisible()).toBe(false);
+
+    await page.evaluate(`app.openAppSettings()`);
+    expect(await setting.isChecked()).toBe(true);
+    await settingSlider.click();
+    expect(await setting.isChecked()).toBe(false);
+    await page.evaluate(`app.saveAppSettings()`);
+    await page.waitForFunction(() => {
+      const saved = JSON.parse(localStorage.getItem('codeman-app-settings-mobile') || '{}');
+      return saved.mobileTerminalControlsEnabled === false;
+    });
+    expect(
+      await page.evaluate(
+        `MobileTerminalControls.enabled === false &&
+          MobileNavigationPad.enabled === false &&
+          KeyboardAccessoryBar.enabled === false`
+      )
+    ).toBe(true);
+    expect(await page.locator(SELECTORS.MOBILE_NAVIGATION).isVisible()).toBe(false);
+    expect(await page.locator('.btn-toolbar.btn-enter').isVisible()).toBe(true);
   });
 
   it('switches to the extended accessory bar while the phone keyboard is visible', async () => {
