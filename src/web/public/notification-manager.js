@@ -9,7 +9,7 @@
  *   5. Audio alerts (Web Audio API beep, user-opt-in)
  *
  * Features:
- * - Per-event-type preferences (enabled, browser, audio, push) with v1→v4 migration
+ * - Per-event-type preferences (enabled, browser, audio, push) with v1→v5 migration
  * - Device-specific defaults (notifications disabled on mobile by default)
  * - 5s notification grouping window to batch rapid-fire events
  * - 100-notification cap with oldest eviction
@@ -21,7 +21,7 @@
  * @param {CodemanApp} app - Reference to the main app instance
  *
  * @dependency constants.js (STUCK_THRESHOLD_DEFAULT_MS, timing constants)
- * @dependency mobile-handlers.js (MobileDetection.getDeviceType for device-specific defaults)
+ * @dependency mobile-handlers.js (MobileDetection stable handheld identity/device type)
  * @loadorder 4 of 15 — loaded after voice-input.js, before keyboard-accessory.js
  */
 
@@ -65,12 +65,19 @@ class NotificationManager {
     });
   }
 
-  loadPreferences() {
+  _usesMobilePreferences() {
+    return (
+      MobileDetection.isHandheldDevice?.() ??
+      MobileDetection.getDeviceType() === 'mobile'
+    );
+  }
+
+  getDefaultPreferences() {
     const defaultEventTypes = {
       permission_prompt: { enabled: true, browser: true, audio: true, push: false },
       elicitation_dialog: { enabled: true, browser: true, audio: true, push: false },
       idle_prompt: { enabled: true, browser: true, audio: false, push: false },
-      stop: { enabled: true, browser: false, audio: false, push: false },
+      stop: { enabled: false, browser: false, audio: false, push: false },
       session_error: { enabled: true, browser: true, audio: false, push: false },
       respawn_cycle: { enabled: true, browser: false, audio: false, push: false },
       token_milestone: { enabled: true, browser: false, audio: false, push: false },
@@ -80,8 +87,8 @@ class NotificationManager {
     };
 
     // Device-specific defaults: mobile has notifications disabled by default
-    const isMobile = MobileDetection.getDeviceType() === 'mobile';
-    const defaults = {
+    const isMobile = this._usesMobilePreferences();
+    return {
       enabled: !isMobile, // Disabled on mobile by default
       browserNotifications: !isMobile,
       audioAlerts: false,
@@ -92,51 +99,97 @@ class NotificationManager {
       muteInfo: false,
       // Per-event-type preferences
       eventTypes: defaultEventTypes,
-      _version: 4,
+      _version: 5,
     };
+  }
+
+  /**
+   * Apply the complete v1→v5 migration to either local or server-hydrated
+   * preferences. Keeping one normalization path prevents fresh browsers from
+   * reviving retired drawer-only hook defaults.
+   */
+  normalizePreferences(rawPreferences) {
+    const defaults = this.getDefaultPreferences();
+    if (
+      !rawPreferences ||
+      typeof rawPreferences !== 'object' ||
+      Array.isArray(rawPreferences)
+    ) {
+      return defaults;
+    }
+
+    const prefs = {
+      ...rawPreferences,
+      eventTypes:
+        rawPreferences.eventTypes &&
+        typeof rawPreferences.eventTypes === 'object' &&
+        !Array.isArray(rawPreferences.eventTypes)
+          ? Object.fromEntries(
+              Object.entries(rawPreferences.eventTypes).map(([key, value]) => [
+                key,
+                value && typeof value === 'object' ? { ...value } : value,
+              ])
+            )
+          : undefined,
+    };
+    const version = Number.isInteger(prefs._version) ? prefs._version : 0;
+
+    // Migrate: v1 had browserNotifications defaulting to false
+    if (version < 2) {
+      prefs.browserNotifications = true;
+    }
+    // Migrate: v2 -> v3 adds eventTypes
+    if (version < 3) {
+      prefs.eventTypes = { ...defaults.eventTypes };
+    }
+    // Migrate: v3 -> v4 adds push field to all eventTypes
+    if (version < 4 && prefs.eventTypes) {
+      for (const key of Object.keys(prefs.eventTypes)) {
+        if (prefs.eventTypes[key] && prefs.eventTypes[key].push === undefined) {
+          prefs.eventTypes[key].push = false;
+        }
+      }
+    }
+    // Migrate: v4 -> v5 removes the drawer-only Response Complete default.
+    // Preserve users who opted into any external delivery channel.
+    if (version < 5) {
+      const stopPref = prefs.eventTypes?.stop;
+      if (
+        stopPref?.enabled === true &&
+        !stopPref.browser &&
+        !stopPref.audio &&
+        !stopPref.push
+      ) {
+        stopPref.enabled = false;
+      }
+    }
+
+    return {
+      ...defaults,
+      ...prefs,
+      eventTypes: { ...defaults.eventTypes, ...prefs.eventTypes },
+      _version: 5,
+    };
+  }
+
+  loadPreferences() {
     try {
       const storageKey = this.getStorageKey();
       const saved = localStorage.getItem(storageKey);
       if (saved) {
-        const prefs = JSON.parse(saved);
-        // Migrate: v1 had browserNotifications defaulting to false
-        if (!prefs._version || prefs._version < 2) {
-          prefs.browserNotifications = true;
-          prefs._version = 2;
-        }
-        // Migrate: v2 -> v3 adds eventTypes
-        if (prefs._version < 3) {
-          prefs.eventTypes = defaultEventTypes;
-          prefs._version = 3;
-          localStorage.setItem(storageKey, JSON.stringify(prefs));
-        }
-        // Migrate: v3 -> v4 adds push field to all eventTypes
-        if (prefs._version < 4) {
-          if (prefs.eventTypes) {
-            for (const key of Object.keys(prefs.eventTypes)) {
-              if (prefs.eventTypes[key] && prefs.eventTypes[key].push === undefined) {
-                prefs.eventTypes[key].push = false;
-              }
-            }
-          }
-          prefs._version = 4;
-          localStorage.setItem(storageKey, JSON.stringify(prefs));
-        }
-        // Merge with defaults to ensure all eventTypes exist
-        return {
-          ...defaults,
-          ...prefs,
-          eventTypes: { ...defaultEventTypes, ...prefs.eventTypes },
-        };
+        const normalized = this.normalizePreferences(JSON.parse(saved));
+        localStorage.setItem(storageKey, JSON.stringify(normalized));
+        return normalized;
       }
     } catch (_e) { /* ignore */ }
-    return defaults;
+    return this.getDefaultPreferences();
   }
 
   // Get storage key for notification prefs (device-specific)
   getStorageKey() {
-    const isMobile = MobileDetection.getDeviceType() === 'mobile';
-    return isMobile ? 'codeman-notification-prefs-mobile' : 'codeman-notification-prefs';
+    return this._usesMobilePreferences()
+      ? 'codeman-notification-prefs-mobile'
+      : 'codeman-notification-prefs';
   }
 
   savePreferences() {
@@ -163,8 +216,10 @@ class NotificationManager {
       'exit-gate': 'ralph_complete',
       'subagent-spawn': 'subagent_spawn',
       'subagent-complete': 'subagent_complete',
-      'hook-teammate-idle': 'idle_prompt',
-      'hook-task-completed': 'stop',
+      // Team lifecycle hooks are agent activity, not session-idle/stop alerts.
+      // Reuse the existing opt-in agent categories instead of making them noisy.
+      'hook-teammate-idle': 'subagent_spawn',
+      'hook-task-completed': 'subagent_complete',
     };
     const eventTypeKey = categoryToEventType[category] || category;
 
