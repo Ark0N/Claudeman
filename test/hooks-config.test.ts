@@ -9,7 +9,13 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { generateHooksConfig, writeHooksConfig } from '../src/hooks-config.js';
+import { spawn } from 'node:child_process';
+import {
+  generateBackgroundWakeScript,
+  generateHooksConfig,
+  refreshStaleCodemanHooks,
+  writeHooksConfig,
+} from '../src/hooks-config.js';
 
 describe('generateHooksConfig', () => {
   it('should return an object with hooks key', () => {
@@ -27,6 +33,30 @@ describe('generateHooksConfig', () => {
     const config = generateHooksConfig();
     expect(config.hooks.Stop).toBeInstanceOf(Array);
     expect(config.hooks.Stop).toHaveLength(1);
+  });
+
+  it('should configure a self-contained Bash background-task rewake hook', () => {
+    const config = generateHooksConfig();
+    const postToolHooks = config.hooks.PostToolUse as Array<{
+      matcher: string;
+      hooks: Array<{
+        type: string;
+        command: string;
+        args: string[];
+        asyncRewake: boolean;
+        timeout: number;
+      }>;
+    }>;
+
+    expect(postToolHooks).toHaveLength(1);
+    expect(postToolHooks[0].matcher).toBe('Bash');
+    expect(postToolHooks[0].hooks[0]).toMatchObject({
+      type: 'command',
+      command: 'node',
+      asyncRewake: true,
+    });
+    expect(postToolHooks[0].hooks[0].args).toEqual(['-e', generateBackgroundWakeScript()]);
+    expect(postToolHooks[0].hooks[0].timeout).toBeGreaterThanOrEqual(3600);
   });
 
   it('should configure idle_prompt matcher', () => {
@@ -157,7 +187,42 @@ describe('writeHooksConfig', () => {
     expect(parsed.hooks).toBeDefined();
   });
 
-  it('should overwrite existing hooks key', async () => {
+  it('should upgrade Codeman-owned hooks that predate background rewake', async () => {
+    const claudeDir = join(testDir, '.claude');
+    const settingsPath = join(claudeDir, 'settings.local.json');
+    mkdirSync(claudeDir, { recursive: true });
+    const oldHooks = generateHooksConfig().hooks;
+    delete oldHooks.PostToolUse;
+    writeFileSync(settingsPath, JSON.stringify({ hooks: oldHooks }, null, 2));
+
+    await refreshStaleCodemanHooks(testDir);
+
+    const parsed = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+    expect(parsed.hooks.PostToolUse).toHaveLength(1);
+    expect(JSON.stringify(parsed.hooks.PostToolUse)).toContain('CODEMAN_BACKGROUND_REWAKE_V1');
+  });
+
+  it('should not add rewake hooks to a user-owned hook configuration', async () => {
+    const claudeDir = join(testDir, '.claude');
+    const settingsPath = join(claudeDir, 'settings.local.json');
+    mkdirSync(claudeDir, { recursive: true });
+    const userHooks = {
+      PostToolUse: [
+        {
+          matcher: 'Write',
+          hooks: [{ type: 'command', command: './format.sh' }],
+        },
+      ],
+    };
+    writeFileSync(settingsPath, JSON.stringify({ hooks: userHooks }, null, 2));
+
+    await refreshStaleCodemanHooks(testDir);
+
+    const parsed = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+    expect(parsed.hooks).toEqual(userHooks);
+  });
+
+  it('should preserve user hook events while installing Codeman hooks', async () => {
     const claudeDir = join(testDir, '.claude');
     mkdirSync(claudeDir, { recursive: true });
     writeFileSync(join(claudeDir, 'settings.local.json'), JSON.stringify({ hooks: { oldHook: [] } }, null, 2));
@@ -165,7 +230,7 @@ describe('writeHooksConfig', () => {
     await writeHooksConfig(testDir);
 
     const parsed = JSON.parse(readFileSync(join(claudeDir, 'settings.local.json'), 'utf-8'));
-    expect(parsed.hooks.oldHook).toBeUndefined();
+    expect(parsed.hooks.oldHook).toEqual([]);
     expect(parsed.hooks.Notification).toBeDefined();
   });
 
@@ -184,6 +249,82 @@ describe('writeHooksConfig', () => {
     await writeHooksConfig(testDir);
     const content = readFileSync(join(testDir, '.claude', 'settings.local.json'), 'utf-8');
     expect(content.endsWith('\n')).toBe(true);
+  });
+});
+
+describe('background task rewake helper', () => {
+  const testDir = join(tmpdir(), 'codeman-background-rewake-test-' + Date.now());
+
+  beforeEach(() => {
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  function runHelper(input: Record<string, unknown>): Promise<{ code: number | null; stderr: string }> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['-e', generateBackgroundWakeScript()], {
+        stdio: ['pipe', 'ignore', 'pipe'],
+      });
+      let stderr = '';
+      const timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error('background rewake helper timed out'));
+      }, 5000);
+
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk;
+      });
+      child.on('error', reject);
+      child.on('close', (code) => {
+        clearTimeout(timeout);
+        resolve({ code, stderr });
+      });
+      child.stdin.end(JSON.stringify(input));
+    });
+  }
+
+  it('exits without waiting for an ordinary Bash result', async () => {
+    const result = await runHelper({
+      transcript_path: join(testDir, 'transcript.jsonl'),
+      tool_response: { stdout: 'ordinary command completed' },
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe('');
+  });
+
+  it('exits 2 when the matching background command completes', async () => {
+    const transcriptPath = join(testDir, 'transcript.jsonl');
+    writeFileSync(transcriptPath, '');
+
+    const resultPromise = runHelper({
+      transcript_path: transcriptPath,
+      tool_response: {
+        stdout: 'Command running in background with ID: bg-test-1. Output is being written to: /tmp/bg-test-1.output.',
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    writeFileSync(
+      transcriptPath,
+      JSON.stringify({
+        type: 'queue-operation',
+        operation: 'enqueue',
+        content:
+          '<task-notification>\n<task-id>bg-test-1</task-id>\n<status>completed</status>\n' +
+          '<output-file>/tmp/bg-test-1.output</output-file>\n</task-notification>',
+      }) + '\n'
+    );
+
+    const result = await resultPromise;
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('bg-test-1');
+    expect(result.stderr).toContain('completed');
+    expect(result.stderr).toContain('/tmp/bg-test-1.output');
   });
 });
 

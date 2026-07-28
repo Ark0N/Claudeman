@@ -65,7 +65,7 @@ import {
   updateCaseModel,
   stripCaseEnvKeys,
   applyStatusLineConfig,
-  refreshStaleHookSecret,
+  refreshStaleCodemanHooks,
 } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { imageWatcher } from '../../image-watcher.js';
@@ -445,7 +445,7 @@ export function registerSessionRoutes(
     // unconditional hook-secret gate keeps accepting its hook events. No-op for fresh
     // cases (writeHooksConfig already wrote the secret) and for non-Codeman/absent hooks.
     if ((body.mode ?? 'claude') === 'claude') {
-      await refreshStaleHookSecret(workingDir).catch(() => {});
+      await refreshStaleCodemanHooks(workingDir).catch(() => {});
     }
 
     // Check OpenCode availability if requested
@@ -2170,7 +2170,7 @@ export function registerSessionRoutes(
       // now-unconditional hook-secret gate keeps accepting its hook events. No-op when
       // the hooks aren't ours or already carry the secret. Skipped for remote cases —
       // resolvedCasePath is a REMOTE path that doesn't exist on the local filesystem.
-      await refreshStaleHookSecret(resolvedCasePath).catch(() => {});
+      await refreshStaleCodemanHooks(resolvedCasePath).catch(() => {});
     }
 
     // Docker cases: the workspace is a REAL host dir bind-mounted into the container.
@@ -2186,7 +2186,7 @@ export function registerSessionRoutes(
         if (!existsSync(join(resolvedCasePath, '.claude', 'settings.local.json'))) {
           await writeHooksConfig(resolvedCasePath);
         } else {
-          await refreshStaleHookSecret(resolvedCasePath).catch(() => {});
+          await refreshStaleCodemanHooks(resolvedCasePath).catch(() => {});
         }
       } catch {
         /* non-fatal — the session still runs, hooks may be degraded */
