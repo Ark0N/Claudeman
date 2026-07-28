@@ -148,6 +148,7 @@ const CodexConfigSchema = z
       .regex(/^[a-zA-Z0-9_-]+$/)
       .optional(),
     dangerouslyBypassApprovals: z.boolean().optional(),
+    animations: z.boolean().optional(),
     renderMode: z
       .enum(['scrollback', 'hybrid'])
       .optional()
@@ -723,6 +724,7 @@ export const SettingsUpdateSchema = z
     allowedTools: z.string().max(2000).optional(),
     // Codex CLI settings
     codexDangerouslyBypassApprovals: z.boolean().optional(),
+    codexAnimationsEnabled: z.boolean().optional(),
     // Terminal history and retention
     terminalScrollbackLines: z
       .number()
@@ -838,6 +840,11 @@ export const SessionInputWithLimitSchema = z.object({
 /** PUT /api/sessions/:id/name */
 export const SessionNameSchema = z.object({
   name: z.string().min(0).max(128),
+});
+
+/** PUT /api/sessions/:id/working-directory */
+export const SessionWorkingDirectorySchema = z.object({
+  workingDir: safePathSchema,
 });
 
 /** PUT /api/sessions/:id/color */

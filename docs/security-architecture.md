@@ -369,12 +369,15 @@ documented here rather than silently diverging from the per‑session claim abov
 
 ### Known limitation — `workingDir` scope
 
-The file‑route boundary is the session's `workingDir`, and `POST /api/sessions`
-currently accepts an arbitrary absolute `workingDir` (validated as "exists + is a
-directory"). A session created with `workingDir=/` can therefore read files
-across the filesystem within that boundary. This is **pre‑existing** across all
-file routes and not widened by the recent changes. Recommended follow‑up:
-constrain `workingDir` to an allowlist (e.g. under the cases dir / `$HOME`).
+The file‑route boundary is the session's `workingDir`. `POST /api/sessions` and
+`PUT /api/sessions/:id/working-directory` accept an arbitrary safe absolute host
+path in single-user/admin mode after verifying that it exists and is a
+directory. The mutation route is local-session-only; remote and Docker sessions
+are rejected. A session pointed at `workingDir=/` can therefore read files
+across the filesystem within that boundary. In multi-user mode,
+`isWorkingDirAllowed` additionally realpath-confines non-admin paths to that
+user's case space. A stricter single-user/admin deployment can constrain
+`workingDir` to an allowlist (for example, the cases directory or `$HOME`).
 
 ---
 

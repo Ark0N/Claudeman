@@ -15,7 +15,7 @@
  *   - response envelope shape; Claude-mode behavior unchanged (regression guard)
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync } from 'node:fs';
@@ -375,6 +375,68 @@ describe('GET /api/sessions/:id/last-response (codex)', () => {
       expect(res.statusCode).toBe(200);
       expect(body.data.text).toBe('claude answer');
       expect(body.data.timestamp).toBe('2026-07-01T00:00:00Z');
+    } finally {
+      process.env.HOME = prevHome;
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers a restored Claude pane by transcript-id prefix and returns only its latest response', async () => {
+    const fakeHome = mkdtempSync(join(tmpdir(), 'codeman-restored-claude-home-'));
+    const prevHome = process.env.HOME;
+    process.env.HOME = fakeHome;
+    try {
+      const restored = createMockSession('restored-deadbeef');
+      restored.mode = 'claude';
+      restored.workingDir = '/stale/server/cwd';
+      const restoredWithTranscript = restored as typeof restored & {
+        claudeSessionId: string;
+        adoptClaudeSessionId: (id: string) => void;
+      };
+      restoredWithTranscript.claudeSessionId = restored.id;
+      restoredWithTranscript.adoptClaudeSessionId = vi.fn((id: string) => {
+        restoredWithTranscript.claudeSessionId = id;
+      });
+      harness.ctx.sessions.set(restored.id, restored);
+
+      const transcriptId = 'deadbeef-1111-4222-8333-444444444444';
+      const projDir = join(fakeHome, '.claude', 'projects', '-actual-project');
+      mkdirSync(projDir, { recursive: true });
+      writeFileSync(
+        join(projDir, `${transcriptId}.jsonl`),
+        [
+          {
+            type: 'user',
+            timestamp: '2026-07-01T00:00:00Z',
+            message: { content: 'first prompt' },
+          },
+          {
+            type: 'assistant',
+            timestamp: '2026-07-01T00:01:00Z',
+            message: { content: [{ type: 'text', text: 'older response' }] },
+          },
+          {
+            type: 'user',
+            timestamp: '2026-07-01T00:02:00Z',
+            message: { content: 'latest prompt' },
+          },
+          {
+            type: 'assistant',
+            timestamp: '2026-07-01T00:03:00Z',
+            message: { content: [{ type: 'text', text: 'actual latest response' }] },
+          },
+        ]
+          .map((entry) => JSON.stringify(entry))
+          .join('\n') + '\n'
+      );
+
+      const { res, body } = await getLastResponse(restored.id);
+      expect(res.statusCode).toBe(200);
+      expect(body.data).toEqual({
+        text: 'actual latest response',
+        timestamp: '2026-07-01T00:03:00Z',
+      });
+      expect(restoredWithTranscript.adoptClaudeSessionId).toHaveBeenCalledWith(transcriptId);
     } finally {
       process.env.HOME = prevHome;
       rmSync(fakeHome, { recursive: true, force: true });

@@ -11,10 +11,11 @@
  * paths remain fully functional. The frontend opts into WS when available and
  * falls back transparently.
  *
- * Terminal output is micro-batched at 8ms to group Ink's rapid cursor-up redraws
- * into single frames, preventing flicker from split ANSI sequences. This matches
- * the SSE path's server-side batching (16-50ms) but at a shorter interval since
- * WS has no Traefik buffering overhead.
+ * Terminal output is micro-batched to group Ink's rapid cursor-up redraws into
+ * single frames, preventing flicker from split ANSI sequences. Desktop keeps an
+ * 8ms/8KB low-latency budget. Mobile uses 50ms/16KB because synchronized xterm
+ * paints are substantially more expensive on phone CPUs; grouping before the
+ * DEC-2026 wrapper preserves every PTY byte while removing redundant paints.
  *
  * Protocol (all JSON text frames):
  *   Server -> Client:
@@ -22,6 +23,7 @@
  *     {"t":"c"}           — clear terminal
  *     {"t":"r"}           — needs refresh (reload buffer)
  *     {"t":"ia","seq":N}  — input ACK (echoes the seq of an applied/deduped input frame)
+ *     {"t":"ha"}          — terminal-stream handoff ACK
  *   Client -> Server:
  *     {"t":"i","d":"...","seq":N,"cid":"..."} — input (keystroke or paste). seq+cid are
  *                          optional reliable-delivery tags: the server applies each
@@ -30,6 +32,7 @@
  *     {"t":"z","c":N,"r":N,"v":"mobile|tablet|desktop","f":bool,"a":bool}
  *                          — resize terminal. f forces SIGWINCH; a explicitly takes
  *                          shared PTY sizing control for this viewport.
+ *     {"t":"h"}           — flush WS output and atomically hand terminal delivery to SSE
  */
 
 import { FastifyInstance } from 'fastify';
@@ -44,8 +47,14 @@ import { canAccessOwned, getAuthUser } from '../route-helpers.js';
  *  long enough to group Ink's rapid cursor-up redraw sequences into single frames. */
 const WS_BATCH_INTERVAL_MS = 8;
 
-/** Flush immediately when batch exceeds this size (bytes) for responsiveness. */
-const WS_BATCH_FLUSH_THRESHOLD = 16384;
+/** Keep active-view redraw frames small enough for one smooth mobile paint. */
+const WS_BATCH_FLUSH_THRESHOLD = 8 * 1024;
+
+/** Phone-specific batching budget: reliably groups two ~30Hz source animation ticks. */
+const WS_MOBILE_BATCH_INTERVAL_MS = 50;
+
+/** Match the browser's mobile xterm parse budget while retaining progressive bulk output. */
+const WS_MOBILE_BATCH_FLUSH_THRESHOLD = 16 * 1024;
 
 /** How often to ping each WebSocket client (ms). Detects stale connections that
  *  TCP keepalive won't catch for minutes, especially through tunnels/proxies. */
@@ -64,6 +73,143 @@ const DEC_2026_END = '\x1b[?2026l';
 /** Max concurrent WS connections per session. Prevents listener/bandwidth multiplication. */
 const MAX_WS_PER_SESSION = 5;
 
+function splitTerminalPayload(
+  data: string,
+  maxBytes: number,
+  flushSafeTail: boolean
+): { frames: string[]; remainder: string } {
+  if (!data) return { frames: [], remainder: '' };
+  const chunks: string[] = [];
+  let parserState: 'ground' | 'escape' | 'csi' | 'osc' | 'osc-escape' | 'control-string' | 'control-string-escape' =
+    'ground';
+  let controlSequence = '';
+  let synchronizedUpdateOpen = false;
+  let start = 0;
+  let offset = 0;
+  let chunkBytes = 0;
+  let lastSafeOffset = 0;
+  while (offset < data.length) {
+    const codePoint = data.codePointAt(offset) ?? 0;
+    const codeUnits = codePoint > 0xffff ? 2 : 1;
+    const codePointBytes = codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+
+    // Split before the next ground-state code point when it would exceed the
+    // target. Inside ANSI strings/sequences, correctness wins: wait until the
+    // parser returns to ground rather than injecting a sync marker mid-command.
+    if (
+      parserState === 'ground' &&
+      !synchronizedUpdateOpen &&
+      chunkBytes > 0 &&
+      chunkBytes + codePointBytes > maxBytes
+    ) {
+      chunks.push(data.slice(start, offset));
+      start = offset;
+      chunkBytes = 0;
+      lastSafeOffset = start;
+    }
+
+    chunkBytes += codePointBytes;
+    offset += codeUnits;
+
+    switch (parserState) {
+      case 'ground':
+        if (codePoint === 0x1b) {
+          parserState = 'escape';
+          controlSequence = '\x1b';
+        } else if (codePoint === 0x9b) {
+          parserState = 'csi';
+          controlSequence = '\x9b';
+        } else if (codePoint === 0x9d) {
+          parserState = 'osc';
+        } else if (codePoint === 0x90 || codePoint === 0x98 || codePoint === 0x9e || codePoint === 0x9f) {
+          parserState = 'control-string';
+        }
+        break;
+      case 'escape':
+        controlSequence += String.fromCodePoint(codePoint);
+        if (codePoint === 0x5b) {
+          parserState = 'csi';
+        } else if (codePoint === 0x5d) {
+          parserState = 'osc';
+          controlSequence = '';
+        } else if (codePoint === 0x50 || codePoint === 0x58 || codePoint === 0x5e || codePoint === 0x5f) {
+          parserState = 'control-string';
+          controlSequence = '';
+        } else if (codePoint < 0x20 || codePoint > 0x2f) {
+          parserState = 'ground';
+          controlSequence = '';
+        }
+        break;
+      case 'csi':
+        if (codePoint === 0x1b) {
+          parserState = 'escape';
+          controlSequence = '\x1b';
+        } else if (codePoint === 0x18 || codePoint === 0x1a) {
+          parserState = 'ground';
+          controlSequence = '';
+        } else {
+          controlSequence += String.fromCodePoint(codePoint);
+          if (codePoint >= 0x40 && codePoint <= 0x7e) {
+            if (controlSequence === '\x1b[?2026h' || controlSequence === '\x9b?2026h') {
+              synchronizedUpdateOpen = true;
+            } else if (controlSequence === '\x1b[?2026l' || controlSequence === '\x9b?2026l') {
+              synchronizedUpdateOpen = false;
+            }
+            parserState = 'ground';
+            controlSequence = '';
+          }
+        }
+        break;
+      case 'osc':
+        if (codePoint === 0x07 || codePoint === 0x9c) {
+          parserState = 'ground';
+        } else if (codePoint === 0x1b) {
+          parserState = 'osc-escape';
+        }
+        break;
+      case 'osc-escape':
+        if (codePoint === 0x5c || codePoint === 0x9c || codePoint === 0x07) {
+          parserState = 'ground';
+        } else {
+          parserState = codePoint === 0x1b ? 'osc-escape' : 'osc';
+        }
+        break;
+      case 'control-string':
+        if (codePoint === 0x9c) {
+          parserState = 'ground';
+        } else if (codePoint === 0x1b) {
+          parserState = 'control-string-escape';
+        }
+        break;
+      case 'control-string-escape':
+        if (codePoint === 0x5c || codePoint === 0x9c) {
+          parserState = 'ground';
+        } else {
+          parserState = codePoint === 0x1b ? 'control-string-escape' : 'control-string';
+        }
+        break;
+    }
+
+    if (parserState === 'ground' && !synchronizedUpdateOpen) {
+      lastSafeOffset = offset;
+      if (chunkBytes >= maxBytes) {
+        chunks.push(data.slice(start, offset));
+        start = offset;
+        chunkBytes = 0;
+        lastSafeOffset = start;
+      }
+    }
+  }
+  if (flushSafeTail && lastSafeOffset > start) {
+    chunks.push(data.slice(start, lastSafeOffset));
+    start = lastSafeOffset;
+  }
+  return {
+    frames: chunks,
+    remainder: data.slice(start),
+  };
+}
+
 /**
  * Track live WS connections per session, keyed by clientId (COD-137).
  * Replaces a bare counter that over-counted across the async-close gap on
@@ -73,7 +219,22 @@ const MAX_WS_PER_SESSION = 5;
  */
 const sessionWsRegistry = new WsConnectionRegistry<WebSocket>(MAX_WS_PER_SESSION);
 
-export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHostPolicy: () => HostPolicy): void {
+export interface TerminalStreamCoordinator {
+  suspendSseTerminal(clientId: string, sessionId: string): void;
+  resumeSseTerminal(clientId: string, sessionId: string, recover: boolean): void;
+}
+
+const NOOP_STREAM_COORDINATOR: TerminalStreamCoordinator = {
+  suspendSseTerminal: () => {},
+  resumeSseTerminal: () => {},
+};
+
+export function registerWsRoutes(
+  app: FastifyInstance,
+  ctx: SessionPort,
+  getHostPolicy: () => HostPolicy,
+  streamCoordinator: TerminalStreamCoordinator = NOOP_STREAM_COORDINATOR
+): void {
   app.get<{ Params: { id: string }; Querystring: { cid?: string } }>(
     '/ws/sessions/:id/terminal',
     { websocket: true },
@@ -137,10 +298,25 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
       }
       console.info('[ws] terminal open', { sessionId: id, wsCount: sessionWsRegistry.liveCount(id) });
 
+      if (cid) {
+        streamCoordinator.suspendSseTerminal(cid, id);
+      }
+
+      let transportReleased = false;
+      let detachTerminalTransport = () => {};
+      const releaseTerminalTransport = (recover: boolean) => {
+        if (transportReleased || !cid) return;
+        transportReleased = true;
+        if (sessionWsRegistry.hasSocket(id, socket)) {
+          streamCoordinator.resumeSseTerminal(cid, id, recover);
+        }
+      };
+
       // Eagerly free the slot on error/terminate — don't wait for the async
       // 'close' (idempotent with the 'close' handler below). This is what kills
       // the reconnect over-count: the slot is released the instant the socket dies.
       socket.on('error', () => {
+        releaseTerminalTransport(true);
         sessionWsRegistry.unregister(id, socket);
       });
 
@@ -148,8 +324,12 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
       let batchChunks: string[] = [];
       let batchSize = 0;
       let batchTimer: ReturnType<typeof setTimeout> | null = null;
+      const batchIntervalMs = () =>
+        announcedViewport === 'mobile' ? WS_MOBILE_BATCH_INTERVAL_MS : WS_BATCH_INTERVAL_MS;
+      const batchFlushThreshold = () =>
+        announcedViewport === 'mobile' ? WS_MOBILE_BATCH_FLUSH_THRESHOLD : WS_BATCH_FLUSH_THRESHOLD;
 
-      const flushBatch = () => {
+      const flushBatch = (flushSafeTail = true) => {
         batchTimer = null;
         if (batchChunks.length === 0 || socket.readyState !== 1) {
           batchChunks = [];
@@ -157,9 +337,19 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
           return;
         }
         const data = batchChunks.join('');
-        batchChunks = [];
-        batchSize = 0;
-        socket.send(`{"t":"o","d":${JSON.stringify(DEC_2026_START + data + DEC_2026_END)}}`);
+        const { frames, remainder } = splitTerminalPayload(data, batchFlushThreshold(), flushSafeTail);
+        batchChunks = remainder ? [remainder] : [];
+        batchSize = Buffer.byteLength(remainder, 'utf8');
+        for (const frame of frames) {
+          socket.send(`{"t":"o","d":${JSON.stringify(DEC_2026_START + frame + DEC_2026_END)}}`);
+        }
+      };
+      const flushBatchNow = () => {
+        if (batchTimer) {
+          clearTimeout(batchTimer);
+          batchTimer = null;
+        }
+        flushBatch(false);
       };
 
       // Per-connection desktop sizing claim — registered on the first
@@ -200,6 +390,15 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
             if (seq !== null && socket.readyState === 1) {
               socket.send(`{"t":"ia","seq":${seq}}`);
             }
+          } else if (msg.t === 'h') {
+            if (batchTimer) {
+              clearTimeout(batchTimer);
+              batchTimer = null;
+            }
+            flushBatch();
+            detachTerminalTransport();
+            releaseTerminalTransport(false);
+            if (socket.readyState === 1) socket.send('{"t":"ha"}');
           } else if (
             msg.t === 'z' &&
             Number.isInteger(msg.c) &&
@@ -236,20 +435,12 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
       const onTerminal = (data: string) => {
         if (socket.readyState !== 1) return;
         batchChunks.push(data);
-        batchSize += data.length;
-
-        // Flush immediately for large batches (responsiveness during bulk output)
-        if (batchSize > WS_BATCH_FLUSH_THRESHOLD) {
-          if (batchTimer) {
-            clearTimeout(batchTimer);
-          }
-          flushBatch();
-          return;
-        }
+        batchSize += Buffer.byteLength(data, 'utf8');
+        if (batchSize >= batchFlushThreshold()) flushBatchNow();
 
         // Start timer if not already running
-        if (!batchTimer) {
-          batchTimer = setTimeout(flushBatch, WS_BATCH_INTERVAL_MS);
+        if (batchChunks.length > 0 && !batchTimer) {
+          batchTimer = setTimeout(flushBatch, batchIntervalMs());
         }
       };
 
@@ -275,6 +466,11 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
       session.on('clearTerminal', onClearTerminal);
       session.on('needsRefresh', onNeedsRefresh);
       session.on('exit', onSessionExit);
+      detachTerminalTransport = () => {
+        session.off('terminal', onTerminal);
+        session.off('clearTerminal', onClearTerminal);
+        session.off('needsRefresh', onNeedsRefresh);
+      };
 
       // Heartbeat: detect stale connections (especially through tunnels where
       // TCP RST can take minutes to propagate).
@@ -294,6 +490,7 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
           console.warn('[ws] terminal ping timeout — terminating', { sessionId: id });
           // Free the slot eagerly — terminate()'s 'close' may lag, and a client
           // reconnecting after a stale-connection drop must not be over-counted.
+          releaseTerminalTransport(true);
           sessionWsRegistry.unregister(id, socket);
           socket.terminate();
         }, WS_PONG_TIMEOUT_MS);
@@ -304,12 +501,11 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
         if (pongTimeout) clearTimeout(pongTimeout);
         if (batchTimer) clearTimeout(batchTimer);
         batchChunks = [];
-        session.off('terminal', onTerminal);
-        session.off('clearTerminal', onClearTerminal);
-        session.off('needsRefresh', onNeedsRefresh);
+        detachTerminalTransport();
         session.off('exit', onSessionExit);
         session.releaseDesktopSizing(sizingToken);
 
+        releaseTerminalTransport(code !== 4009);
         // Release this socket's slot. Idempotent and identity-matched: if this
         // socket was already superseded (a same-cid reconnect took its slot) or
         // eagerly unregistered on terminate/error, this is a no-op and the

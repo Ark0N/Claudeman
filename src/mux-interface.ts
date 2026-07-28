@@ -132,6 +132,31 @@ export interface PaneCaptureOptions {
   maxCaptureBytes?: number;
 }
 
+/** A stable physical-row slice of a tmux pane's retained history. */
+export interface PaneHistoryPage {
+  /** ANSI-styled physical rows separated by CRLF, excluding the visible pane. */
+  buffer: string;
+  /** Inclusive absolute row offset from the oldest retained history row. */
+  start: number;
+  /** Exclusive absolute row offset from the oldest retained history row. */
+  end: number;
+  /** Retained history rows at capture time, excluding the visible pane. */
+  total: number;
+  hasMoreBefore: boolean;
+  hasMoreAfter: boolean;
+  /** Changes when the pane or oldest retained history changes. */
+  origin: string;
+}
+
+export interface PaneHistoryPageOptions {
+  /** Maximum physical tmux rows to return. */
+  limit: number;
+  /** Fetch the page ending immediately before this absolute history row. */
+  before?: number;
+  /** Fetch the page beginning at this absolute history row. */
+  after?: number;
+}
+
 /**
  * Terminal multiplexer interface.
  *
@@ -192,6 +217,9 @@ export interface TerminalMultiplexer extends EventEmitter {
 
   /** Update the display name of a session */
   updateSessionName(sessionId: string, name: string): boolean;
+
+  /** Update the persisted working directory of a session */
+  updateSessionWorkingDir(sessionId: string, workingDir: string): boolean;
 
   /** Mark session as attached/detached */
   setAttached(sessionId: string, attached: boolean): void;
@@ -271,4 +299,7 @@ export interface TerminalMultiplexer extends EventEmitter {
    * Pass `{ fullHistory: true }` to capture the entire scrollback (COD-47).
    */
   captureActivePaneBuffer?(muxName: string, opts?: PaneCaptureOptions): string | null;
+
+  /** Capture one bounded physical-row page from the active pane's retained history. */
+  captureActivePaneHistoryPage?(muxName: string, opts: PaneHistoryPageOptions): PaneHistoryPage | null;
 }

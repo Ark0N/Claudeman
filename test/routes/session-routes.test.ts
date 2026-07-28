@@ -387,6 +387,52 @@ describe('session-routes', () => {
     });
   });
 
+  // ========== PUT /api/sessions/:id/working-directory ==========
+
+  describe('PUT /api/sessions/:id/working-directory', () => {
+    it('synchronizes a local session path and persists the updated state', async () => {
+      const workingDir = await mkdtemp(join(tmpdir(), 'codeman-workdir-'));
+      try {
+        const res = await harness.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${harness.ctx._sessionId}/working-directory`,
+          payload: { workingDir },
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(res.body).data.workingDir).toBe(workingDir);
+        expect(harness.ctx._session.setWorkingDir).toHaveBeenCalledWith(workingDir);
+        expect(harness.ctx.persistSessionState).toHaveBeenCalled();
+        expect(harness.ctx.broadcast).toHaveBeenCalledWith('session:updated', expect.anything());
+      } finally {
+        await rm(workingDir, { recursive: true });
+      }
+    });
+
+    it('rejects a missing directory without changing the session', async () => {
+      const res = await harness.app.inject({
+        method: 'PUT',
+        url: `/api/sessions/${harness.ctx._sessionId}/working-directory`,
+        payload: { workingDir: '/tmp/codeman-directory-that-does-not-exist' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(harness.ctx._session.setWorkingDir).not.toHaveBeenCalled();
+    });
+
+    it('rejects remote sessions because their paths cannot be validated locally', async () => {
+      (harness.ctx._session as typeof harness.ctx._session & { remote: object }).remote = {};
+      const res = await harness.app.inject({
+        method: 'PUT',
+        url: `/api/sessions/${harness.ctx._sessionId}/working-directory`,
+        payload: { workingDir: '/tmp' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(harness.ctx._session.setWorkingDir).not.toHaveBeenCalled();
+    });
+  });
+
   // ========== PUT /api/sessions/:id/color ==========
 
   describe('PUT /api/sessions/:id/color', () => {
@@ -644,6 +690,117 @@ describe('session-routes', () => {
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       expect(body.data.terminalBuffer).toBeDefined();
+      expect(body.data.cursor).toEqual({
+        stream: expect.any(String),
+        generation: expect.any(Number),
+        start: expect.any(Number),
+        end: 11,
+      });
+    });
+
+    it('streams lossless terminal text outside the JSON envelope with cursor headers', async () => {
+      const terminalText = 'history line\nunicode: \u05e9\u05dc\u05d5\u05dd \ud83d\ude80\ncurrent prompt';
+      harness.ctx._session.terminalBuffer = terminalText;
+      harness.ctx.mux.captureActivePaneBuffer = vi.fn(() => null);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal?format=stream`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toBe(terminalText);
+      expect(res.body).not.toContain('"success"');
+      expect(res.headers['content-type']).toContain('text/plain');
+      expect(res.headers['x-codeman-terminal-format']).toBe('stream-v1');
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.headers['x-codeman-terminal-stream']).toEqual(expect.any(String));
+      expect(res.headers['x-codeman-terminal-generation']).toBe('0');
+      expect(res.headers['x-codeman-terminal-start']).toBe('0');
+      expect(res.headers['x-codeman-terminal-end']).toBe(String(terminalText.length));
+      expect(res.headers['x-codeman-terminal-truncated']).toBe('0');
+      expect(res.headers['x-codeman-terminal-source']).toBe('history');
+    });
+
+    it('streams a bounded tmux history page with absolute row metadata', async () => {
+      const capturePage = vi.fn(() => ({
+        buffer: 'PAGE_ROW_1200\r\nPAGE_ROW_2199',
+        start: 1200,
+        end: 2200,
+        total: 2200,
+        hasMoreBefore: true,
+        hasMoreAfter: false,
+        origin: 'pane-7:stable-origin',
+      }));
+      (harness.ctx.mux as { captureActivePaneHistoryPage?: unknown }).captureActivePaneHistoryPage = capturePage;
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal?historyPage=1&lines=1000&format=stream`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toContain('PAGE_ROW_1200');
+      expect(res.body).toContain('PAGE_ROW_2199');
+      expect(res.headers['x-codeman-terminal-source']).toBe('mux-history-page');
+      expect(res.headers['x-codeman-history-start']).toBe('1200');
+      expect(res.headers['x-codeman-history-end']).toBe('2200');
+      expect(res.headers['x-codeman-history-total']).toBe('2200');
+      expect(res.headers['x-codeman-history-more-before']).toBe('1');
+      expect(res.headers['x-codeman-history-more-after']).toBe('0');
+      expect(res.headers['x-codeman-history-origin']).toBe('pane-7:stable-origin');
+      expect(capturePage).toHaveBeenCalledWith(harness.ctx._session.muxName, {
+        limit: 1000,
+        before: undefined,
+        after: undefined,
+      });
+    });
+
+    it('forwards an older-page boundary without requesting the full tmux history', async () => {
+      const capturePage = vi.fn(() => ({
+        buffer: 'OLDER_PAGE',
+        start: 1000,
+        end: 2000,
+        total: 5000,
+        hasMoreBefore: true,
+        hasMoreAfter: true,
+        origin: 'pane-7:stable-origin',
+      }));
+      (harness.ctx.mux as { captureActivePaneHistoryPage?: unknown }).captureActivePaneHistoryPage = capturePage;
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal?historyPage=1&before=2000&lines=1000&format=stream`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(capturePage).toHaveBeenCalledWith(harness.ctx._session.muxName, {
+        limit: 1000,
+        before: 2000,
+        after: undefined,
+      });
+      expect(harness.ctx.mux.captureActivePaneBuffer).toBeUndefined();
+    });
+
+    it('falls back to a bounded newest-byte tail when tmux page capture fails', async () => {
+      const oldest = 'HISTORY_PAGE_FALLBACK_OLDEST';
+      const newest = 'HISTORY_PAGE_FALLBACK_NEWEST';
+      harness.ctx._session.terminalBuffer = oldest + '\n' + 'x'.repeat(1024 * 1024 + 4096) + '\n' + newest;
+      (harness.ctx.mux as { captureActivePaneHistoryPage?: unknown }).captureActivePaneHistoryPage = vi.fn(() => null);
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(() => null);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal?historyPage=1`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.terminalBuffer.length).toBeLessThanOrEqual(1024 * 1024);
+      expect(body.data.terminalBuffer).toContain(newest);
+      expect(body.data.terminalBuffer).not.toContain(oldest);
+      expect(body.data.truncated).toBe(true);
+      expect(body.data.historyPage).toBeUndefined();
     });
 
     it('does not strip VPA-like shell scrollback as Ink redraw bloat', async () => {
@@ -687,6 +844,26 @@ describe('session-routes', () => {
         body.data.terminalBuffer.indexOf('visible tmux pane only')
       );
       // No ?full=1 → visible-frame capture (no fullHistory opts).
+      expect(harness.ctx.mux.captureActivePaneBuffer).toHaveBeenCalledWith(harness.ctx._session.muxName, undefined);
+    });
+
+    it('returns only the current mux pane for latest-frame requests, even with full=1', async () => {
+      harness.ctx._session.terminalBuffer = 'old accumulated history\nthat must load in the background';
+      harness.ctx._session.mode = 'codex';
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(
+        () => 'current pane now\n› current prompt'
+      );
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal?latest=1&full=1&tail=131072&format=stream`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toContain('current pane now');
+      expect(res.body).toContain('› current prompt');
+      expect(res.body).not.toContain('old accumulated history');
+      expect(res.headers['x-codeman-terminal-source']).toBe('mux-visible');
       expect(harness.ctx.mux.captureActivePaneBuffer).toHaveBeenCalledWith(harness.ctx._session.muxName, undefined);
     });
 

@@ -103,17 +103,23 @@ export class WsConnectionRegistry<S extends RegistrableSocket = RegistrableSocke
    * (replaced in-slot by a same-cid reconnect) is NOT removed by its late
    * `close` — the new socket keeps the slot.
    */
-  unregister(sessionId: string, socket: S): void {
+  unregister(sessionId: string, socket: S): boolean {
     const entries = this.bySession.get(sessionId);
-    if (!entries) return;
+    if (!entries) return false;
     const idx = entries.findIndex((e) => e.socket === socket);
-    if (idx === -1) return;
+    if (idx === -1) return false;
     entries.splice(idx, 1);
     if (entries.length === 0) {
       this.bySession.delete(sessionId);
     } else {
       this.bySession.set(sessionId, entries);
     }
+    return true;
+  }
+
+  /** True only while `socket` owns a live registry slot for the session. */
+  hasSocket(sessionId: string, socket: S): boolean {
+    return this.bySession.get(sessionId)?.some((entry) => entry.socket === socket) ?? false;
   }
 
   /** Number of live entries for a session (0 if none). */

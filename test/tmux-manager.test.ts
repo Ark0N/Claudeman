@@ -10,9 +10,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   TmuxManager,
+  buildCodexCommand,
   buildRemoteKillCommand,
   buildRemoteLaunchCommand,
   formatPaneSnapshot,
+  inferSessionModeFromProcessCommand,
+  parsePaneDiscoveryList,
   parsePaneList,
   resolveActivePaneTarget,
 } from '../src/tmux-manager.js';
@@ -68,6 +71,19 @@ vi.mock('node:fs/promises', async () => {
   };
 });
 
+async function importWithTmuxCommandsEnabled(): Promise<typeof TmuxManager> {
+  const originalVitest = process.env.VITEST;
+  vi.resetModules();
+  delete process.env.VITEST;
+  const module = await import('../src/tmux-manager.js');
+  if (originalVitest === undefined) {
+    delete process.env.VITEST;
+  } else {
+    process.env.VITEST = originalVitest;
+  }
+  return module.TmuxManager;
+}
+
 describe('TmuxManager (unit)', () => {
   let manager: TmuxManager;
   const mockedExecSync = vi.mocked(execSync);
@@ -95,6 +111,14 @@ describe('TmuxManager (unit)', () => {
   describe('backend', () => {
     it('should report tmux as backend', () => {
       expect(manager.backend).toBe('tmux');
+    });
+  });
+
+  describe('Codex command builder', () => {
+    it('controls decorative TUI animation through Codex config', () => {
+      expect(buildCodexCommand({ animations: false })).toBe('codex --config tui.animations=false');
+      expect(buildCodexCommand({ animations: true })).toBe('codex --config tui.animations=true');
+      expect(buildCodexCommand()).toBe('codex');
     });
   });
 
@@ -318,24 +342,26 @@ describe('TmuxManager (unit)', () => {
   });
 
   describe('isAvailable', () => {
-    it('should return true when tmux is found', () => {
+    it('should return true when tmux is found', async () => {
       mockedExecSync.mockImplementation((cmd: string) => {
         if (typeof cmd === 'string' && cmd.includes('which tmux')) {
           return '/usr/bin/tmux\n';
         }
         return '';
       });
-      expect(TmuxManager.isTmuxAvailable()).toBe(true);
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      expect(NonTestTmuxManager.isTmuxAvailable()).toBe(true);
     });
 
-    it('should return false when tmux is not found', () => {
+    it('should return false when tmux is not found', async () => {
       mockedExecSync.mockImplementation((cmd: string) => {
         if (typeof cmd === 'string' && cmd.includes('which tmux')) {
           throw new Error('not found');
         }
         return '';
       });
-      expect(TmuxManager.isTmuxAvailable()).toBe(false);
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      expect(NonTestTmuxManager.isTmuxAvailable()).toBe(false);
     });
   });
 
@@ -513,6 +539,16 @@ describe('TmuxManager (unit)', () => {
       expect(result).toBe(false);
     });
 
+    it('should update the persisted session working directory', () => {
+      const result = manager.updateSessionWorkingDir('meta-test', '/tmp/next-project');
+      expect(result).toBe(true);
+      expect(manager.getSession('meta-test')?.workingDir).toBe('/tmp/next-project');
+    });
+
+    it('should return false for an unknown session working directory update', () => {
+      expect(manager.updateSessionWorkingDir('nonexistent', '/tmp/next-project')).toBe(false);
+    });
+
     it('should set attached status', () => {
       manager.setAttached('meta-test', true);
       expect(manager.getSession('meta-test')?.attached).toBe(true);
@@ -590,19 +626,6 @@ describe('TmuxManager (unit)', () => {
   });
 
   describe('tmux launch cwd hardening', () => {
-    async function importWithTmuxCommandsEnabled(): Promise<typeof TmuxManager> {
-      const originalVitest = process.env.VITEST;
-      vi.resetModules();
-      delete process.env.VITEST;
-      const module = await import('../src/tmux-manager.js');
-      if (originalVitest === undefined) {
-        delete process.env.VITEST;
-      } else {
-        process.env.VITEST = originalVitest;
-      }
-      return module.TmuxManager;
-    }
-
     beforeEach(() => {
       mockedExecSync.mockImplementation((cmd: string) => {
         if (typeof cmd === 'string' && cmd.includes('which tmux')) {
@@ -676,6 +699,111 @@ describe('TmuxManager (unit)', () => {
         nonTestManager.destroy();
       }
     });
+
+    it('restores an untracked local session with the pane current directory', async () => {
+      mockedExecSync.mockImplementation((cmd: string) => {
+        if (typeof cmd === 'string' && cmd.includes('which tmux')) {
+          return '/usr/bin/tmux\n';
+        }
+        if (typeof cmd === 'string' && cmd.includes('list-panes -a')) {
+          return 'codeman-deadbeef|4242||/tmp/restored project\n';
+        }
+        if (typeof cmd === 'string' && cmd.includes('ps -p 4242')) {
+          return 'node /usr/bin/codex --dangerously-bypass-approvals-and-sandbox\n';
+        }
+        return '';
+      });
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+
+      try {
+        const result = await nonTestManager.reconcileSessions();
+
+        expect(result.discovered).toEqual(['restored-deadbeef']);
+        expect(nonTestManager.getSession('restored-deadbeef')).toMatchObject({
+          pid: 4242,
+          workingDir: '/tmp/restored project',
+          mode: 'codex',
+        });
+        const listCall = mockedExecSync.mock.calls.find(
+          ([cmd]) => typeof cmd === 'string' && cmd.includes('list-panes -a')
+        );
+        expect(listCall?.[0]).toContain('#{pane_current_path}');
+        const modePersistCall = mockedExecSync.mock.calls.find(
+          ([cmd]) => typeof cmd === 'string' && cmd.includes('set-option') && cmd.includes('@codeman-mode')
+        );
+        expect(modePersistCall?.[0]).toContain('"codex"');
+      } finally {
+        nonTestManager.destroy();
+      }
+    });
+
+    it('repairs a tracked legacy session whose persisted mode does not match its live process', async () => {
+      mockedExecSync.mockImplementation((cmd: string) => {
+        if (typeof cmd === 'string' && cmd.includes('which tmux')) {
+          return '/usr/bin/tmux\n';
+        }
+        if (typeof cmd === 'string' && cmd.includes('list-panes -a')) {
+          return 'codeman-feedface|4242||/tmp/recovered-project\n';
+        }
+        if (typeof cmd === 'string' && cmd.includes('ps -p 4242')) {
+          return 'node /usr/bin/codex --dangerously-bypass-approvals-and-sandbox\n';
+        }
+        return '';
+      });
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+      nonTestManager.registerSession({
+        sessionId: 'restored-feedface',
+        muxName: 'codeman-feedface',
+        pid: 1,
+        createdAt: Date.now(),
+        workingDir: '/tmp/recovered-project',
+        mode: 'claude',
+        attached: false,
+      });
+
+      try {
+        const result = await nonTestManager.reconcileSessions();
+
+        expect(result.alive).toContain('restored-feedface');
+        expect(nonTestManager.getSession('restored-feedface')?.mode).toBe('codex');
+      } finally {
+        nonTestManager.destroy();
+      }
+    });
+
+    it('repairs local metadata written by the old process-cwd recovery fallback', async () => {
+      mockedExecSync.mockImplementation((cmd: string) => {
+        if (typeof cmd === 'string' && cmd.includes('which tmux')) {
+          return '/usr/bin/tmux\n';
+        }
+        if (typeof cmd === 'string' && cmd.includes('list-panes -a')) {
+          return 'codeman-feedface|4242|/tmp/recovered-project\n';
+        }
+        return '';
+      });
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+      nonTestManager.registerSession({
+        sessionId: 'tracked-feedface',
+        muxName: 'codeman-feedface',
+        pid: 1,
+        createdAt: Date.now(),
+        workingDir: process.cwd(),
+        mode: 'claude',
+        attached: false,
+      });
+
+      try {
+        const result = await nonTestManager.reconcileSessions();
+
+        expect(result.alive).toContain('tracked-feedface');
+        expect(nonTestManager.getSession('tracked-feedface')?.workingDir).toBe('/tmp/recovered-project');
+      } finally {
+        nonTestManager.destroy();
+      }
+    });
   });
 });
 
@@ -742,5 +870,62 @@ describe('parsePaneList', () => {
     // future tmux ever appended extra fields.
     const result = parsePaneList('codeman-aaaa|1234|extra-field');
     expect(result.get('codeman-aaaa')).toBe(1234);
+  });
+});
+
+describe('parsePaneDiscoveryList', () => {
+  it('parses durable session mode metadata', () => {
+    const result = parsePaneDiscoveryList(
+      'codeman-aaaa|1234|codex|/home/user/project one\nclaudeman-bbbb|5678|claude|/tmp/project-two'
+    );
+
+    expect(result.get('codeman-aaaa')).toEqual({
+      pid: 1234,
+      mode: 'codex',
+      workingDir: '/home/user/project one',
+    });
+    expect(result.get('claudeman-bbbb')).toEqual({
+      pid: 5678,
+      mode: 'claude',
+      workingDir: '/tmp/project-two',
+    });
+  });
+
+  it('parses the pane pid and current directory without splitting path spaces', () => {
+    const result = parsePaneDiscoveryList(
+      'codeman-aaaa|1234|/home/user/project one\nclaudeman-bbbb|5678|/tmp/project-two'
+    );
+
+    expect(result.get('codeman-aaaa')).toEqual({
+      pid: 1234,
+      workingDir: '/home/user/project one',
+    });
+    expect(result.get('claudeman-bbbb')).toEqual({
+      pid: 5678,
+      workingDir: '/tmp/project-two',
+    });
+  });
+
+  it('keeps the PID usable when an older two-field record has no current directory', () => {
+    expect(parsePaneDiscoveryList('codeman-aaaa|1234').get('codeman-aaaa')).toEqual({
+      pid: 1234,
+      workingDir: undefined,
+    });
+  });
+});
+
+describe('inferSessionModeFromProcessCommand', () => {
+  it.each([
+    ['node /usr/bin/codex --dangerously-bypass-approvals-and-sandbox', 'codex'],
+    ['claude --dangerously-skip-permissions', 'claude'],
+    ['/usr/local/bin/opencode', 'opencode'],
+    ['node /usr/local/bin/gemini --yolo', 'gemini'],
+    ['/bin/zsh', 'shell'],
+  ])('infers %s as %s', (command, expectedMode) => {
+    expect(inferSessionModeFromProcessCommand(command)).toBe(expectedMode);
+  });
+
+  it('does not guess from an unrelated process command', () => {
+    expect(inferSessionModeFromProcessCommand('node server.js')).toBeUndefined();
   });
 });

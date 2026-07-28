@@ -100,6 +100,7 @@ describe('SSE Events', () => {
       expect((initEvent?.data as any).scheduledRuns).toBeDefined();
       expect((initEvent?.data as any).respawnStatus).toBeDefined();
       expect((initEvent?.data as any).timestamp).toBeDefined();
+      expect((initEvent?.data as any).serverStartedAt).toEqual(expect.any(Number));
     });
 
     it('should receive session:created event when session is created', async () => {
@@ -160,6 +161,7 @@ describe('SSE Events', () => {
       expect(body.data).toHaveProperty('scheduledRuns');
       expect(body.data).toHaveProperty('respawnStatus');
       expect(body.data).toHaveProperty('timestamp');
+      expect(body.data.serverStartedAt).toEqual(expect.any(Number));
     });
 
     it('should include active sessions', async () => {

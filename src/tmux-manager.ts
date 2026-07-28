@@ -23,6 +23,7 @@
 
 import { EventEmitter } from 'node:events';
 import { execSync, exec } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 
 const execAsync = promisify(exec);
@@ -77,6 +78,8 @@ import type {
   CreateSessionOptions,
   RespawnPaneOptions,
   PaneCaptureOptions,
+  PaneHistoryPage,
+  PaneHistoryPageOptions,
 } from './mux-interface.js';
 import {
   decideReconnect,
@@ -100,6 +103,8 @@ import { DEFAULT_TMUX_HISTORY_LIMIT, DEFAULT_TERMINAL_BUFFER_MAX_BYTES } from '.
  * capture must be allowed to exceed the final payload size.
  */
 const FULL_HISTORY_CAPTURE_SLACK_BYTES = 8 * 1024 * 1024;
+const HISTORY_PAGE_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
+const HISTORY_ORIGIN_SAMPLE_ROWS = 3;
 
 /** Delay after tmux session creation — enough for detached tmux to be queryable */
 const TMUX_CREATION_WAIT_MS = 100;
@@ -187,8 +192,100 @@ const SAFE_TMUX_SOCKET_PATTERN = /^[a-zA-Z0-9_.-]+$/;
  */
 const PANE_LIST_SEP = '|';
 
-/** Format string for `tmux list-panes -F`. Keep in sync with {@link parsePaneList}. */
-const PANE_LIST_FORMAT = `#{session_name}${PANE_LIST_SEP}#{pane_pid}`;
+/** Format string for `tmux list-panes -F`. Keep in sync with {@link parsePaneDiscoveryList}. */
+const PANE_LIST_FORMAT = ['#{session_name}', '#{pane_pid}', '#{@codeman-mode}', '#{pane_current_path}'].join(
+  PANE_LIST_SEP
+);
+
+const SESSION_MODES = new Set<SessionMode>(['claude', 'shell', 'opencode', 'codex', 'gemini']);
+
+export interface PaneDiscovery {
+  pid: number;
+  workingDir: string | undefined;
+  mode?: SessionMode;
+}
+
+/**
+ * Parse live pane metadata. Current output includes a durable session-mode
+ * option before the path. Legacy three-field output remains supported so panes
+ * created before the option was introduced can be migrated in place.
+ */
+export function parsePaneDiscoveryList(output: string): Map<string, PaneDiscovery> {
+  const result = new Map<string, PaneDiscovery>();
+  for (const line of output.split('\n')) {
+    if (!line) continue;
+    const firstSep = line.indexOf(PANE_LIST_SEP);
+    if (firstSep === -1) continue;
+    const secondSep = line.indexOf(PANE_LIST_SEP, firstSep + 1);
+    const thirdSep = secondSep === -1 ? -1 : line.indexOf(PANE_LIST_SEP, secondSep + 1);
+    const name = line.slice(0, firstSep);
+    const pidText = secondSep === -1 ? line.slice(firstSep + 1) : line.slice(firstSep + 1, secondSep);
+    const pid = parseInt(pidText, 10);
+    const modeText = thirdSep === -1 ? undefined : line.slice(secondSep + 1, thirdSep);
+    const mode = modeText && SESSION_MODES.has(modeText as SessionMode) ? (modeText as SessionMode) : undefined;
+    const workingDir =
+      secondSep === -1
+        ? undefined
+        : thirdSep === -1
+          ? line.slice(secondSep + 1) || undefined
+          : line.slice(thirdSep + 1) || undefined;
+    if (name && !Number.isNaN(pid)) {
+      result.set(name, { pid, workingDir, ...(mode ? { mode } : {}) });
+    }
+  }
+  return result;
+}
+
+/**
+ * Infer the provider from a legacy pane's live process command. This is only a
+ * migration fallback for sessions created before `@codeman-mode`; new panes
+ * restore from explicit tmux metadata instead.
+ */
+export function inferSessionModeFromProcessCommand(command: string): SessionMode | undefined {
+  const tokens = String(command)
+    .replace(/\0/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .map(
+      (token) =>
+        token
+          .replace(/^["']|["']$/g, '')
+          .split('/')
+          .pop()
+          ?.toLowerCase() || ''
+    );
+
+  if (tokens.includes('codex')) return 'codex';
+  if (tokens.includes('opencode')) return 'opencode';
+  if (tokens.includes('gemini')) return 'gemini';
+  if (tokens.includes('claude')) return 'claude';
+
+  const executable = tokens[0];
+  if (['sh', 'bash', 'zsh', 'fish', 'pwsh', 'pwsh.exe', 'powershell.exe'].includes(executable)) {
+    return 'shell';
+  }
+  return undefined;
+}
+
+function inferSessionModeFromPaneProcess(pid: number): SessionMode | undefined {
+  try {
+    const command = readFileSync(`/proc/${pid}/cmdline`, 'utf8');
+    const inferred = inferSessionModeFromProcessCommand(command);
+    if (inferred) return inferred;
+  } catch {
+    // procfs is Linux-only; macOS and other hosts use ps below.
+  }
+
+  try {
+    const command = execSync(`ps -p ${pid} -o command=`, {
+      encoding: 'utf8',
+      timeout: EXEC_TIMEOUT_MS,
+    });
+    return inferSessionModeFromProcessCommand(command);
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * 构建 pane 启动前的 nofile 修复命令。
@@ -212,15 +309,8 @@ export function buildNofileLimitCommand(targetLimit = CLAUDE_CODE_NOFILE_LIMIT):
  */
 export function parsePaneList(output: string): Map<string, number> {
   const result = new Map<string, number>();
-  for (const line of output.split('\n')) {
-    if (!line) continue;
-    const sep = line.indexOf(PANE_LIST_SEP);
-    if (sep === -1) continue;
-    const name = line.slice(0, sep);
-    const pid = parseInt(line.slice(sep + 1), 10);
-    if (name && !Number.isNaN(pid)) {
-      result.set(name, pid);
-    }
+  for (const [name, pane] of parsePaneDiscoveryList(output)) {
+    result.set(name, pane.pid);
   }
   return result;
 }
@@ -501,6 +591,32 @@ export function normalizeScrollbackEol(buffer: string): string {
   return buffer.replace(/\r?\n/g, '\r\n');
 }
 
+export function resolveHistoryPageRange(
+  historySize: number,
+  options: PaneHistoryPageOptions
+): Omit<PaneHistoryPage, 'buffer' | 'origin'> {
+  const total = Math.max(0, Math.trunc(Number.isFinite(historySize) ? historySize : 0));
+  const limit = Math.max(1, Math.trunc(Number.isFinite(options.limit) ? options.limit : 1));
+
+  let start: number;
+  let end: number;
+  if (Number.isFinite(options.after)) {
+    start = Math.max(0, Math.min(total, Math.trunc(options.after as number)));
+    end = Math.min(total, start + limit);
+  } else {
+    end = Number.isFinite(options.before) ? Math.max(0, Math.min(total, Math.trunc(options.before as number))) : total;
+    start = Math.max(0, end - limit);
+  }
+
+  return {
+    start,
+    end,
+    total,
+    hasMoreBefore: start > 0,
+    hasMoreAfter: end < total,
+  };
+}
+
 export function formatPaneSnapshot(
   lines: string[],
   geometry: { cols: number; rows: number; cursorX: number; cursorY: number }
@@ -551,6 +667,13 @@ function isValidPath(path: string): boolean {
     return false;
   }
   return SAFE_PATH_PATTERN.test(path);
+}
+
+function resolveDiscoveredWorkingDir(workingDir: string | undefined): string {
+  if (workingDir?.startsWith('/') && isValidPath(workingDir)) {
+    return workingDir;
+  }
+  return process.cwd();
 }
 
 // ===========================================================================
@@ -638,6 +761,10 @@ export function buildCodexCommand(config?: CodexConfig): string {
 
   if (config?.dangerouslyBypassApprovals) {
     parts.push('--dangerously-bypass-approvals-and-sandbox');
+  }
+
+  if (config?.animations !== undefined) {
+    parts.push('--config', `tui.animations=${config.animations ? 'true' : 'false'}`);
   }
 
   if (config?.model) {
@@ -1396,6 +1523,19 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     return tmuxCommand(this.tmuxSocket);
   }
 
+  private persistSessionMode(muxName: string, mode: SessionMode): boolean {
+    if (!isValidMuxName(muxName)) return false;
+    try {
+      execSync(`${this.tmux()} set-option -t "${muxName}" @codeman-mode "${mode}"`, {
+        timeout: EXEC_TIMEOUT_MS,
+        stdio: 'ignore',
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // Load saved sessions from disk (NEVER called in test mode)
   private loadSessions(): void {
     if (IS_TEST_MODE) return;
@@ -1725,6 +1865,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       } catch {
         /* Non-critical */
       }
+      this.persistSessionMode(muxName, mode);
 
       // For OpenCode: set sensitive env vars and config via tmux setenv
       // (not visible in ps output or tmux history, inherited by panes)
@@ -1922,6 +2063,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       }).catch(() => {
         /* Non-critical — keeps existing tmux history-limit */
       });
+      this.persistSessionMode(muxName, mode);
     }
 
     // Resolve CLI binary directory based on mode
@@ -2247,6 +2389,16 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     return true;
   }
 
+  updateSessionWorkingDir(sessionId: string, workingDir: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return false;
+    }
+    session.workingDir = workingDir;
+    this.saveSessions();
+    return true;
+  }
+
   /**
    * Reconcile tracked sessions with actual running tmux sessions.
    */
@@ -2263,18 +2415,19 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const alive: string[] = [];
     const dead: string[] = [];
     const discovered: string[] = [];
+    let metadataChanged = false;
 
     // Single batched query against the one socket Codeman owns. With a single
     // socket a session's location is a constant, so there is no per-session
     // socket tag to reconcile and no cross-socket ambiguity that could mark a
     // live session dead (the root cause of vanished/duplicate tabs).
-    let active: Map<string, number>;
+    let active: Map<string, PaneDiscovery>;
     try {
       const output = execSync(`${this.tmux()} list-panes -a -F '${PANE_LIST_FORMAT}' 2>/dev/null || true`, {
         encoding: 'utf-8',
         timeout: EXEC_TIMEOUT_MS,
       }).trim();
-      active = parsePaneList(output);
+      active = parsePaneDiscoveryList(output);
     } catch (err) {
       console.error('[TmuxManager] Failed to list tmux panes:', err);
       active = new Map();
@@ -2282,10 +2435,31 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     // Check tracked sessions against the live pane list.
     for (const [sessionId, session] of this.sessions) {
-      const pid = active.get(session.muxName);
-      if (pid !== undefined) {
+      const pane = active.get(session.muxName);
+      if (pane !== undefined) {
         alive.push(sessionId);
-        if (pid !== session.pid) session.pid = pid;
+        if (pane.pid !== session.pid) session.pid = pane.pid;
+        const recoveredMode =
+          pane.mode ??
+          (sessionId.startsWith('restored-') ? inferSessionModeFromPaneProcess(pane.pid) : undefined) ??
+          session.mode;
+        if (recoveredMode && recoveredMode !== session.mode) {
+          session.mode = recoveredMode;
+          metadataChanged = true;
+        }
+        if (recoveredMode && !pane.mode) {
+          this.persistSessionMode(session.muxName, recoveredMode);
+        }
+        const recoveredWorkingDir = resolveDiscoveredWorkingDir(pane.workingDir);
+        if (
+          !session.remote &&
+          !session.docker &&
+          session.workingDir === process.cwd() &&
+          recoveredWorkingDir !== session.workingDir
+        ) {
+          session.workingDir = recoveredWorkingDir;
+          metadataChanged = true;
+        }
       } else {
         dead.push(sessionId);
         this.sessions.delete(sessionId);
@@ -2302,7 +2476,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       knownMuxNames.add(session.muxName);
     }
 
-    for (const [sessionName, pid] of active) {
+    for (const [sessionName, pane] of active) {
       if (!sessionName.startsWith('codeman-') && !sessionName.startsWith('claudeman-')) continue;
       // Only admit names that pass the safe-name pattern. A foreign process on the
       // shared `tmux -L codeman` socket could create a `codeman-…` session whose name
@@ -2316,23 +2490,25 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
       const fragment = sessionName.replace(/^(?:codeman|claudeman)-/, '');
       const sessionId = `restored-${fragment}`;
+      const recoveredMode = pane.mode ?? inferSessionModeFromPaneProcess(pane.pid) ?? 'claude';
       const session: MuxSession = {
         sessionId,
         muxName: sessionName,
-        pid,
+        pid: pane.pid,
         createdAt: Date.now(),
-        workingDir: process.cwd(),
-        mode: 'claude',
+        workingDir: resolveDiscoveredWorkingDir(pane.workingDir),
+        mode: recoveredMode,
         attached: false,
         name: `Restored: ${sessionName}`,
       };
       this.sessions.set(sessionId, session);
+      if (!pane.mode) this.persistSessionMode(sessionName, recoveredMode);
       knownMuxNames.add(sessionName);
       discovered.push(sessionId);
-      console.log(`[TmuxManager] Discovered unknown tmux session: ${sessionName} (PID ${pid})`);
+      console.log(`[TmuxManager] Discovered unknown tmux session: ${sessionName} (PID ${pane.pid})`);
     }
 
-    if (dead.length > 0 || discovered.length > 0) {
+    if (dead.length > 0 || discovered.length > 0 || metadataChanged) {
       this.saveSessions();
     }
 
@@ -3075,6 +3251,102 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       return target ? this.capturePaneBuffer(muxName, target, opts) : null;
     } catch (err) {
       console.error('[TmuxManager] Failed to resolve active pane for capture:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Capture a bounded physical-row slice of tmux history.
+   *
+   * Page coordinates are absolute offsets from the oldest retained history
+   * row. Unlike full-history restoration this deliberately omits `-J`: one
+   * captured tmux row must remain one page coordinate so adjacent pages can be
+   * composed without byte or soft-wrap ambiguity.
+   */
+  capturePaneHistoryPage(
+    muxName: string,
+    paneTarget: string | undefined,
+    opts: PaneHistoryPageOptions
+  ): PaneHistoryPage | null {
+    if (IS_TEST_MODE) return null;
+    const target = resolveTmuxPaneTarget(muxName, paneTarget);
+    if (!target) {
+      console.error('[TmuxManager] Invalid pane target in capturePaneHistoryPage:', {
+        muxName,
+        paneTarget,
+      });
+      return null;
+    }
+
+    try {
+      const historyText = execSync(`${this.tmux()} display-message -p -t ${shellescape(target)} '#{history_size}'`, {
+        encoding: 'utf-8',
+        timeout: EXEC_TIMEOUT_MS,
+      }).trim();
+      const historySize = parseInt(historyText, 10);
+      if (!Number.isSafeInteger(historySize) || historySize < 0) return null;
+
+      const range = resolveHistoryPageRange(historySize, opts);
+      let buffer = '';
+      if (range.end > range.start) {
+        const startLine = range.start - historySize;
+        const endLine = range.end - historySize - 1;
+        const captured = execSync(
+          `${this.tmux()} capture-pane -p -e -S ${startLine} -E ${endLine} -t ${shellescape(target)}`,
+          {
+            encoding: 'utf-8',
+            timeout: EXEC_TIMEOUT_MS,
+            maxBuffer: HISTORY_PAGE_MAX_BUFFER_BYTES,
+          }
+        );
+        // tmux terminates stdout with one newline in addition to the captured
+        // row separators. Remove exactly that terminator so trailing blank rows
+        // still count toward the page's physical-row coordinates.
+        buffer = normalizeScrollbackEol(captured.endsWith('\n') ? captured.slice(0, -1) : captured);
+      }
+
+      let originSample = '';
+      if (historySize > 0) {
+        const sampleEndLine = -Math.max(1, historySize - HISTORY_ORIGIN_SAMPLE_ROWS + 1);
+        const captured = execSync(
+          `${this.tmux()} capture-pane -p -e -S -${historySize} -E ${sampleEndLine} -t ${shellescape(target)}`,
+          {
+            encoding: 'utf-8',
+            timeout: EXEC_TIMEOUT_MS,
+            maxBuffer: 64 * 1024,
+          }
+        );
+        originSample = captured;
+      }
+      const origin = createHash('sha256').update(target).update('\0').update(originSample).digest('hex').slice(0, 24);
+
+      return { buffer, origin, ...range };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOBUFS') {
+        console.error('[TmuxManager] History page exceeded its bounded capture buffer');
+      } else {
+        console.error('[TmuxManager] Failed to capture pane history page:', err);
+      }
+      return null;
+    }
+  }
+
+  captureActivePaneHistoryPage(muxName: string, opts: PaneHistoryPageOptions): PaneHistoryPage | null {
+    if (IS_TEST_MODE) return null;
+    if (!isValidMuxName(muxName)) {
+      console.error('[TmuxManager] Invalid session name in captureActivePaneHistoryPage:', muxName);
+      return null;
+    }
+
+    try {
+      const output = execSync(`${this.tmux()} list-panes -t ${shellescape(muxName)} -F '#{pane_id}:#{pane_active}'`, {
+        encoding: 'utf-8',
+        timeout: EXEC_TIMEOUT_MS,
+      }).trim();
+      const target = resolveActivePaneTarget(output);
+      return target ? this.capturePaneHistoryPage(muxName, target, opts) : null;
+    } catch (err) {
+      console.error('[TmuxManager] Failed to resolve active pane for history capture:', err);
       return null;
     }
   }

@@ -99,6 +99,19 @@ export type { RalphTrackerState, RalphTodoItem, ActiveBashTool } from './types.j
 
 export type ResizeViewportType = 'mobile' | 'tablet' | 'desktop';
 
+/**
+ * Orders terminal output within one in-memory Session.
+ *
+ * Offsets use JavaScript string (UTF-16) units so the browser can slice an
+ * overlapping SSE batch with the same values without a byte conversion.
+ */
+export interface TerminalCursor {
+  stream: string;
+  generation: number;
+  start: number;
+  end: number;
+}
+
 /** Line buffer flush interval (100ms) - forces processing of partial lines */
 const LINE_BUFFER_FLUSH_INTERVAL = 100;
 
@@ -289,7 +302,7 @@ export interface ClaudeMessage {
  */
 export class Session extends EventEmitter {
   readonly id: string;
-  readonly workingDir: string;
+  workingDir: string;
   readonly createdAt: number;
   readonly mode: SessionMode;
 
@@ -310,6 +323,9 @@ export class Session extends EventEmitter {
   private _respawnBlocked = false;
   // Use BufferAccumulator for hot-path buffers to reduce GC pressure
   private _terminalBuffer = new BufferAccumulator(MAX_TERMINAL_BUFFER_SIZE, TERMINAL_BUFFER_TRIM_SIZE);
+  private readonly _terminalStreamId = uuidv4();
+  private _terminalGeneration = 0;
+  private _terminalCursorEnd = 0;
   private _textOutput = new BufferAccumulator(MAX_TEXT_OUTPUT_SIZE, TEXT_OUTPUT_TRIM_SIZE);
   private _errorBuffer: string = '';
   private _lastActivityAt: number;
@@ -658,6 +674,15 @@ export class Session extends EventEmitter {
     return this._terminalBuffer.length;
   }
 
+  get terminalCursor(): TerminalCursor {
+    return {
+      stream: this._terminalStreamId,
+      generation: this._terminalGeneration,
+      start: Math.max(0, this._terminalCursorEnd - this._terminalBuffer.length),
+      end: this._terminalCursorEnd,
+    };
+  }
+
   get textOutput(): string {
     return this._textOutput.value;
   }
@@ -687,6 +712,24 @@ export class Session extends EventEmitter {
   /** Set the owning username (used by recovery to restore ownership). */
   set owner(username: string | undefined) {
     this._owner = username;
+  }
+
+  /**
+   * Synchronize Codeman's workspace metadata with an already-running local
+   * session. This intentionally does not attempt to change the child process cwd.
+   */
+  setWorkingDir(workingDir: string): void {
+    if (workingDir !== this.workingDir) {
+      this.workingDir = workingDir;
+      this._bashToolParser.setWorkingDir(workingDir);
+      if (!isExternalCliMode(this.mode)) {
+        this._ralphTracker.setWorkingDir(workingDir);
+      }
+    }
+    if (this._muxSession) {
+      this._muxSession.workingDir = workingDir;
+    }
+    this._mux?.updateSessionWorkingDir(this.id, workingDir);
   }
 
   // Adopt a Claude conversation ID observed from an external source (e.g. hook
@@ -1408,10 +1451,10 @@ export class Session extends EventEmitter {
       });
     }
 
-    // BufferAccumulator handles auto-trimming when max size exceeded
-    this._terminalBuffer.append(data);
+    // BufferAccumulator handles auto-trimming when max size exceeded.
+    const cursor = this._appendTerminalBuffer(data);
     this._lastActivityAt = Date.now();
-    this.emit('terminal', data);
+    this.emit('terminal', data, cursor);
     this.emit('output', data);
   }
 
@@ -1546,7 +1589,7 @@ export class Session extends EventEmitter {
                 // Clean the buffer - remove mux init junk before actual content
                 // Strip: cursor movement (\x1b[nA/B/C/D), positioning (\x1b[n;nH),
                 // clear screen (\x1b[2J), scroll region (\x1b[n;nr), and whitespace
-                this._terminalBuffer.set(bufferValue.replace(LEADING_ANSI_WHITESPACE_PATTERN, ''));
+                this._replaceTerminalBuffer(bufferValue.replace(LEADING_ANSI_WHITESPACE_PATTERN, ''));
                 // Signal client to refresh
                 this.emit('clearTerminal');
               }
@@ -1901,7 +1944,7 @@ export class Session extends EventEmitter {
         if (!isRestored) {
           setTimeout(() => {
             if (this.ptyProcess) {
-              this._terminalBuffer.clear();
+              this._clearTerminalBuffer();
               this.ptyProcess.write('clear\n');
             }
           }, 100);
@@ -2115,7 +2158,7 @@ export class Session extends EventEmitter {
 
   private _resetBuffers(): void {
     this._status = 'busy';
-    this._terminalBuffer.clear();
+    this._clearTerminalBuffer();
     this._textOutput.clear();
     this._errorBuffer = '';
     this._messages = [];
@@ -2855,7 +2898,7 @@ export class Session extends EventEmitter {
   assignTask(taskId: string): void {
     this._currentTaskId = taskId;
     this._status = 'busy';
-    this._terminalBuffer.clear();
+    this._clearTerminalBuffer();
     this._textOutput.clear();
     this._errorBuffer = '';
     this._messages = [];
@@ -2881,12 +2924,36 @@ export class Session extends EventEmitter {
   }
 
   clearBuffers(): void {
-    this._terminalBuffer.clear();
+    this._clearTerminalBuffer();
     this._textOutput.clear();
     this._errorBuffer = '';
     this._messages = [];
     this._taskTracker.clear();
     this._ralphTracker.clear();
     this._taskCache.clear();
+  }
+
+  private _appendTerminalBuffer(data: string): TerminalCursor {
+    const start = this._terminalCursorEnd;
+    this._terminalBuffer.append(data);
+    this._terminalCursorEnd += data.length;
+    return {
+      stream: this._terminalStreamId,
+      generation: this._terminalGeneration,
+      start,
+      end: this._terminalCursorEnd,
+    };
+  }
+
+  private _replaceTerminalBuffer(data: string): void {
+    this._terminalBuffer.set(data);
+    this._terminalGeneration++;
+    this._terminalCursorEnd = data.length;
+  }
+
+  private _clearTerminalBuffer(): void {
+    this._terminalBuffer.clear();
+    this._terminalGeneration++;
+    this._terminalCursorEnd = 0;
   }
 }

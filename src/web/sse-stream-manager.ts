@@ -16,7 +16,7 @@
  */
 
 import type { FastifyReply } from 'fastify';
-import type { BackgroundTask } from '../session.js';
+import type { BackgroundTask, TerminalCursor } from '../session.js';
 import type { AuthUser } from '../types.js';
 import { CleanupManager, StaleExpirationMap } from '../utils/index.js';
 import { SseEvent } from './sse-events.js';
@@ -71,6 +71,10 @@ export class SseStreamManager {
   private sseClients: Map<FastifyReply, Set<string> | null> = new Map();
   /** Optional client-supplied IDs → reply, for live filter updates without reconnecting */
   private sseClientsById: Map<string, FastifyReply> = new Map();
+  /** Reverse lookup used by per-client terminal transport suspension. */
+  private sseClientIds: Map<FastifyReply, string> = new Map();
+  /** Sessions temporarily owned by a client's WebSocket transport. */
+  private suspendedClientSessions: Map<string, Set<string>> = new Map();
   /** Per-client identity (multi-user); absent for single-user clients → no filtering. */
   private sseClientIdentity: Map<FastifyReply, AuthUser> = new Map();
   /** SSE clients connecting from non-localhost (i.e. through tunnel) */
@@ -85,6 +89,7 @@ export class SseStreamManager {
   // ─── Terminal Batching ──────────────────────────────────
   private terminalBatches: Map<string, string[]> = new Map();
   private terminalBatchSizes: Map<string, number> = new Map(); // Running total avoids O(n) reduce per push
+  private terminalBatchCursors: Map<string, TerminalCursor> = new Map();
   private terminalBatchTimers: Map<string, NodeJS.Timeout> = new Map(); // Per-session timers (staggered flushes)
   // Adaptive batching: track rapid events to extend batch window (per-session)
   // StaleExpirationMap auto-cleans entries for sessions that stop generating output
@@ -148,8 +153,10 @@ export class SseStreamManager {
         this.remoteSseClients.delete(prev);
         this.backpressuredClients.delete(prev);
         this.sseClientIdentity.delete(prev);
+        this.sseClientIds.delete(prev);
       }
       this.sseClientsById.set(clientId, reply);
+      this.sseClientIds.set(reply, clientId);
     }
   }
 
@@ -158,6 +165,7 @@ export class SseStreamManager {
     this.remoteSseClients.delete(reply);
     this.backpressuredClients.delete(reply);
     this.sseClientIdentity.delete(reply);
+    this.sseClientIds.delete(reply);
     // Clear any clientId mappings pointing at this reply
     for (const [id, r] of this.sseClientsById) {
       if (r === reply) this.sseClientsById.delete(id);
@@ -191,6 +199,39 @@ export class SseStreamManager {
     if (!reply || !this.sseClients.has(reply)) return false;
     const filter = sessions === null ? null : new Set(sessions);
     this.sseClients.set(reply, filter);
+    return true;
+  }
+
+  /**
+   * Transfer one client's session stream from SSE to WebSocket without a gap.
+   * Any batch created before the WS listener attached is delivered first.
+   */
+  suspendClientSession(clientId: string, sessionId: string): boolean {
+    this.flushSessionTerminalBatch(sessionId);
+    let sessions = this.suspendedClientSessions.get(clientId);
+    if (!sessions) {
+      sessions = new Set();
+      this.suspendedClientSessions.set(clientId, sessions);
+    }
+    sessions.add(sessionId);
+    return this.sseClientsById.has(clientId);
+  }
+
+  /**
+   * Transfer a session back to SSE. Flush while it is still suppressed so bytes
+   * already delivered over WS cannot be replayed from an in-flight SSE batch.
+   */
+  resumeClientSession(clientId: string, sessionId: string, recover: boolean): boolean {
+    this.flushSessionTerminalBatch(sessionId);
+    const sessions = this.suspendedClientSessions.get(clientId);
+    sessions?.delete(sessionId);
+    if (sessions?.size === 0) this.suspendedClientSessions.delete(clientId);
+
+    const reply = this.sseClientsById.get(clientId);
+    if (!reply || !this.sseClients.has(reply)) return false;
+    if (recover) {
+      this.sendSSE(reply, SseEvent.SessionNeedsRefresh, { id: sessionId });
+    }
     return true;
   }
 
@@ -285,9 +326,24 @@ export class SseStreamManager {
   // Batch terminal data for better performance (60fps)
   // Uses per-session timers with adaptive intervals to prevent thundering herd:
   // each session flushes independently rather than all sessions flushing in one burst.
-  batchTerminalData(sessionId: string, data: string): void {
+  batchTerminalData(sessionId: string, data: string, cursor?: TerminalCursor): void {
     // Skip if server is stopping
     if (this._isStopping) return;
+
+    const currentSize = this.terminalBatchSizes.get(sessionId) ?? 0;
+    const currentCursor = this.terminalBatchCursors.get(sessionId);
+    const cursorIsContiguous =
+      cursor &&
+      currentCursor &&
+      cursor.stream === currentCursor.stream &&
+      cursor.generation === currentCursor.generation &&
+      cursor.start === currentCursor.end;
+    if (
+      currentSize > 0 &&
+      ((cursor && !currentCursor) || (!cursor && currentCursor) || (cursor && currentCursor && !cursorIsContiguous))
+    ) {
+      this.flushSessionTerminalBatch(sessionId);
+    }
 
     let chunks = this.terminalBatches.get(sessionId);
     if (!chunks) {
@@ -298,6 +354,15 @@ export class SseStreamManager {
     const prevSize = this.terminalBatchSizes.get(sessionId) ?? 0;
     const totalLength = prevSize + data.length;
     this.terminalBatchSizes.set(sessionId, totalLength);
+    if (cursor) {
+      const batchCursor = this.terminalBatchCursors.get(sessionId);
+      this.terminalBatchCursors.set(sessionId, {
+        stream: cursor.stream,
+        generation: cursor.generation,
+        start: batchCursor?.start ?? cursor.start,
+        end: cursor.end,
+      });
+    }
 
     // Adaptive batching: detect rapid events and extend batch window (per-session)
     const now = Date.now();
@@ -346,6 +411,7 @@ export class SseStreamManager {
     if (this._isStopping) {
       this.terminalBatches.delete(sessionId);
       this.terminalBatchSizes.delete(sessionId);
+      this.terminalBatchCursors.delete(sessionId);
       return;
     }
     const chunks = this.terminalBatches.get(sessionId);
@@ -362,10 +428,13 @@ export class SseStreamManager {
       // Fast path: build SSE message directly without JSON.stringify on wrapper object.
       // Only the terminal data string needs escaping; sessionId is a UUID (safe to template).
       const escapedData = JSON.stringify(syncData);
+      const cursor = this.terminalBatchCursors.get(sessionId);
+      const cursorField = cursor ? `,"cursor":${JSON.stringify(cursor)}` : '';
       // Append tunnel padding for immediate Cloudflare proxy flush —
       // terminal data is high-frequency and latency-sensitive.
       const padding = this._isTunnelActive ? SSE_PADDING : '';
-      const message = `event: session:terminal\ndata: {"id":"${sessionId}","data":${escapedData}}\n\n` + padding;
+      const message =
+        `event: session:terminal\ndata: {"id":"${sessionId}","data":${escapedData}${cursorField}}\n\n` + padding;
       // Raw terminal bytes are the highest-value payload: resolve the session owner
       // ONCE and withhold the batch from any non-admin who is not the owner (fail
       // closed if the owner is unknown). No-op for identity-less single-user clients.
@@ -374,12 +443,15 @@ export class SseStreamManager {
       for (const [client, filter] of this.sseClients) {
         // Skip clients that have a session filter and aren't subscribed to this session
         if (filter && !filter.has(sessionId)) continue;
+        const clientId = this.sseClientIds.get(client);
+        if (clientId && this.suspendedClientSessions.get(clientId)?.has(sessionId)) continue;
         if (!this.canDeliver(client, termHint)) continue;
         this.sendSSEPreformatted(client, message);
       }
     }
     this.terminalBatches.delete(sessionId);
     this.terminalBatchSizes.delete(sessionId);
+    this.terminalBatchCursors.delete(sessionId);
   }
 
   // ========== Task Update Batching ==========
@@ -501,6 +573,11 @@ export class SseStreamManager {
       this.sseClients.delete(client);
       this.remoteSseClients.delete(client);
       this.backpressuredClients.delete(client);
+      const clientId = this.sseClientIds.get(client);
+      if (clientId && this.sseClientsById.get(clientId) === client) {
+        this.sseClientsById.delete(clientId);
+      }
+      this.sseClientIds.delete(client);
     }
 
     if (deadClients.length > 0) {
@@ -514,6 +591,7 @@ export class SseStreamManager {
   cleanupSessionBatches(sessionId: string): void {
     this.terminalBatches.delete(sessionId);
     this.terminalBatchSizes.delete(sessionId);
+    this.terminalBatchCursors.delete(sessionId);
     const batchTimer = this.terminalBatchTimers.get(sessionId);
     if (batchTimer) {
       clearTimeout(batchTimer);
@@ -545,6 +623,9 @@ export class SseStreamManager {
       }
     }
     this.sseClients.clear();
+    this.sseClientsById.clear();
+    this.sseClientIds.clear();
+    this.suspendedClientSessions.clear();
     this.remoteSseClients.clear();
     this.backpressuredClients.clear();
 
@@ -555,6 +636,7 @@ export class SseStreamManager {
     this.terminalBatchTimers.clear();
     this.terminalBatches.clear();
     this.terminalBatchSizes.clear();
+    this.terminalBatchCursors.clear();
 
     this.taskUpdateBatches.clear();
     this.stateUpdatePending.clear();
