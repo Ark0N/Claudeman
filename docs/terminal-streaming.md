@@ -87,6 +87,13 @@ selection starts this request together with the newest history page and uses it 
 paint. The latest response supplies the authoritative PTY cursor for live-event
 reconciliation after the composed page replay.
 
+Mobile keyboard resizes, Codex WebSocket attachment, and touch selection of a visible
+terminal decision also request this projection. The browser gates live writes before the
+action can redraw, clears only xterm's visible rows, paints the tmux projection inside a
+synchronized update, and drops only queued events represented by the response cursor.
+This preserves the existing scrollback while preventing transient TUI history redraws
+from becoming the revealed frame.
+
 `full=1` remains available for legacy callers that explicitly require one complete tmux
 capture, but the browser no longer uses it during startup or session switching.
 
@@ -108,8 +115,17 @@ approximately 16 KB frames. The wider phone window combines adjacent decorative
 redraws before adding one DEC-2026 synchronized-update pair, reducing full xterm
 paints without discarding terminal data.
 
-Bulk data is split on UTF-8- and ANSI-safe boundaries before each payload is
-wrapped. A single control sequence, OSC/DCS string, or application-owned
+Each output message carries the UTF-16 terminal cursor range represented by its raw
+payload. When one synchronized transaction spans several WebSocket messages, their
+cursor ranges remain contiguous and exclude Codeman's transport markers. The client can
+therefore discard snapshot-covered fragments or rewrap an uncovered fragment without
+guessing byte offsets.
+
+Bulk data is split on UTF-8- and ANSI-safe boundaries, but all fragments from one
+flush remain inside the same DEC-2026 synchronized-update pair. The first WebSocket
+message opens the transaction and the final message closes it, so xterm cannot
+publish transport fragments as intermediate terminal states. A single control
+sequence, OSC/DCS string, or application-owned
 synchronized update remains indivisible even when it exceeds the viewport target;
 terminal correctness takes priority over a hard packet limit. If a PTY event ends
 inside a control sequence, the connection emits its safe prefix and carries the

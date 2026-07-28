@@ -108,10 +108,17 @@ The snapshot transport and cursor contract are documented in
 - `visualViewport` animation frames are coalesced into one settled layout pass. The generic terminal `ResizeObserver` returns while the keyboard is visible so it cannot trigger a delayed second reflow.
 - Keyboard resize claims never use the force-redraw flag. The server therefore suppresses a same-size resize instead of sending an unnecessary `SIGWINCH`.
 - Before a terminal-owned keyboard transition changes the viewport, Codeman clones the already-painted xterm DOM rows into an inert frame cover. Its frame translates toward the new bottom as the viewport shrinks instead of snapping with a bottom anchor. Local xterm resize renders cannot release the cover; parsed terminal output or completed session selection marks the destination frame ready. After two stable compositor frames, Codeman swaps the fully opaque cover out atomically, with a bounded timeout if the TUI does not repaint.
+- Keyboard opening and closing use separate cover generations. Closing is recognized from meaningful growth above the keyboard-open minimum viewport height, so the cover starts during the first animation steps; the final hide threshold restarts it and invalidates any queued release before the full-height fit and `SIGWINCH` redraw can become visible. Smaller address-bar movement stays below that early-close threshold.
 - Touch tab switches initially reuse the keyboard cover, then hand off to the destination's screen-only latest-frame cover while history loads. The completed selection restores focus, prompt anchoring, and local echo without scheduling a redundant second keyboard fit.
-- Codex tab switches keep that latest-frame cover through WebSocket attachment and
-  the immediately following redraw burst. All stateful ANSI bytes still parse
-  underneath; only the settled pane is revealed after a short quiet window.
+- Codex keyboard resizes and WebSocket attachment keep the prior frame covered while
+  live output is gated. After a bounded TUI redraw interval, the browser captures
+  the rendered tmux pane and its terminal cursor, replaces only xterm's visible rows,
+  and reconciles queued live events against that boundary. Existing scrollback stays
+  intact, and timing no longer chooses which intermediate redraw becomes visible.
+- Touch Enter or terminal mouse selection on a visible decision prompt uses the same
+  reconciliation transaction. Hook events improve prompt detection when available,
+  but numbered-option detection keeps the behavior working when a provider exposes
+  no corresponding hook.
 - Provider mode is part of that rendering contract. New tmux sessions persist it
   in the `@codeman-mode` session option so a server restart cannot restore Codex
   as Claude and skip the quiet window. Legacy panes without the option are
@@ -157,6 +164,7 @@ When detected, buffers 50ms of subsequent output before flushing atomically.
 ## Edge Cases
 
 - **Incomplete sync blocks**: xterm.js retains synchronized output until its closing marker
+- **Fragmented WebSocket transactions**: size-bounded messages share one DEC-2026 pair, so transport fragmentation cannot publish partial redraws; authoritative pane replacement closes a partially parsed prior transaction before opening its own atomic repaint
 - **Large histories**: Demand-paged tmux rows prevent full-history transfer and parsing; serial chunk budgets remain as a bounded fallback
 - **Hidden tabs**: Worker wake-ups keep replay moving without racing the compositor while visible
 - **Server shutdown**: Skips batching via `_isStopping` flag
