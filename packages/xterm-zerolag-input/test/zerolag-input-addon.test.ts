@@ -79,6 +79,85 @@ describe('ZerolagInputAddon', () => {
       expect(addon.pendingText).toBe('');
       expect(addon.hasPending).toBe(false);
     });
+
+    it('renders explicit line breaks as separate terminal rows', () => {
+      const { addon, mock } = tracked();
+
+      addon.appendText('first\nsecond');
+
+      const overlay = mock.terminal.element.querySelector('.xterm-screen')!.lastElementChild as HTMLDivElement;
+      expect(addon.pendingText).toBe('first\nsecond');
+      expect(overlay.children).toHaveLength(3); // two rows and the cursor
+      expect(overlay.children[0].textContent).toBe('first');
+      expect(overlay.children[1].textContent).toBe('second');
+    });
+
+    it('pins a growing multiline draft to the bottom and shrinks it after delete', () => {
+      const lines = Array.from({ length: 24 }, () => '');
+      lines[22] = '$ ';
+      const mock = createMockTerminal({
+        buffer: { lines },
+        cols: 20,
+        rows: 24,
+        cellHeight: 10,
+      });
+      const addon = new ZerolagInputAddon({
+        prompt: { type: 'character', char: '$', offset: 2 },
+      });
+      mock.terminal.loadAddon(addon);
+      cleanups.push(() => {
+        addon.dispose();
+        mock.cleanup();
+      });
+
+      addon.appendText('one\ntwo\nthree');
+
+      const overlay = mock.terminal.element.querySelector('.xterm-screen')!.lastElementChild as HTMLDivElement;
+      expect(overlay.style.top).toBe('210px');
+      expect(
+        Array.from(overlay.children)
+          .slice(0, 3)
+          .map((element) => element.textContent)
+      ).toEqual(['one', 'two', 'three']);
+
+      for (let i = 0; i < 6; i++) addon.removeChar();
+
+      expect(addon.pendingText).toBe('one\ntwo');
+      expect(overlay.style.top).toBe('220px');
+      expect(
+        Array.from(overlay.children)
+          .slice(0, 2)
+          .map((element) => element.textContent)
+      ).toEqual(['one', 'two']);
+    });
+
+    it('keeps only the visible tail when a draft exceeds the terminal height', () => {
+      const lines = ['', '', '', '$ '];
+      const mock = createMockTerminal({
+        buffer: { lines },
+        cols: 20,
+        rows: 4,
+        cellHeight: 10,
+      });
+      const addon = new ZerolagInputAddon({
+        prompt: { type: 'character', char: '$', offset: 2 },
+      });
+      mock.terminal.loadAddon(addon);
+      cleanups.push(() => {
+        addon.dispose();
+        mock.cleanup();
+      });
+
+      addon.appendText('a\nb\nc\nd\ne\nf');
+
+      const overlay = mock.terminal.element.querySelector('.xterm-screen')!.lastElementChild as HTMLDivElement;
+      expect(overlay.style.top).toBe('0px');
+      expect(
+        Array.from(overlay.children)
+          .slice(0, 4)
+          .map((element) => element.textContent)
+      ).toEqual(['c', 'd', 'e', 'f']);
+    });
   });
 
   describe('composition text', () => {
@@ -265,6 +344,32 @@ describe('ZerolagInputAddon', () => {
       const s2 = addon.state;
       expect(s1.pendingText).toBe('a');
       expect(s2.pendingText).toBe('ab');
+    });
+
+    it('restores an editable draft without rendering against a stale terminal frame', () => {
+      const { addon, mock } = tracked(['$ stale session']);
+
+      addon.restoreDraft(
+        {
+          pendingText: ' pending',
+          flushedText: 'already sent',
+        },
+        false
+      );
+
+      expect(addon.state).toMatchObject({
+        pendingText: ' pending',
+        compositionText: '',
+        flushedLength: 'already sent'.length,
+        flushedText: 'already sent',
+        visible: false,
+        promptPosition: null,
+      });
+
+      mock.setLines(['$ current session']);
+      addon.rerender();
+      expect(addon.state.visible).toBe(true);
+      expect(addon.state.promptPosition).not.toBeNull();
     });
   });
 
@@ -466,6 +571,25 @@ describe('ZerolagInputAddon', () => {
       addon.setFlushed(3, 'abc');
       expect(() => addon.refreshFont()).not.toThrow();
       expect(addon.hasPending).toBe(true);
+    });
+
+    it('can pin a pending draft to the viewport while terminal history is scrolled', () => {
+      const { addon, mock } = tracked(['$ draft']);
+      addon.appendText('draft');
+      const overlay = mock.terminal.element.querySelector('.xterm-screen')!.lastElementChild as HTMLDivElement;
+
+      mock.terminal.buffer.active.baseY = 8;
+      mock.terminal.buffer.active.viewportY = 2;
+      mock.terminal.element.querySelector('.xterm-viewport')!.dispatchEvent(new Event('scroll'));
+      expect(addon.state.visible).toBe(false);
+
+      addon.setViewportPinned(true);
+      expect(addon.state.visible).toBe(true);
+      expect(overlay.textContent).toContain('draft');
+
+      addon.setViewportPinned(false);
+      expect(addon.state.visible).toBe(false);
+      expect(addon.pendingText).toBe('draft');
     });
   });
 

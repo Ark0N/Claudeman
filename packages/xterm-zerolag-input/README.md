@@ -98,6 +98,7 @@ Most terminal UIs can't do local echo because:
 3. **Font matching**: Canvas/WebGL renderers use their own text shaping. A DOM overlay must pixel-match the canvas grid — normal DOM text flow drifts due to sub-pixel glyph width differences.
 
 This library solves all three by:
+
 - Using a **DOM overlay** that Ink can't touch (separate z-index layer)
 - **Scanning the buffer** bottom-up for the prompt character instead of trusting cursor position
 - Rendering each character as an **absolutely-positioned `<span>`** at exact cell-grid coordinates
@@ -160,15 +161,16 @@ Implements xterm.js `ITerminalAddon`. The addon does **not** hook `terminal.onDa
 
 ### Input
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `addChar(char)` | `void` | Add a single printable character. |
-| `appendText(text)` | `void` | Append multiple characters (paste). |
-| `setCompositionText(text)` | `void` | Replace the visible, uncommitted IME candidate. |
-| `commitComposition(text)` | `void` | Atomically replace the candidate with finalized pending text. |
-| `clearComposition()` | `void` | Remove an unfinished candidate without changing pending text. |
-| `removeChar()` | `'pending'` \| `'flushed'` \| `false` | Remove last char. See [backspace handling](#backspace-handling). |
-| `clear()` | `void` | Clear all state, hide overlay. Call on Enter/Ctrl+C/Escape. |
+| Method                     | Returns                               | Description                                                      |
+| -------------------------- | ------------------------------------- | ---------------------------------------------------------------- |
+| `addChar(char)`            | `void`                                | Add a single printable character.                                |
+| `appendText(text)`         | `void`                                | Append multiple characters (paste).                              |
+| `setCompositionText(text)` | `void`                                | Replace the visible, uncommitted IME candidate.                  |
+| `commitComposition(text)`  | `void`                                | Atomically replace the candidate with finalized pending text.    |
+| `clearComposition()`       | `void`                                | Remove an unfinished candidate without changing pending text.    |
+| `removeChar()`             | `'pending'` \| `'flushed'` \| `false` | Remove last char. See [backspace handling](#backspace-handling). |
+| `clear()`                  | `void`                                | Clear all state, hide overlay. Call on Enter/Ctrl+C/Escape.      |
+| `restoreDraft(draft, render?)` | `void`                            | Atomically restore pending/flushed text. Pass `false` until the current terminal frame loads. |
 
 Composition text is rendered after `pendingText` but remains transient. Call `setCompositionText()` for each `compositionupdate`, then `commitComposition()` with xterm's finalized `onData` payload. This prevents candidate rewrites from duplicating partially composed words.
 
@@ -176,11 +178,11 @@ Composition text is rendered after `pendingText` but remains transient. Call `se
 
 `removeChar()` cascades through three layers and tells you what it removed:
 
-| Return | Source | Your action |
-|--------|--------|-------------|
-| `'pending'` | Unsent text (never transmitted to PTY) | Do nothing |
-| `'flushed'` | Text already sent to PTY | Send `\x7f` backspace to PTY |
-| `false` | Nothing to remove | Do nothing |
+| Return      | Source                                 | Your action                  |
+| ----------- | -------------------------------------- | ---------------------------- |
+| `'pending'` | Unsent text (never transmitted to PTY) | Do nothing                   |
+| `'flushed'` | Text already sent to PTY               | Send `\x7f` backspace to PTY |
+| `false`     | Nothing to remove                      | Do nothing                   |
 
 The cascade is pending text first, then explicitly tracked flushed text. The addon never infers editable input during ordinary typing or Backspace because full-screen terminal UIs can render status text after a prompt glyph. For Tab completion, call `detectBufferText()` after the completion response is rendered; for session restoration, call `setFlushed()`.
 
@@ -188,44 +190,49 @@ The cascade is pending text first, then explicitly tracked flushed text. The add
 
 "Flushed" = sent to PTY but echo hasn't arrived yet. Happens during tab switches and tab completion.
 
-| Method | Description |
-|--------|-------------|
+| Method                             | Description                                                                                  |
+| ---------------------------------- | -------------------------------------------------------------------------------------------- |
 | `setFlushed(count, text, render?)` | Mark text as flushed. Pass `render=false` during tab-switch restore (buffer not loaded yet). |
-| `getFlushed()` | Returns `{ count, text }`. |
-| `clearFlushed()` | Clear flushed state when server echo arrives. |
+| `getFlushed()`                     | Returns `{ count, text }`.                                                                   |
+| `clearFlushed()`                   | Clear flushed state when server echo arrives.                                                |
+
+`restoreDraft({ pendingText, flushedText }, false)` is the preferred reload
+and session-switch rehydration API. It clears transient composition and cached
+prompt coordinates without rendering against the outgoing terminal frame.
 
 ### Buffer Detection
 
 Scan the terminal for text that exists after the prompt but wasn't typed through the overlay.
 
-| Method | Description |
-|--------|-------------|
-| `detectBufferText()` | Explicitly scan and return detected text (or `null`). Sets it as flushed. Guarded: runs once per `clear()` cycle. |
-| `resetBufferDetection()` | Re-enable detection. |
-| `suppressBufferDetection()` | Block detection until next `clear()`. Use for sessions with UI framework text after the prompt. |
-| `undoDetection()` | Undo last detection — clears flushed state, re-enables detection. For tab completion retry. |
+| Method                      | Description                                                                                                       |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `detectBufferText()`        | Explicitly scan and return detected text (or `null`). Sets it as flushed. Guarded: runs once per `clear()` cycle. |
+| `resetBufferDetection()`    | Re-enable detection.                                                                                              |
+| `suppressBufferDetection()` | Block detection until next `clear()`. Use for sessions with UI framework text after the prompt.                   |
+| `undoDetection()`           | Undo last detection — clears flushed state, re-enables detection. For tab completion retry.                       |
 
 ### Rendering
 
-| Method | Description |
-|--------|-------------|
-| `rerender()` | Force re-render. Call after buffer reloads, screen redraws, resizes, reconnects. |
-| `refreshFont()` | Re-cache font properties from terminal. Call after font size or theme changes. |
+| Method                      | Description                                                                                     |
+| --------------------------- | ----------------------------------------------------------------------------------------------- |
+| `rerender()`                | Force re-render. Call after buffer reloads, screen redraws, resizes, reconnects.                |
+| `refreshFont()`             | Re-cache font properties from terminal. Call after font size or theme changes.                  |
+| `setViewportPinned(pinned)` | Keep a pending draft visible at the bottom while xterm scrollback is away from the live prompt. |
 
 ### Prompt Utilities
 
-| Method | Description |
-|--------|-------------|
-| `findPrompt()` | Find prompt position. Returns `{ row, col }` or `null`. |
+| Method             | Description                                              |
+| ------------------ | -------------------------------------------------------- |
+| `findPrompt()`     | Find prompt position. Returns `{ row, col }` or `null`.  |
 | `readPromptText()` | Read text after prompt marker. Returns string or `null`. |
 
 ### State
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `pendingText` | `string` | Unacknowledged text (read-only) |
-| `hasPending` | `boolean` | `true` if overlay has any content |
-| `state` | `ZerolagInputState` | Full snapshot: pendingText, flushedLength, flushedText, visible, promptPosition |
+| Property      | Type                | Description                                                                     |
+| ------------- | ------------------- | ------------------------------------------------------------------------------- |
+| `pendingText` | `string`            | Unacknowledged text (read-only)                                                 |
+| `hasPending`  | `boolean`           | `true` if overlay has any content                                               |
+| `state`       | `ZerolagInputState` | Full snapshot: pendingText, flushedLength, flushedText, visible, promptPosition |
 
 ### Options
 
@@ -316,7 +323,9 @@ zerolag.rerender();
 terminal.options.fontSize = 18;
 zerolag.refreshFont();
 
-function onReconnect() { zerolag.rerender(); }
+function onReconnect() {
+  zerolag.rerender();
+}
 ```
 
 ---

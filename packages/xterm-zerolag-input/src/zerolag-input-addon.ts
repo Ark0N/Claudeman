@@ -1,6 +1,7 @@
 import type {
   XtermTerminal,
   XtermAddon,
+  ZerolagInputDraftState,
   ZerolagInputOptions,
   ZerolagInputState,
   PromptPosition,
@@ -87,6 +88,7 @@ export class ZerolagInputAddon implements XtermAddon {
   private _scrollTimer: ReturnType<typeof setTimeout> | null = null;
   private _scrollHandler: (() => void) | null = null;
   private _scrollViewport: Element | null = null;
+  private _viewportPinned = false;
 
   constructor(options?: ZerolagInputOptions) {
     this._options = {
@@ -125,7 +127,7 @@ export class ZerolagInputAddon implements XtermAddon {
     this._scrollHandler = () => {
       try {
         const buf = this._terminal!.buffer.active;
-        if (buf.viewportY !== buf.baseY) {
+        if (buf.viewportY !== buf.baseY && !this._viewportPinned) {
           this._overlay!.style.display = 'none';
           if (this._scrollTimer) {
             clearTimeout(this._scrollTimer);
@@ -277,6 +279,33 @@ export class ZerolagInputAddon implements XtermAddon {
     this._hide();
   }
 
+  /**
+   * Restore serialized editable input atomically.
+   *
+   * Pass `render=false` while a different session's terminal frame is still
+   * visible. A later `rerender()` will locate the prompt in the current frame,
+   * avoiding a stale prompt-position cache during asynchronous tab switches.
+   */
+  restoreDraft(draft: ZerolagInputDraftState, render = true): void {
+    this._pendingText = typeof draft?.pendingText === 'string' ? draft.pendingText : '';
+    this._compositionText = '';
+    this._flushedText = typeof draft?.flushedText === 'string' ? draft.flushedText : '';
+    this._flushedOffset = this._flushedText.length;
+    this._bufferDetectDone = false;
+    this._lastRenderKey = '';
+    this._lastPromptPos = null;
+
+    if (!render) {
+      this._hide();
+      return;
+    }
+    if (this.hasPending) {
+      this._render();
+    } else {
+      this._hide();
+    }
+  }
+
   // ─── Flushed text tracking ────────────────────────────────────────
 
   /**
@@ -333,6 +362,26 @@ export class ZerolagInputAddon implements XtermAddon {
       this._lastRenderKey = '';
       this._render();
     }
+  }
+
+  /**
+   * Keep the pending draft pinned to the visible terminal rows while xterm
+   * scrollback is away from the bottom. Consumers should enable this only
+   * while a separate input surface (for example a phone keyboard) stays active.
+   */
+  setViewportPinned(pinned: boolean): void {
+    const next = pinned === true;
+    if (this._viewportPinned === next) return;
+    this._viewportPinned = next;
+    this._lastRenderKey = '';
+
+    if (!this._terminal || !this._overlay || !this.hasPending) return;
+    const buf = this._terminal.buffer.active;
+    if (!next && buf.viewportY !== buf.baseY) {
+      this._overlay.style.display = 'none';
+      return;
+    }
+    this._render();
   }
 
   /**
@@ -535,24 +584,39 @@ export class ZerolagInputAddon implements XtermAddon {
 
     try {
       const buf = this._terminal.buffer.active;
+      const terminalRows = Math.max(1, this._terminal.rows);
+      const pinnedToScrolledViewport = this._viewportPinned && buf.viewportY !== buf.baseY;
 
       // Hide overlay when scrolled up — prompt is at bottom, not in viewport
-      if (buf.viewportY !== buf.baseY) {
+      if (buf.viewportY !== buf.baseY && !pinnedToScrolledViewport) {
         this._overlay.style.display = 'none';
         return;
       }
 
-      // Re-scan for prompt on every render (full-screen redraws can move it)
-      const prompt = this.findPrompt();
-      if (prompt) {
-        // When flushed text exists, lock column to prevent jitter from
-        // redraws that temporarily shift the prompt marker. Allow row changes.
-        if (this._lastPromptPos && this._flushedOffset > 0) {
-          this._lastPromptPos = { row: prompt.row, col: this._lastPromptPos.col };
-        } else {
-          this._lastPromptPos = prompt;
+      if (pinnedToScrolledViewport) {
+        if (this._lastPromptPos) {
+          this._lastPromptPos = {
+            row: terminalRows - 1,
+            col: this._lastPromptPos.col,
+          };
         }
-      } else if (!this._lastPromptPos) {
+      } else {
+        // Re-scan for prompt on every render (full-screen redraws can move it)
+        const prompt = this.findPrompt();
+        if (prompt) {
+          // When flushed text exists, lock column to prevent jitter from
+          // redraws that temporarily shift the prompt marker. Allow row changes.
+          if (this._lastPromptPos && this._flushedOffset > 0) {
+            this._lastPromptPos = { row: prompt.row, col: this._lastPromptPos.col };
+          } else {
+            this._lastPromptPos = prompt;
+          }
+        } else if (!this._lastPromptPos) {
+          this._overlay.style.display = 'none';
+          return;
+        }
+      }
+      if (!this._lastPromptPos) {
         this._overlay.style.display = 'none';
         return;
       }
@@ -586,55 +650,62 @@ export class ZerolagInputAddon implements XtermAddon {
         }
       }
 
-      // Skip redundant re-renders — include text content to detect
-      // same-length changes (e.g., setFlushed with different text)
-      const renderKey = `${displayText}:${startCol}:${activePrompt.row}:${activePrompt.col}:${totalCols}:${this._flushedOffset}`;
-      if (renderKey === this._lastRenderKey && this._overlay.style.display !== 'none') return;
-      this._lastRenderKey = renderKey;
-
-      // Split into visual lines by column width (CJK wide chars = 2 cols)
+      // Split explicit draft line breaks and soft-wrap each resulting row by
+      // terminal cell width (CJK wide chars = 2 cols).
       const firstLineCols = Math.max(1, totalCols - startCol);
       const chars = [...displayText]; // proper Unicode iteration
       const lines: string[] = [];
-      let ci = 0;
-      // First line: remaining columns after prompt
-      {
-        let lineStr = '';
-        let lineCols = 0;
-        while (ci < chars.length) {
-          const cw = charCellWidth(this._terminal, chars[ci]);
-          if (lineCols + cw > firstLineCols) break;
-          lineStr += chars[ci];
-          lineCols += cw;
-          ci++;
+      let lineStr = '';
+      let lineCols = 0;
+      let lineCapacity = firstLineCols;
+      for (let ci = 0; ci < chars.length; ci++) {
+        const char = chars[ci];
+        if (char === '\r' || char === '\n') {
+          if (char === '\r' && chars[ci + 1] === '\n') ci++;
+          lines.push(lineStr);
+          lineStr = '';
+          lineCols = 0;
+          lineCapacity = totalCols;
+          continue;
         }
-        lines.push(lineStr);
-      }
-      // Subsequent lines: full terminal width
-      while (ci < chars.length) {
-        let lineStr = '';
-        let lineCols = 0;
-        while (ci < chars.length) {
-          const cw = charCellWidth(this._terminal, chars[ci]);
-          if (lineCols + cw > totalCols) break;
-          lineStr += chars[ci];
-          lineCols += cw;
-          ci++;
+
+        const charCols = charCellWidth(this._terminal, char);
+        if (lineCols + charCols > lineCapacity) {
+          lines.push(lineStr);
+          lineStr = '';
+          lineCols = 0;
+          lineCapacity = totalCols;
         }
-        lines.push(lineStr);
+        lineStr += char;
+        lineCols += charCols;
       }
+      lines.push(lineStr);
+
+      // Keep the newest draft row visible at the bottom of the terminal. As
+      // the draft grows it expands upward; deleting rows lets it shrink back
+      // toward the prompt. Drafts taller than the viewport retain their tail.
+      const hiddenLineCount = Math.max(0, lines.length - terminalRows);
+      const visibleLines = lines.slice(hiddenLineCount);
+      const visibleStartCol = hiddenLineCount > 0 ? 0 : startCol;
+      const renderRow = Math.max(0, Math.min(activePrompt.row, terminalRows - visibleLines.length));
+
+      // Skip redundant re-renders — include the resolved geometry so a
+      // keyboard resize still repositions identical text.
+      const renderKey = `${displayText}:${visibleStartCol}:${renderRow}:${activePrompt.col}:${totalCols}:${terminalRows}:${this._flushedOffset}`;
+      if (renderKey === this._lastRenderKey && this._overlay.style.display !== 'none') return;
+      this._lastRenderKey = renderKey;
 
       const cursorColor = this._options.cursorColor ?? this._terminal.options.theme?.cursor ?? DEFAULT_CURSOR;
 
       renderOverlay(this._overlay, {
-        lines,
-        startCol,
+        lines: visibleLines,
+        startCol: visibleStartCol,
         totalCols,
         cellW,
         cellH,
         charTop,
         charHeight,
-        promptRow: activePrompt.row,
+        promptRow: renderRow,
         font: this._font,
         showCursor: this._options.showCursor,
         cursorColor,

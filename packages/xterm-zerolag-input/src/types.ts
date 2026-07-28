@@ -142,6 +142,20 @@ export interface ZerolagInputState {
   promptPosition: PromptPosition | null;
 }
 
+/**
+ * Serializable editable input state.
+ *
+ * Transient IME composition is deliberately excluded: a browser cannot resume
+ * an operating-system composition session after reload. Consumers should fold
+ * any visible composition candidate into `pendingText` before persisting it.
+ */
+export interface ZerolagInputDraftState {
+  /** Text that has not been sent to the terminal process. */
+  pendingText: string;
+  /** Text sent to the process that is still tracked as editable input. */
+  flushedText: string;
+}
+
 /** Cell dimensions in CSS pixels. */
 export interface CellDimensions {
   width: number;

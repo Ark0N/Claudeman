@@ -4,7 +4,9 @@
 
 > **Current input rule:** ordinary typing and Backspace never infer editable text from the rendered terminal buffer. Consumers explicitly call `detectBufferText()` after Tab completion or `setFlushed()` when restoring known input. Full-screen TUIs can render status text after a prompt glyph, so implicit buffer adoption causes ghost deletion and stale text submission.
 
-> **IME rule:** live composition candidates occupy a separate transient overlay slot. `compositionupdate` replaces that slot, and xterm's finalized `onData` payload atomically commits it to pending text. Candidate text is never submitted or deleted as if it were already committed.
+> **IME rule:** live composition candidates occupy a separate transient overlay slot. `compositionupdate` replaces that slot, and xterm's finalized `onData` payload atomically commits it to pending text. Candidate text is never submitted or deleted as if it were already committed. The mobile integration retains each accepted commit until xterm's delayed composition path or Android's late `insertText` path has had a chance to repeat it, so those two browser routes cannot append the same word twice.
+
+> **Durability rule:** `TerminalInputStateStore` owns each session's pending, flushed, and optional CJK draft text separately from submitted input delivery. Lifecycle suspension calls `capture()` and only saves the draft; it never sends it. Session/Home switching calls `handoff()`, explicitly delivers the returned `flushText`, and persists flushed metadata so reload does not break Backspace. Restoration uses `get()` plus `restoreDraft(..., false)` until the target terminal frame is ready.
 
 ## Context
 

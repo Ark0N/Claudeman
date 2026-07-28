@@ -1,6 +1,6 @@
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { relative, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const repoRoot = resolve(import.meta.dirname, '..');
@@ -20,12 +20,17 @@ describe('frontend public asset tooling', () => {
     expect(appJs.includes(0)).toBe(false);
   });
 
-  it('runs the public asset check script', () => {
-    expect(() => {
-      execFileSync('npm', ['run', 'check:public-assets', '--silent'], {
-        cwd: repoRoot,
-        stdio: 'pipe',
-      });
-    }).not.toThrow();
+  it('exposes self-contained asset discovery and NUL checks', async () => {
+    const checker = (await import(pathToFileURL(resolve(repoRoot, 'scripts/check-public-assets.mjs')).href)) as {
+      collectTextAssets: (directory: string) => string[];
+      findNullByte: (data: Buffer) => number;
+    };
+    const files = checker
+      .collectTextAssets(resolve(repoRoot, 'src/web/public'))
+      .map((file) => relative(repoRoot, file));
+
+    expect(files).toContain('src/web/public/terminal-input-state.js');
+    expect(checker.findNullByte(Buffer.from('valid source'))).toBe(-1);
+    expect(checker.findNullByte(Buffer.from([0x61, 0, 0x62]))).toBe(1);
   });
 });

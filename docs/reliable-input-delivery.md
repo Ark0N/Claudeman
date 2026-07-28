@@ -17,6 +17,12 @@ dropped once the server ACKs it** — so a half-open socket, a reconnect, or a p
 reload can never lose input. Redelivery is **exactly-once**: the server applies
 each `(clientId, seq)` at most once, so a resend can't type the prompt twice.
 
+Editable text that has not been submitted yet has a separate guarantee. A
+per-session draft record in `localStorage['codeman:sessionDrafts']` preserves
+local-echo text across session switches, Home navigation, browser
+minimization/tab discard, phone sleep, and page reload. Restoring a draft never
+submits it.
+
 ## How it works
 
 ### Client (`app.js`)
@@ -42,6 +48,31 @@ each `(clientId, seq)` at most once, so a resend can't type the prompt twice.
   `sentAt = 0` and re-sends everything pending. Also re-drains background sessions
   over POST, and fires on SSE-reconnect / `online`.
 - The connection indicator shows pending count/bytes (`_pendingBytes`).
+
+### Editable drafts
+
+- `TerminalInputStateStore` (`src/web/public/terminal-input-state.js`) is the
+  single owner of `{pendingText, flushedText, cjkText, updatedAt}` per session.
+  Its input API is `capture()`/`set()`/`handoff()`/`clear()`; its output API is
+  `get()` plus the explicit `flushText` returned by `handoff()`. Storage, clock,
+  and timers are injectable, so the state machine is self-contained in tests.
+- Writes are debounced during typing and forced synchronously on `pagehide` and
+  hidden `visibilitychange`.
+- `pendingText` has not reached the PTY. `flushedText` has reached the PTY
+  during a session/Home handoff but remains explicitly tracked so mobile
+  Backspace still maps one character to one PTY Backspace after reload.
+- An unfinished xterm IME candidate is persisted as ordinary pending text
+  because the operating system cannot resume a composition session after page
+  discard. The optional CJK textarea persists its committed field value
+  separately.
+- Session restore calls `restoreDraft(..., false)` before asynchronous terminal
+  replay, then renders only after the target frame is ready. This keeps the
+  draft editable without anchoring it to a stale session frame.
+- Enter, Escape, Ctrl+C, voice submit, and session deletion remove the draft.
+  Draft bytes then follow the normal exactly-once delivery path if submitted.
+- Draft strings are not truncated. On `QuotaExceededError`, reproducible
+  `codeman-xs-*` terminal snapshots are evicted before draft persistence is
+  abandoned.
 
 ### Server
 
@@ -70,3 +101,9 @@ across the narrow restart window.
   semantics (monotonic, per-client, gap-tolerant, eviction-safe).
 - `test/routes/session-routes.test.ts` — POST `/input` applies a tagged
   `(clientId, seq)` once on redelivery; untagged input always applies.
+- `test/mobile/keyboard.test.ts` — background/reload rehydration, switched
+  session editability, and submit cleanup for per-session drafts.
+- `test/terminal-input-state.test.ts` — pure capture, handoff, persistence,
+  clearing, and quota-recovery semantics without a server or browser manager.
+- `packages/xterm-zerolag-input/test/zerolag-input-addon.test.ts` — atomic
+  no-render draft restoration against a stale terminal frame.
