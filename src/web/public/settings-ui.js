@@ -424,7 +424,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('eventIdleAudio').checked = idlePref.audio ?? false;
     // Response complete (stop)
     const stopPref = eventTypes.stop || {};
-    document.getElementById('eventStopEnabled').checked = stopPref.enabled ?? true;
+    document.getElementById('eventStopEnabled').checked = stopPref.enabled ?? false;
     document.getElementById('eventStopBrowser').checked = stopPref.browser ?? false;
     document.getElementById('eventStopPush').checked = stopPref.push ?? false;
     document.getElementById('eventStopAudio').checked = stopPref.audio ?? false;
@@ -1778,7 +1778,7 @@ Object.assign(CodemanApp.prototype, {
           audio: document.getElementById('eventSubagentAudio').checked,
         },
       },
-      _version: 4,
+      _version: 5,
     };
     if (this.notificationManager) {
       this.notificationManager.preferences = notifPrefsToSave;
@@ -2472,7 +2472,8 @@ Object.assign(CodemanApp.prototype, {
         if (notificationPreferences && this.notificationManager) {
           const localNotifPrefs = localStorage.getItem(this.notificationManager.getStorageKey());
           if (!localNotifPrefs) {
-            this.notificationManager.preferences = notificationPreferences;
+            this.notificationManager.preferences =
+              this.notificationManager.normalizePreferences(notificationPreferences);
             this.notificationManager.savePreferences();
           }
         }
