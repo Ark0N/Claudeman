@@ -2134,9 +2134,8 @@ Object.assign(CodemanApp.prototype, {
     }
 
     // File Viewer header button — opt-in, default OFF. Marker class (base is
-    // display:inline-flex !important); clicking it toggles the file browser panel.
-    // Default ON (desktop): the folder button is part of the standard header now;
-    // phones still hide it via mobile.css (btn-file-viewer in the phone-hidden set).
+    // display:inline-flex !important); clicking it toggles the repository panel.
+    // Phones allow the enabled button because the panel has a dedicated mobile layout.
     const showFileViewerButton = settings.showFileViewerButton ?? defaults.showFileViewerButton ?? true;
     const fileViewerBtn = document.querySelector('.btn-file-viewer');
     if (fileViewerBtn) {
