@@ -169,6 +169,118 @@ describe('file-routes', () => {
     });
   });
 
+  // ========== Multi-user scoping for the filesystem picker ==========
+  //
+  // The picker is a SECOND file-serving surface and does not inherit the
+  // attachment guard's ownership scoping, so both of its endpoints have to do
+  // it themselves. Two distinct holes are covered here:
+  //   1. `sessionId` was used without an owner check, so any user could pin
+  //      another user's workingDir as a browse root.
+  //   2. `Home` and `CASES_DIR` were unconditional roots, and per-user spaces
+  //      live INSIDE homedir(), so Home alone exposed every other user's files.
+  describe('filesystem picker multi-user scoping', () => {
+    const SPACES = '/tmp/codeman-test-user-spaces';
+    let prevMultiUser: string | undefined;
+    let prevSpaces: string | undefined;
+
+    beforeEach(() => {
+      prevMultiUser = process.env.CODEMAN_MULTIUSER;
+      prevSpaces = process.env.CODEMAN_USER_SPACES_DIR;
+      process.env.CODEMAN_MULTIUSER = '1';
+      process.env.CODEMAN_USER_SPACES_DIR = SPACES;
+    });
+
+    afterEach(() => {
+      if (prevMultiUser === undefined) delete process.env.CODEMAN_MULTIUSER;
+      else process.env.CODEMAN_MULTIUSER = prevMultiUser;
+      if (prevSpaces === undefined) delete process.env.CODEMAN_USER_SPACES_DIR;
+      else process.env.CODEMAN_USER_SPACES_DIR = prevSpaces;
+    });
+
+    const harnessAs = (role: 'admin' | 'user', username: string) =>
+      createRouteTestHarness(registerFileRoutes, { authUser: { username, role } });
+
+    it('404s a browse scoped to another user session instead of adopting its folder', async () => {
+      const scoped = await harnessAs('user', 'bob');
+      scoped.ctx._session.owner = 'alice';
+      try {
+        const res = await scoped.app.inject({
+          method: 'GET',
+          url: `/api/filesystem/browse?sessionId=${scoped.ctx._sessionId}`,
+        });
+
+        expect(res.statusCode).toBe(404);
+        expect(JSON.parse(res.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.NOT_FOUND });
+        // The decisive part: alice's folder must not have leaked in as a root.
+        expect(res.body).not.toContain(scoped.ctx._session.workingDir);
+      } finally {
+        await scoped.app.close();
+      }
+    });
+
+    it('404s a preview scoped to another user session', async () => {
+      const scoped = await harnessAs('user', 'bob');
+      scoped.ctx._session.owner = 'alice';
+      try {
+        const res = await scoped.app.inject({
+          method: 'GET',
+          url: `/api/filesystem/preview?sessionId=${scoped.ctx._sessionId}&path=${encodeURIComponent(
+            `${scoped.ctx._session.workingDir}/notes.md`
+          )}`,
+        });
+
+        expect(res.statusCode).toBe(404);
+      } finally {
+        await scoped.app.close();
+      }
+    });
+
+    it('confines a regular user to their own space, never Home or the shared cases dir', async () => {
+      const scoped = await harnessAs('user', 'bob');
+      try {
+        mockedReaddir.mockResolvedValueOnce([] as never);
+        const res = await scoped.app.inject({ method: 'GET', url: '/api/filesystem/browse' });
+
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+        expect(body.data.roots).toEqual([{ label: 'My Space', path: `${SPACES}/bob` }]);
+        expect(body.data.path).toBe(`${SPACES}/bob`);
+      } finally {
+        await scoped.app.close();
+      }
+    });
+
+    it("refuses to browse another user's space by absolute path", async () => {
+      const scoped = await harnessAs('user', 'bob');
+      try {
+        const res = await scoped.app.inject({
+          method: 'GET',
+          url: `/api/filesystem/browse?path=${encodeURIComponent(`${SPACES}/alice/cases`)}`,
+        });
+
+        expect(res.statusCode).toBe(403);
+        expect(JSON.parse(res.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.INVALID_INPUT });
+      } finally {
+        await scoped.app.close();
+      }
+    });
+
+    it('keeps the host-wide roots for a multi-user admin', async () => {
+      const scoped = await harnessAs('admin', 'root');
+      try {
+        mockedReaddir.mockResolvedValueOnce([] as never);
+        const res = await scoped.app.inject({ method: 'GET', url: '/api/filesystem/browse' });
+
+        expect(res.statusCode).toBe(200);
+        const labels = JSON.parse(res.body).data.roots.map((root: { label: string }) => root.label);
+        expect(labels).toContain('Home');
+        expect(labels).not.toContain('My Space');
+      } finally {
+        await scoped.app.close();
+      }
+    });
+  });
+
   // ========== GET /api/filesystem/preview ==========
 
   describe('GET /api/filesystem/preview', () => {

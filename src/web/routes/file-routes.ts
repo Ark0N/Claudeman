@@ -30,6 +30,7 @@ import { generateFirstPageThumbnail } from '../../document-thumbnailer.js';
 import { getOfficePreviewPdfPath, getPreviewPdfDownloadName } from '../../document-preview-cache.js';
 import { sanitizeAttachmentHistoryItem } from '../../session-attachment-history.js';
 import { isBlockedAttachmentPath, loadAttachmentGuardConfig } from '../../config/attachment-guard.js';
+import { isMultiUserMode, userSpacePath } from '../../config/multiuser.js';
 import {
   CASES_DIR,
   canAccessOwned,
@@ -323,33 +324,55 @@ function isBlockedPickerPath(path: string, blockedTrees: readonly string[], dire
   return directory && isBlockedAttachmentPath(join(path, '__codeman_path_picker_probe__'), blockedTrees);
 }
 
-function configuredFilesystemPickerRoots(): Array<{ label: string; path: string }> {
-  const candidates: Array<{ label: string; path: string }> = [
+function extraConfiguredPickerRoots(): Array<{ label: string; path: string }> {
+  const extraRoots = process.env.CODEMAN_FILE_PICKER_ROOTS;
+  if (!extraRoots) return [];
+  return extraRoots
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((path, index) => ({ label: `Configured ${index + 1}`, path }));
+}
+
+/**
+ * Browse roots for the requesting identity.
+ *
+ * Single-user mode (and multi-user admins) get the host-wide set. ⚠️ A regular
+ * multi-user user must NOT: per-user spaces live at `<USER_SPACES_DIR>/<name>`,
+ * which is *inside* `homedir()`, so handing out a `Home` root would let any
+ * authenticated user browse and preview every other user's workspace. The
+ * shared `CASES_DIR` leaks the same way, and `/mnt/d` is a broad host mount
+ * that a multi-user deployment should not expose by default. Operators who
+ * genuinely want a shared area can still name it in `CODEMAN_FILE_PICKER_ROOTS`,
+ * which stays an explicit opt-in in both modes.
+ */
+function configuredFilesystemPickerRoots(req: FastifyRequest): Array<{ label: string; path: string }> {
+  const user = getAuthUser(req);
+  if (isMultiUserMode() && user.role !== 'admin') {
+    return [{ label: 'My Space', path: userSpacePath(user.username) }, ...extraConfiguredPickerRoots()];
+  }
+  return [
     { label: 'Home', path: homedir() },
     { label: 'Codeman Cases', path: CASES_DIR },
     { label: 'WSL D:', path: '/mnt/d' },
+    ...extraConfiguredPickerRoots(),
   ];
-  const extraRoots = process.env.CODEMAN_FILE_PICKER_ROOTS;
-  if (extraRoots) {
-    for (const [index, path] of extraRoots
-      .split(',')
-      .map((value) => value.trim())
-      .filter(Boolean)
-      .entries()) {
-      candidates.push({ label: `Configured ${index + 1}`, path });
-    }
-  }
-  return candidates;
 }
 
 async function resolveFilesystemPickerRoots(
   ctx: SessionPort & ConfigPort,
+  req: FastifyRequest,
   sessionId?: string
 ): Promise<FilesystemBrowseRoot[]> {
-  const candidates = configuredFilesystemPickerRoots();
+  const candidates = configuredFilesystemPickerRoots(req);
   if (sessionId) {
     const session = ctx.sessions.get(sessionId) ?? ctx.store.getSession(sessionId);
-    if (!session) {
+    // ⚠️ Ownership must be checked here, exactly as `findSessionOrFail` does for
+    // the other session-scoped handlers in this file. Without it a multi-user
+    // caller could pin ANOTHER user's `workingDir` as a browse root just by
+    // passing their sessionId. Report not-found rather than forbidden so the
+    // endpoint does not confirm that a session id exists.
+    if (!session || !canAccessOwned(getAuthUser(req), (session as { owner?: string }).owner)) {
       throw Object.assign(new Error(`Session ${sessionId} not found`), {
         statusCode: 404,
         body: createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${sessionId} not found`),
@@ -394,10 +417,11 @@ function throwFilesystemPickerError(statusCode: number, code: ApiErrorCode, mess
 
 async function resolveFilesystemPickerPath(
   ctx: SessionPort & ConfigPort,
+  req: FastifyRequest,
   requestedPath: string | undefined,
   sessionId?: string
 ): Promise<ResolvedFilesystemPickerPath> {
-  const roots = await resolveFilesystemPickerRoots(ctx, sessionId);
+  const roots = await resolveFilesystemPickerRoots(ctx, req, sessionId);
   if (roots.length === 0) {
     throwFilesystemPickerError(403, ApiErrorCode.INVALID_INPUT, 'No filesystem browse roots are available');
   }
@@ -545,6 +569,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     const { path: requestedPath, sessionId } = parseBody(FilesystemBrowseQuerySchema, req.query);
     const { candidatePath, resolvedPath, roots, matchingRoot, blockedTrees } = await resolveFilesystemPickerPath(
       ctx,
+      req,
       requestedPath,
       sessionId
     );
@@ -665,6 +690,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     const { path: requestedPath, sessionId } = parseBody(FilesystemPreviewQuerySchema, req.query);
     const { candidatePath, resolvedPath, blockedTrees } = await resolveFilesystemPickerPath(
       ctx,
+      req,
       requestedPath,
       sessionId
     );
