@@ -4053,13 +4053,21 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   display: none;
 }
 
+.case-combobox-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
 .case-combobox-option {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
+  flex: 1;
+  min-width: 0;
   width: 100%;
   min-height: 34px;
-  padding: 0.35rem 0.45rem;
+  padding: 0.35rem 4.2rem 0.35rem 0.45rem;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -4091,6 +4099,58 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.case-combobox-actions {
+  position: absolute;
+  right: 0.3rem;
+  display: flex;
+  gap: 0.15rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-smooth);
+}
+
+.case-combobox-row:hover .case-combobox-actions,
+.case-combobox-row:focus-within .case-combobox-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.case-combobox-action {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  background: #242a34;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.case-combobox-action:hover,
+.case-combobox-action:focus-visible {
+  color: var(--text);
+  background: #303846;
+}
+
+.case-combobox-action-delete:hover,
+.case-combobox-action-delete:focus-visible {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
+.case-combobox-action svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .case-combobox-empty {
@@ -5059,29 +5119,43 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
 .mobile-case-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 20px;
+  padding: 4px 8px;
   background: transparent;
   border: none;
   color: #e5e5e5;
-  font-size: 0.95rem;
-  text-align: left;
-  cursor: pointer;
   transition: background 0.1s;
   width: 100%;
 }
 
-.mobile-case-item:hover {
+.mobile-case-item:hover,
+.mobile-case-item:focus-within {
   background: rgba(255, 255, 255, 0.05);
 }
 
-.mobile-case-item:active {
+.mobile-case-item:has(.mobile-case-item-select:active) {
   background: rgba(255, 255, 255, 0.1);
 }
 
 .mobile-case-item.selected {
   background: rgba(34, 197, 94, 0.15);
   color: #22c55e;
+}
+
+.mobile-case-item-select {
+  display: flex;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 4px 8px 12px;
+  align-items: center;
+  flex: 1;
+  gap: 12px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: 0.95rem;
+  text-align: left;
+  cursor: pointer;
 }
 
 .mobile-case-item-icon {
@@ -5120,21 +5194,43 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   opacity: 1;
 }
 
-.mobile-case-item-delete {
-  width: 28px;
-  height: 28px;
+.mobile-case-item-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+}
+
+.mobile-case-item-action {
+  width: 36px;
+  height: 36px;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--text-dim);
-  opacity: 0.4;
   flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 4px;
   transition: all var(--transition-smooth);
 }
 
+.mobile-case-item-action svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mobile-case-item-edit:active {
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.15);
+}
+
 .mobile-case-item-delete:active {
-  opacity: 1;
   color: #ef4444;
   background: rgba(239, 68, 68, 0.15);
 }

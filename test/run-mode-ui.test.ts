@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 function loadRunModeHarness() {
   const elements: Record<string, any> = {};
@@ -363,6 +363,69 @@ describe('case selector refresh', () => {
 
     expect(elements.quickStartCase.value).toBe('moneytrove');
     expect(app.run).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders distinct edit and delete actions beside every case option', () => {
+    const elements: Record<string, any> = {
+      quickStartCaseSearch: {
+        setAttribute: vi.fn(),
+        removeAttribute: vi.fn(),
+      },
+      quickStartCaseList: {
+        innerHTML: '',
+        classList: { remove: vi.fn() },
+      },
+      quickStartCase: { value: 'Alpha' },
+    };
+    const CodemanApp = function CodemanApp(this: any) {};
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: (id: string) => elements[id] ?? null },
+      console,
+      escapeHtml: (value: string) => value,
+    });
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+
+    const app = new (CodemanApp as any)();
+    app.cases = [{ name: 'Alpha' }, { name: 'Beta' }];
+    app.renderCasePickerList();
+
+    expect(elements.quickStartCaseList.innerHTML.match(/data-case-action="edit"/g)).toHaveLength(3);
+    expect(elements.quickStartCaseList.innerHTML.match(/data-case-action="delete"/g)).toHaveLength(3);
+  });
+
+  it('opens the selected case settings directly from an inline edit action', () => {
+    const elements: Record<string, any> = {
+      quickStartCase: { value: 'Alpha' },
+      caseSettingsPopover: {
+        classList: {
+          add: vi.fn(),
+          contains: vi.fn(() => true),
+          remove: vi.fn(),
+        },
+      },
+    };
+    const CodemanApp = function CodemanApp(this: any) {};
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: (id: string) => elements[id] ?? null },
+      console,
+    });
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+
+    const app = new (CodemanApp as any)();
+    app.selectQuickStartCase = vi.fn();
+    app.toggleCaseSettings = vi.fn();
+
+    app.editCaseFromPicker('Beta');
+
+    expect(app.selectQuickStartCase).toHaveBeenCalledWith('Beta');
+    expect(elements.caseSettingsPopover.classList.add).toHaveBeenCalledWith('hidden');
+    expect(app.toggleCaseSettings).toHaveBeenCalledOnce();
   });
 
   it('creates remote shell sessions by caseName instead of remote display path', async () => {
