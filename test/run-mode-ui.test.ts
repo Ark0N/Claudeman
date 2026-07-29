@@ -74,6 +74,36 @@ describe('run mode UI', () => {
 });
 
 describe('Run launch synchronization', () => {
+  it('keeps launch progress out of an active session terminal', () => {
+    const CodemanApp = function CodemanApp(this: any) {};
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: () => null },
+      console,
+    });
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+
+    const app = new (CodemanApp as any)();
+    app.activeSessionId = 'existing-session';
+    app.terminal = {
+      clear: vi.fn(),
+      writeln: vi.fn(),
+    };
+    app.showToast = vi.fn();
+
+    const ownsTerminal = app._beginSessionLaunchStatus('Starting Codex session', '1;32');
+    app._appendSessionLaunchStatus(ownsTerminal, 'Creating session');
+    app._reportSessionLaunchError(ownsTerminal, 'Launch failed');
+
+    expect(ownsTerminal).toBe(false);
+    expect(app.terminal.clear).not.toHaveBeenCalled();
+    expect(app.terminal.writeln).not.toHaveBeenCalled();
+    expect(app.showToast).toHaveBeenNthCalledWith(1, 'Starting Codex session', 'info');
+    expect(app.showToast).toHaveBeenNthCalledWith(2, 'Launch failed', 'error');
+  });
+
   it('coalesces overlapping Run activations and disables the button while the request is active', async () => {
     const runBtn = {
       disabled: false,
