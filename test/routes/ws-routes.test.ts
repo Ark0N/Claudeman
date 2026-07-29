@@ -19,6 +19,21 @@ import { registerWsRoutes } from '../../src/web/routes/ws-routes.js';
 import { MAX_INPUT_LENGTH } from '../../src/config/terminal-limits.js';
 
 const PORT = 3170;
+const DEC_2026_START = '\x1b[?2026h';
+const DEC_2026_END = '\x1b[?2026l';
+
+function synchronizedPayload(messages: Array<{ d: string }>): string {
+  const transaction = messages.map((message) => message.d).join('');
+  expect(transaction.startsWith(DEC_2026_START)).toBe(true);
+  expect(transaction.endsWith(DEC_2026_END)).toBe(true);
+  return transaction.slice(DEC_2026_START.length, -DEC_2026_END.length);
+}
+
+function transportPayload(message: { d: string }, index: number, count: number): string {
+  const start = index === 0 ? DEC_2026_START.length : 0;
+  const end = index === count - 1 ? message.d.length - DEC_2026_END.length : message.d.length;
+  return message.d.slice(start, end);
+}
 
 /** Helper: open a WebSocket connection and wait for it to reach OPEN state. */
 function connectWs(path: string, timeoutMs = 5000): Promise<WebSocket> {
@@ -140,6 +155,23 @@ describe('ws-routes', () => {
       }
     });
 
+    it('requests recovery when handoff discards an incomplete ANSI suffix', async () => {
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal?cid=page-client-a');
+      try {
+        const messages = collectMessages(ws, 2);
+        ctx._session.emit('terminal', 'safe text\x1b[');
+        ws.send('{"t":"h"}');
+
+        await expect(messages).resolves.toEqual([
+          expect.objectContaining({ t: 'o', d: expect.stringContaining('safe text') }),
+          { t: 'ha' },
+        ]);
+        expect(streamCoordinator.resumeSseTerminal).toHaveBeenCalledWith('page-client-a', 'ws-test-session', true);
+      } finally {
+        ws.close();
+      }
+    });
+
     it('receives terminal output via WS with DEC 2026 sync markers', async () => {
       const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
       try {
@@ -155,6 +187,29 @@ describe('ws-routes', () => {
         expect(msg.d).toContain('hello world');
         expect(msg.d).toMatch(/^\x1b\[\?2026h/); // starts with DEC 2026 start
         expect(msg.d).toMatch(/\x1b\[\?2026l$/); // ends with DEC 2026 end
+      } finally {
+        ws.close();
+      }
+    });
+
+    it('carries the terminal stream cursor with WebSocket output', async () => {
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
+      try {
+        const cursor = {
+          stream: 'ws-cursor-stream',
+          generation: 3,
+          start: 40,
+          end: 51,
+        };
+        ctx._session.emit('terminal', 'hello world', cursor);
+
+        const msg = (await nextMessage(ws)) as {
+          t: string;
+          d: string;
+          cursor?: typeof cursor;
+        };
+        expect(msg.t).toBe('o');
+        expect(msg.cursor).toEqual(cursor);
       } finally {
         ws.close();
       }
@@ -227,7 +282,39 @@ describe('ws-routes', () => {
       }
     });
 
-    it('splits mobile bulk output into lossless 16KB synchronized frames', async () => {
+    it('keeps large adjacent mobile redraw chunks in one synchronized transaction', async () => {
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
+      try {
+        const session = ctx._session;
+        ws.send(JSON.stringify({ t: 'z', c: 48, r: 28, v: 'mobile' }));
+        await vi.waitFor(() => {
+          expect(session.resize).toHaveBeenCalledWith(48, 28, {
+            viewportType: 'mobile',
+            force: false,
+          });
+        });
+
+        const first = 'A'.repeat(24 * 1024);
+        const second = 'B'.repeat(24 * 1024);
+        const messagesPromise = collectMessages(ws, 3, 500);
+        session.emit('terminal', first);
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        session.emit('terminal', second);
+
+        const messages = (await messagesPromise) as Array<{ t: string; d: string }>;
+        expect(synchronizedPayload(messages)).toBe(first + second);
+        expect(messages[0].d.startsWith(DEC_2026_START)).toBe(true);
+        expect(messages[0].d.endsWith(DEC_2026_END)).toBe(false);
+        expect(messages[1].d.includes(DEC_2026_START)).toBe(false);
+        expect(messages[1].d.includes(DEC_2026_END)).toBe(false);
+        expect(messages[2].d.startsWith(DEC_2026_START)).toBe(false);
+        expect(messages[2].d.endsWith(DEC_2026_END)).toBe(true);
+      } finally {
+        ws.close();
+      }
+    });
+
+    it('splits mobile bulk output into one lossless synchronized transaction', async () => {
       const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
       try {
         const session = ctx._session;
@@ -240,13 +327,31 @@ describe('ws-routes', () => {
         });
 
         const largeData = 'X'.repeat(24 * 1024);
+        const cursor = {
+          stream: 'mobile-bulk-stream',
+          generation: 4,
+          start: 100,
+          end: 100 + largeData.length,
+        };
         const messagesPromise = collectMessages(ws, 2, 500);
-        session.emit('terminal', largeData);
+        session.emit('terminal', largeData, cursor);
 
-        const messages = (await messagesPromise) as Array<{ t: string; d: string }>;
-        const payloads = messages.map((message) => message.d.slice('\x1b[?2026h'.length, -'\x1b[?2026l'.length));
+        const messages = (await messagesPromise) as Array<{
+          t: string;
+          d: string;
+          cursor: typeof cursor;
+        }>;
+        const payloads = messages.map((message, index) => transportPayload(message, index, messages.length));
         expect(payloads.every((payload) => Buffer.byteLength(payload, 'utf8') <= 16 * 1024)).toBe(true);
-        expect(payloads.join('')).toBe(largeData);
+        expect(synchronizedPayload(messages)).toBe(largeData);
+        expect(messages[0].cursor.start).toBe(cursor.start);
+        expect(messages[0].cursor.end).toBe(messages[1].cursor.start);
+        expect(messages[1].cursor.end).toBe(cursor.end);
+        expect(
+          messages.every((message, index) => message.cursor.end - message.cursor.start === payloads[index].length)
+        ).toBe(true);
+        expect(messages[0].d.endsWith(DEC_2026_END)).toBe(false);
+        expect(messages[1].d.startsWith(DEC_2026_START)).toBe(false);
       } finally {
         ws.close();
       }
@@ -262,10 +367,10 @@ describe('ws-routes', () => {
         session.emit('terminal', largeData);
 
         const messages = (await messagesPromise) as Array<{ t: string; d: string }>;
-        const payloads = messages.map((message) => message.d.slice('\x1b[?2026h'.length, -'\x1b[?2026l'.length));
+        const payloads = messages.map((message, index) => transportPayload(message, index, messages.length));
         expect(messages.every((message) => message.t === 'o')).toBe(true);
         expect(payloads.every((payload) => Buffer.byteLength(payload, 'utf8') <= 8 * 1024)).toBe(true);
-        expect(payloads.join('')).toBe(largeData);
+        expect(synchronizedPayload(messages)).toBe(largeData);
       } finally {
         ws.close();
       }
@@ -283,10 +388,10 @@ describe('ws-routes', () => {
         session.emit('terminal', firstPayload + atomicPayload);
 
         const messages = (await messagesPromise) as Array<{ t: string; d: string }>;
-        const payloads = messages.map((message) => message.d.slice('\x1b[?2026h'.length, -'\x1b[?2026l'.length));
+        const payloads = messages.map((message, index) => transportPayload(message, index, messages.length));
         expect(payloads[0]).toBe(firstPayload);
         expect(payloads[1]).toBe(atomicPayload);
-        expect(payloads.join('')).toBe(firstPayload + atomicPayload);
+        expect(synchronizedPayload(messages)).toBe(firstPayload + atomicPayload);
       } finally {
         ws.close();
       }
@@ -306,6 +411,62 @@ describe('ws-routes', () => {
         const payloads = messages.map((message) => message.d.slice('\x1b[?2026h'.length, -'\x1b[?2026l'.length));
         expect(payloads).toEqual(['plain text', '\x1b[38;5;196mRED']);
         expect(payloads.join('')).toBe('plain text\x1b[38;5;196mRED');
+      } finally {
+        ws.close();
+      }
+    });
+
+    it('does not carry an incomplete ANSI suffix across a cursor generation boundary', async () => {
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
+      try {
+        const session = ctx._session;
+        const messagesPromise = collectMessages(ws, 3, 500);
+
+        session.emit('terminal', 'old text\x1b[', {
+          stream: 'cursor-stream',
+          generation: 1,
+          start: 0,
+          end: 11,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        session.emit('terminal', 'new text', {
+          stream: 'cursor-stream',
+          generation: 2,
+          start: 0,
+          end: 8,
+        });
+
+        const messages = (await messagesPromise) as Array<{
+          t: string;
+          d?: string;
+          cursor?: { generation: number };
+        }>;
+        expect(messages.map((message) => message.t)).toEqual(['o', 'r', 'o']);
+        expect(messages[0].d).toContain('old text');
+        expect(messages[2].d).toContain('new text');
+        expect(messages[2].d).not.toContain('\x1b[new text');
+        expect(messages[2].cursor?.generation).toBe(2);
+      } finally {
+        ws.close();
+      }
+    });
+
+    it('does not carry an incomplete ANSI suffix across clearTerminal', async () => {
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
+      try {
+        const session = ctx._session;
+        const messagesPromise = collectMessages(ws, 3, 500);
+
+        session.emit('terminal', 'before clear\x1b[');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        session.emit('clearTerminal');
+        session.emit('terminal', 'after clear');
+
+        const messages = (await messagesPromise) as Array<{ t: string; d?: string }>;
+        expect(messages.map((message) => message.t)).toEqual(['o', 'c', 'o']);
+        expect(messages[0].d).toContain('before clear');
+        expect(messages[2].d).toContain('after clear');
+        expect(messages[2].d).not.toContain('\x1b[after clear');
       } finally {
         ws.close();
       }
