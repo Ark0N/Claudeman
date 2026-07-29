@@ -4,6 +4,7 @@
  */
 import { EventEmitter } from 'node:events';
 import { vi } from 'vitest';
+import type { TerminalCursor } from '../../src/session.js';
 
 /**
  * Enhanced mock session for testing RespawnController.
@@ -19,6 +20,7 @@ export class MockSession extends EventEmitter {
   ralphTracker: null = null;
   writeBuffer: string[] = [];
   terminalBuffer: string = '';
+  private _terminalGeneration = 0;
 
   private _muxName: string | null = null;
 
@@ -68,8 +70,13 @@ export class MockSession extends EventEmitter {
 
   /** Simulate raw terminal output */
   simulateTerminalOutput(data: string): void {
+    const start = this.terminalBuffer.length;
     this.terminalBuffer += data;
-    this.emit('terminal', data);
+    this.emit('terminal', data, {
+      ...this.terminalCursor,
+      start,
+      end: this.terminalBuffer.length,
+    });
   }
 
   /** Simulate prompt appearing (legacy fallback signal) */
@@ -152,6 +159,7 @@ export class MockSession extends EventEmitter {
   /** Clear terminal buffer */
   clearTerminalBuffer(): void {
     this.terminalBuffer = '';
+    this._terminalGeneration++;
   }
 
   // ========== Session Lifecycle ==========
@@ -217,6 +225,15 @@ export class MockSession extends EventEmitter {
   /** Terminal buffer byte length */
   get terminalBufferLength(): number {
     return this.terminalBuffer.length;
+  }
+
+  get terminalCursor(): TerminalCursor {
+    return {
+      stream: `mock-${this.id}`,
+      generation: this._terminalGeneration,
+      start: 0,
+      end: this.terminalBuffer.length,
+    };
   }
 
   /** Return a state-like object for route handlers */

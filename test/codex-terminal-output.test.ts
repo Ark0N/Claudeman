@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Session } from '../src/session.js';
+import { Session, type TerminalCursor } from '../src/session.js';
 
 type SessionInternals = {
   _handleTerminalOutput(data: string): void;
@@ -11,6 +11,22 @@ function handleOutput(session: Session, data: string): void {
 }
 
 describe('Codex terminal output filtering', () => {
+  it('emits contiguous terminal cursor ranges and advances the generation after a clear', () => {
+    const session = new Session({ workingDir: '/tmp', mode: 'codex' });
+    const cursors: TerminalCursor[] = [];
+    session.on('terminal', (_data, cursor: TerminalCursor) => cursors.push(cursor));
+
+    handleOutput(session, 'abc');
+    handleOutput(session, 'de');
+    session.clearBuffers();
+    handleOutput(session, 'next');
+
+    expect(cursors[0]).toMatchObject({ generation: 0, start: 0, end: 3 });
+    expect(cursors[1]).toMatchObject({ stream: cursors[0].stream, generation: 0, start: 3, end: 5 });
+    expect(cursors[2]).toMatchObject({ stream: cursors[0].stream, generation: 1, start: 0, end: 4 });
+    expect(session.terminalCursor).toEqual(cursors[2]);
+  });
+
   it('keeps browser scrollback guards but skips Codeman row repair in hybrid render mode', () => {
     const session = new Session({ workingDir: '/tmp', mode: 'codex', codexConfig: { renderMode: 'hybrid' } });
     (session as unknown as SessionInternals)._ptyRows = 63;

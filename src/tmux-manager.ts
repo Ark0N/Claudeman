@@ -22,10 +22,12 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { execSync, exec } from 'node:child_process';
+import { execSync, exec, execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 import { existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { writeFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -77,6 +79,8 @@ import type {
   CreateSessionOptions,
   RespawnPaneOptions,
   PaneCaptureOptions,
+  PaneHistoryPage,
+  PaneHistoryPageOptions,
 } from './mux-interface.js';
 import {
   decideReconnect,
@@ -100,6 +104,9 @@ import { DEFAULT_TMUX_HISTORY_LIMIT, DEFAULT_TERMINAL_BUFFER_MAX_BYTES } from '.
  * capture must be allowed to exceed the final payload size.
  */
 const FULL_HISTORY_CAPTURE_SLACK_BYTES = 8 * 1024 * 1024;
+const HISTORY_PAGE_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
+const HISTORY_ORIGIN_SAMPLE_ROWS = 3;
+const HISTORY_COMMAND_MAX_BUFFER_BYTES = 64 * 1024;
 
 /** Delay after tmux session creation — enough for detached tmux to be queryable */
 const TMUX_CREATION_WAIT_MS = 100;
@@ -499,6 +506,78 @@ function truncatePaneLineByVisibleColumns(line: string, maxColumns: number): str
  */
 export function normalizeScrollbackEol(buffer: string): string {
   return buffer.replace(/\r?\n/g, '\r\n');
+}
+
+export function resolveHistoryPageRange(
+  historySize: number,
+  options: PaneHistoryPageOptions
+): Omit<PaneHistoryPage, 'buffer' | 'origin'> {
+  const total = Math.max(0, Math.trunc(Number.isFinite(historySize) ? historySize : 0));
+  const limit = Math.max(1, Math.trunc(Number.isFinite(options.limit) ? options.limit : 1));
+
+  let start: number;
+  let end: number;
+  if (Number.isFinite(options.after)) {
+    start = Math.max(0, Math.min(total, Math.trunc(options.after as number)));
+    end = Math.min(total, start + limit);
+  } else {
+    end = Number.isFinite(options.before) ? Math.max(0, Math.min(total, Math.trunc(options.before as number))) : total;
+    start = Math.max(0, end - limit);
+  }
+
+  return {
+    start,
+    end,
+    total,
+    hasMoreBefore: start > 0,
+    hasMoreAfter: end < total,
+  };
+}
+
+export type TmuxHistoryCommandRunner = (args: string[], maxBuffer: number) => Promise<string>;
+
+/**
+ * Capture one stable history page through an injected tmux command runner.
+ * Keeping the command sequence here makes the paging algorithm independently
+ * testable without allowing tests to reach a real tmux server.
+ */
+export async function captureHistoryPageWithRunner(
+  target: string,
+  options: PaneHistoryPageOptions,
+  run: TmuxHistoryCommandRunner
+): Promise<PaneHistoryPage | null> {
+  const historyText = (
+    await run(['display-message', '-p', '-t', target, '#{history_size}'], HISTORY_COMMAND_MAX_BUFFER_BYTES)
+  ).trim();
+  const historySize = parseInt(historyText, 10);
+  if (!Number.isSafeInteger(historySize) || historySize < 0) return null;
+
+  const range = resolveHistoryPageRange(historySize, options);
+  let buffer = '';
+  if (range.end > range.start) {
+    const startLine = range.start - historySize;
+    const endLine = range.end - historySize - 1;
+    const captured = await run(
+      ['capture-pane', '-p', '-e', '-S', String(startLine), '-E', String(endLine), '-t', target],
+      HISTORY_PAGE_MAX_BUFFER_BYTES
+    );
+    // tmux terminates stdout with one newline in addition to the captured row
+    // separators. Remove exactly that terminator so trailing blank rows still
+    // count toward the page's physical-row coordinates.
+    buffer = normalizeScrollbackEol(captured.endsWith('\n') ? captured.slice(0, -1) : captured);
+  }
+
+  let originSample = '';
+  if (historySize > 0) {
+    const sampleEndLine = -Math.max(1, historySize - HISTORY_ORIGIN_SAMPLE_ROWS + 1);
+    originSample = await run(
+      ['capture-pane', '-p', '-e', '-S', String(-historySize), '-E', String(sampleEndLine), '-t', target],
+      HISTORY_COMMAND_MAX_BUFFER_BYTES
+    );
+  }
+  const origin = createHash('sha256').update(target).update('\0').update(originSample).digest('hex').slice(0, 24);
+
+  return { buffer, origin, ...range };
 }
 
 export function formatPaneSnapshot(
@@ -3075,6 +3154,74 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       return target ? this.capturePaneBuffer(muxName, target, opts) : null;
     } catch (err) {
       console.error('[TmuxManager] Failed to resolve active pane for capture:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Capture a bounded physical-row slice of tmux history.
+   *
+   * Page coordinates are absolute offsets from the oldest retained history
+   * row. Unlike full-history restoration this deliberately omits `-J`: one
+   * captured tmux row must remain one page coordinate so adjacent pages can be
+   * composed without byte or soft-wrap ambiguity.
+   */
+  private async runTmuxHistoryCommand(args: string[], maxBuffer: number): Promise<string> {
+    const { stdout } = await execFileAsync('tmux', ['-L', this.tmuxSocket, ...args], {
+      encoding: 'utf8',
+      timeout: EXEC_TIMEOUT_MS,
+      maxBuffer,
+    });
+    return stdout;
+  }
+
+  async capturePaneHistoryPage(
+    muxName: string,
+    paneTarget: string | undefined,
+    opts: PaneHistoryPageOptions
+  ): Promise<PaneHistoryPage | null> {
+    if (IS_TEST_MODE) return null;
+    const target = resolveTmuxPaneTarget(muxName, paneTarget);
+    if (!target) {
+      console.error('[TmuxManager] Invalid pane target in capturePaneHistoryPage:', {
+        muxName,
+        paneTarget,
+      });
+      return null;
+    }
+
+    try {
+      return await captureHistoryPageWithRunner(target, opts, (args, maxBuffer) =>
+        this.runTmuxHistoryCommand(args, maxBuffer)
+      );
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOBUFS') {
+        console.error('[TmuxManager] History page exceeded its bounded capture buffer');
+      } else {
+        console.error('[TmuxManager] Failed to capture pane history page:', err);
+      }
+      return null;
+    }
+  }
+
+  async captureActivePaneHistoryPage(muxName: string, opts: PaneHistoryPageOptions): Promise<PaneHistoryPage | null> {
+    if (IS_TEST_MODE) return null;
+    if (!isValidMuxName(muxName)) {
+      console.error('[TmuxManager] Invalid session name in captureActivePaneHistoryPage:', muxName);
+      return null;
+    }
+
+    try {
+      const output = (
+        await this.runTmuxHistoryCommand(
+          ['list-panes', '-t', muxName, '-F', '#{pane_id}:#{pane_active}'],
+          HISTORY_COMMAND_MAX_BUFFER_BYTES
+        )
+      ).trim();
+      const target = resolveActivePaneTarget(output);
+      return target ? await this.capturePaneHistoryPage(muxName, target, opts) : null;
+    } catch (err) {
+      console.error('[TmuxManager] Failed to resolve active pane for history capture:', err);
       return null;
     }
   }

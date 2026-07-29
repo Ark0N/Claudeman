@@ -22,6 +22,7 @@ import type {
   RalphTrackerState,
   RalphTodoItem,
   ActiveBashTool,
+  TerminalCursor,
 } from '../session.js';
 import type { RalphStatusBlock, CircuitBreakerStatus } from '../types.js';
 import { SseEvent } from './sse-events.js';
@@ -30,7 +31,7 @@ import { fileStreamManager } from '../file-stream-manager.js';
 
 /** Stored listener references for session cleanup (prevents memory leaks) */
 export interface SessionListenerRefs {
-  terminal: (data: string) => void;
+  terminal: (data: string, cursor?: TerminalCursor) => void;
   clearTerminal: () => void;
   needsRefresh: () => void;
   message: (msg: ClaudeMessage) => void;
@@ -65,7 +66,7 @@ export interface SessionListenerRefs {
 /** Dependencies injected by WebServer — keeps listener creation decoupled from server internals. */
 interface SessionListenerDeps {
   broadcast(event: string, data: unknown): void;
-  batchTerminalData(sessionId: string, data: string): void;
+  batchTerminalData(sessionId: string, data: string, cursor?: TerminalCursor): void;
   batchTaskUpdate(sessionId: string, task: BackgroundTask): void;
   broadcastSessionStateDebounced(sessionId: string): void;
   sendPushNotifications(event: string, data: Record<string, unknown>): void;
@@ -91,8 +92,8 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
     // ─── Terminal Output ─────────────────────────────────────
 
     /** Batches PTY output → broadcasts `session:terminal` at 16-50ms intervals */
-    terminal: (data) => {
-      deps.batchTerminalData(session.id, data);
+    terminal: (data, cursor) => {
+      deps.batchTerminalData(session.id, data, cursor);
     },
 
     /** Broadcasts `session:clearTerminal` — tells clients to wipe their xterm buffer (after mux attach) */

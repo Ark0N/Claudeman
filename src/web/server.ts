@@ -43,7 +43,7 @@ import { hostname as getHostname } from 'node:os';
 import { dataPath, getDataDir, CODEMAN_INSTANCE } from '../config/instance.js';
 import { getHookSecret } from '../config/hook-secret.js';
 import { EventEmitter } from 'node:events';
-import { Session, isExternalCliMode, type BackgroundTask } from '../session.js';
+import { Session, isExternalCliMode, type BackgroundTask, type TerminalCursor } from '../session.js';
 import type { ClaudeMode, SessionAttachmentHistoryItem, SessionState, WorkflowRunInfo } from '../types.js';
 import { RespawnController, RespawnConfig } from '../respawn-controller.js';
 import type { TerminalMultiplexer } from '../mux-interface.js';
@@ -167,10 +167,10 @@ import { CronService } from '../cron/cron-service.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Bounded, predictable shape for SSE client identifiers: alphanumerics, `_`, `-`.
-// Length range covers crypto.randomUUID() (36 chars) plus any short stable IDs,
-// while capping growth of `sseClientsById` and blocking pathological inputs.
-const SSE_CLIENT_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+// Bounded, predictable shape for SSE client identifiers: alphanumerics, `_`, `-`,
+// and `:` between the stable browser id and per-tab nonce. The length cap bounds
+// growth of `sseClientsById` and rejects pathological inputs.
+const SSE_CLIENT_ID_RE = /^[A-Za-z0-9_:-]{8,128}$/;
 
 function escapeHtmlText(value: string): string {
   return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
@@ -937,7 +937,14 @@ export class WebServer extends EventEmitter {
     this.cronService.init();
     registerCronRoutes(this.app, { ...ctx, cron: this.cronService });
 
-    registerWsRoutes(this.app, ctx, () => this.getHostPolicy());
+    registerWsRoutes(this.app, ctx, () => this.getHostPolicy(), {
+      suspendSseTerminal: (clientId, sessionId) => {
+        this.sse.suspendClientSession(clientId, sessionId);
+      },
+      resumeSseTerminal: (clientId, sessionId, recover) => {
+        this.sse.resumeClientSession(clientId, sessionId, recover);
+      },
+    });
   }
 
   /**
@@ -1963,8 +1970,8 @@ export class WebServer extends EventEmitter {
     return undefined;
   }
 
-  private batchTerminalData(sessionId: string, data: string): void {
-    this.sse.batchTerminalData(sessionId, data);
+  private batchTerminalData(sessionId: string, data: string, cursor?: TerminalCursor): void {
+    this.sse.batchTerminalData(sessionId, data, cursor);
   }
 
   private batchTaskUpdate(sessionId: string, task: BackgroundTask): void {

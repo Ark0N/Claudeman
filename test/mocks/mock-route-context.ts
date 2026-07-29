@@ -106,6 +106,7 @@ export function createMockRouteContext(options?: { sessionId?: string }) {
       listSessions: vi.fn(() => []),
       getStats: vi.fn(() => ({})),
       updateSessionName: vi.fn(() => true),
+      updateSessionWorkingDir: vi.fn(() => true),
       getSession: vi.fn(() => null),
       clearRespawnConfig: vi.fn(),
       updateRespawnConfig: vi.fn(),

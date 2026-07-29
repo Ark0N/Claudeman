@@ -53,7 +53,7 @@ describe('WsConnectionRegistry', () => {
     expect(reg.register('s1', 'f', sock('f')).admitted).toBe(false);
 
     // Eagerly unregister one (simulating terminate/error, not async close).
-    reg.unregister('s1', sockets[0][1]);
+    expect(reg.unregister('s1', sockets[0][1])).toBe(true);
     expect(reg.liveCount('s1')).toBe(4);
 
     // Now a brand-new distinct client is admitted.
@@ -92,7 +92,7 @@ describe('WsConnectionRegistry', () => {
     reg.register('s1', 'alice', fresh); // supersede
 
     // The stale socket's async close arrives late — must NOT remove fresh.
-    reg.unregister('s1', old);
+    expect(reg.unregister('s1', old)).toBe(false);
     expect(reg.liveCount('s1')).toBe(1);
 
     // Fresh is still the live entry: another reconnect evicts fresh, not old.

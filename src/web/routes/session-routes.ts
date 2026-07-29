@@ -11,6 +11,7 @@ import { existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
+import { Readable } from 'node:stream';
 import {
   ApiErrorCode,
   createErrorResponse,
@@ -142,6 +143,23 @@ const ERASE_SCROLLBACK_PATTERN = /\x1b\[3J/g;
 // strip existed can still carry them; strip on replay for parity.
 // eslint-disable-next-line no-control-regex
 const MOUSE_TRACKING_PATTERN = /\x1b\[\?(?:1000|1001|1002|1003|1005|1006|1007)[hl]/g;
+// Historical synchronized-output markers can span network chunks. Strip them
+// before streaming so incremental replay cannot inherit a half-open sync block.
+// eslint-disable-next-line no-control-regex
+const DEC_SYNC_OUTPUT_PATTERN = /\x1b\[\?2026[hl]/g;
+const TERMINAL_STREAM_CHUNK_BYTES = 32 * 1024;
+const TERMINAL_HISTORY_PAGE_FALLBACK_BYTES = 1024 * 1024;
+
+function createTerminalSnapshotStream(data: string): Readable {
+  const bytes = Buffer.from(data, 'utf8');
+  return Readable.from(
+    (function* () {
+      for (let offset = 0; offset < bytes.length; offset += TERMINAL_STREAM_CHUNK_BYTES) {
+        yield bytes.subarray(offset, offset + TERMINAL_STREAM_CHUNK_BYTES);
+      }
+    })()
+  );
+}
 
 /**
  * Strip redundant Ink spinner/status-bar redraw frames from the terminal buffer.
@@ -1568,22 +1586,99 @@ export function registerSessionRoutes(
   // ========== Get Terminal Buffer ==========
 
   // Query params:
-  //   tail=<bytes> - Only return last N bytes (faster initial load)
-  //   full=1       - Full page reload: replay the entire tmux scrollback (COD-47)
-  app.get('/api/sessions/:id/terminal', async (req) => {
+  //   tail=<bytes>  - Only return last N bytes (faster initial load)
+  //   full=1        - Legacy full reload: replay the entire tmux scrollback (COD-47)
+  //   latest=1      - Current rendered pane only, for a stable first frame
+  //   historyPage=1 - One bounded physical-row page from retained tmux history
+  //   before=<row>  - Page backward from this absolute retained-history row
+  //   after=<row>   - Page forward from this absolute retained-history row
+  //   lines=<count> - Requested history-page size (server-clamped)
+  //   format=stream - Raw streamed terminal body with metadata in response headers
+  app.get('/api/sessions/:id/terminal', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const query = req.query as { tail?: string; full?: string };
+    const query = req.query as {
+      tail?: string;
+      full?: string;
+      latest?: string;
+      historyPage?: string;
+      before?: string;
+      after?: string;
+      lines?: string;
+      format?: string;
+    };
     const session = findSessionOrFail(ctx, id, req);
 
-    // `full=1` is the EXPLICIT full-reload signal (COD-47): the browser reloaded
-    // the page and wants the whole scroll history back, so we capture the ENTIRE
-    // tmux scrollback and the user gets back history that scrolled off Codeman's
-    // byte buffer. Requests WITHOUT it — tab switches (`tail=`) and the legacy
-    // no-param callers (response-viewer fallback, clearTerminal refresh) — keep
-    // the fast visible-frame capture.
-    const tailBytes = query.tail ? parseInt(query.tail, 10) : 0;
+    // `full=1` remains an explicit compatibility path for callers that require
+    // the entire tmux scrollback. The browser uses `historyPage=1` for ordinary
+    // cold loads, while tail/no-param callers retain the bounded legacy path.
+    let tailBytes = query.tail ? parseInt(query.tail, 10) : 0;
     const isFullReload = query.full === '1' || query.full === 'true';
+    const isLatestOnly = query.latest === '1' || query.latest === 'true';
+    const isHistoryPage = query.historyPage === '1' || query.historyPage === 'true';
+    const captureFullHistory = isFullReload && !isLatestOnly;
     const { tmuxHistoryLimit, terminalBufferMaxBytes } = await ctx.getTerminalHistoryConfig();
+
+    if (isHistoryPage && session.muxName && typeof ctx.mux.captureActivePaneHistoryPage === 'function') {
+      const parsedLines = Number.parseInt(query.lines || '', 10);
+      const limit = Number.isSafeInteger(parsedLines) ? Math.max(100, Math.min(2000, parsedLines)) : 1000;
+      const parsedBefore = query.before === undefined ? undefined : Number.parseInt(query.before, 10);
+      const parsedAfter = query.after === undefined ? undefined : Number.parseInt(query.after, 10);
+      const before = Number.isSafeInteger(parsedBefore) ? parsedBefore : undefined;
+      const after = before === undefined && Number.isSafeInteger(parsedAfter) ? parsedAfter : undefined;
+      const page = await ctx.mux.captureActivePaneHistoryPage(session.muxName, {
+        limit,
+        before,
+        after,
+      });
+
+      if (page) {
+        const cursor = session.terminalCursor;
+        if (query.format === 'stream') {
+          reply
+            .type('text/plain; charset=utf-8')
+            .header('X-Codeman-Terminal-Format', 'stream-v1')
+            .header('Cache-Control', 'no-store')
+            .header('X-Codeman-Terminal-Stream', cursor.stream)
+            .header('X-Codeman-Terminal-Generation', String(cursor.generation))
+            .header('X-Codeman-Terminal-Start', String(cursor.start))
+            .header('X-Codeman-Terminal-End', String(cursor.end))
+            .header('X-Codeman-Terminal-Status', session.status)
+            .header('X-Codeman-Terminal-Full-Size', String(page.buffer.length))
+            .header('X-Codeman-Terminal-Truncated', '0')
+            .header('X-Codeman-Terminal-Source', 'mux-history-page')
+            .header('X-Codeman-History-Start', String(page.start))
+            .header('X-Codeman-History-End', String(page.end))
+            .header('X-Codeman-History-Total', String(page.total))
+            .header('X-Codeman-History-More-Before', page.hasMoreBefore ? '1' : '0')
+            .header('X-Codeman-History-More-After', page.hasMoreAfter ? '1' : '0')
+            .header('X-Codeman-History-Origin', page.origin);
+          return reply.send(createTerminalSnapshotStream(page.buffer));
+        }
+
+        return {
+          terminalBuffer: page.buffer,
+          status: session.status,
+          fullSize: page.buffer.length,
+          truncated: false,
+          source: 'mux-history-page',
+          cursor,
+          historyPage: {
+            start: page.start,
+            end: page.end,
+            total: page.total,
+            hasMoreBefore: page.hasMoreBefore,
+            hasMoreAfter: page.hasMoreAfter,
+            origin: page.origin,
+          },
+        };
+      }
+    }
+    // A transient tmux capture failure must remain bounded. Falling through
+    // with tailBytes=0 would return the entire in-memory PTY buffer and undo
+    // the bandwidth guarantee of the paging request.
+    if (isHistoryPage && tailBytes <= 0) {
+      tailBytes = TERMINAL_HISTORY_PAGE_FALLBACK_BYTES;
+    }
 
     // Prepend the live tmux pane buffer so tab-switch replay shows the current
     // on-screen frame, not just the accumulated byte history. This matters for
@@ -1597,14 +1692,14 @@ export function registerSessionRoutes(
       muxName && typeof ctx.mux.captureActivePaneBuffer === 'function'
         ? ctx.mux.captureActivePaneBuffer(
             muxName,
-            isFullReload
+            captureFullHistory
               ? { fullHistory: true, historyLimitLines: tmuxHistoryLimit, maxCaptureBytes: terminalBufferMaxBytes }
               : undefined
           )
         : null;
     const hasLiveMuxBuffer = liveMuxBuffer !== null && liveMuxBuffer.length > 0;
     const source: 'history' | 'mux-visible' | 'mux-full-history' = hasLiveMuxBuffer
-      ? isFullReload
+      ? captureFullHistory
         ? 'mux-full-history'
         : 'mux-visible'
       : 'history';
@@ -1615,11 +1710,13 @@ export function registerSessionRoutes(
       // history would replay the whole conversation twice: `\x1b[2J` clears only
       // the viewport, not xterm scrollback. The history+clear+frame concat stays
       // for the visible-frame path, where the single pane frame lacks history.
-      rawBuffer = isFullReload
+      rawBuffer = isLatestOnly
         ? liveMuxBuffer
-        : session.terminalBufferLength > 0
-          ? `${session.terminalBuffer}\x1b[H\x1b[2J${liveMuxBuffer}`
-          : liveMuxBuffer;
+        : captureFullHistory
+          ? liveMuxBuffer
+          : session.terminalBufferLength > 0
+            ? `${session.terminalBuffer}\x1b[H\x1b[2J${liveMuxBuffer}`
+            : liveMuxBuffer;
     } else {
       rawBuffer = session.terminalBuffer;
     }
@@ -1688,12 +1785,30 @@ export function registerSessionRoutes(
     // Remove Ctrl+L and leading whitespace (cheap on tailed subset)
     cleanBuffer = cleanBuffer.replace(CTRL_L_PATTERN, '').replace(LEADING_WHITESPACE_PATTERN, '');
 
+    const cursor = session.terminalCursor;
+    if (query.format === 'stream') {
+      reply
+        .type('text/plain; charset=utf-8')
+        .header('X-Codeman-Terminal-Format', 'stream-v1')
+        .header('Cache-Control', 'no-store')
+        .header('X-Codeman-Terminal-Stream', cursor.stream)
+        .header('X-Codeman-Terminal-Generation', String(cursor.generation))
+        .header('X-Codeman-Terminal-Start', String(cursor.start))
+        .header('X-Codeman-Terminal-End', String(cursor.end))
+        .header('X-Codeman-Terminal-Status', session.status)
+        .header('X-Codeman-Terminal-Full-Size', String(fullSize))
+        .header('X-Codeman-Terminal-Truncated', truncated ? '1' : '0')
+        .header('X-Codeman-Terminal-Source', source);
+      return reply.send(createTerminalSnapshotStream(cleanBuffer.replace(DEC_SYNC_OUTPUT_PATTERN, '')));
+    }
+
     return {
       terminalBuffer: cleanBuffer,
       status: session.status,
       fullSize,
       truncated,
       source,
+      cursor,
     };
   });
 

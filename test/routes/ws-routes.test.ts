@@ -78,13 +78,26 @@ function collectMessages(ws: WebSocket, count: number, timeoutMs = 3000): Promis
 describe('ws-routes', () => {
   let app: FastifyInstance;
   let ctx: MockRouteContext;
+  let streamCoordinator: {
+    suspendSseTerminal: ReturnType<typeof vi.fn>;
+    resumeSseTerminal: ReturnType<typeof vi.fn>;
+  };
 
   beforeEach(async () => {
     app = Fastify({ logger: false });
     await app.register(fastifyWebsocket);
 
     ctx = createMockRouteContext({ sessionId: 'ws-test-session' });
-    registerWsRoutes(app, ctx as never, () => ({ bindHost: '127.0.0.1', allowedHosts: [], tunnelHost: null }));
+    streamCoordinator = {
+      suspendSseTerminal: vi.fn(),
+      resumeSseTerminal: vi.fn(),
+    };
+    registerWsRoutes(
+      app,
+      ctx as never,
+      () => ({ bindHost: '127.0.0.1', allowedHosts: [], tunnelHost: null }),
+      streamCoordinator
+    );
 
     await app.listen({ port: PORT, host: '127.0.0.1' });
   });
@@ -107,6 +120,26 @@ describe('ws-routes', () => {
   // ========== Terminal output ==========
 
   describe('terminal output', () => {
+    it('flushes queued output before handing the session stream back to SSE', async () => {
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal?cid=page-client-a');
+      try {
+        expect(streamCoordinator.suspendSseTerminal).toHaveBeenCalledWith('page-client-a', 'ws-test-session');
+
+        const messages = collectMessages(ws, 2);
+        ctx._session.emit('terminal', 'last websocket batch');
+        ws.send('{"t":"h"}');
+
+        await expect(messages).resolves.toEqual([
+          expect.objectContaining({ t: 'o', d: expect.stringContaining('last websocket batch') }),
+          { t: 'ha' },
+        ]);
+        expect(streamCoordinator.resumeSseTerminal).toHaveBeenCalledWith('page-client-a', 'ws-test-session', false);
+        expect(ctx._session.listenerCount('terminal')).toBe(0);
+      } finally {
+        ws.close();
+      }
+    });
+
     it('receives terminal output via WS with DEC 2026 sync markers', async () => {
       const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
       try {
@@ -170,19 +203,109 @@ describe('ws-routes', () => {
       }
     });
 
-    it('flushes immediately when batch exceeds size threshold', async () => {
+    it('coalesces adjacent mobile redraws across the desktop batch window', async () => {
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
+      try {
+        const session = ctx._session;
+        ws.send(JSON.stringify({ t: 'z', c: 48, r: 28, v: 'mobile' }));
+        await vi.waitFor(() => {
+          expect(session.resize).toHaveBeenCalledWith(48, 28, {
+            viewportType: 'mobile',
+            force: false,
+          });
+        });
+
+        session.emit('terminal', 'mobile-frame-1');
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        session.emit('terminal', 'mobile-frame-2');
+
+        const msg = (await nextMessage(ws)) as { t: string; d: string };
+        expect(msg.t).toBe('o');
+        expect(msg.d).toContain('mobile-frame-1mobile-frame-2');
+      } finally {
+        ws.close();
+      }
+    });
+
+    it('splits mobile bulk output into lossless 16KB synchronized frames', async () => {
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
+      try {
+        const session = ctx._session;
+        ws.send(JSON.stringify({ t: 'z', c: 48, r: 28, v: 'mobile' }));
+        await vi.waitFor(() => {
+          expect(session.resize).toHaveBeenCalledWith(48, 28, {
+            viewportType: 'mobile',
+            force: false,
+          });
+        });
+
+        const largeData = 'X'.repeat(24 * 1024);
+        const messagesPromise = collectMessages(ws, 2, 500);
+        session.emit('terminal', largeData);
+
+        const messages = (await messagesPromise) as Array<{ t: string; d: string }>;
+        const payloads = messages.map((message) => message.d.slice('\x1b[?2026h'.length, -'\x1b[?2026l'.length));
+        expect(payloads.every((payload) => Buffer.byteLength(payload, 'utf8') <= 16 * 1024)).toBe(true);
+        expect(payloads.join('')).toBe(largeData);
+      } finally {
+        ws.close();
+      }
+    });
+
+    it('splits bulk UTF-8 output into bounded lossless frames', async () => {
       const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
       try {
         const session = ctx._session;
 
-        // Emit data larger than WS_BATCH_FLUSH_THRESHOLD (16384)
-        const largeData = 'X'.repeat(17000);
+        const largeData = 'X'.repeat(8000) + '😀'.repeat(1000);
+        const messagesPromise = collectMessages(ws, 2, 500);
         session.emit('terminal', largeData);
 
-        // Should flush immediately (no 8ms wait) — use a tight timeout
-        const msg = (await nextMessage(ws, 500)) as { t: string; d: string };
-        expect(msg.t).toBe('o');
-        expect(msg.d).toContain(largeData);
+        const messages = (await messagesPromise) as Array<{ t: string; d: string }>;
+        const payloads = messages.map((message) => message.d.slice('\x1b[?2026h'.length, -'\x1b[?2026l'.length));
+        expect(messages.every((message) => message.t === 'o')).toBe(true);
+        expect(payloads.every((payload) => Buffer.byteLength(payload, 'utf8') <= 8 * 1024)).toBe(true);
+        expect(payloads.join('')).toBe(largeData);
+      } finally {
+        ws.close();
+      }
+    });
+
+    it('does not split inside ANSI control sequences or synchronized updates', async () => {
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
+      try {
+        const session = ctx._session;
+        const colorSequence = '\x1b[38;5;196m';
+        const firstPayload = 'X'.repeat(8190) + colorSequence;
+        const atomicPayload = '\x1b[?2026h' + 'Y'.repeat(9000) + '\x1b[?2026l';
+        const messagesPromise = collectMessages(ws, 2, 500);
+
+        session.emit('terminal', firstPayload + atomicPayload);
+
+        const messages = (await messagesPromise) as Array<{ t: string; d: string }>;
+        const payloads = messages.map((message) => message.d.slice('\x1b[?2026h'.length, -'\x1b[?2026l'.length));
+        expect(payloads[0]).toBe(firstPayload);
+        expect(payloads[1]).toBe(atomicPayload);
+        expect(payloads.join('')).toBe(firstPayload + atomicPayload);
+      } finally {
+        ws.close();
+      }
+    });
+
+    it('carries an incomplete ANSI suffix into the next PTY event', async () => {
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
+      try {
+        const session = ctx._session;
+        const messagesPromise = collectMessages(ws, 2, 500);
+
+        session.emit('terminal', 'plain text\x1b[38;');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        session.emit('terminal', '5;196mRED');
+
+        const messages = (await messagesPromise) as Array<{ t: string; d: string }>;
+        const payloads = messages.map((message) => message.d.slice('\x1b[?2026h'.length, -'\x1b[?2026l'.length));
+        expect(payloads).toEqual(['plain text', '\x1b[38;5;196mRED']);
+        expect(payloads.join('')).toBe('plain text\x1b[38;5;196mRED');
       } finally {
         ws.close();
       }
