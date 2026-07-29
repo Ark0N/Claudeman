@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   TmuxManager,
+  buildCodexCommand,
   buildRemoteKillCommand,
   buildRemoteLaunchCommand,
   formatPaneSnapshot,
@@ -95,6 +96,14 @@ describe('TmuxManager (unit)', () => {
   describe('backend', () => {
     it('should report tmux as backend', () => {
       expect(manager.backend).toBe('tmux');
+    });
+  });
+
+  describe('Codex command builder', () => {
+    it('controls decorative TUI animation through Codex config', () => {
+      expect(buildCodexCommand({ animations: false })).toBe('codex --config tui.animations=false');
+      expect(buildCodexCommand({ animations: true })).toBe('codex --config tui.animations=true');
+      expect(buildCodexCommand()).toBe('codex');
     });
   });
 

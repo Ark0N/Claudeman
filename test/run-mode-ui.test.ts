@@ -178,11 +178,13 @@ describe('Codex quick start settings', () => {
       /<div class="modal-tab-content hidden" id="settings-claude">([\s\S]*?)<!-- Codex CLI Tab -->/
     );
     expect(claudeTab?.[1]).not.toContain('appSettingsCodexDangerouslyBypassApprovals');
+    expect(claudeTab?.[1]).not.toContain('appSettingsCodexAnimations');
 
     const codexTab = html.match(
       /<div class="modal-tab-content hidden" id="settings-codex">([\s\S]*?)<\/div>\s*<!-- Models Tab -->/
     );
     expect(codexTab?.[1]).toContain('appSettingsCodexDangerouslyBypassApprovals');
+    expect(codexTab?.[1]).toContain('appSettingsCodexAnimations');
     expect(codexTab?.[1]).not.toContain('appSettingsCodexRenderMode');
   });
 
@@ -222,6 +224,7 @@ describe('Codex quick start settings', () => {
     app.terminal = { clear: () => {}, writeln: () => {}, focus: () => {} };
     app.loadAppSettingsFromStorage = () => ({
       codexDangerouslyBypassApprovals: true,
+      codexAnimationsEnabled: false,
     });
     app.getCaseSettings = () => ({});
     app.buildEnvOverrides = () => ({});
@@ -240,7 +243,7 @@ describe('Codex quick start settings', () => {
       mode: 'codex',
       // tabs follow the w<n>-<case> naming convention (quick-start would otherwise auto-name codeman-<id>)
       sessionName: 'w1-codex-case',
-      codexConfig: { dangerouslyBypassApprovals: true, renderMode: 'hybrid' },
+      codexConfig: { dangerouslyBypassApprovals: true, animations: false, renderMode: 'hybrid' },
     });
     expect(selected).toEqual(['sess-1']);
   });

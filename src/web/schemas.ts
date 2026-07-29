@@ -182,6 +182,7 @@ const CodexConfigSchema = z
       .regex(/^[a-zA-Z0-9_-]+$/)
       .optional(),
     dangerouslyBypassApprovals: z.boolean().optional(),
+    animations: z.boolean().optional(),
     renderMode: z
       .enum(['scrollback', 'hybrid'])
       .optional()
@@ -756,6 +757,7 @@ export const SettingsUpdateSchema = z
     allowedTools: z.string().max(2000).optional(),
     // Codex CLI settings
     codexDangerouslyBypassApprovals: z.boolean().optional(),
+    codexAnimationsEnabled: z.boolean().optional(),
     // Terminal history and retention
     terminalScrollbackLines: z
       .number()
