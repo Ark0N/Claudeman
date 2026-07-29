@@ -6,13 +6,24 @@ import { describe, expect, it, vi } from 'vitest';
 function loadTerminalUiHarness() {
   const CodemanApp = function CodemanApp(this: any) {};
   let now = 1_000;
+  let frameCallback: (() => void) | null = null;
+  let keyboardVisible = false;
+  let deviceType = 'desktop';
   const context = vm.createContext({
     window: {},
+    document: {
+      visibilityState: 'visible',
+      documentElement: { dataset: {} },
+      body: { classList: { contains: () => false } },
+    },
     CodemanApp,
     console: { warn: vi.fn(), log: vi.fn() },
     _crashDiag: { log: vi.fn() },
     performance: { now: () => now },
-    requestAnimationFrame: (_fn: () => void) => 1,
+    requestAnimationFrame: (fn: () => void) => {
+      frameCallback = fn;
+      return 1;
+    },
     setTimeout: (_fn: () => void) => 1,
     Blob: function Blob() {},
     URL: {
@@ -24,6 +35,12 @@ function loadTerminalUiHarness() {
     },
     MobileDetection: {
       isTouchDevice: () => true,
+      getDeviceType: () => deviceType,
+    },
+    KeyboardHandler: {
+      get keyboardVisible() {
+        return keyboardVisible;
+      },
     },
     DEC_SYNC_STRIP_RE: /\x1b\[\?2026[hl]/g,
     TERMINAL_CHUNK_SIZE: 32 * 1024,
@@ -37,6 +54,17 @@ function loadTerminalUiHarness() {
     app,
     setNow: (value: number) => {
       now = value;
+    },
+    runFrame: () => {
+      const callback = frameCallback;
+      frameCallback = null;
+      callback?.();
+    },
+    setKeyboardVisible: (visible: boolean) => {
+      keyboardVisible = visible;
+    },
+    setDeviceType: (type: string) => {
+      deviceType = type;
     },
   };
 }
@@ -456,5 +484,87 @@ describe('terminal touch tap mouse guard', () => {
 
     expect(event.preventDefault).not.toHaveBeenCalled();
     expect(event.stopImmediatePropagation).not.toHaveBeenCalled();
+  });
+});
+
+describe('terminal viewport sizing claims', () => {
+  it('forces one redraw for a trusted desktop terminal pointer and ignores unrelated targets', async () => {
+    const { app, runFrame } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.fitAddon = {};
+    app.sendResize = vi.fn(() => Promise.resolve(true));
+    const terminalTarget = { matches: () => true };
+
+    app._handleTerminalSizingPointerDown({
+      isTrusted: true,
+      button: 0,
+      isPrimary: true,
+      target: { closest: () => terminalTarget },
+    });
+    runFrame();
+    expect(app.sendResize).toHaveBeenCalledOnce();
+    expect(app.sendResize).toHaveBeenCalledWith('sess-1', {
+      force: true,
+      takeControl: true,
+      refit: true,
+    });
+
+    app.sendResize.mockClear();
+    app._handleTerminalSizingPointerDown({
+      isTrusted: true,
+      button: 0,
+      isPrimary: true,
+      target: { closest: () => null },
+    });
+    runFrame();
+    expect(app.sendResize).not.toHaveBeenCalled();
+  });
+
+  it('upgrades an already queued passive claim when a terminal click arrives', () => {
+    const { app, runFrame } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.fitAddon = {};
+    app.sendResize = vi.fn(() => Promise.resolve(true));
+
+    app._scheduleTerminalSizingClaim();
+    const terminalTarget = { matches: () => true };
+    app._handleTerminalSizingPointerDown({
+      isTrusted: true,
+      button: 0,
+      isPrimary: true,
+      target: { closest: () => terminalTarget },
+    });
+    runFrame();
+
+    expect(app.sendResize).toHaveBeenCalledOnce();
+    expect(app.sendResize).toHaveBeenCalledWith('sess-1', {
+      force: true,
+      takeControl: true,
+      refit: true,
+    });
+  });
+
+  it('claims sizing from a keyboard-open accessory tap without refitting', () => {
+    const { app, runFrame, setKeyboardVisible, setDeviceType } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.fitAddon = {};
+    app.sendResize = vi.fn(() => Promise.resolve(true));
+    setDeviceType('mobile');
+    setKeyboardVisible(true);
+    const accessoryTarget = { matches: () => false };
+
+    app._handleTerminalSizingPointerDown({
+      isTrusted: true,
+      button: 0,
+      isPrimary: true,
+      target: { closest: () => accessoryTarget },
+    });
+    runFrame();
+
+    expect(app.sendResize).toHaveBeenCalledOnce();
+    expect(app.sendResize).toHaveBeenCalledWith('sess-1', {
+      takeControl: true,
+      refit: false,
+    });
   });
 });

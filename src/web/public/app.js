@@ -1316,7 +1316,7 @@ class CodemanApp {
     if (!session) { this._showSoloSessionGone(); return; }
     // Force re-select (handleInit cleared terminal state above).
     this.activeSessionId = null;
-    this.selectSession(this.soloSessionId);
+    this.selectSession(this.soloSessionId, { takeControl: false });
     const name = this.getSessionName(session) || 'Session';
     const titleEl = document.getElementById('soloSessionTitle');
     if (titleEl) { titleEl.textContent = name; titleEl.style.display = ''; }
@@ -3184,9 +3184,9 @@ class CodemanApp {
         try { restoreId = localStorage.getItem('codeman-active-session'); } catch {}
       }
       if (restoreId && this.sessions.has(restoreId)) {
-        this.selectSession(restoreId);
+        this.selectSession(restoreId, { takeControl: false });
       } else {
-        this.selectSession(this.sessionOrder[0]);
+        this.selectSession(this.sessionOrder[0], { takeControl: false });
       }
     }
   }
@@ -3621,6 +3621,11 @@ class CodemanApp {
 
   handleSessionTabClick(event, sessionId) {
     event?.preventDefault?.();
+    // Desktop activation must clear any mobile inline layout left by a prior
+    // emulated/touch viewport before measuring the terminal container.
+    if (typeof KeyboardHandler !== 'undefined') {
+      KeyboardHandler.resetForDesktopViewport?.();
+    }
     // On touch with the keyboard hidden, blur the tapped tab so switching
     // sessions doesn't pop the on-screen keyboard. Focus policy itself lives
     // in selectSession via _shouldFocusTerminalForTabSwitch().
@@ -4043,6 +4048,11 @@ class CodemanApp {
     return typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible;
   }
 
+  /**
+   * Select and render a session.
+   * Automatic restore/reconnect callers must pass takeControl:false so a
+   * background viewport cannot bypass server-side resize arbitration.
+   */
   async selectSession(sessionId, options = {}) {
     // If this session is popped out into its own window, raise that window
     // instead of showing it inline (focus-on-click for detached tabs). If we
@@ -4052,6 +4062,7 @@ class CodemanApp {
       if (this._raiseDetached(sessionId)) return;
     }
     const forceReload = options?.forceReload === true;
+    const takeControl = options?.takeControl !== false;
     if (this.activeSessionId === sessionId && !forceReload) return;
     if (this.activeSessionId === sessionId && forceReload) {
       this.terminalBufferCache?.delete(sessionId);
@@ -4204,7 +4215,16 @@ class CodemanApp {
       // a small region with empty rows below the status bar.
       // sendResize is a no-op on the server when dims haven't changed, so
       // calling it every tab switch is cheap.
-      const dimsChanged = await this.sendResize(sessionId, { forceHttp: true }).catch(() => false);
+      const forceDesktopResize =
+        forceReload &&
+        (typeof MobileDetection === 'undefined' ||
+          !MobileDetection.getDeviceType ||
+          MobileDetection.getDeviceType() === 'desktop');
+      const dimsChanged = await this.sendResize(sessionId, {
+        force: forceDesktopResize,
+        refit: false,
+        ...(takeControl ? { takeControl: true } : {}),
+      }).catch(() => false);
       if (this._isStaleSelect(selectGen)) {
         this._clearTerminalLoadState(sessionId, selectGen);
         return;
@@ -4395,7 +4415,7 @@ class CodemanApp {
       // conversation. Stale Ink frames in the tailed buffer are a cosmetic
       // annoyance that disappear on the user's next keypress; data loss is not
       // acceptable. Do NOT re-introduce Ctrl+L here.
-      this.sendResize(sessionId);
+      this.sendResize(sessionId, takeControl ? { takeControl: true } : {});
 
       // Defer secondary panel updates so they don't block the main thread
       // after terminal content is already visible.

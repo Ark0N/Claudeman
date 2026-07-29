@@ -276,6 +276,30 @@ describe('Virtual Keyboard', () => {
       expect(newPx).toBeGreaterThan(initialPx);
     });
 
+    it('marks keyboard-driven resizing as active viewport control', async () => {
+      const call = await page.evaluate(`(async function() {
+        var originalSendResize = app.sendResize;
+        var captured = null;
+        app.activeSessionId = 'mobile-keyboard-takeover';
+        app.sendResize = function(sessionId, options) {
+          captured = { sessionId: sessionId, options: options };
+          return Promise.resolve(false);
+        };
+        try {
+          KeyboardHandler._sendTerminalResize();
+          await Promise.resolve();
+          return captured;
+        } finally {
+          app.sendResize = originalSendResize;
+        }
+      })()`);
+
+      expect(call).toEqual({
+        sessionId: 'mobile-keyboard-takeover',
+        options: { takeControl: true, refit: false },
+      });
+    });
+
     it('does not reserve the keyboard height as visible terminal dead space', async () => {
       await showKeyboard(page, KEYBOARD.TYPICAL_IOS_HEIGHT);
       await page.waitForTimeout(WAIT.KEYBOARD_ANIMATION);

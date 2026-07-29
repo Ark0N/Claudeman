@@ -23,6 +23,7 @@ export default defineConfig({
       'test/perf-*.test.ts', // timing-sensitive perf benchmarks (flaky in CI)
       'test/inline-rename.test.ts', // browser (Playwright)
       'test/opencode-resize.test.ts', // browser (Playwright)
+      'test/terminal-viewport-ownership.test.ts', // browser (Playwright)
       'test/webgl-fallback.test.ts', // browser (Playwright)
     ],
     setupFiles: ['./test/setup.ts'],
