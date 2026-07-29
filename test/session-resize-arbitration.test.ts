@@ -19,6 +19,11 @@ function attachFakePty(session: Session, cols = 160, rows = 48) {
   return resize;
 }
 
+function registerActiveDesktop(session: Session, token: symbol, cols = 160, rows = 48): void {
+  session.claimDesktopSizing(token);
+  session.resize(cols, rows, { viewportType: 'desktop', takeControl: true });
+}
+
 describe('Session resize arbitration', () => {
   it('lets a mobile-only session shrink below the spawn default (no desktop connected)', () => {
     const session = new Session({ workingDir: '/tmp', mode: 'shell' });
@@ -54,7 +59,7 @@ describe('Session resize arbitration', () => {
     const resize = attachFakePty(session, 160, 48);
     const desktop = Symbol('desktop-conn');
 
-    session.claimDesktopSizing(desktop);
+    registerActiveDesktop(session, desktop);
     session.resize(48, 28, { viewportType: 'mobile' });
     // Grow is ignored too — it would reflow the desktop view just the same.
     session.resize(200, 60, { viewportType: 'tablet' });
@@ -62,7 +67,22 @@ describe('Session resize arbitration', () => {
     expect(resize).not.toHaveBeenCalled();
   });
 
-  it('always applies desktop resizes, claim or not', () => {
+  it('lets an explicitly active mobile viewport take control of a fresh desktop claim', () => {
+    const session = new Session({ workingDir: '/tmp', mode: 'shell' });
+    const resize = attachFakePty(session, 160, 48);
+    const desktop = Symbol('desktop-conn');
+
+    registerActiveDesktop(session, desktop, 208, 45);
+    resize.mockClear();
+
+    session.resize(48, 28, { viewportType: 'mobile', takeControl: true });
+    expect(resize).toHaveBeenCalledWith(48, 28);
+
+    session.resize(208, 45, { viewportType: 'desktop', takeControl: true });
+    expect(resize).toHaveBeenLastCalledWith(208, 45);
+  });
+
+  it('applies passive desktop resizes while no mobile override is active', () => {
     const session = new Session({ workingDir: '/tmp', mode: 'shell' });
     const resize = attachFakePty(session, 160, 48);
 
@@ -72,12 +92,45 @@ describe('Session resize arbitration', () => {
     expect(resize).toHaveBeenCalledWith(120, 40);
   });
 
+  it('ignores a passive desktop restore while a mobile viewport is active', () => {
+    const session = new Session({ workingDir: '/tmp', mode: 'shell' });
+    const resize = attachFakePty(session, 160, 48);
+    const desktop = Symbol('desktop-conn');
+
+    registerActiveDesktop(session, desktop, 208, 45);
+    resize.mockClear();
+
+    session.resize(48, 28, { viewportType: 'mobile', takeControl: true });
+    session.resize(220, 50, { viewportType: 'desktop' });
+    expect(resize).toHaveBeenCalledTimes(1);
+    expect(resize).toHaveBeenLastCalledWith(48, 28);
+
+    session.resize(220, 50, { viewportType: 'desktop', takeControl: true });
+    expect(resize).toHaveBeenLastCalledWith(220, 50);
+  });
+
+  it('preserves an explicit mobile takeover when a desktop connects afterward', () => {
+    const session = new Session({ workingDir: '/tmp', mode: 'shell' });
+    const resize = attachFakePty(session, 160, 48);
+    const desktop = Symbol('desktop-conn');
+
+    session.resize(48, 28, { viewportType: 'mobile', takeControl: true });
+    session.claimDesktopSizing(desktop);
+    session.resize(208, 45, { viewportType: 'desktop' });
+
+    expect(resize).toHaveBeenCalledTimes(1);
+    expect(resize).toHaveBeenLastCalledWith(48, 28);
+
+    session.resize(208, 45, { viewportType: 'desktop', takeControl: true });
+    expect(resize).toHaveBeenLastCalledWith(208, 45);
+  });
+
   it('restores mobile control once the desktop claim is released', () => {
     const session = new Session({ workingDir: '/tmp', mode: 'shell' });
     const resize = attachFakePty(session, 160, 48);
     const desktop = Symbol('desktop-conn');
 
-    session.claimDesktopSizing(desktop);
+    registerActiveDesktop(session, desktop);
     session.resize(48, 28, { viewportType: 'mobile' });
     expect(resize).not.toHaveBeenCalled();
 
@@ -94,6 +147,7 @@ describe('Session resize arbitration', () => {
 
     session.claimDesktopSizing(desktopA);
     session.claimDesktopSizing(desktopB);
+    session.resize(160, 48, { viewportType: 'desktop', takeControl: true });
     session.releaseDesktopSizing(desktopA);
     session.resize(48, 28, { viewportType: 'mobile' });
     expect(resize).not.toHaveBeenCalled();
@@ -132,7 +186,7 @@ describe('Session resize arbitration', () => {
       const session = new Session({ workingDir: '/tmp', mode: 'shell' });
       const resize = attachFakePty(session, 160, 48);
 
-      session.claimDesktopSizing(Symbol('desktop-conn'));
+      registerActiveDesktop(session, Symbol('desktop-conn'));
       session.resize(48, 28, { viewportType: 'mobile' });
       expect(resize).not.toHaveBeenCalled(); // fresh claim → ignored
 
@@ -146,9 +200,9 @@ describe('Session resize arbitration', () => {
       const session = new Session({ workingDir: '/tmp', mode: 'shell' });
       const resize = attachFakePty(session, 160, 48);
 
-      session.claimDesktopSizing(Symbol('desktop-conn'));
+      registerActiveDesktop(session, Symbol('desktop-conn'));
       vi.advanceTimersByTime(PAST_IDLE_MS - 10_000);
-      session.noteDesktopActivity(); // user typed on desktop
+      session.resize(160, 48, { viewportType: 'desktop', takeControl: true });
       vi.advanceTimersByTime(20_000); // idle since claim, but not since input
 
       session.resize(48, 28, { viewportType: 'mobile' });
@@ -160,14 +214,13 @@ describe('Session resize arbitration', () => {
       const session = new Session({ workingDir: '/tmp', mode: 'shell' });
       const resize = attachFakePty(session, 160, 48);
 
-      session.resize(208, 45, { viewportType: 'desktop' }); // desktop sizes the pane
-      session.claimDesktopSizing(Symbol('desktop-conn'));
+      registerActiveDesktop(session, Symbol('desktop-conn'), 208, 45);
       vi.advanceTimersByTime(PAST_IDLE_MS);
 
       session.resize(48, 28, { viewportType: 'mobile' }); // phone takes over
       expect(resize).toHaveBeenLastCalledWith(48, 28);
 
-      session.noteDesktopActivity(); // desktop user types again
+      session.resize(208, 45, { viewportType: 'desktop', takeControl: true });
       expect(resize).toHaveBeenLastCalledWith(208, 45); // layout restored
     });
 
@@ -175,9 +228,9 @@ describe('Session resize arbitration', () => {
       const session = new Session({ workingDir: '/tmp', mode: 'shell' });
       const resize = attachFakePty(session, 160, 48);
 
-      session.resize(208, 45, { viewportType: 'desktop' });
+      session.resize(208, 45, { viewportType: 'desktop', takeControl: true });
       resize.mockClear();
-      session.noteDesktopActivity();
+      session.resize(208, 45, { viewportType: 'desktop', takeControl: true });
       expect(resize).not.toHaveBeenCalled();
     });
   });

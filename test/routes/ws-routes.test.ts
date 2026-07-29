@@ -208,6 +208,95 @@ describe('ws-routes', () => {
       }
     });
 
+    it('reasserts the last mobile viewport before applying ordinary keyboard input', async () => {
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
+      try {
+        const session = ctx._session;
+        ws.send(JSON.stringify({ t: 'z', c: 48, r: 28, v: 'mobile' }));
+        await vi.waitFor(() => {
+          expect(session.resize).toHaveBeenCalledWith(48, 28, {
+            viewportType: 'mobile',
+            force: false,
+          });
+        });
+        session.resize.mockClear();
+
+        ws.send(JSON.stringify({ t: 'i', d: 'a' }));
+        await vi.waitFor(() => {
+          expect(session.writeBuffer).toContain('a');
+        });
+
+        expect(session.resize).toHaveBeenCalledWith(48, 28, {
+          viewportType: 'mobile',
+          takeControl: true,
+        });
+      } finally {
+        ws.close();
+      }
+    });
+
+    it('reasserts the sending desktop connection dimensions as sizing activity', async () => {
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
+      try {
+        const session = ctx._session;
+        ws.send(JSON.stringify({ t: 'z', c: 180, r: 50, v: 'desktop' }));
+        await vi.waitFor(() => {
+          expect(session.claimDesktopSizing).toHaveBeenCalledOnce();
+        });
+        session.resize.mockClear();
+
+        ws.send(JSON.stringify({ t: 'i', d: 'a' }));
+        await vi.waitFor(() => {
+          expect(session.writeBuffer).toContain('a');
+        });
+
+        expect(session.resize).toHaveBeenCalledWith(180, 50, {
+          viewportType: 'desktop',
+          takeControl: true,
+        });
+      } finally {
+        ws.close();
+      }
+    });
+
+    it('uses the active desktop socket dimensions when multiple desktops are connected', async () => {
+      const desktopA = await connectWs('/ws/sessions/ws-test-session/terminal?cid=desktop-a');
+      const desktopB = await connectWs('/ws/sessions/ws-test-session/terminal?cid=desktop-b');
+      try {
+        const session = ctx._session;
+        desktopA.send(JSON.stringify({ t: 'z', c: 160, r: 44, v: 'desktop' }));
+        desktopB.send(JSON.stringify({ t: 'z', c: 220, r: 56, v: 'desktop' }));
+        await vi.waitFor(() => {
+          expect(session.resize).toHaveBeenCalledWith(160, 44, {
+            viewportType: 'desktop',
+            force: false,
+          });
+          expect(session.resize).toHaveBeenCalledWith(220, 56, {
+            viewportType: 'desktop',
+            force: false,
+          });
+        });
+        session.resize.mockClear();
+
+        desktopA.send(JSON.stringify({ t: 'i', d: 'from-a' }));
+        await vi.waitFor(() => {
+          expect(session.writeBuffer).toContain('from-a');
+        });
+
+        expect(session.resize).toHaveBeenCalledWith(160, 44, {
+          viewportType: 'desktop',
+          takeControl: true,
+        });
+        expect(session.resize).not.toHaveBeenCalledWith(220, 56, {
+          viewportType: 'desktop',
+          takeControl: true,
+        });
+      } finally {
+        desktopA.close();
+        desktopB.close();
+      }
+    });
+
     it('ignores input exceeding MAX_INPUT_LENGTH', async () => {
       const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
       try {
@@ -316,6 +405,25 @@ describe('ws-routes', () => {
 
         await vi.waitFor(() => {
           expect(session.resize).toHaveBeenCalledWith(120, 40, { viewportType: undefined, force: true });
+        });
+      } finally {
+        ws.close();
+      }
+    });
+
+    it('passes explicit viewport takeover through for active mobile interaction', async () => {
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
+      try {
+        const session = ctx._session;
+
+        ws.send(JSON.stringify({ t: 'z', c: 48, r: 28, v: 'mobile', a: true }));
+
+        await vi.waitFor(() => {
+          expect(session.resize).toHaveBeenCalledWith(48, 28, {
+            viewportType: 'mobile',
+            force: false,
+            takeControl: true,
+          });
         });
       } finally {
         ws.close();
