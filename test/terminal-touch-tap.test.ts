@@ -75,7 +75,7 @@ function createElementHarness() {
   };
 }
 
-function createTerminalGrid(lines: string[], cursorY: number) {
+function createTerminalGrid(lines: string[], cursorY: number, wrappedRows = new Set<number>()) {
   const textarea = {
     classList: { contains: (name: string) => name === 'xterm-helper-textarea' },
     blur: vi.fn(),
@@ -90,7 +90,9 @@ function createTerminalGrid(lines: string[], cursorY: number) {
         baseY: 0,
         cursorY,
         getLine: (row: number) =>
-          row >= 0 && row < lines.length ? { translateToString: () => lines[row] } : undefined,
+          row >= 0 && row < lines.length
+            ? { isWrapped: wrappedRows.has(row), translateToString: () => lines[row] }
+            : undefined,
       },
     },
     element: {
@@ -129,6 +131,19 @@ describe('terminal touch tap mouse guard', () => {
     expect(app._classifyMobileTerminalTap(9, 17)).toBe('content'); // row 2: readback
     expect(app._classifyMobileTerminalTap(9, 65)).toBe('input'); // row 5: prompt
     expect(app._classifyMobileTerminalTap(9, 81)).toBe('content'); // row 6: status
+  });
+
+  it('classifies Claude background-agent status as content rather than keyboard input', () => {
+    const { app } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion: '2.1.220' }]]);
+    app.terminal = createTerminalGrid(
+      ['', '', '', '• Working (1m 50s • esc to ', 'interrupt) · 1 background teammate', ''],
+      4,
+      new Set([4])
+    );
+
+    expect(app._classifyMobileTerminalTap(9, 65)).toBe('content');
   });
 
   it('treats a highlighted numbered choice as TUI content, not an input prompt', () => {
@@ -486,6 +501,25 @@ describe('terminal touch tap mouse guard', () => {
 
     app.sessions = new Map([['sess-1', { mode: 'gemini', cliVersion: '9.9.9' }]]); // unverified TUI
     expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
+  });
+
+  it('touch: forwards verified Claude transcript scrolling but keeps Codex touch in local history', () => {
+    const { app } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.terminal = {
+      modes: { mouseTrackingMode: 'none' },
+      buffer: { active: { viewportY: 50, baseY: 50 } },
+    };
+
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion: '2.1.220' }]]);
+    expect(app._shouldForwardTouchScrollToApp()).toBe(true);
+
+    app.loadAppSettingsFromStorage = () => ({ terminalWheelLocalScrollback: true });
+    expect(app._shouldForwardTouchScrollToApp()).toBe(false);
+
+    app.loadAppSettingsFromStorage = () => ({ terminalWheelLocalScrollback: false });
+    app.sessions = new Map([['sess-1', { mode: 'codex' }]]);
+    expect(app._shouldForwardTouchScrollToApp()).toBe(false);
   });
 
   it('wheel: the local-scrollback opt-out pins the plain wheel to local scrollback (issue #154)', () => {

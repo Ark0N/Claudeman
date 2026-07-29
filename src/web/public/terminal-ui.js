@@ -421,6 +421,8 @@ Object.assign(CodemanApp.prototype, {
       let lastTime = 0;
       let scrollFrame = null;
       let isTouching = false;
+      let touchForwardsToApp = false;
+      let touchLastX = 0;
 
       const scrollLoop = (timestamp) => {
         const dt = lastTime ? (timestamp - lastTime) / 16.67 : 1;
@@ -429,12 +431,20 @@ Object.assign(CodemanApp.prototype, {
         if (!isTouching && Math.abs(velocity) > 0.3) {
           // Momentum phase — convert pixel velocity to lines
           const lines = Math.round(velocity / cellHeight());
-          if (lines !== 0) this.terminal.scrollLines(lines);
+          if (lines !== 0) {
+            if (touchForwardsToApp) {
+              this._sendSyntheticSgrWheel(touchLastX, touchLastY, lines);
+            } else {
+              this._noteTerminalUserScroll(lines);
+              this.terminal.scrollLines(lines);
+            }
+          }
           velocity *= 0.92;
           scrollFrame = requestAnimationFrame(scrollLoop);
         } else if (!isTouching) {
           scrollFrame = null;
           velocity = 0;
+          touchForwardsToApp = false;
         } else {
           scrollFrame = requestAnimationFrame(scrollLoop);
         }
@@ -451,13 +461,23 @@ Object.assign(CodemanApp.prototype, {
         'touchstart',
         (ev) => {
           if (ev.touches.length === 1) {
+            touchLastX = ev.touches[0].clientX;
             touchLastY = ev.touches[0].clientY;
             touchStartY = touchLastY;
             velocity = 0;
             pixelAccum = 0;
             isTouching = true;
             didScroll = false;
+            touchForwardsToApp = this._shouldForwardTouchScrollToApp();
             tapStartedWithTerminalFocus = this._isMobileTerminalInputFocused();
+            const touchStartIntent = this._classifyMobileTerminalTap(touchLastX, touchLastY);
+            if (touchStartIntent !== 'input') {
+              // Cancel xterm/browser focus before the compatibility click can
+              // open the OS keyboard. Content taps are re-emitted as SGR on
+              // touchend; history taps deliberately remain inert.
+              ev.preventDefault();
+              this._blurMobileTerminalInput();
+            }
             lastTime = 0;
             if (scrollFrame) {
               cancelAnimationFrame(scrollFrame);
@@ -465,7 +485,7 @@ Object.assign(CodemanApp.prototype, {
             }
           }
         },
-        { passive: true }
+        { passive: false }
       );
 
       container.addEventListener(
@@ -484,6 +504,7 @@ Object.assign(CodemanApp.prototype, {
             // fling, so a jittery tap would both position the cursor AND scroll.
             if (!didScroll) return;
             ev.preventDefault();
+            touchLastX = ev.touches[0].clientX;
             const delta = touchLastY - touchY; // positive = scroll down
             pixelAccum += delta;
             velocity = delta * 1.2;
@@ -492,8 +513,12 @@ Object.assign(CodemanApp.prototype, {
             const ch = cellHeight();
             const lines = Math.trunc(pixelAccum / ch);
             if (lines !== 0) {
-              this._noteTerminalUserScroll(lines);
-              this.terminal.scrollLines(lines);
+              if (touchForwardsToApp) {
+                this._sendSyntheticSgrWheel(touchLastX, touchY, lines);
+              } else {
+                this._noteTerminalUserScroll(lines);
+                this.terminal.scrollLines(lines);
+              }
               pixelAccum -= lines * ch;
             }
           }
@@ -526,6 +551,7 @@ Object.assign(CodemanApp.prototype, {
           isTouching = false;
           velocity = 0;
           pixelAccum = 0;
+          touchForwardsToApp = false;
           tapStartedWithTerminalFocus = false;
         },
         { passive: true }
@@ -2634,11 +2660,13 @@ Object.assign(CodemanApp.prototype, {
 
     const rows = Math.max(1, this.terminal.rows || 1);
     const lines = [];
+    const wrappedRows = [];
     let hasVisibleContent = false;
     for (let row = 0; row < rows; row++) {
       const line = buffer.getLine(buffer.viewportY + row);
       const text = line?.translateToString?.(true) || '';
       lines.push(text);
+      wrappedRows.push(Boolean(line?.isWrapped));
       if (text.trim()) hasVisibleContent = true;
     }
     if (!hasVisibleContent) return 'input';
@@ -2669,6 +2697,17 @@ Object.assign(CodemanApp.prototype, {
     }
 
     const tappedRow = pos.row - 1;
+    let logicalLineStart = tappedRow;
+    while (logicalLineStart > 0 && wrappedRows[logicalLineStart]) logicalLineStart--;
+    let logicalLineEnd = tappedRow;
+    while (logicalLineEnd + 1 < rows && wrappedRows[logicalLineEnd + 1]) logicalLineEnd++;
+    const tappedLine = lines.slice(logicalLineStart, logicalLineEnd + 1).join('');
+    if (
+      mode === 'claude' &&
+      /^\s*[•·]\s*Working\b.*(?:background|esc to interrupt)/i.test(tappedLine)
+    ) {
+      return 'content';
+    }
     if (menuSelectionVisible) return 'content';
     if (promptRow >= 0) {
       const inputEnd = cursorRow >= promptRow ? cursorRow : promptRow;
@@ -2864,6 +2903,15 @@ Object.assign(CodemanApp.prototype, {
       return false;
     }
     return this._terminalViewportAtBottom();
+  },
+
+  // Claude keeps most transcript history inside its own TUI rather than xterm
+  // scrollback. On verified versions, route a touch drag through the same SGR
+  // wheel path as desktop. Codex keeps the existing local touch behavior.
+  _shouldForwardTouchScrollToApp() {
+    const session = this.sessions?.get(this.activeSessionId);
+    if (session?.mode !== 'claude') return false;
+    return this._shouldForwardWheelToApp({ shiftKey: false });
   },
 
   // Encode wheel ticks as SGR reports (button 64 = up, 65 = down) at the pointer
