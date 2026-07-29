@@ -43,38 +43,22 @@ const syncData = DEC_SYNC_START + data + DEC_SYNC_END;
 this.broadcast('session:terminal', { id: sessionId, data: syncData });
 ```
 
-## Client-Side Implementation (`app.js`)
+## Client-Side Implementation (`terminal-ui.js`)
 
 ### `batchTerminalWrite(data)`
 
 1. Checks if flicker filter is enabled (optional, per-session)
 2. If flicker filter active: buffers screen-clear patterns (`ESC[2J`, `ESC[H ESC[J`, `ESC[nA`)
 3. Accumulates data in `pendingWrites`
-4. Schedules `requestAnimationFrame` if not already scheduled
-5. On rAF callback: checks for incomplete sync blocks (start without end)
-6. If incomplete: waits up to 50ms via `syncWaitTimeout`
-7. Calls `flushPendingWrites()` when complete
-
-### `extractSyncSegments(data)`
-
-- Parses DEC 2026 markers, returns array of content segments
-- Content before sync blocks returned as-is
-- Content inside sync blocks returned without markers
-- Incomplete blocks (start without end) returned with marker for next chunk
+4. Calls `_scheduleTerminalWriteFlush()` if no flush is pending
+5. The yielded callback clears its scheduled flag before calling `flushPendingWrites()`
+6. Large batches schedule their own next chunk until the queue is empty
 
 ### `flushPendingWrites()`
 
-```javascript
-const segments = extractSyncSegments(this.pendingWrites);
-this.pendingWrites = '';  // Clear before writing
-for (const segment of segments) {
-  if (segment && !segment.startsWith(DEC_SYNC_START)) {
-    terminal.write(segment);  // Skip incomplete blocks (start with marker)
-  }
-}
-```
-
-Note: Segments starting with `DEC_SYNC_START` are incomplete blocks awaiting more data. These are skipped (discarded if timeout forces flush).
+- Joins the queued terminal data and passes DEC 2026 markers through to xterm.js 6, which handles synchronized output natively.
+- Writes at most 32KB per yield for Codex and 64KB for other modes.
+- Requeues the remainder and immediately schedules another safe yield. A final large response therefore drains without waiting for another SSE event.
 
 ### `chunkedTerminalWrite(buffer, chunkSize=128KB)`
 
@@ -116,17 +100,15 @@ When detected, buffers 50ms of subsequent output before flushing atomically.
 
 ## Edge Cases
 
-- **Incomplete sync blocks**: 50ms timeout forces flush (content discarded to prevent freeze)
+- **Incomplete sync blocks**: xterm.js retains synchronized output until its closing marker
 - **Large buffers**: Chunked writing prevents UI freeze
 - **Server shutdown**: Skips batching via `_isStopping` flag
 - **Session switch**: Clears flicker filter state, pending writes, and sync timeout (prevents cross-session data bleed)
 - **SSE reconnect**: `handleInit()` clears all pending write state
 
-**Trade-off:** If a sync block is split across SSE packets and the end marker doesn't arrive within 50ms, the incomplete content is discarded. This prioritizes responsiveness over completeness. In practice this is rare since the server always sends complete `SYNC_START...SYNC_END` pairs and SSE typically delivers them atomically.
-
 ## DEC Mode 2026 Compatibility
 
-Terminals that natively support DEC 2026 will buffer and render atomically. Terminals that don't support it ignore the escape sequences harmlessly. xterm.js doesn't support DEC 2026 natively, so the client implements its own buffering by parsing the markers.
+Terminals that natively support DEC 2026 buffer and render atomically. Codeman uses xterm.js 6, so the client passes the markers through instead of parsing or discarding partial blocks.
 
 **Supporting terminals:** WezTerm, Kitty, Ghostty, iTerm2 3.5+, Windows Terminal, VSCode terminal
 
@@ -135,4 +117,4 @@ Terminals that natively support DEC 2026 will buffer and render atomically. Term
 | File | Key Functions |
 |------|---------------|
 | `src/web/server.ts` | `batchTerminalData()`, `flushTerminalBatches()`, `broadcast()` |
-| `src/web/public/app.js` | `batchTerminalWrite()`, `extractSyncSegments()`, `flushPendingWrites()`, `flushFlickerBuffer()`, `chunkedTerminalWrite()` |
+| `src/web/public/terminal-ui.js` | `batchTerminalWrite()`, `_scheduleTerminalWriteFlush()`, `flushPendingWrites()`, `flushFlickerBuffer()`, `chunkedTerminalWrite()` |
