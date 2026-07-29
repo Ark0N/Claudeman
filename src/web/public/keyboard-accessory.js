@@ -590,22 +590,13 @@ const KeyboardAccessoryBar = {
    *  Sends text and Enter separately so Ink processes them as distinct events. */
   sendCommand(command) {
     if (!app.activeSessionId) return;
-    // Send command text first (without Enter)
-    app.sendInput(command);
-    // Send Enter separately after a brief delay so Ink has time to process the text.
-    setTimeout(() => app.sendInput('\r'), 120);
+    app.sendTerminalCommand(command);
   },
 
-  /** Send a special key (arrow, escape, etc.) directly to the PTY.
-   *  Bypasses tmux send-keys -l (literal mode) since escape sequences
-   *  must be written raw to be interpreted as key presses by Ink. */
+  /** Send a special key through the controller-owned ordered input path. */
   sendKey(escapeSequence) {
     if (!app.activeSessionId) return;
-    fetch(`/api/sessions/${app.activeSessionId}/input`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input: escapeSequence })
-    }).catch(() => {});
+    app.sendTerminalKey(escapeSequence);
   },
 
   /** Browse the active session's workspace and insert a selected path without Enter. */
@@ -662,8 +653,7 @@ const KeyboardAccessoryBar = {
       const text = textarea.value;
       close();
       if (text) {
-        app.sendInput(text);
-        setTimeout(() => app.sendInput('\r'), 80);
+        app.sendPastedText(text, { submit: true });
       }
     };
 

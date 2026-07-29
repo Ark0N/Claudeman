@@ -569,12 +569,9 @@ const VoiceInput = {
         this._showComposeOverlay(trimmed);
       }
     } else {
-      // Direct mode: inject into local echo overlay if available, else send to PTY
-      if (app._localEchoEnabled && app._localEchoOverlay) {
-        app._localEchoOverlay.appendText(trimmed);
-      } else {
-        app.sendInput(trimmed).catch(() => {});
-      }
+      // Direct mode still enters the controller so draft state and transport
+      // ordering stay coherent with keyboard input.
+      app.insertTerminalText(trimmed);
       this._showVoiceSendBtn();
       setTimeout(() => { if (app.terminal) app.terminal.focus(); }, 150);
     }
@@ -603,17 +600,7 @@ const VoiceInput = {
     // Click handler
     this._voiceSendHandler = () => {
       if (!app.activeSessionId) return;
-      // Simulate Enter key: if local echo is active, flush its buffer + send \r;
-      // otherwise just send \r directly to the PTY
-      if (app._localEchoEnabled && app._localEchoOverlay) {
-        const text = app._localEchoOverlay.pendingText || '';
-        app._localEchoOverlay.clear();
-        app._localEchoOverlay.suppressBufferDetection();
-        if (text) app.sendInput(text).catch(() => {});
-        setTimeout(() => app.sendInput('\r').catch(() => {}), 80);
-      } else {
-        app.sendInput('\r').catch(() => {});
-      }
+      app.sendEnterKey();
       // Blink then restore
       gear.classList.add('voice-send-blink');
       setTimeout(() => this._hideVoiceSendBtn(), 400);
@@ -656,7 +643,7 @@ const VoiceInput = {
     const send = () => {
       const val = textarea.value.trim();
       overlay.remove();
-      if (val) app.sendInput(val + '\r').catch(() => {});
+      if (val) app.sendPastedText(val, { submit: true }).catch(() => {});
     };
     const cancel = () => overlay.remove();
     const newInput = () => {

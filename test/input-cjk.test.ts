@@ -66,6 +66,9 @@ const IOS_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebK
 function loadCjkHarness({ ua = ANDROID_UA }: { ua?: string } = {}) {
   const textarea = makeTextarea();
   const sent: string[] = [];
+  const controls: string[] = [];
+  const pasted: string[] = [];
+  const draftValues: string[] = [];
   const windowObj: Record<string, unknown> = {};
   const documentObj = {
     getElementById: (id: string) => (id === 'cjkInput' ? textarea : null),
@@ -88,10 +91,15 @@ function loadCjkHarness({ ua = ANDROID_UA }: { ua?: string } = {}) {
   vm.runInContext(src, context, { filename: 'input-cjk.js' });
   const CjkInput = vm.runInContext('CjkInput', context);
 
-  CjkInput.init({ send: (text: string) => sent.push(text) });
+  CjkInput.init({
+    sendText: (text: string) => sent.push(text),
+    sendControl: (data: string) => controls.push(data),
+    paste: (text: string) => pasted.push(text),
+    draftChanged: () => draftValues.push(textarea.value),
+  });
   textarea.fire('focus');
 
-  return { CjkInput, textarea, sent, windowObj, documentObj };
+  return { CjkInput, textarea, sent, controls, pasted, draftValues, windowObj, documentObj };
 }
 
 describe('CJK input module', () => {
@@ -184,6 +192,54 @@ describe('CJK input module', () => {
     expect(textarea.value).toBe(PHANTOM);
   });
 
+  it('routes multiline clipboard text through the dedicated paste boundary', () => {
+    const { textarea, sent, pasted } = loadCjkHarness();
+    const preventDefault = vi.fn();
+
+    textarea.fire('paste', {
+      preventDefault,
+      clipboardData: {
+        getData: (type: string) => (type === 'text/plain' ? 'first\n\nsecond' : ''),
+      },
+    });
+
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(pasted).toEqual(['first\n\nsecond']);
+    expect(sent).toEqual([]);
+    expect(textarea.value).toBe(PHANTOM);
+  });
+
+  it('routes Android input-only paste events through the dedicated paste boundary', () => {
+    const { textarea, sent, pasted } = loadCjkHarness();
+    textarea.value = PHANTOM + 'first\n\nReferences\nmore after references';
+
+    textarea.fire('input', {
+      isComposing: false,
+      inputType: 'insertFromPaste',
+    });
+
+    expect(pasted).toEqual(['first\n\nReferences\nmore after references']);
+    expect(sent).toEqual([]);
+    expect(textarea.value).toBe(PHANTOM);
+  });
+
+  it('keeps multiline text bracketed when Enter wins the race with the paste event', () => {
+    const { textarea, sent, controls, pasted } = loadCjkHarness();
+    textarea.value = PHANTOM + 'first\n\nReferences\nmore after references';
+
+    textarea.fire('keydown', {
+      key: 'Enter',
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+    });
+
+    expect(pasted).toEqual(['first\n\nReferences\nmore after references']);
+    expect(sent).toEqual([]);
+    expect(controls).toEqual(['\r']);
+    expect(textarea.value).toBe(PHANTOM);
+  });
+
   it('re-tapping the focused empty field restarts the IME session (wedged-IME recovery)', () => {
     const { textarea, documentObj } = loadCjkHarness();
     documentObj.activeElement = textarea;
@@ -265,6 +321,36 @@ describe('CJK input module', () => {
     expect(textarea.valueWrites).toBe(before);
   });
 
+  it('round-trips a restored CJK draft without submitting it', () => {
+    const { CjkInput, textarea, sent, pasted } = loadCjkHarness();
+
+    CjkInput.restorePendingText('未提交\n草稿');
+
+    expect(CjkInput.getPendingText()).toBe('未提交\n草稿');
+    expect(textarea.value).toBe(PHANTOM + '未提交\n草稿');
+    expect(sent).toEqual([]);
+    expect(pasted).toEqual([]);
+
+    CjkInput.clear();
+    expect(CjkInput.getPendingText()).toBe('');
+    expect(textarea.value).toBe(PHANTOM);
+  });
+
+  it('notifies the draft owner before a CJK input mutation is debounced', () => {
+    const { textarea, sent, draftValues } = loadCjkHarness();
+    draftValues.length = 0;
+    textarea.fire('compositionstart');
+    textarea.value = PHANTOM + '未提交';
+
+    textarea.fire('input', {
+      isComposing: true,
+      inputType: 'insertCompositionText',
+    });
+
+    expect(draftValues).toEqual([PHANTOM + '未提交']);
+    expect(sent).toEqual([]);
+  });
+
   it('routes terminal.focus() to the CJK field while it is visible (focus router)', () => {
     // Regression guard for the intermittent "Chinese input goes nowhere" bug:
     // session-select / SSE-reconnect paths call terminal.focus(), which lands
@@ -283,18 +369,33 @@ describe('CJK input module', () => {
     // redraws), which arrive while e.g. the rename input or search box has
     // focus — refocusing on those steals focus mid-typing. Guard: focus must
     // be on xterm's own textarea AND the data must not be a query reply.
-    const selfHeal = src.slice(src.indexOf('Self-heal'), src.indexOf('CJK regain-focus'));
-    expect(selfHeal).toContain('document.activeElement === this.terminal.textarea');
-    expect(selfHeal).toContain('shouldSuppressTerminalQueryResponse(data)');
+    expect(src).toMatch(
+      /document\.activeElement === this\.terminal\.textarea[\s\S]*?!window\.CodemanTerminalInput\?\.shouldSuppressTerminalQueryResponse\([\s\S]*?data[\s\S]*?\)[\s\S]*?CJK regain-focus \(onData swallowed input\)/
+    );
   });
 
-  it('sends text plus carriage return on Enter', () => {
-    const { textarea, sent } = loadCjkHarness();
+  it('routes Enter text and control through separate semantic callbacks', () => {
+    const { textarea, sent, controls } = loadCjkHarness();
 
     textarea.value = PHANTOM + '你好';
     textarea.fire('keydown', { key: 'Enter' });
 
-    expect(sent).toEqual(['你好\r']);
+    expect(sent).toEqual(['你好']);
+    expect(controls).toEqual(['\r']);
+    expect(textarea.value).toBe(PHANTOM);
+  });
+
+  it('flushes pending CJK text before routing a control action', () => {
+    const { textarea, sent, controls } = loadCjkHarness();
+    textarea.value = PHANTOM + 'draft';
+
+    textarea.fire('keydown', {
+      key: 'c',
+      ctrlKey: true,
+    });
+
+    expect(sent).toEqual(['draft']);
+    expect(controls).toEqual(['\x03']);
     expect(textarea.value).toBe(PHANTOM);
   });
 });

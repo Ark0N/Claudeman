@@ -43,13 +43,16 @@
  *
  * @dependency index.html (#cjkInput textarea)
  * @globals {object} CjkInput — window.cjkActive (boolean) signals app.js to block xterm onData
- * @loadorder 5.5 of 15 — loaded after keyboard-accessory.js, before app.js
+ * @loadorder 5.5 of 16 — loaded after keyboard-accessory.js, before terminal-input-state.js
  */
 
 // eslint-disable-next-line no-unused-vars
 const CjkInput = (() => {
   let _textarea = null;
-  let _send = null;
+  let _sendText = null;
+  let _sendControl = null;
+  let _paste = null;
+  let _draftChanged = null;
   let _initialized = false;
   let _composing = false;
   let _flushTimer = null;
@@ -138,10 +141,20 @@ const CjkInput = (() => {
     }
     _textarea.value = PHANTOM;
     _textarea.setSelectionRange(1, 1);
+    _draftChanged?.();
   }
 
   function _isEffectivelyEmpty() {
     return !_strip(_textarea.value);
+  }
+
+  function _sendCommittedText(text) {
+    if (!text) return;
+    if (/[\r\n]/.test(text)) {
+      _paste(text);
+    } else {
+      _sendText(text);
+    }
   }
 
   /** Flush textarea: send real text to PTY and reset to phantom */
@@ -157,9 +170,7 @@ const CjkInput = (() => {
     }
     const val = _strip(_textarea.value);
     _t(`flush ${val ? 'send len=' + val.length : 'empty'}`);
-    if (val) {
-      _send(val);
-    }
+    _sendCommittedText(val);
     _resetToPhantom();
   }
 
@@ -192,10 +203,14 @@ const CjkInput = (() => {
   }
 
   return {
-    init({ send }) {
+    init({ send, sendText, sendControl, paste, draftChanged }) {
       if (_initialized) this.destroy();
 
-      _send = send;
+      const fallbackSend = typeof send === 'function' ? send : () => {};
+      _sendText = typeof sendText === 'function' ? sendText : fallbackSend;
+      _sendControl = typeof sendControl === 'function' ? sendControl : fallbackSend;
+      _paste = typeof paste === 'function' ? paste : _sendText;
+      _draftChanged = typeof draftChanged === 'function' ? draftChanged : null;
       _composing = false;
       _flushTimer = null;
       _textarea = document.getElementById('cjkInput');
@@ -249,6 +264,23 @@ const CjkInput = (() => {
       _textarea.addEventListener('focus', _listeners.focus);
       _textarea.addEventListener('blur', _listeners.blur);
 
+      // Clipboard text is a single semantic paste, even when it contains blank
+      // lines. Route it separately so the app can add bracketed-paste framing
+      // instead of flushing each newline as a real Enter key.
+      _listeners.paste = (e) => {
+        const text = e.clipboardData?.getData?.('text/plain') || '';
+        if (!text) return;
+        e.preventDefault();
+        _t(`paste len=${text.length}`);
+        _composing = false;
+        _cancelDebouncedFlush();
+        clearTimeout(_compositionFlushTimer);
+        _compositionFlushTimer = null;
+        _paste(text);
+        _resetToPhantom();
+      };
+      _textarea.addEventListener('paste', _listeners.paste);
+
       // ── Composition tracking (keyboard IME — works for CJK typing) ──
       _listeners.compositionstart = () => {
         _t(`compstart ${_vdesc(_textarea.value)}`);
@@ -282,12 +314,9 @@ const CjkInput = (() => {
           _composing = false;
           _cancelDebouncedFlush();
           const val = _strip(_textarea.value);
-          if (val) {
-            _send(val + '\r');
-          } else {
-            _send('\r');
-          }
           _resetToPhantom();
+          _sendCommittedText(val);
+          _sendControl('\r');
           return;
         }
 
@@ -296,12 +325,18 @@ const CjkInput = (() => {
           _composing = false;
           _cancelDebouncedFlush();
           _resetToPhantom();
+          _sendControl('\x1b');
           return;
         }
 
         if (e.ctrlKey && CTRL_KEYS[e.key]) {
           e.preventDefault();
-          _send(CTRL_KEYS[e.key]);
+          _composing = false;
+          _cancelDebouncedFlush();
+          const val = _strip(_textarea.value);
+          _resetToPhantom();
+          _sendCommittedText(val);
+          _sendControl(CTRL_KEYS[e.key]);
           return;
         }
 
@@ -313,7 +348,7 @@ const CjkInput = (() => {
         // Backspace: forward to PTY when no real text in textarea
         if (e.key === 'Backspace' && _isEffectivelyEmpty()) {
           e.preventDefault();
-          _send('\x7f');
+          _sendControl('\x7f');
           _resetToPhantom();
           return;
         }
@@ -321,7 +356,7 @@ const CjkInput = (() => {
         // Arrow/function keys: forward to PTY when no real text
         if (PASSTHROUGH_KEYS[e.key] && _isEffectivelyEmpty()) {
           e.preventDefault();
-          _send(PASSTHROUGH_KEYS[e.key]);
+          _sendControl(PASSTHROUGH_KEYS[e.key]);
           return;
         }
 
@@ -331,7 +366,7 @@ const CjkInput = (() => {
         // tells the input handler to skip that echo.
         if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey && _isEffectivelyEmpty()) {
           e.preventDefault();
-          _send(e.key);
+          _sendText(e.key);
           _keydownSentAt = performance.now();
           _keydownSentText = e.key;
           _resetToPhantom();
@@ -342,6 +377,10 @@ const CjkInput = (() => {
 
       // ── Input event: primary path for virtual keyboards + dictation ──
       _listeners.input = (e) => {
+        // The DOM value has already changed by the time this event runs. Capture
+        // it before an immediate flush/reset so a lifecycle event in this turn
+        // cannot lose an unfinished IME or dictation update.
+        _draftChanged?.();
         _t(`input ${e.inputType || '?'} ic=${e.isComposing} c=${_composing} ${_vdesc(_textarea.value)}`);
         // ── Stuck-composition recovery ──
         // Some IMEs (WeChat/Sogou keyboards) fire compositionstart without a
@@ -359,12 +398,23 @@ const CjkInput = (() => {
           _composing = false;
         }
 
+        // Some Android clipboard surfaces emit no ClipboardEvent. They insert
+        // the complete value and report only inputType=insertFromPaste.
+        if (e.inputType === 'insertFromPaste') {
+          _cancelDebouncedFlush();
+          const text = _strip(_textarea.value);
+          _t(`input-paste len=${text.length}`);
+          if (text) _paste(text);
+          _resetToPhantom();
+          return;
+        }
+
         // ── Backspace / delete detection ──
         if (e.inputType === 'deleteContentBackward' || e.inputType === 'deleteWordBackward') {
           if (_composing) return;
           if (_isEffectivelyEmpty()) {
             _cancelDebouncedFlush();
-            _send('\x7f');
+            _sendControl('\x7f');
             _resetToPhantom();
             return;
           }
@@ -428,6 +478,31 @@ const CjkInput = (() => {
       _resetToPhantom();
     },
 
+    /** Real editable text currently held behind the phantom character. */
+    getPendingText() {
+      return _initialized && _textarea ? _strip(_textarea.value) : '';
+    },
+
+    /**
+     * Restore committed draft text without trying to recreate an OS-level IME
+     * composition. The next input/Enter event treats it as ordinary text.
+     */
+    restorePendingText(text) {
+      if (!_initialized || !_textarea) return;
+      _cancelDebouncedFlush();
+      clearTimeout(_compositionFlushTimer);
+      _compositionFlushTimer = null;
+      _composing = false;
+      const restored = String(text || '');
+      if (!restored) {
+        _resetToPhantom();
+        return;
+      }
+      _textarea.value = PHANTOM + restored;
+      const end = _textarea.value.length;
+      _textarea.setSelectionRange(end, end);
+    },
+
     /** Diagnostic: recent IME event trace (ring buffer). */
     getTrace() {
       return _trace.slice();
@@ -446,6 +521,10 @@ const CjkInput = (() => {
       }
       window.cjkActive = false;
       _composing = false;
+      _sendText = null;
+      _sendControl = null;
+      _paste = null;
+      _draftChanged = null;
       for (const key of Object.keys(_listeners)) delete _listeners[key];
       _initialized = false;
     },

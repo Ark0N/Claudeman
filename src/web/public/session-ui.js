@@ -507,26 +507,10 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  /** Send Enter to the active session (phone toolbar button).
-   *
-   *  MUST go through xterm's onData path, NOT straight to sendInput()/the API.
-   *  With local echo on (the mobile default) the characters you typed are still
-   *  buffered in the LocalEchoOverlay and have NEVER reached the PTY. The onData
-   *  Enter branch (terminal-ui.js) is what flushes that pending text and only
-   *  then sends \r. Send a bare \r instead and you submit an empty line while the
-   *  typed text stays stranded on screen — which reads as "the button does
-   *  nothing". triggerDataEvent replays it exactly as if the key were pressed,
-   *  so overlay flush, flushed-offset cleanup and ordering are all reused. */
+  /** Send Enter through the controller-owned draft and delivery path. */
   sendEnterKey() {
     if (!this.activeSessionId) return;
-    const coreService = this.terminal?._core?.coreService;
-    if (coreService && typeof coreService.triggerDataEvent === 'function') {
-      coreService.triggerDataEvent('\r', true);
-      return;
-    }
-    // Fallback only if xterm's private core API moves: correct when local echo
-    // is off, and still better than doing nothing.
-    this.sendInput('\r');
+    this._terminalInputController?.sendControl('\r');
   },
 
   _initRunMode() {
@@ -774,11 +758,7 @@ Object.assign(CodemanApp.prototype, {
       btn.innerHTML = btn.dataset.origHtml;
       delete btn.dataset.origHtml;
       btn.classList.remove('confirming');
-      fetch(`/api/sessions/${this.activeSessionId}/input`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: '\x03' })
-      });
+      this.sendTerminalKey('\x03');
     } else {
       // First tap — enter confirm state
       btn.dataset.origHtml = btn.innerHTML;
