@@ -494,6 +494,9 @@ class CodemanApp {
 
     this._initGeneration = 0;     // dedup concurrent handleInit calls
     this._initFallbackTimer = null; // fallback timer if SSE init doesn't arrive
+    this._serverStartedAt = null; // process epoch from init/status snapshots
+    this._lastInitSnapshotTimestamp = null;
+    this._serverReloadRequested = false;
     this._selectGeneration = 0;   // cancel stale selectSession loads
     this._initialFullBufferLoad = true; // first buffer load after a page load fetches full tmux scrollback (COD-47)
     this.terminalLoadStates = new Map(); // Map<sessionId, { generation, phase }>
@@ -1632,6 +1635,8 @@ class CodemanApp {
   }
 
   _onSessionTerminal(data) {
+    if (this._serverReloadRequested) return;
+
     if (data.id === this.activeSessionId) {
       if (data.data.length > 32768) _crashDiag.log(`TERMINAL: ${(data.data.length/1024).toFixed(0)}KB`);
 
@@ -3020,9 +3025,173 @@ class CodemanApp {
     }
   }
 
+  /**
+   * Distinguish a duplicate snapshot from a new server process. A changed
+   * process can serve different frontend assets, so persist input and replace
+   * the stale page once; a transport reconnect stays on the current page.
+   */
+  _handleServerInitEpoch(serverStartedAt) {
+    if (!Number.isSafeInteger(serverStartedAt) || serverStartedAt <= 0) return 'legacy';
+    if (this._serverReloadRequested) return 'reload';
+
+    const previous = this._serverStartedAt;
+    this._serverStartedAt = serverStartedAt;
+    if (!Number.isSafeInteger(previous) || previous <= 0) return 'initial';
+    if (previous === serverStartedAt) return 'reconnect';
+
+    this._serverReloadRequested = true;
+    this._captureActiveSessionDraft?.();
+    this._inputState?.persistNow?.();
+    this._persistReliableNow?.();
+    window.location.reload();
+    return 'reload';
+  }
+
+  _acceptServerInitSnapshot(timestamp) {
+    if (!Number.isSafeInteger(timestamp) || timestamp <= 0) return true;
+    const previous = this._lastInitSnapshotTimestamp;
+    if (Number.isSafeInteger(previous) && timestamp <= previous) return false;
+    this._lastInitSnapshotTimestamp = timestamp;
+    return true;
+  }
+
+  /**
+   * Apply an authoritative same-process snapshot without clearing or replaying
+   * the active terminal. This catches events missed during an SSE outage while
+   * keeping the current frame, scroll position, and input intact.
+   */
+  _reconcileSameServerInit(data) {
+    const incomingSessions = Array.isArray(data.sessions) ? data.sessions : [];
+    const incomingIds = new Set(incomingSessions.map((session) => session.id));
+
+    for (const sessionId of Array.from(this.sessions.keys())) {
+      if (!incomingIds.has(sessionId)) this._onSessionDeleted({ id: sessionId });
+    }
+
+    let shouldRecheckSubagentParents = false;
+    for (const session of incomingSessions) {
+      const previous = this.sessions.get(session.id);
+      const workingDirectoryChanged = Boolean(
+        previous && session.workingDir && previous.workingDir !== session.workingDir
+      );
+      if (session.claudeSessionId && !previous?.claudeSessionId) {
+        shouldRecheckSubagentParents = true;
+      }
+      this.sessions.set(session.id, session);
+      this.updateSubagentParentNames(session.id);
+
+      if ((session.ralphLoop || session.ralphTodos) && !this.ralphClosedSessions.has(session.id)) {
+        this.ralphStates.set(session.id, {
+          loop: session.ralphLoop || null,
+          todos: session.ralphTodos || [],
+        });
+      } else {
+        this.ralphStates.delete(session.id);
+      }
+
+      if (session.id === this.activeSessionId && session.tokens) {
+        this.updateRespawnTokens(session.tokens);
+      }
+      const locallySavingWorkingDirectory =
+        this._pendingWorkingDirectoryChange?.sessionId === session.id;
+      if (workingDirectoryChanged && session.id === this.activeSessionId && !locallySavingWorkingDirectory) {
+        void this.syncFileBrowserSession?.(session.id, { force: true });
+      }
+    }
+
+    if (shouldRecheckSubagentParents) {
+      this.recheckOrphanSubagents();
+      requestAnimationFrame(() => this.updateConnectionLines());
+    }
+
+    if (Array.isArray(data.sessionOrder) && data.sessionOrder.length) {
+      try { localStorage.setItem('codeman-session-order', JSON.stringify(data.sessionOrder)); } catch {}
+    }
+    this.syncSessionOrder();
+
+    if (!this.activeSessionId && !this.isSoloWindow && this.sessionOrder.length > 0) {
+      this.selectSession(this.sessionOrder[0]);
+    }
+
+    this.respawnStatus = data.respawnStatus || {};
+    this.globalStats = data.globalStats || null;
+
+    const scheduledRuns = Array.isArray(data.scheduledRuns) ? data.scheduledRuns : [];
+    this.totalCost = incomingSessions.reduce((sum, session) => sum + (session.totalCost || 0), 0);
+    this.totalCost += scheduledRuns.reduce((sum, run) => sum + (run.totalCost || 0), 0);
+
+    const activeRun = scheduledRuns.find((run) => run.status === 'running') || null;
+    this.currentRun = activeRun;
+    if (activeRun) {
+      if (this.timerInterval) this.updateTimer();
+      else this.showTimer();
+    } else {
+      this.hideTimer();
+    }
+
+    if (data.planUsage) this.updatePlanUsageChip(data.planUsage);
+
+    if (Array.isArray(data.subagents)) {
+      const incomingAgentIds = new Set(data.subagents.map((agent) => agent.agentId));
+      for (const agentId of Array.from(this.subagents.keys())) {
+        if (incomingAgentIds.has(agentId)) continue;
+        this.forceCloseSubagentWindow(agentId);
+        this.subagents.delete(agentId);
+        this.subagentActivity.delete(agentId);
+        this.subagentToolResults.delete(agentId);
+        for (const [sessionId, minimizedAgentIds] of this.minimizedSubagents) {
+          minimizedAgentIds.delete(agentId);
+          if (minimizedAgentIds.size === 0) this.minimizedSubagents.delete(sessionId);
+        }
+        if (this.activeSubagentId === agentId) this.activeSubagentId = null;
+      }
+
+      for (const agent of data.subagents) {
+        const previous = this.subagents.get(agent.agentId);
+        this.subagents.set(agent.agentId, previous ? { ...previous, ...agent } : agent);
+        if (!previous) {
+          this.subagentActivity.set(agent.agentId, []);
+          this.findParentSessionForSubagent(agent.agentId);
+        }
+      }
+      this.renderSubagentPanel();
+      this.updateSubagentWindows();
+    }
+
+    if (Array.isArray(data.workflowRuns)) {
+      const incomingRunIds = new Set(data.workflowRuns.map((run) => run.runId));
+      for (const runId of Array.from(this.workflowRuns.keys())) {
+        if (incomingRunIds.has(runId)) continue;
+        this.workflowRunDetails.delete(runId);
+        if (this.activeWorkflowRunId === runId) this.activeWorkflowRunId = null;
+        this.closeUltracodeWindow?.(runId, false);
+      }
+      this.seedWorkflowRuns(data.workflowRuns);
+    }
+
+    this.updateCost();
+    this.renderSessionTabs();
+    this.renderRalphStatePanel();
+    if (this.sessions.size > 0) {
+      if (!this.systemStatsInterval) this.startSystemStatsPolling();
+    } else {
+      this.stopSystemStatsPolling();
+    }
+  }
+
   handleInit(data) {
     // Clear the init fallback timer since we got data
     this._clearTimer('_initFallbackTimer');
+
+    const initAction = this._handleServerInitEpoch(data.serverStartedAt);
+    if (initAction === 'reload') return;
+    if (initAction === 'reconnect') {
+      if (!this._acceptServerInitSnapshot(data.timestamp)) return;
+      this._reconcileSameServerInit(data);
+      return;
+    }
+    if (initAction === 'initial') this._acceptServerInitSnapshot(data.timestamp);
+
     const gen = ++this._initGeneration;
 
     // CJK input form: controlled by user setting (with server env as override)
@@ -3192,11 +3361,14 @@ class CodemanApp {
   }
 
   async loadState() {
+    const initGenerationAtRequest = this._initGeneration;
     try {
       const res = await fetch('/api/status');
       const data = await res.json();
+      if (this._initGeneration !== initGenerationAtRequest) return;
       this.handleInit(data?.data ?? {});
     } catch (err) {
+      if (this._initGeneration !== initGenerationAtRequest) return;
       console.error('Failed to load state:', err);
     }
   }
