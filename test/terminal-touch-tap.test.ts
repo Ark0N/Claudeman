@@ -6,8 +6,16 @@ import { describe, expect, it, vi } from 'vitest';
 function loadTerminalUiHarness() {
   const CodemanApp = function CodemanApp(this: any) {};
   let now = 1_000;
+  let keyboardVisible = false;
+  let activeElement: unknown = null;
   const context = vm.createContext({
     window: {},
+    document: {
+      body: { classList: { contains: () => false } },
+      get activeElement() {
+        return activeElement;
+      },
+    },
     CodemanApp,
     console: { warn: vi.fn(), log: vi.fn() },
     _crashDiag: { log: vi.fn() },
@@ -25,6 +33,11 @@ function loadTerminalUiHarness() {
     MobileDetection: {
       isTouchDevice: () => true,
     },
+    KeyboardHandler: {
+      get keyboardVisible() {
+        return keyboardVisible;
+      },
+    },
     DEC_SYNC_STRIP_RE: /\x1b\[\?2026[hl]/g,
     TERMINAL_CHUNK_SIZE: 32 * 1024,
   });
@@ -37,6 +50,12 @@ function loadTerminalUiHarness() {
     app,
     setNow: (value: number) => {
       now = value;
+    },
+    setKeyboardVisible: (visible: boolean) => {
+      keyboardVisible = visible;
+    },
+    setActiveElement: (element: unknown) => {
+      activeElement = element;
     },
   };
 }
@@ -56,6 +75,19 @@ function createElementHarness() {
 }
 
 describe('terminal touch tap mouse guard', () => {
+  it('keeps the keyboard-opening tap focus-only', () => {
+    const { app, setActiveElement, setKeyboardVisible } = loadTerminalUiHarness();
+    const textarea = { classList: { contains: () => true } };
+    app.terminal = { textarea };
+    setActiveElement(textarea);
+
+    setKeyboardVisible(false);
+    expect(app._shouldForwardMobileTapToApp()).toBe(false);
+
+    setKeyboardVisible(true);
+    expect(app._shouldForwardMobileTapToApp()).toBe(true);
+  });
+
   it('suppresses browser trusted compatibility mouse events during the tap window', () => {
     const { app } = loadTerminalUiHarness();
     const { element, dispatch } = createElementHarness();
