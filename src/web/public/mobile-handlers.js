@@ -209,9 +209,12 @@ const MobileDetection = {
  * Also handles terminal scrolling and toolbar repositioning via visualViewport API.
  */
 const KeyboardHandler = {
+  VIEWPORT_SETTLE_MS: 80,
   lastViewportHeight: 0,
   keyboardVisible: false,
   initialViewportHeight: 0,
+  _viewportSettleTimer: null,
+  _settleScrollToBottom: false,
 
   /** Initialize keyboard handling */
   init() {
@@ -276,6 +279,11 @@ const KeyboardHandler = {
       window.removeEventListener('scroll', this._windowScrollHandler);
       this._windowScrollHandler = null;
     }
+    if (this._viewportSettleTimer) {
+      clearTimeout(this._viewportSettleTimer);
+      this._viewportSettleTimer = null;
+    }
+    this._settleScrollToBottom = false;
   },
 
   /** Handle viewport resize (keyboard show/hide) */
@@ -313,6 +321,7 @@ const KeyboardHandler = {
     }
 
     this.updateLayoutForKeyboard();
+    this._scheduleViewportSettle();
     this.lastViewportHeight = currentHeight;
   },
 
@@ -414,32 +423,9 @@ const KeyboardHandler = {
     // iOS Safari may scroll the document to reveal xterm's hidden textarea.
     window.scrollTo(0, 0);
 
-    // Refit terminal locally AND send resize to server so Claude Code (Ink)
-    // knows the actual terminal dimensions. Without this, Ink redraws at the
-    // old (larger) row count when the user types, causing content to scroll
-    // off the visible area with each keystroke.
-    // Note: the throttledResize handler still suppresses ongoing resize events
-    // while keyboard is up — this one-shot resize on open/close is sufficient.
-    setTimeout(() => {
-      if (typeof app !== 'undefined' && app.terminal) {
-        if (app.fitAddon)
-          try {
-            app.fitAddon.fit();
-          } catch {}
-        // Eliminate terminal row quantization gap: xterm can only show whole
-        // rows, so leftover pixels create dead space below the last row.
-        // Shrink .main's paddingBottom by the gap so the terminal fills flush
-        // to the accessory bar.
-        this._shrinkPaddingToFit();
-        app.terminal.scrollToBottom();
-        app._syncMobileHelperTextareaToCursor?.();
-        app._localEchoOverlay?.rerender?.();
-        // Send resize to server so PTY dimensions match xterm
-        this._sendTerminalResize();
-      }
-      // Reset again after fit/resize in case layout changes triggered scroll
-      window.scrollTo(0, 0);
-    }, 150);
+    // visualViewport emits multiple heights throughout the OS animation.
+    // Re-schedule on every event and fit only after the final height settles.
+    this._scheduleViewportSettle({ scrollToBottom: true });
 
     // Reposition subagent windows to stack from bottom (above keyboard)
     if (typeof app !== 'undefined') app.relayoutMobileSubagentWindows();
@@ -454,20 +440,35 @@ const KeyboardHandler = {
 
     this.resetLayout();
 
-    // Refit terminal, scroll to bottom, and send resize to restore original dimensions
-    setTimeout(() => {
-      if (typeof app !== 'undefined' && app.fitAddon) {
-        try {
-          app.fitAddon.fit();
-        } catch {}
-        if (app.terminal) app.terminal.scrollToBottom();
-        // Send resize to server to restore full terminal size
-        this._sendTerminalResize();
-      }
-    }, 100);
+    this._scheduleViewportSettle({ scrollToBottom: true });
 
     // Reposition subagent windows to stack from top (below header)
     if (typeof app !== 'undefined') app.relayoutMobileSubagentWindows();
+  },
+
+  /** Coalesce the keyboard animation into one final xterm reflow and PTY resize. */
+  _scheduleViewportSettle({ scrollToBottom = false } = {}) {
+    this._settleScrollToBottom = this._settleScrollToBottom || scrollToBottom;
+    if (this._viewportSettleTimer) clearTimeout(this._viewportSettleTimer);
+    this._viewportSettleTimer = setTimeout(() => {
+      this._viewportSettleTimer = null;
+      const shouldScrollToBottom = this._settleScrollToBottom;
+      this._settleScrollToBottom = false;
+
+      if (typeof app !== 'undefined' && app.terminal) {
+        if (app.fitAddon) {
+          try {
+            app.fitAddon.fit();
+          } catch {}
+        }
+        if (this.keyboardVisible) this._shrinkPaddingToFit();
+        if (shouldScrollToBottom) app.terminal.scrollToBottom();
+        app._syncMobileHelperTextareaToCursor?.();
+        app._localEchoOverlay?.rerender?.();
+        this._sendTerminalResize();
+      }
+      window.scrollTo(0, 0);
+    }, this.VIEWPORT_SETTLE_MS);
   },
 
   /** Send current terminal dimensions to the server (one-shot, for keyboard open/close) */
