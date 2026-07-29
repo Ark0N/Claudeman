@@ -1983,6 +1983,9 @@ Object.assign(CodemanApp.prototype, {
       if (this._loadBufferQueue) this._loadBufferQueue.push(data);
       return;
     }
+    if (typeof KeyboardHandler !== 'undefined') {
+      KeyboardHandler.onTerminalFramePending?.();
+    }
 
     // Check if at bottom BEFORE adding data (captures user's scroll position)
     // Only update if not already scheduled (preserve the first check's result)
@@ -2219,6 +2222,13 @@ Object.assign(CodemanApp.prototype, {
     // move the ❯ prompt to a different row, making the overlay invisible.
     if (this._localEchoOverlay?.hasPending) {
       this._localEchoOverlay.rerender();
+    }
+    if (
+      !deferred &&
+      typeof KeyboardHandler !== 'undefined' &&
+      KeyboardHandler.needsTerminalFrameReady?.()
+    ) {
+      this.terminal.write('', () => KeyboardHandler.onTerminalFrameReady?.());
     }
 
     // After Tab completion: detect the completed text in the overlay.

@@ -73,6 +73,21 @@ this.broadcast('session:terminal', { id: sessionId, data: syncData });
 - Parallelizes session attach with buffer fetch
 - Fire-and-forget resize (doesn't block tab switch)
 
+## Mobile Keyboard Resize Cover
+
+Phone keyboard animation changes xterm's row count before the foreground TUI
+finishes its `SIGWINCH` redraw. During that interval the DOM renderer can expose
+blank or partially reflowed rows even though terminal state is valid.
+
+`KeyboardHandler` keeps the last painted `.xterm-rows` in an inert
+`.terminal-resize-frame-cover` while the viewport settles. The clone is only a
+visual cover: xterm remains the authoritative buffer, pointer events pass
+through it, and shell sessions do not use it. The cover is armed immediately
+before the resize and removed after xterm's parser callback, a short Codex
+redraw quiet window, and two animation frames. A bounded expiry removes it when
+no replacement output arrives; an active terminal buffer load keeps it in place
+until that load finishes.
+
 ## Optional Flicker Filter
 
 Per-session toggle via Session Settings. Adds ~50ms latency but eliminates remaining flicker on problematic terminals.
@@ -118,3 +133,4 @@ Terminals that natively support DEC 2026 buffer and render atomically. Codeman u
 |------|---------------|
 | `src/web/server.ts` | `batchTerminalData()`, `flushTerminalBatches()`, `broadcast()` |
 | `src/web/public/terminal-ui.js` | `batchTerminalWrite()`, `_scheduleTerminalWriteFlush()`, `flushPendingWrites()`, `flushFlickerBuffer()`, `chunkedTerminalWrite()` |
+| `src/web/public/mobile-handlers.js` | `_beginTerminalFrameCover()`, `_armTerminalFrameCover()`, `onTerminalFrameReady()` |

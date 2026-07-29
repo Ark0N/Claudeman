@@ -210,11 +210,26 @@ const MobileDetection = {
  */
 const KeyboardHandler = {
   VIEWPORT_SETTLE_MS: 80,
+  FRAME_COVER_MIN_MS: 220,
+  FRAME_COVER_MAX_MS: 1600,
+  FRAME_COVER_LOAD_POLL_MS: 100,
+  FRAME_COVER_CODEX_QUIET_MS: 180,
   lastViewportHeight: 0,
   keyboardVisible: false,
   initialViewportHeight: 0,
   _viewportSettleTimer: null,
   _settleScrollToBottom: false,
+  _terminalInputRequested: false,
+  _terminalFrameCover: null,
+  _terminalFrameCoverStartedAt: 0,
+  _terminalFrameCoverArmed: false,
+  _terminalFrameCoverReady: false,
+  _terminalFrameCoverReadyAt: 0,
+  _terminalFrameCoverReadyVersion: 0,
+  _terminalFrameCoverSwapVersion: 0,
+  _terminalFrameCoverMinTimer: null,
+  _terminalFrameCoverMaxTimer: null,
+  _terminalFrameCoverQuietTimer: null,
 
   /** Initialize keyboard handling */
   init() {
@@ -227,6 +242,11 @@ const KeyboardHandler = {
     // Simple focus handler - scroll input into view after keyboard appears
     this._focusinHandler = (e) => {
       const target = e.target;
+      this._terminalInputRequested = this.isTerminalInputElement(target);
+      if (this._terminalInputRequested) {
+        if (!this.keyboardVisible) this._beginTerminalFrameCover();
+        return;
+      }
       if (!this.isInputElement(target)) return;
 
       // Wait for keyboard animation, then scroll input into view
@@ -284,6 +304,8 @@ const KeyboardHandler = {
       this._viewportSettleTimer = null;
     }
     this._settleScrollToBottom = false;
+    this._terminalInputRequested = false;
+    this._discardTerminalFrameCover();
   },
 
   /** Handle viewport resize (keyboard show/hide) */
@@ -304,6 +326,7 @@ const KeyboardHandler = {
     // Use 100px threshold (not 50) to handle iOS address bar drift,
     // iOS 26's persistent 24px discrepancy, and Safari bottom bar changes
     else if (heightDiff < 100 && this.keyboardVisible) {
+      if (this._terminalInputRequested) this._beginTerminalFrameCover();
       this.keyboardVisible = false;
       document.body.classList.remove('keyboard-visible');
       this.onKeyboardHide();
@@ -414,6 +437,8 @@ const KeyboardHandler = {
 
   /** Called when keyboard appears */
   onKeyboardShow() {
+    if (this._terminalInputRequested) this._beginTerminalFrameCover();
+
     // Show keyboard accessory bar
     if (typeof KeyboardAccessoryBar !== 'undefined') {
       KeyboardAccessoryBar.show();
@@ -433,6 +458,9 @@ const KeyboardHandler = {
 
   /** Called when keyboard hides */
   onKeyboardHide() {
+    const terminalOwnedKeyboard = this._terminalInputRequested;
+    this._terminalInputRequested = false;
+
     // Hide keyboard accessory bar
     if (typeof KeyboardAccessoryBar !== 'undefined') {
       KeyboardAccessoryBar.hide();
@@ -440,7 +468,7 @@ const KeyboardHandler = {
 
     this.resetLayout();
 
-    this._scheduleViewportSettle({ scrollToBottom: true });
+    this._scheduleViewportSettle({ scrollToBottom: terminalOwnedKeyboard });
 
     // Reposition subagent windows to stack from top (below header)
     if (typeof app !== 'undefined') app.relayoutMobileSubagentWindows();
@@ -465,10 +493,239 @@ const KeyboardHandler = {
         if (shouldScrollToBottom) app.terminal.scrollToBottom();
         app._syncMobileHelperTextareaToCursor?.();
         app._localEchoOverlay?.rerender?.();
+        this._armTerminalFrameCover();
         this._sendTerminalResize();
       }
       window.scrollTo(0, 0);
     }, this.VIEWPORT_SETTLE_MS);
+  },
+
+  /**
+   * Freeze the currently painted terminal rows across a phone keyboard resize.
+   * xterm's DOM renderer can briefly clear between fit() and the TUI's SIGWINCH
+   * redraw; the inert clone keeps the last valid frame visible in that window.
+   */
+  _beginTerminalFrameCover({ includeShell = false, restart = false, arm = false } = {}) {
+    if (!MobileDetection.isTouchDevice() || typeof app === 'undefined') return;
+    if (this._terminalFrameCover) {
+      if (restart) this._restartTerminalFrameCover();
+      if (arm) this._armTerminalFrameCover();
+      return;
+    }
+    const session = app.activeSessionId ? app.sessions?.get(app.activeSessionId) : null;
+    if (!app.activeSessionId || (!includeShell && session?.mode === 'shell')) return;
+
+    const terminalElement = app.terminal?.element;
+    const screen = terminalElement?.querySelector?.('.xterm-screen');
+    if (!(terminalElement instanceof HTMLElement) || !(screen instanceof HTMLElement)) return;
+    const rect = screen.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) return;
+
+    const rows = screen.querySelector('.xterm-rows');
+    if (!(rows instanceof HTMLElement)) return;
+    const cover = document.createElement('div');
+    cover.className = 'terminal-resize-frame-cover';
+    cover.setAttribute('aria-hidden', 'true');
+    const frame = document.createElement('div');
+    frame.className = `${screen.className} terminal-resize-frame`;
+    frame.appendChild(rows.cloneNode(true));
+    const localEcho = [...screen.children].find(
+      (child) =>
+        child instanceof HTMLElement &&
+        child.style.pointerEvents === 'none' &&
+        child.style.zIndex === '7' &&
+        child.textContent
+    );
+    if (localEcho) frame.appendChild(localEcho.cloneNode(true));
+    frame.style.width = `${rect.width}px`;
+    frame.style.height = `${rect.height}px`;
+    cover.appendChild(frame);
+    terminalElement.appendChild(cover);
+
+    this._terminalFrameCover = cover;
+    this._terminalFrameCoverStartedAt = Date.now();
+    this._terminalFrameCoverArmed = false;
+    this._terminalFrameCoverReady = false;
+    this._terminalFrameCoverReadyAt = 0;
+    this._terminalFrameCoverReadyVersion += 1;
+    this._terminalFrameCoverSwapVersion = 0;
+    this._scheduleTerminalFrameCoverExpiry();
+    if (arm) this._armTerminalFrameCover();
+  },
+
+  _restartTerminalFrameCover() {
+    if (!this._terminalFrameCover) return;
+    this._clearTerminalFrameCoverTimers();
+    this._terminalFrameCoverStartedAt = Date.now();
+    this._terminalFrameCoverArmed = false;
+    this._terminalFrameCoverReady = false;
+    this._terminalFrameCoverReadyAt = 0;
+    this._terminalFrameCoverReadyVersion += 1;
+    this._terminalFrameCoverSwapVersion = 0;
+    this._scheduleTerminalFrameCoverExpiry();
+  },
+
+  _scheduleTerminalFrameCoverExpiry(delay = this.FRAME_COVER_MAX_MS) {
+    if (this._terminalFrameCoverMaxTimer) clearTimeout(this._terminalFrameCoverMaxTimer);
+    this._terminalFrameCoverMaxTimer = setTimeout(() => {
+      this._terminalFrameCoverMaxTimer = null;
+      if (this._terminalFrameCoverLoadPending()) {
+        this._scheduleTerminalFrameCoverExpiry(this.FRAME_COVER_LOAD_POLL_MS);
+        return;
+      }
+      this._forceTerminalFrameCoverSwap();
+    }, delay);
+  },
+
+  _terminalFrameCoverLoadPending() {
+    if (typeof app === 'undefined' || !app.activeSessionId) return false;
+    const state = app.terminalLoadStates?.get?.(app.activeSessionId);
+    return Boolean(state && state.phase !== 'failed');
+  },
+
+  _armTerminalFrameCover() {
+    if (!this._terminalFrameCover) return;
+    this._terminalFrameCoverArmed = true;
+    this._terminalFrameCoverReady = false;
+    this._terminalFrameCoverReadyAt = 0;
+    this._terminalFrameCoverReadyVersion += 1;
+    this._terminalFrameCoverSwapVersion = 0;
+    if (this._terminalFrameCoverQuietTimer) {
+      clearTimeout(this._terminalFrameCoverQuietTimer);
+      this._terminalFrameCoverQuietTimer = null;
+    }
+    if (this._terminalFrameCoverMinTimer) clearTimeout(this._terminalFrameCoverMinTimer);
+    const elapsed = Date.now() - this._terminalFrameCoverStartedAt;
+    this._terminalFrameCoverMinTimer = setTimeout(
+      () => {
+        this._terminalFrameCoverMinTimer = null;
+        this._tryFinishTerminalFrameCover();
+      },
+      Math.max(0, this.FRAME_COVER_MIN_MS - elapsed)
+    );
+  },
+
+  onTerminalFramePending() {
+    if (!this._terminalFrameCover || !this._terminalFrameCoverArmed) return;
+    this._terminalFrameCoverReady = false;
+    this._terminalFrameCoverReadyAt = 0;
+    this._terminalFrameCoverReadyVersion += 1;
+    this._terminalFrameCoverSwapVersion = 0;
+    if (this._terminalFrameCoverQuietTimer) {
+      clearTimeout(this._terminalFrameCoverQuietTimer);
+      this._terminalFrameCoverQuietTimer = null;
+    }
+  },
+
+  needsTerminalFrameReady() {
+    return Boolean(this._terminalFrameCover && this._terminalFrameCoverArmed);
+  },
+
+  onTerminalFrameReady() {
+    if (!this._terminalFrameCoverArmed) return;
+    this._terminalFrameCoverReady = true;
+    this._terminalFrameCoverReadyAt = Date.now();
+    this._terminalFrameCoverReadyVersion += 1;
+    this._tryFinishTerminalFrameCover();
+  },
+
+  _tryFinishTerminalFrameCover() {
+    if (!this._terminalFrameCover || !this._terminalFrameCoverArmed || !this._terminalFrameCoverReady) {
+      return;
+    }
+    if (Date.now() - this._terminalFrameCoverStartedAt < this.FRAME_COVER_MIN_MS) return;
+    if (!this._terminalHasVisibleFrame()) return;
+    const activeSession =
+      typeof app !== 'undefined' && app.activeSessionId ? app.sessions?.get?.(app.activeSessionId) : null;
+    const quietMs = activeSession?.mode === 'codex' ? this.FRAME_COVER_CODEX_QUIET_MS : 0;
+    const quietRemaining = this._terminalFrameCoverReadyAt + quietMs - Date.now();
+    if (quietRemaining > 0) {
+      if (!this._terminalFrameCoverQuietTimer) {
+        this._terminalFrameCoverQuietTimer = setTimeout(() => {
+          this._terminalFrameCoverQuietTimer = null;
+          this._tryFinishTerminalFrameCover();
+        }, quietRemaining);
+      }
+      return;
+    }
+    this._scheduleTerminalFrameCoverSwap();
+  },
+
+  _scheduleTerminalFrameCoverSwap() {
+    const readyVersion = this._terminalFrameCoverReadyVersion;
+    if (this._terminalFrameCoverSwapVersion === readyVersion) return;
+    this._terminalFrameCoverSwapVersion = readyVersion;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (
+          !this._terminalFrameCover ||
+          !this._terminalFrameCoverArmed ||
+          !this._terminalFrameCoverReady ||
+          this._terminalFrameCoverReadyVersion !== readyVersion
+        ) {
+          return;
+        }
+        this._finishTerminalFrameCover();
+      });
+    });
+  },
+
+  _forceTerminalFrameCoverSwap() {
+    const cover = this._terminalFrameCover;
+    if (!cover) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (this._terminalFrameCover === cover) this._finishTerminalFrameCover();
+      });
+    });
+  },
+
+  _terminalHasVisibleFrame() {
+    if (typeof app === 'undefined' || !app.terminal) return false;
+    if (app._localEchoOverlay?.state?.visible) return true;
+    const terminal = app.terminal;
+    const buffer = terminal.buffer?.active;
+    if (!buffer?.getLine) return false;
+    const viewportY = buffer.viewportY || 0;
+    const rows = Math.max(1, terminal.rows || 1);
+    for (let row = 0; row < rows; row++) {
+      if (
+        buffer
+          .getLine(viewportY + row)
+          ?.translateToString?.(true)
+          ?.trim()
+      ) {
+        return true;
+      }
+    }
+    return false;
+  },
+
+  _finishTerminalFrameCover() {
+    if (!this._terminalFrameCover) return;
+    this._terminalFrameCoverArmed = false;
+    this._discardTerminalFrameCover();
+  },
+
+  _clearTerminalFrameCoverTimers() {
+    if (this._terminalFrameCoverMinTimer) clearTimeout(this._terminalFrameCoverMinTimer);
+    if (this._terminalFrameCoverMaxTimer) clearTimeout(this._terminalFrameCoverMaxTimer);
+    if (this._terminalFrameCoverQuietTimer) clearTimeout(this._terminalFrameCoverQuietTimer);
+    this._terminalFrameCoverMinTimer = null;
+    this._terminalFrameCoverMaxTimer = null;
+    this._terminalFrameCoverQuietTimer = null;
+  },
+
+  _discardTerminalFrameCover() {
+    this._clearTerminalFrameCoverTimers();
+    this._terminalFrameCover?.remove();
+    this._terminalFrameCover = null;
+    this._terminalFrameCoverStartedAt = 0;
+    this._terminalFrameCoverArmed = false;
+    this._terminalFrameCoverReady = false;
+    this._terminalFrameCoverReadyAt = 0;
+    this._terminalFrameCoverReadyVersion += 1;
+    this._terminalFrameCoverSwapVersion = 0;
   },
 
   /** Send current terminal dimensions to the server (one-shot, for keyboard open/close) */
@@ -515,6 +772,14 @@ const KeyboardHandler = {
           } catch {}
       }
     } catch {}
+  },
+
+  /** Check whether focus belongs to the terminal's mobile text-entry surface. */
+  isTerminalInputElement(el) {
+    if (!el) return false;
+    if (el.id === 'cjkInput') return true;
+    if (typeof app !== 'undefined' && el === app.terminal?.textarea) return true;
+    return Boolean(el.closest?.('.xterm, .terminal-container'));
   },
 
   /** Check if element is an input that triggers keyboard (excludes terminal) */

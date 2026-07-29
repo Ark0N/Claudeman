@@ -2504,6 +2504,27 @@ body.solo-mode .btn-lifecycle-log {
   background: transparent !important;
 }
 
+/* Preserve the last painted terminal rows while a mobile keyboard resize
+   refits xterm and waits for the foreground TUI's SIGWINCH redraw. */
+.terminal-resize-frame-cover {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--term-bg, #161b23);
+  opacity: 1;
+}
+
+.terminal-resize-frame {
+  position: absolute !important;
+  top: 0 !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: 0 !important;
+  pointer-events: none !important;
+}
+
 /* Touch devices: prevent browser from claiming the touch gesture before
    our JS touchmove handler fires. Without this, the browser starts native
    scrolling during the first few px of finger travel and ignores our
