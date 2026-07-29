@@ -789,6 +789,44 @@ describe('Virtual Keyboard', () => {
       expect(state.sentInputs).toEqual([]);
     });
 
+    it('focuses the live Claude cursor when a redraw omits the prompt glyph', async () => {
+      const point = await page.evaluate(async () => {
+        window.__sentInputs = [];
+        app.activeSessionId = 'mobile-focus-promptless-claude-test';
+        app.sessions.set('mobile-focus-promptless-claude-test', {
+          id: 'mobile-focus-promptless-claude-test',
+          mode: 'claude',
+          status: 'running',
+        });
+        app._sendInputAsync = (_sessionId: string, input: string) => {
+          window.__sentInputs.push(input);
+        };
+        app.hideWelcome();
+        app.terminal.reset();
+        await new Promise<void>((resolve) => app.terminal.write('Claude response\r\nready for input', resolve));
+        (document.activeElement as HTMLElement | null)?.blur?.();
+
+        const screen = app.terminal.element?.querySelector('.xterm-screen');
+        const cell = app.terminal._core?._renderService?.dimensions?.css?.cell;
+        const rect = screen?.getBoundingClientRect();
+        if (!rect || !cell?.width || !cell?.height) return null;
+        return {
+          x: rect.left + cell.width * 2,
+          y: rect.top + cell.height * (app.terminal.buffer.active.cursorY + 0.5),
+        };
+      });
+      expect(point).not.toBeNull();
+
+      await page.touchscreen.tap(point!.x, point!.y);
+
+      const state = await page.evaluate(() => ({
+        activeClass: document.activeElement?.className,
+        sentInputs: window.__sentInputs,
+      }));
+      expect(state.activeClass).toContain('xterm-helper-textarea');
+      expect(state.sentInputs).toEqual([]);
+    });
+
     it('keeps terminal touch drag available for scrollback with the visible textarea enabled', async () => {
       const calls = await page.evaluate(async () => {
         app.activeSessionId = 'mobile-touch-scroll-test';

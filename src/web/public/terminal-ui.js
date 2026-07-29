@@ -23,6 +23,7 @@
   // short window, only the app's synthetic tap-to-position mouse event should
   // reach xterm.
   const TOUCH_COMPAT_MOUSE_SUPPRESS_MS = 450;
+  const TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM = 4;
 
   function isTerminalQueryResponse(data) {
     return TERMINAL_QUERY_RESPONSE_PATTERN.test(data) || TERMINAL_OSC_RESPONSE_PATTERN.test(data);
@@ -62,6 +63,7 @@
     shouldSuppressTerminalQueryResponse,
     USER_SCROLL_STICKY_SUPPRESS_MS,
     TOUCH_COMPAT_MOUSE_SUPPRESS_MS,
+    TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM,
   };
   global.CODEMAN_XTERM_THEMES = CODEMAN_XTERM_THEMES;
   global.codemanCurrentXtermTheme = currentXtermTheme;
@@ -2712,10 +2714,20 @@ Object.assign(CodemanApp.prototype, {
     if (promptRow >= 0) {
       const inputEnd = cursorRow >= promptRow ? cursorRow : promptRow;
       if (tappedRow >= promptRow && tappedRow <= inputEnd) return 'input';
-    } else if (tappedRow === cursorRow && cursorRow >= rows - 3) {
-      // During redraws a CLI can temporarily omit its prompt marker. Keep the
-      // live cursor row usable without turning arbitrary transcript rows into
-      // keyboard targets.
+    } else if (
+      tappedRow === cursorRow ||
+      tappedRow >=
+        Math.max(
+          0,
+          rows -
+            window.CodemanTerminalInput
+              .TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM
+        )
+    ) {
+      // During redraws a CLI can temporarily omit its prompt marker or place
+      // the cursor above a status footer. Keep the live cursor and a stable
+      // lower-screen focus band usable without turning transcript rows above
+      // that band into keyboard targets.
       return 'input';
     }
 
