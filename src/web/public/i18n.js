@@ -281,12 +281,16 @@
     Input: '输入',
     'Local Echo': '本地回显',
     'CJK Input': '中日韩输入',
-    'Extended Keyboard Bar': '扩展键盘栏',
+    'Mobile Terminal Controls': '移动终端控制',
+    'Control Haptics': '控制振动',
+    'Control Sounds': '控制音效',
     'Gesture Control (beta)': '手势控制（测试版）',
     'Wheel Scrolls Local History': '滚轮滚动本地历史',
     'Instant typing feedback with local echo': '通过本地回显即时显示输入',
     'Dedicated IME input field for CJK languages': '为中日韩语言提供专用输入法文本框',
-    'Extra keys: Tab, Esc, arrows, Ctrl+O': '附加按键：Tab、Esc、方向键、Ctrl+O',
+    'Esc, menu navigation, Tab, and keyboard-open shortcuts': 'Esc、菜单导航、Tab 和键盘打开时的快捷键',
+    'Brief vibration on terminal controls': '操作终端控件时短暂振动',
+    'Quiet tone on terminal controls': '操作终端控件时播放轻提示音',
 
     // CLI / model settings
     'Startup Mode': '启动模式',
@@ -665,8 +669,10 @@
       '通过覆盖层即时显示输入，同时在后台把按键转发到服务器。支持 Tab 补全、切换标签时保留输入并防止会话崩溃丢字；推荐移动端和高延迟连接使用。',
     "Show a dedicated input field below the terminal for CJK (Chinese/Japanese/Korean) IME composition. Recommended for mobile devices with Chinese input methods where xterm's native input handling may drop characters.":
       '在终端下方显示中日韩输入法专用文本框。推荐在可能因 xterm 原生输入而丢字的移动端中文输入法中使用。',
-    'Show additional buttons (Tab, Shift+Tab, Ctrl+O, Esc, Alt+Enter, left/right arrows) in the mobile keyboard accessory bar.':
-      '在移动端键盘工具栏显示附加按键（Tab、Shift+Tab、Ctrl+O、Esc、Alt+Enter、左右方向键）。',
+    'Show Esc, Up, Enter, Down, and Tab controls while the mobile keyboard is hidden, plus the full terminal key bar while it is open. Hardware volume keys are used when the browser exposes them; press both directions together for Enter.':
+      '移动键盘隐藏时显示 Esc、上、Enter、下和 Tab 控件，键盘打开时显示完整终端按键栏。浏览器支持时可使用硬件音量键；同时按下两个方向键可发送 Enter。',
+    'Vibrate briefly after a mobile terminal control is accepted.': '移动终端控件生效后短暂振动。',
+    'Play a short, quiet tone after a mobile terminal control is accepted.': '移动终端控件生效后播放短促轻柔的提示音。',
     'Scroll local history (when mouse passthrough is active)': '滚动本地历史（鼠标直通启用时）',
     'Plain wheel/trackpad pages the terminal scrollback': '使用普通滚轮/触控板翻阅终端历史',
     'Camera hand-tracking overlay (applied on reload)': '摄像头手势跟踪覆盖层（重新加载后生效）',

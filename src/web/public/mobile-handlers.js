@@ -18,7 +18,7 @@
  * @globals {object} KeyboardHandler
  * @globals {object} SwipeHandler
  *
- * @dependency keyboard-accessory.js (KeyboardAccessoryBar reference in KeyboardHandler.onKeyboardShow, soft — guarded with typeof check)
+ * @dependency keyboard-accessory.js (MobileTerminalControls references in KeyboardHandler, soft — guarded with typeof checks)
  * @loadorder 2 of 15 — loaded after constants.js, before voice-input.js
  */
 
@@ -115,6 +115,7 @@ const MobileDetection = {
       'device-tablet',
       'device-desktop',
       'touch-device',
+      'handheld-device',
       'ios-device',
       'safari-browser'
     );
@@ -125,6 +126,10 @@ const MobileDetection = {
     // Add touch device class if applicable
     if (isTouch) {
       body.classList.add('touch-device');
+    }
+
+    if (this.isHandheldDevice()) {
+      body.classList.add('handheld-device');
     }
 
     // Add iOS-specific class for safe area handling
@@ -171,6 +176,9 @@ const MobileDetection = {
         // Tab auto-wrap is width-driven, so it must re-evaluate on resize — the only
         // other trigger is a tab content render. No-op on mobile/tablet (method bails).
         if (typeof app !== 'undefined') app.updateTabOverflowMode?.();
+        if (typeof MobileTerminalControls !== 'undefined') {
+          MobileTerminalControls.syncVisibility();
+        }
       }, 100);
     };
     window.addEventListener('resize', this._resizeHandler);
@@ -212,6 +220,7 @@ const KeyboardHandler = {
   lastViewportHeight: 0,
   keyboardVisible: false,
   initialViewportHeight: 0,
+  initialViewportWidth: 0,
 
   /** Initialize keyboard handling */
   init() {
@@ -219,6 +228,7 @@ const KeyboardHandler = {
     if (!MobileDetection.isTouchDevice()) return;
 
     this.initialViewportHeight = window.visualViewport?.height || window.innerHeight;
+    this.initialViewportWidth = window.visualViewport?.width || window.innerWidth;
     this.lastViewportHeight = this.initialViewportHeight;
 
     // Simple focus handler - scroll input into view after keyboard appears
@@ -281,6 +291,16 @@ const KeyboardHandler = {
   /** Handle viewport resize (keyboard show/hide) */
   handleViewportResize() {
     const currentHeight = window.visualViewport?.height || window.innerHeight;
+    const currentWidth = window.visualViewport?.width || window.innerWidth;
+
+    // Keyboard animations often arrive as several sub-threshold resize steps.
+    // Keep the full-height baseline anchored instead of ratcheting it downward.
+    // A substantial width change indicates a rotation or posture change, where
+    // the previous orientation's height is no longer a useful baseline.
+    if (Math.abs(this.initialViewportWidth - currentWidth) > 80) {
+      this.initialViewportHeight = Math.max(currentHeight, window.innerHeight);
+      this.initialViewportWidth = currentWidth;
+    }
     const heightDiff = this.initialViewportHeight - currentHeight;
 
     // Keyboard appeared (viewport shrunk by more than 150px)
@@ -304,10 +324,11 @@ const KeyboardHandler = {
       MobileDetection.updateAppHeight();
     }
 
-    // Update baseline when keyboard is not visible — adapts to address bar
-    // state changes, orientation changes, and other viewport shifts
+    // Grow the baseline while the keyboard is hidden (for example when the
+    // browser address bar collapses), but never lower it during a keyboard
+    // opening animation.
     if (!this.keyboardVisible) {
-      this.initialViewportHeight = currentHeight;
+      this.initialViewportHeight = Math.max(this.initialViewportHeight, currentHeight);
     } else {
       document.documentElement.style.setProperty('--app-height', `${currentHeight}px`);
     }
@@ -326,15 +347,25 @@ const KeyboardHandler = {
     }
 
     const cjkInput = document.getElementById('cjkInput');
-    const isSmallMedium = MobileDetection.isSmallScreen() || MobileDetection.isMediumScreen();
+    const isPhoneLayout = MobileDetection.isHandheldDevice();
+    const isMediumScreen = !isPhoneLayout && window.innerWidth < 768;
 
     if (this.keyboardVisible) {
       const keyboardHeight = this.initialViewportHeight - (window.visualViewport.height || window.innerHeight);
       const accessoryBar = document.querySelector('.keyboard-accessory-bar');
 
-      if (isSmallMedium) {
-        // Phones/small tablets: toolbar and accessory bar are position:fixed
-        // via CSS. Use translateY to lift them above the keyboard.
+      if (isPhoneLayout) {
+        // The phone app is already constrained to the visual viewport. CSS
+        // reserves exactly one accessory row when mobile terminal controls are
+        // enabled; otherwise the terminal reaches the OS keyboard.
+        const toolbar = document.querySelector('.toolbar');
+        const main = document.querySelector('.main');
+        if (toolbar) toolbar.style.transform = '';
+        if (accessoryBar) accessoryBar.style.transform = '';
+        if (main) main.style.paddingBottom = '';
+      } else if (isMediumScreen) {
+        // Small tablets retain fixed controls and use the visual viewport
+        // offset to lift them above the keyboard.
         const toolbar = document.querySelector('.toolbar');
         const main = document.querySelector('.main');
 
@@ -349,8 +380,15 @@ const KeyboardHandler = {
           accessoryBar.style.transform = keyboardOffset > 0 ? `translateY(${-keyboardOffset}px)` : '';
         }
         if (main && keyboardHeight > 0) {
-          const cjkInputHeight = cjkInput?.classList.contains('cjk-input-visible') ? 44 : 0;
-          main.style.paddingBottom = `${84 + cjkInputHeight}px`;
+          const toolbarHeight =
+            toolbar && getComputedStyle(toolbar).display !== 'none' ? toolbar.getBoundingClientRect().height : 0;
+          const accessoryHeight = accessoryBar?.classList.contains('visible')
+            ? accessoryBar.getBoundingClientRect().height
+            : 0;
+          const cjkInputHeight = cjkInput?.classList.contains('cjk-input-visible')
+            ? cjkInput.getBoundingClientRect().height
+            : 0;
+          main.style.paddingBottom = `${toolbarHeight + accessoryHeight + cjkInputHeight}px`;
         }
       } else if (keyboardHeight > 0) {
         // iPad: use direct bottom positioning (translateY unreliable —
@@ -362,16 +400,23 @@ const KeyboardHandler = {
 
       // CJK textarea positioning (always position:fixed on touch devices).
       if (cjkInput?.classList.contains('cjk-input-visible') && keyboardHeight > 0) {
-        if (isSmallMedium) {
-          // Phones: use translateY like toolbar/accessory bar.
+        if (isPhoneLayout) {
+          // Phone CSS keeps the CJK field in terminal-wrap's flex flow.
+          cjkInput.style.transform = '';
+          cjkInput.style.bottom = '';
+        } else if (isMediumScreen) {
+          // Small tablets use the same translation as the fixed controls.
           const layoutHeight = window.innerHeight;
           const visualBottom = window.visualViewport.offsetTop + window.visualViewport.height;
           const keyboardOffset = Math.max(0, layoutHeight - visualBottom);
           cjkInput.style.transform = keyboardOffset > 0 ? `translateY(${-keyboardOffset}px)` : '';
           cjkInput.style.bottom = '';
         } else {
-          // iPad: direct bottom = keyboard + accessory bar height.
-          cjkInput.style.bottom = `${keyboardHeight + 44}px`;
+          // iPad: direct bottom = keyboard + the currently visible accessory row.
+          const accessoryHeight = accessoryBar?.classList.contains('visible')
+            ? accessoryBar.getBoundingClientRect().height
+            : 0;
+          cjkInput.style.bottom = `${keyboardHeight + accessoryHeight}px`;
           cjkInput.style.transform = '';
         }
       }
@@ -405,10 +450,10 @@ const KeyboardHandler = {
 
   /** Called when keyboard appears */
   onKeyboardShow() {
-    // Show keyboard accessory bar
-    if (typeof KeyboardAccessoryBar !== 'undefined') {
-      KeyboardAccessoryBar.show();
+    if (typeof MobileTerminalControls !== 'undefined') {
+      MobileTerminalControls.syncVisibility();
     }
+    this.updateLayoutForKeyboard();
 
     // Reset any page scroll that occurred during keyboard open.
     // iOS Safari may scroll the document to reveal xterm's hidden textarea.
@@ -447,9 +492,8 @@ const KeyboardHandler = {
 
   /** Called when keyboard hides */
   onKeyboardHide() {
-    // Hide keyboard accessory bar
-    if (typeof KeyboardAccessoryBar !== 'undefined') {
-      KeyboardAccessoryBar.hide();
+    if (typeof MobileTerminalControls !== 'undefined') {
+      MobileTerminalControls.syncVisibility();
     }
 
     this.resetLayout();

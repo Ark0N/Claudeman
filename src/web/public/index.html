@@ -6,7 +6,7 @@
        served at /session/:id (detached single-session window) without 404ing
        on relative <script>/<link> URLs. Must precede the first resource tag. -->
   <base href="/">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="description" content="Claude Code session manager with web interface">
   <meta name="theme-color" content="#11151c">
   <meta name="google" content="notranslate">
@@ -1285,6 +1285,36 @@
               </div>
               <!-- Input Section -->
               <div class="settings-section-header">Input</div>
+              <div class="settings-item settings-item-multiline" id="appSettingsMobileTerminalControlsItem" title="Show Esc, Up, Enter, Down, and Tab controls while the mobile keyboard is hidden, plus the full terminal key bar while it is open. Hardware volume keys are used when the browser exposes them; press both directions together for Enter.">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Mobile Terminal Controls</span>
+                  <span class="settings-item-desc">Esc, menu navigation, Tab, and keyboard-open shortcuts</span>
+                </div>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsMobileTerminalControls" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item settings-item-multiline" id="appSettingsMobileControlHapticsItem" title="Vibrate briefly after a mobile terminal control is accepted.">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Control Haptics</span>
+                  <span class="settings-item-desc">Brief vibration on terminal controls</span>
+                </div>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsMobileControlHaptics" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item settings-item-multiline" id="appSettingsMobileControlSoundItem" title="Play a short, quiet tone after a mobile terminal control is accepted.">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Control Sounds</span>
+                  <span class="settings-item-desc">Quiet tone on terminal controls</span>
+                </div>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsMobileControlSound">
+                  <span class="slider"></span>
+                </label>
+              </div>
               <div class="settings-item settings-item-multiline" title="Scroll the terminal's own local scrollback with a plain mouse wheel / two-finger swipe, instead of forwarding the wheel to the CLI's transcript. Turn on if scrolling back through history doesn't work (e.g. macOS trackpad in Claude sessions). Shift+wheel always reaches local scrollback regardless.">
                 <div class="settings-item-text">
                   <span class="settings-item-label">Wheel Scrolls Local History</span>
@@ -1316,16 +1346,6 @@
                 </label>
               </div>
 
-              <div class="settings-item settings-item-multiline" title="Show additional buttons (Tab, Shift+Tab, Ctrl+O, Esc, Alt+Enter, left/right arrows) in the mobile keyboard accessory bar.">
-                <div class="settings-item-text">
-                  <span class="settings-item-label">Extended Keyboard Bar</span>
-                  <span class="settings-item-desc">Extra keys: Tab, Esc, arrows, Ctrl+O</span>
-                </div>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsExtendedKeyboardBar">
-                  <span class="slider"></span>
-                </label>
-              </div>
               <div class="settings-item settings-item-multiline" id="appSettingsGestureControlItem" title="Enable the camera hand-tracking gesture overlay (applied on reload). The instance must run with CODEMAN_GESTURE=1.">
                 <div class="settings-item-text">
                   <span class="settings-item-label">Gesture Control (beta)</span>

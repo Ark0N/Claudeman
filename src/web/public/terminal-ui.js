@@ -2815,6 +2815,16 @@ Object.assign(CodemanApp.prototype, {
     this._sendSyntheticSgrTap(ev.clientX, ev.clientY);
   },
 
+  /**
+   * Send one terminal control key without focusing xterm.
+   * The existing durable input queue preserves ordering and reconnect safety.
+   */
+  sendTerminalKey(input) {
+    const sessionId = this.activeSessionId;
+    if (!sessionId || !input) return;
+    this._sendInputAsync(sessionId, input);
+  },
+
   _installMobileTapMouseGuard() {
     const el = this.terminal?.element;
     if (!el || el._codemanTapMouseGuardInstalled) return;

@@ -23,7 +23,7 @@ import {
   assertHidden,
   getCSSProperty,
 } from './helpers/assertions.js';
-import { REPRESENTATIVE_DEVICES } from './devices.js';
+import { DEVICE_REGISTRY, REPRESENTATIVE_DEVICES } from './devices.js';
 import type { WebServer } from '../src/web/server.js';
 
 const PORT = PORTS.KEYBOARD;
@@ -127,6 +127,40 @@ describe('Virtual Keyboard', () => {
       expect(visible).toBe(false);
     });
 
+    it('accumulates incremental keyboard-animation shrink without lowering its baseline', async () => {
+      const initial = await getKeyboardState(page);
+      const baseline = initial.initialViewportHeight;
+
+      for (const shrink of [70, 140]) {
+        await page.evaluate(`(function(height, fullHeight) {
+          var vv = window.visualViewport;
+          Object.defineProperty(vv, 'height', {
+            get: function() { return height; },
+            configurable: true,
+          });
+          Object.defineProperty(window, 'innerHeight', {
+            get: function() { return fullHeight; },
+            configurable: true,
+          });
+          KeyboardHandler.handleViewportResize();
+        })(${baseline - shrink}, ${baseline})`);
+        expect(await getKeyboardVisible(page)).toBe(false);
+        expect((await getKeyboardState(page)).initialViewportHeight).toBe(baseline);
+      }
+
+      await page.evaluate(`(function(height) {
+        var vv = window.visualViewport;
+        Object.defineProperty(vv, 'height', {
+          get: function() { return height; },
+          configurable: true,
+        });
+        KeyboardHandler.handleViewportResize();
+      })(${baseline - 210})`);
+
+      expect(await getKeyboardVisible(page)).toBe(true);
+      await assertHasClass(page, 'body', BODY_CLASSES.KEYBOARD_VISIBLE);
+    });
+
     it('dismissing keyboard restores original state', async () => {
       // Show
       await showKeyboardViaCDP(page, KEYBOARD.TYPICAL_IOS_HEIGHT);
@@ -222,43 +256,58 @@ describe('Virtual Keyboard', () => {
       await context.close();
     });
 
-    it('toolbar remains below terminal when keyboard show shrinks the app viewport', async () => {
+    it('hides Codeman control rows so the terminal reaches the phone keyboard edge', async () => {
       await showKeyboard(page, KEYBOARD.TYPICAL_IOS_HEIGHT);
       await page.waitForTimeout(WAIT.KEYBOARD_ANIMATION);
 
       const layout = await page.evaluate(() => {
         const toolbar = document.querySelector('.toolbar') as HTMLElement | null;
         const accessory = document.querySelector('.keyboard-accessory-bar') as HTMLElement | null;
-        const terminalWrap = document.querySelector('.terminal-wrap') as HTMLElement | null;
+        const terminal = document.getElementById('terminalContainer');
+        const appEl = document.querySelector('.app') as HTMLElement | null;
+        const main = document.querySelector('.main') as HTMLElement | null;
         const toolbarRect = toolbar?.getBoundingClientRect();
         const accessoryRect = accessory?.getBoundingClientRect();
-        const terminalRect = terminalWrap?.getBoundingClientRect();
+        const terminalRect = terminal?.getBoundingClientRect();
+        const appRect = appEl?.getBoundingClientRect();
         return {
+          toolbarDisplay: toolbar ? getComputedStyle(toolbar).display : '',
+          accessoryDisplay: accessory ? getComputedStyle(accessory).display : '',
           toolbarTransform: toolbar?.style.transform ?? '',
           accessoryTransform: (accessory as HTMLElement | null)?.style.transform ?? '',
-          toolbarTop: toolbarRect?.top ?? 0,
-          accessoryTop: accessoryRect?.top ?? 0,
+          toolbarHeight: toolbarRect?.height ?? 0,
+          accessoryHeight: accessoryRect?.height ?? 0,
           terminalBottom: terminalRect?.bottom ?? 0,
+          appBottom: appRect?.bottom ?? 0,
+          mainPadding: main ? parseFloat(getComputedStyle(main).paddingBottom) : -1,
         };
       });
+      expect(layout.toolbarDisplay).toBe('none');
+      expect(layout.accessoryDisplay).toBe('none');
       expect(layout.toolbarTransform).toBe('');
       expect(layout.accessoryTransform).toBe('');
-      expect(layout.accessoryTop).toBeGreaterThanOrEqual(layout.terminalBottom - 4);
-      expect(layout.toolbarTop).toBeGreaterThan(layout.accessoryTop);
+      expect(layout.toolbarHeight).toBe(0);
+      expect(layout.accessoryHeight).toBe(0);
+      expect(layout.mainPadding).toBe(0);
+      expect(Math.abs(layout.terminalBottom - layout.appBottom)).toBeLessThanOrEqual(1);
     });
 
-    it('accessory bar gets .visible class', async () => {
+    it('keeps the accessory bar hidden on phones while the keyboard is open', async () => {
       await showKeyboard(page, KEYBOARD.TYPICAL_IOS_HEIGHT);
       await page.waitForTimeout(WAIT.KEYBOARD_ANIMATION);
 
-      const hasVisible = await page.evaluate(() => {
+      const accessoryState = await page.evaluate(() => {
         const bar = document.querySelector('.keyboard-accessory-bar');
-        return bar?.classList.contains('visible') ?? false;
+        return {
+          hasVisibleClass: bar?.classList.contains('visible') ?? false,
+          display: bar ? getComputedStyle(bar).display : '',
+        };
       });
-      expect(hasVisible).toBe(true);
+      expect(accessoryState.hasVisibleClass).toBe(false);
+      expect(accessoryState.display).toBe('none');
     });
 
-    it('main padding increases on keyboard show', async () => {
+    it('clears main padding when the phone keyboard opens', async () => {
       const initialPadding = await page.evaluate(() => {
         const main = document.querySelector('.main') as HTMLElement | null;
         return main ? getComputedStyle(main).paddingBottom : '0px';
@@ -273,7 +322,8 @@ describe('Virtual Keyboard', () => {
         return main ? main.style.paddingBottom : '';
       });
       const newPx = parseFloat(newPadding) || 0;
-      expect(newPx).toBeGreaterThan(initialPx);
+      expect(initialPx).toBeGreaterThan(0);
+      expect(newPx).toBe(0);
     });
 
     it('does not reserve the keyboard height as visible terminal dead space', async () => {
@@ -284,12 +334,15 @@ describe('Virtual Keyboard', () => {
         const main = document.querySelector('.main') as HTMLElement | null;
         const appEl = document.querySelector('.app') as HTMLElement | null;
         const terminalWrap = document.querySelector('.terminal-wrap') as HTMLElement | null;
+        const terminal = document.getElementById('terminalContainer');
         const toolbar = document.querySelector('.toolbar') as HTMLElement | null;
         const accessory = document.querySelector('.keyboard-accessory-bar') as HTMLElement | null;
         return {
           appHeight: appEl?.getBoundingClientRect().height ?? 0,
+          appBottom: appEl?.getBoundingClientRect().bottom ?? 0,
           mainPaddingBottom: main ? parseFloat(main.style.paddingBottom || '0') : 0,
           terminalHeight: terminalWrap?.getBoundingClientRect().height ?? 0,
+          terminalBottom: terminal?.getBoundingClientRect().bottom ?? 0,
           toolbarHeight: toolbar?.getBoundingClientRect().height ?? 0,
           accessoryHeight: accessory?.getBoundingClientRect().height ?? 0,
           visualViewportHeight: window.visualViewport?.height ?? window.innerHeight,
@@ -297,8 +350,9 @@ describe('Virtual Keyboard', () => {
       });
 
       expect(layout.appHeight).toBeLessThanOrEqual(layout.visualViewportHeight + 2);
-      expect(layout.mainPaddingBottom).toBeLessThan(KEYBOARD.TYPICAL_IOS_HEIGHT);
-      expect(layout.mainPaddingBottom).toBeGreaterThanOrEqual(layout.toolbarHeight + layout.accessoryHeight - 4);
+      expect(layout.mainPaddingBottom).toBe(0);
+      expect(layout.toolbarHeight + layout.accessoryHeight).toBe(0);
+      expect(Math.abs(layout.terminalBottom - layout.appBottom)).toBeLessThanOrEqual(1);
       expect(layout.terminalHeight).toBeGreaterThan(160);
     });
 
@@ -323,13 +377,31 @@ describe('Virtual Keyboard', () => {
       expect(mainPadding).toBe('');
     });
 
-    it('accessory bar has the simple-mode action buttons', async () => {
+    it('accessory bar has the unified terminal-control action set', async () => {
       const actions = await page.evaluate(() => {
         return Array.from(document.querySelectorAll('.keyboard-accessory-bar [data-action]')).map(
           (button) => (button as HTMLElement).dataset.action
         );
       });
-      expect(actions).toEqual(['scroll-up', 'scroll-down', 'init', 'clear', 'paste', 'dismiss']);
+      expect(actions).toEqual([
+        'esc',
+        'arrow-left',
+        'scroll-up',
+        'opt-enter',
+        'scroll-down',
+        'arrow-right',
+        'tab',
+        'shift-tab',
+        'paste',
+        'pick-path',
+        'clear-input',
+        'effort-max',
+        'ctrl-o',
+        'init',
+        'clear',
+        'compact',
+        'dismiss',
+      ]);
     });
 
     it('double-tap confirm on /clear button', async () => {
@@ -475,7 +547,7 @@ describe('Virtual Keyboard', () => {
       expect(Number(styles?.zIndex)).toBeGreaterThanOrEqual(0);
     });
 
-    it('routes CJK textarea typing through local echo on Enter', async () => {
+    it('routes CJK textarea typing directly to session input', async () => {
       await page.evaluate(() => {
         window.__sentInputs = [];
         const sessionId = 'mobile-cjk-local-echo-test';
@@ -514,18 +586,18 @@ describe('Virtual Keyboard', () => {
         pendingText: app._localEchoOverlay.pendingText,
         sentInputs: window.__sentInputs,
       }));
-      expect(beforeEnter.visibleText).toBe('hello');
+      expect(beforeEnter.visibleText).toBe('');
       expect(beforeEnter.pendingText).toBe('');
-      expect(beforeEnter.sentInputs).toEqual([]);
+      expect(beforeEnter.sentInputs.join('')).toBe('hello');
 
       await page.keyboard.press('Enter');
-      await page.waitForFunction(() => window.__sentInputs?.length === 2);
+      await page.waitForFunction(() => window.__sentInputs?.join('') === 'hello\r');
       const afterEnter = await page.evaluate(() => ({
         pendingText: app._localEchoOverlay.pendingText,
         sentInputs: window.__sentInputs,
       }));
       expect(afterEnter.pendingText).toBe('');
-      expect(afterEnter.sentInputs).toEqual(['hello', '\r']);
+      expect(afterEnter.sentInputs.join('')).toBe('hello\r');
     });
 
     it('shows the CJK textarea on mobile for server override only inside an active session', async () => {
@@ -791,6 +863,73 @@ describe('Virtual Keyboard', () => {
         // Show keyboard and verify it works
         await showKeyboard(page, KEYBOARD.TYPICAL_IOS_HEIGHT);
         expect(await getKeyboardVisible(page)).toBe(true);
+      } finally {
+        await context.close();
+      }
+    });
+
+    it('scaled Android phone keeps unified controls flush with the keyboard edge', async () => {
+      const device = DEVICE_REGISTRY.find((entry) => entry.name === 'Galaxy S23 Ultra')!;
+      const { context, page } = await createDevicePage(device, BASE_URL, 'chromium');
+      try {
+        expect(await page.evaluate(() => window.innerWidth)).toBeGreaterThan(430);
+        expect(await page.evaluate(`MobileDetection.isHandheldDevice()`)).toBe(true);
+
+        await page.evaluate(`
+          app.activeSessionId = 'scaled-android-controls-test';
+          app.hideWelcome();
+          MobileTerminalControls.setEnabled(true);
+          MobileTerminalControls.syncVisibility();
+        `);
+
+        const viewport = page.viewportSize()!;
+        const keyboardViewportHeight = viewport.height - KEYBOARD.TYPICAL_ANDROID_HEIGHT;
+        const cdp = await getCDP(page);
+        await setVisualViewportHeight(cdp, viewport.width, keyboardViewportHeight, device.deviceScaleFactor);
+        await page.waitForTimeout(100);
+        await page.evaluate(`KeyboardHandler.handleViewportResize()`);
+        await page.waitForTimeout(WAIT.KEYBOARD_ANIMATION);
+        expect(await getKeyboardVisible(page)).toBe(true);
+
+        const layout = await page.evaluate(() => {
+          const appEl = document.querySelector('.app') as HTMLElement | null;
+          const main = document.querySelector('.main') as HTMLElement | null;
+          const terminal = document.getElementById('terminalContainer');
+          const toolbar = document.querySelector('.toolbar') as HTMLElement | null;
+          const accessory = document.querySelector('.keyboard-accessory-bar') as HTMLElement | null;
+          const accessoryRect = accessory?.getBoundingClientRect();
+          const buttonRects = [...(accessory?.querySelectorAll('button') ?? [])].map((button) =>
+            button.getBoundingClientRect()
+          );
+          return {
+            viewportMeta: document.querySelector<HTMLMetaElement>('meta[name="viewport"]')?.content ?? '',
+            hasHandheldClass: document.body.classList.contains('handheld-device'),
+            toolbarDisplay: toolbar ? getComputedStyle(toolbar).display : '',
+            accessoryDisplay: accessory ? getComputedStyle(accessory).display : '',
+            mainPadding: main ? parseFloat(getComputedStyle(main).paddingBottom) : -1,
+            terminalBottom: terminal?.getBoundingClientRect().bottom ?? 0,
+            accessoryTop: accessoryRect?.top ?? 0,
+            accessoryBottom: accessoryRect?.bottom ?? 0,
+            accessoryButtonsContained: buttonRects.every(
+              (rect) => rect.top >= (accessoryRect?.top ?? 0) - 1 && rect.bottom <= (accessoryRect?.bottom ?? 0) + 1
+            ),
+            appBottom: appEl?.getBoundingClientRect().bottom ?? 0,
+            layoutViewportHeight: window.innerHeight,
+            visualViewportHeight: window.visualViewport?.height ?? 0,
+          };
+        });
+
+        expect(layout.viewportMeta).toContain('interactive-widget=resizes-content');
+        expect(layout.hasHandheldClass).toBe(true);
+        expect(layout.toolbarDisplay).toBe('none');
+        expect(layout.accessoryDisplay).toBe('flex');
+        expect(layout.mainPadding).toBeGreaterThan(0);
+        expect(layout.accessoryButtonsContained).toBe(true);
+        expect(layout.layoutViewportHeight).toBe(keyboardViewportHeight);
+        expect(layout.visualViewportHeight).toBe(keyboardViewportHeight);
+        expect(Math.abs(layout.appBottom - keyboardViewportHeight)).toBeLessThanOrEqual(1);
+        expect(Math.abs(layout.terminalBottom - layout.accessoryTop)).toBeLessThanOrEqual(1);
+        expect(Math.abs(layout.accessoryBottom - layout.appBottom)).toBeLessThanOrEqual(1);
       } finally {
         await context.close();
       }

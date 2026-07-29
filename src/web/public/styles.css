@@ -81,6 +81,9 @@
 
   /* Touch target minimum (iOS Human Interface Guidelines) */
   --touch-target-min: 44px;
+  --mobile-toolbar-height: 40px;
+  --mobile-terminal-accessory-height: 44px;
+  --mobile-terminal-nav-height: 48px;
 
   /* UI font + accent/gradient/hover tokens referenced by the v1.0 override block.
      These :root values equal the daylight-blue palette so the no-attribute fallback
@@ -947,7 +950,7 @@ body {
   color: var(--text);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
 }
 
 .tunnel-panel-status {
@@ -10853,7 +10856,7 @@ kbd {
   position: fixed;
   left: var(--safe-area-left);
   right: var(--safe-area-right);
-  bottom: calc(var(--safe-area-bottom) + 40px);
+  bottom: calc(var(--safe-area-bottom) + var(--mobile-toolbar-height));
   z-index: 52;
   display: block;
   min-height: 34px;
@@ -10870,11 +10873,17 @@ kbd {
 }
 
 .touch-device.keyboard-visible #cjkInput.cjk-input-visible {
-  bottom: calc(var(--safe-area-bottom) + 84px);
+  bottom: calc(
+    var(--safe-area-bottom) + var(--mobile-toolbar-height) +
+      var(--mobile-terminal-accessory-height)
+  );
 }
 
 body.touch-device.cjk-input-visible .main {
-  padding-bottom: calc(84px + var(--safe-area-bottom));
+  padding-bottom: calc(
+    var(--mobile-toolbar-height) + var(--mobile-terminal-accessory-height) +
+      var(--safe-area-bottom)
+  );
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -10886,10 +10895,10 @@ body.touch-device.cjk-input-visible .main {
 
 .keyboard-accessory-bar {
   display: none;
-  height: 44px;
+  height: var(--mobile-terminal-accessory-height);
   background: var(--floating-bg);
   border-top: 1px solid var(--control-border);
-  padding: 6px 8px;
+  padding: 0 8px;
   gap: 8px;
   align-items: center;
   overflow-x: auto;
@@ -10917,13 +10926,55 @@ body.touch-device.cjk-input-visible .main {
   will-change: transform;
 }
 
+/* Android scaling, phone landscape, and foldables can expose a desktop-width
+   viewport. These rules live in the always-loaded stylesheet so keyboard
+   geometry follows stable handheld identity at every posture. */
+body.handheld-device.keyboard-visible .app {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: auto;
+  left: 0;
+  height: var(--app-height, 100dvh);
+}
+
+body.handheld-device.keyboard-visible .main {
+  padding-bottom: 0 !important;
+}
+
+body.handheld-device.keyboard-visible.keyboard-accessory-visible .main {
+  padding-bottom: var(--mobile-terminal-accessory-height) !important;
+}
+
+body.handheld-device.keyboard-visible .toolbar {
+  display: none !important;
+}
+
+body.handheld-device.keyboard-visible .keyboard-accessory-bar {
+  position: absolute;
+  bottom: 0 !important;
+  transform: none !important;
+}
+
+body.handheld-device.keyboard-visible .keyboard-accessory-bar.visible {
+  display: flex !important;
+}
+
+body.touch-device.handheld-device.keyboard-visible #cjkInput.cjk-input-visible {
+  position: static;
+  flex-shrink: 0;
+  transform: none !important;
+}
+
 .accessory-btn {
   display: inline-flex;
+  min-width: 40px;
+  height: 100%;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   gap: 4px;
-  padding: 6px 12px;
+  padding: 0 8px;
   background: var(--control-bg);
   border: 1px solid var(--control-border);
   border-radius: 6px;
@@ -10950,10 +11001,15 @@ body.touch-device.cjk-input-visible .main {
 }
 
 .accessory-btn-arrow {
-  padding: 6px 10px;
+  padding: 0 6px;
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-ink);
+}
+
+.keyboard-accessory-bar [data-action='opt-enter'] {
+  min-width: 58px;
+  padding: 0 6px;
 }
 
 .accessory-btn-arrow:active {
@@ -10964,7 +11020,7 @@ body.touch-device.cjk-input-visible .main {
   margin-left: auto;
   flex: 1 1 0;
   max-width: 100px;
-  padding: 10px 8px;
+  padding: 0 8px;
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-ink);
