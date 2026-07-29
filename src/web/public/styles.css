@@ -10411,6 +10411,27 @@ kbd {
   line-height: 1.7;
 }
 
+/* Double-click/double-tap reply copy feedback. `manipulation` keeps panning and
+   pinch zoom while preventing browser double-tap zoom from stealing the gesture. */
+.response-viewer-body,
+.rv-message {
+  touch-action: manipulation;
+}
+
+.response-viewer-body.rv-copy-feedback,
+.rv-message.rv-copy-feedback {
+  animation: rv-copy-confirm 700ms ease-out;
+}
+
+@keyframes rv-copy-confirm {
+  from {
+    box-shadow: inset 0 0 0 2px rgba(109, 219, 127, 0.8);
+  }
+  to {
+    box-shadow: inset 0 0 0 1px rgba(109, 219, 127, 0);
+  }
+}
+
 .rv-text p,
 .response-viewer-body > p {
   margin: 0 0 0.85em;

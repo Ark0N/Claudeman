@@ -1840,6 +1840,9 @@ class CodemanApp {
   _bindResponseViewerInteractions(body) {
     if (!body || body.dataset.rvBound === '1') return;
     body.dataset.rvBound = '1';
+    body.addEventListener('dblclick', (ev) => {
+      void this._copyResponseViewerChunk(body, ev);
+    });
     body.addEventListener('click', async (ev) => {
       // One-click copy: lift the raw source from the sibling <pre><code>.
       const copyBtn = ev.target.closest('.rv-copy-btn');
@@ -1867,6 +1870,51 @@ class CodemanApp {
       const nowrap = pre.classList.toggle('rv-nowrap');
       wrap.classList.toggle('rv-wrap-nowrap', nowrap);
     });
+  }
+
+  /**
+   * Copy one semantic response chunk. Transcript source is stored directly on
+   * the owning DOM node so Markdown rendering cannot change clipboard content.
+   */
+  async _copyResponseViewerChunk(body, ev) {
+    const target = ev?.target?.closest ? ev.target : ev?.target?.parentElement;
+    if (!body || !target?.closest) return false;
+    if (
+      target.closest(
+        'button, a, input, textarea, select, [contenteditable="true"], [data-no-reply-copy]'
+      )
+    ) {
+      return false;
+    }
+
+    const message = target.closest('.rv-message');
+    const sourceElement = message && body.contains(message) ? message : body;
+    const text = sourceElement._codemanCopyText;
+    if (typeof text !== 'string' || !text) return false;
+
+    ev.preventDefault?.();
+    ev.stopPropagation?.();
+    const ok = await this._copyText(text);
+    if (ok) {
+      sourceElement.classList.remove('rv-copy-feedback');
+      // Restart the confirmation animation on intentional repeated copies.
+      void sourceElement.offsetWidth;
+      sourceElement.classList.add('rv-copy-feedback');
+      clearTimeout(sourceElement._rvCopyFeedbackTimer);
+      sourceElement._rvCopyFeedbackTimer = setTimeout(() => {
+        sourceElement.classList.remove('rv-copy-feedback');
+      }, 700);
+      if (typeof MobileTerminalControls !== 'undefined') {
+        MobileTerminalControls.feedback?.('copy');
+      }
+    }
+    this.showToast(
+      ok
+        ? window.codemanT?.('Copied to clipboard') || 'Copied to clipboard'
+        : 'Copy failed',
+      ok ? 'success' : 'error'
+    );
+    return ok;
   }
 
   /**
@@ -1914,23 +1962,10 @@ class CodemanApp {
       // Source 1: Transcript JSONL (best quality — clean structured text from Claude)
       const res = await fetch(`/api/sessions/${this.activeSessionId}/last-response`);
       const data = (await res.json())?.data ?? {};
-      let lastResponse = data.text || '';
-
-      // Source 2: Terminal buffer fallback — strip ANSI, drop Claude CLI chrome.
-      // Claude + shell only: _cleanTerminalBuffer knows Claude CLI's output, and
-      // shell sessions have no transcript source at all; for TUI modes
-      // (codex/opencode/gemini) it yields repaint garbage, so a clear
-      // placeholder beats a messy screen dump there.
-      const sessionMode = this.sessions.get(this.activeSessionId)?.mode || 'claude';
-      if (!lastResponse && (sessionMode === 'claude' || sessionMode === 'shell')) {
-        const termRes = await fetch(`/api/sessions/${this.activeSessionId}/terminal`);
-        const termData = (await termRes.json())?.data ?? {};
-        if (termData.terminalBuffer) {
-          lastResponse = this._cleanTerminalBuffer(termData.terminalBuffer);
-        }
-      }
+      const lastResponse = data.text || '';
 
       const body = document.getElementById('responseViewerBody');
+      body._codemanCopyText = lastResponse;
       if (lastResponse) {
         body.innerHTML = this._renderMarkdown(lastResponse);
         this._bindResponseViewerInteractions(body);
@@ -1966,6 +2001,7 @@ class CodemanApp {
       const title = document.getElementById('responseViewerTitle');
       if (!body) return;
 
+      body._codemanCopyText = '';
       if (messages.length === 0) {
         body.textContent = 'No conversation history available';
         return;
@@ -1980,6 +2016,7 @@ class CodemanApp {
         const div = document.createElement('div');
         const isUser = msg.role === 'user';
         div.className = 'rv-message ' + (isUser ? 'rv-msg-user' : 'rv-msg-assistant');
+        div._codemanCopyText = typeof msg.text === 'string' ? msg.text : '';
 
         const role = document.createElement('div');
         role.className = 'rv-role ' + (isUser ? 'rv-role-user' : 'rv-role-assistant');
