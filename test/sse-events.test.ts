@@ -100,6 +100,11 @@ describe('SSE Events', () => {
       expect((initEvent?.data as any).scheduledRuns).toBeDefined();
       expect((initEvent?.data as any).respawnStatus).toBeDefined();
       expect((initEvent?.data as any).timestamp).toBeDefined();
+      expect(Number.isSafeInteger((initEvent?.data as any).serverStartedAt)).toBe(true);
+
+      const statusResponse = await fetch(`${baseUrl}/api/status`);
+      const statusBody = await statusResponse.json();
+      expect(statusBody.data.serverStartedAt).toBe((initEvent?.data as any).serverStartedAt);
     });
 
     it('should receive session:created event when session is created', async () => {
@@ -160,6 +165,7 @@ describe('SSE Events', () => {
       expect(body.data).toHaveProperty('scheduledRuns');
       expect(body.data).toHaveProperty('respawnStatus');
       expect(body.data).toHaveProperty('timestamp');
+      expect(Number.isSafeInteger(body.data.serverStartedAt)).toBe(true);
     });
 
     it('should include active sessions', async () => {

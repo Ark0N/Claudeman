@@ -1880,6 +1880,7 @@ export class WebServer extends EventEmitter {
 
     const result = {
       version: APP_VERSION,
+      serverStartedAt: this.serverStartTime,
       sessions: this.getLightSessionsState(),
       scheduledRuns: Array.from(this.scheduledRuns.values()),
       respawnStatus,
