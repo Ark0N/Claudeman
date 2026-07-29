@@ -29,33 +29,45 @@ describe('xterm snapshot/replay (codex tab-switch)', () => {
   it('declares the snapshot-restore flag before selectSession uses it', () => {
     const source = appSource();
     const selectStart = source.indexOf('async selectSession(sessionId, options = {})');
+    const warmDeclaration = source.indexOf(
+      'const canWarmRestore = targetWasReplayable && snapshotWasInMemory;',
+      selectStart
+    );
     const declaration = source.indexOf('let restoredSnapshot = false;', selectStart);
-    const snapshotBranch = source.indexOf("if (snapshot && !sessionIsBusy && session?.mode !== 'shell')", selectStart);
+    const snapshotBranch = source.indexOf(
+      "if (snapshot && (canWarmRestore || !sessionIsBusy) && session?.mode !== 'shell')",
+      selectStart
+    );
     const rewriteDecision = source.indexOf(
       'restoredSnapshot || clearedForBusy || data.terminalBuffer !== cachedBuffer',
       selectStart
     );
 
     expect(selectStart).toBeGreaterThan(-1);
+    expect(warmDeclaration).toBeGreaterThan(selectStart);
+    expect(warmDeclaration).toBeLessThan(snapshotBranch);
     expect(declaration).toBeGreaterThan(selectStart);
     expect(declaration).toBeLessThan(snapshotBranch);
     expect(declaration).toBeLessThan(rewriteDecision);
   });
 
-  it('uses xterm snapshots as first paint but still fetches the canonical terminal frame', () => {
+  it('uses cold xterm snapshots as first paint before fetching the canonical terminal frame', () => {
     const source = appSource();
     const snapshotRestore = source.indexOf('SNAPSHOT_RESTORE:');
     const cacheRestore = source.indexOf('Instant cache restore', snapshotRestore);
     const fetchStart = source.indexOf("FETCH_START'", snapshotRestore);
+    const fetchGate = source.lastIndexOf('if (!usedWarmRestore)', fetchStart);
     const needsRewrite = source.indexOf('const needsRewrite', fetchStart);
     const snapshotBlock = source.slice(snapshotRestore, cacheRestore);
     const postSnapshotRestore = source.slice(snapshotRestore, needsRewrite + 160);
 
     expect(snapshotRestore).toBeGreaterThan(-1);
     expect(cacheRestore).toBeGreaterThan(snapshotRestore);
+    expect(fetchGate).toBeGreaterThan(cacheRestore);
     expect(fetchStart).toBeGreaterThan(cacheRestore);
     expect(needsRewrite).toBeGreaterThan(fetchStart);
-    // Snapshot restore must NOT short-circuit the canonical fetch.
+    // A cold snapshot restore must not finish the load before the guarded
+    // canonical fetch. Valid warm replay is covered by warm-terminal-cache.test.
     expect(snapshotBlock).not.toContain('this._finishBufferLoad();');
     expect(postSnapshotRestore).toContain('restoredSnapshot');
     expect(postSnapshotRestore).toContain('restoredSnapshot || clearedForBusy || data.terminalBuffer !== cachedBuffer');

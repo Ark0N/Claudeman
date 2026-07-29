@@ -60,6 +60,169 @@ const SYNC_WAIT_TIMEOUT_MS = 50;            // Wait timeout for terminal sync
 const STATS_POLLING_INTERVAL_MS = 2000;     // System stats polling
 const TUI_REDRAW_SETTLE_MS = 400;           // Grace for a TUI to redraw after a real resize, before fetching its buffer
 
+/**
+ * Bounded cache for recently viewed terminal sessions.
+ *
+ * The active session never expires. Sessions demoted by a tab switch remain
+ * warm briefly so their live terminal deltas can be applied to the serialized
+ * xterm snapshot instead of downloading and replaying the full terminal tail.
+ */
+class WarmTerminalCache {
+  constructor({ limit = 3, ttlMs = 30_000, maxDeltaChars = 256 * 1024 } = {}) {
+    this.limit = limit;
+    this.ttlMs = ttlMs;
+    this.maxDeltaChars = maxDeltaChars;
+    this.entries = new Map();
+  }
+
+  activate(sessionId, now = Date.now()) {
+    if (!sessionId) return;
+
+    for (const [id, entry] of this.entries) {
+      if (id !== sessionId && entry.expiresAt === null) {
+        entry.replayEligible = entry.subscriptionConfirmed && !entry.canonicalPending;
+        entry.expiresAt = now + this.ttlMs;
+      }
+    }
+
+    const existing = this.entries.get(sessionId);
+    const entry =
+      existing?.valid === true
+        ? existing
+        : {
+            expiresAt: null,
+            chunks: [],
+            canonicalPending: true,
+            deltaChars: 0,
+            generation: 0,
+            replayEligible: false,
+            subscriptionConfirmed: false,
+            valid: true,
+          };
+    entry.expiresAt = null;
+    entry.canonicalPending = true;
+    entry.replayEligible = false;
+    this.entries.delete(sessionId);
+    this.entries.set(sessionId, entry);
+    this._prune(now);
+  }
+
+  append(sessionId, data, now = Date.now()) {
+    this._prune(now);
+    const entry = this.entries.get(sessionId);
+    if (!entry || !entry.valid || typeof data !== 'string' || data.length === 0) {
+      return entry?.valid === true;
+    }
+
+    if (entry.deltaChars + data.length > this.maxDeltaChars) {
+      entry.valid = false;
+      entry.chunks = [];
+      entry.deltaChars = 0;
+      return false;
+    }
+
+    entry.chunks.push(data);
+    entry.deltaChars += data.length;
+    return true;
+  }
+
+  consume(sessionId, now = Date.now()) {
+    this._prune(now);
+    const entry = this.entries.get(sessionId);
+    if (!entry?.valid) return null;
+
+    const data = entry.chunks.join('');
+    entry.chunks = [];
+    entry.deltaChars = 0;
+    return data;
+  }
+
+  isWarm(sessionId, now = Date.now()) {
+    this._prune(now);
+    return this.entries.get(sessionId)?.valid === true;
+  }
+
+  isReplayable(sessionId, now = Date.now()) {
+    this._prune(now);
+    const entry = this.entries.get(sessionId);
+    return entry?.valid === true && entry.replayEligible === true;
+  }
+
+  confirmDelivery(sessionId, now = Date.now()) {
+    this._prune(now);
+    const entry = this.entries.get(sessionId);
+    if (entry?.valid) entry.subscriptionConfirmed = true;
+  }
+
+  generation(sessionId, now = Date.now()) {
+    this._prune(now);
+    return this.entries.get(sessionId)?.generation ?? null;
+  }
+
+  invalidateReplay(sessionId, now = Date.now()) {
+    this._prune(now);
+    const entry = this.entries.get(sessionId);
+    if (!entry) return;
+    entry.generation += 1;
+    entry.canonicalPending = true;
+    entry.replayEligible = false;
+    entry.chunks = [];
+    entry.deltaChars = 0;
+  }
+
+  markCanonical(sessionId, now = Date.now()) {
+    this._prune(now);
+    const entry = this.entries.get(sessionId);
+    if (entry?.valid) entry.canonicalPending = false;
+  }
+
+  confirmSubscriptions(sessionIds, now = Date.now()) {
+    this._prune(now);
+    const confirmed = new Set(sessionIds);
+    for (const [id, entry] of this.entries) {
+      entry.subscriptionConfirmed = confirmed.has(id);
+    }
+  }
+
+  ids(now = Date.now()) {
+    this._prune(now);
+    return Array.from(this.entries.keys());
+  }
+
+  nextExpiryDelay(now = Date.now()) {
+    this._prune(now);
+    let earliest = Infinity;
+    for (const entry of this.entries.values()) {
+      if (entry.expiresAt !== null) earliest = Math.min(earliest, entry.expiresAt);
+    }
+    return Number.isFinite(earliest) ? Math.max(0, earliest - now) : null;
+  }
+
+  remove(sessionId) {
+    this.entries.delete(sessionId);
+  }
+
+  clear() {
+    this.entries.clear();
+  }
+
+  _prune(now) {
+    for (const [id, entry] of this.entries) {
+      if (entry.expiresAt !== null && entry.expiresAt <= now) {
+        this.entries.delete(id);
+      }
+    }
+
+    while (this.entries.size > this.limit) {
+      const oldestInactive = Array.from(this.entries).find(([, entry]) => entry.expiresAt !== null);
+      if (!oldestInactive) break;
+      this.entries.delete(oldestInactive[0]);
+    }
+  }
+}
+
+globalThis.WarmTerminalCache = WarmTerminalCache;
+
 // Z-index base values for layered floating windows
 const ZINDEX_SUBAGENT_BASE = 1000;
 const ZINDEX_PLAN_SUBAGENT_BASE = 1100;
