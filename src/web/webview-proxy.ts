@@ -366,11 +366,11 @@ export function buildDownstreamResponseHeaders(
  * root, where it 404s. That is not a rare shape: it is how most dashboards talk to
  * their own backend, and it presents as the dashboard's own "Failed to fetch".
  *
- * The `Referer`-keyed 404 fallback catches some of these, but deliberately NOT
- * paths under `/api`, `/ws` or `/q` (widening it there would let a request-supplied
- * header skip auth on Codeman's own API). Rewriting inside the iframe removes the
- * whole class instead of trading security for it: the page never emits a
- * root-absolute request in the first place.
+ * The `Referer`-keyed 404 fallback catches some of these, but it is a rescue rather
+ * than a fix (it only fires for a request that already missed every Codeman route,
+ * and only when the browser sends a usable `Referer`). Rewriting inside the iframe
+ * removes the whole class instead: the page never emits a root-absolute request in
+ * the first place.
  *
  * ## Why the DOM sinks are patched too, not just fetch/XHR
  *
@@ -455,6 +455,14 @@ function rwAttr(n,v){
     return A.indexOf(k)===-1?v:rw(v);
   }catch(e){return v;}
 }
+// CSS built at runtime is the one sink NO relay can rescue: a <style> element has
+// no URL of its own, so an opaque-origin document sends an EMPTY Referer with the
+// resulting image request, and the 404 fallback has nothing to key on.
+function rwCss(s){
+  try{
+    return String(s).replace(/url\\(\\s*(['"]?)(\\/(?!\\/)[^'")]*)\\1\\s*\\)/gi,function(m,q,u){return 'url('+q+rw(u)+q+')';});
+  }catch(e){return s;}
+}
 // Each value goes through rw() rather than a blind prefix concat, because unlike
 // the server-side rewriteHtml() this runs on markup that may ALREADY be proxied
 // (a page re-injecting its own outerHTML), and rw() is the idempotent one.
@@ -465,7 +473,8 @@ function rwHtml(s){
       .replace(/(\\s(?:src|href|action|poster|formaction|data)\\s*=\\s*")([^"]*)(")/gi,function(m,a,v,q){return a+rw(v)+q;})
       .replace(/(\\s(?:src|href|action|poster|formaction|data)\\s*=\\s*')([^']*)(')/gi,function(m,a,v,q){return a+rw(v)+q;})
       .replace(/(\\ssrcset\\s*=\\s*")([^"]*)(")/gi,function(m,a,v,q){return a+rwSet(v)+q;})
-      .replace(/(\\ssrcset\\s*=\\s*')([^']*)(')/gi,function(m,a,v,q){return a+rwSet(v)+q;});
+      .replace(/(\\ssrcset\\s*=\\s*')([^']*)(')/gi,function(m,a,v,q){return a+rwSet(v)+q;})
+      .replace(/(<style\\b[^>]*>)([^]*?)(<\\/style>)/gi,function(m,a,b,c){return a+rwCss(b)+c;});
   }catch(e){return s;}
 }
 // Marked with __cmrw so a double injection (a page that re-runs the shim) cannot
@@ -530,12 +539,23 @@ try{
         }
       }catch(e){}
     };
+    var fixStyle=function(el){
+      try{
+        if(!el||el.tagName!=='STYLE')return;
+        var t=el.textContent;
+        if(!t||t.indexOf('url(')===-1)return;
+        var n=rwCss(t);
+        if(n!==t)el.textContent=n;
+      }catch(e){}
+    };
     var scan=function(node){
       try{
-        fix(node);
+        fix(node);fixStyle(node);
         if(node&&node.querySelectorAll){
           var l=node.querySelectorAll('[src],[href],[action],[poster],[data],[srcset],[formaction]');
           for(var i=0;i<l.length;i++)fix(l[i]);
+          var st=node.querySelectorAll('style');
+          for(var j=0;j<st.length;j++)fixStyle(st[j]);
         }
       }catch(e){}
     };

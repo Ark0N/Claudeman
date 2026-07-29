@@ -1,5 +1,19 @@
 # aicodeman
 
+## 1.9.1
+
+### Patch Changes
+
+- Narrow the Run dropdown, and close the last two gaps in web-tab asset rewriting.
+
+  **The Run dropdown was pinned at its full width.** It capped at 300px, and the recent-session rows wanted 326px, so it always rendered at the cap and reached further across the terminal than it needed to. Now 250px, chosen as the width at which a `~/<dir>/<repo>` + timestamp row still fits whole, since identifying a session to resume is what that list is for. Three fixes were needed to make the narrower menu degrade instead of clip: the saved-URL label now has its own element, because `text-overflow` on the row button did nothing (a bare text node inside a flex container becomes an anonymous flex item that ellipsis cannot reach); `.hist-dir` got `min-width: 0`, without which a flex item refuses to shrink below its own text and pushes the date out of the box; and history rows are held to the container width, because the list's `overflow-y: auto` implicitly makes `overflow-x: auto` and let each row size to its own content and scroll sideways. Phone and tablet widths are unchanged, being set separately in `mobile.css`.
+
+  **A dashboard's own `/api/...` assets are relayed again.** The `Referer`-keyed 404 fallback, which rescues a root-absolute asset that no rewrite layer could reach, refused everything under `/api` outright. Dashboards commonly serve their assets from exactly that namespace, so those requests had no rescue at all. The refusal is now precise: the relay runs before the API-shaped 404, and the auth exemption refuses only paths that resolve to a REAL Codeman route, with `/ws/` and `/q/` still refused by prefix.
+
+  Two findings shaped that fence, both from probing Fastify rather than reading it. `hasRoute()` matches the registered PATTERN literally, so `/api/sessions/abc` reports no match against a registered `/api/sessions/:id` and would have granted an unauthenticated exemption on a live session-scoped route; `findRoute()` performs the real lookup and is what the fence uses. And `@fastify/static` is mounted at `/`, so it registers a root catch-all matching every path, which has to count as "no real route" or the fence would refuse every referer-form request and break the rescue that already worked. A root catch-all is distinguishable because it is the only route whose wildcard param comes back equal to the whole request path. The fence fails closed, and both edges are pinned in `test/webview-auth-exemption.test.ts`.
+
+  **`url()` inside runtime CSS is rewritten.** Measuring the fallback against a purpose-built dashboard showed one sink no relay can reach: a `<style>` element built by page script has no URL of its own, so the browser sends an EMPTY `Referer` with the image request it triggers. The injected URL shim now rewrites root-absolute `url()` in `<style>` blocks, both as markup and when a `<style>` node is inserted. Verified in Chromium: a stylesheet-only `/api/hero.png` and a runtime `<style>` `/api/late.png` both load, where both previously failed. The remaining known gap is self-navigation via `location.href`, which cannot be patched because `Location.href` is unforgeable.
+
 ## 1.9.0
 
 ### Minor Changes

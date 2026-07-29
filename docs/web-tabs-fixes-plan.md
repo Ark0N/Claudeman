@@ -134,18 +134,57 @@ Two details that mattered:
 
 ---
 
-## Deliberately NOT done: widening the `/api` referer fallback
+## Follow-up (same day): the `/api` referer fallback, done safely
 
-Considered as defense in depth, and skipped. It would have to change **both**
-gates or it is useless on a password-protected instance, and the auth gate is the
-security-sensitive one: auth runs in `onRequest`, before routing, so it cannot
-tell a real Codeman API route from a 404. Dropping the `/api` fence would let a
-page holding a capability forge a `Referer` and reach Codeman's **real** API
-unauthenticated. Doing it safely means exempting only paths that match no
-registered route (via Fastify's `hasRoute`/`findRoute`), which is a separate
-change deserving its own review and its own cases in
-`test/webview-auth-exemption.test.ts`.
+Originally deferred, then implemented on request. Both gates had to move, and the
+auth one is the security-sensitive half: auth runs in `onRequest`, before routing,
+so it cannot tell a real Codeman API route from a 404, and simply dropping the
+`/api` fence would let a page holding a capability forge a `Referer` and reach
+Codeman's **real** API unauthenticated.
 
-The remaining gap this leaves is narrow and documented in `docs/web-tabs.md`: a
-root-absolute `url(/img.png)` inside a stylesheet injected at runtime. Non-`/api`
-ones are already rescued by the existing referer fallback.
+What shipped:
+
+- `server.ts`: `tryWebviewRefererFallback` is tried **before** the API-shaped 404.
+  Reaching that handler already proves no route matched, and the relay declines
+  unless the `Referer` carries a live capability, so unknown `/api` paths still
+  get the envelope.
+- `middleware/auth.ts`: the `/api/` prefix refusal is replaced by
+  `matchesRegisteredRoute()`, which refuses the exemption for any path that
+  resolves to a real route. `/ws/` and `/q/` stay refused by prefix.
+
+Two findings that decided the implementation, both established by probing Fastify
+rather than by reading its docs:
+
+- **`hasRoute()` is the wrong tool and would have been a hole.** It matches the
+  registered PATTERN literally, so `hasRoute({url: '/api/sessions/abc'})` returns
+  false against a registered `/api/sessions/:id` and would have handed out an
+  exemption on a live, session-scoped API route. `findRoute()` performs the real
+  radix-tree lookup and is what the fence uses.
+- **`@fastify/static` is mounted at `/`, so it registers a root catch-all that
+  matches every path.** A match on it means "heading for the 404 handler", not
+  "real route", and it is distinguishable because a root catch-all is the only
+  route whose `*` param comes back equal to the whole request path. Without that
+  carve-out the fence would have refused every referer-form request and broken the
+  rescue that already worked.
+
+The fence fails closed, and `test/webview-auth-exemption.test.ts` pins both edges
+(a concrete URL onto a parametric API route stays 401; the dashboard's own
+`/api/...` namespace is served).
+
+### And the CSS gap, which the fallback could NOT close
+
+Testing the fallback against a purpose-built upstream showed the runtime-injected
+stylesheet case is unreachable by any relay: a `<style>` element has no URL of its
+own, so Chromium sends an **empty `Referer`** with the image request it triggers
+and there is nothing to key on. Measured directly:
+
+| sink | Referer the browser sends | fixed by |
+| --- | --- | --- |
+| `url()` in a proxied `.css` | the stylesheet's proxied URL | the referer relay |
+| `url()` in a runtime `<style>` | *empty* | `rwCss()` in the shim |
+
+So the shim also rewrites `url()` inside `<style>` blocks, both when they arrive as
+markup and when a `<style>` node is inserted (via the existing MutationObserver).
+
+The only gap left is self-navigation via `location.href = '/x'`, which cannot be
+patched because `Location.href` is unforgeable.

@@ -3546,7 +3546,12 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   padding: 4px;
   z-index: 1000;
   min-width: 190px;
-  max-width: 300px;
+  /* Every long row inside (recent-session paths, saved URL names) ellipsizes, so
+     the cap is a deliberate choice rather than a fit-the-content result: the menu
+     overlays the terminal and does not need to reach across it. 250 rather than a
+     rounder 240 because it is the width at which the common `~/<dir>/<repo>` +
+     timestamp recent-session row still fits whole, which is what that list is for. */
+  max-width: 250px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 .run-mode-menu.active {
@@ -3611,8 +3616,19 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   max-height: 200px;
   overflow-y: auto;
 }
+/* `overflow-y: auto` computes overflow-x to auto as well, which makes this a scroll
+   container and lets a row size itself to its own content. A long path therefore
+   scrolled sideways instead of ellipsizing, and before the menu was narrowed it
+   simply pinned the menu at its max-width. */
+.run-mode-history .run-mode-option {
+  max-width: 100%;
+}
 .run-mode-option .hist-dir {
   flex: 1;
+  /* A flex item's default min-width is auto, so without this the path refuses to
+     shrink below its own text and pushes the date out of the menu instead of
+     ellipsizing. Only visible once the menu is narrow enough to force the choice. */
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -12575,7 +12591,16 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
+}
+/* The label needs its own element: `text-overflow` on the button does nothing,
+   because the button is a flex container and a bare text node in one becomes an
+   anonymous flex item that ellipsis cannot reach. Without this a long dashboard
+   name widens the whole menu instead of truncating. */
+.run-mode-web-name {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .run-mode-row-btn {
   flex: 0 0 auto;

@@ -103,11 +103,16 @@ layers cooperate so a dashboard talking to its own backend just works:
    proxy serves.
 3. A small injected script rebases URLs built at **runtime**, which the first two
    cannot see: `fetch('/api/data')` and `new WebSocket('/live')`, but equally
-   `card.innerHTML = '<img src="/api/hero">'` and `img.src = '/api/slide'`. That
-   second group is why images are covered too. A dashboard that renders its
-   thumbnails from script would otherwise show all its data and none of its
-   pictures, because `<base>` does not apply to root-absolute URLs and the
-   attribute rewriting only ever saw the initial document.
+   `card.innerHTML = '<img src="/api/hero">'`, `img.src = '/api/slide'`, and
+   `url(/img.png)` inside a `<style>` the page injects. That second group is why
+   images are covered too. A dashboard that renders its thumbnails from script
+   would otherwise show all its data and none of its pictures, because `<base>`
+   does not apply to root-absolute URLs and the attribute rewriting only ever saw
+   the initial document.
+4. As a last resort, a request that still lands on Codeman's own root is relayed
+   using its `Referer` to identify the dashboard. This only fires for a request
+   that already missed every Codeman route, and never for one that resolves to a
+   real route, which is what keeps it from being an authentication bypass.
 
 On top of that, the proxy answers those requests with CORS headers. That sounds
 wrong for same-host requests, but a sandboxed iframe has an *opaque* origin, so the
@@ -117,12 +122,10 @@ then every API call fails, which looks like the dashboard being broken.
 
 ## Known limits
 
-- **Exotic loaders.** The three layers above cover normal `fetch`/XHR/WebSocket/
-  EventSource, normal markup, and the DOM sinks a page uses to build markup at
-  runtime. Something that constructs requests by an unusual route can still slip
-  through. Symptom: the page renders but a panel stays empty. The known remaining
-  gap is a root-absolute `url(/img.png)` inside a stylesheet the page injects at
-  runtime; one under `/api` has no fallback and will 404.
+- **Exotic loaders.** The layers above cover normal `fetch`/XHR/WebSocket/
+  EventSource, normal markup, the DOM sinks a page uses to build markup at runtime,
+  and `url()` inside stylesheets. Something that constructs requests by an unusual
+  route can still slip through. Symptom: the page renders but a panel stays empty.
 - **Root-absolute `location` navigation.** A dashboard that navigates itself with
   `location.href = '/login'` escapes the prefix, because `Location.href` is
   unforgeable and cannot be patched the way the other sinks are. A relative

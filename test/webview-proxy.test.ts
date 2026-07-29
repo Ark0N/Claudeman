@@ -589,6 +589,41 @@ describe('runtimeUrlShim DOM sinks', () => {
     expect(imgSrc(dom)).toBe('');
   });
 
+  /**
+   * CSS is the sink no relay can rescue: a <style> element has no URL of its own,
+   * so an opaque-origin document sends an EMPTY Referer with the image request it
+   * triggers, and the 404 fallback has nothing to key on. Verified in Chromium.
+   */
+  it('rewrites root-absolute url() inside a <style> injected as markup', () => {
+    const dom = newDom();
+    dom.window.document.getElementById('box')!.innerHTML = '<style>#hero{background-image:url(/api/hero.png)}</style>';
+    expect(dom.window.document.querySelector('#box style')!.textContent).toBe(
+      `#hero{background-image:url(${PREFIX}api/hero.png)}`
+    );
+  });
+
+  it('rewrites url() in a <style> built with textContent, via the observer', async () => {
+    const dom = newDom();
+    const { document } = dom.window;
+    const style = document.createElement('style');
+    style.textContent = "#late{background-image:url('/api/late.png')}";
+    document.head.appendChild(style);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(style.textContent).toBe(`#late{background-image:url('${PREFIX}api/late.png')}`);
+  });
+
+  it('leaves relative, cross-origin and data: url() alone', () => {
+    const dom = newDom();
+    const css = [
+      'a{background:url(img/rel.png)}',
+      'b{background:url(https://cdn.example/z.png)}',
+      'c{background:url(data:image/gif;base64,AAAA)}',
+      `d{background:url(${PREFIX}api/done.png)}`,
+    ].join('');
+    dom.window.document.getElementById('box')!.innerHTML = `<style>${css}</style>`;
+    expect(dom.window.document.querySelector('#box style')!.textContent).toBe(css);
+  });
+
   it('is idempotent when a value passes through two layers', () => {
     const dom = newDom();
     const img = dom.window.document.createElement('img');
