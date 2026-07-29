@@ -607,12 +607,16 @@ describe('Virtual Keyboard', () => {
 
     it('focuses the terminal helper textarea when the terminal is tapped', async () => {
       await page.evaluate(() => {
+        window.__sentInputs = [];
         app.activeSessionId = 'mobile-focus-visible-input-test';
         app.sessions.set('mobile-focus-visible-input-test', {
           id: 'mobile-focus-visible-input-test',
           mode: 'codex',
           status: 'running',
         });
+        app._sendInputAsync = (_sessionId: string, input: string) => {
+          window.__sentInputs.push(input);
+        };
         app.hideWelcome();
         const settings = app.loadAppSettingsFromStorage();
         settings.cjkInputEnabled = false;
@@ -622,8 +626,12 @@ describe('Virtual Keyboard', () => {
 
       await page.locator('#terminalContainer').tap({ position: { x: 40, y: 40 } });
 
-      const activeClass = await page.evaluate(() => document.activeElement?.className);
-      expect(activeClass).toContain('xterm-helper-textarea');
+      const state = await page.evaluate(() => ({
+        activeClass: document.activeElement?.className,
+        sentInputs: window.__sentInputs,
+      }));
+      expect(state.activeClass).toContain('xterm-helper-textarea');
+      expect(state.sentInputs).toEqual([]);
     });
 
     it('keeps terminal touch drag available for scrollback with the visible textarea enabled', async () => {
