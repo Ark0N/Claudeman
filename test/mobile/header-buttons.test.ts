@@ -35,12 +35,64 @@ describe('Header button visibility (E2E)', () => {
     await page.waitForTimeout(WAIT.PAGE_SETTLE);
     await assertHidden(page, '.btn-icon-header.btn-settings');
     await assertHidden(page, '.btn-icon-header.btn-lifecycle-log');
+    await assertHidden(page, '#instanceShutdownBtn');
+  });
+
+  it('confirms instance shutdown without restoring terminal keyboard focus', async () => {
+    const { page } = await createDevicePage(REPRESENTATIVE_DEVICES['large-tablet'], BASE_URL);
+    await page.waitForTimeout(WAIT.PAGE_SETTLE);
+    await page.route('**/api/system/shutdown', async (route) => {
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          accepted: true,
+          strategy: 'manual',
+          alreadyScheduled: false,
+        }),
+      });
+    });
+
+    await page.evaluate(() => {
+      const textarea = document.createElement('textarea');
+      textarea.className = 'xterm-helper-textarea';
+      document.body.appendChild(textarea);
+    });
+    await page.locator('.xterm-helper-textarea').focus();
+    await page.locator('#instanceShutdownBtn').click();
+    await assertVisible(page, '#instanceShutdownModal');
+
+    const opened = await page.evaluate(() => ({
+      activeId: document.activeElement?.id || '',
+      terminalFocused: document.activeElement?.classList.contains('xterm-helper-textarea') || false,
+      modalZ: Number.parseInt(getComputedStyle(document.getElementById('instanceShutdownModal')!).zIndex, 10),
+      headerZ: Number.parseInt(getComputedStyle(document.querySelector('.header')!).zIndex, 10),
+    }));
+    expect(opened.activeId).toBe('instanceShutdownCancelBtn');
+    expect(opened.terminalFocused).toBe(false);
+    expect(opened.modalZ).toBeGreaterThan(opened.headerZ);
+
+    await page.locator('#instanceShutdownCancelBtn').click();
+    expect(
+      await page.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea') || false)
+    ).toBe(false);
+
+    await page.locator('#instanceShutdownBtn').click();
+    const responsePromise = page.waitForResponse(
+      (response) => response.url().endsWith('/api/system/shutdown') && response.request().method() === 'POST'
+    );
+    await page.locator('#instanceShutdownConfirmBtn').click();
+    expect((await responsePromise).status()).toBe(202);
+    await page.waitForFunction(() =>
+      document.getElementById('instanceShutdownStatus')?.textContent?.includes('Codeman is stopping')
+    );
   });
 
   it('keeps the opt-in attachments button HIDDEN by default on a desktop-class viewport', async () => {
     const { page } = await createDevicePage(REPRESENTATIVE_DEVICES['large-tablet'], BASE_URL);
     await page.waitForTimeout(WAIT.PAGE_SETTLE);
     await assertHidden(page, '#attachmentsHistoryBtn');
+    await assertVisible(page, '#instanceShutdownBtn');
   });
 
   it('shows the attachments button once the setting is enabled', async () => {

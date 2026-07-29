@@ -94,6 +94,12 @@ import {
 } from './respawn-event-wiring.js';
 
 import { reconcileUpdateOnBoot } from './self-update.js';
+import {
+  detectInstanceShutdownStrategy,
+  startSupervisorShutdown,
+  type ResolvedShutdownStrategy,
+} from './instance-shutdown.js';
+import type { InstanceShutdownResult } from './ports/index.js';
 
 // Load version from package.json
 const require = createRequire(import.meta.url);
@@ -303,6 +309,7 @@ export class WebServer extends EventEmitter {
     teamRemoved: (config: unknown) => void;
     taskUpdated: (data: unknown) => void;
   } | null = null;
+  private instanceShutdownResult: Extract<InstanceShutdownResult, { accepted: true }> | null = null;
   constructor(
     port: number = 3000,
     https: boolean = false,
@@ -644,7 +651,58 @@ export class WebServer extends EventEmitter {
         return self._orchestratorLoop;
       },
       initOrchestratorLoop: () => this.initOrchestratorLoop(),
+      // InstanceControlPort
+      requestInstanceShutdown: this.requestInstanceShutdown.bind(this),
     };
+  }
+
+  async requestInstanceShutdown(): Promise<InstanceShutdownResult> {
+    if (this.instanceShutdownResult) {
+      return { ...this.instanceShutdownResult, alreadyScheduled: true };
+    }
+
+    const strategy = detectInstanceShutdownStrategy();
+    if (strategy.kind === 'unsupported') {
+      return { accepted: false, reason: strategy.reason };
+    }
+
+    const result: Extract<InstanceShutdownResult, { accepted: true }> = {
+      accepted: true,
+      strategy: strategy.apiName,
+      alreadyScheduled: false,
+    };
+    this.instanceShutdownResult = result;
+
+    // app.inject()/browser tests exercise the complete request without killing
+    // their shared test process.
+    if (!this.testMode) {
+      const timer = setTimeout(() => this.executeInstanceShutdown(strategy), 250);
+      timer.unref();
+    }
+    return result;
+  }
+
+  private executeInstanceShutdown(strategy: Exclude<ResolvedShutdownStrategy, { kind: 'unsupported' }>): void {
+    if (strategy.kind === 'manual') {
+      void this.stop()
+        .then(() => process.exit(0))
+        .catch((error: unknown) => {
+          this.instanceShutdownResult = null;
+          console.error('[Shutdown] Graceful shutdown failed:', getErrorMessage(error));
+        });
+      return;
+    }
+
+    try {
+      const child = startSupervisorShutdown(strategy);
+      child.once('error', (error) => {
+        this.instanceShutdownResult = null;
+        console.error('[Shutdown] Failed to stop supervisor:', getErrorMessage(error));
+      });
+    } catch (error) {
+      this.instanceShutdownResult = null;
+      console.error('[Shutdown] Failed to start supervisor stop:', getErrorMessage(error));
+    }
   }
 
   /**

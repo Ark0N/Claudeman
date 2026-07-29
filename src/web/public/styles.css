@@ -1216,6 +1216,13 @@ body {
   transform: rotate(45deg);
 }
 
+.btn-icon-header.btn-instance-shutdown:hover,
+.btn-icon-header.btn-instance-shutdown:active {
+  color: var(--red);
+  background: rgba(239, 68, 68, 0.12);
+  transform: none;
+}
+
 /* Admin Panel header button: only shown to admins in multi-user mode (marker
    class removed by admin-ui.js after identity boot). Deliberately BIG and
    prominent: it is the entry point to user/permission management. */
@@ -5435,6 +5442,34 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   color: var(--text-dim);
   font-size: 0.85rem;
   margin-bottom: 0.5rem;
+}
+
+.instance-shutdown-copy p {
+  margin: 0;
+}
+
+.instance-shutdown-note {
+  margin-top: 0.65rem !important;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.instance-shutdown-status {
+  margin-top: 0.75rem !important;
+  color: var(--yellow);
+  font-size: 0.8rem;
+}
+
+.instance-shutdown-status.error {
+  color: var(--red);
+}
+
+.instance-shutdown-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem 1rem;
 }
 
 /* Close Session Options */
@@ -9860,6 +9895,13 @@ kbd {
 }
 .btn-file-viewer.btn-file-viewer--hidden {
   display: none !important;
+}
+
+/* Destructive header actions stay off modern wide-phone touch layouts too. */
+@media (max-width: 480px) {
+  body.touch-device .btn-instance-shutdown {
+    display: none !important;
+  }
 }
 
 /* "Cron" footer-toolbar button — opt-in, hidden by default (enable under App
