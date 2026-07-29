@@ -429,6 +429,13 @@ textarea:focus-visible {
   font-size: 16px !important; /* prevent iOS auto-zoom on focus */
 }
 
+/* Local echo owns IME candidate rendering at the detected CLI prompt.
+ * Keep xterm's composition helper active for input finalization, but suppress
+ * its cursor-anchored duplicate once the prompt-aware overlay is enabled. */
+.touch-device .xterm.codeman-local-echo .composition-view.active {
+  display: none !important;
+}
+
 /* Session tab focus */
 .session-tab:focus-visible {
   outline: 2px solid var(--accent);

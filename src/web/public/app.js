@@ -42,9 +42,11 @@
  * @dependency voice-input.js (VoiceInput, DeepgramProvider)
  * @dependency notification-manager.js (NotificationManager class)
  * @dependency keyboard-accessory.js (KeyboardAccessoryBar, FocusTrap)
+ * @dependency terminal-input-state.js (TerminalInputStateStore)
+ * @dependency terminal-input-controller.js (TerminalInputController)
  * @dependency vendor/xterm.js, vendor/xterm-addon-fit.js, vendor/xterm-addon-webgl.js
  * @dependency vendor/xterm-zerolag-input.iife.js (LocalEchoOverlay)
- * @loadorder 6 of 15 — loaded after keyboard-accessory.js, before terminal-ui.js
+ * @loadorder 6 of 16 — loaded after terminal-input-controller.js, before terminal-ui.js
  */
 
 // Codeman App - Tab-based Terminal UI
@@ -642,6 +644,11 @@ class CodemanApp {
     this.maxReconnectAttempts = 10;
     this.isOnline = navigator.onLine;
 
+    // Editable input is one session-scoped state record, kept separate from
+    // submitted delivery records below. Terminal/CJK modules are view adapters;
+    // this store owns normalization, handoff transitions, and persistence.
+    this._inputState = new TerminalInputStateStore();
+
     // Reliable, durable input delivery (replaces the old best-effort queue).
     // Every input byte is recorded with a stable clientId + a monotonic
     // per-session seq, persisted to localStorage, and only dropped once the
@@ -658,14 +665,25 @@ class CodemanApp {
     this._postDraining = new Set(); // sessionIds with an in-flight POST drainer
     this._persistReliableTimer = null;
     this._reliableAckTimeoutMs = 4000; // unacked WS frame older than this ⇒ socket likely dead
-    this._reliableMaxBytes = 256 * 1024; // cap on the persisted backlog
+    // Match the aggregate editable-draft budget. A supported 512 KiB draft may
+    // expand into several 60 KiB delivery frames, and all of those records must
+    // remain reload-durable until ACKed.
+    this._reliableMaxBytes = 2 * 1024 * 1024;
     this._loadReliableState();
     this._reliableSweepTimer = setInterval(() => this._redeliverSweep(), 2000);
     // Flush the durable queue synchronously when the page is hidden/closed —
     // debounced persistence may have a pending write we mustn't lose on reload.
-    window.addEventListener('pagehide', () => this._persistReliableNow());
+    window.addEventListener('pagehide', () => {
+      this._captureActiveSessionDraft();
+      this._inputState.persistNow();
+      this._persistReliableNow();
+    });
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') this._persistReliableNow();
+      if (document.visibilityState === 'hidden') {
+        this._captureActiveSessionDraft();
+        this._inputState.persistNow();
+        this._persistReliableNow();
+      }
     });
 
     // Local echo overlay — DOM overlay positioned at the visible ❯ prompt
@@ -772,6 +790,27 @@ class CodemanApp {
       this.tabAlerts.set(sessionId, 'idle');
     }
     this.renderSessionTabs();
+  }
+
+  _hasPendingInteractionPrompt(sessionId = this.activeSessionId) {
+    const hooks = sessionId ? this.pendingHooks.get(sessionId) : null;
+    return !!(
+      hooks?.has('permission_prompt') ||
+      hooks?.has('elicitation_dialog')
+    );
+  }
+
+  _handleInteractionPromptControl(sessionId, data) {
+    if (
+      !sessionId ||
+      (!/^[\r\n]+$/.test(data) &&
+        data !== '\x1b' &&
+        data !== '\x03')
+    ) {
+      return;
+    }
+    this.clearPendingHooks(sessionId, 'permission_prompt');
+    this.clearPendingHooks(sessionId, 'elicitation_dialog');
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -2478,7 +2517,27 @@ class CodemanApp {
    */
   _sendInputAsync(sessionId, input, opts) {
     if (!sessionId || !input) return;
-    this._reliableSend(sessionId, input, opts?.useMux === true);
+    const maxFrameLength = 60 * 1024;
+    let offset = 0;
+    while (offset < input.length) {
+      let end = Math.min(input.length, offset + maxFrameLength);
+      if (
+        end < input.length &&
+        end > offset &&
+        input.charCodeAt(end - 1) >= 0xd800 &&
+        input.charCodeAt(end - 1) <= 0xdbff &&
+        input.charCodeAt(end) >= 0xdc00 &&
+        input.charCodeAt(end) <= 0xdfff
+      ) {
+        end -= 1;
+      }
+      this._reliableSend(
+        sessionId,
+        input.slice(offset, end),
+        opts?.useMux === true
+      );
+      offset = end;
+    }
   }
 
   /**
@@ -2595,11 +2654,21 @@ class CodemanApp {
             // rather than retry forever (not a "lost" prompt: the target is gone).
             this._ackDelivery(sessionId, rec.seq);
           } else {
+            // A WebSocket may have reconnected while this POST was in flight.
+            // Make the failed head frame eligible there before later seqs drain.
+            rec.sentAt = 0;
             break; // offline / 5xx — leave queued; sweep + reconnect retry later
           }
         }
       } finally {
         this._postDraining.delete(sessionId);
+        if (
+          this._ws &&
+          this._ws.readyState === WebSocket.OPEN &&
+          this._wsSessionId === sessionId
+        ) {
+          this._drainSession(sessionId);
+        }
       }
     })();
   }
@@ -2620,7 +2689,6 @@ class CodemanApp {
         this._updateConnectionIndicator();
       }
     }
-    this.clearPendingHooks?.(sessionId);
   }
 
   /** Server input-ACK frame ({t:'ia',seq}) over the WebSocket. */
@@ -2630,6 +2698,9 @@ class CodemanApp {
 
   /** Called from ws.onopen — flush everything pending over the fresh socket. */
   _onWsReady(sessionId) {
+    // Let an in-flight POST finish first. Otherwise the reconnect can send the
+    // same seq over WS while the mux-backed HTTP writer is still pending.
+    if (this._postDraining.has(sessionId)) return;
     const list = this._pendingDeliveries.get(sessionId);
     if (list) for (const r of list) r.sentAt = 0; // fresh socket ⇒ re-send all
     this._drainSession(sessionId);
@@ -2775,15 +2846,83 @@ class CodemanApp {
         }));
         for (const r of list) bytes += r.data.length;
       }
-      // Bound the persisted backlog. On extreme overflow keep the seq counters
-      // (so future input stays monotonic and dedup-safe) but skip the payloads —
-      // the in-memory queue still delivers; only cross-reload durability is lost.
+      // Bound the persisted backlog at the same aggregate budget as editable
+      // drafts. Inputs inside the supported draft budget retain every ordered
+      // frame, including bracketed-paste delimiters, across reloads.
       const payload =
         bytes > this._reliableMaxBytes ? { seqs } : { seqs, pending };
       localStorage.setItem('codeman:pendingInput', JSON.stringify(payload));
     } catch {
       /* QuotaExceeded or disabled storage — in-memory delivery is unaffected */
     }
+  }
+
+  // ---- durable editable drafts (localStorage; separate from submitted input) --
+
+  _setSessionDraft(sessionId, candidate, persist = true) {
+    return this._inputState.set(sessionId, candidate, { persist });
+  }
+
+  _captureActiveSessionDraft() {
+    const sessionId = this.activeSessionId;
+    const overlay = this._localEchoOverlay;
+    if (!sessionId || !overlay) return null;
+    const state = overlay.state || {};
+    let cjkText = '';
+    try {
+      cjkText = typeof CjkInput !== 'undefined' ? CjkInput.getPendingText?.() || '' : '';
+    } catch {
+      /* the optional textarea may not be initialized yet */
+    }
+    return this._inputState.capture(sessionId, {
+      pendingText: state.pendingText || '',
+      compositionText: state.compositionText || '',
+      flushedText: state.flushedText || '',
+      cjkText,
+      ptyOwned: this._terminalInputController?.isPtyEditing?.(sessionId) === true,
+    });
+  }
+
+  _restoreSessionDraft(sessionId, render = true, options = {}) {
+    if (
+      options.preserveLiveComposition &&
+      sessionId === this.activeSessionId &&
+      this._localEchoOverlay?.compositionText
+    ) {
+      _crashDiag.log('DRAFT_RESTORE_SKIP_ACTIVE_COMPOSITION');
+      if (render) this._localEchoOverlay.rerender();
+      return this._inputState.has(sessionId);
+    }
+    const draft = this._inputState.get(sessionId) || {
+      pendingText: '',
+      flushedText: '',
+      cjkText: '',
+    };
+    this._terminalInputController?.restorePtyEditing?.(
+      sessionId,
+      draft.ptyOwned === true
+    );
+    if (this._localEchoOverlay?.restoreDraft) {
+      this._localEchoOverlay.restoreDraft(
+        {
+          pendingText: draft.pendingText,
+          flushedText: draft.flushedText,
+        },
+        render
+      );
+    }
+    try {
+      if (typeof CjkInput !== 'undefined') {
+        CjkInput.restorePendingText?.(draft.cjkText);
+      }
+    } catch {
+      /* optional CJK input is unavailable */
+    }
+    return this._inputState.has(sessionId);
+  }
+
+  _clearSessionDraft(sessionId) {
+    this._inputState.clear(sessionId);
   }
 
   // Pure render of the header connection indicator: reads only `this.*` state,
@@ -3904,6 +4043,14 @@ class CodemanApp {
   }
 
   _cleanupPreviousSession(newSessionId) {
+    const outgoingOverlayState = this._localEchoOverlay?.state || null;
+    let outgoingCjkText = '';
+    try {
+      outgoingCjkText = typeof CjkInput !== 'undefined' ? CjkInput.getPendingText?.() || '' : '';
+    } catch {
+      /* optional CJK input is unavailable */
+    }
+
     // Snapshot the OUTGOING session's xterm rendered state (viewport + scrollback +
     // colors/attrs) before the terminal gets cleared/reset. Lets us restore the
     // exact view on switch-back rather than replaying codex's byte stream, which
@@ -4001,32 +4148,34 @@ class CodemanApp {
     // Flush local echo text to PTY before switching tabs.
     // Send as a single batch (no Enter) so it lands in the session's readline
     // input buffer — avoids "old text resent on Enter" and overlay render bugs.
-    // Track flushed length so _render() offsets the overlay correctly even before
-    // the PTY echo arrives in the terminal buffer.
+    // The state store preserves the editable draft while pending bytes are
+    // handed to the outgoing PTY without submitting the prompt.
     if (this.activeSessionId) {
-      const echoText = this._localEchoOverlay?.pendingText || '';
-      // Include buffer-detected flushed text (from Tab completion, etc.)
-      // so it's preserved across tab switches.
-      const existingFlushed = this._localEchoOverlay?.getFlushed()?.count || 0;
-      const existingFlushedText = this._localEchoOverlay?.getFlushed()?.text || '';
-      if (echoText) {
-        this._sendInputAsync(this.activeSessionId, echoText);
-      }
-      const totalOffset = existingFlushed + echoText.length;
-      if (totalOffset > 0) {
-        if (!this._flushedOffsets) this._flushedOffsets = new Map();
-        if (!this._flushedTexts) this._flushedTexts = new Map();
-        this._flushedOffsets.set(this.activeSessionId, totalOffset);
-        this._flushedTexts.set(this.activeSessionId, existingFlushedText + echoText);
+      const handoff = this._inputState.handoff(this.activeSessionId, {
+        pendingText: outgoingOverlayState?.pendingText || '',
+        compositionText: outgoingOverlayState?.compositionText || '',
+        flushedText: outgoingOverlayState?.flushedText || '',
+        cjkText: outgoingCjkText,
+        ptyOwned:
+          this._terminalInputController?.isPtyEditing?.(
+            this.activeSessionId
+          ) === true,
+      });
+      if (handoff.flushText) {
+        this._terminalInputController?.flushDraftText?.(
+          handoff.flushText,
+          this.activeSessionId
+        );
       }
     }
     this._localEchoOverlay?.clear();
+    this._terminalInputController?.reset?.();
     // Prevent _detectBufferText() from picking up Claude's Ink UI text
     // (status bar, model info, etc.) as "user input" on fresh sessions.
     // Only sessions with prior flushed text (from tab-switch-away) need detection.
     // After the user's first Enter, clear() resets _bufferDetectDone = false,
     // re-enabling detection for tab completion and other legitimate cases.
-    if (this._localEchoOverlay && !this._flushedOffsets?.has(newSessionId)) {
+    if (this._localEchoOverlay && !this._inputState.hasFlushed(newSessionId)) {
       this._localEchoOverlay.suppressBufferDetection();
     }
   }
@@ -4063,7 +4212,6 @@ class CodemanApp {
       this._isLoadingBuffer = false;
       this._loadBufferQueue = null;
       this._chunkedWriteGen = (this._chunkedWriteGen || 0) + 1;
-      this.activeSessionId = null;
     }
     // Focus terminal SYNCHRONOUSLY before any await — iOS Safari only honors
     // programmatic focus() within the user-gesture call stack (e.g. tab click).
@@ -4111,17 +4259,11 @@ class CodemanApp {
     }
     this._updateLocalEchoState();
 
-    // Restore flushed offset AND text IMMEDIATELY so backspace/typing work during
-    // the async buffer load.  Without this, the offset is 0 during the
+    // Restore the editable draft IMMEDIATELY so backspace/typing work during
+    // the async buffer load. Without this, the offset is 0 during the
     // fetch() gap: backspace is swallowed, and typing a space covers the
     // canvas text with an opaque overlay showing only the new char.
-    if (this._flushedOffsets?.has(sessionId) && this._localEchoOverlay) {
-      this._localEchoOverlay.setFlushed(
-        this._flushedOffsets.get(sessionId),
-        this._flushedTexts?.get(sessionId) || '',
-        false  // render=false: buffer not loaded yet
-      );
-    }
+    this._restoreSessionDraft(sessionId, false);
 
     // Glow the newly-active tab
     const activeTab = document.querySelector(`.session-tab.active[data-id="${sessionId}"]`);
@@ -4372,12 +4514,12 @@ class CodemanApp {
 
       // Restore flushed offset and text for this session so the overlay positions
       // correctly even before the PTY echo arrives in the terminal buffer.
-      if (this._flushedOffsets?.has(sessionId) && this._localEchoOverlay) {
-        this._localEchoOverlay.setFlushed(
-          this._flushedOffsets.get(sessionId),
-          this._flushedTexts?.get(sessionId) || '',
-          false  // render=false: buffer just loaded, defer to rerender
-        );
+      if (
+        this._restoreSessionDraft(sessionId, false, {
+          preserveLiveComposition: true,
+        }) &&
+        this._localEchoOverlay
+      ) {
         // Trigger render after xterm.js finishes processing the buffer data.
         // terminal.write('', callback) fires the callback after ALL previously
         // queued writes have been parsed — so findPrompt() can find ❯ in the buffer.
@@ -4520,8 +4662,8 @@ class CodemanApp {
     this._xtermSnapshots?.delete(sessionId);
     try { localStorage.removeItem(`codeman-xs-${sessionId}`); } catch {}
 
-    this._flushedOffsets?.delete(sessionId);
-    this._flushedTexts?.delete(sessionId);
+    this._clearSessionDraft(sessionId);
+    this._terminalInputController?.forgetSession?.(sessionId);
     // Drop any durably-queued input for a session that's actually gone (deleted/
     // exited). Not a lost prompt — the target no longer exists. Only reached on
     // real session removal, never on a tab switch.
@@ -4706,6 +4848,9 @@ class CodemanApp {
       this.terminalBufferCache.clear();
       this.terminalLoadStates.clear();
       this._xtermSnapshots?.clear();
+      this._inputState.clearAll({ persist: false });
+      this._inputState.persistNow();
+      this._terminalInputController?.clearPtyEditingSessions?.();
       try {
         for (const k of Object.keys(localStorage)) {
           if (k.startsWith('codeman-xs-')) localStorage.removeItem(k);

@@ -333,20 +333,17 @@ const KeyboardHandler = {
       const accessoryBar = document.querySelector('.keyboard-accessory-bar');
 
       if (isSmallMedium) {
-        // Phones/small tablets: toolbar and accessory bar are position:fixed
-        // via CSS. Use translateY to lift them above the keyboard.
+        // Phones/small tablets: --app-height already constrains the fixed app to
+        // the visual viewport. Translating the bars by keyboard height again
+        // moves them off-screen and leaves dead space below the terminal.
         const toolbar = document.querySelector('.toolbar');
         const main = document.querySelector('.main');
 
-        const layoutHeight = window.innerHeight;
-        const visualBottom = window.visualViewport.offsetTop + window.visualViewport.height;
-        const keyboardOffset = Math.max(0, layoutHeight - visualBottom);
-
         if (toolbar) {
-          toolbar.style.transform = keyboardOffset > 0 ? `translateY(${-keyboardOffset}px)` : '';
+          toolbar.style.transform = '';
         }
         if (accessoryBar) {
-          accessoryBar.style.transform = keyboardOffset > 0 ? `translateY(${-keyboardOffset}px)` : '';
+          accessoryBar.style.transform = '';
         }
         if (main && keyboardHeight > 0) {
           const cjkInputHeight = cjkInput?.classList.contains('cjk-input-visible') ? 44 : 0;
@@ -363,11 +360,8 @@ const KeyboardHandler = {
       // CJK textarea positioning (always position:fixed on touch devices).
       if (cjkInput?.classList.contains('cjk-input-visible') && keyboardHeight > 0) {
         if (isSmallMedium) {
-          // Phones: use translateY like toolbar/accessory bar.
-          const layoutHeight = window.innerHeight;
-          const visualBottom = window.visualViewport.offsetTop + window.visualViewport.height;
-          const keyboardOffset = Math.max(0, layoutHeight - visualBottom);
-          cjkInput.style.transform = keyboardOffset > 0 ? `translateY(${-keyboardOffset}px)` : '';
+          // The fixed app is already constrained to the visual viewport.
+          cjkInput.style.transform = '';
           cjkInput.style.bottom = '';
         } else {
           // iPad: direct bottom = keyboard + accessory bar height.

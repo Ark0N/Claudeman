@@ -687,10 +687,9 @@ html.mobile-init .file-browser-panel {
     bottom: calc(var(--safe-area-bottom) + (100vh - var(--app-height, 100vh)));
   }
 
-  /* When keyboard is visible the JS translateY already accounts for the full
-     distance from the visual-viewport bottom to the layout-viewport bottom
-     (keyboard + Safari bar).  Remove the CSS Safari-bar offset to avoid
-     double-counting, which otherwise creates a visible gap above the keyboard. */
+  /* The fixed app is constrained to --app-height while the keyboard is visible.
+     Remove the normal Safari-bar offset so the bottom controls use that visual
+     viewport directly without creating a second gap above the keyboard. */
   .keyboard-visible.ios-device.safari-browser .toolbar {
     bottom: var(--safe-area-bottom);
   }
@@ -1131,9 +1130,9 @@ html.mobile-init .file-browser-panel {
     display: none !important;
   }
 
-  /* When keyboard is visible, also move accessory bar up */
+  /* Keyboard-visible placement is driven by the constrained app viewport. */
   .keyboard-visible .keyboard-accessory-bar.visible {
-    /* Position is handled by JS transform along with toolbar */
+    /* Kept as an explicit state hook for device-specific overrides. */
   }
 
   /* Paste overlay for iOS clipboard access */

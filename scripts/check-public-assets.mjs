@@ -10,7 +10,7 @@ const publicRoot = resolve(repoRoot, 'src/web/public');
 const prettierBin = resolve(repoRoot, 'node_modules/.bin/prettier');
 const checkedExtensions = new Set(['.js', '.css', '.html', '.json']);
 
-function collectTextAssets(dir) {
+export function collectTextAssets(dir) {
   const files = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const fullPath = join(dir, entry.name);
@@ -25,42 +25,49 @@ function collectTextAssets(dir) {
   return files;
 }
 
-function findNullByte(buffer) {
+export function findNullByte(buffer) {
   for (let i = 0; i < buffer.length; i += 1) {
     if (buffer[i] === 0) return i;
   }
   return -1;
 }
 
-const files = collectTextAssets(publicRoot);
-const failures = [];
+function main() {
+  const files = collectTextAssets(publicRoot);
+  const failures = [];
 
-for (const file of files) {
-  const rel = relative(repoRoot, file);
-  const data = readFileSync(file);
-  const nullByteIndex = findNullByte(data);
-  if (nullByteIndex !== -1) {
-    failures.push(`${rel}: contains literal NUL byte at offset ${nullByteIndex}`);
-  }
+  for (const file of files) {
+    const rel = relative(repoRoot, file);
+    const data = readFileSync(file);
+    const nullByteIndex = findNullByte(data);
+    if (nullByteIndex !== -1) {
+      failures.push(`${rel}: contains literal NUL byte at offset ${nullByteIndex}`);
+    }
 
-  if (extname(file) === '.js') {
-    try {
-      execFileSync(process.execPath, ['--check', file], { cwd: repoRoot, stdio: 'pipe' });
-    } catch (err) {
-      failures.push(`${rel}: JavaScript syntax check failed\n${String(err.stderr || err.message).trim()}`);
+    if (extname(file) === '.js') {
+      try {
+        execFileSync(process.execPath, ['--check', file], { cwd: repoRoot, stdio: 'pipe' });
+      } catch (err) {
+        failures.push(`${rel}: JavaScript syntax check failed\n${String(err.stderr || err.message).trim()}`);
+      }
     }
   }
+
+  try {
+    execFileSync(prettierBin, ['--check', ...files], { cwd: repoRoot, stdio: 'pipe' });
+  } catch (err) {
+    failures.push(`Prettier public asset check failed\n${String(err.stdout || err.stderr || err.message).trim()}`);
+  }
+
+  if (failures.length > 0) {
+    console.error(failures.join('\n\n'));
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log(`Public asset checks passed (${files.length} files).`);
 }
 
-try {
-  execFileSync(prettierBin, ['--check', ...files], { cwd: repoRoot, stdio: 'pipe' });
-} catch (err) {
-  failures.push(`Prettier public asset check failed\n${String(err.stdout || err.stderr || err.message).trim()}`);
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
 }
-
-if (failures.length > 0) {
-  console.error(failures.join('\n\n'));
-  process.exit(1);
-}
-
-console.log(`Public asset checks passed (${files.length} files).`);

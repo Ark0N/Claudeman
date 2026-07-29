@@ -19,6 +19,14 @@ import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 
+const reliableStorage = {
+  length: 0,
+  key: vi.fn(),
+  getItem: vi.fn(),
+  setItem: vi.fn(),
+  removeItem: vi.fn(),
+};
+
 function loadCodemanAppClass() {
   const constants = readFileSync(resolve(import.meta.dirname, '../src/web/public/constants.js'), 'utf8');
   const source = readFileSync(resolve(import.meta.dirname, '../src/web/public/app.js'), 'utf8');
@@ -34,13 +42,7 @@ function loadCodemanAppClass() {
     WebSocket: { OPEN: 1 },
     fetch: (...args: Parameters<typeof fetch>) => global.fetch(...args),
     document: { addEventListener: vi.fn() },
-    localStorage: {
-      length: 0,
-      key: vi.fn(),
-      getItem: vi.fn(),
-      setItem: vi.fn(),
-      removeItem: vi.fn(),
-    },
+    localStorage: reliableStorage,
     window: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
     MobileDetection: {},
   });
@@ -62,7 +64,11 @@ type PostBody = { input: string; seq: number; clientId: string };
 
 type App = {
   _sendInputAsync: (sessionId: string, input: string, opts?: { useMux?: boolean }) => void;
+  _persistReliableNow: () => void;
   _pendingDeliveries: Map<string, Array<{ seq: number; data: string; sentAt: number }>>;
+  _reliableMaxBytes: number;
+  _postDraining: Set<string>;
+  _onWsReady: (sessionId: string) => void;
   _ws: { readyState: number; send: (data: string) => void } | null;
   _wsSessionId: string | null;
   activeSessionId: string | null;
@@ -75,12 +81,12 @@ function makeApp(): App {
   app._pendingDeliveries = new Map();
   app._postDraining = new Set();
   app._persistReliableState = vi.fn();
-  app._persistReliableNow = vi.fn();
   app._updateConnectionIndicator = vi.fn();
   app.clearPendingHooks = vi.fn();
   app.activeSessionId = 'session-1';
   app.isOnline = true;
   app._connectionStatus = 'connected';
+  app._reliableMaxBytes = 2 * 1024 * 1024;
   app._ws = null;
   app._wsSessionId = null;
   return app as unknown as App;
@@ -101,6 +107,26 @@ describe('durable input delivery — send ordering', () => {
     expect(frames.map((f) => f.d)).toEqual(['a', 'b', 'c']);
     expect(frames.map((f) => f.seq)).toEqual([1, 2, 3]);
     expect(frames.every((f) => f.t === 'i' && f.cid === 'c-test')).toBe(true);
+  });
+
+  it('splits a large WebSocket payload without breaking Unicode or order', () => {
+    const app = makeApp();
+    const frames: Frame[] = [];
+    app._ws = {
+      readyState: 1,
+      send: (data: string) => frames.push(JSON.parse(data)),
+    };
+    app._wsSessionId = 'session-1';
+    const input = 'x'.repeat(60 * 1024 - 1) + '😀' + 'y'.repeat(10 * 1024);
+
+    app._sendInputAsync('session-1', input);
+
+    expect(frames).toHaveLength(2);
+    expect(frames.every((frame) => frame.d.length <= 60 * 1024)).toBe(true);
+    expect(frames.map((frame) => frame.d).join('')).toBe(input);
+    expect(frames.map((frame) => frame.seq)).toEqual([1, 2]);
+    expect(frames[0].d.endsWith('\ud83d')).toBe(false);
+    expect(frames[1].d.startsWith('\ude00')).toBe(false);
   });
 
   it('POSTs queued input one frame at a time in seq order when no socket is open', async () => {
@@ -127,6 +153,111 @@ describe('durable input delivery — send ordering', () => {
 
     completions.shift()?.();
     await waitForCalls(calls, 2);
+  });
+
+  it('finishes an in-flight POST before resuming delivery over WebSocket', async () => {
+    const app = makeApp();
+    const calls: PostBody[] = [];
+    const frames: Frame[] = [];
+    let finishPost!: () => void;
+    global.fetch = vi.fn(async (_url, init) => {
+      calls.push(JSON.parse(String(init?.body)) as PostBody);
+      await new Promise<void>((resolve) => {
+        finishPost = resolve;
+      });
+      return new Response('{}', { status: 200 });
+    });
+
+    app._sendInputAsync('session-1', 'a');
+    app._sendInputAsync('session-1', 'b');
+    await waitForCalls(calls, 1);
+
+    app._ws = {
+      readyState: 1,
+      send: (data: string) => frames.push(JSON.parse(data)),
+    };
+    app._wsSessionId = 'session-1';
+    app._onWsReady('session-1');
+    expect(frames).toEqual([]);
+
+    finishPost();
+    await vi.waitFor(() => {
+      expect(frames.map((frame) => frame.d)).toEqual(['b']);
+    });
+  });
+
+  it('retries a failed in-flight POST before later WebSocket frames', async () => {
+    const app = makeApp();
+    const calls: PostBody[] = [];
+    const frames: Frame[] = [];
+    let finishPost!: () => void;
+    global.fetch = vi.fn(async (_url, init) => {
+      calls.push(JSON.parse(String(init?.body)) as PostBody);
+      await new Promise<void>((resolve) => {
+        finishPost = resolve;
+      });
+      return new Response('busy', { status: 503 });
+    });
+
+    app._sendInputAsync('session-1', 'a');
+    app._sendInputAsync('session-1', 'b');
+    await waitForCalls(calls, 1);
+
+    app._ws = {
+      readyState: 1,
+      send: (data: string) => frames.push(JSON.parse(data)),
+    };
+    app._wsSessionId = 'session-1';
+    app._onWsReady('session-1');
+    expect(frames).toEqual([]);
+
+    finishPost();
+    await vi.waitFor(() => {
+      expect(frames.map((frame) => frame.d)).toEqual(['a', 'b']);
+    });
+    expect(frames.map((frame) => frame.seq)).toEqual([1, 2]);
+  });
+
+  it('serializes every large POST frame in order', async () => {
+    const app = makeApp();
+    const calls: PostBody[] = [];
+    global.fetch = vi.fn(async (_url, init) => {
+      calls.push(JSON.parse(String(init?.body)) as PostBody);
+      return new Response('{}', { status: 200 });
+    });
+    const input = 'x'.repeat(60 * 1024 - 1) + '😀' + 'y'.repeat(10 * 1024);
+
+    app._sendInputAsync('session-1', input);
+    await waitForCalls(calls, 2);
+
+    expect(calls).toHaveLength(2);
+    expect(calls.every((call) => call.input.length <= 60 * 1024)).toBe(true);
+    expect(calls.map((call) => call.input).join('')).toBe(input);
+    expect(calls.map((call) => call.seq)).toEqual([1, 2]);
+  });
+
+  it('persists all frames of a supported large paste before ACK', () => {
+    const app = makeApp();
+    app._ws = {
+      readyState: 1,
+      send: vi.fn(),
+    };
+    app._wsSessionId = 'session-1';
+    const input = `\x1b[200~${'x'.repeat(300 * 1024)}\x1b[201~`;
+    reliableStorage.setItem.mockClear();
+
+    app._sendInputAsync('session-1', input);
+    app._persistReliableNow();
+
+    const persistedCall = reliableStorage.setItem.mock.calls.find(([key]) => key === 'codeman:pendingInput');
+    expect(persistedCall).toBeDefined();
+    const persisted = JSON.parse(String(persistedCall?.[1]));
+    const records = persisted.pending['session-1'] as Array<{
+      data: string;
+      seq: number;
+    }>;
+    expect(records.map((record) => record.data).join('')).toBe(input);
+    expect(records.map((record) => record.seq)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
   it('leaves a frame queued (unacked) when HTTP delivery fails', async () => {
