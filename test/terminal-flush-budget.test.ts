@@ -127,12 +127,12 @@ describe('terminal flush budget', () => {
     expect(app._bufferLoadOwner).toBe(null);
   });
 
-  it('does not snap back to bottom during Codex Working redraws right after the user scrolls up', () => {
+  it('does not snap back to bottom during Codex Working redraws while history is scroll-locked', () => {
     const { app } = loadTerminalUiHarness('codex');
     const scrollToBottom = vi.fn();
     app.terminal.scrollToBottom = scrollToBottom;
     app._wasAtBottomBeforeWrite = true;
-    app._lastUserScrollUpAt = 0;
+    app._terminalScrollLocked = true;
     app.pendingWrites.push('\x1b[55;1H\x1b[2m• Working (6s)');
 
     app.flushPendingWrites();
@@ -151,11 +151,29 @@ describe('terminal flush budget', () => {
       buffer.viewportY = line;
     });
     app._wasAtBottomBeforeWrite = true;
-    app._lastUserScrollUpAt = 0;
+    app._terminalScrollLocked = true;
     app.pendingWrites.push('\x1b[55;1H\x1b[2m• Working (6s)');
 
     app.flushPendingWrites();
 
     expect(buffer.viewportY).toBe(40);
+  });
+
+  it('keeps the history lock until a downward scroll actually reaches the bottom', () => {
+    const { app } = loadTerminalUiHarness('codex');
+    const buffer = { viewportY: 40, baseY: 50 };
+    app.terminal.buffer = { active: buffer };
+    app.terminal.scrollLines = vi.fn((lines: number) => {
+      buffer.viewportY = Math.max(0, Math.min(buffer.baseY, buffer.viewportY + lines));
+    });
+
+    app._scrollTerminalLines(-2);
+    expect(app._shouldPreserveTerminalScroll()).toBe(true);
+
+    app._scrollTerminalLines(2);
+    expect(app._shouldPreserveTerminalScroll()).toBe(true);
+
+    app._scrollTerminalLines(20);
+    expect(app._shouldPreserveTerminalScroll()).toBe(false);
   });
 });
