@@ -53,6 +53,7 @@
   // Bound on page keys emitted from one gesture batch, mirroring the SGR tick
   // cap: a fling must not build a backlog that keeps paging after it stops.
   const PAGE_KEY_MAX_PER_BATCH = 3;
+  const TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM = 4;
   // Composer navigation keys as xterm.js encodes user keystrokes: plain and
   // modified arrows (CSI A-D, CSI 1;mA-D, SS3 A-D), Home/End (CSI H/F, SS3
   // H/F, CSI 1~/4~), Insert/Delete/PgUp/PgDn (CSI 2~/3~/5~/6~, optional
@@ -180,6 +181,7 @@
     KEY_PAGE_DOWN,
     PAGE_KEY_SCREEN_FRACTION,
     PAGE_KEY_MAX_PER_BATCH,
+    TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM,
   };
   global.CODEMAN_XTERM_THEMES = CODEMAN_XTERM_THEMES;
   global.codemanCurrentXtermTheme = currentXtermTheme;
@@ -3429,10 +3431,20 @@ Object.assign(CodemanApp.prototype, {
     if (promptRow >= 0) {
       const inputEnd = cursorRow >= promptRow ? cursorRow : promptRow;
       if (tappedRow >= promptRow && tappedRow <= inputEnd) return 'input';
-    } else if (tappedRow === cursorRow && cursorRow >= rows - 3) {
-      // During redraws a CLI can temporarily omit its prompt marker. Keep the
-      // live cursor row usable without turning arbitrary transcript rows into
-      // keyboard targets.
+    } else if (
+      tappedRow === cursorRow ||
+      tappedRow >=
+        Math.max(
+          0,
+          rows -
+            window.CodemanTerminalInput
+              .TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM
+        )
+    ) {
+      // During redraws a CLI can temporarily omit its prompt marker or place
+      // the cursor above a status footer. Keep the live cursor and a stable
+      // lower-screen focus band usable without turning transcript rows above
+      // that band into keyboard targets.
       return 'input';
     }
 
