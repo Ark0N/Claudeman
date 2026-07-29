@@ -464,6 +464,7 @@ Object.assign(CodemanApp.prototype, {
     modal.querySelectorAll('.modal-tabs .modal-tab-btn').forEach(btn => {
       btn.onclick = () => this.switchSettingsTab(btn.dataset.tab);
     });
+    this._prepareMobileSettingsDescriptions();
     modal.classList.add('active');
 
     // Activate focus trap
@@ -486,7 +487,178 @@ Object.assign(CodemanApp.prototype, {
     if (tabName === 'settings-shortcuts') this.renderShortcutSettingsList?.();
   },
 
+  _ensureSettingsDescriptionLayer() {
+    let layer = document.getElementById('settingsDescriptionLayer');
+    if (layer) return layer;
+
+    const modal = document.getElementById('appSettingsModal');
+    if (!modal) return null;
+
+    layer = document.createElement('div');
+    layer.id = 'settingsDescriptionLayer';
+    layer.className = 'settings-description-layer';
+    layer.hidden = true;
+    layer.setAttribute('aria-hidden', 'true');
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'settings-description-backdrop';
+    backdrop.setAttribute('aria-hidden', 'true');
+
+    const panel = document.createElement('div');
+    panel.className = 'settings-description-panel';
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-modal', 'true');
+    panel.setAttribute('aria-labelledby', 'settingsDescriptionTitle');
+    panel.setAttribute('aria-describedby', 'settingsDescriptionText');
+
+    const header = document.createElement('div');
+    header.className = 'settings-description-header';
+
+    const title = document.createElement('h4');
+    title.id = 'settingsDescriptionTitle';
+
+    const close = document.createElement('button');
+    close.id = 'settingsDescriptionClose';
+    close.className = 'settings-description-close';
+    close.type = 'button';
+    close.setAttribute('aria-label', 'Close setting description');
+    close.textContent = '\u00d7';
+
+    const text = document.createElement('p');
+    text.id = 'settingsDescriptionText';
+    text.className = 'settings-description-text';
+
+    header.append(title, close);
+    panel.append(header, text);
+    layer.append(backdrop, panel);
+    modal.appendChild(layer);
+
+    backdrop.addEventListener('click', () => this.closeSettingsDescription());
+    close.addEventListener('click', () => this.closeSettingsDescription());
+    layer.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.closeSettingsDescription();
+    });
+
+    return layer;
+  },
+
+  _prepareMobileSettingsDescriptions() {
+    const modal = document.getElementById('appSettingsModal');
+    if (!modal) return;
+
+    const isPhone =
+      typeof MobileDetection !== 'undefined' &&
+      MobileDetection.getDeviceType?.() === 'mobile';
+    const items = modal.querySelectorAll('.settings-item[title]');
+
+    for (const item of items) {
+      const trigger = item.querySelector('.settings-item-text') || item.querySelector('.settings-item-label');
+      item.classList.toggle('settings-item-has-description', isPhone);
+      if (!trigger) continue;
+
+      trigger.classList.toggle('settings-description-trigger', isPhone);
+      if (isPhone) {
+        trigger.setAttribute('role', 'button');
+        trigger.setAttribute('tabindex', '0');
+        trigger.setAttribute('aria-haspopup', 'dialog');
+        trigger.setAttribute('aria-controls', 'settingsDescriptionLayer');
+      } else {
+        trigger.removeAttribute('role');
+        trigger.removeAttribute('tabindex');
+        trigger.removeAttribute('aria-haspopup');
+        trigger.removeAttribute('aria-controls');
+      }
+    }
+
+    if (!isPhone) {
+      this.closeSettingsDescription();
+      return;
+    }
+
+    this._ensureSettingsDescriptionLayer();
+    if (this._settingsDescriptionHandlersReady) return;
+    this._settingsDescriptionHandlersReady = true;
+
+    modal.addEventListener('click', (event) => {
+      const item = event.target.closest?.('.settings-item.settings-item-has-description');
+      if (!item) return;
+      if (event.target.closest?.('input, select, textarea, button, a, label, .settings-item-actions')) return;
+      const trigger = item.querySelector('.settings-description-trigger');
+      this.openSettingsDescription(item, trigger);
+    });
+
+    modal.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      const trigger = event.target.closest?.('.settings-description-trigger');
+      if (!trigger) return;
+      const item = trigger.closest('.settings-item.settings-item-has-description');
+      if (!item) return;
+      event.preventDefault();
+      this.openSettingsDescription(item, trigger);
+    });
+  },
+
+  openSettingsDescription(item, trigger) {
+    const description = item?.getAttribute?.('title')?.trim();
+    if (!description) return;
+
+    const layer = this._ensureSettingsDescriptionLayer();
+    const modal = document.getElementById('appSettingsModal');
+    const modalContent = modal?.querySelector('.modal-content');
+    if (!layer || !modal || !modalContent) return;
+
+    const label = item.querySelector('.settings-item-label')?.textContent?.trim() || 'Setting';
+    document.getElementById('settingsDescriptionTitle').textContent = label;
+    document.getElementById('settingsDescriptionText').textContent = description;
+
+    try {
+      trigger?.focus?.({ preventScroll: true });
+    } catch {
+      trigger?.focus?.();
+    }
+
+    modalContent.inert = true;
+    modalContent.setAttribute('aria-hidden', 'true');
+    layer.hidden = false;
+    layer.setAttribute('aria-hidden', 'false');
+
+    const parentTrap = this.activeFocusTrap;
+    this._settingsDescriptionParentTrap = parentTrap || null;
+    if (parentTrap) {
+      parentTrap.element.removeEventListener('keydown', parentTrap.boundHandleKeydown);
+    }
+    this._settingsDescriptionFocusTrap = new FocusTrap(layer);
+    this._settingsDescriptionFocusTrap.activate();
+  },
+
+  closeSettingsDescription() {
+    const layer = document.getElementById('settingsDescriptionLayer');
+    if (!layer || layer.hidden) return;
+
+    const modalContent = document.getElementById('appSettingsModal')?.querySelector('.modal-content');
+    if (modalContent) {
+      modalContent.inert = false;
+      modalContent.removeAttribute('aria-hidden');
+    }
+    layer.hidden = true;
+    layer.setAttribute('aria-hidden', 'true');
+
+    const descriptionTrap = this._settingsDescriptionFocusTrap;
+    this._settingsDescriptionFocusTrap = null;
+    descriptionTrap?.deactivate();
+
+    const parentTrap = this._settingsDescriptionParentTrap;
+    this._settingsDescriptionParentTrap = null;
+    if (parentTrap && parentTrap === this.activeFocusTrap) {
+      parentTrap.element.addEventListener('keydown', parentTrap.boundHandleKeydown);
+    }
+  },
+
   closeAppSettings() {
+    this.closeSettingsDescription();
     document.getElementById('appSettingsModal').classList.remove('active');
 
     // Deactivate focus trap and restore focus

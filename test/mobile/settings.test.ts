@@ -182,6 +182,50 @@ describe('Settings Modal', () => {
       }
     });
 
+    it('opens the full option description without toggling the setting', async () => {
+      await openSettingsModal();
+
+      const item = page.locator('#appSettingsTerminalWheelLocal').locator('..').locator('..');
+      const trigger = item.locator('.settings-item-text');
+      const checkbox = page.locator('#appSettingsTerminalWheelLocal');
+      const checkedBefore = await checkbox.isChecked();
+
+      await trigger.click();
+      await assertVisible(page, '#settingsDescriptionLayer');
+
+      const description = await page.locator('#settingsDescriptionText').textContent();
+      const accessibility = await trigger.evaluate((element) => ({
+        role: element.getAttribute('role'),
+        tabIndex: element.getAttribute('tabindex'),
+        hasPopup: element.getAttribute('aria-haspopup'),
+        controls: element.getAttribute('aria-controls'),
+      }));
+
+      expect(await page.locator('#settingsDescriptionTitle').textContent()).toBe('Wheel Scrolls Local History');
+      expect(description).toContain("Scroll the terminal's own local scrollback");
+      expect(await checkbox.isChecked()).toBe(checkedBefore);
+      expect(accessibility).toEqual({
+        role: 'button',
+        tabIndex: '0',
+        hasPopup: 'dialog',
+        controls: 'settingsDescriptionLayer',
+      });
+
+      await page.locator('.settings-description-backdrop').click({ position: { x: 8, y: 8 } });
+      await assertHidden(page, '#settingsDescriptionLayer');
+
+      await item.locator('.switch').click();
+      expect(await checkbox.isChecked()).toBe(!checkedBefore);
+      await assertHidden(page, '#settingsDescriptionLayer');
+
+      await page.locator('.modal-tab-btn[data-tab="settings-notifications"]').click();
+      await page.locator('#settings-notifications .settings-grid-3col .settings-item-label').first().click();
+      await assertVisible(page, '#settingsDescriptionLayer');
+      expect(await page.locator('#settingsDescriptionTitle').textContent()).toBe('Critical');
+      expect(await page.locator('#settingsDescriptionText').textContent()).toBe('Errors, crashes, agent failures');
+      await page.locator('#settingsDescriptionClose').click();
+    });
+
     it('modal body adjusts height when keyboard visible', async () => {
       await openSettingsModal();
       const modalBody = page.locator(SELECTORS.SETTINGS_MODAL_BODY).first();
