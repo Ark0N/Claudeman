@@ -32,10 +32,17 @@ import { sanitizeAttachmentHistoryItem } from '../../session-attachment-history.
 import { isBlockedAttachmentPath, loadAttachmentGuardConfig } from '../../config/attachment-guard.js';
 import { isMultiUserMode, userSpacePath } from '../../config/multiuser.js';
 import {
+  getGitCommitDetails,
+  getGitDiffDetail,
+  getGitRepositoryOverview,
+  resolveRepositoryBrowseRoot,
+} from '../../git-repository-browser.js';
+import {
   CASES_DIR,
   canAccessOwned,
   findSessionOrFail,
   getAuthUser,
+  isWorkingDirAllowed,
   parseBody,
   validateSessionFilePath,
 } from '../route-helpers.js';
@@ -453,6 +460,30 @@ function appendDownloadFlag(url: string): string {
   return `${url}${url.includes('?') ? '&' : '?'}download=true`;
 }
 
+async function resolveFileBrowserWorkingDir(
+  workingDir: string,
+  scope: string | undefined,
+  req: FastifyRequest
+): Promise<string> {
+  let resolvedRoot = workingDir;
+  if (scope) {
+    const repositoryRoot = await resolveRepositoryBrowseRoot(workingDir, scope);
+    if (repositoryRoot) {
+      resolvedRoot = repositoryRoot;
+    } else if (scope !== 'current') {
+      throw new Error('Repository worktree scope not found');
+    }
+  }
+  if (!isWorkingDirAllowed(getAuthUser(req), resolvedRoot)) {
+    throw new Error('Repository worktree scope is outside the allowed workspace');
+  }
+  return resolvedRoot;
+}
+
+function appendFileBrowserScope(url: string, scope?: string): string {
+  return scope ? `${url}${url.includes('?') ? '&' : '?'}scope=${encodeURIComponent(scope)}` : url;
+}
+
 function getSessionAttachmentHistory(
   ctx: SessionPort & ConfigPort,
   sessionId: string,
@@ -737,15 +768,91 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     await serveRawFile(reply, resolvedPath, fileName, extension);
   });
 
+  // Repository/worktree overview for the File Viewer. Git commands run against
+  // a server-resolved session path; clients select only opaque worktree ids.
+  app.get('/api/sessions/:id/repository', async (req) => {
+    const { id } = req.params as { id: string };
+    const { scope } = req.query as { scope?: string };
+    const session = findSessionOrFail(ctx, id, req);
+    try {
+      const selectedRoot = await resolveFileBrowserWorkingDir(session.workingDir, scope, req);
+      const user = getAuthUser(req);
+      const overview = await getGitRepositoryOverview(session.workingDir, scope);
+      overview.worktrees = overview.worktrees.filter((worktree) => isWorkingDirAllowed(user, worktree.path));
+      if (overview.repositoryRoot && !isWorkingDirAllowed(user, overview.repositoryRoot)) {
+        overview.repositoryRoot = selectedRoot;
+      }
+      return {
+        success: true,
+        data: overview,
+      };
+    } catch (err) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, getErrorMessage(err));
+    }
+  });
+
+  app.get('/api/sessions/:id/repository/commit', async (req) => {
+    const { id } = req.params as { id: string };
+    const { scope, commit } = req.query as { scope?: string; commit?: string };
+    const session = findSessionOrFail(ctx, id, req);
+    if (!commit) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing commit parameter');
+    }
+    try {
+      const selectedRoot = await resolveFileBrowserWorkingDir(session.workingDir, scope, req);
+      return {
+        success: true,
+        data: await getGitCommitDetails(selectedRoot, 'current', commit),
+      };
+    } catch (err) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, getErrorMessage(err));
+    }
+  });
+
+  app.get('/api/sessions/:id/repository/diff', async (req) => {
+    const { id } = req.params as { id: string };
+    const {
+      scope,
+      path: filePath,
+      commit,
+    } = req.query as {
+      scope?: string;
+      path?: string;
+      commit?: string;
+    };
+    const session = findSessionOrFail(ctx, id, req);
+    if (!filePath) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter');
+    }
+    try {
+      const selectedRoot = await resolveFileBrowserWorkingDir(session.workingDir, scope, req);
+      return {
+        success: true,
+        data: await getGitDiffDetail(selectedRoot, 'current', filePath, commit),
+      };
+    } catch (err) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, getErrorMessage(err));
+    }
+  });
+
   // File tree listing
   app.get('/api/sessions/:id/files', async (req) => {
     const { id } = req.params as { id: string };
-    const { depth, showHidden } = req.query as { depth?: string; showHidden?: string };
+    const { depth, showHidden, scope } = req.query as {
+      depth?: string;
+      showHidden?: string;
+      scope?: string;
+    };
     const session = findSessionOrFail(ctx, id, req);
 
     const maxDepth = Math.min(parseInt(depth || '5', 10), 10);
     const includeHidden = showHidden === 'true';
-    const workingDir = session.workingDir;
+    let workingDir: string;
+    try {
+      workingDir = await resolveFileBrowserWorkingDir(session.workingDir, scope, req);
+    } catch (err) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, getErrorMessage(err));
+    }
 
     // Default excludes - large/generated directories
     const excludeDirs = new Set([
@@ -864,15 +971,33 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // Get file content for preview (File Browser)
   app.get('/api/sessions/:id/file-content', async (req) => {
     const { id } = req.params as { id: string };
-    const { path: filePath, lines, raw } = req.query as { path?: string; lines?: string; raw?: string };
+    const {
+      path: filePath,
+      lines,
+      raw,
+      scope,
+    } = req.query as {
+      path?: string;
+      lines?: string;
+      raw?: string;
+      scope?: string;
+    };
     const session = findSessionOrFail(ctx, id, req);
 
     if (!filePath) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter');
     }
 
-    // Validate path is within working directory (security: resolve symlinks to prevent traversal)
-    const validated = validateSessionFilePath(session.workingDir, filePath);
+    let workingDir: string;
+    try {
+      workingDir = await resolveFileBrowserWorkingDir(session.workingDir, scope, req);
+    } catch (err) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, getErrorMessage(err));
+    }
+
+    // Validate path is within the server-resolved workspace/worktree root
+    // (security: resolve symlinks to prevent traversal).
+    const validated = validateSessionFilePath(workingDir, filePath);
     if (!validated) {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found');
     }
@@ -936,7 +1061,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
             ? 'audio'
             : null;
 
-      const fileRawUrl = `/api/sessions/${id}/file-raw?path=${encodeURIComponent(filePath)}`;
+      const fileRawUrl = appendFileBrowserScope(
+        `/api/sessions/${id}/file-raw?path=${encodeURIComponent(filePath)}`,
+        scope
+      );
 
       if (raw === 'true' || mediaType || otherBinaryExts.has(ext)) {
         // Return metadata for media/binary files (no text body)
@@ -1017,7 +1145,15 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // Serve raw file content (for images/binary files)
   app.get('/api/sessions/:id/file-raw', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { path: filePath, download } = req.query as { path?: string; download?: string };
+    const {
+      path: filePath,
+      download,
+      scope,
+    } = req.query as {
+      path?: string;
+      download?: string;
+      scope?: string;
+    };
     const session = findSessionOrFail(ctx, id, req);
 
     if (!filePath) {
@@ -1025,8 +1161,17 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       return;
     }
 
-    // Validate path is within working directory (security: resolve symlinks to prevent traversal)
-    const validated = validateSessionFilePath(session.workingDir, filePath);
+    let workingDir: string;
+    try {
+      workingDir = await resolveFileBrowserWorkingDir(session.workingDir, scope, req);
+    } catch (err) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, getErrorMessage(err)));
+      return;
+    }
+
+    // Validate path is within the server-resolved workspace/worktree root
+    // (security: resolve symlinks to prevent traversal).
+    const validated = validateSessionFilePath(workingDir, filePath);
     if (!validated) {
       reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
       return;
@@ -1253,12 +1398,20 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // are converted to PDF via LibreOffice; PDF/PNG/text preview through file-raw.
   app.get('/api/sessions/:id/file-preview', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { path: filePath } = req.query as { path?: string };
-    const workingDir = getKnownSessionWorkingDir(ctx, id, reply, req);
-    if (!workingDir) return;
+    const { path: filePath, scope } = req.query as { path?: string; scope?: string };
+    const sessionWorkingDir = getKnownSessionWorkingDir(ctx, id, reply, req);
+    if (!sessionWorkingDir) return;
 
     if (!filePath) {
       reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
+      return;
+    }
+
+    let workingDir: string;
+    try {
+      workingDir = await resolveFileBrowserWorkingDir(sessionWorkingDir, scope, req);
+    } catch (err) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, getErrorMessage(err)));
       return;
     }
 
@@ -1271,7 +1424,9 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     const ext = filePath.split('.').pop()?.toLowerCase() || '';
 
     if (ext !== 'docx' && ext !== 'pptx') {
-      reply.redirect(`/api/sessions/${id}/file-raw?path=${encodeURIComponent(filePath)}`);
+      reply.redirect(
+        appendFileBrowserScope(`/api/sessions/${id}/file-raw?path=${encodeURIComponent(filePath)}`, scope)
+      );
       return;
     }
 
@@ -1281,12 +1436,20 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // Serve a first-page thumbnail for a workspace-relative path.
   app.get('/api/sessions/:id/file-thumbnail', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { path: filePath } = req.query as { path?: string };
-    const workingDir = getKnownSessionWorkingDir(ctx, id, reply, req);
-    if (!workingDir) return;
+    const { path: filePath, scope } = req.query as { path?: string; scope?: string };
+    const sessionWorkingDir = getKnownSessionWorkingDir(ctx, id, reply, req);
+    if (!sessionWorkingDir) return;
 
     if (!filePath) {
       reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
+      return;
+    }
+
+    let workingDir: string;
+    try {
+      workingDir = await resolveFileBrowserWorkingDir(sessionWorkingDir, scope, req);
+    } catch (err) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, getErrorMessage(err)));
       return;
     }
 
