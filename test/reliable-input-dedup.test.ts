@@ -1,10 +1,10 @@
 /**
- * @fileoverview Exactly-once input delivery — Session.shouldApplyInput dedup.
+ * @fileoverview Exactly-once input delivery — Session delivery bookkeeping.
  *
  * Guards the server half of the reliable-input-delivery feature: the web client
  * tags each input frame with a stable clientId + a monotonic per-session seq and
  * redelivers anything it hasn't seen ACKed (a half-open socket silently drops
- * frames on a flaky link). shouldApplyInput must apply each (clientId, seq)
+ * frames on a flaky link). The Session delivery API must apply each (clientId, seq)
  * exactly once so a redelivery can never type the prompt twice — while still
  * applying untagged input (curl/legacy) unconditionally at the call sites.
  *
@@ -69,5 +69,20 @@ describe('Session.shouldApplyInput (exactly-once input dedup)', () => {
     expect(s.shouldApplyInput('recent', 1)).toBe(true);
     expect(s.shouldApplyInput('recent', 1)).toBe(false);
     expect(s.shouldApplyInput('recent', 2)).toBe(true);
+  });
+
+  it('keeps an in-flight frame retryable until its writer accepts it', () => {
+    const s = makeSession();
+
+    expect(s.reserveInputDelivery('client', 1)).toBe('reserved');
+    expect(s.reserveInputDelivery('client', 1)).toBe('pending');
+    expect(s.reserveInputDelivery('client', 2)).toBe('pending');
+
+    s.completeInputDelivery('client', 1, false);
+    expect(s.reserveInputDelivery('client', 1)).toBe('reserved');
+    s.completeInputDelivery('client', 1, true);
+
+    expect(s.reserveInputDelivery('client', 1)).toBe('applied');
+    expect(s.reserveInputDelivery('client', 2)).toBe('reserved');
   });
 });

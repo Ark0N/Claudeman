@@ -485,6 +485,128 @@ describe('session-routes', () => {
       expect(body.success).toBe(true);
     });
 
+    it('waits for mux delivery before returning the reliable-input ACK', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const session = harness.ctx.sessions.get(harness.ctx._sessionId) as any;
+      let releaseMux!: (accepted: boolean) => void;
+      const writeViaMux = vi.spyOn(session, 'writeViaMux').mockImplementation(
+        () =>
+          new Promise<boolean>((resolve) => {
+            releaseMux = resolve;
+          })
+      );
+      let settled = false;
+
+      const responsePromise = harness.app
+        .inject({
+          method: 'POST',
+          url: `/api/sessions/${harness.ctx._sessionId}/input`,
+          payload: {
+            input: 'prompt',
+            useMux: true,
+            seq: 1,
+            clientId: 'mux-wait-client',
+          },
+        })
+        .then((response) => {
+          settled = true;
+          return response;
+        });
+
+      await vi.waitFor(() => {
+        expect(writeViaMux).toHaveBeenCalledOnce();
+      });
+      expect(settled).toBe(false);
+
+      releaseMux(true);
+      const response = await responsePromise;
+      expect(response.statusCode).toBe(200);
+    });
+
+    it('keeps concurrent retries behind an in-flight mux delivery', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const session = harness.ctx.sessions.get(harness.ctx._sessionId) as any;
+      let releaseMux!: (accepted: boolean) => void;
+      const writeViaMux = vi.spyOn(session, 'writeViaMux').mockImplementation(
+        () =>
+          new Promise<boolean>((resolve) => {
+            releaseMux = resolve;
+          })
+      );
+      const payload = {
+        input: 'prompt',
+        useMux: true,
+        seq: 1,
+        clientId: 'overlap-client',
+      };
+      const first = harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/input`,
+        payload,
+      });
+      await vi.waitFor(() => {
+        expect(writeViaMux).toHaveBeenCalledOnce();
+      });
+
+      const overlap = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/input`,
+        payload,
+      });
+      expect(overlap.statusCode).toBe(409);
+      expect(writeViaMux).toHaveBeenCalledOnce();
+
+      releaseMux(true);
+      expect((await first).statusCode).toBe(200);
+
+      const duplicate = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/input`,
+        payload,
+      });
+      expect(duplicate.statusCode).toBe(200);
+      expect(writeViaMux).toHaveBeenCalledOnce();
+    });
+
+    it('keeps a tagged frame retryable until a PTY accepts it', async () => {
+      const url = `/api/sessions/${harness.ctx._sessionId}/input`;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const session = harness.ctx.sessions.get(harness.ctx._sessionId) as any;
+      session.writeBuffer.length = 0;
+      const write = vi
+        .spyOn(session, 'write')
+        .mockReturnValueOnce(false)
+        .mockImplementation((data: string) => {
+          session.writeBuffer.push(data);
+          return true;
+        });
+      const payload = {
+        input: 'restored draft',
+        seq: 1,
+        clientId: 'attach-race-client',
+      };
+
+      const unavailable = await harness.app.inject({
+        method: 'POST',
+        url,
+        payload,
+      });
+
+      expect(unavailable.statusCode).toBe(409);
+      expect(session.hasAppliedInput(payload.clientId, payload.seq)).toBe(false);
+
+      const retry = await harness.app.inject({
+        method: 'POST',
+        url,
+        payload,
+      });
+
+      expect(retry.statusCode).toBe(200);
+      expect(write).toHaveBeenCalledTimes(2);
+      expect(session.writeBuffer).toEqual(['restored draft']);
+      expect(session.hasAppliedInput(payload.clientId, payload.seq)).toBe(true);
+    });
+
     it('returns error for unknown session', async () => {
       const res = await harness.app.inject({
         method: 'POST',

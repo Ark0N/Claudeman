@@ -208,6 +208,51 @@ describe('ws-routes', () => {
       }
     });
 
+    it('does not ACK a tagged frame until the PTY accepts it', async () => {
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
+      const received: Array<{ t: string; seq?: number }> = [];
+      const onMessage = (raw: WebSocket.RawData) => {
+        received.push(JSON.parse(String(raw)));
+      };
+      ws.on('message', onMessage);
+      try {
+        const session = ctx._session;
+        const write = vi
+          .spyOn(session, 'write')
+          .mockReturnValueOnce(false)
+          .mockImplementation((data: string) => {
+            session.writeBuffer.push(data);
+            return true;
+          });
+        const frame = {
+          t: 'i',
+          d: 'restored draft',
+          cid: 'attach-race-client',
+          seq: 1,
+        };
+
+        ws.send(JSON.stringify(frame));
+        await vi.waitFor(() => {
+          expect(write).toHaveBeenCalledTimes(1);
+        });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(received).toEqual([]);
+        expect(session.hasAppliedInput(frame.cid, frame.seq)).toBe(false);
+
+        ws.send(JSON.stringify(frame));
+        await vi.waitFor(() => {
+          expect(received).toContainEqual({ t: 'ia', seq: 1 });
+        });
+
+        expect(write).toHaveBeenCalledTimes(2);
+        expect(session.writeBuffer).toEqual(['restored draft']);
+        expect(session.hasAppliedInput(frame.cid, frame.seq)).toBe(true);
+      } finally {
+        ws.off('message', onMessage);
+        ws.close();
+      }
+    });
+
     it('ignores input exceeding MAX_INPUT_LENGTH', async () => {
       const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
       try {

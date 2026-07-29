@@ -853,29 +853,44 @@ export function registerSessionRoutes(
 
     // Reliable delivery (POST fallback when the WebSocket is down): a 2xx IS the
     // client's ACK, so a tagged duplicate redelivery must still return 200 but
-    // skip the write. Untagged requests (curl/legacy) always apply.
-    if (typeof clientId === 'string' && typeof seq === 'number' && !session.shouldApplyInput(clientId, seq)) {
+    // skip the write. Untagged requests (curl/legacy) bypass deduplication.
+    const taggedInput = typeof clientId === 'string' && typeof seq === 'number';
+    const reservation = taggedInput ? session.reserveInputDelivery(clientId, seq) : 'reserved';
+    if (reservation === 'applied') {
       return {};
     }
+    if (reservation === 'pending') {
+      return createErrorResponse(ApiErrorCode.CONFLICT, 'Session input delivery is already in progress; retry shortly');
+    }
 
-    // Write input to PTY. Direct write is synchronous; writeViaMux
-    // (tmux send-keys) is fire-and-forget to avoid blocking the HTTP response.
-    if (useMux) {
-      // Fire-and-forget: don't block HTTP response on tmux child process.
-      // Fallback to direct write on failure.
-      session
-        .writeViaMux(inputStr)
-        .then((ok) => {
-          if (!ok) {
-            console.warn(`[Server] writeViaMux failed for session ${id}, falling back to direct write`);
-            session.write(inputStr);
-          }
-        })
-        .catch(() => {
-          session.write(inputStr);
-        });
-    } else {
-      session.write(inputStr);
+    // A 2xx response is the durable queue's ACK, so both write paths must finish
+    // before returning. Otherwise the next seq can overtake an in-flight mux
+    // write, and a process exit can lose input the client already discarded.
+    let accepted = false;
+    try {
+      if (useMux) {
+        try {
+          accepted = await session.writeViaMux(inputStr);
+        } catch {
+          accepted = false;
+        }
+        if (!accepted) {
+          console.warn(`[Server] writeViaMux failed for session ${id}, falling back to direct write`);
+          accepted = session.write(inputStr);
+        }
+      } else {
+        accepted = session.write(inputStr);
+      }
+    } finally {
+      if (taggedInput) {
+        session.completeInputDelivery(clientId, seq, accepted);
+      }
+    }
+    if (!accepted) {
+      return createErrorResponse(
+        ApiErrorCode.CONFLICT,
+        'Session input is not attached yet; retry after the terminal is ready'
+      );
     }
     return {};
   });

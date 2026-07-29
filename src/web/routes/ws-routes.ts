@@ -174,19 +174,26 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
           if (msg.t === 'i' && typeof msg.d === 'string') {
             if (msg.d.length > MAX_INPUT_LENGTH) return;
             // Reliable delivery: when the frame carries a clientId + seq, apply it
-            // exactly once (skip a duplicate redelivery) but ACK it regardless so
-            // the client can drop it from its durable queue. Frames without seq
-            // (legacy/other tools) are applied as-is — no behavior change.
+            // exactly once. Applied duplicates are ACKed; frames that overlap an
+            // in-flight HTTP delivery remain unacknowledged until the client retries.
+            // Frames without seq (legacy/other tools) are applied as-is.
             const cid = typeof msg.cid === 'string' ? msg.cid : null;
             const seq = Number.isInteger(msg.seq) ? (msg.seq as number) : null;
-            const apply = cid && seq !== null ? session.shouldApplyInput(cid, seq) : true;
-            if (apply) {
+            const reservation = cid && seq !== null ? session.reserveInputDelivery(cid, seq) : 'reserved';
+            let accepted = reservation === 'applied';
+            if (reservation === 'reserved') {
               // Typed input from a claim-holding desktop keeps the claim "hot"
               // and re-asserts the desktop layout after a mobile override.
               if (holdsDesktopClaim) session.noteDesktopActivity();
-              session.write(msg.d);
+              try {
+                accepted = session.write(msg.d);
+              } finally {
+                if (cid && seq !== null) {
+                  session.completeInputDelivery(cid, seq, accepted);
+                }
+              }
             }
-            if (seq !== null && socket.readyState === 1) {
+            if (accepted && seq !== null && socket.readyState === 1) {
               socket.send(`{"t":"ia","seq":${seq}}`);
             }
           } else if (

@@ -29,8 +29,9 @@ export class MockSession extends EventEmitter {
   }
 
   /** Direct PTY write (used by session.write()) */
-  write(data: string): void {
+  write(data: string): boolean {
     this.writeBuffer.push(data);
+    return true;
   }
 
   /** Write via mux (used by respawn controller) */
@@ -39,13 +40,38 @@ export class MockSession extends EventEmitter {
     return true;
   }
 
-  /** Exactly-once input dedup — mirrors Session.shouldApplyInput so route tests
+  /** Exactly-once input dedup — mirrors Session's delivery API so route tests
    *  exercising the reliable-delivery path behave like production. */
   private _appliedInputSeq = new Map<string, number>();
-  shouldApplyInput(clientId: string, seq: number): boolean {
+  private _pendingInputSeq = new Map<string, number>();
+  hasAppliedInput(clientId: string, seq: number): boolean {
     const last = this._appliedInputSeq.get(clientId);
-    if (last !== undefined && seq <= last) return false;
-    this._appliedInputSeq.set(clientId, seq);
+    return last !== undefined && seq <= last;
+  }
+
+  reserveInputDelivery(clientId: string, seq: number): 'applied' | 'pending' | 'reserved' {
+    if (this.hasAppliedInput(clientId, seq)) return 'applied';
+    if (this._pendingInputSeq.has(clientId)) return 'pending';
+    this._pendingInputSeq.set(clientId, seq);
+    return 'reserved';
+  }
+
+  completeInputDelivery(clientId: string, seq: number, accepted: boolean): void {
+    if (this._pendingInputSeq.get(clientId) !== seq) return;
+    this._pendingInputSeq.delete(clientId);
+    if (accepted) this.markInputApplied(clientId, seq);
+  }
+
+  markInputApplied(clientId: string, seq: number): void {
+    const last = this._appliedInputSeq.get(clientId);
+    if (last === undefined || seq > last) {
+      this._appliedInputSeq.set(clientId, seq);
+    }
+  }
+
+  shouldApplyInput(clientId: string, seq: number): boolean {
+    if (this.reserveInputDelivery(clientId, seq) !== 'reserved') return false;
+    this.completeInputDelivery(clientId, seq, true);
     return true;
   }
 

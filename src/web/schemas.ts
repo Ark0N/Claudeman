@@ -859,9 +859,10 @@ export const SessionInputWithLimitSchema = z.object({
   // client tags each input with a stable clientId + a monotonic per-session seq
   // and redelivers anything it hasn't seen ACKed (e.g. a frame silently dropped
   // by a half-open WebSocket on a flaky link). The server applies each (clientId,
-  // seq) at-most-once via Session.shouldApplyInput so a redelivery can't type the
-  // prompt twice. `.optional()` (not `.nullish()`) — the client omits them when
-  // unset rather than sending null. See docs/reliable-input-delivery.md.
+  // seq) at-most-once through Session's reservation/commit bookkeeping so a
+  // redelivery can't type the prompt twice. `.optional()` (not `.nullish()`) —
+  // the client omits them when unset rather than sending null. See
+  // docs/reliable-input-delivery.md.
   seq: z.number().int().nonnegative().optional(),
   clientId: z.string().max(128).optional(),
 });

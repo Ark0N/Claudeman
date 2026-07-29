@@ -20,7 +20,7 @@
  * `cid` that already holds a socket is a SUPERSEDE — the registry evicts the
  * stale socket and reuses its slot, which makes a reconnect reclaim rather
  * than double-count (fixes #1 and #2). The cid is opaque here; input-frame
- * dedup uses the bare clientId separately (`session.shouldApplyInput`).
+ * dedup uses the bare clientId separately (Session's input-delivery bookkeeping).
  *
  * Backward-compat: an upgrade with NO `cid` (legacy clients, other tools) is
  * admitted anonymously — it counts toward the limit but never evicts another

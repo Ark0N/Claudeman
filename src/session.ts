@@ -98,6 +98,7 @@ export type { BackgroundTask } from './task-tracker.js';
 export type { RalphTrackerState, RalphTodoItem, ActiveBashTool } from './types.js';
 
 export type ResizeViewportType = 'mobile' | 'tablet' | 'desktop';
+export type InputDeliveryReservation = 'applied' | 'pending' | 'reserved';
 
 /** Line buffer flush interval (100ms) - forces processing of partial lines */
 const LINE_BUFFER_FLUSH_INTERVAL = 100;
@@ -2489,6 +2490,7 @@ export class Session extends EventEmitter {
    * Remember to include `\r` (carriage return) to simulate pressing Enter.
    *
    * @param data - The input data to send (text, escape sequences, etc.)
+   * @returns true when a live PTY accepted the input
    *
    * @example
    * ```typescript
@@ -2497,11 +2499,11 @@ export class Session extends EventEmitter {
    * session.write('ls -la\r');     // Command with Enter
    * ```
    */
-  write(data: string): void {
+  write(data: string): boolean {
+    if (!this.ptyProcess) return false;
     this._trackCodexSubmit(data);
-    if (this.ptyProcess) {
-      this.ptyProcess.write(data);
-    }
+    this.ptyProcess.write(data);
+    return true;
   }
 
   // ── Codex thread tracking ─────────────────────────────────────────────
@@ -2528,25 +2530,43 @@ export class Session extends EventEmitter {
    * eviction drops the least-recently-active client).
    */
   private _appliedInputSeq = new Map<string, number>();
+  private _pendingInputSeq = new Map<string, number>();
   private static readonly MAX_INPUT_DEDUP_CLIENTS = 256;
 
   /**
-   * Decide whether an input frame should be applied to the PTY or skipped as a
-   * duplicate redelivery. Returns true exactly once per (clientId, seq): the
-   * first time a seq strictly greater than the client's last-applied is seen.
-   * A redelivery of an already-applied seq (the client never got our ACK and
-   * resent) returns false. Callers should ACK regardless — a duplicate is, from
-   * the client's view, "delivered" — and only `write()` the PTY when this is
-   * true. Relies on the client delivering one client's frames in seq order over
-   * a single ordered stream, so `seq <= last` ⇒ already applied.
+   * Return whether a reliable input frame was already applied.
    *
-   * Without this, the client's at-least-once redelivery (needed because a
-   * half-open socket silently drops frames with no error) would type a prompt
-   * twice whenever an ACK is lost after the write landed.
+   * Client frames are ordered, so any `seq <= last` is a duplicate redelivery.
    */
-  shouldApplyInput(clientId: string, seq: number): boolean {
+  hasAppliedInput(clientId: string, seq: number): boolean {
     const last = this._appliedInputSeq.get(clientId);
-    if (last !== undefined && seq <= last) return false;
+    return last !== undefined && seq <= last;
+  }
+
+  /**
+   * Reserve a reliable input stream while its writer is in flight.
+   *
+   * HTTP mux delivery is asynchronous and can overlap a reconnecting WebSocket.
+   * A pending reservation prevents the second transport from writing or ACKing
+   * the same frame before the first transport confirms that it was accepted.
+   */
+  reserveInputDelivery(clientId: string, seq: number): InputDeliveryReservation {
+    if (this.hasAppliedInput(clientId, seq)) return 'applied';
+    if (this._pendingInputSeq.has(clientId)) return 'pending';
+    this._pendingInputSeq.set(clientId, seq);
+    return 'reserved';
+  }
+
+  /** Commit an accepted reservation, or release a failed one for retry. */
+  completeInputDelivery(clientId: string, seq: number, accepted: boolean): void {
+    if (this._pendingInputSeq.get(clientId) !== seq) return;
+    this._pendingInputSeq.delete(clientId);
+    if (accepted) this.markInputApplied(clientId, seq);
+  }
+
+  markInputApplied(clientId: string, seq: number): void {
+    const last = this._appliedInputSeq.get(clientId);
+    if (last !== undefined && seq <= last) return;
     // Re-insert to move this client to the MRU end for fair eviction.
     if (last !== undefined) this._appliedInputSeq.delete(clientId);
     this._appliedInputSeq.set(clientId, seq);
@@ -2554,6 +2574,15 @@ export class Session extends EventEmitter {
       const oldest = this._appliedInputSeq.keys().next().value;
       if (oldest !== undefined) this._appliedInputSeq.delete(oldest);
     }
+  }
+
+  /**
+   * Compatibility helper for synchronous callers and pure dedup tests.
+   * Routes that can fail or await a writer must use reserve/complete instead.
+   */
+  shouldApplyInput(clientId: string, seq: number): boolean {
+    if (this.reserveInputDelivery(clientId, seq) !== 'reserved') return false;
+    this.completeInputDelivery(clientId, seq, true);
     return true;
   }
 
@@ -2574,12 +2603,14 @@ export class Session extends EventEmitter {
    * ```
    */
   async writeViaMux(data: string): Promise<boolean> {
-    this._trackCodexSubmit(data);
     if (this._mux && this._muxSession) {
-      return this._mux.sendInput(this.id, data);
+      const sent = await this._mux.sendInput(this.id, data);
+      if (sent) this._trackCodexSubmit(data);
+      return sent;
     }
     // Fallback to PTY write
     if (this.ptyProcess) {
+      this._trackCodexSubmit(data);
       this.ptyProcess.write(data);
       return true;
     }
