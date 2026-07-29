@@ -372,9 +372,26 @@ export function buildDownstreamResponseHeaders(
  * whole class instead of trading security for it: the page never emits a
  * root-absolute request in the first place.
  *
+ * ## Why the DOM sinks are patched too, not just fetch/XHR
+ *
+ * A dashboard that renders `container.innerHTML = '<img src="/api/hero?slug=x">'`
+ * or `img.src = '/api/slide?n=01'` produces exactly the same root-absolute request,
+ * and NONE of the other layers can reach it: `<base>` does not apply to
+ * root-absolute URLs at all, and `rewriteHtml()` only ever sees the initial
+ * document, not markup built later by page script. The visible symptom is very
+ * specific and easy to misread: the dashboard's DATA loads (reads go through
+ * `fetch`, which was already patched) while every IMAGE stays broken. So the same
+ * `rw()` is applied to `innerHTML`/`outerHTML`/`insertAdjacentHTML`, to
+ * `setAttribute`, and to the `src`/`href`/`srcset`/... property setters, with a
+ * `MutationObserver` as a last net for any sink not patched above (that one costs a
+ * wasted 404 per node, since the browser starts fetching on insert, so it is a net
+ * and not the mechanism).
+ *
  * Runs before any page script because it is injected immediately after `<base>`.
  * Only same-origin, non-prefixed, root-absolute URLs are touched; relative URLs
- * (already handled by `<base>`) and cross-origin URLs are passed through.
+ * (already handled by `<base>`) and cross-origin URLs are passed through. Every
+ * rewrite is idempotent, so a value that passes through two layers is unchanged by
+ * the second.
  */
 export function runtimeUrlShim(prefix: string): string {
   // Kept dependency-free and defensive: it runs inside a page we do not control,
@@ -420,6 +437,117 @@ if(window.XMLHttpRequest&&XMLHttpRequest.prototype.open){
   ['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(function(s){if(s in C)W[s]=C[s];});
   window[k]=W;
 });
+var A=['src','href','action','poster','data','formaction','srcset'];
+function rwSet(v){
+  try{
+    return String(v).split(',').map(function(p){
+      var t=p.trim();if(!t)return t;
+      var i=t.search(/\\s/);
+      return i===-1?rw(t):rw(t.slice(0,i))+t.slice(i);
+    }).join(', ');
+  }catch(e){return v;}
+}
+function rwAttr(n,v){
+  try{
+    if(v==null)return v;
+    var k=String(n).toLowerCase();
+    if(k==='srcset')return rwSet(v);
+    return A.indexOf(k)===-1?v:rw(v);
+  }catch(e){return v;}
+}
+// Each value goes through rw() rather than a blind prefix concat, because unlike
+// the server-side rewriteHtml() this runs on markup that may ALREADY be proxied
+// (a page re-injecting its own outerHTML), and rw() is the idempotent one.
+function rwHtml(s){
+  try{
+    if(typeof s!=='string')return s;
+    return s
+      .replace(/(\\s(?:src|href|action|poster|formaction|data)\\s*=\\s*")([^"]*)(")/gi,function(m,a,v,q){return a+rw(v)+q;})
+      .replace(/(\\s(?:src|href|action|poster|formaction|data)\\s*=\\s*')([^']*)(')/gi,function(m,a,v,q){return a+rw(v)+q;})
+      .replace(/(\\ssrcset\\s*=\\s*")([^"]*)(")/gi,function(m,a,v,q){return a+rwSet(v)+q;})
+      .replace(/(\\ssrcset\\s*=\\s*')([^']*)(')/gi,function(m,a,v,q){return a+rwSet(v)+q;});
+  }catch(e){return s;}
+}
+// Marked with __cmrw so a double injection (a page that re-runs the shim) cannot
+// wrap an already-wrapped setter and rewrite twice.
+function patchProp(C,prop,conv){
+  try{
+    if(!C||!C.prototype)return;
+    var d=Object.getOwnPropertyDescriptor(C.prototype,prop);
+    if(!d||!d.set||d.set.__cmrw)return;
+    var s=d.set;
+    var ns=function(v){var w=v;try{w=conv(v);}catch(e){}return s.call(this,w);};
+    ns.__cmrw=1;
+    Object.defineProperty(C.prototype,prop,{get:d.get,set:ns,configurable:true,enumerable:d.enumerable});
+  }catch(e){}
+}
+function patchHtmlProp(O,prop){
+  try{
+    if(!O)return;
+    var d=Object.getOwnPropertyDescriptor(O,prop);
+    if(!d||!d.set||d.set.__cmrw)return;
+    var s=d.set;
+    var ns=function(v){return s.call(this,rwHtml(v));};
+    ns.__cmrw=1;
+    Object.defineProperty(O,prop,{get:d.get,set:ns,configurable:true,enumerable:d.enumerable});
+  }catch(e){}
+}
+function patchFn(O,name,wrap){
+  try{
+    var f=O&&O[name];
+    if(typeof f!=='function'||f.__cmrw)return;
+    var nf=wrap(f);nf.__cmrw=1;O[name]=nf;
+  }catch(e){}
+}
+[['HTMLImageElement','src'],['HTMLImageElement','srcset'],['HTMLSourceElement','src'],
+ ['HTMLSourceElement','srcset'],['HTMLMediaElement','src'],['HTMLVideoElement','poster'],
+ ['HTMLScriptElement','src'],['HTMLIFrameElement','src'],['HTMLEmbedElement','src'],
+ ['HTMLTrackElement','src'],['HTMLLinkElement','href'],['HTMLAnchorElement','href'],
+ ['HTMLAreaElement','href'],['HTMLObjectElement','data'],['HTMLFormElement','action']
+].forEach(function(p){patchProp(window[p[0]],p[1],p[1]==='srcset'?rwSet:rw);});
+var EP=window.Element&&window.Element.prototype;
+patchHtmlProp(EP,'innerHTML');
+patchHtmlProp(EP,'outerHTML');
+patchHtmlProp(window.ShadowRoot&&window.ShadowRoot.prototype,'innerHTML');
+patchFn(EP,'insertAdjacentHTML',function(f){return function(p,h){return f.call(this,p,rwHtml(h));};});
+patchFn(EP,'setAttribute',function(f){return function(n,v){return f.call(this,n,rwAttr(n,v));};});
+patchFn(EP,'setAttributeNS',function(f){return function(ns,n,v){
+  var k=String(n==null?'':n),i=k.indexOf(':');
+  return f.call(this,ns,n,rwAttr(i===-1?k:k.slice(i+1),v));
+};});
+// Last net: anything inserted by a sink not patched above still gets corrected.
+// setAttribute below is the patched one, so this stays idempotent and terminates.
+try{
+  var doc=window.document,MO=window.MutationObserver;
+  if(MO&&doc&&doc.documentElement){
+    var fix=function(el){
+      try{
+        if(!el||el.nodeType!==1||!el.hasAttribute)return;
+        for(var i=0;i<A.length;i++){
+          var n=A[i];if(!el.hasAttribute(n))continue;
+          var c=el.getAttribute(n),x=rwAttr(n,c);
+          if(x!=null&&x!==c)el.setAttribute(n,x);
+        }
+      }catch(e){}
+    };
+    var scan=function(node){
+      try{
+        fix(node);
+        if(node&&node.querySelectorAll){
+          var l=node.querySelectorAll('[src],[href],[action],[poster],[data],[srcset],[formaction]');
+          for(var i=0;i<l.length;i++)fix(l[i]);
+        }
+      }catch(e){}
+    };
+    new MO(function(ms){
+      for(var i=0;i<ms.length;i++){
+        var m=ms[i];
+        if(m.type==='attributes')fix(m.target);
+        else for(var j=0;j<m.addedNodes.length;j++)scan(m.addedNodes[j]);
+      }
+    }).observe(doc.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:A});
+  }
+}catch(e){}
 }catch(e){}})();</script>`;
 }
 

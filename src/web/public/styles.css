@@ -12561,6 +12561,44 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 
 .run-mode-dot.web { background: #38bdf8; }
 .run-mode-webviews { max-height: 180px; overflow-y: auto; }
+
+/* A saved URL is a ROW: open on the left, edit + delete on the right, so a URL can
+   be changed or removed without first opening it as a tab. The side buttons stay
+   permanently visible rather than hover-revealed, because this menu is used on
+   touch devices where there is no hover to reveal them with. */
+.run-mode-row--web {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.run-mode-row--web .run-mode-option--web {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.run-mode-row-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--btn-radius);
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.run-mode-row-btn:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+}
+.run-mode-webview-delete { font-size: 1.05rem; }
+.run-mode-webview-delete:hover { color: var(--danger, #ef4444); }
 .run-mode-empty {
   padding: 4px 10px 6px;
   font-size: 0.75em;

@@ -290,7 +290,13 @@ Object.assign(CodemanApp.prototype, {
 
   // ── Run-menu entries ──────────────────────────────────────────────────────
 
-  /** Saved dashboards listed inside the Run dropdown, under "Web / URL". */
+  /**
+   * Saved dashboards listed inside the Run dropdown, under "Web / URL".
+   *
+   * Each row carries its own edit and delete buttons. Without them the only way to
+   * change or remove a saved URL was to open it as a tab first and go through the
+   * tab's gear, which is a dead end for a URL you no longer want open at all.
+   */
   renderWebviewMenuItems() {
     const container = document.getElementById('runModeWebviews');
     if (!container) return;
@@ -300,15 +306,20 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
     container.innerHTML = list
-      .map(
-        (w) => `<button class="run-mode-option run-mode-option--web" onclick="app.openWebviewFromMenu(${escapeHtml(
-          JSON.stringify(w.id)
-        )})" title="${escapeHtml(w.url)}">
-          <span class="run-mode-menu-icon">${w.icon ? escapeHtml(w.icon) : '<span class="run-mode-dot web"></span>'}</span>${escapeHtml(
-            w.name
-          )}
-        </button>`
-      )
+      .map((w) => {
+        const jsonId = escapeHtml(JSON.stringify(w.id));
+        const name = escapeHtml(w.name);
+        const icon = w.icon ? escapeHtml(w.icon) : '<span class="run-mode-dot web"></span>';
+        return `<div class="run-mode-row run-mode-row--web">
+          <button class="run-mode-option run-mode-option--web" onclick="app.openWebviewFromMenu(${jsonId})" title="${escapeHtml(w.url)}">
+            <span class="run-mode-menu-icon">${icon}</span>${name}
+          </button>
+          <button class="run-mode-row-btn run-mode-webview-edit" onclick="event.stopPropagation(); app.showWebviewModal(${jsonId})"
+            title="Edit URL" aria-label="Edit ${name}">&#x2699;</button>
+          <button class="run-mode-row-btn run-mode-webview-delete" onclick="event.stopPropagation(); app.deleteWebviewById(${jsonId})"
+            title="Delete URL" aria-label="Delete ${name}">&times;</button>
+        </div>`;
+      })
       .join('');
   },
 
@@ -429,17 +440,36 @@ Object.assign(CodemanApp.prototype, {
   async deleteWebview() {
     const id = this._editingWebviewId;
     if (!id) return;
+    if (await this._confirmAndDeleteWebview(id)) this.closeWebviewModal();
+  },
+
+  /**
+   * Delete straight from a Run-dropdown row, without opening the editor first.
+   *
+   * The dropdown's outside-click handler closes the menu when the click target is
+   * not inside it, and by the time the delete resolves this row is gone, so the
+   * menu is re-asserted open: deleting one of several saved URLs should leave you
+   * looking at the rest of the list.
+   */
+  async deleteWebviewById(id) {
+    if (!id) return;
+    if (!(await this._confirmAndDeleteWebview(id))) return;
+    document.getElementById('runModeMenu')?.classList.add('active');
+  },
+
+  /** Shared by the row button and the editor modal. @returns true when deleted. */
+  async _confirmAndDeleteWebview(id) {
     const webview = this.webviews.get(id);
-    if (!confirm(`Delete "${webview?.name || id}"?`)) return;
+    if (!confirm(`Delete "${webview?.name || id}"?`)) return false;
     const res = await this._apiDelete(`/api/webviews/${encodeURIComponent(id)}`);
     if (!res || !res.ok) {
       this.showToast?.('Could not delete URL', 'error');
-      return;
+      return false;
     }
     this._removeWebviewTab(id);
     this.webviews.delete(id);
-    this.closeWebviewModal();
     this.renderWebviewMenuItems();
     this.renderSessionTabs();
+    return true;
   },
 });

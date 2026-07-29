@@ -855,6 +855,17 @@ html.mobile-init .file-browser-panel {
     -webkit-tap-highlight-color: rgba(255, 255, 255, 0.1);
   }
 
+  /* Per-URL edit/delete in the Web / URL list need a real touch target, and they
+     sit next to the row's own tap area, so they get sized up rather than relying
+     on the 24px desktop hit box. */
+  .run-mode-row-btn {
+    width: 34px;
+    height: 34px;
+    font-size: 1rem;
+    -webkit-tap-highlight-color: rgba(255, 255, 255, 0.1);
+  }
+  .run-mode-webview-delete { font-size: 1.2rem; }
+
   .run-mode-history {
     -webkit-overflow-scrolling: touch;
     touch-action: manipulation;
