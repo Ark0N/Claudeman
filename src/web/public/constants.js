@@ -56,9 +56,12 @@ const AUTO_CLOSE_NOTIFICATION_MS = 8000;    // Auto-close browser notifications
 const THROTTLE_DELAY_MS = 100;              // General UI throttle delay
 const TERMINAL_CHUNK_SIZE = 32 * 1024;      // 32KB chunks for terminal buffer loading
 const TERMINAL_TAIL_SIZE = 1024 * 1024;     // 1MB tail for initial load (more scrollback on tab switch)
+const TERMINAL_LATEST_FRAME_SIZE = 128 * 1024; // Bounded current-pane request shown before history replay
+const TERMINAL_FRAME_FETCH_TIMEOUT_MS = 5000; // Bound a stale pane capture so later transitions can recover
 const SYNC_WAIT_TIMEOUT_MS = 50;            // Wait timeout for terminal sync
 const STATS_POLLING_INTERVAL_MS = 2000;     // System stats polling
 const TUI_REDRAW_SETTLE_MS = 400;           // Grace for a TUI to redraw after a real resize, before fetching its buffer
+const TUI_ACTION_REDRAW_SETTLE_MS = 180;     // Grace before capturing the pane after a decision is submitted
 
 // Z-index base values for layered floating windows
 const ZINDEX_SUBAGENT_BASE = 1000;

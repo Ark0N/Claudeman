@@ -26,6 +26,7 @@
 import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { resolve } from 'node:path';
+import { TextDecoder, TextEncoder } from 'node:util';
 import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -41,6 +42,8 @@ function loadTerminalMixin(): Record<string, unknown> {
     setInterval: vi.fn(),
     clearInterval: vi.fn(),
     requestAnimationFrame: vi.fn(),
+    TextDecoder,
+    TERMINAL_CHUNK_SIZE: 32 * 1024,
     CodemanApp: FakeCodemanApp,
     // terminal-ui.js IIFE is invoked with `window`; it reads/writes a few globals.
     window: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
@@ -52,14 +55,38 @@ function loadTerminalMixin(): Record<string, unknown> {
 
 const mixin = loadTerminalMixin();
 
+type TerminalCursor = {
+  stream: string;
+  generation: number;
+  start: number;
+  end: number;
+};
+
 type BufferLoadApp = {
   _bufferLoadSeq: number;
   _bufferLoadOwner: string | null;
   _isLoadingBuffer: boolean;
-  _loadBufferQueue: string[] | null;
-  batchTerminalWrite: (data: string) => void;
+  _loadBufferQueue: Array<string | { data: string; cursor: TerminalCursor }> | null;
+  batchTerminalWrite: (data: string, cursor?: TerminalCursor) => void;
   _beginBufferLoad: (owner?: string) => string;
-  _finishBufferLoad: (owner?: string, opts?: { flushQueued?: boolean }) => boolean;
+  _finishBufferLoad: (owner?: string, opts?: { flushQueued?: boolean; snapshotCursor?: TerminalCursor }) => boolean;
+  _isTerminalCursor: (cursor: unknown) => boolean;
+  _terminalEventAfterSnapshot: (
+    item: { data: string; cursor: TerminalCursor },
+    snapshotCursor: TerminalCursor
+  ) => { data: string; cursor: TerminalCursor } | null;
+  _terminalSnapshotCursorFromHeaders: (headers: Headers) => TerminalCursor | null;
+  _readTerminalSnapshotResponse: (
+    response: Response,
+    options?: {
+      isCancelled?: () => boolean;
+    }
+  ) => Promise<{
+    terminalBuffer: string;
+    cursor?: TerminalCursor;
+    streamed: boolean;
+    aborted: boolean;
+  }>;
 };
 
 /**
@@ -80,14 +107,22 @@ function makeApp() {
     }),
     _beginBufferLoad: mixin._beginBufferLoad as BufferLoadApp['_beginBufferLoad'],
     _finishBufferLoad: mixin._finishBufferLoad as BufferLoadApp['_finishBufferLoad'],
+    _isTerminalCursor: mixin._isTerminalCursor as BufferLoadApp['_isTerminalCursor'],
+    _terminalEventAfterSnapshot: mixin._terminalEventAfterSnapshot as BufferLoadApp['_terminalEventAfterSnapshot'],
+    _terminalSnapshotCursorFromHeaders:
+      mixin._terminalSnapshotCursorFromHeaders as BufferLoadApp['_terminalSnapshotCursorFromHeaders'],
+    _readTerminalSnapshotResponse:
+      mixin._readTerminalSnapshotResponse as BufferLoadApp['_readTerminalSnapshotResponse'],
   };
   return { app, writes };
 }
 
 /** Simulate live SSE events arriving while a buffer load is in progress (the queue path). */
-function pushWhileLoading(app: BufferLoadApp, data: string) {
+function pushWhileLoading(app: BufferLoadApp, data: string, cursor?: TerminalCursor) {
   // Mirrors batchTerminalWrite's queue branch: if loading, push to the queue.
-  if (app._isLoadingBuffer && app._loadBufferQueue) app._loadBufferQueue.push(data);
+  if (app._isLoadingBuffer && app._loadBufferQueue) {
+    app._loadBufferQueue.push(cursor ? { data, cursor } : data);
+  }
 }
 
 describe('buffer-load flush (COD-144)', () => {
@@ -168,5 +203,154 @@ describe('buffer-load flush (COD-144)', () => {
     expect(app._loadBufferQueue).toBeNull();
     expect(app.batchTerminalWrite).not.toHaveBeenCalled();
     expect(writes).toEqual([]);
+  });
+
+  it('discards cursor-covered events and replays only the synchronized suffix beyond the snapshot', () => {
+    const { app, writes } = makeApp();
+    const owner = app._beginBufferLoad('cursor-overlap');
+    pushWhileLoading(app, 'covered', { stream: 'stream-a', generation: 1, start: 0, end: 7 });
+    pushWhileLoading(app, 'abcdefgh', { stream: 'stream-a', generation: 1, start: 7, end: 15 });
+    pushWhileLoading(app, 'after', { stream: 'stream-a', generation: 1, start: 15, end: 20 });
+
+    expect(
+      app._finishBufferLoad(owner, {
+        snapshotCursor: { stream: 'stream-a', generation: 1, start: 0, end: 10 },
+      })
+    ).toBe(true);
+
+    expect(writes).toEqual(['\x1b[?2026hdefgh\x1b[?2026l', 'after']);
+    expect(app.batchTerminalWrite).toHaveBeenNthCalledWith(1, '\x1b[?2026hdefgh\x1b[?2026l', {
+      stream: 'stream-a',
+      generation: 1,
+      start: 10,
+      end: 15,
+    });
+    expect(app.batchTerminalWrite).toHaveBeenNthCalledWith(2, 'after', {
+      stream: 'stream-a',
+      generation: 1,
+      start: 15,
+      end: 20,
+    });
+  });
+
+  it.each([
+    ['opening fragment', '\x1b[?2026habcdefgh'],
+    ['middle fragment', 'abcdefgh'],
+    ['closing fragment', 'abcdefgh\x1b[?2026l'],
+  ])('rewraps an overlap inside a fragmented WS synchronized update (%s)', (_label, data) => {
+    const { app, writes } = makeApp();
+    const owner = app._beginBufferLoad('cursor-fragment-overlap');
+    pushWhileLoading(app, data, {
+      stream: 'stream-a',
+      generation: 1,
+      start: 7,
+      end: 15,
+    });
+
+    app._finishBufferLoad(owner, {
+      snapshotCursor: { stream: 'stream-a', generation: 1, start: 0, end: 10 },
+    });
+
+    expect(writes).toEqual(['\x1b[?2026hdefgh\x1b[?2026l']);
+    expect(app.batchTerminalWrite).toHaveBeenCalledWith('\x1b[?2026hdefgh\x1b[?2026l', {
+      stream: 'stream-a',
+      generation: 1,
+      start: 10,
+      end: 15,
+    });
+  });
+
+  it('drops stale stream and generation events while preserving a newer generation', () => {
+    const { app, writes } = makeApp();
+    const owner = app._beginBufferLoad('cursor-generation');
+    pushWhileLoading(app, 'old stream', { stream: 'old-stream', generation: 9, start: 0, end: 10 });
+    pushWhileLoading(app, 'old generation', { stream: 'stream-a', generation: 1, start: 0, end: 14 });
+    pushWhileLoading(app, 'new generation', { stream: 'stream-a', generation: 3, start: 0, end: 14 });
+
+    app._finishBufferLoad(owner, {
+      snapshotCursor: { stream: 'stream-a', generation: 2, start: 0, end: 5 },
+    });
+
+    expect(writes).toEqual(['new generation']);
+  });
+
+  it('decodes a streamed snapshot losslessly when an emoji spans wire chunks', async () => {
+    const { app } = makeApp();
+    const text = 'alpha \u05e9\u05dc\u05d5\u05dd \ud83d\ude80 omega';
+    const bytes = new TextEncoder().encode(text);
+    const emojiByte = new TextEncoder().encode(text.slice(0, text.indexOf('\ud83d\ude80'))).length;
+    const wireChunks = [
+      bytes.slice(0, emojiByte + 2),
+      bytes.slice(emojiByte + 2, emojiByte + 3),
+      bytes.slice(emojiByte + 3),
+    ];
+    let index = 0;
+    const headers = new Headers({
+      'x-codeman-terminal-format': 'stream-v1',
+      'x-codeman-terminal-stream': 'stream-a',
+      'x-codeman-terminal-generation': '4',
+      'x-codeman-terminal-start': '0',
+      'x-codeman-terminal-end': String(text.length),
+      'x-codeman-terminal-source': 'mux-visible',
+      'x-codeman-terminal-truncated': '0',
+    });
+    const response = {
+      ok: true,
+      headers,
+      body: {
+        getReader: () => ({
+          read: async () =>
+            index < wireChunks.length ? { done: false, value: wireChunks[index++] } : { done: true, value: undefined },
+          cancel: async () => {},
+        }),
+      },
+    } as unknown as Response;
+    const result = await app._readTerminalSnapshotResponse(response);
+
+    expect(result.terminalBuffer).toBe(text);
+    expect(result).toMatchObject({
+      streamed: true,
+      aborted: false,
+      source: 'mux-visible',
+      cursor: { stream: 'stream-a', generation: 4, start: 0, end: text.length },
+    });
+  });
+
+  it('keeps the JSON terminal response as a non-streaming fallback', async () => {
+    const { app } = makeApp();
+    const response = {
+      ok: true,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({ data: { terminalBuffer: 'legacy snapshot', truncated: false } }),
+    } as unknown as Response;
+
+    await expect(app._readTerminalSnapshotResponse(response)).resolves.toMatchObject({
+      terminalBuffer: 'legacy snapshot',
+      truncated: false,
+      streamed: false,
+    });
+  });
+
+  it('repositions a pending local draft after the loaded frame becomes authoritative', () => {
+    const { app } = makeApp();
+    const rerender = vi.fn();
+    let writeDone: (() => void) | undefined;
+    Object.assign(app, {
+      _localEchoOverlay: { hasPending: true, rerender },
+      terminal: {
+        write: vi.fn((_data: string, callback?: () => void) => {
+          writeDone = callback;
+        }),
+      },
+    });
+    const owner = app._beginBufferLoad('load-with-draft');
+
+    expect(app._finishBufferLoad(owner)).toBe(true);
+    expect(writeDone).toBeTypeOf('function');
+    expect(rerender).not.toHaveBeenCalled();
+
+    writeDone?.();
+
+    expect(rerender).toHaveBeenCalledOnce();
   });
 });

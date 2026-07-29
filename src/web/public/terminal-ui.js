@@ -580,6 +580,11 @@ Object.assign(CodemanApp.prototype, {
     this._chunkedWriteGen = 0;
     this._bufferLoadSeq = 0;
     this._bufferLoadOwner = null;
+    this._terminalFrameReconcileSeq = 0;
+    this._terminalFrameReconcilePending = null;
+    this._terminalFrameReconcilePromise = null;
+    this._terminalFrameReconcileAbortController?.abort?.();
+    this._terminalFrameReconcileAbortController = null;
     this._lastUserScrollUpAt = null;
 
     // Handle resize with throttling for performance
@@ -1975,12 +1980,14 @@ Object.assign(CodemanApp.prototype, {
     return performance.now() - this._lastUserScrollUpAt < window.CodemanTerminalInput.USER_SCROLL_STICKY_SUPPRESS_MS;
   },
 
-  batchTerminalWrite(data) {
+  batchTerminalWrite(data, cursor) {
     // If a buffer load (chunkedTerminalWrite) is in progress, queue live events
     // to prevent interleaving historical buffer data with live SSE data.
     // This is critical: interleaving causes cursor position chaos with Ink redraws.
     if (this._isLoadingBuffer) {
-      if (this._loadBufferQueue) this._loadBufferQueue.push(data);
+      if (this._loadBufferQueue) {
+        this._loadBufferQueue.push(this._isTerminalCursor(cursor) ? { data, cursor } : data);
+      }
       return;
     }
     if (typeof KeyboardHandler !== 'undefined') {
@@ -2053,6 +2060,17 @@ Object.assign(CodemanApp.prototype, {
       // content between 2026h/2026l and renders atomically.
       this.flushPendingWrites();
     });
+  },
+
+  /**
+   * Resolve only after every xterm write queued before this call has parsed.
+   * Resetting or repainting before this fence lets an older terminal frame
+   * mutate the replacement screen through xterm's shared write buffer.
+   */
+  _waitForTerminalParserFence() {
+    const terminal = this.terminal;
+    if (!terminal?.write) return Promise.resolve();
+    return new Promise((resolve) => terminal.write('', resolve));
   },
 
   /**
@@ -2461,29 +2479,370 @@ Object.assign(CodemanApp.prototype, {
     });
   },
 
+  _waitForTerminalPaint() {
+    return new Promise((resolve) => {
+      this._safeYield(() => this._safeYield(resolve));
+    });
+  },
+
+  _waitForTerminalFrameSettle(delayMs, signal) {
+    if (delayMs <= 0) return Promise.resolve(true);
+    if (signal?.aborted) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      let timer = null;
+      let onAbort = null;
+      const finish = (completed) => {
+        if (timer !== null) clearTimeout(timer);
+        signal?.removeEventListener?.('abort', onAbort);
+        resolve(completed);
+      };
+      onAbort = () => finish(false);
+      timer = setTimeout(() => finish(true), delayMs);
+      signal?.addEventListener?.('abort', onAbort, { once: true });
+    });
+  },
+
+  _terminalSnapshotCursorFromHeaders(headers) {
+    if (headers?.get?.('x-codeman-terminal-format') !== 'stream-v1') return null;
+    const cursor = {
+      stream: headers.get('x-codeman-terminal-stream'),
+      generation: Number(headers.get('x-codeman-terminal-generation')),
+      start: Number(headers.get('x-codeman-terminal-start')),
+      end: Number(headers.get('x-codeman-terminal-end')),
+    };
+    return this._isTerminalCursor(cursor) ? cursor : null;
+  },
+
+  /**
+   * Decode a compressed HTTP snapshot incrementally. Browser fetch exposes the
+   * losslessly decompressed bytes; TextDecoder preserves UTF-8 sequences split
+   * across response chunks.
+   */
+  async _readTerminalSnapshotResponse(response, options = {}) {
+    if (!response?.ok) {
+      throw new Error(`Terminal snapshot request failed (${response?.status ?? 'unknown'})`);
+    }
+
+    const cursor = this._terminalSnapshotCursorFromHeaders(response.headers);
+    if (!cursor) {
+      const payload = await response.json();
+      const data =
+        payload?.data && typeof payload.data === 'object' ? payload.data : payload;
+      return {
+        ...(data ?? {}),
+        streamed: false,
+        aborted: false,
+      };
+    }
+
+    const result = {
+      terminalBuffer: '',
+      status: response.headers.get('x-codeman-terminal-status') || undefined,
+      fullSize: Number(response.headers.get('x-codeman-terminal-full-size')) || 0,
+      truncated: response.headers.get('x-codeman-terminal-truncated') === '1',
+      source: response.headers.get('x-codeman-terminal-source') || 'history',
+      cursor,
+      streamed: true,
+      aborted: false,
+    };
+    const reader = response.body?.getReader?.();
+    if (!reader) {
+      result.terminalBuffer = await response.text();
+      return result;
+    }
+
+    const decoder = new TextDecoder();
+    const chunks = [];
+
+    while (true) {
+      if (options.isCancelled?.()) {
+        result.aborted = true;
+        try {
+          await reader.cancel();
+        } catch {}
+        return result;
+      }
+      const { done, value } = await reader.read();
+      if (options.isCancelled?.()) {
+        result.aborted = true;
+        try {
+          await reader.cancel();
+        } catch {}
+        return result;
+      }
+      if (done) break;
+      const text = decoder.decode(value, { stream: true });
+      if (text) chunks.push(text);
+    }
+    const finalText = decoder.decode();
+    if (finalText) chunks.push(finalText);
+    result.terminalBuffer = chunks.join('');
+    return result;
+  },
+
+  _isTerminalActionSubmission(input) {
+    if (typeof input !== 'string' || !input || input.startsWith('\x1b[200~')) return false;
+    if (input === '\r' || input === '\n') return true;
+    return /\x1b\[<0;\d+;\d+[Mm]/.test(input);
+  },
+
+  _hasForegroundTerminalDecision(sessionId = this.activeSessionId) {
+    const hooks = sessionId ? this.pendingHooks?.get?.(sessionId) : null;
+    if (hooks?.has?.('permission_prompt') || hooks?.has?.('elicitation_dialog')) return true;
+    if (
+      !sessionId ||
+      sessionId !== this.activeSessionId ||
+      !this.terminal ||
+      !this._terminalViewportAtBottom()
+    ) {
+      return false;
+    }
+
+    const buffer = this.terminal.buffer?.active;
+    if (!buffer?.getLine) return false;
+    const rows = Math.max(1, this.terminal.rows || 1);
+    let choices = 0;
+    let selectedChoice = false;
+    let selectionInstruction = false;
+    for (let row = 0; row < rows; row++) {
+      const line = buffer.getLine(buffer.viewportY + row)?.translateToString?.(true) || '';
+      if (/^\s*(?:[❯›]\s*)?\d+[.)]\s+\S/.test(line)) choices += 1;
+      if (/^\s*[❯›]\s*\d+[.)]\s+\S/.test(line)) selectedChoice = true;
+      if (
+        /(?:enter|return).*(?:select|confirm)|(?:select|confirm).*(?:enter|return)|esc\s+to\s+(?:cancel|go back)/i.test(
+          line
+        )
+      ) {
+        selectionInstruction = true;
+      }
+    }
+    return choices >= 2 && (selectedChoice || selectionInstruction);
+  },
+
+  _shouldReconcileTerminalAction(sessionId, input) {
+    const isTouch =
+      typeof MobileDetection !== 'undefined' && MobileDetection.isTouchDevice?.();
+    const session = sessionId ? this.sessions?.get?.(sessionId) : null;
+    return Boolean(
+      isTouch &&
+        sessionId === this.activeSessionId &&
+        session?.mode !== 'shell' &&
+        this._isTerminalActionSubmission(input) &&
+        this._hasForegroundTerminalDecision(sessionId)
+    );
+  },
+
+  _isTerminalFrameReconcileCurrent(request) {
+    return Boolean(
+      request &&
+        request.id === this._terminalFrameReconcileSeq &&
+        request.sessionId === this.activeSessionId
+    );
+  },
+
+  _requestTerminalFrameReconcile(options = {}) {
+    const sessionId = this.activeSessionId;
+    const session = sessionId ? this.sessions?.get?.(sessionId) : null;
+    if (!sessionId || !this.terminal || session?.mode === 'shell') {
+      return Promise.resolve(false);
+    }
+
+    const request = {
+      captureWhenUnchanged: options.captureWhenUnchanged === true,
+      id: ++this._terminalFrameReconcileSeq,
+      reason: options.reason || 'terminal-transition',
+      resizeOptions: options.resizeOptions || null,
+      sessionId,
+      settleMs: Math.max(0, Number(options.settleMs) || 0),
+    };
+    this._terminalFrameReconcilePending = request;
+    this._terminalFrameReconcileAbortController?.abort?.();
+    if (!this._terminalFrameReconcilePromise) {
+      let trackedPromise;
+      trackedPromise = this._drainTerminalFrameReconciles().finally(() => {
+        if (this._terminalFrameReconcilePromise === trackedPromise) {
+          this._terminalFrameReconcilePromise = null;
+        }
+      });
+      this._terminalFrameReconcilePromise = trackedPromise;
+    }
+    return this._terminalFrameReconcilePromise;
+  },
+
+  async _drainTerminalFrameReconciles() {
+    let result = false;
+    while (this._terminalFrameReconcilePending) {
+      const request = this._terminalFrameReconcilePending;
+      this._terminalFrameReconcilePending = null;
+      result = await this._runTerminalFrameReconcile(request);
+    }
+    return result;
+  },
+
+  async _runTerminalFrameReconcile(request) {
+    if (!this._isTerminalFrameReconcileCurrent(request)) return false;
+    if (this._isLoadingBuffer) {
+      if (typeof KeyboardHandler !== 'undefined') {
+        KeyboardHandler.onTerminalFrameReady?.();
+      }
+      return false;
+    }
+
+    let loadOwner = this._beginBufferLoad(`frame-reconcile-${request.id}`);
+    let authoritative = false;
+    let synchronizedUpdateOpen = false;
+    let fetchTimeout = null;
+    const abortController =
+      typeof AbortController !== 'undefined' ? new AbortController() : null;
+    this._terminalFrameReconcileAbortController = abortController;
+    const terminal = this.terminal;
+    const syncStart = '\x1b[?2026h';
+    const syncEnd = '\x1b[?2026l';
+    try {
+      if (request.resizeOptions) {
+        const dimensionsChanged = await this.sendResize(request.sessionId, request.resizeOptions);
+        if (!this._isTerminalFrameReconcileCurrent(request)) return false;
+        if (!dimensionsChanged && !request.captureWhenUnchanged) {
+          this._finishBufferLoad(loadOwner, { flushQueued: true });
+          loadOwner = null;
+          await this._waitForTerminalPaint();
+          if (
+            this._isTerminalFrameReconcileCurrent(request) &&
+            typeof KeyboardHandler !== 'undefined'
+          ) {
+            KeyboardHandler.onTerminalFrameAuthoritative?.();
+          }
+          return false;
+        }
+      }
+
+      if (request.settleMs > 0) {
+        const settled = await this._waitForTerminalFrameSettle(
+          request.settleMs,
+          abortController?.signal
+        );
+        if (!settled || !this._isTerminalFrameReconcileCurrent(request)) return false;
+      }
+
+      if (abortController) {
+        fetchTimeout = setTimeout(
+          () => abortController.abort(),
+          TERMINAL_FRAME_FETCH_TIMEOUT_MS
+        );
+      }
+      const response = await fetch(
+        `/api/sessions/${request.sessionId}/terminal?latest=1` +
+          `&tail=${TERMINAL_LATEST_FRAME_SIZE}&format=stream`,
+        abortController ? { signal: abortController.signal } : undefined
+      );
+      const latest = await this._readTerminalSnapshotResponse(response, {
+        paint: false,
+        isCancelled: () =>
+          abortController?.signal.aborted ||
+          !this._isTerminalFrameReconcileCurrent(request),
+      });
+      if (fetchTimeout !== null) {
+        clearTimeout(fetchTimeout);
+        fetchTimeout = null;
+      }
+      if (
+        latest.aborted ||
+        !this._isTerminalFrameReconcileCurrent(request) ||
+        latest.source !== 'mux-visible' ||
+        !latest.terminalBuffer ||
+        !this._isTerminalCursor(latest.cursor)
+      ) {
+        return false;
+      }
+
+      // The pane snapshot includes everything accepted by the PTY through its
+      // cursor boundary. Drop pre-snapshot browser work, cross xterm's parser
+      // fence, then repaint only the visible rows so existing scrollback stays.
+      this.pendingWrites = [];
+      this.writeFrameScheduled = false;
+      this._clearTimer('flickerFilterTimeout');
+      this.flickerFilterBuffer = '';
+      this.flickerFilterActive = false;
+      await this._waitForTerminalParserFence();
+      if (!this._isTerminalFrameReconcileCurrent(request)) return false;
+
+      // A size-bounded transport transaction may have parsed its opening
+      // DEC-2026 marker while the closing fragment is still queued. Close it,
+      // then paint the replacement pane inside a fresh synchronized update.
+      synchronizedUpdateOpen = true;
+      await new Promise((resolve) =>
+        terminal.write(`${syncEnd}${syncStart}\x1b[0m\x1b[H\x1b[2J`, resolve)
+      );
+      await this.chunkedTerminalWrite(
+        latest.terminalBuffer,
+        TERMINAL_CHUNK_SIZE,
+        loadOwner
+      );
+      if (!this._isTerminalFrameReconcileCurrent(request)) return false;
+      await new Promise((resolve) => terminal.write(syncEnd, resolve));
+      synchronizedUpdateOpen = false;
+
+      this._terminalScrollLocked = false;
+      this._wasAtBottomBeforeWrite = true;
+      terminal.scrollToBottom();
+      await this._waitForTerminalPaint();
+      if (!this._isTerminalFrameReconcileCurrent(request)) return false;
+
+      this._finishBufferLoad(loadOwner, { snapshotCursor: latest.cursor });
+      loadOwner = null;
+      this._syncMobileHelperTextareaToCursor?.();
+      this._localEchoOverlay?.rerender?.();
+      await this._waitForTerminalPaint();
+      if (this._isTerminalFrameReconcileCurrent(request)) {
+        authoritative = true;
+        if (typeof KeyboardHandler !== 'undefined') {
+          KeyboardHandler.onTerminalFrameAuthoritative?.();
+        }
+      }
+      _crashDiag.log(`FRAME_RECONCILE: ${request.reason}`);
+      return true;
+    } catch (err) {
+      if (!abortController?.signal.aborted) {
+        console.warn(`Failed to reconcile terminal frame after ${request.reason}:`, err);
+      }
+      return false;
+    } finally {
+      if (fetchTimeout !== null) clearTimeout(fetchTimeout);
+      if (this._terminalFrameReconcileAbortController === abortController) {
+        this._terminalFrameReconcileAbortController = null;
+      }
+      if (synchronizedUpdateOpen) {
+        try {
+          await new Promise((resolve) => terminal.write(syncEnd, resolve));
+        } catch {}
+      }
+      if (loadOwner !== null) {
+        this._finishBufferLoad(loadOwner, { flushQueued: true });
+      }
+      if (
+        !authoritative &&
+        this._isTerminalFrameReconcileCurrent(request) &&
+        !this._terminalFrameReconcilePending &&
+        typeof KeyboardHandler !== 'undefined'
+      ) {
+        KeyboardHandler.onTerminalFrameReady?.();
+      }
+    }
+  },
+
   /**
    * Complete a buffer load: unblock live SSE writes.
    * Called when chunkedTerminalWrite finishes (or is skipped for empty buffers).
    *
-   * By default queued SSE events are DISCARDED, not flushed. For an established
-   * session the loaded buffer from the API is the source of truth up to the
-   * response timestamp; SSE events queued during the fetch+write overlap already
-   * appear in that buffer, so flushing them writes duplicate data (especially Ink
-   * cursor-up redraws), corrupting the terminal display.
-   *
-   * COD-144: a brand-new session is the exception. Its terminal fetch can resolve
-   * BEFORE the PTY emits its first prompt, so the fetched buffer is empty and the
-   * prompt arrives only as a queued SSE event. Discarding it leaves the terminal
-   * blank until a tab-switch re-fetches a now-populated buffer. When the caller
-   * knows the load painted nothing (empty fetch + no cache), it passes
-   * `{ flushQueued: true }` so the queued events are REPLAYED through
-   * `batchTerminalWrite()` instead of dropped. Replay runs after `_isLoadingBuffer`
-   * is cleared, so the events write through normally and are not re-queued.
+   * Cursor-bearing events are reconciled against the snapshot boundary: covered
+   * output is discarded, output after the boundary is replayed, and a batch that
+   * crosses the boundary contributes only its uncovered suffix. Legacy events
+   * retain COD-144's empty-buffer `flushQueued` fallback.
    *
    * After unblocking, new SSE/WS events deliver subsequent output normally.
    *
    * @param {string} [owner] Load token from `_beginBufferLoad`; a stale owner is a no-op.
-   * @param {{ flushQueued?: boolean }} [opts] When `flushQueued` is true, replay any queued events.
+   * @param {{ flushQueued?: boolean, snapshotCursor?: object }} [opts]
    */
   _beginBufferLoad(owner) {
     if (this._bufferLoadSeq === undefined) this._bufferLoadSeq = 0;
@@ -2502,14 +2861,69 @@ Object.assign(CodemanApp.prototype, {
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
     this._bufferLoadOwner = null;
-    // COD-144: replay (rather than discard) queued live events when the load
-    // painted nothing — the queued prompt is the only content a new session has.
-    if (opts?.flushQueued && queued && queued.length) {
-      for (const data of queued) {
-        this.batchTerminalWrite(data);
+    if (queued && queued.length) {
+      for (const item of queued) {
+        if (opts?.snapshotCursor && typeof item === 'object' && item !== null) {
+          const replay = this._terminalEventAfterSnapshot(item, opts.snapshotCursor);
+          if (replay) this.batchTerminalWrite(replay.data, replay.cursor);
+        } else if (opts?.flushQueued) {
+          const data = typeof item === 'string' ? item : item.data;
+          const itemCursor = typeof item === 'string' ? undefined : item.cursor;
+          if (itemCursor) this.batchTerminalWrite(data, itemCursor);
+          else this.batchTerminalWrite(data);
+        }
       }
     }
+    const overlay = this._localEchoOverlay;
+    if (overlay?.hasPending && this.terminal?.write) {
+      this.terminal.write('', () => {
+        if (!this._isLoadingBuffer && overlay === this._localEchoOverlay && overlay.hasPending) {
+          overlay.rerender();
+        }
+      });
+    }
     return true;
+  },
+
+  _isTerminalCursor(cursor) {
+    return Boolean(
+      cursor &&
+      typeof cursor.stream === 'string' &&
+      cursor.stream.length > 0 &&
+      Number.isSafeInteger(cursor.generation) &&
+      cursor.generation >= 0 &&
+      Number.isSafeInteger(cursor.start) &&
+      Number.isSafeInteger(cursor.end) &&
+      cursor.start >= 0 &&
+      cursor.end >= cursor.start
+    );
+  },
+
+  _terminalEventAfterSnapshot(item, snapshotCursor) {
+    const cursor = item?.cursor;
+    if (!this._isTerminalCursor(cursor) || !this._isTerminalCursor(snapshotCursor)) return null;
+    if (cursor.stream !== snapshotCursor.stream || cursor.generation < snapshotCursor.generation) return null;
+    if (cursor.generation > snapshotCursor.generation) return item;
+    if (cursor.end <= snapshotCursor.end) return null;
+    if (cursor.start >= snapshotCursor.end) return item;
+
+    const coveredLength = snapshotCursor.end - cursor.start;
+    const syncStart = '\x1b[?2026h';
+    const syncEnd = '\x1b[?2026l';
+    const payloadStart = item.data.startsWith(syncStart) ? syncStart.length : 0;
+    const payloadEnd = item.data.endsWith(syncEnd)
+      ? item.data.length - syncEnd.length
+      : item.data.length;
+    const hasCursorAlignedPayload =
+      payloadEnd - payloadStart === cursor.end - cursor.start;
+    const suffix = hasCursorAlignedPayload
+      ? syncStart + item.data.slice(payloadStart + coveredLength, payloadEnd) + syncEnd
+      : item.data.slice(coveredLength);
+
+    return {
+      data: suffix,
+      cursor: { ...cursor, start: snapshotCursor.end },
+    };
   },
 
   // ═══════════════════════════════════════════════════════════════

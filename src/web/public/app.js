@@ -619,6 +619,10 @@ class CodemanApp {
     this._loadBufferQueue = null;  // queued SSE events during buffer load
     this._bufferLoadSeq = 0;
     this._bufferLoadOwner = null;
+    this._terminalFrameReconcileSeq = 0;
+    this._terminalFrameReconcilePending = null;
+    this._terminalFrameReconcilePromise = null;
+    this._terminalFrameReconcileAbortController = null;
 
     // Flicker filter state (buffers output after screen clears)
     this.flickerFilterBuffer = '';
@@ -1654,7 +1658,7 @@ class CodemanApp {
         return;
       }
 
-      this.batchTerminalWrite(data.data);
+      this.batchTerminalWrite(data.data, data.cursor);
     }
   }
 
@@ -2321,7 +2325,21 @@ class CodemanApp {
         // (re)connects AND registers the desktop sizing claim server-side —
         // selectSession's earlier resizes ran before this WS existed, so they
         // went over HTTP, which never claims (see ws-routes sizingToken).
-        this.sendResize(sessionId)?.catch?.(() => {});
+        const session = this.sessions?.get?.(sessionId);
+        const reconcileMobileCodex =
+          session?.mode === 'codex' &&
+          typeof MobileDetection !== 'undefined' &&
+          MobileDetection.isTouchDevice?.();
+        if (reconcileMobileCodex) {
+          void this._requestTerminalFrameReconcile?.({
+            captureWhenUnchanged: true,
+            reason: 'ws-attach',
+            resizeOptions: {},
+            settleMs: TUI_REDRAW_SETTLE_MS,
+          });
+        } else {
+          this.sendResize(sessionId)?.catch?.(() => {});
+        }
         this._startMobileResizeRetry(sessionId);
         // Flush any durably-queued input over the fresh socket (covers frames a
         // prior half-open socket silently dropped, and input typed while offline).
@@ -2338,7 +2356,7 @@ class CodemanApp {
         const msg = JSON.parse(event.data);
         if (msg.t === 'o') {
           // Terminal output — route through the same batching pipeline as SSE
-          this._onSessionTerminal({ id: sessionId, data: msg.d });
+          this._onSessionTerminal({ id: sessionId, data: msg.d, cursor: msg.cursor });
         } else if (msg.t === 'c') {
           this._onSessionClearTerminal({ id: sessionId });
         } else if (msg.t === 'r') {
@@ -2478,6 +2496,15 @@ class CodemanApp {
    */
   _sendInputAsync(sessionId, input, opts) {
     if (!sessionId || !input) return;
+    if (this._shouldReconcileTerminalAction?.(sessionId, input)) {
+      if (typeof KeyboardHandler !== 'undefined') {
+        KeyboardHandler._beginTerminalFrameCover?.({ restart: true, arm: true });
+      }
+      void this._requestTerminalFrameReconcile?.({
+        reason: 'dialogue-selection',
+        settleMs: TUI_ACTION_REDRAW_SETTLE_MS,
+      });
+    }
     this._reliableSend(sessionId, input, opts?.useMux === true);
   }
 
@@ -2958,6 +2985,10 @@ class CodemanApp {
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
     this._bufferLoadOwner = null;
+    this._terminalFrameReconcileSeq = (this._terminalFrameReconcileSeq || 0) + 1;
+    this._terminalFrameReconcilePending = null;
+    this._terminalFrameReconcileAbortController?.abort?.();
+    this._terminalFrameReconcileAbortController = null;
     // Abort any in-flight chunkedTerminalWrite (SSE reconnect reloads buffers)
     this._chunkedWriteGen = (this._chunkedWriteGen || 0) + 1;
     // Preserve local echo overlay text across SSE reconnect — just hide until
@@ -4053,6 +4084,22 @@ class CodemanApp {
     }
     const forceReload = options?.forceReload === true;
     if (this.activeSessionId === sessionId && !forceReload) return;
+    const targetSession = this.sessions.get(sessionId);
+    const coverMobileCodex =
+      targetSession?.mode === 'codex' &&
+      typeof MobileDetection !== 'undefined' &&
+      MobileDetection.isTouchDevice?.();
+    if (
+      (this.activeSessionId !== sessionId || forceReload) &&
+      coverMobileCodex &&
+      typeof KeyboardHandler !== 'undefined'
+    ) {
+      KeyboardHandler._beginTerminalFrameCover?.({
+        includeShell: true,
+        restart: true,
+        arm: true,
+      });
+    }
     if (this.activeSessionId === sessionId && forceReload) {
       this.terminalBufferCache?.delete(sessionId);
       this._xtermSnapshots?.delete(sessionId);
@@ -4065,6 +4112,10 @@ class CodemanApp {
       this._chunkedWriteGen = (this._chunkedWriteGen || 0) + 1;
       this.activeSessionId = null;
     }
+    this._terminalFrameReconcileSeq = (this._terminalFrameReconcileSeq || 0) + 1;
+    this._terminalFrameReconcilePending = null;
+    this._terminalFrameReconcileAbortController?.abort?.();
+    this._terminalFrameReconcileAbortController = null;
     // Focus terminal SYNCHRONOUSLY before any await — iOS Safari only honors
     // programmatic focus() within the user-gesture call stack (e.g. tab click).
     // After the first await the gesture context is lost and focus() is silently

@@ -15,7 +15,7 @@ PTY Output → Server Batching → DEC 2026 Wrap → SSE → Client rAF → Sync
 | **3. SSE Broadcast** | `server.ts:broadcast()` | JSON serialize once, send to all clients | 0ms |
 | **4. Client rAF** | `app.js:batchTerminalWrite()` | `requestAnimationFrame` batching | 0-16ms |
 | **5. Sync Block Parser** | `app.js:extractSyncSegments()` | Strips DEC 2026 markers, waits for complete blocks | 0-50ms |
-| **6. Chunked Loading** | `app.js:chunkedTerminalWrite()` | 64KB/frame for large buffers | variable |
+| **6. Chunked Loading** | `terminal-ui.js:chunkedTerminalWrite()` | 32KB/frame for large buffers | variable |
 
 ## Server-Side Implementation (`server.ts`)
 
@@ -60,10 +60,10 @@ this.broadcast('session:terminal', { id: sessionId, data: syncData });
 - Writes at most 32KB per yield for Codex and 64KB for other modes.
 - Requeues the remainder and immediately schedules another safe yield. A final large response therefore drains without waiting for another SSE event.
 
-### `chunkedTerminalWrite(buffer, chunkSize=128KB)`
+### `chunkedTerminalWrite(buffer, chunkSize=32KB)`
 
 - For large buffer restoration (session switch, reconnect)
-- Writes 128KB per `requestAnimationFrame` to avoid UI jank
+- Writes 32KB per safe yield to avoid UI jank
 - Strips any embedded DEC 2026 markers from historical data
 
 ### `selectSession()` Optimizations
@@ -87,6 +87,31 @@ before the resize and removed after xterm's parser callback, a short Codex
 redraw quiet window, and two animation frames. A bounded expiry removes it when
 no replacement output arrives; an active terminal buffer load keeps it in place
 until that load finishes.
+
+## Authoritative Mobile Frame Reconciliation
+
+The cover hides transition frames, but it cannot determine whether xterm's
+underlying pane is current. Touch-device Codex sessions therefore reconcile
+after keyboard resizes, WebSocket attachment, and foreground dialogue
+submission:
+
+1. Coalesce overlapping requests so only the newest session/viewport transition
+   can publish a frame. A newer request aborts the older settle or fetch.
+2. Hold live SSE/WS writes behind the existing buffer-load ownership gate.
+3. Fetch the bounded 128KB current pane from
+   `/api/sessions/:id/terminal?latest=1&format=stream`.
+4. Require a `mux-visible` source and terminal stream cursor, then cross xterm's
+   parser fence.
+5. Clear only the viewport, preserving xterm scrollback, and paint the pane
+   inside one DEC 2026 synchronized update.
+6. Replay only queued output after the snapshot cursor. Covered bytes are
+   discarded and a cursor-crossing event contributes only its uncovered suffix.
+7. Release the visual cover after the authoritative pane and any pending local
+   input overlay have painted.
+
+The stream endpoint and cursor metadata are the server contract; the client
+keeps the JSON response as a compatibility fallback. Fetches have a bounded
+timeout so a stalled capture cannot block later transitions indefinitely.
 
 ## Optional Flicker Filter
 
@@ -120,6 +145,7 @@ When detected, buffers 50ms of subsequent output before flushing atomically.
 - **Server shutdown**: Skips batching via `_isStopping` flag
 - **Session switch**: Clears flicker filter state, pending writes, and sync timeout (prevents cross-session data bleed)
 - **SSE reconnect**: `handleInit()` clears all pending write state
+- **Superseded frame capture**: Aborts its settle/fetch and releases its buffer-load gate
 
 ## DEC Mode 2026 Compatibility
 
@@ -132,5 +158,5 @@ Terminals that natively support DEC 2026 buffer and render atomically. Codeman u
 | File | Key Functions |
 |------|---------------|
 | `src/web/server.ts` | `batchTerminalData()`, `flushTerminalBatches()`, `broadcast()` |
-| `src/web/public/terminal-ui.js` | `batchTerminalWrite()`, `_scheduleTerminalWriteFlush()`, `flushPendingWrites()`, `flushFlickerBuffer()`, `chunkedTerminalWrite()` |
-| `src/web/public/mobile-handlers.js` | `_beginTerminalFrameCover()`, `_armTerminalFrameCover()`, `onTerminalFrameReady()` |
+| `src/web/public/terminal-ui.js` | `batchTerminalWrite()`, `flushPendingWrites()`, `chunkedTerminalWrite()`, `_requestTerminalFrameReconcile()` |
+| `src/web/public/mobile-handlers.js` | `_beginTerminalFrameCover()`, `_armTerminalFrameCover()`, `onTerminalFrameAuthoritative()` |

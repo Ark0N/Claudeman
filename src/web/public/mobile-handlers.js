@@ -214,9 +214,12 @@ const KeyboardHandler = {
   FRAME_COVER_MAX_MS: 1600,
   FRAME_COVER_LOAD_POLL_MS: 100,
   FRAME_COVER_CODEX_QUIET_MS: 180,
+  KEYBOARD_CLOSE_START_DELTA_PX: 40,
   lastViewportHeight: 0,
   keyboardVisible: false,
   initialViewportHeight: 0,
+  _keyboardOpenMinHeight: 0,
+  _keyboardClosing: false,
   _viewportSettleTimer: null,
   _settleScrollToBottom: false,
   _terminalInputRequested: false,
@@ -227,6 +230,7 @@ const KeyboardHandler = {
   _terminalFrameCoverReadyAt: 0,
   _terminalFrameCoverReadyVersion: 0,
   _terminalFrameCoverSwapVersion: 0,
+  _terminalFrameCoverAuthoritative: false,
   _terminalFrameCoverMinTimer: null,
   _terminalFrameCoverMaxTimer: null,
   _terminalFrameCoverQuietTimer: null,
@@ -238,6 +242,8 @@ const KeyboardHandler = {
 
     this.initialViewportHeight = window.visualViewport?.height || window.innerHeight;
     this.lastViewportHeight = this.initialViewportHeight;
+    this._keyboardOpenMinHeight = 0;
+    this._keyboardClosing = false;
 
     // Simple focus handler - scroll input into view after keyboard appears
     this._focusinHandler = (e) => {
@@ -305,6 +311,8 @@ const KeyboardHandler = {
     }
     this._settleScrollToBottom = false;
     this._terminalInputRequested = false;
+    this._keyboardOpenMinHeight = 0;
+    this._keyboardClosing = false;
     this._discardTerminalFrameCover();
   },
 
@@ -313,9 +321,28 @@ const KeyboardHandler = {
     const currentHeight = window.visualViewport?.height || window.innerHeight;
     const heightDiff = this.initialViewportHeight - currentHeight;
 
+    // A soft keyboard closes through several growing visualViewport frames.
+    // Start covering at the first meaningful growth instead of waiting until
+    // the final hidden threshold, where a resize redraw may already be visible.
+    if (this.keyboardVisible) {
+      const openMinHeight =
+        this._keyboardOpenMinHeight > 0
+          ? Math.min(this._keyboardOpenMinHeight, currentHeight)
+          : Math.min(this.lastViewportHeight || currentHeight, currentHeight);
+      this._keyboardOpenMinHeight = openMinHeight;
+      if (!this._keyboardClosing && currentHeight - openMinHeight >= this.KEYBOARD_CLOSE_START_DELTA_PX) {
+        this._keyboardClosing = true;
+        if (this._terminalInputRequested) {
+          this._beginTerminalFrameCover({ restart: true });
+        }
+      }
+    }
+
     // Keyboard appeared (viewport shrunk by more than 150px)
     if (heightDiff > 150 && !this.keyboardVisible) {
       this.keyboardVisible = true;
+      this._keyboardOpenMinHeight = currentHeight;
+      this._keyboardClosing = false;
       document.body.classList.add('keyboard-visible');
       // While the keyboard is open, size the app to the visual viewport so
       // xterm's bottom row and cursor sit above the OS keyboard.
@@ -326,8 +353,15 @@ const KeyboardHandler = {
     // Use 100px threshold (not 50) to handle iOS address bar drift,
     // iOS 26's persistent 24px discrepancy, and Safari bottom bar changes
     else if (heightDiff < 100 && this.keyboardVisible) {
-      if (this._terminalInputRequested) this._beginTerminalFrameCover();
+      // Closing can begin while the opening cover still owns a queued
+      // compositor swap. Restart its lifecycle so that stale release cannot
+      // expose the final fit/SIGWINCH redraw sequence.
+      if (this._terminalInputRequested) {
+        this._beginTerminalFrameCover({ restart: true });
+      }
       this.keyboardVisible = false;
+      this._keyboardOpenMinHeight = 0;
+      this._keyboardClosing = false;
       document.body.classList.remove('keyboard-visible');
       this.onKeyboardHide();
       // Re-sync --app-height now that keyboard is gone (MobileDetection skipped
@@ -549,6 +583,7 @@ const KeyboardHandler = {
     this._terminalFrameCoverReadyAt = 0;
     this._terminalFrameCoverReadyVersion += 1;
     this._terminalFrameCoverSwapVersion = 0;
+    this._terminalFrameCoverAuthoritative = false;
     this._scheduleTerminalFrameCoverExpiry();
     if (arm) this._armTerminalFrameCover();
   },
@@ -562,6 +597,7 @@ const KeyboardHandler = {
     this._terminalFrameCoverReadyAt = 0;
     this._terminalFrameCoverReadyVersion += 1;
     this._terminalFrameCoverSwapVersion = 0;
+    this._terminalFrameCoverAuthoritative = false;
     this._scheduleTerminalFrameCoverExpiry();
   },
 
@@ -590,6 +626,7 @@ const KeyboardHandler = {
     this._terminalFrameCoverReadyAt = 0;
     this._terminalFrameCoverReadyVersion += 1;
     this._terminalFrameCoverSwapVersion = 0;
+    this._terminalFrameCoverAuthoritative = false;
     if (this._terminalFrameCoverQuietTimer) {
       clearTimeout(this._terminalFrameCoverQuietTimer);
       this._terminalFrameCoverQuietTimer = null;
@@ -629,6 +666,16 @@ const KeyboardHandler = {
     this._tryFinishTerminalFrameCover();
   },
 
+  onTerminalFrameAuthoritative() {
+    if (!this._terminalFrameCover || !this._terminalFrameCoverArmed) return;
+    this._terminalFrameCoverAuthoritative = true;
+    if (this._terminalFrameCoverQuietTimer) {
+      clearTimeout(this._terminalFrameCoverQuietTimer);
+      this._terminalFrameCoverQuietTimer = null;
+    }
+    this.onTerminalFrameReady();
+  },
+
   _tryFinishTerminalFrameCover() {
     if (!this._terminalFrameCover || !this._terminalFrameCoverArmed || !this._terminalFrameCoverReady) {
       return;
@@ -637,7 +684,8 @@ const KeyboardHandler = {
     if (!this._terminalHasVisibleFrame()) return;
     const activeSession =
       typeof app !== 'undefined' && app.activeSessionId ? app.sessions?.get?.(app.activeSessionId) : null;
-    const quietMs = activeSession?.mode === 'codex' ? this.FRAME_COVER_CODEX_QUIET_MS : 0;
+    const quietMs =
+      this._terminalFrameCoverAuthoritative || activeSession?.mode !== 'codex' ? 0 : this.FRAME_COVER_CODEX_QUIET_MS;
     const quietRemaining = this._terminalFrameCoverReadyAt + quietMs - Date.now();
     if (quietRemaining > 0) {
       if (!this._terminalFrameCoverQuietTimer) {
@@ -726,26 +774,19 @@ const KeyboardHandler = {
     this._terminalFrameCoverReadyAt = 0;
     this._terminalFrameCoverReadyVersion += 1;
     this._terminalFrameCoverSwapVersion = 0;
+    this._terminalFrameCoverAuthoritative = false;
   },
 
   /** Send current terminal dimensions to the server (one-shot, for keyboard open/close) */
   _sendTerminalResize() {
     if (typeof app === 'undefined' || !app.activeSessionId || !app.fitAddon) return;
     try {
-      const dims = app.fitAddon.proposeDimensions();
-      if (dims) {
-        const cols = Math.max(dims.cols, 40);
-        const rows = Math.max(dims.rows, 10);
-        app._lastResizeDims = { cols, rows };
-        // Declare the viewport type so resize arbitration can ignore this
-        // while a desktop connection is sizing the same session.
-        const viewportType = MobileDetection.getDeviceType ? MobileDetection.getDeviceType() : 'mobile';
-        fetch(`/api/sessions/${app.activeSessionId}/resize`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cols, rows, viewportType }),
-        }).catch(() => {});
-      }
+      return app._requestTerminalFrameReconcile?.({
+        captureWhenUnchanged: true,
+        reason: 'keyboard-resize',
+        resizeOptions: { takeControl: true, refit: false },
+        settleMs: TUI_REDRAW_SETTLE_MS,
+      });
     } catch {}
   },
 
