@@ -1,6 +1,20 @@
 # Local Echo Overlay — Implementation Plan
 
-> **Status: SHIPPED.** Implementation lives in `packages/xterm-zerolag-input/src/` (overlay-renderer.ts, prompt-finder.ts, cell-dimensions.ts, zerolag-input-addon.ts) with the embedded copy in `src/web/public/app.js`. This document is retained as historical design context.
+> **Status: SHIPPED.** Source lives in `packages/xterm-zerolag-input/src/` and is bundled into the gitignored public vendor asset by the package/build scripts. This document is retained as historical design context.
+
+> **Current input rule:** ordinary typing and Backspace never infer editable text from the rendered terminal buffer. Consumers explicitly call `detectBufferText()` after Tab completion or `setFlushed()` when restoring known input. Full-screen TUIs can render status text after a prompt glyph, so implicit buffer adoption causes ghost deletion and stale text submission.
+
+> **IME rule:** `TerminalInputController` owns the full pre-delivery lifecycle.
+> Live composition candidates occupy a separate transient overlay slot;
+> `compositionupdate` replaces that slot, and the first finalized browser path
+> atomically commits it to pending text before clearing xterm's helper textarea.
+> Candidate text is never submitted or deleted as if already committed. The
+> controller retains each accepted commit for a short replay window and
+> consumes one matching repeat whole or in fragments. Substantive new input,
+> a new composition, session reset, or expiry invalidates the marker, so two
+> browser routes cannot append one word twice.
+
+> **Durability rule:** `TerminalInputStateStore` owns each session's pending, flushed, and optional CJK draft text separately from submitted input delivery. Lifecycle suspension calls `capture()` and only saves the draft; it never sends it. Session/Home switching calls `handoff()`, explicitly delivers the returned `flushText`, and persists flushed metadata so reload does not break Backspace. Restoration uses `get()` plus `restoreDraft(..., false)` until the target terminal frame is ready.
 
 ## Context
 
@@ -27,11 +41,12 @@ sub-pixel rendering. (Originally designed against xterm.js v5.3.0; project now o
 ## Key Technical Details (from research)
 
 ### Pixel Positioning Formula
+
 ```js
 // Same formula used by BufferDecorationRenderer, CompositionHelper, Terminal._syncTextArea
 const dims = terminal._core._renderService.dimensions;
-const left = cursorX * dims.css.cell.width;   // CSS pixels, relative to .xterm-screen
-const top  = cursorY * dims.css.cell.height;  // CSS pixels, relative to .xterm-screen
+const left = cursorX * dims.css.cell.width; // CSS pixels, relative to .xterm-screen
+const top = cursorY * dims.css.cell.height; // CSS pixels, relative to .xterm-screen
 ```
 
 - `cursorX` = `terminal.buffer.active.cursorX` (0 to terminal.cols)
@@ -39,14 +54,17 @@ const top  = cursorY * dims.css.cell.height;  // CSS pixels, relative to .xterm-
 - No scroll offset math needed
 
 ### Cell Dimensions (no public API in v5/v6 — use internal; public in v7+)
+
 ```js
 const dims = terminal._core._renderService.dimensions;
-dims.css.cell.width   // e.g., 8.4px
-dims.css.cell.height  // e.g., 17px
+dims.css.cell.width; // e.g., 8.4px
+dims.css.cell.height; // e.g., 17px
 ```
+
 Public `terminal.dimensions` only available in v7.0.0+.
 
 ### xterm.js DOM Structure
+
 ```
 div.terminal.xterm
   ├── div.xterm-viewport (overflow-y: scroll)
@@ -58,41 +76,44 @@ div.terminal.xterm
 ```
 
 ### Z-Index Layers
-| Layer | Z-Index |
-|-------|---------|
-| textarea | -5 |
-| row content (DOM renderer) | auto (0) |
-| selection | 1 |
-| composition (IME) | 1 |
-| helpers | 5 |
-| decorations | 6 |
-| decorations (top layer) | 7 ← OUR OVERLAY |
-| overview ruler | 8 |
-| accessibility | 10 |
+
+| Layer                      | Z-Index         |
+| -------------------------- | --------------- |
+| textarea                   | -5              |
+| row content (DOM renderer) | auto (0)        |
+| selection                  | 1               |
+| composition (IME)          | 1               |
+| helpers                    | 5               |
+| decorations                | 6               |
+| decorations (top layer)    | 7 ← OUR OVERLAY |
+| overview ruler             | 8               |
+| accessibility              | 10              |
 
 ### Font Matching CSS
+
 ```css
 .local-echo-overlay {
-    position: absolute;
-    z-index: 7;
-    pointer-events: none;
-    white-space: pre;
-    font-kerning: none;
-    overflow: hidden;
-    display: none;
-    /* Set dynamically: left, top, height, line-height, font-family, font-size, color, letter-spacing */
+  position: absolute;
+  z-index: 7;
+  pointer-events: none;
+  white-space: pre;
+  font-kerning: none;
+  overflow: hidden;
+  display: none;
+  /* Set dynamically: left, top, height, line-height, font-family, font-size, color, letter-spacing */
 }
 ```
 
 Critical: match `letter-spacing` from `.xterm-rows` container (DPR rounding compensation).
 
 ### Font Properties from Terminal
+
 ```js
-terminal.options.fontFamily   // '"Fira Code", "Cascadia Code", ...'
-terminal.options.fontSize     // 14 (10 on mobile)
-terminal.options.fontWeight   // 'normal'
-terminal.options.letterSpacing // 0
-terminal.options.lineHeight   // 1.2
+terminal.options.fontFamily; // '"Fira Code", "Cascadia Code", ...'
+terminal.options.fontSize; // 14 (10 on mobile)
+terminal.options.fontWeight; // 'normal'
+terminal.options.letterSpacing; // 0
+terminal.options.lineHeight; // 1.2
 ```
 
 Use actual `dims.css.cell.height` for line-height (not the multiplier).
@@ -120,84 +141,95 @@ After Image Watcher section (~line 878), add "Input" section with checkbox.
 
 ```js
 class LocalEchoOverlay {
-    constructor(terminal) {
-        this.terminal = terminal;
-        this.overlay = document.createElement('span');
-        // ... CSS setup ...
-        const screen = terminal.element.querySelector('.xterm-screen');
-        screen.appendChild(this.overlay);
-        this.pendingText = '';
-        this.timeout = null;
+  constructor(terminal) {
+    this.terminal = terminal;
+    this.overlay = document.createElement('span');
+    // ... CSS setup ...
+    const screen = terminal.element.querySelector('.xterm-screen');
+    screen.appendChild(this.overlay);
+    this.pendingText = '';
+    this.timeout = null;
+  }
+
+  addChar(char) {
+    this.pendingText += char;
+    this._render();
+    this._resetTimeout();
+  }
+
+  removeChar() {
+    if (this.pendingText.length > 0) {
+      this.pendingText = this.pendingText.slice(0, -1);
+      this._render();
+      if (this.pendingText.length > 0) this._resetTimeout();
+      else this._clearTimeout();
     }
+  }
 
-    addChar(char) {
-        this.pendingText += char;
-        this._render();
-        this._resetTimeout();
+  clear() {
+    this.pendingText = '';
+    this.overlay.textContent = '';
+    this.overlay.style.display = 'none';
+    this._clearTimeout();
+  }
+
+  _render() {
+    if (!this.pendingText) {
+      this.clear();
+      return;
     }
+    const dims = this.terminal._core._renderService.dimensions;
+    const cellW = dims.css.cell.width;
+    const cellH = dims.css.cell.height;
+    const cursorX = this.terminal.buffer.active.cursorX;
+    const cursorY = this.terminal.buffer.active.cursorY;
 
-    removeChar() {
-        if (this.pendingText.length > 0) {
-            this.pendingText = this.pendingText.slice(0, -1);
-            this._render();
-            if (this.pendingText.length > 0) this._resetTimeout();
-            else this._clearTimeout();
-        }
+    this.overlay.style.left = cursorX * cellW + 'px';
+    this.overlay.style.top = cursorY * cellH + 'px';
+    this.overlay.style.height = cellH + 'px';
+    this.overlay.style.lineHeight = cellH + 'px';
+    this.overlay.textContent = this.pendingText;
+    this.overlay.style.display = '';
+  }
+
+  _resetTimeout() {
+    this._clearTimeout();
+    this.timeout = setTimeout(() => this.clear(), 2000);
+  }
+
+  _clearTimeout() {
+    if (this.timeout) {
+      clearTimeout(this.timeout);
+      this.timeout = null;
     }
+  }
 
-    clear() {
-        this.pendingText = '';
-        this.overlay.textContent = '';
-        this.overlay.style.display = 'none';
-        this._clearTimeout();
-    }
+  get hasPending() {
+    return this.pendingText.length > 0;
+  }
 
-    _render() {
-        if (!this.pendingText) { this.clear(); return; }
-        const dims = this.terminal._core._renderService.dimensions;
-        const cellW = dims.css.cell.width;
-        const cellH = dims.css.cell.height;
-        const cursorX = this.terminal.buffer.active.cursorX;
-        const cursorY = this.terminal.buffer.active.cursorY;
-
-        this.overlay.style.left = (cursorX * cellW) + 'px';
-        this.overlay.style.top = (cursorY * cellH) + 'px';
-        this.overlay.style.height = cellH + 'px';
-        this.overlay.style.lineHeight = cellH + 'px';
-        this.overlay.textContent = this.pendingText;
-        this.overlay.style.display = '';
-    }
-
-    _resetTimeout() {
-        this._clearTimeout();
-        this.timeout = setTimeout(() => this.clear(), 2000);
-    }
-
-    _clearTimeout() {
-        if (this.timeout) { clearTimeout(this.timeout); this.timeout = null; }
-    }
-
-    get hasPending() { return this.pendingText.length > 0; }
-
-    dispose() {
-        this.clear();
-        this.overlay.remove();
-    }
+  dispose() {
+    this.clear();
+    this.overlay.remove();
+  }
 }
 ```
 
 ### Integration Points
 
 **Input handler (`terminal.onData`):**
+
 - Backspace (`\x7f`): if overlay has pending + echo enabled → `overlay.removeChar()`
 - Enter (`\r`/`\n`): `overlay.clear()`, disable echo (session goes busy)
 - Other control chars / multi-char (paste): `overlay.clear()`
 - Single printable char (charCode >= 32, length === 1): if echo enabled → `overlay.addChar(data)`
 
 **Output handler (`flushPendingWrites`):**
+
 - After writing segments: if overlay has pending text → `overlay.clear()` (server confirmed)
 
 **State management:**
+
 - `_localEchoEnabled` boolean, updated on session status change + settings change
 - Only enabled when: setting on + active session is idle
 - On idle→busy transition: clear overlay
@@ -213,17 +245,17 @@ Default: **disabled** (opt-in)
 
 ## Edge Cases
 
-| Case | Handling |
-|---|---|
-| Paste (multi-char onData) | data.length > 1 → NOT echoed. Server echoes it. |
-| Misprediction | Server output arrives → overlay cleared → server redraws correctly |
-| Idle→busy race | _updateLocalEchoState() disables + clears overlay |
-| Server unresponsive | 2s timeout → overlay cleared |
-| Tab switch | selectSession() clears overlay |
-| SSE reconnect | handleInit() clears overlay |
-| Terminal resize | Overlay position recalculated on next _render() |
-| Scrolled back | cursorY is viewport-relative, position stays correct |
-| Unicode/emoji | data.length > 1 → not echoed (ASCII-only) |
+| Case                      | Handling                                                           |
+| ------------------------- | ------------------------------------------------------------------ |
+| Paste (multi-char onData) | data.length > 1 → NOT echoed. Server echoes it.                    |
+| Misprediction             | Server output arrives → overlay cleared → server redraws correctly |
+| Idle→busy race            | \_updateLocalEchoState() disables + clears overlay                 |
+| Server unresponsive       | 2s timeout → overlay cleared                                       |
+| Tab switch                | selectSession() clears overlay                                     |
+| SSE reconnect             | handleInit() clears overlay                                        |
+| Terminal resize           | Overlay position recalculated on next \_render()                   |
+| Scrolled back             | cursorY is viewport-relative, position stays correct               |
+| Unicode/emoji             | data.length > 1 → not echoed (ASCII-only)                          |
 
 ## What NOT to Do
 
