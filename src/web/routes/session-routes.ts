@@ -25,6 +25,7 @@ import { SseEvent } from '../sse-events.js';
 import {
   CreateSessionSchema,
   SessionNameSchema,
+  SessionWorkingDirectorySchema,
   SessionColorSchema,
   RunPromptSchema,
   SessionInputWithLimitSchema,
@@ -581,6 +582,39 @@ export function registerSessionRoutes(
     ctx.mux.updateSessionName(id, session.name);
     persistAndBroadcastSession(ctx, session);
     return { name: session.name };
+  });
+
+  // ========== Set Session Working Directory ==========
+
+  app.put('/api/sessions/:id/working-directory', async (req) => {
+    const { id } = req.params as { id: string };
+    const body = parseBody(SessionWorkingDirectorySchema, req.body, 'Invalid request body');
+    const session = findSessionOrFail(ctx, id, req);
+    const sessionState = session.toState();
+
+    if (sessionState.remote || sessionState.docker) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'Working directory reassignment is available only for local sessions'
+      );
+    }
+    if (!isWorkingDirAllowed(getAuthUser(req), body.workingDir)) {
+      return createErrorResponse(ApiErrorCode.FORBIDDEN, 'workingDir is outside your workspace');
+    }
+    try {
+      if (!statSync(body.workingDir).isDirectory()) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'workingDir is not a directory');
+      }
+    } catch {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'workingDir does not exist');
+    }
+
+    session.setWorkingDir(body.workingDir);
+    if (session.imageWatcherEnabled) {
+      imageWatcher.watchSession(session.id, body.workingDir);
+    }
+    persistAndBroadcastSession(ctx, session);
+    return { workingDir: session.workingDir };
   });
 
   // ========== Set Session Color ==========

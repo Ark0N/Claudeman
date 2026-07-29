@@ -289,7 +289,7 @@ export interface ClaudeMessage {
  */
 export class Session extends EventEmitter {
   readonly id: string;
-  readonly workingDir: string;
+  workingDir: string;
   readonly createdAt: number;
   readonly mode: SessionMode;
 
@@ -687,6 +687,24 @@ export class Session extends EventEmitter {
   /** Set the owning username (used by recovery to restore ownership). */
   set owner(username: string | undefined) {
     this._owner = username;
+  }
+
+  /**
+   * Synchronize Codeman's workspace metadata with an already-running local
+   * session. This intentionally does not attempt to change the child process cwd.
+   */
+  setWorkingDir(workingDir: string): void {
+    if (workingDir !== this.workingDir) {
+      this.workingDir = workingDir;
+      this._bashToolParser.setWorkingDir(workingDir);
+      if (!isExternalCliMode(this.mode)) {
+        this._ralphTracker.setWorkingDir(workingDir);
+      }
+    }
+    if (this._muxSession) {
+      this._muxSession.workingDir = workingDir;
+    }
+    this._mux?.updateSessionWorkingDir(this.id, workingDir);
   }
 
   // Adopt a Claude conversation ID observed from an external source (e.g. hook

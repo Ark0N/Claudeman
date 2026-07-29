@@ -9,6 +9,7 @@ export const PORTS = {
   VISUAL_REGRESSION: 3206,
   ACCESSIBILITY: 3207,
   HEADER_BUTTONS: 3208,
+  FILE_VIEWER: 3211,
 } as const;
 
 // CSS Selectors

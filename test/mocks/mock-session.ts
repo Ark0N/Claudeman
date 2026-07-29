@@ -188,6 +188,10 @@ export class MockSession extends EventEmitter {
   /** CLI mode */
   mode: string = 'claude';
 
+  /** Remote/container execution metadata used by local-only route guards. */
+  remote: object | undefined;
+  docker: object | undefined;
+
   /** Text output buffer (stripped of ANSI) */
   textOutput: string = '';
 
@@ -228,6 +232,8 @@ export class MockSession extends EventEmitter {
       name: this.name,
       color: this.color,
       mode: this.mode,
+      remote: this.remote,
+      docker: this.docker,
       muxName: this._muxName,
       pinned: this.pinned || undefined,
       pinnedAt: this.pinned ? (this.pinnedAt ?? undefined) : undefined,
@@ -257,6 +263,11 @@ export class MockSession extends EventEmitter {
   /** Set session color */
   setColor = vi.fn((c: string) => {
     this.color = c;
+  });
+
+  /** Synchronize the session's authoritative working directory. */
+  setWorkingDir = vi.fn((workingDir: string) => {
+    this.workingDir = workingDir;
   });
 
   /** Stub for sendInput */

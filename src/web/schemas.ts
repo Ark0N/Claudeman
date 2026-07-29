@@ -873,6 +873,11 @@ export const SessionNameSchema = z.object({
   name: z.string().min(0).max(128),
 });
 
+/** PUT /api/sessions/:id/working-directory */
+export const SessionWorkingDirectorySchema = z.object({
+  workingDir: safePathSchema,
+});
+
 /** PUT /api/sessions/:id/color */
 export const SessionColorSchema = z.object({
   color: z.string().max(30),

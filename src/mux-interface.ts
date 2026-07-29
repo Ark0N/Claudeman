@@ -193,6 +193,9 @@ export interface TerminalMultiplexer extends EventEmitter {
   /** Update the display name of a session */
   updateSessionName(sessionId: string, name: string): boolean;
 
+  /** Update the persisted working directory of a session */
+  updateSessionWorkingDir(sessionId: string, workingDir: string): boolean;
+
   /** Mark session as attached/detached */
   setAttached(sessionId: string, attached: boolean): void;
 

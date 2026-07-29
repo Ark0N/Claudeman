@@ -387,6 +387,52 @@ describe('session-routes', () => {
     });
   });
 
+  // ========== PUT /api/sessions/:id/working-directory ==========
+
+  describe('PUT /api/sessions/:id/working-directory', () => {
+    it('synchronizes a local session path and persists the updated state', async () => {
+      const workingDir = await mkdtemp(join(tmpdir(), 'codeman-workdir-'));
+      try {
+        const res = await harness.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${harness.ctx._sessionId}/working-directory`,
+          payload: { workingDir },
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(res.body).data.workingDir).toBe(workingDir);
+        expect(harness.ctx._session.setWorkingDir).toHaveBeenCalledWith(workingDir);
+        expect(harness.ctx.persistSessionState).toHaveBeenCalled();
+        expect(harness.ctx.broadcast).toHaveBeenCalledWith('session:updated', expect.anything());
+      } finally {
+        await rm(workingDir, { recursive: true });
+      }
+    });
+
+    it('rejects a missing directory without changing the session', async () => {
+      const res = await harness.app.inject({
+        method: 'PUT',
+        url: `/api/sessions/${harness.ctx._sessionId}/working-directory`,
+        payload: { workingDir: '/tmp/codeman-directory-that-does-not-exist' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(harness.ctx._session.setWorkingDir).not.toHaveBeenCalled();
+    });
+
+    it('rejects remote sessions because their paths cannot be validated locally', async () => {
+      harness.ctx._session.remote = {};
+      const res = await harness.app.inject({
+        method: 'PUT',
+        url: `/api/sessions/${harness.ctx._sessionId}/working-directory`,
+        payload: { workingDir: '/tmp' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(harness.ctx._session.setWorkingDir).not.toHaveBeenCalled();
+    });
+  });
+
   // ========== PUT /api/sessions/:id/color ==========
 
   describe('PUT /api/sessions/:id/color', () => {

@@ -2247,6 +2247,16 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     return true;
   }
 
+  updateSessionWorkingDir(sessionId: string, workingDir: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return false;
+    }
+    session.workingDir = workingDir;
+    this.saveSessions();
+    return true;
+  }
+
   /**
    * Reconcile tracked sessions with actual running tmux sessions.
    */

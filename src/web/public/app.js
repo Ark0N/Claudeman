@@ -588,7 +588,19 @@ class CodemanApp {
     this.fileBrowserFilter = '';
     this.fileBrowserAllExpanded = false;
     this.fileBrowserDragListeners = null;
+    this.fileBrowserView = 'files';
+    this.fileBrowserRepositoryData = null;
+    this.fileBrowserScopeId = 'current';
+    this.fileBrowserSessionId = null;
+    this.fileBrowserLoadGeneration = 0;
+    this.fileBrowserAbortController = null;
+    this.fileBrowserCommitCache = new Map();
+    this.fileBrowserExpandedCommit = null;
+    this.fileBrowserAutoRefreshTimer = null;
     this.filePreviewContent = '';
+    this.fileDiffData = null;
+    this.fileDiffMode = 'compact';
+    this.fileDiffLoadGeneration = 0;
 
     // Toast container cache (methods in panels-ui.js)
     this._toastContainer = null;
@@ -1573,6 +1585,9 @@ class CodemanApp {
     const session = data.session || data;
     const oldSession = this.sessions.get(session.id);
     const claudeSessionIdJustSet = session.claudeSessionId && (!oldSession || !oldSession.claudeSessionId);
+    const workingDirectoryChanged = Boolean(
+      oldSession && session.workingDir && oldSession.workingDir !== session.workingDir
+    );
     this.sessions.set(session.id, session);
     this.renderSessionTabs();
     this.updateCost();
@@ -1591,6 +1606,11 @@ class CodemanApp {
       requestAnimationFrame(() => {
         this.updateConnectionLines();
       });
+    }
+    const locallySavingWorkingDirectory =
+      this._pendingWorkingDirectoryChange?.sessionId === session.id;
+    if (workingDirectoryChanged && session.id === this.activeSessionId && !locallySavingWorkingDirectory) {
+      void this.syncFileBrowserSession?.(session.id, { force: true });
     }
   }
 
@@ -4092,6 +4112,7 @@ class CodemanApp {
 
     this._cleanupPreviousSession(sessionId);
     this.activeSessionId = sessionId;
+    this.syncFileBrowserSession?.(sessionId);
     try { localStorage.setItem('codeman-active-session', sessionId); } catch {}
     // Narrow SSE filter to the active session — server stops streaming
     // session:terminal events for other sessions to this client. Cuts
@@ -4449,8 +4470,11 @@ class CodemanApp {
         if (settings.showFileBrowser) {
           const fileBrowserPanel = this.$('fileBrowserPanel');
           if (fileBrowserPanel) {
+            const wasVisible = fileBrowserPanel.classList.contains('visible');
             fileBrowserPanel.classList.add('visible');
-            this.loadFileBrowser(sessionId);
+            if (!wasVisible || this.fileBrowserSessionId !== sessionId) {
+              this.loadFileBrowser(sessionId);
+            }
             // Attach drag listeners if not already attached
             if (!this.fileBrowserDragListeners) {
               const header = fileBrowserPanel.querySelector('.file-browser-header');

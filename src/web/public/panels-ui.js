@@ -2944,35 +2944,336 @@ Object.assign(CodemanApp.prototype, {
   // File Browser Panel
   // ═══════════════════════════════════════════════════════════════
 
-  async loadFileBrowser(sessionId) {
+  resetFileBrowserSessionContext(sessionId, options = {}) {
+    if (!sessionId || (!options.force && this.fileBrowserSessionId === sessionId)) return false;
+
+    this.fileBrowserAbortController?.abort();
+    this.fileBrowserAbortController = null;
+    this.fileBrowserLoadGeneration += 1;
+    if (this.fileBrowserAutoRefreshTimer) {
+      clearInterval(this.fileBrowserAutoRefreshTimer);
+      this.fileBrowserAutoRefreshTimer = null;
+    }
+
+    this.fileBrowserSessionId = sessionId;
+    this.fileBrowserScopeId = 'current';
+    this.fileBrowserData = null;
+    this.fileBrowserRepositoryData = null;
+    this.fileBrowserExpandedDirs.clear();
+    this.fileBrowserFilter = '';
+    this.fileBrowserAllExpanded = false;
+    this.fileBrowserCommitCache.clear();
+    this.fileBrowserExpandedCommit = null;
+    const searchInput = this.$('fileBrowserSearch');
+    if (searchInput) searchInput.value = '';
+    return true;
+  },
+
+  syncFileBrowserSession(sessionId, options = {}) {
+    if (!this.resetFileBrowserSessionContext(sessionId, options)) return null;
+
+    const panel = this.$('fileBrowserPanel');
+    if (panel?.classList.contains('visible')) {
+      return this.loadFileBrowser(sessionId, { scopeId: 'current' });
+    }
+    return null;
+  },
+
+  async loadFileBrowser(sessionId, options = {}) {
     if (!sessionId) return;
 
     const treeEl = this.$('fileBrowserTree');
-    const statusEl = this.$('fileBrowserStatus');
     if (!treeEl) return;
 
-    // Show loading state
-    treeEl.innerHTML = '<div class="file-browser-loading">Loading files...</div>';
+    this.resetFileBrowserSessionContext(sessionId);
+
+    const repositoryOnly = options.repositoryOnly === true;
+    const requestedScope = options.scopeId || this.fileBrowserScopeId || 'current';
+    const generation = ++this.fileBrowserLoadGeneration;
+    this.fileBrowserAbortController?.abort();
+    const controller = new AbortController();
+    this.fileBrowserAbortController = controller;
+
+    if (!options.silent) {
+      treeEl.innerHTML = `<div class="file-browser-loading">Loading ${repositoryOnly ? 'repository' : 'files'}...</div>`;
+    }
 
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/files?depth=5&showHidden=false`);
-      if (!res.ok) throw new Error('Failed to load files');
+      const scopeQuery = encodeURIComponent(requestedScope);
+      const repositoryRequest = fetch(
+        `/api/sessions/${sessionId}/repository?scope=${scopeQuery}`,
+        { signal: controller.signal }
+      );
+      const filesRequest = repositoryOnly
+        ? null
+        : fetch(
+            `/api/sessions/${sessionId}/files?depth=5&showHidden=false&scope=${scopeQuery}`,
+            { signal: controller.signal }
+          );
+      const [repositoryResponse, filesResponse] = await Promise.all([
+        repositoryRequest,
+        filesRequest,
+      ]);
 
-      const result = await res.json();
-      if (!result.success) throw new Error(result.error || 'Failed to load files');
-
-      this.fileBrowserData = result.data;
-      this.renderFileBrowserTree();
-
-      // Update status
-      if (statusEl) {
-        const { totalFiles, totalDirectories, truncated } = result.data;
-        statusEl.textContent = `${totalFiles} files, ${totalDirectories} dirs${truncated ? ' (truncated)' : ''}`;
+      if (!repositoryResponse.ok) throw new Error('Failed to load repository');
+      const repositoryResult = await repositoryResponse.json();
+      if (!repositoryResult.success) {
+        throw new Error(repositoryResult.error || 'Failed to load repository');
       }
+
+      let filesResult = null;
+      if (filesResponse) {
+        if (!filesResponse.ok) throw new Error('Failed to load files');
+        filesResult = await filesResponse.json();
+        if (!filesResult.success) throw new Error(filesResult.error || 'Failed to load files');
+      }
+
+      if (
+        generation !== this.fileBrowserLoadGeneration ||
+        this.activeSessionId !== sessionId ||
+        this.fileBrowserSessionId !== sessionId
+      ) {
+        return;
+      }
+
+      this.fileBrowserRepositoryData = repositoryResult.data;
+      this.fileBrowserScopeId = repositoryResult.data.selectedScopeId || 'current';
+      if (filesResult) this.fileBrowserData = filesResult.data;
+      this.renderFileBrowserControls();
+      this.renderFileBrowserCurrentView();
+      this.updateFileBrowserAutoRefresh();
     } catch (err) {
+      if (err?.name === 'AbortError') return;
       console.error('Failed to load file browser:', err);
-      treeEl.innerHTML = `<div class="file-browser-empty">Failed to load files: ${escapeHtml(err.message)}</div>`;
+      if (
+        generation === this.fileBrowserLoadGeneration &&
+        this.fileBrowserSessionId === sessionId
+      ) {
+        treeEl.innerHTML = `<div class="file-browser-empty">Failed to load repository: ${escapeHtml(err.message)}</div>`;
+      }
+    } finally {
+      if (this.fileBrowserAbortController === controller) {
+        this.fileBrowserAbortController = null;
+      }
     }
+  },
+
+  renderFileBrowserControls() {
+    const repository = this.fileBrowserRepositoryData;
+    const scopeRow = this.$('fileBrowserScopeRow');
+    const scopeSelect = this.$('fileBrowserScope');
+    const rootEl = this.$('fileBrowserRoot');
+    const searchRow = this.$('fileBrowserSearchRow');
+    const expandBtn = this.$('fileBrowserExpandBtn');
+    const workingDirectoryBtn = this.$('fileBrowserWorkingDirectoryBtn');
+    const changesCount = this.$('fileBrowserChangesCount');
+    const available = repository?.available === true;
+    const session = this.sessions.get(this.fileBrowserSessionId);
+
+    if (scopeRow) scopeRow.hidden = !available;
+    if (workingDirectoryBtn) {
+      workingDirectoryBtn.hidden = !session || Boolean(session.remote || session.docker);
+    }
+    if (scopeSelect && available) {
+      scopeSelect.replaceChildren();
+      for (const worktree of repository.worktrees) {
+        const option = document.createElement('option');
+        option.value = worktree.id;
+        const role = worktree.main ? 'root' : 'worktree';
+        const branch = worktree.branch || worktree.head.slice(0, 8);
+        option.textContent = `${worktree.name} · ${branch} (${role})`;
+        option.title = worktree.path;
+        option.selected = worktree.id === this.fileBrowserScopeId;
+        scopeSelect.appendChild(option);
+      }
+    }
+    if (rootEl) {
+      const selected = repository?.worktrees?.find(
+        worktree => worktree.id === this.fileBrowserScopeId
+      );
+      rootEl.textContent = selected?.branch || '';
+      rootEl.title = selected?.path || repository?.repositoryRoot || '';
+    }
+
+    document.querySelectorAll('.file-browser-tab').forEach(tab => {
+      const active = tab.dataset.view === this.fileBrowserView;
+      tab.classList.toggle('active', active);
+      tab.setAttribute('aria-selected', String(active));
+    });
+    if (searchRow) searchRow.hidden = this.fileBrowserView !== 'files';
+    if (expandBtn) expandBtn.hidden = this.fileBrowserView !== 'files';
+    if (changesCount) {
+      const count = repository?.changes?.length || 0;
+      changesCount.textContent = String(count);
+      changesCount.hidden = count === 0;
+    }
+    this.updateFileBrowserStatus();
+  },
+
+  switchFileBrowserView(view) {
+    if (!['files', 'changes', 'history'].includes(view)) return;
+    this.fileBrowserView = view;
+    this.renderFileBrowserControls();
+    this.renderFileBrowserCurrentView();
+    this.updateFileBrowserAutoRefresh();
+  },
+
+  changeFileBrowserScope(scopeId) {
+    if (!scopeId || scopeId === this.fileBrowserScopeId || !this.fileBrowserSessionId) return;
+    this.fileBrowserScopeId = scopeId;
+    this.fileBrowserExpandedDirs.clear();
+    this.fileBrowserCommitCache.clear();
+    this.fileBrowserExpandedCommit = null;
+    this.loadFileBrowser(this.fileBrowserSessionId, { scopeId });
+  },
+
+  openFileBrowserWorkingDirectoryEditor() {
+    const sessionId = this.fileBrowserSessionId || this.activeSessionId;
+    const session = sessionId ? this.sessions.get(sessionId) : null;
+    if (!session) {
+      this.showToast('Open a session to set its work path', 'info');
+      return;
+    }
+    if (session.remote || session.docker) {
+      this.showToast('Work path editing is available for local sessions', 'info');
+      return;
+    }
+
+    const modal = this.$('workingDirectoryModal');
+    const input = this.$('workingDirectoryInput');
+    const status = this.$('workingDirectoryStatus');
+    if (!modal || !input) return;
+
+    modal.dataset.sessionId = sessionId;
+    modal.classList.add('active');
+    modal.setAttribute('aria-hidden', 'false');
+    input.value = session.workingDir || '';
+    if (status) {
+      status.hidden = true;
+      status.textContent = '';
+    }
+    this._workingDirectoryFocusTrap?.deactivate();
+    this._workingDirectoryFocusTrap = new FocusTrap(modal);
+    this._workingDirectoryFocusTrap.activate();
+    requestAnimationFrame(() => {
+      input.focus();
+      input.select();
+    });
+  },
+
+  closeFileBrowserWorkingDirectoryEditor() {
+    const modal = this.$('workingDirectoryModal');
+    if (modal) {
+      modal.classList.remove('active');
+      modal.setAttribute('aria-hidden', 'true');
+      delete modal.dataset.sessionId;
+    }
+    this._workingDirectoryFocusTrap?.deactivate();
+    this._workingDirectoryFocusTrap = null;
+  },
+
+  async saveFileBrowserWorkingDirectory(event) {
+    event?.preventDefault?.();
+    const modal = this.$('workingDirectoryModal');
+    const input = this.$('workingDirectoryInput');
+    const status = this.$('workingDirectoryStatus');
+    const saveBtn = this.$('workingDirectorySaveBtn');
+    const sessionId = modal?.dataset.sessionId;
+    const workingDir = input?.value.trim();
+    if (!modal || !sessionId || !workingDir) return;
+
+    if (saveBtn) saveBtn.disabled = true;
+    if (status) {
+      status.hidden = true;
+      status.textContent = '';
+    }
+
+    try {
+      this._pendingWorkingDirectoryChange = { sessionId, workingDir };
+      const response = await this._apiPut(
+        `/api/sessions/${encodeURIComponent(sessionId)}/working-directory`,
+        { workingDir }
+      );
+      let result = null;
+      try {
+        result = await response?.json();
+      } catch {
+        /* handled by the response check below */
+      }
+      if (!response?.ok || result?.success === false) {
+        throw new Error(result?.error || 'Failed to update work path');
+      }
+
+      const updatedWorkingDir = result?.data?.workingDir || result?.workingDir || workingDir;
+      const session = this.sessions.get(sessionId);
+      if (session) session.workingDir = updatedWorkingDir;
+      this.closeFileBrowserWorkingDirectoryEditor();
+      await this.syncFileBrowserSession(sessionId, { force: true });
+      this.showToast('Session work path updated', 'success');
+    } catch (err) {
+      if (status) {
+        status.textContent = err?.message || 'Failed to update work path';
+        status.hidden = false;
+      }
+    } finally {
+      this._pendingWorkingDirectoryChange = null;
+      if (saveBtn) saveBtn.disabled = false;
+    }
+  },
+
+  renderFileBrowserCurrentView() {
+    if (this.fileBrowserView === 'changes') {
+      this.renderFileBrowserChanges();
+    } else if (this.fileBrowserView === 'history') {
+      this.renderFileBrowserHistory();
+    } else {
+      this.renderFileBrowserTree();
+    }
+    this.updateFileBrowserStatus();
+  },
+
+  updateFileBrowserStatus() {
+    const statusEl = this.$('fileBrowserStatus');
+    if (!statusEl) return;
+    if (this.fileBrowserView === 'changes') {
+      const count = this.fileBrowserRepositoryData?.changes?.length || 0;
+      statusEl.textContent = `${count} changed file${count === 1 ? '' : 's'} · refreshes every 5s`;
+      return;
+    }
+    if (this.fileBrowserView === 'history') {
+      const count = this.fileBrowserRepositoryData?.commits?.length || 0;
+      statusEl.textContent = `${count} recent commit${count === 1 ? '' : 's'}`;
+      return;
+    }
+    if (!this.fileBrowserData) {
+      statusEl.textContent = '';
+      return;
+    }
+    const { totalFiles, totalDirectories, truncated } = this.fileBrowserData;
+    statusEl.textContent = `${totalFiles} files, ${totalDirectories} dirs${truncated ? ' (truncated)' : ''}`;
+  },
+
+  updateFileBrowserAutoRefresh() {
+    if (this.fileBrowserAutoRefreshTimer) {
+      clearInterval(this.fileBrowserAutoRefreshTimer);
+      this.fileBrowserAutoRefreshTimer = null;
+    }
+    const panel = this.$('fileBrowserPanel');
+    if (
+      this.fileBrowserView !== 'changes' ||
+      !panel?.classList.contains('visible') ||
+      !this.fileBrowserSessionId
+    ) {
+      return;
+    }
+    this.fileBrowserAutoRefreshTimer = setInterval(() => {
+      if (document.hidden || !panel.classList.contains('visible')) return;
+      this.loadFileBrowser(this.fileBrowserSessionId, {
+        scopeId: this.fileBrowserScopeId,
+        repositoryOnly: true,
+        silent: true,
+      });
+    }, 5000);
   },
 
   renderFileBrowserTree() {
@@ -2987,6 +3288,10 @@ Object.assign(CodemanApp.prototype, {
 
     const html = [];
     const filter = this.fileBrowserFilter.toLowerCase();
+    const sessionId = this.fileBrowserSessionId || this.activeSessionId;
+    const scopeSuffix = this.fileBrowserScopeId
+      ? `&scope=${encodeURIComponent(this.fileBrowserScopeId)}`
+      : '';
 
     const renderNode = (node, depth) => {
       const isDir = node.type === 'directory';
@@ -3017,7 +3322,7 @@ Object.assign(CodemanApp.prototype, {
       const nameClass = isDir ? 'file-tree-name directory' : 'file-tree-name';
 
       const downloadBtn = !isDir
-        ? `<a class="file-tree-download" href="/api/sessions/${this.activeSessionId}/file-raw?path=${encodeURIComponent(node.path)}&download=true" title="Download" onclick="event.stopPropagation()">&#x2B07;</a>`
+        ? `<a class="file-tree-download" href="/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(node.path)}&download=true${scopeSuffix}" title="Download" onclick="event.stopPropagation()">&#x2B07;</a>`
         : '';
 
       html.push(`
@@ -3053,10 +3358,166 @@ Object.assign(CodemanApp.prototype, {
         if (type === 'directory') {
           this.toggleFileBrowserFolder(path);
         } else {
-          this.openFilePreview(path);
+          this.openFilePreview(path, sessionId, null, this.fileBrowserScopeId);
         }
       });
     });
+  },
+
+  renderFileBrowserChanges() {
+    const treeEl = this.$('fileBrowserTree');
+    if (!treeEl) return;
+    const repository = this.fileBrowserRepositoryData;
+    if (!repository?.available) {
+      treeEl.innerHTML = '<div class="file-browser-empty">This session is not inside a Git repository</div>';
+      return;
+    }
+    const changes = repository.changes || [];
+    if (changes.length === 0) {
+      treeEl.innerHTML = '<div class="file-browser-empty">Working tree is clean</div>';
+      return;
+    }
+
+    treeEl.innerHTML = changes
+      .map(change => {
+        const stats = change.binary
+          ? '<span class="repo-change-stats">binary</span>'
+          : change.additions !== null || change.deletions !== null
+            ? `<span class="repo-change-stats"><span class="repo-add">+${change.additions || 0}</span> <span class="repo-del">-${change.deletions || 0}</span></span>`
+            : '';
+        const stage = change.staged && change.unstaged
+          ? 'staged + working'
+          : change.staged
+            ? 'staged'
+            : 'working';
+        const displayPath = change.oldPath
+          ? `${change.oldPath} -> ${change.path}`
+          : change.path;
+        return `
+          <button type="button" class="repo-change-row" data-path="${escapeHtml(change.path)}" title="${escapeHtml(`${displayPath} · ${stage}`)}">
+            <span class="repo-status repo-status-${escapeHtml(change.code.toLowerCase().replace('?', 'new'))}">${escapeHtml(change.code)}</span>
+            <span class="repo-change-main">
+              <span class="repo-change-path">${escapeHtml(displayPath)}</span>
+              <span class="repo-change-stage">${escapeHtml(stage)}</span>
+            </span>
+            ${stats}
+          </button>
+        `;
+      })
+      .join('');
+
+    treeEl.querySelectorAll('.repo-change-row').forEach(row => {
+      row.addEventListener('click', () => this.openRepositoryDiff(row.dataset.path));
+    });
+  },
+
+  formatRepositoryDate(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  },
+
+  renderFileBrowserHistory() {
+    const treeEl = this.$('fileBrowserTree');
+    if (!treeEl) return;
+    const repository = this.fileBrowserRepositoryData;
+    if (!repository?.available) {
+      treeEl.innerHTML = '<div class="file-browser-empty">This session is not inside a Git repository</div>';
+      return;
+    }
+    const commits = repository.commits || [];
+    if (commits.length === 0) {
+      treeEl.innerHTML = '<div class="file-browser-empty">No commits yet</div>';
+      return;
+    }
+
+    treeEl.innerHTML = commits
+      .map(commit => {
+        const expanded = commit.hash === this.fileBrowserExpandedCommit;
+        const cacheKey = `${this.fileBrowserScopeId}:${commit.hash}`;
+        const details = this.fileBrowserCommitCache.get(cacheKey);
+        let files = '';
+        if (expanded) {
+          if (!details) {
+            files = '<div class="repo-commit-loading">Loading changed files...</div>';
+          } else if (details.changes.length === 0) {
+            files = '<div class="repo-commit-loading">No changed files</div>';
+          } else {
+            files = `
+              <div class="repo-commit-files">
+                ${details.changes.map(change => `
+                  <button type="button" class="repo-commit-file" data-path="${escapeHtml(change.path)}" data-commit="${escapeHtml(commit.hash)}">
+                    <span class="repo-status repo-status-${escapeHtml(change.code.toLowerCase())}">${escapeHtml(change.code)}</span>
+                    <span>${escapeHtml(change.oldPath ? `${change.oldPath} -> ${change.path}` : change.path)}</span>
+                  </button>
+                `).join('')}
+              </div>
+            `;
+          }
+        }
+        return `
+          <div class="repo-commit${expanded ? ' expanded' : ''}">
+            <button type="button" class="repo-commit-summary" data-commit="${escapeHtml(commit.hash)}" aria-expanded="${String(expanded)}">
+              <span class="repo-commit-chevron">&#x25B6;</span>
+              <span class="repo-commit-copy">
+                <span class="repo-commit-subject">${escapeHtml(commit.subject)}</span>
+                <span class="repo-commit-meta"><code>${escapeHtml(commit.shortHash)}</code> · ${escapeHtml(commit.author)} · ${escapeHtml(this.formatRepositoryDate(commit.authoredAt))}</span>
+              </span>
+            </button>
+            ${files}
+          </div>
+        `;
+      })
+      .join('');
+
+    treeEl.querySelectorAll('.repo-commit-summary').forEach(button => {
+      button.addEventListener('click', () => this.toggleFileBrowserCommit(button.dataset.commit));
+    });
+    treeEl.querySelectorAll('.repo-commit-file').forEach(button => {
+      button.addEventListener('click', () => {
+        this.openRepositoryDiff(button.dataset.path, button.dataset.commit);
+      });
+    });
+  },
+
+  async toggleFileBrowserCommit(commit) {
+    if (!commit || !this.fileBrowserSessionId) return;
+    if (this.fileBrowserExpandedCommit === commit) {
+      this.fileBrowserExpandedCommit = null;
+      this.renderFileBrowserHistory();
+      return;
+    }
+    this.fileBrowserExpandedCommit = commit;
+    this.renderFileBrowserHistory();
+
+    const cacheKey = `${this.fileBrowserScopeId}:${commit}`;
+    if (this.fileBrowserCommitCache.has(cacheKey)) return;
+    const sessionId = this.fileBrowserSessionId;
+    const scopeId = this.fileBrowserScopeId;
+    try {
+      const res = await fetch(
+        `/api/sessions/${sessionId}/repository/commit?scope=${encodeURIComponent(scopeId)}&commit=${encodeURIComponent(commit)}`
+      );
+      const result = await res.json();
+      if (!res.ok || !result.success) {
+        throw new Error(result.error || 'Failed to load commit');
+      }
+      if (
+        this.fileBrowserSessionId !== sessionId ||
+        this.fileBrowserScopeId !== scopeId
+      ) {
+        return;
+      }
+      this.fileBrowserCommitCache.set(cacheKey, result.data);
+      if (this.fileBrowserExpandedCommit === commit) this.renderFileBrowserHistory();
+    } catch (err) {
+      console.error('Failed to load commit:', err);
+      if (this.fileBrowserExpandedCommit === commit) {
+        const treeEl = this.$('fileBrowserTree');
+        const loading = treeEl?.querySelector('.repo-commit-loading');
+        if (loading) loading.textContent = `Failed to load commit: ${err.message}`;
+      }
+    }
   },
 
   hasMatchingChild(node, filter) {
@@ -3116,14 +3577,10 @@ Object.assign(CodemanApp.prototype, {
   },
 
   refreshFileBrowser() {
-    if (this.activeSessionId) {
-      this.fileBrowserExpandedDirs.clear();
-      this.fileBrowserFilter = '';
-      this.fileBrowserAllExpanded = false;
-      const searchInput = this.$('fileBrowserSearch');
-      if (searchInput) searchInput.value = '';
-      this.loadFileBrowser(this.activeSessionId);
-    }
+    const sessionId = this.activeSessionId || this.fileBrowserSessionId;
+    if (!sessionId) return;
+    this.fileBrowserCommitCache.clear();
+    this.loadFileBrowser(sessionId, { scopeId: this.fileBrowserScopeId });
   },
 
   // Header "File Viewer" button (opt-in via App Settings → Header Displays →
@@ -3180,6 +3637,12 @@ Object.assign(CodemanApp.prototype, {
       }
       this.fileBrowserDragListeners = null;
     }
+    this.fileBrowserAbortController?.abort();
+    this.fileBrowserAbortController = null;
+    if (this.fileBrowserAutoRefreshTimer) {
+      clearInterval(this.fileBrowserAutoRefreshTimer);
+      this.fileBrowserAutoRefreshTimer = null;
+    }
     // Save setting
     const settings = this.loadAppSettingsFromStorage();
     settings.showFileBrowser = false;
@@ -3190,7 +3653,215 @@ Object.assign(CodemanApp.prototype, {
     if (headerBtn) headerBtn.setAttribute('aria-expanded', 'false');
   },
 
-  async openFilePreview(filePath, sessionId = this.activeSessionId, attachmentId = null) {
+  async openRepositoryDiff(filePath, commit = null) {
+    const sessionId = this.fileBrowserSessionId || this.activeSessionId;
+    const scopeId = this.fileBrowserScopeId;
+    if (!sessionId || !scopeId || !filePath) return;
+
+    const overlay = this.$('filePreviewOverlay');
+    const titleEl = this.$('filePreviewTitle');
+    const bodyEl = this.$('filePreviewBody');
+    const footerEl = this.$('filePreviewFooter');
+    const modeEl = this.$('filePreviewMode');
+    if (!overlay || !bodyEl) return;
+
+    const generation = (this.fileDiffLoadGeneration || 0) + 1;
+    this.fileDiffLoadGeneration = generation;
+    this.fileDiffData = null;
+    this.fileDiffMode = 'compact';
+    overlay.classList.add('visible');
+    if (titleEl) titleEl.textContent = filePath;
+    bodyEl.innerHTML = '<div class="binary-message">Loading diff...</div>';
+    if (footerEl) footerEl.textContent = '';
+    if (modeEl) modeEl.hidden = false;
+    this.setRepositoryDiffMode('compact');
+
+    const params = new URLSearchParams({ scope: scopeId, path: filePath });
+    if (commit) params.set('commit', commit);
+    try {
+      const res = await fetch(
+        `/api/sessions/${sessionId}/repository/diff?${params.toString()}`
+      );
+      const result = await res.json();
+      if (!res.ok || !result.success) {
+        throw new Error(result.error || 'Failed to load diff');
+      }
+      if (
+        generation !== this.fileDiffLoadGeneration ||
+        this.fileBrowserSessionId !== sessionId ||
+        this.fileBrowserScopeId !== scopeId
+      ) {
+        return;
+      }
+      this.fileDiffData = result.data;
+      this.renderRepositoryDiff();
+    } catch (err) {
+      if (generation !== this.fileDiffLoadGeneration) return;
+      bodyEl.innerHTML = `<div class="binary-message">Error: ${escapeHtml(err.message)}</div>`;
+    }
+  },
+
+  setRepositoryDiffMode(mode) {
+    if (!['compact', 'full'].includes(mode)) return;
+    this.fileDiffMode = mode;
+    document.querySelectorAll('.file-preview-mode-btn').forEach(button => {
+      const active = button.dataset.mode === mode;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+    if (this.fileDiffData) this.renderRepositoryDiff();
+  },
+
+  parseUnifiedDiffRows(patch) {
+    const rows = [];
+    const lines = String(patch || '').split('\n');
+    let oldLine = 0;
+    let newLine = 0;
+    let inHunk = false;
+
+    for (let index = 0; index < lines.length; index++) {
+      const line = lines[index];
+      if (index === lines.length - 1 && line === '') continue;
+      const hunk = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/);
+      if (hunk) {
+        oldLine = Number.parseInt(hunk[1], 10);
+        newLine = Number.parseInt(hunk[2], 10);
+        inHunk = true;
+        rows.push({ kind: 'hunk', text: line, oldLine: null, newLine: null });
+        continue;
+      }
+      if (!inHunk || /^(diff --git|index |--- |\+\+\+ |new file|deleted file|similarity|rename )/.test(line)) {
+        rows.push({ kind: 'meta', text: line, oldLine: null, newLine: null });
+        continue;
+      }
+      if (line.startsWith('+')) {
+        rows.push({
+          kind: 'add',
+          text: line.slice(1),
+          oldLine: null,
+          newLine,
+          anchorNewLine: newLine,
+        });
+        newLine++;
+      } else if (line.startsWith('-')) {
+        rows.push({
+          kind: 'del',
+          text: line.slice(1),
+          oldLine,
+          newLine: null,
+          anchorNewLine: newLine,
+        });
+        oldLine++;
+      } else if (line.startsWith(' ')) {
+        rows.push({
+          kind: 'context',
+          text: line.slice(1),
+          oldLine,
+          newLine,
+          anchorNewLine: newLine,
+        });
+        oldLine++;
+        newLine++;
+      } else {
+        rows.push({ kind: 'meta', text: line, oldLine: null, newLine: null });
+      }
+    }
+    return rows;
+  },
+
+  repositoryDiffRowHtml(row) {
+    if (row.kind === 'meta' || row.kind === 'hunk') {
+      return `<div class="repository-diff-line diff-${row.kind}"><span class="diff-gutter"></span><span class="diff-gutter"></span><code>${escapeHtml(row.text)}</code></div>`;
+    }
+    const prefix = row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : ' ';
+    return `
+      <div class="repository-diff-line diff-${row.kind}">
+        <span class="diff-gutter">${row.oldLine ?? ''}</span>
+        <span class="diff-gutter">${row.newLine ?? ''}</span>
+        <code><span class="diff-prefix">${prefix}</span>${escapeHtml(row.text)}</code>
+      </div>
+    `;
+  },
+
+  renderRepositoryDiff() {
+    const data = this.fileDiffData;
+    const bodyEl = this.$('filePreviewBody');
+    const footerEl = this.$('filePreviewFooter');
+    if (!data || !bodyEl) return;
+
+    if (data.binary) {
+      bodyEl.innerHTML = '<div class="binary-message">Binary diff cannot be rendered</div>';
+      this.filePreviewContent = data.patch || '';
+    } else if (this.fileDiffMode === 'full') {
+      bodyEl.innerHTML = this.renderFullRepositoryDiff(data);
+      this.filePreviewContent = data.afterContent ?? data.beforeContent ?? '';
+    } else {
+      const rows = this.parseUnifiedDiffRows(data.patch);
+      bodyEl.innerHTML = rows.length
+        ? `<div class="repository-diff">${rows.map(row => this.repositoryDiffRowHtml(row)).join('')}</div>`
+        : '<div class="binary-message">No textual diff for this file</div>';
+      this.filePreviewContent = data.patch || '';
+    }
+
+    if (footerEl) {
+      footerEl.textContent = `${data.label} · +${data.additions} -${data.deletions}${data.truncated ? ' · truncated' : ''}`;
+    }
+  },
+
+  renderFullRepositoryDiff(data) {
+    const deletedFile = data.beforeExists && !data.afterExists;
+    const content = deletedFile ? data.beforeContent : data.afterContent;
+    if (content === null) {
+      return '<div class="binary-message">Full file is unavailable or exceeds the preview limit</div>';
+    }
+
+    const contentLines = String(content).split('\n');
+    if (content.endsWith('\n')) contentLines.pop();
+    if (deletedFile) {
+      const rows = contentLines.map((text, index) => ({
+        kind: 'del',
+        text,
+        oldLine: index + 1,
+        newLine: null,
+      }));
+      return `<div class="repository-diff repository-diff-full">${rows.map(row => this.repositoryDiffRowHtml(row)).join('')}</div>`;
+    }
+
+    const patchRows = this.parseUnifiedDiffRows(data.patch);
+    const addedLines = new Set();
+    const oldLineByNewLine = new Map();
+    const deletedBefore = new Map();
+    for (const row of patchRows) {
+      if (row.kind === 'add') addedLines.add(row.newLine);
+      if (row.kind === 'context') oldLineByNewLine.set(row.newLine, row.oldLine);
+      if (row.kind === 'del') {
+        const anchor = row.anchorNewLine || 1;
+        const deletions = deletedBefore.get(anchor) || [];
+        deletions.push(row);
+        deletedBefore.set(anchor, deletions);
+      }
+    }
+
+    const rows = [];
+    for (let newLine = 1; newLine <= contentLines.length; newLine++) {
+      rows.push(...(deletedBefore.get(newLine) || []));
+      rows.push({
+        kind: addedLines.has(newLine) ? 'add' : 'context',
+        text: contentLines[newLine - 1],
+        oldLine: oldLineByNewLine.get(newLine) ?? null,
+        newLine,
+      });
+    }
+    rows.push(...(deletedBefore.get(contentLines.length + 1) || []));
+    return `<div class="repository-diff repository-diff-full">${rows.map(row => this.repositoryDiffRowHtml(row)).join('')}</div>`;
+  },
+
+  async openFilePreview(
+    filePath,
+    sessionId = this.activeSessionId,
+    attachmentId = null,
+    scopeId = null
+  ) {
     if (!sessionId || !filePath) return;
 
     const overlay = this.$('filePreviewOverlay');
@@ -3201,10 +3872,15 @@ Object.assign(CodemanApp.prototype, {
     if (!overlay || !bodyEl) return;
 
     // Show overlay with loading state
+    this.fileDiffLoadGeneration = (this.fileDiffLoadGeneration || 0) + 1;
+    this.fileDiffData = null;
+    const modeEl = this.$('filePreviewMode');
+    if (modeEl) modeEl.hidden = true;
     overlay.classList.add('visible');
     titleEl.textContent = filePath;
     bodyEl.innerHTML = '<div class="binary-message">Loading...</div>';
     footerEl.textContent = '';
+    const scopeSuffix = scopeId ? `&scope=${encodeURIComponent(scopeId)}` : '';
 
     const ext = (filePath.split('.').pop() || '').toLowerCase();
 
@@ -3240,13 +3916,13 @@ Object.assign(CodemanApp.prototype, {
     // to file-content below, which would dump the binary bytes as mojibake.
     if (ext === 'docx' || ext === 'pptx') {
       footerEl.textContent = ext.toUpperCase();
-      const previewSrc = `/api/sessions/${sessionId}/file-preview?path=${encodeURIComponent(filePath)}`;
+      const previewSrc = `/api/sessions/${sessionId}/file-preview?path=${encodeURIComponent(filePath)}${scopeSuffix}`;
       bodyEl.innerHTML = `<iframe src="${escapeHtml(previewSrc)}" title="${escapeHtml(filePath)}"></iframe>`;
       return;
     }
     if (ext === 'pdf') {
       footerEl.textContent = 'PDF';
-      const rawSrc = `/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}`;
+      const rawSrc = `/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}${scopeSuffix}`;
       bodyEl.innerHTML = `<iframe src="${escapeHtml(rawSrc)}" title="${escapeHtml(filePath)}"></iframe>`;
       return;
     }
@@ -3258,7 +3934,9 @@ Object.assign(CodemanApp.prototype, {
     if (ext === 'svg') {
       footerEl.textContent = 'SVG';
       try {
-        const res = await fetch(`/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}`);
+        const res = await fetch(
+          `/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}${scopeSuffix}`
+        );
         if (!res.ok) throw new Error('Failed to load image');
         const blobUrl = URL.createObjectURL(new Blob([await res.text()], { type: 'image/svg+xml' }));
         bodyEl.innerHTML = `<img src="${blobUrl}" alt="${escapeHtml(filePath)}">`;
@@ -3271,7 +3949,9 @@ Object.assign(CodemanApp.prototype, {
     }
 
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/file-content?path=${encodeURIComponent(filePath)}&lines=500`);
+      const res = await fetch(
+        `/api/sessions/${sessionId}/file-content?path=${encodeURIComponent(filePath)}&lines=500${scopeSuffix}`
+      );
       if (!res.ok) throw new Error('Failed to load file');
 
       const result = await res.json();
@@ -3306,10 +3986,14 @@ Object.assign(CodemanApp.prototype, {
   },
 
   closeFilePreview() {
+    this.fileDiffLoadGeneration = (this.fileDiffLoadGeneration || 0) + 1;
     const overlay = this.$('filePreviewOverlay');
     if (overlay) {
       overlay.classList.remove('visible');
     }
+    const modeEl = this.$('filePreviewMode');
+    if (modeEl) modeEl.hidden = true;
+    this.fileDiffData = null;
     this.filePreviewContent = '';
   },
 

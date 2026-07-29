@@ -513,6 +513,16 @@ describe('TmuxManager (unit)', () => {
       expect(result).toBe(false);
     });
 
+    it('should update the persisted session working directory', () => {
+      const result = manager.updateSessionWorkingDir('meta-test', '/tmp/updated');
+      expect(result).toBe(true);
+      expect(manager.getSession('meta-test')?.workingDir).toBe('/tmp/updated');
+    });
+
+    it('should return false for unknown session working directory update', () => {
+      expect(manager.updateSessionWorkingDir('nonexistent', '/tmp/updated')).toBe(false);
+    });
+
     it('should set attached status', () => {
       manager.setAttached('meta-test', true);
       expect(manager.getSession('meta-test')?.attached).toBe(true);

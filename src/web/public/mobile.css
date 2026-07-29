@@ -468,18 +468,17 @@ html.mobile-init .file-browser-panel {
     height: 12px;
   }
 
-  /* Hide header settings gear, lifecycle log, away digest, session manager, and
-     file viewer on mobile - settings moved to toolbar; the others are secondary /
-     desktop-oriented controls that don't belong on the cramped phone header (the
-     session manager stays reachable via the Ctrl+K palette's "Browse all sessions"
-     item; the file viewer button is opt-in but its panel is desktop-sized).
+  /* Hide header settings gear, lifecycle log, away digest, and session manager
+     on mobile - settings moved to toolbar; the others are secondary controls
+     that don't belong on the cramped phone header (the session manager stays
+     reachable via the Ctrl+K palette's "Browse all sessions" item). The opt-in
+     File Viewer remains available because its panel has a dedicated phone layout.
      (The attachments button is opt-in / default-hidden everywhere via its own
      --hidden marker, so it needs no mobile-specific rule here.) */
   .btn-icon-header.btn-settings,
   .btn-icon-header.btn-lifecycle-log,
   .btn-icon-header.btn-away-digest,
-  .btn-icon-header.btn-session-manager,
-  .btn-icon-header.btn-file-viewer {
+  .btn-icon-header.btn-session-manager {
     display: none !important;
   }
 
@@ -1841,9 +1840,104 @@ html.mobile-init .file-browser-panel {
 
   /* File browser panel - compact on mobile, visibility controlled by JS */
   .file-browser-panel {
-    max-width: 100%;
-    max-height: 50vh;
+    top: auto;
+    right: calc(8px + var(--safe-area-right));
     bottom: calc(44px + 2rem + var(--safe-area-bottom));
+    left: calc(8px + var(--safe-area-left));
+    width: auto;
+    height: min(64dvh, 560px);
+    min-width: 0;
+    min-height: 260px;
+    max-width: none;
+    max-height: 64dvh;
+    border-radius: 8px;
+    resize: none;
+  }
+
+  .file-browser-header {
+    min-height: 40px;
+    cursor: default;
+  }
+
+  .file-browser-tab {
+    min-height: 38px;
+    font-size: 0.7rem;
+  }
+
+  .file-browser-scope {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.15rem;
+  }
+
+  .file-browser-scope select {
+    height: 34px;
+    font-size: 0.72rem;
+  }
+
+  .file-browser-root {
+    max-width: 100%;
+    padding: 0 0.1rem;
+  }
+
+  .repo-change-row {
+    min-height: 50px;
+  }
+
+  .repo-change-path,
+  .repo-commit-file > span:last-child {
+    font-size: 0.68rem;
+  }
+
+  .file-preview-overlay {
+    align-items: stretch;
+    padding-top: var(--safe-area-top);
+    padding-right: var(--safe-area-right);
+    padding-bottom: var(--safe-area-bottom);
+    padding-left: var(--safe-area-left);
+  }
+
+  .file-preview-window {
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    border-radius: 0;
+  }
+
+  .file-preview-header {
+    min-height: 46px;
+    gap: 0.35rem;
+    padding: 0.35rem 0.45rem;
+  }
+
+  .file-preview-title {
+    min-width: 0;
+    font-size: 0.72rem;
+  }
+
+  .file-preview-actions {
+    flex-shrink: 0;
+  }
+
+  .file-preview-mode {
+    height: 30px;
+  }
+
+  .file-preview-mode-btn {
+    padding: 0 0.4rem;
+    font-size: 0.62rem;
+  }
+
+  .repository-diff {
+    font-size: 0.68rem;
+  }
+
+  .repository-diff-line {
+    grid-template-columns: 34px 34px minmax(max-content, 1fr);
+  }
+
+  .repository-diff-line code {
+    padding-right: 0.45rem;
   }
 
   /* Notification drawer - full width on mobile, includes safe area padding */
