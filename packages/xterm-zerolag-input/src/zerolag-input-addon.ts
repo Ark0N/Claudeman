@@ -1,6 +1,7 @@
 import type {
   XtermTerminal,
   XtermAddon,
+  ZerolagInputDraftState,
   ZerolagInputOptions,
   ZerolagInputState,
   PromptPosition,
@@ -17,6 +18,33 @@ const DEFAULT_SCROLL_DEBOUNCE_MS = 50;
 const DEFAULT_BG = '#0d0d0d';
 const DEFAULT_FG = '#eeeeee';
 const DEFAULT_CURSOR = '#e0e0e0';
+const GRAPHEME_SEGMENTER =
+  typeof Intl.Segmenter === 'function' ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+
+interface InputLayoutLine {
+  text: string;
+  startOffset: number;
+  endOffset: number;
+}
+
+function removeLastInputUnit(text: string): string {
+  if (!text) return '';
+  if (text.endsWith('\r\n')) return text.slice(0, -2);
+
+  if (GRAPHEME_SEGMENTER) {
+    const lastSegment = GRAPHEME_SEGMENTER.segment(text).containing(text.length - 1);
+    return text.slice(0, lastSegment?.index ?? 0);
+  }
+
+  const last = text.charCodeAt(text.length - 1);
+  const removesSurrogatePair =
+    last >= 0xdc00 &&
+    last <= 0xdfff &&
+    text.length > 1 &&
+    text.charCodeAt(text.length - 2) >= 0xd800 &&
+    text.charCodeAt(text.length - 2) <= 0xdbff;
+  return text.slice(0, removesSurrogatePair ? -2 : -1);
+}
 
 /**
  * xterm.js addon that provides instant keystroke feedback via a DOM overlay.
@@ -49,7 +77,7 @@ const DEFAULT_CURSOR = '#e0e0e0';
  *     ws.send(text + '\r');
  *   } else if (data === '\x7f') {
  *     const source = zerolag.removeChar();
- *     if (source === 'flushed') ws.send(data); // only send if text was already in PTY
+ *     if (source !== 'pending') ws.send(data); // let the PTY handle text not owned locally
  *   } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
  *     zerolag.addChar(data);
  *   }
@@ -64,6 +92,7 @@ export class ZerolagInputAddon implements XtermAddon {
 
   // Text state
   private _pendingText = '';
+  private _compositionText = '';
   private _flushedOffset = 0;
   private _flushedText = '';
   private _bufferDetectDone = false;
@@ -71,6 +100,13 @@ export class ZerolagInputAddon implements XtermAddon {
   // Render cache
   private _lastRenderKey = '';
   private _lastPromptPos: PromptPosition | null = null;
+  private _layoutLines: InputLayoutLine[] = [];
+  private _layoutDirtyOffset: number | null = 0;
+  private _layoutTextLength = 0;
+  private _layoutStartCol = -1;
+  private _layoutCols = -1;
+  private _layoutRevision = 0;
+  private _fallbackFlushedText: string | null = null;
 
   // Font cache
   private _font: FontStyle = {
@@ -86,6 +122,7 @@ export class ZerolagInputAddon implements XtermAddon {
   private _scrollTimer: ReturnType<typeof setTimeout> | null = null;
   private _scrollHandler: (() => void) | null = null;
   private _scrollViewport: Element | null = null;
+  private _viewportPinned = false;
 
   constructor(options?: ZerolagInputOptions) {
     this._options = {
@@ -124,13 +161,13 @@ export class ZerolagInputAddon implements XtermAddon {
     this._scrollHandler = () => {
       try {
         const buf = this._terminal!.buffer.active;
-        if (buf.viewportY !== buf.baseY) {
+        if (buf.viewportY !== buf.baseY && !this._viewportPinned) {
           this._overlay!.style.display = 'none';
           if (this._scrollTimer) {
             clearTimeout(this._scrollTimer);
             this._scrollTimer = null;
           }
-        } else if (this._pendingText || this._flushedOffset > 0) {
+        } else if (this._pendingText || this._compositionText || this._flushedOffset > 0) {
           if (this._scrollTimer) clearTimeout(this._scrollTimer);
           this._scrollTimer = setTimeout(() => {
             this._scrollTimer = null;
@@ -176,7 +213,7 @@ export class ZerolagInputAddon implements XtermAddon {
    * Call this when the user types a character (charCode >= 32, length === 1).
    */
   addChar(char: string): void {
-    if (!this._pendingText && !this._flushedOffset) this._detectBufferText();
+    this._markLayoutDirty(this._pendingDisplayOffset() + this._pendingText.length);
     this._pendingText += char;
     this._render();
   }
@@ -186,30 +223,77 @@ export class ZerolagInputAddon implements XtermAddon {
    */
   appendText(text: string): void {
     if (!text) return;
-    if (!this._pendingText && !this._flushedOffset) this._detectBufferText();
+    this._markLayoutDirty(this._pendingDisplayOffset() + this._pendingText.length);
     this._pendingText += text;
     this._render();
+  }
+
+  /**
+   * Replace the transient IME candidate shown after committed pending text.
+   * Candidate updates are replacements, not appends: mobile keyboards rewrite
+   * the whole composing word as suggestions change.
+   */
+  setCompositionText(text: string): void {
+    this._markLayoutDirty(this._pendingDisplayOffset() + this._pendingText.length);
+    this._compositionText = text;
+    if (text || this._pendingText || this._flushedOffset > 0) {
+      this._render();
+    } else {
+      this._hide();
+    }
+  }
+
+  /**
+   * Atomically replace the transient IME candidate with finalized input.
+   */
+  commitComposition(text: string): void {
+    this._markLayoutDirty(this._pendingDisplayOffset() + this._pendingText.length);
+    this._compositionText = '';
+    if (text) this._pendingText += text;
+    if (this._pendingText || this._flushedOffset > 0) {
+      this._render();
+    } else {
+      this._hide();
+    }
+  }
+
+  /** Remove an unfinished IME candidate without changing committed input. */
+  clearComposition(): void {
+    this.commitComposition('');
   }
 
   /**
    * Remove the last character from the overlay.
    *
    * Cascade order:
-   * 1. Remove from `pendingText` if non-empty → returns `'pending'`
-   * 2. Decrement `flushedOffset` if pending is empty but flushed exists → returns `'flushed'`
-   * 3. Try `detectBufferText()` if both are empty, then decrement → returns `'flushed'`
+   * 1. Remove from transient composition if non-empty → returns `'pending'`
+   * 2. Remove from `pendingText` if non-empty → returns `'pending'`
+   * 3. Decrement `flushedOffset` if pending is empty but flushed exists → returns `'flushed'`
    *
    * @returns The source of the removed character, or `false` if nothing to remove.
    *
-   * - `'pending'`: A character was removed from unsent text. The consumer
-   *   should NOT send backspace to the PTY (the text was never transmitted).
+   * - `'pending'`: A user-visible input unit was removed from unsent or
+   *   composing text. The consumer should NOT send backspace to the PTY.
    * - `'flushed'`: A character was removed from text already sent to the PTY.
    *   The consumer SHOULD send backspace to the PTY.
-   * - `false`: Nothing to remove. The consumer should NOT send backspace.
+   * - `false`: No locally tracked text was removed. The consumer decides
+   *   whether the PTY may still own editable text and should receive backspace.
    */
   removeChar(): 'pending' | 'flushed' | false {
+    if (this._compositionText.length > 0) {
+      this._compositionText = removeLastInputUnit(this._compositionText);
+      this._markLayoutDirty(this._pendingDisplayOffset() + this._pendingText.length + this._compositionText.length);
+      if (this._compositionText || this._pendingText || this._flushedOffset > 0) {
+        this._render();
+      } else {
+        this._hide();
+      }
+      return 'pending';
+    }
+
     if (this._pendingText.length > 0) {
-      this._pendingText = this._pendingText.slice(0, -1);
+      this._pendingText = removeLastInputUnit(this._pendingText);
+      this._markLayoutDirty(this._pendingDisplayOffset() + this._pendingText.length);
       if (this._pendingText.length > 0 || this._flushedOffset > 0) {
         this._render();
       } else {
@@ -219,22 +303,11 @@ export class ZerolagInputAddon implements XtermAddon {
     }
 
     if (this._flushedOffset > 0) {
-      this._flushedOffset--;
-      this._flushedText = this._flushedText.slice(0, -1);
-      if (this._flushedOffset > 0) {
-        this._render();
-      } else {
-        this._hide();
-      }
-      return 'flushed';
-    }
-
-    // Both empty — try detecting text already on the prompt line
-    // (handles tab completion, arrow-key edits, etc.)
-    this._detectBufferText();
-    if (this._flushedOffset > 0) {
-      this._flushedOffset--;
-      this._flushedText = this._flushedText.slice(0, -1);
+      const nextText = removeLastInputUnit(this._flushedText);
+      const removedLength = this._flushedText.length - nextText.length;
+      this._flushedOffset = Math.max(0, this._flushedOffset - Math.max(1, removedLength));
+      this._flushedText = nextText;
+      this._markLayoutDirty(0);
       if (this._flushedOffset > 0) {
         this._render();
       } else {
@@ -252,12 +325,42 @@ export class ZerolagInputAddon implements XtermAddon {
    */
   clear(): void {
     this._pendingText = '';
+    this._compositionText = '';
     this._flushedOffset = 0;
     this._flushedText = '';
     this._bufferDetectDone = false;
     this._lastRenderKey = '';
     this._lastPromptPos = null;
+    this._resetLayout();
     this._hide();
+  }
+
+  /**
+   * Restore serialized editable input atomically.
+   *
+   * Pass `render=false` while a different session's terminal frame is still
+   * visible. A later `rerender()` will locate the prompt in the current frame,
+   * avoiding a stale prompt-position cache during asynchronous tab switches.
+   */
+  restoreDraft(draft: ZerolagInputDraftState, render = true): void {
+    this._pendingText = typeof draft?.pendingText === 'string' ? draft.pendingText : '';
+    this._compositionText = '';
+    this._flushedText = typeof draft?.flushedText === 'string' ? draft.flushedText : '';
+    this._flushedOffset = this._flushedText.length;
+    this._bufferDetectDone = false;
+    this._lastRenderKey = '';
+    this._lastPromptPos = null;
+    this._resetLayout();
+
+    if (!render) {
+      this._hide();
+      return;
+    }
+    if (this.hasPending) {
+      this._render();
+    } else {
+      this._hide();
+    }
   }
 
   // ─── Flushed text tracking ────────────────────────────────────────
@@ -280,6 +383,7 @@ export class ZerolagInputAddon implements XtermAddon {
   setFlushed(count: number, text: string, render = true): void {
     this._flushedOffset = count;
     this._flushedText = text;
+    this._markLayoutDirty(0);
     if (render) this._render();
   }
 
@@ -297,7 +401,8 @@ export class ZerolagInputAddon implements XtermAddon {
   clearFlushed(): void {
     this._flushedOffset = 0;
     this._flushedText = '';
-    if (this._pendingText) {
+    this._markLayoutDirty(0);
+    if (this._pendingText || this._compositionText) {
       this._render();
     } else {
       this._hide();
@@ -312,10 +417,33 @@ export class ZerolagInputAddon implements XtermAddon {
    * that move the prompt.
    */
   rerender(): void {
-    if (this._pendingText || this._flushedOffset > 0) {
+    if (this._pendingText || this._compositionText || this._flushedOffset > 0) {
       this._lastRenderKey = '';
       this._render();
     }
+  }
+
+  /**
+   * Keep the pending draft pinned to the visible terminal rows while xterm
+   * scrollback is away from the bottom. Consumers should enable this only
+   * while a separate input surface (for example a phone keyboard) stays active.
+   */
+  setViewportPinned(pinned: boolean): void {
+    const next = pinned === true;
+    if (this._viewportPinned === next) return;
+    this._viewportPinned = next;
+    this._lastRenderKey = '';
+
+    if (next && !this._lastPromptPos) {
+      this._lastPromptPos = this.findPrompt();
+    }
+    if (!this._terminal || !this._overlay || !this.hasPending) return;
+    const buf = this._terminal.buffer.active;
+    if (!next && buf.viewportY !== buf.baseY) {
+      this._overlay.style.display = 'none';
+      return;
+    }
+    this._render();
   }
 
   /**
@@ -325,7 +453,7 @@ export class ZerolagInputAddon implements XtermAddon {
   refreshFont(): void {
     this._cacheFont();
     this._lastRenderKey = '';
-    if (this._pendingText || this._flushedOffset > 0) this._render();
+    if (this._pendingText || this._compositionText || this._flushedOffset > 0) this._render();
   }
 
   // ─── Buffer detection ─────────────────────────────────────────────
@@ -364,6 +492,7 @@ export class ZerolagInputAddon implements XtermAddon {
     this._flushedOffset = 0;
     this._flushedText = '';
     this._bufferDetectDone = false;
+    this._markLayoutDirty(0);
   }
 
   /**
@@ -391,7 +520,7 @@ export class ZerolagInputAddon implements XtermAddon {
     this._options.prompt = finder;
     this._lastPromptPos = null;
     this._lastRenderKey = '';
-    if (this._pendingText || this._flushedOffset > 0) this._render();
+    if (this._pendingText || this._compositionText || this._flushedOffset > 0) this._render();
   }
 
   // ─── Prompt utilities ─────────────────────────────────────────────
@@ -425,15 +554,21 @@ export class ZerolagInputAddon implements XtermAddon {
     return this._pendingText;
   }
 
-  /** Whether there is any overlay content (pending or flushed). */
+  /** Current uncommitted IME candidate text. */
+  get compositionText(): string {
+    return this._compositionText;
+  }
+
+  /** Whether there is any overlay content (pending, composing, or flushed). */
   get hasPending(): boolean {
-    return this._pendingText.length > 0 || this._flushedOffset > 0;
+    return this._pendingText.length > 0 || this._compositionText.length > 0 || this._flushedOffset > 0;
   }
 
   /** Read-only state snapshot. */
   get state(): ZerolagInputState {
     return {
       pendingText: this._pendingText,
+      compositionText: this._compositionText,
       flushedLength: this._flushedOffset,
       flushedText: this._flushedText,
       visible: this._overlay !== null && this._overlay.style.display !== 'none',
@@ -462,6 +597,7 @@ export class ZerolagInputAddon implements XtermAddon {
       if (afterPrompt.length > 0) {
         this._flushedOffset = afterPrompt.length;
         this._flushedText = afterPrompt;
+        this._markLayoutDirty(0);
         this._lastPromptPos = prompt;
         this._bufferDetectDone = true;
         return afterPrompt;
@@ -498,38 +634,170 @@ export class ZerolagInputAddon implements XtermAddon {
   private _hide(): void {
     if (!this._overlay) return;
     this._lastRenderKey = '';
-    this._lastPromptPos = null;
+    if (!this._viewportPinned) this._lastPromptPos = null;
     this._overlay.innerHTML = '';
     this._overlay.style.display = 'none';
   }
 
+  private _pendingDisplayOffset(): number {
+    return this._flushedText.length === this._flushedOffset ? this._flushedText.length : 0;
+  }
+
+  private _markLayoutDirty(offset: number): void {
+    const safeOffset = Math.max(0, offset);
+    this._layoutDirtyOffset =
+      this._layoutDirtyOffset === null ? safeOffset : Math.min(this._layoutDirtyOffset, safeOffset);
+    this._lastRenderKey = '';
+  }
+
+  private _resetLayout(): void {
+    this._layoutLines = [];
+    this._layoutDirtyOffset = 0;
+    this._layoutTextLength = 0;
+    this._layoutStartCol = -1;
+    this._layoutCols = -1;
+    this._fallbackFlushedText = null;
+    this._layoutRevision += 1;
+  }
+
+  private _layoutVisibleLines(
+    displayText: string,
+    startCol: number,
+    totalCols: number,
+    terminalRows: number
+  ): { visibleLines: string[]; hiddenLineCount: number } {
+    const firstLineCols = Math.max(1, totalCols - startCol);
+    const geometryChanged = this._layoutStartCol !== startCol || this._layoutCols !== totalCols;
+    let dirtyOffset = geometryChanged ? 0 : this._layoutDirtyOffset;
+    if (dirtyOffset === null && this._layoutTextLength !== displayText.length) dirtyOffset = 0;
+    if (dirtyOffset === null && this._layoutLines.length > 0) {
+      const hiddenLineCount = Math.max(0, this._layoutLines.length - terminalRows);
+      return {
+        visibleLines: this._layoutLines.slice(hiddenLineCount).map((line) => line.text),
+        hiddenLineCount,
+      };
+    }
+
+    let reflowLineIndex = 0;
+    if (!geometryChanged && this._layoutLines.length > 0 && (dirtyOffset ?? 0) > 0) {
+      let low = 0;
+      let high = this._layoutLines.length - 1;
+      while (low <= high) {
+        const middle = Math.floor((low + high) / 2);
+        if (this._layoutLines[middle].startOffset <= (dirtyOffset ?? 0)) {
+          reflowLineIndex = middle;
+          low = middle + 1;
+        } else {
+          high = middle - 1;
+        }
+      }
+      if (reflowLineIndex > 0 && this._layoutLines[reflowLineIndex].startOffset === (dirtyOffset ?? 0)) {
+        reflowLineIndex -= 1;
+      }
+    }
+
+    let startOffset = this._layoutLines[reflowLineIndex]?.startOffset ?? 0;
+    if (startOffset > displayText.length) {
+      reflowLineIndex = 0;
+      startOffset = 0;
+    }
+    this._layoutLines.length = reflowLineIndex;
+    const lines = this._layoutLines;
+    let lineStartOffset = startOffset;
+    let lineText = '';
+    let lineCols = 0;
+    let lineCapacity = reflowLineIndex === 0 ? firstLineCols : totalCols;
+    let index = startOffset;
+
+    while (index < displayText.length) {
+      const codePoint = displayText.codePointAt(index);
+      if (codePoint === undefined) break;
+      const char = String.fromCodePoint(codePoint);
+      const charLength = char.length;
+
+      if (char === '\r' || char === '\n') {
+        index += charLength;
+        if (char === '\r' && displayText[index] === '\n') index += 1;
+        lines.push({ text: lineText, startOffset: lineStartOffset, endOffset: index });
+        lineStartOffset = index;
+        lineText = '';
+        lineCols = 0;
+        lineCapacity = totalCols;
+        continue;
+      }
+
+      const charCols = charCellWidth(this._terminal, char);
+      if (lineCols + charCols > lineCapacity && (lineText.length > 0 || lineCapacity !== totalCols)) {
+        lines.push({ text: lineText, startOffset: lineStartOffset, endOffset: index });
+        lineStartOffset = index;
+        lineText = '';
+        lineCols = 0;
+        lineCapacity = totalCols;
+        continue;
+      }
+
+      lineText += char;
+      lineCols += charCols;
+      index += charLength;
+    }
+    lines.push({ text: lineText, startOffset: lineStartOffset, endOffset: displayText.length });
+
+    this._layoutLines = lines;
+    this._layoutDirtyOffset = null;
+    this._layoutTextLength = displayText.length;
+    this._layoutStartCol = startCol;
+    this._layoutCols = totalCols;
+    this._layoutRevision += 1;
+
+    const hiddenLineCount = Math.max(0, lines.length - terminalRows);
+    return {
+      visibleLines: lines.slice(hiddenLineCount).map((line) => line.text),
+      hiddenLineCount,
+    };
+  }
+
   private _render(): void {
     if (!this._terminal || !this._overlay) return;
-    if (!this._pendingText && !(this._flushedOffset > 0)) {
+    if (!this._pendingText && !this._compositionText && !(this._flushedOffset > 0)) {
       this._overlay.style.display = 'none';
       return;
     }
 
     try {
       const buf = this._terminal.buffer.active;
+      const terminalRows = Math.max(1, this._terminal.rows);
+      const pinnedToScrolledViewport = this._viewportPinned && buf.viewportY !== buf.baseY;
 
       // Hide overlay when scrolled up — prompt is at bottom, not in viewport
-      if (buf.viewportY !== buf.baseY) {
+      if (buf.viewportY !== buf.baseY && !pinnedToScrolledViewport) {
         this._overlay.style.display = 'none';
         return;
       }
 
-      // Re-scan for prompt on every render (full-screen redraws can move it)
-      const prompt = this.findPrompt();
-      if (prompt) {
-        // When flushed text exists, lock column to prevent jitter from
-        // redraws that temporarily shift the prompt marker. Allow row changes.
-        if (this._lastPromptPos && this._flushedOffset > 0) {
-          this._lastPromptPos = { row: prompt.row, col: this._lastPromptPos.col };
-        } else {
-          this._lastPromptPos = prompt;
+      if (pinnedToScrolledViewport) {
+        if (this._lastPromptPos) {
+          this._lastPromptPos = {
+            row: terminalRows - 1,
+            col: this._lastPromptPos.col,
+          };
         }
-      } else if (!this._lastPromptPos) {
+      } else {
+        // Re-scan for prompt on every render (full-screen redraws can move it)
+        const prompt = this.findPrompt();
+        if (prompt) {
+          // When flushed text exists, lock column to prevent jitter from
+          // redraws that temporarily shift the prompt marker. Allow row changes.
+          if (this._lastPromptPos && this._flushedOffset > 0) {
+            this._lastPromptPos = { row: prompt.row, col: this._lastPromptPos.col };
+          } else {
+            this._lastPromptPos = prompt;
+          }
+        } else if (!this._lastPromptPos) {
+          this._overlay.style.display = 'none';
+          return;
+        }
+      }
+      if (!this._lastPromptPos) {
         this._overlay.style.display = 'none';
         return;
       }
@@ -547,10 +815,14 @@ export class ZerolagInputAddon implements XtermAddon {
       const startCol = activePrompt.col + offset;
 
       // Build display text: flushed chars + pending chars
-      let displayText = this._pendingText;
+      let displayText = this._pendingText + this._compositionText;
       if (this._flushedOffset > 0) {
         if (this._flushedText && this._flushedText.length === this._flushedOffset) {
-          displayText = this._flushedText + this._pendingText;
+          if (this._fallbackFlushedText !== null) {
+            this._fallbackFlushedText = null;
+            this._markLayoutDirty(0);
+          }
+          displayText = this._flushedText + this._pendingText + this._compositionText;
         } else {
           // Fallback: read flushed chars from terminal buffer
           const absRow = buf.viewportY + activePrompt.row;
@@ -558,60 +830,44 @@ export class ZerolagInputAddon implements XtermAddon {
           if (line) {
             const lineText = line.translateToString(true);
             const flushedChars = lineText.slice(startCol, startCol + this._flushedOffset);
-            displayText = flushedChars + this._pendingText;
+            if (this._fallbackFlushedText !== flushedChars) {
+              this._fallbackFlushedText = flushedChars;
+              this._markLayoutDirty(0);
+            }
+            displayText = flushedChars + this._pendingText + this._compositionText;
           }
         }
       }
 
-      // Skip redundant re-renders — include text content to detect
-      // same-length changes (e.g., setFlushed with different text)
-      const renderKey = `${displayText}:${startCol}:${activePrompt.row}:${activePrompt.col}:${totalCols}:${this._flushedOffset}`;
+      // Keep the newest draft row visible at the bottom of the terminal. As
+      // the draft grows it expands upward; deleting rows lets it shrink back
+      // toward the prompt. Drafts taller than the viewport retain their tail.
+      const { visibleLines, hiddenLineCount } = this._layoutVisibleLines(
+        displayText,
+        startCol,
+        totalCols,
+        terminalRows
+      );
+      const visibleStartCol = hiddenLineCount > 0 ? 0 : startCol;
+      const renderRow = Math.max(0, Math.min(activePrompt.row, terminalRows - visibleLines.length));
+
+      // Skip redundant re-renders — include the resolved geometry so a
+      // keyboard resize still repositions identical text.
+      const renderKey = `${this._layoutRevision}:${visibleStartCol}:${renderRow}:${activePrompt.col}:${totalCols}:${terminalRows}:${cellW}:${cellH}:${charTop}:${charHeight}:${this._flushedOffset}`;
       if (renderKey === this._lastRenderKey && this._overlay.style.display !== 'none') return;
       this._lastRenderKey = renderKey;
-
-      // Split into visual lines by column width (CJK wide chars = 2 cols)
-      const firstLineCols = Math.max(1, totalCols - startCol);
-      const chars = [...displayText]; // proper Unicode iteration
-      const lines: string[] = [];
-      let ci = 0;
-      // First line: remaining columns after prompt
-      {
-        let lineStr = '';
-        let lineCols = 0;
-        while (ci < chars.length) {
-          const cw = charCellWidth(this._terminal, chars[ci]);
-          if (lineCols + cw > firstLineCols) break;
-          lineStr += chars[ci];
-          lineCols += cw;
-          ci++;
-        }
-        lines.push(lineStr);
-      }
-      // Subsequent lines: full terminal width
-      while (ci < chars.length) {
-        let lineStr = '';
-        let lineCols = 0;
-        while (ci < chars.length) {
-          const cw = charCellWidth(this._terminal, chars[ci]);
-          if (lineCols + cw > totalCols) break;
-          lineStr += chars[ci];
-          lineCols += cw;
-          ci++;
-        }
-        lines.push(lineStr);
-      }
 
       const cursorColor = this._options.cursorColor ?? this._terminal.options.theme?.cursor ?? DEFAULT_CURSOR;
 
       renderOverlay(this._overlay, {
-        lines,
-        startCol,
+        lines: visibleLines,
+        startCol: visibleStartCol,
         totalCols,
         cellW,
         cellH,
         charTop,
         charHeight,
-        promptRow: activePrompt.row,
+        promptRow: renderRow,
         font: this._font,
         showCursor: this._options.showCursor,
         cursorColor,

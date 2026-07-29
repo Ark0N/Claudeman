@@ -27,6 +27,19 @@ function tracked(lines?: string[], promptChar?: string) {
   return result;
 }
 
+function trackedTerminal(options: Parameters<typeof createMockTerminal>[0], promptChar = '$') {
+  const mock = createMockTerminal(options);
+  const addon = new ZerolagInputAddon({
+    prompt: { type: 'character', char: promptChar, offset: 2 },
+  });
+  mock.terminal.loadAddon(addon);
+  cleanups.push(() => {
+    addon.dispose();
+    mock.cleanup();
+  });
+  return { addon, mock };
+}
+
 describe('ZerolagInputAddon', () => {
   describe('lifecycle', () => {
     it('creates overlay element in .xterm-screen', () => {
@@ -79,6 +92,179 @@ describe('ZerolagInputAddon', () => {
       expect(addon.pendingText).toBe('');
       expect(addon.hasPending).toBe(false);
     });
+
+    it('renders explicit line breaks as separate terminal rows', () => {
+      const { addon, mock } = tracked();
+
+      addon.appendText('first\nsecond');
+
+      const overlay = mock.terminal.element.querySelector('.xterm-screen')!.lastElementChild as HTMLDivElement;
+      expect(addon.pendingText).toBe('first\nsecond');
+      expect(overlay.children).toHaveLength(3); // two rows and the cursor
+      expect(overlay.children[0].textContent).toBe('first');
+      expect(overlay.children[1].textContent).toBe('second');
+    });
+
+    it('pins a growing multiline draft to the bottom and shrinks it after delete', () => {
+      const lines = Array.from({ length: 24 }, () => '');
+      lines[22] = '$ ';
+      const mock = createMockTerminal({
+        buffer: { lines },
+        cols: 20,
+        rows: 24,
+        cellHeight: 10,
+      });
+      const addon = new ZerolagInputAddon({
+        prompt: { type: 'character', char: '$', offset: 2 },
+      });
+      mock.terminal.loadAddon(addon);
+      cleanups.push(() => {
+        addon.dispose();
+        mock.cleanup();
+      });
+
+      addon.appendText('one\ntwo\nthree');
+
+      const overlay = mock.terminal.element.querySelector('.xterm-screen')!.lastElementChild as HTMLDivElement;
+      expect(overlay.style.top).toBe('210px');
+      expect(
+        Array.from(overlay.children)
+          .slice(0, 3)
+          .map((element) => element.textContent)
+      ).toEqual(['one', 'two', 'three']);
+
+      for (let i = 0; i < 6; i++) addon.removeChar();
+
+      expect(addon.pendingText).toBe('one\ntwo');
+      expect(overlay.style.top).toBe('220px');
+      expect(
+        Array.from(overlay.children)
+          .slice(0, 2)
+          .map((element) => element.textContent)
+      ).toEqual(['one', 'two']);
+    });
+
+    it('keeps only the visible tail when a draft exceeds the terminal height', () => {
+      const lines = ['', '', '', '$ '];
+      const mock = createMockTerminal({
+        buffer: { lines },
+        cols: 20,
+        rows: 4,
+        cellHeight: 10,
+      });
+      const addon = new ZerolagInputAddon({
+        prompt: { type: 'character', char: '$', offset: 2 },
+      });
+      mock.terminal.loadAddon(addon);
+      cleanups.push(() => {
+        addon.dispose();
+        mock.cleanup();
+      });
+
+      addon.appendText('a\nb\nc\nd\ne\nf');
+
+      const overlay = mock.terminal.element.querySelector('.xterm-screen')!.lastElementChild as HTMLDivElement;
+      expect(overlay.style.top).toBe('0px');
+      expect(
+        Array.from(overlay.children)
+          .slice(0, 4)
+          .map((element) => element.textContent)
+      ).toEqual(['c', 'd', 'e', 'f']);
+    });
+
+    it('reflows only the changed tail of a long draft', () => {
+      const { addon } = trackedTerminal({
+        buffer: { lines: ['$ '] },
+        cols: 12,
+        rows: 4,
+      });
+      addon.appendText('x'.repeat(1_000));
+      const before = (
+        addon as unknown as {
+          _layoutLines: Array<{ text: string }>;
+        }
+      )._layoutLines;
+      const beforeLength = before.length;
+      const preserved = before.slice(0, -1);
+
+      addon.addChar('y');
+
+      const after = (
+        addon as unknown as {
+          _layoutLines: Array<{ text: string }>;
+        }
+      )._layoutLines;
+      expect(after.length).toBeGreaterThanOrEqual(beforeLength);
+      for (let index = 0; index < preserved.length; index += 1) {
+        expect(after[index]).toBe(preserved[index]);
+      }
+    });
+
+    it('removes a soft-wrapped tail without leaving a phantom row', () => {
+      const { addon, mock } = trackedTerminal({
+        buffer: { lines: ['$ '] },
+        cols: 6,
+        rows: 4,
+      });
+      addon.appendText('abcde');
+      addon.removeChar();
+
+      const overlay = mock.terminal.element.querySelector('.xterm-screen')!.lastElementChild as HTMLDivElement;
+      const lines = (
+        addon as unknown as {
+          _layoutLines: Array<{ text: string }>;
+        }
+      )._layoutLines;
+      expect(lines.map((line) => line.text)).toEqual(['abcd']);
+      expect(overlay.textContent).toContain('abcd');
+    });
+  });
+
+  describe('composition text', () => {
+    it('renders changing IME candidates without committing them to pending text', () => {
+      const { addon, mock } = tracked();
+      addon.appendText('first ');
+
+      addon.setCompositionText('sec');
+      addon.setCompositionText('second');
+
+      const overlay = mock.terminal.element.querySelector('.xterm-screen')!.lastElementChild as HTMLDivElement;
+      expect(addon.pendingText).toBe('first ');
+      expect(addon.compositionText).toBe('second');
+      expect(overlay.textContent).toContain('first second');
+    });
+
+    it('commits the finalized composition atomically', () => {
+      const { addon } = tracked();
+      addon.appendText('first ');
+      addon.setCompositionText('second');
+
+      addon.commitComposition('second');
+
+      expect(addon.pendingText).toBe('first second');
+      expect(addon.compositionText).toBe('');
+      expect(addon.hasPending).toBe(true);
+    });
+
+    it('clear removes an unfinished composition', () => {
+      const { addon } = tracked();
+      addon.setCompositionText('candidate');
+
+      addon.clear();
+
+      expect(addon.compositionText).toBe('');
+      expect(addon.state.visible).toBe(false);
+    });
+
+    it('removes composition before committed pending text', () => {
+      const { addon } = tracked();
+      addon.appendText('committed');
+      addon.setCompositionText('候補');
+
+      expect(addon.removeChar()).toBe('pending');
+      expect(addon.pendingText).toBe('committed');
+      expect(addon.compositionText).toBe('候');
+    });
   });
 
   describe('removeChar', () => {
@@ -96,6 +282,30 @@ describe('ZerolagInputAddon', () => {
       expect(addon.removeChar()).toBe(false);
     });
 
+    it('removes one emoji grapheme without leaving a surrogate', () => {
+      const { addon } = tracked();
+      addon.appendText('a😀');
+
+      expect(addon.removeChar()).toBe('pending');
+      expect(addon.pendingText).toBe('a');
+    });
+
+    it('removes one combining grapheme as a visible unit', () => {
+      const { addon } = tracked();
+      addon.appendText('e\u0301');
+
+      expect(addon.removeChar()).toBe('pending');
+      expect(addon.pendingText).toBe('');
+    });
+
+    it('removes CRLF as one rendered line break', () => {
+      const { addon } = tracked();
+      addon.appendText('line\r\n');
+
+      expect(addon.removeChar()).toBe('pending');
+      expect(addon.pendingText).toBe('line');
+    });
+
     it('returns "flushed" when removing from flushed text', () => {
       const { addon } = tracked();
       addon.setFlushed(3, 'abc');
@@ -103,6 +313,14 @@ describe('ZerolagInputAddon', () => {
       expect(source).toBe('flushed');
       expect(addon.getFlushed().count).toBe(2);
       expect(addon.getFlushed().text).toBe('ab');
+    });
+
+    it('keeps flushed offsets aligned when removing an emoji grapheme', () => {
+      const { addon } = tracked();
+      addon.setFlushed('😀'.length, '😀');
+
+      expect(addon.removeChar()).toBe('flushed');
+      expect(addon.getFlushed()).toEqual({ count: 0, text: '' });
     });
 
     it('removes pending before flushed', () => {
@@ -122,14 +340,21 @@ describe('ZerolagInputAddon', () => {
       expect(addon.hasPending).toBe(false);
     });
 
-    it('detects buffer text and removes from it when both empty', () => {
+    it('does not infer editable text from the terminal buffer', () => {
       const { addon } = tracked(['$ hello']);
-      // Both pending and flushed are empty, but buffer has text
+
       const source = addon.removeChar();
-      expect(source).toBe('flushed');
-      // "hello" (5 chars) detected, then one removed = 4
-      expect(addon.getFlushed().count).toBe(4);
-      expect(addon.getFlushed().text).toBe('hell');
+
+      expect(source).toBe(false);
+      expect(addon.getFlushed()).toEqual({ count: 0, text: '' });
+    });
+
+    it('removes explicitly detected completion text as flushed input', () => {
+      const { addon } = tracked(['$ hello']);
+      expect(addon.detectBufferText()).toBe('hello');
+
+      expect(addon.removeChar()).toBe('flushed');
+      expect(addon.getFlushed()).toEqual({ count: 4, text: 'hell' });
     });
 
     it('returns false on empty prompt with no buffer text', () => {
@@ -184,6 +409,19 @@ describe('ZerolagInputAddon', () => {
       expect(pos).not.toBeNull();
     });
 
+    it('refreshes equal-length fallback text read from the terminal buffer', () => {
+      const { addon, mock } = tracked(['$ abc']);
+      addon.setFlushed(3, '');
+      const overlay = mock.terminal.element.querySelector('.xterm-screen')!.lastElementChild as HTMLDivElement;
+      expect(overlay.textContent).toContain('abc');
+
+      mock.setLines(['$ xyz']);
+      addon.rerender();
+
+      expect(overlay.textContent).toContain('xyz');
+      expect(overlay.textContent).not.toContain('abc');
+    });
+
     it('clearFlushed resets flushed state', () => {
       const { addon } = tracked();
       addon.setFlushed(3, 'abc');
@@ -221,6 +459,32 @@ describe('ZerolagInputAddon', () => {
       const s2 = addon.state;
       expect(s1.pendingText).toBe('a');
       expect(s2.pendingText).toBe('ab');
+    });
+
+    it('restores an editable draft without rendering against a stale terminal frame', () => {
+      const { addon, mock } = tracked(['$ stale session']);
+
+      addon.restoreDraft(
+        {
+          pendingText: ' pending',
+          flushedText: 'already sent',
+        },
+        false
+      );
+
+      expect(addon.state).toMatchObject({
+        pendingText: ' pending',
+        compositionText: '',
+        flushedLength: 'already sent'.length,
+        flushedText: 'already sent',
+        visible: false,
+        promptPosition: null,
+      });
+
+      mock.setLines(['$ current session']);
+      addon.rerender();
+      expect(addon.state.visible).toBe(true);
+      expect(addon.state.promptPosition).not.toBeNull();
     });
   });
 
@@ -295,22 +559,19 @@ describe('ZerolagInputAddon', () => {
       expect(addon.getFlushed().count).toBe(0);
     });
 
-    it('suppressBufferDetection also blocks implicit detection in addChar', () => {
+    it('suppressBufferDetection keeps explicit detection disabled while typing', () => {
       const { addon } = tracked(['$ ink status bar']);
       addon.suppressBufferDetection();
 
-      // addChar calls _detectBufferText internally on first keystroke
       addon.addChar('x');
-      // Should have only 'x' pending, NOT the buffer text as flushed
       expect(addon.pendingText).toBe('x');
       expect(addon.getFlushed().count).toBe(0);
     });
 
-    it('suppressBufferDetection also blocks detection in removeChar cascade', () => {
+    it('suppressBufferDetection keeps explicit detection disabled before backspace', () => {
       const { addon } = tracked(['$ buffer text']);
       addon.suppressBufferDetection();
 
-      // removeChar step 3 calls _detectBufferText — should be blocked
       expect(addon.removeChar()).toBe(false);
       expect(addon.getFlushed().count).toBe(0);
     });
@@ -425,6 +686,53 @@ describe('ZerolagInputAddon', () => {
       addon.setFlushed(3, 'abc');
       expect(() => addon.refreshFont()).not.toThrow();
       expect(addon.hasPending).toBe(true);
+    });
+
+    it('can pin a pending draft to the viewport while terminal history is scrolled', () => {
+      const { addon, mock } = tracked(['$ draft']);
+      addon.appendText('draft');
+      const overlay = mock.terminal.element.querySelector('.xterm-screen')!.lastElementChild as HTMLDivElement;
+
+      mock.terminal.buffer.active.baseY = 8;
+      mock.terminal.buffer.active.viewportY = 2;
+      mock.terminal.element.querySelector('.xterm-viewport')!.dispatchEvent(new Event('scroll'));
+      expect(addon.state.visible).toBe(false);
+
+      addon.setViewportPinned(true);
+      expect(addon.state.visible).toBe(true);
+      expect(overlay.textContent).toContain('draft');
+
+      addon.setViewportPinned(false);
+      expect(addon.state.visible).toBe(false);
+      expect(addon.pendingText).toBe('draft');
+    });
+
+    it('caches the live prompt before an empty pinned draft scrolls away', () => {
+      const { addon, mock } = tracked(['$ ']);
+      const overlay = mock.terminal.element.querySelector('.xterm-screen')!.lastElementChild as HTMLDivElement;
+      addon.setViewportPinned(true);
+
+      mock.terminal.buffer.active.baseY = 8;
+      mock.terminal.buffer.active.viewportY = 2;
+      mock.terminal.element.querySelector('.xterm-viewport')!.dispatchEvent(new Event('scroll'));
+      addon.addChar('a');
+
+      expect(addon.state.visible).toBe(true);
+      expect(overlay.textContent).toContain('a');
+    });
+
+    it('retains the pinned prompt after deleting the draft to empty', () => {
+      const { addon, mock } = tracked(['$ ']);
+      addon.setViewportPinned(true);
+      mock.terminal.buffer.active.baseY = 8;
+      mock.terminal.buffer.active.viewportY = 2;
+      addon.addChar('a');
+      addon.removeChar();
+
+      addon.addChar('b');
+
+      expect(addon.state.visible).toBe(true);
+      expect(addon.pendingText).toBe('b');
     });
   });
 
@@ -705,23 +1013,21 @@ describe('ZerolagInputAddon', () => {
     });
   });
 
-  describe('addChar implicit buffer detection', () => {
-    it('first keystroke detects existing buffer text as flushed', () => {
+  describe('typing with pre-existing buffer content', () => {
+    it('does not adopt existing buffer text on the first keystroke', () => {
       const { addon } = tracked(['$ existing']);
-      // First addChar should trigger _detectBufferText
+
       addon.addChar('!');
       expect(addon.pendingText).toBe('!');
-      expect(addon.getFlushed().count).toBe(8); // 'existing'
-      expect(addon.getFlushed().text).toBe('existing');
+      expect(addon.getFlushed()).toEqual({ count: 0, text: '' });
     });
 
-    it('second keystroke does NOT re-detect', () => {
+    it('does not adopt existing buffer text on appendText', () => {
       const { addon } = tracked(['$ existing']);
-      addon.addChar('a');
-      addon.addChar('b');
-      // Should NOT detect again — flushed from first char remains
-      expect(addon.pendingText).toBe('ab');
-      expect(addon.getFlushed().count).toBe(8); // still 'existing'
+
+      addon.appendText('pasted');
+      expect(addon.pendingText).toBe('pasted');
+      expect(addon.getFlushed()).toEqual({ count: 0, text: '' });
     });
   });
 });

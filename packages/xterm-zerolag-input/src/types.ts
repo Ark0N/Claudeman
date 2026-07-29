@@ -130,6 +130,8 @@ export interface ZerolagInputOptions {
 export interface ZerolagInputState {
   /** Characters typed but not yet acknowledged by the server */
   pendingText: string;
+  /** Current uncommitted IME candidate text */
+  compositionText?: string;
   /** Number of characters flushed to PTY but echo not yet received */
   flushedLength: number;
   /** Text content of the flushed portion */
@@ -138,6 +140,20 @@ export interface ZerolagInputState {
   visible: boolean;
   /** Last detected prompt position, if any */
   promptPosition: PromptPosition | null;
+}
+
+/**
+ * Serializable editable input state.
+ *
+ * Transient IME composition is deliberately excluded: a browser cannot resume
+ * an operating-system composition session after reload. Consumers should fold
+ * any visible composition candidate into `pendingText` before persisting it.
+ */
+export interface ZerolagInputDraftState {
+  /** Text that has not been sent to the terminal process. */
+  pendingText: string;
+  /** Text sent to the process that is still tracked as editable input. */
+  flushedText: string;
 }
 
 /** Cell dimensions in CSS pixels. */
