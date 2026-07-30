@@ -14,6 +14,14 @@
   </p>
 </p>
 
+> ### Made for [**Codeman**](https://getcodeman.com)
+>
+> This overlay is the local echo engine of [**Codeman**](https://github.com/Ark0N/Codeman), mission control for AI coding agents: run and monitor a dozen Claude Code, Codex, OpenCode and Gemini sessions at once, watch their subagents work in live floating windows, let them run autonomously overnight, and drive all of it from your phone.
+>
+> That last part is why this library exists. The demo below is a real Codeman session on two phones.
+>
+> **[getcodeman.com](https://getcodeman.com)** · install with `curl -fsSL https://getcodeman.com/install | bash` · [star it on GitHub](https://github.com/Ark0N/Codeman)
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/Ark0N/Codeman/master/docs/images/zerolag-demo-20260728.gif" alt="Side-by-side phones typing into the same remote session: with zerolag the text appears at 0ms, without it every keystroke waits 600ms to 2.7s for the server echo" width="900">
 </p>
@@ -29,18 +37,14 @@
 
 Over a remote connection, xterm.js shows you a character only after it has flown to the server and back. At 100-500ms RTT that reads as broken: you type ahead of the screen, you cannot see your typos, and you start pecking one key at a time to stay in sync.
 
-`xterm-zerolag-input` paints your keystrokes **immediately**, as an absolutely-positioned DOM overlay locked to the terminal's character grid. When the server echo lands 300ms later, the overlay clears and the real terminal text takes over. The handoff is invisible.
+```
+  stock xterm.js   keypress ─────── 300 ms ───────→ character appears
+  with zerolag     keypress → character appears  ·  echo lands later, unseen
+```
 
-```
-                                    ┌─── DOM overlay (instant, 0ms)
-User types 'h' ─── onData('h') ───┤
-                                    └─── Your app sends to PTY ──→ Server
-                                                                      │
-Server echoes 'h' ←──────────────────────────────────────────────────┘
-         │                                                  (200-500ms RTT)
-         └──→ terminal.write('h') ──→ overlay.clear()
-              (server output replaces overlay, seamless transition)
-```
+Same keystroke, same link. The only difference is who you wait for: the server, or nobody.
+
+`xterm-zerolag-input` paints your keystrokes **immediately**, as an absolutely-positioned DOM overlay locked to the terminal's character grid. The byte still goes to the PTY exactly as before, so nothing about your shell changes. When the server echo lands 300ms later, the overlay clears and the real terminal text takes over on the same pixels. The handoff is invisible.
 
 **No backend changes. No protocol. No server support.** It is a client-side addon that never touches the wire.
 
@@ -54,7 +58,7 @@ Server echoes 'h' ←───────────────────�
 | **Backspace that actually works** | A three-layer cascade (unsent, in-flight, already on screen) tells you exactly what to forward to the PTY, so editing works through any mix of typed, flushed and tab-completed text. |
 | **You keep control of input** | The addon never hooks `onData` for you. You decide what gets echoed and what gets forwarded, which is what makes char-at-a-time, buffered, and multi-session tab switching all possible. |
 | **Small and self-contained** | 6.1 kB gzipped, zero runtime dependencies, dual CJS/ESM with full type declarations. |
-| **Proven under load** | Extracted from a production app, hardened over thousands of hours of real remote and mobile usage, 175 tests over every state transition. |
+| **Proven under load** | Extracted from [Codeman](https://getcodeman.com), hardened over thousands of hours of real remote and mobile usage, 175 tests over every state transition. |
 
 Built for anything that puts a terminal behind a network hop: SSH web clients, cloud IDEs, mobile terminals, Kubernetes and container consoles, remote agent dashboards, browser-based dev environments.
 
@@ -422,9 +426,11 @@ The overlay hides when the viewport is scrolled up (`viewportY !== baseY`) and r
 
 ## Origin
 
-Extracted from [**Codeman**](https://github.com/Ark0N/Codeman), mission control for AI coding agents: multi-session management, live agent visualization, autonomous respawn loops, and a mobile-first web UI for Claude Code, OpenCode, Codex and Gemini.
+[Codeman](https://getcodeman.com) needed this before anyone else did. A coding agent you drive from your phone over a tunnel is unusable if every keystroke costs a round trip.
 
-The local echo system was built to make phone and remote access feel instant, ran in production for thousands of hours, then survived three deep code audits before being pulled out into this standalone library. The demo above is a real Codeman session on two phones.
+So the overlay was built there, ran in production for thousands of hours, and survived three deep code audits before being pulled out into this standalone library with its tests intact. Nothing was reimplemented for the extraction: the engine here is the one Codeman ships.
+
+Want the whole thing? [**getcodeman.com**](https://getcodeman.com) · [github.com/Ark0N/Codeman](https://github.com/Ark0N/Codeman)
 
 ## License
 
