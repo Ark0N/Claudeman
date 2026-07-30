@@ -692,20 +692,27 @@ export function registerSystemRoutes(
         await ctx.mux.setHistoryLimit(resolveTerminalHistoryConfig(merged).tmuxHistoryLimit);
       }
 
+      // Service toggles resolve from `merged` (existing + incoming), NEVER from the
+      // raw request body. A PARTIAL PUT omits keys it does not intend to change, and
+      // reading the body directly turned every omission into "apply the default":
+      // a body of just `{statusLineTelemetry:true}` would START the subagent watcher
+      // (`?? true`) and STOP the workflow + image watchers (`?? false`), silently
+      // undoing the user's persisted config. Reading `merged` makes any PUT reconcile
+      // services to the effective stored settings instead, which also self-heals
+      // drift. Same convention as the tmuxHistoryLimit block above.
       // Handle subagent tracking toggle dynamically
-      toggleService((settings.subagentTrackingEnabled as boolean) ?? true, subagentWatcher, 'Subagent watcher');
+      toggleService((merged.subagentTrackingEnabled as boolean) ?? true, subagentWatcher, 'Subagent watcher');
 
       // Handle ultracode/workflow run watcher toggle dynamically (default OFF).
       // Either the docked panel OR the floating windows keep the watcher running.
       toggleService(
-        ((settings.showUltracodeAgents as boolean) ?? false) ||
-          ((settings.ultracodeFloatingWindows as boolean) ?? false),
+        ((merged.showUltracodeAgents as boolean) ?? false) || ((merged.ultracodeFloatingWindows as boolean) ?? false),
         workflowRunWatcher,
         'Workflow run watcher'
       );
 
       // Handle image watcher toggle dynamically
-      toggleService((settings.imageWatcherEnabled as boolean) ?? false, imageWatcher, 'Image watcher', () => {
+      toggleService((merged.imageWatcherEnabled as boolean) ?? false, imageWatcher, 'Image watcher', () => {
         // Re-watch all active sessions that have image watcher enabled
         for (const session of ctx.sessions.values()) {
           if (session.imageWatcherEnabled) {

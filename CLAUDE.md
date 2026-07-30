@@ -74,7 +74,7 @@ When user says "COM":
 
 CI runs `npm run check:lockfile` on every push/PR, so lockfile drift fails the build even if the `version-packages` script is bypassed.
 
-**Version**: 1.9.3 (must match `package.json`)
+**Version**: 1.9.4 (must match `package.json`)
 
 ## Project Overview
 
@@ -292,7 +292,7 @@ Frontend JS modules have `@fileoverview` with `@dependency`/`@loadorder` tags. L
 - **API endpoint**: Types in `src/types/` domain file, route in `src/web/routes/*-routes.ts`. Return the `ApiResponse` envelope (`{ success: true, data }`; errors via `createErrorResponse()` with proper status code). Validate with Zod schemas in `schemas.ts`.
 - **SSE event**: Add to `src/web/sse-events.ts` + `SSE_EVENTS` in `constants.js`, emit via `broadcast()`, handle in `app.js` (`addListener(`)
 - **Session setting**: Add to `SessionState`, include in `session.toState()`, call `persistSessionState()`
-- **App setting**: decide per-device vs synced first. Per-device keys go in the `displayKeys` set in settings-ui.js and must NOT be added to `SettingsUpdateSchema` (it is `.strict()`).
+- **App setting**: decide per-device vs synced first. Per-device keys go in the `displayKeys` set in settings-ui.js and must NOT be added to `SettingsUpdateSchema` (it is `.strict()`). ⚠️ Anything in `PUT /api/settings` that acts on a setting (the `toggleService` watcher calls) must resolve from **`merged`** (persisted + incoming), never from the raw request body: a partial PUT omits keys it doesn't intend to change, and `body.x ?? default` turns every omission into "apply the default" and silently resets live services. Pinned by `test/routes/system-routes-settings-partial-put.test.ts`.
 - **Hook event**: Add to `HookEventType`, add hook in `hooks-config.ts:generateHooksConfig()`, update `HookEventSchema`
 - **Mobile feature**: Add to relevant singleton, guard with `MobileDetection.isMobile()`. New header buttons must stay off phones (`test/mobile-header-buttons-policy.test.ts`).
 - **New test**: Pick unique port (search `const PORT =`). Route tests use `app.inject()` (no port needed) — see `test/routes/_route-test-utils.ts`.

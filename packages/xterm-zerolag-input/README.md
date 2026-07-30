@@ -19,8 +19,6 @@
 > This overlay is the local echo engine of [**Codeman**](https://github.com/Ark0N/Codeman), mission control for AI coding agents: run and monitor a dozen Claude Code, Codex, OpenCode and Gemini sessions at once, watch their subagents work in live floating windows, let them run autonomously overnight, and drive all of it from your phone.
 >
 > That last part is why this library exists. The demo below is a real Codeman session on two phones.
->
-> **[getcodeman.com](https://getcodeman.com)** · install with `curl -fsSL https://getcodeman.com/install | bash` · [star it on GitHub](https://github.com/Ark0N/Codeman)
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Ark0N/Codeman/master/docs/images/zerolag-demo-20260728.gif" alt="Side-by-side phones typing into the same remote session: with zerolag the text appears at 0ms, without it every keystroke waits 600ms to 2.7s for the server echo" width="900">
