@@ -10248,9 +10248,10 @@ kbd {
 }
 
 /* Plan-usage chip (App Settings → Display → "Plan Usage Limits"). Shows the
-   live 5-hour + weekly plan limits parsed from the Claude statusline. Hidden by
-   default via the marker class below; the server strips it at render when the
-   setting is on and the client toggles it live on save. */
+   live 5-hour + weekly plan limits parsed from the Claude statusline. Ships
+   hidden via the marker class below because display is PER-DEVICE and the
+   server cannot read localStorage; settings-ui.js reveals it on load (desktop
+   default ON, handhelds OFF) and on a live toggle. */
 .header-plan-usage {
   display: inline-flex !important;
   align-items: center;

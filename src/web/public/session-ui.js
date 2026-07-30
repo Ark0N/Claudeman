@@ -716,7 +716,7 @@ Object.assign(CodemanApp.prototype, {
             // is shared by sibling sessions, so create-with-false must not yank it
             // — see the comment in session-routes create). Disabling the setting
             // removes it via the App Settings toggle path (system-routes), not here.
-            statusLineTelemetry: globalSettings.showPlanUsageLimits === true,
+            statusLineTelemetry: this.planUsageChipEnabled(globalSettings),
           })
         }).then(r => r.json())
       );

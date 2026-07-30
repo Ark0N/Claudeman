@@ -74,7 +74,7 @@ When user says "COM":
 
 CI runs `npm run check:lockfile` on every push/PR, so lockfile drift fails the build even if the `version-packages` script is bypassed.
 
-**Version**: 1.9.2 (must match `package.json`)
+**Version**: 1.9.3 (must match `package.json`)
 
 ## Project Overview
 
@@ -183,7 +183,7 @@ Codeman is a Claude Code session manager with web interface and autonomous Ralph
 
 **Auto-resume on usage limit** (opt-in per session, top of the Respawn tab): when Claude halts on a subscription limit, `usage-limit-patterns.ts` (pure, unit-tested) parses the reset time and `SessionAutoOps` arms a timer for reset+2min, then sends Esc + `continue`. ⚠️ Respawn cycles are blocked while paused (`isLimitPaused` guard in `onIdleDetected`), which is what prevents `/clear` from wiping the paused conversation. Claude-mode only. → [architecture-invariants#auto-resume-on-usage-limit](docs/architecture-invariants.md#auto-resume-on-usage-limit)
 
-**Plan-usage chip** (statusLine telemetry, opt-in `showPlanUsageLimits`, default OFF): Codeman injects its own `statusLine.command` exporter which POSTs Claude's `rate_limits` blob to `POST /api/status-telemetry`. The exporter is identified by a marker, so it only ever adds/updates/removes a statusLine that is **ours**, never a user's hand-authored one, and it prints the footer through so the in-terminal statusline is not blanked. Claude-mode only; distinct from auto-resume, which reacts to the limit *message* rather than showing live %. → [architecture-invariants#plan-usage-chip-statusline-telemetry](docs/architecture-invariants.md#plan-usage-chip-statusline-telemetry), `docs/usage-limits-display-plan.md`
+**Plan-usage chip** (statusLine telemetry, `showPlanUsageLimits`, per-device: desktop default **ON**, handhelds OFF via the mobile block in `getDefaultSettings()`): resolve it ONLY through `planUsageChipEnabled()` in settings-ui.js, which backs all three call sites (the App Settings checkbox, the chip's visibility, and the `statusLineTelemetry` flag on session create). A chip shown without telemetry renders `—` forever. Codeman injects its own `statusLine.command` exporter which POSTs Claude's `rate_limits` blob to `POST /api/status-telemetry`. The exporter is identified by a marker, so it only ever adds/updates/removes a statusLine that is **ours**, never a user's hand-authored one, and it prints the footer through so the in-terminal statusline is not blanked. Claude-mode only; distinct from auto-resume, which reacts to the limit *message* rather than showing live %. → [architecture-invariants#plan-usage-chip-statusline-telemetry](docs/architecture-invariants.md#plan-usage-chip-statusline-telemetry), `docs/usage-limits-display-plan.md`
 
 **Orchestrator**: State machine that turns a user goal into a phased plan and drives it to completion: `idle → planning → approval → executing → verifying → (replanning) → completed/failed`. `OrchestratorLoop` (engine) delegates plan generation to `orchestrator-planner` and per-phase verification gates to `orchestrator-verifier`, executing phases via team agents/`task-queue`. State persists under the `orchestrator` key in `state.json`. Distinct from Ralph (single-session autonomous loop) — orchestrator coordinates multi-phase, multi-agent execution. See `docs/orchestrator-loop-architecture.md`.
 
