@@ -52,12 +52,20 @@ jobs:
           OLD_TAG="aicodeman@${VERSION}"
           NEW_TAG="codeman@${VERSION}"
 
-          # Update the GitHub release BEFORE deleting the old tag
+          # Update the GitHub release BEFORE deleting the old tag.
+          # make_latest pins the "Latest" badge to the Codeman release. This repo
+          # publishes TWO packages (aicodeman + xterm-zerolag-input), changesets
+          # creates a GitHub release for each, and GitHub awards "Latest" to
+          # whichever was published LAST. That is a race: 1.9.2 kept the badge,
+          # 1.9.4 lost it to xterm-zerolag-input@0.1.7 by two seconds. All package
+          # releases already exist by the time this step runs, so setting it here
+          # is deterministic.
           RELEASE_ID=$(gh release view "$OLD_TAG" --json databaseId -q .databaseId 2>/dev/null || true)
           if [ -n "$RELEASE_ID" ]; then
             gh api -X PATCH "repos/${{ github.repository }}/releases/${RELEASE_ID}" \
               -f tag_name="$NEW_TAG" \
-              -f name="$NEW_TAG"
+              -f name="$NEW_TAG" \
+              -f make_latest=true
           fi
 
           # Retag
