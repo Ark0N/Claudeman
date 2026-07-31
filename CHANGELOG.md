@@ -1,5 +1,18 @@
 # aicodeman
 
+## 1.9.5
+
+### Patch Changes
+
+- Background-Bash rewake hook, hooks self-heal that preserves user hooks, and test-harness isolation.
+  - New `PostToolUse(Bash)` hook (PR #176): a self-contained `node -e` helper watches the session transcript for a background command's completion notification and uses Claude Code's `asyncRewake` to wake an idle agent (exit code 2), without injecting terminal input that could submit a user's draft. Works on Claude Code 2.1.207+; older CLIs strip the fields harmlessly.
+  - Hooks self-heal (`refreshStaleHookSecret` renamed to `refreshStaleCodemanHooks`) now replaces only Codeman-owned handlers, preserving user events, matchers, and sibling handlers in mixed configurations; `writeHooksConfig` merges instead of clobbering the hooks key at case creation (PR #176).
+  - Rewake helper hardening: self-terminates on its own 6h deadline and when orphaned; the marker is versioned (V2) with a version-agnostic ownership prefix so future script updates replace older handlers instead of duplicating them.
+  - Hook timeout units fixed: the hook `timeout` field is seconds (the CLI multiplies by 1000), so `HOOK_TIMEOUT_MS = 10000` gave curl hooks a ~2.8-hour effective timeout; now `HOOK_TIMEOUT_SECONDS = 10`.
+  - Test-harness isolation (PR #175): every test file gets a temporary `HOME`/`USERPROFILE` so tests cannot touch real Codeman state or delete real case directories, and `Session` attaches a raw-mode echo PTY instead of a real tmux client under Vitest. Fixes the quick-start suite deleting the real `~/codeman-cases/testcase`.
+  - CI stability: drain console-log rpc forwards before worker teardown (fixes a run-failing `EnvironmentTeardownError` with all tests passing); `test/webview-proxy.test.ts` no longer accidentally runs under the jsdom environment via a directive named in a comment.
+  - Release workflow pins the GitHub "Latest" badge to the Codeman release.
+
 ## 1.9.4
 
 ### Patch Changes
