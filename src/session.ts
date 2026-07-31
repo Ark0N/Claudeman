@@ -181,7 +181,12 @@ const DEFAULT_PTY_COLS = 120;
 const DEFAULT_PTY_ROWS = 40;
 const TMUX_DISPLAY_TIMEOUT_MS = 2000;
 const IS_TEST_MODE = !!process.env.VITEST;
-const TEST_PTY_SCRIPT = 'process.stdin.pipe(process.stdout);';
+/**
+ * Echo transport for the test-mode PTY attach. Raw mode disables the tty line
+ * discipline, so each input byte flows back exactly once and immediately; without
+ * it, tty echo doubles every line and canonical buffering holds bytes until Enter.
+ */
+const TEST_PTY_SCRIPT = 'if (process.stdin.isTTY) process.stdin.setRawMode(true); process.stdin.pipe(process.stdout);';
 /** Delay before the in-container Claude CLI version probe (lets the container start). */
 const DOCKER_CLI_VERSION_PROBE_DELAY_MS = 3000;
 

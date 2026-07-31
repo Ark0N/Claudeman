@@ -487,7 +487,10 @@ describe('runtimeUrlShim', () => {
  * 404s on Codeman's own root while the dashboard's fetch-driven data loads fine.
  *
  * Node environment on purpose, like test/markdown-sanitizer.test.ts: a per-file
- * `@vitest-environment jsdom` externalizes node builtins under vite.
+ * jsdom environment directive would externalize node builtins under vite. The
+ * directive is deliberately not written out here, even in prose: vitest scans
+ * comments for it, and naming it flipped this whole file to the jsdom
+ * environment while this comment claimed the opposite.
  */
 describe('runtimeUrlShim DOM sinks', () => {
   const body = runtimeUrlShim(PREFIX)

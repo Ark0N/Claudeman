@@ -95,10 +95,10 @@ describe('generateHooksConfig', () => {
     expect(notifHooks[0].hooks[0].command).toContain('|| true');
   });
 
-  it('should set timeout to 10000ms', () => {
+  it('should set timeout to 10 seconds (hook timeout fields are seconds)', () => {
     const config = generateHooksConfig();
     const notifHooks = config.hooks.Notification as Array<{ hooks: Array<{ timeout: number }> }>;
-    expect(notifHooks[0].hooks[0].timeout).toBe(10000);
+    expect(notifHooks[0].hooks[0].timeout).toBe(10);
   });
 
   it('should include correct event names in curl payloads', () => {
@@ -199,7 +199,40 @@ describe('writeHooksConfig', () => {
 
     const parsed = JSON.parse(readFileSync(settingsPath, 'utf-8'));
     expect(parsed.hooks.PostToolUse).toHaveLength(1);
-    expect(JSON.stringify(parsed.hooks.PostToolUse)).toContain('CODEMAN_BACKGROUND_REWAKE_V1');
+    expect(JSON.stringify(parsed.hooks.PostToolUse)).toContain('CODEMAN_BACKGROUND_REWAKE_V');
+  });
+
+  it('should replace an older rewake script version without duplicating it', async () => {
+    const claudeDir = join(testDir, '.claude');
+    const settingsPath = join(claudeDir, 'settings.local.json');
+    mkdirSync(claudeDir, { recursive: true });
+    // Simulate a case healed by the previous release: current curls (secret present)
+    // plus a V1 rewake handler. The version bump must swap the handler in place.
+    const hooks = generateHooksConfig().hooks;
+    hooks.PostToolUse = [
+      {
+        matcher: 'Bash',
+        hooks: [
+          {
+            type: 'command',
+            command: 'node',
+            args: ['-e', 'const CODEMAN_BACKGROUND_REWAKE_V1 = true; process.exit(0);'],
+            asyncRewake: true,
+            timeout: 21600,
+          },
+        ],
+      },
+    ];
+    writeFileSync(settingsPath, JSON.stringify({ hooks }, null, 2));
+
+    await refreshStaleCodemanHooks(testDir);
+
+    const parsed = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+    const serialized = JSON.stringify(parsed.hooks.PostToolUse);
+    expect(parsed.hooks.PostToolUse).toHaveLength(1);
+    expect(parsed.hooks.PostToolUse[0].hooks).toHaveLength(1);
+    expect(serialized).toContain('CODEMAN_BACKGROUND_REWAKE_V2');
+    expect(serialized).not.toContain('CODEMAN_BACKGROUND_REWAKE_V1');
   });
 
   it('should not add rewake hooks to a user-owned hook configuration', async () => {
@@ -841,7 +874,7 @@ describe('Hook Config Generation - Extended', () => {
       expect(hook.matcher).toBeDefined();
       expect(hook.hooks).toHaveLength(1);
       expect(hook.hooks[0].type).toBe('command');
-      expect(hook.hooks[0].timeout).toBe(10000);
+      expect(hook.hooks[0].timeout).toBe(10);
       expect(hook.hooks[0].command).toBeTruthy();
     }
   });

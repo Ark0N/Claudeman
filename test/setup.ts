@@ -25,7 +25,7 @@ if (originalPlaywrightBrowsersPath === undefined && originalHome) {
     process.platform === 'darwin'
       ? join(originalHome, 'Library', 'Caches', 'ms-playwright')
       : process.platform === 'win32'
-        ? join(process.env.LOCALAPPDATA || originalHome, 'ms-playwright')
+        ? join(process.env.LOCALAPPDATA || join(originalHome, 'AppData', 'Local'), 'ms-playwright')
         : join(originalHome, '.cache', 'ms-playwright');
 }
 process.env.HOME = testHome;
@@ -44,7 +44,14 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-afterAll(() => {
+afterAll(async () => {
+  // Let in-flight console-log rpc forwards drain before the worker environment
+  // tears down. On loaded CI runners the channel otherwise closes while the last
+  // "onUserConsoleLog" call is still pending, and that single unhandled
+  // EnvironmentTeardownError fails the run after every test has passed
+  // (observed twice on the PR #175/#176 merge commit; never locally).
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
 
@@ -57,5 +64,12 @@ afterAll(() => {
   if (originalPlaywrightBrowsersPath === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH;
   else process.env.PLAYWRIGHT_BROWSERS_PATH = originalPlaywrightBrowsersPath;
 
+  rmSync(testHome, { recursive: true, force: true });
+});
+
+// afterAll never fires for a fully-skipped test file (no tests execute), which
+// would leak the temp home created above. The exit hook is the backstop; rmSync
+// with force is a no-op when afterAll already removed it.
+process.on('exit', () => {
   rmSync(testHome, { recursive: true, force: true });
 });

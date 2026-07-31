@@ -18,7 +18,7 @@
  * Hook categories: `Notification` (3 matchers), `Stop` (1), `TeammateIdle` (1),
  * `TaskCompleted` (1), `PostToolUse` (1 self-contained background Bash rewake)
  *
- * @dependencies types (HookEventType), config/auth-config (HOOK_TIMEOUT_MS)
+ * @dependencies types (HookEventType), config/auth-config (HOOK_TIMEOUT_SECONDS)
  * @consumedby web/server (session creation), session-cli-builder (env setup)
  *
  * @module hooks-config
@@ -29,7 +29,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { HookEventType } from './types.js';
-import { HOOK_TIMEOUT_MS } from './config/auth-config.js';
+import { HOOK_TIMEOUT_SECONDS } from './config/auth-config.js';
 
 /**
  * Serializes read-modify-write access to a `settings.local.json` path. Every
@@ -40,7 +40,19 @@ import { HOOK_TIMEOUT_MS } from './config/auth-config.js';
  * are independent; the map self-prunes when a path's chain goes idle.
  */
 const settingsWriteLocks = new Map<string, Promise<unknown>>();
-const BACKGROUND_WAKE_MARKER = 'CODEMAN_BACKGROUND_REWAKE_V1';
+/**
+ * Version-agnostic ownership prefix: every rewake script version embeds a marker
+ * starting with this, and `isCodemanHookHandler` matches on the prefix. That way a
+ * version bump replaces the old handler instead of duplicating it (matching on the
+ * full versioned marker would disown every older script).
+ */
+const BACKGROUND_WAKE_MARKER_PREFIX = 'CODEMAN_BACKGROUND_REWAKE_V';
+/**
+ * Current script version. Bump the suffix whenever `generateBackgroundWakeScript`
+ * changes: `refreshStaleCodemanHooks` treats the absence of the CURRENT marker as
+ * stale, so healed cases pick up the new script on next launch.
+ */
+const BACKGROUND_WAKE_MARKER = `${BACKGROUND_WAKE_MARKER_PREFIX}2`;
 const BACKGROUND_WAKE_TIMEOUT_SECONDS = 6 * 60 * 60;
 
 /**
@@ -51,11 +63,17 @@ const BACKGROUND_WAKE_TIMEOUT_SECONDS = 6 * 60 * 60;
  * record avoids injecting terminal input (which could submit a user's draft).
  * The helper is embedded in settings via `node -e`, so it has no script path
  * that can go stale after an install or plugin-cache cleanup.
+ *
+ * Self-terminating: Claude Code enforces the hook timeout, but the helper does not
+ * rely on it. It exits on its own deadline (same budget) and when orphaned
+ * (`ppid === 1`), so a dead session cannot leave a poller stat-ing the transcript
+ * forever. The ppid check misses subreaper setups; the deadline is the backstop.
  */
 export function generateBackgroundWakeScript(): string {
   return [
     "const fs = require('node:fs');",
     `const ${BACKGROUND_WAKE_MARKER} = true;`,
+    `const deadline = Date.now() + ${BACKGROUND_WAKE_TIMEOUT_SECONDS} * 1000;`,
     'let input = {};',
     "try { input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}'); } catch { process.exit(0); }",
     'function findTaskId(value) {',
@@ -99,6 +117,7 @@ export function generateBackgroundWakeScript(): string {
     '  }',
     '}',
     'function poll() {',
+    '  if (Date.now() > deadline || process.ppid === 1) process.exit(0);',
     '  try {',
     '    const size = fs.statSync(transcriptPath).size;',
     "    if (size < position) { position = 0; carry = ''; }",
@@ -165,30 +184,30 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
       Notification: [
         {
           matcher: 'idle_prompt',
-          hooks: [{ type: 'command', command: curlCmd('idle_prompt'), timeout: HOOK_TIMEOUT_MS }],
+          hooks: [{ type: 'command', command: curlCmd('idle_prompt'), timeout: HOOK_TIMEOUT_SECONDS }],
         },
         {
           matcher: 'permission_prompt',
-          hooks: [{ type: 'command', command: curlCmd('permission_prompt'), timeout: HOOK_TIMEOUT_MS }],
+          hooks: [{ type: 'command', command: curlCmd('permission_prompt'), timeout: HOOK_TIMEOUT_SECONDS }],
         },
         {
           matcher: 'elicitation_dialog',
-          hooks: [{ type: 'command', command: curlCmd('elicitation_dialog'), timeout: HOOK_TIMEOUT_MS }],
+          hooks: [{ type: 'command', command: curlCmd('elicitation_dialog'), timeout: HOOK_TIMEOUT_SECONDS }],
         },
       ],
       Stop: [
         {
-          hooks: [{ type: 'command', command: curlCmd('stop'), timeout: HOOK_TIMEOUT_MS }],
+          hooks: [{ type: 'command', command: curlCmd('stop'), timeout: HOOK_TIMEOUT_SECONDS }],
         },
       ],
       TeammateIdle: [
         {
-          hooks: [{ type: 'command', command: curlCmd('teammate_idle'), timeout: HOOK_TIMEOUT_MS }],
+          hooks: [{ type: 'command', command: curlCmd('teammate_idle'), timeout: HOOK_TIMEOUT_SECONDS }],
         },
       ],
       TaskCompleted: [
         {
-          hooks: [{ type: 'command', command: curlCmd('task_completed'), timeout: HOOK_TIMEOUT_MS }],
+          hooks: [{ type: 'command', command: curlCmd('task_completed'), timeout: HOOK_TIMEOUT_SECONDS }],
         },
       ],
       PostToolUse: [
@@ -212,7 +231,8 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
 function isCodemanHookHandler(value: unknown): boolean {
   try {
     const serialized = JSON.stringify(value);
-    return serialized.includes('/api/hook-event') || serialized.includes(BACKGROUND_WAKE_MARKER);
+    // Prefix, not the versioned marker: older script versions must still be ours.
+    return serialized.includes('/api/hook-event') || serialized.includes(BACKGROUND_WAKE_MARKER_PREFIX);
   } catch {
     return false;
   }

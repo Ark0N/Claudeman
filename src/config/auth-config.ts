@@ -31,5 +31,10 @@ export const AUTH_FAILURE_WINDOW_MS = 15 * 60 * 1000;
 // Hooks
 // ============================================================================
 
-/** Timeout for Claude Code hook curl commands (ms) */
-export const HOOK_TIMEOUT_MS = 10000;
+/**
+ * Timeout for Claude Code hook curl commands, in SECONDS: the hook `timeout`
+ * field is seconds (the CLI multiplies by 1000). The predecessor constant
+ * `HOOK_TIMEOUT_MS = 10000` fed the same field, so those hooks effectively had a
+ * ~2.8-hour timeout; 10 seconds is the originally intended budget.
+ */
+export const HOOK_TIMEOUT_SECONDS = 10;
