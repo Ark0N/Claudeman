@@ -2,14 +2,18 @@
 
 > Official documentation for Claude Code hooks system, extracted from [code.claude.com](https://code.claude.com/docs/en/hooks).
 
-**Last Updated**: 2026-01-24
+**Last Updated**: 2026-07-25
 **Source**: [Claude Code Hooks Documentation](https://code.claude.com/docs/en/hooks)
+
+> This is a maintained summary, not an exhaustive copy of the upstream reference.
+> Check the source link for event-specific schemas before adding a new hook.
 
 ---
 
 ## Overview
 
 Hooks are automated scripts that execute at specific events during your Claude Code session. They allow you to:
+
 - Validate, modify, or block tool usage
 - Add context to prompts
 - Implement custom workflows
@@ -21,12 +25,12 @@ Hooks are automated scripts that execute at specific events during your Claude C
 
 Hooks are configured in settings files:
 
-| File | Scope |
-|------|-------|
-| `~/.claude/settings.json` | User (global) |
-| `.claude/settings.json` | Project |
+| File                          | Scope                      |
+| ----------------------------- | -------------------------- |
+| `~/.claude/settings.json`     | User (global)              |
+| `.claude/settings.json`       | Project                    |
 | `.claude/settings.local.json` | Local project (gitignored) |
-| Plugin hook files | Plugin-specific |
+| Plugin hook files             | Plugin-specific            |
 
 ### Basic Structure
 
@@ -49,8 +53,9 @@ Hooks are configured in settings files:
 ```
 
 **Key Fields**:
+
 - `matcher`: Pattern to match tool names (case-sensitive, supports regex like `Edit|Write` or `*` for all)
-- `type`: `"command"` for bash or `"prompt"` for LLM-based evaluation
+- `type`: `"command"`, `"http"`, `"mcp_tool"`, `"prompt"`, or `"agent"` where the event supports it
 - `command`: Bash command to execute
 - `prompt`: LLM prompt for evaluation (prompt-based hooks only)
 - `timeout`: Optional timeout in seconds (default: 60)
@@ -59,6 +64,10 @@ Hooks are configured in settings files:
 
 ## Hook Events
 
+Claude Code's current event surface is broader than the detailed subset below. In
+particular, `TeammateIdle` and `TaskCompleted` are supported lifecycle events used
+by Codeman; they are not stale or plugin-defined event names.
+
 ### PreToolUse
 
 **When**: After Claude creates tool parameters, before processing the tool call.
@@ -66,15 +75,17 @@ Hooks are configured in settings files:
 **Use Cases**: Approval, denial, or modification of tool calls.
 
 **Common Matchers**:
+
 - `Bash` - Shell commands
 - `Write` - File writing
 - `Edit` - File editing
 - `Read` - File reading
-- `Task` - Subagent tasks
+- `Agent` - Subagent tasks
 - `WebFetch`, `WebSearch` - Web operations
 - `mcp__<server>__<tool>` - MCP tools
 
 **Output Control**:
+
 ```json
 {
   "hookSpecificOutput": {
@@ -96,13 +107,14 @@ Hooks are configured in settings files:
 **Use Cases**: Auto-approve or deny permissions.
 
 **Output Control**:
+
 ```json
 {
   "hookSpecificOutput": {
     "hookEventName": "PermissionRequest",
     "decision": {
       "behavior": "allow|deny",
-      "updatedInput": { },
+      "updatedInput": {},
       "message": "deny reason",
       "interrupt": false
     }
@@ -117,6 +129,7 @@ Hooks are configured in settings files:
 **Use Cases**: Provide feedback, run formatters/linters, log operations.
 
 **Output Control**:
+
 ```json
 {
   "decision": "block",
@@ -128,15 +141,30 @@ Hooks are configured in settings files:
 }
 ```
 
+#### Asynchronous Rewake
+
+Command hooks can set `"asyncRewake": true` to run asynchronously and wake an
+idle Claude turn when the hook exits with code 2. The hook's stderr is delivered
+to Claude as a system reminder. This implies `"async": true`; ordinary async
+hooks do not wake an idle turn, and their output waits for the next interaction.
+
+Codeman uses this on `PostToolUse(Bash)`: a self-contained Node helper extracts
+the background task ID from the Bash result, watches the session transcript for
+the matching completion notification, and exits 2. It does not send terminal
+input, so it cannot submit a user's partially written prompt.
+
 ### Notification
 
 **When**: When Claude Code sends notifications.
 
 **Matchers**:
+
 - `permission_prompt`
 - `idle_prompt`
 - `auth_success`
 - `elicitation_dialog`
+- `elicitation_complete`
+- `elicitation_response`
 
 ### UserPromptSubmit
 
@@ -145,6 +173,7 @@ Hooks are configured in settings files:
 **Use Cases**: Add context, validate, or block prompts.
 
 **Output Control**:
+
 ```json
 {
   "decision": "block",
@@ -165,6 +194,7 @@ Hooks are configured in settings files:
 **Use Cases**: **Ralph Wiggum loops** - block exit and refeed prompt.
 
 **Output Control**:
+
 ```json
 {
   "decision": "block",
@@ -173,6 +203,7 @@ Hooks are configured in settings files:
 ```
 
 Or to allow exit:
+
 ```json
 {
   "continue": true,
@@ -184,15 +215,32 @@ Or to allow exit:
 
 ### SubagentStop
 
-**When**: When a subagent (Task tool call) finishes responding.
+**When**: When a subagent (Agent tool call) finishes responding.
 
 **Use Cases**: Control nested loops, verify subagent output.
+
+### TeammateIdle
+
+**When**: When an agent-team teammate is about to go idle.
+
+**Use Cases**: Reassign work, continue a teammate loop, or notify an orchestrator.
+
+**Matcher Support**: None. The hook fires for every occurrence.
+
+### TaskCompleted
+
+**When**: When a task is about to be marked completed.
+
+**Use Cases**: Validate completion or forward team progress to an external UI.
+
+**Matcher Support**: None. The hook fires for every occurrence.
 
 ### PreCompact
 
 **When**: Before a compact operation.
 
 **Matchers**:
+
 - `manual` - Invoked from `/compact`
 - `auto` - Invoked from auto-compact
 
@@ -201,6 +249,7 @@ Or to allow exit:
 **When**: When Claude Code starts or resumes a session.
 
 **Matchers**:
+
 - `startup` - Fresh start
 - `resume` - From `--resume`, `--continue`, or `/resume`
 - `clear` - From `/clear`
@@ -209,6 +258,7 @@ Or to allow exit:
 **Use Cases**: Load development context, set environment variables.
 
 **Persisting Environment Variables**:
+
 ```bash
 #!/bin/bash
 if [ -n "$CLAUDE_ENV_FILE" ]; then
@@ -219,6 +269,7 @@ exit 0
 ```
 
 **Output Control**:
+
 ```json
 {
   "hookSpecificOutput": {
@@ -233,6 +284,7 @@ exit 0
 **When**: When a session ends.
 
 **Reason Values**:
+
 - `clear`
 - `logout`
 - `prompt_input_exit`
@@ -254,7 +306,7 @@ Hooks receive JSON via stdin with common fields:
   "permission_mode": "default",
   "hook_event_name": "PreToolUse",
   "tool_name": "Bash",
-  "tool_input": { },
+  "tool_input": {},
   "tool_use_id": "toolu_01ABC123..."
 }
 ```
@@ -262,6 +314,7 @@ Hooks receive JSON via stdin with common fields:
 ### Tool-Specific Input
 
 **Bash**:
+
 ```json
 {
   "tool_name": "Bash",
@@ -274,6 +327,7 @@ Hooks receive JSON via stdin with common fields:
 ```
 
 **Write**:
+
 ```json
 {
   "tool_name": "Write",
@@ -285,6 +339,7 @@ Hooks receive JSON via stdin with common fields:
 ```
 
 **Edit**:
+
 ```json
 {
   "tool_name": "Edit",
@@ -302,11 +357,11 @@ Hooks receive JSON via stdin with common fields:
 
 ### Exit Codes
 
-| Code | Behavior |
-|------|----------|
-| 0 | Success. `stdout` processed (shown in verbose or added as context) |
-| 2 | Blocking error. Only `stderr` used. Blocks tool/prompt based on event |
-| Other | Non-blocking error. `stderr` shown in verbose, execution continues |
+| Code  | Behavior                                                              |
+| ----- | --------------------------------------------------------------------- |
+| 0     | Success. `stdout` processed (shown in verbose or added as context)    |
+| 2     | Blocking error. Only `stderr` used. Blocks tool/prompt based on event |
+| Other | Non-blocking error. `stderr` shown in verbose, execution continues    |
 
 ### JSON Output (Exit Code 0)
 
@@ -323,7 +378,12 @@ Hooks receive JSON via stdin with common fields:
 
 ## Prompt-Based Hooks
 
-For Stop and SubagentStop events, you can use LLM-based evaluation:
+Prompt and agent handlers are supported by decision-oriented events including
+`PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`,
+`PostToolBatch`, `UserPromptSubmit`, `Stop`, `SubagentStop`, `TaskCreated`, and
+`TaskCompleted`. Check the upstream reference before choosing a handler type.
+
+For example, a Stop event can use LLM-based evaluation:
 
 ```json
 {
@@ -344,6 +404,7 @@ For Stop and SubagentStop events, you can use LLM-based evaluation:
 ```
 
 **LLM Response Format**:
+
 ```json
 {
   "ok": true,
@@ -362,17 +423,18 @@ Hooks can be defined in Skills, Agents, and Slash Commands using frontmatter:
 name: secure-operations
 hooks:
   PreToolUse:
-    - matcher: "Bash"
+    - matcher: 'Bash'
       hooks:
         - type: command
-          command: "./scripts/security-check.sh"
+          command: './scripts/security-check.sh'
 ---
 ```
 
 These hooks:
+
 - Are scoped to the component's lifecycle
 - Only run when that component is active
-- Support: PreToolUse, PostToolUse, Stop
+- Support all hook events; a subagent-scoped `Stop` is converted to `SubagentStop`
 
 ---
 
@@ -550,11 +612,11 @@ exit 0
 
 ## Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `CLAUDE_PROJECT_DIR` | Project root directory |
-| `CLAUDE_CODE_REMOTE` | `"true"` for web, empty for CLI |
-| `CLAUDE_ENV_FILE` | Path to write persistent env vars (SessionStart) |
+| Variable             | Description                                      |
+| -------------------- | ------------------------------------------------ |
+| `CLAUDE_PROJECT_DIR` | Project root directory                           |
+| `CLAUDE_CODE_REMOTE` | `"true"` for web, empty for CLI                  |
+| `CLAUDE_ENV_FILE`    | Path to write persistent env vars (SessionStart) |
 
 ---
 
@@ -593,4 +655,4 @@ Use `/hooks` command to view registered hooks and make changes.
 
 ---
 
-*Source: [Claude Code Hooks Documentation](https://code.claude.com/docs/en/hooks)*
+_Source: [Claude Code Hooks Documentation](https://code.claude.com/docs/en/hooks)_
