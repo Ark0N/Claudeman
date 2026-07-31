@@ -694,6 +694,19 @@ Object.assign(CodemanApp.prototype, {
     this._updatePollTimer = setInterval(poll, 1500);
   },
 
+  async loadGeminiAvailability() {
+    const btn = document.getElementById('welcomeGeminiBtn');
+    if (!btn) return;
+    try {
+      const res = await fetch('/api/gemini/status');
+      const env = await res.json();
+      const status = env?.success === true ? env.data : env;
+      btn.style.display = status?.available ? 'flex' : 'none';
+    } catch {
+      btn.style.display = 'none';
+    }
+  },
+
   async loadTunnelStatus() {
     try {
       const res = await fetch('/api/tunnel/status');
