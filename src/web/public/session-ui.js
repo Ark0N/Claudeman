@@ -441,6 +441,7 @@ Object.assign(CodemanApp.prototype, {
     // Load history sessions when menu opens
     if (menu.classList.contains('active')) {
       this._loadRunModeHistory();
+      this._refreshRunModeAvailability();
       const close = (ev) => {
         if (!menu.contains(ev.target)) {
           menu.classList.remove('active');
@@ -449,6 +450,32 @@ Object.assign(CodemanApp.prototype, {
       };
       setTimeout(() => document.addEventListener('click', close), 0);
     }
+  },
+
+  /**
+   * Hides run-mode dropdown entries for CLIs that aren't installed, so
+   * picking one doesn't spawn a session that immediately errors out.
+   * Shell has no external CLI dependency and is never gated.
+   */
+  async _refreshRunModeAvailability() {
+    const checks = [
+      ['claude', '/api/claude/status'],
+      ['opencode', '/api/opencode/status'],
+      ['codex', '/api/codex/status'],
+      ['gemini', '/api/gemini/status'],
+    ];
+    await Promise.all(checks.map(async ([mode, url]) => {
+      const btn = document.querySelector(`.run-mode-option[data-mode="${mode}"]`);
+      if (!btn) return;
+      try {
+        const res = await fetch(url);
+        const env = await res.json();
+        const status = env?.success === true ? env.data : env;
+        btn.style.display = status?.available ? 'flex' : 'none';
+      } catch {
+        btn.style.display = 'none';
+      }
+    }));
   },
 
   async _loadRunModeHistory() {

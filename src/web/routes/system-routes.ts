@@ -374,8 +374,18 @@ export function registerSystemRoutes(
   });
 
   // ═══════════════════════════════════════════════════════════════
-  // CLI Integrations (OpenCode, Codex, Gemini, Antigravity)
+  // CLI Integrations (Claude, OpenCode, Codex, Gemini, Antigravity)
   // ═══════════════════════════════════════════════════════════════
+
+  // ========== Claude ==========
+
+  app.get('/api/claude/status', async () => {
+    const { isClaudeAvailable, findClaudeDir } = await import('../../utils/claude-cli-resolver.js');
+    return {
+      available: isClaudeAvailable(),
+      path: findClaudeDir(),
+    };
+  });
 
   // ========== OpenCode ==========
 
