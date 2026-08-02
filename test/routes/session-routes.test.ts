@@ -18,7 +18,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import fastifyMultipart from '@fastify/multipart';
 import { join } from 'node:path';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
@@ -1287,6 +1287,39 @@ describe('session-routes', () => {
       });
       const body = JSON.parse(res.body);
       expect(body.data.sessions.length).toBeLessThanOrEqual(50);
+    });
+
+    it('decodes a dotdir working directory (e.g. ~/.codeman) instead of falling back to $HOME', async () => {
+      // Claude Code's project-key encoding maps both '/' and '.' to '-', so
+      // "/home/x/.dotcase" and "/home/x/dotcase" collapse to the same-looking
+      // dash run except for a doubled dash. decodeProjectKey() must still
+      // recover the real (dotdir) path rather than silently falling back to
+      // bare $HOME (COD bug: 2026-08-01, ~/.codeman resumed sessions got
+      // workingDir "/home/timkjr" instead of "/home/timkjr/.codeman").
+      const home = process.env.HOME as string;
+      const realDir = join(home, '.dotcase');
+      await mkdir(realDir, { recursive: true });
+
+      const projectKey = realDir.replace(/\//g, '-').replace(/\./g, '-');
+      const projDir = join(home, '.claude', 'projects', projectKey);
+      await mkdir(projDir, { recursive: true });
+
+      const sessionId = '12345678-1234-1234-1234-123456789012';
+      const transcriptLine = JSON.stringify({ type: 'user', message: { role: 'user', content: 'hello world' } }) + '\n';
+      // scanProjectDir skips files under 4000 bytes.
+      const padding = '#'.repeat(4200 - transcriptLine.length);
+      await writeFile(join(projDir, `${sessionId}.jsonl`), transcriptLine + padding);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/history/sessions?projectKey=${projectKey}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      const row = body.data.sessions.find((s: { sessionId: string }) => s.sessionId === sessionId);
+      expect(row).toBeDefined();
+      expect(row.workingDir).toBe(realDir);
+      expect(row.workingDir).not.toBe(home);
     });
   });
 

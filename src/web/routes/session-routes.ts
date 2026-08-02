@@ -2514,6 +2514,25 @@ export function registerSessionRoutes(
           }
         }
       }
+      // The encoder maps both '/' and '.' to '-', so a literal '.' in the
+      // original path (e.g. "/home/timkjr/.codeman") collapses into an empty
+      // split segment here. Retry this window as a dotdir/dotfile: ".<join>".
+      if (segments[idx] === '' && idx + 1 < segments.length) {
+        const dotMaxLook = Math.min(idx + 1 + 4, segments.length);
+        for (let end = dotMaxLook - 1; end >= idx + 1; end--) {
+          const dotCandidates =
+            end === idx + 1
+              ? [segments[idx + 1]]
+              : [segments.slice(idx + 1, end + 1).join('-'), segments.slice(idx + 1, end + 1).join('_')];
+          for (const child of dotCandidates) {
+            const candidate = current + '/.' + child;
+            if (await isDir(candidate)) {
+              const result = await tryDecode(end + 1, candidate);
+              if (result) return result;
+            }
+          }
+        }
+      }
       return null;
     }
 
@@ -2546,6 +2565,25 @@ export function registerSessionRoutes(
           }
         }
         if (matched) break;
+      }
+      if (!matched && segments[i] === '' && i + 1 < segments.length) {
+        const dotMaxLook = Math.min(i + 1 + 4, segments.length);
+        for (let end = i + 1; end < dotMaxLook; end++) {
+          const dotCandidates =
+            end === i + 1
+              ? [segments[i + 1]]
+              : [segments.slice(i + 1, end + 1).join('_'), segments.slice(i + 1, end + 1).join('-')];
+          for (const child of dotCandidates) {
+            const candidate = current + '/.' + child;
+            if (await isDir(candidate)) {
+              current = candidate;
+              i = end + 1;
+              matched = true;
+              break;
+            }
+          }
+          if (matched) break;
+        }
       }
       if (!matched) {
         current = current + '/' + segments[i];
