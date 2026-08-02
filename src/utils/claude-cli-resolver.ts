@@ -27,6 +27,15 @@ const CLAUDE_SEARCH_DIRS = [
 let _claudeDir: string | null = null;
 
 /**
+ * Returns true if the Claude CLI binary can be located (via `which` or one of
+ * the common install directories). Mirrors `isGeminiAvailable`/`isOpenCodeAvailable`/
+ * `isCodexAvailable` in the sibling resolvers.
+ */
+export function isClaudeAvailable(): boolean {
+  return findClaudeDir() !== null;
+}
+
+/**
  * Finds the directory containing the `claude` binary.
  * Checks `which claude` first, then falls back to common install locations.
  * Result is cached for subsequent calls.

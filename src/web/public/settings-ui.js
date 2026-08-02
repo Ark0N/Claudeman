@@ -695,10 +695,22 @@ Object.assign(CodemanApp.prototype, {
   },
 
   async loadGeminiAvailability() {
-    const btn = document.getElementById('welcomeGeminiBtn');
+    await this._loadCliAvailability('welcomeGeminiBtn', '/api/gemini/status');
+  },
+
+  async loadClaudeAvailability() {
+    await this._loadCliAvailability('welcomeClaudeBtn', '/api/claude/status');
+  },
+
+  async loadOpencodeAvailability() {
+    await this._loadCliAvailability('welcomeOpencodeBtn', '/api/opencode/status');
+  },
+
+  async _loadCliAvailability(buttonId, statusUrl) {
+    const btn = document.getElementById(buttonId);
     if (!btn) return;
     try {
-      const res = await fetch('/api/gemini/status');
+      const res = await fetch(statusUrl);
       const env = await res.json();
       const status = env?.success === true ? env.data : env;
       btn.style.display = status?.available ? 'flex' : 'none';
