@@ -1,5 +1,13 @@
 # aicodeman
 
+## 1.9.6
+
+### Patch Changes
+
+- Two fixes from community PRs (thanks @Lint111):
+  - fix(transcripts): complete tools from user-entry results (#177). Claude transcripts record tool requests in assistant entries but commonly carry their results in user-role entries; the transcript watcher only completed tools from the older assistant-entry path, so Codeman could keep showing a tool as running after it had finished. The watcher now recognizes `tool_result` blocks in user entries, ends the active tool state, and emits `transcript:tool_end` with the correct tool name and error status. Watcher tests also moved from fixed sleeps to condition-based `vi.waitFor` assertions.
+  - fix(notifications): quiet lifecycle hook noise (#178). Notification preferences move to schema version 5: the drawer-only "Response complete" (stop) default is now off, and the migration disables only the legacy drawer-only shape, preserving any explicit browser, audio, or push delivery the user opted into. Teammate-idle and task-completed hooks now map to the existing opt-in subagent categories instead of the broadly enabled idle/stop alerts, so normal agent activity no longer floods the drawer. Local and server-hydrated preferences are normalized through the same migration path (server hydration used to revive the retired default on fresh browsers), and the notification storage key now uses the stable handheld identity so an unfolded foldable keeps its mobile defaults and storage key (tablets and desktops unaffected).
+
 ## 1.9.5
 
 ### Patch Changes
