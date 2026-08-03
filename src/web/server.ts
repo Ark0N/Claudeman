@@ -2464,6 +2464,10 @@ export class WebServer extends EventEmitter {
               envOverrides: savedEnvOverrides,
               effort: savedState?.effort,
               attachmentHistory: savedAttachmentHistory,
+              // The pane's last Enter. Without it the response viewer would show
+              // the launch conversation until the user types again, even though
+              // the re-attached CLI is on a post-`/clear` one.
+              lastSubmitAt: savedState?.lastSubmitAt,
               // Remote SSH metadata must round-trip on recovery: without it the
               // attach cwd falls back to the (nonexistent-locally) remote path and
               // respawn rebuilds a LOCAL command, breaking the pane and silently

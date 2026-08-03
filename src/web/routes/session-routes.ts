@@ -1228,6 +1228,11 @@ export function registerSessionRoutes(
     const activeId = await resolveActiveClaudeSessionIdFromHistory(session, projectsDir);
     if (activeId && activeId !== session.claudeSessionId) {
       session.adoptClaudeSessionId(activeId);
+      // Flush the Enter that vouched for this adoption to state.json. A `/clear`
+      // emits no completion event, so without this the anchor could still be
+      // unpersisted when the server restarts — and recovery would fall back to
+      // the launch conversation.
+      ctx.persistSessionState(session);
       // Docker sessions: keep the case's resume seed following the live conversation.
       if (session.docker) {
         void persistDockerCaseClaudeSessionId(CODEMAN_CONFIG_DIR, session.docker.containerName, activeId).catch(

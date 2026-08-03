@@ -499,6 +499,8 @@ export class Session extends EventEmitter {
       tmuxHistoryLimit?: number;
       /** Restored per-session attachment history. May include server-private external paths. */
       attachmentHistory?: SessionAttachmentHistoryItem[];
+      /** Restored wall-clock ms of the pane's last Enter (see `lastSubmitAt`). */
+      lastSubmitAt?: number;
       /** Remote execution metadata for sessions launched through SSH inside local tmux. */
       remote?: SessionRemote;
       /** Docker execution metadata for sessions launched inside a container via local tmux. */
@@ -525,6 +527,12 @@ export class Session extends EventEmitter {
     this._lastActivityAt = this.createdAt;
     // Set claudeSessionId — when resuming, the Claude conversation ID is the resumed one.
     this._claudeSessionId = config.resumeSessionId || this.id;
+    // Restored from state.json on boot recovery. start() resets _claudeSessionId
+    // to the launch id even when re-attaching to a mux session whose CLI has
+    // moved on (a `/clear` before the restart), so this anchor is what lets the
+    // response viewer re-derive the live conversation without waiting for the
+    // user to type again.
+    this._lastSubmitAt = config.lastSubmitAt ?? 0;
     this._mux = config.mux || null;
     this._useMux = config.useMux ?? (this._mux !== null && this._mux.isAvailable());
     this._muxSession = config.muxSession || null;
@@ -1119,6 +1127,7 @@ export class Session extends EventEmitter {
       // recovery can re-attach.
       respawnBlocked: this._respawnBlocked || undefined,
       attachmentHistory: this.attachmentHistory.length > 0 ? this.attachmentHistory : undefined,
+      lastSubmitAt: this._lastSubmitAt || undefined,
       // envOverrides intentionally NOT on the public SessionState type — they must not
       // leak into SSE / GET /api/sessions broadcasts (schema allows OPENCODE_*, which
       // can carry secrets). For disk persistence, session-manager calls
