@@ -104,7 +104,7 @@ describe('GET /api/sessions/:id/last-response (codex)', () => {
   let codexHome: string;
   let prevCodexHome: string | undefined;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let session: any; // MockSession, loosened for codex-only fields (codexConfig, codexLastSubmitAt)
+  let session: any; // MockSession, loosened for codex-only fields (codexConfig, lastSubmitAt)
   let workdir: string;
 
   /** Write a rollout under CODEX_HOME/sessions/<date>/ with a controlled mtime. */
@@ -230,7 +230,7 @@ describe('GET /api/sessions/:id/last-response (codex)', () => {
 
   it('history.jsonl pin (pane last-submit correlation) outranks the originator match', async () => {
     const submitAtSec = BASE_MTIME + 500;
-    session.codexLastSubmitAt = submitAtSec * 1000;
+    session.lastSubmitAt = submitAtSec * 1000;
     writeHistory([{ session_id: UUID_B, ts: submitAtSec }]);
 
     // Originator-stamped rollout exists and is NEWER, but the pane /resume'd onto

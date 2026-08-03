@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
@@ -174,5 +174,133 @@ describe('GET /api/sessions/:id/last-response (claude)', () => {
       ['user', 'continue'],
       ['assistant', 'Second answer.'],
     ]);
+  });
+});
+
+/**
+ * Which conversation a pane is on is decided by the pane's own Enter, not by
+ * "newest entry for this cwd" — a cwd is shared with every other tab on it,
+ * with tabs long since closed, and with any plain `claude` the user runs in
+ * their own terminal.
+ */
+describe('GET /api/sessions/:id/last-response (claude conversation pinning)', () => {
+  let harness: LocalHarness;
+  let testHome: string;
+  let previousHome: string | undefined;
+  const WORKDIR = '/workspace';
+  const NOW = 1_770_000_000_000;
+
+  beforeEach(async () => {
+    testHome = mkdtempSync(join(tmpdir(), 'codeman-claude-pin-'));
+    previousHome = process.env.HOME;
+    process.env.HOME = testHome;
+    harness = await createEnvelopeHarness();
+  });
+
+  afterEach(async () => {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    rmSync(testHome, { recursive: true, force: true });
+    await harness.app.close();
+  });
+
+  /** A transcript whose only assistant turn is `text`, stamped at `mtimeMs`. */
+  function writeTranscript(conversationId: string, text: string, mtimeMs: number): void {
+    const projectDir = join(testHome, '.claude', 'projects', '-workspace');
+    mkdirSync(projectDir, { recursive: true });
+    const path = join(projectDir, `${conversationId}.jsonl`);
+    writeFileSync(
+      path,
+      JSON.stringify({
+        type: 'assistant',
+        timestamp: new Date(mtimeMs).toISOString(),
+        message: { content: [{ type: 'text', text }] },
+      })
+    );
+    utimesSync(path, mtimeMs / 1000, mtimeMs / 1000);
+  }
+
+  function writeHistory(entries: Array<{ sessionId: string; timestamp: number; project?: string }>): void {
+    const claudeDir = join(testHome, '.claude');
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(
+      join(claudeDir, 'history.jsonl'),
+      entries
+        .map((entry) => JSON.stringify({ display: 'prompt', project: entry.project ?? WORKDIR, ...entry }))
+        .join('\n')
+    );
+  }
+
+  /** Replaces the pre-seeded mock session with a Claude pane in WORKDIR. */
+  function addPane(id: string, conversationId: string, lastSubmitAt: number) {
+    const base = harness.ctx._session;
+    const pane = Object.create(Object.getPrototypeOf(base)) as typeof base & {
+      claudeSessionId: string;
+      lastSubmitAt: number;
+      adoptClaudeSessionId: ReturnType<typeof vi.fn>;
+    };
+    Object.assign(pane, base, { id, mode: 'claude', workingDir: WORKDIR, docker: undefined });
+    pane.claudeSessionId = conversationId;
+    pane.lastSubmitAt = lastSubmitAt;
+    pane.adoptClaudeSessionId = vi.fn((newId: string) => {
+      pane.claudeSessionId = newId;
+    });
+    harness.ctx.sessions.set(id, pane);
+    return pane;
+  }
+
+  async function getLastResponse(sessionId: string) {
+    const response = await harness.app.inject({ method: 'GET', url: `/api/sessions/${sessionId}/last-response` });
+    return JSON.parse(response.body).data as { text: string };
+  }
+
+  it('does not adopt a conversation from another claude process sharing the cwd', async () => {
+    // The pane typed hours ago; a `claude` running in the user's own terminal
+    // is the newest thing in this cwd. Before this fix the viewer followed it.
+    const pane = addPane('pane-1', 'pane-conversation', NOW - 6 * 3600_000);
+    writeTranscript('pane-conversation', 'my own answer', NOW - 6 * 3600_000);
+    writeTranscript('someone-elses-conversation', 'a stranger answer', NOW);
+    writeHistory([{ sessionId: 'someone-elses-conversation', timestamp: NOW }]);
+
+    expect(await getLastResponse('pane-1')).toEqual({ text: 'my own answer', timestamp: expect.any(String) });
+    expect(pane.adoptClaudeSessionId).not.toHaveBeenCalled();
+  });
+
+  it('follows /clear onto the new conversation the pane submitted into', async () => {
+    const pane = addPane('pane-1', 'before-clear', NOW);
+    writeTranscript('before-clear', 'answer before clear', NOW - 60_000);
+    writeTranscript('after-clear', 'answer after clear', NOW + 500);
+    writeHistory([{ sessionId: 'after-clear', timestamp: NOW + 120 }]);
+
+    expect(await getLastResponse('pane-1')).toEqual({ text: 'answer after clear', timestamp: expect.any(String) });
+    expect(pane.adoptClaudeSessionId).toHaveBeenCalledWith('after-clear');
+  });
+
+  it('stays put when the pane has never submitted through Codeman', async () => {
+    const pane = addPane('pane-1', 'pane-conversation', 0);
+    writeTranscript('pane-conversation', 'my own answer', NOW - 60_000);
+    writeTranscript('unrelated-conversation', 'a stranger answer', NOW);
+    writeHistory([{ sessionId: 'unrelated-conversation', timestamp: NOW }]);
+
+    expect(await getLastResponse('pane-1')).toEqual({ text: 'my own answer', timestamp: expect.any(String) });
+    expect(pane.adoptClaudeSessionId).not.toHaveBeenCalled();
+  });
+
+  it('credits a shared-cwd entry to the pane whose Enter is closest to it', async () => {
+    const near = addPane('pane-near', 'near-conversation', NOW);
+    const far = addPane('pane-far', 'far-conversation', NOW - 4_000);
+    writeTranscript('near-conversation', 'near answer', NOW - 60_000);
+    writeTranscript('far-conversation', 'far answer', NOW - 60_000);
+    writeTranscript('fresh-conversation', 'the freshly cleared answer', NOW + 500);
+    writeHistory([{ sessionId: 'fresh-conversation', timestamp: NOW + 100 }]);
+
+    // Both panes are inside the match window; only the closest may claim it.
+    expect(await getLastResponse('pane-far')).toEqual({ text: 'far answer', timestamp: expect.any(String) });
+    expect(far.adoptClaudeSessionId).not.toHaveBeenCalled();
+    expect(await getLastResponse('pane-near')).toEqual({
+      text: 'the freshly cleared answer',
+      timestamp: expect.any(String),
+    });
+    expect(near.adoptClaudeSessionId).toHaveBeenCalledWith('fresh-conversation');
   });
 });

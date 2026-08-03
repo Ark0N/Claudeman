@@ -940,80 +940,97 @@ export function registerSessionRoutes(
 
   // ========== Get Last Response (from transcript JSONL) ==========
 
-  // Resolves the most recent Claude conversation id for a session's cwd by
-  // tailing ~/.claude/history.jsonl. After `/clear`, Claude Code keeps writing
-  // to a new <uuid>.jsonl; history.jsonl is the only source-of-truth update
-  // that does not rely on project-local hooks (we intentionally don't install
-  // hooks in arbitrary user repos, see the POST /api/sessions comment).
+  // How far apart a ~/.claude/history.jsonl entry and a pane's Enter may be and
+  // still be the same submission. Claude appends to history as it accepts the
+  // prompt, so the true gap is milliseconds — this is slack for a loaded box,
+  // not a search radius.
+  const CLAUDE_SUBMIT_MATCH_MS = 10_000;
+  // history.jsonl grows forever; only the tail can hold entries near a submit.
+  const CLAUDE_HISTORY_TAIL_BYTES = 256 * 1024;
+
+  // Resolves the Claude conversation id THIS pane is currently on by matching
+  // ~/.claude/history.jsonl (which logs every submitted prompt as
+  // {project, sessionId, timestamp}) against the pane's last Enter. After
+  // `/clear` Claude keeps writing to a new <uuid>.jsonl, and history.jsonl is
+  // the only source-of-truth update that does not rely on project-local hooks
+  // (we intentionally don't install hooks in arbitrary user repos, see the
+  // POST /api/sessions comment).
   //
-  // Entries from OTHER Codeman sessions in the same cwd are filtered out by
-  // their known claudeSessionIds so concurrent tabs don't shadow each other,
-  // as long as each has had its id resolved at least once.
+  // The pane's own Enter is what makes an entry OURS. `project` alone is not:
+  // a cwd is shared by every other Codeman tab on it, by tabs long since
+  // closed, and by any plain `claude` the user runs in their own terminal —
+  // adopting the newest entry for the cwd pinned the viewer to whichever of
+  // those conversations was typed in last, so the eye showed a stranger's
+  // transcript. With no correlated entry we keep the id we have; a viewer one
+  // turn behind beats a viewer showing someone else's conversation.
+  const claudeHistoryPinCache = new LRUMap<string, { submitAt: number; claudeSessionId: string }>({ maxSize: 1024 });
   async function resolveActiveClaudeSessionIdFromHistory(
     session: Session,
     projectsDir: string
   ): Promise<string | null> {
-    const historyPath = join(homedir(), '.claude', 'history.jsonl');
+    const submitAt = session.lastSubmitAt;
+    if (!submitAt) return null; // never typed through Codeman — nothing to credit
+    const cached = claudeHistoryPinCache.get(session.id);
+    if (cached && cached.submitAt === submitAt) return cached.claudeSessionId;
+
+    // Ids another live pane is already pinned to can never be ours, and every
+    // pane sharing this cwd competes for the entry we are about to claim —
+    // including non-Claude panes, since a shell pane can run `claude` too.
     const otherClaudeIds = new Set<string>();
+    const otherSubmits: number[] = [];
     for (const s of ctx.sessions.values()) {
-      if (s.id !== session.id && s.workingDir === session.workingDir && s.claudeSessionId) {
-        otherClaudeIds.add(s.claudeSessionId);
-      }
+      if (s.id === session.id || s.workingDir !== session.workingDir) continue;
+      if (s.claudeSessionId) otherClaudeIds.add(s.claudeSessionId);
+      if (s.lastSubmitAt) otherSubmits.push(s.lastSubmitAt);
     }
 
-    let candidateSid: string | null = null;
-    try {
-      const content = await fs.readFile(historyPath, 'utf8');
-      const lines = content.split('\n');
-      for (let i = lines.length - 1; i >= 0; i--) {
-        const line = lines[i];
-        if (!line) continue;
-        try {
-          const entry = JSON.parse(line) as { project?: string; sessionId?: string };
-          if (
-            entry.project === session.workingDir &&
-            typeof entry.sessionId === 'string' &&
-            !otherClaudeIds.has(entry.sessionId)
-          ) {
-            candidateSid = entry.sessionId;
-            break;
-          }
-        } catch {
-          // Skip unparseable lines
-        }
-      }
-    } catch {
-      return null;
-    }
-    if (!candidateSid || candidateSid === session.id) return candidateSid;
+    const historyPath = join(homedir(), '.claude', 'history.jsonl');
+    const stat = await fs.stat(historyPath).catch(() => null);
+    if (!stat || stat.size === 0) return null;
+    const tail = await readFileTail(historyPath, Buffer.alloc(CLAUDE_HISTORY_TAIL_BYTES), stat.size);
+    if (!tail) return null;
 
-    // Safety: only adopt if the candidate's jsonl is more recently written
-    // than our initial conversation's jsonl. Blocks stale ids inherited from
-    // a prior Codeman session that happened to share this cwd.
-    try {
-      const projectDirs = await fs.readdir(projectsDir);
+    let best: { sessionId: string; dist: number } | undefined;
+    for (const line of tail.split('\n')) {
+      if (!line) continue;
+      let entry: { project?: string; sessionId?: string; timestamp?: number };
+      try {
+        entry = JSON.parse(line) as typeof entry;
+      } catch {
+        continue; // the first tail line is usually cut mid-JSON
+      }
+      const { sessionId, timestamp } = entry;
+      if (entry.project !== session.workingDir) continue;
+      if (typeof sessionId !== 'string' || !sessionId) continue;
+      if (typeof timestamp !== 'number') continue;
+      if (otherClaudeIds.has(sessionId)) continue;
+      const dist = Math.abs(timestamp - submitAt);
+      if (dist > CLAUDE_SUBMIT_MATCH_MS) continue;
+      if (otherSubmits.some((other) => Math.abs(timestamp - other) < dist)) continue; // another pane is closer
+      if (!best || dist <= best.dist) best = { sessionId, dist }; // ties: the newer entry wins
+    }
+    if (!best) return null;
+
+    // Sanity: the conversation we switch to must exist on disk and must not be
+    // staler than the one we are leaving. A `/clear` successor never is.
+    const currentSessionId = session.claudeSessionId || session.id;
+    if (best.sessionId !== currentSessionId) {
+      const projectDirs = await fs.readdir(projectsDir).catch(() => null);
+      if (!projectDirs) return null;
       let candidateMtime = 0;
-      let initialMtime = 0;
+      let currentMtime = 0;
       for (const projDir of projectDirs) {
-        try {
-          const cs = await fs.stat(join(projectsDir, projDir, `${candidateSid}.jsonl`));
-          if (cs.mtimeMs > candidateMtime) candidateMtime = cs.mtimeMs;
-        } catch {
-          /* not in this dir */
-        }
-        try {
-          const is = await fs.stat(join(projectsDir, projDir, `${session.id}.jsonl`));
-          if (is.mtimeMs > initialMtime) initialMtime = is.mtimeMs;
-        } catch {
-          /* not in this dir */
-        }
+        const candidateStat = await fs.stat(join(projectsDir, projDir, `${best.sessionId}.jsonl`)).catch(() => null);
+        if (candidateStat && candidateStat.mtimeMs > candidateMtime) candidateMtime = candidateStat.mtimeMs;
+        const currentStat = await fs.stat(join(projectsDir, projDir, `${currentSessionId}.jsonl`)).catch(() => null);
+        if (currentStat && currentStat.mtimeMs > currentMtime) currentMtime = currentStat.mtimeMs;
       }
-      if (candidateMtime === 0) return null;
-      if (initialMtime > 0 && candidateMtime <= initialMtime) return null;
-    } catch {
-      return null;
+      if (candidateMtime === 0) return null; // transcript not written yet — retry next poll
+      if (currentMtime > 0 && candidateMtime < currentMtime) return null;
     }
-    return candidateSid;
+
+    claudeHistoryPinCache.set(session.id, { submitAt, claudeSessionId: best.sessionId });
+    return best.sessionId;
   }
 
   interface ClaudeResponseMessage {
@@ -1284,7 +1301,7 @@ export function registerSessionRoutes(
     return { cwd, originator };
   }
 
-  // The pane's last Enter (Session.codexLastSubmitAt) correlated against
+  // The pane's last Enter (Session.lastSubmitAt) correlated against
   // ~/.codex/history.jsonl, which logs every submitted user message as
   // {session_id, ts}. This identifies the thread the pane is ACTUALLY on and
   // is the only signal that survives /resume, /new and /fork typed inside the
@@ -1293,10 +1310,10 @@ export function registerSessionRoutes(
   // can't steal the attribution.
   const codexHistoryPinCache = new LRUMap<string, { submitAt: number; threadId: string }>({ maxSize: 1024 });
   async function resolveCodexThreadFromHistory(
-    session: { id: string; codexLastSubmitAt?: number },
+    session: { id: string; lastSubmitAt?: number },
     codexHome: string
   ): Promise<string | null> {
-    const submitAt = session.codexLastSubmitAt || 0;
+    const submitAt = session.lastSubmitAt || 0;
     if (!submitAt) return null;
     const cached = codexHistoryPinCache.get(session.id);
     if (cached && cached.submitAt === submitAt) return cached.threadId;
@@ -1310,8 +1327,8 @@ export function registerSessionRoutes(
     const WINDOW_MS = 15_000;
     const otherSubmits: number[] = [];
     for (const s of ctx.sessions.values()) {
-      if (s.id !== session.id && s.mode === 'codex' && s.codexLastSubmitAt) {
-        otherSubmits.push(s.codexLastSubmitAt);
+      if (s.id !== session.id && s.mode === 'codex' && s.lastSubmitAt) {
+        otherSubmits.push(s.lastSubmitAt);
       }
     }
 
@@ -1354,7 +1371,7 @@ export function registerSessionRoutes(
   async function findActiveCodexFile(session: {
     id: string;
     workingDir: string;
-    codexLastSubmitAt?: number;
+    lastSubmitAt?: number;
     codexConfig?: { resumeSessionId?: string };
   }): Promise<string | null> {
     const codexHome = process.env.CODEX_HOME || join(process.env.HOME || '/tmp', '.codex');

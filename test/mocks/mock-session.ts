@@ -19,6 +19,8 @@ export class MockSession extends EventEmitter {
   ralphTracker: null = null;
   writeBuffer: string[] = [];
   terminalBuffer: string = '';
+  /** Mirrors Session.lastSubmitAt — the response viewer credits history entries by it. */
+  lastSubmitAt: number = 0;
 
   private _muxName: string | null = null;
 
