@@ -88,6 +88,14 @@ describe('shell-mode spawn command (issue #208)', () => {
     expect(cmd.trim()).not.toBe('');
   });
 
+  it('launches an interactive login shell, so rc files (~/.zshrc, ~/.bashrc, etc.) are sourced', () => {
+    // Without -i -l, the resolved shell runs as a bare non-interactive child of
+    // the non-interactive `bash -c` that launches the pane, silently dropping
+    // aliases, PATH additions, and tool init (zoxide, nvm, etc.).
+    const cmd = buildSpawnCommand({ mode: 'shell', sessionId: 'abc123de-0000-0000-0000-000000000000' });
+    expect(cmd.trim().endsWith('-i -l')).toBe(true);
+  });
+
   it('produces a launch command that parses after the outer sh -c expansion layer', () => {
     const cmd = buildSpawnCommand({ mode: 'shell', sessionId: 'abc123de-0000-0000-0000-000000000000' });
     // Mirrors tmux-manager: `… bash -c ${JSON.stringify(launchCmd)}` handed to `sh -c`.

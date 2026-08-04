@@ -780,7 +780,11 @@ export function buildSpawnCommand(options: {
   // SERVER process's env — empty in containers and system systemd units, leaving
   // the pane command ending in a dangling `&&` ("syntax error: unexpected end of
   // file", pane dead on arrival). Resolve it in Node and quote the result.
-  return shellescape(resolveLocalShell());
+  // -i -l: interactive login shell, so the resolved shell sources the user's rc
+  // files (~/.zshrc, ~/.bashrc, etc.) instead of running as a bare non-interactive
+  // child of the non-interactive `bash -c` that launches the pane — without this,
+  // aliases, PATH additions, and tool init (zoxide, nvm, etc.) are silently dropped.
+  return `${shellescape(resolveLocalShell())} -i -l`;
 }
 
 /**
