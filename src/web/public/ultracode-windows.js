@@ -210,6 +210,9 @@ Object.assign(CodemanApp.prototype, {
     document.body.appendChild(win);
     // Drop the spawn class on the next frame so the transition runs.
     requestAnimationFrame(() => win.classList.remove('spawning'));
+    // Then hand over to the chosen entrance style (no-op for `fly`/`off`, which
+    // leave the small scale-in transition above as the whole animation).
+    this.applyWindowEntrance?.(win);
 
     const header = win.querySelector('.ultracode-window-header');
     const dragListeners = this.makeWindowDraggable(win, header);
@@ -586,6 +589,7 @@ Object.assign(CodemanApp.prototype, {
 
     document.body.appendChild(win);
     requestAnimationFrame(() => win.classList.remove('spawning'));
+    this.applyWindowEntrance?.(win);
 
     const header = win.querySelector('.ultracode-window-header');
     const dragListeners = this.makeWindowDraggable(win, header);

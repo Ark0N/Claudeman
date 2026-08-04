@@ -1276,6 +1276,20 @@
                   </optgroup>
                 </select>
               </div>
+              <div class="settings-item settings-item-multiline" title="How new session tabs, the terminal pane, agent windows and their connection lines appear. This device only. For per-surface control and a live preview, add ?animlab=1 to the URL.">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Entrance Animations</span>
+                  <span class="settings-item-desc">How new tabs, panes and agent windows arrive</span>
+                </div>
+                <select id="appSettingsEntranceAnim" class="form-select settings-inline-select">
+                  <option value="legacy">Off (default)</option>
+                  <option value="terminal">Terminal (CRT)</option>
+                  <option value="beamdown">Beam down</option>
+                  <option value="quiet">Quiet</option>
+                  <option value="playful">Playful</option>
+                  <option value="custom">Custom (set in the lab)</option>
+                </select>
+              </div>
               <div class="settings-item" id="appSettingsWebglRendererItem" title="Use the GPU-accelerated WebGL terminal renderer (desktop only). Turn off to force the DOM renderer if you hit GPU glitches. Codeman also auto-falls-back to the DOM renderer after repeated GPU stalls.">
                 <span class="settings-item-label">WebGL Renderer</span>
                 <label class="switch switch-sm">
@@ -2626,6 +2640,7 @@
   <script defer src="admin-ui.js"></script>
   <script defer src="session-ui.js"></script>
   <script defer src="webview-tabs.js"></script>
+  <script defer src="entrance-animations.js"></script>
   <script defer src="ralph-wizard.js"></script>
   <script defer src="api-client.js"></script>
   <script defer src="subagent-windows.js"></script>

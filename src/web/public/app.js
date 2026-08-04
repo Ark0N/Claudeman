@@ -800,6 +800,10 @@ class CodemanApp {
     this.applyLocalization();
     this.applyTabWrapSettings();
     this.applyMonitorVisibility();
+    // Must run before the first session:created can arrive: markSessionTabEntering()
+    // ignores ids until this sets up its state, which is what keeps the tabs
+    // restored on page load from animating.
+    this.initEntranceAnimations?.();
     // Remove mobile-init class now that JS has applied visibility settings.
     // The inline <script> in <head> added this to prevent flash-of-content on mobile.
     document.documentElement.classList.remove('mobile-init');
@@ -1563,6 +1567,12 @@ class CodemanApp {
       this.sessionOrder.push(data.id);
       this.saveSessionOrder();
     }
+    // Idempotent per id: the POST response and the session:created event both
+    // land here, and a batch launched together cascades in creation order.
+    this.markSessionTabEntering?.(data.id);
+    // The pane is one shared element, so it is only marked here and played when
+    // this session is actually selected (see selectSession).
+    this.markTerminalEntering?.(data.id);
     this.renderSessionTabs();
     this.updateCost();
     // Start stats polling when first session appears
@@ -3443,6 +3453,9 @@ class CodemanApp {
     }
 
     this.updateTabOverflowMode();
+    // After the wrap measurement: the `unroll` style starts tabs at max-width 0,
+    // so measuring mid-animation would decide the wrap on collapsed widths.
+    this._applyTabEntrances?.();
   }
 
   // Auto-wrap desktop session tabs to a second row when they overflow one row,
@@ -3569,6 +3582,9 @@ class CodemanApp {
     // toggle (applyTabWrapSettings calls this) which would otherwise leave a stale
     // tabs-auto-wrap class until the next content render.
     this.updateTabOverflowMode();
+    // Newly created tabs animate in; a re-render mid-cascade resumes them rather
+    // than restarting, since this rebuild just destroyed the animating elements.
+    this._applyTabEntrances?.();
   }
 
   // Set up arrow key navigation for session tabs (accessibility)
@@ -4100,6 +4116,10 @@ class CodemanApp {
     // selectSession or reconnect catches up.
     this._updateSseSubscription(sessionId);
     this.hideWelcome();
+    // Terminal-pane entrance: plays for a freshly created session, and on every
+    // switch when that option is on. Transform/opacity/clip-path only, xterm's
+    // FitAddon reads the untransformed layout box, so this cannot reach the PTY.
+    this.playTerminalEntrance?.(sessionId);
     // Clear idle hooks on view, but keep action hooks until user interacts
     this.clearPendingHooks(sessionId, 'idle_prompt');
     // Instant active-class toggle (no 100ms debounce), then schedule full render for badges/status

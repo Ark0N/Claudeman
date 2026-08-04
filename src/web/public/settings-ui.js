@@ -312,6 +312,10 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsShowFileViewerButton').checked = settings.showFileViewerButton ?? defaults.showFileViewerButton ?? true;
     document.getElementById('appSettingsShowAttachmentsButton').checked = settings.showAttachmentsButton ?? defaults.showAttachmentsButton ?? false;
     document.getElementById('appSettingsSkin').value = settings.skin ?? defaults.skin ?? 'daylight-blue';
+    // Entrance animations. Deliberately NOT part of the settings payload: the
+    // styles persist to their own localStorage keys via setAnimTheme(), which
+    // keeps them per-device without touching the .strict() SettingsUpdateSchema.
+    this._syncEntranceAnimSetting?.();
     // WebGL renderer (desktop only — mobile always uses the DOM renderer, so hide
     // the toggle there so it can't promise something that won't apply).
     document.getElementById('appSettingsWebglRenderer').checked = settings.webglRendererEnabled ?? defaults.webglRendererEnabled ?? true;

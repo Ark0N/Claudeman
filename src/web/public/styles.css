@@ -638,6 +638,674 @@ body {
   100% { box-shadow: 0 0 0px 0px rgba(34, 197, 94, 0); background: transparent; }
 }
 
+/* ── Tab entrance animations (tab-entrance.js) ─────────────────────────────
+   Style is picked by html[data-tab-anim]; the stagger arrives as an inline
+   --tab-enter-delay per tab (negative when an entrance is resuming after a
+   re-render). Duration is scaled by --anim-enter-scale so one slider retimes
+   every style.
+
+   Colour/glow effects live on ::before, never on the tab itself: .session-tab.active
+   sets background/border/box-shadow with !important (and a newly created session is
+   normally the active one), and !important beats an animation. Transform and opacity
+   are unaffected, so the tab keeps those. */
+
+.session-tab.tab-enter {
+  animation-delay: var(--tab-enter-delay, 0ms);
+  animation-fill-mode: both;
+  will-change: transform, opacity;
+}
+
+.session-tab.tab-enter::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  animation-delay: var(--tab-enter-delay, 0ms);
+  animation-fill-mode: both;
+}
+
+/* Slide, drifts in from the right and settles. */
+html[data-tab-anim="slide"] .session-tab.tab-enter {
+  animation-name: tab-enter-slide;
+  animation-duration: calc(380ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes tab-enter-slide {
+  from { opacity: 0; transform: translate3d(24px, 3px, 0) scale(0.96); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Pop, springs past full size, then settles back. */
+html[data-tab-anim="pop"] .session-tab.tab-enter {
+  animation-name: tab-enter-pop;
+  animation-duration: calc(460ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+@keyframes tab-enter-pop {
+  0%   { opacity: 0; transform: scale(0.4); }
+  55%  { opacity: 1; transform: scale(1.13); }
+  76%  { opacity: 1; transform: scale(0.965); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* CRT, snaps open as a hot line, then unfolds vertically. */
+html[data-tab-anim="crt"] .session-tab.tab-enter {
+  animation-name: tab-enter-crt;
+  animation-duration: calc(520ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.3, 0.9, 0.3, 1);
+}
+
+html[data-tab-anim="crt"] .session-tab.tab-enter::before {
+  animation-name: tab-enter-crt-flash;
+  animation-duration: calc(520ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+@keyframes tab-enter-crt {
+  0%   { opacity: 0; transform: scale3d(0.04, 0.09, 1); }
+  20%  { opacity: 1; transform: scale3d(1, 0.09, 1); }
+  56%  { opacity: 1; transform: scale3d(1, 1.14, 1); }
+  78%  { opacity: 1; transform: scale3d(1, 0.95, 1); }
+  100% { opacity: 1; transform: none; }
+}
+
+@keyframes tab-enter-crt-flash {
+  0%   { opacity: 1; background: rgba(205, 255, 225, 0.95); box-shadow: 0 0 26px 8px rgba(0, 255, 102, 0.6); }
+  20%  { opacity: 0.9; background: rgba(150, 255, 195, 0.7); box-shadow: 0 0 20px 6px rgba(0, 255, 102, 0.45); }
+  60%  { opacity: 0.32; background: rgba(0, 255, 102, 0.14); box-shadow: 0 0 12px 2px rgba(0, 255, 102, 0.22); }
+  100% { opacity: 0; background: transparent; box-shadow: none; }
+}
+
+/* Unroll, the strip makes room and the tab widens into it. */
+html[data-tab-anim="unroll"] .session-tab.tab-enter {
+  animation-name: tab-enter-unroll;
+  animation-duration: calc(480ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  overflow: hidden;
+}
+
+@keyframes tab-enter-unroll {
+  0%   { max-width: 0; opacity: 0; padding-left: 0; padding-right: 0; transform: translateY(3px); }
+  30%  { opacity: 1; }
+  100% { max-width: 900px; opacity: 1; padding-left: 0.6rem; padding-right: 0.6rem; transform: none; }
+}
+
+/* Boot, flickers on under a green scan sweep, like a display warming up. */
+html[data-tab-anim="boot"] .session-tab.tab-enter {
+  animation-name: tab-enter-boot;
+  animation-duration: calc(720ms * var(--anim-enter-scale, 1));
+  animation-timing-function: linear;
+}
+
+html[data-tab-anim="boot"] .session-tab.tab-enter::before {
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    rgba(0, 255, 102, 0.06) 34%,
+    rgba(200, 255, 220, 0.5) 50%,
+    rgba(0, 255, 102, 0.06) 66%,
+    transparent 100%
+  );
+  background-size: 280% 100%;
+  animation-name: tab-enter-boot-scan;
+  animation-duration: calc(720ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-in-out;
+}
+
+@keyframes tab-enter-boot {
+  0%   { opacity: 0; transform: translate3d(0, 5px, 0); }
+  8%   { opacity: 0.85; }
+  15%  { opacity: 0.12; }
+  23%  { opacity: 1; }
+  31%  { opacity: 0.35; }
+  42%  { opacity: 1; transform: none; }
+  55%  { opacity: 0.72; }
+  66%  { opacity: 1; }
+  100% { opacity: 1; transform: none; }
+}
+
+@keyframes tab-enter-boot-scan {
+  0%   { opacity: 0; background-position: 150% 0; }
+  12%  { opacity: 1; }
+  86%  { opacity: 1; }
+  100% { opacity: 0; background-position: -50% 0; }
+}
+
+/* Flip, drops in as a card hinged on its top edge. */
+html[data-tab-anim="flip"] .session-tab.tab-enter {
+  animation-name: tab-enter-flip;
+  animation-duration: calc(520ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.3, 0.9, 0.3, 1);
+  transform-origin: 50% 0%;
+}
+
+@keyframes tab-enter-flip {
+  0%   { opacity: 0; transform: perspective(700px) rotateX(-92deg); }
+  55%  { opacity: 1; transform: perspective(700px) rotateX(13deg); }
+  78%  { opacity: 1; transform: perspective(700px) rotateX(-5deg); }
+  100% { opacity: 1; transform: perspective(700px) rotateX(0deg); }
+}
+
+/* ── Entrance lab (?animlab=1) ───────────────────────────────────────────── */
+
+.anim-lab {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 3100;
+  width: 300px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: rgba(12, 16, 14, 0.96);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  color: var(--text);
+  font-size: 0.72rem;
+  backdrop-filter: blur(6px);
+}
+
+.anim-lab-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.anim-lab-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.anim-lab-close:hover { color: var(--text); }
+
+.anim-lab-themes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.anim-lab-themes button {
+  padding: 3px 8px;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-dim);
+  font-size: 0.66rem;
+  cursor: pointer;
+}
+
+.anim-lab-themes button:hover { background: rgba(34, 197, 94, 0.16); color: var(--text); }
+
+.anim-lab-themes button.selected {
+  border-color: rgba(0, 255, 102, 0.7);
+  background: rgba(34, 197, 94, 0.2);
+  color: #fff;
+}
+
+.anim-lab-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+
+.anim-lab-scroll::-webkit-scrollbar { width: 5px; }
+.anim-lab-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.anim-lab-group { margin-bottom: 10px; }
+
+.anim-lab-group-title {
+  margin-bottom: 4px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.anim-lab-style {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  margin-bottom: 3px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-dim);
+  text-align: left;
+  cursor: pointer;
+}
+
+.anim-lab-style:hover { background: rgba(34, 197, 94, 0.09); color: var(--text); }
+
+.anim-lab-style.selected {
+  border-color: rgba(0, 255, 102, 0.6);
+  background: rgba(34, 197, 94, 0.14);
+  color: #fff;
+}
+
+.anim-lab-style strong { font-size: 0.73rem; font-weight: 600; }
+.anim-lab-style em { font-style: normal; font-size: 0.64rem; opacity: 0.7; }
+
+.anim-lab-range {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 4px 8px;
+  margin-bottom: 6px;
+  color: var(--text-dim);
+}
+
+.anim-lab-range output { justify-self: end; color: var(--text); font-variant-numeric: tabular-nums; }
+.anim-lab-range input { grid-column: 1 / -1; width: 100%; accent-color: #00ff66; }
+
+.anim-lab-demo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  color: var(--text-dim);
+}
+
+.anim-lab-demo button {
+  flex: 1;
+  padding: 4px 0;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.anim-lab-demo button:hover { background: rgba(34, 197, 94, 0.16); border-color: rgba(0, 255, 102, 0.5); }
+
+.anim-lab-hint { margin: 8px 0 0; font-size: 0.64rem; opacity: 0.55; }
+
+/* ── Window entrance animations ────────────────────────────────────────────
+   Applied to a window already sitting at its resting position. The `fly` style
+   is NOT here: it is the pre-existing JS transition in subagent-windows.js that
+   flies the window out of its parent tab, and it skips this class entirely. */
+
+.subagent-window.win-enter,
+.ultracode-window.win-enter {
+  animation-delay: var(--win-enter-delay, 0ms);
+  animation-fill-mode: both;
+  will-change: transform, opacity, filter;
+}
+
+.subagent-window.win-enter::before,
+.ultracode-window.win-enter::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  animation-delay: var(--win-enter-delay, 0ms);
+  animation-fill-mode: both;
+}
+
+/* CRT, bursts open as a hot line, then unfolds vertically. */
+html[data-win-anim="crt"] .subagent-window.win-enter,
+html[data-win-anim="crt"] .ultracode-window.win-enter {
+  animation-name: win-enter-crt;
+  animation-duration: calc(560ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.3, 0.9, 0.3, 1);
+}
+
+html[data-win-anim="crt"] .subagent-window.win-enter::before,
+html[data-win-anim="crt"] .ultracode-window.win-enter::before {
+  animation-name: win-enter-crt-flash;
+  animation-duration: calc(560ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+@keyframes win-enter-crt {
+  0%   { opacity: 0; transform: scale3d(0.55, 0.008, 1); }
+  22%  { opacity: 1; transform: scale3d(1, 0.01, 1); }
+  58%  { opacity: 1; transform: scale3d(1, 1.05, 1); }
+  80%  { opacity: 1; transform: scale3d(1, 0.98, 1); }
+  100% { opacity: 1; transform: none; }
+}
+
+@keyframes win-enter-crt-flash {
+  0%   { opacity: 1; background: rgba(205, 255, 225, 0.9); box-shadow: 0 0 40px 14px rgba(0, 255, 102, 0.55); }
+  22%  { opacity: 0.8; background: rgba(120, 255, 180, 0.5); box-shadow: 0 0 30px 10px rgba(0, 255, 102, 0.4); }
+  60%  { opacity: 0.25; background: rgba(0, 255, 102, 0.1); box-shadow: 0 0 14px 3px rgba(0, 255, 102, 0.18); }
+  100% { opacity: 0; background: transparent; box-shadow: none; }
+}
+
+/* Materialize, resolves out of a blur with a short glitch. */
+html[data-win-anim="materialize"] .subagent-window.win-enter,
+html[data-win-anim="materialize"] .ultracode-window.win-enter {
+  animation-name: win-enter-materialize;
+  animation-duration: calc(620ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes win-enter-materialize {
+  0%   { opacity: 0; transform: scale(0.94); filter: blur(16px) brightness(1.7); }
+  35%  { opacity: 0.85; filter: blur(6px) brightness(1.3); }
+  45%  { opacity: 0.4; }
+  55%  { opacity: 0.95; filter: blur(3px) brightness(1.15); }
+  70%  { opacity: 0.75; }
+  100% { opacity: 1; transform: none; filter: none; }
+}
+
+/* Unfold, hinges down from the top edge. */
+html[data-win-anim="unfold"] .subagent-window.win-enter,
+html[data-win-anim="unfold"] .ultracode-window.win-enter {
+  animation-name: win-enter-unfold;
+  animation-duration: calc(560ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.3, 0.9, 0.3, 1);
+  transform-origin: 50% 0%;
+}
+
+@keyframes win-enter-unfold {
+  0%   { opacity: 0; transform: perspective(1600px) rotateX(-88deg); }
+  55%  { opacity: 1; transform: perspective(1600px) rotateX(9deg); }
+  80%  { opacity: 1; transform: perspective(1600px) rotateX(-3deg); }
+  100% { opacity: 1; transform: perspective(1600px) rotateX(0deg); }
+}
+
+/* Beam down, holds still (so its connection line can draw toward a stable rect),
+   then materializes out of a green wash. NO transform: a transformed window
+   reports a transformed rect and the line would aim at the wrong place. */
+html[data-win-anim="beam"] .subagent-window.win-enter,
+html[data-win-anim="beam"] .ultracode-window.win-enter {
+  animation-name: win-enter-beam;
+  animation-duration: calc(620ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+html[data-win-anim="beam"] .subagent-window.win-enter::before,
+html[data-win-anim="beam"] .ultracode-window.win-enter::before {
+  animation-name: win-enter-beam-wash;
+  animation-duration: calc(620ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+@keyframes win-enter-beam {
+  0%   { opacity: 0; filter: brightness(2.6) saturate(0.4); }
+  20%  { opacity: 0.55; }
+  32%  { opacity: 0.2; }
+  48%  { opacity: 0.9; filter: brightness(1.5) saturate(0.8); }
+  100% { opacity: 1; filter: none; }
+}
+
+@keyframes win-enter-beam-wash {
+  0%   { opacity: 0.9; background: linear-gradient(180deg, rgba(190, 255, 215, 0.85), rgba(0, 255, 102, 0)); }
+  45%  { opacity: 0.5; background: linear-gradient(180deg, rgba(0, 255, 102, 0.35), rgba(0, 255, 102, 0)); }
+  100% { opacity: 0; background: transparent; }
+}
+
+/* Pop, springs open from the centre. */
+html[data-win-anim="pop"] .subagent-window.win-enter,
+html[data-win-anim="pop"] .ultracode-window.win-enter {
+  animation-name: win-enter-pop;
+  animation-duration: calc(460ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+@keyframes win-enter-pop {
+  0%   { opacity: 0; transform: scale(0.55); }
+  58%  { opacity: 1; transform: scale(1.045); }
+  80%  { opacity: 1; transform: scale(0.99); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* ── Main terminal pane entrance animations ────────────────────────────────
+   ⚠ transform / opacity / clip-path ONLY. xterm's FitAddon derives rows+cols
+   from getComputedStyle(parent).width/height, the untransformed layout box -
+   so these are invisible to it, but animating width/height/padding here would
+   resize the PTY mid-animation. Colour washes go on ::before, never as a
+   `filter` on the container: that would blur a full-screen WebGL canvas every
+   frame. `will-change` is deliberately not set, the base rule needs its
+   `will-change: contents` for terminal compositing. */
+
+.terminal-container.term-enter {
+  animation-fill-mode: both;
+}
+
+.terminal-container.term-enter::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  opacity: 0;
+  animation-fill-mode: both;
+}
+
+/* CRT, power-on: a hot line that expands to full height. */
+html[data-term-anim="crt"] .terminal-container.term-enter {
+  animation-name: term-enter-crt;
+  animation-duration: calc(560ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.3, 0.9, 0.3, 1);
+}
+
+html[data-term-anim="crt"] .terminal-container.term-enter::before {
+  animation-name: term-enter-crt-flash;
+  animation-duration: calc(560ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+@keyframes term-enter-crt {
+  0%   { opacity: 0; transform: scale3d(0.6, 0.004, 1); }
+  20%  { opacity: 1; transform: scale3d(1, 0.006, 1); }
+  58%  { opacity: 1; transform: scale3d(1, 1.03, 1); }
+  80%  { opacity: 1; transform: scale3d(1, 0.99, 1); }
+  100% { opacity: 1; transform: none; }
+}
+
+@keyframes term-enter-crt-flash {
+  0%   { opacity: 1; background: rgba(210, 255, 230, 0.85); }
+  20%  { opacity: 0.7; background: rgba(120, 255, 180, 0.4); }
+  60%  { opacity: 0.2; background: rgba(0, 255, 102, 0.08); }
+  100% { opacity: 0; background: transparent; }
+}
+
+/* Boot, flickers on under a green scan sweep. */
+html[data-term-anim="boot"] .terminal-container.term-enter {
+  animation-name: term-enter-boot;
+  animation-duration: calc(760ms * var(--anim-enter-scale, 1));
+  animation-timing-function: linear;
+}
+
+html[data-term-anim="boot"] .terminal-container.term-enter::before {
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(0, 255, 102, 0.05) 40%,
+    rgba(200, 255, 220, 0.28) 50%,
+    rgba(0, 255, 102, 0.05) 60%,
+    transparent 100%
+  );
+  background-size: 100% 300%;
+  animation-name: term-enter-boot-scan;
+  animation-duration: calc(760ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-in-out;
+}
+
+@keyframes term-enter-boot {
+  0%   { opacity: 0; transform: scale(0.995); }
+  8%   { opacity: 0.85; }
+  15%  { opacity: 0.1; }
+  24%  { opacity: 1; }
+  33%  { opacity: 0.35; }
+  45%  { opacity: 1; transform: none; }
+  58%  { opacity: 0.7; }
+  70%  { opacity: 1; }
+  100% { opacity: 1; transform: none; }
+}
+
+@keyframes term-enter-boot-scan {
+  0%   { opacity: 0; background-position: 0 -150%; }
+  12%  { opacity: 1; }
+  86%  { opacity: 1; }
+  100% { opacity: 0; background-position: 0 150%; }
+}
+
+/* Wipe, reveals top-to-bottom behind a bright edge. */
+html[data-term-anim="wipe"] .terminal-container.term-enter {
+  animation-name: term-enter-wipe;
+  animation-duration: calc(520ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.35, 0.85, 0.3, 1);
+}
+
+html[data-term-anim="wipe"] .terminal-container.term-enter::before {
+  background: linear-gradient(180deg, rgba(0, 255, 102, 0.16) 0%, rgba(190, 255, 215, 0.5) 82%, transparent 100%);
+  animation-name: term-enter-wipe-edge;
+  animation-duration: calc(520ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.35, 0.85, 0.3, 1);
+}
+
+@keyframes term-enter-wipe {
+  0%   { opacity: 1; clip-path: inset(0 0 100% 0); }
+  100% { opacity: 1; clip-path: inset(0 0 0 0); }
+}
+
+@keyframes term-enter-wipe-edge {
+  0%   { opacity: 0.9; clip-path: inset(0 0 100% 0); }
+  80%  { opacity: 0.45; }
+  100% { opacity: 0; clip-path: inset(0 0 0 0); }
+}
+
+/* Slide up, rises into place from below. */
+html[data-term-anim="slide"] .terminal-container.term-enter {
+  animation-name: term-enter-slide;
+  animation-duration: calc(420ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes term-enter-slide {
+  0%   { opacity: 0; transform: translate3d(0, 34px, 0); }
+  100% { opacity: 1; transform: none; }
+}
+
+/* Fade, quiet, with a touch of scale. */
+html[data-term-anim="fade"] .terminal-container.term-enter {
+  animation-name: term-enter-fade;
+  animation-duration: calc(340ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+@keyframes term-enter-fade {
+  0%   { opacity: 0; transform: scale(0.985); }
+  100% { opacity: 1; transform: none; }
+}
+
+/* ── Connection-line entrance animations ───────────────────────────────────
+   `--line-len` is the measured path length, stamped inline by
+   _applyLineEntrances(); `--line-enter-delay` is negative when an entrance is
+   resuming after the SVG was rebuilt underneath it. */
+
+.connection-line.line-enter {
+  animation-delay: var(--line-enter-delay, 0ms);
+  animation-fill-mode: both;
+}
+
+/* Draw, the line paints itself from the tab down to the window. Overrides the
+   resting 5 3 dash to a single full-length dash for the duration. */
+html[data-line-anim="draw"] .connection-line.line-enter {
+  stroke-dasharray: var(--line-len);
+  animation-name: line-enter-draw;
+  animation-duration: calc(420ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.32, 0.8, 0.3, 1);
+}
+
+@keyframes line-enter-draw {
+  from { stroke-dashoffset: var(--line-len); opacity: 1; }
+  to   { stroke-dashoffset: 0; opacity: 0.9; }
+}
+
+/* Fade, plain opacity ramp, dashes intact. */
+html[data-line-anim="fade"] .connection-line.line-enter {
+  animation-name: line-enter-fade;
+  animation-duration: calc(300ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+@keyframes line-enter-fade {
+  from { opacity: 0; }
+  to   { opacity: 0.9; }
+}
+
+/* Packet, the base line fades in and a separate bright dash rides down it. The
+   packet is its own cloned path so the base line keeps its dashed look. */
+html[data-line-anim="packet"] .connection-line.line-enter {
+  animation-name: line-enter-fade;
+  animation-duration: calc(300ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+.connection-line-packet {
+  fill: none;
+  stroke: #cdfbe3;
+  stroke-width: 4;
+  stroke-linecap: round;
+  pointer-events: none;
+  stroke-dasharray: 20px 100000px;
+  filter: drop-shadow(0 0 4px rgba(0, 255, 102, 0.95)) drop-shadow(0 0 10px rgba(59, 130, 246, 0.7));
+  animation-name: line-enter-packet;
+  animation-duration: calc(700ms * var(--anim-enter-scale, 1));
+  animation-delay: var(--line-enter-delay, 0ms);
+  animation-timing-function: cubic-bezier(0.4, 0, 0.3, 1);
+  animation-fill-mode: both;
+}
+
+@keyframes line-enter-packet {
+  0%   { stroke-dashoffset: 20px; opacity: 0; }
+  12%  { opacity: 1; }
+  85%  { opacity: 1; }
+  100% { stroke-dashoffset: calc(-1 * var(--line-len)); opacity: 0; }
+}
+
+.anim-lab-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -4px 0 12px;
+  padding: 0 2px;
+  color: var(--text-dim);
+  font-size: 0.66rem;
+  cursor: pointer;
+}
+
+.anim-lab-check input { accent-color: #00ff66; }
+
+@media (prefers-reduced-motion: reduce) {
+  .session-tab.tab-enter,
+  .session-tab.tab-enter::before,
+  .subagent-window.win-enter,
+  .subagent-window.win-enter::before,
+  .ultracode-window.win-enter,
+  .ultracode-window.win-enter::before,
+  .terminal-container.term-enter,
+  .terminal-container.term-enter::before,
+  .connection-line.line-enter,
+  .connection-line-packet {
+    animation: none !important;
+  }
+}
+
 .session-tab .tab-status {
   width: 6px;
   height: 6px;
