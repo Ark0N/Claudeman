@@ -96,8 +96,16 @@ describe('WebServer index.html <title> templating (#82)', () => {
 
   it('only substitutes the <title> tag — the rest of the template is identical (modulo asset cache-busting)', async () => {
     // renderIndexHtml also appends ?v=<mtime> cache-bust params to same-origin
-    // .js/.css refs; strip them so the title remains the only other change.
-    const html = (await render('laptop')).replace(/(\.(?:js|css))\?v=[^"]*/g, '$1');
+    // .js/.css refs, and injects the CLI-availability flags before </head>; strip
+    // both so the title remains the only other change.
+    //
+    // The flag strip is what keeps this test environment-independent. It used to
+    // pass here by luck: the availability script was injected only where a CLI
+    // resolved, so the assertion held on a machine with none installed and would
+    // have failed on a developer's box that had them.
+    const html = (await render('laptop'))
+      .replace(/(\.(?:js|css))\?v=[^"]*/g, '$1')
+      .replace(/<script>window\.__codemanCliAvailable=\{.*?\};<\/script>\n/, '');
     const beforeTitle = rawTemplate.split('<title>Codeman</title>')[0];
     const afterTitle = rawTemplate.split('<title>Codeman</title>')[1];
     expect(html.startsWith(beforeTitle)).toBe(true);

@@ -441,7 +441,7 @@ Object.assign(CodemanApp.prototype, {
     // Load history sessions when menu opens
     if (menu.classList.contains('active')) {
       this._loadRunModeHistory();
-      this._refreshRunModeAvailability();
+      this._refreshRunModeAvailability(menu);
       const close = (ev) => {
         if (!menu.contains(ev.target)) {
           menu.classList.remove('active');
@@ -453,29 +453,22 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Hides run-mode dropdown entries for CLIs that aren't installed, so
+   * #201: hides run-mode dropdown entries for CLIs that aren't installed, so
    * picking one doesn't spawn a session that immediately errors out.
-   * Shell has no external CLI dependency and is never gated.
+   *
+   * Shell has no external CLI dependency and is never gated, which is also what
+   * guarantees the menu is never empty. Scoped to `menu` rather than the document:
+   * `.run-mode-option` is also the class the saved-dashboard rows and the history
+   * rows use, and a bare querySelector would find whichever came first in the DOM.
+   *
+   * Antigravity is in this list even though #201 predates it — it is a run mode
+   * like the rest, and `agy` is the LEAST likely of the five to be installed.
    */
-  async _refreshRunModeAvailability() {
-    const checks = [
-      ['claude', '/api/claude/status'],
-      ['opencode', '/api/opencode/status'],
-      ['codex', '/api/codex/status'],
-      ['gemini', '/api/gemini/status'],
-    ];
-    await Promise.all(checks.map(async ([mode, url]) => {
-      const btn = document.querySelector(`.run-mode-option[data-mode="${mode}"]`);
-      if (!btn) return;
-      try {
-        const res = await fetch(url);
-        const env = await res.json();
-        const status = env?.success === true ? env.data : env;
-        btn.style.display = status?.available ? 'flex' : 'none';
-      } catch {
-        btn.style.display = 'none';
-      }
-    }));
+  _refreshRunModeAvailability(menu) {
+    for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity']) {
+      const btn = menu.querySelector(`.run-mode-option[data-mode="${mode}"]`);
+      if (btn) btn.style.display = this.isCliAvailable(mode) ? 'flex' : 'none';
+    }
   },
 
   async _loadRunModeHistory() {

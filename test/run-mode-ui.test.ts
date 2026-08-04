@@ -296,7 +296,7 @@ describe('Codex quick start settings', () => {
   describe('Codex CLI tab visibility', () => {
     // Both settings on the tab are handed to `codex` at launch, so on an instance
     // where the binary does not resolve the tab is a promise nothing can keep.
-    // renderIndexHtml injects window.__codemanCodexAvailable; this pins the client
+    // renderIndexHtml injects window.__codemanCliAvailable; this pins the client
     // half. Coupled test: it drives the REAL settings-ui.js against a stub button,
     // so deleting the call in openAppSettings() is what it is meant to catch.
     function loadSettingsUi(codexAvailable: boolean | undefined) {
@@ -313,7 +313,7 @@ describe('Codex quick start settings', () => {
         console,
       });
       context.window = context;
-      if (codexAvailable !== undefined) context.__codemanCodexAvailable = codexAvailable;
+      if (codexAvailable !== undefined) context.__codemanCliAvailable = { codex: codexAvailable };
       const settingsUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/settings-ui.js'), 'utf8');
       vm.runInContext(settingsUi, context, { filename: 'settings-ui.js' });
       return { app: new (CodemanApp as any)(), codexTabBtn };
@@ -342,6 +342,107 @@ describe('Codex quick start settings', () => {
       const open = src.slice(src.indexOf('\n  openAppSettings() {'));
       const body = open.slice(0, open.indexOf('\n  },'));
       expect(body).toContain('_applyCodexSettingsVisibility()');
+    });
+  });
+
+  describe('CLI availability gating (#200/#201)', () => {
+    // Drives the REAL settings-ui.js + session-ui.js against stub elements, so an
+    // added run mode that nobody wires up here is what these are meant to catch.
+    function loadUi(flags: Record<string, boolean> | undefined) {
+      const CodemanApp = function CodemanApp(this: any) {};
+      const welcomeBtns: Record<string, { style: { display: string } }> = {};
+      for (const id of ['welcomeClaudeBtn', 'welcomeOpencodeBtn', 'welcomeGeminiBtn', 'welcomeTunnelBtn']) {
+        welcomeBtns[id] = { style: { display: 'PRISTINE' } };
+      }
+      const modeBtns: Record<string, { style: { display: string } }> = {};
+      for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'shell']) {
+        modeBtns[mode] = { style: { display: 'PRISTINE' } };
+      }
+      const menu = {
+        querySelector: (sel: string) => {
+          const m = sel.match(/data-mode="([^"]+)"/);
+          return m ? (modeBtns[m[1]] ?? null) : null;
+        },
+      };
+      const context: any = vm.createContext({
+        CodemanApp,
+        MobileDetection: { getDeviceType: () => 'desktop', isTouchDevice: () => false, isHandheldDevice: () => false },
+        localStorage: { getItem: () => null, setItem: () => {} },
+        document: { getElementById: (id: string) => welcomeBtns[id] ?? null, querySelector: () => null },
+        console,
+      });
+      context.window = context;
+      if (flags !== undefined) context.__codemanCliAvailable = flags;
+      for (const file of ['settings-ui.js', 'session-ui.js']) {
+        const src = readFileSync(resolve(import.meta.dirname, `../src/web/public/${file}`), 'utf8');
+        vm.runInContext(src, context, { filename: file });
+      }
+      return { app: new (CodemanApp as any)(), welcomeBtns, modeBtns, menu };
+    }
+
+    const ALL_OFF = {
+      claude: false,
+      opencode: false,
+      codex: false,
+      gemini: false,
+      antigravity: false,
+      cloudflared: false,
+    };
+
+    it('hides each welcome button whose tool is missing, including the tunnel', () => {
+      const { app, welcomeBtns } = loadUi({ ...ALL_OFF, claude: true });
+      app.applyWelcomeCliVisibility();
+      expect(welcomeBtns.welcomeClaudeBtn.style.display).toBe('flex');
+      expect(welcomeBtns.welcomeOpencodeBtn.style.display).toBe('none');
+      expect(welcomeBtns.welcomeGeminiBtn.style.display).toBe('none');
+      // #200 originally DELETED the tunnel button and its QR outright; it is gated
+      // on cloudflared instead, so a box that has cloudflared keeps the feature.
+      expect(welcomeBtns.welcomeTunnelBtn.style.display).toBe('none');
+
+      const withTunnel = loadUi({ ...ALL_OFF, cloudflared: true });
+      withTunnel.app.applyWelcomeCliVisibility();
+      expect(withTunnel.welcomeBtns.welcomeTunnelBtn.style.display).toBe('flex');
+    });
+
+    it('gates every run mode in the dropdown, antigravity included, and never shell', () => {
+      const { app, modeBtns, menu } = loadUi({ ...ALL_OFF, claude: true, antigravity: true });
+      app._refreshRunModeAvailability(menu);
+      expect(modeBtns.claude.style.display).toBe('flex');
+      expect(modeBtns.antigravity.style.display).toBe('flex');
+      expect(modeBtns.opencode.style.display).toBe('none');
+      expect(modeBtns.codex.style.display).toBe('none');
+      expect(modeBtns.gemini.style.display).toBe('none');
+      // Shell needs no external CLI, and leaving it alone is what guarantees the
+      // menu is never empty on a box with nothing installed.
+      expect(modeBtns.shell.style.display).toBe('PRISTINE');
+    });
+
+    it('gates every mode the run-mode menu actually offers', () => {
+      // Catches a sixth run mode being added to index.html without being gated,
+      // which is exactly how antigravity slipped past #201.
+      const html = readFileSync(resolve(import.meta.dirname, '../src/web/public/index.html'), 'utf8');
+      const menuHtml = html.slice(html.indexOf('id="runModeMenu"'));
+      const offered = [...menuHtml.slice(0, menuHtml.indexOf('</div>')).matchAll(/data-mode="([^"]+)"/g)].map(
+        (m) => m[1]
+      );
+      expect(offered).toContain('antigravity');
+      const src = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+      // Anchor on the DEFINITION, not the earlier call site in toggleRunModeMenu.
+      const fn = src.slice(src.indexOf('_refreshRunModeAvailability(menu) {'));
+      const gated = fn.slice(0, fn.indexOf('\n  },'));
+      for (const mode of offered.filter((m) => m !== 'shell')) {
+        expect(gated).toContain(`'${mode}'`);
+      }
+    });
+
+    it('shows everything when the flags were never injected', () => {
+      // A cached page from a build without the injection, or a solo popup. Hiding
+      // every run button on a doubt would leave a working install nothing to click.
+      const { app, welcomeBtns, modeBtns, menu } = loadUi(undefined);
+      app.applyWelcomeCliVisibility();
+      app._refreshRunModeAvailability(menu);
+      expect(welcomeBtns.welcomeClaudeBtn.style.display).toBe('flex');
+      expect(modeBtns.gemini.style.display).toBe('flex');
     });
   });
 

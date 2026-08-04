@@ -1195,9 +1195,7 @@ Object.assign(CodemanApp.prototype, {
     if (overlay) {
       overlay.classList.add('visible');
       this.loadTunnelStatus();
-      this.loadClaudeAvailability();
-      this.loadOpencodeAvailability();
-      this.loadGeminiAvailability();
+      this.applyWelcomeCliVisibility();
       this.loadHistorySessions();
       this.initSearchPanel();
     }

@@ -315,6 +315,10 @@
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               Run Claude Code
             </button>
+            <button class="welcome-btn welcome-btn-tunnel" id="welcomeTunnelBtn" style="display: none;" onclick="app.toggleTunnelFromWelcome()">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+              Cloudflare Tunnel
+            </button>
             <button class="welcome-btn welcome-btn-opencode" id="welcomeOpencodeBtn" style="display: none;" onclick="app.setRunMode('opencode'); app.runOpenCode()">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               Run OpenCode
@@ -323,6 +327,10 @@
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               Run Gemini
             </button>
+          </div>
+          <div class="welcome-qr" id="welcomeQr" onclick="app.toggleWelcomeQrSize()">
+            <div class="welcome-qr-inner" id="welcomeQrInner"></div>
+            <div class="welcome-qr-url" id="welcomeQrUrl"></div>
           </div>
           <div class="history-sessions" id="historySessions" style="display:none">
             <div class="search-panel" id="searchPanel">

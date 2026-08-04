@@ -497,16 +497,21 @@ Object.assign(CodemanApp.prototype, {
    * status effects) are passed to `codex` at launch, so on a box without codex
    * the tab is a promise nothing can keep.
    *
-   * Availability comes from `window.__codemanCodexAvailable`, injected by
-   * renderIndexHtml (same shape as the gesture flag) so the tab never flickers
+   * Availability comes from the injected `window.__codemanCliAvailable`, shared
+   * with the welcome buttons and the run-mode dropdown, so the tab never flickers
    * in and back out. Only the tab BUTTON is toggled: the panel already carries
    * `.modal-tab-content.hidden` unless it is the selected tab, and
    * openAppSettings() always reopens on Display, so an unreachable button is
    * enough to keep the panel unreachable.
+   *
+   * Note the inverted default versus the run buttons: an UNKNOWN flag hides this
+   * tab. Hiding a settings tab costs a user nothing (the values stay in the DOM
+   * and are still saved), whereas hiding a run button would leave a working
+   * install with nothing to click.
    */
   _applyCodexSettingsVisibility() {
     const btn = document.querySelector('#appSettingsModal .modal-tab-btn[data-tab="settings-codex"]');
-    if (btn) btn.style.display = window.__codemanCodexAvailable ? '' : 'none';
+    if (btn) btn.style.display = window.__codemanCliAvailable?.codex === true ? '' : 'none';
   },
 
   switchSettingsTab(tabName) {
@@ -718,28 +723,39 @@ Object.assign(CodemanApp.prototype, {
     this._updatePollTimer = setInterval(poll, 1500);
   },
 
-  async loadGeminiAvailability() {
-    await this._loadCliAvailability('welcomeGeminiBtn', '/api/gemini/status');
+  /**
+   * Is `tool` installed on the server? Reads `window.__codemanCliAvailable`,
+   * injected by renderIndexHtml (see the comment there for why this is injected
+   * rather than fetched per surface).
+   *
+   * Unknown reads as AVAILABLE. A missing flag means the page was rendered by a
+   * build that predates the injection, or by a solo popup: hiding every run
+   * button on a doubt would leave nothing to click, and the pre-existing failure
+   * mode for a genuinely missing CLI is just an error toast.
+   */
+  isCliAvailable(tool) {
+    const flags = window.__codemanCliAvailable;
+    if (!flags || typeof flags !== 'object') return true;
+    return flags[tool] !== false;
   },
 
-  async loadClaudeAvailability() {
-    await this._loadCliAvailability('welcomeClaudeBtn', '/api/claude/status');
-  },
-
-  async loadOpencodeAvailability() {
-    await this._loadCliAvailability('welcomeOpencodeBtn', '/api/opencode/status');
-  },
-
-  async _loadCliAvailability(buttonId, statusUrl) {
-    const btn = document.getElementById(buttonId);
-    if (!btn) return;
-    try {
-      const res = await fetch(statusUrl);
-      const env = await res.json();
-      const status = env?.success === true ? env.data : env;
-      btn.style.display = status?.available ? 'flex' : 'none';
-    } catch {
-      btn.style.display = 'none';
+  /**
+   * #200: show a welcome-screen button only where the thing it launches exists.
+   * The markup ships them hidden, so an old cached page can never flash a button
+   * for a tool this server does not have.
+   */
+  applyWelcomeCliVisibility() {
+    const buttons = [
+      ['welcomeClaudeBtn', 'claude'],
+      ['welcomeOpencodeBtn', 'opencode'],
+      ['welcomeGeminiBtn', 'gemini'],
+      // Not a run mode, same reasoning: offering a Cloudflare Tunnel on a box
+      // without cloudflared can only ever produce "cloudflared not found".
+      ['welcomeTunnelBtn', 'cloudflared'],
+    ];
+    for (const [id, tool] of buttons) {
+      const btn = document.getElementById(id);
+      if (btn) btn.style.display = this.isCliAvailable(tool) ? 'flex' : 'none';
     }
   },
 

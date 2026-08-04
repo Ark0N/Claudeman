@@ -15,10 +15,8 @@
 
 import { EventEmitter } from 'node:events';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
+import { resolveCloudflaredPath } from './utils/cloudflared-resolver.js';
 import {
   QR_TOKEN_TTL_MS,
   QR_TOKEN_GRACE_MS,
@@ -95,23 +93,10 @@ export class TunnelManager extends EventEmitter {
   private resolveCloudflared(): string | null {
     if (this.cloudflaredPath) return this.cloudflaredPath;
 
-    // Check ~/.local/bin first (common user install location)
-    const localBin = join(homedir(), '.local', 'bin', 'cloudflared');
-    if (existsSync(localBin)) {
-      this.cloudflaredPath = localBin;
-      return localBin;
-    }
-
-    // Check /usr/local/bin
-    const usrLocalBin = '/usr/local/bin/cloudflared';
-    if (existsSync(usrLocalBin)) {
-      this.cloudflaredPath = usrLocalBin;
-      return usrLocalBin;
-    }
-
-    // Fall back to PATH
-    this.cloudflaredPath = 'cloudflared';
-    return 'cloudflared';
+    // Shared with the welcome-screen availability check, so the button and the
+    // spawn can never disagree about where cloudflared lives.
+    this.cloudflaredPath = resolveCloudflaredPath() ?? 'cloudflared';
+    return this.cloudflaredPath;
   }
 
   /** Clear all pending timers */

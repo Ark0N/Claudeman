@@ -1288,18 +1288,48 @@ export class WebServer extends EventEmitter {
     // actual on/off. We expose `__codemanGestureAvailable` so the settings UI can
     // show the toggle only when the feature is available, and inject the bundle
     // (served same-origin from /gesture/, so 'self' covers it) only when enabled.
-    // Codex CLI settings tab: the App Settings "Codex CLI" tab only means anything
-    // when the codex binary is actually installed, so expose availability and let
-    // settings-ui.js hide the tab otherwise (same shape as the gesture flag below).
-    // Injected rather than fetched so the tab never flickers in and back out on
-    // modal open. `isCodexAvailable()` memoizes its PATH probe, so this is cheap
-    // per render; installing codex afterwards needs a server restart, exactly like
-    // the /api/codex/status route that backs the Run menu.
+    // Tool availability (#200/#201): the welcome-screen run buttons, the run-mode
+    // dropdown entries and the App Settings "Codex CLI" tab are all offers that a
+    // box without the binary cannot keep — picking one spawns a session that
+    // errors out immediately. One object answers all three.
+    //
+    // INJECTED, not fetched per surface. The `/api/<cli>/status` routes exist and
+    // stay (they mirror each other and are a fine API surface), but as the source
+    // for UI gating they buy nothing: every resolver memoizes its PATH probe on
+    // the server, so a fetch is exactly as stale as an injected value, while
+    // costing a round trip each time the dropdown opens and leaving the welcome
+    // buttons to flicker in after paint. Installing a CLI later needs a server
+    // restart either way. Memoized probes also make this cheap per render.
+    //
+    // Solo popups skip it: no settings modal, no welcome screen, no run menu.
     if (!soloSessionId) {
-      const { isCodexAvailable } = await import('../utils/codex-cli-resolver.js');
-      if (isCodexAvailable()) {
-        html = html.replace('</head>', `<script>window.__codemanCodexAvailable=true;</script>\n</head>`);
-      }
+      const [
+        { isClaudeAvailable },
+        { isOpenCodeAvailable },
+        { isCodexAvailable },
+        { isGeminiAvailable },
+        { isAntigravityAvailable },
+        { isCloudflaredAvailable },
+      ] = await Promise.all([
+        import('../utils/claude-cli-resolver.js'),
+        import('../utils/opencode-cli-resolver.js'),
+        import('../utils/codex-cli-resolver.js'),
+        import('../utils/gemini-cli-resolver.js'),
+        import('../utils/antigravity-cli-resolver.js'),
+        import('../utils/cloudflared-resolver.js'),
+      ]);
+      const available = {
+        claude: isClaudeAvailable(),
+        opencode: isOpenCodeAvailable(),
+        codex: isCodexAvailable(),
+        gemini: isGeminiAvailable(),
+        antigravity: isAntigravityAvailable(),
+        cloudflared: isCloudflaredAvailable(),
+      };
+      html = html.replace(
+        '</head>',
+        `<script>window.__codemanCliAvailable=${JSON.stringify(available)};</script>\n</head>`
+      );
     }
     if (!soloSessionId && process.env.CODEMAN_GESTURE === '1') {
       html = html.replace('</head>', `<script>window.__codemanGestureAvailable=true;</script>\n</head>`);
