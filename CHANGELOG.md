@@ -1,5 +1,19 @@
 # aicodeman
 
+## 1.9.7
+
+### Patch Changes
+
+- Antigravity run mode, plus opt-in entrance animations.
+
+  **Antigravity CLI backend (#207).** Antigravity (`agy`) joins Claude Code, shell, OpenCode, Codex and Gemini as a sixth session backend, following the same pluggable-resolver pattern: `utils/antigravity-cli-resolver.ts` resolves the CLI and `GET /api/antigravity/status` reports availability and path. `ANTIGRAVITY_*` is added to the `ALLOWED_ENV_PREFIXES` allowlist so env overrides stay CLI-scoped rather than blanket-forwarded. Like the other external CLIs it requires tmux with no direct PTY fallback, because secrets are injected through socket-scoped `tmux setenv` and never on the spawn command line. The UI gains a Run-dropdown entry, an agent-type option, an `ag` tab badge and toolbar colours; `runAntigravity()` routes remote and docker cases through `POST /api/quick-start` and skips the local status probe for them.
+
+  **Entrance animations (opt-in, OFF by default).** Optional animations for the four things that appear when work starts: session tabs, the terminal pane a session's CLI runs in, floating agent windows, and the connection lines tying a window back to its parent tab. Defaults are the `legacy` theme, so an untouched install behaves exactly as before and every hook short-circuits on its first line. Choose a look in App Settings > Appearance > Entrance Animations (per-device, stored in localStorage rather than the settings payload); `?animlab=1` opens a per-surface picker with a live preview that fakes tabs, a pane, a window and a line so styles can be compared without spawning sessions.
+
+  Three implementation notes worth knowing if you touch this: tabs and connection lines are destroyed mid-animation on every re-render (`_fullRenderSessionTabs()` replaces the strip's innerHTML, `_updateConnectionLinesImmediate()` clears the SVG), so both are tracked by id and re-applied to the fresh element with a negative `animation-delay` that resumes rather than restarts them; terminal-pane styles animate transform, opacity and clip-path only, because xterm's FitAddon derives rows and columns from the untransformed layout box and animating width or height there would resize the PTY; and window styles that transform also move the rect their connection line aims at, which is why the `beam` style animates opacity and filter only.
+
+  Also fixes an agent window spawning hidden (its agent belongs to a background tab): being `display:none` it never ran its animation, so `animationend` never fired and the entrance class plus its inline custom property stuck to the window permanently. Hidden windows now skip the entrance entirely.
+
 ## 1.9.6
 
 ### Patch Changes
