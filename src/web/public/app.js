@@ -3290,6 +3290,13 @@ class CodemanApp {
   }
 
   _renderSessionTabsImmediate() {
+    // Same guard as renderSessionTabs()/_fullRenderSessionTabs(): the incremental
+    // branch below rewrites .tab-name's innerHTML, which destroys the inline rename
+    // <input> mid-keystroke. Guarding only the scheduler is not enough: a render
+    // debounced just BEFORE the rename opened still fires ~100ms later and lands
+    // here directly. finishRename() re-renders on both commit and cancel, so a
+    // render dropped here is picked back up when the rename settles.
+    if (this._inlineRenameActive) return;
     const container = this.$('sessionTabs');
     const existingTabs = container.querySelectorAll('.session-tab[data-id]');
     const existingIds = new Set([...existingTabs].map(t => t.dataset.id));
