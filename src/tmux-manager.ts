@@ -860,13 +860,14 @@ export function buildRemoteLaunchCommand(options: {
   // hardcoding --dangerously-skip-permissions, so a non-granted multi-user user's
   // downgraded 'auto' actually reaches the remote agent (the default command otherwise
   // ignored claudeMode). A per-host `commands.claude` override stays authoritative
-  // (admin's explicit choice). For the DEFAULT single-user config (skip), the emitted
-  // command is byte-identical to before. Non-claude modes are unchanged.
+  // (admin's explicit choice). Wrapped in `$SHELL -i -l -c` for the same reason as
+  // `defaultRemoteCommandForMode`: `claude` lives under a per-user PATH entry that
+  // only an interactive login shell resolves (see that function's comment).
   const override = remote.commands?.[mode];
   const modeCommand = override
     ? override
     : mode === 'claude'
-      ? `exec claude${buildClaudePermissionFlags(claudeMode, allowedTools)}`
+      ? `exec $SHELL -i -l -c ${shellescape(`claude${buildClaudePermissionFlags(claudeMode, allowedTools)}`)}`
       : defaultRemoteCommandForMode(mode);
   const remoteName = remoteTmuxSessionName(sessionId);
 
@@ -881,6 +882,14 @@ export function buildRemoteLaunchCommand(options: {
   // shared remote tmux server's other sessions keep their own prefix/mouse.
   const tmuxInvocation = [
     `tmux -L ${REMOTE_TMUX_SOCKET} new-session -A -s ${remoteName} -c ${shellescape(remote.remotePath)} ${shellescape(paneCommand)}`,
+    // Without this, tmux's default behavior destroys the pane -> window ->
+    // session (and, being the only session, the whole remote server) the
+    // instant paneCommand exits for ANY reason -- even something transient.
+    // That tears down the local ssh -t attach along with it (dead pane,
+    // status whatever ssh reported), and reconnect's `-A` then creates a
+    // fresh session with no trace of what actually happened. Set first, so
+    // it applies as early as possible after the pane starts.
+    `set -t ${remoteName} remain-on-exit on`,
     `set -t ${remoteName} status off`,
     `set -t ${remoteName} mouse off`,
     `set -t ${remoteName} prefix C-q`,

@@ -146,7 +146,8 @@ describe('TmuxManager (unit)', () => {
         sessionId: 'abc123def456',
       });
 
-      expect(command).toContain('exec bash -l');
+      expect(command).toContain('exec $SHELL -i -l');
+      expect(command).toContain('remain-on-exit on');
     });
 
     it('defaults claude to a non-interactive launch (--dangerously-skip-permissions)', () => {
@@ -155,7 +156,13 @@ describe('TmuxManager (unit)', () => {
         remote: { hostId: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu', remotePath: '/w' },
         sessionId: 'abc123def456',
       });
-      expect(command).toContain('exec claude --dangerously-skip-permissions');
+      // Routed through an interactive login shell so ~/.local/bin (where `claude`
+      // typically lives) is on PATH — ssh's remote-command execution is neither
+      // interactive nor login, so a bare `exec claude` fails with "command not found".
+      // The inner quoting is escaped twice over (once per shellescape() layer), so
+      // assert on the unescaped substrings rather than the literal quoted form.
+      expect(command).toContain('exec $SHELL -i -l -c');
+      expect(command).toContain('claude --dangerously-skip-permissions');
     });
   });
 
