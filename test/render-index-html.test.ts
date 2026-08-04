@@ -12,6 +12,16 @@
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { WebServer } from '../src/web/server.js';
+import { isCodexAvailable } from '../src/utils/codex-cli-resolver.js';
+
+// renderIndexHtml probes the real PATH for `codex`, which would make the codex
+// assertions below depend on whatever happens to be installed on the machine
+// running the suite. Default to "not installed" so every OTHER test in this file
+// renders exactly as before, and opt in per test.
+vi.mock('../src/utils/codex-cli-resolver.js', () => ({
+  isCodexAvailable: vi.fn(() => false),
+  resolveCodexDir: vi.fn(() => null),
+}));
 
 const TEMPLATE = [
   '<head>',
@@ -84,6 +94,27 @@ describe('WebServer.renderIndexHtml', () => {
     html = await render(server);
     expect(html).toContain('window.__codemanGestureAvailable=true');
     expect(html).toContain('gesture-codeman.js');
+  });
+
+  it('exposes codex availability so the App Settings Codex tab can be gated', async () => {
+    vi.mocked(isCodexAvailable).mockReturnValue(true);
+    const { server } = makeServer({});
+    const html = await render(server);
+    expect(html).toContain('window.__codemanCodexAvailable=true');
+  });
+
+  it('omits the codex flag entirely when the codex binary does not resolve', async () => {
+    vi.mocked(isCodexAvailable).mockReturnValue(false);
+    const { server } = makeServer({});
+    const html = await render(server);
+    expect(html).not.toContain('__codemanCodexAvailable');
+  });
+
+  it('skips the codex probe for a solo window, which has no settings modal', async () => {
+    vi.mocked(isCodexAvailable).mockReturnValue(true);
+    const { server } = makeServer({});
+    const html = await render(server, 'sess-123');
+    expect(html).not.toContain('__codemanCodexAvailable');
   });
 
   it('does not expose gesture at all when CODEMAN_GESTURE is unset', async () => {

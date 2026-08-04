@@ -373,11 +373,15 @@ Object.assign(CodemanApp.prototype, {
     claudeModeSelect.onchange = () => {
       allowedToolsRow.style.display = claudeModeSelect.value === 'allowedTools' ? '' : 'none';
     };
-    // Codex CLI settings
+    // Codex CLI settings. The inputs are always populated (and always read back
+    // by saveAppSettings), even when the tab is hidden below, so a user without
+    // codex installed can never silently wipe the codex prefs of an instance
+    // that does have it.
     document.getElementById('appSettingsCodexDangerouslyBypassApprovals').checked =
       settings.codexDangerouslyBypassApprovals ?? false;
     document.getElementById('appSettingsCodexAnimations').checked =
       settings.codexAnimationsEnabled ?? false;
+    this._applyCodexSettingsVisibility();
     // Claude Permissions settings
     document.getElementById('appSettingsAgentTeams').checked = settings.agentTeamsEnabled ?? false;
     document.getElementById('appSettingsClaudeModel').value = settings.claudeModel ?? '';
@@ -485,6 +489,24 @@ Object.assign(CodemanApp.prototype, {
     // Activate focus trap
     this.activeFocusTrap = new FocusTrap(modal);
     this.activeFocusTrap.activate();
+  },
+
+  /**
+   * Show the App Settings "Codex CLI" tab only on instances where the codex
+   * binary actually resolves. Both settings on it (approval bypass, animated
+   * status effects) are passed to `codex` at launch, so on a box without codex
+   * the tab is a promise nothing can keep.
+   *
+   * Availability comes from `window.__codemanCodexAvailable`, injected by
+   * renderIndexHtml (same shape as the gesture flag) so the tab never flickers
+   * in and back out. Only the tab BUTTON is toggled: the panel already carries
+   * `.modal-tab-content.hidden` unless it is the selected tab, and
+   * openAppSettings() always reopens on Display, so an unreachable button is
+   * enough to keep the panel unreachable.
+   */
+  _applyCodexSettingsVisibility() {
+    const btn = document.querySelector('#appSettingsModal .modal-tab-btn[data-tab="settings-codex"]');
+    if (btn) btn.style.display = window.__codemanCodexAvailable ? '' : 'none';
   },
 
   switchSettingsTab(tabName) {

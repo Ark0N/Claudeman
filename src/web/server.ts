@@ -1288,6 +1288,19 @@ export class WebServer extends EventEmitter {
     // actual on/off. We expose `__codemanGestureAvailable` so the settings UI can
     // show the toggle only when the feature is available, and inject the bundle
     // (served same-origin from /gesture/, so 'self' covers it) only when enabled.
+    // Codex CLI settings tab: the App Settings "Codex CLI" tab only means anything
+    // when the codex binary is actually installed, so expose availability and let
+    // settings-ui.js hide the tab otherwise (same shape as the gesture flag below).
+    // Injected rather than fetched so the tab never flickers in and back out on
+    // modal open. `isCodexAvailable()` memoizes its PATH probe, so this is cheap
+    // per render; installing codex afterwards needs a server restart, exactly like
+    // the /api/codex/status route that backs the Run menu.
+    if (!soloSessionId) {
+      const { isCodexAvailable } = await import('../utils/codex-cli-resolver.js');
+      if (isCodexAvailable()) {
+        html = html.replace('</head>', `<script>window.__codemanCodexAvailable=true;</script>\n</head>`);
+      }
+    }
     if (!soloSessionId && process.env.CODEMAN_GESTURE === '1') {
       html = html.replace('</head>', `<script>window.__codemanGestureAvailable=true;</script>\n</head>`);
       if (settings.gestureControlEnabled === true) {

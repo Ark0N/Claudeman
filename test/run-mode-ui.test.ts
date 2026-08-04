@@ -293,6 +293,58 @@ describe('Codex quick start settings', () => {
     expect(codexTab?.[1]).not.toContain('appSettingsCodexRenderMode');
   });
 
+  describe('Codex CLI tab visibility', () => {
+    // Both settings on the tab are handed to `codex` at launch, so on an instance
+    // where the binary does not resolve the tab is a promise nothing can keep.
+    // renderIndexHtml injects window.__codemanCodexAvailable; this pins the client
+    // half. Coupled test: it drives the REAL settings-ui.js against a stub button,
+    // so deleting the call in openAppSettings() is what it is meant to catch.
+    function loadSettingsUi(codexAvailable: boolean | undefined) {
+      const codexTabBtn = { dataset: { tab: 'settings-codex' }, style: { display: 'PRISTINE' } };
+      const CodemanApp = function CodemanApp(this: any) {};
+      const context: any = vm.createContext({
+        CodemanApp,
+        MobileDetection: { getDeviceType: () => 'desktop', isTouchDevice: () => false, isHandheldDevice: () => false },
+        localStorage: { getItem: () => null, setItem: () => {} },
+        document: {
+          getElementById: () => null,
+          querySelector: (sel: string) => (sel.includes('[data-tab="settings-codex"]') ? codexTabBtn : null),
+        },
+        console,
+      });
+      context.window = context;
+      if (codexAvailable !== undefined) context.__codemanCodexAvailable = codexAvailable;
+      const settingsUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/settings-ui.js'), 'utf8');
+      vm.runInContext(settingsUi, context, { filename: 'settings-ui.js' });
+      return { app: new (CodemanApp as any)(), codexTabBtn };
+    }
+
+    it('hides the Codex tab when the codex binary is not available', () => {
+      const { app, codexTabBtn } = loadSettingsUi(false);
+      app._applyCodexSettingsVisibility();
+      expect(codexTabBtn.style.display).toBe('none');
+    });
+
+    it('hides the Codex tab when the availability flag was never injected', () => {
+      const { app, codexTabBtn } = loadSettingsUi(undefined);
+      app._applyCodexSettingsVisibility();
+      expect(codexTabBtn.style.display).toBe('none');
+    });
+
+    it('shows the Codex tab when codex is available', () => {
+      const { app, codexTabBtn } = loadSettingsUi(true);
+      app._applyCodexSettingsVisibility();
+      expect(codexTabBtn.style.display).toBe('');
+    });
+
+    it('applies the gating from openAppSettings, not just in isolation', () => {
+      const src = readFileSync(resolve(import.meta.dirname, '../src/web/public/settings-ui.js'), 'utf8');
+      const open = src.slice(src.indexOf('\n  openAppSettings() {'));
+      const body = open.slice(0, open.indexOf('\n  },'));
+      expect(body).toContain('_applyCodexSettingsVisibility()');
+    });
+  });
+
   it('passes global Codex settings into quick-start config for new sessions', async () => {
     const elements: Record<string, any> = {
       quickStartCase: { value: 'codex-case' },
