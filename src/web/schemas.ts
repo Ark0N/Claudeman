@@ -766,6 +766,8 @@ export const SettingsUpdateSchema = z
     // CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK env var. Stripped before persisting.
     acknowledgeUnauthTunnel: z.boolean().optional(),
     tabTwoRows: z.boolean().optional(),
+    /** Session list layout: 'header' = horizontal tab strip, 'sidebar' = collapsible left sidebar. Display key (per-device). */
+    sessionListLayout: z.enum(['header', 'sidebar']).optional(),
     agentTeamsEnabled: z.boolean().optional(),
     /** Model for new Claude sessions (e.g. "claude-fable-5[1m]", "opus[1m]"); takes precedence over opusContext1mEnabled */
     claudeModel: z.string().max(50).optional(),

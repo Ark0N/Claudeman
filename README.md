@@ -650,6 +650,7 @@ Single-digit selection (1-9), color-coded status, token counts, auto-refresh. De
 | `Ctrl/Cmd+Tab`                  | Next session                                                  |
 | `Alt/Option+[` / `Alt/Option+]` | Previous / next session                                       |
 | `Alt/Option+1`-`Alt/Option+9`   | Switch to tab N (physical keys, so macOS Option layouts work) |
+| `Alt/Option+B`                  | Collapse / expand the session sidebar (sidebar layout only)   |
 | `Ctrl+Shift+{` / `Ctrl+Shift+}` | Move active tab left / right                                  |
 | `Ctrl/Cmd+C`                    | Copy selection, or interrupt when nothing is selected         |
 | `Ctrl+Shift+C`                  | Copy selection (never interrupts)                             |

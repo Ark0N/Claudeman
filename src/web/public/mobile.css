@@ -468,6 +468,20 @@ html.mobile-init .file-browser-panel {
     height: 12px;
   }
 
+  /* Exception to the 26px shrink above: in sidebar layout this button is the
+     ONLY way to open the session list — the strip it replaced is gone. A 26px
+     target is below --touch-target-min (44px), which the 430-768px block
+     already enforces for every other header button. */
+  html[data-session-list='sidebar'] #sidebarToggleBtn {
+    width: 44px;
+    height: 44px;
+  }
+
+  html[data-session-list='sidebar'] #sidebarToggleBtn svg {
+    width: 18px;
+    height: 18px;
+  }
+
   /* Hide header settings gear, lifecycle log, away digest, session manager, and
      file viewer on mobile - settings moved to toolbar; the others are secondary /
      desktop-oriented controls that don't belong on the cramped phone header (the
@@ -2870,5 +2884,119 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 
   .attachment-history-actions button {
     padding: 4px 7px;
+  }
+}
+
+/* ============================================================================
+   SESSION SIDEBAR — off-canvas drawer (tablet + phone)
+   ============================================================================
+   This whole file is served with media="(max-width: 1023px)", so these
+   top-level rules cover the entire handheld range — deliberately NOT wrapped in
+   a nested @media, because the two compact `.session-tabs` blocks above live in
+   `max-width: 768px` and `max-width: 430px` and would leave 769-1023px
+   unhandled.
+
+   Placement at the END of the file is load-bearing: the compact strip blocks at
+   lines ~117 and ~584 use the deliberate `.session-tabs, .session-tabs.tabs-two-rows`
+   (0,2,0) doubling documented there. The sidebar selectors below are (0,2,1)
+   and up AND come later, so they win on both counts. Move this block and the
+   list collapses to a 36px sliver that looks like an empty list.
+
+   Why an overlay instead of the desktop rail: 44px is 11% of a 393px viewport.
+   Below 1024px the sidebar never occupies layout width — it slides over the
+   terminal, following the .attachment-history-drawer recipe in styles.css.
+   `collapsed` therefore means "drawer closed", and applySessionListLayout()
+   mirrors that into the `.open` class. */
+
+html[data-session-list="sidebar"] .session-sidebar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: min(280px, 80vw);
+  flex: 0 0 auto;
+  transform: translateX(-100%);
+  /* visibility, not just transform: an off-screen drawer keeps display:flex, so
+     without this its filter box and ~4 tab stops per session stay in the Tab
+     order and in the a11y tree. applySessionListLayout() also sets `inert`; this
+     is the CSS half, and the transition keeps it visible for the slide-out. */
+  visibility: hidden;
+  transition: transform var(--sidebar-transition), visibility var(--sidebar-transition);
+  box-shadow: 10px 0 28px rgba(0, 0, 0, 0.36);
+  z-index: 12;
+  padding-left: var(--safe-area-left);
+}
+
+html[data-session-list="sidebar"] .session-sidebar.open {
+  transform: translateX(0);
+  visibility: visible;
+}
+
+/* Collapsed == closed here, so the desktop icon-rail styling must not apply:
+   the drawer keeps its full width and its head/filter/labels while it is off
+   screen, otherwise opening it would animate in a 44px stub. */
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar {
+  flex-basis: auto;
+  width: min(280px, 80vw);
+}
+
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar-head,
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar-filter {
+  display: flex;
+}
+
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .session-tab {
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  padding: 0.4rem 0.5rem;
+}
+
+/* Undo the rail's content trimming: these rows are full-width drawer rows, just
+   currently off screen. Same specificity as the styles.css rail rules and later
+   in the cascade, which is why this file must stay loaded after styles.css. */
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-info {
+  display: flex;
+}
+
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-number {
+  display: inline-flex;
+}
+
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-subagent-badge {
+  margin-left: 4px;
+}
+
+/* mobile.css:~604 pins .session-tab to max-height:32px for the horizontal strip,
+   which clips the folder row the sidebar always renders. Rows also need the
+   44px touch target the strip cannot afford. */
+html[data-session-list="sidebar"] .session-sidebar .session-tab {
+  min-height: 44px;
+  max-height: none;
+  flex-shrink: 0;
+}
+
+/* Touch has no hover: reveal-on-hover row actions would be unreachable.
+   Matches the (hover: none) block above, but has to be repeated here because
+   the phone block hides them on non-active tabs with (0,2,0). */
+html[data-session-list="sidebar"] .session-sidebar .session-tab .tab-gear,
+html[data-session-list="sidebar"] .session-sidebar .session-tab .tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 1;
+  width: auto;
+  min-width: 28px;
+  height: auto;
+  margin-left: 0;
+  padding: 0.15rem 0.25rem;
+}
+
+/* (.tab-filtered-out is handled in styles.css — its rule is already scoped to
+   html[data-session-list="sidebar"] and carries !important, so it wins here too;
+   no handheld variant needed.) */
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-session-list="sidebar"] .session-sidebar {
+    transition: none;
   }
 }

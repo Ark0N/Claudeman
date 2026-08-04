@@ -363,6 +363,8 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsCjkInput').checked = settings.cjkInputEnabled ?? defaults.cjkInputEnabled ?? false;
     document.getElementById('appSettingsExtendedKeyboardBar').checked = settings.extendedKeyboardBar ?? false;
     document.getElementById('appSettingsTabTwoRows').checked = settings.tabTwoRows ?? defaults.tabTwoRows ?? false;
+    document.getElementById('appSettingsSessionListLayout').value =
+      settings.sessionListLayout ?? defaults.sessionListLayout ?? 'header';
     // Claude CLI settings
     const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
     const allowedToolsRow = document.getElementById('allowedToolsRow');
@@ -1542,6 +1544,7 @@ Object.assign(CodemanApp.prototype, {
       webglRendererEnabled: document.getElementById('appSettingsWebglRenderer').checked,
       extendedKeyboardBar: document.getElementById('appSettingsExtendedKeyboardBar').checked,
       tabTwoRows: document.getElementById('appSettingsTabTwoRows').checked,
+      sessionListLayout: document.getElementById('appSettingsSessionListLayout').value,
       skin: document.getElementById('appSettingsSkin').value,
       // Claude CLI settings
       claudeMode: document.getElementById('appSettingsClaudeMode').value,
@@ -1683,7 +1686,9 @@ Object.assign(CodemanApp.prototype, {
     this.applyHeaderVisibilitySettings();
     this.applySkin();
     this.applyLocalization();
-    this.applyTabWrapSettings();
+    // Re-parents #sessionTabs between header host and sidebar if the layout
+    // changed, then calls applyTabWrapSettings() itself — do not call both.
+    this.applySessionListLayout();
     this._updateTokensImmediate();  // Re-render token display (picks up showCost change)
     this.applyMonitorVisibility();
     this.renderProjectInsightsPanel();  // Re-render to apply visibility setting
@@ -1910,6 +1915,7 @@ Object.assign(CodemanApp.prototype, {
         imageWatcherEnabled: false,
         ralphTrackerEnabled: false,
         tabTwoRows: false,
+        sessionListLayout: 'header',
         cjkInputEnabled: false,
         terminalWheelLocalScrollback: false, // mobile scrolls via touch, not wheel
         webglRendererEnabled: false, // mobile always uses the DOM renderer
@@ -2133,19 +2139,27 @@ Object.assign(CodemanApp.prototype, {
     const settings = this.loadAppSettingsFromStorage();
     const defaults = this.getDefaultSettings();
     const deviceType = MobileDetection.getDeviceType();
+    // The left sidebar is one vertical column with its own scroller: there is no
+    // row to wrap into, and its rows are always tall (name + folder) because that
+    // is the cheapest way to tell 25 sessions apart. Header strip keeps the old
+    // rules unchanged. Kept here rather than only in applySessionListLayout() so
+    // that a stray applyTabWrapSettings() call (this one is invoked from
+    // saveAppSettings and from the resize path) cannot leave the sidebar wrapped.
+    const sidebar = this.isSessionSidebarActive?.() === true;
     // Two-row tabs disabled on mobile/tablet — not enough screen space
-    const twoRows = deviceType === 'desktop'
+    const twoRows = !sidebar && deviceType === 'desktop'
       ? (settings.tabTwoRows ?? defaults.tabTwoRows ?? false)
       : false;
+    const showFolder = sidebar || twoRows;
     const prevTallTabs = this._tallTabsEnabled;
-    this._tallTabsEnabled = twoRows;
+    this._tallTabsEnabled = showFolder;
     const tabsEl = document.getElementById('sessionTabs');
     if (tabsEl) {
       tabsEl.classList.toggle('tabs-two-rows', twoRows);
-      tabsEl.classList.toggle('tabs-show-folder', twoRows);
+      tabsEl.classList.toggle('tabs-show-folder', showFolder);
     }
     // Re-render tabs if folder visibility changed (folder spans are generated in JS)
-    if (prevTallTabs !== undefined && prevTallTabs !== twoRows) {
+    if (prevTallTabs !== undefined && prevTallTabs !== showFolder) {
       this._fullRenderSessionTabs();
     }
   },
@@ -2350,7 +2364,7 @@ Object.assign(CodemanApp.prototype, {
           'showFontControls', 'showSystemStats', 'showTokenCount', 'showCost',
           'showLifecycleLog', 'showResponseViewer', 'showRedrawButton',
           'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
-          'subagentActiveTabOnly', 'tabTwoRows', 'localEchoEnabled', 'cjkInputEnabled', 'extendedKeyboardBar',
+          'subagentActiveTabOnly', 'tabTwoRows', 'sessionListLayout', 'localEchoEnabled', 'cjkInputEnabled', 'extendedKeyboardBar',
           'skin', 'showPlanUsageLimits', 'showAttachmentsButton', 'showFileViewerButton', 'webglRendererEnabled',
           'language',
           'terminalWheelLocalScrollback',

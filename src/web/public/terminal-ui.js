@@ -182,6 +182,17 @@ Object.assign(CodemanApp.prototype, {
         return true;
       }
 
+      // Session-sidebar toggle chord (default Alt+B): same trap as above —
+      // preventDefault() in the capture handler does not stop xterm, so without
+      // this gate every toggle would ALSO send ESC b (readline backward-word)
+      // into the live session and walk the cursor back through the user's
+      // half-typed prompt. Registry-aware and only while the sidebar layout is
+      // active, so a rebind/disable and the default header layout keep plain
+      // Meta-b working in the terminal.
+      if (ev.type === 'keydown' && this.shouldToggleSessionSidebarFromShortcut?.(ev)) {
+        return false;
+      }
+
       // Ctrl+V / Cmd+V: intercept before xterm sends ^V to PTY.
       // Route through our paste trap which handles both images and text.
       if ((ev.ctrlKey || ev.metaKey) && ev.key === 'v' && ev.type === 'keydown') {

@@ -1595,7 +1595,10 @@ Object.assign(CodemanApp.prototype, {
     input.value = parsed ? parsed.suffix : (session.name || '');
     input.placeholder = parsed ? 'Add description...' : currentName;
     input.className = 'tab-rename-input';
-    input.style.cssText = 'width: 80px; font-size: 0.75rem; padding: 2px 4px; background: var(--bg-input); border: 1px solid var(--accent); border-radius: 3px; color: var(--text); outline: none;';
+    // 80px is tuned for the narrow header tab; a full-width sidebar row can and
+    // should give the whole line to the input.
+    const renameWidth = this.isSessionSidebarActive?.() ? '100%' : '80px';
+    input.style.cssText = `width: ${renameWidth}; min-width: 0; font-size: 0.75rem; padding: 2px 4px; background: var(--bg-input); border: 1px solid var(--accent); border-radius: 3px; color: var(--text); outline: none;`;
 
     tabName.appendChild(input);
     input.focus();

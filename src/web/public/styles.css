@@ -49,6 +49,9 @@
   --ring-glow: 0 0 12px -2px rgba(56, 182, 240, 0.55);
   --header-height: 36px;
   --toolbar-height: 42px;
+  --sidebar-width: 260px;
+  --sidebar-width-collapsed: 44px; /* == --touch-target-min */
+  --sidebar-transition: 0.18s ease;
   --glass-bg: rgba(31, 38, 48, 0.85);
   --glass-border: rgba(255, 255, 255, 0.08);
   --control-bg: rgba(255, 255, 255, 0.045);
@@ -2049,6 +2052,9 @@ html[data-line-anim="packet"] .connection-line.line-enter {
 
 /* ===== Solo (detached single-session) window chrome ===================== */
 body.solo-mode .session-tabs,
+body.solo-mode .session-tabs-host,
+body.solo-mode .session-sidebar,
+body.solo-mode .btn-sidebar-toggle,
 body.solo-mode .header-system-stats,
 body.solo-mode .header-tokens,
 body.solo-mode .btn-notifications,
@@ -13462,3 +13468,244 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 /* Delete sits apart from Cancel/Save so it is not fat-fingered on the way to Save. */
 .webview-modal-actions { justify-content: space-between; }
 .webview-modal-actions .btn-danger { margin-right: auto; }
+
+/* ============================================================
+   === Collapsible session sidebar (opt-in layout) ===
+   Appended at top level ON PURPOSE: styles.css:12171-12390 is one
+   html:not([data-skin="og"]) { … } native-nesting block whose bare
+   selectors resolve at (0,2,x) and re-tone .session-tab with
+   !important. Everything below is LAYOUT ONLY (flex/size/overflow/
+   display) and sets no colour on .session-tab, so it composes with
+   every skin instead of fighting it. Keep it that way.
+
+   The list itself is not a second DOM tree: applySessionListLayout()
+   moves the one #sessionTabs element between #sessionTabsHost (header)
+   and #sessionSidebarList (this aside).
+   ============================================================ */
+
+/* Header host — wraps #sessionTabs so the strip can be hidden without
+   touching the element that gets re-parented. */
+.session-tabs-host {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+html[data-session-list="sidebar"] .session-tabs-host {
+  display: none;
+}
+
+/* The header only needs flex-start to support the two-row strip; with the
+   strip gone the remaining header chrome should sit centered. */
+html[data-session-list="sidebar"] .header {
+  align-items: center;
+}
+
+.session-sidebar {
+  display: none;
+}
+
+html[data-session-list="sidebar"] .session-sidebar {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 var(--sidebar-width);
+  width: var(--sidebar-width);
+  min-width: 0;
+  background: var(--bg-card);
+  border-right: 1px solid var(--border);
+  /* Own stacking context ABOVE .welcome-overlay (z-index 10, which is what a
+     user with no open session sees) but BELOW .toolbar (20) — raising it to or
+     past 20 makes the Run menu unclickable again. */
+  position: relative;
+  z-index: 11;
+  transition: flex-basis var(--sidebar-transition), width var(--sidebar-transition);
+  /* Deliberately NO contain:paint — .header has it, which is exactly why app.js
+     re-parents .subagent-dropdown to <body>. Leaving it off keeps per-row
+     dropdowns and the inline rename input paintable in place. */
+}
+
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar {
+  flex-basis: var(--sidebar-width-collapsed);
+  width: var(--sidebar-width-collapsed);
+}
+
+.session-sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--glass-border);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.session-sidebar-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+
+.session-sidebar-filter {
+  display: flex;
+  flex-shrink: 0;
+  padding: 0.35rem 0.5rem;
+}
+
+.session-sidebar-filter-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.3rem 0.45rem;
+  background: var(--bg-input);
+  border: 1px solid var(--control-border);
+  border-radius: var(--btn-radius);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.75rem;
+  outline: none;
+}
+
+.session-sidebar-filter-input::placeholder {
+  color: var(--text-muted);
+}
+
+.session-sidebar-filter-input:focus-visible {
+  border-color: var(--accent);
+}
+
+/* Host for the relocated #sessionTabs. */
+.session-sidebar-list {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* --- The relocated strip, now vertical --------------------------------- */
+html[data-session-list="sidebar"] .session-sidebar .session-tabs {
+  flex-direction: column;
+  align-items: stretch;
+  flex-wrap: nowrap;
+  gap: 2px;
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0.25rem;
+}
+
+html[data-session-list="sidebar"] .session-sidebar .session-tab {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.4rem 0.5rem;
+  border-radius: var(--btn-radius);
+}
+
+/* .tab-info is already column/overflow-hidden/min-width:0 — it only has to
+   claim the free width now that rows are full-width. */
+html[data-session-list="sidebar"] .session-sidebar .tab-info {
+  flex: 1;
+  min-width: 0;
+}
+
+html[data-session-list="sidebar"] .session-sidebar .tab-name {
+  max-width: none;
+}
+
+/* Reveal-on-hover reads badly on a 40px-tall full-width row, so keep the row
+   actions permanently visible on the active session — no layout jitter when
+   the pointer crosses the list. */
+html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-gear,
+html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-detach,
+html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-close {
+  opacity: 1;
+  width: auto;
+}
+
+/* Drag-reorder indicators become horizontal edges. The class names stay
+   drag-over-left / drag-over-right (they read as before/after now) so app.js,
+   the base rules above and the generated gesture bundle need no renaming. */
+html[data-session-list="sidebar"] .session-sidebar .session-tab.drag-over-left {
+  box-shadow: 0 -2px 0 0 var(--accent);
+}
+
+html[data-session-list="sidebar"] .session-sidebar .session-tab.drag-over-right {
+  box-shadow: 0 2px 0 0 var(--accent);
+}
+
+/* Sidebar filter box (applySidebarFilter toggles this class post-render).
+   Scoped to the sidebar layout on purpose: applySidebarFilter() already strips
+   the class whenever the filter box is off screen, and this prefix is the
+   second lock — a leaked class must never be able to hide tabs from the header
+   strip, which has no filter control to clear it with. */
+html[data-session-list="sidebar"] .session-tab.tab-filtered-out {
+  display: none !important;
+}
+
+/* --- Collapsed rail ---------------------------------------------------- */
+/* Collapsed is a 44px icon rail, not "hidden": the ambient signal (status dot,
+   task/subagent/ultracode badges) is the whole point of mission control and
+   must survive collapse. The rail is also its own reopen affordance — clicking
+   a row still switches session.
+   NOT surviving: the name, the folder and the `sh`/`oc`/`cx`/`gm` mode chip —
+   the chip is rendered inside .tab-info (app.js row template), which the rail
+   hides. Moving it out of .tab-info just to keep it would change the shared row
+   markup for both layouts; agent type stays a hover/expand affordance. */
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar-head,
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar-filter {
+  display: none;
+}
+
+/* 44px rail minus the list's 0.25rem padding either side minus the row's 1px
+   borders leaves ~34px of content box. Number (16) + gap (5.6) + dot (6) + gap
+   (5.6) + one badge (16) already overflows that, and .tab-number / .tab-status
+   are flex-shrink: 0 — with justify-content: center the excess gets clipped at
+   BOTH ends, so the digit and the badge are cut in half. Two fixes, both
+   needed: drop the Alt+N hint (it is a keyboard affordance that only reads in
+   the expanded list; Alt+N itself keeps working), and let whatever is left wrap
+   instead of clipping, so a row carrying several badges just gets taller. */
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .session-tab {
+  justify-content: center;
+  align-content: center;
+  flex-wrap: wrap;
+  row-gap: 2px;
+  padding: 0.4rem 0;
+}
+
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-info,
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-number,
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-gear,
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-detach,
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-close {
+  display: none;
+}
+
+/* The subagent badge carries a 4px left margin tuned for the horizontal strip;
+   in a centered 34px rail it pushes the row off-centre. */
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-subagent-badge {
+  margin-left: 0;
+}
+
+/* --- Toggle button ----------------------------------------------------- */
+.btn-sidebar-toggle--hidden {
+  display: none !important;
+}
+
+/* .btn-icon-header:hover rotates 45deg globally — a panel glyph must not spin. */
+.btn-sidebar-toggle:hover {
+  transform: none;
+}
+
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle svg {
+  transform: scaleX(-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-sidebar {
+    transition: none;
+  }
+}
