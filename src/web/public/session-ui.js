@@ -1120,9 +1120,7 @@ Object.assign(CodemanApp.prototype, {
     const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
     const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
 
-    this.terminal.clear();
-    this.terminal.writeln(`\x1b[1;32m Starting Antigravity session in ${caseName}...\x1b[0m`);
-    this.terminal.writeln('');
+    const ownsLaunchTerminal = this._beginSessionLaunchStatus(`Starting Antigravity session in ${caseName}...`);
     this.terminal.focus();
 
     try {
@@ -1130,8 +1128,10 @@ Object.assign(CodemanApp.prototype, {
         const statusRes = await fetch('/api/antigravity/status');
         const status = (await statusRes.json()).data;
         if (!status.available) {
-          this.terminal.writeln('\x1b[1;31m Antigravity CLI not found.\x1b[0m');
-          this.terminal.writeln('\x1b[90m Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash\x1b[0m');
+          this._reportSessionLaunchError(
+            ownsLaunchTerminal,
+            'Antigravity CLI not found. Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash'
+          );
           return;
         }
       }
@@ -1160,7 +1160,7 @@ Object.assign(CodemanApp.prototype, {
 
       this.terminal.focus();
     } catch (err) {
-      this.terminal.writeln(`\x1b[1;31m Error: ${err.message}\x1b[0m`);
+      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
     }
   },
 
