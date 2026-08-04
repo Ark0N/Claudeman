@@ -582,13 +582,43 @@ Object.assign(CodemanApp.prototype, {
     return startNumber;
   },
 
+  /**
+   * Launch progress may use the terminal only on the session-less home screen.
+   * When another session is active, mutating the shared xterm would serialize
+   * launch chrome into that session's snapshot during the subsequent switch.
+   */
+  _beginSessionLaunchStatus(message, ansiColor = '1;32') {
+    const ownsTerminal = !this.activeSessionId;
+    if (ownsTerminal) {
+      this.terminal.clear();
+      this.terminal.writeln(`\x1b[${ansiColor}m ${message}\x1b[0m`);
+      this.terminal.writeln('');
+    } else {
+      this.showToast?.(message, 'info');
+    }
+    return ownsTerminal;
+  },
+
+  _appendSessionLaunchStatus(ownsTerminal, message, ansiColor = '90') {
+    if (!ownsTerminal || this.activeSessionId) return;
+    this.terminal.writeln(`\x1b[${ansiColor}m ${message}\x1b[0m`);
+  },
+
+  _reportSessionLaunchError(ownsTerminal, message) {
+    if (ownsTerminal && !this.activeSessionId) {
+      this.terminal.writeln(`\x1b[1;31m Error: ${message}\x1b[0m`);
+    } else {
+      this.showToast?.(message, 'error');
+    }
+  },
+
   async runClaude() {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
     const tabCount = Math.min(20, Math.max(1, parseInt(document.getElementById('tabCount').value) || 1));
 
-    this.terminal.clear();
-    this.terminal.writeln(`\x1b[1;32m Starting ${tabCount} Claude session(s) in ${caseName}...\x1b[0m`);
-    this.terminal.writeln('');
+    const ownsLaunchTerminal = this._beginSessionLaunchStatus(
+      `Starting ${tabCount} Claude session(s) in ${caseName}...`
+    );
     // Focus terminal NOW, in the synchronous user-gesture context (button click).
     // iOS Safari ignores programmatic focus() after any await, so this must happen
     // before the first async call. The keyboard opens here and stays open through
@@ -671,7 +701,7 @@ Object.assign(CodemanApp.prototype, {
           await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
           remoteIds.push(data.data.sessionId);
         }
-        this.terminal.writeln(`\x1b[90m All ${tabCount} remote session(s) ready\x1b[0m`);
+        this._appendSessionLaunchStatus(ownsLaunchTerminal, `All ${tabCount} remote session(s) ready`);
         if (remoteIds[0]) {
           await this.selectSession(remoteIds[0]);
           this.loadQuickStartCases();
@@ -706,7 +736,7 @@ Object.assign(CodemanApp.prototype, {
       const modelOverride = globalSettings.claudeModel || (useOpus1m ? 'opus[1m]' : '');
 
       // Step 1: Create all sessions in parallel
-      this.terminal.writeln(`\x1b[90m Creating ${tabCount} session(s)...\x1b[0m`);
+      this._appendSessionLaunchStatus(ownsLaunchTerminal, `Creating ${tabCount} session(s)...`);
       const createPromises = sessionNames.map(name =>
         fetch('/api/sessions', {
           method: 'POST',
@@ -747,12 +777,12 @@ Object.assign(CodemanApp.prototype, {
       ));
 
       // Step 3: Start all sessions in parallel (biggest speedup)
-      this.terminal.writeln(`\x1b[90m Starting ${tabCount} session(s) in parallel...\x1b[0m`);
+      this._appendSessionLaunchStatus(ownsLaunchTerminal, `Starting ${tabCount} session(s) in parallel...`);
       await Promise.all(sessionIds.map(id =>
         fetch(`/api/sessions/${id}/interactive`, { method: 'POST' })
       ));
 
-      this.terminal.writeln(`\x1b[90m All ${tabCount} sessions ready\x1b[0m`);
+      this._appendSessionLaunchStatus(ownsLaunchTerminal, `All ${tabCount} sessions ready`);
 
       // Auto-switch to the new session using selectSession (does proper refresh)
       if (firstSessionId) {
@@ -762,7 +792,7 @@ Object.assign(CodemanApp.prototype, {
 
       this.terminal.focus();
     } catch (err) {
-      this.terminal.writeln(`\x1b[1;31m Error: ${err.message}\x1b[0m`);
+      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
     }
   },
 
@@ -805,9 +835,10 @@ Object.assign(CodemanApp.prototype, {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
     const shellCount = Math.min(20, Math.max(1, parseInt(document.getElementById('shellCount').value) || 1));
 
-    this.terminal.clear();
-    this.terminal.writeln(`\x1b[1;33m Starting ${shellCount} Shell session(s) in ${caseName}...\x1b[0m`);
-    this.terminal.writeln('');
+    const ownsLaunchTerminal = this._beginSessionLaunchStatus(
+      `Starting ${shellCount} Shell session(s) in ${caseName}...`,
+      '1;33'
+    );
 
     try {
       // Get the case path
@@ -913,7 +944,7 @@ Object.assign(CodemanApp.prototype, {
 
       this.terminal.focus();
     } catch (err) {
-      this.terminal.writeln(`\x1b[1;31m Error: ${err.message}\x1b[0m`);
+      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
     }
   },
 
@@ -924,9 +955,7 @@ Object.assign(CodemanApp.prototype, {
     const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
     const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
 
-    this.terminal.clear();
-    this.terminal.writeln(`\x1b[1;32m Starting OpenCode session in ${caseName}...\x1b[0m`);
-    this.terminal.writeln('');
+    const ownsLaunchTerminal = this._beginSessionLaunchStatus(`Starting OpenCode session in ${caseName}...`);
     // Focus in sync gesture context (see runClaude comment)
     this.terminal.focus();
 
@@ -936,8 +965,10 @@ Object.assign(CodemanApp.prototype, {
         const statusRes = await fetch('/api/opencode/status');
         const status = (await statusRes.json()).data;
         if (!status.available) {
-          this.terminal.writeln('\x1b[1;31m OpenCode CLI not found.\x1b[0m');
-          this.terminal.writeln('\x1b[90m Install with: curl -fsSL https://opencode.ai/install | bash\x1b[0m');
+          this._reportSessionLaunchError(
+            ownsLaunchTerminal,
+            'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash'
+          );
           return;
         }
       }
@@ -970,7 +1001,7 @@ Object.assign(CodemanApp.prototype, {
 
       this.terminal.focus();
     } catch (err) {
-      this.terminal.writeln(`\x1b[1;31m Error: ${err.message}\x1b[0m`);
+      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
     }
   },
 
@@ -981,9 +1012,7 @@ Object.assign(CodemanApp.prototype, {
     const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
     const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
 
-    this.terminal.clear();
-    this.terminal.writeln(`\x1b[1;32m Starting Codex session in ${caseName}...\x1b[0m`);
-    this.terminal.writeln('');
+    const ownsLaunchTerminal = this._beginSessionLaunchStatus(`Starting Codex session in ${caseName}...`);
     this.terminal.focus();
 
     try {
@@ -991,8 +1020,10 @@ Object.assign(CodemanApp.prototype, {
         const statusRes = await fetch('/api/codex/status');
         const status = (await statusRes.json()).data;
         if (!status.available) {
-          this.terminal.writeln('\x1b[1;31m Codex CLI not found.\x1b[0m');
-          this.terminal.writeln('\x1b[90m Install with: npm install -g @openai/codex\x1b[0m');
+          this._reportSessionLaunchError(
+            ownsLaunchTerminal,
+            'Codex CLI not found. Install with: npm install -g @openai/codex'
+          );
           return;
         }
       }
@@ -1027,7 +1058,7 @@ Object.assign(CodemanApp.prototype, {
 
       this.terminal.focus();
     } catch (err) {
-      this.terminal.writeln(`\x1b[1;31m Error: ${err.message}\x1b[0m`);
+      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
     }
   },
 
@@ -1038,9 +1069,7 @@ Object.assign(CodemanApp.prototype, {
     const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
     const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
 
-    this.terminal.clear();
-    this.terminal.writeln(`\x1b[1;32m Starting Gemini session in ${caseName}...\x1b[0m`);
-    this.terminal.writeln('');
+    const ownsLaunchTerminal = this._beginSessionLaunchStatus(`Starting Gemini session in ${caseName}...`);
     this.terminal.focus();
 
     try {
@@ -1048,8 +1077,10 @@ Object.assign(CodemanApp.prototype, {
         const statusRes = await fetch('/api/gemini/status');
         const status = (await statusRes.json()).data;
         if (!status.available) {
-          this.terminal.writeln('\x1b[1;31m Gemini CLI not found.\x1b[0m');
-          this.terminal.writeln('\x1b[90m Install with: npm install -g @google/gemini-cli\x1b[0m');
+          this._reportSessionLaunchError(
+            ownsLaunchTerminal,
+            'Gemini CLI not found. Install with: npm install -g @google/gemini-cli'
+          );
           return;
         }
       }
@@ -1078,7 +1109,7 @@ Object.assign(CodemanApp.prototype, {
 
       this.terminal.focus();
     } catch (err) {
-      this.terminal.writeln(`\x1b[1;31m Error: ${err.message}\x1b[0m`);
+      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
     }
   },
 
@@ -1089,9 +1120,7 @@ Object.assign(CodemanApp.prototype, {
     const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
     const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
 
-    this.terminal.clear();
-    this.terminal.writeln(`\x1b[1;32m Starting Antigravity session in ${caseName}...\x1b[0m`);
-    this.terminal.writeln('');
+    const ownsLaunchTerminal = this._beginSessionLaunchStatus(`Starting Antigravity session in ${caseName}...`);
     this.terminal.focus();
 
     try {
@@ -1099,8 +1128,10 @@ Object.assign(CodemanApp.prototype, {
         const statusRes = await fetch('/api/antigravity/status');
         const status = (await statusRes.json()).data;
         if (!status.available) {
-          this.terminal.writeln('\x1b[1;31m Antigravity CLI not found.\x1b[0m');
-          this.terminal.writeln('\x1b[90m Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash\x1b[0m');
+          this._reportSessionLaunchError(
+            ownsLaunchTerminal,
+            'Antigravity CLI not found. Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash'
+          );
           return;
         }
       }
@@ -1129,7 +1160,7 @@ Object.assign(CodemanApp.prototype, {
 
       this.terminal.focus();
     } catch (err) {
-      this.terminal.writeln(`\x1b[1;31m Error: ${err.message}\x1b[0m`);
+      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
     }
   },
 

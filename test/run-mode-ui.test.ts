@@ -84,6 +84,101 @@ describe('run mode UI', () => {
 });
 
 describe('Run launch synchronization', () => {
+  it('keeps launch progress out of an active session terminal', () => {
+    const CodemanApp = function CodemanApp(this: any) {};
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: () => null },
+      console,
+    });
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+
+    const app = new (CodemanApp as any)();
+    app.activeSessionId = 'existing-session';
+    app.terminal = {
+      clear: vi.fn(),
+      writeln: vi.fn(),
+    };
+    app.showToast = vi.fn();
+
+    const ownsTerminal = app._beginSessionLaunchStatus('Starting Codex session', '1;32');
+    app._appendSessionLaunchStatus(ownsTerminal, 'Creating session');
+    app._reportSessionLaunchError(ownsTerminal, 'Launch failed');
+
+    expect(ownsTerminal).toBe(false);
+    expect(app.terminal.clear).not.toHaveBeenCalled();
+    expect(app.terminal.writeln).not.toHaveBeenCalled();
+    expect(app.showToast).toHaveBeenNthCalledWith(1, 'Starting Codex session', 'info');
+    expect(app.showToast).toHaveBeenNthCalledWith(2, 'Launch failed', 'error');
+  });
+
+  it('still renders launch progress in the terminal on the session-less home screen', () => {
+    const CodemanApp = function CodemanApp(this: any) {};
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: () => null },
+      console,
+    });
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+
+    const app = new (CodemanApp as any)();
+    app.activeSessionId = null; // home screen: nothing else owns the terminal
+    app.terminal = { clear: vi.fn(), writeln: vi.fn() };
+    app.showToast = vi.fn();
+
+    const ownsTerminal = app._beginSessionLaunchStatus('Starting Codex session', '1;32');
+    app._appendSessionLaunchStatus(ownsTerminal, 'Creating session');
+    app._reportSessionLaunchError(ownsTerminal, 'Launch failed');
+
+    expect(ownsTerminal).toBe(true);
+    expect(app.terminal.clear).toHaveBeenCalledTimes(1);
+    expect(app.terminal.writeln.mock.calls.map((c: string[]) => c[0]).join('\n')).toContain('Starting Codex session');
+    expect(app.terminal.writeln.mock.calls.map((c: string[]) => c[0]).join('\n')).toContain('Creating session');
+    expect(app.terminal.writeln.mock.calls.map((c: string[]) => c[0]).join('\n')).toContain('Error: Launch failed');
+    expect(app.showToast).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Static guard over session-ui.js itself. The helpers above can be perfectly
+   * correct while a run*() entry point still writes to the shared xterm
+   * directly, which is the actual bug: a launch started while another session
+   * is active wipes that session's terminal, and _cleanupPreviousSession()
+   * then serializes the wiped view into its restore snapshot. Asserting on the
+   * helpers alone cannot see that, so pin the call sites here. This also
+   * covers run modes added later, which is how runAntigravity was caught.
+   */
+  it('routes every run mode through the ownership helpers, never the terminal directly', () => {
+    const src = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+
+    // Methods live in one Object.assign(prototype, {...}) block at a fixed
+    // 2-space indent, so `\n  },` reliably closes the one we are inside.
+    const bodies = new Map<string, string>();
+    const header = /^ {2}async (run[A-Za-z]*)\(\) \{$/gm;
+    for (let m = header.exec(src); m; m = header.exec(src)) {
+      const start = m.index + m[0].length;
+      const end = src.indexOf('\n  },', start);
+      expect(end, `could not find the end of ${m[1]}()`).toBeGreaterThan(start);
+      bodies.set(m[1], src.slice(start, end));
+    }
+
+    // Fail loudly if the scan matched nothing: a silently empty scan would make
+    // every assertion below vacuously true.
+    expect([...bodies.keys()]).toEqual(
+      expect.arrayContaining(['runClaude', 'runShell', 'runOpenCode', 'runCodex', 'runGemini', 'runAntigravity'])
+    );
+
+    for (const [name, body] of bodies) {
+      expect(body, `${name}() must not clear a terminal it may not own`).not.toContain('this.terminal.clear(');
+      expect(body, `${name}() must not write launch status straight to the terminal`).not.toContain(
+        'this.terminal.writeln('
+      );
+    }
+  });
+
   it('coalesces overlapping Run activations and disables the button while the request is active', async () => {
     const runBtn = {
       disabled: false,
