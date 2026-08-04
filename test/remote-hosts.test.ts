@@ -56,9 +56,12 @@ describe('remote-hosts domain', () => {
 
   it('returns safe mode defaults and remote display values', () => {
     expect(defaultRemoteCommandForMode('shell')).toBe('exec $SHELL -i -l');
-    expect(defaultRemoteCommandForMode('codex')).toBe('exec codex');
+    // Routed through an interactive login shell so per-user PATH entries (e.g.
+    // ~/.local/bin, ~/.opencode/bin) resolve — a bare `exec codex` sees only
+    // sshd's minimal default PATH and fails with "command not found".
+    expect(defaultRemoteCommandForMode('codex')).toBe("exec $SHELL -i -l -c 'codex'");
     // Mirrors the local claude default so the remote agent runs non-interactively.
-    expect(defaultRemoteCommandForMode('claude')).toBe('exec claude --dangerously-skip-permissions');
+    expect(defaultRemoteCommandForMode('claude')).toBe("exec $SHELL -i -l -c 'claude --dangerously-skip-permissions'");
     expect(remoteSshTarget({ id: 'h1', label: 'H1', host: 'box.local', username: 'aamer' })).toBe('aamer@box.local');
     expect(remoteDisplayPath({ username: 'aamer', host: 'box.local', path: '/opt/work' })).toBe(
       'aamer@box.local:/opt/work'

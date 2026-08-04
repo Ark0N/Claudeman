@@ -59,6 +59,15 @@ export async function writeRemoteCases(configDir: string, cases: RemoteCase[]): 
 }
 
 export function defaultRemoteCommandForMode(mode: SessionMode): string {
+  // Agent CLIs (claude/opencode/codex/gemini/antigravity) are typically installed
+  // under per-user paths like ~/.local/bin or ~/.opencode/bin, added to PATH only by
+  // the remote user's interactive-login shell startup files (~/.zshrc etc.). ssh's
+  // remote-command execution is neither interactive nor login, so a bare `exec
+  // claude` sees only sshd's minimal default PATH and fails with "command not
+  // found" (exit 127) — confirmed via `tmux capture-pane` on the
+  // remain-on-exit-preserved dead pane. Route through `$SHELL -i -l -c`, the same
+  // fix already used for shell mode below, so PATH is fully resolved before the
+  // CLI name is looked up.
   const commands: Record<RemoteCommandMode, string> = {
     // $SHELL, not a hardcoded bash: sshd sets it from the remote user's
     // /etc/passwd entry, so this launches their actual login shell (zsh,
@@ -68,11 +77,11 @@ export function defaultRemoteCommandForMode(mode: SessionMode): string {
     // Mirror the LOCAL claude default so the remote agent runs non-interactively
     // (no trust-folder/permission prompt that nothing on the remote answers). The
     // per-host `commands.claude` override stays the escape hatch.
-    claude: 'exec claude --dangerously-skip-permissions',
-    opencode: 'exec opencode',
-    codex: 'exec codex',
-    gemini: 'exec gemini',
-    antigravity: 'exec agy',
+    claude: `exec $SHELL -i -l -c ${shellescape('claude --dangerously-skip-permissions')}`,
+    opencode: `exec $SHELL -i -l -c ${shellescape('opencode')}`,
+    codex: `exec $SHELL -i -l -c ${shellescape('codex')}`,
+    gemini: `exec $SHELL -i -l -c ${shellescape('gemini')}`,
+    antigravity: `exec $SHELL -i -l -c ${shellescape('agy')}`,
   };
   return commands[mode as RemoteCommandMode] || commands.shell;
 }

@@ -852,13 +852,14 @@ export function buildRemoteLaunchCommand(options: {
   // hardcoding --dangerously-skip-permissions, so a non-granted multi-user user's
   // downgraded 'auto' actually reaches the remote agent (the default command otherwise
   // ignored claudeMode). A per-host `commands.claude` override stays authoritative
-  // (admin's explicit choice). For the DEFAULT single-user config (skip), the emitted
-  // command is byte-identical to before. Non-claude modes are unchanged.
+  // (admin's explicit choice). Wrapped in `$SHELL -i -l -c` for the same reason as
+  // `defaultRemoteCommandForMode`: `claude` lives under a per-user PATH entry that
+  // only an interactive login shell resolves (see that function's comment).
   const override = remote.commands?.[mode];
   const modeCommand = override
     ? override
     : mode === 'claude'
-      ? `exec claude${buildClaudePermissionFlags(claudeMode, allowedTools)}`
+      ? `exec $SHELL -i -l -c ${shellescape(`claude${buildClaudePermissionFlags(claudeMode, allowedTools)}`)}`
       : defaultRemoteCommandForMode(mode);
   const remoteName = remoteTmuxSessionName(sessionId);
 
