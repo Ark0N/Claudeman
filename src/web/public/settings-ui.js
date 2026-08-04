@@ -718,6 +718,31 @@ Object.assign(CodemanApp.prototype, {
     this._updatePollTimer = setInterval(poll, 1500);
   },
 
+  async loadGeminiAvailability() {
+    await this._loadCliAvailability('welcomeGeminiBtn', '/api/gemini/status');
+  },
+
+  async loadClaudeAvailability() {
+    await this._loadCliAvailability('welcomeClaudeBtn', '/api/claude/status');
+  },
+
+  async loadOpencodeAvailability() {
+    await this._loadCliAvailability('welcomeOpencodeBtn', '/api/opencode/status');
+  },
+
+  async _loadCliAvailability(buttonId, statusUrl) {
+    const btn = document.getElementById(buttonId);
+    if (!btn) return;
+    try {
+      const res = await fetch(statusUrl);
+      const env = await res.json();
+      const status = env?.success === true ? env.data : env;
+      btn.style.display = status?.available ? 'flex' : 'none';
+    } catch {
+      btn.style.display = 'none';
+    }
+  },
+
   async loadTunnelStatus() {
     try {
       const res = await fetch('/api/tunnel/status');
