@@ -1,7 +1,7 @@
 # Web tabs: two fixes (planned + implemented 2026-07-28)
 
 Both found against the saved dashboard
-`https://macminis-mac-mini.tailf80371.ts.net:4000` (Bio-Hacking-Dashboard).
+`https://<your-host>.<your-tailnet>.ts.net:4000` (Bio-Hacking-Dashboard).
 Kept because the root-cause analysis of the second one is not obvious from the
 resulting diff.
 
@@ -49,7 +49,7 @@ already revoked the capability and broadcast `WebviewChanged`.
 ```
 CAP=<from POST /api/webviews/<id>/open>
 # A) upstream direct                       -> 200 image/jpeg 118150
-curl -sk "https://macminis-mac-mini.tailf80371.ts.net:4000/api/hero?slug=120-minutes-in-nature"
+curl -sk "https://<your-host>.<your-tailnet>.ts.net:4000/api/hero?slug=120-minutes-in-nature"
 # B) through the proxy prefix              -> 200 image/jpeg 118150
 curl -sk "https://localhost:3000/webview/$CAP/api/hero?slug=120-minutes-in-nature"
 # C) what the browser ACTUALLY requested   -> 404 {"errorCode":"NOT_FOUND"}

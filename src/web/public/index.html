@@ -379,6 +379,12 @@
           <button class="welcome-ralph-link" onclick="app.showRalphWizard()">Start Ralph Loop &rarr;</button>
         </div>
       </div>
+
+      <!-- Mobile Overview (phone home screen, shown in place of the welcome
+           overlay when the "C" logo is tapped). Ships `hidden`: only
+           mobile-overview.js removes it, and only when the phone gate passes, so
+           desktop (which never loads mobile.css) can never render it. -->
+      <div class="mobile-overview" id="mobileOverview" hidden></div>
     </main>
 
     <!-- Project Insights Panel (shows file-viewing Bash commands) -->
@@ -1438,6 +1444,16 @@
                 <span class="settings-item-label">Redraw Terminal Button</span>
                 <label class="switch switch-sm">
                   <input type="checkbox" id="appSettingsShowRedrawButton">
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <!-- Phone Section (only meaningful under 430px, hidden elsewhere by settings-ui.js) -->
+              <div class="settings-section-header" id="appSettingsPhoneSection">Phone</div>
+              <div class="settings-item" id="appSettingsMobileOverviewItem" title="On phones, the C logo opens a session overview (needs you / spaces / idle) instead of the welcome screen">
+                <span class="settings-item-label">Overview Home Screen</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsMobileOverview" checked>
                   <span class="slider"></span>
                 </label>
               </div>
@@ -2644,6 +2660,7 @@
   <script defer src="admin-ui.js"></script>
   <script defer src="session-ui.js"></script>
   <script defer src="webview-tabs.js"></script>
+  <script defer src="mobile-overview.js"></script>
   <script defer src="entrance-animations.js"></script>
   <script defer src="ralph-wizard.js"></script>
   <script defer src="api-client.js"></script>

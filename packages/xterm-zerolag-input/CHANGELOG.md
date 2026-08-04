@@ -1,5 +1,34 @@
 # xterm-zerolag-input
 
+## 0.1.8
+
+### Patch Changes
+
+- **Fixed: sessions failed to start on macOS with `Error: posix_spawnp failed.`** (issues #6 and #204)
+
+  `node-pty@1.1.0` publishes its macOS prebuilt helper as `prebuilds/darwin-<arch>/spawn-helper` with mode 0644, i.e. no execute bit. macOS launches every PTY through that helper, so a stock install failed on every session start. The bug is macOS-only: `spawn-helper` is a mac-only gyp target and node-pty ships no Linux prebuild, so Linux always compiles a correctly-permissioned helper from source.
+
+  The previous fix chmodded only `build/Release/spawn-helper`, which on macOS does not exist (the prebuild is used, so node-gyp never runs), and it derived that path from `require.resolve('node-pty')`, landing on `<pkg>/lib/build/Release/...`. It was a no-op on every platform.
+  - New `scripts/fix-node-pty.mjs` (also `npm run fix:node-pty`) chmods every `spawn-helper` it finds, in `build/Release`, `build/Debug` and each `prebuilds/*/`, then verifies the result by actually opening a PTY. A `require()` alone passes on a broken install, because the helper is only touched at spawn time.
+  - `postinstall` no longer force-rebuilds node-pty from source on Node 22+. That step needed Xcode command line tools, cost 30-120s on every install, and deleted the `prebuilds/` tree before compiling, so a Mac without a compiler was left with no working binary at all. A rebuild now happens only when the chmod plus spawn probe still fails, and the prebuilds tree is backed up and restored around it.
+  - New `spawnPtyWithHelperRepair()` (`src/utils/node-pty-repair.ts`) wraps every `pty.spawn()` in `session.ts`, so an install that is already broken repairs itself on the first failed spawn and retries in-process instead of showing a dead session. Unrelated spawn errors are rethrown untouched; a second failure carries the `npm run fix:node-pty` hint.
+  - `scripts/fix-node-pty.mjs` is now in the published `files` list, so global npm installs get the repair too.
+  - Direct-PTY Claude spawns use the resolved absolute binary path (new `getClaudeBinaryPath()`) instead of the bare name `claude`, so a CLI installed outside the server's PATH still launches.
+
+  Verified end to end on macOS 26.4 arm64: a stock `npm i` reproduces `posix_spawnp failed.`, and after the fix the same install spawns a PTY successfully with the prebuilds preserved.
+
+  **Added: phone home screen (session overview)**
+
+  Under 430px the "C" logo now opens a session overview (current sessions, past sessions, spaces) instead of the welcome overlay: on a small screen "which session needs me" beats "how do I start one". Rows resume a session in place, and "New session here" goes through the normal quick-start path so remote and Docker cases keep their routing. Per-device setting `mobileOverviewEnabled` (phones only, default ON) in App Settings. Tablet and desktop are unchanged.
+
+  **Added: guided Tailscale setup in `install.sh`**
+
+  The network-access prompt is now 3-way: Tailscale, LAN, or local-only. The Tailscale path binds loopback and walks through installing Tailscale, logging in, the operator grant, the tailnet HTTPS-certificates toggle, and `tailscale serve --bg <port>`, then verifies the result end to end with curl. That gives HTTPS on a real certificate with no app password and no `0.0.0.0` bind, which is also what PWA install and web push need. `install.sh tailscale` retrofits it onto an existing install, and `CODEMAN_TAILSCALE=1` presets the choice. Serve state is detected from `tailscale serve status --json`; the installer never runs `tailscale serve reset` and never touches serve mappings other than 443 to Codeman's port. README and `docs/security-architecture.md` updated to match.
+
+  **Docs**: replaced a real tailnet hostname with placeholders in `docs/web-tabs-fixes-plan.md`.
+
+  **xterm-zerolag-input**: npm description and keywords only, no code change.
+
 ## 0.1.7
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "aicodeman",
-  "version": "1.9.7",
+  "version": "1.9.8",
   "description": "Mission control for AI coding agents - run 20 autonomous agents with real-time monitoring and session persistence",
   "type": "module",
   "main": "dist/index.js",
@@ -22,6 +22,7 @@
     "test:coverage": "vitest run --config config/vitest.config.ts --coverage",
     "test:ci": "vitest run --config config/vitest.ci.config.ts",
     "check:frontend-syntax": "node scripts/check-frontend-syntax.mjs",
+    "fix:node-pty": "node scripts/fix-node-pty.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint --config config/eslint.config.js 'src/**/*.ts'",
     "lint:fix": "eslint --config config/eslint.config.js 'src/**/*.ts' --fix",
@@ -156,6 +157,7 @@
   "files": [
     "dist",
     "scripts/postinstall.js",
+    "scripts/fix-node-pty.mjs",
     "LICENSE",
     "README.md"
   ]

@@ -2259,6 +2259,433 @@ html.mobile-init .file-browser-panel {
     border-radius: 8px;
     transform: none !important;
   }
+
+  /* ---- Mobile Overview (phone home screen) ----
+     Shown in place of the welcome overlay when the C logo is tapped. Styled only
+     with :root tokens so every skin, including the four light ones, works with
+     no override block. Never give .mobile-overview itself a display value: the
+     element ships with [hidden] and only .visible may turn it on. */
+
+  .mobile-overview.visible {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 0.75rem 0.6rem calc(1rem + var(--safe-area-bottom));
+    background: var(--bg-dark);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  /* No side padding: the wordmark's left edge lines up with the session cards
+     below it, and the Run button's right edge with theirs. */
+  .mobile-overview-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0;
+  }
+
+  /* Same accent as the "C" in the header (`.logo` uses --accent-hover), and the
+     same 48px box as the Run button opposite it, so the two are centered on one
+     line by construction rather than by eye. */
+  .mobile-overview-brand {
+    display: inline-flex;
+    align-items: center;
+    min-height: 48px;
+    font-size: 1.5rem;
+    font-weight: 800;
+    line-height: 1;
+    color: var(--accent-hover);
+    letter-spacing: -0.02em;
+  }
+
+  /* Split Run button. Colors come from the toolbar's own
+     `.btn-toolbar.btn-run.mode-<backend>` rules in styles.css (the element
+     carries those classes), so this button and the one in the toolbar are the
+     same control in two places. Only size/shape is set here, and NOTHING that
+     would override the mode gradient. */
+  .mobile-overview-header {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .mobile-overview-run-group {
+    display: flex;
+    align-items: stretch;
+    flex-shrink: 0;
+  }
+
+  /* Sized well past the 44px touch minimum: this is the primary action on the
+     home screen, and the caret is a separate target right next to it.
+     ⚠️ The !important is required, not decorative: the phone block clamps every
+     .btn-toolbar to `height/min-height/max-height: 26px !important`, and this
+     button deliberately carries .btn-toolbar to inherit the run-mode gradient.
+     Without matching !important (max-height included) it renders 26px tall. */
+  .mobile-overview-run-group .mobile-overview-run {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-height: 48px !important;
+    height: 48px !important;
+    max-height: 48px !important;
+    padding: 0 1.15rem !important;
+    font-size: 0.95rem !important;
+    line-height: 1;
+    font-weight: 700;
+    font-family: inherit;
+    border-radius: 10px 0 0 10px !important;
+  }
+
+  .mobile-overview-run-mode {
+    font-weight: 600;
+    font-size: 0.85rem;
+    opacity: 0.8;
+  }
+
+  .mobile-overview-run-group .mobile-overview-run-caret {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 48px !important;
+    height: 48px !important;
+    max-height: 48px !important;
+    min-width: 48px !important;
+    width: 48px !important;
+    padding: 0 !important;
+    line-height: 1;
+    font-family: inherit;
+    border-radius: 0 10px 10px 0 !important;
+  }
+
+  /* The phone block shrinks every run-gear glyph to 10px; this one is a 48px
+     tap target, so it gets a proportionate chevron. `display:block` drops the
+     inline-baseline gap that would otherwise push it a pixel low. */
+  .mobile-overview-run-group .mobile-overview-run-caret svg {
+    display: block;
+    width: 20px !important;
+    height: 20px !important;
+    margin: 0 !important;
+  }
+
+  .mobile-overview-run-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    margin: 0.5rem 0 0;
+    padding: 0.35rem;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--floating-bg);
+    box-shadow: var(--elevated-shadow);
+  }
+
+  .mobile-overview-run-option {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 44px;
+    padding: 0 0.6rem;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.82rem;
+    text-align: left;
+  }
+
+  .mobile-overview-run-option.selected {
+    background: var(--control-bg-hover);
+  }
+
+  .mobile-overview-run-option:active {
+    background: var(--bg-hover);
+  }
+
+  .mobile-overview-run-option--add {
+    color: var(--accent);
+  }
+
+  .mobile-overview-run-header {
+    padding: 0.4rem 0.6rem 0.2rem;
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .mobile-overview-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  /* Flush left with the wordmark and the cards: one left edge down the screen. */
+  .mobile-overview-heading {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin: 0.35rem 0 0;
+    padding: 0;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .mobile-overview-heading-count {
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+
+  .mobile-overview-empty {
+    margin: 0;
+    padding: 0.5rem 0;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  /* Row: 56px tap target, dot + two-line body + pill + chevron */
+  .mobile-overview-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    width: 100%;
+    min-height: 56px;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--bg-card);
+    color: var(--text);
+    font-family: inherit;
+    text-align: left;
+  }
+
+  .mobile-overview-row:active {
+    background: var(--bg-hover);
+  }
+
+  /* Attention states mirror the session tabs exactly: red blink when the agent
+     asked something (permission / question), yellow blink when it is waiting for
+     a prompt. Same hues and same cadence as tab-blink-red / tab-blink-yellow in
+     styles.css; the keyframes are re-declared here only because a tab's resting
+     background is transparent while a row's is the card color. */
+  .mobile-overview-row--needs {
+    border-color: var(--red);
+    animation: mobile-overview-blink-red 2.5s ease-in-out infinite;
+  }
+
+  .mobile-overview-row--waiting {
+    border-color: var(--yellow);
+    animation: mobile-overview-blink-yellow 3.5s ease-in-out infinite;
+  }
+
+  .mobile-overview-row--error {
+    border-color: var(--red);
+  }
+
+  @keyframes mobile-overview-blink-red {
+    0%,
+    100% {
+      background: var(--bg-card);
+      border-color: var(--border);
+    }
+    50% {
+      background: rgba(239, 68, 68, 0.14);
+      border-color: var(--red);
+    }
+  }
+
+  @keyframes mobile-overview-blink-yellow {
+    0%,
+    100% {
+      background: var(--bg-card);
+      border-color: var(--border);
+    }
+    50% {
+      background: rgba(234, 179, 8, 0.12);
+      border-color: var(--yellow);
+    }
+  }
+
+  .mobile-overview-row-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .mobile-overview-row-title {
+    display: block;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mobile-overview-row-case {
+    color: var(--text-dim);
+    font-weight: 500;
+  }
+
+  .mobile-overview-row-sub {
+    display: block;
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mobile-overview-dot {
+    flex-shrink: 0;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--text-muted);
+  }
+
+  .mobile-overview-dot--needs,
+  .mobile-overview-dot--error {
+    background: var(--red);
+  }
+
+  .mobile-overview-dot--waiting {
+    background: var(--yellow);
+  }
+
+  /* Same as .session-tab .tab-status: green when the session is fine, and the
+     shared `pulse` keyframes while it is working. */
+  .mobile-overview-dot--working {
+    background: var(--green);
+    animation: pulse 1.5s infinite;
+    will-change: opacity;
+  }
+
+  .mobile-overview-dot--idle {
+    background: var(--green);
+  }
+
+  .mobile-overview-dot--done {
+    background: var(--text-muted);
+    opacity: 0.5;
+  }
+
+  .mobile-overview-pill {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.2rem 0.45rem;
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    font-size: 0.62rem;
+    font-weight: 600;
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+
+  .mobile-overview-pill--needs,
+  .mobile-overview-pill--error {
+    border-color: var(--red);
+    color: var(--red);
+  }
+
+  .mobile-overview-pill--waiting {
+    border-color: var(--yellow);
+    color: var(--yellow);
+  }
+
+  .mobile-overview-pill--idle,
+  .mobile-overview-pill--working {
+    border-color: var(--green);
+    color: var(--green);
+  }
+
+  .mobile-overview-chevron {
+    flex-shrink: 0;
+    color: var(--text-muted);
+    font-size: 1rem;
+    line-height: 1;
+  }
+
+  /* Past conversations: quieter than a live row, since tapping one starts work */
+  .mobile-overview-row--past {
+    background: transparent;
+    border-style: dashed;
+  }
+
+  .mobile-overview-row--past .mobile-overview-row-title {
+    font-weight: 500;
+    color: var(--text-dim);
+  }
+
+  .mobile-overview-dot--past {
+    background: transparent;
+    border: 1px solid var(--border-light);
+  }
+
+  .mobile-overview-pill--past {
+    border-color: var(--border-light);
+    color: var(--text-muted);
+  }
+
+  .mobile-overview-more {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    min-height: 40px;
+    border: none;
+    border-radius: 10px;
+    background: var(--control-bg);
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 0.72rem;
+    font-weight: 600;
+  }
+
+  .mobile-overview-more-count {
+    padding: 0.05rem 0.35rem;
+    border-radius: 999px;
+    background: var(--control-bg-hover);
+    color: var(--text-muted);
+  }
+}
+
+/* The overview's attention blink is an alert, so it stays visible without
+   motion: hold the alert color instead of animating to it. */
+@media (prefers-reduced-motion: reduce) {
+  .mobile-overview-row--needs,
+  .mobile-overview-row--waiting {
+    animation: none;
+  }
+
+  .mobile-overview-row--needs {
+    background: rgba(239, 68, 68, 0.14);
+  }
+
+  .mobile-overview-row--waiting {
+    background: rgba(234, 179, 8, 0.12);
+  }
+
+  .mobile-overview-dot--working {
+    animation: none;
+  }
 }
 
 /* Light-skin compatibility for mobile-only chrome. These components predate

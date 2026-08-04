@@ -3456,6 +3456,10 @@ class CodemanApp {
     // After the wrap measurement: the `unroll` style starts tabs at max-width 0,
     // so measuring mid-animation would decide the wrap on collapsed widths.
     this._applyTabEntrances?.();
+    // Phone overview rides on this one call: every state change it cares about
+    // (create, delete, idle, working, exit, hook alerts via updateTabAlertFromHooks)
+    // already funnels through here. No-ops unless that surface is showing.
+    this._refreshMobileOverviewIfVisible?.();
   }
 
   // Auto-wrap desktop session tabs to a second row when they overflow one row,

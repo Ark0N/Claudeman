@@ -331,6 +331,14 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsShowMultiMonitorButton').checked = settings.showMultiMonitorButton ?? defaults.showMultiMonitorButton ?? false;
     document.getElementById('appSettingsShowPlanUsageLimits').checked = this.planUsageChipEnabled(settings);
     document.getElementById('appSettingsShowRedrawButton').checked = settings.showRedrawButton ?? defaults.showRedrawButton ?? false;
+    // Phone overview home screen: only meaningful under 430px, so the row is
+    // hidden elsewhere rather than offering a toggle that changes nothing.
+    document.getElementById('appSettingsMobileOverview').checked = settings.mobileOverviewEnabled ?? defaults.mobileOverviewEnabled ?? false;
+    const phoneOnly = MobileDetection.getDeviceType() === 'mobile' ? '' : 'none';
+    const mobileOverviewItem = document.getElementById('appSettingsMobileOverviewItem');
+    if (mobileOverviewItem) mobileOverviewItem.style.display = phoneOnly;
+    const phoneSection = document.getElementById('appSettingsPhoneSection');
+    if (phoneSection) phoneSection.style.display = phoneOnly;
     // Session Manager, Away Digest and Cron buttons all default OFF (opt-in under
     // Display → Header Displays; the Cron button also ships with btn-cron--hidden
     // in the template, so an unchecked box and a hidden button stay consistent).
@@ -1453,6 +1461,7 @@ Object.assign(CodemanApp.prototype, {
       showMultiMonitorButton: document.getElementById('appSettingsShowMultiMonitorButton').checked,
       showPlanUsageLimits: document.getElementById('appSettingsShowPlanUsageLimits').checked,
       showRedrawButton: document.getElementById('appSettingsShowRedrawButton').checked,
+      mobileOverviewEnabled: document.getElementById('appSettingsMobileOverview').checked,
       showSessionButton: document.getElementById('appSettingsShowSessionButton').checked,
       showAwayDigestButton: document.getElementById('appSettingsShowAwayDigestButton').checked,
       showCronButton: document.getElementById('appSettingsShowCronButton').checked,
@@ -1616,6 +1625,10 @@ Object.assign(CodemanApp.prototype, {
     // Apply CJK input visibility immediately
     this._updateCjkInputState();
 
+    // The phone home surface (overview vs welcome) may have just been toggled.
+    // Only re-decide while a home screen is actually up.
+    if (!this.activeSessionId) this.showWelcome();
+
     // Apply keyboard bar mode
     KeyboardAccessoryBar.setMode(settings.extendedKeyboardBar ? 'extended' : 'simple');
 
@@ -1646,6 +1659,8 @@ Object.assign(CodemanApp.prototype, {
       showSessionButton: _ssb,
       showAwayDigestButton: _adb,
       showCronButton: _crb,
+      // Phone-only home surface, and absent from SettingsUpdateSchema (.strict()).
+      mobileOverviewEnabled: _mov,
       ...serverSettings
     } = settings;
     try {
@@ -1814,6 +1829,10 @@ Object.assign(CodemanApp.prototype, {
         showSessionButton: false,
         showAwayDigestButton: false,
         showCronButton: false,
+        // Phone home screen: the C logo opens the session overview instead of the
+        // welcome screen. ON by default here, and the escape hatch if it ever
+        // misbehaves on a device (the gate treats only an explicit false as off).
+        mobileOverviewEnabled: true,
         // Remote auto-reconnect (COD-108) — on by default
         remoteAutoReconnect: true,
         // Input
@@ -2269,6 +2288,7 @@ Object.assign(CodemanApp.prototype, {
           'language',
           'terminalWheelLocalScrollback',
           'showSessionButton', 'showAwayDigestButton', 'showCronButton',
+          'mobileOverviewEnabled',
         ]);
         // The plan-usage chip is a PER-DEVICE display setting (desktop default ON,
         // handheld default OFF): desktop can show it while mobile stays hidden. It

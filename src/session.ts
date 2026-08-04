@@ -66,6 +66,8 @@ import {
   MAX_SESSION_TOKENS,
   execPattern,
   getClaudeCliVersion,
+  getClaudeBinaryPath,
+  spawnPtyWithHelperRepair,
 } from './utils/index.js';
 import {
   MAX_TERMINAL_BUFFER_SIZE,
@@ -1284,15 +1286,17 @@ export class Session extends EventEmitter {
     const attachCommand = IS_TEST_MODE ? process.execPath : mux.getAttachCommand();
     const attachArgs = IS_TEST_MODE ? ['-e', TEST_PTY_SCRIPT] : mux.getAttachArgs(this._muxSession!.muxName);
     try {
-      this.ptyProcess = pty.spawn(attachCommand, attachArgs, {
-        name: 'xterm-256color',
-        cols: ptyCols,
-        rows: ptyRows,
-        cwd: resolveMuxAttachCwd(this.workingDir, this._remote, this._docker),
-        // COD-75: codex/gemini/antigravity get COLORTERM=truecolor — mirrors buildEnvExports()
-        // in tmux-manager.ts so the attach client and the tmux session agree.
-        env: buildMuxAttachEnv(this.mode === 'codex' || this.mode === 'gemini' || this.mode === 'antigravity'),
-      });
+      this.ptyProcess = spawnPtyWithHelperRepair(() =>
+        pty.spawn(attachCommand, attachArgs, {
+          name: 'xterm-256color',
+          cols: ptyCols,
+          rows: ptyRows,
+          cwd: resolveMuxAttachCwd(this.workingDir, this._remote, this._docker),
+          // COD-75: codex/gemini/antigravity get COLORTERM=truecolor — mirrors buildEnvExports()
+          // in tmux-manager.ts so the attach client and the tmux session agree.
+          env: buildMuxAttachEnv(this.mode === 'codex' || this.mode === 'gemini' || this.mode === 'antigravity'),
+        })
+      );
     } catch (spawnErr) {
       console.error(`[Session] Failed to spawn PTY for ${options.spawnErrLabel}:`, spawnErr);
       this.emit('error', `Failed to attach to mux session: ${spawnErr}`);
@@ -1619,14 +1623,16 @@ export class Session extends EventEmitter {
         // Pass --session-id to use the SAME ID as the Codeman session
         // This ensures subagents can be directly matched to the correct tab
         const args = buildInteractiveArgs(this.id, this._claudeMode, this._model, this._allowedTools, this._effort);
-        this.ptyProcess = pty.spawn('claude', args, {
-          name: 'xterm-256color',
-          cols: 120,
-          rows: 40,
-          cwd: this.workingDir,
-          // Merge envOverrides after buildClaudeEnv so user settings shadow defaults.
-          env: { ...buildClaudeEnv(this.id), ...(this._envOverrides ?? {}) },
-        });
+        this.ptyProcess = spawnPtyWithHelperRepair(() =>
+          pty.spawn(getClaudeBinaryPath(), args, {
+            name: 'xterm-256color',
+            cols: 120,
+            rows: 40,
+            cwd: this.workingDir,
+            // Merge envOverrides after buildClaudeEnv so user settings shadow defaults.
+            env: { ...buildClaudeEnv(this.id), ...(this._envOverrides ?? {}) },
+          })
+        );
       } catch (spawnErr) {
         console.error('[Session] Failed to spawn Claude PTY:', spawnErr);
         this._status = 'stopped';
@@ -1949,13 +1955,15 @@ export class Session extends EventEmitter {
     // Fallback to direct PTY if mux is not used
     if (!this.ptyProcess) {
       try {
-        this.ptyProcess = pty.spawn(shell, [], {
-          name: 'xterm-256color',
-          cols: 120,
-          rows: 40,
-          cwd: this.workingDir,
-          env: buildShellEnv(this.id),
-        });
+        this.ptyProcess = spawnPtyWithHelperRepair(() =>
+          pty.spawn(shell, [], {
+            name: 'xterm-256color',
+            cols: 120,
+            rows: 40,
+            cwd: this.workingDir,
+            env: buildShellEnv(this.id),
+          })
+        );
       } catch (spawnErr) {
         console.error('[Session] Failed to spawn shell PTY:', spawnErr);
         this._status = 'stopped';
@@ -2055,14 +2063,16 @@ export class Session extends EventEmitter {
         const args = buildPromptArgs(prompt, model, this._claudeMode, this._allowedTools);
 
         try {
-          this.ptyProcess = pty.spawn('claude', args, {
-            name: 'xterm-256color',
-            cols: 120,
-            rows: 40,
-            cwd: this.workingDir,
-            // Merge envOverrides after buildClaudeEnv so user settings shadow defaults.
-            env: { ...buildClaudeEnv(this.id), ...(this._envOverrides ?? {}) },
-          });
+          this.ptyProcess = spawnPtyWithHelperRepair(() =>
+            pty.spawn(getClaudeBinaryPath(), args, {
+              name: 'xterm-256color',
+              cols: 120,
+              rows: 40,
+              cwd: this.workingDir,
+              // Merge envOverrides after buildClaudeEnv so user settings shadow defaults.
+              env: { ...buildClaudeEnv(this.id), ...(this._envOverrides ?? {}) },
+            })
+          );
         } catch (spawnErr) {
           console.error('[Session] Failed to spawn Claude PTY for runPrompt:', spawnErr);
           this.emit(

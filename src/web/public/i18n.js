@@ -350,6 +350,26 @@
     'Show Shortcuts': '显示快捷键',
     'Full shortcut reference': '完整快捷键参考',
 
+    // Mobile overview (phone home screen)
+    'Needs you': '需要你',
+    'Current sessions': '当前会话',
+    'Past sessions': '历史会话',
+    'Show all past sessions': '显示全部历史会话',
+    'Show fewer': '收起',
+    'Choose what to run': '选择运行方式',
+    'Web / URL': '网页 / 链接',
+    'Add URL…': '添加链接…',
+    'Nothing running. Hit Run to start something.': '当前没有运行中的会话。点击“运行”开始。',
+    'No past conversations yet': '尚无历史对话',
+    'Loading…': '加载中…',
+    // Status pills are deliberately NOT listed: they are single generic words
+    // ("idle", "done", "error") that also appear as state strings elsewhere, so
+    // they carry data-i18n-skip in the DOM instead of a translation entry here.
+    'Overview Home Screen': '概览主页',
+    'On phones, the C logo opens a session overview (needs you / spaces / idle) instead of the welcome screen':
+      '在手机上，点击 C 图标打开会话概览（需要你 / 空间 / 空闲），而不是欢迎页',
+    Phone: '手机',
+
     // Session/case dialogs
     'Session Options': '会话选项',
     'Session Name': '会话名称',

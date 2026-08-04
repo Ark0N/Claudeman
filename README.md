@@ -197,7 +197,7 @@ codeman web --https
 # Open on your phone: https://<your-ip>:3000
 ```
 
-> `localhost` works over plain HTTP. Use `--https` when accessing from another device, or use [Tailscale](https://tailscale.com/) (recommended) — it provides a private network so you can access `http://<tailscale-ip>:3000` from your phone without TLS certificates.
+> `localhost` works over plain HTTP. Use `--https` when accessing from another device, or use [Tailscale](https://tailscale.com/) (recommended): the installer can set it up for you (choose **Tailscale** at the network-access prompt, or run `bash ~/.codeman/app/install.sh tailscale` on an existing install). That gives you `https://<your-machine>.<tailnet>.ts.net` with a real certificate: private to your tailnet, no password required, and PWA install + push notifications work on your phone.
 
 ### Secure QR Code Authentication
 

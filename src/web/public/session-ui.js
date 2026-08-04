@@ -316,6 +316,9 @@ Object.assign(CodemanApp.prototype, {
         select.dataset.listenerAdded = 'true';
       }
       this.setupQuickStartCasePicker();
+      // The phone overview labels rows with their case name, and a case rename or
+      // link does not go through the session-tab renderer.
+      this._refreshMobileOverviewIfVisible?.();
     } catch (err) {
       console.error('Failed to load cases:', err);
     }
