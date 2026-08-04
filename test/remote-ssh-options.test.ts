@@ -150,16 +150,19 @@ describe('COD-107 buildRemoteLaunchCommand — threads connection args', () => {
     const sh = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
     const remoteName = `codeman-ssh-${SESSION_ID.slice(0, 8)}`;
     const path = sh('/home/ubuntu/work');
-    const paneCommand = `cd ${path} && exec $SHELL -i -l`;
+    const paneCommand = `cd ${path} && exec "\${SHELL:-/bin/sh}" -i -l`;
     const tmuxInvocation = [
       `tmux -L codeman-remote new-session -A -s ${remoteName} -c ${path} ${sh(paneCommand)}`,
-      `set -t ${remoteName} remain-on-exit on`,
       `set -t ${remoteName} status off`,
       `set -t ${remoteName} mouse off`,
       `set -t ${remoteName} prefix C-q`,
       'set -s escape-time 0',
       // COD-106 — shared/collaborative sizing, per-session scoped (never -g).
       `set -t ${remoteName} window-size latest`,
+      // #210 — keep a CRASHED pane for diagnosis. `failed` (not `on`, which would
+      // also strand a pane after a clean `exit`), and LAST because tmux aborts the
+      // remaining commands of a `\;` chain on error and `failed` needs tmux >= 3.2.
+      `set -t ${remoteName} remain-on-exit failed`,
     ].join(' \\; ');
     // Connection args (with the default -o ConnectTimeout=10) sit after -t.
     const expected = `ssh -o BatchMode=yes -t -o ConnectTimeout=10 ${remoteSshTarget(baseRemote)} ${sh(tmuxInvocation)}`;

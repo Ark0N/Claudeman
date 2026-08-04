@@ -120,6 +120,6 @@ describe('Antigravity mode gates', () => {
     expect(defaultDockerCommandForMode('antigravity')).toBe('exec agy');
     // Routed through an interactive login shell so per-user PATH entries resolve —
     // same fix as the other remote agent CLIs (see defaultRemoteCommandForMode).
-    expect(defaultRemoteCommandForMode('antigravity')).toBe("exec $SHELL -i -l -c 'agy'");
+    expect(defaultRemoteCommandForMode('antigravity')).toBe('exec "${SHELL:-/bin/sh}" -i -l -c \'agy\'');
   });
 });

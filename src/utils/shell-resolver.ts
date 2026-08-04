@@ -33,6 +33,18 @@ const FALLBACK_SHELLS = ['/bin/bash', '/bin/zsh', '/bin/sh'];
  */
 const NON_INTERACTIVE_SHELLS = new Set(['nologin', 'false', 'true', 'sync']);
 
+/**
+ * Shells verified to accept BOTH `-i` and `-l`. Deliberately an allowlist, not a
+ * blocklist: a shell that rejects an unknown flag exits immediately, which is the
+ * dead-pane-on-arrival failure this module exists to prevent (#208). The passwd
+ * entry is user data and can name anything — nushell, elvish, and xonsh all take
+ * neither flag in this form, so they get a bare launch instead of a dead tab.
+ *
+ * csh/tcsh are excluded on purpose: tcsh honors `-l` only when it is the ONLY
+ * flag, so `-i -l` would silently not be a login shell there anyway.
+ */
+const LOGIN_FLAG_SHELLS = new Set(['sh', 'bash', 'dash', 'ash', 'zsh', 'ksh', 'ksh93', 'mksh', 'pdksh', 'fish']);
+
 function isUsableShell(candidate: string): boolean {
   if (!candidate.startsWith('/')) return false;
   const base = candidate.slice(candidate.lastIndexOf('/') + 1);
@@ -75,4 +87,25 @@ export function resolveLocalShell(): string {
   // Nothing was verifiable (exotic/read-restricted image). /bin/sh is still the
   // best guess and is far better than emitting an empty command.
   return '/bin/sh';
+}
+
+/**
+ * Flags that make `shellPath` a login shell, or `''` when it takes none we trust.
+ *
+ * A tmux pane already hands the shell a tty, so it is interactive with or without
+ * `-i` (verified: `$-` contains `i` for a bare `/bin/bash` in a pane, which is why
+ * `~/.bashrc` has always been sourced). The flag that actually changes anything is
+ * `-l`: it makes the pane a LOGIN shell, matching what tmux itself does when it
+ * spawns a pane with no `default-command`, and picking up the `/etc/profile` and
+ * `/etc/profile.d/*` PATH entries that a systemd-spawned server never sourced.
+ *
+ * `-i` is kept alongside it because for bash the two select different files —
+ * login reads `~/.bash_profile`, interactive-non-login reads `~/.bashrc` — and
+ * asking for both is the closest thing to "the shell the user actually gets".
+ *
+ * Returns a string ready to append to an already-escaped shell path.
+ */
+export function loginShellArgs(shellPath: string): string {
+  const base = shellPath.slice(shellPath.lastIndexOf('/') + 1);
+  return LOGIN_FLAG_SHELLS.has(base) ? ' -i -l' : '';
 }

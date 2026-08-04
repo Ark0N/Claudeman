@@ -146,8 +146,16 @@ describe('TmuxManager (unit)', () => {
         sessionId: 'abc123def456',
       });
 
-      expect(command).toContain('exec $SHELL -i -l');
-      expect(command).toContain('remain-on-exit on');
+      expect(command).toContain('exec "${SHELL:-/bin/sh}" -i -l');
+      // `failed`, not `on`: `on` also keeps the pane after a CLEAN exit, so typing
+      // `exit` in a remote shell strands a dead pane that the next launch's `-A`
+      // reattaches to instead of starting a shell.
+      expect(command).toContain('remain-on-exit failed');
+      expect(command).not.toContain('remain-on-exit on');
+      // Last in the chain: tmux aborts the rest of a `\;` sequence after an error,
+      // and `failed` needs tmux >= 3.2 on the REMOTE host. Trailing, a rejection
+      // costs only this option instead of every setting after it.
+      expect(command.trimEnd().endsWith("remain-on-exit failed'")).toBe(true);
     });
 
     it('defaults claude to a non-interactive launch (--dangerously-skip-permissions)', () => {
@@ -161,7 +169,7 @@ describe('TmuxManager (unit)', () => {
       // interactive nor login, so a bare `exec claude` fails with "command not found".
       // The inner quoting is escaped twice over (once per shellescape() layer), so
       // assert on the unescaped substrings rather than the literal quoted form.
-      expect(command).toContain('exec $SHELL -i -l -c');
+      expect(command).toContain('exec "${SHELL:-/bin/sh}" -i -l -c');
       expect(command).toContain('claude --dangerously-skip-permissions');
     });
   });

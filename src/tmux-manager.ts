@@ -49,7 +49,12 @@ import {
   type DockerCommandMode,
 } from './types.js';
 import { buildEffortCliArgs } from './session-cli-builder.js';
-import { buildSshConnectionArgs, defaultRemoteCommandForMode, remoteSshTarget } from './remote-hosts.js';
+import {
+  buildSshConnectionArgs,
+  defaultRemoteCommandForMode,
+  remoteLoginShellCommand,
+  remoteSshTarget,
+} from './remote-hosts.js';
 import {
   buildDockerBaseArgs,
   buildDockerCreateArgs,
@@ -72,6 +77,7 @@ import {
   resolveGeminiDir,
   resolveAntigravityDir,
   resolveLocalShell,
+  loginShellArgs,
 } from './utils/index.js';
 import type {
   TerminalMultiplexer,
@@ -784,11 +790,15 @@ export function buildSpawnCommand(options: {
   // SERVER process's env — empty in containers and system systemd units, leaving
   // the pane command ending in a dangling `&&` ("syntax error: unexpected end of
   // file", pane dead on arrival). Resolve it in Node and quote the result.
-  // -i -l: interactive login shell, so the resolved shell sources the user's rc
-  // files (~/.zshrc, ~/.bashrc, etc.) instead of running as a bare non-interactive
-  // child of the non-interactive `bash -c` that launches the pane — without this,
-  // aliases, PATH additions, and tool init (zoxide, nvm, etc.) are silently dropped.
-  return `${shellescape(resolveLocalShell())} -i -l`;
+  // #209: launch it as a LOGIN shell, which is what tmux itself does for a pane
+  // with no `default-command`, so a Codeman shell tab matches a hand-started tmux
+  // one. That is what picks up /etc/profile and /etc/profile.d/* — a systemd
+  // --user service never sourced them, so its PATH is what every pane inherited.
+  // The flags come from loginShellArgs() rather than being hardcoded: they are
+  // appended to a path that ultimately comes from the passwd entry, and a shell
+  // that rejects an unknown flag exits on the spot, which is #208 all over again.
+  const shell = resolveLocalShell();
+  return `${shellescape(shell)}${loginShellArgs(shell)}`;
 }
 
 /**
@@ -867,7 +877,7 @@ export function buildRemoteLaunchCommand(options: {
   const modeCommand = override
     ? override
     : mode === 'claude'
-      ? `exec $SHELL -i -l -c ${shellescape(`claude${buildClaudePermissionFlags(claudeMode, allowedTools)}`)}`
+      ? remoteLoginShellCommand(`claude${buildClaudePermissionFlags(claudeMode, allowedTools)}`)
       : defaultRemoteCommandForMode(mode);
   const remoteName = remoteTmuxSessionName(sessionId);
 
@@ -882,14 +892,6 @@ export function buildRemoteLaunchCommand(options: {
   // shared remote tmux server's other sessions keep their own prefix/mouse.
   const tmuxInvocation = [
     `tmux -L ${REMOTE_TMUX_SOCKET} new-session -A -s ${remoteName} -c ${shellescape(remote.remotePath)} ${shellescape(paneCommand)}`,
-    // Without this, tmux's default behavior destroys the pane -> window ->
-    // session (and, being the only session, the whole remote server) the
-    // instant paneCommand exits for ANY reason -- even something transient.
-    // That tears down the local ssh -t attach along with it (dead pane,
-    // status whatever ssh reported), and reconnect's `-A` then creates a
-    // fresh session with no trace of what actually happened. Set first, so
-    // it applies as early as possible after the pane starts.
-    `set -t ${remoteName} remain-on-exit on`,
     `set -t ${remoteName} status off`,
     `set -t ${remoteName} mouse off`,
     `set -t ${remoteName} prefix C-q`,
@@ -901,6 +903,24 @@ export function buildRemoteLaunchCommand(options: {
     // Per-session scoped (`set -t <name>`, matching #145's hardening) so a shared
     // remote tmux server's other sessions keep their own sizing behavior.
     `set -t ${remoteName} window-size latest`,
+    // #210: keep a CRASHED pane so the failure is still on screen. Without this,
+    // tmux destroys the pane -> window -> session (and, being the only session,
+    // the whole remote server) the instant the pane command exits, which tears the
+    // local `ssh -t` attach down with it; reconnect's `-A` then builds a fresh
+    // session and the cycle can repeat as a flap loop with no evidence surviving.
+    // That is how the exit-127 PATH bug fixed above stayed invisible.
+    //
+    // `failed`, NOT `on`: `on` keeps the pane on a CLEAN exit too, so typing
+    // `exit` in a remote shell leaves a dead pane behind, the session outlives it,
+    // and the next launch's `-A` reattaches to that corpse ("Pane is dead (status
+    // 0)") instead of starting a shell — verified against a real tmux. `failed`
+    // keeps the pane only on a non-zero exit, which is exactly the diagnostic case.
+    //
+    // LAST in the chain on purpose: tmux aborts the remaining commands of a `\;`
+    // sequence once one errors (also verified), and `failed` needs tmux >= 3.2 on
+    // the REMOTE host. Trailing, a rejection costs only this option; leading, it
+    // would silently drop status/mouse/prefix/escape-time/window-size with it.
+    `set -t ${remoteName} remain-on-exit failed`,
   ].join(' \\; ');
 
   // ssh runs its trailing args through the remote login shell, so the entire

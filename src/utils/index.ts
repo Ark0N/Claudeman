@@ -26,7 +26,7 @@ export { isSafePushEndpoint } from './push-endpoint-validation.js';
 export { stringSimilarity, fuzzyPhraseMatch, todoContentHash } from './string-similarity.js';
 export { assertNever } from './type-safety.js';
 export { wrapWithNice } from './nice-wrapper.js';
-export { resolveLocalShell } from './shell-resolver.js';
+export { resolveLocalShell, loginShellArgs } from './shell-resolver.js';
 export { findClaudeDir, getAugmentedPath, getClaudeCliVersion, getClaudeBinaryPath } from './claude-cli-resolver.js';
 export { spawnPtyWithHelperRepair } from './node-pty-repair.js';
 export { resolveOpenCodeDir } from './opencode-cli-resolver.js';

@@ -17,7 +17,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { buildSpawnCommand } from '../src/tmux-manager.js';
-import { resolveLocalShell } from '../src/utils/shell-resolver.js';
+import { loginShellArgs, resolveLocalShell } from '../src/utils/shell-resolver.js';
 
 describe('resolveLocalShell', () => {
   const originalShell = process.env.SHELL;
@@ -70,6 +70,40 @@ describe('resolveLocalShell', () => {
   });
 });
 
+describe('loginShellArgs (#209 login flags, allowlisted)', () => {
+  it('asks for a login shell on the POSIX-family shells that accept the flags', () => {
+    for (const shell of ['/bin/sh', '/bin/bash', '/bin/dash', '/usr/bin/zsh', '/usr/local/bin/fish', '/bin/ksh']) {
+      expect(loginShellArgs(shell)).toBe(' -i -l');
+    }
+  });
+
+  it('adds nothing for shells that take neither flag, so the pane cannot die on arrival', () => {
+    // The shell path can come from the passwd entry, which is user data and can
+    // name anything. A shell that rejects an unknown flag exits immediately —
+    // indistinguishable from the #208 dead-pane-on-arrival this module prevents.
+    // csh/tcsh are here too: tcsh honors -l only when it is the ONLY flag.
+    for (const shell of ['/usr/bin/nu', '/usr/bin/elvish', '/usr/bin/xonsh', '/bin/tcsh', '/bin/csh']) {
+      expect(loginShellArgs(shell)).toBe('');
+    }
+  });
+
+  it('really launches for every allowlisted shell present on this machine', () => {
+    // The whole point of the allowlist is that the flags are ACCEPTED, so prove it
+    // against the real binaries rather than trusting the set.
+    for (const shell of ['/bin/sh', '/bin/bash', '/bin/dash', '/usr/bin/zsh', '/bin/ksh']) {
+      let exists = true;
+      try {
+        execFileSync('/bin/sh', ['-c', `test -x ${shell}`]);
+      } catch {
+        exists = false;
+      }
+      if (!exists) continue;
+      const out = execFileSync('/bin/sh', ['-c', `${shell} -i -l -c 'echo ok' 2>/dev/null`], { encoding: 'utf8' });
+      expect(out).toContain('ok');
+    }
+  });
+});
+
 describe('shell-mode spawn command (issue #208)', () => {
   const originalShell = process.env.SHELL;
 
@@ -88,10 +122,12 @@ describe('shell-mode spawn command (issue #208)', () => {
     expect(cmd.trim()).not.toBe('');
   });
 
-  it('launches an interactive login shell, so rc files (~/.zshrc, ~/.bashrc, etc.) are sourced', () => {
-    // Without -i -l, the resolved shell runs as a bare non-interactive child of
-    // the non-interactive `bash -c` that launches the pane, silently dropping
-    // aliases, PATH additions, and tool init (zoxide, nvm, etc.).
+  it('launches a LOGIN shell, matching what tmux does for a pane with no default-command', () => {
+    // A tmux pane already hands the shell a tty, so it is interactive either way
+    // (`$-` contains `i` for a bare /bin/bash in a pane, which is why ~/.bashrc has
+    // always been sourced). `-l` is the flag that changes anything: it is what
+    // picks up /etc/profile and /etc/profile.d/*, which a systemd --user service
+    // never sourced, so its minimal PATH is what every pane used to inherit.
     const cmd = buildSpawnCommand({ mode: 'shell', sessionId: 'abc123de-0000-0000-0000-000000000000' });
     expect(cmd.trim().endsWith('-i -l')).toBe(true);
   });

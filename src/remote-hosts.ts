@@ -58,6 +58,37 @@ export async function writeRemoteCases(configDir: string, cases: RemoteCase[]): 
   await writeJsonArray(configDir, remoteCasesPath(configDir), cases);
 }
 
+/**
+ * The remote user's login shell, defaulted and quoted.
+ *
+ * The default is belt-and-braces, not a live bug: an empty `$SHELL` would expand
+ * to `exec  -i -l`, which the shell reads as `exec -i` — "not found", pane dead on
+ * arrival, the #208 failure all over again (verified: `sh -c 'exec $SHELL -i -l'`
+ * with SHELL unset prints `exec: -i: not found`). In practice tmux always exports
+ * SHELL into a pane from its own `default-shell` option, so the command as USED
+ * here is safe either way (also verified). The default matters because these
+ * strings are the seed values a per-host `commands.*` override is edited from, and
+ * nothing constrains where an edited one ends up running. Quoted for a shell path
+ * containing spaces. `/bin/sh` exists on every POSIX host.
+ */
+const REMOTE_LOGIN_SHELL = '"${SHELL:-/bin/sh}"';
+
+/**
+ * Run `command` through the remote user's interactive login shell, so per-user
+ * PATH entries (~/.local/bin, ~/.opencode/bin, …) are resolved before the CLI name
+ * is looked up. ssh's remote-command execution is neither interactive nor login,
+ * so a bare `exec claude` sees only sshd's minimal default PATH and dies with
+ * "command not found" (exit 127).
+ *
+ * Shells that take neither flag (nushell, elvish, …) cannot be detected from here
+ * the way `loginShellArgs()` detects them locally, since the shell is whatever the
+ * REMOTE passwd says. A host like that is what the per-host `commands.*` override
+ * is for.
+ */
+export function remoteLoginShellCommand(command: string): string {
+  return `exec ${REMOTE_LOGIN_SHELL} -i -l -c ${shellescape(command)}`;
+}
+
 export function defaultRemoteCommandForMode(mode: SessionMode): string {
   // Agent CLIs (claude/opencode/codex/gemini/antigravity) are typically installed
   // under per-user paths like ~/.local/bin or ~/.opencode/bin, added to PATH only by
@@ -73,15 +104,15 @@ export function defaultRemoteCommandForMode(mode: SessionMode): string {
     // /etc/passwd entry, so this launches their actual login shell (zsh,
     // fish, etc.). -i -l so it sources rc files (~/.zshrc etc.), matching
     // the local shell-mode launch.
-    shell: 'exec $SHELL -i -l',
+    shell: `exec ${REMOTE_LOGIN_SHELL} -i -l`,
     // Mirror the LOCAL claude default so the remote agent runs non-interactively
     // (no trust-folder/permission prompt that nothing on the remote answers). The
     // per-host `commands.claude` override stays the escape hatch.
-    claude: `exec $SHELL -i -l -c ${shellescape('claude --dangerously-skip-permissions')}`,
-    opencode: `exec $SHELL -i -l -c ${shellescape('opencode')}`,
-    codex: `exec $SHELL -i -l -c ${shellescape('codex')}`,
-    gemini: `exec $SHELL -i -l -c ${shellescape('gemini')}`,
-    antigravity: `exec $SHELL -i -l -c ${shellescape('agy')}`,
+    claude: remoteLoginShellCommand('claude --dangerously-skip-permissions'),
+    opencode: remoteLoginShellCommand('opencode'),
+    codex: remoteLoginShellCommand('codex'),
+    gemini: remoteLoginShellCommand('gemini'),
+    antigravity: remoteLoginShellCommand('agy'),
   };
   return commands[mode as RemoteCommandMode] || commands.shell;
 }
