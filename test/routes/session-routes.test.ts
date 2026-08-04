@@ -1321,6 +1321,35 @@ describe('session-routes', () => {
       expect(row.workingDir).toBe(realDir);
       expect(row.workingDir).not.toBe(home);
     });
+
+    it('prefers the dotdir over a same-named non-dot sibling, and never emits a "//" path', async () => {
+      // A doubled dash also lets the decoder read the empty split segment as a
+      // directory NAME. `isDir(current + '/' + '')` stats `current + '/'`, which
+      // always succeeds, so `~/.sib` + `~/sib` both existing used to resolve to
+      // "/home/x//sib": the wrong directory, spelled with a double slash that
+      // then fails every string comparison against session.workingDir. The empty
+      // candidate is never a real path component, so it is skipped outright,
+      // which is also what lets the dotdir branch below it run at all.
+      const home = process.env.HOME as string;
+      const dotDir = join(home, '.sib');
+      await mkdir(dotDir, { recursive: true });
+      await mkdir(join(home, 'sib'), { recursive: true });
+
+      const projectKey = dotDir.replace(/\//g, '-').replace(/\./g, '-');
+      const projDir = join(home, '.claude', 'projects', projectKey);
+      await mkdir(projDir, { recursive: true });
+
+      const sessionId = '22222222-2222-2222-2222-222222222222';
+      const line = JSON.stringify({ type: 'user', message: { role: 'user', content: 'hello world' } }) + '\n';
+      await writeFile(join(projDir, `${sessionId}.jsonl`), line + '#'.repeat(4200 - line.length));
+
+      const res = await harness.app.inject({ method: 'GET', url: `/api/history/sessions?projectKey=${projectKey}` });
+      expect(res.statusCode).toBe(200);
+      const row = JSON.parse(res.body).data.sessions.find((s: { sessionId: string }) => s.sessionId === sessionId);
+      expect(row).toBeDefined();
+      expect(row.workingDir).toBe(dotDir);
+      expect(row.workingDir).not.toContain('//');
+    });
   });
 
   // ========== POST /api/sessions (with resumeSessionId) ==========

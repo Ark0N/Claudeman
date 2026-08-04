@@ -2551,7 +2551,12 @@ export function registerSessionRoutes(
       for (let end = maxLook - 1; end >= idx; end--) {
         const candidates: string[] = [];
         if (end === idx) {
-          candidates.push(segments[idx]);
+          // Skip an EMPTY segment: `isDir(current + '/' + '')` stats `current + '/'`,
+          // which always succeeds, so the empty candidate would match unconditionally
+          // and swallow the doubled dash that is the whole signature of a dotdir. It
+          // then resolves "/home/x/.sib" to "/home/x//sib" whenever a non-dot sibling
+          // exists, and shadows the dotdir branch below in every other case.
+          if (segments[idx] !== '') candidates.push(segments[idx]);
         } else {
           candidates.push(segments.slice(idx, end + 1).join('-'));
           candidates.push(segments.slice(idx, end + 1).join('_'));
@@ -2600,7 +2605,10 @@ export function registerSessionRoutes(
       for (let end = i; end < maxLook; end++) {
         const candidates: string[] = [];
         if (end === i) {
-          candidates.push(segments[i]);
+          // Same empty-segment skip as tryDecode above. This loop is shortest-match
+          // first, so without it the empty candidate matches on the very first try
+          // and sets `matched`, leaving the dotdir branch below permanently dead.
+          if (segments[i] !== '') candidates.push(segments[i]);
         } else {
           candidates.push(segments.slice(i, end + 1).join('_'));
           candidates.push(segments.slice(i, end + 1).join('-'));
@@ -2636,8 +2644,21 @@ export function registerSessionRoutes(
         }
       }
       if (!matched) {
-        current = current + '/' + segments[i];
-        i++;
+        if (segments[i] === '') {
+          // Nothing on disk matched (the usual reason this fallback runs at all is
+          // that the directory was deleted). An empty segment still means the
+          // encoder ate a literal '.', so guess the dotdir form rather than
+          // appending a bare '/' and emitting a "//" path.
+          if (i + 1 < segments.length) {
+            current = current + '/.' + segments[i + 1];
+            i += 2;
+          } else {
+            i++;
+          }
+        } else {
+          current = current + '/' + segments[i];
+          i++;
+        }
       }
     }
     const finalExists = await fs
