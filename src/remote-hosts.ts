@@ -60,7 +60,11 @@ export async function writeRemoteCases(configDir: string, cases: RemoteCase[]): 
 
 export function defaultRemoteCommandForMode(mode: SessionMode): string {
   const commands: Record<RemoteCommandMode, string> = {
-    shell: 'exec bash -l',
+    // $SHELL, not a hardcoded bash: sshd sets it from the remote user's
+    // /etc/passwd entry, so this launches their actual login shell (zsh,
+    // fish, etc.). -i -l so it sources rc files (~/.zshrc etc.), matching
+    // the local shell-mode launch.
+    shell: 'exec $SHELL -i -l',
     // Mirror the LOCAL claude default so the remote agent runs non-interactively
     // (no trust-folder/permission prompt that nothing on the remote answers). The
     // per-host `commands.claude` override stays the escape hatch.

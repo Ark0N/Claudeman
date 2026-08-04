@@ -137,7 +137,8 @@ describe('TmuxManager (unit)', () => {
         sessionId: 'abc123def456',
       });
 
-      expect(command).toContain('exec bash -l');
+      expect(command).toContain('exec $SHELL -i -l');
+      expect(command).toContain('remain-on-exit on');
     });
 
     it('defaults claude to a non-interactive launch (--dangerously-skip-permissions)', () => {

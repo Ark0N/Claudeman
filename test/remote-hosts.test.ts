@@ -55,7 +55,7 @@ describe('remote-hosts domain', () => {
   });
 
   it('returns safe mode defaults and remote display values', () => {
-    expect(defaultRemoteCommandForMode('shell')).toBe('exec bash -l');
+    expect(defaultRemoteCommandForMode('shell')).toBe('exec $SHELL -i -l');
     expect(defaultRemoteCommandForMode('codex')).toBe('exec codex');
     // Mirrors the local claude default so the remote agent runs non-interactively.
     expect(defaultRemoteCommandForMode('claude')).toBe('exec claude --dangerously-skip-permissions');

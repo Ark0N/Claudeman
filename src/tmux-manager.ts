@@ -873,6 +873,14 @@ export function buildRemoteLaunchCommand(options: {
   // shared remote tmux server's other sessions keep their own prefix/mouse.
   const tmuxInvocation = [
     `tmux -L ${REMOTE_TMUX_SOCKET} new-session -A -s ${remoteName} -c ${shellescape(remote.remotePath)} ${shellescape(paneCommand)}`,
+    // Without this, tmux's default behavior destroys the pane -> window ->
+    // session (and, being the only session, the whole remote server) the
+    // instant paneCommand exits for ANY reason -- even something transient.
+    // That tears down the local ssh -t attach along with it (dead pane,
+    // status whatever ssh reported), and reconnect's `-A` then creates a
+    // fresh session with no trace of what actually happened. Set first, so
+    // it applies as early as possible after the pane starts.
+    `set -t ${remoteName} remain-on-exit on`,
     `set -t ${remoteName} status off`,
     `set -t ${remoteName} mouse off`,
     `set -t ${remoteName} prefix C-q`,
