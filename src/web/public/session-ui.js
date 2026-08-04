@@ -1040,6 +1040,7 @@ Object.assign(CodemanApp.prototype, {
           ...(isRemote ? {} : {
             codexConfig: {
               dangerouslyBypassApprovals: globalSettings.codexDangerouslyBypassApprovals ?? false,
+              animations: globalSettings.codexAnimationsEnabled ?? false,
               renderMode: 'hybrid',
             },
             ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),

@@ -305,6 +305,8 @@ export interface CodexConfig {
   resumeSessionId?: string;
   /** Bypass approval prompts (passes --dangerously-bypass-approvals-and-sandbox) */
   dangerouslyBypassApprovals?: boolean;
+  /** Enable Codex's decorative TUI animations. Disable to reduce remote terminal redraws. */
+  animations?: boolean;
   /** Browser rendering strategy for Codex sessions. Hybrid TUI is the only supported mode. */
   renderMode?: CodexRenderMode;
 }

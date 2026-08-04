@@ -643,6 +643,10 @@ export function buildCodexCommand(config?: CodexConfig): string {
     parts.push('--dangerously-bypass-approvals-and-sandbox');
   }
 
+  if (config?.animations !== undefined) {
+    parts.push('--config', `tui.animations=${config.animations ? 'true' : 'false'}`);
+  }
+
   if (config?.model) {
     const safeModel = /^[a-zA-Z0-9._\-/]+$/.test(config.model) ? config.model : undefined;
     if (safeModel) parts.push('--model', safeModel);
