@@ -2461,6 +2461,7 @@ export class WebServer extends EventEmitter {
               openCodeConfig: muxSession.mode === 'opencode' ? savedState?.openCodeConfig : undefined,
               codexConfig: muxSession.mode === 'codex' ? savedState?.codexConfig : undefined,
               geminiConfig: muxSession.mode === 'gemini' ? savedState?.geminiConfig : undefined,
+              antigravityConfig: muxSession.mode === 'antigravity' ? savedState?.antigravityConfig : undefined,
               envOverrides: savedEnvOverrides,
               effort: savedState?.effort,
               attachmentHistory: savedAttachmentHistory,

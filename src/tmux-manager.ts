@@ -43,6 +43,7 @@ import {
   type CodexConfig,
   type EffortLevel,
   type GeminiConfig,
+  type AntigravityConfig,
   type SessionRemote,
   type SessionDocker,
   type DockerCommandMode,
@@ -69,6 +70,7 @@ import {
   resolveOpenCodeDir,
   resolveCodexDir,
   resolveGeminiDir,
+  resolveAntigravityDir,
 } from './utils/index.js';
 import type {
   TerminalMultiplexer,
@@ -683,6 +685,34 @@ function buildGeminiCommand(config?: GeminiConfig): string {
 }
 
 /**
+ * Build the Antigravity CLI (agy) command with appropriate flags.
+ *
+ * Unlike gemini's yolo default, `--dangerously-skip-permissions` is only added
+ * when the config explicitly asks for it (the frontend sends it for parity with
+ * Codeman's Claude default; the multi-user clamp strips it for non-granted owners,
+ * and an ABSENT config stays at agy's own prompting default — safe like Codex).
+ */
+function buildAntigravityCommand(config?: AntigravityConfig): string {
+  const parts = ['agy'];
+
+  if (config?.dangerouslySkipPermissions) {
+    parts.push('--dangerously-skip-permissions');
+  }
+
+  if (config?.model) {
+    const safeModel = /^[a-zA-Z0-9._\-/]+$/.test(config.model) ? config.model : undefined;
+    if (safeModel) parts.push('--model', safeModel);
+  }
+
+  if (config?.resumeConversationId) {
+    const safeId = /^[a-zA-Z0-9._-]+$/.test(config.resumeConversationId) ? config.resumeConversationId : undefined;
+    if (safeId) parts.push('--conversation', safeId);
+  }
+
+  return parts.join(' ');
+}
+
+/**
  * Build the spawn command for any session mode.
  * Shared by createSession() and respawnPane() to avoid duplication.
  */
@@ -709,6 +739,7 @@ export function buildSpawnCommand(options: {
   openCodeConfig?: OpenCodeConfig;
   codexConfig?: CodexConfig;
   geminiConfig?: GeminiConfig;
+  antigravityConfig?: AntigravityConfig;
   resumeSessionId?: string;
   effort?: EffortLevel;
 }): string {
@@ -738,6 +769,9 @@ export function buildSpawnCommand(options: {
   }
   if (options.mode === 'gemini') {
     return buildGeminiCommand(options.geminiConfig);
+  }
+  if (options.mode === 'antigravity') {
+    return buildAntigravityCommand(options.antigravityConfig);
   }
   return '$SHELL';
 }
@@ -917,6 +951,8 @@ function appendResumeFlag(modeCommand: string, mode: SessionMode, resumeId: stri
       return `${modeCommand} --resume ${resumeId}`;
     case 'codex':
       return `${modeCommand} resume ${resumeId}`;
+    case 'antigravity':
+      return `${modeCommand} --conversation ${resumeId}`;
     default:
       return modeCommand; // shell / opencode: no resume
   }
@@ -1485,8 +1521,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const exports = [
       'export LANG=en_US.UTF-8',
       'export LC_ALL=en_US.UTF-8',
-      mode === 'codex' || mode === 'gemini' ? 'export COLORTERM=truecolor' : 'unset COLORTERM',
-      ...(mode === 'codex' || mode === 'gemini' ? ['unset NO_COLOR'] : []),
+      mode === 'codex' || mode === 'gemini' || mode === 'antigravity'
+        ? 'export COLORTERM=truecolor'
+        : 'unset COLORTERM',
+      ...(mode === 'codex' || mode === 'gemini' || mode === 'antigravity' ? ['unset NO_COLOR'] : []),
       // Stamp each Codex pane with a unique originator so the response-viewer
       // can locate THIS pane's rollout exactly — codex writes the value into
       // session_meta.originator of every rollout it creates. Without it,
@@ -1569,6 +1607,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       const dir = resolveGeminiDir();
       return { pathExport: dir ? `export PATH="${dir}:$PATH" && ` : '', dir };
     }
+    if (mode === 'antigravity') {
+      const dir = resolveAntigravityDir();
+      return { pathExport: dir ? `export PATH="${dir}:$PATH" && ` : '', dir };
+    }
     return { pathExport: '', dir: null };
   }
 
@@ -1616,6 +1658,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       openCodeConfig,
       codexConfig,
       geminiConfig,
+      antigravityConfig,
       resumeSessionId,
       envOverrides,
       effort,
@@ -1667,6 +1710,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     if (mode === 'gemini' && !cliDir) {
       throw new Error('Gemini CLI not found. Install with: npm install -g @google/gemini-cli');
     }
+    if (mode === 'antigravity' && !cliDir) {
+      throw new Error(
+        'Antigravity CLI not found. Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash'
+      );
+    }
 
     const envExportsStr = this.buildEnvExports(sessionId, muxName, mode).join(' && ');
 
@@ -1679,6 +1727,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       openCodeConfig,
       codexConfig,
       geminiConfig,
+      antigravityConfig,
       resumeSessionId,
       effort,
     });
@@ -1901,6 +1950,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       openCodeConfig,
       codexConfig,
       geminiConfig,
+      antigravityConfig,
       resumeSessionId,
       envOverrides,
       effort,
@@ -1938,6 +1988,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       openCodeConfig,
       codexConfig,
       geminiConfig,
+      antigravityConfig,
       resumeSessionId,
       effort,
     });

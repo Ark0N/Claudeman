@@ -374,7 +374,7 @@ export function registerSystemRoutes(
   });
 
   // ═══════════════════════════════════════════════════════════════
-  // CLI Integrations (OpenCode, Codex, Gemini)
+  // CLI Integrations (OpenCode, Codex, Gemini, Antigravity)
   // ═══════════════════════════════════════════════════════════════
 
   // ========== OpenCode ==========
@@ -402,6 +402,16 @@ export function registerSystemRoutes(
     return {
       available: isGeminiAvailable(),
       path: resolveGeminiDir(),
+    };
+  });
+
+  // ========== Antigravity ==========
+
+  app.get('/api/antigravity/status', async () => {
+    const { isAntigravityAvailable, resolveAntigravityDir } = await import('../../utils/antigravity-cli-resolver.js');
+    return {
+      available: isAntigravityAvailable(),
+      path: resolveAntigravityDir(),
     };
   });
 

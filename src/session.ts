@@ -49,6 +49,7 @@ import {
   type CodexConfig,
   type EffortLevel,
   type GeminiConfig,
+  type AntigravityConfig,
   type SessionRemote,
   type SessionDocker,
 } from './types.js';
@@ -140,7 +141,7 @@ const NEWLINE_SPLIT_PATTERN = /\r?\n/;
 
 /** True for external-CLI run modes (non-Claude) that use their own TUI and output format. */
 export function isExternalCliMode(mode: SessionMode): boolean {
-  return mode === 'opencode' || mode === 'codex' || mode === 'gemini';
+  return mode === 'opencode' || mode === 'codex' || mode === 'gemini' || mode === 'antigravity';
 }
 
 function getModeLabel(mode: SessionMode): string {
@@ -151,6 +152,8 @@ function getModeLabel(mode: SessionMode): string {
       return 'Codex';
     case 'gemini':
       return 'Gemini';
+    case 'antigravity':
+      return 'Antigravity';
     case 'shell':
       return 'Shell';
     case 'claude':
@@ -403,6 +406,8 @@ export class Session extends EventEmitter {
   private _codexConfig: CodexConfig | undefined;
   // Gemini configuration (only for mode === 'gemini')
   private _geminiConfig: GeminiConfig | undefined;
+  // Antigravity configuration (only for mode === 'antigravity')
+  private _antigravityConfig: AntigravityConfig | undefined;
   private _resumeSessionId: string | undefined;
 
   // Ephemeral env overrides (e.g., CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS). Exported by tmux
@@ -489,6 +494,8 @@ export class Session extends EventEmitter {
       codexConfig?: CodexConfig;
       /** Gemini configuration (only for mode === 'gemini') */
       geminiConfig?: GeminiConfig;
+      /** Antigravity configuration (only for mode === 'antigravity') */
+      antigravityConfig?: AntigravityConfig;
       /** Resume a previous Claude conversation (used after server reboot) */
       resumeSessionId?: string;
       /** Extra env vars exported to the CLI at spawn time (no disk persistence) */
@@ -560,6 +567,11 @@ export class Session extends EventEmitter {
     // Apply Gemini configuration
     if (config.geminiConfig) {
       this._geminiConfig = config.geminiConfig;
+    }
+
+    // Apply Antigravity configuration
+    if (config.antigravityConfig) {
+      this._antigravityConfig = config.antigravityConfig;
     }
 
     // Apply env overrides (exported at spawn, not persisted to disk).
@@ -1111,6 +1123,7 @@ export class Session extends EventEmitter {
       openCodeConfig: this._openCodeConfig,
       codexConfig: this._codexConfig,
       geminiConfig: this._geminiConfig,
+      antigravityConfig: this._antigravityConfig,
       resumeSessionId: this._resumeSessionId,
       effort: this._effort,
       // COD-118: runtime-only — surfaced so the frontend can require explicit user
@@ -1276,9 +1289,9 @@ export class Session extends EventEmitter {
         cols: ptyCols,
         rows: ptyRows,
         cwd: resolveMuxAttachCwd(this.workingDir, this._remote, this._docker),
-        // COD-75: codex/gemini get COLORTERM=truecolor — mirrors buildEnvExports()
+        // COD-75: codex/gemini/antigravity get COLORTERM=truecolor — mirrors buildEnvExports()
         // in tmux-manager.ts so the attach client and the tmux session agree.
-        env: buildMuxAttachEnv(this.mode === 'codex' || this.mode === 'gemini'),
+        env: buildMuxAttachEnv(this.mode === 'codex' || this.mode === 'gemini' || this.mode === 'antigravity'),
       });
     } catch (spawnErr) {
       console.error(`[Session] Failed to spawn PTY for ${options.spawnErrLabel}:`, spawnErr);
@@ -1343,6 +1356,7 @@ export class Session extends EventEmitter {
       openCodeConfig: this._openCodeConfig,
       codexConfig: this._codexConfig,
       geminiConfig: this._geminiConfig,
+      antigravityConfig: this._antigravityConfig,
       resumeSessionId: this._resumeSessionId,
       envOverrides: this._envOverrides,
       effort: this._effort,
@@ -1515,6 +1529,7 @@ export class Session extends EventEmitter {
             openCodeConfig: this._openCodeConfig,
             codexConfig: this._codexConfig,
             geminiConfig: this._geminiConfig,
+            antigravityConfig: this._antigravityConfig,
             resumeSessionId: this._resumeSessionId,
             envOverrides: this._envOverrides,
             effort: this._effort,
@@ -1595,6 +1610,10 @@ export class Session extends EventEmitter {
       // Gemini sessions require tmux for Gemini/Google auth env injection via setenv
       if (this.mode === 'gemini') {
         throw new Error('Gemini sessions require tmux. Direct PTY fallback is not supported.');
+      }
+      // Antigravity sessions require tmux for env override injection via setenv
+      if (this.mode === 'antigravity') {
+        throw new Error('Antigravity sessions require tmux. Direct PTY fallback is not supported.');
       }
       try {
         // Pass --session-id to use the SAME ID as the Codeman session

@@ -328,7 +328,8 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   .search-filter-chip.active,
   .search-badge-session,
   .history-view-all-btn,
-  .session-tab .tab-mode.gemini
+  .session-tab .tab-mode.gemini,
+  .session-tab .tab-mode.antigravity
 ) {
   color: var(--accent-d);
 }
@@ -2113,6 +2114,11 @@ body.solo-mode .btn-lifecycle-log {
 .session-tab .tab-mode.gemini {
   background: rgba(138, 180, 248, 0.2);
   color: #8ab4f8;
+}
+
+.session-tab .tab-mode.antigravity {
+  background: rgba(34, 211, 238, 0.2);
+  color: #22d3ee;
 }
 
 /* Timer Banner - Compact */
@@ -4199,6 +4205,22 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   color: #eff6ff;
 }
 
+/* Antigravity mode colors */
+.btn-toolbar.btn-run.mode-antigravity,
+.btn-toolbar.btn-run-gear.mode-antigravity {
+  background: linear-gradient(135deg, #0b2b33 0%, #0e7490 55%, #0891b2 100%);
+  border-color: rgba(34, 211, 238, 0.5);
+  color: #cffafe;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.btn-toolbar.btn-run.mode-antigravity:hover,
+.btn-toolbar.btn-run-gear.mode-antigravity:hover {
+  background: linear-gradient(135deg, #124450 0%, #0891b2 55%, #06b6d4 100%);
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.35), 0 2px 8px rgba(8, 145, 178, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border-color: rgba(103, 232, 249, 0.6);
+  color: #ecfeff;
+}
+
 /* Dropdown menu */
 .run-mode-menu {
   display: none;
@@ -4258,6 +4280,7 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
 .run-mode-dot.opencode { background: #10b981; }
 .run-mode-dot.codex { background: #a855f7; }
 .run-mode-dot.gemini { background: #8ab4f8; }
+.run-mode-dot.antigravity { background: #22d3ee; }
 .run-mode-dot.shell { background: #94a3b8; }
 
 /* Phone-only Enter button (see index.html). Hidden by default at every width;

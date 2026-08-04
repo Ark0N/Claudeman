@@ -103,6 +103,7 @@
     'Run Claude Code': '运行 Claude Code',
     'Run OpenCode': '运行 OpenCode',
     'Run Gemini': '运行 Gemini',
+    'Run Antigravity': '运行 Antigravity',
     'Run Shell': '运行 Shell',
     'Select AI backend': '选择 AI 后端',
     'Create New Case': '新建案例',

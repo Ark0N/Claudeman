@@ -839,6 +839,20 @@ html.mobile-init .file-browser-panel {
     border-color: rgba(96, 165, 250, 0.5);
   }
 
+  /* Antigravity mode colors on mobile */
+  .btn-toolbar.btn-run.mode-antigravity,
+  .btn-toolbar.btn-run-gear.mode-antigravity {
+    background: #0b2b33;
+    border-color: rgba(34, 211, 238, 0.3);
+    color: #cffafe;
+  }
+
+  .btn-toolbar.btn-run.mode-antigravity:active,
+  .btn-toolbar.btn-run-gear.mode-antigravity:active {
+    background: #0e7490;
+    border-color: rgba(34, 211, 238, 0.5);
+  }
+
   /* Run mode dropdown menu — positioned above toolbar on mobile */
   .run-mode-menu {
     bottom: 100%;
@@ -2283,6 +2297,12 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-toolbar.btn-run.mode-gemini, .btn-toolbar.btn-run-gear.mode-gemini) {
   background: linear-gradient(135deg, #174ea6, #4f46e5);
   border-color: #315fc3;
+  color: #ffffff;
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-toolbar.btn-run.mode-antigravity, .btn-toolbar.btn-run-gear.mode-antigravity) {
+  background: linear-gradient(135deg, #0e7490, #0891b2);
+  border-color: #155e75;
   color: #ffffff;
 }
 

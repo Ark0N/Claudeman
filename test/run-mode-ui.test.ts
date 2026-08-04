@@ -71,6 +71,16 @@ describe('run mode UI', () => {
     expect(app.runMode).toBe('gemini');
     expect(runBtnLabel.textContent).toBe('Run GM');
   });
+
+  it('accepts Antigravity mode from server sync and updates the run button label', async () => {
+    const { app, storage, runBtnLabel } = loadRunModeHarness();
+
+    storage.set('codeman_runMode', 'claude');
+    await app.loadAppSettingsFromServer(Promise.resolve({ runMode: 'antigravity' }));
+
+    expect(app.runMode).toBe('antigravity');
+    expect(runBtnLabel.textContent).toBe('Run AG');
+  });
 });
 
 describe('Run launch synchronization', () => {
@@ -555,5 +565,58 @@ describe('Gemini quick start', () => {
       geminiConfig: { approvalMode: 'yolo' },
     });
     expect(selected).toEqual(['sess-gm']);
+  });
+});
+
+describe('Antigravity quick start', () => {
+  // Same envelope-unwrap regression guard as the Gemini block above, for runAntigravity().
+  it('drives runAntigravity() through the {success,data} envelope and selects the new session', async () => {
+    const elements: Record<string, any> = {
+      quickStartCase: { value: 'ag-case' },
+    };
+    const requests: Array<{ url: string; body?: any }> = [];
+    const CodemanApp = function CodemanApp(this: any) {};
+
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: (id: string) => elements[id] ?? null },
+      fetch: async (url: string, init?: { body?: string }) => {
+        requests.push({ url, body: init?.body ? JSON.parse(init.body) : undefined });
+        if (url === '/api/antigravity/status')
+          return { json: async () => ({ success: true, data: { available: true } }) };
+        if (url === '/api/quick-start')
+          return { json: async () => ({ success: true, data: { sessionId: 'sess-ag' } }) };
+        if (url === '/api/sessions/sess-ag')
+          return { json: async () => ({ success: true, data: { id: 'sess-ag', name: 'w1-ag-case' } }) };
+        throw new Error(`unexpected fetch: ${url}`);
+      },
+      console,
+    });
+
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+
+    const app = new (CodemanApp as any)();
+    app.terminal = { clear: () => {}, writeln: () => {}, focus: () => {} };
+    app.loadAppSettingsFromStorage = () => ({});
+    app.getCaseSettings = () => ({});
+    app.buildEnvOverrides = () => ({});
+    app.sessions = new Map();
+    app._onSessionCreated = (session: any) => app.sessions.set(session.id, session);
+    app._renderSessionTabsImmediate = vi.fn();
+    const selected: string[] = [];
+    app.selectSession = async (id: string) => {
+      selected.push(id);
+    };
+
+    await app.runAntigravity();
+
+    expect(requests.find((req) => req.url === '/api/quick-start')?.body).toMatchObject({
+      caseName: 'ag-case',
+      mode: 'antigravity',
+      antigravityConfig: { dangerouslySkipPermissions: true },
+    });
+    expect(selected).toEqual(['sess-ag']);
   });
 });

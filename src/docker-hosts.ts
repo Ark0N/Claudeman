@@ -143,6 +143,7 @@ export function defaultDockerCommandForMode(mode: SessionMode): string {
     opencode: 'exec opencode',
     codex: 'exec codex',
     gemini: 'exec gemini',
+    antigravity: 'exec agy',
   };
   return commands[mode as DockerCommandMode] || commands.shell;
 }

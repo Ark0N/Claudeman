@@ -99,6 +99,14 @@ export const DEPENDENCY_REGISTRY: ToolDependency[] = [
     resolvers: [{ match: ALL, resolver: { kind: 'path', bins: ['gemini'], versionArg: '--version' } }],
   },
   {
+    id: 'antigravity',
+    label: 'Antigravity CLI',
+    category: 'core',
+    required: false,
+    usedBy: ['Antigravity sessions'],
+    resolvers: [{ match: ALL, resolver: { kind: 'path', bins: ['agy'], versionArg: '--version' } }],
+  },
+  {
     id: 'libreoffice',
     label: 'LibreOffice',
     category: 'office',
