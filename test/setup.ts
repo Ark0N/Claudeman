@@ -1,16 +1,36 @@
 /**
  * @fileoverview Global test setup for Codeman tests
  *
- * SAFETY: TmuxManager has built-in test mode detection
- * (via process.env.VITEST) that makes ALL shell commands no-ops.
- * This means tests CANNOT kill, create, or interact with real tmux
- * sessions regardless of what the test code does.
+ * SAFETY: The suite gets a temporary HOME and explicitly enables runtime test
+ * mode before application modules load. Tests therefore cannot touch the real
+ * Codeman state/cases tree or launch external tmux-backed agent sessions.
  *
  * This setup file strips shell-level auth configuration that can leak from a
  * running Codeman instance, then handles mock/timer cleanup between tests.
  */
 
-import { afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, afterEach, vi } from 'vitest';
+
+const originalHome = process.env.HOME;
+const originalUserProfile = process.env.USERPROFILE;
+const originalVitest = process.env.VITEST;
+const originalPlaywrightBrowsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH;
+const testHome = mkdtempSync(join(tmpdir(), 'codeman-vitest-'));
+
+if (originalPlaywrightBrowsersPath === undefined && originalHome) {
+  process.env.PLAYWRIGHT_BROWSERS_PATH =
+    process.platform === 'darwin'
+      ? join(originalHome, 'Library', 'Caches', 'ms-playwright')
+      : process.platform === 'win32'
+        ? join(process.env.LOCALAPPDATA || join(originalHome, 'AppData', 'Local'), 'ms-playwright')
+        : join(originalHome, '.cache', 'ms-playwright');
+}
+process.env.HOME = testHome;
+process.env.USERPROFILE = testHome;
+process.env.VITEST = 'true';
 
 delete process.env.CODEMAN_PASSWORD;
 delete process.env.CODEMAN_USERNAME;
@@ -22,4 +42,34 @@ delete process.env.CODEMAN_GESTURE;
 afterEach(() => {
   vi.clearAllMocks();
   vi.useRealTimers();
+});
+
+afterAll(async () => {
+  // Let in-flight console-log rpc forwards drain before the worker environment
+  // tears down. On loaded CI runners the channel otherwise closes while the last
+  // "onUserConsoleLog" call is still pending, and that single unhandled
+  // EnvironmentTeardownError fails the run after every test has passed
+  // (observed twice on the PR #175/#176 merge commit; never locally).
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
+
+  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = originalUserProfile;
+
+  if (originalVitest === undefined) delete process.env.VITEST;
+  else process.env.VITEST = originalVitest;
+
+  if (originalPlaywrightBrowsersPath === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH;
+  else process.env.PLAYWRIGHT_BROWSERS_PATH = originalPlaywrightBrowsersPath;
+
+  rmSync(testHome, { recursive: true, force: true });
+});
+
+// afterAll never fires for a fully-skipped test file (no tests execute), which
+// would leak the temp home created above. The exit hook is the backstop; rmSync
+// with force is a no-op when afterAll already removed it.
+process.on('exit', () => {
+  rmSync(testHome, { recursive: true, force: true });
 });

@@ -15,7 +15,9 @@ on. Web tabs sit in the same strip as session tabs, continue the same `Alt+1..9`
 numbering, and carry a globe icon so they never read as a running agent.
 
 Closing a tab (the `x`) only closes it. The saved dashboard stays in the dropdown.
-Deleting for good is behind the gear on the tab, or the gear on its dropdown row.
+To delete it for good, use the `x` on its **dropdown row** (the tab's own `x` is
+close, not delete). Each dropdown row also has a gear for editing, so a saved URL
+can be changed or removed without opening it first.
 
 Switching tabs does **not** reload a dashboard. Frames stay alive in the background,
 so a dashboard that took a while to authenticate is still there when you come back.
@@ -97,9 +99,20 @@ Worth knowing, because it is where this feature does its least obvious work. Thr
 layers cooperate so a dashboard talking to its own backend just works:
 
 1. `<base href>` handles relative URLs in the markup.
-2. Attribute rewriting handles root-absolute `src`/`href`/`action`.
-3. A small injected script rebases URLs built at **runtime** (`fetch('/api/data')`,
-   `new WebSocket('/live')`), which the first two cannot see.
+2. Attribute rewriting handles root-absolute `src`/`href`/`action` in the page the
+   proxy serves.
+3. A small injected script rebases URLs built at **runtime**, which the first two
+   cannot see: `fetch('/api/data')` and `new WebSocket('/live')`, but equally
+   `card.innerHTML = '<img src="/api/hero">'`, `img.src = '/api/slide'`, and
+   `url(/img.png)` inside a `<style>` the page injects. That second group is why
+   images are covered too. A dashboard that renders its thumbnails from script
+   would otherwise show all its data and none of its pictures, because `<base>`
+   does not apply to root-absolute URLs and the attribute rewriting only ever saw
+   the initial document.
+4. As a last resort, a request that still lands on Codeman's own root is relayed
+   using its `Referer` to identify the dashboard. This only fires for a request
+   that already missed every Codeman route, and never for one that resolves to a
+   real route, which is what keeps it from being an authentication bypass.
 
 On top of that, the proxy answers those requests with CORS headers. That sounds
 wrong for same-host requests, but a sandboxed iframe has an *opaque* origin, so the
@@ -109,9 +122,14 @@ then every API call fails, which looks like the dashboard being broken.
 
 ## Known limits
 
-- **Exotic loaders.** The three layers above cover normal `fetch`/XHR/WebSocket/
-  EventSource and normal markup. Something that constructs requests by an unusual
+- **Exotic loaders.** The layers above cover normal `fetch`/XHR/WebSocket/
+  EventSource, normal markup, the DOM sinks a page uses to build markup at runtime,
+  and `url()` inside stylesheets. Something that constructs requests by an unusual
   route can still slip through. Symptom: the page renders but a panel stays empty.
+- **Root-absolute `location` navigation.** A dashboard that navigates itself with
+  `location.href = '/login'` escapes the prefix, because `Location.href` is
+  unforgeable and cannot be patched the way the other sinks are. A relative
+  `location.href = 'login'` is fine (`<base>` covers it).
 - **Cross-origin redirects are not followed.** If a dashboard bounces to a different
   host (an external SSO provider, say), the proxy hands the redirect back unchanged
   rather than relaying it, because relaying would make this an open proxy. Use

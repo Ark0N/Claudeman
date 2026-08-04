@@ -1,11 +1,28 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
-import { WebServer } from '../src/web/server.js';
-import { existsSync, rmSync, mkdirSync } from 'node:fs';
+import type { WebServer } from '../src/web/server.js';
+import { existsSync, rmSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { tmpdir } from 'node:os';
 
 const TEST_PORT = 3099;
-const CASES_DIR = join(homedir(), 'codeman-cases');
+const ORIGINAL_HOME = process.env.HOME;
+const TEST_HOME = mkdtempSync(join(tmpdir(), 'codeman-quick-start-'));
+const CASES_DIR = join(TEST_HOME, 'codeman-cases');
+let webServerModule: Promise<typeof import('../src/web/server.js')> | undefined;
+
+process.env.HOME = TEST_HOME;
+
+async function createTestServer(port: number): Promise<WebServer> {
+  webServerModule ??= import('../src/web/server.js');
+  const { WebServer: TestWebServer } = await webServerModule;
+  return new TestWebServer(port, false, true);
+}
+
+afterAll(() => {
+  if (ORIGINAL_HOME === undefined) delete process.env.HOME;
+  else process.env.HOME = ORIGINAL_HOME;
+  rmSync(TEST_HOME, { recursive: true, force: true });
+});
 
 describe('Quick Start API', () => {
   let server: WebServer;
@@ -13,7 +30,7 @@ describe('Quick Start API', () => {
   const createdCases: string[] = [];
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT, false, true);
+    server = await createTestServer(TEST_PORT);
     await server.start();
     baseUrl = `http://localhost:${TEST_PORT}`;
   });
@@ -147,7 +164,7 @@ describe('Session Management', () => {
   let baseUrl: string;
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT + 1, false, true);
+    server = await createTestServer(TEST_PORT + 1);
     await server.start();
     baseUrl = `http://localhost:${TEST_PORT + 1}`;
   });
@@ -206,7 +223,7 @@ describe('Case Management', () => {
   const createdCases: string[] = [];
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT + 2, false, true);
+    server = await createTestServer(TEST_PORT + 2);
     await server.start();
     baseUrl = `http://localhost:${TEST_PORT + 2}`;
   });

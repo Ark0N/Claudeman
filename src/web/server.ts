@@ -855,14 +855,21 @@ export class WebServer extends EventEmitter {
     // the envelope hook into a contradictory HTTP 404 {success:true,...}.
     this.app.setNotFoundHandler(async (req, reply) => {
       const notFound = `Route ${req.method}:${req.url} not found`;
+      // A web-tab dashboard asking for a root-absolute asset (`fetch('/api/data')`,
+      // `import('/chunk.js')`, `url(/img.png)` inside a stylesheet) lands here,
+      // because `<base href>` cannot rewrite a URL built at runtime. Its Referer says
+      // which dashboard to relay to. Deliberately placed on the 404 path so every
+      // real Codeman route still wins.
+      //
+      // Tried BEFORE the API-shaped 404, because a dashboard's own assets commonly
+      // live under its `/api/...` namespace and were the one class this could never
+      // rescue. Reaching this handler at all already proves no Codeman route matched,
+      // and the relay declines unless the Referer carries a live capability, so
+      // genuinely unknown `/api` paths still get the envelope below.
+      if (await tryWebviewRefererFallback(req, reply)) return reply;
       if (req.url.startsWith('/api')) {
         return reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, notFound));
       }
-      // A web-tab dashboard asking for a root-absolute asset (`fetch('/api/data')`,
-      // `import('/chunk.js')`) lands here, because `<base href>` cannot rewrite a URL
-      // built at runtime. Its Referer says which dashboard to relay to. Deliberately
-      // placed on the 404 path so every real Codeman route still wins.
-      if (await tryWebviewRefererFallback(req, reply)) return reply;
       return reply.code(404).send({ message: notFound, error: 'Not Found', statusCode: 404 });
     });
 
@@ -2454,6 +2461,7 @@ export class WebServer extends EventEmitter {
               openCodeConfig: muxSession.mode === 'opencode' ? savedState?.openCodeConfig : undefined,
               codexConfig: muxSession.mode === 'codex' ? savedState?.codexConfig : undefined,
               geminiConfig: muxSession.mode === 'gemini' ? savedState?.geminiConfig : undefined,
+              antigravityConfig: muxSession.mode === 'antigravity' ? savedState?.antigravityConfig : undefined,
               envOverrides: savedEnvOverrides,
               effort: savedState?.effort,
               attachmentHistory: savedAttachmentHistory,

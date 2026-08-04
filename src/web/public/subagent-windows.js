@@ -465,6 +465,10 @@ Object.assign(CodemanApp.prototype, {
     if (typeof this._appendUltracodeAgentConnectionLines === 'function') {
       this._appendUltracodeAgentConnectionLines(svg, rects);
     }
+
+    // Every path above was just created from scratch, so any line entrance in
+    // flight has to be re-attached here (resumed via a negative animation-delay).
+    this._applyLineEntrances?.(svg);
   },
 
   // ═══════════════════════════════════════════════════════════════
@@ -729,12 +733,17 @@ Object.assign(CodemanApp.prototype, {
       </div>
     `;
 
+    // Only the `fly` entrance style parks the window on its parent tab; every
+    // CSS-animated style (entrance-animations.js) needs it to start at its
+    // resting position, or the animation would play at the wrong place.
+    const flyFromTab = !!parentTab && !isMobile && this.windowEntranceFliesFromTab?.() !== false;
+
     // If we have a parent tab, start window at tab position for spawn animation
     if (isMobile) {
       // Mobile: position using top (keyboard-aware positioning calculated above)
       win.style.top = `${finalY}px`;
       win.style.bottom = 'auto';
-    } else if (parentTab) {
+    } else if (flyFromTab) {
       const tabRect = parentTab.getBoundingClientRect();
       win.style.left = `${tabRect.left}px`;
       win.style.top = `${tabRect.bottom}px`;
@@ -812,7 +821,7 @@ Object.assign(CodemanApp.prototype, {
     this.subagentWindows.get(agentId).resizeObserver = resizeObserver;
 
     // Animate to final position if spawning from tab (desktop only)
-    if (parentTab && !isMobile) {
+    if (flyFromTab) {
       requestAnimationFrame(() => {
         win.style.transition = 'all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)';
         win.style.left = `${finalX}px`;
@@ -824,11 +833,26 @@ Object.assign(CodemanApp.prototype, {
         setTimeout(() => {
           win.style.transition = '';
           win.classList.remove('spawning');
+          // The line only becomes meaningful once the window has landed, so its
+          // draw-in starts here rather than at spawn.
+          this.markConnectionLineEntering?.(agentId);
           this.updateConnectionLines();
         }, 400);
       });
     } else {
-      // No animation (mobile uses CSS positioning), just update connection lines
+      // CSS-animated entrance styles (and mobile) run in place. The window is
+      // already at its resting position, so the connection line can be drawn
+      // against a correct rect right away and animate alongside it.
+      //
+      // Skipped when the window spawns hidden (its agent belongs to a background
+      // tab): a display:none element never runs its animation, so `animationend`
+      // would never fire and the entrance class plus its inline custom property
+      // would stick to the window forever. Nothing is visible to animate anyway,
+      // and revealing it later is a tab switch, not a spawn.
+      if (!shouldHide) {
+        this.applyWindowEntrance?.(win);
+        this.markConnectionLineEntering?.(agentId);
+      }
       this.updateConnectionLines();
     }
 

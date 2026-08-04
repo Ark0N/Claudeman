@@ -379,6 +379,12 @@
           <button class="welcome-ralph-link" onclick="app.showRalphWizard()">Start Ralph Loop &rarr;</button>
         </div>
       </div>
+
+      <!-- Mobile Overview (phone home screen, shown in place of the welcome
+           overlay when the "C" logo is tapped). Ships `hidden`: only
+           mobile-overview.js removes it, and only when the phone gate passes, so
+           desktop (which never loads mobile.css) can never render it. -->
+      <div class="mobile-overview" id="mobileOverview" hidden></div>
     </main>
 
     <!-- Project Insights Panel (shows file-viewing Bash commands) -->
@@ -463,6 +469,9 @@
               </button>
               <button class="run-mode-option" data-mode="gemini" onclick="app.setRunMode('gemini')">
                 <span class="run-mode-dot gemini"></span>Gemini
+              </button>
+              <button class="run-mode-option" data-mode="antigravity" onclick="app.setRunMode('antigravity')">
+                <span class="run-mode-dot antigravity"></span>Antigravity
               </button>
               <div class="run-mode-sep"></div>
               <button class="run-mode-option" data-mode="shell" onclick="app.setRunMode('shell')">
@@ -733,6 +742,7 @@
                 <option value="opencode">OpenCode</option>
                 <option value="codex">Codex</option>
                 <option value="gemini">Gemini</option>
+                <option value="antigravity">Antigravity</option>
               </select>
             </div>
             <div class="form-row"><label>Working Directory</label><input type="text" id="schWorkingDir" placeholder="/absolute/path"></div>
@@ -1276,6 +1286,20 @@
                   </optgroup>
                 </select>
               </div>
+              <div class="settings-item settings-item-multiline" title="How new session tabs, the terminal pane, agent windows and their connection lines appear. This device only. For per-surface control and a live preview, add ?animlab=1 to the URL.">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Entrance Animations</span>
+                  <span class="settings-item-desc">How new tabs, panes and agent windows arrive</span>
+                </div>
+                <select id="appSettingsEntranceAnim" class="form-select settings-inline-select">
+                  <option value="legacy">Off (default)</option>
+                  <option value="terminal">Terminal (CRT)</option>
+                  <option value="beamdown">Beam down</option>
+                  <option value="quiet">Quiet</option>
+                  <option value="playful">Playful</option>
+                  <option value="custom">Custom (set in the lab)</option>
+                </select>
+              </div>
               <div class="settings-item" id="appSettingsWebglRendererItem" title="Use the GPU-accelerated WebGL terminal renderer (desktop only). Turn off to force the DOM renderer if you hit GPU glitches. Codeman also auto-falls-back to the DOM renderer after repeated GPU stalls.">
                 <span class="settings-item-label">WebGL Renderer</span>
                 <label class="switch switch-sm">
@@ -1420,6 +1444,16 @@
                 <span class="settings-item-label">Redraw Terminal Button</span>
                 <label class="switch switch-sm">
                   <input type="checkbox" id="appSettingsShowRedrawButton">
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <!-- Phone Section (only meaningful under 430px, hidden elsewhere by settings-ui.js) -->
+              <div class="settings-section-header" id="appSettingsPhoneSection">Phone</div>
+              <div class="settings-item" id="appSettingsMobileOverviewItem" title="On phones, the C logo opens a session overview (needs you / spaces / idle) instead of the welcome screen">
+                <span class="settings-item-label">Overview Home Screen</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsMobileOverview" checked>
                   <span class="slider"></span>
                 </label>
               </div>
@@ -1848,7 +1882,7 @@
               <input type="checkbox" id="eventIdleAudio">
 
               <div class="event-label">Response complete</div>
-              <input type="checkbox" id="eventStopEnabled" checked>
+              <input type="checkbox" id="eventStopEnabled">
               <input type="checkbox" id="eventStopBrowser">
               <input type="checkbox" id="eventStopPush">
               <input type="checkbox" id="eventStopAudio">
@@ -2626,6 +2660,8 @@
   <script defer src="admin-ui.js"></script>
   <script defer src="session-ui.js"></script>
   <script defer src="webview-tabs.js"></script>
+  <script defer src="mobile-overview.js"></script>
+  <script defer src="entrance-animations.js"></script>
   <script defer src="ralph-wizard.js"></script>
   <script defer src="api-client.js"></script>
   <script defer src="subagent-windows.js"></script>

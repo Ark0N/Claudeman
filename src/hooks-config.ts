@@ -16,9 +16,9 @@
  * `stop`, `teammate_idle`, `task_completed`
  *
  * Hook categories: `Notification` (3 matchers), `Stop` (1), `TeammateIdle` (1),
- * `TaskCompleted` (1)
+ * `TaskCompleted` (1), `PostToolUse` (1 self-contained background Bash rewake)
  *
- * @dependencies types (HookEventType), config/auth-config (HOOK_TIMEOUT_MS)
+ * @dependencies types (HookEventType), config/auth-config (HOOK_TIMEOUT_SECONDS)
  * @consumedby web/server (session creation), session-cli-builder (env setup)
  *
  * @module hooks-config
@@ -29,7 +29,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { HookEventType } from './types.js';
-import { HOOK_TIMEOUT_MS } from './config/auth-config.js';
+import { HOOK_TIMEOUT_SECONDS } from './config/auth-config.js';
 
 /**
  * Serializes read-modify-write access to a `settings.local.json` path. Every
@@ -40,6 +40,104 @@ import { HOOK_TIMEOUT_MS } from './config/auth-config.js';
  * are independent; the map self-prunes when a path's chain goes idle.
  */
 const settingsWriteLocks = new Map<string, Promise<unknown>>();
+/**
+ * Version-agnostic ownership prefix: every rewake script version embeds a marker
+ * starting with this, and `isCodemanHookHandler` matches on the prefix. That way a
+ * version bump replaces the old handler instead of duplicating it (matching on the
+ * full versioned marker would disown every older script).
+ */
+const BACKGROUND_WAKE_MARKER_PREFIX = 'CODEMAN_BACKGROUND_REWAKE_V';
+/**
+ * Current script version. Bump the suffix whenever `generateBackgroundWakeScript`
+ * changes: `refreshStaleCodemanHooks` treats the absence of the CURRENT marker as
+ * stale, so healed cases pick up the new script on next launch.
+ */
+const BACKGROUND_WAKE_MARKER = `${BACKGROUND_WAKE_MARKER_PREFIX}2`;
+const BACKGROUND_WAKE_TIMEOUT_SECONDS = 6 * 60 * 60;
+
+/**
+ * Inline Node helper for Claude Code's `asyncRewake` hook.
+ *
+ * A background Bash tool returns immediately with a task ID, then Claude writes
+ * its completion as a queue-operation in the transcript. Watching that durable
+ * record avoids injecting terminal input (which could submit a user's draft).
+ * The helper is embedded in settings via `node -e`, so it has no script path
+ * that can go stale after an install or plugin-cache cleanup.
+ *
+ * Self-terminating: Claude Code enforces the hook timeout, but the helper does not
+ * rely on it. It exits on its own deadline (same budget) and when orphaned
+ * (`ppid === 1`), so a dead session cannot leave a poller stat-ing the transcript
+ * forever. The ppid check misses subreaper setups; the deadline is the backstop.
+ */
+export function generateBackgroundWakeScript(): string {
+  return [
+    "const fs = require('node:fs');",
+    `const ${BACKGROUND_WAKE_MARKER} = true;`,
+    `const deadline = Date.now() + ${BACKGROUND_WAKE_TIMEOUT_SECONDS} * 1000;`,
+    'let input = {};',
+    "try { input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}'); } catch { process.exit(0); }",
+    'function findTaskId(value) {',
+    "  const idKeys = new Set(['taskId', 'task_id', 'shellId', 'shell_id', 'backgroundTaskId', 'background_task_id']);",
+    '  const stack = [value];',
+    '  const seen = new Set();',
+    '  while (stack.length > 0) {',
+    '    const current = stack.pop();',
+    "    if (!current || typeof current !== 'object' || seen.has(current)) continue;",
+    '    seen.add(current);',
+    '    for (const [key, nested] of Object.entries(current)) {',
+    "      if (idKeys.has(key) && typeof nested === 'string' && /^[A-Za-z0-9_-]+$/.test(nested)) return nested;",
+    "      if (nested && typeof nested === 'object') stack.push(nested);",
+    '    }',
+    '  }',
+    "  const serialized = JSON.stringify(value ?? '');",
+    '  const messageMatch = serialized.match(/Command running in background with ID:\\s*([A-Za-z0-9_-]+)/i);',
+    '  if (messageMatch) return messageMatch[1];',
+    '  const pathMatch = serialized.match(/[\\\\/]tasks[\\\\/]([A-Za-z0-9_-]+)\\.output/i);',
+    '  return pathMatch ? pathMatch[1] : null;',
+    '}',
+    'const taskId = findTaskId(input.tool_response);',
+    "const transcriptPath = typeof input.transcript_path === 'string' ? input.transcript_path : '';",
+    'if (!taskId || !transcriptPath) process.exit(0);',
+    'let position = 0;',
+    'try { position = Math.max(0, fs.statSync(transcriptPath).size - 262144); } catch { process.exit(0); }',
+    "let carry = '';",
+    'function inspect(text) {',
+    '  for (const line of text.split(/\\r?\\n/)) {',
+    '    if (!line.includes(taskId)) continue;',
+    '    let entry;',
+    '    try { entry = JSON.parse(line); } catch { continue; }',
+    "    if (entry.type !== 'queue-operation' || typeof entry.content !== 'string') continue;",
+    "    if (!entry.content.includes('<task-id>' + taskId + '</task-id>')) continue;",
+    '    const status = entry.content.match(/<status>(completed|failed|killed|error)<\\/status>/i);',
+    '    if (!status) continue;',
+    '    const output = entry.content.match(/<output-file>([^<]+)<\\/output-file>/i);',
+    "    const location = output ? ' Read ' + output[1] + ' and' : '';",
+    "    console.error('Background command ' + taskId + ' ' + status[1].toLowerCase() + '.' + location + ' continue the task.');",
+    '    process.exit(2);',
+    '  }',
+    '}',
+    'function poll() {',
+    '  if (Date.now() > deadline || process.ppid === 1) process.exit(0);',
+    '  try {',
+    '    const size = fs.statSync(transcriptPath).size;',
+    "    if (size < position) { position = 0; carry = ''; }",
+    '    if (size > position) {',
+    '      const length = Math.min(size - position, 1048576);',
+    '      const buffer = Buffer.allocUnsafe(length);',
+    "      const fd = fs.openSync(transcriptPath, 'r');",
+    '      const bytes = fs.readSync(fd, buffer, 0, length, position);',
+    '      fs.closeSync(fd);',
+    '      position += bytes;',
+    "      carry = (carry + buffer.subarray(0, bytes).toString('utf8')).slice(-262144);",
+    '      inspect(carry);',
+    '    }',
+    '  } catch {}',
+    '  setTimeout(poll, 1000);',
+    '}',
+    'poll();',
+  ].join('\n');
+}
+
 function withSettingsLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
   const prev = settingsWriteLocks.get(path) ?? Promise.resolve();
   const run = prev.then(fn, fn); // run after the prior writer, regardless of its outcome
@@ -86,34 +184,116 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
       Notification: [
         {
           matcher: 'idle_prompt',
-          hooks: [{ type: 'command', command: curlCmd('idle_prompt'), timeout: HOOK_TIMEOUT_MS }],
+          hooks: [{ type: 'command', command: curlCmd('idle_prompt'), timeout: HOOK_TIMEOUT_SECONDS }],
         },
         {
           matcher: 'permission_prompt',
-          hooks: [{ type: 'command', command: curlCmd('permission_prompt'), timeout: HOOK_TIMEOUT_MS }],
+          hooks: [{ type: 'command', command: curlCmd('permission_prompt'), timeout: HOOK_TIMEOUT_SECONDS }],
         },
         {
           matcher: 'elicitation_dialog',
-          hooks: [{ type: 'command', command: curlCmd('elicitation_dialog'), timeout: HOOK_TIMEOUT_MS }],
+          hooks: [{ type: 'command', command: curlCmd('elicitation_dialog'), timeout: HOOK_TIMEOUT_SECONDS }],
         },
       ],
       Stop: [
         {
-          hooks: [{ type: 'command', command: curlCmd('stop'), timeout: HOOK_TIMEOUT_MS }],
+          hooks: [{ type: 'command', command: curlCmd('stop'), timeout: HOOK_TIMEOUT_SECONDS }],
         },
       ],
       TeammateIdle: [
         {
-          hooks: [{ type: 'command', command: curlCmd('teammate_idle'), timeout: HOOK_TIMEOUT_MS }],
+          hooks: [{ type: 'command', command: curlCmd('teammate_idle'), timeout: HOOK_TIMEOUT_SECONDS }],
         },
       ],
       TaskCompleted: [
         {
-          hooks: [{ type: 'command', command: curlCmd('task_completed'), timeout: HOOK_TIMEOUT_MS }],
+          hooks: [{ type: 'command', command: curlCmd('task_completed'), timeout: HOOK_TIMEOUT_SECONDS }],
+        },
+      ],
+      PostToolUse: [
+        {
+          matcher: 'Bash',
+          hooks: [
+            {
+              type: 'command',
+              command: 'node',
+              args: ['-e', generateBackgroundWakeScript()],
+              asyncRewake: true,
+              timeout: BACKGROUND_WAKE_TIMEOUT_SECONDS,
+            },
+          ],
         },
       ],
     },
   };
+}
+
+function isCodemanHookHandler(value: unknown): boolean {
+  try {
+    const serialized = JSON.stringify(value);
+    // Prefix, not the versioned marker: older script versions must still be ours.
+    return serialized.includes('/api/hook-event') || serialized.includes(BACKGROUND_WAKE_MARKER_PREFIX);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Replace only Codeman-owned command handlers while preserving user events,
+ * matcher entries, and sibling handlers in mixed entries.
+ */
+function mergeCodemanHooks(existingValue: unknown, generated: Record<string, unknown[]>): Record<string, unknown[]> {
+  const existing =
+    existingValue && typeof existingValue === 'object' && !Array.isArray(existingValue)
+      ? (existingValue as Record<string, unknown>)
+      : {};
+  const merged: Record<string, unknown[]> = {};
+
+  for (const eventName of new Set([...Object.keys(existing), ...Object.keys(generated)])) {
+    const existingEntries = Array.isArray(existing[eventName]) ? (existing[eventName] as unknown[]) : [];
+    const generatedEntries = generated[eventName];
+    if (!generatedEntries) {
+      merged[eventName] = existingEntries;
+      continue;
+    }
+
+    const entries: unknown[] = [];
+    let insertedGenerated = false;
+    for (const entry of existingEntries) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        if (!isCodemanHookHandler(entry)) entries.push(entry);
+        continue;
+      }
+
+      const record = entry as Record<string, unknown>;
+      if (!Array.isArray(record.hooks)) {
+        if (isCodemanHookHandler(record)) {
+          if (!insertedGenerated) {
+            entries.push(...generatedEntries);
+            insertedGenerated = true;
+          }
+        } else {
+          entries.push(entry);
+        }
+        continue;
+      }
+
+      const retainedHandlers = record.hooks.filter((handler) => !isCodemanHookHandler(handler));
+      const removedCodemanHandler = retainedHandlers.length !== record.hooks.length;
+      if (removedCodemanHandler && !insertedGenerated) {
+        entries.push(...generatedEntries);
+        insertedGenerated = true;
+      }
+      if (retainedHandlers.length > 0 || !removedCodemanHandler) {
+        entries.push(retainedHandlers.length === record.hooks.length ? entry : { ...record, hooks: retainedHandlers });
+      }
+    }
+
+    if (!insertedGenerated) entries.push(...generatedEntries);
+    merged[eventName] = entries;
+  }
+
+  return merged;
 }
 
 /**
@@ -237,29 +417,31 @@ export async function writeHooksConfig(casePath: string): Promise<void> {
     }
 
     const hooksConfig = generateHooksConfig();
-    const merged = { ...existing, ...hooksConfig };
+    const merged = {
+      ...existing,
+      hooks: mergeCodemanHooks(existing.hooks, hooksConfig.hooks),
+    };
 
     await writeFile(settingsPath, JSON.stringify(merged, null, 2) + '\n');
   });
 }
 
 /**
- * Self-heal a case's hooks block so the COD-91 unconditional hook-secret gate keeps
- * accepting its hook events.
+ * Self-heal a case's Codeman-owned hooks block.
  *
  * `writeHooksConfig` only runs when a case is first CREATED. Cases created before the
  * X-Codeman-Hook-Secret header was added (COD-54, 2026-06-10) keep hook curls in their
  * settings.local.json that POST to /api/hook-event WITHOUT the secret — which, once the
- * gate requires it unconditionally (COD-91), silently 401 on a password-protected
- * install. This refreshes the hooks block so those stale curls regain the header.
+ * gate requires it unconditionally (COD-91), silently 401 on a password-protected install.
+ * Older Codeman blocks also lack the background Bash async-rewake hook. Refresh either
+ * stale shape on launch so existing cases gain both current behaviors.
  *
  * Deliberately surgical: regenerates ONLY when settings.local.json already contains
- * Codeman's own hook curls (they target `/api/hook-event`) that lack the secret header.
- * No-op when the file/hooks are absent (we never impose hooks on a user who removed
- * them), when the hooks aren't ours, or when the secret is already present — so it never
- * clobbers a user's customizations and is cheap enough to call on every Claude spawn.
+ * Codeman's own hook curls (they target `/api/hook-event`) and they are stale. No-op
+ * when the file/hooks are absent (we never impose hooks on a user who removed them) or
+ * when the hooks aren't ours, so it is cheap enough to call on every Claude spawn.
  */
-export async function refreshStaleHookSecret(casePath: string): Promise<void> {
+export async function refreshStaleCodemanHooks(casePath: string): Promise<void> {
   const settingsPath = join(casePath, '.claude', 'settings.local.json');
   if (!existsSync(settingsPath)) return;
   await withSettingsLock(settingsPath, async () => {
@@ -274,8 +456,13 @@ export async function refreshStaleHookSecret(casePath: string): Promise<void> {
     // The generated curl carries this header literal (see generateHooksConfig); its
     // absence on our own hooks means they predate COD-54 and need regenerating.
     const hasSecret = hooksJson.includes('X-Codeman-Hook-Secret');
-    if (!isOurs || hasSecret) return;
-    const merged = { ...existing, ...generateHooksConfig() };
+    const hasBackgroundWake = hooksJson.includes(BACKGROUND_WAKE_MARKER);
+    if (!isOurs || (hasSecret && hasBackgroundWake)) return;
+    const generated = generateHooksConfig();
+    const merged = {
+      ...existing,
+      hooks: mergeCodemanHooks(existing.hooks, generated.hooks),
+    };
     await writeFile(settingsPath, JSON.stringify(merged, null, 2) + '\n');
   });
 }

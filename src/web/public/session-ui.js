@@ -316,6 +316,9 @@ Object.assign(CodemanApp.prototype, {
         select.dataset.listenerAdded = 'true';
       }
       this.setupQuickStartCasePicker();
+      // The phone overview labels rows with their case name, and a case rename or
+      // link does not go through the session-tab renderer.
+      this._refreshMobileOverviewIfVisible?.();
     } catch (err) {
       console.error('Failed to load cases:', err);
     }
@@ -370,7 +373,7 @@ Object.assign(CodemanApp.prototype, {
     this._renderSessionTabsImmediate?.();
   },
 
-  /** Run using the selected mode (Claude Code, OpenCode, Codex, or Gemini) */
+  /** Run using the selected mode (Claude Code, OpenCode, Codex, Gemini, or Antigravity) */
   async run() {
     if (this._runInFlight) return;
 
@@ -393,6 +396,9 @@ Object.assign(CodemanApp.prototype, {
       }
       if (mode === 'gemini') {
         return await this.runGemini();
+      }
+      if (mode === 'antigravity') {
+        return await this.runAntigravity();
       }
       if (mode === 'shell') {
         return await this.runShell();
@@ -503,7 +509,7 @@ Object.assign(CodemanApp.prototype, {
       gearBtn.className = `btn-toolbar btn-run-gear mode-${mode}`;
     }
     if (label) {
-      label.textContent = mode === 'opencode' ? 'Run OC' : mode === 'codex' ? 'Run CX' : mode === 'gemini' ? 'Run GM' : mode === 'shell' ? 'Run SH' : 'Run';
+      label.textContent = mode === 'opencode' ? 'Run OC' : mode === 'codex' ? 'Run CX' : mode === 'gemini' ? 'Run GM' : mode === 'antigravity' ? 'Run AG' : mode === 'shell' ? 'Run SH' : 'Run';
     }
   },
 
@@ -746,7 +752,7 @@ Object.assign(CodemanApp.prototype, {
             // is shared by sibling sessions, so create-with-false must not yank it
             // — see the comment in session-routes create). Disabling the setting
             // removes it via the App Settings toggle path (system-routes), not here.
-            statusLineTelemetry: globalSettings.showPlanUsageLimits === true,
+            statusLineTelemetry: this.planUsageChipEnabled(globalSettings),
           })
         }).then(r => r.json())
       );
@@ -1107,6 +1113,57 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  async runAntigravity() {
+    const caseName = document.getElementById('quickStartCase').value || 'testcase';
+    // Remote/docker cases run agy on the OTHER side — skip the local status probe and the
+    // local-only config/env below (quick-start rejects them for remote cases).
+    const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
+    const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
+
+    this.terminal.clear();
+    this.terminal.writeln(`\x1b[1;32m Starting Antigravity session in ${caseName}...\x1b[0m`);
+    this.terminal.writeln('');
+    this.terminal.focus();
+
+    try {
+      if (!isRemote) {
+        const statusRes = await fetch('/api/antigravity/status');
+        const status = (await statusRes.json()).data;
+        if (!status.available) {
+          this.terminal.writeln('\x1b[1;31m Antigravity CLI not found.\x1b[0m');
+          this.terminal.writeln('\x1b[90m Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash\x1b[0m');
+          return;
+        }
+      }
+
+      const envOverrides = this.buildEnvOverrides(this.getCaseSettings(caseName), this.loadAppSettingsFromStorage());
+      const res = await fetch('/api/quick-start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          caseName,
+          mode: 'antigravity',
+          sessionName: `w${this._nextCaseSessionStartNumber(caseName)}-${caseName}`,
+          ...(isRemote ? {} : {
+            antigravityConfig: { dangerouslySkipPermissions: true },
+            ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
+          }),
+        })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to start Antigravity');
+      await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
+
+      if (data.data.sessionId) {
+        await this.selectSession(data.data.sessionId);
+      }
+
+      this.terminal.focus();
+    } catch (err) {
+      this.terminal.writeln(`\x1b[1;31m Error: ${err.message}\x1b[0m`);
+    }
+  },
+
 
   // ═══════════════════════════════════════════════════════════════
   // Session Options Modal
@@ -1119,7 +1176,7 @@ Object.assign(CodemanApp.prototype, {
     this.editingSessionId = sessionId;
 
     // Reset to an appropriate tab — Summary for external CLIs (Respawn/Ralph are Claude-only)
-    const isAltMode = session.mode === 'opencode' || session.mode === 'codex' || session.mode === 'gemini';
+    const isAltMode = session.mode === 'opencode' || session.mode === 'codex' || session.mode === 'gemini' || session.mode === 'antigravity';
     this.switchOptionsTab(isAltMode ? 'summary' : 'respawn');
 
     // Update respawn status display and buttons
@@ -1149,7 +1206,7 @@ Object.assign(CodemanApp.prototype, {
     }
 
     // Hide Claude-specific options for external CLI sessions
-    const isExternalCli = session.mode === 'opencode' || session.mode === 'codex' || session.mode === 'gemini';
+    const isExternalCli = session.mode === 'opencode' || session.mode === 'codex' || session.mode === 'gemini' || session.mode === 'antigravity';
     const claudeOnlyEls = document.querySelectorAll('[data-claude-only]');
     claudeOnlyEls.forEach(el => { el.style.display = isExternalCli ? 'none' : ''; });
 
@@ -2569,6 +2626,8 @@ Object.defineProperty(CodemanApp.prototype, 'runMode', {
   },
   set(mode) {
     this._runMode =
-      mode === 'opencode' || mode === 'codex' || mode === 'gemini' || mode === 'claude' ? mode : 'claude';
+      mode === 'opencode' || mode === 'codex' || mode === 'gemini' || mode === 'antigravity' || mode === 'claude'
+        ? mode
+        : 'claude';
   },
 });

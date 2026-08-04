@@ -59,6 +59,21 @@ export function findClaudeDir(): string | null {
   return null;
 }
 
+/**
+ * Returns an absolute path to the `claude` binary, falling back to the bare
+ * name `'claude'` when it cannot be located (so PATH resolution still gets a
+ * chance).
+ *
+ * Preferred over passing `'claude'` to `pty.spawn()`: a PTY child resolves the
+ * command against the environment it is handed, and an install that lives in
+ * `~/.local/bin` or `~/.claude/local` is frequently absent from the PATH the
+ * server process inherited (issue #6).
+ */
+export function getClaudeBinaryPath(): string {
+  const dir = findClaudeDir();
+  return dir ? join(dir, 'claude') : 'claude';
+}
+
 /** Cached augmented PATH string */
 let _augmentedPath: string | null = null;
 

@@ -312,6 +312,10 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsShowFileViewerButton').checked = settings.showFileViewerButton ?? defaults.showFileViewerButton ?? true;
     document.getElementById('appSettingsShowAttachmentsButton').checked = settings.showAttachmentsButton ?? defaults.showAttachmentsButton ?? false;
     document.getElementById('appSettingsSkin').value = settings.skin ?? defaults.skin ?? 'daylight-blue';
+    // Entrance animations. Deliberately NOT part of the settings payload: the
+    // styles persist to their own localStorage keys via setAnimTheme(), which
+    // keeps them per-device without touching the .strict() SettingsUpdateSchema.
+    this._syncEntranceAnimSetting?.();
     // WebGL renderer (desktop only — mobile always uses the DOM renderer, so hide
     // the toggle there so it can't promise something that won't apply).
     document.getElementById('appSettingsWebglRenderer').checked = settings.webglRendererEnabled ?? defaults.webglRendererEnabled ?? true;
@@ -325,9 +329,19 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsUltracodeFloatingWindows').checked =
       settings.ultracodeFloatingWindows ?? defaults.ultracodeFloatingWindows ?? false;
     document.getElementById('appSettingsShowMultiMonitorButton').checked = settings.showMultiMonitorButton ?? defaults.showMultiMonitorButton ?? false;
-    document.getElementById('appSettingsShowPlanUsageLimits').checked = settings.showPlanUsageLimits ?? defaults.showPlanUsageLimits ?? false;
+    document.getElementById('appSettingsShowPlanUsageLimits').checked = this.planUsageChipEnabled(settings);
     document.getElementById('appSettingsShowRedrawButton').checked = settings.showRedrawButton ?? defaults.showRedrawButton ?? false;
-    // Session Manager + Away Digest buttons default OFF; Cron button defaults ON.
+    // Phone overview home screen: only meaningful under 430px, so the row is
+    // hidden elsewhere rather than offering a toggle that changes nothing.
+    document.getElementById('appSettingsMobileOverview').checked = settings.mobileOverviewEnabled ?? defaults.mobileOverviewEnabled ?? false;
+    const phoneOnly = MobileDetection.getDeviceType() === 'mobile' ? '' : 'none';
+    const mobileOverviewItem = document.getElementById('appSettingsMobileOverviewItem');
+    if (mobileOverviewItem) mobileOverviewItem.style.display = phoneOnly;
+    const phoneSection = document.getElementById('appSettingsPhoneSection');
+    if (phoneSection) phoneSection.style.display = phoneOnly;
+    // Session Manager, Away Digest and Cron buttons all default OFF (opt-in under
+    // Display → Header Displays; the Cron button also ships with btn-cron--hidden
+    // in the template, so an unchecked box and a hidden button stay consistent).
     document.getElementById('appSettingsShowSessionButton').checked = settings.showSessionButton ?? defaults.showSessionButton ?? false;
     document.getElementById('appSettingsShowAwayDigestButton').checked = settings.showAwayDigestButton ?? defaults.showAwayDigestButton ?? false;
     document.getElementById('appSettingsShowCronButton').checked = settings.showCronButton ?? defaults.showCronButton ?? false;
@@ -408,7 +422,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('eventIdleAudio').checked = idlePref.audio ?? false;
     // Response complete (stop)
     const stopPref = eventTypes.stop || {};
-    document.getElementById('eventStopEnabled').checked = stopPref.enabled ?? true;
+    document.getElementById('eventStopEnabled').checked = stopPref.enabled ?? false;
     document.getElementById('eventStopBrowser').checked = stopPref.browser ?? false;
     document.getElementById('eventStopPush').checked = stopPref.push ?? false;
     document.getElementById('eventStopAudio').checked = stopPref.audio ?? false;
@@ -1447,6 +1461,7 @@ Object.assign(CodemanApp.prototype, {
       showMultiMonitorButton: document.getElementById('appSettingsShowMultiMonitorButton').checked,
       showPlanUsageLimits: document.getElementById('appSettingsShowPlanUsageLimits').checked,
       showRedrawButton: document.getElementById('appSettingsShowRedrawButton').checked,
+      mobileOverviewEnabled: document.getElementById('appSettingsMobileOverview').checked,
       showSessionButton: document.getElementById('appSettingsShowSessionButton').checked,
       showAwayDigestButton: document.getElementById('appSettingsShowAwayDigestButton').checked,
       showCronButton: document.getElementById('appSettingsShowCronButton').checked,
@@ -1587,7 +1602,7 @@ Object.assign(CodemanApp.prototype, {
           audio: document.getElementById('eventSubagentAudio').checked,
         },
       },
-      _version: 4,
+      _version: 5,
     };
     if (this.notificationManager) {
       this.notificationManager.preferences = notifPrefsToSave;
@@ -1609,6 +1624,10 @@ Object.assign(CodemanApp.prototype, {
 
     // Apply CJK input visibility immediately
     this._updateCjkInputState();
+
+    // The phone home surface (overview vs welcome) may have just been toggled.
+    // Only re-decide while a home screen is actually up.
+    if (!this.activeSessionId) this.showWelcome();
 
     // Apply keyboard bar mode
     KeyboardAccessoryBar.setMode(settings.extendedKeyboardBar ? 'extended' : 'simple');
@@ -1640,6 +1659,8 @@ Object.assign(CodemanApp.prototype, {
       showSessionButton: _ssb,
       showAwayDigestButton: _adb,
       showCronButton: _crb,
+      // Phone-only home surface, and absent from SettingsUpdateSchema (.strict()).
+      mobileOverviewEnabled: _mov,
       ...serverSettings
     } = settings;
     try {
@@ -1798,6 +1819,9 @@ Object.assign(CodemanApp.prototype, {
         showUltracodeAgents: false,
         ultracodeFloatingWindows: false,
         showMultiMonitorButton: false,
+        // Desktop defaults this ON (see planUsageChipEnabled); handhelds keep it
+        // OFF so the phone header stays minimal and the mobile-header-buttons
+        // policy guard keeps passing.
         showPlanUsageLimits: false,
         showAttachmentsButton: false,
         showFileViewerButton: false,
@@ -1805,6 +1829,10 @@ Object.assign(CodemanApp.prototype, {
         showSessionButton: false,
         showAwayDigestButton: false,
         showCronButton: false,
+        // Phone home screen: the C logo opens the session overview instead of the
+        // welcome screen. ON by default here, and the escape hatch if it ever
+        // misbehaves on a device (the gate treats only an explicit false as off).
+        mobileOverviewEnabled: true,
         // Remote auto-reconnect (COD-108) — on by default
         remoteAutoReconnect: true,
         // Input
@@ -1889,6 +1917,18 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  // Resolved per-device state of the plan-usage chip. Desktop defaults ON,
+  // handhelds default OFF (the mobile block in getDefaultSettings() sets false,
+  // and the mobile-header-buttons-policy guard depends on that staying false).
+  // Single source of truth for THREE call sites that must never disagree: the
+  // App Settings checkbox, the chip's visibility, and the statusLineTelemetry
+  // flag sent on session create. A chip shown without telemetry renders "—"
+  // forever, which is exactly the drift this helper prevents.
+  planUsageChipEnabled(settings = null) {
+    const s = settings ?? this.loadAppSettingsFromStorage();
+    return s.showPlanUsageLimits ?? this.getDefaultSettings().showPlanUsageLimits ?? true;
+  },
+
   applyHeaderVisibilitySettings() {
     const settings = this.loadAppSettingsFromStorage();
     const defaults = this.getDefaultSettings();
@@ -1967,11 +2007,13 @@ Object.assign(CodemanApp.prototype, {
       ultracodeBtn.classList.toggle('btn-ultracode-agents--hidden', !showUltracodeAgents);
     }
 
-    // Plan-usage chip — hidden by default (App Settings → Display → "Plan Usage
-    // Limits"). Server renders the initial state on reload; this handles a live
-    // toggle from a settings save. Marker class (base is display:inline-flex
-    // !important), matching the response-viewer/multimonitor pattern.
-    const showPlanUsageLimits = settings.showPlanUsageLimits ?? defaults.showPlanUsageLimits ?? false;
+    // Plan-usage chip — shown by default on desktop, OFF on handhelds (App
+    // Settings → Display → "Plan Usage Limits"). The template always ships it
+    // hidden because display is per-device and the server cannot know a
+    // localStorage value, so THIS is what reveals it on every load as well as
+    // on a live toggle. Marker class (base is display:inline-flex !important),
+    // matching the response-viewer/multimonitor pattern.
+    const showPlanUsageLimits = this.planUsageChipEnabled(settings);
     const planUsageChip = document.getElementById('planUsageChip');
     if (planUsageChip) {
       planUsageChip.classList.toggle('header-plan-usage--hidden', !showPlanUsageLimits);
@@ -2246,10 +2288,12 @@ Object.assign(CodemanApp.prototype, {
           'language',
           'terminalWheelLocalScrollback',
           'showSessionButton', 'showAwayDigestButton', 'showCronButton',
+          'mobileOverviewEnabled',
         ]);
-        // The plan-usage chip is a PER-DEVICE display setting (default OFF): desktop
-        // can show it while mobile stays hidden. It used to sync, so an older
-        // server.json may still carry `true` — drop it so the server value is NEVER
+        // The plan-usage chip is a PER-DEVICE display setting (desktop default ON,
+        // handheld default OFF): desktop can show it while mobile stays hidden. It
+        // used to sync, so an older server.json may still carry a value — drop it
+        // so the server value is NEVER
         // seeded into a device that didn't explicitly enable it (collection is handled
         // separately via the statusLineTelemetry action, not this display flag).
         delete appSettings.showPlanUsageLimits;
@@ -2275,7 +2319,8 @@ Object.assign(CodemanApp.prototype, {
         if (notificationPreferences && this.notificationManager) {
           const localNotifPrefs = localStorage.getItem(this.notificationManager.getStorageKey());
           if (!localNotifPrefs) {
-            this.notificationManager.preferences = notificationPreferences;
+            this.notificationManager.preferences =
+              this.notificationManager.normalizePreferences(notificationPreferences);
             this.notificationManager.savePreferences();
           }
         }
