@@ -1,5 +1,15 @@
 # aicodeman
 
+## 1.9.9
+
+### Patch Changes
+
+- Two bug fixes.
+
+  **Plain shell sessions could not start when the server process had no `SHELL` (#208).** The tmux pane command for `mode: 'shell'` was the literal string `$SHELL`. That string is embedded in the `bash -c "..."` argument of the `respawn-pane` line, which is run through `/bin/sh -c`, so it was expanded by the _server_ process's shell against the _server_ process's environment rather than inside the pane. Containers and system-level systemd units do not set `SHELL`, so it expanded to nothing and the pane command ended in a dangling `&&`, giving `bash: -c: line 1: syntax error: unexpected end of file` and a pane that died instantly (status 2) while tmux session creation still reported success. The shell is now resolved in Node (`$SHELL`, then the passwd entry, then `/bin/bash`, `/bin/zsh`, `/bin/sh`), requiring an absolute path to an executable and skipping `nologin`-style stubs, then shell-quoted. Only local shell sessions were affected: agent CLI modes emit a real command, and Docker/remote-SSH cases already used a literal `exec bash -l`.
+
+  **A session name typed into the tab options could be silently dropped.** Two independent paths. In the Session Options modal, the Session Name input saves on blur while every autosave handler bails on a null `editingSessionId`, and `closeSessionOptions()` cleared that id before hiding the modal (hiding is what blurs the input), so the save always ran too late; Escape and backdrop-click lost the name with no PUT at all, and only the X button worked because mousedown blurs first. The focused modal field is now blurred before the id is cleared, which also covers the auto-compact prompt. Separately, the right-click inline rename could be destroyed mid-keystroke: the `_inlineRenameActive` guard was missing from `_renderSessionTabsImmediate()`, so a render queued just before the rename opened still rewrote the tab name's innerHTML, committing a truncated name or closing the rename outright. The debounced executor is now guarded too.
+
 ## 1.9.8
 
 ### Patch Changes

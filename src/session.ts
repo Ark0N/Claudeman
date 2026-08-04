@@ -68,6 +68,7 @@ import {
   getClaudeCliVersion,
   getClaudeBinaryPath,
   spawnPtyWithHelperRepair,
+  resolveLocalShell,
 } from './utils/index.js';
 import {
   MAX_TERMINAL_BUFFER_SIZE,
@@ -1898,8 +1899,9 @@ export class Session extends EventEmitter {
 
     this._resetBuffers();
 
-    // Use user's default shell or bash
-    const shell = process.env.SHELL || '/bin/bash';
+    // Use user's default shell, falling back to a shell that actually exists.
+    // Shared with the tmux pane command so both paths launch the same binary.
+    const shell = resolveLocalShell();
     console.log(
       '[Session] Starting shell session with:',
       shell + (this._useMux ? ` (with ${this._mux!.backend})` : '')

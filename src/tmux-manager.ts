@@ -71,6 +71,7 @@ import {
   resolveCodexDir,
   resolveGeminiDir,
   resolveAntigravityDir,
+  resolveLocalShell,
 } from './utils/index.js';
 import type {
   TerminalMultiplexer,
@@ -773,7 +774,13 @@ export function buildSpawnCommand(options: {
   if (options.mode === 'antigravity') {
     return buildAntigravityCommand(options.antigravityConfig);
   }
-  return '$SHELL';
+  // #208: NOT the literal '$SHELL'. This string is embedded in the `bash -c "…"`
+  // argument of the respawn-pane line, which execSync runs through `/bin/sh -c`,
+  // so a `$SHELL` here is expanded by the SERVER process's shell against the
+  // SERVER process's env — empty in containers and system systemd units, leaving
+  // the pane command ending in a dangling `&&` ("syntax error: unexpected end of
+  // file", pane dead on arrival). Resolve it in Node and quote the result.
+  return shellescape(resolveLocalShell());
 }
 
 /**
