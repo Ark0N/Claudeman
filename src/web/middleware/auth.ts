@@ -159,10 +159,46 @@ function hasValidWebviewCapability(req: FastifyRequest): boolean {
   // capability already implies an authenticated `POST /api/webviews/:id/open`, but
   // the exemption should stay no wider than the problem it solves.
   if (req.method !== 'GET' && req.method !== 'HEAD') return false;
-  if (url.startsWith('/api/') || url.startsWith('/ws/') || url.startsWith('/q/')) return false;
+  if (url.startsWith('/ws/') || url.startsWith('/q/')) return false;
+  // Anything that resolves to a REAL Codeman route is refused, which is the fence
+  // that keeps this from being an auth bypass. `/api/` used to be refused by prefix
+  // instead, but dashboards legitimately serve assets from their own `/api/...`
+  // namespace (`<img src="/api/hero?slug=x">`), and those requests were the one
+  // class the 404 relay could never rescue. See matchesRegisteredRoute.
+  if (matchesRegisteredRoute(req, url)) return false;
 
   const fromReferer = capabilityFromReferer(typeof req.headers.referer === 'string' ? req.headers.referer : undefined);
   return !!fromReferer && webviewCapabilities.resolve(fromReferer) !== undefined;
+}
+
+/**
+ * Whether `url` resolves to a route Codeman actually registered.
+ *
+ * `hasRoute()` is the wrong tool: it matches the registered PATTERN literally, so
+ * `/api/sessions/abc` reports false against a registered `/api/sessions/:id` and
+ * would hand out an exemption on a live API route. `findRoute()` performs the real
+ * radix-tree lookup and fills in `params`, which is what this needs.
+ *
+ * The one complication is `@fastify/static`, mounted at `/`, which registers a
+ * root-level catch-all that matches EVERY path. A match on that means "no real
+ * route, this is heading for the 404 handler", and it is distinguishable because a
+ * root catch-all is the only route whose `*` param comes back equal to the entire
+ * request path. `test/webview-auth-exemption.test.ts` pins both halves of that.
+ *
+ * Fails CLOSED: anything unexpected counts as a real route, which merely denies the
+ * exemption and restores the previous behavior.
+ */
+function matchesRegisteredRoute(req: FastifyRequest, url: string): boolean {
+  try {
+    const found = req.server.findRoute({ method: req.method as 'GET' | 'HEAD', url });
+    if (!found) return false;
+    const params = found.params ?? {};
+    const keys = Object.keys(params);
+    const isRootCatchAll = keys.length === 1 && keys[0] === '*' && `/${params['*']}` === url;
+    return !isRootCatchAll;
+  } catch {
+    return true;
+  }
 }
 
 /**

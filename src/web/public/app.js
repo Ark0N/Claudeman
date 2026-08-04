@@ -800,6 +800,10 @@ class CodemanApp {
     this.applyLocalization();
     this.applyTabWrapSettings();
     this.applyMonitorVisibility();
+    // Must run before the first session:created can arrive: markSessionTabEntering()
+    // ignores ids until this sets up its state, which is what keeps the tabs
+    // restored on page load from animating.
+    this.initEntranceAnimations?.();
     // Remove mobile-init class now that JS has applied visibility settings.
     // The inline <script> in <head> added this to prevent flash-of-content on mobile.
     document.documentElement.classList.remove('mobile-init');
@@ -1563,6 +1567,12 @@ class CodemanApp {
       this.sessionOrder.push(data.id);
       this.saveSessionOrder();
     }
+    // Idempotent per id: the POST response and the session:created event both
+    // land here, and a batch launched together cascades in creation order.
+    this.markSessionTabEntering?.(data.id);
+    // The pane is one shared element, so it is only marked here and played when
+    // this session is actually selected (see selectSession).
+    this.markTerminalEntering?.(data.id);
     this.renderSessionTabs();
     this.updateCost();
     // Start stats polling when first session appears
@@ -1974,7 +1984,7 @@ class CodemanApp {
       // Render conversation thread
       const mode = this.sessions.get(this.activeSessionId)?.mode;
       const agentLabel =
-        mode === 'codex' ? 'Codex' : mode === 'gemini' ? 'Gemini' : mode === 'opencode' ? 'OpenCode' : 'Claude';
+        mode === 'codex' ? 'Codex' : mode === 'gemini' ? 'Gemini' : mode === 'antigravity' ? 'Antigravity' : mode === 'opencode' ? 'OpenCode' : 'Claude';
       body.innerHTML = '';
       for (const msg of messages) {
         const div = document.createElement('div');
@@ -3280,6 +3290,13 @@ class CodemanApp {
   }
 
   _renderSessionTabsImmediate() {
+    // Same guard as renderSessionTabs()/_fullRenderSessionTabs(): the incremental
+    // branch below rewrites .tab-name's innerHTML, which destroys the inline rename
+    // <input> mid-keystroke. Guarding only the scheduler is not enough: a render
+    // debounced just BEFORE the rename opened still fires ~100ms later and lands
+    // here directly. finishRename() re-renders on both commit and cancel, so a
+    // render dropped here is picked back up when the rename settles.
+    if (this._inlineRenameActive) return;
     const container = this.$('sessionTabs');
     const existingTabs = container.querySelectorAll('.session-tab[data-id]');
     const existingIds = new Set([...existingTabs].map(t => t.dataset.id));
@@ -3443,6 +3460,13 @@ class CodemanApp {
     }
 
     this.updateTabOverflowMode();
+    // After the wrap measurement: the `unroll` style starts tabs at max-width 0,
+    // so measuring mid-animation would decide the wrap on collapsed widths.
+    this._applyTabEntrances?.();
+    // Phone overview rides on this one call: every state change it cares about
+    // (create, delete, idle, working, exit, hook alerts via updateTabAlertFromHooks)
+    // already funnels through here. No-ops unless that surface is showing.
+    this._refreshMobileOverviewIfVisible?.();
   }
 
   // Auto-wrap desktop session tabs to a second row when they overflow one row,
@@ -3532,7 +3556,7 @@ class CodemanApp {
           <span class="tab-status ${status}" aria-hidden="true"></span>
           <span class="tab-info">
             <span class="tab-name-row">
-              ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : mode === 'opencode' ? '<span class="tab-mode opencode" aria-hidden="true">oc</span>' : mode === 'codex' ? '<span class="tab-mode codex" aria-hidden="true">cx</span>' : mode === 'gemini' ? '<span class="tab-mode gemini" aria-hidden="true">gm</span>' : ''}
+              ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : mode === 'opencode' ? '<span class="tab-mode opencode" aria-hidden="true">oc</span>' : mode === 'codex' ? '<span class="tab-mode codex" aria-hidden="true">cx</span>' : mode === 'gemini' ? '<span class="tab-mode gemini" aria-hidden="true">gm</span>' : mode === 'antigravity' ? '<span class="tab-mode antigravity" aria-hidden="true">ag</span>' : ''}
               <span class="tab-name" data-session-id="${id}">${(() => { const p = parseSessionPrefix(name); return p && p.suffix ? '<span class="tab-prefix">' + escapeHtml(p.prefix) + '</span><span class="tab-suffix">: ' + escapeHtml(p.suffix) + '</span>' : escapeHtml(name); })()}</span>
               <span class="tab-detached-badge" aria-hidden="true">detached</span>
             </span>
@@ -3569,6 +3593,9 @@ class CodemanApp {
     // toggle (applyTabWrapSettings calls this) which would otherwise leave a stale
     // tabs-auto-wrap class until the next content render.
     this.updateTabOverflowMode();
+    // Newly created tabs animate in; a re-render mid-cascade resumes them rather
+    // than restarting, since this rebuild just destroyed the animating elements.
+    this._applyTabEntrances?.();
   }
 
   // Set up arrow key navigation for session tabs (accessibility)
@@ -4100,6 +4127,10 @@ class CodemanApp {
     // selectSession or reconnect catches up.
     this._updateSseSubscription(sessionId);
     this.hideWelcome();
+    // Terminal-pane entrance: plays for a freshly created session, and on every
+    // switch when that option is on. Transform/opacity/clip-path only, xterm's
+    // FitAddon reads the untransformed layout box, so this cannot reach the PTY.
+    this.playTerminalEntrance?.(sessionId);
     // Clear idle hooks on view, but keep action hooks until user interacts
     this.clearPendingHooks(sessionId, 'idle_prompt');
     // Instant active-class toggle (no 100ms debounce), then schedule full render for badges/status
@@ -4610,7 +4641,9 @@ class CodemanApp {
           ? 'Kill Tmux & Codex'
           : session.mode === 'gemini'
             ? 'Kill Tmux & Gemini'
-            : 'Kill Tmux & Claude Code';
+            : session.mode === 'antigravity'
+              ? 'Kill Tmux & Antigravity'
+              : 'Kill Tmux & Claude Code';
     }
 
     document.getElementById('closeConfirmModal').classList.add('active');

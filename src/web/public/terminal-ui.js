@@ -1178,6 +1178,19 @@ Object.assign(CodemanApp.prototype, {
   },
 
   showWelcome() {
+    // Phones get the session overview instead of the welcome screen: on a small
+    // screen "which session is blocked on me" beats "how do I start one". The
+    // gate lives in mobile-overview.js; every other device falls through
+    // unchanged. Both surfaces are toggled here so a breakpoint change (rotate,
+    // unfold) swaps cleanly instead of showing both.
+    if (this.shouldUseMobileOverview?.()) {
+      const overlay = document.getElementById('welcomeOverlay');
+      if (overlay) overlay.classList.remove('visible');
+      this.showMobileOverview();
+      this._updateCjkInputState?.();
+      return;
+    }
+    this.hideMobileOverview?.();
     const overlay = document.getElementById('welcomeOverlay');
     if (overlay) {
       overlay.classList.add('visible');
@@ -1191,6 +1204,7 @@ Object.assign(CodemanApp.prototype, {
   },
 
   hideWelcome() {
+    this.hideMobileOverview?.();
     const overlay = document.getElementById('welcomeOverlay');
     if (overlay) {
       overlay.classList.remove('visible');

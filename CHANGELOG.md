@@ -1,5 +1,165 @@
 # aicodeman
 
+## 1.9.9
+
+### Patch Changes
+
+- Two bug fixes.
+
+  **Plain shell sessions could not start when the server process had no `SHELL` (#208).** The tmux pane command for `mode: 'shell'` was the literal string `$SHELL`. That string is embedded in the `bash -c "..."` argument of the `respawn-pane` line, which is run through `/bin/sh -c`, so it was expanded by the _server_ process's shell against the _server_ process's environment rather than inside the pane. Containers and system-level systemd units do not set `SHELL`, so it expanded to nothing and the pane command ended in a dangling `&&`, giving `bash: -c: line 1: syntax error: unexpected end of file` and a pane that died instantly (status 2) while tmux session creation still reported success. The shell is now resolved in Node (`$SHELL`, then the passwd entry, then `/bin/bash`, `/bin/zsh`, `/bin/sh`), requiring an absolute path to an executable and skipping `nologin`-style stubs, then shell-quoted. Only local shell sessions were affected: agent CLI modes emit a real command, and Docker/remote-SSH cases already used a literal `exec bash -l`.
+
+  **A session name typed into the tab options could be silently dropped.** Two independent paths. In the Session Options modal, the Session Name input saves on blur while every autosave handler bails on a null `editingSessionId`, and `closeSessionOptions()` cleared that id before hiding the modal (hiding is what blurs the input), so the save always ran too late; Escape and backdrop-click lost the name with no PUT at all, and only the X button worked because mousedown blurs first. The focused modal field is now blurred before the id is cleared, which also covers the auto-compact prompt. Separately, the right-click inline rename could be destroyed mid-keystroke: the `_inlineRenameActive` guard was missing from `_renderSessionTabsImmediate()`, so a render queued just before the rename opened still rewrote the tab name's innerHTML, committing a truncated name or closing the rename outright. The debounced executor is now guarded too.
+
+## 1.9.8
+
+### Patch Changes
+
+- **Fixed: sessions failed to start on macOS with `Error: posix_spawnp failed.`** (issues #6 and #204)
+
+  `node-pty@1.1.0` publishes its macOS prebuilt helper as `prebuilds/darwin-<arch>/spawn-helper` with mode 0644, i.e. no execute bit. macOS launches every PTY through that helper, so a stock install failed on every session start. The bug is macOS-only: `spawn-helper` is a mac-only gyp target and node-pty ships no Linux prebuild, so Linux always compiles a correctly-permissioned helper from source.
+
+  The previous fix chmodded only `build/Release/spawn-helper`, which on macOS does not exist (the prebuild is used, so node-gyp never runs), and it derived that path from `require.resolve('node-pty')`, landing on `<pkg>/lib/build/Release/...`. It was a no-op on every platform.
+  - New `scripts/fix-node-pty.mjs` (also `npm run fix:node-pty`) chmods every `spawn-helper` it finds, in `build/Release`, `build/Debug` and each `prebuilds/*/`, then verifies the result by actually opening a PTY. A `require()` alone passes on a broken install, because the helper is only touched at spawn time.
+  - `postinstall` no longer force-rebuilds node-pty from source on Node 22+. That step needed Xcode command line tools, cost 30-120s on every install, and deleted the `prebuilds/` tree before compiling, so a Mac without a compiler was left with no working binary at all. A rebuild now happens only when the chmod plus spawn probe still fails, and the prebuilds tree is backed up and restored around it.
+  - New `spawnPtyWithHelperRepair()` (`src/utils/node-pty-repair.ts`) wraps every `pty.spawn()` in `session.ts`, so an install that is already broken repairs itself on the first failed spawn and retries in-process instead of showing a dead session. Unrelated spawn errors are rethrown untouched; a second failure carries the `npm run fix:node-pty` hint.
+  - `scripts/fix-node-pty.mjs` is now in the published `files` list, so global npm installs get the repair too.
+  - Direct-PTY Claude spawns use the resolved absolute binary path (new `getClaudeBinaryPath()`) instead of the bare name `claude`, so a CLI installed outside the server's PATH still launches.
+
+  Verified end to end on macOS 26.4 arm64: a stock `npm i` reproduces `posix_spawnp failed.`, and after the fix the same install spawns a PTY successfully with the prebuilds preserved.
+
+  **Added: phone home screen (session overview)**
+
+  Under 430px the "C" logo now opens a session overview (current sessions, past sessions, spaces) instead of the welcome overlay: on a small screen "which session needs me" beats "how do I start one". Rows resume a session in place, and "New session here" goes through the normal quick-start path so remote and Docker cases keep their routing. Per-device setting `mobileOverviewEnabled` (phones only, default ON) in App Settings. Tablet and desktop are unchanged.
+
+  **Added: guided Tailscale setup in `install.sh`**
+
+  The network-access prompt is now 3-way: Tailscale, LAN, or local-only. The Tailscale path binds loopback and walks through installing Tailscale, logging in, the operator grant, the tailnet HTTPS-certificates toggle, and `tailscale serve --bg <port>`, then verifies the result end to end with curl. That gives HTTPS on a real certificate with no app password and no `0.0.0.0` bind, which is also what PWA install and web push need. `install.sh tailscale` retrofits it onto an existing install, and `CODEMAN_TAILSCALE=1` presets the choice. Serve state is detected from `tailscale serve status --json`; the installer never runs `tailscale serve reset` and never touches serve mappings other than 443 to Codeman's port. README and `docs/security-architecture.md` updated to match.
+
+  **Docs**: replaced a real tailnet hostname with placeholders in `docs/web-tabs-fixes-plan.md`.
+
+  **xterm-zerolag-input**: npm description and keywords only, no code change.
+
+## 1.9.7
+
+### Patch Changes
+
+- Antigravity run mode, plus opt-in entrance animations.
+
+  **Antigravity CLI backend (#207).** Antigravity (`agy`) joins Claude Code, shell, OpenCode, Codex and Gemini as a sixth session backend, following the same pluggable-resolver pattern: `utils/antigravity-cli-resolver.ts` resolves the CLI and `GET /api/antigravity/status` reports availability and path. `ANTIGRAVITY_*` is added to the `ALLOWED_ENV_PREFIXES` allowlist so env overrides stay CLI-scoped rather than blanket-forwarded. Like the other external CLIs it requires tmux with no direct PTY fallback, because secrets are injected through socket-scoped `tmux setenv` and never on the spawn command line. The UI gains a Run-dropdown entry, an agent-type option, an `ag` tab badge and toolbar colours; `runAntigravity()` routes remote and docker cases through `POST /api/quick-start` and skips the local status probe for them.
+
+  **Entrance animations (opt-in, OFF by default).** Optional animations for the four things that appear when work starts: session tabs, the terminal pane a session's CLI runs in, floating agent windows, and the connection lines tying a window back to its parent tab. Defaults are the `legacy` theme, so an untouched install behaves exactly as before and every hook short-circuits on its first line. Choose a look in App Settings > Appearance > Entrance Animations (per-device, stored in localStorage rather than the settings payload); `?animlab=1` opens a per-surface picker with a live preview that fakes tabs, a pane, a window and a line so styles can be compared without spawning sessions.
+
+  Three implementation notes worth knowing if you touch this: tabs and connection lines are destroyed mid-animation on every re-render (`_fullRenderSessionTabs()` replaces the strip's innerHTML, `_updateConnectionLinesImmediate()` clears the SVG), so both are tracked by id and re-applied to the fresh element with a negative `animation-delay` that resumes rather than restarts them; terminal-pane styles animate transform, opacity and clip-path only, because xterm's FitAddon derives rows and columns from the untransformed layout box and animating width or height there would resize the PTY; and window styles that transform also move the rect their connection line aims at, which is why the `beam` style animates opacity and filter only.
+
+  Also fixes an agent window spawning hidden (its agent belongs to a background tab): being `display:none` it never ran its animation, so `animationend` never fired and the entrance class plus its inline custom property stuck to the window permanently. Hidden windows now skip the entrance entirely.
+
+## 1.9.6
+
+### Patch Changes
+
+- Two fixes from community PRs (thanks @Lint111):
+  - fix(transcripts): complete tools from user-entry results (#177). Claude transcripts record tool requests in assistant entries but commonly carry their results in user-role entries; the transcript watcher only completed tools from the older assistant-entry path, so Codeman could keep showing a tool as running after it had finished. The watcher now recognizes `tool_result` blocks in user entries, ends the active tool state, and emits `transcript:tool_end` with the correct tool name and error status. Watcher tests also moved from fixed sleeps to condition-based `vi.waitFor` assertions.
+  - fix(notifications): quiet lifecycle hook noise (#178). Notification preferences move to schema version 5: the drawer-only "Response complete" (stop) default is now off, and the migration disables only the legacy drawer-only shape, preserving any explicit browser, audio, or push delivery the user opted into. Teammate-idle and task-completed hooks now map to the existing opt-in subagent categories instead of the broadly enabled idle/stop alerts, so normal agent activity no longer floods the drawer. Local and server-hydrated preferences are normalized through the same migration path (server hydration used to revive the retired default on fresh browsers), and the notification storage key now uses the stable handheld identity so an unfolded foldable keeps its mobile defaults and storage key (tablets and desktops unaffected).
+
+## 1.9.5
+
+### Patch Changes
+
+- Background-Bash rewake hook, hooks self-heal that preserves user hooks, and test-harness isolation.
+  - New `PostToolUse(Bash)` hook (PR #176): a self-contained `node -e` helper watches the session transcript for a background command's completion notification and uses Claude Code's `asyncRewake` to wake an idle agent (exit code 2), without injecting terminal input that could submit a user's draft. Works on Claude Code 2.1.207+; older CLIs strip the fields harmlessly.
+  - Hooks self-heal (`refreshStaleHookSecret` renamed to `refreshStaleCodemanHooks`) now replaces only Codeman-owned handlers, preserving user events, matchers, and sibling handlers in mixed configurations; `writeHooksConfig` merges instead of clobbering the hooks key at case creation (PR #176).
+  - Rewake helper hardening: self-terminates on its own 6h deadline and when orphaned; the marker is versioned (V2) with a version-agnostic ownership prefix so future script updates replace older handlers instead of duplicating them.
+  - Hook timeout units fixed: the hook `timeout` field is seconds (the CLI multiplies by 1000), so `HOOK_TIMEOUT_MS = 10000` gave curl hooks a ~2.8-hour effective timeout; now `HOOK_TIMEOUT_SECONDS = 10`.
+  - Test-harness isolation (PR #175): every test file gets a temporary `HOME`/`USERPROFILE` so tests cannot touch real Codeman state or delete real case directories, and `Session` attaches a raw-mode echo PTY instead of a real tmux client under Vitest. Fixes the quick-start suite deleting the real `~/codeman-cases/testcase`.
+  - CI stability: drain console-log rpc forwards before worker teardown (fixes a run-failing `EnvironmentTeardownError` with all tests passing); `test/webview-proxy.test.ts` no longer accidentally runs under the jsdom environment via a directive named in a comment.
+  - Release workflow pins the GitHub "Latest" badge to the Codeman release.
+
+## 1.9.4
+
+### Patch Changes
+
+- Fix a latent bug where a partial settings PUT silently reset live service state, and trim the `xterm-zerolag-input` README callout.
+  - **`PUT /api/settings` no longer resets watchers on a partial body.** The three `toggleService` calls (subagent watcher, workflow-run watcher, image watcher) read the raw request body with `??` defaults, so every key a caller omitted was treated as "apply the default". A body of just `{statusLineTelemetry:true}` would START the subagent watcher and STOP the workflow and image watchers, undoing the persisted config. They now resolve from `merged` (persisted settings + incoming), the same convention the `tmuxHistoryLimit` branch in that handler already used, so any PUT reconciles services to the effective stored state. Nothing triggered this in practice because every shipped client sends a full settings payload rebuilt from the DOM, but it was a trap for the next partial-update caller.
+  - **Regression test**: `test/routes/system-routes-settings-partial-put.test.ts` (4 cases) pins both directions, omitted keys preserve state and explicit keys still take effect. Verified to fail against the pre-fix handler.
+  - **CLAUDE.md** records the rule under "Adding Features → App setting": anything acting on a setting in that handler must resolve from `merged`, never the request body.
+  - **`xterm-zerolag-input` README**: removed the links line (getcodeman.com / install one-liner / star link) from the Codeman callout above the demo GIF. The callout keeps its links in the heading and body.
+
+## 1.9.3
+
+### Patch Changes
+
+- Plan-usage chip now defaults ON on desktop, plus the reworked `xterm-zerolag-input` README.
+  - **Plan-usage chip defaults ON (desktop).** The `showPlanUsageLimits` chip (live 5-hour and weekly plan usage from the Claude statusline) used to be opt-in and default OFF, so most users never saw it. Desktop now defaults ON; handhelds still default OFF so the phone header stays minimal and the `mobile-header-buttons-policy` guard keeps passing. Devices with an explicitly stored preference keep whatever they chose, so nobody's OFF gets overridden.
+  - **One resolver behind the chip.** Added `planUsageChipEnabled()` in settings-ui.js and routed all three call sites through it: the App Settings checkbox, the chip's visibility, and the create-time `statusLineTelemetry` flag in session-ui.js. Those three had independent `?? false` / `=== true` defaults, and a chip revealed without the telemetry flag renders `—` forever, so a default flip on one site alone would have shipped a permanently empty chip.
+  - **Cron button comment corrected.** The App Settings comment claimed "Cron button defaults ON" while the code, the template (`btn-cron--hidden`) and the CSS all default it OFF. Verified against a fresh browser profile: the button is hidden and its checkbox unchecked out of the box. Comment now matches, and states why the two halves stay consistent.
+  - **Docs.** CLAUDE.md, `docs/architecture-invariants.md` and `docs/usage-limits-display-plan.md` updated for the new default and the single-resolver rule; the stale `styles.css` comment claiming the server strips the chip's hidden class at render was corrected (display is per-device, so the client reveals it).
+  - **`xterm-zerolag-input` README rework** (0.1.5 shipped the content; this republishes with the graphic and promo changes): replaced the misaligned 8-line keystroke-flow diagram with a two-line stock-vs-zerolag contrast, added a Codeman callout above the demo GIF with links to getcodeman.com and the repo, and rewrote the Origin section so it argues the extraction story instead of repeating the promo.
+
+## 1.9.2
+
+### Patch Changes
+
+- Rewrite the `xterm-zerolag-input` package README as a value-first document and correct the drift that had accumulated against the source.
+  - Added the side-by-side phone demo GIF (`docs/images/zerolag-demo-20260728.gif`) as the hero image, referenced by absolute raw URL so it renders on npmjs.com as well as GitHub. The two-phone comparison shows 0ms local echo next to a 600ms-2.7s server echo on the same session.
+  - New "Why this one" comparison table, an explicit list of target use cases (SSH web clients, cloud IDEs, mobile terminals, container consoles), and a bundle-size badge (6.1 kB gzipped, measured from the ESM build).
+  - Corrected the test-count badge from 78 to the actual 175 tests across 5 files, in both the package README and the Published Packages section of the root README.
+  - Removed the stale "Unicode/emoji rendered at single-cell width" limitation. CJK, fullwidth forms and emoji have had double-width rendering and visual-column positioning since the wide-character fix; the honest remaining caveat (per-code-point width summing over-counts ZWJ grapheme clusters) replaces it.
+  - Documented the previously undocumented public `setPrompt()` method for switching prompt strategies at runtime, and the new "Wide characters (CJK, emoji)" integration section covering the optional `Unicode11Addon` path and the built-in range-table fallback.
+  - Documented `backgroundColor: 'transparent'`, corrected the `foregroundColor` default, and updated the grid-alignment math to reflect visual-column positioning rather than character index.
+
+  No source changes, docs only.
+
+## 1.9.1
+
+### Patch Changes
+
+- Narrow the Run dropdown, and close the last two gaps in web-tab asset rewriting.
+
+  **The Run dropdown was pinned at its full width.** It capped at 300px, and the recent-session rows wanted 326px, so it always rendered at the cap and reached further across the terminal than it needed to. Now 250px, chosen as the width at which a `~/<dir>/<repo>` + timestamp row still fits whole, since identifying a session to resume is what that list is for. Three fixes were needed to make the narrower menu degrade instead of clip: the saved-URL label now has its own element, because `text-overflow` on the row button did nothing (a bare text node inside a flex container becomes an anonymous flex item that ellipsis cannot reach); `.hist-dir` got `min-width: 0`, without which a flex item refuses to shrink below its own text and pushes the date out of the box; and history rows are held to the container width, because the list's `overflow-y: auto` implicitly makes `overflow-x: auto` and let each row size to its own content and scroll sideways. Phone and tablet widths are unchanged, being set separately in `mobile.css`.
+
+  **A dashboard's own `/api/...` assets are relayed again.** The `Referer`-keyed 404 fallback, which rescues a root-absolute asset that no rewrite layer could reach, refused everything under `/api` outright. Dashboards commonly serve their assets from exactly that namespace, so those requests had no rescue at all. The refusal is now precise: the relay runs before the API-shaped 404, and the auth exemption refuses only paths that resolve to a REAL Codeman route, with `/ws/` and `/q/` still refused by prefix.
+
+  Two findings shaped that fence, both from probing Fastify rather than reading it. `hasRoute()` matches the registered PATTERN literally, so `/api/sessions/abc` reports no match against a registered `/api/sessions/:id` and would have granted an unauthenticated exemption on a live session-scoped route; `findRoute()` performs the real lookup and is what the fence uses. And `@fastify/static` is mounted at `/`, so it registers a root catch-all matching every path, which has to count as "no real route" or the fence would refuse every referer-form request and break the rescue that already worked. A root catch-all is distinguishable because it is the only route whose wildcard param comes back equal to the whole request path. The fence fails closed, and both edges are pinned in `test/webview-auth-exemption.test.ts`.
+
+  **`url()` inside runtime CSS is rewritten.** Measuring the fallback against a purpose-built dashboard showed one sink no relay can reach: a `<style>` element built by page script has no URL of its own, so the browser sends an EMPTY `Referer` with the image request it triggers. The injected URL shim now rewrites root-absolute `url()` in `<style>` blocks, both as markup and when a `<style>` node is inserted. Verified in Chromium: a stylesheet-only `/api/hero.png` and a runtime `<style>` `/api/late.png` both load, where both previously failed. The remaining known gap is self-navigation via `location.href`, which cannot be patched because `Location.href` is unforgeable.
+
+## 1.9.0
+
+### Minor Changes
+
+- 2667150: feat(mobile): browse and insert local file and folder paths
+
+  Add a root-confined filesystem picker to Link Existing and the extended mobile
+  keyboard bar. Selected paths remain editable at the active prompt, supported
+  images/documents/text files open in a safe inline preview, and a new one-tap
+  action clears only the current unsent input without invoking `/clear`.
+
+### Patch Changes
+
+- 3cff98f: Fix two multi-user scoping holes in the new filesystem path picker. `GET /api/filesystem/browse` and `GET /api/filesystem/preview` accept an optional `sessionId` that contributes the session's working directory as a browse root, but they resolved it straight off the session map without an ownership check, unlike the nine other session-scoped handlers in the same route file. A non-admin could therefore pin another user's working directory as a root simply by passing their session id, then list and preview files under it. Both endpoints now run `canAccessOwned` and report 404, which also avoids confirming that a session id exists.
+
+  Separately, `Home` and `CASES_DIR` were unconditional browse roots for every caller. Per-user spaces live at `<USER_SPACES_DIR>/<username>`, which is inside `homedir()`, so the `Home` root alone exposed every other user's workspace to any authenticated user. In multi-user mode a non-admin now gets only their own space plus anything explicitly listed in `CODEMAN_FILE_PICKER_ROOTS`; `/mnt/d` is no longer offered by default, since a broad host mount should be an explicit operator decision in a multi-user deployment. Admins keep the host-wide roots, and single-user mode is unchanged.
+
+  Both holes are regression-guarded in `test/routes/file-routes.test.ts`, verified to fail against the previous code. Multi-user mode is opt-in and off by default, so single-user installs were never affected.
+
+- Web tabs: delete saved URLs from the Run dropdown, and fix images in proxied dashboards.
+
+  **Saved URLs are now manageable from the dropdown.** Each row under "Web / URL" gains a gear and an `x`, so a URL can be edited or deleted without first opening it as a tab. Previously the only delete path ran through the gear on an open tab, which was a dead end for a URL you no longer wanted open at all. Both controls stay permanently visible rather than hover-revealed, because the same menu is used on touch, and they get a larger hit box there. Deleting leaves the dropdown open on the remaining rows, and deleting the dashboard that is currently open also closes its tab and unmounts its frame.
+
+  **Runtime-injected images no longer 404.** A dashboard that renders its own markup from script (`card.innerHTML = '<img src="/api/hero?slug=x">'`, `img.src = '/api/slide'`) escaped every rewrite layer at once: `<base href>` never applies to a root-absolute URL, the server-side attribute rewrite only ever sees the initial document, and `runtimeUrlShim()` patched only `fetch`, `XMLHttpRequest`, `WebSocket` and `EventSource`. Those requests landed on Codeman's own root and 404'd, with a symptom that reads as an upstream fault: the dashboard's data loaded while every image stayed broken.
+
+  The shim now also covers the DOM URL sinks, so the request is never emitted in the first place and neither the `/api` fence in the 404 fallback nor the one in the auth middleware had to move. It wraps `innerHTML`, `outerHTML`, `insertAdjacentHTML` (including on `ShadowRoot`), `setAttribute`/`setAttributeNS`, and the `src`/`srcset`/`href`/`poster`/`data`/`action` property setters on img, source, media, video poster, script, iframe, embed, track, link, anchor, area, object and form, with a `MutationObserver` as a last net for sinks not patched above. Every rewrite routes through the same idempotent helper, which matters because unlike the server-side rewrite this one sees markup that may already be proxied, and a page re-injecting its own `outerHTML` would otherwise double-prefix. Everything is defensively guarded and marked so a double injection cannot wrap an already-wrapped setter.
+
+  Measured against a real dashboard: 693 image elements, 0 of them under the proxy prefix and 0 of 23 in-viewport images decoded before, 693 and 23 of 23 after. Covered by a new jsdom suite over the shim's DOM half and a new frontend suite over the dropdown rows. Known remaining gaps are documented in `docs/web-tabs.md`: a root-absolute `url()` inside a stylesheet injected at runtime, and self-navigation via `location.href`, which cannot be patched because `Location.href` is unforgeable.
+
+  Also in this release: a value-first README overhaul pointing at getcodeman.com, and the QR-auth distribution test now uses a chi-square check instead of a max-deviation threshold that failed on random variance.
+
+- bca56b4: Normalize Claude conversations in the response viewer. A Claude transcript is an append-only event log, so one logical exchange spans many JSONL rows: tool-result rows, meta/image/skill rows, compact summaries, task and team notifications, sidechains, replayed assistant snapshots, and multi-block assistant output. The viewer rendered a card per row, which produced duplicate and truncated cards that read as lost responses. Cards are now built at real human-turn boundaries, replayed assistant snapshots are deduplicated, and sidechain rows (which belong to subagents, not the main conversation) no longer leak in. An identical prompt that legitimately recurs after an assistant reply is still kept as its own turn.
+
+  Measured over 40 real transcripts: 3108 cards became 621, duplicate cards dropped from 74 to 8 (all of them genuinely repeated turns), no assistant text was lost, and the non-`context=full` last-response text was byte-identical on every file.
+
+  Also rebinds recovered sessions to their transcript. `reconcileSessions()` can recover a lost mux session as a `restored-<uuid8>` placeholder with a stale working directory, which made transcript lookup by cwd find nothing. The placeholder still carries the first eight characters of the conversation UUID, so the viewer now rebinds to the matching top-level transcript when exactly one candidate matches.
+
 ## 1.8.3
 
 ### Patch Changes

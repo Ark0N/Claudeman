@@ -245,6 +245,119 @@ describe('Inline rename input', () => {
     expect(result.threw).toBe(false);
   });
 
+  it('Render guard: _renderSessionTabsImmediate() does not destroy an open rename input', async () => {
+    await resetState();
+
+    // The debounced tab render is scheduled by renderSessionTabs() but EXECUTED by
+    // _renderSessionTabsImmediate(). A render queued just before the rename opened
+    // still fires ~100ms later and lands in the executor directly, so the guard has
+    // to live there too, otherwise the incremental branch rewrites .tab-name's
+    // innerHTML and the user's half-typed description is lost.
+    //
+    // The tab MUST live inside the real #sessionTabs container and be the only
+    // session in app.sessions: the renderer walks that container, so a synthetic
+    // node parked on <body> would make this test pass with the guard removed.
+    const result = await page.evaluate(() => {
+      const app = (
+        window as unknown as {
+          app: {
+            sessions: Map<string, { id: string; name: string; status: string }>;
+            sessionOrder: string[];
+            startInlineRename: (id: string) => void;
+            _renderSessionTabsImmediate: () => void;
+            _activeRename: unknown;
+          };
+        }
+      ).app;
+      const id = 'render-race';
+      app.sessions.set(id, { id, name: 'w9-case', status: 'idle' });
+      app.sessionOrder = [id];
+
+      const container = document.getElementById('sessionTabs') as HTMLElement;
+      const tab = document.createElement('div');
+      tab.setAttribute('data-test-tab', '1');
+      tab.className = 'session-tab';
+      tab.dataset.id = id;
+      tab.innerHTML =
+        '<span class="tab-status idle"></span><span class="tab-info"><span class="tab-name-row">' +
+        `<span class="tab-name" data-session-id="${id}">w9-case</span>` +
+        '</span></span>';
+      container.appendChild(tab);
+
+      app.startInlineRename(id);
+      const input = document.querySelector('input.tab-rename-input') as HTMLInputElement | null;
+      if (!input) return { opened: false };
+      input.value = 'half-typed';
+
+      // Exactly what a debounce timer queued before the rename would do.
+      app._renderSessionTabsImmediate();
+
+      const after = document.querySelector('input.tab-rename-input') as HTMLInputElement | null;
+      return {
+        opened: true,
+        stillInDom: !!after && document.body.contains(after),
+        value: after?.value ?? null,
+        renameStillActive: !!app._activeRename,
+      };
+    });
+
+    expect(result.opened).toBe(true);
+    expect(result.stillInDom).toBe(true);
+    expect(result.value).toBe('half-typed');
+    expect(result.renameStillActive).toBe(true);
+  });
+
+  it('Modal: closeSessionOptions() commits the Session Name field before clearing the id', async () => {
+    await resetState();
+
+    // Every autosave handler in the session-options modal bails on a null
+    // editingSessionId, and hiding the modal blurs the focused input. If the id is
+    // cleared first, the blur-driven save is dropped and the typed name vanishes,
+    // which is what Escape and backdrop-click used to do.
+    const result = await page.evaluate(async () => {
+      const app = (
+        window as unknown as {
+          app: {
+            editingSessionId: string | null;
+            sessions: Map<string, { id: string; name: string }>;
+            closeSessionOptions: () => void;
+          };
+        }
+      ).app;
+      app.sessions.set('modal-id', { id: 'modal-id', name: 'w9-case' });
+      app.editingSessionId = 'modal-id';
+
+      const nameInput = document.getElementById('modalSessionName') as HTMLInputElement;
+      const modal = document.getElementById('sessionOptionsModal') as HTMLElement;
+      modal.classList.add('active');
+      // The Session Name field lives on the modal's Context tab, which is hidden
+      // until selected: a hidden input cannot take focus.
+      document.getElementById('context-tab')?.classList.remove('hidden');
+      nameInput.value = 'mydesc';
+      nameInput.focus();
+      const wasFocused = document.activeElement === nameInput;
+
+      let putBody: string | null = null;
+      const origFetch = window.fetch;
+      window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).includes('/api/sessions/modal-id/name')) putBody = String(init?.body ?? '');
+        return new Response('{"success":true}', { status: 200 });
+      }) as typeof window.fetch;
+
+      app.closeSessionOptions();
+      await new Promise((r) => setTimeout(r, 30));
+      window.fetch = origFetch;
+      modal.classList.remove('active');
+
+      return { wasFocused, putBody, editingAfter: app.editingSessionId };
+    });
+
+    expect(result.wasFocused).toBe(true);
+    // Prefixed session: the suffix the user typed is appended to the w9-case prefix.
+    expect(result.putBody).toContain('w9-case: mydesc');
+    expect(result.editingAfter).toBe(null);
+  });
+
   it('Re-entry: starting rename while one is active aborts the previous one', async () => {
     await resetState();
     expect(await startRename('first-id', 'First')).toBe(true);

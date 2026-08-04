@@ -42,9 +42,16 @@ beforeEach(async () => {
   // Stand-ins for the real surfaces, so a reachable route means auth let it through.
   app.all('/webview/:cap/*', async () => ({ proxied: true }));
   app.all('/api/sessions', async () => ({ sensitive: true }));
+  // Parametric on purpose: the exemption's fence has to resolve a CONCRETE url
+  // against it, which is precisely what `hasRoute()` cannot do.
+  app.all('/api/sessions/:id', async () => ({ sensitive: true }));
+  app.all('/q/:token', async () => ({ qr: true }));
   app.get('/', async () => 'app shell');
-  app.get('/static/app.js', async () => 'asset');
   app.get('/webviewfoo/bar', async () => 'lookalike');
+  // Stand-in for @fastify/static mounted at '/', which is what actually serves
+  // /static/app.js in production. It matches EVERY path, so the fence must treat a
+  // root catch-all as "no real route" or the Referer form could never apply at all.
+  app.get('/*', async () => 'static asset');
   await app.ready();
 });
 
@@ -109,6 +116,21 @@ describe('the exemption applies to a live capability', () => {
     });
     expect(res.statusCode).toBe(200);
   });
+
+  it("covers the dashboard's OWN /api namespace, which no Codeman route claims", async () => {
+    // A dashboard serving `<img src="/api/hero?slug=x">` from page script is the
+    // case this exists for: the URL is root-absolute, so it lands on Codeman, and
+    // nothing here matches a real route. Refusing it by `/api` prefix (as this once
+    // did) left dashboard images permanently broken with no way to rescue them.
+    for (const url of ['/api/hero?slug=x', '/api/slide?owner=o&n=01', '/api/preview']) {
+      const res = await app.inject({
+        method: 'GET',
+        url,
+        headers: { referer: `http://localhost/webview/${capability}/panel` },
+      });
+      expect(res.statusCode, url).toBe(200);
+    }
+  });
 });
 
 describe('the exemption does NOT widen anywhere else', () => {
@@ -132,14 +154,50 @@ describe('the exemption does NOT widen anywhere else', () => {
     expect((await app.inject({ method: 'GET', url: '/webviewfoo/bar' })).statusCode).toBe(401);
   });
 
-  it('NEVER exempts the Codeman API, even with a valid capability in the Referer', async () => {
-    // This is the hole the Referer form would open if it were not path-fenced.
+  it('NEVER exempts a real Codeman API route, even with a valid capability in the Referer', async () => {
+    // This is the hole the Referer form would open if it were not fenced.
     const res = await app.inject({
       method: 'GET',
       url: '/api/sessions',
       headers: { referer: `http://localhost/webview/${capability}/panel` },
     });
     expect(res.statusCode).toBe(401);
+  });
+
+  it('NEVER exempts a PARAMETRIC API route matched by a concrete url', async () => {
+    // The fence has to route `/api/sessions/abc` onto `/api/sessions/:id`. A literal
+    // pattern check (`hasRoute`) reports no match here and would hand out an
+    // exemption on a live, session-scoped API route.
+    for (const url of ['/api/sessions/abc', '/api/sessions/abc?x=1']) {
+      const res = await app.inject({
+        method: 'GET',
+        url,
+        headers: { referer: `http://localhost/webview/${capability}/panel` },
+      });
+      expect(res.statusCode, url).toBe(401);
+    }
+  });
+
+  it('still refuses the websocket namespace outright', async () => {
+    // `/q/` is deliberately absent here: QR login is PUBLIC by its own bypass
+    // (an unauthenticated device is the entire point), so it can never demonstrate
+    // anything about this exemption. The `/q/` guard alongside it is belt-and-braces.
+    const res = await app.inject({
+      method: 'GET',
+      url: '/ws/anything',
+      headers: { referer: `http://localhost/webview/${capability}/panel` },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('does not exempt an unrouted /api path without a live capability in the Referer', async () => {
+    expect((await app.inject({ method: 'GET', url: '/api/hero?slug=x' })).statusCode).toBe(401);
+    const stale = await app.inject({
+      method: 'GET',
+      url: '/api/hero?slug=x',
+      headers: { referer: `http://localhost/webview/${'Z'.repeat(32)}/panel` },
+    });
+    expect(stale.statusCode).toBe(401);
   });
 
   it('does not let the Referer form carry a WRITE', async () => {

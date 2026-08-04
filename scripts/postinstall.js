@@ -6,7 +6,7 @@
  */
 
 import { execSync, spawn } from 'child_process';
-import { chmodSync, existsSync } from 'fs';
+import { existsSync } from 'fs';
 import { homedir, platform } from 'os';
 import { join } from 'path';
 import { createRequire } from 'module';
@@ -148,35 +148,32 @@ if (majorVersion < MIN_NODE_VERSION) {
 }
 
 // ----------------------------------------------------------------------------
-// 1b. Fix node-pty spawn-helper permissions (macOS posix_spawnp fix)
+// 1b. Repair + verify node-pty (macOS posix_spawnp fix, issues #6 and #204)
+//
+// node-pty ships its macOS spawn-helper without the execute bit, which breaks
+// every session start on macOS. fixNodePty() chmods it, then proves a PTY can
+// actually be opened, and only falls back to a from-source rebuild if that
+// still fails. See scripts/fix-node-pty.mjs for the full story.
 // ----------------------------------------------------------------------------
 
 try {
-    const require = createRequire(import.meta.url);
-    const ptyPath = join(require.resolve('node-pty'), '..');
-    const spawnHelper = join(ptyPath, 'build', 'Release', 'spawn-helper');
-    if (existsSync(spawnHelper)) {
-        chmodSync(spawnHelper, 0o755);
-        console.log(colors.green('✓ node-pty spawn-helper permissions fixed'));
-    }
-} catch {
-    // Non-critical — only affects macOS with prebuilt binaries
-}
+    const { fixNodePty } = await import('./fix-node-pty.mjs');
+    const result = await fixNodePty({
+        log: (line) => console.log(colors.dim(`  ${line}`)),
+        warn: (line) => console.log(colors.yellow(`⚠ ${line}`)),
+    });
 
-// ----------------------------------------------------------------------------
-// 1c. Rebuild node-pty from source for Node.js 22+ compatibility
-// ----------------------------------------------------------------------------
-
-if (majorVersion >= 22) {
-    try {
-        console.log(colors.dim('  Rebuilding node-pty from source for Node.js 22+...'));
-        execSync('npm rebuild node-pty --build-from-source', { stdio: 'pipe', timeout: 120000 });
-        console.log(colors.green('✓ node-pty rebuilt from source'));
-    } catch {
+    if (result.ok) {
+        console.log(colors.green('✓ node-pty verified') + colors.dim(' (PTY spawn works)'));
+    } else {
         hasWarnings = true;
-        console.log(colors.yellow('⚠ Failed to rebuild node-pty from source'));
-        console.log(colors.dim('  You may need to run: npm rebuild node-pty --build-from-source'));
+        console.log(colors.yellow(`⚠ node-pty is not usable: ${result.reason}`));
+        console.log(colors.dim('  Sessions will fail to start. Try: ') + colors.cyan('npm run fix:node-pty'));
     }
+} catch (err) {
+    hasWarnings = true;
+    console.log(colors.yellow(`⚠ Could not verify node-pty: ${err.message}`));
+    console.log(colors.dim('  If sessions fail to start, run: ') + colors.cyan('npm run fix:node-pty'));
 }
 
 // ----------------------------------------------------------------------------

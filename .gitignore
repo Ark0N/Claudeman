@@ -68,6 +68,9 @@ design-explorations/
 # Artifacts that should not be tracked
 test-results/
 tmp/
+# Machine-local working files (never meant for git). ANCHORED so only the root
+# dir matches.
+/pr/
 # Root `public` (a symlink to scripts/remotion/public — local artifact). ANCHORED
 # with a leading slash so it does NOT also match src/web/public (a bare `public`
 # would swallow the whole web UI source dir and silently un-stage any new asset

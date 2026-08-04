@@ -49,6 +49,7 @@ import {
   type CodexConfig,
   type EffortLevel,
   type GeminiConfig,
+  type AntigravityConfig,
   type SessionRemote,
   type SessionDocker,
 } from './types.js';
@@ -65,6 +66,9 @@ import {
   MAX_SESSION_TOKENS,
   execPattern,
   getClaudeCliVersion,
+  getClaudeBinaryPath,
+  spawnPtyWithHelperRepair,
+  resolveLocalShell,
 } from './utils/index.js';
 import {
   MAX_TERMINAL_BUFFER_SIZE,
@@ -140,7 +144,7 @@ const NEWLINE_SPLIT_PATTERN = /\r?\n/;
 
 /** True for external-CLI run modes (non-Claude) that use their own TUI and output format. */
 export function isExternalCliMode(mode: SessionMode): boolean {
-  return mode === 'opencode' || mode === 'codex' || mode === 'gemini';
+  return mode === 'opencode' || mode === 'codex' || mode === 'gemini' || mode === 'antigravity';
 }
 
 function getModeLabel(mode: SessionMode): string {
@@ -151,6 +155,8 @@ function getModeLabel(mode: SessionMode): string {
       return 'Codex';
     case 'gemini':
       return 'Gemini';
+    case 'antigravity':
+      return 'Antigravity';
     case 'shell':
       return 'Shell';
     case 'claude':
@@ -180,6 +186,13 @@ export function isAltScreenStripMode(mode: SessionMode): boolean {
 const DEFAULT_PTY_COLS = 120;
 const DEFAULT_PTY_ROWS = 40;
 const TMUX_DISPLAY_TIMEOUT_MS = 2000;
+const IS_TEST_MODE = !!process.env.VITEST;
+/**
+ * Echo transport for the test-mode PTY attach. Raw mode disables the tty line
+ * discipline, so each input byte flows back exactly once and immediately; without
+ * it, tty echo doubles every line and canonical buffering holds bytes until Enter.
+ */
+const TEST_PTY_SCRIPT = 'if (process.stdin.isTTY) process.stdin.setRawMode(true); process.stdin.pipe(process.stdout);';
 /** Delay before the in-container Claude CLI version probe (lets the container start). */
 const DOCKER_CLI_VERSION_PROBE_DELAY_MS = 3000;
 
@@ -396,6 +409,8 @@ export class Session extends EventEmitter {
   private _codexConfig: CodexConfig | undefined;
   // Gemini configuration (only for mode === 'gemini')
   private _geminiConfig: GeminiConfig | undefined;
+  // Antigravity configuration (only for mode === 'antigravity')
+  private _antigravityConfig: AntigravityConfig | undefined;
   private _resumeSessionId: string | undefined;
 
   // Ephemeral env overrides (e.g., CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS). Exported by tmux
@@ -482,6 +497,8 @@ export class Session extends EventEmitter {
       codexConfig?: CodexConfig;
       /** Gemini configuration (only for mode === 'gemini') */
       geminiConfig?: GeminiConfig;
+      /** Antigravity configuration (only for mode === 'antigravity') */
+      antigravityConfig?: AntigravityConfig;
       /** Resume a previous Claude conversation (used after server reboot) */
       resumeSessionId?: string;
       /** Extra env vars exported to the CLI at spawn time (no disk persistence) */
@@ -553,6 +570,11 @@ export class Session extends EventEmitter {
     // Apply Gemini configuration
     if (config.geminiConfig) {
       this._geminiConfig = config.geminiConfig;
+    }
+
+    // Apply Antigravity configuration
+    if (config.antigravityConfig) {
+      this._antigravityConfig = config.antigravityConfig;
     }
 
     // Apply env overrides (exported at spawn, not persisted to disk).
@@ -1104,6 +1126,7 @@ export class Session extends EventEmitter {
       openCodeConfig: this._openCodeConfig,
       codexConfig: this._codexConfig,
       geminiConfig: this._geminiConfig,
+      antigravityConfig: this._antigravityConfig,
       resumeSessionId: this._resumeSessionId,
       effort: this._effort,
       // COD-118: runtime-only — surfaced so the frontend can require explicit user
@@ -1248,24 +1271,33 @@ export class Session extends EventEmitter {
       // No extra sleep — createSession() already waits for tmux readiness
     }
 
-    // Attach to the mux session via PTY
-    // Prevent tmux from letting the newest browser attach dictate global window
-    // size; accepted Codeman resize events update it explicitly below.
-    mux.setManualWindowSize?.(this._muxSession!.muxName);
+    // Integration tests need a live input/output transport without attaching to
+    // the host's tmux server or agent CLI. Production still uses the real mux.
+    if (!IS_TEST_MODE) {
+      // Prevent tmux from letting the newest browser attach dictate global window
+      // size; accepted Codeman resize events update it explicitly below.
+      mux.setManualWindowSize?.(this._muxSession!.muxName);
+    }
     // Query existing tmux window size so re-attach matches (avoids flicker from 120x40 default).
     // MUST go through the dedicated socket (mux.muxSocket); a bare `tmux display` hits the
     // default server, always fails for our socketed sessions, and silently falls back to 120x40.
-    const { cols: ptyCols, rows: ptyRows } = queryTmuxWindowSize(this._muxSession!.muxName, mux.muxSocket);
+    const { cols: ptyCols, rows: ptyRows } = IS_TEST_MODE
+      ? { cols: DEFAULT_PTY_COLS, rows: DEFAULT_PTY_ROWS }
+      : queryTmuxWindowSize(this._muxSession!.muxName, mux.muxSocket);
+    const attachCommand = IS_TEST_MODE ? process.execPath : mux.getAttachCommand();
+    const attachArgs = IS_TEST_MODE ? ['-e', TEST_PTY_SCRIPT] : mux.getAttachArgs(this._muxSession!.muxName);
     try {
-      this.ptyProcess = pty.spawn(mux.getAttachCommand(), mux.getAttachArgs(this._muxSession!.muxName), {
-        name: 'xterm-256color',
-        cols: ptyCols,
-        rows: ptyRows,
-        cwd: resolveMuxAttachCwd(this.workingDir, this._remote, this._docker),
-        // COD-75: codex/gemini get COLORTERM=truecolor — mirrors buildEnvExports()
-        // in tmux-manager.ts so the attach client and the tmux session agree.
-        env: buildMuxAttachEnv(this.mode === 'codex' || this.mode === 'gemini'),
-      });
+      this.ptyProcess = spawnPtyWithHelperRepair(() =>
+        pty.spawn(attachCommand, attachArgs, {
+          name: 'xterm-256color',
+          cols: ptyCols,
+          rows: ptyRows,
+          cwd: resolveMuxAttachCwd(this.workingDir, this._remote, this._docker),
+          // COD-75: codex/gemini/antigravity get COLORTERM=truecolor — mirrors buildEnvExports()
+          // in tmux-manager.ts so the attach client and the tmux session agree.
+          env: buildMuxAttachEnv(this.mode === 'codex' || this.mode === 'gemini' || this.mode === 'antigravity'),
+        })
+      );
     } catch (spawnErr) {
       console.error(`[Session] Failed to spawn PTY for ${options.spawnErrLabel}:`, spawnErr);
       this.emit('error', `Failed to attach to mux session: ${spawnErr}`);
@@ -1329,6 +1361,7 @@ export class Session extends EventEmitter {
       openCodeConfig: this._openCodeConfig,
       codexConfig: this._codexConfig,
       geminiConfig: this._geminiConfig,
+      antigravityConfig: this._antigravityConfig,
       resumeSessionId: this._resumeSessionId,
       envOverrides: this._envOverrides,
       effort: this._effort,
@@ -1501,6 +1534,7 @@ export class Session extends EventEmitter {
             openCodeConfig: this._openCodeConfig,
             codexConfig: this._codexConfig,
             geminiConfig: this._geminiConfig,
+            antigravityConfig: this._antigravityConfig,
             resumeSessionId: this._resumeSessionId,
             envOverrides: this._envOverrides,
             effort: this._effort,
@@ -1582,18 +1616,24 @@ export class Session extends EventEmitter {
       if (this.mode === 'gemini') {
         throw new Error('Gemini sessions require tmux. Direct PTY fallback is not supported.');
       }
+      // Antigravity sessions require tmux for env override injection via setenv
+      if (this.mode === 'antigravity') {
+        throw new Error('Antigravity sessions require tmux. Direct PTY fallback is not supported.');
+      }
       try {
         // Pass --session-id to use the SAME ID as the Codeman session
         // This ensures subagents can be directly matched to the correct tab
         const args = buildInteractiveArgs(this.id, this._claudeMode, this._model, this._allowedTools, this._effort);
-        this.ptyProcess = pty.spawn('claude', args, {
-          name: 'xterm-256color',
-          cols: 120,
-          rows: 40,
-          cwd: this.workingDir,
-          // Merge envOverrides after buildClaudeEnv so user settings shadow defaults.
-          env: { ...buildClaudeEnv(this.id), ...(this._envOverrides ?? {}) },
-        });
+        this.ptyProcess = spawnPtyWithHelperRepair(() =>
+          pty.spawn(getClaudeBinaryPath(), args, {
+            name: 'xterm-256color',
+            cols: 120,
+            rows: 40,
+            cwd: this.workingDir,
+            // Merge envOverrides after buildClaudeEnv so user settings shadow defaults.
+            env: { ...buildClaudeEnv(this.id), ...(this._envOverrides ?? {}) },
+          })
+        );
       } catch (spawnErr) {
         console.error('[Session] Failed to spawn Claude PTY:', spawnErr);
         this._status = 'stopped';
@@ -1859,8 +1899,9 @@ export class Session extends EventEmitter {
 
     this._resetBuffers();
 
-    // Use user's default shell or bash
-    const shell = process.env.SHELL || '/bin/bash';
+    // Use user's default shell, falling back to a shell that actually exists.
+    // Shared with the tmux pane command so both paths launch the same binary.
+    const shell = resolveLocalShell();
     console.log(
       '[Session] Starting shell session with:',
       shell + (this._useMux ? ` (with ${this._mux!.backend})` : '')
@@ -1916,13 +1957,15 @@ export class Session extends EventEmitter {
     // Fallback to direct PTY if mux is not used
     if (!this.ptyProcess) {
       try {
-        this.ptyProcess = pty.spawn(shell, [], {
-          name: 'xterm-256color',
-          cols: 120,
-          rows: 40,
-          cwd: this.workingDir,
-          env: buildShellEnv(this.id),
-        });
+        this.ptyProcess = spawnPtyWithHelperRepair(() =>
+          pty.spawn(shell, [], {
+            name: 'xterm-256color',
+            cols: 120,
+            rows: 40,
+            cwd: this.workingDir,
+            env: buildShellEnv(this.id),
+          })
+        );
       } catch (spawnErr) {
         console.error('[Session] Failed to spawn shell PTY:', spawnErr);
         this._status = 'stopped';
@@ -2022,14 +2065,16 @@ export class Session extends EventEmitter {
         const args = buildPromptArgs(prompt, model, this._claudeMode, this._allowedTools);
 
         try {
-          this.ptyProcess = pty.spawn('claude', args, {
-            name: 'xterm-256color',
-            cols: 120,
-            rows: 40,
-            cwd: this.workingDir,
-            // Merge envOverrides after buildClaudeEnv so user settings shadow defaults.
-            env: { ...buildClaudeEnv(this.id), ...(this._envOverrides ?? {}) },
-          });
+          this.ptyProcess = spawnPtyWithHelperRepair(() =>
+            pty.spawn(getClaudeBinaryPath(), args, {
+              name: 'xterm-256color',
+              cols: 120,
+              rows: 40,
+              cwd: this.workingDir,
+              // Merge envOverrides after buildClaudeEnv so user settings shadow defaults.
+              env: { ...buildClaudeEnv(this.id), ...(this._envOverrides ?? {}) },
+            })
+          );
         } catch (spawnErr) {
           console.error('[Session] Failed to spawn Claude PTY for runPrompt:', spawnErr);
           this.emit(
@@ -2683,7 +2728,7 @@ export class Session extends EventEmitter {
     if (this.ptyProcess && (dimsChanged || options.force)) {
       this._ptyCols = cols;
       this._ptyRows = rows;
-      if (this._mux && this._muxSession) {
+      if (!IS_TEST_MODE && this._mux && this._muxSession) {
         this._mux.resizeWindow?.(this._muxSession.muxName, cols, rows);
       }
       this.ptyProcess.resize(cols, rows);

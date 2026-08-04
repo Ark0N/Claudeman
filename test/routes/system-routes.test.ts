@@ -81,12 +81,18 @@ vi.mock('../../src/utils/gemini-cli-resolver.js', () => ({
   resolveGeminiDir: vi.fn(() => null),
 }));
 
+vi.mock('../../src/utils/antigravity-cli-resolver.js', () => ({
+  isAntigravityAvailable: vi.fn(() => false),
+  resolveAntigravityDir: vi.fn(() => null),
+}));
+
 import fs from 'node:fs/promises';
 import { existsSync, readdirSync } from 'node:fs';
 import { subagentWatcher } from '../../src/subagent-watcher.js';
 import { getLifecycleLog } from '../../src/session-lifecycle-log.js';
 import { isOpenCodeAvailable, resolveOpenCodeDir } from '../../src/utils/opencode-cli-resolver.js';
 import { isGeminiAvailable, resolveGeminiDir } from '../../src/utils/gemini-cli-resolver.js';
+import { isAntigravityAvailable, resolveAntigravityDir } from '../../src/utils/antigravity-cli-resolver.js';
 
 const mockedReadFile = vi.mocked(fs.readFile);
 const mockedWriteFile = vi.mocked(fs.writeFile);
@@ -98,6 +104,8 @@ const mockedIsOpenCodeAvailable = vi.mocked(isOpenCodeAvailable);
 const mockedResolveOpenCodeDir = vi.mocked(resolveOpenCodeDir);
 const mockedIsGeminiAvailable = vi.mocked(isGeminiAvailable);
 const mockedResolveGeminiDir = vi.mocked(resolveGeminiDir);
+const mockedIsAntigravityAvailable = vi.mocked(isAntigravityAvailable);
+const mockedResolveAntigravityDir = vi.mocked(resolveAntigravityDir);
 
 describe('system-routes', () => {
   let harness: RouteTestHarness;
@@ -802,6 +810,32 @@ describe('system-routes', () => {
       const body = JSON.parse(res.body);
       expect(body.available).toBe(true);
       expect(body.path).toBe('/usr/local/bin');
+    });
+  });
+
+  // ========== GET /api/antigravity/status ==========
+
+  describe('GET /api/antigravity/status', () => {
+    it('returns unavailable when agy is not installed', async () => {
+      mockedIsAntigravityAvailable.mockReturnValue(false);
+      mockedResolveAntigravityDir.mockReturnValue(null);
+
+      const res = await harness.app.inject({ method: 'GET', url: '/api/antigravity/status' });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.available).toBe(false);
+      expect(body.path).toBeNull();
+    });
+
+    it('returns available with path when agy is installed', async () => {
+      mockedIsAntigravityAvailable.mockReturnValue(true);
+      mockedResolveAntigravityDir.mockReturnValue('/home/user/.local/bin');
+
+      const res = await harness.app.inject({ method: 'GET', url: '/api/antigravity/status' });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.available).toBe(true);
+      expect(body.path).toBe('/home/user/.local/bin');
     });
   });
 

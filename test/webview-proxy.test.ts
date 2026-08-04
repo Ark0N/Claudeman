@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { JSDOM } from 'jsdom';
 import {
   buildDownstreamResponseHeaders,
   buildProxyCorsHeaders,
@@ -471,6 +472,167 @@ describe('runtimeUrlShim', () => {
     new (win.WebSocket as new (u: string) => unknown)('/live');
     new (win.EventSource as new (u: string) => unknown)('/events');
     expect(calls).toEqual([`${PREFIX}live`, `${PREFIX}events`]);
+  });
+});
+
+/**
+ * The DOM half of the shim, run in a real jsdom document rather than the fake
+ * window above, because these patches ARE DOM behavior: what matters is the URL the
+ * browser would end up requesting after `innerHTML = ...`, not whether some
+ * function got wrapped.
+ *
+ * The bug being pinned: a dashboard rendering `<img src="/api/hero?slug=x">` from
+ * page script escapes `<base>` (which never applies to root-absolute URLs) and
+ * escapes `rewriteHtml()` (which only sees the initial document), so every image
+ * 404s on Codeman's own root while the dashboard's fetch-driven data loads fine.
+ *
+ * Node environment on purpose, like test/markdown-sanitizer.test.ts: a per-file
+ * jsdom environment directive would externalize node builtins under vite. The
+ * directive is deliberately not written out here, even in prose: vitest scans
+ * comments for it, and naming it flipped this whole file to the jsdom
+ * environment while this comment claimed the opposite.
+ */
+describe('runtimeUrlShim DOM sinks', () => {
+  const body = runtimeUrlShim(PREFIX)
+    .replace(/^<script>/, '')
+    .replace(/<\/script>$/, '');
+
+  function newDom() {
+    const dom = new JSDOM('<!doctype html><html><head></head><body><div id="box"></div></body></html>', {
+      url: `https://codeman.local${PREFIX}page`,
+      runScripts: 'outside-only',
+    });
+    dom.window.eval(body);
+    return dom;
+  }
+
+  /** src of the first <img> in #box, as the attribute the browser would fetch. */
+  function imgSrc(dom: JSDOM): string | null {
+    return dom.window.document.querySelector('#box img')!.getAttribute('src');
+  }
+
+  it('rewrites a root-absolute img src injected via innerHTML', () => {
+    const dom = newDom();
+    dom.window.document.getElementById('box')!.innerHTML =
+      '<img class="thumb" loading="lazy" src="/api/hero?slug=x" alt="">';
+    expect(imgSrc(dom)).toBe(`${PREFIX}api/hero?slug=x`);
+  });
+
+  it('rewrites single-quoted markup and insertAdjacentHTML too', () => {
+    const dom = newDom();
+    dom.window.document.getElementById('box')!.insertAdjacentHTML('beforeend', "<img src='/api/logo'>");
+    expect(imgSrc(dom)).toBe(`${PREFIX}api/logo`);
+  });
+
+  it('rewrites the img.src property setter', () => {
+    const dom = newDom();
+    const img = new dom.window.Image();
+    img.src = '/api/slide?owner=o&n=01';
+    expect(img.getAttribute('src')).toBe(`${PREFIX}api/slide?owner=o&n=01`);
+  });
+
+  it('rewrites setAttribute and media src/poster', () => {
+    const dom = newDom();
+    const video = dom.window.document.createElement('video');
+    video.setAttribute('src', '/api/video?owner=o');
+    video.poster = '/thumb.png';
+    expect(video.getAttribute('src')).toBe(`${PREFIX}api/video?owner=o`);
+    expect(video.getAttribute('poster')).toBe(`${PREFIX}thumb.png`);
+  });
+
+  it('rewrites every candidate in a srcset, leaving cross-origin ones alone', () => {
+    const dom = newDom();
+    const img = dom.window.document.createElement('img');
+    img.setAttribute('srcset', '/a.png 1x, /b.png 2x, https://cdn.example/c.png 3x');
+    expect(img.getAttribute('srcset')).toBe(`${PREFIX}a.png 1x, ${PREFIX}b.png 2x, https://cdn.example/c.png 3x`);
+  });
+
+  it('leaves relative, cross-origin, hash, data: and already-proxied URLs untouched', () => {
+    const dom = newDom();
+    const box = dom.window.document.getElementById('box')!;
+    box.innerHTML = [
+      '<img id="rel" src="api/rel.png">',
+      '<img id="cross" src="https://cdn.example/z.png">',
+      '<img id="data" src="data:image/gif;base64,AAAA">',
+      `<img id="done" src="${PREFIX}api/hero">`,
+      '<a id="hash" href="#top">t</a>',
+    ].join('');
+    const at = (id: string, attr: string) => dom.window.document.getElementById(id)!.getAttribute(attr);
+    expect(at('rel', 'src')).toBe('api/rel.png');
+    expect(at('cross', 'src')).toBe('https://cdn.example/z.png');
+    expect(at('data', 'src')).toBe('data:image/gif;base64,AAAA');
+    expect(at('done', 'src')).toBe(`${PREFIX}api/hero`);
+    expect(at('hash', 'href')).toBe('#top');
+  });
+
+  it('catches a node built through an UNPATCHED sink via the MutationObserver net', async () => {
+    const dom = newDom();
+    const { document } = dom.window;
+    // createContextualFragment parses markup without going through innerHTML or
+    // setAttribute, so only the observer can fix this one.
+    const frag = document.createRange().createContextualFragment('<img id="net" src="/api/net.png">');
+    expect(frag.querySelector('img')!.getAttribute('src')).toBe('/api/net.png');
+    document.getElementById('box')!.appendChild(frag);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(document.getElementById('net')!.getAttribute('src')).toBe(`${PREFIX}api/net.png`);
+  });
+
+  it('does not double-prefix when a page re-injects its own markup', () => {
+    const dom = newDom();
+    const box = dom.window.document.getElementById('box')!;
+    box.innerHTML = '<img src="/api/hero">';
+    const roundTrip = box.innerHTML;
+    box.innerHTML = roundTrip;
+    expect(imgSrc(dom)).toBe(`${PREFIX}api/hero`);
+  });
+
+  it('leaves an empty src empty, the "no image for this row" case', () => {
+    const dom = newDom();
+    dom.window.document.getElementById('box')!.innerHTML = '<img class="thumb" src="" alt="">';
+    expect(imgSrc(dom)).toBe('');
+  });
+
+  /**
+   * CSS is the sink no relay can rescue: a <style> element has no URL of its own,
+   * so an opaque-origin document sends an EMPTY Referer with the image request it
+   * triggers, and the 404 fallback has nothing to key on. Verified in Chromium.
+   */
+  it('rewrites root-absolute url() inside a <style> injected as markup', () => {
+    const dom = newDom();
+    dom.window.document.getElementById('box')!.innerHTML = '<style>#hero{background-image:url(/api/hero.png)}</style>';
+    expect(dom.window.document.querySelector('#box style')!.textContent).toBe(
+      `#hero{background-image:url(${PREFIX}api/hero.png)}`
+    );
+  });
+
+  it('rewrites url() in a <style> built with textContent, via the observer', async () => {
+    const dom = newDom();
+    const { document } = dom.window;
+    const style = document.createElement('style');
+    style.textContent = "#late{background-image:url('/api/late.png')}";
+    document.head.appendChild(style);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(style.textContent).toBe(`#late{background-image:url('${PREFIX}api/late.png')}`);
+  });
+
+  it('leaves relative, cross-origin and data: url() alone', () => {
+    const dom = newDom();
+    const css = [
+      'a{background:url(img/rel.png)}',
+      'b{background:url(https://cdn.example/z.png)}',
+      'c{background:url(data:image/gif;base64,AAAA)}',
+      `d{background:url(${PREFIX}api/done.png)}`,
+    ].join('');
+    dom.window.document.getElementById('box')!.innerHTML = `<style>${css}</style>`;
+    expect(dom.window.document.querySelector('#box style')!.textContent).toBe(css);
+  });
+
+  it('is idempotent when a value passes through two layers', () => {
+    const dom = newDom();
+    const img = dom.window.document.createElement('img');
+    img.src = '/api/hero';
+    img.setAttribute('src', img.getAttribute('src')!);
+    expect(img.getAttribute('src')).toBe(`${PREFIX}api/hero`);
   });
 });
 

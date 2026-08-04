@@ -249,16 +249,28 @@ Ordered most‑to‑least recommended:
 
 ### A. Tailscale serve (recommended)
 
-Bind loopback, let Tailscale front it on your tailnet with a real cert:
+Bind loopback, let Tailscale front it on your tailnet with a real cert. **The
+installer sets this up for you**: choose **Tailscale** at the network-access
+prompt, or retrofit an existing install with:
 
 ```bash
-codeman web --https            # binds 127.0.0.1:3000
-tailscale serve --bg https / http://127.0.0.1:3000
+bash ~/.codeman/app/install.sh tailscale
 ```
 
-Only devices on your tailnet can reach it; Tailscale handles identity. No app
-password and no `0.0.0.0` bind required. (This is the maintainer's production
-setup.)
+The guided flow installs Tailscale if needed, walks through login and the
+tailnet HTTPS-certificates toggle, and configures the equivalent of:
+
+```bash
+codeman web                    # binds 127.0.0.1:3000 (plain HTTP is fine here)
+tailscale serve --bg 3000      # HTTPS at https://<node>.<tailnet>.ts.net
+```
+
+Only devices on your tailnet can reach it; Tailscale handles identity and
+terminates TLS with a real Let's Encrypt certificate (so PWA install and web
+push work). No app password and no `0.0.0.0` bind required. (This is the
+maintainer's production setup.) `CODEMAN_TAILSCALE=1` presets the choice for
+automation; the installer never runs `tailscale serve reset` and never touches
+serve mappings other than `443 -> Codeman's port`.
 
 ### B. Authenticated cloudflared tunnel + password
 

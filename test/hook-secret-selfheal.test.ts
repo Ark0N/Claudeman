@@ -1,10 +1,10 @@
 /**
- * COD-91 — `refreshStaleHookSecret` self-heal.
+ * COD-91 — `refreshStaleCodemanHooks` self-heal.
  *
  * Making the hook-event secret unconditionally required (PR #127) would silently 401 the
  * hook curls baked into cases created before the secret header existed (COD-54). Those
  * curls live in `.claude/settings.local.json` and `writeHooksConfig` only runs at case
- * CREATION, so existing cases never refresh. `refreshStaleHookSecret` regenerates the
+ * CREATION, so existing cases never refresh. `refreshStaleCodemanHooks` regenerates the
  * hooks block on session spawn — but ONLY when the case already holds Codeman's own
  * pre-secret hook curls, never clobbering a user's customizations.
  *
@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { refreshStaleHookSecret } from '../src/hooks-config.js';
+import { refreshStaleCodemanHooks } from '../src/hooks-config.js';
 
 const SECRET_HEADER = 'X-Codeman-Hook-Secret';
 
@@ -41,7 +41,7 @@ function staleCodemanHooks() {
   };
 }
 
-describe('refreshStaleHookSecret', () => {
+describe('refreshStaleCodemanHooks', () => {
   let dir: string;
   let settingsPath: string;
 
@@ -60,7 +60,7 @@ describe('refreshStaleHookSecret', () => {
       settingsPath,
       JSON.stringify({ env: { CLAUDE_CODE_FOO: '1' }, model: 'opus', hooks: staleCodemanHooks() }, null, 2)
     );
-    await refreshStaleHookSecret(dir);
+    await refreshStaleCodemanHooks(dir);
 
     const after = JSON.parse(readFileSync(settingsPath, 'utf-8'));
     expect(JSON.stringify(after.hooks)).toContain(SECRET_HEADER);
@@ -73,11 +73,11 @@ describe('refreshStaleHookSecret', () => {
   it('leaves a hooks block that already carries the secret unchanged', async () => {
     // Seed with a current block by healing a stale one first, then re-heal: second pass must no-op.
     writeFileSync(settingsPath, JSON.stringify({ hooks: staleCodemanHooks() }, null, 2));
-    await refreshStaleHookSecret(dir);
+    await refreshStaleCodemanHooks(dir);
     const healed = readFileSync(settingsPath, 'utf-8');
     expect(healed).toContain(SECRET_HEADER);
 
-    await refreshStaleHookSecret(dir);
+    await refreshStaleCodemanHooks(dir);
     expect(readFileSync(settingsPath, 'utf-8')).toBe(healed); // byte-identical: no rewrite
   });
 
@@ -88,19 +88,60 @@ describe('refreshStaleHookSecret', () => {
       2
     );
     writeFileSync(settingsPath, foreign);
-    await refreshStaleHookSecret(dir);
+    await refreshStaleCodemanHooks(dir);
     expect(readFileSync(settingsPath, 'utf-8')).toBe(foreign);
   });
 
+  it('preserves user handlers and events in a mixed stale configuration', async () => {
+    const hooks = staleCodemanHooks();
+    hooks.Stop[0].hooks.push({
+      type: 'command',
+      command: './notify-user.sh',
+      timeout: 10,
+    });
+    const customPostToolUse = {
+      matcher: 'Write',
+      hooks: [{ type: 'command', command: './format.sh' }],
+    };
+    const customEvent = [
+      {
+        hooks: [{ type: 'command', command: './audit.sh' }],
+      },
+    ];
+    writeFileSync(
+      settingsPath,
+      JSON.stringify(
+        {
+          hooks: {
+            ...hooks,
+            PostToolUse: [customPostToolUse],
+            CustomEvent: customEvent,
+          },
+        },
+        null,
+        2
+      )
+    );
+
+    await refreshStaleCodemanHooks(dir);
+
+    const after = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+    expect(JSON.stringify(after.hooks)).toContain(SECRET_HEADER);
+    expect(JSON.stringify(after.hooks)).toContain('CODEMAN_BACKGROUND_REWAKE_V');
+    expect(JSON.stringify(after.hooks.Stop)).toContain('./notify-user.sh');
+    expect(after.hooks.PostToolUse).toEqual(expect.arrayContaining([customPostToolUse]));
+    expect(after.hooks.CustomEvent).toEqual(customEvent);
+  });
+
   it('is a no-op when settings.local.json is absent (does not create one)', async () => {
-    await refreshStaleHookSecret(dir);
+    await refreshStaleCodemanHooks(dir);
     expect(existsSync(settingsPath)).toBe(false);
   });
 
   it('leaves a malformed settings file untouched', async () => {
     const garbage = '{ not valid json';
     writeFileSync(settingsPath, garbage);
-    await refreshStaleHookSecret(dir);
+    await refreshStaleCodemanHooks(dir);
     expect(readFileSync(settingsPath, 'utf-8')).toBe(garbage);
   });
 });

@@ -88,14 +88,16 @@ describe('TranscriptWatcher', () => {
       watcher.start(testFile);
 
       // Add user entry
-      const userEntry = { type: 'user', timestamp: new Date().toISOString(), message: { role: 'user', content: 'test' } };
+      const userEntry = {
+        type: 'user',
+        timestamp: new Date().toISOString(),
+        message: { role: 'user', content: 'test' },
+      };
       appendFileSync(testFile, JSON.stringify(userEntry) + '\n');
 
-      // Wait for processing
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      const state = watcher.getState();
-      expect(state.entryCount).toBeGreaterThanOrEqual(1);
+      await vi.waitFor(() => {
+        expect(watcher.getState().entryCount).toBeGreaterThanOrEqual(1);
+      });
     });
 
     it('should emit transcript:complete on result entry', async () => {
@@ -109,10 +111,9 @@ describe('TranscriptWatcher', () => {
       const resultEntry = { type: 'result', timestamp: new Date().toISOString() };
       appendFileSync(testFile, JSON.stringify(resultEntry) + '\n');
 
-      // Wait for processing
-      await new Promise(resolve => setTimeout(resolve, 200));
-
-      expect(completeHandler).toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(completeHandler).toHaveBeenCalled();
+      });
       const state = watcher.getState();
       expect(state.isComplete).toBe(true);
     });
@@ -130,20 +131,60 @@ describe('TranscriptWatcher', () => {
         timestamp: new Date().toISOString(),
         message: {
           role: 'assistant',
-          content: [
-            { type: 'tool_use', name: 'Read', input: { file_path: '/test.txt' } }
-          ]
-        }
+          content: [{ type: 'tool_use', name: 'Read', input: { file_path: '/test.txt' } }],
+        },
       };
       appendFileSync(testFile, JSON.stringify(assistantEntry) + '\n');
 
-      // Wait for processing
-      await new Promise(resolve => setTimeout(resolve, 200));
-
-      expect(toolStartHandler).toHaveBeenCalledWith('Read');
+      await vi.waitFor(() => {
+        expect(toolStartHandler).toHaveBeenCalledWith('Read');
+      });
       const state = watcher.getState();
       expect(state.toolExecuting).toBe(true);
       expect(state.currentTool).toBe('Read');
+    });
+
+    it('should complete a tool when Claude writes tool_result in a user entry', async () => {
+      writeFileSync(testFile, '');
+      watcher.start(testFile);
+
+      const toolEndHandler = vi.fn();
+      watcher.on('transcript:tool_end', toolEndHandler);
+
+      appendFileSync(
+        testFile,
+        JSON.stringify({
+          type: 'assistant',
+          timestamp: new Date().toISOString(),
+          message: {
+            role: 'assistant',
+            content: [{ type: 'tool_use', name: 'Bash', input: { command: 'printf done' } }],
+          },
+        }) + '\n'
+      );
+      await vi.waitFor(() => {
+        expect(watcher.getState().toolExecuting).toBe(true);
+      });
+
+      appendFileSync(
+        testFile,
+        JSON.stringify({
+          type: 'user',
+          timestamp: new Date().toISOString(),
+          message: {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'done', is_error: false }],
+          },
+        }) + '\n'
+      );
+
+      await vi.waitFor(() => {
+        expect(toolEndHandler).toHaveBeenCalledWith('Bash', false);
+      });
+      expect(watcher.getState()).toMatchObject({
+        toolExecuting: false,
+        currentTool: null,
+      });
     });
 
     it('should detect plan mode from AskUserQuestion tool', async () => {
@@ -159,17 +200,14 @@ describe('TranscriptWatcher', () => {
         timestamp: new Date().toISOString(),
         message: {
           role: 'assistant',
-          content: [
-            { type: 'tool_use', name: 'AskUserQuestion', input: { question: 'test?' } }
-          ]
-        }
+          content: [{ type: 'tool_use', name: 'AskUserQuestion', input: { question: 'test?' } }],
+        },
       };
       appendFileSync(testFile, JSON.stringify(assistantEntry) + '\n');
 
-      // Wait for processing
-      await new Promise(resolve => setTimeout(resolve, 200));
-
-      expect(planModeHandler).toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(planModeHandler).toHaveBeenCalled();
+      });
       const state = watcher.getState();
       expect(state.planModeDetected).toBe(true);
     });
@@ -182,15 +220,14 @@ describe('TranscriptWatcher', () => {
       const resultEntry = {
         type: 'result',
         timestamp: new Date().toISOString(),
-        error: { type: 'api_error', message: 'Rate limited' }
+        error: { type: 'api_error', message: 'Rate limited' },
       };
       appendFileSync(testFile, JSON.stringify(resultEntry) + '\n');
 
-      // Wait for processing
-      await new Promise(resolve => setTimeout(resolve, 200));
-
+      await vi.waitFor(() => {
+        expect(watcher.getState().hasError).toBe(true);
+      });
       const state = watcher.getState();
-      expect(state.hasError).toBe(true);
       expect(state.errorMessage).toContain('Rate limited');
     });
   });

@@ -19,6 +19,7 @@ import {
   type SessionColor,
   type CodexConfig,
   type GeminiConfig,
+  type AntigravityConfig,
 } from '../../types.js';
 import { Session, isAltScreenStripMode } from '../../session.js';
 import { SseEvent } from '../sse-events.js';
@@ -65,7 +66,7 @@ import {
   updateCaseModel,
   stripCaseEnvKeys,
   applyStatusLineConfig,
-  refreshStaleHookSecret,
+  refreshStaleCodemanHooks,
 } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { imageWatcher } from '../../image-watcher.js';
@@ -282,25 +283,35 @@ export function _resetPasteRateBuckets(): void {
 
 /**
  * Security (multi-user §6.3): the Claude-only permission-mode downgrade does not
- * cover the other CLIs' bypass switches. Codex `--dangerously-bypass-approvals-and-sandbox`
- * and Gemini `--approval-mode yolo` disable the safety classifier the non-granted-user
- * downgrade is meant to keep on, so clamp them for a non-granted owner. buildGeminiCommand
- * defaults an ABSENT approvalMode to yolo, so the gemini config must be MATERIALIZED
- * (auto_edit) even when the request sent none. No-op in single-user mode / for a granted
+ * cover the other CLIs' bypass switches. Codex `--dangerously-bypass-approvals-and-sandbox`,
+ * Gemini `--approval-mode yolo`, and Antigravity `--dangerously-skip-permissions` disable
+ * the safety classifier the non-granted-user downgrade is meant to keep on, so clamp them
+ * for a non-granted owner. buildGeminiCommand defaults an ABSENT approvalMode to yolo, so
+ * the gemini config must be MATERIALIZED (auto_edit) even when the request sent none.
+ * Antigravity is like Codex: an ABSENT config already defaults safe (no bypass flag), so
+ * only a sent config needs the flag forced off. No-op in single-user mode / for a granted
  * owner (canUsernameRunPrivilegedCommands returns true when !isMultiUserMode()).
  */
 async function clampExternalCliBypassForOwner(
   owner: string | undefined,
   codexConfig: CodexConfig | undefined,
-  geminiConfig: GeminiConfig | undefined
-): Promise<{ codexConfig: CodexConfig | undefined; geminiConfig: GeminiConfig | undefined }> {
+  geminiConfig: GeminiConfig | undefined,
+  antigravityConfig: AntigravityConfig | undefined
+): Promise<{
+  codexConfig: CodexConfig | undefined;
+  geminiConfig: GeminiConfig | undefined;
+  antigravityConfig: AntigravityConfig | undefined;
+}> {
   const granted = await canUsernameRunPrivilegedCommands(owner);
-  if (granted) return { codexConfig, geminiConfig };
-  // Non-granted: force codex bypass off (only meaningful when a config was sent) and
-  // materialize gemini to auto_edit (clamps an explicit 'yolo' and the yolo default).
+  if (granted) return { codexConfig, geminiConfig, antigravityConfig };
+  // Non-granted: force codex/antigravity bypass off (only meaningful when a config was
+  // sent) and materialize gemini to auto_edit (clamps an explicit 'yolo' and the yolo default).
   const clampedCodex = codexConfig ? { ...codexConfig, dangerouslyBypassApprovals: false } : codexConfig;
   const clampedGemini: GeminiConfig = { ...(geminiConfig ?? {}), approvalMode: 'auto_edit' };
-  return { codexConfig: clampedCodex, geminiConfig: clampedGemini };
+  const clampedAntigravity = antigravityConfig
+    ? { ...antigravityConfig, dangerouslySkipPermissions: false }
+    : antigravityConfig;
+  return { codexConfig: clampedCodex, geminiConfig: clampedGemini, antigravityConfig: clampedAntigravity };
 }
 
 export function registerSessionRoutes(
@@ -414,6 +425,7 @@ export function registerSessionRoutes(
       body.mode !== 'opencode' &&
       body.mode !== 'codex' &&
       body.mode !== 'gemini' &&
+      body.mode !== 'antigravity' &&
       body.envOverrides &&
       Object.keys(body.envOverrides).length > 0 &&
       (workingDir.startsWith(CASES_DIR + '/') || workingDir.startsWith(managedCasesBase + '/'));
@@ -445,7 +457,7 @@ export function registerSessionRoutes(
     // unconditional hook-secret gate keeps accepting its hook events. No-op for fresh
     // cases (writeHooksConfig already wrote the secret) and for non-Codeman/absent hooks.
     if ((body.mode ?? 'claude') === 'claude') {
-      await refreshStaleHookSecret(workingDir).catch(() => {});
+      await refreshStaleCodemanHooks(workingDir).catch(() => {});
     }
 
     // Check OpenCode availability if requested
@@ -477,6 +489,15 @@ export function registerSessionRoutes(
         return createErrorResponse(
           ApiErrorCode.OPERATION_FAILED,
           'Gemini CLI not found. Install with: npm install -g @google/gemini-cli'
+        );
+      }
+    }
+    if (body.mode === 'antigravity') {
+      const { isAntigravityAvailable } = await import('../../utils/antigravity-cli-resolver.js');
+      if (!isAntigravityAvailable()) {
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          'Antigravity CLI not found. Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash'
         );
       }
     }
@@ -521,18 +542,20 @@ export function registerSessionRoutes(
           ? body.codexConfig?.model
           : mode === 'gemini'
             ? body.geminiConfig?.model
-            : mode !== 'shell'
-              ? modelConfig?.defaultModel || undefined
-              : undefined;
+            : mode === 'antigravity'
+              ? body.antigravityConfig?.model
+              : mode !== 'shell'
+                ? modelConfig?.defaultModel || undefined
+                : undefined;
     const claudeModeConfig = await ctx.getClaudeModeConfig();
     // Section 6.3: force non-granted users to a classifier-guarded mode.
     const effectiveClaudeMode = await resolveClaudeModeForUsername(claudeModeConfig.claudeMode, owner);
-    // Section 6.3: clamp Codex/Gemini bypass switches for a non-granted owner (no-op single-user/granted).
-    const { codexConfig: gatedCodexConfig, geminiConfig: gatedGeminiConfig } = await clampExternalCliBypassForOwner(
-      owner,
-      body.codexConfig,
-      body.geminiConfig
-    );
+    // Section 6.3: clamp Codex/Gemini/Antigravity bypass switches for a non-granted owner (no-op single-user/granted).
+    const {
+      codexConfig: gatedCodexConfig,
+      geminiConfig: gatedGeminiConfig,
+      antigravityConfig: gatedAntigravityConfig,
+    } = await clampExternalCliBypassForOwner(owner, body.codexConfig, body.geminiConfig, body.antigravityConfig);
     const terminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const session = new Session({
       workingDir,
@@ -547,6 +570,7 @@ export function registerSessionRoutes(
       openCodeConfig: mode === 'opencode' ? body.openCodeConfig : undefined,
       codexConfig: mode === 'codex' ? gatedCodexConfig : undefined,
       geminiConfig: mode === 'gemini' ? gatedGeminiConfig : undefined,
+      antigravityConfig: mode === 'antigravity' ? gatedAntigravityConfig : undefined,
       resumeSessionId: validatedResumeId,
       envOverrides: body.envOverrides,
       effort: body.effort,
@@ -760,11 +784,12 @@ export function registerSessionRoutes(
 
     try {
       // Auto-detect completion phrase from CLAUDE.md BEFORE starting (only if globally enabled and not explicitly disabled by user)
-      // Ralph tracker is not supported for opencode / codex / gemini sessions
+      // Ralph tracker is not supported for opencode / codex / gemini / antigravity sessions
       if (
         session.mode !== 'opencode' &&
         session.mode !== 'codex' &&
         session.mode !== 'gemini' &&
+        session.mode !== 'antigravity' &&
         ctx.store.getConfig().ralphEnabled &&
         !session.ralphTracker.autoEnableDisabled
       ) {
@@ -1943,6 +1968,7 @@ export function registerSessionRoutes(
       openCodeConfig,
       codexConfig,
       geminiConfig,
+      antigravityConfig,
       envOverrides,
       effort,
     } = parseBody(QuickStartSchema, req.body);
@@ -1988,6 +2014,7 @@ export function registerSessionRoutes(
         modelOverride !== undefined ||
         codexConfig ||
         geminiConfig ||
+        antigravityConfig ||
         openCodeConfig
       ) {
         return createErrorResponse(
@@ -2018,6 +2045,7 @@ export function registerSessionRoutes(
         effort ||
         codexConfig ||
         geminiConfig ||
+        antigravityConfig ||
         openCodeConfig
       ) {
         return createErrorResponse(
@@ -2110,6 +2138,17 @@ export function registerSessionRoutes(
         }
       }
 
+      // Check Antigravity availability if requested
+      if (mode === 'antigravity') {
+        const { isAntigravityAvailable } = await import('../../utils/antigravity-cli-resolver.js');
+        if (!isAntigravityAvailable()) {
+          return createErrorResponse(
+            ApiErrorCode.OPERATION_FAILED,
+            'Antigravity CLI not found. Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash'
+          );
+        }
+      }
+
       // Resolve case path: check linked-cases registry first, then fall back to CASES_DIR.
       // This mirrors the behaviour of resolveCasePath() in case-routes so that linked
       // external project directories are honoured by quick-start just like regular case routes.
@@ -2156,8 +2195,8 @@ export function registerSessionRoutes(
         writeFileSync(join(resolvedCasePath, 'CLAUDE.md'), claudeMd);
 
         // Write .claude/settings.local.json with hooks for desktop notifications
-        // (Claude-specific — OpenCode, Codex, and Gemini use their own systems)
-        if (mode !== 'opencode' && mode !== 'codex' && mode !== 'gemini') {
+        // (Claude-specific — OpenCode, Codex, Gemini, and Antigravity use their own systems)
+        if (mode !== 'opencode' && mode !== 'codex' && mode !== 'gemini' && mode !== 'antigravity') {
           await writeHooksConfig(resolvedCasePath);
         }
 
@@ -2170,14 +2209,21 @@ export function registerSessionRoutes(
       // now-unconditional hook-secret gate keeps accepting its hook events. No-op when
       // the hooks aren't ours or already carry the secret. Skipped for remote cases —
       // resolvedCasePath is a REMOTE path that doesn't exist on the local filesystem.
-      await refreshStaleHookSecret(resolvedCasePath).catch(() => {});
+      await refreshStaleCodemanHooks(resolvedCasePath).catch(() => {});
     }
 
     // Docker cases: the workspace is a REAL host dir bind-mounted into the container.
     // Scaffold hooks (+ a CLAUDE.md) if MISSING so in-container permission prompts and
     // hook-idle detection fire (decision: wire hooks now). Never clobbers an existing
     // configured project. Skipped for external CLIs (they use their own systems).
-    if (docker && docker.hooksEnabled && mode !== 'opencode' && mode !== 'codex' && mode !== 'gemini') {
+    if (
+      docker &&
+      docker.hooksEnabled &&
+      mode !== 'opencode' &&
+      mode !== 'codex' &&
+      mode !== 'gemini' &&
+      mode !== 'antigravity'
+    ) {
       try {
         if (!existsSync(join(resolvedCasePath, 'CLAUDE.md'))) {
           const templatePath = await ctx.getDefaultClaudeMdPath();
@@ -2186,7 +2232,7 @@ export function registerSessionRoutes(
         if (!existsSync(join(resolvedCasePath, '.claude', 'settings.local.json'))) {
           await writeHooksConfig(resolvedCasePath);
         } else {
-          await refreshStaleHookSecret(resolvedCasePath).catch(() => {});
+          await refreshStaleCodemanHooks(resolvedCasePath).catch(() => {});
         }
       } catch {
         /* non-fatal — the session still runs, hooks may be degraded */
@@ -2206,6 +2252,7 @@ export function registerSessionRoutes(
       mode !== 'opencode' &&
       mode !== 'codex' &&
       mode !== 'gemini' &&
+      mode !== 'antigravity' &&
       !remote &&
       envOverrides &&
       Object.keys(envOverrides).length > 0
@@ -2224,17 +2271,19 @@ export function registerSessionRoutes(
           ? codexConfig?.model
           : mode === 'gemini'
             ? geminiConfig?.model
-            : mode !== 'shell'
-              ? qsModelConfig?.defaultModel || undefined
-              : undefined;
+            : mode === 'antigravity'
+              ? antigravityConfig?.model
+              : mode !== 'shell'
+                ? qsModelConfig?.defaultModel || undefined
+                : undefined;
     const qsClaudeModeConfig = await ctx.getClaudeModeConfig();
     const qsEffectiveClaudeMode = await resolveClaudeModeForUsername(qsClaudeModeConfig.claudeMode, owner);
-    // Section 6.3: clamp Codex/Gemini bypass switches for a non-granted owner (no-op single-user/granted).
-    const { codexConfig: qsGatedCodexConfig, geminiConfig: qsGatedGeminiConfig } = await clampExternalCliBypassForOwner(
-      owner,
-      codexConfig,
-      geminiConfig
-    );
+    // Section 6.3: clamp Codex/Gemini/Antigravity bypass switches for a non-granted owner (no-op single-user/granted).
+    const {
+      codexConfig: qsGatedCodexConfig,
+      geminiConfig: qsGatedGeminiConfig,
+      antigravityConfig: qsGatedAntigravityConfig,
+    } = await clampExternalCliBypassForOwner(owner, codexConfig, geminiConfig, antigravityConfig);
     const qsTerminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const session = new Session({
       workingDir: resolvedCasePath,
@@ -2250,6 +2299,7 @@ export function registerSessionRoutes(
       openCodeConfig: mode === 'opencode' ? openCodeConfig : undefined,
       codexConfig: mode === 'codex' ? qsGatedCodexConfig : undefined,
       geminiConfig: mode === 'gemini' ? qsGatedGeminiConfig : undefined,
+      antigravityConfig: mode === 'antigravity' ? qsGatedAntigravityConfig : undefined,
       envOverrides,
       effort,
       remote,

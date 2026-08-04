@@ -21,6 +21,16 @@
 #                               non-interactive default is 127.0.0.1)
 #   CODEMAN_PASSWORD          - Preset the dashboard password (skips the
 #                               password prompt when binding to the network)
+#   CODEMAN_TAILSCALE=1       - Preset the Tailscale choice: bind loopback and
+#                               front it with `tailscale serve` HTTPS (skips
+#                               the network prompt; never installs Tailscale
+#                               in non-interactive runs)
+#
+# Subcommands:
+#   install.sh update     - Update an existing install
+#   install.sh uninstall  - Remove services, symlinks and (optionally) data
+#   install.sh tailscale  - Set up (or repair) Tailscale serve HTTPS access
+#                           for an existing install
 
 set -euo pipefail
 
@@ -50,6 +60,14 @@ EXISTING_FOUND="0"
 EXISTING_HOST=""
 EXISTING_PASSWORD=""
 EXISTING_ACK="0"
+
+# Tailscale serve URL configured or detected during this run
+# (setup_tailscale_access / detect_tailscale_serve_url). Empty when the
+# Tailscale path was not taken or not completed.
+TAILSCALE_SERVE_URL=""
+# Set to 1 when serve commands must go through sudo because granting the user
+# tailscale "operator" rights failed (ensure_tailscale_operator).
+TS_NEED_ROOT="0"
 
 # puppeteer is a devDependency used only by scripts/browser-comparison.mjs — its
 # ~150MB chrome-headless-shell download is never needed to build or run Codeman.
@@ -177,13 +195,28 @@ print_security_notice() {
         echo -e "    For access from OUTSIDE your network, prefer Tailscale or a tunnel."
         echo -e "    ${DIM}Details: docs/security-architecture.md${NC}"
     else
-        echo -e "  ${YELLOW}${BOLD}Security:${NC}"
-        echo -e "    Codeman binds ${BOLD}127.0.0.1${NC} (this machine only) — no password needed by default."
-        echo -e "    To reach it from another device, do ONE of:"
-        echo -e "      ${CYAN}•${NC} tailscale serve / cloudflared tunnel   ${DIM}(recommended)${NC}, or"
-        echo -e "      ${CYAN}•${NC} ${CYAN}codeman web --host 0.0.0.0${NC}  AND set ${CYAN}CODEMAN_PASSWORD${NC}"
-        echo -e "    A non-loopback bind without a password still starts, but warns loudly."
-        echo -e "    ${DIM}Details: docs/security-architecture.md${NC}"
+        # Loopback bind: when a tailscale serve mapping fronts it, lead with
+        # the actual URL instead of the generic "do ONE of" list. Detection is
+        # dynamic (tailscaled state is the single source of truth).
+        local notice_ts_url="$TAILSCALE_SERVE_URL"
+        if [[ -z "$notice_ts_url" ]]; then
+            notice_ts_url=$(detect_tailscale_serve_url 2>/dev/null) || notice_ts_url=""
+        fi
+        if [[ -n "$notice_ts_url" ]]; then
+            echo -e "  ${YELLOW}${BOLD}Security:${NC}"
+            echo -e "    Codeman binds ${BOLD}127.0.0.1${NC}, fronted by Tailscale serve:"
+            echo -e "    reachable at ${BOLD}$notice_ts_url${NC} (HTTPS, your tailnet only)."
+            echo -e "    Tailscale authenticates every device before traffic reaches Codeman."
+            echo -e "    ${DIM}Details: docs/security-architecture.md${NC}"
+        else
+            echo -e "  ${YELLOW}${BOLD}Security:${NC}"
+            echo -e "    Codeman binds ${BOLD}127.0.0.1${NC} (this machine only) — no password needed by default."
+            echo -e "    To reach it from another device, do ONE of:"
+            echo -e "      ${CYAN}•${NC} tailscale serve / cloudflared tunnel   ${DIM}(recommended)${NC}, or"
+            echo -e "      ${CYAN}•${NC} ${CYAN}codeman web --host 0.0.0.0${NC}  AND set ${CYAN}CODEMAN_PASSWORD${NC}"
+            echo -e "    A non-loopback bind without a password still starts, but warns loudly."
+            echo -e "    ${DIM}Details: docs/security-architecture.md${NC}"
+        fi
     fi
     echo ""
 }
@@ -1050,6 +1083,7 @@ read_existing_binding() {
 # preset. The server binary itself still defaults to 127.0.0.1 either way.
 choose_network_binding() {
     # Preset via environment: honor it and skip the prompt entirely.
+    # CODEMAN_TAILSCALE=1 composes with a loopback (or absent) CODEMAN_HOST.
     if [[ -n "${CODEMAN_HOST:-}" ]]; then
         BIND_HOST="$CODEMAN_HOST"
         BIND_PASSWORD="${CODEMAN_PASSWORD:-}"
@@ -1057,6 +1091,20 @@ choose_network_binding() {
             BIND_ACK="1"
         fi
         info "Network binding preset via CODEMAN_HOST: $BIND_HOST"
+        if [[ "${CODEMAN_TAILSCALE:-0}" == "1" ]]; then
+            if [[ "$BIND_HOST" == "127.0.0.1" ]]; then
+                setup_tailscale_access || true
+            else
+                warn "CODEMAN_TAILSCALE=1 ignored: CODEMAN_HOST=$BIND_HOST is not loopback."
+            fi
+        fi
+        return 0
+    fi
+    if [[ "${CODEMAN_TAILSCALE:-0}" == "1" ]]; then
+        BIND_HOST="127.0.0.1"
+        BIND_PASSWORD="${CODEMAN_PASSWORD:-}"
+        info "Tailscale access preset via CODEMAN_TAILSCALE=1"
+        setup_tailscale_access || true
         return 0
     fi
 
@@ -1077,21 +1125,48 @@ choose_network_binding() {
         return 0
     fi
 
-    # Default follows the existing setup when there is one, else network.
-    local default_choice="1"
+    # Tailscale state, for the menu hint and the default choice. Detection
+    # only; never installs, logs in, or prompts for sudo here.
+    local ts_hint="will be installed for you" ts_ready="0" ts_detected_url=""
+    if check_tailscale; then
+        ts_hint="installed, needs login"
+        if command -v node &>/dev/null && [[ "$(ts_status_field 's.BackendState')" == "Running" ]]; then
+            ts_ready="1"
+            ts_hint="already connected"
+            ts_detected_url=$(detect_tailscale_serve_url) || ts_detected_url=""
+            if [[ -n "$ts_detected_url" ]]; then
+                ts_hint="already serving Codeman"
+            fi
+        fi
+    fi
+
+    # Defaults: an existing setup wins (existing loopback installs default to
+    # Tailscale only when its serve mapping is already present); fresh installs
+    # default to Tailscale when it is already connected, else network access.
+    # A bare Enter never pulls in new software.
+    local default_choice="2"
     if [[ "$EXISTING_FOUND" == "1" && "$EXISTING_HOST" == "127.0.0.1" ]]; then
-        default_choice="2"
+        if [[ -n "$ts_detected_url" ]]; then
+            default_choice="1"
+        else
+            default_choice="3"
+        fi
+    elif [[ "$EXISTING_FOUND" != "1" && "$ts_ready" == "1" ]]; then
+        default_choice="1"
     fi
 
     echo -e "  ${BOLD}Network access${NC}"
     echo ""
     echo -e "  How should the Codeman dashboard be reachable?"
     echo ""
-    echo -e "    ${CYAN}1)${NC} ${BOLD}Any device on your network${NC} ${DIM}(0.0.0.0)${NC}"
-    echo -e "       Open it straight from your phone or laptop."
+    echo -e "    ${CYAN}1)${NC} ${BOLD}Tailscale${NC} ${DIM}($ts_hint)${NC}"
+    echo -e "       Private VPN access from your phone or laptop, anywhere."
+    echo -e "       Real HTTPS, no password needed: your tailnet is the login."
+    echo -e "    ${CYAN}2)${NC} ${BOLD}Any device on your network${NC} ${DIM}(0.0.0.0)${NC}"
+    echo -e "       Open it straight from your phone or laptop on the same Wi-Fi."
     echo -e "       ${YELLOW}Less safe: set a password so only you control your agents.${NC}"
-    echo -e "    ${CYAN}2)${NC} ${BOLD}This machine only${NC} ${DIM}(127.0.0.1)${NC}"
-    echo -e "       Safest. Reach it remotely via Tailscale or a tunnel."
+    echo -e "    ${CYAN}3)${NC} ${BOLD}This machine only${NC} ${DIM}(127.0.0.1)${NC}"
+    echo -e "       Safest. Reach it remotely via Tailscale or a tunnel later."
     echo ""
     if [[ "$EXISTING_FOUND" == "1" ]]; then
         echo -e "  ${DIM}Current setup: $EXISTING_HOST$([[ -n "$EXISTING_PASSWORD" ]] && echo ", password set"). Enter keeps it.${NC}"
@@ -1100,18 +1175,52 @@ choose_network_binding() {
 
     local bind_choice=""
     while true; do
-        echo -en "${CYAN}Choose [1/2] (default $default_choice):${NC} " >&2
+        echo -en "${CYAN}Choose [1/2/3] (default $default_choice):${NC} " >&2
         read_reply bind_choice || bind_choice="$default_choice"
         bind_choice="${bind_choice:-$default_choice}"
         case "$bind_choice" in
-            1|2) break ;;
-            *) echo "Please enter 1 or 2." >&2 ;;
+            1|2|3) break ;;
+            *) echo "Please enter 1, 2, or 3." >&2 ;;
         esac
     done
 
-    if [[ "$bind_choice" == "2" ]]; then
+    if [[ "$bind_choice" == "3" ]]; then
         BIND_HOST="127.0.0.1"
         success "Binding 127.0.0.1 (this machine only)"
+        return 0
+    fi
+
+    if [[ "$bind_choice" == "1" ]]; then
+        BIND_HOST="127.0.0.1"
+        setup_tailscale_access || true
+
+        # Password is optional here: the tailnet already authenticates devices.
+        # An existing password is always kept (never silently loosen).
+        if [[ -n "$EXISTING_PASSWORD" ]]; then
+            BIND_PASSWORD="$EXISTING_PASSWORD"
+            info "Keeping the existing dashboard password"
+        elif [[ -n "${CODEMAN_PASSWORD:-}" ]]; then
+            BIND_PASSWORD="$CODEMAN_PASSWORD"
+            info "Using CODEMAN_PASSWORD from the environment"
+        elif prompt_yes_no "Add a dashboard password too? (optional; your tailnet already authenticates your devices)" "n"; then
+            local ts_pw="" ts_pw2=""
+            while true; do
+                echo -en "${CYAN}Dashboard password:${NC} " >&2
+                read_secret ts_pw || ts_pw=""
+                if [[ -z "$ts_pw" ]]; then
+                    info "No password set"
+                    break
+                fi
+                echo -en "${CYAN}Confirm password:${NC} " >&2
+                read_secret ts_pw2 || ts_pw2=""
+                if [[ "$ts_pw" == "$ts_pw2" ]]; then
+                    BIND_PASSWORD="$ts_pw"
+                    success "Password set (login user: admin)"
+                    break
+                fi
+                echo "Passwords do not match, try again." >&2
+            done
+        fi
         return 0
     fi
 
@@ -1160,6 +1269,403 @@ choose_network_binding() {
         echo "Passwords do not match, try again." >&2
     done
     return 0
+}
+
+# ============================================================================
+# Tailscale Access (loopback bind fronted by `tailscale serve` HTTPS)
+# ============================================================================
+# The recommended remote-access setup: Codeman stays on 127.0.0.1 and
+# tailscaled fronts it with a real Let's Encrypt certificate for
+# https://<node>.<tailnet>.ts.net, reachable from the user's tailnet only.
+# The app side needs zero configuration (.ts.net is in the server's trusted
+# host suffixes). All state lives in tailscaled: no marker files, `tailscale
+# serve status` is the single source of truth, and `--bg` config persists
+# across reboots on its own.
+#
+# Safety rule for every function here: NEVER `tailscale serve reset` and never
+# touch mappings other than 443 -> Codeman's port. Users may have unrelated
+# serve config (other ports, other apps) that a reset would destroy.
+
+get_tailscale_path() {
+    if command -v tailscale &>/dev/null; then
+        command -v tailscale
+        return 0
+    fi
+    # macOS GUI app (App Store or brew cask) ships the CLI inside the bundle
+    # and does not put it on PATH.
+    if [[ -x "/Applications/Tailscale.app/Contents/MacOS/Tailscale" ]]; then
+        echo "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+        return 0
+    fi
+    return 1
+}
+
+check_tailscale() {
+    get_tailscale_path >/dev/null 2>&1
+}
+
+ts_cmd() {
+    local ts_bin
+    ts_bin=$(get_tailscale_path) || return 127
+    "$ts_bin" "$@"
+}
+
+# Serve mutations need root or "operator" rights on Linux; TS_NEED_ROOT is set
+# by ensure_tailscale_operator when the operator grant failed. Detection paths
+# run with TS_NEED_ROOT=0 and must never trigger a sudo prompt.
+ts_cmd_serve() {
+    local ts_bin
+    ts_bin=$(get_tailscale_path) || return 127
+    if [[ "$TS_NEED_ROOT" == "1" ]]; then
+        run_as_root "$ts_bin" "$@"
+    else
+        "$ts_bin" "$@"
+    fi
+}
+
+# ts_status_field <js-expr>: evaluate an expression against the parsed
+# `tailscale status --json` object bound to `s`, printing the result (empty on
+# any error). node is guaranteed at every call site (the installer installs it
+# before the binding prompt; the subcommand requires a completed install).
+ts_status_field() {
+    ts_cmd status --json 2>/dev/null | node -e '
+        let d = "";
+        process.stdin.on("data", (c) => (d += c));
+        process.stdin.on("end", () => {
+            try {
+                const s = JSON.parse(d);
+                const v = eval(process.argv[1]);
+                if (v !== undefined && v !== null && v !== false) process.stdout.write(String(v));
+            } catch {}
+        });
+    ' "$1" 2>/dev/null
+}
+
+# Print the local port that the :443 web handler proxies to, empty when 443 is
+# unconfigured. Any scheme counts (http://, and https+insecure:// from setups
+# where Codeman itself runs --https), so legacy configs are recognized as ours.
+ts_serve_443_target_port() {
+    ts_cmd_serve serve status --json 2>/dev/null | node -e '
+        let d = "";
+        process.stdin.on("data", (c) => (d += c));
+        process.stdin.on("end", () => {
+            try {
+                const s = JSON.parse(d);
+                for (const [hostport, cfg] of Object.entries(s.Web || {})) {
+                    if (!hostport.endsWith(":443")) continue;
+                    const proxy = cfg && cfg.Handlers && cfg.Handlers["/"] && cfg.Handlers["/"].Proxy;
+                    if (!proxy) continue;
+                    const m = String(proxy).match(/:(\d+)\/?$/);
+                    if (m) process.stdout.write(m[1]);
+                    return;
+                }
+            } catch {}
+        });
+    ' 2>/dev/null
+}
+
+# Print https://<node>.<tailnet>.ts.net when tailscale is running AND serve
+# already forwards 443 to Codeman's port; print nothing otherwise. Safe to call
+# anywhere (no sudo, no side effects); used by the security notice, uninstall,
+# and the re-run default.
+detect_tailscale_serve_url() {
+    check_tailscale || return 0
+    command -v node &>/dev/null || return 0
+    [[ "$(ts_status_field 's.BackendState')" == "Running" ]] || return 0
+    local port="${CODEMAN_PORT:-3000}"
+    [[ "$(ts_serve_443_target_port)" == "$port" ]] || return 0
+    local dns
+    dns=$(ts_status_field 's.Self && s.Self.DNSName')
+    [[ -n "$dns" ]] || return 0
+    echo "https://${dns%.}"
+}
+
+tailscale_retrofit_hint() {
+    warn "$1: falling back to local-only access (127.0.0.1)."
+    echo -e "  ${DIM}Set up Tailscale access any time later with:${NC} ${CYAN}bash $INSTALL_DIR/install.sh tailscale${NC}" >&2
+}
+
+offer_install_tailscale() {
+    if [[ "$NONINTERACTIVE" == "1" ]]; then
+        info "Tailscale is not installed; skipping (non-interactive runs never install it)."
+        return 1
+    fi
+    headless_guard "install Tailscale (curl | sh from tailscale.com)"
+
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        if command -v brew &>/dev/null; then
+            if ! prompt_yes_no "Tailscale is not installed. Install it now with Homebrew?" "y"; then
+                return 1
+            fi
+            if ! brew install --cask tailscale; then
+                warn "Homebrew install failed."
+                return 1
+            fi
+            open -a Tailscale 2>/dev/null || true
+            info "Log in via the Tailscale menu-bar app if it asks."
+        else
+            info "Install the Tailscale app first: https://tailscale.com/download/macos"
+            if ! prompt_yes_no "Continue once Tailscale is installed?" "n"; then
+                return 1
+            fi
+        fi
+    else
+        if ! prompt_yes_no "Tailscale is not installed. Install it now (official installer from tailscale.com)?" "y"; then
+            return 1
+        fi
+        info "Running the official Tailscale installer (it may ask for sudo)..."
+        # When piped (curl | bash), stdin is our pipe: give the child installer
+        # the real terminal so its own sudo prompt works.
+        if [[ -e /dev/tty ]]; then
+            if ! sh -c "$(download_to_stdout https://tailscale.com/install.sh)" < /dev/tty; then
+                warn "Tailscale installation failed."
+                return 1
+            fi
+        else
+            if ! sh -c "$(download_to_stdout https://tailscale.com/install.sh)"; then
+                warn "Tailscale installation failed."
+                return 1
+            fi
+        fi
+    fi
+
+    if ! check_tailscale; then
+        warn "tailscale was not found after the install."
+        return 1
+    fi
+    success "Tailscale installed"
+    return 0
+}
+
+ensure_tailscale_login() {
+    local state
+    state=$(ts_status_field 's.BackendState')
+    if [[ "$state" == "Running" ]]; then
+        return 0
+    fi
+    if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
+        warn "Tailscale is installed but not connected (state: ${state:-unknown})."
+        return 1
+    fi
+
+    info "Tailscale needs to log in to your tailnet."
+    echo -e "  ${DIM}A login URL will be printed: open it on any device. Waiting up to 5 minutes.${NC}"
+    local ts_bin up_ok="0"
+    ts_bin=$(get_tailscale_path) || return 1
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        # The GUI app's CLI runs as the user; no root needed.
+        if "$ts_bin" up --timeout=300s; then up_ok="1"; fi
+    else
+        if [[ -e /dev/tty ]]; then
+            if run_as_root "$ts_bin" up --timeout=300s < /dev/tty; then up_ok="1"; fi
+        else
+            if run_as_root "$ts_bin" up --timeout=300s; then up_ok="1"; fi
+        fi
+    fi
+    if [[ "$up_ok" != "1" ]]; then
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            info "If the CLI cannot log in, open the Tailscale app, log in there, then run:"
+            info "  bash $INSTALL_DIR/install.sh tailscale"
+        fi
+        return 1
+    fi
+    [[ "$(ts_status_field 's.BackendState')" == "Running" ]]
+}
+
+# Linux: `tailscale serve` needs root or operator rights. Grant operator once
+# (with the user's consent via sudo) so serve config never needs sudo again;
+# fall back to sudo-per-command when the grant fails.
+ensure_tailscale_operator() {
+    if [[ "$(uname -s)" == "Darwin" ]] || [[ $EUID -eq 0 ]]; then
+        return 0
+    fi
+    if ts_cmd serve status &>/dev/null; then
+        return 0
+    fi
+    if ! command -v sudo &>/dev/null; then
+        warn "No sudo available; tailscale serve configuration may fail without root."
+        TS_NEED_ROOT="1"
+        return 0
+    fi
+    info "Granting your user Tailscale 'operator' rights (one-time sudo; lets serve run without root)..."
+    local ts_bin
+    ts_bin=$(get_tailscale_path) || return 0
+    if run_as_root "$ts_bin" set --operator="$USER" 2>/dev/null && ts_cmd serve status &>/dev/null; then
+        success "Operator rights granted"
+        return 0
+    fi
+    warn "Could not grant operator rights; serve commands will use sudo."
+    TS_NEED_ROOT="1"
+    return 0
+}
+
+# HTTPS certificates are a per-tailnet admin toggle. Serve without them cannot
+# terminate TLS, and a plain-HTTP fallback would silently break the "real
+# HTTPS" promise (PWA install, web push), so guide the user through enabling
+# them instead of degrading.
+ensure_tailnet_https() {
+    while true; do
+        local magic cert
+        magic=$(ts_status_field 's.CurrentTailnet && s.CurrentTailnet.MagicDNSEnabled ? "1" : ""')
+        cert=$(ts_status_field 'Array.isArray(s.CertDomains) && s.CertDomains.length > 0 ? "1" : ""')
+        if [[ "$magic" == "1" && "$cert" == "1" ]]; then
+            return 0
+        fi
+        warn "Your tailnet has not enabled HTTPS certificates yet (a one-time admin toggle)."
+        echo -e "    Open ${CYAN}https://login.tailscale.com/admin/dns${NC} and enable:" >&2
+        if [[ "$magic" == "1" ]]; then
+            echo -e "      ${CYAN}1.${NC} MagicDNS            ${GREEN}(already on)${NC}" >&2
+        else
+            echo -e "      ${CYAN}1.${NC} MagicDNS" >&2
+        fi
+        if [[ "$cert" == "1" ]]; then
+            echo -e "      ${CYAN}2.${NC} HTTPS Certificates  ${GREEN}(already on)${NC}" >&2
+        else
+            echo -e "      ${CYAN}2.${NC} HTTPS Certificates" >&2
+        fi
+        if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
+            return 1
+        fi
+        if ! prompt_yes_no "Re-check now? (answering no skips Tailscale setup)" "y"; then
+            return 1
+        fi
+    done
+}
+
+setup_tailscale_serve() {
+    local port="${CODEMAN_PORT:-3000}"
+    local dns url existing
+    dns=$(ts_status_field 's.Self && s.Self.DNSName')
+    if [[ -z "$dns" ]]; then
+        warn "Could not determine this machine's tailnet DNS name."
+        return 1
+    fi
+    url="https://${dns%.}"
+
+    existing=$(ts_serve_443_target_port)
+    if [[ "$existing" == "$port" ]]; then
+        TAILSCALE_SERVE_URL="$url"
+        success "Tailscale serve already forwards $url to port $port (kept as-is)"
+        return 0
+    fi
+    if [[ -n "$existing" ]]; then
+        warn "tailscale serve already forwards $url (port 443) to local port $existing."
+        if ! prompt_yes_no "Replace that mapping with Codeman (port $port)?" "n"; then
+            info "Keeping the existing mapping."
+            return 1
+        fi
+    fi
+
+    info "Configuring: tailscale serve --bg $port"
+    local serve_out
+    if serve_out=$(ts_cmd_serve serve --bg "$port" 2>&1); then
+        TAILSCALE_SERVE_URL="$url"
+        success "Tailscale HTTPS enabled: $url"
+        echo -e "  ${DIM}(persists across reboots; inspect with: tailscale serve status)${NC}"
+        return 0
+    fi
+    warn "tailscale serve failed:"
+    printf '%s\n' "$serve_out" | sed 's/^/    /' >&2
+    return 1
+}
+
+# Curl the ts.net URL until it answers. 200 = reachable; 401 = reachable behind
+# the dashboard password. The first request can be slow while tailscaled
+# obtains the Let's Encrypt certificate.
+verify_tailscale_access() {
+    if [[ -z "$TAILSCALE_SERVE_URL" ]]; then
+        return 0
+    fi
+    if ! command -v curl &>/dev/null; then
+        info "curl not available; open $TAILSCALE_SERVE_URL to verify."
+        return 0
+    fi
+    info "Verifying $TAILSCALE_SERVE_URL (first load can take ~30s while the HTTPS certificate is issued)..."
+    local i http_code
+    for ((i = 1; i <= 10; i++)); do
+        http_code=$(curl -skm 10 -o /dev/null -w '%{http_code}' "$TAILSCALE_SERVE_URL/api/status" 2>/dev/null) || http_code=""
+        if [[ "$http_code" == "200" || "$http_code" == "401" ]]; then
+            success "Reachable: $TAILSCALE_SERVE_URL"
+            return 0
+        fi
+        sleep 3
+    done
+    warn "Could not reach $TAILSCALE_SERVE_URL/api/status yet."
+    warn "It may need another minute (certificate issuance). Inspect: tailscale serve status"
+    warn "If Codeman itself runs with --https, the serve target must be:"
+    warn "  tailscale serve --bg https+insecure://localhost:${CODEMAN_PORT:-3000}"
+    return 1
+}
+
+# Orchestrator: walk every state (not installed -> logged out -> operator ->
+# tailnet HTTPS -> serve) and end with TAILSCALE_SERVE_URL set, or fall back
+# gracefully (the caller keeps the loopback bind either way).
+setup_tailscale_access() {
+    TAILSCALE_SERVE_URL=""
+    if ! check_tailscale; then
+        if ! offer_install_tailscale; then
+            tailscale_retrofit_hint "Tailscale is not installed"
+            return 1
+        fi
+    fi
+    if ! command -v node &>/dev/null; then
+        tailscale_retrofit_hint "node is not on PATH yet"
+        return 1
+    fi
+    if ! ensure_tailscale_login; then
+        tailscale_retrofit_hint "Tailscale is not connected"
+        return 1
+    fi
+    ensure_tailscale_operator
+    if ! ensure_tailnet_https; then
+        tailscale_retrofit_hint "HTTPS certificates are not enabled for your tailnet"
+        return 1
+    fi
+    if ! setup_tailscale_serve; then
+        tailscale_retrofit_hint "tailscale serve could not be configured"
+        return 1
+    fi
+    return 0
+}
+
+# `install.sh tailscale`: retrofit Tailscale access onto an existing install
+# (also the target of every "set it up later" hint above).
+setup_tailscale_subcommand() {
+    print_banner
+    if ! command -v node &>/dev/null; then
+        die "node is required. Install Codeman first (run the installer without arguments)."
+    fi
+
+    read_existing_binding
+    if [[ "$EXISTING_FOUND" == "1" && -n "$EXISTING_HOST" && "$EXISTING_HOST" != "127.0.0.1" ]]; then
+        warn "Your service binds $EXISTING_HOST (network-wide). Tailscale serve will work, but the"
+        warn "dashboard stays reachable on your LAN too. Re-run the installer and choose Tailscale"
+        warn "to switch to the tighter loopback-only bind."
+        echo ""
+    fi
+
+    if ! setup_tailscale_access; then
+        exit 1
+    fi
+
+    # Verify end-to-end only when Codeman is actually answering locally.
+    local port="${CODEMAN_PORT:-3000}" server_up="0"
+    if command -v curl &>/dev/null; then
+        if curl -skm 5 -o /dev/null "http://127.0.0.1:$port/api/status" 2>/dev/null ||
+            curl -skm 5 -o /dev/null "https://127.0.0.1:$port/api/status" 2>/dev/null; then
+            server_up="1"
+        fi
+    fi
+    if [[ "$server_up" == "1" ]]; then
+        verify_tailscale_access || true
+    else
+        info "Codeman does not appear to be running on port $port right now."
+        info "Once it is, open: $TAILSCALE_SERVE_URL"
+    fi
+
+    BIND_HOST="${EXISTING_HOST:-127.0.0.1}"
+    BIND_PASSWORD="$EXISTING_PASSWORD"
+    print_security_notice
 }
 
 # ============================================================================
@@ -1773,10 +2279,19 @@ main() {
 
         echo ""
         if [[ "$service_ok" == "true" ]]; then
+            # With Tailscale configured, prove the URL actually answers now
+            # that the server is up (never claim success blindly).
+            if [[ -n "$TAILSCALE_SERVE_URL" ]]; then
+                verify_tailscale_access || true
+                echo ""
+            fi
             echo -e "  ${GREEN}${BOLD}Codeman is running now!${NC}"
             echo ""
             echo -e "    ${CYAN}# Open in browser${NC}"
-            if [[ "$BIND_HOST" == "0.0.0.0" ]]; then
+            if [[ -n "$TAILSCALE_SERVE_URL" ]]; then
+                echo -e "    $TAILSCALE_SERVE_URL   ${DIM}(any device on your tailnet, HTTPS)${NC}"
+                echo -e "    http://localhost:3000       ${DIM}(this machine)${NC}"
+            elif [[ "$BIND_HOST" == "0.0.0.0" ]]; then
                 echo -e "    http://$(detect_lan_ip):3000   ${DIM}(any device on your network)${NC}"
                 echo -e "    http://localhost:3000       ${DIM}(this machine)${NC}"
             else
@@ -1822,7 +2337,18 @@ main() {
             echo ""
             echo -e "    ${CYAN}# Open in browser${NC}"
             echo -e "    http://localhost:3000"
+            if [[ -n "$TAILSCALE_SERVE_URL" ]]; then
+                echo -e "    $TAILSCALE_SERVE_URL   ${DIM}(any device on your tailnet, once running)${NC}"
+            fi
         fi
+        echo ""
+    fi
+
+    if [[ -n "$TAILSCALE_SERVE_URL" ]]; then
+        echo -e "  ${BOLD}Remote Access (Tailscale):${NC}"
+        echo ""
+        echo -e "    $TAILSCALE_SERVE_URL   ${DIM}(HTTPS, any device on your tailnet)${NC}"
+        echo -e "    ${CYAN}tailscale serve status${NC}      # Inspect the mapping"
         echo ""
     fi
 
@@ -1982,6 +2508,20 @@ uninstall() {
         success "Removed LaunchDaemon"
     fi
 
+    # Remove OUR tailscale serve mapping (443 -> Codeman's port) only. Other
+    # serve config stays untouched, and never `tailscale serve reset`.
+    local ts_url=""
+    ts_url=$(detect_tailscale_serve_url 2>/dev/null) || ts_url=""
+    if [[ -n "$ts_url" ]]; then
+        if prompt_yes_no "Remove the Tailscale serve mapping for Codeman ($ts_url)?" "y"; then
+            if ts_cmd_serve serve --https=443 off 2>/dev/null; then
+                success "Removed tailscale serve mapping"
+            else
+                warn "Could not remove it automatically. Run: tailscale serve --https=443 off"
+            fi
+        fi
+    fi
+
     # Remove symlinks
     local symlink_dir="$HOME/.local/bin"
     if [[ -L "$symlink_dir/codeman" ]]; then
@@ -2030,6 +2570,7 @@ uninstall() {
 case "${1:-}" in
     update)    update ;;
     uninstall) uninstall ;;
+    tailscale) setup_tailscale_subcommand ;;
     *)
         # Only a COMPLETED install re-runs as a quiet update. A partial one
         # (clone succeeded but build/menu never finished) lacks the marker and

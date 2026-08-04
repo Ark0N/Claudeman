@@ -1,45 +1,64 @@
 <p align="center">
   <h1 align="center">xterm-zerolag-input</h1>
   <p align="center">
-    Instant keystroke feedback overlay for <a href="https://xtermjs.org/">xterm.js</a><br>
-    <em>Eliminates perceived input latency over high-RTT connections</em>
+    <strong>Make typing feel instant in <a href="https://xtermjs.org/">xterm.js</a>, no matter how far away the server is.</strong><br>
+    <em>A pixel-perfect local echo overlay. Client-side only. Zero dependencies.</em>
   </p>
   <p align="center">
     <a href="https://www.npmjs.com/package/xterm-zerolag-input"><img src="https://img.shields.io/npm/v/xterm-zerolag-input?style=flat-square&color=22c55e" alt="npm"></a>
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-1e3a5f?style=flat-square" alt="MIT"></a>
-    <img src="https://img.shields.io/badge/Dependencies-0-22c55e?style=flat-square" alt="Zero deps">
-    <img src="https://img.shields.io/badge/Tests-78-22c55e?style=flat-square" alt="78 tests">
-    <img src="https://img.shields.io/badge/xterm.js-v5%20%7C%20v7+-3b82f6?style=flat-square" alt="xterm.js">
+    <img src="https://img.shields.io/badge/Dependencies-0-22c55e?style=flat-square" alt="Zero dependencies">
+    <img src="https://img.shields.io/badge/Size-6.1%20kB%20gzip-22c55e?style=flat-square" alt="6.1 kB gzipped">
+    <img src="https://img.shields.io/badge/Tests-175-22c55e?style=flat-square" alt="175 tests">
+    <img src="https://img.shields.io/badge/xterm.js-v5%20%7C%20v7+-3b82f6?style=flat-square" alt="xterm.js v5 and v7+">
   </p>
+</p>
+
+> ### Made for [**Codeman**](https://getcodeman.com)
+>
+> This overlay is the local echo engine of [**Codeman**](https://github.com/Ark0N/Codeman), mission control for AI coding agents: run and monitor a dozen Claude Code, Codex, OpenCode and Gemini sessions at once, watch their subagents work in live floating windows, let them run autonomously overnight, and drive all of it from your phone.
+>
+> That last part is why this library exists. The demo below is a real Codeman session on two phones.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Ark0N/Codeman/master/docs/images/zerolag-demo-20260728.gif" alt="Side-by-side phones typing into the same remote session: with zerolag the text appears at 0ms, without it every keystroke waits 600ms to 2.7s for the server echo" width="900">
+</p>
+
+<p align="center">
+  <em>Two phones, the same remote session, the same slow link.<br>
+  Left: the zerolag overlay paints every keystroke at <strong>0ms</strong>. Right: stock xterm.js waits <strong>600ms to 2.7s</strong> for the server to echo it back.</em>
 </p>
 
 ---
 
-## The Problem
+## The 30-second version
 
-When using xterm.js over a remote connection (SSH web clients, cloud IDEs, mobile terminals), every keystroke takes a full round-trip to the server before appearing on screen. At 100-500ms RTT, typing feels sluggish and unresponsive. Users type blind, make mistakes they can't see, and the experience feels broken.
-
-## The Solution
-
-`xterm-zerolag-input` renders typed characters **immediately** as a pixel-perfect DOM overlay positioned on the terminal's character grid. The overlay covers the terminal canvas at the prompt location, showing characters instantly while the server echo travels back. Once the server responds, the overlay seamlessly disappears and the real terminal text takes over.
+Over a remote connection, xterm.js shows you a character only after it has flown to the server and back. At 100-500ms RTT that reads as broken: you type ahead of the screen, you cannot see your typos, and you start pecking one key at a time to stay in sync.
 
 ```
-Keystroke Flow:
-                                    ┌─── DOM overlay (instant, 0ms)
-User types 'h' ─── onData('h') ───┤
-                                    └─── Your app sends to PTY ──→ Server
-                                                                      │
-Server echoes 'h' ←──────────────────────────────────────────────────┘
-         │                                                  (200-500ms RTT)
-         └──→ terminal.write('h') ──→ overlay.clear()
-              (server output replaces overlay — seamless transition)
+  stock xterm.js   keypress ─────── 300 ms ───────→ character appears
+  with zerolag     keypress → character appears  ·  echo lands later, unseen
 ```
 
-**No changes to your backend needed.** The addon is purely client-side.
+Same keystroke, same link. The only difference is who you wait for: the server, or nobody.
 
-## Origin
+`xterm-zerolag-input` paints your keystrokes **immediately**, as an absolutely-positioned DOM overlay locked to the terminal's character grid. The byte still goes to the PTY exactly as before, so nothing about your shell changes. When the server echo lands 300ms later, the overlay clears and the real terminal text takes over on the same pixels. The handoff is invisible.
 
-This library was extracted from [Codeman](https://github.com/Ark0N/Codeman), mission control for AI coding agents — multi-session management, real-time agent visualization, autonomous respawn loops, and a mobile-first web UI for Claude Code, OpenCode, and Codex. The local echo system was built to make mobile and remote access feel instant, then battle-tested across thousands of hours of real usage. After 3 deep code audits, it was extracted into this standalone library with 78 tests covering every state transition.
+**No backend changes. No protocol. No server support.** It is a client-side addon that never touches the wire.
+
+## Why this one
+
+| | |
+|---|---|
+| **Survives full-screen TUIs** | Ink, blessed, and friends repaint the whole screen constantly. The overlay is a separate DOM layer they cannot reach, so it does not get clobbered. |
+| **Pixel-matched to the canvas** | Each character is its own absolutely-positioned `<span>` at exact cell coordinates, so it does not drift out of the grid like normal DOM text flow. |
+| **Wide characters included** | CJK, fullwidth forms and emoji render double-width and position by visual column, using the terminal's Unicode addon when one is loaded. |
+| **Backspace that actually works** | A three-layer cascade (unsent, in-flight, already on screen) tells you exactly what to forward to the PTY, so editing works through any mix of typed, flushed and tab-completed text. |
+| **You keep control of input** | The addon never hooks `onData` for you. You decide what gets echoed and what gets forwarded, which is what makes char-at-a-time, buffered, and multi-session tab switching all possible. |
+| **Small and self-contained** | 6.1 kB gzipped, zero runtime dependencies, dual CJS/ESM with full type declarations. |
+| **Proven under load** | Extracted from [Codeman](https://getcodeman.com), hardened over thousands of hours of real remote and mobile usage, 175 tests over every state transition. |
+
+Built for anything that puts a terminal behind a network hop: SSH web clients, cloud IDEs, mobile terminals, Kubernetes and container consoles, remote agent dashboards, browser-based dev environments.
 
 ## Install
 
@@ -47,12 +66,9 @@ This library was extracted from [Codeman](https://github.com/Ark0N/Codeman), mis
 npm install xterm-zerolag-input
 ```
 
-- **Zero runtime dependencies**
-- Compatible with both `xterm` (pre-5.4) and `@xterm/xterm` (5.4+)
-- Dual CJS/ESM build with full TypeScript declarations
-- Works with canvas, WebGL, and DOM renderers
+Works with both `xterm` (pre-5.4) and `@xterm/xterm` (5.4+), and with the canvas, WebGL and DOM renderers.
 
-## Quick Start
+## Quick start
 
 ```typescript
 import { Terminal } from '@xterm/xterm';
@@ -61,7 +77,7 @@ import { ZerolagInputAddon } from 'xterm-zerolag-input';
 const terminal = new Terminal();
 terminal.open(document.getElementById('terminal')!);
 
-// 1. Create addon with your prompt character
+// 1. Create the addon with your prompt character
 const zerolag = new ZerolagInputAddon({
   prompt: { type: 'character', char: '$', offset: 2 },
 });
@@ -75,7 +91,7 @@ terminal.onData((data) => {
     ws.send(text + '\r');
   } else if (data === '\x7f') {
     const source = zerolag.removeChar();
-    if (source === 'flushed') ws.send(data); // only backspace text already in PTY
+    if (source === 'flushed') ws.send(data); // only backspace text already in the PTY
   } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
     zerolag.addChar(data);
   }
@@ -87,26 +103,29 @@ terminal.onWriteParsed(() => {
 });
 ```
 
-## Why This Is Hard
+That is the whole integration. Everything below is for tuning it.
 
-Most terminal UIs can't do local echo because:
+## Why this is hard
 
-1. **Buffer writes corrupt**: Frameworks like [Ink](https://github.com/vadimdemedes/ink) (React for terminals) redraw the entire screen on every state change. Writing directly to the terminal buffer gets immediately overwritten.
+Most terminal UIs cannot do local echo, for three reasons:
 
-2. **Cursor position lies**: In Ink, `buffer.cursorY` reflects internal state (near the status bar), not the visible prompt. You can't trust it.
+1. **Buffer writes get corrupted.** Frameworks like [Ink](https://github.com/vadimdemedes/ink) (React for terminals) redraw the entire screen on every state change. Anything written straight into the terminal buffer is overwritten immediately.
 
-3. **Font matching**: Canvas/WebGL renderers use their own text shaping. A DOM overlay must pixel-match the canvas grid — normal DOM text flow drifts due to sub-pixel glyph width differences.
+2. **Cursor position lies.** In Ink, `buffer.cursorY` reflects internal render state (often near a status bar), not the visible prompt. You cannot trust it.
 
-This library solves all three by:
-- Using a **DOM overlay** that Ink can't touch (separate z-index layer)
-- **Scanning the buffer** bottom-up for the prompt character instead of trusting cursor position
-- Rendering each character as an **absolutely-positioned `<span>`** at exact cell-grid coordinates
+3. **Fonts do not line up.** Canvas and WebGL renderers do their own text shaping. A DOM overlay has to pixel-match that grid, and normal DOM text flow drifts as sub-pixel glyph widths accumulate.
+
+This library answers all three:
+
+- a **DOM overlay** on its own z-index layer, which Ink cannot touch
+- **bottom-up buffer scanning** for the prompt instead of trusting the cursor
+- **one absolutely-positioned `<span>` per character** at exact cell-grid coordinates
 
 ---
 
-## Prompt Detection
+## Prompt detection
 
-The addon needs to know where user input starts. It scans the terminal buffer bottom-up for the prompt. Three strategies:
+The addon needs to know where user input starts. It scans the terminal buffer bottom-up. Three strategies:
 
 ### Character (default)
 
@@ -118,17 +137,17 @@ The addon needs to know where user input starts. It scans the terminal buffer bo
 { type: 'character', char: '%', offset: 2 }
 
 // Fish / Starship: ❯
-{ type: 'character', char: '\u276f', offset: 2 }
+{ type: 'character', char: '❯', offset: 2 }
 
 // Simple arrow: >
 { type: 'character', char: '>', offset: 2 }
 ```
 
-`offset` = characters between the prompt marker and where user input begins (e.g., `"$ "` = 2).
+`offset` = characters between the prompt marker and where user input begins (`"$ "` = 2).
 
 ### Regex
 
-For complex prompts. The `g` flag is safely stripped to prevent `lastIndex` mutation.
+For complex prompts. The `g` flag is stripped safely, so there is no `lastIndex` mutation.
 
 ```typescript
 { type: 'regex', pattern: /\$\s*$/, offset: 2 }
@@ -150,77 +169,88 @@ Full control:
 }
 ```
 
+### Switching prompts at runtime
+
+If one terminal hosts several CLIs with different prompts, swap the strategy in place:
+
+```typescript
+zerolag.setPrompt({ type: 'character', char: '❯', offset: 2 });
+```
+
+`setPrompt()` clears the cached prompt position and re-renders if anything is pending, so a mode switch cannot leave the overlay pinned to the old column.
+
 ---
 
-## API Reference
+## API reference
 
 ### `ZerolagInputAddon`
 
-Implements xterm.js `ITerminalAddon`. The addon does **not** hook `terminal.onData()` — you wire your own input handler and call these methods. This gives you full control over which keystrokes are echoed vs forwarded.
+Implements the xterm.js `ITerminalAddon` interface. It deliberately does **not** hook `terminal.onData()`: you wire your own handler and call these methods, which is what gives you control over which keystrokes are echoed and which are forwarded.
 
 ### Input
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `addChar(char)` | `void` | Add a single printable character. Auto-detects existing buffer text on first keystroke. |
+| `addChar(char)` | `void` | Add a single printable character. Auto-detects existing buffer text on the first keystroke. |
 | `appendText(text)` | `void` | Append multiple characters (paste). |
-| `removeChar()` | `'pending'` \| `'flushed'` \| `false` | Remove last char. See [backspace handling](#backspace-handling). |
-| `clear()` | `void` | Clear all state, hide overlay. Call on Enter/Ctrl+C/Escape. |
+| `removeChar()` | `'pending'` \| `'flushed'` \| `false` | Remove the last character. See [backspace handling](#backspace-handling). |
+| `clear()` | `void` | Clear all state and hide the overlay. Call on Enter, Ctrl+C, Escape. |
 
-### Backspace Handling
+### Backspace handling
 
 `removeChar()` cascades through three layers and tells you what it removed:
 
 | Return | Source | Your action |
 |--------|--------|-------------|
-| `'pending'` | Unsent text (never transmitted to PTY) | Do nothing |
-| `'flushed'` | Text already sent to PTY | Send `\x7f` backspace to PTY |
+| `'pending'` | Unsent text (never transmitted to the PTY) | Do nothing |
+| `'flushed'` | Text already sent to the PTY | Send `\x7f` to the PTY |
 | `false` | Nothing to remove | Do nothing |
 
-The cascade: pending text first, then flushed text, then auto-detect buffer text (handles tab completion). This means backspace "just works" through any combination of typed, flushed, and tab-completed text.
+The cascade order is pending text, then flushed text, then auto-detected buffer text (which is what makes backspace work after tab completion). Backspace "just works" across any combination of typed, in-flight and completed text.
 
-### Flushed Text
+### Flushed text
 
-"Flushed" = sent to PTY but echo hasn't arrived yet. Happens during tab switches and tab completion.
+"Flushed" means sent to the PTY but the echo has not arrived yet. This happens during tab switches and tab completion.
 
 | Method | Description |
 |--------|-------------|
-| `setFlushed(count, text, render?)` | Mark text as flushed. Pass `render=false` during tab-switch restore (buffer not loaded yet). |
+| `setFlushed(count, text, render?)` | Mark text as flushed. Pass `render=false` during tab-switch restore, when the buffer is not loaded yet. |
 | `getFlushed()` | Returns `{ count, text }`. |
-| `clearFlushed()` | Clear flushed state when server echo arrives. |
+| `clearFlushed()` | Clear flushed state once the server echo arrives. |
 
-### Buffer Detection
+### Buffer detection
 
-Scan the terminal for text that exists after the prompt but wasn't typed through the overlay.
+Finds text that exists after the prompt but was never typed through the overlay.
 
 | Method | Description |
 |--------|-------------|
-| `detectBufferText()` | Scan and return detected text (or `null`). Sets it as flushed. Guarded: runs once per `clear()` cycle. |
+| `detectBufferText()` | Scan and return the detected text (or `null`), marking it flushed. Guarded: runs once per `clear()` cycle. |
 | `resetBufferDetection()` | Re-enable detection. |
-| `suppressBufferDetection()` | Block detection until next `clear()`. Use for sessions with UI framework text after the prompt. |
-| `undoDetection()` | Undo last detection — clears flushed state, re-enables detection. For tab completion retry. |
+| `suppressBufferDetection()` | Block detection until the next `clear()`. Use for sessions that render UI framework text after the prompt. |
+| `undoDetection()` | Undo the last detection: clears flushed state and re-enables detection. For tab-completion retries. |
 
 ### Rendering
 
 | Method | Description |
 |--------|-------------|
-| `rerender()` | Force re-render. Call after buffer reloads, screen redraws, resizes, reconnects. |
-| `refreshFont()` | Re-cache font properties from terminal. Call after font size or theme changes. |
+| `rerender()` | Force a re-render. Call after buffer reloads, screen redraws, resizes and reconnects. |
+| `refreshFont()` | Re-cache font and color properties from the terminal. Call after a font size or theme change. |
 
-### Prompt Utilities
+### Prompt
 
 | Method | Description |
 |--------|-------------|
-| `findPrompt()` | Find prompt position. Returns `{ row, col }` or `null`. |
-| `readPromptText()` | Read text after prompt marker. Returns string or `null`. |
+| `setPrompt(finder)` | Replace the prompt detection strategy at runtime. |
+| `findPrompt()` | Find the prompt position. Returns `{ row, col }` or `null`. |
+| `readPromptText()` | Read the text after the prompt marker. Returns a string or `null`. |
 
 ### State
 
 | Property | Type | Description |
 |----------|------|-------------|
 | `pendingText` | `string` | Unacknowledged text (read-only) |
-| `hasPending` | `boolean` | `true` if overlay has any content |
-| `state` | `ZerolagInputState` | Full snapshot: pendingText, flushedLength, flushedText, visible, promptPosition |
+| `hasPending` | `boolean` | `true` if the overlay has any content |
+| `state` | `ZerolagInputState` | Full snapshot: `pendingText`, `flushedLength`, `flushedText`, `visible`, `promptPosition` |
 
 ### Options
 
@@ -228,23 +258,23 @@ Scan the terminal for text that exists after the prompt but wasn't typed through
 {
   prompt?: PromptFinder,       // Default: { type: 'character', char: '>', offset: 2 }
   zIndex?: number,             // Default: 7
-  backgroundColor?: string,    // Default: from terminal theme
-  foregroundColor?: string,    // Default: from computed .xterm-rows style
+  backgroundColor?: string,    // Default: terminal theme background ('transparent' to disable)
+  foregroundColor?: string,    // Default: terminal theme / computed .xterm-rows style
   showCursor?: boolean,        // Default: true
-  cursorColor?: string,        // Default: from terminal theme
+  cursorColor?: string,        // Default: terminal theme cursor
   scrollDebounceMs?: number,   // Default: 50
 }
 ```
 
 ---
 
-## Integration Patterns
+## Integration patterns
 
-### Buffered Input (hold until Enter)
+### Buffered input (hold until Enter)
 
-The quick start example above. Characters accumulate in the overlay and are sent on Enter. Best for remote shells where you want to batch input.
+The quick start above. Characters accumulate in the overlay and go out on Enter. Best for remote shells where you want to batch input.
 
-### Char-at-a-Time (send immediately)
+### Char-at-a-time (send immediately)
 
 ```typescript
 terminal.onData((data) => {
@@ -256,12 +286,14 @@ terminal.onData((data) => {
     ws.send(data);
   } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
     zerolag.addChar(data);
-    ws.send(data); // send immediately — overlay shows while echo travels back
+    ws.send(data); // overlay shows the char while the echo travels back
   }
 });
 ```
 
-### Tab Switching (multi-session)
+This is the mode that keeps shell features intact: tab completion, `Ctrl+R` history search, and readline bindings all still work, because every byte still reaches the PTY.
+
+### Tab switching (multi-session)
 
 ```typescript
 function switchToSession(newId: string) {
@@ -280,19 +312,19 @@ function switchToSession(newId: string) {
   const saved = savedState.get(newId);
   if (saved) zerolag.setFlushed(saved.count, saved.text, false); // silent
 
-  // Render after buffer loads
+  // Render after the buffer loads
   terminal.write('', () => zerolag.rerender());
 }
 ```
 
-### Tab Completion
+### Tab completion
 
 ```typescript
 const baseline = zerolag.readPromptText();
 zerolag.clear();
 sendToPty('\t');
 
-// After response:
+// After the response:
 zerolag.resetBufferDetection();
 const detected = zerolag.detectBufferText();
 if (detected && detected !== baseline) {
@@ -302,7 +334,7 @@ if (detected && detected !== baseline) {
 }
 ```
 
-### Resize / Font / Reconnect
+### Resize, font, reconnect
 
 ```typescript
 fitAddon.fit();
@@ -311,14 +343,31 @@ zerolag.rerender();
 terminal.options.fontSize = 18;
 zerolag.refreshFont();
 
-function onReconnect() { zerolag.rerender(); }
+function onReconnect() {
+  zerolag.rerender();
+}
 ```
+
+### Wide characters (CJK, emoji)
+
+Wide characters work out of the box: the overlay measures each character's cell width, renders double-width spans for wide ones, and positions later characters by visual column instead of character index. Line wrapping is computed in columns too, so a wrapped Japanese or Chinese line lands on the same cells the server will use.
+
+For exact Unicode 11+ widths, load xterm's Unicode addon and the overlay will defer to it:
+
+```typescript
+import { Unicode11Addon } from '@xterm/addon-unicode11';
+
+terminal.loadAddon(new Unicode11Addon());
+terminal.unicode.activeVersion = '11';
+```
+
+Without it, a built-in range table covers Hangul, Kana, CJK Unified (including Ext A through G), fullwidth forms and the emoji planes.
 
 ---
 
-## How It Works
+## How it works
 
-### DOM Structure
+### DOM structure
 
 ```
 div.xterm-screen (position: relative)
@@ -326,53 +375,61 @@ div.xterm-screen (position: relative)
   ├── div.xterm-selection (z-index: 1)
   ├── div.xterm-helpers (z-index: 5)
   ├── div.xterm-decoration-container (z-index: 6-7)
-  └── div[zerolag overlay] (z-index: 7)  ← our overlay (invisible to Ink)
+  └── div[zerolag overlay] (z-index: 7)  ← our overlay, invisible to Ink
 ```
 
-### Per-Character Grid Alignment
+### Per-character grid alignment
 
 Each character is an absolutely-positioned `<span>`:
 
 ```
-left  = charIndex * cellWidth   (CSS pixels)
-top   = lineIndex * cellHeight  (CSS pixels)
-width = cellWidth               (exact cell width)
+left  = visualColumn * cellWidth   (CSS pixels)
+top   = lineIndex    * cellHeight  (CSS pixels)
+width = cellWidth * charCellWidth  (1 cell, or 2 for wide characters)
 ```
 
-This avoids sub-pixel drift from normal DOM text flow.
+Positioning by visual column instead of letting the browser lay out text is what removes sub-pixel drift.
 
-### Font Matching
+### Font matching
 
 1. `fontFamily`, `fontSize`, `fontWeight` from `terminal.options`
-2. `letterSpacing` from computed style of `.xterm-rows`
-3. `-webkit-font-smoothing: antialiased` (matches canvas grayscale)
+2. `letterSpacing` from the computed style of `.xterm-rows`
+3. `-webkit-font-smoothing: antialiased` (matches canvas grayscale AA)
 4. `font-feature-settings: 'liga' 0, 'calt' 0` (no ligatures)
 5. `text-rendering: geometricPrecision`
 
-### Cell Dimensions
+### Cell dimensions
 
 - **xterm.js v5.x**: `terminal._core._renderService.dimensions.css.cell` (private API)
 - **xterm.js v7+**: `terminal.dimensions.css.cell` (public API, auto-detected)
 
-### Prompt Column Locking
+### Prompt column locking
 
-When flushed text exists, the prompt column is locked to prevent jitter from full-screen redraws. Row changes are allowed (output can scroll the prompt).
+While flushed text exists the prompt column is locked, so a full-screen redraw cannot make the overlay jitter sideways. Row changes are still allowed, because output legitimately scrolls the prompt.
 
-### Scroll Awareness
+### Scroll awareness
 
-Overlay hides when scrolled up (`viewportY !== baseY`). Debounced re-render when scrolling back to bottom.
+The overlay hides when the viewport is scrolled up (`viewportY !== baseY`) and re-renders, debounced, when you scroll back to the bottom.
+
+---
+
+## Known limitations
+
+- **Canvas and WebGL font mismatch**: minor sub-pixel differences are still possible. Per-character absolute positioning keeps them small.
+- **Grapheme clusters**: widths are summed per code point, so ZWJ emoji sequences (for example 👨‍👩‍👧) and combining marks can be over-counted. Single-code-point emoji and CJK are correct.
+- **Password prompts**: the overlay will happily show characters the server is not echoing. Call `clear()` when you detect a no-echo prompt.
+- **Prompt characters in output**: if your prompt marker also appears in command output, detection can latch onto the wrong line. Use a regex or a custom finder.
 
 ---
 
-## Known Limitations
+## Origin
 
-- **Canvas/WebGL font mismatch**: Minor sub-pixel differences possible. Per-character absolute positioning minimizes this.
-- **Unicode/emoji**: Multi-byte characters occupy variable cell widths — rendered at single-cell width, causing misalignment.
-- **Password prompts**: Overlay shows characters that aren't echoed. Call `clear()` when you detect no-echo mode.
-- **Prompt in output**: If `$` appears in command output, prompt detection may find the wrong position. Use regex or custom finder.
+[Codeman](https://getcodeman.com) needed this before anyone else did. A coding agent you drive from your phone over a tunnel is unusable if every keystroke costs a round trip.
 
----
+So the overlay was built there, ran in production for thousands of hours, and survived three deep code audits before being pulled out into this standalone library with its tests intact. Nothing was reimplemented for the extraction: the engine here is the one Codeman ships.
+
+Want the whole thing? [**getcodeman.com**](https://getcodeman.com) · [github.com/Ark0N/Codeman](https://github.com/Ark0N/Codeman)
 
 ## License
 
-MIT — [Codeman](https://github.com/Ark0N/Codeman) Contributors
+MIT, [Codeman](https://github.com/Ark0N/Codeman) Contributors
