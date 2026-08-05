@@ -1,5 +1,69 @@
 # aicodeman
 
+## 1.11.1
+
+### Patch Changes
+
+- fix(history): Past Sessions data quality, and gate the phone run picker on CLI availability
+
+  **Past Sessions data quality (#215).** Three bugs in the transcript scanner behind
+  the Cmd+K Session Manager and the phone overview's PAST SESSIONS list:
+  - Automated/SDK-driven transcripts (CI review bots and other tooling, which Claude
+    Code stamps with a non-`cli` `entrypoint`) were listed alongside real interactive
+    sessions even though they were never resumable. They are now excluded. Detection
+    scans every entrypoint-bearing message rather than stopping at the first, so a
+    transcript that began under an older Claude Code build and only later picked up a
+    non-`cli` entrypoint is no longer wrongly hidden.
+  - A resumed session could show a same-directory sibling's preview text as its own.
+    The `workingDir` backfill in `mergeUnifiedSessions()` now only ever applies to rows
+    that have no history entry of their own, so it can no longer overwrite a row's real
+    content with another conversation's.
+  - Sessions restarted many times accumulated enough bookkeeping lines to push the real
+    first prompt past the scanner's 16KB head-read window, leaving a blank row. The read
+    is now two-tier: 16KB first, escalating to 128KB only when that was not enough, which
+    is both correct and cheaper than reading 128KB unconditionally (measured on a real
+    transcript tree: 36% fewer bytes read, roughly 17.5% faster than the unconditional
+    version). Also restores the tail-read fallback for a file whose head read failed
+    outright (for example `EMFILE` while scanning hundreds of files), which had been
+    silently dropping the session from history.
+
+  Follow-up hardening on top of the above: the automated-transcript exclusion now
+  blocklists the SDK entrypoint shape (`sdk`, `sdk-cli`, `sdk-py`) instead of allowlisting
+  the exact value `cli`. Because the check hides rows, an allowlist failed closed on any
+  value Claude Code has not shipped yet: a future rename of the interactive entrypoint,
+  or a second interactive host, would have blanked the entire Past Sessions list with
+  nothing in the UI to explain it. An unrecognized automated entrypoint now costs a few
+  noisy rows instead, which is the annoyance this filter set out to fix rather than a
+  broken feature.
+
+  **Phone overview run picker (#214).** The "C" logo home screen's Run picker listed all
+  six backends regardless of what was installed, so tapping an uninstalled one produced a
+  failed launch instead of the entry simply not being offered. It is now gated on
+  `isCliAvailable()` exactly like the desktop toolbar's run-mode dropdown (shell exempt,
+  since it has no external CLI dependency and keeps the menu from ever being empty). The
+  picker is a hardcoded duplicate of the toolbar menu rather than a shared render, which
+  is why it never picked up the earlier gating work; a test now asserts that every mode
+  the picker offers is gated, so a newly added backend cannot silently drift again.
+
+- 73315bc: fix(web): stop the Claude response viewer from following another session's conversation
+
+  The viewer re-derived a pane's live conversation by taking the newest
+  `~/.claude/history.jsonl` entry for the pane's cwd. A cwd is shared with every
+  other Codeman tab on it, with tabs long since closed, and with any plain
+  `claude` run in the user's own terminal, so the eye followed whichever of those
+  was typed into last — and the adoption was written back to the session, so the
+  mispin persisted. Entries are now credited to a pane only when they land within
+  10s of that pane's own Enter and no other pane on the cwd submitted closer, the
+  same last-submit correlation the Codex locator already uses.
+
+  That correlation also has to survive a restart. `start()` resets
+  `claudeSessionId` to the launch id even when re-attaching to a mux session whose
+  CLI has since moved on via `/clear`, so a recovered pane pointed the viewer at
+  its pre-`/clear` transcript — and with the anchor itself living only in memory,
+  nothing corrected it until the user happened to type again. `lastSubmitAt` is
+  now persisted in `SessionState` and restored on boot recovery, so the viewer
+  re-derives the live conversation on its first poll.
+
 ## 1.11.0
 
 ### Minor Changes
