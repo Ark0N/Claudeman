@@ -1,5 +1,15 @@
 # aicodeman
 
+## 1.11.0
+
+### Minor Changes
+
+- Two user-facing features since 1.10.0.
+
+  **Terminal: Ctrl+C copies the selection, interrupts when nothing is selected** (#211). Copying from the terminal previously worked only through the browser context menu: xterm turns Ctrl+C into 0x03 and cancels the keydown, so the muscle-memory copy failed silently and read as "no copy-paste at all". With a selection, Ctrl+C now copies it, shows the "Copied to clipboard" toast, clears the selection and sends nothing to the PTY; with no selection it falls through unchanged, so the interrupt is intact. Ctrl+Shift+C is an explicit copy chord that never interrupts. The shortcut is a normal registry entry (`copy-selection`), so it can be rebound or disabled in App Settings, and disabling it restores plain always-interrupt Ctrl+C. Copy goes through the Clipboard API with a hidden-textarea fallback, so it also works on plain-HTTP LAN installs.
+
+  **File Viewer: edit mode for text files** (#212). The file-preview overlay can now edit workspace text files in place, phone-first: `GET /api/sessions/:id/file-content?edit=1` reads for edit without the 500-line preview truncation (saving a truncated buffer would silently delete the rest) and returns a sha256 hash plus the detected EOL; `PUT /api/sessions/:id/file-content` saves. Edit-in-place only: there is no O_CREAT anywhere in the handler, so "never create, never delete" is structural. Confinement inherits the read path (realpath plus workspace boundary, ownership scoping) and adds sensitive-path and attachment-guard blocklists, a `.git/` subtree deny, and an extension allowlist (`svg` and `env` deliberately excluded). Optimistic concurrency is by content hash, so a file changed on disk mid-edit returns 409 with an overwrite option rather than clobbering. Writes are atomic (`wx` temp, fchmod, fsync, rename) which closes the validate-then-write TOCTOU window and cannot follow a pre-existing symlink. Binary and latin-1 content are refused via a NUL sniff plus a UTF-8 round-trip compare, and EOL is re-applied server-side so a textarea's LF normalization cannot turn a two-line edit of a CRLF file into a whole-file diff.
+
 ## 1.10.0
 
 ### Minor Changes
