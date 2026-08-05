@@ -16,6 +16,7 @@ import {
   MIN_TERMINAL_BUFFER_BYTES,
   MIN_TERMINAL_SCROLLBACK_LINES,
 } from '../config/terminal-history.js';
+import { MAX_EDITABLE_BYTES } from '../config/file-editing.js';
 
 // ========== Path Validation ==========
 
@@ -82,6 +83,30 @@ export const FilesystemPreviewQuerySchema = z.object({
     .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid session id')
     .optional(),
 });
+
+/**
+ * Body validation for `PUT /api/sessions/:id/file-content` (File Viewer edit
+ * mode). `content.max()` counts UTF-16 code units, which for UTF-8 output is
+ * always <= the byte length, so it is a coarse pre-filter that never rejects
+ * valid content; the handler enforces the exact MAX_EDITABLE_BYTES byte cap.
+ * Workspace containment and symlink resolution are enforced by the route via
+ * validateSessionFilePath after parsing.
+ */
+export const FileWriteSchema = z
+  .object({
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .refine((p) => !p.includes('\0') && !p.includes('\n') && !p.includes('\r'), {
+        message: 'Invalid path',
+      }),
+    content: z.string().max(MAX_EDITABLE_BYTES),
+    baseHash: z.string().regex(/^[a-f0-9]{64}$/, 'baseHash must be a sha256 hex digest'),
+    eol: z.enum(['lf', 'crlf']).optional(),
+    force: z.boolean().optional(),
+  })
+  .strict();
 
 // ========== Env Var Allowlist ==========
 

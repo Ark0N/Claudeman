@@ -1871,6 +1871,33 @@ html.mobile-init .file-browser-panel {
     bottom: calc(44px + 2rem + var(--safe-area-bottom));
   }
 
+  /* File preview window: full screen on phones. --app-height tracks the visual
+     viewport (KeyboardHandler), so the edit textarea + Save bar stay above the
+     OS keyboard instead of hiding behind it. Footer/edit bar pad for the home
+     indicator. */
+  .file-preview-window {
+    width: 100vw;
+    max-width: 100vw;
+    height: var(--app-height, 100vh);
+    max-height: var(--app-height, 100vh);
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+  }
+
+  .file-preview-editbar {
+    padding-bottom: calc(0.4rem + var(--safe-area-bottom));
+  }
+
+  .file-preview-overlay .file-preview-footer {
+    padding-bottom: calc(0.35rem + var(--safe-area-bottom));
+  }
+
+  /* >=16px or iOS Safari auto-zooms the page on focus */
+  .file-preview-body textarea.file-preview-editor {
+    font-size: 16px;
+  }
+
   /* Notification drawer - full width on mobile, includes safe area padding */
   .notification-drawer {
     width: 100%;
