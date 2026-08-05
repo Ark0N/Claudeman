@@ -2457,6 +2457,30 @@ export function registerSessionRoutes(
   }
 
   /**
+   * The `entrypoint` field Claude Code stamps on its own message records:
+   * 'cli' for a real interactive session, something else (e.g. 'sdk-py') for
+   * an SDK/automated invocation. Used to exclude non-interactive transcripts
+   * (CI review bots, etc.) from the resumable history list — they were never
+   * something a user can resume into.
+   */
+  function extractTranscriptEntrypoint(text: string): string | undefined {
+    let start = 0;
+    while (start < text.length) {
+      const end = text.indexOf('\n', start);
+      const line = end === -1 ? text.slice(start) : text.slice(start, end);
+      start = end === -1 ? text.length : end + 1;
+      if (!line.includes('"entrypoint"')) continue;
+      try {
+        const entry = JSON.parse(line);
+        if (typeof entry.entrypoint === 'string') return entry.entrypoint;
+      } catch {
+        // Malformed/truncated line — skip
+      }
+    }
+    return undefined;
+  }
+
+  /**
    * Extract the text of the LAST user message from a JSONL transcript chunk
    * (COD-145). Mirrors `extractFirstUserPrompt` exactly — same user-message
    * detection, same noise/secret/slash-command filters, same 120-char cap — but
@@ -2762,6 +2786,22 @@ export function registerSessionRoutes(
       }
       const lastPrompt =
         (tail ? extractLastUserPrompt(tail) : undefined) ?? (head ? extractLastUserPrompt(head) : undefined);
+
+      // Automated/SDK-driven invocations (CI review bots, etc.) write transcripts
+      // into the same ~/.claude/projects tree as interactive sessions but were
+      // never something a user can resume into — no PTY, no running process, and
+      // their "conversation" is typically a single one-shot prompt (often with a
+      // full diff embedded, which is exactly why it dwarfs this scanner's read
+      // windows and shows up above as blank or as an identical boilerplate
+      // sentence across many rows). Checked last, so it reuses whatever `head`/
+      // `tail` the prompt extraction above already read rather than triggering
+      // an extra file read. Missing entrypoint (older transcripts) reads as
+      // interactive — fail open, matching every other gating check in this
+      // codebase.
+      const entrypoint =
+        (head ? extractTranscriptEntrypoint(head) : undefined) ??
+        (tail ? extractTranscriptEntrypoint(tail) : undefined);
+      if (entrypoint && entrypoint !== 'cli') continue;
 
       out.push({
         sessionId,

@@ -1350,6 +1350,51 @@ describe('session-routes', () => {
       expect(row.workingDir).toBe(dotDir);
       expect(row.workingDir).not.toContain('//');
     });
+
+    it('excludes non-interactive (SDK-driven) transcripts from the history list', async () => {
+      // CI review bots and other automated tools write transcripts into the same
+      // ~/.claude/projects tree as interactive sessions (entrypoint "sdk-py" etc.)
+      // but were never something a user can resume into — no PTY, no running
+      // process. They cluttered Past Sessions as blank rows or identical
+      // boilerplate ("Review this change for security vulnerabilities...").
+      const home = process.env.HOME as string;
+      const projPath = join(home, '.claude', 'projects', 'proj-entrypoint-test');
+      await mkdir(projPath, { recursive: true });
+
+      const cliId = '33333333-3333-3333-3333-333333333333';
+      const sdkId = '44444444-4444-4444-4444-444444444444';
+      const noEntrypointId = '55555555-5555-5555-5555-555555555555';
+
+      const cliLine =
+        JSON.stringify({ type: 'user', entrypoint: 'cli', message: { role: 'user', content: 'a real question' } }) +
+        '\n';
+      const sdkLine =
+        JSON.stringify({
+          type: 'user',
+          entrypoint: 'sdk-py',
+          message: { role: 'user', content: 'Review this change for security vulnerabilities.' },
+        }) + '\n';
+      // Older transcripts predate the entrypoint field entirely — must still show.
+      const noEntrypointLine =
+        JSON.stringify({ type: 'user', message: { role: 'user', content: 'a pre-entrypoint session' } }) + '\n';
+
+      await writeFile(join(projPath, `${cliId}.jsonl`), cliLine + '#'.repeat(4200 - cliLine.length));
+      await writeFile(join(projPath, `${sdkId}.jsonl`), sdkLine + '#'.repeat(4200 - sdkLine.length));
+      await writeFile(
+        join(projPath, `${noEntrypointId}.jsonl`),
+        noEntrypointLine + '#'.repeat(4200 - noEntrypointLine.length)
+      );
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/history/sessions?projectKey=proj-entrypoint-test',
+      });
+      expect(res.statusCode).toBe(200);
+      const ids = JSON.parse(res.body).data.sessions.map((s: { sessionId: string }) => s.sessionId);
+      expect(ids).toContain(cliId);
+      expect(ids).toContain(noEntrypointId);
+      expect(ids).not.toContain(sdkId);
+    });
   });
 
   // ========== POST /api/sessions (with resumeSessionId) ==========
