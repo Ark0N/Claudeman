@@ -1396,42 +1396,103 @@ describe('session-routes', () => {
       expect(ids).not.toContain(sdkId);
     });
 
-    it('attributes entrypoint from the true first message, not a later one or a bookkeeping line', async () => {
-      // A transcript that started under an older Claude Code version (no
-      // entrypoint field) and got resumed under a newer one mid-conversation
-      // could otherwise pick up entrypoint from a later message, misattributing
-      // the session's origin. Scanning must anchor on "type":"user"/"assistant"
-      // lines specifically, not any line that happens to mention "entrypoint".
+    it('ignores a bookkeeping line that happens to mention "entrypoint" outside a real message record', async () => {
+      // Scanning must anchor on "type":"user"/"assistant" lines specifically,
+      // not any line that happens to contain the substring "entrypoint".
       const home = process.env.HOME as string;
-      const projPath = join(home, '.claude', 'projects', 'proj-entrypoint-scoping-test');
+      const projPath = join(home, '.claude', 'projects', 'proj-entrypoint-bookkeeping-test');
       await mkdir(projPath, { recursive: true });
 
       const sessionId = '77777777-7777-7777-7777-777777777777';
-      // True first message: no entrypoint field (old-version transcript).
-      const firstLine =
-        JSON.stringify({ type: 'user', message: { role: 'user', content: 'the genuine first message' } }) + '\n';
-      // A bookkeeping line that (hypothetically) mentions entrypoint outside a
-      // real message record — must not be mistaken for message metadata.
       const bookkeepingLine = JSON.stringify({ type: 'mode', mode: 'normal', entrypoint: 'sdk-py' }) + '\n';
-      // A later message, after the resume, that DOES carry entrypoint: 'cli' —
-      // this is what the (fixed) scan should find, since it's the first
-      // user/assistant line that actually carries the field.
-      const laterLine =
-        JSON.stringify({ type: 'user', entrypoint: 'cli', message: { role: 'user', content: 'a later message' } }) +
+      const realLine =
+        JSON.stringify({ type: 'user', entrypoint: 'cli', message: { role: 'user', content: 'a real message' } }) +
         '\n';
 
       // scanProjectDir skips files under 4000 bytes.
-      const body = firstLine + bookkeepingLine + laterLine;
+      const body = bookkeepingLine + realLine;
       await writeFile(join(projPath, `${sessionId}.jsonl`), body + '#'.repeat(4200 - body.length));
 
       const res = await harness.app.inject({
         method: 'GET',
-        url: '/api/history/sessions?projectKey=proj-entrypoint-scoping-test',
+        url: '/api/history/sessions?projectKey=proj-entrypoint-bookkeeping-test',
       });
       expect(res.statusCode).toBe(200);
       const ids = JSON.parse(res.body).data.sessions.map((s: { sessionId: string }) => s.sessionId);
-      // entrypoint: 'cli' (from the later message) — shown, not excluded.
       expect(ids).toContain(sessionId);
+    });
+
+    it('shows a session with ANY interactive (cli) message, even if an earlier message was automated', async () => {
+      // "First field wins" would have misattributed this: an old transcript
+      // whose true first message predates the entrypoint field, later resumed
+      // under something automated (entrypoint: 'sdk-py' on message 2), then
+      // continued interactively by a real person (entrypoint: 'cli' on message
+      // 3). Stopping at the first entrypoint-bearing line found ('sdk-py')
+      // would wrongly exclude a session a human genuinely used. One real
+      // interactive message anywhere is enough to keep it visible.
+      const home = process.env.HOME as string;
+      const projPath = join(home, '.claude', 'projects', 'proj-entrypoint-any-cli-test');
+      await mkdir(projPath, { recursive: true });
+
+      const sessionId = '99999999-9999-9999-9999-999999999999';
+      const firstLine =
+        JSON.stringify({ type: 'user', message: { role: 'user', content: 'pre-entrypoint-field message' } }) + '\n';
+      const automatedLine =
+        JSON.stringify({
+          type: 'user',
+          entrypoint: 'sdk-py',
+          message: { role: 'user', content: 'an automated follow-up' },
+        }) + '\n';
+      const interactiveLine =
+        JSON.stringify({
+          type: 'user',
+          entrypoint: 'cli',
+          message: { role: 'user', content: 'a real person continued this' },
+        }) + '\n';
+
+      const body = firstLine + automatedLine + interactiveLine;
+      await writeFile(join(projPath, `${sessionId}.jsonl`), body + '#'.repeat(4200 - body.length));
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/history/sessions?projectKey=proj-entrypoint-any-cli-test',
+      });
+      expect(res.statusCode).toBe(200);
+      const ids = JSON.parse(res.body).data.sessions.map((s: { sessionId: string }) => s.sessionId);
+      expect(ids).toContain(sessionId);
+    });
+
+    it('still excludes a session where every entrypoint-bearing message is automated', async () => {
+      // Mirror of the previous test with no 'cli' message anywhere — proves the
+      // "any cli wins" fix isn't just failing open unconditionally.
+      const home = process.env.HOME as string;
+      const projPath = join(home, '.claude', 'projects', 'proj-entrypoint-all-automated-test');
+      await mkdir(projPath, { recursive: true });
+
+      const sessionId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+      const firstLine =
+        JSON.stringify({
+          type: 'user',
+          entrypoint: 'sdk-py',
+          message: { role: 'user', content: 'Review this change for security vulnerabilities.' },
+        }) + '\n';
+      const secondLine =
+        JSON.stringify({
+          type: 'assistant',
+          entrypoint: 'sdk-py',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'Looking at the diff...' }] },
+        }) + '\n';
+
+      const body = firstLine + secondLine;
+      await writeFile(join(projPath, `${sessionId}.jsonl`), body + '#'.repeat(4200 - body.length));
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/history/sessions?projectKey=proj-entrypoint-all-automated-test',
+      });
+      expect(res.statusCode).toBe(200);
+      const ids = JSON.parse(res.body).data.sessions.map((s: { sessionId: string }) => s.sessionId);
+      expect(ids).not.toContain(sessionId);
     });
 
     it('finds the real first prompt past a large run of pre-message bookkeeping lines', async () => {
