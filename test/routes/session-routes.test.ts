@@ -1396,6 +1396,44 @@ describe('session-routes', () => {
       expect(ids).not.toContain(sdkId);
     });
 
+    it('attributes entrypoint from the true first message, not a later one or a bookkeeping line', async () => {
+      // A transcript that started under an older Claude Code version (no
+      // entrypoint field) and got resumed under a newer one mid-conversation
+      // could otherwise pick up entrypoint from a later message, misattributing
+      // the session's origin. Scanning must anchor on "type":"user"/"assistant"
+      // lines specifically, not any line that happens to mention "entrypoint".
+      const home = process.env.HOME as string;
+      const projPath = join(home, '.claude', 'projects', 'proj-entrypoint-scoping-test');
+      await mkdir(projPath, { recursive: true });
+
+      const sessionId = '77777777-7777-7777-7777-777777777777';
+      // True first message: no entrypoint field (old-version transcript).
+      const firstLine =
+        JSON.stringify({ type: 'user', message: { role: 'user', content: 'the genuine first message' } }) + '\n';
+      // A bookkeeping line that (hypothetically) mentions entrypoint outside a
+      // real message record — must not be mistaken for message metadata.
+      const bookkeepingLine = JSON.stringify({ type: 'mode', mode: 'normal', entrypoint: 'sdk-py' }) + '\n';
+      // A later message, after the resume, that DOES carry entrypoint: 'cli' —
+      // this is what the (fixed) scan should find, since it's the first
+      // user/assistant line that actually carries the field.
+      const laterLine =
+        JSON.stringify({ type: 'user', entrypoint: 'cli', message: { role: 'user', content: 'a later message' } }) +
+        '\n';
+
+      // scanProjectDir skips files under 4000 bytes.
+      const body = firstLine + bookkeepingLine + laterLine;
+      await writeFile(join(projPath, `${sessionId}.jsonl`), body + '#'.repeat(4200 - body.length));
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/history/sessions?projectKey=proj-entrypoint-scoping-test',
+      });
+      expect(res.statusCode).toBe(200);
+      const ids = JSON.parse(res.body).data.sessions.map((s: { sessionId: string }) => s.sessionId);
+      // entrypoint: 'cli' (from the later message) — shown, not excluded.
+      expect(ids).toContain(sessionId);
+    });
+
     it('finds the real first prompt past a large run of pre-message bookkeeping lines', async () => {
       // A session restarted many times over a long conversation accumulates a batch
       // of small bookkeeping lines (mode/permission-mode/last-prompt/queue-operation)
@@ -1428,6 +1466,44 @@ describe('session-routes', () => {
       const row = JSON.parse(res.body).data.sessions.find((s: { sessionId: string }) => s.sessionId === sessionId);
       expect(row).toBeDefined();
       expect(row.firstPrompt).toBe('the real first message');
+    });
+
+    it('still falls back to the tail read when bookkeeping alone exceeds the new 128KB head window', async () => {
+      // Raising the head buffer to 128KB helps most restart-heavy sessions, but an
+      // even more extreme case (many more restarts) can still exceed it. The
+      // existing tail-read fallback must stay correctly wired to the new
+      // threshold (headBuf.length, not the old hardcoded 65536) rather than being
+      // silently skipped because the size comparison no longer means what it used
+      // to. The real message here sits near the end of the file, well inside the
+      // 32KB tail window, so a working fallback finds it; a broken one leaves the
+      // row blank exactly like the bug this whole fix addresses.
+      const home = process.env.HOME as string;
+      const projPath = join(home, '.claude', 'projects', 'proj-tail-fallback-test');
+      await mkdir(projPath, { recursive: true });
+
+      const sessionId = '88888888-8888-8888-8888-888888888888';
+      const bookkeepingLine = JSON.stringify({ type: 'mode', mode: 'normal', sessionId }) + '\n';
+      // Comfortably past the new 128KB head window (was 16KB), so the head read
+      // never reaches a single "type":"user"/"assistant"/"summary" line.
+      const prefix = bookkeepingLine.repeat(Math.ceil(140000 / bookkeepingLine.length));
+      const realLine =
+        JSON.stringify({
+          type: 'user',
+          entrypoint: 'cli',
+          message: { role: 'user', content: 'found via tail fallback' },
+        }) + '\n';
+      expect(prefix.length).toBeGreaterThan(131072);
+
+      await writeFile(join(projPath, `${sessionId}.jsonl`), prefix + realLine);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/history/sessions?projectKey=proj-tail-fallback-test',
+      });
+      expect(res.statusCode).toBe(200);
+      const row = JSON.parse(res.body).data.sessions.find((s: { sessionId: string }) => s.sessionId === sessionId);
+      expect(row).toBeDefined();
+      expect(row.firstPrompt).toBe('found via tail fallback');
     });
   });
 

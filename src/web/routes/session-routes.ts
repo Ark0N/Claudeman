@@ -2462,6 +2462,13 @@ export function registerSessionRoutes(
    * an SDK/automated invocation. Used to exclude non-interactive transcripts
    * (CI review bots, etc.) from the resumable history list — they were never
    * something a user can resume into.
+   *
+   * Scoped to `"type":"user"`/`"type":"assistant"` lines specifically, mirroring
+   * `extractFirstUserPrompt`'s type check, rather than any line that happens to
+   * contain the substring "entrypoint". A transcript that started under an older
+   * Claude Code version (no entrypoint field) and got resumed under a newer one
+   * mid-conversation could otherwise pick up the field from a much later message
+   * than the true first one, misattributing the session's origin.
    */
   function extractTranscriptEntrypoint(text: string): string | undefined {
     let start = 0;
@@ -2469,10 +2476,13 @@ export function registerSessionRoutes(
       const end = text.indexOf('\n', start);
       const line = end === -1 ? text.slice(start) : text.slice(start, end);
       start = end === -1 ? text.length : end + 1;
+      if (!line.includes('"type":"user"') && !line.includes('"type":"assistant"')) continue;
       if (!line.includes('"entrypoint"')) continue;
       try {
         const entry = JSON.parse(line);
-        if (typeof entry.entrypoint === 'string') return entry.entrypoint;
+        if ((entry.type === 'user' || entry.type === 'assistant') && typeof entry.entrypoint === 'string') {
+          return entry.entrypoint;
+        }
       } catch {
         // Malformed/truncated line — skip
       }
