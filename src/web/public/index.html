@@ -422,11 +422,18 @@
         <div class="file-preview-header">
           <span class="file-preview-title" id="filePreviewTitle">file.ts</span>
           <div class="file-preview-actions">
+            <button class="btn-icon-sm file-preview-edit-btn" id="filePreviewEditBtn" onclick="app.enterFilePreviewEdit()" title="Edit file" aria-label="Edit file" hidden><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg></button>
             <button class="btn-icon-sm" onclick="app.copyFilePreviewContent()" title="Copy content">&#x2398;</button>
             <button class="btn-icon-sm" onclick="app.closeFilePreview()" title="Close">&times;</button>
           </div>
         </div>
         <div class="file-preview-body" id="filePreviewBody"></div>
+        <div class="file-preview-editbar" id="filePreviewEditBar" hidden>
+          <span class="file-preview-dirty" id="filePreviewDirty" hidden>Unsaved changes</span>
+          <span class="file-preview-editbar-spacer"></span>
+          <button class="file-preview-editbar-btn" onclick="app.cancelFilePreviewEdit()">Cancel</button>
+          <button class="file-preview-editbar-btn file-preview-editbar-btn--save" id="filePreviewSaveBtn" onclick="app.saveFilePreviewEdit()" disabled>Save</button>
+        </div>
         <div class="file-preview-footer" id="filePreviewFooter"></div>
       </div>
     </div>

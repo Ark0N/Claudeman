@@ -9430,6 +9430,84 @@ kbd {
   flex-shrink: 0;
 }
 
+/* ---- File Viewer edit mode (issue #212) ---- */
+
+.file-preview-body textarea.file-preview-editor {
+  display: block;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0.75rem;
+  border: none;
+  outline: none;
+  resize: none;
+  background: var(--bg-dark);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow: auto;
+  tab-size: 4;
+}
+
+.file-preview-editbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  border-top: 1px solid var(--border);
+  background: var(--bg-input);
+  flex-shrink: 0;
+}
+
+.file-preview-editbar[hidden] {
+  display: none;
+}
+
+.file-preview-editbar-spacer {
+  flex: 1;
+}
+
+.file-preview-dirty {
+  font-size: 0.7rem;
+  color: var(--warning, #e5c07b);
+}
+
+.file-preview-dirty::before {
+  content: '\25CF  ';
+}
+
+.file-preview-editbar-btn {
+  padding: 0.3rem 0.9rem;
+  font-size: 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--control-border);
+  background: var(--bg-input);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.file-preview-editbar-btn:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+}
+
+.file-preview-editbar-btn--save {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.file-preview-editbar-btn--save:hover {
+  background: var(--accent-hover);
+}
+
+.file-preview-editbar-btn--save:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* ========== Log Viewer Windows (Floating) ========== */
 
 .log-viewer-window {

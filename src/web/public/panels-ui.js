@@ -3200,6 +3200,9 @@ Object.assign(CodemanApp.prototype, {
 
     if (!overlay || !bodyEl) return;
 
+    // Edit mode: reset any prior editor state whenever a preview (re)loads.
+    this._resetFilePreviewEdit();
+
     // Show overlay with loading state
     overlay.classList.add('visible');
     titleEl.textContent = filePath;
@@ -3298,6 +3301,13 @@ Object.assign(CodemanApp.prototype, {
         bodyEl.innerHTML = `<pre><code>${escapeHtml(data.content)}</code></pre>`;
         const truncNote = data.truncated ? ` (showing 500/${data.totalLines} lines)` : '';
         footerEl.textContent = `${data.totalLines} lines \u2022 ${this.formatFileSize(data.size)}${truncNote}`;
+        // Edit affordance only when the server says an edit=1 re-fetch would
+        // succeed (workspace text file inside the allowlist and size cap).
+        if (data.editable) {
+          this.filePreviewEditTarget = { sessionId, filePath };
+          const editBtn = this.$('filePreviewEditBtn');
+          if (editBtn) editBtn.hidden = false;
+        }
       }
     } catch (err) {
       console.error('Failed to preview file:', err);
@@ -3306,11 +3316,179 @@ Object.assign(CodemanApp.prototype, {
   },
 
   closeFilePreview() {
+    if (this.filePreviewEdit?.dirty && !confirm('Discard unsaved changes?')) return;
+    this._resetFilePreviewEdit();
     const overlay = this.$('filePreviewOverlay');
     if (overlay) {
       overlay.classList.remove('visible');
     }
     this.filePreviewContent = '';
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // File Viewer edit mode (issue #212 — docs/file-viewer-edit-plan.md)
+  // ═══════════════════════════════════════════════════════════════
+
+  _resetFilePreviewEdit() {
+    this.filePreviewEdit = null;
+    this.filePreviewEditTarget = null;
+    const editBtn = this.$('filePreviewEditBtn');
+    if (editBtn) editBtn.hidden = true;
+    const editBar = this.$('filePreviewEditBar');
+    if (editBar) editBar.hidden = true;
+    const dirtyEl = this.$('filePreviewDirty');
+    if (dirtyEl) dirtyEl.hidden = true;
+    const saveBtn = this.$('filePreviewSaveBtn');
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Save';
+    }
+  },
+
+  async enterFilePreviewEdit() {
+    const target = this.filePreviewEditTarget;
+    if (!target || this.filePreviewEdit) return;
+    const bodyEl = this.$('filePreviewBody');
+    const footerEl = this.$('filePreviewFooter');
+    if (!bodyEl) return;
+
+    // Always re-fetch with edit=1: the preview buffer may be line-truncated and
+    // a truncated buffer must never become an edit buffer. Parse the envelope
+    // even on non-ok responses so the specific refusal ("too large to edit
+    // here") reaches the toast instead of a generic failure.
+    let data;
+    try {
+      const res = await fetch(
+        `/api/sessions/${target.sessionId}/file-content?path=${encodeURIComponent(target.filePath)}&edit=1`
+      );
+      const result = await res.json().catch(() => null);
+      if (!result || result.success !== true) {
+        throw new Error(result?.error || `Failed to load file for editing (HTTP ${res.status})`);
+      }
+      data = result.data;
+    } catch (err) {
+      this.showToast(err.message, 'error');
+      return;
+    }
+
+    this.filePreviewEdit = {
+      sessionId: target.sessionId,
+      filePath: target.filePath,
+      baseHash: data.hash,
+      eol: data.eol,
+      original: data.content,
+      dirty: false,
+      saving: false,
+    };
+
+    const textarea = document.createElement('textarea');
+    textarea.className = 'file-preview-editor';
+    textarea.spellcheck = false;
+    textarea.setAttribute('autocapitalize', 'off');
+    textarea.setAttribute('autocorrect', 'off');
+    textarea.setAttribute('autocomplete', 'off');
+    textarea.wrap = 'off';
+    textarea.value = data.content;
+    textarea.addEventListener('input', () => this._onFilePreviewEditInput());
+    bodyEl.innerHTML = '';
+    bodyEl.appendChild(textarea);
+    // Deliberately no autofocus: on phones that would pop the OS keyboard
+    // before the user has scrolled to the line they want to change.
+
+    const editBtn = this.$('filePreviewEditBtn');
+    if (editBtn) editBtn.hidden = true;
+    const editBar = this.$('filePreviewEditBar');
+    if (editBar) editBar.hidden = false;
+    if (footerEl) {
+      const eolNote = data.eol === 'crlf' ? ' • CRLF' : '';
+      footerEl.textContent = `Editing • ${data.totalLines} lines • ${this.formatFileSize(data.size)}${eolNote}`;
+    }
+  },
+
+  _onFilePreviewEditInput() {
+    const edit = this.filePreviewEdit;
+    if (!edit) return;
+    const textarea = this.$('filePreviewBody')?.querySelector('textarea.file-preview-editor');
+    if (!textarea) return;
+    edit.dirty = textarea.value !== edit.original;
+    const dirtyEl = this.$('filePreviewDirty');
+    if (dirtyEl) dirtyEl.hidden = !edit.dirty;
+    const saveBtn = this.$('filePreviewSaveBtn');
+    if (saveBtn) saveBtn.disabled = !edit.dirty || edit.saving;
+  },
+
+  cancelFilePreviewEdit() {
+    const edit = this.filePreviewEdit;
+    if (!edit) return;
+    if (edit.dirty && !confirm('Discard unsaved changes?')) return;
+    const { sessionId, filePath } = edit;
+    this._resetFilePreviewEdit();
+    this.openFilePreview(filePath, sessionId);
+  },
+
+  async saveFilePreviewEdit(force = false) {
+    const edit = this.filePreviewEdit;
+    if (!edit || edit.saving) return;
+    const textarea = this.$('filePreviewBody')?.querySelector('textarea.file-preview-editor');
+    if (!textarea) return;
+
+    edit.saving = true;
+    const saveBtn = this.$('filePreviewSaveBtn');
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving…';
+    }
+    const restoreSaveState = () => {
+      edit.saving = false;
+      if (saveBtn) saveBtn.textContent = 'Save';
+      this._onFilePreviewEditInput();
+    };
+
+    let result = null;
+    let status = 0;
+    try {
+      const res = await fetch(`/api/sessions/${edit.sessionId}/file-content`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path: edit.filePath,
+          content: textarea.value,
+          baseHash: edit.baseHash,
+          eol: edit.eol ?? undefined, // Zod .optional() rejects null
+          force: force || undefined,
+        }),
+      });
+      status = res.status;
+      result = await res.json().catch(() => null);
+    } catch (err) {
+      restoreSaveState();
+      this.showToast(`Save failed: ${err.message}`, 'error');
+      return;
+    }
+
+    if (status === 409 || result?.errorCode === 'CONFLICT') {
+      restoreSaveState();
+      if (
+        confirm(
+          'File changed on disk since you loaded it.\nOK overwrites it with your version; Cancel keeps your draft open.'
+        )
+      ) {
+        this.saveFilePreviewEdit(true);
+      }
+      return;
+    }
+    if (!result || result.success !== true) {
+      restoreSaveState();
+      this.showToast(`Save failed: ${result?.error || `HTTP ${status}`}`, 'error');
+      return;
+    }
+
+    const { sessionId, filePath } = edit;
+    this._resetFilePreviewEdit();
+    this.showToast('Saved', 'success');
+    // Re-open in read mode — re-fetching shows the truth on disk (including the
+    // server-side EOL normalization) rather than trusting the local buffer.
+    this.openFilePreview(filePath, sessionId);
   },
 
   // ═══════════════════════════════════════════════════════════════
@@ -3749,8 +3927,13 @@ Object.assign(CodemanApp.prototype, {
   },
 
   copyFilePreviewContent() {
-    if (this.filePreviewContent) {
-      navigator.clipboard.writeText(this.filePreviewContent).then(() => {
+    // While editing, copy the live editor buffer (not the stale preview text).
+    const editTextarea = this.filePreviewEdit
+      ? this.$('filePreviewBody')?.querySelector('textarea.file-preview-editor')
+      : null;
+    const content = editTextarea ? editTextarea.value : this.filePreviewContent;
+    if (content) {
+      navigator.clipboard.writeText(content).then(() => {
         this.showToast('Copied to clipboard', 'success');
       }).catch(() => {
         this.showToast('Failed to copy', 'error');

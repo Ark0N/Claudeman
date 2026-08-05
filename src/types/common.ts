@@ -97,6 +97,22 @@ export interface FilesystemBrowseData {
   truncated: boolean;
 }
 
+/** Response payload for `PUT /api/sessions/:id/file-content` (File Viewer edit mode). */
+export interface FileWriteData {
+  /** Workspace-relative path as submitted */
+  path: string;
+  /** Size of the written content in bytes */
+  size: number;
+  /** mtime of the file after the write */
+  mtimeMs: number;
+  /** sha256 hex of the written bytes — the client's next baseHash */
+  hash: string;
+  /** Line count of the written content */
+  totalLines: number;
+  /** Line-ending style that was applied */
+  eol: 'lf' | 'crlf';
+}
+
 export type CleanupResourceType = 'timer' | 'interval' | 'watcher' | 'listener' | 'stream';
 
 /**

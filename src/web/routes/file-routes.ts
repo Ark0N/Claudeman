@@ -1,12 +1,16 @@
 /**
  * @fileoverview File browser and streaming routes.
- * Provides directory listing, file content preview, raw file serving, and tail streaming.
+ * Provides directory listing, file content preview, raw file serving, tail
+ * streaming, and the File Viewer edit-mode write path (edit=1 read +
+ * PUT /api/sessions/:id/file-content; policy in src/config/file-editing.ts,
+ * design in docs/file-viewer-edit-plan.md).
  */
 
 import { FastifyInstance, type FastifyReply } from 'fastify';
-import { basename as pathBasename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename as pathBasename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createReadStream, realpathSync, type ReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
+import { createHash, randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import type {
   ApiResponse,
@@ -14,6 +18,7 @@ import type {
   FilesystemBrowseEntry,
   FilesystemBrowseRoot,
   FilesystemPreviewKind,
+  FileWriteData,
 } from '../../types.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import { fileStreamManager } from '../../file-stream-manager.js';
@@ -44,7 +49,14 @@ import type { SessionAttachmentHistoryItem, SessionState } from '../../types/ses
 import { isSensitivePath } from '../sensitive-path.js';
 import { SseEvent } from '../sse-events.js';
 import type { ConfigPort, EventPort, SessionPort } from '../ports/index.js';
-import { FilesystemBrowseQuerySchema, FilesystemPreviewQuerySchema } from '../schemas.js';
+import { FilesystemBrowseQuerySchema, FilesystemPreviewQuerySchema, FileWriteSchema } from '../schemas.js';
+import {
+  MAX_EDITABLE_BYTES,
+  applyEol,
+  detectEol,
+  isDeniedEditRelativePath,
+  isEditableFileName,
+} from '../../config/file-editing.js';
 
 const MIME_TYPES: Record<string, string> = {
   png: 'image/png',
@@ -451,6 +463,71 @@ async function resolveFilesystemPickerPath(
 
 function appendDownloadFlag(url: string): string {
   return `${url}${url.includes('?') ? '&' : '?'}download=true`;
+}
+
+// ===== File Viewer edit mode (issue #212) =====
+// Policy lives in src/config/file-editing.ts; design in docs/file-viewer-edit-plan.md.
+
+function sha256Hex(buf: Buffer): string {
+  return createHash('sha256').update(buf).digest('hex');
+}
+
+/** NUL byte in the first 8KB — same binary signal the plain read path uses. */
+function sniffsBinary(buf: Buffer): boolean {
+  const sniffLength = Math.min(buf.length, 8192);
+  for (let i = 0; i < sniffLength; i++) {
+    if (buf[i] === 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Structured-throw variant for the edit read/write paths. Identical mechanics to
+ * throwFilesystemPickerError (rendered by the central route error handler both
+ * in prod and in the app.inject() test harness); a separate name only so edit
+ * failures grep distinctly.
+ */
+function throwFileEditError(statusCode: number, code: ApiErrorCode, message: string): never {
+  throw Object.assign(new Error(message), {
+    statusCode,
+    body: createErrorResponse(code, message),
+  });
+}
+
+/**
+ * Gate a resolved workspace file for edit-mode read/write. Throws a structured
+ * error when the file may not be edited; returns void when it may. Order
+ * matters for the message a user sees: confinement (the caller's 404) →
+ * sensitive/blocked (403) → .git (403) → extension allowlist (400).
+ */
+function assertEditableTarget(resolvedPath: string, relativePath: string, blockedTrees: readonly string[]): void {
+  if (isSensitivePath(resolvedPath) || isBlockedAttachmentPath(resolvedPath, blockedTrees)) {
+    throwFileEditError(403, ApiErrorCode.FORBIDDEN, 'Editing this file is blocked');
+  }
+  if (isDeniedEditRelativePath(relativePath)) {
+    throwFileEditError(403, ApiErrorCode.FORBIDDEN, 'Files under .git cannot be edited');
+  }
+  if (!isEditableFileName(pathBasename(resolvedPath))) {
+    throwFileEditError(400, ApiErrorCode.INVALID_INPUT, 'This file type is not editable');
+  }
+}
+
+/**
+ * Decode a candidate edit buffer, refusing binary and non-UTF-8 content. The
+ * round-trip compare is what protects against silent corruption: decoding
+ * latin-1 (or any non-UTF-8) bytes yields U+FFFD replacements, and writing
+ * those back would destroy the original bytes. A UTF-8 BOM round-trips and is
+ * deliberately preserved.
+ */
+function decodeEditableText(buf: Buffer): string {
+  if (sniffsBinary(buf)) {
+    throwFileEditError(400, ApiErrorCode.INVALID_INPUT, 'Binary files cannot be edited');
+  }
+  const text = buf.toString('utf8');
+  if (!Buffer.from(text, 'utf8').equals(buf)) {
+    throwFileEditError(400, ApiErrorCode.INVALID_INPUT, 'Only UTF-8 text files can be edited');
+  }
+  return text;
 }
 
 function getSessionAttachmentHistory(
@@ -864,7 +941,12 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // Get file content for preview (File Browser)
   app.get('/api/sessions/:id/file-content', async (req) => {
     const { id } = req.params as { id: string };
-    const { path: filePath, lines, raw } = req.query as { path?: string; lines?: string; raw?: string };
+    const {
+      path: filePath,
+      lines,
+      raw,
+      edit,
+    } = req.query as { path?: string; lines?: string; raw?: string; edit?: string };
     const session = findSessionOrFail(ctx, id, req);
 
     if (!filePath) {
@@ -876,7 +958,52 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     if (!validated) {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found');
     }
-    const { resolvedPath } = validated;
+    const { resolvedPath, relativePath } = validated;
+
+    // Read-for-edit: never truncated (a truncated buffer must never become an
+    // edit buffer), tighter size cap, full editability gate, and the hash/eol
+    // the client must echo back on PUT. Outside the shared try/catch below so
+    // its structured errors keep their status codes instead of collapsing into
+    // OPERATION_FAILED.
+    if (edit === '1' || edit === 'true') {
+      const guard = await loadAttachmentGuardConfig();
+      assertEditableTarget(resolvedPath, relativePath, guard.blockedTrees);
+
+      let editStat;
+      try {
+        editStat = await fs.stat(resolvedPath);
+      } catch {
+        throwFileEditError(404, ApiErrorCode.NOT_FOUND, 'File not found');
+      }
+      if (!editStat.isFile()) {
+        throwFileEditError(400, ApiErrorCode.INVALID_INPUT, 'Only regular files can be edited');
+      }
+      if (editStat.size > MAX_EDITABLE_BYTES) {
+        throwFileEditError(
+          413,
+          ApiErrorCode.INVALID_INPUT,
+          `File too large to edit here (${Math.ceil(editStat.size / 1024)}KB > ${MAX_EDITABLE_BYTES / 1024}KB limit)`
+        );
+      }
+
+      const editBuf = await fs.readFile(resolvedPath);
+      const editText = decodeEditableText(editBuf);
+      return {
+        success: true,
+        data: {
+          path: filePath,
+          content: editText,
+          size: editBuf.length,
+          mtimeMs: editStat.mtimeMs,
+          totalLines: editText.split('\n').length,
+          truncated: false,
+          extension: filePath.split('.').pop()?.toLowerCase() || '',
+          editable: true,
+          hash: sha256Hex(editBuf),
+          eol: detectEol(editText),
+        },
+      };
+    }
 
     try {
       const stat = await fs.stat(resolvedPath);
@@ -998,6 +1125,19 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       const truncatedContent = allLines.length > maxLines;
       const displayContent = truncatedContent ? allLines.slice(0, maxLines).join('\n') : content;
 
+      // Additive edit-mode advertisement: whether an edit=1 re-fetch would
+      // succeed. The UTF-8 round-trip compare is a cheap memcmp and mirrors
+      // decodeEditableText; no hash here — the Edit action re-fetches with
+      // edit=1, which is where the baseHash comes from.
+      const guard = await loadAttachmentGuardConfig();
+      const editable =
+        isEditableFileName(pathBasename(resolvedPath)) &&
+        !isDeniedEditRelativePath(relativePath) &&
+        !isSensitivePath(resolvedPath) &&
+        !isBlockedAttachmentPath(resolvedPath, guard.blockedTrees) &&
+        stat.size <= MAX_EDITABLE_BYTES &&
+        Buffer.from(content, 'utf8').equals(buf);
+
       return {
         success: true,
         data: {
@@ -1007,12 +1147,128 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
           totalLines: allLines.length,
           truncated: truncatedContent,
           extension: ext,
+          editable,
         },
       };
     } catch (err) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${getErrorMessage(err)}`);
     }
   });
+
+  // File Viewer edit mode: save a text file back into the session workspace.
+  // Edit-in-place ONLY — there is deliberately no O_CREAT path in this handler,
+  // so it can never create, and it never deletes. Confinement is identical to
+  // the read path (realpath + workspace boundary + ownership via
+  // findSessionOrFail), plus the sensitive-path/attachment-guard blocklists and
+  // the extension allowlist. Concurrency is optimistic: the client echoes the
+  // sha256 it loaded (baseHash) and a mismatch is a 409 unless force is set.
+  // bodyLimit: JSON escaping can expand content up to ~6x (each control char
+  // becomes \uXXXX), so the 512KB content cap needs headroom over Fastify's
+  // 1MB default.
+  app.put(
+    '/api/sessions/:id/file-content',
+    { bodyLimit: 4 * 1024 * 1024 },
+    async (req): Promise<ApiResponse<FileWriteData>> => {
+      const { id } = req.params as { id: string };
+      const session = findSessionOrFail(ctx, id, req);
+      const body = parseBody(FileWriteSchema, req.body);
+
+      // Exact byte cap — the schema's .max() counts UTF-16 code units and is
+      // only a coarse pre-filter.
+      if (Buffer.byteLength(body.content, 'utf8') > MAX_EDITABLE_BYTES) {
+        throwFileEditError(413, ApiErrorCode.INVALID_INPUT, `Content too large (${MAX_EDITABLE_BYTES / 1024}KB limit)`);
+      }
+
+      const validated = validateSessionFilePath(session.workingDir, body.path);
+      if (!validated) {
+        // Covers missing files, traversal, and symlink escapes alike — a write
+        // target that fails confinement is reported identically to a missing
+        // one, matching the read route.
+        throwFileEditError(404, ApiErrorCode.NOT_FOUND, 'File not found');
+      }
+      const { resolvedPath, relativePath } = validated;
+
+      const guard = await loadAttachmentGuardConfig();
+      assertEditableTarget(resolvedPath, relativePath, guard.blockedTrees);
+
+      let stat;
+      try {
+        stat = await fs.stat(resolvedPath);
+      } catch {
+        throwFileEditError(404, ApiErrorCode.NOT_FOUND, 'File not found');
+      }
+      if (!stat.isFile()) {
+        throwFileEditError(400, ApiErrorCode.INVALID_INPUT, 'Only regular files can be edited');
+      }
+      if (stat.size > MAX_EDITABLE_BYTES) {
+        throwFileEditError(
+          413,
+          ApiErrorCode.INVALID_INPUT,
+          `File too large to edit here (${MAX_EDITABLE_BYTES / 1024}KB limit)`
+        );
+      }
+
+      const currentBuf = await fs.readFile(resolvedPath);
+      const currentText = decodeEditableText(currentBuf);
+      const currentHash = sha256Hex(currentBuf);
+      if (currentHash !== body.baseHash && !body.force) {
+        throwFileEditError(
+          409,
+          ApiErrorCode.CONFLICT,
+          'File changed on disk since it was loaded — reload it or overwrite'
+        );
+      }
+
+      // Re-apply the file's original line endings (a <textarea> normalizes to
+      // LF; without this a two-line edit of a CRLF file rewrites every line).
+      const eol = body.eol ?? detectEol(currentText);
+      const outText = applyEol(body.content, eol);
+      const outBuf = Buffer.from(outText, 'utf8');
+      if (outBuf.length > MAX_EDITABLE_BYTES) {
+        throwFileEditError(413, ApiErrorCode.INVALID_INPUT, `Content too large (${MAX_EDITABLE_BYTES / 1024}KB limit)`);
+      }
+
+      // Atomic replace: O_EXCL temp in the same directory, then rename.
+      // 'wx' cannot follow a pre-existing symlink and rename() replaces (not
+      // follows) a symlink in the final component, which closes the
+      // validate-then-write TOCTOU window. fchmod because open()'s mode is
+      // masked by the process umask; fsync so the rename never publishes a
+      // partially-durable file. Trade-off (same as vim's default): the inode
+      // changes, so hardlinks keep the old content.
+      const fileMode = stat.mode & 0o777;
+      const tmpPath = join(
+        dirname(resolvedPath),
+        `.${pathBasename(resolvedPath)}.codeman-tmp-${randomBytes(6).toString('hex')}`
+      );
+      let handle;
+      try {
+        handle = await fs.open(tmpPath, 'wx', fileMode);
+        await handle.chmod(fileMode);
+        await handle.writeFile(outBuf);
+        await handle.sync();
+        await handle.close();
+        handle = undefined;
+        await fs.rename(tmpPath, resolvedPath);
+      } catch (err) {
+        if (handle) await handle.close().catch(() => {});
+        await fs.unlink(tmpPath).catch(() => {});
+        throwFileEditError(500, ApiErrorCode.OPERATION_FAILED, `Failed to save file: ${getErrorMessage(err)}`);
+      }
+
+      const newStat = await fs.stat(resolvedPath).catch(() => undefined);
+      return {
+        success: true,
+        data: {
+          path: body.path,
+          size: outBuf.length,
+          mtimeMs: newStat?.mtimeMs ?? Date.now(),
+          hash: sha256Hex(outBuf),
+          totalLines: outText.split('\n').length,
+          eol,
+        },
+      };
+    }
+  );
 
   // Serve raw file content (for images/binary files)
   app.get('/api/sessions/:id/file-raw', async (req, reply) => {
