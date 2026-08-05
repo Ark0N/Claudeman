@@ -1470,13 +1470,15 @@ describe('session-routes', () => {
 
     it('still falls back to the tail read when bookkeeping alone exceeds the new 128KB head window', async () => {
       // Raising the head buffer to 128KB helps most restart-heavy sessions, but an
-      // even more extreme case (many more restarts) can still exceed it. The
-      // existing tail-read fallback must stay correctly wired to the new
-      // threshold (headBuf.length, not the old hardcoded 65536) rather than being
-      // silently skipped because the size comparison no longer means what it used
-      // to. The real message here sits near the end of the file, well inside the
-      // 32KB tail window, so a working fallback finds it; a broken one leaves the
-      // row blank exactly like the bug this whole fix addresses.
+      // even more extreme case (many more restarts) can still exceed it. This
+      // proves the tail-read fallback itself is intact after the threshold
+      // rewrite (`fileStat.size > headBuf.length` replacing the old hardcoded
+      // 16384/65536) — the fallback's own logic, not the exact threshold value,
+      // is what could have silently broken (e.g. a copy-paste slip that dropped
+      // the `> headBuf.length` check entirely). The real message sits near the
+      // end of the file, well inside the 32KB tail window, so a working fallback
+      // finds it; a broken one leaves the row blank exactly like the bug this
+      // whole fix addresses.
       const home = process.env.HOME as string;
       const projPath = join(home, '.claude', 'projects', 'proj-tail-fallback-test');
       await mkdir(projPath, { recursive: true });
