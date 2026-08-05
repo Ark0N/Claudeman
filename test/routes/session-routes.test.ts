@@ -1350,6 +1350,224 @@ describe('session-routes', () => {
       expect(row.workingDir).toBe(dotDir);
       expect(row.workingDir).not.toContain('//');
     });
+
+    it('excludes non-interactive (SDK-driven) transcripts from the history list', async () => {
+      // CI review bots and other automated tools write transcripts into the same
+      // ~/.claude/projects tree as interactive sessions (entrypoint "sdk-py" etc.)
+      // but were never something a user can resume into — no PTY, no running
+      // process. They cluttered Past Sessions as blank rows or identical
+      // boilerplate ("Review this change for security vulnerabilities...").
+      const home = process.env.HOME as string;
+      const projPath = join(home, '.claude', 'projects', 'proj-entrypoint-test');
+      await mkdir(projPath, { recursive: true });
+
+      const cliId = '33333333-3333-3333-3333-333333333333';
+      const sdkId = '44444444-4444-4444-4444-444444444444';
+      const noEntrypointId = '55555555-5555-5555-5555-555555555555';
+
+      const cliLine =
+        JSON.stringify({ type: 'user', entrypoint: 'cli', message: { role: 'user', content: 'a real question' } }) +
+        '\n';
+      const sdkLine =
+        JSON.stringify({
+          type: 'user',
+          entrypoint: 'sdk-py',
+          message: { role: 'user', content: 'Review this change for security vulnerabilities.' },
+        }) + '\n';
+      // Older transcripts predate the entrypoint field entirely — must still show.
+      const noEntrypointLine =
+        JSON.stringify({ type: 'user', message: { role: 'user', content: 'a pre-entrypoint session' } }) + '\n';
+
+      await writeFile(join(projPath, `${cliId}.jsonl`), cliLine + '#'.repeat(4200 - cliLine.length));
+      await writeFile(join(projPath, `${sdkId}.jsonl`), sdkLine + '#'.repeat(4200 - sdkLine.length));
+      await writeFile(
+        join(projPath, `${noEntrypointId}.jsonl`),
+        noEntrypointLine + '#'.repeat(4200 - noEntrypointLine.length)
+      );
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/history/sessions?projectKey=proj-entrypoint-test',
+      });
+      expect(res.statusCode).toBe(200);
+      const ids = JSON.parse(res.body).data.sessions.map((s: { sessionId: string }) => s.sessionId);
+      expect(ids).toContain(cliId);
+      expect(ids).toContain(noEntrypointId);
+      expect(ids).not.toContain(sdkId);
+    });
+
+    it('ignores a bookkeeping line that happens to mention "entrypoint" outside a real message record', async () => {
+      // Scanning must anchor on "type":"user"/"assistant" lines specifically,
+      // not any line that happens to contain the substring "entrypoint".
+      const home = process.env.HOME as string;
+      const projPath = join(home, '.claude', 'projects', 'proj-entrypoint-bookkeeping-test');
+      await mkdir(projPath, { recursive: true });
+
+      const sessionId = '77777777-7777-7777-7777-777777777777';
+      const bookkeepingLine = JSON.stringify({ type: 'mode', mode: 'normal', entrypoint: 'sdk-py' }) + '\n';
+      const realLine =
+        JSON.stringify({ type: 'user', entrypoint: 'cli', message: { role: 'user', content: 'a real message' } }) +
+        '\n';
+
+      // scanProjectDir skips files under 4000 bytes.
+      const body = bookkeepingLine + realLine;
+      await writeFile(join(projPath, `${sessionId}.jsonl`), body + '#'.repeat(4200 - body.length));
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/history/sessions?projectKey=proj-entrypoint-bookkeeping-test',
+      });
+      expect(res.statusCode).toBe(200);
+      const ids = JSON.parse(res.body).data.sessions.map((s: { sessionId: string }) => s.sessionId);
+      expect(ids).toContain(sessionId);
+    });
+
+    it('shows a session with ANY interactive (cli) message, even if an earlier message was automated', async () => {
+      // "First field wins" would have misattributed this: an old transcript
+      // whose true first message predates the entrypoint field, later resumed
+      // under something automated (entrypoint: 'sdk-py' on message 2), then
+      // continued interactively by a real person (entrypoint: 'cli' on message
+      // 3). Stopping at the first entrypoint-bearing line found ('sdk-py')
+      // would wrongly exclude a session a human genuinely used. One real
+      // interactive message anywhere is enough to keep it visible.
+      const home = process.env.HOME as string;
+      const projPath = join(home, '.claude', 'projects', 'proj-entrypoint-any-cli-test');
+      await mkdir(projPath, { recursive: true });
+
+      const sessionId = '99999999-9999-9999-9999-999999999999';
+      const firstLine =
+        JSON.stringify({ type: 'user', message: { role: 'user', content: 'pre-entrypoint-field message' } }) + '\n';
+      const automatedLine =
+        JSON.stringify({
+          type: 'user',
+          entrypoint: 'sdk-py',
+          message: { role: 'user', content: 'an automated follow-up' },
+        }) + '\n';
+      const interactiveLine =
+        JSON.stringify({
+          type: 'user',
+          entrypoint: 'cli',
+          message: { role: 'user', content: 'a real person continued this' },
+        }) + '\n';
+
+      const body = firstLine + automatedLine + interactiveLine;
+      await writeFile(join(projPath, `${sessionId}.jsonl`), body + '#'.repeat(4200 - body.length));
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/history/sessions?projectKey=proj-entrypoint-any-cli-test',
+      });
+      expect(res.statusCode).toBe(200);
+      const ids = JSON.parse(res.body).data.sessions.map((s: { sessionId: string }) => s.sessionId);
+      expect(ids).toContain(sessionId);
+    });
+
+    it('still excludes a session where every entrypoint-bearing message is automated', async () => {
+      // Mirror of the previous test with no 'cli' message anywhere — proves the
+      // "any cli wins" fix isn't just failing open unconditionally.
+      const home = process.env.HOME as string;
+      const projPath = join(home, '.claude', 'projects', 'proj-entrypoint-all-automated-test');
+      await mkdir(projPath, { recursive: true });
+
+      const sessionId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+      const firstLine =
+        JSON.stringify({
+          type: 'user',
+          entrypoint: 'sdk-py',
+          message: { role: 'user', content: 'Review this change for security vulnerabilities.' },
+        }) + '\n';
+      const secondLine =
+        JSON.stringify({
+          type: 'assistant',
+          entrypoint: 'sdk-py',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'Looking at the diff...' }] },
+        }) + '\n';
+
+      const body = firstLine + secondLine;
+      await writeFile(join(projPath, `${sessionId}.jsonl`), body + '#'.repeat(4200 - body.length));
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/history/sessions?projectKey=proj-entrypoint-all-automated-test',
+      });
+      expect(res.statusCode).toBe(200);
+      const ids = JSON.parse(res.body).data.sessions.map((s: { sessionId: string }) => s.sessionId);
+      expect(ids).not.toContain(sessionId);
+    });
+
+    it('finds the real first prompt past a large run of pre-message bookkeeping lines', async () => {
+      // A session restarted many times over a long conversation accumulates a batch
+      // of small bookkeeping lines (mode/permission-mode/last-prompt/queue-operation)
+      // per restart, ahead of the real first message. With enough restarts these can
+      // push the genuine first prompt past a 16KB head-read window even though the
+      // message itself is tiny — the row showed up blank despite having real content.
+      const home = process.env.HOME as string;
+      const projPath = join(home, '.claude', 'projects', 'proj-bookkeeping-test');
+      await mkdir(projPath, { recursive: true });
+
+      const sessionId = '66666666-6666-6666-6666-666666666666';
+      const bookkeepingLine = JSON.stringify({ type: 'mode', mode: 'normal', sessionId }) + '\n';
+      // > 16KB (the old head-read size) but well under 128KB (the new one).
+      const prefix = bookkeepingLine.repeat(Math.ceil(20000 / bookkeepingLine.length));
+      const realLine =
+        JSON.stringify({
+          type: 'user',
+          entrypoint: 'cli',
+          message: { role: 'user', content: 'the real first message' },
+        }) + '\n';
+      expect(prefix.length).toBeGreaterThan(16384);
+
+      await writeFile(join(projPath, `${sessionId}.jsonl`), prefix + realLine);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/history/sessions?projectKey=proj-bookkeeping-test',
+      });
+      expect(res.statusCode).toBe(200);
+      const row = JSON.parse(res.body).data.sessions.find((s: { sessionId: string }) => s.sessionId === sessionId);
+      expect(row).toBeDefined();
+      expect(row.firstPrompt).toBe('the real first message');
+    });
+
+    it('still falls back to the tail read when bookkeeping alone exceeds the new 128KB head window', async () => {
+      // Raising the head buffer to 128KB helps most restart-heavy sessions, but an
+      // even more extreme case (many more restarts) can still exceed it. This
+      // proves the tail-read fallback itself is intact after the threshold
+      // rewrite (`fileStat.size > headBuf.length` replacing the old hardcoded
+      // 16384/65536) — the fallback's own logic, not the exact threshold value,
+      // is what could have silently broken (e.g. a copy-paste slip that dropped
+      // the `> headBuf.length` check entirely). The real message sits near the
+      // end of the file, well inside the 32KB tail window, so a working fallback
+      // finds it; a broken one leaves the row blank exactly like the bug this
+      // whole fix addresses.
+      const home = process.env.HOME as string;
+      const projPath = join(home, '.claude', 'projects', 'proj-tail-fallback-test');
+      await mkdir(projPath, { recursive: true });
+
+      const sessionId = '88888888-8888-8888-8888-888888888888';
+      const bookkeepingLine = JSON.stringify({ type: 'mode', mode: 'normal', sessionId }) + '\n';
+      // Comfortably past the new 128KB head window (was 16KB), so the head read
+      // never reaches a single "type":"user"/"assistant"/"summary" line.
+      const prefix = bookkeepingLine.repeat(Math.ceil(140000 / bookkeepingLine.length));
+      const realLine =
+        JSON.stringify({
+          type: 'user',
+          entrypoint: 'cli',
+          message: { role: 'user', content: 'found via tail fallback' },
+        }) + '\n';
+      expect(prefix.length).toBeGreaterThan(131072);
+
+      await writeFile(join(projPath, `${sessionId}.jsonl`), prefix + realLine);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/history/sessions?projectKey=proj-tail-fallback-test',
+      });
+      expect(res.statusCode).toBe(200);
+      const row = JSON.parse(res.body).data.sessions.find((s: { sessionId: string }) => s.sessionId === sessionId);
+      expect(row).toBeDefined();
+      expect(row.firstPrompt).toBe('found via tail fallback');
+    });
   });
 
   // ========== POST /api/sessions (with resumeSessionId) ==========

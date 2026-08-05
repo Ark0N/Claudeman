@@ -2479,6 +2479,46 @@ export function registerSessionRoutes(
   }
 
   /**
+   * The `entrypoint` field Claude Code stamps on its own message records:
+   * 'cli' for a real interactive session, something else (e.g. 'sdk-py') for
+   * an SDK/automated invocation. Used to exclude non-interactive transcripts
+   * (CI review bots, etc.) from the resumable history list — they were never
+   * something a user can resume into.
+   *
+   * Scans every `"type":"user"`/`"type":"assistant"` line with an entrypoint
+   * field — not just the first one — and returns 'cli' the moment ANY of them
+   * carries it. A transcript is excluded only when every entrypoint-bearing
+   * message says something else; "first field wins" would misattribute a
+   * transcript that started under an older Claude Code version (no entrypoint
+   * on its true first message) and later picked up a non-'cli' entrypoint on
+   * some later message, wrongly hiding a genuinely interactive session. This
+   * deliberately errs toward keeping a session visible: one real interactive
+   * message anywhere is enough. Returns undefined ("unknown", fail-open) only
+   * when nothing scanned carries the field at all.
+   */
+  function extractTranscriptEntrypoint(text: string): string | undefined {
+    let start = 0;
+    let sawNonCli: string | undefined;
+    while (start < text.length) {
+      const end = text.indexOf('\n', start);
+      const line = end === -1 ? text.slice(start) : text.slice(start, end);
+      start = end === -1 ? text.length : end + 1;
+      if (!line.includes('"type":"user"') && !line.includes('"type":"assistant"')) continue;
+      if (!line.includes('"entrypoint"')) continue;
+      try {
+        const entry = JSON.parse(line);
+        if ((entry.type === 'user' || entry.type === 'assistant') && typeof entry.entrypoint === 'string') {
+          if (entry.entrypoint === 'cli') return 'cli';
+          sawNonCli ??= entry.entrypoint;
+        }
+      } catch {
+        // Malformed/truncated line — skip
+      }
+    }
+    return sawNonCli;
+  }
+
+  /**
    * Extract the text of the LAST user message from a JSONL transcript chunk
    * (COD-145). Mirrors `extractFirstUserPrompt` exactly — same user-message
    * detection, same noise/secret/slash-command filters, same 120-char cap — but
@@ -2690,7 +2730,7 @@ export function registerSessionRoutes(
     return finalExists ? current : process.env.HOME || '/tmp';
   }
 
-  /** Read the first 16KB of a file for content sniffing. */
+  /** Read the first `buf.length` bytes of a file for content sniffing. */
   async function readFileHead(path: string, buf: Buffer): Promise<string | null> {
     try {
       const fd = await fs.open(path, 'r');
@@ -2733,7 +2773,12 @@ export function registerSessionRoutes(
 
   // Scan a single project directory and return all valid history sessions in it.
   // Reused by both the global overview and the single-folder drill-down.
-  async function scanProjectDir(projPath: string, projDir: string, headBuf: Buffer): Promise<HistorySession[]> {
+  async function scanProjectDir(
+    projPath: string,
+    projDir: string,
+    smallHeadBuf: Buffer,
+    headBuf: Buffer
+  ): Promise<HistorySession[]> {
     const out: HistorySession[] = [];
     const stat = await fs.stat(projPath).catch(() => null);
     if (!stat?.isDirectory()) return out;
@@ -2751,22 +2796,45 @@ export function registerSessionRoutes(
       if (!fileStat) continue;
       if (fileStat.size < 4000) continue;
 
-      let firstPrompt: string | undefined;
-      const head = await readFileHead(filePath, headBuf);
       const hasConversation = (text: string) =>
         text.includes('"type":"user"') || text.includes('"type":"assistant"') || text.includes('"type":"summary"');
 
+      // Two-tier head read: try the cheap smallHeadBuf (16KB) size first -- enough
+      // for the vast majority of transcripts -- and only escalate to the full
+      // headBuf (128KB) when that wasn't enough. Reading 128KB unconditionally for
+      // EVERY file in the directory roughly quadrupled the cost of a full scan
+      // (measured against a real ~/.claude/projects tree: ~4x both bytes read and
+      // wall time) to fix a problem only ~28% of files actually have. Escalating
+      // resolves the restart-bookkeeping case (the reason 128KB exists at all)
+      // without ever touching the tail-read fallback below for most of that 28%.
+      let head = await readFileHead(filePath, smallHeadBuf);
       let foundContent = head ? hasConversation(head) : false;
+      let firstPrompt = head ? extractFirstUserPrompt(head) : undefined;
+      if ((!foundContent || !firstPrompt) && head !== null && fileStat.size > smallHeadBuf.length) {
+        const biggerHead = await readFileHead(filePath, headBuf);
+        if (biggerHead) {
+          head = biggerHead;
+          if (!foundContent) foundContent = hasConversation(head);
+          if (!firstPrompt) firstPrompt = extractFirstUserPrompt(head);
+        }
+      }
+
       let tail: string | null = null;
-      if (!foundContent && fileStat.size > 16384) {
+      // `head === null` (a failed read -- e.g. EMFILE while scanning hundreds of
+      // files) must also get a shot at the tail, not just "file bigger than the
+      // head buffer". Losing this dropped the session from history entirely
+      // instead of giving it a second chance, for any file at or under the head
+      // buffer size whose head read happened to fail.
+      if (!foundContent && (head === null || fileStat.size > headBuf.length)) {
         const tailBuf = Buffer.alloc(32768);
         tail = await readFileTail(filePath, tailBuf, fileStat.size);
         if (tail) foundContent = hasConversation(tail);
       }
       if (!foundContent) continue;
 
-      if (head) firstPrompt = extractFirstUserPrompt(head);
-      if (!firstPrompt && fileStat.size > 65536) {
+      // firstPrompt was already attempted from head (both tiers) above; this is
+      // purely the tail fallback for whatever's left unresolved.
+      if (!firstPrompt && (head === null || fileStat.size > headBuf.length)) {
         if (!tail) {
           const tailBuf = Buffer.alloc(32768);
           tail = await readFileTail(filePath, tailBuf, fileStat.size);
@@ -2776,14 +2844,36 @@ export function registerSessionRoutes(
 
       // COD-145: last (most recent) user prompt lives near the END of the file, so
       // prefer the tail. For large files where no tail was read yet, read one
-      // (mirrors the firstPrompt > 65536 block). Small files fit in `head`, which
-      // then contains the whole transcript — scan it for the last match instead.
-      if (!tail && fileStat.size > 65536) {
+      // (mirrors the firstPrompt > headBuf.length block). Small files fit in `head`,
+      // which then contains the whole transcript — scan it for the last match instead.
+      if (!tail && fileStat.size > headBuf.length) {
         const tailBuf = Buffer.alloc(32768);
         tail = await readFileTail(filePath, tailBuf, fileStat.size);
       }
       const lastPrompt =
         (tail ? extractLastUserPrompt(tail) : undefined) ?? (head ? extractLastUserPrompt(head) : undefined);
+
+      // Automated/SDK-driven invocations (CI review bots, etc.) write transcripts
+      // into the same ~/.claude/projects tree as interactive sessions but were
+      // never something a user can resume into — no PTY, no running process, and
+      // their "conversation" is typically a single one-shot prompt (often with a
+      // full diff embedded, which is exactly why it dwarfs this scanner's read
+      // windows and shows up above as blank or as an identical boilerplate
+      // sentence across many rows). Checked last, so it reuses whatever `head`/
+      // `tail` the prompt extraction above already read rather than triggering
+      // an extra file read. Missing entrypoint (older transcripts) reads as
+      // interactive — fail open, matching every other gating check in this
+      // codebase.
+      //
+      // head and tail are checked independently and merged with "cli wins" (not
+      // a first-truthy-value `??` chain): a large file's head might land on a
+      // non-'cli' message while a real interactive message sits in the tail (or
+      // vice versa), and either one being 'cli' is enough to keep the session.
+      const headEntrypoint = head ? extractTranscriptEntrypoint(head) : undefined;
+      const tailEntrypoint = tail ? extractTranscriptEntrypoint(tail) : undefined;
+      const entrypoint =
+        headEntrypoint === 'cli' || tailEntrypoint === 'cli' ? 'cli' : (headEntrypoint ?? tailEntrypoint);
+      if (entrypoint && entrypoint !== 'cli') continue;
 
       out.push({
         sessionId,
@@ -2801,7 +2891,13 @@ export function registerSessionRoutes(
   app.get('/api/history/sessions', async (req) => {
     const query = req.query as { projectKey?: string; offset?: string; limit?: string };
     const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
-    const headBuf = Buffer.alloc(16384);
+    // scanProjectDir tries smallHeadBuf (16KB, the original size) first for every
+    // file and only escalates to headBuf (128KB) when that wasn't enough — see the
+    // comment at the escalation site in scanProjectDir for why unconditional 128KB
+    // reads were too expensive to keep. 128KB matches the existing precedent
+    // elsewhere in this file (line ~1431).
+    const smallHeadBuf = Buffer.alloc(16384);
+    const headBuf = Buffer.alloc(131072);
     // Multi-user: this scans the host-wide ~/.claude/projects tree, so a non-admin
     // must only see history whose decoded workingDir is inside their own case space.
     // Do NOT trust the caller-supplied projectKey — confine on the decoded path.
@@ -2819,7 +2915,7 @@ export function registerSessionRoutes(
       const offset = Math.max(0, parseInt(query.offset || '0', 10) || 0);
       const limit = Math.min(100, Math.max(1, parseInt(query.limit || '20', 10) || 20));
       const projPath = join(projectsDir, query.projectKey);
-      let all = await scanProjectDir(projPath, query.projectKey, headBuf);
+      let all = await scanProjectDir(projPath, query.projectKey, smallHeadBuf, headBuf);
       // Confine to the caller's workspace (a projectKey maps to a single foreign cwd).
       if (scopeHistory) all = all.filter((r) => isWorkingDirAllowed(user, r.workingDir));
       all.sort((a, b) => new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime());
@@ -2832,7 +2928,7 @@ export function registerSessionRoutes(
       const projectDirs = await fs.readdir(projectsDir);
       for (const projDir of projectDirs) {
         const projPath = join(projectsDir, projDir);
-        const list = await scanProjectDir(projPath, projDir, headBuf);
+        const list = await scanProjectDir(projPath, projDir, smallHeadBuf, headBuf);
         results.push(...list);
       }
     } catch {
@@ -2908,11 +3004,13 @@ export function registerSessionRoutes(
     const history: HistoryInput[] = [];
     try {
       const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
-      const headBuf = Buffer.alloc(16384);
+      // See the sibling allocation above for why there are two sizes.
+      const smallHeadBuf = Buffer.alloc(16384);
+      const headBuf = Buffer.alloc(131072);
       const projectDirs = await fs.readdir(projectsDir);
       for (const projDir of projectDirs) {
         const projPath = join(projectsDir, projDir);
-        const list = await scanProjectDir(projPath, projDir, headBuf);
+        const list = await scanProjectDir(projPath, projDir, smallHeadBuf, headBuf);
         for (const h of list) {
           history.push({
             sessionId: h.sessionId,
