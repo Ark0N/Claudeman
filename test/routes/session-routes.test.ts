@@ -1495,6 +1495,35 @@ describe('session-routes', () => {
       expect(ids).not.toContain(sessionId);
     });
 
+    it('keeps a session whose entrypoint is an unrecognized non-SDK value (fail open)', async () => {
+      // The exclusion is a blocklist on the SDK shape, NOT an allowlist on 'cli'.
+      // An allowlist fails CLOSED on any value Claude Code has not shipped yet:
+      // the day it stamps a new interactive entrypoint, nothing matches 'cli' and
+      // the entire Past Sessions list silently goes blank. Excluding only what we
+      // positively recognize as automated fails open instead — a few noisy rows,
+      // not a dead feature.
+      const home = process.env.HOME as string;
+      const projPath = join(home, '.claude', 'projects', 'proj-entrypoint-unknown-test');
+      await mkdir(projPath, { recursive: true });
+
+      const sessionId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+      const line =
+        JSON.stringify({
+          type: 'user',
+          entrypoint: 'cli-next',
+          message: { role: 'user', content: 'a question from a future interactive host' },
+        }) + '\n';
+      await writeFile(join(projPath, `${sessionId}.jsonl`), line + '#'.repeat(4200 - line.length));
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/history/sessions?projectKey=proj-entrypoint-unknown-test',
+      });
+      expect(res.statusCode).toBe(200);
+      const ids = JSON.parse(res.body).data.sessions.map((s: { sessionId: string }) => s.sessionId);
+      expect(ids).toContain(sessionId);
+    });
+
     it('finds the real first prompt past a large run of pre-message bookkeeping lines', async () => {
       // A session restarted many times over a long conversation accumulates a batch
       // of small bookkeeping lines (mode/permission-mode/last-prompt/queue-operation)

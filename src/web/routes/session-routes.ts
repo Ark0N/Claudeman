@@ -2479,6 +2479,24 @@ export function registerSessionRoutes(
   }
 
   /**
+   * Is this `entrypoint` value an automated/SDK-driven invocation?
+   *
+   * ⚠️ Deliberately a BLOCKLIST on the SDK shape, not an allowlist on `'cli'`.
+   * The exclusion below hides rows, so an allowlist fails CLOSED on any value
+   * Claude Code has not shipped yet: the day it stamps a new interactive
+   * entrypoint (a rename, or a second interactive host), every transcript stops
+   * matching `'cli'` and the whole Past Sessions list goes blank with nothing in
+   * the UI to explain it. A blocklist fails OPEN instead — an automated
+   * entrypoint we do not recognize yet costs a few noisy rows, which is the
+   * annoyance this filter set out to fix rather than a broken feature.
+   *
+   * Observed values: `cli` (interactive), `sdk-cli` / `sdk-py` (automated).
+   */
+  function isAutomatedEntrypoint(entrypoint: string): boolean {
+    return /^sdk(-|$)/.test(entrypoint);
+  }
+
+  /**
    * The `entrypoint` field Claude Code stamps on its own message records:
    * 'cli' for a real interactive session, something else (e.g. 'sdk-py') for
    * an SDK/automated invocation. Used to exclude non-interactive transcripts
@@ -2873,7 +2891,7 @@ export function registerSessionRoutes(
       const tailEntrypoint = tail ? extractTranscriptEntrypoint(tail) : undefined;
       const entrypoint =
         headEntrypoint === 'cli' || tailEntrypoint === 'cli' ? 'cli' : (headEntrypoint ?? tailEntrypoint);
-      if (entrypoint && entrypoint !== 'cli') continue;
+      if (entrypoint && isAutomatedEntrypoint(entrypoint)) continue;
 
       out.push({
         sessionId,
