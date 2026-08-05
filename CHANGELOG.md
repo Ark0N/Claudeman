@@ -1,5 +1,23 @@
 # aicodeman
 
+## 1.10.0
+
+### Minor Changes
+
+- Codeman 1.10.0.
+
+  **Every surface that offers a CLI now checks the CLI is actually there** (#200, #201). The welcome-screen run buttons, the run-mode dropdown and the App Settings "Codex CLI" tab used to be shown unconditionally, so picking one on a box without the binary spawned a session that errored out immediately. All of them now gate on a single server-injected availability object covering Claude, OpenCode, Codex, Gemini, Antigravity and cloudflared, so nothing flickers in after paint and the dropdown costs no round trips to open. Shell is never gated, which is what keeps the menu non-empty on a box with nothing installed, and unknown availability reads as available so a stale page can never leave a working install with nothing to click. Adds `isClaudeAvailable()` and `GET /api/claude/status`, the one CLI that had no availability check despite being the default. The Cloudflare Tunnel welcome button and its scan-to-connect QR are gated on `cloudflared` rather than shown regardless.
+
+  **Shell and remote-SSH sessions now launch a real login shell** (#209, #210). Local shell tabs match what tmux itself does for a pane with no `default-command`, picking up the `/etc/profile` and `/etc/profile.d/*` entries a systemd `--user` service never sourced. On remote SSH, `claude`/`opencode`/`codex`/`gemini`/`agy` are routed through the remote user's interactive login shell, fixing agent CLIs that silently failed with "command not found" because ssh's remote-command execution sees only sshd's minimal default PATH and not the `~/.local/bin` or `~/.opencode/bin` entries where those CLIs actually live. Shell mode uses the remote user's real shell instead of hardcoded bash. The login flags are applied only to shells verified to accept them, so an exotic passwd entry (nushell, elvish, xonsh) cannot produce a dead pane on arrival.
+
+  **A crashed remote pane is kept for diagnosis** (#210), which is how the PATH failure above was found: it previously destroyed the pane, the window and the whole remote session on exit, tearing the local ssh attach down with it and leaving a flap loop with no evidence. Scoped to `remain-on-exit failed`, so a clean `exit` still tears the session down and only a non-zero exit strands anything, and applied last in the tmux command chain so a remote tmux older than 3.2 cannot drop the other session options with it.
+
+  **Resumed sessions under a hidden directory get the right working directory** (#202). Claude Code's project-key encoder maps both `/` and `.` to `-`, and the decoder could not reconstruct a dot-prefixed component, so every session under `~/.codeman` (or any project nested beneath any dotdir) silently resolved to bare `$HOME`. The wrong `workingDir` then propagated into `state.json` and everything trusting it: CLAUDE.md lookup, paste-image directory, subagent and image watchers. A same-named non-dot sibling could also produce a doubled-slash path that failed every later string comparison.
+
+  **Launching a session no longer wipes the terminal you are looking at** (#180). All six run modes route through the shared ownership helpers instead of clearing and writing into whatever session happened to be active, Antigravity included.
+
+  **Codex terminal animations are configurable** (#181), and the App Settings "Codex CLI" tab appears only where the `codex` binary resolves, since both settings on it are handed to `codex` at launch.
+
 ## 1.9.9
 
 ### Patch Changes
