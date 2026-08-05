@@ -270,6 +270,39 @@ describe('mergeUnifiedSessions', () => {
     expect(live!.firstPrompt).toBeUndefined();
   });
 
+  it('does NOT borrow a sibling transcript for a history-only row whose own extraction failed (no cross-contamination)', () => {
+    // A pure history row already got its own real scan (step 1 keys it under its
+    // OWN sessionId) — if that extraction genuinely failed (oversized first
+    // message, noise-filtered, etc.), the workingDir guess must not paper over
+    // it with an unrelated session's opening line. Regression: an old session
+    // in a shared workingDir was displaying TODAY's live session's firstPrompt
+    // as its own, because the guess didn't check whether this row already had
+    // its own (failed) attempt.
+    const merged = mergeUnifiedSessions({
+      history: [
+        // This session's own transcript scan found no usable prompt.
+        {
+          sessionId: 'old-uuid',
+          workingDir: '/shared',
+          sizeBytes: 5000,
+          lastModified: '2026-01-01T00:00:00.000Z',
+          firstPrompt: undefined,
+        },
+        // A much newer, unrelated session in the same directory.
+        {
+          sessionId: 'newer-uuid',
+          workingDir: '/shared',
+          sizeBytes: 6000,
+          lastModified: '2026-06-01T00:00:00.000Z',
+          firstPrompt: "today's real prompt",
+        },
+      ],
+    });
+    const old = merged.find((m) => m.sessionId === 'old-uuid');
+    expect(old).toBeDefined();
+    expect(old!.firstPrompt).toBeUndefined();
+  });
+
   // COD-145: lastPrompt backfill — mirrors the COD-140 firstPrompt path so the
   // most-recent user prompt also reaches live rows whose id ≠ transcript UUID.
   it('backfills lastPrompt onto a live session by claudeSessionId join (uuid-join)', () => {

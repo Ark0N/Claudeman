@@ -226,6 +226,16 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
   // different UUID. Backfill from the already-passed history: first try the claudeSessionId
   // join, then the newest transcript in the same workingDir. Never overwrite a non-empty
   // firstPrompt (so rows keyed to their own transcript are untouched).
+  //
+  // The workingDir guess is a last resort and MUST be skipped for any item that
+  // already has its own 'history' entry (step 1 above already gave it a real,
+  // direct scan of its own transcript). Without this guard, a history row whose
+  // OWN extraction genuinely failed (oversized first message, etc.) silently
+  // inherited the newest OTHER session's opening line from the same directory —
+  // not a blank, but actively wrong: old sessions displayed today's conversation
+  // as if it were their own. A row with no 'history' source at all (its
+  // transcript hasn't been linked/scanned under its own id yet) has no such
+  // direct attempt to prefer, so the guess remains a reasonable stand-in there.
   const firstPromptByUuid = new Map<string, string>();
   const firstPromptByWorkingDir = new Map<string, { prompt: string; ms: number }>();
   // COD-145: lastPrompt rides the same backfill (build parallel indexes; never overwrite).
@@ -254,12 +264,13 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
     }
   }
   for (const item of map.values()) {
+    const hasOwnHistoryEntry = item.sources.includes('history');
     if (!item.firstPrompt) {
       // never overwrite an existing non-empty prompt
       const byUuid = item.claudeSessionId ? firstPromptByUuid.get(item.claudeSessionId) : undefined;
       if (byUuid) {
         item.firstPrompt = byUuid;
-      } else if (item.workingDir) {
+      } else if (item.workingDir && !hasOwnHistoryEntry) {
         const byDir = firstPromptByWorkingDir.get(item.workingDir);
         if (byDir) item.firstPrompt = byDir.prompt;
       }
@@ -268,7 +279,7 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
       const byUuid = item.claudeSessionId ? lastPromptByUuid.get(item.claudeSessionId) : undefined;
       if (byUuid) {
         item.lastPrompt = byUuid;
-      } else if (item.workingDir) {
+      } else if (item.workingDir && !hasOwnHistoryEntry) {
         const byDir = lastPromptByWorkingDir.get(item.workingDir);
         if (byDir) item.lastPrompt = byDir.prompt;
       }
