@@ -651,6 +651,8 @@ Single-digit selection (1-9), color-coded status, token counts, auto-refresh. De
 | `Alt/Option+[` / `Alt/Option+]` | Previous / next session                                       |
 | `Alt/Option+1`-`Alt/Option+9`   | Switch to tab N (physical keys, so macOS Option layouts work) |
 | `Ctrl+Shift+{` / `Ctrl+Shift+}` | Move active tab left / right                                  |
+| `Ctrl/Cmd+C`                    | Copy selection, or interrupt when nothing is selected         |
+| `Ctrl+Shift+C`                  | Copy selection (never interrupts)                             |
 | `Ctrl/Cmd+L`                    | Clear terminal                                                |
 | `Ctrl+Shift+R`                  | Restore terminal size                                         |
 | `Ctrl+Shift+V`                  | Toggle voice input                                            |

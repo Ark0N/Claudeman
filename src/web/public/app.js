@@ -350,6 +350,22 @@ const DEFAULT_SHORTCUTS = [
     action: 'clearTerminal',
   },
   {
+    id: 'copy-selection',
+    group: 'Terminal',
+    label: 'Copy Selection',
+    // Bindings match on `key`, not `code`: xterm decides which byte to emit from the
+    // PRODUCED character, so intercepting a physical KeyC that doesn't produce "c"
+    // would diverge from the chord that actually sends ^C.
+    bindings: [
+      { modifiers: ['ctrl'], key: 'c' },
+      { modifiers: ['ctrl', 'shift'], key: 'C' },
+    ],
+    // Dispatched by shouldCopyTerminalSelectionFromShortcut() in terminal-ui.js and
+    // deliberately absent from SHORTCUT_ACTIONS: the generic capture loop always
+    // preventDefaults on a match, which would cost the user the interrupt key.
+    action: 'copyTerminalSelection',
+  },
+  {
     id: 'increase-font',
     group: 'Terminal',
     label: 'Increase Font',

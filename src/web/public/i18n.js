@@ -451,6 +451,7 @@
     'Respawn Blocked': '重生已阻止',
     'Task Complete': '任务完成',
     'Copied to clipboard': '已复制到剪贴板',
+    'Failed to copy': '复制失败',
     'Checking…': '正在检查…',
     'Starting…': '正在启动…',
     'Starting update…': '正在开始更新…',

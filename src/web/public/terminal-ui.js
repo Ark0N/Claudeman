@@ -158,6 +158,30 @@ Object.assign(CodemanApp.prototype, {
         return false;
       }
 
+      // Smart copy (#211): with a selection, Ctrl+C copies it instead of sending
+      // ^C. With NO selection the branch must fall through (return true, and no
+      // preventDefault) or the interrupt key is lost, which is the whole reason
+      // the selection check runs before any registry dispatch. Ctrl+Shift+C is
+      // the explicit copy chord and never falls through: an "explicit copy" that
+      // interrupts a running agent because the selection happened to be empty is
+      // a footgun with no upside.
+      // NOTE: returning false does NOT cancel the event (xterm's _keyDown calls
+      // this handler before its own cancel()), so preventDefault is explicit:
+      // without it the browser runs its native copy on top of ours.
+      if (this.shouldCopyTerminalSelectionFromShortcut?.(ev)) {
+        const selection = this.terminal.hasSelection?.() ? this.terminal.getSelection() : '';
+        if (selection) {
+          ev.preventDefault();
+          void this.copyTerminalSelection(selection);
+          return false;
+        }
+        if (ev.shiftKey) {
+          ev.preventDefault();
+          return false;
+        }
+        return true;
+      }
+
       // Ctrl+V / Cmd+V: intercept before xterm sends ^V to PTY.
       // Route through our paste trap which handles both images and text.
       if ((ev.ctrlKey || ev.metaKey) && ev.key === 'v' && ev.type === 'keydown') {
@@ -2610,6 +2634,46 @@ Object.assign(CodemanApp.prototype, {
   // or an Ink-safe control sequence, NOT \x0c.
   sendPendingCtrlL(_sessionId) {
     // intentionally empty
+  },
+
+  // Registry-aware gate for the smart-copy chord (#211). Mirrors
+  // shouldOpenCommandPaletteFromShortcut(): honors a rebound or disabled
+  // 'copy-selection' entry, and falls back to the default chord when the
+  // registry isn't available (isolated test harnesses).
+  // Returning true only means "this chord asked to copy", the CALLER decides
+  // what happens when there is no selection, so the interrupt stays intact.
+  shouldCopyTerminalSelectionFromShortcut(ev) {
+    // The custom key handler also runs for keypress/keyup; only keydown decides.
+    if (!ev || ev.type !== 'keydown') return false;
+    // Hot path: every dispatchable chord needs Ctrl/Cmd/Alt, so plain typing
+    // exits before any registry work.
+    if (!ev.ctrlKey && !ev.metaKey && !ev.altKey) return false;
+    const registryAvailable =
+      typeof this.getShortcutRegistry === 'function' && typeof this.matchesShortcutEvent === 'function';
+    const entry = registryAvailable ? this.getShortcutRegistry().find((s) => s.id === 'copy-selection') : null;
+    if (entry) return !entry.disabled && this.matchesShortcutEvent(ev, entry);
+    return !ev.altKey && (ev.key || '').toLowerCase() === 'c';
+  },
+
+  // Copy the current terminal selection. Goes through _copyText (Clipboard API,
+  // then a hidden-textarea + execCommand fallback) because install.sh's LAN
+  // option serves plain HTTP, where navigator.clipboard is undefined.
+  async copyTerminalSelection(text) {
+    const selection = text ?? (this.terminal.hasSelection?.() ? this.terminal.getSelection() : '');
+    if (!selection) return false;
+    const ok = await this._copyText(selection);
+    if (ok) {
+      // Clearing is what makes a second Ctrl+C an interrupt (and xterm already
+      // drops the selection on any keypress, so this matches existing feel).
+      this.terminal.clearSelection?.();
+      this.showToast('Copied to clipboard', 'success');
+    } else {
+      this.showToast('Failed to copy', 'error');
+    }
+    // The execCommand fallback focuses a temp textarea, so hand focus back. This
+    // is the CJK-aware focus router, not xterm's raw focus().
+    this.terminal.focus();
+    return ok;
   },
 
   async copyTerminal() {

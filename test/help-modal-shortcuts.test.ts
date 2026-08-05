@@ -52,6 +52,8 @@ describe('help modal shortcuts', () => {
   });
 
   it('documents terminal input shortcuts without advertising stale run shortcuts', () => {
+    expectShortcut(helpModal, ['Ctrl', 'C'], 'Copy Selection');
+    expectShortcut(helpModal, ['Ctrl', 'Shift', 'C'], 'Copy Selection');
     expectShortcut(helpModal, ['Ctrl', 'L'], 'Clear Terminal');
     expectShortcut(helpModal, ['Ctrl', '+'], 'Increase Font');
     expectShortcut(helpModal, ['Ctrl', '-'], 'Decrease Font');

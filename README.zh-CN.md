@@ -641,6 +641,8 @@ sc -l           # 列出会话
 | `Alt/Option+[` / `Alt/Option+]` | 上一个 / 下一个会话                                      |
 | `Alt/Option+1`–`Alt/Option+9`   | 切换到第 N 个标签（按物理键位，macOS Option 布局也适用） |
 | `Ctrl+Shift+{` / `Ctrl+Shift+}` | 将当前标签左移 / 右移                                    |
+| `Ctrl/Cmd+C`                    | 复制选中内容；未选中时中断代理                           |
+| `Ctrl+Shift+C`                  | 复制选中内容（永不中断）                                 |
 | `Ctrl/Cmd+L`                    | 清屏                                                     |
 | `Ctrl+Shift+R`                  | 恢复终端尺寸                                             |
 | `Ctrl+Shift+V`                  | 切换语音输入                                             |
