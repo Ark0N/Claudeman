@@ -486,6 +486,11 @@ Object.assign(CodemanApp.prototype, {
    * The Run picker: the same backends as the toolbar's run-mode menu, plus saved
    * web tabs. Deliberately no "Recent Sessions" block, unlike the toolbar menu:
    * past conversations have their own section further down this screen.
+   *
+   * Gated the same way as the toolbar's #runModeMenu (isCliAvailable(), shell
+   * exempt) — this list is a separate, hardcoded duplicate of the toolbar's menu
+   * rather than a shared render, so it never picked up #201's gating and offered
+   * every backend regardless of what's actually installed.
    */
   _buildMobileOverviewRunMenu() {
     const menu = document.createElement('div');
@@ -493,6 +498,7 @@ Object.assign(CodemanApp.prototype, {
     const current = this.runMode || 'claude';
 
     for (const entry of MOBILE_OVERVIEW_RUN_MODES) {
+      if (entry.mode !== 'shell' && !this.isCliAvailable(entry.mode)) continue;
       const option = document.createElement('button');
       option.type = 'button';
       option.className = 'mobile-overview-run-option' + (entry.mode === current ? ' selected' : '');
