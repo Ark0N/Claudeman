@@ -12,13 +12,34 @@ import { describe, expect, it } from 'vitest';
 
 const PUBLIC = resolve(import.meta.dirname, '../src/web/public');
 
+/** Minimal fake DOM node — enough surface for mobile-overview.js's programmatic builders. */
+function fakeElement(): any {
+  const el: any = {
+    className: '',
+    type: '',
+    dataset: {},
+    style: {},
+    children: [] as any[],
+    setAttribute() {},
+    appendChild(child: any) {
+      el.children.push(child);
+      return child;
+    },
+  };
+  return el;
+}
+
 function loadOverviewApp(overrides: Record<string, any> = {}) {
   const CodemanApp = function CodemanApp(this: any) {};
   const context = vm.createContext({
     CodemanApp,
     console,
     window: {},
-    document: { getElementById: () => null },
+    document: {
+      getElementById: () => null,
+      createElement: () => fakeElement(),
+      createElementNS: () => fakeElement(),
+    },
     MobileDetection: { getDeviceType: () => 'mobile' },
   });
   vm.runInContext(readFileSync(resolve(PUBLIC, 'mobile-overview.js'), 'utf8'), context, {
@@ -270,5 +291,49 @@ describe('mobile overview wiring', () => {
     expect(rules.length).toBeGreaterThan(10);
     const hardcoded = rules.flatMap((rule) => rule.match(/:\s*#[0-9a-f]{3,8}\b/gi) || []);
     expect(hardcoded).toEqual([]);
+  });
+});
+
+describe('mobile overview run picker (CLI availability gating)', () => {
+  function modeButtons(menu: any): string[] {
+    return menu.children.filter((c: any) => c.dataset.moAction === 'run-mode').map((c: any) => c.dataset.moMode);
+  }
+
+  // #201 gated the toolbar's #runModeMenu on isCliAvailable(); this phone-only
+  // picker (MOBILE_OVERVIEW_RUN_MODES / _buildMobileOverviewRunMenu) is a
+  // separate, hardcoded duplicate of that menu rather than a shared render, so
+  // it silently offered every backend regardless of what the server reported.
+  it('hides run modes the server reports as unavailable, keeps shell always', () => {
+    const app = loadOverviewApp({
+      runMode: 'claude',
+      isCliAvailable: (tool: string) => tool === 'claude',
+    });
+    const menu = app._buildMobileOverviewRunMenu();
+    expect(modeButtons(menu)).toEqual(['claude', 'shell']);
+  });
+
+  it('shows every mode when every CLI is available', () => {
+    const app = loadOverviewApp({
+      runMode: 'claude',
+      isCliAvailable: () => true,
+    });
+    const menu = app._buildMobileOverviewRunMenu();
+    expect(modeButtons(menu)).toEqual(['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'shell']);
+  });
+
+  it('gates every mode the picker actually offers', () => {
+    // Catches a new backend being added to MOBILE_OVERVIEW_RUN_MODES without
+    // being gated — the same class of bug that let this list drift from the
+    // toolbar menu's gating in the first place.
+    const src = readFileSync(resolve(PUBLIC, 'mobile-overview.js'), 'utf8');
+    const modesBlock = src.slice(
+      src.indexOf('const MOBILE_OVERVIEW_RUN_MODES'),
+      src.indexOf('];', src.indexOf('const MOBILE_OVERVIEW_RUN_MODES')) + 2
+    );
+    const offered = [...modesBlock.matchAll(/mode: '([^']+)'/g)].map((m) => m[1]);
+    expect(offered).toContain('antigravity');
+    const fn = src.slice(src.indexOf('_buildMobileOverviewRunMenu() {'));
+    const gate = fn.slice(0, fn.indexOf('const header'));
+    expect(gate).toContain('isCliAvailable');
   });
 });
