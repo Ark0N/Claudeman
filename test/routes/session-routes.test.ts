@@ -1395,6 +1395,40 @@ describe('session-routes', () => {
       expect(ids).toContain(noEntrypointId);
       expect(ids).not.toContain(sdkId);
     });
+
+    it('finds the real first prompt past a large run of pre-message bookkeeping lines', async () => {
+      // A session restarted many times over a long conversation accumulates a batch
+      // of small bookkeeping lines (mode/permission-mode/last-prompt/queue-operation)
+      // per restart, ahead of the real first message. With enough restarts these can
+      // push the genuine first prompt past a 16KB head-read window even though the
+      // message itself is tiny — the row showed up blank despite having real content.
+      const home = process.env.HOME as string;
+      const projPath = join(home, '.claude', 'projects', 'proj-bookkeeping-test');
+      await mkdir(projPath, { recursive: true });
+
+      const sessionId = '66666666-6666-6666-6666-666666666666';
+      const bookkeepingLine = JSON.stringify({ type: 'mode', mode: 'normal', sessionId }) + '\n';
+      // > 16KB (the old head-read size) but well under 128KB (the new one).
+      const prefix = bookkeepingLine.repeat(Math.ceil(20000 / bookkeepingLine.length));
+      const realLine =
+        JSON.stringify({
+          type: 'user',
+          entrypoint: 'cli',
+          message: { role: 'user', content: 'the real first message' },
+        }) + '\n';
+      expect(prefix.length).toBeGreaterThan(16384);
+
+      await writeFile(join(projPath, `${sessionId}.jsonl`), prefix + realLine);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/history/sessions?projectKey=proj-bookkeeping-test',
+      });
+      expect(res.statusCode).toBe(200);
+      const row = JSON.parse(res.body).data.sessions.find((s: { sessionId: string }) => s.sessionId === sessionId);
+      expect(row).toBeDefined();
+      expect(row.firstPrompt).toBe('the real first message');
+    });
   });
 
   // ========== POST /api/sessions (with resumeSessionId) ==========

@@ -2760,7 +2760,7 @@ export function registerSessionRoutes(
 
       let foundContent = head ? hasConversation(head) : false;
       let tail: string | null = null;
-      if (!foundContent && fileStat.size > 16384) {
+      if (!foundContent && fileStat.size > headBuf.length) {
         const tailBuf = Buffer.alloc(32768);
         tail = await readFileTail(filePath, tailBuf, fileStat.size);
         if (tail) foundContent = hasConversation(tail);
@@ -2768,7 +2768,7 @@ export function registerSessionRoutes(
       if (!foundContent) continue;
 
       if (head) firstPrompt = extractFirstUserPrompt(head);
-      if (!firstPrompt && fileStat.size > 65536) {
+      if (!firstPrompt && fileStat.size > headBuf.length) {
         if (!tail) {
           const tailBuf = Buffer.alloc(32768);
           tail = await readFileTail(filePath, tailBuf, fileStat.size);
@@ -2778,9 +2778,9 @@ export function registerSessionRoutes(
 
       // COD-145: last (most recent) user prompt lives near the END of the file, so
       // prefer the tail. For large files where no tail was read yet, read one
-      // (mirrors the firstPrompt > 65536 block). Small files fit in `head`, which
-      // then contains the whole transcript — scan it for the last match instead.
-      if (!tail && fileStat.size > 65536) {
+      // (mirrors the firstPrompt > headBuf.length block). Small files fit in `head`,
+      // which then contains the whole transcript — scan it for the last match instead.
+      if (!tail && fileStat.size > headBuf.length) {
         const tailBuf = Buffer.alloc(32768);
         tail = await readFileTail(filePath, tailBuf, fileStat.size);
       }
@@ -2819,7 +2819,14 @@ export function registerSessionRoutes(
   app.get('/api/history/sessions', async (req) => {
     const query = req.query as { projectKey?: string; offset?: string; limit?: string };
     const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
-    const headBuf = Buffer.alloc(16384);
+    // 128KB (was 16KB): a session restarted many times over the course of a long
+    // conversation accumulates small bookkeeping lines (mode/permission-mode/
+    // last-prompt/queue-operation, one batch per restart) ahead of the real first
+    // message. 16KB was enough margin for a handful of restarts but not dozens —
+    // a genuinely tiny first message still came up blank because the metadata
+    // alone crossed the window. 128KB matches the existing precedent elsewhere in
+    // this file (line ~1431) rather than inventing a new size.
+    const headBuf = Buffer.alloc(131072);
     // Multi-user: this scans the host-wide ~/.claude/projects tree, so a non-admin
     // must only see history whose decoded workingDir is inside their own case space.
     // Do NOT trust the caller-supplied projectKey — confine on the decoded path.
@@ -2926,7 +2933,8 @@ export function registerSessionRoutes(
     const history: HistoryInput[] = [];
     try {
       const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
-      const headBuf = Buffer.alloc(16384);
+      // 128KB (was 16KB) — see the sibling allocation above for why.
+      const headBuf = Buffer.alloc(131072);
       const projectDirs = await fs.readdir(projectsDir);
       for (const projDir of projectDirs) {
         const projPath = join(projectsDir, projDir);
