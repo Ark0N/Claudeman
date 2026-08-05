@@ -481,6 +481,15 @@ export interface SessionState {
   /** Sanitized per-session attachment history. */
   attachmentHistory?: SessionAttachmentHistoryItem[];
   /**
+   * Wall-clock ms of this pane's last Enter (Session.lastSubmitAt). Persisted
+   * because it is the response-viewer's only anchor for re-deriving the pane's
+   * live conversation after a Codeman restart: `start()` resets
+   * `claudeSessionId` to the launch id even when re-attaching to a mux session
+   * whose CLI has since moved on via `/clear`, and the correlation cannot run
+   * again until the pane's own Enter is known.
+   */
+  lastSubmitAt?: number;
+  /**
    * PTY-exit circuit breaker tripped — respawn blocked until an explicit restart
    * (COD-118). Runtime-only: never restored on boot (fresh server = fresh breaker).
    */

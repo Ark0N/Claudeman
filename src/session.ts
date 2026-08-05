@@ -509,6 +509,8 @@ export class Session extends EventEmitter {
       tmuxHistoryLimit?: number;
       /** Restored per-session attachment history. May include server-private external paths. */
       attachmentHistory?: SessionAttachmentHistoryItem[];
+      /** Restored wall-clock ms of the pane's last Enter (see `lastSubmitAt`). */
+      lastSubmitAt?: number;
       /** Remote execution metadata for sessions launched through SSH inside local tmux. */
       remote?: SessionRemote;
       /** Docker execution metadata for sessions launched inside a container via local tmux. */
@@ -535,6 +537,12 @@ export class Session extends EventEmitter {
     this._lastActivityAt = this.createdAt;
     // Set claudeSessionId — when resuming, the Claude conversation ID is the resumed one.
     this._claudeSessionId = config.resumeSessionId || this.id;
+    // Restored from state.json on boot recovery. start() resets _claudeSessionId
+    // to the launch id even when re-attaching to a mux session whose CLI has
+    // moved on (a `/clear` before the restart), so this anchor is what lets the
+    // response viewer re-derive the live conversation without waiting for the
+    // user to type again.
+    this._lastSubmitAt = config.lastSubmitAt ?? 0;
     this._mux = config.mux || null;
     this._useMux = config.useMux ?? (this._mux !== null && this._mux.isAvailable());
     this._muxSession = config.muxSession || null;
@@ -1135,6 +1143,7 @@ export class Session extends EventEmitter {
       // recovery can re-attach.
       respawnBlocked: this._respawnBlocked || undefined,
       attachmentHistory: this.attachmentHistory.length > 0 ? this.attachmentHistory : undefined,
+      lastSubmitAt: this._lastSubmitAt || undefined,
       // envOverrides intentionally NOT on the public SessionState type — they must not
       // leak into SSE / GET /api/sessions broadcasts (schema allows OPENCODE_*, which
       // can carry secrets). For disk persistence, session-manager calls
@@ -2543,26 +2552,28 @@ export class Session extends EventEmitter {
    * ```
    */
   write(data: string): void {
-    this._trackCodexSubmit(data);
+    this._trackSubmit(data);
     if (this.ptyProcess) {
       this.ptyProcess.write(data);
     }
   }
 
-  // ── Codex thread tracking ─────────────────────────────────────────────
-  // When a codex pane last submitted a message (Enter). The response-viewer
-  // correlates this against ~/.codex/history.jsonl entry timestamps to find
-  // the thread the pane is ACTUALLY on — the only signal that survives
-  // /resume, /new and /fork typed inside the codex TUI itself.
-  private _codexLastSubmitAt = 0;
+  // ── Conversation tracking ─────────────────────────────────────────────
+  // When this pane last submitted a message (Enter). The response-viewer
+  // correlates this against the CLI's own history.jsonl entry timestamps to
+  // find the conversation the pane is ACTUALLY on — the only signal that
+  // survives /clear, /resume, /new and /fork typed inside the TUI itself,
+  // none of which announce themselves on the PTY's stdout.
+  private _lastSubmitAt = 0;
 
-  get codexLastSubmitAt(): number {
-    return this._codexLastSubmitAt;
+  /** Wall-clock ms of this pane's last Enter; 0 if it has never submitted. */
+  get lastSubmitAt(): number {
+    return this._lastSubmitAt;
   }
 
-  private _trackCodexSubmit(data: string): void {
-    if (this.mode === 'codex' && (data.includes('\r') || data.includes('\n'))) {
-      this._codexLastSubmitAt = Date.now();
+  private _trackSubmit(data: string): void {
+    if (data.includes('\r') || data.includes('\n')) {
+      this._lastSubmitAt = Date.now();
     }
   }
 
@@ -2619,7 +2630,7 @@ export class Session extends EventEmitter {
    * ```
    */
   async writeViaMux(data: string): Promise<boolean> {
-    this._trackCodexSubmit(data);
+    this._trackSubmit(data);
     if (this._mux && this._muxSession) {
       return this._mux.sendInput(this.id, data);
     }
