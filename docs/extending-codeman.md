@@ -242,5 +242,14 @@ require nothing of you but HTTP.
 - **No in-process plugin runtime.** See the reasoning at the top of this page.
 - **No build or startup hooks** for third-party code. Run your own process.
 - **No per-plugin config or state directories.** Manage your own files.
-- **No sandbox**, because there is nothing to sandbox. Your integration is your
-  process, with your permissions, talking HTTP.
+- **No sandbox for integration code**, because Codeman never launches it. Your
+  integration is your own process, started by you, with your permissions,
+  talking HTTP.
+
+That last point is about integration code specifically, not about Codeman.
+Sandboxing lives on a different axis here: the thing worth isolating is the
+**agent**, and you isolate it per case with
+[Docker cases](docker-cases.md), which run the agent in a hardened container with
+a bind-mounted workspace and seeded (not shared) credentials. An integration that
+creates or drives a Docker-backed session inherits that isolation for free, since
+it is a property of the session rather than of the caller.
