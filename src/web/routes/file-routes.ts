@@ -640,6 +640,25 @@ async function buildExternalAttachmentRouteItem(
   }
 }
 
+/**
+ * Headers Fastify already put on the reply, in a shape `writeHead` accepts.
+ *
+ * `reply.raw.writeHead()` writes straight to the Node response and bypasses
+ * Fastify's header store, so anything the security `onRequest` hook granted — CORS
+ * for localhost origins, nosniff, frame-options, CSP — is silently dropped on every
+ * route that answers this way. Spread this first and let the route's own headers
+ * win over it.
+ */
+function inheritedHeaders(reply: {
+  getHeaders(): NodeJS.Dict<number | string | string[]>;
+}): Record<string, number | string | string[]> {
+  const out: Record<string, number | string | string[]> = {};
+  for (const [name, value] of Object.entries(reply.getHeaders())) {
+    if (value !== undefined) out[name] = value;
+  }
+  return out;
+}
+
 export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & EventPort & ConfigPort): void {
   // Lazy filesystem listing for the Link Existing and mobile input path pickers.
   app.get('/api/filesystem/browse', async (req, reply): Promise<ApiResponse<FilesystemBrowseData>> => {
@@ -1337,6 +1356,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       const basename = rawBasename.replace(/["\\\r\n]/g, '_');
       if (download === 'true' || ext === 'svg') {
         reply.raw.writeHead(200, {
+          ...inheritedHeaders(reply),
           'Content-Type': ext === 'svg' ? 'application/octet-stream' : mimeTypes[ext] || 'application/octet-stream',
           'Content-Disposition': `attachment; filename="${basename}"`,
           'Content-Length': content.length,
@@ -1576,6 +1596,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
 
     // Set up SSE headers
     reply.raw.writeHead(200, {
+      ...inheritedHeaders(reply),
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
@@ -1709,6 +1730,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       const content = await fs.readFile(resolvedPath);
       // Bypass Fastify compression — write directly to raw response
       reply.raw.writeHead(200, {
+        ...inheritedHeaders(reply),
         'Content-Type': mimeTypes[ext] || 'application/octet-stream',
         'Content-Disposition': `attachment; filename="${filename}"`,
         'Content-Length': content.length,
