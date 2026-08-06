@@ -982,7 +982,7 @@ export function dockerTmuxSessionName(sessionId: string): string {
 const RESUME_ID_SAFE = /^[A-Za-z0-9._-]+$/;
 
 /**
- * Append the CLI-specific resume flag to a pane command (codex/gemini). Only fires
+ * Append the CLI-specific resume flag to a pane command (codex/gemini/antigravity). Only fires
  * when the in-container tmux is RE-CREATED (`new-session -A` makes the flag inert
  * on a live reattach), i.e. exactly when the previous live agent was lost and we
  * want to resume the conversation from the bind-mounted transcript. Claude mode

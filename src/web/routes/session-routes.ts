@@ -415,7 +415,7 @@ export function registerSessionRoutes(
     //
     // For keys the caller is actively setting, strip any stale disk entry a prior
     // Codeman version may have written. Scope limited to:
-    //   - Claude mode (OpenCode/Codex/Gemini don't read .claude/settings.local.json)
+    //   - Claude mode (OpenCode/Codex/Gemini/Antigravity don't read .claude/settings.local.json)
     //   - workingDir inside CASES_DIR / the per-user case space (Codeman's managed
     //     territory — we never mutate .claude/settings.local.json in arbitrary user
     //     repos that POST /api/sessions can target, as those may have hand-authored
@@ -2027,7 +2027,7 @@ export function registerSessionRoutes(
       if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
 
       // Per-session config that is applied to the LOCAL tmux/CLI wrapper (env vars via
-      // tmux setenv, effort/model CLI args, codex/gemini/opencode config) does NOT
+      // tmux setenv, effort/model CLI args, codex/gemini/antigravity/opencode config) does NOT
       // cross ssh, so it would silently no-op. Reject rather than pretend it worked —
       // remote command/env customization goes through the per-host command override.
       if (
@@ -2364,7 +2364,7 @@ export function registerSessionRoutes(
         });
         ctx.broadcast(SseEvent.SessionInteractive, { id: session.id, mode: 'shell' });
       } else {
-        // 'claude', 'opencode', 'codex', and 'gemini' modes use startInteractive()
+        // 'claude', 'opencode', 'codex', 'gemini', and 'antigravity' modes use startInteractive()
         await session.startInteractive();
         getLifecycleLog().log({
           event: 'started',

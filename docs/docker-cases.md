@@ -2,7 +2,7 @@
 
 Run a case inside an **isolated Docker container** instead of directly on the host. Any number of Codeman sessions can share one container (it is scoped to the case, not the session), so a whole project lives in a sandbox with its own network, resource caps, and filesystem, and you can **export the container to move it to another machine**.
 
-Docker mode is a **location overlay on cases**, the direct analog of [remote SSH cases](./remote-hosts.md): where a remote case runs a local tmux pane doing `ssh host` into a durable remote tmux server, a docker case runs a local tmux pane doing `docker exec -it` into a durable **in-container** tmux server. It is not a separate `SessionMode`, so `claude` / `shell` / `opencode` / `codex` / `gemini` all work inside the container.
+Docker mode is a **location overlay on cases**, the direct analog of [remote SSH cases](./remote-hosts.md): where a remote case runs a local tmux pane doing `ssh host` into a durable remote tmux server, a docker case runs a local tmux pane doing `docker exec -it` into a durable **in-container** tmux server. It is not a separate `SessionMode`, so `claude` / `shell` / `opencode` / `codex` / `gemini` / `antigravity` all work inside the container.
 
 ## One-time setup: build the base image
 

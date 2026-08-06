@@ -748,6 +748,7 @@ Object.assign(CodemanApp.prototype, {
     const buttons = [
       ['welcomeClaudeBtn', 'claude'],
       ['welcomeOpencodeBtn', 'opencode'],
+      ['welcomeAntigravityBtn', 'antigravity'],
       ['welcomeGeminiBtn', 'gemini'],
       // Not a run mode, same reasoning: offering a Cloudflare Tunnel on a box
       // without cloudflared can only ever produce "cloudflared not found".

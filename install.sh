@@ -116,6 +116,14 @@ GEMINI_SEARCH_PATHS=(
     "$HOME/bin/gemini"
 )
 
+# Antigravity CLI search paths (from src/utils/antigravity-cli-resolver.ts)
+ANTIGRAVITY_SEARCH_PATHS=(
+    "$HOME/.local/bin/agy"
+    "$HOME/.antigravity/bin/agy"
+    "/usr/local/bin/agy"
+    "$HOME/bin/agy"
+)
+
 # ============================================================================
 # Color Output
 # ============================================================================
@@ -486,6 +494,34 @@ get_gemini_path() {
     fi
 
     for path in "${GEMINI_SEARCH_PATHS[@]}"; do
+        if [[ -x "$path" ]]; then
+            echo "$path"
+            return
+        fi
+    done
+}
+
+check_antigravity() {
+    if command -v agy &>/dev/null; then
+        return 0
+    fi
+
+    for path in "${ANTIGRAVITY_SEARCH_PATHS[@]}"; do
+        if [[ -x "$path" ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+get_antigravity_path() {
+    if command -v agy &>/dev/null; then
+        command -v agy
+        return
+    fi
+
+    for path in "${ANTIGRAVITY_SEARCH_PATHS[@]}"; do
         if [[ -x "$path" ]]; then
             echo "$path"
             return
@@ -1993,11 +2029,12 @@ main() {
         fi
     fi
 
-    # AI CLI (Codeman drives one of: Claude Code, OpenCode, Codex, Gemini)
+    # AI CLI (Codeman drives one of: Claude Code, OpenCode, Codex, Gemini, Antigravity)
     local has_claude=false
     local has_opencode=false
     local has_codex=false
     local has_gemini=false
+    local has_antigravity=false
 
     info "Checking AI CLI tools..."
     if check_claude; then
@@ -2016,17 +2053,21 @@ main() {
         has_gemini=true
         success "Gemini CLI found at $(get_gemini_path)"
     fi
+    if check_antigravity; then
+        has_antigravity=true
+        success "Antigravity CLI found at $(get_antigravity_path)"
+    fi
 
-    if [[ "$has_claude" == "false" && "$has_opencode" == "false" && "$has_codex" == "false" && "$has_gemini" == "false" ]]; then
+    if [[ "$has_claude" == "false" && "$has_opencode" == "false" && "$has_codex" == "false" && "$has_gemini" == "false" && "$has_antigravity" == "false" ]]; then
         echo ""
-        warn "No AI CLI found. Codeman needs at least one: Claude Code, OpenCode, Codex, or Gemini."
+        warn "No AI CLI found. Codeman needs at least one: Claude Code, OpenCode, Codex, Antigravity, or Gemini."
         headless_guard "install an AI CLI (curl | bash from its vendor)"
         echo ""
         echo -e "  ${BOLD}Which AI CLI would you like to install?${NC}"
         echo -e "    ${CYAN}1)${NC} Claude Code  (Anthropic)"
         echo -e "    ${CYAN}2)${NC} OpenCode     (open-source)"
         echo -e "    ${CYAN}3)${NC} Both"
-        echo -e "    ${CYAN}4)${NC} Skip         (I'll install one myself, e.g. Codex or Gemini)"
+        echo -e "    ${CYAN}4)${NC} Skip         (I'll install one myself, e.g. Codex or Antigravity)"
         echo ""
 
         local cli_choice=""
@@ -2071,8 +2112,8 @@ main() {
 
         if [[ "$cli_choice" == "4" ]]; then
             warn "Skipping AI CLI install. Codeman will run, but sessions need a CLI to drive."
-            info "Install one later, e.g.: npm install -g @openai/codex        (Codex)"
-            info "                    or: npm install -g @google/gemini-cli   (Gemini)"
+            info "Install one later, e.g.: npm install -g @openai/codex                          (Codex)"
+            info "                    or: curl -fsSL https://antigravity.google/cli/install.sh | bash  (Antigravity)"
         elif [[ "$has_claude" == "false" ]] && [[ "$has_opencode" == "false" ]]; then
             die "The selected AI CLI failed to install. Install one manually and re-run the installer."
         fi
@@ -2372,12 +2413,12 @@ main() {
     echo -e "    https://github.com/Ark0N/Codeman"
     echo ""
 
-    if ! check_claude && ! check_opencode && ! check_codex && ! check_gemini; then
+    if ! check_claude && ! check_opencode && ! check_codex && ! check_gemini && ! check_antigravity; then
         echo -e "  ${YELLOW}${BOLD}Reminder:${NC} Install at least one AI CLI to start using Codeman:"
-        echo -e "    ${CYAN}curl -fsSL https://claude.ai/install.sh | bash${NC}  # Claude Code"
-        echo -e "    ${CYAN}curl -fsSL https://opencode.ai/install | bash${NC}   # OpenCode"
-        echo -e "    ${CYAN}npm install -g @openai/codex${NC}                    # Codex"
-        echo -e "    ${CYAN}npm install -g @google/gemini-cli${NC}               # Gemini"
+        echo -e "    ${CYAN}curl -fsSL https://claude.ai/install.sh | bash${NC}                # Claude Code"
+        echo -e "    ${CYAN}curl -fsSL https://opencode.ai/install | bash${NC}                 # OpenCode"
+        echo -e "    ${CYAN}npm install -g @openai/codex${NC}                                  # Codex"
+        echo -e "    ${CYAN}curl -fsSL https://antigravity.google/cli/install.sh | bash${NC}   # Antigravity"
         echo ""
     fi
 

@@ -1,7 +1,7 @@
 # Cron Jobs — User & Operator Guide
 
 Codeman's **Cron** feature lets you save named, recurring jobs that automatically
-spin up a Claude (or shell / OpenCode / Codex / Gemini) session on a schedule and
+spin up a Claude (or shell / OpenCode / Codex / Antigravity / Gemini) session on a schedule and
 feed it a prompt. Think "cron for agent sessions": _"every weekday at 3am, open a
 Claude session in `~/proj` and tell it to update dependencies and open a PR."_
 
@@ -91,7 +91,7 @@ These map 1:1 to `CronJobSchema` (`src/web/schemas.ts`) and the `CronJob` type
 | Field                      | Required    | Values / limits                                          | Notes                                                                                                                                                                                      |
 | -------------------------- | ----------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `name`                     | ✅          | 1–200 chars                                              | Display name; also used as the created session's name.                                                                                                                                     |
-| `agentType`                | ✅          | `claude` \| `shell` \| `opencode` \| `codex` \| `gemini` | Reuses Codeman's `SessionMode`. `shell` = a plain terminal.                                                                                                                                |
+| `agentType`                | ✅          | `claude` \| `shell` \| `opencode` \| `codex` \| `gemini` \| `antigravity` | Reuses Codeman's `SessionMode`. `shell` = a plain terminal.                                                                                                                                |
 | `workingDir`               | ✅          | valid path (allowlist-validated)                         | Validated at **create/update** (must exist, be a directory, and not resolve into a blocked tree — `/etc`, `/root`, `/proc`, `/sys`, `/dev`, or `/` itself) and again **at fire time**.     |
 | `launchCommand`            | —           | ≤ 2000 chars, single line                                | `shell` mode only: sent as the **first input line** once the shell is up, before the prompt. Ignored for other agent types.                                                                |
 | `promptMode`               | ✅          | `inline_text` \| `prompt_file_path`                      | See §5.                                                                                                                                                                                    |

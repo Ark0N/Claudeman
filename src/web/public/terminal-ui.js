@@ -1408,7 +1408,7 @@ Object.assign(CodemanApp.prototype, {
     }
     titleSpan.appendChild(document.createTextNode(s.name || s.firstPrompt || shortDir));
 
-    // Badge row: mode (claude/codex/opencode/gemini/shell) + a LIVE pill.
+    // Badge row: mode (claude/codex/opencode/gemini/antigravity/shell) + a LIVE pill.
     const badgeRow = document.createElement('div');
     badgeRow.className = 'history-item-badges';
     if (s.mode) {

@@ -1976,7 +1976,7 @@ class CodemanApp {
       // Source 2: Terminal buffer fallback — strip ANSI, drop Claude CLI chrome.
       // Claude + shell only: _cleanTerminalBuffer knows Claude CLI's output, and
       // shell sessions have no transcript source at all; for TUI modes
-      // (codex/opencode/gemini) it yields repaint garbage, so a clear
+      // (codex/opencode/gemini/antigravity) it yields repaint garbage, so a clear
       // placeholder beats a messy screen dump there.
       const sessionMode = this.sessions.get(this.activeSessionId)?.mode || 'claude';
       if (!lastResponse && (sessionMode === 'claude' || sessionMode === 'shell')) {
@@ -4281,7 +4281,7 @@ class CodemanApp {
       // (viewport + scrollback + colors) for an instant first paint. For codex
       // this is also a correctness fix — its byte-stream replay shows only the
       // latest TUI frame (the idle welcome banner) because codex doesn't include
-      // earlier conversation in its current redraw. For claude/opencode/gemini
+      // earlier conversation in its current redraw. For claude/opencode/gemini/antigravity
       // the replay is already complete, so the snapshot is purely a faster,
       // scroll-preserving first paint before the canonical fetch reconciles.
       //

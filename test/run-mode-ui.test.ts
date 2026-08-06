@@ -351,7 +351,13 @@ describe('Codex quick start settings', () => {
     function loadUi(flags: Record<string, boolean> | undefined) {
       const CodemanApp = function CodemanApp(this: any) {};
       const welcomeBtns: Record<string, { style: { display: string } }> = {};
-      for (const id of ['welcomeClaudeBtn', 'welcomeOpencodeBtn', 'welcomeGeminiBtn', 'welcomeTunnelBtn']) {
+      for (const id of [
+        'welcomeClaudeBtn',
+        'welcomeOpencodeBtn',
+        'welcomeAntigravityBtn',
+        'welcomeGeminiBtn',
+        'welcomeTunnelBtn',
+      ]) {
         welcomeBtns[id] = { style: { display: 'PRISTINE' } };
       }
       const modeBtns: Record<string, { style: { display: string } }> = {};
@@ -394,6 +400,7 @@ describe('Codex quick start settings', () => {
       app.applyWelcomeCliVisibility();
       expect(welcomeBtns.welcomeClaudeBtn.style.display).toBe('flex');
       expect(welcomeBtns.welcomeOpencodeBtn.style.display).toBe('none');
+      expect(welcomeBtns.welcomeAntigravityBtn.style.display).toBe('none');
       expect(welcomeBtns.welcomeGeminiBtn.style.display).toBe('none');
       // #200 originally DELETED the tunnel button and its QR outright; it is gated
       // on cloudflared instead, so a box that has cloudflared keeps the feature.
@@ -402,6 +409,12 @@ describe('Codex quick start settings', () => {
       const withTunnel = loadUi({ ...ALL_OFF, cloudflared: true });
       withTunnel.app.applyWelcomeCliVisibility();
       expect(withTunnel.welcomeBtns.welcomeTunnelBtn.style.display).toBe('flex');
+
+      // Antigravity is a first-class welcome action, gated on `agy` like the rest.
+      const withAgy = loadUi({ ...ALL_OFF, antigravity: true });
+      withAgy.app.applyWelcomeCliVisibility();
+      expect(withAgy.welcomeBtns.welcomeAntigravityBtn.style.display).toBe('flex');
+      expect(withAgy.welcomeBtns.welcomeClaudeBtn.style.display).toBe('none');
     });
 
     it('gates every run mode in the dropdown, antigravity included, and never shell', () => {

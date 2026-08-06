@@ -26,14 +26,23 @@ RUN apt-get update \
       openssh-client \
  && rm -rf /var/lib/apt/lists/*
 
-# The agent CLIs (all four backends Codeman supports). Pinning is left to the
-# rebuild cadence (see docs/docker-cases-plan.md, user-decision 2).
+# The npm-published agent CLIs. Pinning is left to the rebuild cadence (see
+# docs/docker-cases-plan.md, user-decision 2).
 RUN npm install -g \
       @anthropic-ai/claude-code \
       @openai/codex \
       @google/gemini-cli \
       opencode-ai \
  && npm cache clean --force
+
+# Antigravity (`agy`) is NOT on npm — Google ships a standalone binary through its
+# own installer, so it needs its own step. `--dir /usr/local/bin` is load-bearing:
+# the installer's default target is `$HOME/.local/bin`, which at build time is
+# root's home and would be unreachable by the `agent` user the container runs as.
+# ⚠️ This binary is ~190MB on its own; it is the single largest layer in the image.
+RUN curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr/local/bin \
+ && chmod 755 /usr/local/bin/agy \
+ && agy --version
 
 # `agent` user (gid 0) with an arbitrary-uid-writable HOME. The uid is
 # auto-assigned (node:22-slim already occupies uid 1000 with its `node` user); at
@@ -50,7 +59,8 @@ ENV HOME=/home/agent
 # dirs: tokens/settings/config are seeded in as writable copies and each CLI's runtime
 # state (backups, tasks, refreshed tokens) stays container-local, while ONLY the shared
 # transcript/rollout dirs (`.claude/projects`, `.codex/sessions`) are bind-mounted from
-# the host. (gemini/gcloud/opencode are whole seed-copies and need no pre-created dir.)
+# the host. (gemini/gcloud/opencode are whole seed-copies and need no pre-created dir;
+# Antigravity nests its state inside `.gemini/antigravity-cli`, so it rides that seed.)
 RUN useradd -g 0 -m -d /home/agent -s /bin/bash agent \
  && mkdir -p /home/agent/.npm /home/agent/.cache /home/agent/.config /home/agent/.codeman \
       /home/agent/.claude/projects /home/agent/.codex/sessions \

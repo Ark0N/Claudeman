@@ -5,7 +5,7 @@
 <h2 align="center">AI 编程智能体的任务控制中心</h2>
 
 <p align="center">
-  <em>Claude Code &bull; OpenCode &bull; Codex &bull; Gemini &bull; 终端 —— 统一仪表盘 &bull; 任意设备</em>
+  <em>Claude Code &bull; OpenCode &bull; Codex &bull; Antigravity &bull; Gemini &bull; 终端 —— 统一仪表盘 &bull; 任意设备</em>
 </p>
 
 <p align="center">
@@ -58,7 +58,7 @@ curl -fsSL https://getcodeman.com/install | bash
 - **重跑即更新。** 再次运行同一条命令即可原地更新已完成的安装：`~/.codeman/app` 中的本地改动会被 stash（绝不丢弃），运行中的服务会自动重启并校验。若首次安装中途失败，重跑会继续完成完整的安装流程。也可以使用 `install.sh update` 与 `install.sh uninstall`。
 - **CI / 无终端环境：** 没有终端时，涉及系统改动的步骤会带着说明中止，而不是静默执行；在自动化场景设置 `CODEMAN_NONINTERACTIVE=1` 即可批准这些步骤。
 
-你至少需要安装一个 AI 编程 CLI —— [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli) 或 [Gemini CLI](https://github.com/google-gemini/gemini-cli)（任意组合均可）。安装器会自动检测这四个中已安装的任意一个；若一个都没有，会提供安装 Claude Code 或 OpenCode 的选项，也可以选择跳过、稍后自行安装。安装完成后：
+你至少需要安装一个 AI 编程 CLI —— [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli)、[Antigravity](https://antigravity.google) 或 [Gemini CLI](https://github.com/google-gemini/gemini-cli)（任意组合均可；自 Google 面向消费者停售后，Gemini CLI 仅限企业版，Antigravity 是其继任者）。安装器会自动检测这五个中已安装的任意一个；若一个都没有，会提供安装 Claude Code 或 OpenCode 的选项，也可以选择跳过、稍后自行安装。安装完成后：
 
 ```bash
 codeman web
@@ -141,7 +141,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.codeman.web.plist
 wsl bash -c "curl -fsSL https://getcodeman.com/install | bash"
 ```
 
-Codeman 依赖 tmux，因此 Windows 用户需要 [WSL](https://learn.microsoft.com/en-us/windows/wsl/install)。如果还没装 WSL：在管理员 PowerShell 中运行 `wsl --install`，重启，打开 Ubuntu，然后在 WSL 内安装你偏好的 AI 编程 CLI（[Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli) 或 [Gemini CLI](https://github.com/google-gemini/gemini-cli)）。安装完成后，即可从 Windows 浏览器访问 `http://localhost:3000`。
+Codeman 依赖 tmux，因此 Windows 用户需要 [WSL](https://learn.microsoft.com/en-us/windows/wsl/install)。如果还没装 WSL：在管理员 PowerShell 中运行 `wsl --install`，重启，打开 Ubuntu，然后在 WSL 内安装你偏好的 AI 编程 CLI（[Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli)、[Antigravity](https://antigravity.google) 或 [Gemini CLI](https://github.com/google-gemini/gemini-cli)）。安装完成后，即可从 Windows 浏览器访问 `http://localhost:3000`。
 
 </details>
 
@@ -221,7 +221,7 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 | 字段                   | 作用                                                                                        |
 | ---------------------- | ------------------------------------------------------------------------------------------- |
 | **工作目录 / case**    | 智能体操作的文件夹。「case」就是一个 Codeman 记住的命名工作目录。                           |
-| **CLI / 运行模式**     | `Claude`（默认）、`OpenCode`、`Codex`、`Gemini` 或 `Terminal`（普通 shell）。               |
+| **CLI / 运行模式**     | `Claude`（默认）、`OpenCode`、`Codex`、`Antigravity`、`Gemini` 或 `Terminal`（普通 shell）。 |
 | **模型**               | 每会话模型（App Settings → Claude Model）。软默认值 —— 会话内 `/model` 依然有效。           |
 | **Effort / Ultracode** | 推理力度（`low`–`max`），或用 `ultracode` 开启动态多智能体工作流。随时可用 `/effort` 切换。 |
 
@@ -394,7 +394,7 @@ PTY 输出 → 16ms 服务端批处理 → DEC 2026 包裹 → SSE → 客户端
 ## 更多特性
 
 - **自更新** —— systemd/launchd 管理下的 git-clone 安装可在 **App Settings → Updates** 中原地更新：它会检测最新发行版，自动暂存（stash）脏工作树，并在服务重启期间流式展示构建进度（npm 安装会被报告为不可更新）
-- **多 CLI** —— 每个会话可选 **Claude Code**、**OpenCode**、**Codex** 或 **Gemini**；环境变量前缀自动隔离（`CLAUDE_CODE_*`、`OPENCODE_*`、`CODEX_*` 与 `GEMINI_*`/`GOOGLE_*`）。详见 [`docs/opencode-integration.md`](docs/opencode-integration.md)
+- **多 CLI** —— 每个会话可选 **Claude Code**、**OpenCode**、**Codex**、**Antigravity** 或 **Gemini**；环境变量前缀自动隔离（`CLAUDE_CODE_*`、`OPENCODE_*`、`CODEX_*`、`ANTIGRAVITY_*` 与 `GEMINI_*`/`GOOGLE_*`）。详见 [`docs/opencode-integration.md`](docs/opencode-integration.md)
 - **Docker 会话** —— 在隔离且加固的容器中运行案例。**Create New** 上勾选一个复选框即可用合理的默认值启动容器并在其中启动智能体；同一案例的多个会话共享一个容器；可将容器连同工作区导出为可移植的 `.tar.gz`，迁移到另一台机器。详见 [`docs/docker-cases.md`](docs/docker-cases.md)
 - **远程 SSH 会话**：把案例指向另一台机器，让智能体在那里一个持久的远程 tmux 中运行：SSH 断连不中断任务、自动重连，还能发现并附着主机上已在运行的会话。详见 [`docs/remote-sessions.md`](docs/remote-sessions.md)
 - **Effort 与 Ultracode** —— 设置每会话的默认 effort（`low`–`max`），或启用 **ultracode**（动态多智能体工作流）。这些都只是软默认值 —— 会话中可随时用 `/effort` 切换。扩展思考预算也可配置
@@ -416,7 +416,7 @@ PTY 输出 → 16ms 服务端批处理 → DEC 2026 包裹 → SSE → 客户端
 - **资源模板** —— 展开复选框可选 **Small / Medium / Large / GPU** 预设（内存、CPU、GPU），也可以完全自定义。**磁盘是弹性的** —— 存储随数据增长，没有固定上限。
 - **按案例共享容器** —— 多个会话可以 `docker exec` 进同一个容器；结束某个会话绝不会影响其他会话所在的容器。
 - **默认加固** —— 非 root、`--cap-drop ALL`、`no-new-privileges`、PID/内存上限，绝不使用 `--privileged` 或 docker socket；**密封（sealed）** 配置（不注入主机凭据、关闭网络）只需一个开关。
-- **无感认证、凭据隔离** —— 主机上的 Claude / Codex / Gemini / OpenCode 登录在容器内开箱即用：凭据在启动时以只读种子方式复制注入，onboarding/信任提示已预先答复，不会弹出登录向导。容器保留自己的副本，绝不回写主机的凭据存储；跨边界共享的只有对话转录，导出文件也绝不包含机密。
+- **无感认证、凭据隔离** —— 主机上的 Claude / Codex / Antigravity / Gemini / OpenCode 登录在容器内开箱即用：凭据在启动时以只读种子方式复制注入，onboarding/信任提示已预先答复，不会弹出登录向导。容器保留自己的副本，绝不回写主机的凭据存储；跨边界共享的只有对话转录，导出文件也绝不包含机密。
 - **迁移到另一台机器** —— 把容器的完整环境（工具链 + 工作区）导出为可移植的 `.tar.gz`，在另一台机器上导入到新案例即可继续。
 - **持久耐用** —— Codeman 重启后重连会回到同一个存活的智能体；容器停止/重启后则从绑定挂载的转录恢复对话。
 
@@ -602,7 +602,7 @@ Codeman 默认用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 
 
 ### 输入、文件与响应头
 
-- **模式校验的输入** —— 每个 API 请求体都用 Zod v4 模式检查；一个 `CLAUDE_CODE_*` / `OPENCODE_*` / `CODEX_*` / `GEMINI_*` / `GOOGLE_*` 环境变量前缀允许列表把控每个 CLI 能接收哪些设置
+- **模式校验的输入** —— 每个 API 请求体都用 Zod v4 模式检查；一个 `CLAUDE_CODE_*` / `OPENCODE_*` / `CODEX_*` / `ANTIGRAVITY_*` / `GEMINI_*` / `GOOGLE_*` 环境变量前缀允许列表把控每个 CLI 能接收哪些设置
 - **路径限定** —— 文件路由在边界检查前先 `realpath`（无 TOCTOU）；`..`、绝对路径、以及解析到工作目录之外的符号链接都会被拒绝。上限：10 MB 文本预览 / 50 MB 原始与下载；`/api/download` 对敏感路径（`.env`、`*credentials*`、`~/.ssh/`、`.aws/credentials`）做黑名单。SVG/HTML 以 `octet-stream` + `nosniff` + attachment 提供，因此会被下载而非执行
 - **安全响应头** —— `Content-Security-Policy`（`default-src 'self'`，每个例外都逐条列举）、`X-Content-Type-Options: nosniff`、`X-Frame-Options: SAMEORIGIN`、HTTPS 下的 HSTS，以及**仅**对 `localhost` / `127.0.0.1` / `::1` 反射的 CORS
 
@@ -834,7 +834,7 @@ flowchart TB
         end
 
         subgraph External["外部"]
-            CLI["AI CLI<br/><small>Claude Code / OpenCode / Codex / Gemini</small>"]
+            CLI["AI CLI<br/><small>Claude Code / OpenCode / Codex / Antigravity / Gemini</small>"]
             BG["后台智能体<br/><small>(Task 工具)</small>"]
         end
     end

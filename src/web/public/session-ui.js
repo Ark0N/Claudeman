@@ -1,5 +1,5 @@
 /**
- * @fileoverview Quick start (case loading, session spawning for Claude/Shell/OpenCode/Codex/Gemini),
+ * @fileoverview Quick start (case loading, session spawning for Claude/Shell/OpenCode/Codex/Gemini/Antigravity),
  * session options modal (per-session settings, color picker, rename),
  * session options tabs (Ralph config tab), case settings (CRUD, links),
  * create case modal, and mobile case picker.

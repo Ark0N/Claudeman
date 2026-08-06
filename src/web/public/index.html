@@ -323,6 +323,10 @@
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               Run OpenCode
             </button>
+            <button class="welcome-btn welcome-btn-antigravity" id="welcomeAntigravityBtn" style="display: none;" onclick="app.setRunMode('antigravity'); app.runAntigravity()">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run Antigravity
+            </button>
             <button class="welcome-btn welcome-btn-gemini" id="welcomeGeminiBtn" style="display: none;" onclick="app.setRunMode('gemini'); app.runGemini()">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               Run Gemini
@@ -2192,7 +2196,7 @@
             <div class="form-row">
               <label>Image</label>
               <input type="text" id="dockerImage" placeholder="codeman/agent:base" autocomplete="off" autocapitalize="off" spellcheck="false">
-              <span class="form-hint">Build it once with <code>node scripts/build-agent-image.mjs</code>. Contains node + claude/codex/gemini + tmux.</span>
+              <span class="form-hint">Build it once with <code>node scripts/build-agent-image.mjs</code>. Contains node + claude/codex/gemini/opencode/agy + tmux.</span>
             </div>
             <div class="form-row">
               <label>Network</label>

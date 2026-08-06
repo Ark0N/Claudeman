@@ -516,7 +516,7 @@ export const DockerHostSchema = z.object({
   mountCredentials: z.boolean().optional(),
   hooksEnabled: z.boolean().optional(),
   resumeOnStart: z.boolean().optional(),
-  commands: RemoteCommandOverridesSchema, // same shell/claude/opencode/codex/gemini shape
+  commands: RemoteCommandOverridesSchema, // same shell/claude/opencode/codex/gemini/antigravity shape
   extraCreateArgs: z
     .array(
       z

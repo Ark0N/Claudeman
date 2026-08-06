@@ -3305,6 +3305,23 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   transform: translateY(-1px);
 }
 
+/* Antigravity: cyan identity, matching .btn-toolbar.btn-run.mode-antigravity and
+   .run-mode-dot.antigravity so the welcome action reads as the same backend. */
+.welcome-btn-antigravity {
+  background: linear-gradient(135deg, #0b2b33 0%, #0e7490 55%, #0891b2 100%);
+  border-color: rgba(34, 211, 238, 0.4);
+  color: #cffafe;
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.welcome-btn-antigravity:hover {
+  background: linear-gradient(135deg, #124450 0%, #0891b2 55%, #06b6d4 100%);
+  box-shadow: 0 4px 20px rgba(34, 211, 238, 0.3), 0 0 40px rgba(8, 145, 178, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border-color: rgba(103, 232, 249, 0.5);
+  color: #ecfeff;
+  transform: translateY(-1px);
+}
+
 .welcome-btn-gemini {
   background: linear-gradient(135deg, #10243f 0%, #174ea6 55%, #4f46e5 100%);
   border-color: rgba(96, 165, 250, 0.4);

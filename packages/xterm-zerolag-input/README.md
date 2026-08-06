@@ -16,7 +16,7 @@
 
 > ### Made for [**Codeman**](https://getcodeman.com)
 >
-> This overlay is the local echo engine of [**Codeman**](https://github.com/Ark0N/Codeman), mission control for AI coding agents: run and monitor a dozen Claude Code, Codex, OpenCode and Gemini sessions at once, watch their subagents work in live floating windows, let them run autonomously overnight, and drive all of it from your phone.
+> This overlay is the local echo engine of [**Codeman**](https://github.com/Ark0N/Codeman), mission control for AI coding agents: run and monitor a dozen Claude Code, Codex, OpenCode and Antigravity sessions at once, watch their subagents work in live floating windows, let them run autonomously overnight, and drive all of it from your phone.
 >
 > That last part is why this library exists. The demo below is a real Codeman session on two phones.
 

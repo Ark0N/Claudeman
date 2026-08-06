@@ -1,7 +1,7 @@
 /**
  * @fileoverview Resolve the `cloudflared` binary across common install paths.
  *
- * Mirrors the CLI resolvers (gemini-cli-resolver.ts et al), for the same reason
+ * Mirrors the CLI resolvers (antigravity-cli-resolver.ts et al), for the same reason
  * they exist: the welcome screen should not offer a button whose only possible
  * outcome is an error toast.
  *

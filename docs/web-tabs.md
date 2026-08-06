@@ -1,7 +1,7 @@
 # Web Tabs (dashboards as Codeman tabs)
 
 Open any dashboard you run, Grafana, Uptime Kuma, Portainer, a status page on port
-4000, as a tab beside your Claude/Codex/Gemini sessions. Codeman becomes one mission
+4000, as a tab beside your Claude/Codex/Antigravity sessions. Codeman becomes one mission
 control instead of Codeman plus a pile of browser tabs.
 
 ## Using it

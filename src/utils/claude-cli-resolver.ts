@@ -28,7 +28,7 @@ let _claudeDir: string | null = null;
 
 /**
  * Returns true if the Claude CLI binary can be located (via `which` or one of
- * the common install directories). Mirrors `isGeminiAvailable`/`isOpenCodeAvailable`/
+ * the common install directories). Mirrors `isGeminiAvailable`/`isAntigravityAvailable`/`isOpenCodeAvailable`/
  * `isCodexAvailable` in the sibling resolvers.
  */
 export function isClaudeAvailable(): boolean {
