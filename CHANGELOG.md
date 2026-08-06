@@ -1,5 +1,26 @@
 # aicodeman
 
+## 1.11.2
+
+### Patch Changes
+
+- Make Antigravity (`agy`) a first-class CLI everywhere, and stop presenting Gemini CLI as a consumer product now that it is enterprise-only.
+
+  Antigravity was already wired into the session layer, schemas, run-mode menu and remote/Docker command maps, but the surfaces around it were never updated. Gemini keeps full support; Antigravity now sits beside it.
+
+  Fixes:
+  - **Docker cases with `mode: 'antigravity'` were broken.** `docker/agent.Dockerfile` installs its CLIs from npm, and `agy` is not an npm package, so the binary was never in the image and the container died on command-not-found. It now gets its own installer step. The `--dir /usr/local/bin` flag is load-bearing: the installer's default `$HOME/.local/bin` resolves to root's home at build time and would be unreachable by the `agent` user the container runs as. Note the binary is roughly 190MB, making it the largest layer in the image, so rebuild with `node scripts/build-agent-image.mjs` when convenient.
+  - **Welcome screen** gained a "Run Antigravity" action, gated on `agy` being present like the other CLI buttons, styled with the same cyan identity as the toolbar run button and run-mode dot.
+  - **`install.sh`** now detects `agy` (search paths mirroring `antigravity-cli-resolver.ts`), counts it as a satisfying AI CLI so an Antigravity-only box is not told it has none, and recommends it instead of Gemini in the install hints.
+
+  Documentation corrections where it had become factually wrong: `architecture-invariants.md` described `isExternalCliMode()` as opencode/codex/gemini when the code has included antigravity for some time, said "all three modes", and omitted `ANTIGRAVITY_*` from the env-prefix allowlist row; the `agentType` enum in `cron-guide.md`, `SessionMode` in `cron-discovery.md`, and `RemoteCommandMode` in `remote-sessions.md` were all stale.
+
+  Also updated both READMEs (five CLIs, Gemini marked enterprise-only), the `antigravity` npm keyword, and comment drift in eight places. Test coverage added for the new welcome button.
+
+  Antigravity stores its state under `~/.gemini/antigravity-cli/` rather than a `~/.antigravity` directory, so the existing `.gemini` Docker credential seed already covers it. That is now recorded in a code comment so no dead configuration gets added later.
+
+- b982c5d: Keep the brief Response Viewer output inside the same message card and Markdown wrapper used by the full conversation view, so opening the viewer without clicking More preserves the same readable formatting.
+
 ## 1.11.1
 
 ### Patch Changes
