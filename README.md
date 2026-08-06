@@ -812,6 +812,8 @@ REST over Fastify — **~190 handlers across 20 route modules**, plus an SSE str
 | `POST` | `/api/clipboard`                | Push text to all connected browsers (`{text}`) |
 | `GET`  | `/api/sessions/:id/run-summary` | Timeline + stats                               |
 
+> **Building something on top of Codeman?** [`docs/extending-codeman.md`](docs/extending-codeman.md) is the integration guide: render your own UI as a tab, subscribe to the SSE event stream to react when an agent needs you, drive Codeman from a script, and the traps worth knowing before you start. Codeman has no plugin runtime on purpose, so an integration is just your own process talking HTTP.
+
 ---
 
 ## Architecture

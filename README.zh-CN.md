@@ -802,6 +802,8 @@ Codeman 会注册 Claude Code hook，它们 `POST /api/hook-event`（`permission
 | `POST` | `/api/clipboard`                | 把文本推送到所有已连接浏览器（`{text}`） |
 | `GET`  | `/api/sessions/:id/run-summary` | 时间线 + 统计                            |
 
+> **想在 Codeman 之上做集成？**[`docs/extending-codeman.md`](docs/extending-codeman.md)（英文）是集成指南：把你自己的界面作为标签页嵌入、订阅 SSE 事件流以便在 agent 需要你时做出响应、用脚本驱动 Codeman，以及动手前值得先了解的那些坑。Codeman 刻意不提供插件运行时，所以一个集成就是你自己的进程在讲 HTTP。
+
 ---
 
 ## 架构

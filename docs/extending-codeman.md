@@ -40,6 +40,17 @@ curl -u admin:$CODEMAN_PASSWORD http://127.0.0.1:3000/api/v1/sessions
 or `body.success`, then read `body.data`. The full `errorCode` to status mapping
 is in [`api-reference.md`](api-reference.md).
 
+⚠️ A few legacy GETs (`/api/away-digest` among them) return a bare-ish body with
+the payload at the top level rather than under `data`. Read defensively with
+`body.data ?? body`.
+
+**Already driving Codeman from an agent?** The README's
+[Programmatic Guide](../README.md#driving-codeman-from-an-agent--programmatic-guide)
+covers the in-session case: the `CODEMAN_MUX`, `CODEMAN_API_URL`,
+`CODEMAN_SESSION_ID` and `CODEMAN_HOOK_SECRET_FILE` variables that let a CLI
+running inside Codeman find the API and avoid acting on itself. This page is for
+code running *outside* a session.
+
 ## Seam 1: Web tabs
 
 The highest-leverage seam. Any web app you can serve locally becomes a tab beside
@@ -156,11 +167,16 @@ curl -u admin:$PASS -X POST http://127.0.0.1:3000/api/v1/sessions \
   -H 'Content-Type: application/json' \
   -d '{"workingDir":"/home/me/project","mode":"claude"}'
 
-# Send a prompt (single-line only, "\r" submits)
+# Send a prompt (single-line only)
 curl -u admin:$PASS -X POST http://127.0.0.1:3000/api/v1/sessions/$ID/input \
   -H 'Content-Type: application/json' \
-  -d '{"input":"run the tests","useScreen":true}'
+  -d '{"input":"run the tests","useMux":true}'
 ```
+
+`POST .../input` also accepts `clientId` (stable per client, max 128 chars) and
+`seq` (monotonic per session). Send both and the server applies each pair
+at-most-once, so retrying after a dropped connection cannot type the prompt
+twice. Omit them entirely rather than sending `null`.
 
 For shell scripting, the `codeman` CLI is the same surface without the HTTP
 plumbing:
@@ -205,8 +221,10 @@ Every one of these has cost somebody real time.
   shipped bugs more than once.
 - **`text/plain` bodies stay raw.** Auto-parsing them as JSON enabled
   simple-request CSRF, so it is deliberate. Send `application/json`.
-- **Prompts are single-line.** Input is delivered as text plus a separate Enter;
-  a multi-line string breaks the agent's input handling. Send `\r` to submit.
+- **Prompts are single-line.** With `useMux: true` the server delivers your text
+  and then Enter as two separate writes, so you do not append `\r` yourself. A
+  multi-line string breaks the agent's Ink-based input handling: send one line,
+  or split it across calls.
 - **Unwrap the envelope** before reading fields. `data` is not the response body.
 
 ## Publishing your integration
