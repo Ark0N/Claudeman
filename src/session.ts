@@ -2551,11 +2551,16 @@ export class Session extends EventEmitter {
    * session.write('ls -la\r');     // Command with Enter
    * ```
    */
-  write(data: string): void {
+  /**
+   * @returns true if the data reached a PTY. A session whose PTY is gone silently
+   * swallowed every write before this signal existed, which is how input could
+   * disappear with the caller believing it had been delivered.
+   */
+  write(data: string): boolean {
     this._trackSubmit(data);
-    if (this.ptyProcess) {
-      this.ptyProcess.write(data);
-    }
+    if (!this.ptyProcess) return false;
+    this.ptyProcess.write(data);
+    return true;
   }
 
   // ── Conversation tracking ─────────────────────────────────────────────
@@ -2600,6 +2605,23 @@ export class Session extends EventEmitter {
    * half-open socket silently drops frames with no error) would type a prompt
    * twice whenever an ACK is lost after the write landed.
    */
+  /**
+   * Undo the bookkeeping of {@link shouldApplyInput} for a delivery that failed.
+   *
+   * Without this, the reliable-delivery layer guarantees exactly-once delivery of
+   * something that may never have been delivered: the seq is recorded as applied
+   * BEFORE the write is attempted, so a client retry — the very mechanism the seq
+   * exists for — is rejected as a duplicate and the input is lost for good.
+   *
+   * Only rolls back if `seq` is still the newest recorded one; a later input has
+   * already superseded it and must not be re-opened.
+   */
+  forgetInputSeq(clientId: string, seq: number): void {
+    if (this._appliedInputSeq.get(clientId) === seq) {
+      this._appliedInputSeq.set(clientId, seq - 1);
+    }
+  }
+
   shouldApplyInput(clientId: string, seq: number): boolean {
     const last = this._appliedInputSeq.get(clientId);
     if (last !== undefined && seq <= last) return false;

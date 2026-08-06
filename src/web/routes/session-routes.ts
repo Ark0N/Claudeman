@@ -879,28 +879,41 @@ export function registerSessionRoutes(
     // Reliable delivery (POST fallback when the WebSocket is down): a 2xx IS the
     // client's ACK, so a tagged duplicate redelivery must still return 200 but
     // skip the write. Untagged requests (curl/legacy) always apply.
-    if (typeof clientId === 'string' && typeof seq === 'number' && !session.shouldApplyInput(clientId, seq)) {
+    const tagged = typeof clientId === 'string' && typeof seq === 'number';
+    if (tagged && !session.shouldApplyInput(clientId as string, seq as number)) {
       return {};
     }
 
     // Write input to PTY. Direct write is synchronous; writeViaMux
     // (tmux send-keys) is fire-and-forget to avoid blocking the HTTP response.
     if (useMux) {
-      // Fire-and-forget: don't block HTTP response on tmux child process.
-      // Fallback to direct write on failure.
+      // Fire-and-forget: don't block the HTTP response on a tmux child process.
+      // Fallback to a direct write on failure.
+      //
+      // Because the response has already been sent by then, a failure here is the
+      // one case the caller can never learn about — so the dedup bookkeeping is
+      // rolled back. Otherwise the seq stays recorded as applied and a retry, the
+      // very mechanism reliable delivery exists for, is rejected as a duplicate.
+      const undoOnFailure = () => {
+        if (tagged) session.forgetInputSeq(clientId as string, seq as number);
+      };
       session
         .writeViaMux(inputStr)
         .then((ok) => {
-          if (!ok) {
-            console.warn(`[Server] writeViaMux failed for session ${id}, falling back to direct write`);
-            session.write(inputStr);
-          }
+          if (ok) return;
+          console.warn(`[Server] writeViaMux failed for session ${id}, falling back to direct write`);
+          if (!session.write(inputStr)) undoOnFailure();
         })
         .catch(() => {
-          session.write(inputStr);
+          if (!session.write(inputStr)) undoOnFailure();
         });
     } else {
-      session.write(inputStr);
+      // Same rollback. NOT an error response, deliberately: a session can
+      // legitimately have no PTY yet (created but not started), and callers have
+      // always been able to write to one without a 4xx.
+      if (!session.write(inputStr) && tagged) {
+        session.forgetInputSeq(clientId as string, seq as number);
+      }
     }
     return {};
   });

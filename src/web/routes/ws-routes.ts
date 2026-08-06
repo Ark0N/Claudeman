@@ -180,13 +180,19 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
             const cid = typeof msg.cid === 'string' ? msg.cid : null;
             const seq = Number.isInteger(msg.seq) ? (msg.seq as number) : null;
             const apply = cid && seq !== null ? session.shouldApplyInput(cid, seq) : true;
+            let delivered = true;
             if (apply) {
               // Typed input from a claim-holding desktop keeps the claim "hot"
               // and re-asserts the desktop layout after a mobile override.
               if (holdsDesktopClaim) session.noteDesktopActivity();
-              session.write(msg.d);
+              delivered = session.write(msg.d);
+              // A session whose PTY is gone swallows the write. ACKing anyway told
+              // the client to drop the frame from its durable queue and left the seq
+              // burnt, so the retry that reliable delivery exists for was rejected as
+              // a duplicate: the input was lost for good.
+              if (!delivered && cid && seq !== null) session.forgetInputSeq(cid, seq);
             }
-            if (seq !== null && socket.readyState === 1) {
+            if (delivered && seq !== null && socket.readyState === 1) {
               socket.send(`{"t":"ia","seq":${seq}}`);
             }
           } else if (
