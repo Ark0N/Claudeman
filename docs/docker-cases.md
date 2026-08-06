@@ -15,6 +15,21 @@ node scripts/build-agent-image.mjs          # builds codeman/agent:base
 
 The image is **secret-free**: credentials are delivered at runtime (bind mounts or `docker exec --env`), never baked in, so exports never leak them.
 
+⚠️ **Re-build with `--no-cache`, always.** The CLIs are installed in a single `RUN npm install -g` layer, so a plain rebuild re-uses it from the Docker layer cache and the CLIs stay frozen at whatever versions the image was **first** built with, however long ago that was. Editing the Dockerfile does not help unless the edit lands at or above that line: a change appended below it leaves the npm layer cached and only runs the new step. Observed 2026-08-06: a rebuild silently kept a stale `@openai/codex@0.144.6` whose aliased platform binary had not installed, so every `codex` docker case died with `Missing optional dependency @openai/codex-linux-x64` while the build itself reported success.
+
+```bash
+node scripts/build-agent-image.mjs --no-cache
+```
+
+A zero exit code only proves the layers ran, not that the toolchain works. Verify by actually executing each CLI in the image, and check the build log for `Using cache` lines:
+
+```bash
+docker run --rm codeman/agent:base bash -lc \
+  'for c in claude codex gemini opencode agy; do printf "%-9s " $c; $c --version 2>&1 | head -1; done'
+```
+
+Antigravity (`agy`) is the one CLI not installed from npm (Google ships a standalone binary), so it has its own Dockerfile step and adds roughly 190MB; a full image lands near 1.6GB.
+
 ## Quickest path: one-click "Run in Docker"
 
 On the **New case → Create New** tab there's a **🐳 Run in an isolated Docker container** checkbox. Checking it alone is enough: Codeman creates the case folder in `~/codeman-cases/<name>`, spins up a hardened container with sensible defaults (auto-provisioning a shared `default` host), and starts the session inside it. No host/image/network fields to fill in.
