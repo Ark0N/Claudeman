@@ -47,7 +47,7 @@ The production server caches static files for 1 year, `immutable` (`maxAge: '1y'
 
 ## COM Shorthand (Deployment)
 
-Uses [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`) via `@changesets/cli`. What SemVer actually covers (the CLI + documented env vars are public; the HTTP/SSE API, on-disk state, and experimental features are internal/unstable) is defined in `docs/versioning-policy.md`. Security reporting + known limitations live in `.github/SECURITY.md`.
+Uses [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`) via `@changesets/cli`. What SemVer actually covers (the CLI, documented env vars, **and the HTTP/SSE API under `/api/v1`**: endpoint paths, response envelope, `errorCode` values and SSE event names are public/stable; on-disk state, internal TS modules, and experimental features are internal/unstable) is defined in `docs/versioning-policy.md`. Third-party integration surfaces are documented in `docs/extending-codeman.md`. Security reporting + known limitations live in `.github/SECURITY.md`.
 
 When user says "COM":
 
