@@ -1,5 +1,11 @@
 # aicodeman
 
+## 1.11.2
+
+### Patch Changes
+
+- b982c5d: Keep the brief Response Viewer output inside the same message card and Markdown wrapper used by the full conversation view, so opening the viewer without clicking More preserves the same readable formatting.
+
 ## 1.11.1
 
 ### Patch Changes
