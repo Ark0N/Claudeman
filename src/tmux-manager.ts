@@ -22,7 +22,8 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { execSync, exec } from 'node:child_process';
+import { collectDescendants } from './proc-tree.js';
+import { execSync, exec, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execAsync = promisify(exec);
@@ -100,6 +101,16 @@ import {
 // ============================================================================
 
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
+
+/** How long a cached process snapshot stays usable. */
+const PROC_SNAPSHOT_TTL_MS = 2000;
+
+/**
+ * How long the kill path waits for a fresh snapshot before giving up on it.
+ * Shorter than EXEC_TIMEOUT_MS on purpose: killSession has two further strategies
+ * (process group, tmux kill-session) and must reach them even when `ps` is wedged.
+ */
+const PROC_SNAPSHOT_WAIT_MS = 1500;
 import { DEFAULT_TMUX_HISTORY_LIMIT, DEFAULT_TERMINAL_BUFFER_MAX_BYTES } from './config/terminal-history.js';
 
 /**
@@ -2094,27 +2105,102 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
   }
 
-  // Get all child process PIDs recursively
-  private getChildPids(pid: number): number[] {
-    const pids: number[] = [];
-    try {
-      const output = execSync(`pgrep -P ${pid}`, {
-        encoding: 'utf-8',
-        timeout: EXEC_TIMEOUT_MS,
-      }).trim();
-      if (output) {
-        for (const childPid of output
-          .split('\n')
-          .map((p) => parseInt(p, 10))
-          .filter((p) => !Number.isNaN(p))) {
-          pids.push(childPid);
-          pids.push(...this.getChildPids(childPid));
+  /** One `ps` snapshot of the whole process table, cached briefly. */
+  private static procSnapshot: { at: number; byParent: Map<number, number[]> } | null = null;
+  /** Single-flight guard so a hung `ps` cannot pile up parallel refreshes. */
+  private static procRefresh: { started: number; promise: Promise<Map<number, number[]>> } | null = null;
+
+  /**
+   * Fork ONE `ps` asynchronously and cache the parent -> children map.
+   *
+   * Async on purpose: a synchronous fork here would block the event loop on every
+   * stats tick, and under the procfs pathology this module exists to survive,
+   * `execSync`'s timeout cannot return at all (spawnSync waits for the unkillable
+   * child) — freezing the whole server where a hung async poll only costs staleness.
+   */
+  private static refreshProcSnapshot(): Promise<Map<number, number[]>> {
+    const inFlight = TmuxManager.procRefresh;
+    // Reuse an in-flight refresh — unless it is old enough to be presumed stuck.
+    if (inFlight && Date.now() - inFlight.started < EXEC_TIMEOUT_MS * 2) return inFlight.promise;
+
+    const started = Date.now();
+    const promise = new Promise<Map<number, number[]>>((resolve) => {
+      execFile('ps', ['-eo', 'pid=,ppid='], { timeout: EXEC_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 }, (err, out) => {
+        if (TmuxManager.procRefresh?.started === started) TmuxManager.procRefresh = null;
+        if (err) {
+          // ANY error, not just an empty one: a timed-out or truncated `ps` yields
+          // partial output, and caching that as fresh would make whole subtrees
+          // invisible — including to the kill path. Stale beats wrong.
+          console.error('[TmuxManager] process snapshot failed:', err);
+          resolve(TmuxManager.procSnapshot?.byParent ?? new Map());
+          return;
         }
-      }
-    } catch {
-      // No children or command failed
+        const byParent = new Map<number, number[]>();
+        for (const line of String(out).split('\n')) {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length < 2) continue;
+          const pid = parseInt(parts[0], 10);
+          const ppid = parseInt(parts[1], 10);
+          if (Number.isNaN(pid) || Number.isNaN(ppid)) continue;
+          const list = byParent.get(ppid);
+          if (list) list.push(pid);
+          else byParent.set(ppid, [pid]);
+        }
+        TmuxManager.procSnapshot = { at: Date.now(), byParent };
+        resolve(byParent);
+      });
+    });
+    TmuxManager.procRefresh = { started, promise };
+    return promise;
+  }
+
+  /**
+   * Best snapshot WITHOUT forking: returns the cache, kicking off a background
+   * refresh when it has gone stale, and never blocks. Stats and window-title
+   * consumers tolerate data one interval old; nothing that KILLS may use this.
+   */
+  private childrenByParent(): Map<number, number[]> {
+    const cached = TmuxManager.procSnapshot;
+    if (!cached || Date.now() - cached.at >= PROC_SNAPSHOT_TTL_MS) {
+      void TmuxManager.refreshProcSnapshot();
     }
-    return pids;
+    return cached?.byParent ?? new Map();
+  }
+
+  /**
+   * Descendants from a snapshot that is not the cached one — the kill path's variant.
+   *
+   * killSession re-scans for survivors between SIGTERM and SIGKILL, and the wait in
+   * between (200ms) sits far inside the cache TTL (2000ms): reading the cache there
+   * returns the pre-SIGTERM state verbatim, so children spawned since are invisible
+   * and SIGKILL aims at stale PIDs, guarded only by kill(pid, 0) — which cannot
+   * detect PID reuse.
+   *
+   * It forces a refresh rather than guaranteeing recency: an already-running refresh
+   * is reused, so the snapshot can predate this call by up to one `ps` runtime. A
+   * strict postdate guarantee would mean chaining a second `ps` behind every
+   * in-flight one, which is the fork storm this code exists to avoid.
+   *
+   * Bounded by design: waiting forever would freeze killSession before it reaches
+   * its process-group and tmux fallbacks.
+   */
+  private async getChildPidsFresh(pid: number): Promise<number[]> {
+    let byParent: ReadonlyMap<number, readonly number[]>;
+    try {
+      byParent = await Promise.race([
+        TmuxManager.refreshProcSnapshot(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('proc snapshot timeout')), PROC_SNAPSHOT_WAIT_MS)
+        ),
+      ]);
+    } catch {
+      console.warn('[TmuxManager] process snapshot did not return in time; using the cached one');
+      byParent = TmuxManager.procSnapshot?.byParent ?? new Map<number, number[]>();
+    }
+    return collectDescendants(pid, byParent, {
+      onTruncated: (root, cap, reason) =>
+        console.warn(`[TmuxManager] descendant walk for ${root} hit the ${cap}-${reason} cap; truncating`),
+    });
   }
 
   // Check if a process is still alive
@@ -2221,7 +2307,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const allPids: number[] = [currentPid];
 
     // Strategy 1: Kill all child processes recursively
-    let childPids = this.getChildPids(currentPid);
+    let childPids = await this.getChildPidsFresh(currentPid);
     if (childPids.length > 0) {
       console.log(`[TmuxManager] Found ${childPids.length} child processes to kill`);
       allPids.push(...childPids);
@@ -2238,7 +2324,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
       await new Promise((resolve) => setTimeout(resolve, TMUX_KILL_WAIT_MS));
 
-      childPids = this.getChildPids(currentPid);
+      childPids = await this.getChildPidsFresh(currentPid);
       for (const childPid of childPids) {
         if (this.isProcessAlive(childPid)) {
           try {
@@ -2452,17 +2538,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
       const [rss, cpu] = psOutput.split(/\s+/).map((x) => parseFloat(x) || 0);
 
+      // From the shared snapshot: this runs per session on every stats tick, and a
+      // pgrep per session was a fork per session per interval.
       let childCount = 0;
       try {
-        const childOutput = (
-          await execAsync(`pgrep -P ${session.pid} | wc -l`, {
-            encoding: 'utf-8',
-            timeout: EXEC_TIMEOUT_MS,
-          })
-        ).stdout.trim();
-        childCount = parseInt(childOutput, 10) || 0;
+        childCount = (this.childrenByParent().get(session.pid) ?? []).length;
       } catch {
-        // No children or command failed
+        // No children or snapshot unavailable
       }
 
       return {
@@ -2496,17 +2578,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // Step 1: Get descendant PIDs
       const descendantMap = new Map<number, number[]>();
 
-      const pgrepOutput = (
-        await execAsync(
-          `for p in ${sessionPids.join(' ')}; do children=$(pgrep -P $p 2>/dev/null | tr '\\n' ','); echo "$p:$children"; done`,
-          {
-            encoding: 'utf-8',
-            timeout: EXEC_TIMEOUT_MS,
-          }
-        )
-      ).stdout.trim();
+      // Derived from the ONE snapshot instead of a shell loop that forks a pgrep
+      // per session — the shape that turned into a fork storm under load.
+      const byParent = this.childrenByParent();
+      const childLines = sessionPids.map((p) => `${p}:${(byParent.get(p) ?? []).join(',')}`).join('\n');
 
-      for (const line of pgrepOutput.split('\n')) {
+      for (const line of childLines.split('\n')) {
         const [pidStr, childrenStr] = line.split(':');
         const sessionPid = parseInt(pidStr, 10);
         if (!Number.isNaN(sessionPid)) {
