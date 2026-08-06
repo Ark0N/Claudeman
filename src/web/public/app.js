@@ -1923,6 +1923,37 @@ class CodemanApp {
     }
   }
 
+  /** Build one response-viewer message so the brief and full views share markup and CSS. */
+  _buildResponseViewerMessage(text, role, agentLabel) {
+    const div = document.createElement('div');
+    const isUser = role === 'user';
+    div.className = 'rv-message ' + (isUser ? 'rv-msg-user' : 'rv-msg-assistant');
+
+    const roleBadge = document.createElement('div');
+    roleBadge.className = 'rv-role ' + (isUser ? 'rv-role-user' : 'rv-role-assistant');
+    roleBadge.textContent = isUser ? 'You' : agentLabel;
+    div.appendChild(roleBadge);
+
+    const renderedText = document.createElement('div');
+    renderedText.className = 'rv-text';
+    renderedText.innerHTML = this._renderMarkdown(text);
+    div.appendChild(renderedText);
+    return div;
+  }
+
+  _getResponseViewerAgentLabel() {
+    const mode = this.sessions.get(this.activeSessionId)?.mode;
+    return mode === 'codex'
+      ? 'Codex'
+      : mode === 'gemini'
+        ? 'Gemini'
+        : mode === 'antigravity'
+          ? 'Antigravity'
+          : mode === 'opencode'
+            ? 'OpenCode'
+            : 'Claude';
+  }
+
   async toggleResponseViewer() {
     const viewer = document.getElementById('responseViewer');
     const backdrop = document.getElementById('responseViewerBackdrop');
@@ -1958,7 +1989,11 @@ class CodemanApp {
 
       const body = document.getElementById('responseViewerBody');
       if (lastResponse) {
-        body.innerHTML = this._renderMarkdown(lastResponse);
+        // Keep the brief view inside the same message wrapper as the full
+        // conversation view. The wrapper supplies the card, role badge and
+        // descendant markdown styles that direct body children do not get.
+        body.innerHTML = '';
+        body.appendChild(this._buildResponseViewerMessage(lastResponse, 'assistant', this._getResponseViewerAgentLabel()));
         this._bindResponseViewerInteractions(body);
       } else {
         body.textContent =
@@ -1998,26 +2033,10 @@ class CodemanApp {
       }
 
       // Render conversation thread
-      const mode = this.sessions.get(this.activeSessionId)?.mode;
-      const agentLabel =
-        mode === 'codex' ? 'Codex' : mode === 'gemini' ? 'Gemini' : mode === 'antigravity' ? 'Antigravity' : mode === 'opencode' ? 'OpenCode' : 'Claude';
+      const agentLabel = this._getResponseViewerAgentLabel();
       body.innerHTML = '';
       for (const msg of messages) {
-        const div = document.createElement('div');
-        const isUser = msg.role === 'user';
-        div.className = 'rv-message ' + (isUser ? 'rv-msg-user' : 'rv-msg-assistant');
-
-        const role = document.createElement('div');
-        role.className = 'rv-role ' + (isUser ? 'rv-role-user' : 'rv-role-assistant');
-        role.textContent = isUser ? 'You' : agentLabel;
-        div.appendChild(role);
-
-        const text = document.createElement('div');
-        text.className = 'rv-text';
-        text.innerHTML = this._renderMarkdown(msg.text);
-        div.appendChild(text);
-
-        body.appendChild(div);
+        body.appendChild(this._buildResponseViewerMessage(msg.text, msg.role, agentLabel));
       }
       this._bindResponseViewerInteractions(body);
 
