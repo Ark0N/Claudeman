@@ -208,6 +208,55 @@ describe('ws-routes', () => {
       }
     });
 
+    it('ACKs a delivered input and burns its seq', async () => {
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
+      try {
+        const session = ctx._session;
+        ws.send(JSON.stringify({ t: 'i', d: 'ok\r', cid: 'c1', seq: 1 }));
+
+        expect(await nextMessage(ws)).toEqual({ t: 'ia', seq: 1 });
+        expect(session.shouldApplyInput('c1', 1)).toBe(false);
+      } finally {
+        ws.close();
+      }
+    });
+
+    it('withholds the ACK and re-opens the seq when the write did not land', async () => {
+      // A session whose PTY is gone swallows the write. ACKing anyway told the
+      // client to drop the frame from its durable queue while the seq stayed
+      // burnt, so the retry that reliable delivery exists for was rejected as a
+      // duplicate — the input was lost for good.
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
+      try {
+        const session = ctx._session;
+        session.failWrites = true;
+
+        ws.send(JSON.stringify({ t: 'i', d: 'lost\r', cid: 'c1', seq: 1 }));
+
+        await expect(nextMessage(ws, 600)).rejects.toThrow(/timeout/);
+        expect(session.shouldApplyInput('c1', 1)).toBe(true);
+      } finally {
+        ws.close();
+      }
+    });
+
+    it('still ACKs a duplicate frame the server deliberately skipped', async () => {
+      // Dedup must stay silent-but-acknowledged: the client has to be able to
+      // drop a frame it already delivered once.
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
+      try {
+        const session = ctx._session;
+        session.shouldApplyInput('c1', 7); // pretend seq 7 already landed
+
+        ws.send(JSON.stringify({ t: 'i', d: 'again\r', cid: 'c1', seq: 7 }));
+
+        expect(await nextMessage(ws)).toEqual({ t: 'ia', seq: 7 });
+        expect(session.writeBuffer).not.toContain('again\r');
+      } finally {
+        ws.close();
+      }
+    });
+
     it('ignores input exceeding MAX_INPUT_LENGTH', async () => {
       const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
       try {

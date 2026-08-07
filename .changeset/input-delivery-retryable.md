@@ -14,8 +14,11 @@ been delivered.
 
 The bookkeeping is now rolled back on failure and the WebSocket ACK withheld, so
 the client redelivers. `Session.write()` reports whether it reached a PTY at all
-instead of silently swallowing the data, and the non-mux POST branch — whose
-response has not gone out yet — answers `OPERATION_FAILED` rather than a cheerful 200.
+instead of silently swallowing the data.
+
+Response codes are unchanged: a session can legitimately have no PTY yet (created
+but not started), so turning that into a failure status would be a contract change
+of its own.
 
 Note this does not remove the root cause: the POST still answers 200 before the
 mux write is attempted, so a client that treats any 2xx as final still cannot
