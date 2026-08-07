@@ -457,8 +457,7 @@ Object.assign(CodemanApp.prototype, {
           return;
         }
         this._noteTerminalUserScroll(lines);
-        this.terminal.scrollLines(lines);
-        this._maybeLoadMoreHistoryOnScroll(lines);
+        this._smoothScrollBy(lines);
       },
       { passive: false, capture: true }
     );
@@ -2075,6 +2074,40 @@ Object.assign(CodemanApp.prototype, {
   _maybeLoadMoreHistoryOnScroll(lines) {
     if (lines >= 0) return;
     if (this.terminal?.buffer?.active?.viewportY === 0) this._maybeRefetchFullHistory?.();
+  },
+
+  /**
+   * Ease-out smooth scrolling for the local wheel path. The capture-phase
+   * wheel handler owns local scrolling (xterm's own smooth scroller is
+   * bypassed, see the listener comment), so without this every notch was an
+   * instant multi-line jump. Wheel deltas accumulate into a pending line
+   * count and drain ~35% per animation frame (minimum one line, so it always
+   * terminates); more notches mid-glide just deepen the pending count, which
+   * reads as natural acceleration. Direction reversals cancel arithmetically.
+   * The pending amount is dropped when the active session changes mid-glide —
+   * leftover momentum must never scroll the tab the user just switched to.
+   */
+  _smoothScrollBy(lines) {
+    if (!lines) return;
+    this._smoothScrollPending = (this._smoothScrollPending || 0) + lines;
+    this._smoothScrollSession = this.activeSessionId;
+    if (this._smoothScrollFrame) return;
+    const step = () => {
+      this._smoothScrollFrame = null;
+      const pending = this._smoothScrollPending || 0;
+      if (!pending) return;
+      if (this.activeSessionId !== this._smoothScrollSession) {
+        this._smoothScrollPending = 0;
+        return;
+      }
+      const move =
+        pending > 0 ? Math.max(1, Math.floor(pending * 0.35)) : Math.min(-1, Math.ceil(pending * 0.35));
+      this._smoothScrollPending = pending - move;
+      this.terminal.scrollLines(move);
+      this._maybeLoadMoreHistoryOnScroll(move);
+      if (this._smoothScrollPending) this._smoothScrollFrame = requestAnimationFrame(step);
+    };
+    this._smoothScrollFrame = requestAnimationFrame(step);
   },
 
   /**
