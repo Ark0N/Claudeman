@@ -415,15 +415,21 @@ Object.assign(CodemanApp.prototype, {
     // ignores wheel reports); older versions DO capture wheel as option
     // navigation, so they keep the local wheel.
     // Shift+wheel always scrolls xterm's local scrollback (Codeman's restored
-    // history lives there), and once the viewport left the bottom the wheel
-    // stays local until the user scrolls back down — so both scrollbacks stay
-    // reachable without a mode switch.
+    // history lives there); the plain wheel stays on the CLI's transcript for
+    // those modes regardless of scroll position, so the CLI's input box never
+    // slides off the screen (see _shouldForwardWheelToApp).
     container.addEventListener(
       'wheel',
       (ev) => {
         ev.preventDefault();
         const lines = this._wheelScrollLines(ev);
         if (this._shouldForwardWheelToApp(ev)) {
+          // SGR coordinates address the LIVE screen (the bottom `rows` of the
+          // buffer), so a report computed from a scrolled-up viewport would
+          // hit-test a different row entirely — and forwarding while the user
+          // stares at stale scrollback looks like the wheel is dead. Snap back
+          // first: the wheel then always acts on what the CLI is drawing now.
+          if (!this._terminalViewportAtBottom()) this.terminal.scrollToBottom();
           this._sendSyntheticSgrWheel(ev.clientX, ev.clientY, lines);
           return;
         }
@@ -2868,7 +2874,23 @@ Object.assign(CodemanApp.prototype, {
     } else if (sessionMode !== 'codex') {
       return false;
     }
-    return this._terminalViewportAtBottom();
+    // Deliberately NOT gated on _terminalViewportAtBottom(). It used to be, so
+    // that leaving the bottom handed the wheel back to local scrollback and both
+    // histories stayed reachable without a mode switch. In practice that inverted
+    // the behavior users actually want: a repaint-mode CLI keeps NO terminal
+    // scrollback of its own (tmux reports history_size=0 for a Claude pane), so
+    // xterm's buffer holds only Codeman's REPLAYED repaint frames. Scrolling that
+    // locally drags the CLI's own pinned furniture (the prompt box, the status
+    // line) up the screen and shows stale frames underneath, which reads as "the
+    // window scrolled away" rather than "I am reading history".
+    //
+    // And it was easy to fall into: scrollToLastNonEmptyLine() parks the viewport
+    // `rows - 2` above the last non-empty row, so any tab switch onto a session
+    // with trailing blank rows left the viewport off-bottom and every later wheel
+    // went local. Forwarding unconditionally keeps the CLI's transcript as the
+    // plain wheel's target and its input box fixed in place; local scrollback is
+    // still on Shift+wheel and on the "Wheel scrolls local history" opt-out above.
+    return true;
   },
 
   // Encode wheel ticks as SGR reports (button 64 = up, 65 = down) at the pointer
