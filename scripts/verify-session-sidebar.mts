@@ -22,13 +22,19 @@ process.env.HOME = mkdtempSync(join(tmpdir(), 'codeman-sidebar-verify-'));
 process.env.VITEST = 'true';
 
 const PORT = 3299;
-const OUT = '/tmp/claude-1000/-home-chaberl-codeman-cases-codeman/d9cb817e-4c9f-4ca9-a976-cd468f0c5270/scratchpad/shots';
+const OUT = process.env.SIDEBAR_SHOTS_DIR ?? join(tmpdir(), 'codeman-sidebar-shots');
 mkdirSync(OUT, { recursive: true });
 
 const PROJECTS = [
-  ['iurix-backend', 'claude'], ['iurix-webapp', 'claude'], ['iurix-mobile', 'codex'],
-  ['iurix-data', 'claude'], ['iurix-skills', 'gemini'], ['codeman', 'claude'],
-  ['haberl-webapps', 'claude'], ['iurix-output', 'opencode'], ['ris-findok', 'claude'],
+  ['iurix-backend', 'claude'],
+  ['iurix-webapp', 'claude'],
+  ['iurix-mobile', 'codex'],
+  ['iurix-data', 'claude'],
+  ['iurix-skills', 'gemini'],
+  ['codeman', 'claude'],
+  ['haberl-webapps', 'claude'],
+  ['iurix-output', 'opencode'],
+  ['ris-findok', 'claude'],
 ];
 const STATUSES = ['idle', 'busy', 'idle', 'busy', 'error', 'idle'];
 
@@ -41,7 +47,7 @@ function fleet(n: number) {
       id: `sess-${String(i).padStart(4, '0')}-aaaa-bbbb-cccc-dddddddddddd`,
       pid: 10000 + i,
       status,
-      workingDir: `/home/chaberl/projects/${proj}`,
+      workingDir: `${tmpdir()}/projects/${proj}`,
       name: `${proj}${i > 8 ? '-' + Math.floor(i / 9) : ''}`,
       mode,
       currentTaskId: null,
@@ -49,7 +55,9 @@ function fleet(n: number) {
       lastActivityAt: Date.now() - i * 1000,
       isWorking: status === 'busy',
       messageCount: i * 3,
-      totalCost: 0, inputTokens: 0, outputTokens: 0,
+      totalCost: 0,
+      inputTokens: 0,
+      outputTokens: 0,
       color: 'default',
       taskStats: { total: i % 4, running: i % 3 === 0 ? 2 : 0, completed: 0, failed: 0 },
       taskTree: [],
@@ -70,7 +78,7 @@ async function main() {
 
   async function shot(
     name: string,
-    opts: { layout: 'header' | 'sidebar'; collapsed?: boolean; width: number; height: number; touch?: boolean },
+    opts: { layout: 'header' | 'sidebar'; collapsed?: boolean; width: number; height: number; touch?: boolean }
   ) {
     const ctx = await browser.newContext({
       viewport: { width: opts.width, height: opts.height },
@@ -88,7 +96,7 @@ async function main() {
         if (c !== null) localStorage.setItem('codeman-sidebar-collapsed', c as string);
         else localStorage.removeItem('codeman-sidebar-collapsed');
       },
-      [settings, collapsed],
+      [settings, collapsed]
     );
     await page.goto(`http://localhost:${PORT}`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(1500);
@@ -123,7 +131,11 @@ async function main() {
         asideInert: aside?.hasAttribute('inert') ?? null,
         ariaHidden: aside?.getAttribute('aria-hidden') ?? null,
         toggleAriaExpanded: document.getElementById('sidebarToggleBtn')?.getAttribute('aria-expanded') ?? null,
-        firstRowText: (document.querySelector('.session-tab') as HTMLElement | null)?.innerText?.trim().replace(/\s+/g, ' ').slice(0, 40) ?? null,
+        firstRowText:
+          (document.querySelector('.session-tab') as HTMLElement | null)?.innerText
+            ?.trim()
+            .replace(/\s+/g, ' ')
+            .slice(0, 40) ?? null,
         listScrollable: (() => {
           const el = document.getElementById('sessionTabs');
           return el ? el.scrollHeight > el.clientHeight + 2 : null;
@@ -160,5 +172,5 @@ main().then(
   (e) => {
     console.error(e);
     process.exit(1);
-  },
+  }
 );
