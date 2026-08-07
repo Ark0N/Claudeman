@@ -418,10 +418,39 @@ Object.assign(CodemanApp.prototype, {
     // history lives there); the plain wheel stays on the CLI's transcript for
     // those modes regardless of scroll position, so the CLI's input box never
     // slides off the screen (see _shouldForwardWheelToApp).
+    //
+    // CAPTURE phase, deliberately, and Codeman owns the scroll. xterm's
+    // viewport is a vscode-style ScrollableElement that consumes wheel events
+    // itself (preventDefault + stopPropagation) whenever it believes a
+    // scrollbar exists, does NOT consult attachCustomWheelEventHandler, and —
+    // measured on the live instance — goes DEAF after terminal.reset(): a tab
+    // switch or full-history replay leaves its scroll dimensions stale, after
+    // which wheel events neither scroll nor propagate reliably. A bubble-phase
+    // listener here therefore never fired once local scrollback existed
+    // (measured: _shouldForwardWheelToApp call count stayed 0 while xterm
+    // scrolled), and after a tab switch NOTHING scrolled at all — the "input
+    // box scrolls up then it fights", "works at first, breaks after a tab
+    // switch" reports on #205.
+    //
+    // So: capture runs ancestors-first; this handler sees every wheel first
+    // and stops propagation, keeping xterm's scroller out of it entirely.
+    // Local scrolling goes through terminal.scrollLines() — buffer-level, so
+    // it keeps working after resets — with our own deltaMode normalization
+    // (_wheelScrollLines) covering Firefox's line-unit wheels. Two cases still
+    // belong to xterm and are passed through untouched:
+    //  - mouseTrackingMode active: xterm's own encoder forwards the wheel to
+    //    the PTY (htop/vim with mouse on in a shell pane);
+    //  - alternate buffer (direct-PTY fallback running vim/less): xterm's
+    //    alt-scroll handling converts the wheel to cursor keys, which is what
+    //    those apps expect.
     container.addEventListener(
       'wheel',
       (ev) => {
+        const trackingMode = this.terminal?.modes?.mouseTrackingMode;
+        if (trackingMode && trackingMode !== 'none') return;
+        if (this.terminal?.buffer?.active?.type === 'alternate') return;
         ev.preventDefault();
+        ev.stopPropagation();
         const lines = this._wheelScrollLines(ev);
         if (this._shouldForwardWheelToApp(ev)) {
           this._forwardScrollToApp(ev.clientX, ev.clientY, lines);
@@ -431,7 +460,7 @@ Object.assign(CodemanApp.prototype, {
         this.terminal.scrollLines(lines);
         this._maybeLoadMoreHistoryOnScroll(lines);
       },
-      { passive: false }
+      { passive: false, capture: true }
     );
 
     // Touch scrolling — use terminal.scrollLines() for all devices.
