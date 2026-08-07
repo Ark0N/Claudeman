@@ -424,13 +424,7 @@ Object.assign(CodemanApp.prototype, {
         ev.preventDefault();
         const lines = this._wheelScrollLines(ev);
         if (this._shouldForwardWheelToApp(ev)) {
-          // SGR coordinates address the LIVE screen (the bottom `rows` of the
-          // buffer), so a report computed from a scrolled-up viewport would
-          // hit-test a different row entirely — and forwarding while the user
-          // stares at stale scrollback looks like the wheel is dead. Snap back
-          // first: the wheel then always acts on what the CLI is drawing now.
-          if (!this._terminalViewportAtBottom()) this.terminal.scrollToBottom();
-          this._sendSyntheticSgrWheel(ev.clientX, ev.clientY, lines);
+          this._forwardScrollToApp(ev.clientX, ev.clientY, lines);
           return;
         }
         this._noteTerminalUserScroll(lines);
@@ -444,9 +438,17 @@ Object.assign(CodemanApp.prototype, {
     // xterm.js DOM renderer doesn't populate xterm-viewport's scroll area,
     // so native CSS scrolling (overflow-y: scroll + touch-action: pan-y)
     // has nothing to scroll. Instead, convert touch deltas into scrollLines()
-    // calls, matching the wheel handler above.
+    // calls, matching the wheel handler above, including the forwarding
+    // branch: for the sessions whose wheel goes to the CLI's own transcript
+    // (_shouldForwardWheelToApp), a touch drag must go there too, or every
+    // phone/tablet swipe scrolls the local buffer of stale repaint frames and
+    // drags the CLI's pinned input box off the screen (issue #205's mobile
+    // half). Same gate, so Shift has no touch analog but the local-scrollback
+    // opt-out setting and the CLI-version gate apply to touch exactly as they
+    // do to the wheel.
     {
       const cellHeight = () => this.terminal._core?._renderService?.dimensions?.css?.cell?.height || 13;
+      let touchLastX = 0;
       let touchLastY = 0;
       let velocity = 0;
       let lastTime = 0;
@@ -461,8 +463,14 @@ Object.assign(CodemanApp.prototype, {
           // Momentum phase — convert pixel velocity to lines
           const lines = Math.round(velocity / cellHeight());
           if (lines !== 0) {
-            this.terminal.scrollLines(lines);
-            this._maybeLoadMoreHistoryOnScroll(lines);
+            if (this._shouldForwardWheelToApp({ shiftKey: false })) {
+              // Flick momentum keeps feeding the CLI's transcript from the last
+              // touch point; the 40ms coalescer batches the per-frame reports.
+              this._forwardScrollToApp(touchLastX, touchLastY, lines);
+            } else {
+              this.terminal.scrollLines(lines);
+              this._maybeLoadMoreHistoryOnScroll(lines);
+            }
           }
           velocity *= 0.92;
           scrollFrame = requestAnimationFrame(scrollLoop);
@@ -484,6 +492,7 @@ Object.assign(CodemanApp.prototype, {
         'touchstart',
         (ev) => {
           if (ev.touches.length === 1) {
+            touchLastX = ev.touches[0].clientX;
             touchLastY = ev.touches[0].clientY;
             touchStartY = touchLastY;
             velocity = 0;
@@ -519,14 +528,19 @@ Object.assign(CodemanApp.prototype, {
             const delta = touchLastY - touchY; // positive = scroll down
             pixelAccum += delta;
             velocity = delta * 1.2;
+            touchLastX = ev.touches[0].clientX;
             touchLastY = touchY;
             // Convert accumulated pixels to whole lines
             const ch = cellHeight();
             const lines = Math.trunc(pixelAccum / ch);
             if (lines !== 0) {
-              this._noteTerminalUserScroll(lines);
-              this.terminal.scrollLines(lines);
-              this._maybeLoadMoreHistoryOnScroll(lines);
+              if (this._shouldForwardWheelToApp({ shiftKey: false })) {
+                this._forwardScrollToApp(touchLastX, touchLastY, lines);
+              } else {
+                this._noteTerminalUserScroll(lines);
+                this.terminal.scrollLines(lines);
+                this._maybeLoadMoreHistoryOnScroll(lines);
+              }
               pixelAccum -= lines * ch;
             }
           }
@@ -2032,6 +2046,20 @@ Object.assign(CodemanApp.prototype, {
   _maybeLoadMoreHistoryOnScroll(lines) {
     if (lines >= 0) return;
     if (this.terminal?.buffer?.active?.viewportY === 0) this._maybeRefetchFullHistory?.();
+  },
+
+  /**
+   * Hand a scroll gesture (wheel tick or touch drag, already converted to
+   * lines) to the CLI as synthetic SGR wheel reports. SGR coordinates address
+   * the LIVE screen (the bottom `rows` of the buffer), so a report computed
+   * from a scrolled-up viewport would hit-test a different row entirely, and
+   * forwarding while the user stares at stale scrollback looks like the
+   * gesture is dead. Snap back first: the gesture then always acts on what the
+   * CLI is drawing now.
+   */
+  _forwardScrollToApp(clientX, clientY, lines) {
+    if (!this._terminalViewportAtBottom()) this.terminal.scrollToBottom();
+    this._sendSyntheticSgrWheel(clientX, clientY, lines);
   },
 
   _hasRecentUserScrollUp() {

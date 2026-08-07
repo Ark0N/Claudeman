@@ -462,6 +462,39 @@ describe('terminal touch tap mouse guard', () => {
     expect(sent).toHaveLength(1);
   });
 
+  it('forwarded scrolls (wheel AND touch) snap the viewport home first, then encode SGR ticks', () => {
+    const { app } = loadTerminalUiHarness();
+    const sent: Array<{ id: string; data: string }> = [];
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app._sendInputEphemeral = (id: string, data: string) => sent.push({ id, data });
+    const scrolledToBottom: boolean[] = [];
+    app.terminal = {
+      cols: 80,
+      rows: 24,
+      // Scrolled up into local scrollback: SGR coordinates address the LIVE
+      // screen, so the report would hit-test the wrong row without the snap.
+      buffer: { active: { viewportY: 10, baseY: 50 } },
+      scrollToBottom: () => scrolledToBottom.push(true),
+      element: {
+        querySelector: () => ({ getBoundingClientRect: () => ({ left: 0, top: 0 }) }),
+      },
+      _core: { _renderService: { dimensions: { css: { cell: { width: 8, height: 16 } } } } },
+    };
+
+    app._forwardScrollToApp(50, 50, -3);
+    expect(scrolledToBottom).toEqual([true]);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[<64;7;4M'.repeat(3) }]);
+
+    // Already at the bottom: no snap, just the report.
+    app.terminal.buffer.active.viewportY = 50;
+    app._forwardScrollToApp(50, 50, 2);
+    expect(scrolledToBottom).toHaveLength(1);
+    app._flushWheelSgrQueue();
+    expect(sent).toHaveLength(2);
+  });
+
   it('allows trusted mouse events after the tap window expires', () => {
     const { app, setNow } = loadTerminalUiHarness();
     const { element, dispatch } = createElementHarness();
