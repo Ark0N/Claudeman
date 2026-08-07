@@ -1,5 +1,20 @@
 # aicodeman
 
+## 1.12.0
+
+### Minor Changes
+
+- Terminal scrollback overhaul (issue #205), fixing every reported scroll failure across shell and CLI sessions, desktop and mobile:
+  - Shell, OpenCode and Antigravity sessions finally have working scrollback: tmux's own client-side alternate-screen switch is stripped for tmux-backed sessions (narrow strip: alt-screen toggles only, keeping `clear`'s 3J and mouse DECSETs), so xterm stays in the normal buffer instead of a scrollback-less alt buffer where the wheel turned into shell history cycling and touch scrolling did nothing. Direct-PTY fallback sessions are untouched so fullscreen apps (vim/less/htop) keep the alt screen there.
+  - The wheel listener now runs in capture phase and owns the scroll: xterm's internal vscode-style viewport scroller consumed wheel events whenever local scrollback existed (and goes deaf entirely after a tab switch or replay resets the terminal), which silently killed wheel forwarding, made scrolling break after reload/tab switches, and let the CLI's input box scroll away. Local scrolling goes through buffer-level scrollLines and keeps working after resets; mouse-tracking apps and alternate-buffer sessions are passed through untouched.
+  - Wheel AND touch scrolling now forward to the CLI's own transcript for Codex and Claude 2.1.187+, at any scroll position (the viewport snaps home first), so the input box stays pinned on desktop and phones alike. Shift+wheel and the "Wheel scrolls local history" setting still pin local scrollback.
+  - Smooth scrolling: local wheel scrolling glides with an ease-out animation (fractional line accumulation, so slow trackpad drags track the finger instead of running ahead).
+  - Full tmux history on demand: the full-scrollback replay is now per session instead of once per page load, and scrolling up at the top of the buffer re-pulls the complete tmux history, recovering everything tmux's repaint bursts or tab switches removed from the browser's copy.
+  - Firefox wheel speed: wheel deltas are normalized by deltaMode (Firefox reports line units, previously read as pixels and slowed ~4x).
+  - Remote SSH Claude sessions now probe the CLI version over ssh (same connection options and login-shell wrapper as the real launch), so wheel forwarding works for them too instead of silently staying off.
+
+  Docs: scrollback analysis and fix plan recorded in docs/, architecture invariants updated (strip flavors, capture-phase wheel ownership, per-session full-history replay); docker agent-image rebuild warning and integration-guide link fixes from the preceding docs commits.
+
 ## 1.11.2
 
 ### Patch Changes
