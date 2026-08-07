@@ -23,6 +23,27 @@
   // short window, only the app's synthetic tap-to-position mouse event should
   // reach xterm.
   const TOUCH_COMPAT_MOUSE_SUPPRESS_MS = 450;
+  // Escape sequences occupy no terminal cells, so they must come out before a
+  // captured line's WIDTH can be measured (_estimateReplayRows). Covers OSC,
+  // CSI, charset designators and the short escapes tmux emits; deliberately
+  // approximate — this feeds a size comparison, not a renderer.
+  // eslint-disable-next-line no-control-regex
+  const REPLAY_ESCAPE_RE =
+    /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?<>=!]*[ -/]*[@-~]|\x1b[()#][0-9A-Za-z]|\x1b[=>78M]/g;
+  // PageUp / PageDown as xterm.js encodes them. Used as the LAST-RESORT scroll
+  // gesture for a repaint-mode CLI whose local buffer holds no scrollback
+  // (_maybePageCliTranscript).
+  const KEY_PAGE_UP = '\x1b[5~';
+  const KEY_PAGE_DOWN = '\x1b[6~';
+  // Wheel/touch travel (in lines) that adds up to one PageUp/PageDown. Half a
+  // screen rather than a full one: the page key always jumps a whole screen, so
+  // a 1:1 mapping made the fallback feel unreachably slow with a discrete mouse
+  // wheel (Firefox reports 3 lines a notch → 12 notches per page). Overshooting
+  // the finger is the right trade against a gesture that otherwise does nothing.
+  const PAGE_KEY_SCREEN_FRACTION = 0.5;
+  // Bound on page keys emitted from one gesture batch, mirroring the SGR tick
+  // cap: a fling must not build a backlog that keeps paging after it stops.
+  const PAGE_KEY_MAX_PER_BATCH = 3;
 
   function isTerminalQueryResponse(data) {
     return TERMINAL_QUERY_RESPONSE_PATTERN.test(data) || TERMINAL_OSC_RESPONSE_PATTERN.test(data);
@@ -62,6 +83,11 @@
     shouldSuppressTerminalQueryResponse,
     USER_SCROLL_STICKY_SUPPRESS_MS,
     TOUCH_COMPAT_MOUSE_SUPPRESS_MS,
+    REPLAY_ESCAPE_RE,
+    KEY_PAGE_UP,
+    KEY_PAGE_DOWN,
+    PAGE_KEY_SCREEN_FRACTION,
+    PAGE_KEY_MAX_PER_BATCH,
   };
   global.CODEMAN_XTERM_THEMES = CODEMAN_XTERM_THEMES;
   global.codemanCurrentXtermTheme = currentXtermTheme;
@@ -452,6 +478,7 @@ Object.assign(CodemanApp.prototype, {
         ev.preventDefault();
         ev.stopPropagation();
         if (this._shouldForwardWheelToApp(ev)) {
+          this._logScrollRouting('forward-sgr');
           this._forwardScrollToApp(ev.clientX, ev.clientY, this._wheelScrollLines(ev));
           return;
         }
@@ -459,6 +486,10 @@ Object.assign(CodemanApp.prototype, {
         // a stream of tiny pixel deltas, and rounding each one to a whole line
         // (the ±1 fallback) made slow drags scroll faster than the finger.
         const lines = this._wheelScrollLinesFloat(ev);
+        // …unless there is no local scrollback to scroll, in which case page the
+        // CLI's own transcript instead of doing nothing (_maybePageCliTranscript).
+        if (this._maybePageCliTranscript(ev, lines)) return;
+        this._logScrollRouting('local-scrollback');
         this._noteTerminalUserScroll(lines);
         this._smoothScrollBy(lines);
       },
@@ -476,7 +507,10 @@ Object.assign(CodemanApp.prototype, {
     // drags the CLI's pinned input box off the screen (issue #205's mobile
     // half). Same gate, so Shift has no touch analog but the local-scrollback
     // opt-out setting and the CLI-version gate apply to touch exactly as they
-    // do to the wheel.
+    // do to the wheel — including the PageUp/PageDown fallback the wheel uses
+    // when that gate is false and there is no local scrollback to scroll
+    // (_maybePageCliTranscript), which is what keeps a swipe from being a
+    // complete no-op on a phone.
     {
       const cellHeight = () => this.terminal._core?._renderService?.dimensions?.css?.cell?.height || 13;
       let touchLastX = 0;
@@ -498,7 +532,7 @@ Object.assign(CodemanApp.prototype, {
               // Flick momentum keeps feeding the CLI's transcript from the last
               // touch point; the 40ms coalescer batches the per-frame reports.
               this._forwardScrollToApp(touchLastX, touchLastY, lines);
-            } else {
+            } else if (!this._maybePageCliTranscript({ shiftKey: false }, lines)) {
               this.terminal.scrollLines(lines);
               this._maybeLoadMoreHistoryOnScroll(lines);
             }
@@ -566,8 +600,10 @@ Object.assign(CodemanApp.prototype, {
             const lines = Math.trunc(pixelAccum / ch);
             if (lines !== 0) {
               if (this._shouldForwardWheelToApp({ shiftKey: false })) {
+                this._logScrollRouting('forward-sgr');
                 this._forwardScrollToApp(touchLastX, touchLastY, lines);
-              } else {
+              } else if (!this._maybePageCliTranscript({ shiftKey: false }, lines)) {
+                this._logScrollRouting('local-scrollback');
                 this._noteTerminalUserScroll(lines);
                 this.terminal.scrollLines(lines);
                 this._maybeLoadMoreHistoryOnScroll(lines);
@@ -2080,6 +2116,54 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
+   * Rows a `?full=1` capture will occupy once written into xterm.
+   *
+   * tmux joins wrapped rows in that capture (`capture-pane -J`), so a long
+   * logical line re-wraps into several xterm rows on write and a bare newline
+   * count would undershoot; escape sequences occupy no cells and come out
+   * first. Approximate by construction (it ignores double-width glyphs), which
+   * is fine: the only consumer is a coarse size comparison
+   * (_replayWouldShrinkBuffer), and it runs once per cooldown-guarded re-pull.
+   */
+  _estimateReplayRows(text, cols) {
+    if (typeof text !== 'string' || !text) return 0;
+    const width = cols > 0 ? cols : 80;
+    const plain = text.replace(window.CodemanTerminalInput.REPLAY_ESCAPE_RE, '');
+    let rows = 0;
+    for (const line of plain.split('\n')) {
+      const cells = line.endsWith('\r') ? line.length - 1 : line.length;
+      rows += cells > width ? Math.ceil(cells / width) : 1;
+    }
+    return rows;
+  },
+
+  /**
+   * DOWNGRADE GUARD for the scroll-to-top re-pull (issue #205, round 2).
+   *
+   * `_maybeRefetchFullHistory` resets the terminal and rewrites it from the
+   * capture, which is a straight win when tmux holds more than the browser —
+   * the burst-repaint and tab-switch losses it was built for. But a repaint-mode
+   * CLI pane keeps NO tmux history of its own (`history_size≈0` measured for a
+   * Claude pane), so there the capture is roughly ONE frame while xterm may hold
+   * hundreds of rows of replayed frames. Rewriting then DESTROYS history
+   * mid-scroll: exactly the "goes back a limited amount, repeats blocks, gets
+   * worse when I reach the top" report from the 1.12.0 retest.
+   *
+   * So refuse when the capture is smaller, with a one-screen tolerance because
+   * both sides are estimates: `buffer.active.length` includes the blank rows
+   * below the last line, and _estimateReplayRows can only approximate wrapping.
+   * Only a capture that is worse by more than a full screen counts as a
+   * downgrade, which leaves every genuine recovery case untouched.
+   */
+  _replayWouldShrinkBuffer(capture) {
+    const term = this.terminal;
+    const rowsNow = term?.buffer?.active?.length || 0;
+    if (!rowsNow) return false;
+    const screen = term?.rows || 24;
+    return this._estimateReplayRows(capture, term?.cols) + screen < rowsNow;
+  },
+
+  /**
    * Ease-out smooth scrolling for the local wheel path. The capture-phase
    * wheel handler owns local scrolling (xterm's own smooth scroller is
    * bypassed, see the listener comment), so without this every notch was an
@@ -2969,6 +3053,16 @@ Object.assign(CodemanApp.prototype, {
     // plain wheel to xterm's own scrollback like pre-#144, for users who prefer
     // it over forwarding the wheel to the CLI's transcript (issue #154). Cheap —
     // loadAppSettingsFromStorage() is cache-backed.
+    //
+    // FOOTGUN, and why it is handled downstream rather than here: for a
+    // repaint-mode CLI that local scrollback is EMPTY (tmux keeps no history for
+    // the pane), so this setting can silently convert a working wheel into a
+    // dead one — a plausible reading of the #205 retest, where a user whose
+    // scrolling was broken on 1.11.x may well have flipped it while hunting for
+    // a fix. Scoping the setting away from those modes would be the other
+    // option, but it would override an explicit user choice; instead the caller
+    // falls through to _maybePageCliTranscript, so the gesture still pages the
+    // CLI's transcript and the setting keeps meaning exactly what it says.
     if (this.loadAppSettingsFromStorage?.()?.terminalWheelLocalScrollback) return false;
     const mode = this.terminal?.modes?.mouseTrackingMode;
     if (mode && mode !== 'none') return false;
@@ -3012,11 +3106,103 @@ Object.assign(CodemanApp.prototype, {
     if (!pos) return;
     const btn = lines < 0 ? 64 : 65;
     const ticks = Math.min(Math.abs(lines), 5);
+    this._queueScrollBytes(`\x1b[<${btn};${pos.col};${pos.row}M`.repeat(ticks));
+  },
+
+  /**
+   * Shared 40ms coalescer for every byte a scroll gesture sends to the PTY (SGR
+   * wheel reports and the PageUp/PageDown fallback alike). Each flush becomes a
+   * tmux send-keys server-side, so per-event writes would spawn a process storm
+   * on a single flick; the queue is bounded so a wild scroll can't build a
+   * backlog that keeps scrolling after the finger stops.
+   */
+  _queueScrollBytes(data) {
+    if (!data || !this.activeSessionId) return;
     const queued = this._wheelSgrQueue || '';
     if (queued.length > 512) return;
-    this._wheelSgrQueue = queued + `\x1b[<${btn};${pos.col};${pos.row}M`.repeat(ticks);
+    this._wheelSgrQueue = queued + data;
     if (this._wheelSgrFlushTimer) return;
     this._wheelSgrFlushTimer = setTimeout(() => this._flushWheelSgrQueue(), 40);
+  },
+
+  /**
+   * True when this session's LOCAL scrollback is structurally empty: a Claude
+   * pane in repaint mode, where tmux reports `history_size≈0` and every frame
+   * overwrites the last, so xterm's normal buffer never grows past one screen
+   * (`baseY === 0`). Scrolling that buffer is a no-op no matter how the gesture
+   * is routed — the "wheel does nothing at all" half of the #205 retest.
+   */
+  _localScrollbackIsHollow() {
+    const mode = this.sessions?.get(this.activeSessionId)?.mode || 'claude';
+    if (mode !== 'claude') return false;
+    const buf = this.terminal?.buffer?.active;
+    if (!buf || buf.type === 'alternate') return false;
+    return (buf.baseY || 0) === 0;
+  },
+
+  /**
+   * LAST-RESORT scroll for a hollow local buffer: translate gesture lines into
+   * coalesced PageUp/PageDown key sends so the CLI pages its OWN transcript.
+   *
+   * The rescue path for every way `_shouldForwardWheelToApp` can come back false
+   * on a Claude session that has no local history to fall back on: the CLI
+   * version probe failed or is genuinely older than 2.1.187, or the user turned
+   * on "Wheel scrolls local history" (which pins the wheel to a buffer that,
+   * for a repaint-mode CLI, is empty — the setting's footgun). Before this, all
+   * of those produced a completely dead gesture; the #205 reporter proved the
+   * keyboard route works by paging back through intact text with Fn+Up.
+   *
+   * Triple-guarded (claude mode + gate false + `baseY === 0`), so a session with
+   * real local scrollback is never touched. Shift is excluded on purpose: it is
+   * the explicit "give me local scrollback" gesture and must keep that meaning.
+   *
+   * @returns true when the gesture was consumed here (the caller must not also
+   *          scroll locally).
+   */
+  _maybePageCliTranscript(ev, lines) {
+    if (!lines || ev?.shiftKey || !this.activeSessionId) return false;
+    if (!this._localScrollbackIsHollow()) return false;
+    // Leftover travel belongs to the tab it was made on.
+    if (this._pageKeySession !== this.activeSessionId) {
+      this._pageKeySession = this.activeSessionId;
+      this._pageKeyPending = 0;
+    }
+    const tuning = window.CodemanTerminalInput;
+    const perPage = Math.max(2, Math.round((this.terminal?.rows || 24) * tuning.PAGE_KEY_SCREEN_FRACTION));
+    const pending = (this._pageKeyPending || 0) + lines;
+    const pages = Math.trunc(pending / perPage);
+    this._pageKeyPending = pending - pages * perPage;
+    if (pages) {
+      const key = pages < 0 ? tuning.KEY_PAGE_UP : tuning.KEY_PAGE_DOWN;
+      this._queueScrollBytes(key.repeat(Math.min(Math.abs(pages), tuning.PAGE_KEY_MAX_PER_BATCH)));
+    }
+    this._logScrollRouting('page-keys');
+    return true;
+  },
+
+  /**
+   * One line in the console saying WHY a scroll gesture went where it went.
+   *
+   * Issue #205 ran two rounds of remote guesswork — is the CLI version probe
+   * empty, is the opt-out setting on, did a mouse DECSET leak past the strip? —
+   * that this single log answers directly. Logged once per session per distinct
+   * decision, so a steady gesture stays silent and a CHANGE (e.g. the version
+   * arriving late and flipping the route) still prints.
+   */
+  _logScrollRouting(decision) {
+    const sessionId = this.activeSessionId || '(none)';
+    const session = this.sessions?.get(sessionId);
+    const optOut = !!this.loadAppSettingsFromStorage?.()?.terminalWheelLocalScrollback;
+    const tracking = this.terminal?.modes?.mouseTrackingMode || 'none';
+    const baseY = this.terminal?.buffer?.active?.baseY ?? -1;
+    const signature = `${decision}|${session?.mode}|${session?.cliVersion}|${optOut}|${tracking}|${baseY > 0}`;
+    if (!this._scrollRoutingLogged) this._scrollRoutingLogged = new Map();
+    if (this._scrollRoutingLogged.get(sessionId) === signature) return;
+    this._scrollRoutingLogged.set(sessionId, signature);
+    console.log(
+      `[scroll] ${sessionId} → ${decision} (mode=${session?.mode || '?'}, cliVersion=${session?.cliVersion || 'unknown'}, ` +
+        `localScrollbackOptOut=${optOut}, mouseTracking=${tracking}, localScrollbackRows=${baseY})`
+    );
   },
 
   _flushWheelSgrQueue() {

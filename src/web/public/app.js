@@ -519,6 +519,10 @@ class CodemanApp {
     // Cooldown per session for the scroll-to-top "load more history" re-pull.
     this._fullHistoryRepullAt = new Map(); // Map<sessionId, timestamp>
     this._fullHistoryRepullInFlight = false;
+    // Sessions whose last re-pull came back THINNER than the live buffer (a
+    // repaint-mode CLI pane, where tmux keeps no history of its own). The pull is
+    // refused for those and retried far more slowly — see _maybeRefetchFullHistory.
+    this._fullHistoryRepullUseless = new Set();
     this.terminalLoadStates = new Map(); // Map<sessionId, { generation, phase }>
     this.respawnStatus = {};
     this.respawnTimers = {}; // Track timed respawn timers
@@ -4121,6 +4125,13 @@ class CodemanApp {
    * On demand rather than automatic because that capture is unbounded-ish work: at
    * the default history limit it can be megabytes, which is fine to pay when the
    * user is explicitly reaching for history and not fine on every tab switch.
+   *
+   * NEVER a downgrade: for a repaint-mode CLI pane tmux keeps no history of its
+   * own, so the capture can be THINNER than what xterm already holds and the
+   * reset+rewrite below would delete history mid-scroll. `_replayWouldShrinkBuffer`
+   * (terminal-ui.js) is the guard, and a session that produced one useless re-pull
+   * gets a much longer cooldown so a hollow pane stops re-fetching megabytes on
+   * every scroll-up (issue #205, round 2).
    */
   async _maybeRefetchFullHistory() {
     const sessionId = this.activeSessionId;
@@ -4129,7 +4140,8 @@ class CodemanApp {
     const now = Date.now();
     // Momentum scrolling fires this dozens of times per flick, and a burst of new
     // output is the normal reason to want a re-pull, so cooldown rather than latch.
-    if (now - (this._fullHistoryRepullAt.get(sessionId) || 0) < 4000) return;
+    const cooldown = this._fullHistoryRepullUseless?.has(sessionId) ? 60000 : 4000;
+    if (now - (this._fullHistoryRepullAt.get(sessionId) || 0) < cooldown) return;
     this._fullHistoryRepullAt.set(sessionId, now);
     this._fullHistoryRepullInFlight = true;
     try {
@@ -4138,6 +4150,12 @@ class CodemanApp {
       // Bail on a tab switch mid-fetch: writing here would paint another session's
       // history into the terminal the user is now looking at.
       if (!buffer || this.activeSessionId !== sessionId) return;
+      if (this._replayWouldShrinkBuffer(buffer)) {
+        (this._fullHistoryRepullUseless ||= new Set()).add(sessionId);
+        this._logScrollRouting?.('repull-refused-downgrade');
+        return;
+      }
+      this._fullHistoryRepullUseless?.delete(sessionId);
       const rowsBefore = this.terminal.buffer.active.length;
       this._resetTerminalForReplay();
       await this.chunkedTerminalWrite(buffer, TERMINAL_CHUNK_SIZE, sessionId);

@@ -25,6 +25,144 @@ What shipped vs. what this doc proposed:
 - **Finding 5 (remote probe)**: implemented (`probeRemoteCliVersion` over ssh, deferred at
   session start, same login-shell wrapper as the launch).
 
+## RETEST FAILED (2026-08-07, after v1.12.0 shipped) — analysis round 2
+
+mtiller retested on 1.12.0 and reports it is NOT fixed (issue #205 comment, 2026-08-07 12:12 UTC;
+issue reopened same day with clarifying questions: mouse vs trackpad, Shift+scroll behavior,
+Claude vs shell session on the phone, and an iOS full-tab-kill to rule out stale JS). Two
+failure signatures, now analyzed against the SHIPPED 1.12.0 code (not the pre-fix code):
+
+1. **iPhone Safari (Claude session assumed)**: touch scrollback goes back only a limited
+   amount and sometimes REPEATS blocks of text; unreliable.
+2. **Firefox on macOS (mouse)**: wheel does NOTHING at all, while Fn+Up (= PageUp) pages back
+   through INTACT text.
+
+### Ruled out by code reading
+
+- deltaMode mishandling: `_wheelScrollLinesFloat` normalizes line/page/pixel units correctly;
+  a Firefox line-mode notch yields ±3 lines. Not the bug.
+- Ephemeral transport: `_sendInputEphemeral` (app.js) has a POST fallback when WS is down.
+- Service worker: sw.js is network-first with cache fallback; it serves stale JS only when the
+  fetch FAILS (flaky mobile connection can do this — relevant to "unreliable" on the phone,
+  and the fixed `CACHE_NAME = 'codeman-v1'` never invalidates that offline copy).
+
+### The load-bearing observation: PageUp works, the wheel does not
+
+Fn+Up is a KEYBOARD event: xterm encodes PageUp and Claude pages its own transcript (intact
+text proves Claude-side history is fine and the PTY input path is fine). The wheel path is the
+capture-phase handler, and for a Claude session it has exactly two branches:
+
+- **Forwarding branch** (`_shouldForwardWheelToApp` true): snap-to-bottom + SGR reports. If
+  this branch ran, the user would see the same paging motion Fn+Up produces. They see nothing.
+- **Local branch** (gate false): `_smoothScrollBy` over xterm's local buffer. For a Claude
+  pane in repaint mode, tmux keeps `history_size≈0`, so `?full=1` returns roughly one frame:
+  the local buffer is structurally HOLLOW, the top-of-buffer re-pull recovers nothing, and the
+  wheel looks completely dead. **This matches every observed detail on Firefox.**
+
+So the working hypothesis is that mtiller's sessions evaluate the gate FALSE. The gate
+(`_shouldForwardWheelToApp`) has exactly four false-paths worth checking, in likelihood order:
+
+1. **`terminalWheelLocalScrollback` opt-out is ON.** Plausible: a user whose scrolling was
+   broken on 1.11.x may well have toggled "Wheel scrolls local history" while trying to fix
+   it. On 1.12.0 that setting now routes the wheel to a hollow local buffer = dead wheel on
+   desktop AND the stale-repaint-frames experience on the phone (see below). Ask, or check
+   what the setting does on their export.
+2. **`cliVersion` missing — CONFIRMED BUG, independent of whether it is mtiller's**:
+   `getClaudeCliVersion()` (utils/claude-cli-resolver.ts:124-148) caches its result
+   process-wide including FAILURE: on any exception it sets `_claudeVersion = null`, and the
+   guard is `!== undefined`, so a single failed/timed-out probe (5s `EXEC_TIMEOUT_MS`; PATH
+   under systemd/launchd; transient fs hiccup) at the FIRST Claude session start disables
+   wheel forwarding for every Claude session until the server restarts. Fix: cache success
+   permanently, but let failure retry (retry on next call, or a short negative-cache TTL).
+   Note that mtiller sees identical breakage on phone + iPad + laptop, which points at a
+   SERVER-side/session-side cause exactly like this (cliVersion is shared by all devices)
+   rather than anything browser-specific.
+3. **Claude Code genuinely < 2.1.187** on their machine: gate false BY DESIGN, but the
+   resulting UX is a dead-end (no local history to fall back on).
+4. mouseTrackingMode non-none (a DECSET leaked past the strip, e.g. emitted before attach or
+   split across chunks in a way the carry missed): would also kill the container handler via
+   the early return. Least likely, checkable via `terminal.modes.mouseTrackingMode` in console.
+
+### The iPhone symptoms fit the same gate-false story
+
+Touch with gate false = local `scrollLines()` over whatever repaint frames accumulated:
+"repeats blocks of text" is literally what a buffer of successive overlapping repaint frames
+looks like; "limited amount" is its thinness; "unreliable" is burst-dependence (finding 2)
+PLUS the new re-pull being actively DESTRUCTIVE for repaint panes: `_maybeRefetchFullHistory`
+does `_resetTerminalForReplay()` then writes the fetched capture, and when that capture is
+one frame (Claude pane, `history_size≈0`) it REPLACES a multi-frame buffer with less than the
+user had, mid-scroll. Stale pre-1.12 JS on the phone (suspended Safari tab) remains possible
+until they confirm the tab kill.
+
+### Fix directions, ranked
+
+1. **Make the re-pull refuse downgrades** (`_maybeRefetchFullHistory`, app.js): if the fetched
+   capture would yield FEWER buffer rows than currently present, skip the reset+rewrite and
+   keep the richer buffer (optionally cache-mark the session "re-pull useless"). Small, safe,
+   kills the "got worse after scrolling to top" class. Consider skipping the re-pull entirely
+   for forwarding-capable modes where tmux keeps no history.
+2. **Rescue the gate-false Claude dead-end with PageUp forwarding**: when mode is `claude`,
+   the gate is false, AND the local buffer has no scrollback (`baseY === 0`), translate wheel
+   lines into coalesced PageUp/PageDown key sends (mtiller just proved Claude pages correctly
+   on PageUp even on their version). Zero regression risk under that triple guard: sessions
+   with real local history keep local scrolling; only the currently-dead path changes.
+   Caveat: older Claude menus may react to PageUp; acceptable against "completely dead".
+3. **Audit `getClaudeCliVersion()` failure caching** (utils/claude-cli-resolver.ts): a cached
+   empty probe must retry (with backoff), not poison the process.
+4. **Guard the opt-out setting's footgun**: if `terminalWheelLocalScrollback` is ON for a
+   repaint-mode CLI session, local history is hollow; either scope the setting's effect to
+   modes with real local scrollback, or pair it with fix 2's PageUp fallback so it still
+   scrolls SOMETHING.
+5. **Add a one-line gate diagnostic**: log (once per session, console) WHY the wheel chose
+   local vs forward: `{mode, cliVersion, optOut, trackingMode}`. The #205 thread is now two
+   rounds deep on guesswork a single console line would have answered.
+
+### What shipped for round 2 (branch `fix/scrollback-205-round2`)
+
+All five directions above, implemented as ranked:
+
+1. **Downgrade guard** — `_replayWouldShrinkBuffer()` (terminal-ui.js) estimates the rows a
+   capture will occupy (ANSI stripped, `capture-pane -J` re-wrapping accounted for) and
+   `_maybeRefetchFullHistory` (app.js) skips the reset+rewrite when that is more than one
+   screen short of what xterm already holds. A refused session goes on
+   `_fullHistoryRepullUseless`, which raises its re-pull cooldown from 4s to 60s so a hollow
+   pane stops re-fetching. Measured A/B on a live Claude pane, same gesture, same buffer:
+   guard off → 341 rows collapse to 42 and every seeded row is gone; guard on → 341 rows
+   preserved. The tab-switch recovery it must not break still runs (shell buffer 401 → 44 on
+   a tab switch → 401 again after scrolling to the top).
+2. **PageUp/PageDown fallback** — `_maybePageCliTranscript()` translates wheel/touch travel
+   into coalesced `\x1b[5~` / `\x1b[6~` under the triple guard (claude mode, forwarding gate
+   false, `baseY === 0`), through the same 40ms queue as the SGR reports. Half a screen of
+   travel per page: the page key always jumps a whole screen, and a 1:1 mapping was
+   unusably slow with a discrete wheel. Shift is excluded — it keeps meaning "local
+   scrollback". Verified live: opt-out ON on a Claude session sends real PageUp/PageDown to
+   the PTY where the wheel previously did nothing.
+3. **Probe caching** — `getClaudeCliVersion()` no longer caches failure. Success is kept for
+   the process lifetime; a failed probe retries with a 1/2/4…15min backoff. The cache policy
+   is a pure function (`resolveClaudeCliVersion`) so the retry semantics are unit-testable
+   without spawning `claude`. The VITEST short-circuit now records nothing, where before it
+   wrote a permanent null.
+4. **Opt-out footgun** — handled by pairing rather than by scoping: the setting keeps meaning
+   exactly what it says (the wheel goes local), and fix 2 catches the case where "local" is
+   empty. Scoping the setting away from repaint-mode CLIs would have silently overridden an
+   explicit user choice. The App Settings tooltip now says to leave it off for Claude/Codex.
+5. **Diagnostic** — `_logScrollRouting()` prints one line per session per distinct decision:
+   `[scroll] <id> → forward-sgr|page-keys|local-scrollback|repull-refused-downgrade (mode=…,
+   cliVersion=…, localScrollbackOptOut=…, mouseTracking=…, localScrollbackRows=…)`. That
+   single line answers every open question in the list below.
+
+Still unanswered by code alone: whether mtiller's Claude Code is genuinely older than
+2.1.187 (false-path 3), and whether the iPhone was running stale JS. The diagnostic makes
+both self-reporting, so the retest ask is now "open the console and paste the `[scroll]` line".
+
+### What to get from mtiller (some already asked)
+
+- Shift+scroll behavior on Firefox (distinguishes hollow-local from handler-not-firing).
+- `claude --version` on the Mac (decides false-paths 2 vs 3).
+- App Settings → Input → "Wheel scrolls local history" state (false-path 1).
+- iPhone: Claude or shell session, and whether a full tab kill changes anything.
+- Browser console: `app.terminalUi?.terminal?.modes?.mouseTrackingMode` (false-path 4).
+
 Original plan follows.
 
 ## Reports
