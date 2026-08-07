@@ -54,6 +54,7 @@ import {
   type SessionDocker,
 } from './types.js';
 import { probeDockerCliVersion } from './docker-hosts.js';
+import { probeRemoteCliVersion } from './remote-hosts.js';
 import type { TerminalMultiplexer, MuxSession } from './mux-interface.js';
 import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { RalphTracker } from './ralph-tracker.js';
@@ -226,6 +227,8 @@ const IS_TEST_MODE = !!process.env.VITEST;
 const TEST_PTY_SCRIPT = 'if (process.stdin.isTTY) process.stdin.setRawMode(true); process.stdin.pipe(process.stdout);';
 /** Delay before the in-container Claude CLI version probe (lets the container start). */
 const DOCKER_CLI_VERSION_PROBE_DELAY_MS = 3000;
+/** Delay before the over-ssh Claude CLI version probe (keeps session start off the ssh round-trip). */
+const REMOTE_CLI_VERSION_PROBE_DELAY_MS = 3000;
 
 /**
  * Ask tmux for the current window geometry of `muxName` so a re-attaching PTY
@@ -1534,8 +1537,8 @@ export class Session extends EventEmitter {
     // never show it — which left cliVersion undefined and silently disabled
     // wheel-forwarding to Claude's own transcript (the only route to history in
     // repaint/alt-screen mode; issue #154). Remote sessions run claude on
-    // another host, so a local probe wouldn't reflect their version — skip them
-    // and let the banner scrape handle those. Cached process-wide, best-effort.
+    // another host, so a local probe wouldn't reflect their version; they get
+    // their own over-ssh probe below. Cached process-wide, best-effort.
     if (this.mode === 'claude' && !this._remote && !this._docker && !this._cliVersion) {
       const probedVersion = getClaudeCliVersion();
       if (probedVersion) {
@@ -1572,6 +1575,32 @@ export class Session extends EventEmitter {
             /* best-effort */
           });
       }, DOCKER_CLI_VERSION_PROBE_DELAY_MS);
+    }
+
+    // Remote sessions run claude on ANOTHER HOST, so neither the local nor the
+    // docker probe applies, and the banner-scrape fallback they were left with
+    // is the unreliable path #154 was filed for, so remote Claude cases silently
+    // never got wheel-forwarding (noted in the #205 analysis). Probe over ssh,
+    // deferred so session start never waits on the ssh round-trip.
+    if (this.mode === 'claude' && this._remote && !this._cliVersion) {
+      const remoteMeta = this._remote;
+      setTimeout(() => {
+        if (this._isStopped || this._cliVersion) return;
+        void probeRemoteCliVersion(remoteMeta, this.mode)
+          .then((version) => {
+            if (!version || this._isStopped || this._cliVersion) return;
+            this._cliVersion = version;
+            this.emit('cliInfoUpdated', {
+              version: this._cliVersion,
+              model: this._cliModel,
+              accountType: this._cliAccountType,
+              latestVersion: this._cliLatestVersion,
+            });
+          })
+          .catch(() => {
+            /* best-effort */
+          });
+      }, REMOTE_CLI_VERSION_PROBE_DELAY_MS);
     }
 
     // If mux wrapping is enabled, create or attach to a mux session
