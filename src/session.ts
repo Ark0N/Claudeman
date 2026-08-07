@@ -2542,19 +2542,17 @@ export class Session extends EventEmitter {
    * For interactive sessions, this is how you send user input to Claude.
    * Remember to include `\r` (carriage return) to simulate pressing Enter.
    *
-   * @param data - The input data to send (text, escape sequences, etc.)
-   *
    * @example
    * ```typescript
    * session.write('hello world');  // Text only, no Enter
    * session.write('\r');           // Enter key
    * session.write('ls -la\r');     // Command with Enter
    * ```
-   */
-  /**
-   * @returns true if the data reached a PTY. A session whose PTY is gone silently
-   * swallowed every write before this signal existed, which is how input could
-   * disappear with the caller believing it had been delivered.
+   *
+   * @param data - The input data to send (text, escape sequences, etc.)
+   * @returns true if the data reached a PTY. A session whose PTY is gone still
+   * discards the data, but it used to do so with no signal at all — which is how
+   * input could disappear while the caller believed it had been delivered.
    */
   write(data: string): boolean {
     this._trackSubmit(data);
@@ -2605,6 +2603,19 @@ export class Session extends EventEmitter {
    * half-open socket silently drops frames with no error) would type a prompt
    * twice whenever an ACK is lost after the write landed.
    */
+  shouldApplyInput(clientId: string, seq: number): boolean {
+    const last = this._appliedInputSeq.get(clientId);
+    if (last !== undefined && seq <= last) return false;
+    // Re-insert to move this client to the MRU end for fair eviction.
+    if (last !== undefined) this._appliedInputSeq.delete(clientId);
+    this._appliedInputSeq.set(clientId, seq);
+    if (this._appliedInputSeq.size > Session.MAX_INPUT_DEDUP_CLIENTS) {
+      const oldest = this._appliedInputSeq.keys().next().value;
+      if (oldest !== undefined) this._appliedInputSeq.delete(oldest);
+    }
+    return true;
+  }
+
   /**
    * Undo the bookkeeping of {@link shouldApplyInput} for a delivery that failed.
    *
@@ -2620,19 +2631,6 @@ export class Session extends EventEmitter {
     if (this._appliedInputSeq.get(clientId) === seq) {
       this._appliedInputSeq.set(clientId, seq - 1);
     }
-  }
-
-  shouldApplyInput(clientId: string, seq: number): boolean {
-    const last = this._appliedInputSeq.get(clientId);
-    if (last !== undefined && seq <= last) return false;
-    // Re-insert to move this client to the MRU end for fair eviction.
-    if (last !== undefined) this._appliedInputSeq.delete(clientId);
-    this._appliedInputSeq.set(clientId, seq);
-    if (this._appliedInputSeq.size > Session.MAX_INPUT_DEDUP_CLIENTS) {
-      const oldest = this._appliedInputSeq.keys().next().value;
-      if (oldest !== undefined) this._appliedInputSeq.delete(oldest);
-    }
-    return true;
   }
 
   /**

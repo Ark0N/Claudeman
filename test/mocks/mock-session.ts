@@ -30,7 +30,6 @@ export class MockSession extends EventEmitter {
     this._muxName = `codeman-test-${id.slice(0, 8)}`;
   }
 
-  /** Direct PTY write (used by session.write()) */
   /**
    * Set to simulate a session whose PTY is gone: both write paths report failure,
    * which is the state in which input used to disappear silently.
