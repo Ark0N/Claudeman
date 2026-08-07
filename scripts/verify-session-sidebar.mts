@@ -25,16 +25,19 @@ const PORT = 3299;
 const OUT = process.env.SIDEBAR_SHOTS_DIR ?? join(tmpdir(), 'codeman-sidebar-shots');
 mkdirSync(OUT, { recursive: true });
 
+// Generic on purpose: these names end up in the harness screenshots, so they
+// should not carry one contributor's project list into everyone else's review.
+// The mix of CLI modes matters (each renders a different badge); the names do not.
 const PROJECTS = [
-  ['iurix-backend', 'claude'],
-  ['iurix-webapp', 'claude'],
-  ['iurix-mobile', 'codex'],
-  ['iurix-data', 'claude'],
-  ['iurix-skills', 'gemini'],
+  ['api-server', 'claude'],
+  ['web-client', 'claude'],
+  ['mobile-app', 'codex'],
+  ['data-pipeline', 'claude'],
+  ['shared-lib', 'gemini'],
   ['codeman', 'claude'],
-  ['haberl-webapps', 'claude'],
-  ['iurix-output', 'opencode'],
-  ['ris-findok', 'claude'],
+  ['docs-site', 'claude'],
+  ['batch-jobs', 'opencode'],
+  ['search-index', 'claude'],
 ];
 const STATUSES = ['idle', 'busy', 'idle', 'busy', 'error', 'idle'];
 
