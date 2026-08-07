@@ -1,5 +1,60 @@
 # aicodeman
 
+## 1.12.1
+
+### Patch Changes
+
+- Terminal scrollback fixes, round 2 of issue #205. A Claude pane's local buffer is hollow (tmux keeps no history for a repaint-mode pane), and both retest reports traced back to that fact. The scroll-to-top full-history re-pull now refuses to rewrite the terminal when the capture holds less than the browser already does, so it can no longer delete history mid-scroll on iPhone (a refused session also re-fetches far less often). When wheel-forwarding is unavailable on a Claude session (version probe failed, CLI older than 2.1.187, or the "Wheel Scrolls Local History" opt-out) and there is no local scrollback to scroll, wheel and touch now page the CLI's own transcript via coalesced PageUp/PageDown instead of doing nothing. The `claude --version` probe no longer caches a failed run for the server's lifetime (one timed-out probe used to silently disable wheel-forwarding on every device until restart); failures retry with backoff. Every scroll gesture now logs a one-line `[scroll]` routing decision to the browser console for direct diagnosis, and the opt-out setting's tooltip explains that the paging fallback is Claude-only (Codex has none).
+- 2e69e28: Bound the process-tree walk that could take a machine down.
+
+  `getChildPids` ran `pgrep -P <pid>` per node and recursed with no visited set, no
+  depth limit and no node cap. Across ~28 adopted tmux trees the fan-out exploded,
+  and because each `pgrep` blocks in the kernel while reading `/proc/<pid>/cgroup`
+  under WSL, none returned while the walk kept spawning more — ~13,000 `pgrep`
+  processes stuck in D-state out of ~39,000 total, load average above 13,000,
+  recoverable only by restarting WSL.
+
+  Now: one `ps` snapshot, breadth-first with a visited set, a depth cap and a node
+  cap, in a pure module (`proc-tree.ts`) that the regression tests exercise
+  directly. The snapshot is refreshed asynchronously, and the kill path forces a
+  fresh one so the SIGKILL escalation cannot re-read pre-SIGTERM state.
+
+- ebfcac6: An input whose delivery fails can be retried instead of being lost for good.
+
+  Both input paths recorded the `(clientId, seq)` pair as applied and acknowledged
+  the frame _before_ knowing whether the write had landed — the POST route because
+  its mux write is fire-and-forget, the WebSocket handler because it ACKed
+  unconditionally. When the write then failed, the client dropped the frame from its
+  durable queue and the server rejected the retry as a duplicate: the reliable
+  delivery layer was guaranteeing exactly-once delivery of something that had never
+  been delivered.
+
+  The bookkeeping is now rolled back on failure and the WebSocket ACK withheld, so
+  the client redelivers. `Session.write()` reports whether it reached a PTY at all
+  instead of silently swallowing the data.
+
+  Response codes are unchanged: a session can legitimately have no PTY yet (created
+  but not started), so turning that into a failure status would be a contract change
+  of its own.
+
+  Note this does not remove the root cause: the POST still answers 200 before the
+  mux write is attempted, so a client that treats any 2xx as final still cannot
+  learn about that failure. Closing that would mean awaiting the tmux child in the
+  request path.
+
+- 1a32e63: Routes that answer with `reply.raw.writeHead()` no longer drop the headers the
+  security hook set.
+
+  `writeHead` writes straight to the Node response and bypasses Fastify's header
+  store, so everything the `onRequest` hook granted was silently lost — including the
+  `Access-Control-Allow-Origin` it emits for localhost origins, and the
+  `X-Content-Type-Options` / `X-Frame-Options` / CSP headers. A localhost page could
+  therefore call every other `/api` endpoint cross-origin while its EventSource
+  failed CORS.
+
+  Affects `GET /api/events` and the three raw-writing routes in `file-routes.ts`
+  (`file-raw`, `tail-file`, `download`).
+
 ## 1.12.0
 
 ### Minor Changes
