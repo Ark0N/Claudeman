@@ -451,11 +451,14 @@ Object.assign(CodemanApp.prototype, {
         if (this.terminal?.buffer?.active?.type === 'alternate') return;
         ev.preventDefault();
         ev.stopPropagation();
-        const lines = this._wheelScrollLines(ev);
         if (this._shouldForwardWheelToApp(ev)) {
-          this._forwardScrollToApp(ev.clientX, ev.clientY, lines);
+          this._forwardScrollToApp(ev.clientX, ev.clientY, this._wheelScrollLines(ev));
           return;
         }
+        // Local scrolling accumulates FRACTIONAL lines: a macOS trackpad emits
+        // a stream of tiny pixel deltas, and rounding each one to a whole line
+        // (the ±1 fallback) made slow drags scroll faster than the finger.
+        const lines = this._wheelScrollLinesFloat(ev);
         this._noteTerminalUserScroll(lines);
         this._smoothScrollBy(lines);
       },
@@ -2081,11 +2084,15 @@ Object.assign(CodemanApp.prototype, {
    * wheel handler owns local scrolling (xterm's own smooth scroller is
    * bypassed, see the listener comment), so without this every notch was an
    * instant multi-line jump. Wheel deltas accumulate into a pending line
-   * count and drain ~35% per animation frame (minimum one line, so it always
-   * terminates); more notches mid-glide just deepen the pending count, which
-   * reads as natural acceleration. Direction reversals cancel arithmetically.
-   * The pending amount is dropped when the active session changes mid-glide —
-   * leftover momentum must never scroll the tab the user just switched to.
+   * count (fractional — see _wheelScrollLinesFloat) and drain ~22% per
+   * animation frame with a one-line floor, so a single notch starts with a
+   * gentle step and glides to an exact landing; more notches mid-glide deepen
+   * the pending count, which reads as natural acceleration. A sub-line
+   * residual stays pending until further input pushes it past a whole line
+   * (that is what makes slow trackpad drags track the finger). Direction
+   * reversals cancel arithmetically. The pending amount is dropped when the
+   * active session changes mid-glide — leftover momentum must never scroll
+   * the tab the user just switched to.
    */
   _smoothScrollBy(lines) {
     if (!lines) return;
@@ -2100,12 +2107,13 @@ Object.assign(CodemanApp.prototype, {
         this._smoothScrollPending = 0;
         return;
       }
-      const move =
-        pending > 0 ? Math.max(1, Math.floor(pending * 0.35)) : Math.min(-1, Math.ceil(pending * 0.35));
+      if (Math.abs(pending) < 1) return; // sub-line residual: wait for more input
+      const eased = pending * 0.22;
+      const move = pending > 0 ? Math.max(1, Math.floor(eased)) : Math.min(-1, Math.ceil(eased));
       this._smoothScrollPending = pending - move;
       this.terminal.scrollLines(move);
       this._maybeLoadMoreHistoryOnScroll(move);
-      if (this._smoothScrollPending) this._smoothScrollFrame = requestAnimationFrame(step);
+      if (Math.abs(this._smoothScrollPending) >= 1) this._smoothScrollFrame = requestAnimationFrame(step);
     };
     this._smoothScrollFrame = requestAnimationFrame(step);
   },
@@ -2937,15 +2945,22 @@ Object.assign(CodemanApp.prototype, {
   // the ±1 fallback — one line per notch, versus 4-5 for Chrome's ~110px. In
   // Claude mode the same value also capped the forwarded SGR report at one tick.
   _wheelScrollLines(ev) {
+    const lines = this._wheelScrollLinesFloat(ev);
+    if (!lines) return 0; // pure horizontal swipe: don't fall through to -1
+    return Math.round(lines) || (lines > 0 ? 1 : -1);
+  },
+
+  /** Unrounded variant for the smooth local-scroll path, which accumulates
+   *  sub-line fractions across events instead of forcing every tiny trackpad
+   *  delta to a whole ±1 line. Same unit handling and Shift-axis trap. */
+  _wheelScrollLinesFloat(ev) {
     const delta = ev.shiftKey && Math.abs(ev.deltaX) > Math.abs(ev.deltaY) ? ev.deltaX : ev.deltaY;
-    if (!delta) return 0; // pure horizontal swipe: don't fall through to -1
-    const lines =
-      ev.deltaMode === 1 // DOM_DELTA_LINE (Firefox mouse wheel)
-        ? delta
-        : ev.deltaMode === 2 // DOM_DELTA_PAGE
-          ? delta * (this.terminal?.rows || 24)
-          : delta / 25; // DOM_DELTA_PIXEL (Chrome/WebKit, and every trackpad)
-    return Math.round(lines) || (delta > 0 ? 1 : -1);
+    if (!delta) return 0;
+    return ev.deltaMode === 1 // DOM_DELTA_LINE (Firefox mouse wheel)
+      ? delta
+      : ev.deltaMode === 2 // DOM_DELTA_PAGE
+        ? delta * (this.terminal?.rows || 24)
+        : delta / 25; // DOM_DELTA_PIXEL (Chrome/WebKit, and every trackpad)
   },
 
   _shouldForwardWheelToApp(ev) {
