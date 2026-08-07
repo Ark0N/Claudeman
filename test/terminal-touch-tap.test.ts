@@ -311,7 +311,7 @@ describe('terminal touch tap mouse guard', () => {
     expect(sent).toEqual(['\x1b[<0;7;4M\x1b[<0;7;4m']);
   });
 
-  it('wheel: forwards to the app only for verified sessions at the buffer bottom without Shift', () => {
+  it('wheel: forwards to the app for verified sessions without Shift, at ANY scroll position', () => {
     const { app } = loadTerminalUiHarness();
     app.activeSessionId = 'sess-1';
     app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion: '2.1.187' }]]);
@@ -323,8 +323,14 @@ describe('terminal touch tap mouse guard', () => {
     expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(true);
     expect(app._shouldForwardWheelToApp({ shiftKey: true })).toBe(false); // Shift = local scrollback
 
-    app.terminal.buffer.active.viewportY = 10; // browsing local scrollback
-    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
+    // Scrolled up into local scrollback still forwards. Gating this on the
+    // viewport being at the bottom is what let a repaint-mode CLI's own prompt
+    // box scroll off the screen: scrollToLastNonEmptyLine() parks the viewport
+    // above the bottom, so a tab switch silently pinned the wheel to local
+    // scrollback full of stale replayed frames. The wheel handler snaps the
+    // viewport back to the bottom before encoding the report instead.
+    app.terminal.buffer.active.viewportY = 10;
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(true);
     app.terminal.buffer.active.viewportY = 50;
 
     app.terminal.modes.mouseTrackingMode = 'vt200'; // xterm's own encoder live
@@ -333,6 +339,24 @@ describe('terminal touch tap mouse guard', () => {
 
     app.sessions = new Map([['sess-1', { mode: 'shell' }]]); // not a strip mode
     expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
+  });
+
+  it('wheel: converts deltaMode line/page units instead of assuming pixels', () => {
+    const { app } = loadTerminalUiHarness();
+    app.terminal = { rows: 40 };
+
+    // DOM_DELTA_PIXEL (Chrome/WebKit, and every trackpad): ~110px per notch.
+    expect(app._wheelScrollLines({ deltaY: 110, deltaX: 0, deltaMode: 0, shiftKey: false })).toBe(4);
+    // DOM_DELTA_LINE (Firefox mouse wheel): deltaY is already lines. Read as
+    // pixels this rounded to 0 and fell through to the ±1 fallback.
+    expect(app._wheelScrollLines({ deltaY: 3, deltaX: 0, deltaMode: 1, shiftKey: false })).toBe(3);
+    expect(app._wheelScrollLines({ deltaY: -3, deltaX: 0, deltaMode: 1, shiftKey: false })).toBe(-3);
+    // DOM_DELTA_PAGE: one page is one screenful.
+    expect(app._wheelScrollLines({ deltaY: 1, deltaX: 0, deltaMode: 2, shiftKey: false })).toBe(40);
+    // A pure horizontal swipe must not fall through to a phantom -1.
+    expect(app._wheelScrollLines({ deltaY: 0, deltaX: 90, deltaMode: 0, shiftKey: false })).toBe(0);
+    // Shift + macOS trackpad reports the magnitude on deltaX (issue #154).
+    expect(app._wheelScrollLines({ deltaY: 0, deltaX: -100, deltaMode: 0, shiftKey: true })).toBe(-4);
   });
 
   it('wheel: gates claude forwarding on CLI version 2.1.187+ (unknown or older stays local)', () => {
@@ -436,6 +460,39 @@ describe('terminal touch tap mouse guard', () => {
 
     app._flushWheelSgrQueue(); // queue drained — no duplicate send
     expect(sent).toHaveLength(1);
+  });
+
+  it('forwarded scrolls (wheel AND touch) snap the viewport home first, then encode SGR ticks', () => {
+    const { app } = loadTerminalUiHarness();
+    const sent: Array<{ id: string; data: string }> = [];
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app._sendInputEphemeral = (id: string, data: string) => sent.push({ id, data });
+    const scrolledToBottom: boolean[] = [];
+    app.terminal = {
+      cols: 80,
+      rows: 24,
+      // Scrolled up into local scrollback: SGR coordinates address the LIVE
+      // screen, so the report would hit-test the wrong row without the snap.
+      buffer: { active: { viewportY: 10, baseY: 50 } },
+      scrollToBottom: () => scrolledToBottom.push(true),
+      element: {
+        querySelector: () => ({ getBoundingClientRect: () => ({ left: 0, top: 0 }) }),
+      },
+      _core: { _renderService: { dimensions: { css: { cell: { width: 8, height: 16 } } } } },
+    };
+
+    app._forwardScrollToApp(50, 50, -3);
+    expect(scrolledToBottom).toEqual([true]);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[<64;7;4M'.repeat(3) }]);
+
+    // Already at the bottom: no snap, just the report.
+    app.terminal.buffer.active.viewportY = 50;
+    app._forwardScrollToApp(50, 50, 2);
+    expect(scrolledToBottom).toHaveLength(1);
+    app._flushWheelSgrQueue();
+    expect(sent).toHaveLength(2);
   });
 
   it('allows trusted mouse events after the tap window expires', () => {

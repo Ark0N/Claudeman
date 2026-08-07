@@ -511,7 +511,14 @@ class CodemanApp {
     this._initGeneration = 0;     // dedup concurrent handleInit calls
     this._initFallbackTimer = null; // fallback timer if SSE init doesn't arrive
     this._selectGeneration = 0;   // cancel stale selectSession loads
-    this._initialFullBufferLoad = true; // first buffer load after a page load fetches full tmux scrollback (COD-47)
+    // Sessions whose full tmux scrollback has already been replayed this page load
+    // (COD-47). Tracked PER SESSION rather than as a single "first load" flag: the
+    // flag was consumed by whichever session auto-selected at page load, so every
+    // OTHER tab started life with one visible frame of history (issue #205).
+    this._fullHistoryLoaded = new Set();
+    // Cooldown per session for the scroll-to-top "load more history" re-pull.
+    this._fullHistoryRepullAt = new Map(); // Map<sessionId, timestamp>
+    this._fullHistoryRepullInFlight = false;
     this.terminalLoadStates = new Map(); // Map<sessionId, { generation, phase }>
     this.respawnStatus = {};
     this.respawnTimers = {}; // Track timed respawn timers
@@ -4098,6 +4105,58 @@ class CodemanApp {
     this.terminal.write('\x1b[3J\x1b[H\x1b[2J');
   }
 
+  /**
+   * "Load more history": re-pull the whole tmux scrollback when the user scrolls up
+   * while already at the top of what the browser has.
+   *
+   * xterm's buffer is only ever a WINDOW onto tmux's real history, and two things
+   * shrink it. tmux repaints the pane rectangle instead of emitting linefeeds
+   * whenever output outpaces its flush interval, which OVERWRITES already-rendered
+   * scrollback rather than pushing rows into it (measured: a 60-line burst added 1
+   * row and destroyed 34, while the same 60 lines emitted slowly added all 60). And
+   * a tab switch replays only the visible frame. Either way tmux still holds
+   * everything (history-limit 100k by default), so the fix is to go ask for it with
+   * the same `?full=1` capture a page reload uses (issue #205).
+   *
+   * On demand rather than automatic because that capture is unbounded-ish work: at
+   * the default history limit it can be megabytes, which is fine to pay when the
+   * user is explicitly reaching for history and not fine on every tab switch.
+   */
+  async _maybeRefetchFullHistory() {
+    const sessionId = this.activeSessionId;
+    if (!sessionId || this._fullHistoryRepullInFlight || this._isLoadingBuffer) return;
+    if (this.detachedSessions?.has(sessionId)) return;
+    const now = Date.now();
+    // Momentum scrolling fires this dozens of times per flick, and a burst of new
+    // output is the normal reason to want a re-pull, so cooldown rather than latch.
+    if (now - (this._fullHistoryRepullAt.get(sessionId) || 0) < 4000) return;
+    this._fullHistoryRepullAt.set(sessionId, now);
+    this._fullHistoryRepullInFlight = true;
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/terminal?full=1`);
+      const buffer = (await res.json())?.data?.terminalBuffer;
+      // Bail on a tab switch mid-fetch: writing here would paint another session's
+      // history into the terminal the user is now looking at.
+      if (!buffer || this.activeSessionId !== sessionId) return;
+      const rowsBefore = this.terminal.buffer.active.length;
+      this._resetTerminalForReplay();
+      await this.chunkedTerminalWrite(buffer, TERMINAL_CHUNK_SIZE, sessionId);
+      if (this.activeSessionId !== sessionId) return;
+      this.terminalBufferCache.set(sessionId, buffer);
+      // Hold the user's place. The replay is a superset that grew the buffer
+      // UPWARD, so what used to be row 0 (what they were looking at) is now `delta`
+      // rows down; scrolling there reveals the recovered history above it instead
+      // of teleporting them to the bottom the way a normal buffer load does.
+      const delta = this.terminal.buffer.active.length - rowsBefore;
+      if (delta > 0) this.terminal.scrollToLine(delta);
+      else this.terminal.scrollToTop();
+    } catch {
+      // Transient (offline, 5xx) — the next scroll-up past the cooldown retries.
+    } finally {
+      this._fullHistoryRepullInFlight = false;
+    }
+  }
+
   _shouldFocusTerminalForTabSwitch() {
     if (typeof MobileDetection === 'undefined' || !MobileDetection.isTouchDevice()) {
       return true;
@@ -4368,11 +4427,14 @@ class CodemanApp {
 
       this._setTerminalLoadState(sessionId, selectGen, 'fetching');
       _crashDiag.log('FETCH_START');
-      // The FIRST buffer load after a page load requests the full tmux scrollback
-      // (?full=1, COD-47) so history that scrolled off the server's byte buffer
-      // comes back after a reload. Tab switches keep the fast ?tail= frame path.
-      const useFullHistory = this._initialFullBufferLoad === true;
-      this._initialFullBufferLoad = false;
+      // The first load OF EACH SESSION this page load requests the full tmux
+      // scrollback (?full=1, COD-47) so history that scrolled off the server's byte
+      // buffer comes back. Later switches to an already-replayed session keep the
+      // fast ?tail= frame path, which is why this is a Set and not a flag: the flag
+      // version gave the full replay to the auto-selected tab and one frame of
+      // history to every other one (issue #205).
+      const useFullHistory = !this._fullHistoryLoaded.has(sessionId);
+      if (useFullHistory) this._fullHistoryLoaded.add(sessionId);
       const res = await fetch(
         useFullHistory
           ? `/api/sessions/${sessionId}/terminal?full=1`

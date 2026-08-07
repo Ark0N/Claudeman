@@ -415,31 +415,71 @@ Object.assign(CodemanApp.prototype, {
     // ignores wheel reports); older versions DO capture wheel as option
     // navigation, so they keep the local wheel.
     // Shift+wheel always scrolls xterm's local scrollback (Codeman's restored
-    // history lives there), and once the viewport left the bottom the wheel
-    // stays local until the user scrolls back down — so both scrollbacks stay
-    // reachable without a mode switch.
+    // history lives there); the plain wheel stays on the CLI's transcript for
+    // those modes regardless of scroll position, so the CLI's input box never
+    // slides off the screen (see _shouldForwardWheelToApp).
+    //
+    // CAPTURE phase, deliberately, and Codeman owns the scroll. xterm's
+    // viewport is a vscode-style ScrollableElement that consumes wheel events
+    // itself (preventDefault + stopPropagation) whenever it believes a
+    // scrollbar exists, does NOT consult attachCustomWheelEventHandler, and —
+    // measured on the live instance — goes DEAF after terminal.reset(): a tab
+    // switch or full-history replay leaves its scroll dimensions stale, after
+    // which wheel events neither scroll nor propagate reliably. A bubble-phase
+    // listener here therefore never fired once local scrollback existed
+    // (measured: _shouldForwardWheelToApp call count stayed 0 while xterm
+    // scrolled), and after a tab switch NOTHING scrolled at all — the "input
+    // box scrolls up then it fights", "works at first, breaks after a tab
+    // switch" reports on #205.
+    //
+    // So: capture runs ancestors-first; this handler sees every wheel first
+    // and stops propagation, keeping xterm's scroller out of it entirely.
+    // Local scrolling goes through terminal.scrollLines() — buffer-level, so
+    // it keeps working after resets — with our own deltaMode normalization
+    // (_wheelScrollLines) covering Firefox's line-unit wheels. Two cases still
+    // belong to xterm and are passed through untouched:
+    //  - mouseTrackingMode active: xterm's own encoder forwards the wheel to
+    //    the PTY (htop/vim with mouse on in a shell pane);
+    //  - alternate buffer (direct-PTY fallback running vim/less): xterm's
+    //    alt-scroll handling converts the wheel to cursor keys, which is what
+    //    those apps expect.
     container.addEventListener(
       'wheel',
       (ev) => {
+        const trackingMode = this.terminal?.modes?.mouseTrackingMode;
+        if (trackingMode && trackingMode !== 'none') return;
+        if (this.terminal?.buffer?.active?.type === 'alternate') return;
         ev.preventDefault();
-        const lines = this._wheelScrollLines(ev);
+        ev.stopPropagation();
         if (this._shouldForwardWheelToApp(ev)) {
-          this._sendSyntheticSgrWheel(ev.clientX, ev.clientY, lines);
+          this._forwardScrollToApp(ev.clientX, ev.clientY, this._wheelScrollLines(ev));
           return;
         }
+        // Local scrolling accumulates FRACTIONAL lines: a macOS trackpad emits
+        // a stream of tiny pixel deltas, and rounding each one to a whole line
+        // (the ±1 fallback) made slow drags scroll faster than the finger.
+        const lines = this._wheelScrollLinesFloat(ev);
         this._noteTerminalUserScroll(lines);
-        this.terminal.scrollLines(lines);
+        this._smoothScrollBy(lines);
       },
-      { passive: false }
+      { passive: false, capture: true }
     );
 
     // Touch scrolling — use terminal.scrollLines() for all devices.
     // xterm.js DOM renderer doesn't populate xterm-viewport's scroll area,
     // so native CSS scrolling (overflow-y: scroll + touch-action: pan-y)
     // has nothing to scroll. Instead, convert touch deltas into scrollLines()
-    // calls, matching the wheel handler above.
+    // calls, matching the wheel handler above, including the forwarding
+    // branch: for the sessions whose wheel goes to the CLI's own transcript
+    // (_shouldForwardWheelToApp), a touch drag must go there too, or every
+    // phone/tablet swipe scrolls the local buffer of stale repaint frames and
+    // drags the CLI's pinned input box off the screen (issue #205's mobile
+    // half). Same gate, so Shift has no touch analog but the local-scrollback
+    // opt-out setting and the CLI-version gate apply to touch exactly as they
+    // do to the wheel.
     {
       const cellHeight = () => this.terminal._core?._renderService?.dimensions?.css?.cell?.height || 13;
+      let touchLastX = 0;
       let touchLastY = 0;
       let velocity = 0;
       let lastTime = 0;
@@ -453,7 +493,16 @@ Object.assign(CodemanApp.prototype, {
         if (!isTouching && Math.abs(velocity) > 0.3) {
           // Momentum phase — convert pixel velocity to lines
           const lines = Math.round(velocity / cellHeight());
-          if (lines !== 0) this.terminal.scrollLines(lines);
+          if (lines !== 0) {
+            if (this._shouldForwardWheelToApp({ shiftKey: false })) {
+              // Flick momentum keeps feeding the CLI's transcript from the last
+              // touch point; the 40ms coalescer batches the per-frame reports.
+              this._forwardScrollToApp(touchLastX, touchLastY, lines);
+            } else {
+              this.terminal.scrollLines(lines);
+              this._maybeLoadMoreHistoryOnScroll(lines);
+            }
+          }
           velocity *= 0.92;
           scrollFrame = requestAnimationFrame(scrollLoop);
         } else if (!isTouching) {
@@ -474,6 +523,7 @@ Object.assign(CodemanApp.prototype, {
         'touchstart',
         (ev) => {
           if (ev.touches.length === 1) {
+            touchLastX = ev.touches[0].clientX;
             touchLastY = ev.touches[0].clientY;
             touchStartY = touchLastY;
             velocity = 0;
@@ -509,13 +559,19 @@ Object.assign(CodemanApp.prototype, {
             const delta = touchLastY - touchY; // positive = scroll down
             pixelAccum += delta;
             velocity = delta * 1.2;
+            touchLastX = ev.touches[0].clientX;
             touchLastY = touchY;
             // Convert accumulated pixels to whole lines
             const ch = cellHeight();
             const lines = Math.trunc(pixelAccum / ch);
             if (lines !== 0) {
-              this._noteTerminalUserScroll(lines);
-              this.terminal.scrollLines(lines);
+              if (this._shouldForwardWheelToApp({ shiftKey: false })) {
+                this._forwardScrollToApp(touchLastX, touchLastY, lines);
+              } else {
+                this._noteTerminalUserScroll(lines);
+                this.terminal.scrollLines(lines);
+                this._maybeLoadMoreHistoryOnScroll(lines);
+              }
               pixelAccum -= lines * ch;
             }
           }
@@ -2009,6 +2065,73 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  /**
+   * Post-scroll companion to _noteTerminalUserScroll: hitting the TOP of the
+   * buffer while scrolling up is the user reaching for history the browser does
+   * not have, so pull the rest of tmux's scrollback (issue #205, see
+   * _maybeRefetchFullHistory). Must be called AFTER scrollLines(), since the
+   * check is on the resulting position, and it is deliberately not folded into
+   * _noteTerminalUserScroll for exactly that reason. Cheap: one integer compare
+   * per scroll event, and the pull itself is cooldown-guarded.
+   */
+  _maybeLoadMoreHistoryOnScroll(lines) {
+    if (lines >= 0) return;
+    if (this.terminal?.buffer?.active?.viewportY === 0) this._maybeRefetchFullHistory?.();
+  },
+
+  /**
+   * Ease-out smooth scrolling for the local wheel path. The capture-phase
+   * wheel handler owns local scrolling (xterm's own smooth scroller is
+   * bypassed, see the listener comment), so without this every notch was an
+   * instant multi-line jump. Wheel deltas accumulate into a pending line
+   * count (fractional — see _wheelScrollLinesFloat) and drain ~22% per
+   * animation frame with a one-line floor, so a single notch starts with a
+   * gentle step and glides to an exact landing; more notches mid-glide deepen
+   * the pending count, which reads as natural acceleration. A sub-line
+   * residual stays pending until further input pushes it past a whole line
+   * (that is what makes slow trackpad drags track the finger). Direction
+   * reversals cancel arithmetically. The pending amount is dropped when the
+   * active session changes mid-glide — leftover momentum must never scroll
+   * the tab the user just switched to.
+   */
+  _smoothScrollBy(lines) {
+    if (!lines) return;
+    this._smoothScrollPending = (this._smoothScrollPending || 0) + lines;
+    this._smoothScrollSession = this.activeSessionId;
+    if (this._smoothScrollFrame) return;
+    const step = () => {
+      this._smoothScrollFrame = null;
+      const pending = this._smoothScrollPending || 0;
+      if (!pending) return;
+      if (this.activeSessionId !== this._smoothScrollSession) {
+        this._smoothScrollPending = 0;
+        return;
+      }
+      if (Math.abs(pending) < 1) return; // sub-line residual: wait for more input
+      const eased = pending * 0.22;
+      const move = pending > 0 ? Math.max(1, Math.floor(eased)) : Math.min(-1, Math.ceil(eased));
+      this._smoothScrollPending = pending - move;
+      this.terminal.scrollLines(move);
+      this._maybeLoadMoreHistoryOnScroll(move);
+      if (Math.abs(this._smoothScrollPending) >= 1) this._smoothScrollFrame = requestAnimationFrame(step);
+    };
+    this._smoothScrollFrame = requestAnimationFrame(step);
+  },
+
+  /**
+   * Hand a scroll gesture (wheel tick or touch drag, already converted to
+   * lines) to the CLI as synthetic SGR wheel reports. SGR coordinates address
+   * the LIVE screen (the bottom `rows` of the buffer), so a report computed
+   * from a scrolled-up viewport would hit-test a different row entirely, and
+   * forwarding while the user stares at stale scrollback looks like the
+   * gesture is dead. Snap back first: the gesture then always acts on what the
+   * CLI is drawing now.
+   */
+  _forwardScrollToApp(clientX, clientY, lines) {
+    if (!this._terminalViewportAtBottom()) this.terminal.scrollToBottom();
+    this._sendSyntheticSgrWheel(clientX, clientY, lines);
+  },
+
   _hasRecentUserScrollUp() {
     if (typeof this._lastUserScrollUpAt !== 'number') return false;
     return performance.now() - this._lastUserScrollUpAt < window.CodemanTerminalInput.USER_SCROLL_STICKY_SUPPRESS_MS;
@@ -2815,9 +2938,29 @@ Object.assign(CodemanApp.prototype, {
   // deltaY≈0 collapses to a fixed ±1 line/tick and the gesture can't page through
   // history on a trackpad (issue #154). Non-Shift and mouse-wheel paths are
   // unchanged (they carry deltaY). The `|| ±1` keeps sub-25px deltas moving.
+  //
+  // `deltaMode` says what UNIT the delta is in, and ignoring it made every
+  // non-pixel browser scroll ~4x too slowly: Firefox reports DOM_DELTA_LINE (1)
+  // with deltaY≈3 per notch, so the pixel math rounded to 0 and fell through to
+  // the ±1 fallback — one line per notch, versus 4-5 for Chrome's ~110px. In
+  // Claude mode the same value also capped the forwarded SGR report at one tick.
   _wheelScrollLines(ev) {
+    const lines = this._wheelScrollLinesFloat(ev);
+    if (!lines) return 0; // pure horizontal swipe: don't fall through to -1
+    return Math.round(lines) || (lines > 0 ? 1 : -1);
+  },
+
+  /** Unrounded variant for the smooth local-scroll path, which accumulates
+   *  sub-line fractions across events instead of forcing every tiny trackpad
+   *  delta to a whole ±1 line. Same unit handling and Shift-axis trap. */
+  _wheelScrollLinesFloat(ev) {
     const delta = ev.shiftKey && Math.abs(ev.deltaX) > Math.abs(ev.deltaY) ? ev.deltaX : ev.deltaY;
-    return Math.round(delta / 25) || (delta > 0 ? 1 : -1);
+    if (!delta) return 0;
+    return ev.deltaMode === 1 // DOM_DELTA_LINE (Firefox mouse wheel)
+      ? delta
+      : ev.deltaMode === 2 // DOM_DELTA_PAGE
+        ? delta * (this.terminal?.rows || 24)
+        : delta / 25; // DOM_DELTA_PIXEL (Chrome/WebKit, and every trackpad)
   },
 
   _shouldForwardWheelToApp(ev) {
@@ -2836,7 +2979,23 @@ Object.assign(CodemanApp.prototype, {
     } else if (sessionMode !== 'codex') {
       return false;
     }
-    return this._terminalViewportAtBottom();
+    // Deliberately NOT gated on _terminalViewportAtBottom(). It used to be, so
+    // that leaving the bottom handed the wheel back to local scrollback and both
+    // histories stayed reachable without a mode switch. In practice that inverted
+    // the behavior users actually want: a repaint-mode CLI keeps NO terminal
+    // scrollback of its own (tmux reports history_size=0 for a Claude pane), so
+    // xterm's buffer holds only Codeman's REPLAYED repaint frames. Scrolling that
+    // locally drags the CLI's own pinned furniture (the prompt box, the status
+    // line) up the screen and shows stale frames underneath, which reads as "the
+    // window scrolled away" rather than "I am reading history".
+    //
+    // And it was easy to fall into: scrollToLastNonEmptyLine() parks the viewport
+    // `rows - 2` above the last non-empty row, so any tab switch onto a session
+    // with trailing blank rows left the viewport off-bottom and every later wheel
+    // went local. Forwarding unconditionally keeps the CLI's transcript as the
+    // plain wheel's target and its input box fixed in place; local scrollback is
+    // still on Shift+wheel and on the "Wheel scrolls local history" opt-out above.
+    return true;
   },
 
   // Encode wheel ticks as SGR reports (button 64 = up, 65 = down) at the pointer

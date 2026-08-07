@@ -21,7 +21,7 @@ import {
   type GeminiConfig,
   type AntigravityConfig,
 } from '../../types.js';
-import { Session, isAltScreenStripMode } from '../../session.js';
+import { Session, isAltScreenStripMode, isMuxAltScreenOnlyStripMode } from '../../session.js';
 import { SseEvent } from '../sse-events.js';
 import {
   CreateSessionSchema,
@@ -1703,6 +1703,11 @@ export function registerSessionRoutes(
         .replace(ALT_SCREEN_TOGGLE_PATTERN, '')
         .replace(ERASE_SCROLLBACK_PATTERN, '')
         .replace(MOUSE_TRACKING_PATTERN, '');
+    } else if (isMuxAltScreenOnlyStripMode(session.mode, session.usesMux)) {
+      // tmux-backed shell/opencode/antigravity: drop tmux's own client smcup only.
+      // A byte buffer recorded before the live-side strip existed can still carry
+      // it, and one replayed `\x1b[?1049h` re-parks xterm in the alt buffer (#205).
+      strippedBuffer = strippedBuffer.replace(ALT_SCREEN_TOGGLE_PATTERN, '');
     }
 
     if (tailBytes > 0 && strippedBuffer.length > tailBytes) {

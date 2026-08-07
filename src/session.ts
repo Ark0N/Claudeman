@@ -54,6 +54,7 @@ import {
   type SessionDocker,
 } from './types.js';
 import { probeDockerCliVersion } from './docker-hosts.js';
+import { probeRemoteCliVersion } from './remote-hosts.js';
 import type { TerminalMultiplexer, MuxSession } from './mux-interface.js';
 import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { RalphTracker } from './ralph-tracker.js';
@@ -180,6 +181,37 @@ export function isAltScreenStripMode(mode: SessionMode): boolean {
   return mode === 'codex' || mode === 'claude' || mode === 'gemini';
 }
 
+/**
+ * Modes that need the NARROW strip: alt-screen toggles only, leaving `\x1b[3J`
+ * and the mouse-tracking DECSETs alone. Applies to every mode `isAltScreenStripMode`
+ * excludes, but ONLY when the session is tmux-backed (`useMux`).
+ *
+ * The bug (issue #205): the tmux CLIENT emits `smcup` (`\x1b[?1049h`) as its first
+ * bytes on attach, before any program has run. Unstripped, xterm.js parks in the
+ * alternate buffer for the whole session, where `baseY` is pinned at 0 (no
+ * scrollback to reach, so touch scrolling is a no-op) and xterm's own wheel handler
+ * translates the wheel into `\x1bOA`/`\x1bOB` cursor keys — which readline receives
+ * as shell history navigation. Both reported symptoms, one sequence.
+ *
+ * Why this is safe under tmux, despite the old "shell must keep the alt screen for
+ * vim/less/htop" reasoning: tmux is a full terminal emulator and NEVER forwards a
+ * pane's alt-screen toggles to its client, it repaints instead. Captured from a real
+ * attach, `\x1b[?1049h` appears exactly once (at attach) and vim/less/htop sessions
+ * inside the pane emit zero. So the only thing stripped here is tmux's own smcup.
+ *
+ * Why it is gated on `useMux`: `startShell()`/`startInteractive()` fall back to a
+ * DIRECT PTY when mux creation fails. There the inner program's `\x1b[?1049h` really
+ * does reach xterm, and stripping it would break vim/less/htop for real.
+ *
+ * Why it is narrower than the full strip: with tmux `mouse off`, a mouse-aware
+ * program in the pane (htop, vim with `set mouse=a`) still gets its DECSETs passed
+ * through to the client, so stripping those would break its mouse support. And
+ * `\x1b[3J` from a user's own `clear` is a deliberate "wipe my scrollback".
+ */
+export function isMuxAltScreenOnlyStripMode(mode: SessionMode, useMux: boolean): boolean {
+  return useMux && !isAltScreenStripMode(mode);
+}
+
 // Note: Claude CLI PATH resolution moved to session-cli-builder.ts (buildClaudeEnv)
 
 /** PTY fallback geometry when tmux can't be queried (matches pre-#80 hardcoded values). */
@@ -195,6 +227,8 @@ const IS_TEST_MODE = !!process.env.VITEST;
 const TEST_PTY_SCRIPT = 'if (process.stdin.isTTY) process.stdin.setRawMode(true); process.stdin.pipe(process.stdout);';
 /** Delay before the in-container Claude CLI version probe (lets the container start). */
 const DOCKER_CLI_VERSION_PROBE_DELAY_MS = 3000;
+/** Delay before the over-ssh Claude CLI version probe (keeps session start off the ssh round-trip). */
+const REMOTE_CLI_VERSION_PROBE_DELAY_MS = 3000;
 
 /**
  * Ask tmux for the current window geometry of `muxName` so a re-attaching PTY
@@ -731,6 +765,15 @@ export class Session extends EventEmitter {
   /** The tmux session name, if the session is running inside a mux */
   get muxName(): string | null {
     return this._muxSession?.muxName ?? null;
+  }
+
+  /**
+   * True when this session's PTY is a tmux client rather than the program itself.
+   * Read by the replay-side alt-screen strip, which must apply the same
+   * `useMux` gate as the live strip (isMuxAltScreenOnlyStripMode).
+   */
+  get usesMux(): boolean {
+    return this._useMux;
   }
 
   get totalCost(): number {
@@ -1401,9 +1444,16 @@ export class Session extends EventEmitter {
     // SSE/WS stream carries them, keeping everything in the main buffer with
     // scrollback intact. These are controlled TUIs whose cursor-positioned
     // redraws overwrite only the cells they target, so non-erased rows keep
-    // their content. Gated to Codex/Claude (isAltScreenStripMode) — shell must
-    // keep the alt screen for vim/less/htop.
-    if (isAltScreenStripMode(this.mode)) {
+    // their content. Gated to Codex/Claude/Gemini (isAltScreenStripMode).
+    //
+    // Every OTHER mode (shell/opencode/antigravity) gets the NARROW strip when it
+    // is tmux-backed: alt-screen toggles only, because the sequence that breaks
+    // scrollback there is tmux's own client-side smcup at attach, not anything the
+    // program in the pane emitted (issue #205, see isMuxAltScreenOnlyStripMode).
+    // 3J and the mouse DECSETs stay, so `clear` and mouse-aware TUIs keep working.
+    const fullStrip = isAltScreenStripMode(this.mode);
+    const altOnlyStrip = !fullStrip && isMuxAltScreenOnlyStripMode(this.mode, this._useMux);
+    if (fullStrip || altOnlyStrip) {
       // Reassemble sequences split across PTY chunk boundaries first: a chunk
       // ending mid-sequence ('\x1b[?104' now, '9h' next) would slip past the
       // strip below and leave xterm stuck in the scrollback-less alt buffer
@@ -1419,13 +1469,15 @@ export class Session extends EventEmitter {
         data = data.slice(0, -splitTail[0].length);
         if (!data) return;
       }
-      data = data
-        // eslint-disable-next-line no-control-regex
-        .replace(/\x1b\[\?(?:47|1047|1049)[hl]/g, '')
-        // eslint-disable-next-line no-control-regex
-        .replace(/\x1b\[3J/g, '')
-        // eslint-disable-next-line no-control-regex
-        .replace(/\x1b\[\?(?:1000|1001|1002|1003|1005|1006|1007)[hl]/g, '');
+      // eslint-disable-next-line no-control-regex
+      data = data.replace(/\x1b\[\?(?:47|1047|1049)[hl]/g, '');
+      if (fullStrip) {
+        data = data
+          // eslint-disable-next-line no-control-regex
+          .replace(/\x1b\[3J/g, '')
+          // eslint-disable-next-line no-control-regex
+          .replace(/\x1b\[\?(?:1000|1001|1002|1003|1005|1006|1007)[hl]/g, '');
+      }
     }
 
     // Scan terminal output for attachment requests. `codeman://attach?...` is an
@@ -1485,8 +1537,8 @@ export class Session extends EventEmitter {
     // never show it — which left cliVersion undefined and silently disabled
     // wheel-forwarding to Claude's own transcript (the only route to history in
     // repaint/alt-screen mode; issue #154). Remote sessions run claude on
-    // another host, so a local probe wouldn't reflect their version — skip them
-    // and let the banner scrape handle those. Cached process-wide, best-effort.
+    // another host, so a local probe wouldn't reflect their version; they get
+    // their own over-ssh probe below. Cached process-wide, best-effort.
     if (this.mode === 'claude' && !this._remote && !this._docker && !this._cliVersion) {
       const probedVersion = getClaudeCliVersion();
       if (probedVersion) {
@@ -1523,6 +1575,32 @@ export class Session extends EventEmitter {
             /* best-effort */
           });
       }, DOCKER_CLI_VERSION_PROBE_DELAY_MS);
+    }
+
+    // Remote sessions run claude on ANOTHER HOST, so neither the local nor the
+    // docker probe applies, and the banner-scrape fallback they were left with
+    // is the unreliable path #154 was filed for, so remote Claude cases silently
+    // never got wheel-forwarding (noted in the #205 analysis). Probe over ssh,
+    // deferred so session start never waits on the ssh round-trip.
+    if (this.mode === 'claude' && this._remote && !this._cliVersion) {
+      const remoteMeta = this._remote;
+      setTimeout(() => {
+        if (this._isStopped || this._cliVersion) return;
+        void probeRemoteCliVersion(remoteMeta, this.mode)
+          .then((version) => {
+            if (!version || this._isStopped || this._cliVersion) return;
+            this._cliVersion = version;
+            this.emit('cliInfoUpdated', {
+              version: this._cliVersion,
+              model: this._cliModel,
+              accountType: this._cliAccountType,
+              latestVersion: this._cliLatestVersion,
+            });
+          })
+          .catch(() => {
+            /* best-effort */
+          });
+      }, REMOTE_CLI_VERSION_PROBE_DELAY_MS);
     }
 
     // If mux wrapping is enabled, create or attach to a mux session

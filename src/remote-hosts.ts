@@ -257,6 +257,69 @@ export async function checkRemoteTmuxAvailable(
 }
 
 /**
+ * The CLI binary each session mode runs on the remote host. Antigravity's
+ * binary is `agy` (the mode name is not the command); shell has no CLI to
+ * probe, so it is absent.
+ */
+const REMOTE_CLI_BIN: Partial<Record<SessionMode, string>> = {
+  claude: 'claude',
+  opencode: 'opencode',
+  codex: 'codex',
+  gemini: 'gemini',
+  antigravity: 'agy',
+};
+
+/**
+ * Build the SSH command that reads the remote CLI's version (`claude --version`
+ * on the remote host). The version query is routed through
+ * `remoteLoginShellCommand` (the SAME `$SHELL -i -l -c` wrapper the real
+ * launch uses), because agent CLIs live on PATH only after the remote user's
+ * interactive-login startup files run (see defaultRemoteCommandForMode); a bare
+ * `claude --version` over ssh exits 127. Connection options come from the
+ * shared `buildSshConnectionArgs`, so the probe reaches exactly the hosts the
+ * launch can reach. Returns null for modes with no CLI (shell).
+ */
+export function buildRemoteCliVersionProbeCommand(
+  host: Pick<RemoteHost, 'username' | 'host' | 'port'> & RemoteSshOptions,
+  mode: SessionMode
+): string | null {
+  const bin = REMOTE_CLI_BIN[mode];
+  if (!bin) return null;
+  return [
+    ...buildSshConnectionArgs(host),
+    remoteSshTarget(host),
+    shellescape(remoteLoginShellCommand(`${bin} --version`)),
+  ].join(' ');
+}
+
+/**
+ * Read the CLI version installed ON THE REMOTE HOST. Feeds Session.cliVersion
+ * for remote sessions: the deterministic local probe deliberately skips them
+ * (it would report the LOCAL host's claude), and the startup-banner scrape is
+ * unreliable (newer Claude Code builds print no banner; resumed sessions never
+ * do), which left cliVersion undefined and silently disabled wheel-forwarding
+ * to the CLI transcript (residual #154, noted in the #205 analysis). The
+ * version is parsed as the first semver in stdout, never raw output: an
+ * interactive-login shell may echo rc-file noise around it. Returns undefined
+ * on any failure. No-op under VITEST (mirrors checkRemoteTmuxAvailable).
+ */
+export async function probeRemoteCliVersion(
+  host: Pick<RemoteHost, 'username' | 'host' | 'port'> & RemoteSshOptions,
+  mode: SessionMode
+): Promise<string | undefined> {
+  if (process.env.VITEST) return undefined;
+  const command = buildRemoteCliVersionProbeCommand(host, mode);
+  if (!command) return undefined;
+  try {
+    const { stdout } = await execAsync(command, { timeout: 15_000 });
+    const match = stdout.match(/\d+\.\d+\.\d+/);
+    return match ? match[0] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * COD-105 — build the SSH command that lists `codeman-*` tmux sessions on a
  * remote host's canonical `-L codeman` socket.
  *
