@@ -2620,20 +2620,23 @@ export class Session extends EventEmitter {
    * For interactive sessions, this is how you send user input to Claude.
    * Remember to include `\r` (carriage return) to simulate pressing Enter.
    *
-   * @param data - The input data to send (text, escape sequences, etc.)
-   *
    * @example
    * ```typescript
    * session.write('hello world');  // Text only, no Enter
    * session.write('\r');           // Enter key
    * session.write('ls -la\r');     // Command with Enter
    * ```
+   *
+   * @param data - The input data to send (text, escape sequences, etc.)
+   * @returns true if the data reached a PTY. A session whose PTY is gone still
+   * discards the data, but it used to do so with no signal at all — which is how
+   * input could disappear while the caller believed it had been delivered.
    */
-  write(data: string): void {
+  write(data: string): boolean {
     this._trackSubmit(data);
-    if (this.ptyProcess) {
-      this.ptyProcess.write(data);
-    }
+    if (!this.ptyProcess) return false;
+    this.ptyProcess.write(data);
+    return true;
   }
 
   // ── Conversation tracking ─────────────────────────────────────────────
@@ -2689,6 +2692,23 @@ export class Session extends EventEmitter {
       if (oldest !== undefined) this._appliedInputSeq.delete(oldest);
     }
     return true;
+  }
+
+  /**
+   * Undo the bookkeeping of {@link shouldApplyInput} for a delivery that failed.
+   *
+   * Without this, the reliable-delivery layer guarantees exactly-once delivery of
+   * something that may never have been delivered: the seq is recorded as applied
+   * BEFORE the write is attempted, so a client retry — the very mechanism the seq
+   * exists for — is rejected as a duplicate and the input is lost for good.
+   *
+   * Only rolls back if `seq` is still the newest recorded one; a later input has
+   * already superseded it and must not be re-opened.
+   */
+  forgetInputSeq(clientId: string, seq: number): void {
+    if (this._appliedInputSeq.get(clientId) === seq) {
+      this._appliedInputSeq.set(clientId, seq - 1);
+    }
   }
 
   /**
