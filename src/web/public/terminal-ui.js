@@ -429,6 +429,7 @@ Object.assign(CodemanApp.prototype, {
         }
         this._noteTerminalUserScroll(lines);
         this.terminal.scrollLines(lines);
+        this._maybeLoadMoreHistoryOnScroll(lines);
       },
       { passive: false }
     );
@@ -453,7 +454,10 @@ Object.assign(CodemanApp.prototype, {
         if (!isTouching && Math.abs(velocity) > 0.3) {
           // Momentum phase — convert pixel velocity to lines
           const lines = Math.round(velocity / cellHeight());
-          if (lines !== 0) this.terminal.scrollLines(lines);
+          if (lines !== 0) {
+            this.terminal.scrollLines(lines);
+            this._maybeLoadMoreHistoryOnScroll(lines);
+          }
           velocity *= 0.92;
           scrollFrame = requestAnimationFrame(scrollLoop);
         } else if (!isTouching) {
@@ -516,6 +520,7 @@ Object.assign(CodemanApp.prototype, {
             if (lines !== 0) {
               this._noteTerminalUserScroll(lines);
               this.terminal.scrollLines(lines);
+              this._maybeLoadMoreHistoryOnScroll(lines);
               pixelAccum -= lines * ch;
             }
           }
@@ -2009,6 +2014,20 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  /**
+   * Post-scroll companion to _noteTerminalUserScroll: hitting the TOP of the
+   * buffer while scrolling up is the user reaching for history the browser does
+   * not have, so pull the rest of tmux's scrollback (issue #205, see
+   * _maybeRefetchFullHistory). Must be called AFTER scrollLines(), since the
+   * check is on the resulting position, and it is deliberately not folded into
+   * _noteTerminalUserScroll for exactly that reason. Cheap: one integer compare
+   * per scroll event, and the pull itself is cooldown-guarded.
+   */
+  _maybeLoadMoreHistoryOnScroll(lines) {
+    if (lines >= 0) return;
+    if (this.terminal?.buffer?.active?.viewportY === 0) this._maybeRefetchFullHistory?.();
+  },
+
   _hasRecentUserScrollUp() {
     if (typeof this._lastUserScrollUpAt !== 'number') return false;
     return performance.now() - this._lastUserScrollUpAt < window.CodemanTerminalInput.USER_SCROLL_STICKY_SUPPRESS_MS;
@@ -2815,9 +2834,22 @@ Object.assign(CodemanApp.prototype, {
   // deltaY≈0 collapses to a fixed ±1 line/tick and the gesture can't page through
   // history on a trackpad (issue #154). Non-Shift and mouse-wheel paths are
   // unchanged (they carry deltaY). The `|| ±1` keeps sub-25px deltas moving.
+  //
+  // `deltaMode` says what UNIT the delta is in, and ignoring it made every
+  // non-pixel browser scroll ~4x too slowly: Firefox reports DOM_DELTA_LINE (1)
+  // with deltaY≈3 per notch, so the pixel math rounded to 0 and fell through to
+  // the ±1 fallback — one line per notch, versus 4-5 for Chrome's ~110px. In
+  // Claude mode the same value also capped the forwarded SGR report at one tick.
   _wheelScrollLines(ev) {
     const delta = ev.shiftKey && Math.abs(ev.deltaX) > Math.abs(ev.deltaY) ? ev.deltaX : ev.deltaY;
-    return Math.round(delta / 25) || (delta > 0 ? 1 : -1);
+    if (!delta) return 0; // pure horizontal swipe: don't fall through to -1
+    const lines =
+      ev.deltaMode === 1 // DOM_DELTA_LINE (Firefox mouse wheel)
+        ? delta
+        : ev.deltaMode === 2 // DOM_DELTA_PAGE
+          ? delta * (this.terminal?.rows || 24)
+          : delta / 25; // DOM_DELTA_PIXEL (Chrome/WebKit, and every trackpad)
+    return Math.round(lines) || (delta > 0 ? 1 : -1);
   },
 
   _shouldForwardWheelToApp(ev) {
