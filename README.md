@@ -85,9 +85,29 @@ codeman web --multiuser              # named logins + per-user case spaces
 Details in [Multi-User Mode](#multi-user-mode-opt-in) below.
 
 <details>
-<summary><strong>Run as a background service</strong></summary>
+<summary><strong>Keep it running in the background</strong></summary>
 
-The installer's final menu sets this up for you (option 2) and verifies the service actually comes up before claiming success. To configure it manually instead:
+To outlive the shell you started it in, without setting anything up:
+
+```bash
+codeman web -d          # detach; logs to ~/.codeman/web.log
+codeman web --status    # is it up, and on which pid
+codeman web --stop      # graceful SIGTERM; agents keep running in tmux
+```
+
+`-d` waits until the server actually answers before reporting success, and refuses to start a second one on the same data dir (two servers sharing a tmux socket attach to each other's sessions).
+
+To have it come back after a reboot, install it as a service instead. The installer's final menu does this for you (option 2); `codeman service` is the equivalent for an `npm i -g aicodeman` install:
+
+```bash
+codeman service install     # systemd user unit (Linux) or LaunchAgent (macOS)
+codeman service status
+codeman service uninstall
+```
+
+`service install` writes the unit with your current PATH baked in, which matters more than it sounds: launchd hands a job `/usr/bin:/bin:/usr/sbin:/sbin`, so a Homebrew or nvm `node`, `tmux` or `claude` is invisible to a hand-written plist. It never copies `CODEMAN_PASSWORD` into the unit file; add that yourself if the service needs auth.
+
+To write the unit by hand instead:
 
 **Linux (systemd):**
 
