@@ -325,6 +325,16 @@ describe('Virtual Keyboard', () => {
 
     it('coalesces keyboard animation frames into one final terminal fit', async () => {
       const result = await page.evaluate(async () => {
+        // `app.terminal` and `app.fitAddon` are only assigned by initTerminal(),
+        // which needs a selected session this harness never creates. Both are
+        // null at rest, and the settle callback returns early on a falsy
+        // terminal — so without stand-ins this test cannot reach the behavior
+        // it asserts. Install the minimum surface the callback touches.
+        const hadTerminal = app.terminal !== null && app.terminal !== undefined;
+        const hadFitAddon = app.fitAddon !== null && app.fitAddon !== undefined;
+        if (!hadTerminal) app.terminal = { scrollToBottom() {} };
+        if (!hadFitAddon) app.fitAddon = { fit() {}, proposeDimensions: () => null };
+
         const originalFit = app.fitAddon.fit.bind(app.fitAddon);
         const originalSendResize = KeyboardHandler._sendTerminalResize.bind(KeyboardHandler);
         const originalScrollToBottom = app.terminal.scrollToBottom.bind(app.terminal);
@@ -354,11 +364,57 @@ describe('Virtual Keyboard', () => {
         app.fitAddon.fit = originalFit;
         KeyboardHandler._sendTerminalResize = originalSendResize;
         app.terminal.scrollToBottom = originalScrollToBottom;
+        if (!hadFitAddon) app.fitAddon = null;
+        if (!hadTerminal) app.terminal = null;
         return { beforeFinalSettle, afterFinalSettle };
       });
 
       expect(result.beforeFinalSettle).toEqual({ fits: 0, resizes: 0, bottomRestores: 0 });
       expect(result.afterFinalSettle).toEqual({ fits: 1, resizes: 1, bottomRestores: 1 });
+    });
+
+    // Behavioral counterpart to the test above, driven through the PUBLIC entry
+    // point rather than the internal scheduler. Before this change each
+    // onKeyboardShow armed its own uncoalesced 150ms setTimeout, so a keyboard
+    // animation that reports several viewport steps refit the terminal once per
+    // step — the visible symptom being repeated reflow while the keyboard slides
+    // up. This asserts the observable outcome (one refit for a burst) and so
+    // fails on master by COUNT, not by a missing method.
+    it('refits once for a burst of keyboard viewport steps', async () => {
+      const counts = await page.evaluate(async () => {
+        const hadTerminal = app.terminal !== null && app.terminal !== undefined;
+        const hadFitAddon = app.fitAddon !== null && app.fitAddon !== undefined;
+        if (!hadTerminal) app.terminal = { scrollToBottom() {} };
+        if (!hadFitAddon) app.fitAddon = { fit() {}, proposeDimensions: () => null };
+
+        const originalFit = app.fitAddon.fit.bind(app.fitAddon);
+        const originalSendResize = KeyboardHandler._sendTerminalResize.bind(KeyboardHandler);
+        let fits = 0;
+        app.fitAddon.fit = () => {
+          fits++;
+        };
+        KeyboardHandler._sendTerminalResize = () => {};
+
+        // Three viewport steps in quick succession, as a keyboard animation
+        // produces on a real device.
+        KeyboardHandler.onKeyboardShow();
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        KeyboardHandler.onKeyboardShow();
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        KeyboardHandler.onKeyboardShow();
+
+        // Well past both the coalescing window and master's fixed 150ms timer.
+        await new Promise((resolve) => setTimeout(resolve, 400));
+
+        app.fitAddon.fit = originalFit;
+        KeyboardHandler._sendTerminalResize = originalSendResize;
+        if (!hadFitAddon) app.fitAddon = null;
+        if (!hadTerminal) app.terminal = null;
+        return fits;
+      });
+
+      // Coalesced: one refit for the whole burst. Master fires one per step.
+      expect(counts).toBe(1);
     });
 
     it('accessory bar has the simple-mode action buttons', async () => {
