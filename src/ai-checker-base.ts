@@ -135,6 +135,7 @@ export abstract class AiCheckerBase<
   // Active check state
   protected checkMuxName: string | null = null;
   protected checkTempFile: string | null = null;
+  protected checkStderrFile: string | null = null;
   protected checkPromptFile: string | null = null;
   protected checkPollTimer: NodeJS.Timeout | null = null;
   protected checkTimeoutTimer: NodeJS.Timeout | null = null;
@@ -376,6 +377,7 @@ export abstract class AiCheckerBase<
     const shortId = this.sessionId.slice(0, 8);
     const timestamp = Date.now();
     this.checkTempFile = join(tmpdir(), `${this.tempFilePrefix}-${shortId}-${timestamp}.txt`);
+    this.checkStderrFile = join(tmpdir(), `${this.tempFilePrefix}-stderr-${shortId}-${timestamp}.txt`);
     this.checkPromptFile = join(tmpdir(), `${this.tempFilePrefix}-prompt-${shortId}-${timestamp}.txt`);
     this.checkMuxName = `${this.muxNamePrefix}${shortId}`;
 
@@ -386,6 +388,7 @@ export abstract class AiCheckerBase<
 
     // Ensure output temp file exists (empty) so we can poll it
     writeFileSync(this.checkTempFile, '');
+    writeFileSync(this.checkStderrFile, '');
 
     // Write prompt to file to avoid E2BIG error (argument list too long)
     // The prompt can be 16KB+ which exceeds shell argument limits
@@ -396,7 +399,7 @@ export abstract class AiCheckerBase<
     const modelArg = `--model "${this.config.model.replace(/"/g, '\\"')}"`;
     const augmentedPath = getAugmentedPath();
     const claudeCmd = `cat "${this.checkPromptFile}" | claude -p ${modelArg} --output-format text`;
-    const fullCmd = `export PATH="${augmentedPath}"; ${claudeCmd} > "${this.checkTempFile}" 2>&1; echo "${this.doneMarker}" >> "${this.checkTempFile}"; rm -f "${this.checkPromptFile}"`;
+    const fullCmd = `export PATH="${augmentedPath}"; ${claudeCmd} > "${this.checkTempFile}" 2> "${this.checkStderrFile}"; echo "${this.doneMarker}" >> "${this.checkTempFile}"; rm -f "${this.checkPromptFile}"`;
 
     // Spawn tmux session
     try {
@@ -461,16 +464,30 @@ export abstract class AiCheckerBase<
     const output = content.replace(this.doneMarker, '').trim();
 
     if (!output) {
-      return this.createErrorResult(`Empty output from ${this.checkDescription}`, durationMs);
+      const stderr = this.readStderrDiagnostic();
+      const detail = stderr ? `: ${stderr}` : '';
+      return this.createErrorResult(`Empty output from ${this.checkDescription}${detail}`, durationMs);
     }
 
     // Delegate to subclass for verdict parsing
     const parsed = this.parseVerdict(output);
     if (!parsed) {
-      return this.createErrorResult(`Could not parse verdict from: "${output.substring(0, 100)}"`, durationMs);
+      const stderr = this.readStderrDiagnostic();
+      const detail = stderr ? `; stderr: "${stderr}"` : '';
+      return this.createErrorResult(`Could not parse verdict from: "${output.substring(0, 100)}"${detail}`, durationMs);
     }
 
     return this.createResult(parsed.verdict, parsed.reasoning, durationMs);
+  }
+
+  private readStderrDiagnostic(): string {
+    if (!this.checkStderrFile || !existsSync(this.checkStderrFile)) return '';
+
+    try {
+      return readFileSync(this.checkStderrFile, 'utf-8').trim().substring(0, 200);
+    } catch {
+      return '';
+    }
   }
 
   private cleanupCheck(): void {
@@ -507,6 +524,17 @@ export abstract class AiCheckerBase<
         // Best effort cleanup
       }
       this.checkTempFile = null;
+    }
+
+    if (this.checkStderrFile) {
+      try {
+        if (existsSync(this.checkStderrFile)) {
+          unlinkSync(this.checkStderrFile);
+        }
+      } catch {
+        // Best effort cleanup
+      }
+      this.checkStderrFile = null;
     }
 
     if (this.checkPromptFile) {
