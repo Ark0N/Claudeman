@@ -1421,10 +1421,16 @@ html[data-line-anim="packet"] .connection-line.line-enter {
   transition: opacity 0.05s ease-out, width 0.05s ease-out, padding 0.05s ease-out;
 }
 
-.session-tab:hover .tab-close {
-  opacity: 1;
-  width: auto;
-  padding: 0.15rem 0.35rem;
+/* Touch-only devices wider than mobile.css's breakpoint (e.g. iPad Pro
+   landscape) keep the legacy tap-reveal: tap sets sticky :hover, icons gain
+   width, the tab grows. Hover-capable devices instead use the fixed-width
+   .tab-actions overlay defined after the detach section. */
+@media (hover: none) {
+  .session-tab:hover .tab-close {
+    opacity: 1;
+    width: auto;
+    padding: 0.15rem 0.35rem;
+  }
 }
 
 .session-tab .tab-close:hover {
@@ -1983,10 +1989,12 @@ html[data-line-anim="packet"] .connection-line.line-enter {
   transition: opacity 0.15s, width 0.15s, padding 0.15s, transform 0.2s;
 }
 
-.session-tab:hover .tab-gear {
-  opacity: 1;
-  width: auto;
-  padding: 0 0.3rem;
+@media (hover: none) {
+  .session-tab:hover .tab-gear {
+    opacity: 1;
+    width: auto;
+    padding: 0 0.3rem;
+  }
 }
 
 .session-tab .tab-gear:hover {
@@ -2008,10 +2016,12 @@ html[data-line-anim="packet"] .connection-line.line-enter {
   overflow: hidden;
   transition: opacity 0.15s, width 0.15s, padding 0.15s;
 }
-.session-tab:hover .tab-detach {
-  opacity: 1;
-  width: auto;
-  padding: 0 0.3rem;
+@media (hover: none) {
+  .session-tab:hover .tab-detach {
+    opacity: 1;
+    width: auto;
+    padding: 0 0.3rem;
+  }
 }
 .session-tab .tab-detach:hover {
   color: var(--accent-hover);
@@ -2045,6 +2055,96 @@ html[data-line-anim="packet"] .connection-line.line-enter {
 }
 .session-tab.detached .tab-detached-badge {
   display: inline-flex;
+}
+
+/* ===== Fixed-width tab hover: icons overlay, title slides ================
+   All three per-tab icons live in a .tab-actions wrapper. In flow it adds no
+   width (children keep the width:0 collapse above), so the touch paths in
+   mobile.css behave exactly as before. On hover-capable devices the wrapper
+   is lifted out of flow instead: the tab NEVER changes width on hover — the
+   icons slide in over the right edge while the title row (and any badges)
+   slide left by --tab-slide, set per-tab by _applyTabHoverSlide() in app.js
+   (text width is unknowable in CSS; short names should barely move). The
+   sliding title clips at the LEFT edge of .tab-info (overflow: hidden), so
+   the readable tail — the :comment suffix — stays visible. */
+
+.session-tab .tab-actions {
+  display: flex;
+  align-items: center;
+}
+
+/* Pop-out button is opt-in (App Settings → Tab Bar, default off; per-device).
+   settings-ui.js mirrors the setting as the tabs-show-detach class on <html>.
+   A tab that is ALREADY detached keeps its icon regardless — it is the
+   re-focus affordance for the popped-out window. */
+html:not(.tabs-show-detach) .session-tab:not(.detached) .tab-detach {
+  display: none;
+}
+
+@media (hover: hover) {
+  .session-tab .tab-actions {
+    position: absolute;
+    top: 50%;
+    right: 3px;
+    padding: 0 1px;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-50%) translateX(10px);
+    transition: transform 0.16s ease-out, opacity 0.16s ease-out;
+  }
+  /* Reveal on hover, or on KEYBOARD focus of an icon (:focus-visible, so a
+     mouse click on the gear does not pin the overlay open after the pointer
+     leaves — spans with tabindex keep focus after a click). */
+  .session-tab:hover .tab-actions,
+  .session-tab .tab-actions:has(:focus-visible) {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(-50%) translateX(0);
+  }
+  /* Un-collapse the icons: the wrapper overlays instead of growing the tab. */
+  .session-tab .tab-actions .tab-gear,
+  .session-tab .tab-actions .tab-detach,
+  .session-tab .tab-actions .tab-close {
+    opacity: 1;
+    width: auto;
+    overflow: visible;
+    padding: 0.1rem 0.25rem;
+  }
+  /* Title and badges slide left to clear the incoming icons. Badges keep
+     their own (shorter) transition so background hovers stay intact, and
+     their scale-on-hover must COMPOSE with the slide (transform is a single
+     property — a bare scale() would snap the badge back right). */
+  .session-tab .tab-name-row,
+  .session-tab .tab-folder {
+    transform: translateX(calc(-1 * var(--tab-slide, 0px)));
+    transition: transform 0.16s ease-out;
+  }
+  .session-tab > .tab-badge {
+    transition: transform 0.16s ease-out;
+  }
+  .session-tab > .tab-badge,
+  .session-tab > .tab-subagent-badge,
+  .session-tab > .tab-ultracode-badge {
+    transform: translateX(calc(-1 * var(--tab-slide, 0px)));
+  }
+  .session-tab > .tab-subagent-badge:hover,
+  .session-tab > .tab-ultracode-badge:hover {
+    transform: translateX(calc(-1 * var(--tab-slide, 0px))) scale(1.05);
+  }
+  /* Detached tab: the pop-out icon stays visible at rest as the re-focus
+     affordance; reserve its footprint so it never covers the title. */
+  .session-tab.detached {
+    padding-right: 26px;
+  }
+  .session-tab.detached .tab-actions {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(-50%);
+  }
+  .session-tab.detached:not(:hover) .tab-actions:not(:has(:focus-visible)) .tab-gear,
+  .session-tab.detached:not(:hover) .tab-actions:not(:has(:focus-visible)) .tab-close {
+    display: none;
+  }
 }
 
 /* ===== Solo (detached single-session) window chrome ===================== */

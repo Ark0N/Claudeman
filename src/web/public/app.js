@@ -827,6 +827,7 @@ class CodemanApp {
     this.applyLocalization();
     this.applyTabWrapSettings();
     this.applyMonitorVisibility();
+    this._setupTabHoverSlide();
     // Must run before the first session:created can arrive: markSessionTabEntering()
     // ignores ids until this sets up its state, which is what keeps the tabs
     // restored on page load from animating.
@@ -3489,11 +3490,12 @@ class CodemanApp {
             }
           }
         } else if (minimizedCount > 0 && !subagentBadgeEl) {
-          // Need to add badge - insert before gear icon
+          // Need to add badge - insert before the action-icon overlay so the
+          // badge stays a direct child of the tab (outside .tab-actions)
           const badgeHtml = this.renderSubagentTabBadge(id, minimizedAgents);
-          const gearEl = tab.querySelector('.tab-gear');
-          if (gearEl) {
-            gearEl.insertAdjacentHTML('beforebegin', badgeHtml);
+          const actionsEl = tab.querySelector('.tab-actions');
+          if (actionsEl) {
+            actionsEl.insertAdjacentHTML('beforebegin', badgeHtml);
           }
         } else if (minimizedCount === 0 && subagentBadgeEl) {
           // Count went to 0 - remove badge
@@ -3545,6 +3547,61 @@ class CodemanApp {
       : container.scrollWidth > container.clientWidth + 1;
 
     container.classList.toggle('tabs-auto-wrap', shouldWrap);
+  }
+
+  // Tab hover reveal (hover-capable devices): the tab keeps its width — the
+  // .tab-actions overlay slides in over the right edge while the title (and any
+  // badges) slide left just far enough to clear it, clipped at the LEFT edge of
+  // .tab-info so the name's tail stays readable. CSS owns the reveal itself
+  // (:hover/:focus-within in styles.css); JS only computes the per-tab slide
+  // distance (--tab-slide), because text width is unknowable in CSS and short
+  // names should barely move.
+  _setupTabHoverSlide() {
+    const container = this.$('sessionTabs');
+    if (!container || this._tabHoverSlideBound) return;
+    this._tabHoverSlideBound = true;
+    const enter = (e) => {
+      const tab = e.target.closest?.('.session-tab');
+      if (!tab || !container.contains(tab)) return;
+      // Moving within the tab: skip unless the slide was cleared mid-hover
+      // (focusout can clear it while the pointer never left).
+      if (e.relatedTarget && tab.contains(e.relatedTarget) && tab.style.getPropertyValue('--tab-slide')) return;
+      this._applyTabHoverSlide(tab);
+    };
+    const leave = (e) => {
+      const tab = e.target.closest?.('.session-tab');
+      if (!tab || (e.relatedTarget && tab.contains(e.relatedTarget))) return;
+      if (e.type === 'focusout' && tab.matches(':hover')) return; // pointer still owns the reveal
+      tab.style.removeProperty('--tab-slide');
+    };
+    container.addEventListener('pointerover', enter);
+    container.addEventListener('pointerout', leave);
+    // Keyboard path: tabbing onto an icon reveals the overlay via
+    // .tab-actions:has(:focus-visible). Clicking a tab also focuses it
+    // (tabindex=0), so only focus INSIDE the actions wrapper may trigger the
+    // slide — else every click would slide the title with no icons showing.
+    container.addEventListener('focusin', (e) => {
+      if (e.target.closest?.('.tab-actions')) enter(e);
+    });
+    container.addEventListener('focusout', leave);
+  }
+
+  _applyTabHoverSlide(tab) {
+    const actions = tab.querySelector('.tab-actions');
+    // Zero width = overlay inactive (touch layout keeps icons in-flow) or no icons.
+    if (!actions || !actions.offsetWidth) return;
+    // offsetLeft/offsetWidth are pre-transform layout values, and offsetParent is
+    // the tab itself (position: relative), so both sides share the same origin.
+    let contentRight = 0;
+    for (const child of tab.children) {
+      if (child === actions) continue;
+      const cl = child.classList;
+      if (cl.contains('tab-number') || cl.contains('tab-status') || cl.contains('tab-load-spinner') || cl.contains('tab-web-icon')) continue;
+      contentRight = Math.max(contentRight, child.offsetLeft + child.offsetWidth);
+    }
+    const shift = Math.min(Math.max(0, contentRight + 4 - actions.offsetLeft), actions.offsetWidth + 12);
+    if (shift > 0) tab.style.setProperty('--tab-slide', shift + 'px');
+    else tab.style.removeProperty('--tab-slide');
   }
 
   _fullRenderSessionTabs() {
@@ -3611,9 +3668,7 @@ class CodemanApp {
           ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()" aria-label="${taskStats.running} running tasks">${taskStats.running}</span>` : ''}
           ${subagentBadge}
           ${ultracodeBadge}
-          <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions(${escapeHtml(JSON.stringify(id))})" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span>
-          <span class="tab-detach" onclick="event.stopPropagation(); app.detachSession(${escapeHtml(JSON.stringify(id))})" title="Open in a new window" aria-label="Open session in a new window" tabindex="0">&#x29C9;</span>
-          <span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession(${escapeHtml(JSON.stringify(id))})" title="Close session" aria-label="Close session" tabindex="0">&times;</span>
+          <span class="tab-actions"><span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions(${escapeHtml(JSON.stringify(id))})" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span><span class="tab-detach" onclick="event.stopPropagation(); app.detachSession(${escapeHtml(JSON.stringify(id))})" title="Open in a new window" aria-label="Open session in a new window" tabindex="0">&#x29C9;</span><span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession(${escapeHtml(JSON.stringify(id))})" title="Close session" aria-label="Close session" tabindex="0">&times;</span></span>
         </div>`);
       _tabIdx++;
     }
@@ -3630,6 +3685,12 @@ class CodemanApp {
 
     // Set up keyboard navigation for tabs
     this.setupTabKeyboardNavigation(container);
+
+    // A rebuild replaces a hovered tab mid-hover (SSE-driven renders): the fresh
+    // element matches :hover immediately but its inline --tab-slide is gone, so
+    // re-derive it or the title stops clearing the action icons.
+    const hoveredTab = container.querySelector('.session-tab:hover');
+    if (hoveredTab) this._applyTabHoverSlide(hoveredTab);
 
     // Update connection lines after tabs change (positions may have shifted)
     this.updateConnectionLines();

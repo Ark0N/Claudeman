@@ -227,6 +227,7 @@
     'Redraw Terminal Button': '重绘终端按钮',
     'Tab Bar': '标签栏',
     'Tall Tabs (Name + Folder)': '双行标签（名称 + 文件夹）',
+    'Pop-out Button on Tabs': '标签页弹出窗口按钮',
     Panels: '面板',
     Monitor: '监视器',
     'Project Insights': '项目洞察',
