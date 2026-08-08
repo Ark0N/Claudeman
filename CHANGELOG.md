@@ -1,5 +1,28 @@
 # aicodeman
 
+## 1.13.0
+
+### Minor Changes
+
+- Agent wait primitives, the Codeman agent skill, a fix for hooks dying silently on HTTPS installs, and the tab-strip UX improvements from the previous batch.
+
+  **Agent wait primitives (new API surface, the reason this is a minor).** Three bounded long-polls let an agent driving Codeman from a shell block instead of poll:
+  - `GET /api/v1/sessions/:id/wait` blocks until a lifecycle signal fires (`until=stop,idle,working,blocked,exit`, `fresh=1` to require a new transition).
+  - `GET /api/v1/sessions/:id/wait-output` blocks until a literal substring appears in the session's output (`match=`, `nocase=`, `from=now|buffer`; never regex, by design).
+  - `wait`/`waitTimeout` on `POST /api/v1/sessions/:id/input` (send-and-wait) registers the waiter before typing, closing the race where a separate wait reports the previous turn's idle state as this turn's answer.
+
+  Shared semantics: a timeout is HTTP 200 with `wait.timedOut: true` (callers loop over short waits; tunnels cut idle connections), timeouts are clamped to [1s, 600s] and echoed back as `wait.timeoutMs`, all three nest the result under `data.wait`, and `status`/`limitPaused` ride along. `stop`/`blocked` exist for `claude` mode only: requesting them explicitly elsewhere is a 400, the default set silently narrows and echoes what it waited on. Capacity caps (16 waiters per session, 128 process-wide) answer 409/429, waiter slots release on client hang-up, and shutdown resolves parked waiters instead of stranding them. Bounds are operator-tunable via `CODEMAN_WAIT_*` env vars.
+
+  Reliability details that came out of three verification rounds: a worker that dies inside its tmux pane is now detected at the mux layer (pane-death probe, ~750ms cache, a 3s watcher for waits already parked), so a corpse answers `exit` instead of `idle` and send-and-wait rolls back its dedup seq when the write went nowhere; output matching normalizes charset-designation escapes (a stock bash prompt's `ESC ( B` no longer breaks `match=tnode:`) and holds back partial escapes at chunk boundaries, so matches straddling PTY chunks are found.
+
+  **Codeman agent skill (`skills/codeman`).** A packaged skill that teaches an agent running inside a Codeman session to drive the API safely: guard preamble (refuses outside `CODEMAN_MUX=1`, resolves credentials from the data dir `.env` or the install's service definition), self-protection (`is_self` prefix check in both directions), readiness for claude workers (composer-first, trust dialog as bounded fallback), send-and-wait loops that cannot report a never-submitted prompt as success, marker-synchronized shell flows, fan-out patterns, and cleanup discipline. Ships in the npm package via the `files` entry.
+
+  **Hooks were dying silently on every HTTPS install (bug fix).** The generated hook curls lacked `-k`, so on `--https` installs (self-signed cert) every hook event (`stop`, `permission_prompt`, `elicitation_dialog`, `idle_prompt`, `teammate_idle`, `task_completed`) failed TLS verification and the failure was swallowed, taking respawn's definitive idle signals with it. Hooks are now generated with `curl -sk`, and a staleness detector regenerates the on-disk hook config of already-created cases the next time a session starts in them. Relatedly, `CODEMAN_API_URL` is no longer exported with a guessed `http://localhost:3000` fallback (wrong scheme on HTTPS installs); it is omitted unless the server has stamped the real URL, so in-session guards fail closed.
+
+  **Tab strip (from the previous batch, reported by christianhaberl):** action icons (kill/pop-out) now appear on the active tab only, middle-click closes a tab, tab hover uses a fixed width with a sliding title instead of resizing the strip, and the pop-out button is opt-in (default off).
+
+  **Docs.** `docs/api-reference.md` gained the full long-polling contract (signals by mode, readiness, what the matcher sees, response discriminators); `docs/extending-codeman.md` and the README carry verified copy-paste orchestration recipes; `docs/architecture-invariants.md` records the load-bearing ordering, liveness, and edge-triggered-signal invariants. Net +163 tests (4300 passing in the CI sweep).
+
 ## 1.12.2
 
 ### Patch Changes

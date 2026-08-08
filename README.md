@@ -680,15 +680,21 @@ When a CLI runs in a Codeman-managed session, these environment variables are se
 
 ### Rules of the road (read before you POST)
 
-1. **Single-line input only.** Programmatic input is sent as literal text **+ Enter** in one shot. Multi-line strings break the agent TUI (Ink) — send one line, or split into multiple calls.
+1. **Single-line input, ending in `\r`.** Programmatic input is sent as literal text, and Enter fires **only when the input contains a carriage return**: `{"input":"run tests\r"}`. Without the `\r` the text sits on the session's prompt unsubmitted (and a combined `wait` runs its full timeout on a turn that never started). Embedded newlines are stripped rather than rejected, so `"echo A\necho B\r"` runs the joined command `echo Aecho B`: send one line per call.
 2. **Make input idempotent.** Include a stable `clientId` and a monotonic per-session `seq` on `POST …/input`. The server de-duplicates, so a retry after a dropped connection can't double-deliver a prompt.
-3. **Auth.** If `CODEMAN_PASSWORD` is set, send HTTP Basic auth (user `admin` or `CODEMAN_USERNAME`) or a `codeman_session` cookie. The default loopback install is passwordless. A missing `Origin` header is allowed, so plain `curl` works; cross-site browser origins are rejected (CSRF guard).
+3. **Auth.** If `CODEMAN_PASSWORD` is set, send HTTP Basic auth (user `admin` or `CODEMAN_USERNAME`) or a `codeman_session` cookie. The default loopback install is passwordless. A missing `Origin` header is allowed, so plain `curl` works; cross-site browser origins are rejected (CSRF guard). ⚠️ A `401` replies with the bare string `Unauthorized`, **not** the JSON envelope, so piping it into `jq` throws a parse error instead of showing the failure: check the status before parsing.
 4. **Response envelope.** Most endpoints return `{ "success": true, "data": … }` (errors: `{ "success": false, "error", "errorCode" }`). A few legacy GETs return bare bodies — **handle both** (`body.data ?? body`).
 5. **`/api/v1/*`** is a stable alias of `/api/*`.
+6. **Wait instead of polling, and don't treat a timeout as an error.** The wait endpoints answer with HTTP `200` and `wait.timedOut: true` when nothing happened in time, so loop over short waits (60s is the default) rather than issuing one long call, because tunnels cut idle connections. `wait.timeoutMs` tells you the timeout the server actually applied after clamping (600s ceiling).
+7. **Only `claude` sessions emit `stop` and `blocked`.** Those two come from Claude Code hooks; `shell` and the external CLIs (opencode/codex/gemini/antigravity) accept only `idle`, `working` and `exit`. Asking for `stop` explicitly on those is a `400`; omitting `until` is always safe. ⚠️ On a `shell` session `idle` fires **once**, at startup, and never again, so send-and-wait there can only time out; synchronize hook-less sessions with a `wait-output` marker.
+8. **Nothing reports "ready", so wait for it explicitly.** A new session answers `{"signal":"exit","immediate":true}` (that means *not started*, not *crashed*) until its PID exists, and a `claude` worker in a fresh case then sits on the CLI's trust dialog. Prompt it there and the wait resolves on `idle` in ~2s looking exactly like a finished turn, while the text sits stuck in the dialog. Recipe 2b below is the sequence that avoids it.
 
 ### Recipes
 
 ```bash
+# CODEMAN_API_URL is auto-set inside every Codeman session, correct scheme included.
+# The fallback below fits a stock install; on a --https install set the https:// URL
+# yourself and add -k to each curl (self-signed cert).
 API="${CODEMAN_API_URL:-http://127.0.0.1:3000}"
 # (add  -u admin:"$CODEMAN_PASSWORD"  to each call if a password is set)
 
@@ -700,18 +706,63 @@ curl -s -X POST "$API/api/quick-start" \
   -H 'Content-Type: application/json' \
   -d '{"caseName":"refactor-auth","mode":"claude","effort":"high"}' | jq
 
+# 2b. Wait until that worker is actually READY (see rule 8): composer marker first,
+#     first-run trust dialog only as the fallback. (Probing trust first and sending
+#     a blind Enter misfires on re-runs: the dialog text stays in the buffer forever,
+#     so the probe matches stale text and the Enter lands in a ready composer.)
+#     Match single tokens: TUI text can reach the matcher without its spaces.
+until [ "$(curl -s "$API/api/sessions/$SID" | jq '.data.pid')" != null ]; do sleep 1; done
+R=$(curl -sG "$API/api/sessions/$SID/wait-output" --data-urlencode 'match=bypass' \
+      --data-urlencode 'from=buffer' --data-urlencode 'timeout=5000')
+if ! jq -e '.data.wait.matched' <<<"$R" >/dev/null; then
+  T=$(curl -sG "$API/api/sessions/$SID/wait-output" --data-urlencode 'match=trust' \
+        --data-urlencode 'from=buffer' --data-urlencode 'timeout=2000')
+  jq -e '.data.wait.matched' <<<"$T" >/dev/null && \
+    curl -s -X POST "$API/api/sessions/$SID/input" -H 'Content-Type: application/json' \
+      -d '{"input":"\r","useMux":true}'        # accept the first-run trust dialog
+  curl -sG "$API/api/sessions/$SID/wait-output" --data-urlencode 'match=bypass' \
+    --data-urlencode 'from=buffer' --data-urlencode 'timeout=45000' >/dev/null
+fi
+
 # 3. Send a prompt into a session (exactly-once: clientId + seq)
 curl -s -X POST "$API/api/sessions/$SID/input" \
   -H 'Content-Type: application/json' \
-  -d '{"input":"Run the test suite and summarize failures","useMux":true,"clientId":"agent-1","seq":1}'
+  -d '{"input":"Run the test suite and summarize failures\r","useMux":true,"clientId":"agent-1","seq":1}'
 
-# 4. Read the terminal back
-curl -s "$API/api/sessions/$SID/output" | jq -r '.data // .'
+# 4. Send a prompt and BLOCK until that turn is done (registers the wait before
+#    writing, so it can't answer with the previous turn's idle state)
+curl -s -X POST "$API/api/sessions/$SID/input" \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"Run the test suite and summarize failures\r","useMux":true,
+       "clientId":"agent-1","seq":2,"wait":"stop,exit","waitTimeout":60000}' \
+  | jq '.data.wait'      # -> {"signal":"stop","timedOut":false,"waitedMs":41230,...}
+#    (`stop` is the definitive end-of-turn hook. Adding `idle` makes it resolve on a
+#     spinner pause too, and on anything that redraws a ❯ prompt — like a dialog.)
 
-# 5. Stream live events (session output, agent activity, status)
+# 4b. Timed out? That's a 200, not a failure. Loop over short waits.
+curl -s "$API/api/sessions/$SID/wait?until=stop,exit&timeout=60000" | jq '.data.wait'
+
+# 4c. Or wait for a marker in the output (works for shell sessions too).
+#     ⚠️ Unique per call (tmux repaints replay old screen text), and SPLIT so the
+#     typed line never contains it: your own keystrokes echo into the output
+#     stream, so an unsplit marker matches before the command has run. from=buffer
+#     catches a marker that printed before the wait landed.
+N=$RANDOM
+curl -s -X POST "$API/api/sessions/$SID/input" -H 'Content-Type: application/json' \
+  -d "{\"input\":\"M=DONE; npm test; echo \${M}_$N rc=\$?\r\",\"useMux\":true}"
+curl -sG "$API/api/sessions/$SID/wait-output" \
+  --data-urlencode "match=DONE_$N" --data-urlencode 'from=buffer' \
+  --data-urlencode 'timeout=60000' | jq '.data.wait'
+
+# 5. Read the terminal back. ⚠️ Use terminal?tail=, NOT /output: the latter's
+#    textOutput is empty for every tmux-backed (i.e. every interactive) session.
+#    tail counts BYTES, and what comes back is terminal data, ANSI included.
+curl -s "$API/api/sessions/$SID/terminal?tail=8000" | jq -r '.data.terminalBuffer'
+
+# 6. Stream live events (session output, agent activity, status)
 curl -sN "$API/api/events"          # Server-Sent Events
 
-# 6. Schedule recurring work (cron-style job)
+# 7. Schedule recurring work (cron-style job)
 curl -s -X POST "$API/api/cron/jobs" \
   -H 'Content-Type: application/json' \
   -d '{"name":"nightly-deps","agentType":"claude","workingDir":"/home/me/proj",
@@ -719,11 +770,11 @@ curl -s -X POST "$API/api/cron/jobs" \
        "inputMode":"typed","scheduleType":"daily","dailyTime":"03:00",
        "enabled":true,"concurrencyPolicy":"warn_only"}' | jq
 
-# 7. Inspect background sub-agents and their transcripts
+# 8. Inspect background sub-agents and their transcripts
 curl -s "$API/api/subagents" | jq '.data // .'
 curl -s "$API/api/subagents/$AID/transcript" | jq -r '.data // .'
 
-# 8. Whole-system snapshot (sessions, settings, respawn, stats)
+# 9. Whole-system snapshot (sessions, settings, respawn, stats)
 curl -s "$API/api/status" | jq
 ```
 
@@ -749,7 +800,7 @@ Codeman registers Claude Code hooks that `POST /api/hook-event` (`permission_pro
 
 ## API
 
-REST over Fastify — **~190 handlers across 20 route modules**, plus an SSE stream and a WebSocket terminal channel. All responses use the `ApiResponse<T>` envelope (`{success, data}` / `{success, error, errorCode}`); `/api/v1/*` is a stable alias. A representative subset:
+REST over Fastify — **~200 handlers across 21 route modules**, plus an SSE stream and a WebSocket terminal channel. All responses use the `ApiResponse<T>` envelope (`{success, data}` / `{success, error, errorCode}`); `/api/v1/*` is a stable alias. A representative subset:
 
 ### Sessions
 
@@ -757,8 +808,11 @@ REST over Fastify — **~190 handlers across 20 route modules**, plus an SSE str
 | -------- | -------------------------- | ---------------------------------------------------------------------------------- |
 | `GET`    | `/api/sessions`            | List all                                                                           |
 | `POST`   | `/api/quick-start`         | Create case + start session (`{caseName?, mode?, effort?, envOverrides?}`)         |
-| `POST`   | `/api/sessions/:id/input`  | Send input (`{input, useMux?, clientId?, seq?}` — `clientId`+`seq` = exactly-once) |
-| `GET`    | `/api/sessions/:id/output` | Read terminal output                                                               |
+| `POST`   | `/api/sessions/:id/input`  | Send input (`{input, useMux?, clientId?, seq?, wait?, waitTimeout?}`: `clientId`+`seq` = exactly-once; `wait` blocks until the turn ends) |
+| `GET`    | `/api/sessions/:id/terminal` | Read terminal output (`?tail=<bytes>`, `?full=1`); the read path for interactive sessions |
+| `GET`    | `/api/sessions/:id/output` | Parsed one-shot output (`textOutput` is empty for tmux-backed sessions)             |
+| `GET`    | `/api/sessions/:id/wait`   | Block until a signal fires (`?until=stop,idle,exit&timeout=&fresh=`); a timeout is a `200` |
+| `GET`    | `/api/sessions/:id/wait-output` | Block until a literal string appears (`?match=&nocase=&from=now\|buffer&timeout=`) |
 | `GET`    | `/api/sessions/unified`    | Unified live + history list (Session Manager) — `?q=&limit=`                       |
 | `POST`   | `/api/sessions/:id/pin`    | Pin/unpin in the Session Manager (`{pinned}`)                                      |
 | `PUT`    | `/api/session-order`       | Sync tab order across devices (`{order: [ids]}`)                                   |

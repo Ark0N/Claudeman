@@ -4,6 +4,7 @@
  */
 import { EventEmitter } from 'node:events';
 import { vi } from 'vitest';
+import type { SessionStatus } from '../../src/types.js';
 
 /**
  * Enhanced mock session for testing RespawnController.
@@ -12,8 +13,15 @@ import { vi } from 'vitest';
 export class MockSession extends EventEmitter {
   id: string;
   workingDir: string = '/tmp/test-workdir';
-  status: 'idle' | 'working' = 'idle';
-  pid: number = 12345;
+  /**
+   * The REAL union, deliberately. This used to be `'idle' | 'working'`, and
+   * `'working'` is not a `SessionStatus` at all — so `signalForStatus()` fell to its
+   * `default: null` branch in every route test and the busy / stopped / error halves
+   * of the immediate-resolve mapping had zero coverage while appearing to be tested.
+   */
+  status: SessionStatus = 'idle';
+  /** `null` once the PTY is gone (or before it has ever started) — see `pid` in Session. */
+  pid: number | null = 12345;
   isWorking: boolean = false;
   private _activeChildProcesses: { pid: number; command: string }[] = [];
   ralphTracker: null = null;
@@ -113,7 +121,9 @@ export class MockSession extends EventEmitter {
   /** Simulate working state with spinner */
   simulateWorking(text: string = 'Thinking'): void {
     this.simulateTerminalOutput(`${text}... \u280b`);
-    this.status = 'working';
+    // 'busy' is what the real Session sets while a turn is in flight; the old
+    // 'working' here was the event name, not a status value.
+    this.status = 'busy';
     this.emit('working');
   }
 
@@ -181,6 +191,14 @@ export class MockSession extends EventEmitter {
   get muxName(): string | null {
     return this._muxName;
   }
+
+  /**
+   * Mirrors `Session.usesMux`. True by default because that is the normal
+   * configuration, and it is what makes a route's pane-liveness probe reachable:
+   * `session.pid` is the tmux ATTACH CLIENT, so a mux-backed session's worker can be
+   * dead while `pid` is still a live number.
+   */
+  usesMux: boolean = true;
 
   /** Check for active child processes (mock returns configurable list) */
   getActiveChildProcesses(): { pid: number; command: string }[] {

@@ -4,7 +4,8 @@
  * auto-clear, auto-compact, image watcher, flicker filter, and logout.
  */
 
-import { FastifyInstance } from 'fastify';
+import { FastifyInstance, type FastifyReply } from 'fastify';
+import { z } from 'zod';
 import { join, dirname, extname, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -17,6 +18,7 @@ import {
   getErrorMessage,
   type ApiResponse,
   type SessionColor,
+  type SessionStatus,
   type CodexConfig,
   type GeminiConfig,
   type AntigravityConfig,
@@ -40,8 +42,19 @@ import {
   QuickStartSchema,
   InteractiveStartSchema,
   SessionOrderUpdateSchema,
+  SessionWaitQuerySchema,
+  SessionWaitOutputQuerySchema,
 } from '../schemas.js';
 import { mergeSessionOrder } from '../../session-order.js';
+import {
+  sessionWaits,
+  resolveWaitSignals,
+  signalForStatus,
+  WaitCapacityError,
+  type WaitSignal,
+  type SignalWaitResult,
+} from '../session-wait-registry.js';
+import { clampWaitMs, MAX_BUFFER_SCAN_BYTES } from '../../config/agent-wait.js';
 import {
   autoConfigureRalph,
   canAccessOwned,
@@ -312,6 +325,234 @@ async function clampExternalCliBypassForOwner(
     ? { ...antigravityConfig, dangerouslySkipPermissions: false }
     : antigravityConfig;
   return { codexConfig: clampedCodex, geminiConfig: clampedGemini, antigravityConfig: clampedAntigravity };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Agent wait helpers (shared by GET /wait, GET /wait-output, POST /input)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Validate a wait query WITHOUT throwing away the Zod issue.
+ *
+ * `parseBody`'s message argument REPLACES the issue text, so `?timeout=30s` came
+ * back as a bare "Invalid wait parameters": the caller could not tell which of
+ * `until`, `timeout` or `fresh` it got wrong, and its only move was to retry with
+ * a different guess. These endpoints are driven by an LLM with no documentation in
+ * context — the error message IS the documentation, which is why the signal parser
+ * one line later goes to the trouble of naming the bad token and listing the valid
+ * ones. This keeps the endpoint label AND names the offending field.
+ */
+function parseWaitQuery<T>(schema: z.ZodType<T>, query: unknown, label: string): T {
+  const result = schema.safeParse(query);
+  if (result.success) return result.data;
+  const issue = result.error.issues[0];
+  const field = issue && issue.path.length > 0 ? issue.path.join('.') : '';
+  const detail = issue?.message ?? 'validation failed';
+  const message = field ? `Invalid ${label} parameter '${field}': ${detail}` : `Invalid ${label} parameters: ${detail}`;
+  throw Object.assign(new Error(message), {
+    statusCode: 400,
+    body: createErrorResponse(ApiErrorCode.INVALID_INPUT, message),
+  });
+}
+
+/**
+ * Map a waiter-cap rejection to the code that tells the caller the truth.
+ *
+ * The two caps mean different things and warrant different recovery: `session` is
+ * genuinely about THIS session, while `owner` and `total` are process-wide budgets
+ * that say nothing about it. Reporting a global cap as `SESSION_BUSY` (409,
+ * documented as "Session is busy") sent an agent off to a different session to hit
+ * the identical error. `RATE_LIMITED` is the code whose whole meaning is "come back
+ * later", and clients and proxies already treat 429 that way.
+ */
+function waitCapacityResponse(err: WaitCapacityError): ApiResponse<never> {
+  const code = err.scope === 'session' ? ApiErrorCode.SESSION_BUSY : ApiErrorCode.RATE_LIMITED;
+  // The registry's message already names the scope and the limit; passing it through
+  // verbatim keeps the wording in one place.
+  return createErrorResponse(code, err.message);
+}
+
+/**
+ * The signal a session is ALREADY emitting, corrected for liveness.
+ *
+ * `signalForStatus` alone is not enough here, because `Session` parks a DEAD PTY at
+ * `_status = 'idle'` (both `onExit` handlers do) and the object survives in the
+ * session map until an explicit DELETE. Trusting the status therefore answers the
+ * default wait with `{signal:"idle", immediate:true}` for a worker that has
+ * crashed — HTTP 200, no error anywhere, and the agent types its next prompt into a
+ * corpse — while `until=exit` blocks for the full timeout on an event that already
+ * happened and can never happen again.
+ *
+ * `pid === null` means no process is behind this session: it exited, it was
+ * detached, or it was created and never started. All three are `exit` from a
+ * caller's point of view — nothing is running — and in all three the agent's
+ * correct next move is to (re)start the worker rather than to type at it. The
+ * response still carries the raw `status` alongside, so nothing is hidden.
+ *
+ * ⚠️ `pid` alone is NOT enough, and on the normal configuration it is never the
+ * thing that fires — see `workerIsDead()`. `dead` carries the mux layer's answer.
+ *
+ * Fixing it HERE rather than in `signalForStatus` is deliberate: liveness is not
+ * derivable from `SessionStatus`, and the registry holds no `Session` reference.
+ */
+function currentSignalFor(session: { pid: number | null; status: SessionStatus }, dead: boolean): WaitSignal | null {
+  if (dead || session.pid === null || session.pid === undefined) return 'exit';
+  return signalForStatus(session.status);
+}
+
+// ── Worker liveness for tmux-backed sessions ────────────────────────────────
+//
+// `session.pid` is the LOCAL `tmux attach` client, not the worker. Codeman sets
+// `remain-on-exit on` for every session it creates, so when the command inside the
+// pane exits, tmux keeps the pane (`pane_dead=1`), the tmux session survives, the
+// attach client keeps running and `pid` never goes null — no `exit` event is emitted
+// and nothing in `Session` changes. Measured on a shell worker killed with `exit 42`:
+// tmux reports `pane_dead=1 status=42` while Codeman reports `pid=309406 status=idle`
+// and the DEFAULT wait answers `{signal:"idle", immediate:true}` in 0 ms for a corpse.
+// So the liveness check has to ask the mux layer. `pid === null` still matters: it is
+// the right (and only) answer for a direct-PTY session, which has no pane to ask about.
+//
+// Cost control, because `isPaneDead()` is a synchronous `execSync` and `/wait` is
+// polled in a loop by design:
+//   1. Only mux-backed sessions are probed at all.
+//   2. Only requests that actually wait probe — a plain `POST .../input` (the browser's
+//      hot path, thousands per session) never touches tmux.
+//   3. Results are cached per pane for PANE_DEATH_TTL_MS, so a poll loop cannot turn
+//      into one exec per request.
+//   4. The while-blocked watcher is ONE timer per session no matter how many waiters
+//      are parked on it, and it exists only while at least one of them is.
+
+/** How long a pane-liveness probe is reused. Long enough to absorb a poll loop. */
+const PANE_DEATH_TTL_MS = 750;
+
+/** How often a session with a parked waiter is re-checked for a dead worker. */
+const PANE_DEATH_POLL_MS = 3_000;
+
+/** Bounded, because a 24h server churns through panes. */
+const paneDeathCache = new LRUMap<string, { dead: boolean; at: number }>({ maxSize: 256 });
+
+/** One watcher per pane, refcounted by the waits currently parked on it. */
+const paneDeathWatchers = new Map<string, { timer: NodeJS.Timeout; refs: number }>();
+
+type LivenessSession = { usesMux?: boolean; muxName?: string | null };
+
+/**
+ * Whether the worker inside this session's tmux pane has exited.
+ *
+ * False for anything not tmux-backed (nothing to ask), and false when the probe is
+ * unavailable or throws — an unknown answer must never invent a death.
+ */
+function workerIsDead(mux: InfraPort['mux'], session: LivenessSession, now: number = Date.now()): boolean {
+  const muxName = session.usesMux === false ? null : session.muxName;
+  if (!muxName) return false;
+  // Defensive: `TerminalMultiplexer` declares it, but route-test doubles may not.
+  if (typeof mux?.isPaneDead !== 'function') return false;
+
+  const cached = paneDeathCache.get(muxName);
+  if (cached && now - cached.at < PANE_DEATH_TTL_MS) return cached.dead;
+
+  let dead = false;
+  try {
+    dead = mux.isPaneDead(muxName) === true;
+  } catch {
+    dead = false;
+  }
+  paneDeathCache.set(muxName, { dead, at: now });
+  return dead;
+}
+
+/**
+ * Release every waiter on a session whose worker has died, in the documented order.
+ *
+ * The same pair the PTY-exit listener and the delete path use, for the same reason:
+ * `until=exit` callers get their signal, everyone else gets `ended: true` instead of
+ * burning the rest of their timeout on feeds that will never produce anything.
+ */
+function releaseWaitersForDeadWorker(sessionId: string): void {
+  sessionWaits.notifySignal(sessionId, 'exit');
+  sessionWaits.cancelAll(sessionId);
+}
+
+/**
+ * While a wait is parked on a mux-backed session, poll for the worker dying.
+ *
+ * Without this, a worker that dies DURING a wait is invisible: no `exit` event fires
+ * (the attach client is still alive), no output arrives, and the caller blocks for its
+ * full timeout — the common orchestration case, "send a prompt and wait", where the
+ * worker crashes mid-turn.
+ *
+ * @returns a release function; call it in a `finally`, or the timer outlives the wait.
+ */
+function watchForDeadWorker(mux: InfraPort['mux'], session: LivenessSession, sessionId: string): () => void {
+  const muxName = session.usesMux === false ? null : session.muxName;
+  if (!muxName || typeof mux?.isPaneDead !== 'function') return () => {};
+
+  const existing = paneDeathWatchers.get(muxName);
+  if (existing) {
+    existing.refs++;
+  } else {
+    const timer = setInterval(() => {
+      if (!workerIsDead(mux, session)) return;
+      releaseWaitersForDeadWorker(sessionId);
+    }, PANE_DEATH_POLL_MS);
+    // Auxiliary to the waiter's own timer, which is deliberately NOT unref'd; this one
+    // must never be the reason the process stays up.
+    timer.unref();
+    paneDeathWatchers.set(muxName, { timer, refs: 1 });
+  }
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const entry = paneDeathWatchers.get(muxName);
+    if (!entry) return;
+    entry.refs--;
+    if (entry.refs <= 0) {
+      clearInterval(entry.timer);
+      paneDeathWatchers.delete(muxName);
+    }
+  };
+}
+
+/** Test seam: pane-liveness state is module-level, so a suite must be able to reset it. */
+export function _resetPaneLivenessState(): void {
+  for (const entry of paneDeathWatchers.values()) clearInterval(entry.timer);
+  paneDeathWatchers.clear();
+  paneDeathCache.clear();
+}
+
+/** Test seam: how many panes are currently being watched for a dead worker. */
+export function _paneDeathWatcherCount(): number {
+  return paneDeathWatchers.size;
+}
+
+/**
+ * An `AbortController` that fires when the CLIENT goes away, and only then.
+ *
+ * Freeing an abandoned waiter matters because the documented pattern is a loop of
+ * short waits: `curl --max-time 30 ".../wait?timeout=600000"` abandons a live waiter
+ * every iteration until the cap is hit and an innocent session reports busy. Same for
+ * any proxy that cuts the connection.
+ *
+ * ⚠️ **It must listen on the RESPONSE, not the request.** `req.raw` emits `'close'`
+ * as soon as the request body has finished streaming, which on a POST is BEFORE the
+ * handler ever blocks — measured at +1ms with `aborted: false`, indistinguishable
+ * from a real hang-up at +0ms. Wiring the abort there cancels every send-and-wait
+ * instantly and silently kills the feature (it survives on GET only because a GET has
+ * no body to finish). `reply.raw` emits `'close'` both when the response completes
+ * and when the socket dies, and `writableFinished` is what tells those apart: true
+ * only if the response actually went out. The guard is load-bearing, not defensive.
+ *
+ * `app.inject()` never emits `'close'` at all, so this is only observable over real
+ * HTTP — which is why the regression test for it binds a port.
+ */
+function abortOnClientHangUp(reply: FastifyReply): AbortController {
+  const controller = new AbortController();
+  reply.raw.on('close', () => {
+    if (!reply.raw.writableFinished) controller.abort();
+  });
+  return controller;
 }
 
 export function registerSessionRoutes(
@@ -863,9 +1104,9 @@ export function registerSessionRoutes(
 
   // ========== Send Input ==========
 
-  app.post('/api/sessions/:id/input', async (req) => {
+  app.post('/api/sessions/:id/input', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { input, useMux, seq, clientId } = parseBody(SessionInputWithLimitSchema, req.body);
+    const { input, useMux, seq, clientId, wait, waitTimeout } = parseBody(SessionInputWithLimitSchema, req.body);
     const session = findSessionOrFail(ctx, id, req);
 
     const inputStr = String(input);
@@ -876,27 +1117,102 @@ export function registerSessionRoutes(
       );
     }
 
+    // Send-and-wait (agent orchestration). This has to be ONE endpoint rather than a
+    // POST followed by GET .../wait: between the write and the session flipping to
+    // `working` there is a window in which a separate wait sees the session still
+    // idle and returns instantly, reporting the PREVIOUS turn as this turn's answer.
+    // Registering the waiter before the write closes that window.
+    const wantsWait =
+      wait === true || (typeof wait === 'string' && wait.trim().length > 0) || (Array.isArray(wait) && wait.length > 0);
+    let until: readonly WaitSignal[] = [];
+    if (wantsWait) {
+      const resolved = resolveWaitSignals(wait === true ? undefined : wait, { mode: session.mode });
+      if (resolved.error) return createErrorResponse(ApiErrorCode.INVALID_INPUT, resolved.error);
+      until = resolved.until;
+    }
+
     // Reliable delivery (POST fallback when the WebSocket is down): a 2xx IS the
     // client's ACK, so a tagged duplicate redelivery must still return 200 but
     // skip the write. Untagged requests (curl/legacy) always apply.
     const tagged = typeof clientId === 'string' && typeof seq === 'number';
-    if (tagged && !session.shouldApplyInput(clientId as string, seq as number)) {
+    const duplicate = tagged && !session.shouldApplyInput(clientId as string, seq as number);
+    if (duplicate && !wantsWait) {
       return {};
     }
 
+    // Only a waiting request pays for the tmux probe: the browser's plain input path
+    // (thousands of calls per session) must stay exec-free.
+    const workerDead = wantsWait && workerIsDead(ctx.mux, session);
+
+    const timeoutMs = clampWaitMs(waitTimeout ?? undefined);
+    // Same slot leak as the GET routes: a client that gives up mid-wait would
+    // otherwise hold a waiter for the full timeout. Response-side, always — see
+    // abortOnClientHangUp: on THIS route a request-side listener fires the moment the
+    // JSON body finishes streaming and aborts every send-and-wait before it starts.
+    const abort = abortOnClientHangUp(reply);
+    let waitPromise: Promise<SignalWaitResult> | null = null;
+    if (wantsWait) {
+      try {
+        waitPromise = sessionWaits.waitForSignal(id, {
+          until,
+          timeoutMs,
+          owner: ownerFor(req),
+          abortSignal: abort.signal,
+          // A FRESH delivery must not be satisfied by the state the session is already
+          // in: it is idle right now, which is precisely why we are typing at it.
+          // A DUPLICATE has no new turn coming, so it answers from the current state
+          // instead of blocking for a transition that already happened.
+          requireTransition: !duplicate,
+          currentSignal: duplicate ? currentSignalFor(session, workerDead) : undefined,
+        });
+      } catch (err) {
+        if (err instanceof WaitCapacityError) {
+          // Nothing has been written yet, but `shouldApplyInput` already consumed the
+          // seq. Give it back or the caller's retry is rejected as a duplicate and the
+          // input is lost by the very mechanism meant to make delivery reliable.
+          if (tagged && !duplicate) session.forgetInputSeq(clientId as string, seq as number);
+          return waitCapacityResponse(err);
+        }
+        throw err;
+      }
+    }
+    const stopDeathWatch = wantsWait ? watchForDeadWorker(ctx.mux, session, id) : () => {};
+
     // Write input to PTY. Direct write is synchronous; writeViaMux
     // (tmux send-keys) is fire-and-forget to avoid blocking the HTTP response.
-    if (useMux) {
+    //
+    // Because the response has already been sent by then, a failure there is the
+    // one case the caller can never learn about — so the dedup bookkeeping is
+    // rolled back. Otherwise the seq stays recorded as applied and a retry, the
+    // very mechanism reliable delivery exists for, is rejected as a duplicate.
+    const undoOnFailure = () => {
+      if (tagged) session.forgetInputSeq(clientId as string, seq as number);
+    };
+
+    // Whether the bytes actually reached a write path. Only meaningful on the wait
+    // path (the fire-and-forget branches return before the response is built), and
+    // reported there instead of the old `!duplicate`: a PTY that has exited fails
+    // BOTH writes, and telling the caller "delivered, but it timed out" points it at
+    // the wrong recovery — wait longer, when the truth is "restart the worker".
+    let delivered = false;
+
+    if (duplicate) {
+      // Redelivery of an already-applied input: skip the write, but still honor the
+      // wait, since the caller's question ("tell me when this settles") is unanswered.
+    } else if (useMux && waitPromise) {
+      // The response is already staying open for the wait, so the tmux write can be
+      // awaited here. This is the ONE path where a writeViaMux failure is observable.
+      const ok = await session.writeViaMux(inputStr).catch(() => false);
+      if (ok) {
+        delivered = true;
+      } else {
+        console.warn(`[Server] writeViaMux failed for session ${id}, falling back to direct write`);
+        delivered = session.write(inputStr);
+        if (!delivered) undoOnFailure();
+      }
+    } else if (useMux) {
       // Fire-and-forget: don't block the HTTP response on a tmux child process.
-      // Fallback to a direct write on failure.
-      //
-      // Because the response has already been sent by then, a failure here is the
-      // one case the caller can never learn about — so the dedup bookkeeping is
-      // rolled back. Otherwise the seq stays recorded as applied and a retry, the
-      // very mechanism reliable delivery exists for, is rejected as a duplicate.
-      const undoOnFailure = () => {
-        if (tagged) session.forgetInputSeq(clientId as string, seq as number);
-      };
+      // Fallback to a direct write on failure. Unchanged from before send-and-wait.
       session
         .writeViaMux(inputStr)
         .then((ok) => {
@@ -911,11 +1227,209 @@ export function registerSessionRoutes(
       // Same rollback. NOT an error response, deliberately: a session can
       // legitimately have no PTY yet (created but not started), and callers have
       // always been able to write to one without a 4xx.
-      if (!session.write(inputStr) && tagged) {
+      delivered = session.write(inputStr);
+      if (!delivered && tagged) {
         session.forgetInputSeq(clientId as string, seq as number);
       }
     }
-    return {};
+
+    if (!waitPromise) return {};
+
+    try {
+      // `send-keys` SUCCEEDS against a dead pane — tmux is happy to write into a corpse
+      // — so a truthful `delivered` cannot come from the write's return value alone.
+      // This is the case the field exists for: "delivered, but it timed out" tells an
+      // agent to wait longer when the truth is "restart the worker".
+      if (delivered && workerDead) {
+        delivered = false;
+        // The bytes went nowhere, so the seq must not be recorded as applied or the
+        // caller's retry against a restarted worker is refused as a duplicate.
+        if (!duplicate) undoOnFailure();
+      }
+
+      // Nothing was written and nothing will be: no turn is coming, so blocking for the
+      // full timeout would only delay the caller's real recovery by up to ten minutes.
+      // Releasing the waiter also hands its slot back immediately.
+      const selfReleased = !delivered && !duplicate;
+      if (selfReleased) abort.abort();
+
+      const result = await waitPromise;
+      return {
+        success: true,
+        data: {
+          delivered,
+          duplicate,
+          status: session.status,
+          limitPaused: session.isLimitPaused,
+          // Identical `wait` object to the two GET endpoints, so one client helper
+          // reads all three, `timeoutMs` (post-clamp) included.
+          //
+          // `aborted` is the CLIENT-facing "you hung up, nobody is reading this", and
+          // by that definition it is unobservable — which is exactly what the API
+          // reference promises. The abort above is the server releasing its own waiter
+          // on a delivery that failed, and the client IS reading this response, so
+          // reporting `aborted: true` there would break that promise and hand an agent
+          // a second, contradictory reason for the same outcome. `delivered: false`
+          // already says what happened; `ended` says the wait was released early.
+          wait: { ...result, aborted: selfReleased ? false : result.aborted, until: [...until] },
+        },
+      };
+    } finally {
+      stopDeathWatch();
+    }
+  });
+
+  // ========== Wait For A Signal (agent orchestration) ==========
+  //
+  // A bounded long-poll: block until the session hits one of `until`, then answer.
+  // This exists because SSE is the only "tell me when" channel Codeman has, and an
+  // agent driving the API from a shell tool cannot hold a stream and parse events
+  // inline. See docs/agent-control-plan.md.
+  //
+  // A TIMEOUT IS A 200, not an error: callers are expected to loop over short waits
+  // (proxies such as `tailscale serve` cut idle connections), and turning every poll
+  // boundary into a 4xx would make that loop indistinguishable from a real failure.
+
+  app.get('/api/sessions/:id/wait', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const query = parseWaitQuery(SessionWaitQuerySchema, req.query, 'wait');
+    const session = findSessionOrFail(ctx, id, req);
+
+    // An agent polls this URL in a loop with identical parameters. Any intermediary
+    // applying heuristic freshness to the 200 would serve the stored `timedOut:true`
+    // body to the next iteration instantly, turning the loop into a busy spin that
+    // never observes the signal.
+    reply.header('Cache-Control', 'no-store');
+
+    // Shared with the `wait` field on POST .../input: unknown token is a 400,
+    // hook-only signals are rejected explicitly but dropped from the default.
+    const { until, error } = resolveWaitSignals(query.until, { mode: session.mode });
+    if (error) return createErrorResponse(ApiErrorCode.INVALID_INPUT, error);
+
+    // The value actually applied after clamping, echoed below: a caller that asked
+    // for 30 minutes and silently got 10 could not otherwise tell a poll boundary
+    // from a wedged worker, and would kill a session that was working fine.
+    const timeoutMs = clampWaitMs(query.timeout);
+
+    // Free the waiter when the caller hangs up; the response can no longer be sent by
+    // then, so freeing the slot is the entire purpose.
+    const abort = abortOnClientHangUp(reply);
+    // A worker that dies while this request is parked emits nothing at all (the tmux
+    // attach client survives it), so a wait would otherwise run to its full timeout.
+    const stopDeathWatch = watchForDeadWorker(ctx.mux, session, id);
+
+    try {
+      const result = await sessionWaits.waitForSignal(id, {
+        until,
+        timeoutMs,
+        owner: ownerFor(req),
+        abortSignal: abort.signal,
+        requireTransition: query.fresh === '1' || query.fresh === 'true',
+        // Read BEFORE awaiting: this is the state the caller is asking about.
+        currentSignal: currentSignalFor(session, workerIsDead(ctx.mux, session)),
+      });
+
+      return {
+        success: true,
+        data: {
+          sessionId: id,
+          // Post-wait status, so a caller that timed out still learns where things stand.
+          status: session.status,
+          // A session paused on a usage limit emits nothing until its reset, so a
+          // timeout here is expected rather than a stall worth retrying hard.
+          limitPaused: session.isLimitPaused,
+          // One shape across all three endpoints, so a single `is_done(resp)` helper
+          // works against any of them. `result.timeoutMs` is the value actually
+          // applied after clamping, which is what makes the clamp observable.
+          wait: { ...result, until: [...until] },
+        },
+      };
+    } catch (err) {
+      if (err instanceof WaitCapacityError) return waitCapacityResponse(err);
+      throw err;
+    } finally {
+      stopDeathWatch();
+    }
+  });
+
+  // ========== Wait For Output (agent orchestration) ==========
+  //
+  // The companion to /wait: block until a literal string appears in this session's
+  // output. Same 200-on-timeout contract. Fed by the `terminal` listener in
+  // session-listener-wiring.ts, so what this scans is byte-for-byte what the pane
+  // printed, ANSI stripped.
+  //
+  // ⚠️ A tmux repaint replays text already on screen, so `from=now` can match
+  // something printed before the request. Callers need a marker unique per call.
+
+  app.get('/api/sessions/:id/wait-output', async (req, reply) => {
+    const { id } = req.params as { id: string };
+
+    // Reject `regex` loudly instead of ignoring it. Matching is deliberately literal
+    // (no ReDoS surface on a caller-supplied pattern over a live stream), and an agent
+    // that assumed otherwise would silently wait on the wrong thing.
+    if (req.query && typeof req.query === 'object' && 'regex' in req.query) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'regex is not supported; use match=<literal substring> (optionally with nocase=1)'
+      );
+    }
+
+    const query = parseWaitQuery(SessionWaitOutputQuerySchema, req.query, 'wait-output');
+    const session = findSessionOrFail(ctx, id, req);
+
+    // Same reason as /wait: this URL is polled in a loop with identical parameters.
+    reply.header('Cache-Control', 'no-store');
+
+    const timeoutMs = clampWaitMs(query.timeout);
+    const abort = abortOnClientHangUp(reply);
+    const owner = ownerFor(req);
+    // Output waiters are the ones a dead worker strands hardest: the feed simply stops.
+    const stopDeathWatch = watchForDeadWorker(ctx.mux, session, id);
+
+    try {
+      // Check the cap BEFORE touching the buffer. `session.terminalBuffer` is
+      // `BufferAccumulator.value`, which joins the WHOLE accumulator (up to 32MB)
+      // before the slice below takes its tail — so a request that is going to be
+      // rejected anyway must not pay for a full materialization first, or the cap
+      // provides no backpressure at all against a `from=buffer` loop.
+      sessionWaits.assertCapacity(id, owner);
+
+      // `from=buffer` scans what already scrolled past before blocking. Bounded to a
+      // tail: the buffer runs to 32MB and this is a per-request ANSI strip.
+      let initialText: string | undefined;
+      if (query.from === 'buffer') {
+        const buffer = session.terminalBuffer;
+        initialText =
+          buffer.length > MAX_BUFFER_SCAN_BYTES ? buffer.slice(buffer.length - MAX_BUFFER_SCAN_BYTES) : buffer;
+      }
+
+      const result = await sessionWaits.waitForOutput(id, {
+        match: query.match,
+        nocase: query.nocase === '1' || query.nocase === 'true',
+        timeoutMs,
+        owner,
+        abortSignal: abort.signal,
+        initialText,
+      });
+
+      return {
+        success: true,
+        data: {
+          sessionId: id,
+          status: session.status,
+          limitPaused: session.isLimitPaused,
+          // Same envelope as /wait; this one carries `matched`/`snippet`/`match`
+          // where the signal wait carries `signal`/`until`.
+          wait: { ...result, match: query.match },
+        },
+      };
+    } catch (err) {
+      if (err instanceof WaitCapacityError) return waitCapacityResponse(err);
+      throw err;
+    } finally {
+      stopDeathWatch();
+    }
   });
 
   // ========== Send Named Key (tmux send-keys -H) ==========

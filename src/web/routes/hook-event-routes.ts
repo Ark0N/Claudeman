@@ -10,6 +10,7 @@ import { HookEventSchema, isValidWorkingDir } from '../schemas.js';
 import { sanitizeHookData, parseBody } from '../route-helpers.js';
 import { persistDockerCaseClaudeSessionId } from '../../docker-hosts.js';
 import { getDataDir } from '../../config/instance.js';
+import { sessionWaits, hooksAvailableForMode } from '../session-wait-registry.js';
 import type { SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort } from '../ports/index.js';
 
 export function registerHookEventRoutes(
@@ -20,6 +21,27 @@ export function registerHookEventRoutes(
     const { event, sessionId, data } = parseBody(HookEventSchema, req.body);
     if (!ctx.sessions.has(sessionId)) {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+    }
+
+    // Wake anything blocked on `GET /api/sessions/:id/wait`. Hooks are the only
+    // DEFINITIVE signals Codeman gets (`idle` is inferred from output stabilization
+    // and can flap mid-turn), so these two are what an orchestrating agent should
+    // wait on.
+    //
+    // Gated on the session's MODE, matching `resolveWaitSignals` on the read side.
+    // Without it the guard is one-sided: a caller cannot ASK for `stop` on a shell or
+    // codex session, but this endpoint would happily deliver one for it. Hook events
+    // carry no identity beyond a per-instance secret shared by every case, so this is
+    // also the cheap half of the forgery surface — a `stop` claimed for a session that
+    // could never legitimately emit one is now dropped instead of steering another
+    // agent's control flow.
+    const waitSession = ctx.sessions.get(sessionId);
+    if (waitSession && hooksAvailableForMode(waitSession.mode)) {
+      if (event === 'stop') {
+        sessionWaits.notifySignal(sessionId, 'stop');
+      } else if (event === 'permission_prompt' || event === 'elicitation_dialog') {
+        sessionWaits.notifySignal(sessionId, 'blocked');
+      }
     }
 
     // Signal the respawn controller based on hook event type

@@ -74,7 +74,7 @@ When user says "COM":
 
 CI runs `npm run check:lockfile` on every push/PR, so lockfile drift fails the build even if the `version-packages` script is bypassed.
 
-**Version**: 1.12.2 (must match `package.json`)
+**Version**: 1.13.0 (must match `package.json`)
 
 ## Project Overview
 
@@ -179,6 +179,8 @@ Codeman is a Claude Code session manager with web interface and autonomous Ralph
 ### Key Patterns
 
 **Input**: `session.writeViaMux()` for programmatic/curl input via tmux `send-keys -l` + `send-keys Enter`, single-line only. Interactive **browser** input goes through a durable **exactly-once** layer: a stable `clientId` + monotonic per-session `seq` persisted to localStorage until the server ACKs, so a dropped link cannot lose or double-deliver a prompt. `ws-connection-registry.ts` supersedes only same-TAB reconnects, so two tabs on one session coexist. → [architecture-invariants#input-delivery-and-ws-resilience](docs/architecture-invariants.md#input-delivery-and-ws-resilience)
+
+**Agent wait primitives**: bounded long-polls so an agent driving Codeman from a shell can block instead of poll: `GET /api/sessions/:id/wait` (lifecycle signal), `GET /api/sessions/:id/wait-output` (literal substring, **never** regex) and `wait`/`waitTimeout` on `POST /api/sessions/:id/input`. Registry in `session-wait-registry.ts` (pure, no `Session` reference), bounds in `config/agent-wait.ts`. ⚠️ **A timeout is a 200** (`wait.timedOut`), never an error, so callers loop over short waits. ⚠️ `stop`/`blocked` come from Claude Code hooks and therefore fire for **`claude` mode ONLY** (`shell` installs none either); asking for one explicitly on another mode is a 400, the default set silently drops them. ⚠️ Send-and-wait registers the waiter BEFORE the write (a separate POST-then-wait races and reports the PREVIOUS turn), and both teardown paths must `notifySignal('exit')` BEFORE `cancelAll()`. ⚠️ Client-hangup abort listens on **`reply.raw`** guarded by `writableFinished`: on `req.raw`, `close` fires when the request BODY ends, which on a POST killed every send-and-wait instantly and no `app.inject()` test could see it. ⚠️ Worker liveness cannot come from `session.pid` — for a tmux session that is the local attach client, which outlives a worker dying inside its pane — so it is probed at the mux layer (`isPaneDead`, ~750 ms cache) on blocking waits only, never on the input hot path. ⚠️ Signals are edge-triggered with no history: one that fires with no waiter registered is unobservable afterwards, so gather fan-outs with send-and-wait or latched `wait-output` markers, never fire-and-forget-then-sequential-signal-waits. → [architecture-invariants#agent-wait-primitives](docs/architecture-invariants.md#agent-wait-primitives), `docs/api-reference.md`
 
 **Idle detection**: Multi-layer (completion message → AI check → output silence → token stability). See `docs/respawn-state-machine.md`.
 
@@ -292,7 +294,7 @@ Frontend JS modules have `@fileoverview` with `@dependency`/`@loadorder` tags. L
 
 ### API Routes
 
-~199 handlers across 21 route files in `src/web/routes/`: system (45), sessions (32), cases (27), files (16), orchestrator (10), ralph (9), cron (9), admin (8), plan (8), respawn (7), webviews (6 + the `/webview/:cap/*` proxy), mux (5), push (4), scheduled (4, legacy `ScheduledRun`), me (2), teams (2), search (1), hooks (1), clipboard (1), status-telemetry (1), ws (1 WebSocket). Each file has `@fileoverview` with endpoint details.
+~200 handlers across 21 route files in `src/web/routes/`: system (45), sessions (34), cases (27), files (16), orchestrator (10), ralph (9), cron (9), admin (8), plan (8), respawn (7), webviews (6 + the `/webview/:cap/*` proxy), mux (5), push (4), scheduled (4, legacy `ScheduledRun`), me (2), teams (2), search (1), hooks (1), clipboard (1), status-telemetry (1), ws (1 WebSocket). Each file has `@fileoverview` with endpoint details.
 
 **HTTP contract** (stable since 0.9.x, see `docs/versioning-policy.md`; full envelope/status/error-code/SSE spec in `docs/api-reference.md`): responses use the `ApiResponse<T>` envelope — `{ success: true, data? }` or `{ success: false, error, errorCode }` (`src/types/api.ts`). `/api/v1/*` is a versioned alias of `/api/*` (URL rewrite in `server.ts`).
 

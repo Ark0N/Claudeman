@@ -247,14 +247,41 @@ describe('TmuxManager (unit)', () => {
   });
 
   describe('environment exports', () => {
-    it('keeps COLORTERM unset for OpenCode sessions', () => {
-      const exports = (
+    const callBuildEnvExports = (mode: string) =>
+      (
         manager as unknown as {
           buildEnvExports(sessionId: string, muxName: string, mode: string): string[];
         }
-      ).buildEnvExports('session-1', 'codeman-abc12345', 'opencode');
+      ).buildEnvExports('session-1', 'codeman-abc12345', mode);
 
-      expect(exports).toContain('unset COLORTERM');
+    it('keeps COLORTERM unset for OpenCode sessions', () => {
+      expect(callBuildEnvExports('opencode')).toContain('unset COLORTERM');
+    });
+
+    it('exports the server-stamped CODEMAN_API_URL verbatim', () => {
+      const original = process.env.CODEMAN_API_URL;
+      process.env.CODEMAN_API_URL = 'https://127.0.0.1:3199';
+      try {
+        expect(callBuildEnvExports('claude')).toContain('export CODEMAN_API_URL=https://127.0.0.1:3199');
+      } finally {
+        if (original === undefined) delete process.env.CODEMAN_API_URL;
+        else process.env.CODEMAN_API_URL = original;
+      }
+    });
+
+    // A hardcoded fallback exported the wrong scheme on HTTPS installs; unset must
+    // stay unset so in-session guards fail closed instead of curling a bad URL.
+    it('exports no CODEMAN_API_URL at all when the server has not stamped one', () => {
+      const original = process.env.CODEMAN_API_URL;
+      delete process.env.CODEMAN_API_URL;
+      try {
+        const exports = callBuildEnvExports('claude');
+        expect(exports.some((line) => line.startsWith('export CODEMAN_API_URL'))).toBe(false);
+        expect(exports.join(' ')).not.toContain('localhost:3000');
+      } finally {
+        if (original === undefined) delete process.env.CODEMAN_API_URL;
+        else process.env.CODEMAN_API_URL = original;
+      }
     });
   });
 

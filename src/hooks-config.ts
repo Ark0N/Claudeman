@@ -173,7 +173,11 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
   const curlCmd = (event: HookEventType) =>
     `HOOK_DATA=$(cat 2>/dev/null || echo '{}'); ` +
     `printf '{"event":"${event}","sessionId":"%s","data":%s}' "$CODEMAN_SESSION_ID" "$HOOK_DATA" | ` +
-    `curl -s -X POST "$CODEMAN_API_URL/api/hook-event" ` +
+    // `-k`, same as the statusline exporter: CODEMAN_API_URL is loopback HTTPS with
+    // a self-signed cert on --https/tailscale installs. Without it curl exits 60,
+    // the `|| true` swallows it, and ALL SIX hook events die silently: respawn loses
+    // its definitive idle signals and the wait endpoints lose stop/blocked.
+    `curl -sk -X POST "$CODEMAN_API_URL/api/hook-event" ` +
     `-H 'Content-Type: application/json' ` +
     `-H "X-Codeman-Hook-Secret: $(cat "$CODEMAN_HOOK_SECRET_FILE" 2>/dev/null)" ` +
     `--data @- ` +
@@ -433,8 +437,10 @@ export async function writeHooksConfig(casePath: string): Promise<void> {
  * X-Codeman-Hook-Secret header was added (COD-54, 2026-06-10) keep hook curls in their
  * settings.local.json that POST to /api/hook-event WITHOUT the secret — which, once the
  * gate requires it unconditionally (COD-91), silently 401 on a password-protected install.
- * Older Codeman blocks also lack the background Bash async-rewake hook. Refresh either
- * stale shape on launch so existing cases gain both current behaviors.
+ * Older Codeman blocks also lack the background Bash async-rewake hook. A third stale
+ * shape: hook curls without `-k`, which exit 60 on every --https/tailscale install (the
+ * cert is self-signed), swallowed by the hooks' own `|| true` — all six hook events die
+ * silently. Refresh any of these stale shapes on launch so existing cases heal.
  *
  * Deliberately surgical: regenerates ONLY when settings.local.json already contains
  * Codeman's own hook curls (they target `/api/hook-event`) and they are stale. No-op
@@ -457,7 +463,11 @@ export async function refreshStaleCodemanHooks(casePath: string): Promise<void> 
     // absence on our own hooks means they predate COD-54 and need regenerating.
     const hasSecret = hooksJson.includes('X-Codeman-Hook-Secret');
     const hasBackgroundWake = hooksJson.includes(BACKGROUND_WAKE_MARKER);
-    if (!isOurs || (hasSecret && hasBackgroundWake)) return;
+    // The pre--k curl shape: `curl -sk -X POST` does not contain `curl -s -X POST`
+    // as a substring, so this cleanly identifies hook curls that die with exit 60
+    // on a self-signed HTTPS install.
+    const hasTlsFlaglessCurl = hooksJson.includes('curl -s -X POST');
+    if (!isOurs || (hasSecret && hasBackgroundWake && !hasTlsFlaglessCurl)) return;
     const generated = generateHooksConfig();
     const merged = {
       ...existing,

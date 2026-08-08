@@ -27,6 +27,7 @@ import type { RalphStatusBlock, CircuitBreakerStatus } from '../types.js';
 import { SseEvent } from './sse-events.js';
 import { getLifecycleLog } from '../session-lifecycle-log.js';
 import { fileStreamManager } from '../file-stream-manager.js';
+import { sessionWaits } from './session-wait-registry.js';
 
 /** Stored listener references for session cleanup (prevents memory leaks) */
 export interface SessionListenerRefs {
@@ -92,6 +93,9 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
 
     /** Batches PTY output → broadcasts `session:terminal` at 16-50ms intervals */
     terminal: (data) => {
+      // Feeds `GET /api/sessions/:id/wait-output`. No-ops with a single Map lookup
+      // when nothing is waiting, which is the case on virtually every chunk.
+      sessionWaits.notifyOutput(session.id, data);
       deps.batchTerminalData(session.id, data);
     },
 
@@ -137,6 +141,28 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
 
     /** Broadcasts `session:exit` + `session:updated` — PTY process exited; cleans up respawn, timers, listeners */
     exit: (code) => {
+      // Before anything that can throw: a caller blocked on this session must learn
+      // the process died rather than sit until its timeout.
+      //
+      // Both halves are required, in this order — the same pair `_doCleanupSession`
+      // uses on the delete path, for the same reason. `notifySignal` resolves ONLY
+      // waiters that asked for `exit`; everyone else (`until=working`, `until=stop`,
+      // every wait-output) would keep a slot in the process-wide pool until their
+      // timeout, on a session whose feeds this very handler is about to tear down:
+      // `removeSessionListenerRefs` below detaches the `terminal` listener that is
+      // the only input to `notifyOutput`, and the `idle`/`working` listeners with it.
+      // Nothing can reach those waiters afterwards, so holding them is a guaranteed
+      // ten-minute lie. `cancelAll` answers them `ended: true`, which the plan's §3.6
+      // specifies for exactly this case ("Never hang").
+      //
+      // Safe against the respawn cycle: a respawn writes `/clear` + a kickstart
+      // prompt through the mux and never restarts the PTY, so it emits no `exit` and
+      // cannot cancel an orchestrating agent's wait. And for an agent driving a
+      // worker this is the right trade even when the PTY exit was only a tmux
+      // DETACH: `ended` means "re-check and re-issue", one extra round trip, versus
+      // burning the caller's entire timeout learning nothing.
+      sessionWaits.notifySignal(session.id, 'exit');
+      sessionWaits.cancelAll(session.id);
       getLifecycleLog().log({
         event: 'exit',
         sessionId: session.id,
@@ -187,6 +213,7 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
 
     /** Broadcasts `session:working` — Claude started processing */
     working: () => {
+      sessionWaits.notifySignal(session.id, 'working');
       deps.broadcast(SseEvent.SessionWorking, { id: session.id });
       const tracker = deps.getRunSummaryTracker(session.id);
       if (tracker) {
@@ -197,6 +224,7 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
 
     /** Broadcasts `session:idle` — Claude finished processing, waiting for input */
     idle: () => {
+      sessionWaits.notifySignal(session.id, 'idle');
       deps.broadcast(SseEvent.SessionIdle, { id: session.id });
       deps.broadcastSessionStateDebounced(session.id);
       const tracker = deps.getRunSummaryTracker(session.id);

@@ -17,6 +17,7 @@ import {
   MIN_TERMINAL_SCROLLBACK_LINES,
 } from '../config/terminal-history.js';
 import { MAX_EDITABLE_BYTES } from '../config/file-editing.js';
+import { MIN_MATCH_LENGTH, MAX_MATCH_LENGTH } from '../config/agent-wait.js';
 
 // ========== Path Validation ==========
 
@@ -911,6 +912,66 @@ export const SessionInputWithLimitSchema = z.object({
   // unset rather than sending null. See docs/reliable-input-delivery.md.
   seq: z.number().int().nonnegative().optional(),
   clientId: z.string().max(128).optional(),
+  // Send-and-wait (agent orchestration): `true` for the default signal set, or the
+  // same grammar as `GET .../wait` — a comma string or an array of signals. Absent
+  // means the historical fire-and-forget behavior, byte for byte.
+  //
+  // `.nullish()`, not `.optional()`: a third-party caller building the body with
+  // JSON.stringify keeps an explicit null on the wire, and `.optional()` rejects it
+  // with INVALID_INPUT. That gotcha has shipped as a real bug twice.
+  wait: z.union([z.boolean(), z.string().max(120), z.array(z.string().max(120)).max(8)]).nullish(),
+  // Unbounded above: the effective value is clamped to MAX_WAIT_MS server-side and
+  // returned as `data.wait.timeoutMs`, so a caller that asks for 24h sees what it
+  // actually got. A `.max()` here would turn the same documented clamp into a 400 for
+  // large-enough guesses, which is the one behaviour an agent cannot predict.
+  waitTimeout: z.number().int().positive().nullish(),
+});
+
+/**
+ * Query validation for `GET /api/sessions/:id/wait` (agent wait primitives).
+ *
+ * Everything arrives as a string. `timeout` is coerced and bounded here, then
+ * clamped again to the operator's ceiling by `clampWaitMs()` — the schema bound
+ * only keeps an absurd number out of the arithmetic. A non-numeric `timeout` is a
+ * 400 rather than a silent fallback, so an agent never believes it asked for a
+ * longer wait than it got; the value actually applied comes back as
+ * `data.wait.timeoutMs`, which is what makes the clamp observable. `until` is
+ * parsed by `parseWaitSignals()`, which reports unknown tokens instead of
+ * dropping them.
+ *
+ * `until` accepts an ARRAY as well as the comma string: `?until=stop&until=exit`
+ * is how most HTTP clients express a list, Fastify's query parser delivers a
+ * repeated parameter as an array, and `parseWaitSignals()` has always handled
+ * both. Rejecting the repeated form left that branch unreachable and 400'd the
+ * more natural spelling.
+ */
+export const SessionWaitQuerySchema = z.object({
+  until: z.union([z.string().max(120), z.array(z.string().max(120)).max(8)]).optional(),
+  // No upper bound on purpose. The contract is "clamped to [MIN_WAIT_MS, MAX_WAIT_MS]",
+  // and a `.max()` here contradicted it: `timeout=99999999` was a 400 mid-fan-out while
+  // `timeout=600001` was silently clamped, so the same documented rule produced two
+  // different outcomes depending on how big the caller's guess was. `clampWaitMs()`
+  // bounds every finite value, and `.int()` still rejects `Infinity`/`1e999` and junk.
+  timeout: z.coerce.number().int().positive().optional(),
+  fresh: z.enum(['0', '1', 'true', 'false']).optional(),
+});
+
+/**
+ * Query validation for `GET /api/sessions/:id/wait-output`.
+ *
+ * `match` is a LITERAL substring, never a pattern: `search-service.ts` avoids regex
+ * so there is no ReDoS surface, and this endpoint is more exposed still (the pattern
+ * would be caller-supplied and the input is a live stream). The length bound is a
+ * second reason the carry buffer stays small. The route separately rejects a `regex`
+ * parameter outright rather than ignoring it.
+ */
+export const SessionWaitOutputQuerySchema = z.object({
+  match: z.string().min(MIN_MATCH_LENGTH).max(MAX_MATCH_LENGTH),
+  nocase: z.enum(['0', '1', 'true', 'false']).optional(),
+  from: z.enum(['now', 'buffer']).optional(),
+  // Unbounded above for the same reason as SessionWaitQuerySchema.timeout: clamping is
+  // the documented contract, so a large value must clamp rather than 400.
+  timeout: z.coerce.number().int().positive().optional(),
 });
 
 // ========== Session Mutation Routes ==========

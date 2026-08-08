@@ -133,6 +133,25 @@ describe('refreshStaleCodemanHooks', () => {
     expect(after.hooks.CustomEvent).toEqual(customEvent);
   });
 
+  // A case can be current on the secret AND the background-wake hook and still carry
+  // the `-k`-less curl shape, which exits 60 against a self-signed HTTPS API and is
+  // swallowed by `|| true` — every hook event dead, silently. The refresh must treat
+  // that as a third stale shape.
+  it('heals a current-looking block whose hook curls lack -k (HTTPS self-signed installs)', async () => {
+    const { generateHooksConfig } = await import('../src/hooks-config.js');
+    const flagless = JSON.parse(JSON.stringify(generateHooksConfig()).replaceAll('curl -sk ', 'curl -s '));
+    writeFileSync(settingsPath, JSON.stringify({ hooks: flagless.hooks }, null, 2));
+
+    await refreshStaleCodemanHooks(dir);
+
+    const after = readFileSync(settingsPath, 'utf-8');
+    expect(after).toContain('curl -sk -X POST');
+    expect(after).not.toContain('curl -s -X POST');
+    // and the pass is convergent: a second refresh must not rewrite
+    await refreshStaleCodemanHooks(dir);
+    expect(readFileSync(settingsPath, 'utf-8')).toBe(after);
+  });
+
   it('is a no-op when settings.local.json is absent (does not create one)', async () => {
     await refreshStaleCodemanHooks(dir);
     expect(existsSync(settingsPath)).toBe(false);

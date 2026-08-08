@@ -121,7 +121,10 @@ export function buildClaudeEnv(sessionId: string): Record<string, string | undef
     // Inform Claude it's running within Codeman (helps prevent self-termination)
     CODEMAN_MUX: '1',
     CODEMAN_SESSION_ID: sessionId,
-    CODEMAN_API_URL: process.env.CODEMAN_API_URL || 'http://localhost:3000',
+    // CODEMAN_API_URL rides in via the process.env spread when the server has
+    // stamped it (WebServer.start()); no fallback: a hardcoded one was the wrong
+    // scheme on HTTPS installs, and a present-with-undefined key would serialize
+    // as the literal "CODEMAN_API_URL=undefined" (COD-115).
     // Path only (not the secret value) — hook curls cat it at execution time (COD-54)
     CODEMAN_HOOK_SECRET_FILE: dataPath('hook-secret'),
   };
@@ -179,7 +182,8 @@ export function buildShellEnv(sessionId: string): Record<string, string | undefi
     TERM: 'xterm-256color',
     CODEMAN_MUX: '1',
     CODEMAN_SESSION_ID: sessionId,
-    CODEMAN_API_URL: process.env.CODEMAN_API_URL || 'http://localhost:3000',
+    // CODEMAN_API_URL rides in via the process.env spread when set; no fallback
+    // (same reasoning as buildClaudeEnv above).
     // Path only (not the secret value) — hook curls cat it at execution time (COD-54)
     CODEMAN_HOOK_SECRET_FILE: dataPath('hook-secret'),
   };

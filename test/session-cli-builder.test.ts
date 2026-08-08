@@ -64,3 +64,38 @@ describe('buildMuxAttachEnv', () => {
     }
   });
 });
+
+describe('spawn env CODEMAN_API_URL (no fallback)', () => {
+  const withApiUrl = (value: string | undefined, fn: () => void) => {
+    const original = process.env.CODEMAN_API_URL;
+    if (value === undefined) delete process.env.CODEMAN_API_URL;
+    else process.env.CODEMAN_API_URL = value;
+    try {
+      fn();
+    } finally {
+      if (original === undefined) delete process.env.CODEMAN_API_URL;
+      else process.env.CODEMAN_API_URL = original;
+    }
+  };
+
+  it('passes the server-stamped URL through verbatim', async () => {
+    const { buildClaudeEnv, buildShellEnv } = await import('../src/session-cli-builder.js');
+    withApiUrl('https://127.0.0.1:3199', () => {
+      expect(buildClaudeEnv('test-session').CODEMAN_API_URL).toBe('https://127.0.0.1:3199');
+      expect(buildShellEnv('test-session').CODEMAN_API_URL).toBe('https://127.0.0.1:3199');
+    });
+  });
+
+  // A hardcoded fallback was the wrong scheme on HTTPS installs. The key must be
+  // genuinely ABSENT when unset: present-with-undefined would serialize through
+  // node-pty as the literal string "CODEMAN_API_URL=undefined" (COD-115).
+  it('leaves the key absent (not undefined, not a fallback) when the server has not stamped one', async () => {
+    const { buildClaudeEnv, buildShellEnv } = await import('../src/session-cli-builder.js');
+    withApiUrl(undefined, () => {
+      for (const env of [buildClaudeEnv('test-session'), buildShellEnv('test-session')]) {
+        expect('CODEMAN_API_URL' in env).toBe(false);
+        expect(JSON.stringify(env)).not.toContain('localhost:3000');
+      }
+    });
+  });
+});

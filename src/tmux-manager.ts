@@ -1589,7 +1589,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       'export CODEMAN_MUX=1',
       `export CODEMAN_SESSION_ID=${sessionId}`,
       `export CODEMAN_MUX_NAME=${muxName}`,
-      `export CODEMAN_API_URL=${process.env.CODEMAN_API_URL || 'http://localhost:3000'}`,
+      // Only exported when the server has stamped the real URL (scheme+host+port,
+      // set in WebServer.start()). A hardcoded fallback here exported the wrong
+      // scheme on HTTPS installs; leaving the variable unset makes in-session
+      // guards fail closed instead of curling a URL that was never right.
+      ...(process.env.CODEMAN_API_URL ? [`export CODEMAN_API_URL=${process.env.CODEMAN_API_URL}`] : []),
       // Path only (not the secret value): hook curl commands cat the file at
       // execution time, so the COD-54 hook secret stays off the command line.
       `export CODEMAN_HOOK_SECRET_FILE="${dataPath('hook-secret')}"`,

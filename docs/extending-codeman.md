@@ -44,6 +44,10 @@ is in [`api-reference.md`](api-reference.md).
 the payload at the top level rather than under `data`. Read defensively with
 `body.data ?? body`.
 
+⚠️ A `401` is not an envelope at all: auth is rejected in a request hook that
+replies with the bare string `Unauthorized`, so parsing it as JSON throws. Branch on
+the status code before you parse, or a missing password looks like a broken endpoint.
+
 **Already driving Codeman from an agent?** The README's
 [Programmatic Guide](../README.md#driving-codeman-from-an-agent--programmatic-guide)
 covers the in-session case: the `CODEMAN_MUX`, `CODEMAN_API_URL`,
@@ -152,7 +156,7 @@ for (;;) {
 
 ## Seam 3: HTTP API and CLI
 
-Around 199 handlers across 21 route files cover sessions, cases, files, cron,
+Around 200 handlers across 21 route files cover sessions, cases, files, cron,
 respawn, Ralph, the orchestrator, search, and admin. Each route module carries an
 `@fileoverview` describing its endpoints.
 
@@ -167,16 +171,136 @@ curl -u admin:$PASS -X POST http://127.0.0.1:3000/api/v1/sessions \
   -H 'Content-Type: application/json' \
   -d '{"workingDir":"/home/me/project","mode":"claude"}'
 
-# Send a prompt (single-line only)
+# Send a prompt (single-line only, and it must end with \r: Enter is sent only
+# when the input contains a carriage return; without it the text sits on the
+# session's prompt unsubmitted)
 curl -u admin:$PASS -X POST http://127.0.0.1:3000/api/v1/sessions/$ID/input \
   -H 'Content-Type: application/json' \
-  -d '{"input":"run the tests","useMux":true}'
+  -d '{"input":"run the tests\r","useMux":true}'
 ```
 
 `POST .../input` also accepts `clientId` (stable per client, max 128 chars) and
 `seq` (monotonic per session). Send both and the server applies each pair
 at-most-once, so retrying after a dropped connection cannot type the prompt
 twice. Omit them entirely rather than sending `null`.
+
+It also accepts `wait` and `waitTimeout`, which hold the response open until the
+session finishes the turn you just started. `wait` is `true` (the default signal
+set) or a comma list of `idle,working,stop,blocked,exit`; the result comes back
+under `data.wait`. Sending them changes nothing for callers that do not: without
+`wait` the response is still `{"success": true, "data": {}}` and the write is still
+fire-and-forget. The two interact with `clientId` / `seq` in one way worth knowing:
+a **tagged duplicate** (a pair the server already applied) skips the write but still
+waits, answering from the session's current state rather than blocking for a
+transition that already happened. It reports `"delivered": false, "duplicate": true`.
+
+### Waiting instead of polling
+
+Three calls block until something happens: `GET /api/v1/sessions/:id/wait` (a
+lifecycle signal), `GET /api/v1/sessions/:id/wait-output` (a literal string in the
+output), and the `wait` field above. Full parameter and response tables are in
+[`api-reference.md`](api-reference.md#long-polling-agent-wait). Four things decide
+whether your integration works, and the last one is what actually bites:
+
+- **A timeout is a `200` with `wait.timedOut: true`**, not an error. Loop over short
+  waits rather than issuing one long one, because `tailscale serve` and cloudflared
+  both cut idle connections and a single 10-minute call is the pattern most likely
+  to die in the field.
+- **`wait.timeoutMs`** is the timeout after server-side clamping (600 s ceiling by
+  default). Read it rather than assuming you got what you asked for.
+- **`stop` and `blocked` only exist for `claude` sessions**, and on a `shell` session
+  even `idle` fires only once at startup, so send-and-wait there can only time out.
+  See the Gotchas below.
+
+⚠️ **There is no readiness signal, and skipping readiness is the failure that looks
+like success.** A session reports `idle` before its CLI has spawned, and a `claude`
+worker in a brand-new case comes up on the CLI's **trust dialog**, which has a ❯
+prompt of its own. Prompt it at that moment and the text lands in the dialog, the
+`\r` does not get past it, and the session's startup `idle` lands inside the wait
+window: the wait resolves on `idle` in a couple of seconds with `timedOut: false`,
+indistinguishable from a finished turn. Wait for the pid, then wait for the
+composer, answering the dialog only as the bounded fallback.
+
+A worked orchestration: start a worker, get it ready, prompt it, wait, clean up.
+
+```bash
+API="${CODEMAN_API_URL:-http://127.0.0.1:3000}"   # auto-set in-session, correct scheme included
+AUTH=(-u "admin:$CODEMAN_PASSWORD")     # omit entirely if no password is set
+CURL=(curl -sk "${AUTH[@]}")   # -k: harmless on http, required on --https installs (self-signed cert)
+
+# 1. Start a worker session (creates the case if it does not exist yet).
+#    The guard matters: a TLS or auth failure otherwise leaves SID empty and every
+#    later step "succeeds" against nothing.
+SID=$("${CURL[@]}" -X POST "$API/api/v1/quick-start" \
+  -H 'Content-Type: application/json' \
+  -d '{"caseName":"worker-1","mode":"claude"}' | jq -r '.data.sessionId')
+[ -n "$SID" ] && [ "$SID" != null ] || { echo "quick-start failed"; exit 1; }
+
+# 2. READINESS: composer marker first, trust dialog only as the bounded fallback.
+#    Skip this and step 3 reports a turn that never ran. Do NOT probe trust first
+#    and Enter blindly: the dialog text stays in the buffer for the life of the
+#    session, so on every later run that probe matches stale text and the Enter
+#    lands in a ready composer. Match single tokens only: TUI text can arrive
+#    without its spaces. Stage 1 is short on purpose (an already-trusted case
+#    matches in <1 s; a first-run case can never pass it and pays it in full).
+until [ "$("${CURL[@]}" "$API/api/v1/sessions/$SID" | jq '.data.pid')" != null ]
+do sleep 1; done
+R=$("${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
+      --data-urlencode 'match=bypass' --data-urlencode 'from=buffer' \
+      --data-urlencode 'timeout=5000')           # composer's status bar = ready
+if ! jq -e '.data.wait.matched' <<<"$R" >/dev/null; then
+  T=$("${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
+        --data-urlencode 'match=trust' --data-urlencode 'from=buffer' \
+        --data-urlencode 'timeout=2000')
+  jq -e '.data.wait.matched' <<<"$T" >/dev/null && \
+    "${CURL[@]}" -X POST "$API/api/v1/sessions/$SID/input" \
+      -H 'Content-Type: application/json' -d '{"input":"\r","useMux":true}' >/dev/null
+  "${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
+    --data-urlencode 'match=bypass' --data-urlencode 'from=buffer' \
+    --data-urlencode 'timeout=45000' >/dev/null
+fi
+
+# 3. Send the prompt AND register the wait in one call, so the answer cannot be
+#    the previous turn's idle state. Single line only, ending in \r (otherwise
+#    Enter is never sent and this wait times out on a turn that never started).
+W=$("${CURL[@]}" -X POST "$API/api/v1/sessions/$SID/input" \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"Run the test suite and summarize the failures\r","useMux":true,
+       "clientId":"orchestrator","seq":1,"wait":"stop,exit","waitTimeout":60000}' \
+  | jq -c '.data.wait')
+
+# 4. That first wait probably timed out (60 s). Keep going in SHORT waits.
+for _ in $(seq 1 30); do
+  [ "$(jq -r '.timedOut' <<<"$W")" = 'true' ] || break        # signal fired, or wait ended
+  W=$("${CURL[@]}" \
+    "$API/api/v1/sessions/$SID/wait?until=stop,exit&timeout=60000" | jq -c '.data.wait')
+done
+jq -r 'if .ended or .aborted then "worker is not running"
+       elif .timedOut then "still working after 30 waits"
+       else "signal: \(.signal)" end' <<<"$W"
+
+# 5. Read what it produced, then delete the session YOU created, by exact id.
+#    ⚠️ NOT /output: its textOutput is empty for every tmux-backed session.
+#    `tail` counts BYTES, and the payload is terminal data with ANSI in it.
+"${CURL[@]}" "$API/api/v1/sessions/$SID/terminal?tail=8000" | jq -r '.data.terminalBuffer'
+"${CURL[@]}" -X DELETE "$API/api/v1/sessions/$SID"
+```
+
+Waiting on a marker instead of a signal is the form that works in **every** mode,
+and the only one that works on a `shell` session:
+
+```bash
+# ⚠️ Split the marker so the typed line never contains it: your own keystrokes echo
+# into the output stream, so an unsplit marker matches before the command has run.
+# `from=buffer` also catches a marker that printed before the wait registered.
+N=$RANDOM
+"${CURL[@]}" -X POST "$API/api/v1/sessions/$SID/input" \
+  -H 'Content-Type: application/json' \
+  -d "{\"input\":\"M=DONE; npm test; echo \${M}_$N rc=\$?\r\",\"useMux\":true}"
+"${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
+  --data-urlencode "match=DONE_$N" --data-urlencode 'from=buffer' \
+  --data-urlencode 'timeout=60000' | jq '.data.wait'
+```
 
 For shell scripting, the `codeman` CLI is the same surface without the HTTP
 plumbing:
@@ -221,10 +345,41 @@ Every one of these has cost somebody real time.
   shipped bugs more than once.
 - **`text/plain` bodies stay raw.** Auto-parsing them as JSON enabled
   simple-request CSRF, so it is deliberate. Send `application/json`.
-- **Prompts are single-line.** With `useMux: true` the server delivers your text
-  and then Enter as two separate writes, so you do not append `\r` yourself. A
-  multi-line string breaks the agent's Ink-based input handling: send one line,
-  or split it across calls.
+- **Prompts are single-line and must end with `\r`.** The server splits your text
+  and Enter into two separate tmux writes (Ink needs them apart), but it sends the
+  Enter **only when the input contains a carriage return**. Without it your text
+  sits on the prompt unsubmitted, which is the single most common "the wait
+  endpoints don't work" report: the wait runs its full timeout on a turn that never
+  started. Newlines inside the string are stripped rather than rejected, so
+  `"echo A\necho B\r"` runs the single joined command `echo Aecho B`: send one line
+  per call.
+- **`wait-output`'s `from=now` is not "printed after you asked".** tmux repaints
+  the visible screen on attach, on resize, and on any TUI redraw, and a repaint
+  arrives as ordinary output, so text already on screen can satisfy a fresh wait.
+  Observed live: a marker echoed a minute earlier matched instantly. Use a marker
+  unique to each call, and build it so the typed line never contains it (your own
+  keystrokes echo into the stream). Matching is a literal substring, so `regex=` is
+  rejected with a `400` rather than ignored.
+- **`wait-output` matches the normalized PTY stream, not the screen.** ANSI escape
+  sequences are stripped (the `ESC ( B` charset escape a bash prompt emits on every
+  line included), a partial escape at a chunk boundary is held back until its tail
+  arrives, and a match may straddle PTY chunks, so text you printed yourself
+  matches reliably (`printf STRAD; sleep 1; printf DLEQQ` is matchable as
+  `STRADDLEQQ`). What can still fail is TUI output: a full-screen TUI positions
+  words with cursor moves, so its text can reach the matcher **without spaces** and
+  a multi-word match is unreliable there. Match one short space-free token, ideally
+  one you printed yourself, and keep it out of the typed line (your own keystrokes
+  echo into the stream).
+- **`stop` and `blocked` never fire for `shell`, `opencode`, `codex`, `gemini` or
+  `antigravity` sessions.** They come from Claude Code hooks, which no other mode
+  installs, so only `idle`, `working` and `exit` exist there. Asking for them
+  explicitly is a `400`; omitting `until` is safe, since the server drops them from
+  the default set and echoes what it actually waited on as `wait.until`. Even in
+  `claude` mode, a Docker case needs `CODEMAN_DOCKER_BRIDGE_HOOKS=1` for hooks to
+  reach the server at all, a remote-SSH case's hooks may never arrive, and a case
+  written by Codeman < 1.13.0 against an `--https` install carries hook curls
+  without `-k` that TLS-fail silently — a 1.13.0+ server rewrites them the next
+  time a session starts in that case.
 - **Unwrap the envelope** before reading fields. `data` is not the response body.
 
 ## Publishing your integration

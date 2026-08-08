@@ -85,6 +85,7 @@ import {
   attachSessionListeners,
   detachSessionListeners,
 } from './session-listener-wiring.js';
+import { sessionWaits } from './session-wait-registry.js';
 import {
   wireRespawnListeners,
   setupTimedRespawn,
@@ -1246,6 +1247,16 @@ export class WebServer extends EventEmitter {
         this.store.demoteOrRemoveSession(sessionId);
       }
     }
+
+    // Release anything blocked on this session, in the documented order: 'exit'
+    // first so an until=exit caller gets its signal, then cancelAll so everyone
+    // else resolves with ended:true instead of timing out.
+    //
+    // The 'exit' here is NOT redundant with the PTY-exit listener: listeners are
+    // detached a few lines above, before `session.stop()`, so on a delete the
+    // session's own exit event never reaches the registry.
+    sessionWaits.notifySignal(sessionId, 'exit');
+    sessionWaits.cancelAll(sessionId);
 
     this.broadcast(SseEvent.SessionDeleted, { id: sessionId });
   }
@@ -2844,6 +2855,11 @@ export class WebServer extends EventEmitter {
 
     // Gracefully close all SSE connections and clear batching state
     this.sse.stop();
+
+    // Release every pending long-poll waiter. Their timers are deliberately not
+    // unref'd (an unref'd timer can let the process exit mid-wait and strand the
+    // response), so without this a 10-minute wait holds shutdown open.
+    sessionWaits.cancelEverything();
 
     this.lastRecordedTokens.clear();
 

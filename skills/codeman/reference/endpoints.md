@@ -1,0 +1,214 @@
+# Codeman API reference for agents
+
+Loaded on demand from the `codeman` skill. Assumes the guard variables from SKILL.md
+(`$API`, `$SELF`, `"${CURL[@]}"`). Canonical contract: `docs/api-reference.md` in the
+Codeman repo; this file is the agent-relevant subset, verified live.
+
+## Envelope and errors
+
+Every JSON response: `{"success":true,"data":…}` or
+`{"success":false,"error":"…","errorCode":"…"}`. Branch on `errorCode`:
+
+| `errorCode` | HTTP | Meaning |
+|-------------|------|---------|
+| `INVALID_INPUT` | 400 | malformed request; the message names the bad field |
+| `UNAUTHORIZED` | 401 | auth required or failed (send `-u user:password`). ⚠️ The 401 body is plain text, NOT this envelope — `jq` dies with a parse error, see the guard in SKILL.md |
+| `NOT_FOUND` | 404 | no such session, or one this caller does not own |
+| `SESSION_BUSY` | 409 | this session's waiter cap (16, combined signal+output) is full |
+| `CONFLICT` / `ALREADY_EXISTS` | 409 | conflicts with current state |
+| `OPERATION_FAILED` | 422 | well-formed but could not be completed |
+| `RATE_LIMITED` | 429 | per-owner or process-wide waiter pool is full — back off; switching sessions will not help |
+| `INTERNAL_ERROR` | 500 | server bug |
+
+`SESSION_BUSY` vs `RATE_LIMITED` on the wait endpoints is deliberate: the first means
+"too many waiters on *this* session", the second means the *pool* is full.
+
+## Sessions
+
+| Task | Call |
+|------|------|
+| list sessions (metadata only, ~1.5 KB each, safe to poll) | `GET /api/v1/sessions` |
+| one session (has `.data.pid`, `null` until the PTY spawns) | `GET /api/v1/sessions/:id` — ⚠️ **not a liveness check**: a worker that dies inside its pane keeps `status:"idle"` and a pid (the tmux attach client); `wait?until=exit` is the death check |
+| unified list incl. history | `GET /api/v1/sessions/unified` → `.data.sessions[]` (NOT `.data[]`), and it folds in transcript history from the whole machine — never use it to verify cleanup; `GET /api/v1/sessions` is the cleanup check |
+| start case + session in one call | `POST /api/v1/quick-start` |
+| send input | `POST /api/v1/sessions/:id/input` |
+| read terminal (tail is in **BYTES**, raw ANSI) | `GET /api/v1/sessions/:id/terminal?tail=3000` → `.data.terminalBuffer` |
+| full tmux scrollback (context bomb; post-mortems only) | `GET /api/v1/sessions/:id/terminal?full=1` |
+| background agents of a session | `GET /api/v1/subagents` |
+| server status / version | `GET /api/v1/status` → `.data.version` |
+| delete one session (yours, `is_self`-checked) | `DELETE /api/v1/sessions/:id` |
+
+⚠️ `GET /api/v1/sessions/:id/output` → `.data.textOutput` looks like the obvious read
+but stays **empty for interactive tmux-backed sessions** (it is fed only by the legacy
+JSON-stream path). Verified empty on live claude and shell sessions. Read
+`terminal?tail=` instead and strip ANSI:
+
+```bash
+… | jq -r '.data.terminalBuffer' | sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' -e 's/\x1b([B0]//g'
+```
+
+`POST /api/v1/quick-start` body (all optional):
+`{"caseName":"worker-1","mode":"claude","sessionName":"w9-worker","effort":"high"}`
+— `mode` ∈ `claude|shell|opencode|codex|gemini|antigravity`; response is
+`.data.{sessionId, caseName, casePath}`. Creates the case directory (a real directory
+on the user's disk) if missing — do not retry it in a loop, and remember the name.
+
+`POST /api/v1/sessions/:id/input` body:
+`{"input":"one line\r","useMux":true,"clientId":"agent-1","seq":1}` plus optionally
+`"wait"` / `"waitTimeout"` (below).
+
+- ⚠️ **The input must contain `\r`** (the JSON escape, i.e. a real carriage return)
+  **or Enter is never sent**: the text is typed onto the worker's prompt and sits
+  there unsubmitted. Verified live — this is the number-one silent failure, and no
+  response field catches it: `delivered:true` means "written to the pane", not
+  "submitted". A `\r`-less send with `wait` reports `delivered:true` and then every
+  wait on that turn times out. Without `wait`, fire-and-forget returns an **empty**
+  `{"success":true,"data":{}}` — no `delivered`, no `duplicate`; those fields exist
+  only on the `wait` variant, so a fire-and-forget flow gets no delivery
+  confirmation at all.
+- `input` must be single-line (newlines are stripped). To send a bare Enter (confirm
+  a dialog), send `{"input":"\r"}`.
+- `clientId`+`seq` give exactly-once delivery: the server applies each pair at most
+  once. Increment `seq` per new input.
+
+## The wait primitives
+
+Three bounded long-polls. Shared semantics:
+
+- **Timeout = HTTP 200** with `wait.timedOut:true`. Loop over short waits (60 s);
+  `tailscale serve` / cloudflared cut idle connections.
+- Timeouts are **clamped** to `[1000, 600000]` ms (operator-tunable); the applied
+  value is echoed as `wait.timeoutMs` — read it back, never assume.
+- All three nest the result under `.data.wait`, same shape, so one helper parses all.
+- `.data.status` (post-wait `SessionStatus`) and `.data.limitPaused` ride along.
+  `limitPaused:true` means the session is paused on a usage limit and will emit
+  nothing until reset — a timeout is then *expected*; do not retry hard, and do not
+  kill the worker.
+
+### Signals by mode
+
+| Signal | Meaning | Available for |
+|--------|---------|---------------|
+| `idle` | output stabilized + prompt detected — heuristic, can flap mid-turn | every mode |
+| `working` | session started producing output | every mode |
+| `stop` | Claude Code `stop` hook — the definitive end-of-turn | `claude` only |
+| `blocked` | `permission_prompt` / `elicitation_dialog` hook — the worker needs an answer | `claude` only |
+| `exit` | PTY exited or session deleted | every mode |
+
+Default `until` set: `stop,idle,exit`. On non-claude modes the server silently drops
+`stop`/`blocked` from the *default* set (echoed back as `wait.until`, e.g.
+`["idle","exit"]` on shell); requesting them *explicitly* there is a 400 naming the
+mode. ⚠️ On hook-less modes the lifecycle signals are also **coarse in practice**: a
+short shell command produced **no** `idle` transition within 60 s (verified live), so
+a `fresh=1` / fresh-delivery wait can burn its whole timeout while the work finished
+long ago. Synchronize hook-less modes with `wait-output` markers instead.
+
+Two more places hooks go missing even in claude mode: **Docker cases** need
+`CODEMAN_DOCKER_BRIDGE_HOOKS=1` on the server (without it only `idle`/`working`/
+`exit` arrive), and **remote-SSH cases** run the agent on another host whose hooks may
+never reach this server. When unsure, ask for `stop,idle,exit`.
+
+⚠️ **Signals are edge-triggered with no history.** A signal that fires while no
+waiter is registered is gone; no later wait can observe it (`until=stop` on a worker
+whose turn already ended just times out, with or without `fresh` — verified live).
+Register the waiter before the event can happen: send-and-wait does exactly that,
+and `wait-output` markers with `from=buffer` are latched by construction. Never
+fire-and-forget N prompts and then gather signal-waits worker by worker; every
+worker that finishes before its gather is unobservable (see recipes.md Flow 3b).
+
+### `GET /api/v1/sessions/:id/wait`
+
+| Param | Default | Notes |
+|-------|---------|-------|
+| `until` | `stop,idle,exit` | comma list; unknown token → 400 naming it |
+| `timeout` | 60000 | ms, clamped; applied value echoed as `wait.timeoutMs` |
+| `fresh` | `0` | `1` requires an actual *transition*, ignoring the state at call time |
+
+⚠️ A session whose PTY has not spawned (`pid:null`) or has exited counts as `exit`
+**right now**: with the default set the call answers immediately
+(`signal:"exit", immediate:true`). That is how you detect a dead worker cheaply — but
+it also means "wait for my just-created session" needs the readiness recipe in
+SKILL.md, not this endpoint.
+
+### `GET /api/v1/sessions/:id/wait-output`
+
+| Param | Default | Notes |
+|-------|---------|-------|
+| `match` | required | literal substring, 1–200 chars, ANSI-stripped; chunk-straddling matches found; **no regex** — a `regex=` param is a 400 |
+| `nocase` | `0` | case-insensitive compare; snippet keeps original casing |
+| `from` | `now` | `buffer` scans the tail (~256 KB) of existing output first |
+| `timeout` | 60000 | same clamp |
+
+Four traps, all observed live:
+
+1. **The echo of your own typed command is output.** A marker appearing verbatim in
+   the input line matches the moment the text is typed, before the command runs.
+   Split the marker with a shell variable: send `M=DONE; …; echo ${M}_1234\r`, wait
+   on `DONE_1234`.
+2. **`from=now` misses text printed before the wait landed** — a marker echoed just
+   before the request registered timed out at full length. After sending a command,
+   always wait with `from=buffer`.
+3. **`from=now` can also match too much**: tmux repaints old screen content as
+   ordinary output on attach/resize/redraw, so a *generic* marker (`BUILD OK`)
+   matches stale text. Unique-per-call markers (`DONE_$RANDOM`) make both `from`
+   modes safe.
+4. **TUI output can be space-less in the stream.** Full-screen TUIs (claude, codex,
+   …) position words with cursor-movement escapes rather than literal spaces, so
+   the stripped stream can read `Yes,Itrustthisfolder` while the pane shows the
+   spaced phrase. Whether a given phrase keeps its spaces depends on how the TUI
+   drew it (observed live: some multi-word matches fire, some never do), so treat
+   multi-word matches against TUI screens as unreliable and match a **single
+   space-free token** (`trust`, `bypass`). Plain command output (shell workers,
+   `echo` lines) keeps real spaces and multi-word matches work there.
+
+Build the query with `-G --data-urlencode` (a `+` in a hand-built query decodes to a
+space). Result extras: `wait.matched`, `wait.match`, `wait.snippet` (bounded window
+around the match, blank runs collapsed — the snippet is often all you need to read).
+
+### `POST /api/v1/sessions/:id/input` with `wait`
+
+| Field | Notes |
+|-------|-------|
+| `wait` | `true` (default signal set) or the same comma grammar as `until`; absent = historical fire-and-forget |
+| `waitTimeout` | ms, same clamp |
+
+Registers the waiter **before** typing, which closes the race where send-then-wait
+sees the previous turn's idle state and returns instantly. Response adds `delivered`
+and `duplicate` beside the standard `wait` object.
+
+A **tagged duplicate** (same `clientId`+`seq` already applied) does not retype but
+still honors `wait`, answering from the session's *current* state instead of
+requiring a new transition (`delivered:false, duplicate:true` — verified: ~20 ms,
+command ran exactly once). That is what makes the resend-identical-request loop in
+SKILL.md correct: iteration 1 delivers and needs a transition; later iterations
+resolve immediately if the turn ended in between. ⚠️ The flip side: a duplicate's
+`immediate:true` answer is the current state and nothing more — an idle worker
+whose prompt was never submitted (missing `\r`) produces the same
+`signal:"idle", immediate:true` as one that finished the turn. Confirm from
+`terminal?tail=` before reporting success; SKILL.md's loop shows where.
+
+### Outcome parsing, in order
+
+1. `wait.signal != null` (or `wait.matched == true`) — the thing happened.
+   `wait.immediate:true` rides along and means the condition already held at call
+   time; if that is not what you meant, you wanted `fresh=1` or send-and-wait.
+2. `wait.timedOut` — poll boundary; loop again.
+3. `wait.ended` — session deleted/torn down mid-wait; stop looping.
+
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---------|-------------|
+| every curl fails with a certificate error | you dropped `-k`; `CODEMAN_API_URL` is HTTPS with a self-signed cert |
+| `jq: parse error` on every call | plain-text 401s: the server has a password. Check with `-w '%{http_code}'`, use the guard's `.env` fallback, and if no `.env` exists, stop and ask the user for credentials |
+| input arrives but nothing happens; later waits all time out | the input had no `\r`, so Enter was never sent; the text is sitting on the worker's prompt. **Submitting it with `{"input":"\r"}` is the ONLY recovery** — Ctrl+U (0x15) and Esc do NOT clear the composer (verified live) — and the flush costs one turn in which the worker reasons about the junk; open the next real prompt with "ignore the garbled line above:" |
+| `GET .../sessions/$CODEMAN_SESSION_ID` 404s | Docker case: the env id is truncated to 8 chars; find yourself with `startswith($SELF)`, and always self-compare by prefix, in both directions |
+| `CODEMAN_MUX` unset but you seem to be in a session | remote-SSH case: the env vars are not exported there. Fail closed — refuse to act |
+| connection refused from inside a container | a loopback-bound server is unreachable from a container, and `CODEMAN_DOCKER_BRIDGE_HOOKS=1` does **not** fix that: it opens a hooks-only listener, so hook events start flowing but `/api/v1/*` stays refused. Driving the API from inside a Docker case needs a reachable bind (an operator decision); report it, don't retry |
+| wait routes 404 on a valid session id | read the `.error` text: a `Route ...` prefix means the server predates the wait endpoints (< 1.13.0; a dev build can serve them while reporting an older version, so probe, never version-compare) — poll `terminal?tail=` and say so. `Session ... not found` means your id is wrong, not the server |
+| wait on `stop` never resolves | non-claude mode, or hooks not reaching the server (Docker/remote), or a case created by Codeman < 1.13.0 against an `--https` install (its hook curls lacked `-k` and TLS-failed silently; a 1.13.0+ server rewrites them the next time a session starts in that case). Use markers or `idle,exit` |
+| new claude worker ignores its first prompt | it was showing the first-run trust dialog and Codeman's auto-accept missed; use the readiness recipe in SKILL.md (wait for `bypass` first, accept the dialog only as the bounded fallback) |
+| `wait-output` times out although the pane shows the text | multi-word match against a TUI screen; the stream has no spaces there — match one token |
+| `wait-output` matched instantly with stale text | generic marker + tmux repaint; use `DONE_$RANDOM` |
+| 409 `SESSION_BUSY` on a wait | too many concurrent waiters on that session (cap 16 combined); reuse one wait per worker |
+| 429 `RATE_LIMITED` on a wait | global/owner waiter pool full; back off, do not switch sessions |
