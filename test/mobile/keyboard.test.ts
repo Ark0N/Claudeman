@@ -417,6 +417,52 @@ describe('Virtual Keyboard', () => {
       expect(counts).toBe(1);
     });
 
+    // A viewport resize with NO pending show/hide transition must not arm settle
+    // work of its own: keyboard detection can miss a fine-grained OS animation
+    // entirely (sub-150px steps with the baseline chasing the animation), and a
+    // fit against that mid-animation, uncompensated layout resizes the PTY to
+    // transient dims. The resulting SIGWINCH thrash duplicates prompts and
+    // garbles the transcript. Wiggles may only push a pending settle back.
+    it('does not refit on viewport wiggles without a keyboard transition', async () => {
+      const result = await page.evaluate(async () => {
+        const hadTerminal = app.terminal !== null && app.terminal !== undefined;
+        const hadFitAddon = app.fitAddon !== null && app.fitAddon !== undefined;
+        if (!hadTerminal) app.terminal = { scrollToBottom() {} };
+        if (!hadFitAddon) app.fitAddon = { fit() {}, proposeDimensions: () => null };
+
+        const originalFit = app.fitAddon.fit.bind(app.fitAddon);
+        const originalSendResize = KeyboardHandler._sendTerminalResize.bind(KeyboardHandler);
+        let fits = 0;
+        app.fitAddon.fit = () => {
+          fits++;
+        };
+        KeyboardHandler._sendTerminalResize = () => {};
+
+        // Wiggle only: nothing pending, so nothing may fire.
+        KeyboardHandler._deferViewportSettle();
+        KeyboardHandler._deferViewportSettle();
+        await new Promise((resolve) => setTimeout(resolve, KeyboardHandler.VIEWPORT_SETTLE_MS + 80));
+        const wiggleOnly = fits;
+
+        // A real transition arms the work; a following wiggle defers it but the
+        // settle still fires exactly once.
+        KeyboardHandler._scheduleViewportSettle({ scrollToBottom: true });
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        KeyboardHandler._deferViewportSettle();
+        await new Promise((resolve) => setTimeout(resolve, KeyboardHandler.VIEWPORT_SETTLE_MS + 80));
+        const afterTransition = fits;
+
+        app.fitAddon.fit = originalFit;
+        KeyboardHandler._sendTerminalResize = originalSendResize;
+        if (!hadFitAddon) app.fitAddon = null;
+        if (!hadTerminal) app.terminal = null;
+        return { wiggleOnly, afterTransition };
+      });
+
+      expect(result.wiggleOnly).toBe(0);
+      expect(result.afterTransition).toBe(1);
+    });
+
     it('accessory bar has the simple-mode action buttons', async () => {
       const actions = await page.evaluate(() => {
         return Array.from(document.querySelectorAll('.keyboard-accessory-bar [data-action]')).map(

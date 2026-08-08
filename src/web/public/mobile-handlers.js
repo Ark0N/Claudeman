@@ -215,6 +215,7 @@ const KeyboardHandler = {
   initialViewportHeight: 0,
   _viewportSettleTimer: null,
   _settleScrollToBottom: false,
+  _settlePending: false,
 
   /** Initialize keyboard handling */
   init() {
@@ -284,6 +285,7 @@ const KeyboardHandler = {
       this._viewportSettleTimer = null;
     }
     this._settleScrollToBottom = false;
+    this._settlePending = false;
   },
 
   /** Handle viewport resize (keyboard show/hide) */
@@ -321,7 +323,7 @@ const KeyboardHandler = {
     }
 
     this.updateLayoutForKeyboard();
-    this._scheduleViewportSettle();
+    this._deferViewportSettle();
     this.lastViewportHeight = currentHeight;
   },
 
@@ -446,12 +448,34 @@ const KeyboardHandler = {
     if (typeof app !== 'undefined') app.relayoutMobileSubagentWindows();
   },
 
-  /** Coalesce the keyboard animation into one final xterm reflow and PTY resize. */
+  /**
+   * Coalesce the keyboard animation into one final xterm reflow and PTY resize.
+   * Only a real show/hide transition arms the settle work; ongoing viewport
+   * resize events merely push a pending settle back (_deferViewportSettle).
+   * A viewport change that never crosses the show/hide thresholds must not
+   * refit: keyboard detection can miss a fine-grained OS animation entirely
+   * (each step under 150px, with the baseline chasing the animation), and the
+   * container is then mid-animation with no keyboard CSS compensation, so a
+   * fit against it resizes the PTY to transient dims and the SIGWINCH thrash
+   * garbles the transcript.
+   */
   _scheduleViewportSettle({ scrollToBottom = false } = {}) {
     this._settleScrollToBottom = this._settleScrollToBottom || scrollToBottom;
+    this._settlePending = true;
+    this._armViewportSettleTimer();
+  },
+
+  /** Push a pending settle back while the viewport is still animating; no-op otherwise. */
+  _deferViewportSettle() {
+    if (!this._settlePending) return;
+    this._armViewportSettleTimer();
+  },
+
+  _armViewportSettleTimer() {
     if (this._viewportSettleTimer) clearTimeout(this._viewportSettleTimer);
     this._viewportSettleTimer = setTimeout(() => {
       this._viewportSettleTimer = null;
+      this._settlePending = false;
       const shouldScrollToBottom = this._settleScrollToBottom;
       this._settleScrollToBottom = false;
 
