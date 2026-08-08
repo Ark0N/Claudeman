@@ -44,6 +44,23 @@
   // Bound on page keys emitted from one gesture batch, mirroring the SGR tick
   // cap: a fling must not build a backlog that keeps paging after it stops.
   const PAGE_KEY_MAX_PER_BATCH = 3;
+  // Composer navigation keys as xterm.js encodes user keystrokes: plain and
+  // modified arrows (CSI A-D, CSI 1;mA-D, SS3 A-D), Home/End (CSI H/F, SS3
+  // H/F, CSI 1~/4~), Insert/Delete/PgUp/PgDn (CSI 2~/3~/5~/6~, optional
+  // modifier). Deliberately EXCLUDES terminal query responses that also
+  // arrive via onData (DA `\x1b[?1;2c`, CPR `\x1b[12;34R`) and function
+  // keys, so only genuine cursor/editing keys trigger the local-echo flush.
+  // eslint-disable-next-line no-control-regex
+  const COMPOSER_NAV_KEY_PATTERN = /^\x1b(?:\[(?:[ABCDHF]|1;[2-8][ABCDHF]|[1-8](?:;[2-8])?~)|O[ABCDHF])$/;
+  // Prefix xterm.js puts on terminal.paste() payloads while the application
+  // has bracketed-paste mode (DECSET 2004) enabled. Codex, Claude Code and
+  // tmux all enable it, so browser pastes arrive as one onData chunk of
+  // `\x1b[200~<text>\x1b[201~`.
+  const BRACKETED_PASTE_START = '\x1b[200~';
+
+  function isComposerNavKey(data) {
+    return COMPOSER_NAV_KEY_PATTERN.test(data);
+  }
 
   function isTerminalQueryResponse(data) {
     return TERMINAL_QUERY_RESPONSE_PATTERN.test(data) || TERMINAL_OSC_RESPONSE_PATTERN.test(data);
@@ -81,6 +98,8 @@
   global.CodemanTerminalInput = {
     isTerminalQueryResponse,
     shouldSuppressTerminalQueryResponse,
+    isComposerNavKey,
+    BRACKETED_PASTE_START,
     USER_SCROLL_STICKY_SUPPRESS_MS,
     TOUCH_COMPAT_MOUSE_SUPPRESS_MS,
     REPLAY_ESCAPE_RE,
@@ -868,11 +887,23 @@ Object.assign(CodemanApp.prototype, {
         }
         this._lastTerminalData = { data, time: performance.now() };
 
+        // ── Local Echo Pass-through ──
+        // After a composer nav key (arrow/Home/End/Delete) the real cursor may
+        // sit mid-text, where the overlay's append-only buffering would corrupt
+        // both the preview and the submitted text. Such sessions are handed
+        // back to plain PTY echo until Enter or Ctrl+C submits/cancels the
+        // composer line (see the nav-key branch below).
+        const echoPassthrough =
+          this._localEchoEnabled && this._echoPassthroughSessions?.has(this.activeSessionId);
+        if (echoPassthrough && (data === '\r' || data === '\x03')) {
+          this._echoPassthroughSessions.delete(this.activeSessionId);
+        }
+
         // ── Local Echo Mode ──
         // When enabled, keystrokes are buffered locally in the overlay for
         // instant visual feedback.  Nothing is sent to the PTY until Enter
         // (or a control char) is pressed — avoids out-of-order char delivery.
-        if (this._localEchoEnabled) {
+        if (this._localEchoEnabled && !echoPassthrough) {
           if (data === '\x7f') {
             const source = this._localEchoOverlay?.removeChar();
             if (source === 'flushed') {
@@ -889,9 +920,16 @@ Object.assign(CodemanApp.prototype, {
               }
               this._pendingInput += data;
               flushInput();
+            } else if (source === false) {
+              // Nothing pending, nothing flushed, nothing detected. The
+              // composer may still hold text the overlay cannot see (buffer
+              // detection is suppressed after a control-char flush), so
+              // forward the backspace instead of swallowing it (issue #218);
+              // an empty composer ignores it.
+              this._pendingInput += data;
+              flushInput();
             }
             // 'pending' = removed unsent text (no PTY backspace needed)
-            // false = nothing to remove (swallow the backspace)
             return;
           }
           if (/^[\r\n]+$/.test(data)) {
@@ -933,6 +971,41 @@ Object.assign(CodemanApp.prototype, {
             // Single-byte ESC (user pressing Escape) still falls through to
             // the control char handler below.
             if (data.length > 1 && data.charCodeAt(0) === 27) {
+              // Bracketed paste (terminal.paste() while DECSET 2004 is on):
+              // flush typed-but-unsent overlay text FIRST so the pasted block
+              // lands after it in the composer, not before it (issue #219).
+              // The paste sequence gets its own delayed write: Codex's
+              // paste-burst handling drops keystrokes that arrive in the SAME
+              // PTY read as a bracketed paste (verified against codex 0.147),
+              // mirroring the delayed \r in the Enter branch above.
+              if (data.startsWith(window.CodemanTerminalInput.BRACKETED_PASTE_START)) {
+                const hadPending = !!this._localEchoOverlay?.pendingText;
+                this._flushLocalEchoPending();
+                if (hadPending) {
+                  flushInput();
+                  setTimeout(() => {
+                    this._pendingInput += data;
+                    flushInput();
+                  }, 80);
+                } else {
+                  this._pendingInput += data;
+                  flushInput();
+                }
+                return;
+              }
+              // Composer nav keys (arrows, Home/End, Delete, PgUp/PgDn):
+              // flush unsent text so the key edits the real composer state,
+              // then hand the session to plain PTY echo until Enter/Ctrl+C.
+              // The cursor may now sit mid-text, where append-only buffering
+              // cannot track edits (issue #218).
+              if (window.CodemanTerminalInput.isComposerNavKey(data)) {
+                this._flushLocalEchoPending();
+                if (!this._echoPassthroughSessions) this._echoPassthroughSessions = new Set();
+                this._echoPassthroughSessions.add(this.activeSessionId);
+                this._pendingInput += data;
+                flushInput();
+                return;
+              }
               // Multi-byte escape sequence — forward to PTY without clearing
               // overlay/flushed state (terminal response, not user input)
               this._pendingInput += data;
@@ -2312,6 +2385,23 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
+   * Flush the local-echo overlay's unsent text into `_pendingInput` (no
+   * trailing Enter) and reset overlay + flushed-state tracking. Used before
+   * forwarding sequences that must arrive AFTER the typed text (bracketed
+   * paste, composer nav keys). The caller forwards its own sequence: nav keys
+   * ride the same write, pastes get a delayed second write because codex
+   * drops keys that share a PTY read with a bracketed paste.
+   */
+  _flushLocalEchoPending() {
+    const text = this._localEchoOverlay?.pendingText || '';
+    this._localEchoOverlay?.clear();
+    this._localEchoOverlay?.suppressBufferDetection();
+    this._flushedOffsets?.delete(this.activeSessionId);
+    this._flushedTexts?.delete(this.activeSessionId);
+    if (text) this._pendingInput += text;
+  },
+
+  /**
    * Update local echo overlay state based on settings.
    * Enabled whenever the setting is on — works during idle AND busy.
    * Position is tracked dynamically by _findPrompt() on every render.
@@ -2350,8 +2440,14 @@ Object.assign(CodemanApp.prototype, {
             }
           },
         });
-      } else if (session.mode === 'shell') {
+      } else if (session.mode === 'shell' || session.mode === 'codex') {
         // Shell mode: the shell provides its own PTY echo so the overlay isn't needed.
+        // Codex mode: the composer is fully interactive per keystroke. Typing
+        // "/" pops a live-filtering command picker (issue #222), the composer
+        // grows and rewraps as it fills (#220), pastes are bracketed (#219)
+        // and arrows/history edit server-side state (#218). Buffering
+        // keystrokes until Enter starves all of that, so codex sessions use
+        // plain PTY echo like shell.
         // Disable it by clearing any pending text.
         this._localEchoOverlay.clear();
         this._localEchoEnabled = false;
@@ -2755,7 +2851,11 @@ Object.assign(CodemanApp.prototype, {
   /** Insert editable text at the active prompt without pressing Enter. */
   insertTerminalText(text) {
     if (!this.activeSessionId || !text) return;
-    if (this._localEchoEnabled && this._localEchoOverlay) {
+    if (
+      this._localEchoEnabled &&
+      this._localEchoOverlay &&
+      !this._echoPassthroughSessions?.has(this.activeSessionId)
+    ) {
       this._localEchoOverlay.appendText(text);
     } else {
       this.sendInput(text).catch(() => {});

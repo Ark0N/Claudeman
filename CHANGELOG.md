@@ -1,5 +1,19 @@
 # aicodeman
 
+## 1.12.2
+
+### Patch Changes
+
+- Codex input fixes: all four bugs reported by @DodgyBadger traced to one root cause (the zero-lag local-echo overlay buffering keystrokes until Enter, which starves codex's per-keystroke composer) and fixed in terminal-ui.js:
+  - Slash command picker never appeared in codex sessions (#222): the "/" sat in the overlay until Enter, so codex never saw it. Codex-mode sessions now use plain PTY echo (same branch as shell), so the picker pops and live-filters as you type.
+  - Arrow keys dead while typing, backspace dead after Ctrl+Backspace (#218): arrows were forwarded to a still-empty composer while typed text sat pending, and after a control-char flush the overlay swallowed every backspace. Codex bypasses the overlay entirely now; the shared overlay branch (claude/gemini/opencode) additionally flushes pending text on composer nav keys, then hands the session to pass-through until Enter/Ctrl+C, and forwards backspace instead of swallowing it when the overlay has no state.
+  - Pasting displaced the typed prompt (#219): bracketed pastes (xterm terminal.paste with DECSET 2004 active) were forwarded without flushing pending typed text, so the paste landed first. The shared branch now flushes typed text first and delays the paste sequence by 80ms, because codex's paste-burst handling drops keystrokes that arrive in the same PTY read as a bracketed paste (verified against codex 0.147.0 at the byte level).
+  - Long prompts overflowed the bottom of the screen (#220): long typed prompts existed only in the overlay DOM so codex never grew its composer; with plain PTY echo the composer grows and rewraps normally.
+
+  Verified end to end against a real codex 0.147.0 TUI driven by a headless browser: the pre-fix build reproduces all four bugs, the fixed build passes 17/17 assertions. New CI test file test/local-echo-codex-gating.test.ts (41 tests) pins the nav-key classifier, per-mode overlay gating, the flush helper, and pass-through routing. Known upstream limitation: Ctrl+Backspace deletes one character, not a word (xterm.js sends 0x08; word-delete needs kitty CSI-u encoding that xterm.js 6.0.0 cannot emit).
+
+  Mobile keyboard viewport settling fixes by @Lint111 (#229): coalesce keyboard viewport settling so rapid visualViewport resize events during keyboard show/hide no longer thrash the terminal fit, and only arm the settle logic on a real keyboard transition instead of every viewport resize.
+
 ## 1.12.1
 
 ### Patch Changes
