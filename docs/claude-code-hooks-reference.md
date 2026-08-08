@@ -149,9 +149,17 @@ to Claude as a system reminder. This implies `"async": true`; ordinary async
 hooks do not wake an idle turn, and their output waits for the next interaction.
 
 Codeman uses this on `PostToolUse(Bash)`: a self-contained Node helper extracts
-the background task ID from the Bash result, watches the session transcript for
-the matching completion notification, and exits 2. It does not send terminal
-input, so it cannot submit a user's partially written prompt.
+the background task ID from the Bash result, watches the originating transcript
+and, for subagents, the top-level parent transcript for the matching completion
+notification, and exits 2. Claude records a subagent's Bash result in its
+`subagents/agent-*.jsonl` file but queues completion in the lead session JSONL.
+The task ID keeps each wake targeted. The helper does not send terminal input,
+so it cannot submit a user's partially written prompt.
+
+For script-dispatched Codex work, `codex-run.sh` writes the final response
+between `CODEMAN_RESULT_BEGIN/END` markers in the background task output. The
+rewake helper includes a maximum of 64 KiB of that report in its feedback. UI
+subagent discovery and dispatcher result delivery are separate contracts.
 
 ### Notification
 
@@ -218,6 +226,16 @@ Or to allow exit:
 **When**: When a subagent (Agent tool call) finishes responding.
 
 **Use Cases**: Control nested loops, verify subagent output.
+
+The hook input includes `agent_id`, `agent_transcript_path`, and
+`last_assistant_message`. Like `Stop`, a command hook can return
+`{"decision":"block","reason":"..."}` to keep the subagent running and feed
+the reason back to it.
+
+Codeman uses this to prevent premature reports from workers that still own live
+Monitor or background-Bash processes. It derives candidate task IDs from the
+subagent transcript, but requires a matching live Linux process descriptor for
+`tasks/<id>.output`; historical task text by itself is not treated as active.
 
 ### TeammateIdle
 
