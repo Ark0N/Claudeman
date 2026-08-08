@@ -2003,7 +2003,7 @@ Object.assign(CodemanApp.prototype, {
     const settings = this.loadAppSettingsFromStorage();
     const defaults = this.getDefaultSettings();
 
-    // Tab pop-out (open-in-new-window) button — opt-in (App Settings → Tab Bar,
+    // Tab pop-out (open-in-new-window) button: opt-in (App Settings → Tab Bar,
     // default OFF, per-device). Mirrored as a class on <html>: styles.css hides
     // .tab-detach without it (a tab that is already detached keeps its icon as
     // the re-focus affordance for the popped-out window).
