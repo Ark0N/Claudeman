@@ -9208,6 +9208,20 @@ kbd {
   gap: 0.25rem;
 }
 
+/* Show-hidden toggle: a literal `.*` glyph rather than an icon, so its meaning
+ * (dot-prefixed files and folders) survives every skin and font stack. */
+.btn-file-browser-hidden {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: -0.05em;
+}
+
+.btn-file-browser-hidden.active {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
 .file-browser-search {
   padding: 0.4rem;
   border-bottom: 1px solid var(--border);
@@ -10659,6 +10673,222 @@ kbd {
   display: none !important;
 }
 
+/* "Approvals" header bell: appears ONLY while prompts are pending (JS toggles
+   the marker class on count changes), so it ships hidden and stays out of the
+   default header. Same marker pattern as the attachments button. */
+.btn-approvals {
+  display: inline-flex !important;
+  position: relative;
+}
+.btn-approvals.btn-approvals--hidden {
+  display: none !important;
+}
+
+.approvals-badge {
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  background: var(--error, #e5484d);
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 700;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+/* Approvals Inbox drawer: same shell as the attachment history drawer. */
+.approvals-drawer {
+  position: fixed;
+  top: var(--header-height);
+  right: 0;
+  width: 420px;
+  max-width: calc(100vw - 24px);
+  height: calc(100vh - var(--header-height) - var(--toolbar-height));
+  height: calc(100dvh - var(--header-height) - var(--toolbar-height));
+  background: var(--floating-bg);
+  border-left: 1px solid var(--border);
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.18s ease;
+  box-shadow: -10px 0 28px rgba(0, 0, 0, 0.36);
+}
+.approvals-drawer.open {
+  transform: translateX(0);
+}
+.approvals-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.approvals-title {
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+.approvals-subtitle {
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: 0.68rem;
+}
+.approvals-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+.approvals-close:hover {
+  color: var(--text);
+}
+.approvals-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+.approvals-empty {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  text-align: center;
+  padding: 24px 8px;
+}
+
+.approval-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 8px;
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.02));
+}
+.approval-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.approval-kind-badge {
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+}
+.approval-kind-question .approval-kind-badge {
+  background: #d97706;
+}
+.approval-kind-idle .approval-kind-badge {
+  background: #6b7280;
+}
+.approval-session {
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.approval-age {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 0.68rem;
+}
+.approval-summary {
+  color: var(--text);
+  font-size: 0.76rem;
+  margin-bottom: 6px;
+  word-break: break-word;
+}
+.approval-context {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.66rem;
+  line-height: 1.35;
+  color: var(--text-dim);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  margin: 0 0 8px;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre;
+}
+.approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.approval-btn {
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary, rgba(255, 255, 255, 0.05));
+  color: var(--text);
+  font-size: 0.72rem;
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.approval-btn:hover {
+  border-color: var(--accent);
+}
+.approval-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.approval-btn-danger {
+  border-color: var(--error, #e5484d);
+  color: var(--error, #e5484d);
+}
+.approval-text-row {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+}
+.approval-text-input {
+  flex: 1;
+  background: var(--bg, rgba(0, 0, 0, 0.3));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.74rem;
+  padding: 5px 8px;
+}
+.approval-meta-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+}
+.approval-link {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+.approval-link:hover {
+  color: var(--text);
+}
+
 /* "Attachments" header button — opt-in (App Settings → Display), hidden by
    default. Same pattern as the response viewer: a base inline-flex !important so
    an inline style can't override it, and a more-specific marker rule to hide. */
@@ -11996,7 +12226,8 @@ body.touch-device.cjk-input-visible .main {
 }
 
 .path-picker-up,
-.path-picker-refresh {
+.path-picker-refresh,
+.path-picker-hidden {
   flex: 0 0 38px;
   height: 38px;
   color: var(--text);
@@ -12004,6 +12235,20 @@ body.touch-device.cjk-input-visible .main {
   border: 1px solid var(--border);
   border-radius: 8px;
   cursor: pointer;
+}
+
+/* Show-hidden toggle: a literal `.*` glyph rather than an icon, so its meaning
+ * (dot-prefixed files and folders) survives every skin and font stack. */
+.path-picker-hidden {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: -0.05em;
+}
+
+.path-picker-hidden.active {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .path-picker-up:disabled {
@@ -13496,3 +13741,496 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 /* Delete sits apart from Cancel/Save so it is not fat-fingered on the way to Save. */
 .webview-modal-actions { justify-content: space-between; }
 .webview-modal-actions .btn-danger { margin-right: auto; }
+
+/* ═══════════════════════════════════════════════════════════════
+   Connection loss: banner + full-screen overlay
+   ═══════════════════════════════════════════════════════════════
+   The service worker serves the cached shell, so an unreachable server used to
+   render as an empty-but-normal dashboard with only an 8px red dot in the
+   header. Both surfaces below are deliberately skin-independent (literal
+   colors, not tokens): "you are disconnected" must read identically on every
+   skin, including the light ones. Visibility is driven by the `hidden`
+   attribute, so the display rules need !important to lose to it. */
+
+.offline-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 1rem;
+  background: linear-gradient(90deg, #b91c1c, #991b1b);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.35);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  flex-shrink: 0;
+  z-index: 1250;
+}
+
+.offline-banner[hidden] {
+  display: none !important;
+}
+
+.offline-banner-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #fff;
+  flex-shrink: 0;
+  animation: offline-banner-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes offline-banner-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.offline-banner-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.offline-banner-detail {
+  color: rgba(255, 255, 255, 0.8);
+  font-weight: 500;
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+.offline-banner-retry {
+  flex-shrink: 0;
+  padding: 0.2rem 0.6rem;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.offline-banner-retry:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+/* Above the mobile fixed header (1200) and modals (1300): this is a blocking
+   "nothing works right now" state, and it only appears before any session
+   state has loaded, so there is no modal underneath to bury. Stays below the
+   image popup layer (3000). */
+.offline-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  padding-top: calc(20px + var(--safe-area-top));
+  padding-bottom: calc(20px + var(--safe-area-bottom));
+  background: rgba(6, 8, 12, 0.93);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  overflow-y: auto;
+}
+
+.offline-overlay[hidden] {
+  display: none !important;
+}
+
+.offline-overlay-card {
+  width: min(420px, 100%);
+  box-sizing: border-box;
+  padding: 26px 24px 22px;
+  border-radius: 14px;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  background: #16181d;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+  color: #f3f6fa;
+  text-align: center;
+}
+
+.offline-overlay-icon {
+  color: #ef4444;
+  margin-bottom: 10px;
+}
+
+.offline-overlay-title {
+  margin: 0 0 8px;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.offline-overlay-body {
+  margin: 0 0 14px;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: #b9c0cc;
+}
+
+.offline-overlay-host {
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.75rem;
+  color: #8b93a1;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-bottom: 14px;
+  word-break: break-all;
+}
+
+.offline-overlay-hints {
+  margin: 0 0 18px;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+  font-size: 0.8rem;
+  line-height: 1.7;
+  color: #a7aebb;
+}
+
+.offline-overlay-hints li::before {
+  content: '›';
+  color: #ef4444;
+  font-weight: 700;
+  margin-right: 8px;
+}
+
+.offline-overlay-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.offline-overlay-btn {
+  padding: 0.5rem 1rem;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e7ebf2;
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.offline-overlay-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.offline-overlay-btn--primary {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #fff;
+}
+
+.offline-overlay-btn--primary:hover {
+  background: #ef4444;
+}
+
+.offline-overlay-status {
+  margin-top: 14px;
+  font-size: 0.75rem;
+  color: #8b93a1;
+  min-height: 1em;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Home screen: open tabs in the left gutter (home-sessions.js)
+
+   The welcome content is 560px wide and centered, so this column lives in dead
+   space. It is `position: absolute` precisely so that stays true: the centered
+   content does not move by a pixel whether the column renders or not. That in
+   turn is why the width gate below has to exist — in a narrow window there is
+   no gutter to sit in, and an absolute box would simply overlap the search
+   panel. JS gates on the same 1180px so the two can never disagree.
+
+   The working dot is the phone's, exactly: pulsing green ringed by the very
+   same `tab-load-spin` a tab shows while it loads (reused from above, never
+   re-declared), plus a green halo. One signal, one motion, both home screens.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.home-sessions {
+  position: absolute;
+  left: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 256px;
+  max-height: calc(100% - 3rem);
+  text-align: left;
+  z-index: 1;
+}
+
+/* `hidden` has to be re-asserted over the display above, or the module's only
+   lever (el.hidden) does nothing. */
+.home-sessions[hidden] {
+  display: none;
+}
+
+/* Belt and braces with shouldShowHomeSessions(): a resize that outruns the
+   matchMedia listener must never leave the column overlapping the content. */
+@media (max-width: 1179px) {
+  .home-sessions {
+    display: none !important;
+  }
+}
+
+.home-sessions-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+}
+
+.home-sessions-title {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.home-sessions-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.6rem;
+  font-weight: 700;
+  font-family: monospace;
+}
+
+.home-sessions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 2px 2px 6px;
+}
+
+.home-sessions-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.home-sessions-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+
+.home-sessions-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border-radius: 9px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 0.76rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition-smooth), border-color var(--transition-smooth), color var(--transition-smooth);
+}
+
+.home-sessions-row:hover {
+  background: var(--bg-hover);
+  border-color: rgba(34, 197, 94, 0.35);
+  color: var(--text);
+}
+
+.home-sessions-row:active {
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.home-sessions-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.58rem;
+  font-weight: 700;
+  font-family: monospace;
+}
+
+.home-sessions-dot {
+  position: relative;
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.home-sessions-dot--needs,
+.home-sessions-dot--error {
+  background: var(--red);
+}
+
+.home-sessions-dot--waiting {
+  background: var(--yellow);
+}
+
+.home-sessions-dot--idle {
+  background: var(--green);
+}
+
+.home-sessions-dot--done {
+  background: var(--text-muted);
+  opacity: 0.5;
+}
+
+.home-sessions-dot--web {
+  background: #60a5fa;
+}
+
+.home-sessions-dot--working {
+  background: var(--green);
+  animation: pulse 1.5s infinite;
+  box-shadow: 0 0 8px 2px color-mix(in srgb, var(--green) 55%, transparent);
+  will-change: opacity;
+}
+
+.home-sessions-dot--working::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border: 2px solid color-mix(in srgb, var(--green) 25%, transparent);
+  border-top-color: var(--green);
+  border-radius: 50%;
+  animation: tab-load-spin 0.7s linear infinite;
+}
+
+.home-sessions-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.home-sessions-row-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.home-sessions-row-title .session-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-sessions-row-sub {
+  font-size: 0.66rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-sessions-mode {
+  flex-shrink: 0;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.55rem;
+  font-weight: 700;
+  font-family: monospace;
+  text-transform: uppercase;
+}
+
+.home-sessions-pill {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.home-sessions-pill--needs,
+.home-sessions-pill--error {
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  color: var(--red);
+}
+
+.home-sessions-pill--waiting {
+  background: color-mix(in srgb, var(--yellow) 18%, transparent);
+  border-color: color-mix(in srgb, var(--yellow) 45%, transparent);
+  color: var(--yellow);
+}
+
+.home-sessions-pill--working,
+.home-sessions-pill--idle {
+  background: color-mix(in srgb, var(--green) 15%, transparent);
+  border-color: color-mix(in srgb, var(--green) 40%, transparent);
+  color: var(--green);
+}
+
+/* Row accents: same language as the session tabs and the phone overview — red
+   means a question is pending, yellow means it wants input, green means work is
+   happening. Nothing else on this screen may reuse these colors. */
+.home-sessions-row--needs,
+.home-sessions-row--error {
+  border-color: color-mix(in srgb, var(--red) 50%, transparent);
+  animation: home-sessions-blink-red 2.5s ease-in-out infinite;
+}
+
+.home-sessions-row--waiting {
+  border-color: color-mix(in srgb, var(--yellow) 50%, transparent);
+  animation: home-sessions-blink-yellow 3.5s ease-in-out infinite;
+}
+
+.home-sessions-row--working {
+  border-color: color-mix(in srgb, var(--green) 35%, transparent);
+}
+
+@keyframes home-sessions-blink-red {
+  0%, 100% { border-color: color-mix(in srgb, var(--red) 50%, transparent); }
+  50% { border-color: color-mix(in srgb, var(--red) 95%, transparent); }
+}
+
+@keyframes home-sessions-blink-yellow {
+  0%, 100% { border-color: color-mix(in srgb, var(--yellow) 45%, transparent); }
+  50% { border-color: color-mix(in srgb, var(--yellow) 90%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-sessions-row,
+  .home-sessions-dot,
+  .home-sessions-dot::after {
+    animation: none !important;
+  }
+}

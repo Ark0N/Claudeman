@@ -45,11 +45,12 @@ function loadKeyboardModule() {
     insertTerminalText: vi.fn(),
     sendInput: vi.fn(),
   };
+  const fetchMock = vi.fn(() => Promise.resolve({ ok: true }));
   const context = vm.createContext({
     app,
     MobileDetection: { isTouchDevice: () => false },
     URLSearchParams,
-    fetch: vi.fn(),
+    fetch: fetchMock,
     document: {},
     setTimeout: (fn: () => void) => {
       fn();
@@ -63,10 +64,65 @@ function loadKeyboardModule() {
   );
   return {
     app,
+    fetchMock,
     bar: (context as unknown as { __bar: { handleAction(action: string): void } }).__bar,
     picker: (context as unknown as { __picker: { open: ReturnType<typeof vi.fn> } }).__picker,
   };
 }
+
+describe('accessory Tab key', () => {
+  it('replaced /clear in the simple bar; /clear stays extended-only', () => {
+    const simple = keyboardSource.slice(
+      keyboardSource.indexOf('_simpleButtons'),
+      keyboardSource.indexOf('_extendedButtons')
+    );
+    expect(simple).toContain('data-action="tab"');
+    expect(simple).not.toContain('data-action="clear" title="/clear"');
+    expect(simple).not.toContain('data-action="compact"');
+  });
+
+  it('sends a bare \\t when nothing is buffered locally', () => {
+    const { app, bar, fetchMock } = loadKeyboardModule();
+    bar.handleAction('tab');
+
+    expect(app.sendInput).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/sessions/session-1/input');
+    expect(JSON.parse(init.body)).toEqual({ input: '\t' });
+  });
+
+  it('flushes locally-buffered prompt text to the PTY before sending Tab', () => {
+    const { app, bar, fetchMock } = loadKeyboardModule() as ReturnType<typeof loadKeyboardModule> & {
+      app: Record<string, unknown>;
+    };
+    const overlay = {
+      pendingText: 'git sta',
+      clear: vi.fn(),
+      suppressBufferDetection: vi.fn(),
+    };
+    Object.assign(app, {
+      _localEchoEnabled: true,
+      _localEchoOverlay: overlay,
+      _flushedOffsets: new Map([['session-1', 3]]),
+      _flushedTexts: new Map([['session-1', 'git']]),
+    });
+
+    bar.handleAction('tab');
+
+    expect(overlay.clear).toHaveBeenCalledOnce();
+    expect(overlay.suppressBufferDetection).toHaveBeenCalledOnce();
+    expect((app as { _flushedOffsets: Map<string, number> })._flushedOffsets.has('session-1')).toBe(false);
+    expect((app as { _flushedTexts: Map<string, string> })._flushedTexts.has('session-1')).toBe(false);
+    expect(app.sendInput).toHaveBeenCalledWith('git sta');
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ input: '\t' });
+    // Text must reach the PTY before the completion request.
+    const sendInputOrder = (app.sendInput as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    const fetchOrder = fetchMock.mock.invocationCallOrder[0];
+    expect(sendInputOrder).toBeLessThan(fetchOrder);
+  });
+});
 
 describe('mobile filesystem picker actions', () => {
   it('keeps clear-input separate from the destructive /clear command', () => {

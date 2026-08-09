@@ -97,6 +97,8 @@ export interface RespawnPaneOptions {
   sessionId: string;
   workingDir: string;
   mode: SessionMode;
+  /** Session display name; a respawned claude keeps its `--name` peer name (version-gated, local only). */
+  name?: string;
   niceConfig?: NiceConfig;
   model?: string;
   claudeMode?: ClaudeMode;
@@ -274,4 +276,13 @@ export interface TerminalMultiplexer extends EventEmitter {
    * Pass `{ fullHistory: true }` to capture the entire scrollback (COD-47).
    */
   captureActivePaneBuffer?(muxName: string, opts?: PaneCaptureOptions): string | null;
+
+  /**
+   * Plain text of the visible frame: no styles, no cursor query, no repaint
+   * reconstruction. Deliberately cheaper than `capturePaneBuffer` because idle
+   * detection calls it on a timer: it only needs to read what the CLI is
+   * currently rendering, never to replay it into an xterm. Returns null when the
+   * pane cannot be read.
+   */
+  capturePaneText?(muxName: string, paneTarget?: string): string | null;
 }

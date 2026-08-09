@@ -1,5 +1,84 @@
 # aicodeman
 
+## 1.16.1
+
+### Patch Changes
+
+- 161f1da: Read My Mind phase 1: per-case intent profiles (docs/readmymind-plan.md). Codeman can now capture the prompts a user actually submits (from the Claude session transcript, opt-in via the new synced readMyMindEnabled setting, default OFF) into a per-case intent profile alongside user-stated goals, stored in ~/.codeman/intents.json (mode 0600, never searched). New endpoints GET/PUT/DELETE /api/sessions/:id/intent (ownership-scoped, strict schemas), a transcript:user_prompt event on TranscriptWatcher, and agent-skill coverage (SKILL.md recipe + endpoints.md rows) so agents can read and record the user's intent. Groundwork for the phase-2 predictor button: nothing is ever auto-sent.
+- Home screen and phone touch targets.
+
+  The desktop welcome screen now lists your open tabs as a vertical column down its left gutter, which was previously dead space: one row per live session plus any saved web tabs, in tab order so the row badges match Alt+1..9, with case, backend and state on each row. Clicking a row enters that session. The column is width-gated (1180px and up) and never moves the centered welcome content.
+
+  Working state now reads the same everywhere it appears. A busy session shows a pulsing green dot ringed by the same spinner a tab draws while it loads, with a green halo, on the desktop home column, the phone home screen and the tab strip alike. Phone tabs got the bigger 9px glowing dot for the same reason.
+
+  Phone touch targets: the brand "C" that returns you to the home screen was roughly a 12x13px hit area, well under the 44px minimum. It is now a real 44x44 button, and the phone header grew from 36px to 44px to make that possible, which gives every other header control the same 8px. The simple keyboard accessory bar also swaps /clear for Tab (/clear and /compact stay in the extended bar), flushing locally buffered text to the terminal first so completion applies to what you just typed.
+
+## 1.16.0
+
+### Minor Changes
+
+- Approvals Inbox, truthful idle detection, a revived trust-dialog auto-accept, and an unmistakable offline state.
+
+  **Approvals Inbox (#245, opt-in, default OFF)**: one cross-session inbox for every prompt that is waiting on a human (permission dialogs, AskUserQuestion questions, idle prompts). Enable "Approvals Inbox" in App Settings -> Panels (synced setting `approvalsInboxEnabled`); until then no new UI renders anywhere. Desktop gets a header bell (visible only while something is pending, with a count badge) opening a drawer of cards answerable in place: session, tool/message summary, the captured dialog frame, and one button per parsed dialog option (fallback: Approve / Deny-Esc). The phone overview's NEEDS YOU rows gain compact answer strips, and push notification action buttons were fixed along the way.
+
+  **Sessions no longer report idle while working (#246)**: every working Claude session flipped to `status: "idle"` about two seconds into its turn, and tabs, notifications, respawn and the phone overview all read that bad value. The `❯` prompt redraws throughout a turn, so readiness now requires a sustained repaint streak plus a capture-pane probe that recognizes the live working line (`✻ ... (Xs)`), and the UI shows a working state you can actually see.
+
+  **Workspace trust dialog auto-accept has been dead and now works (#249)**: a session started in a directory Claude had not seen before sat on the workspace-trust dialog until a human pressed Enter, because tmux delivers cursor-forward sequences rather than spaces. Detection now goes through the capture-pane text added in #246 and the dialog is answered reliably.
+
+  **A dead connection is unmistakable instead of a red dot (#248)**: the service worker serves the cached app shell, so opening Codeman with nothing reachable rendered a normal-looking empty dashboard with only an 8px red header dot as a clue. Now a connection-loss overlay (retry button, server host, actionable hints) plus a persistent banner make the state obvious on desktop and phone, and clear the moment the server answers again.
+
+- 1e1db94: Cross-session messaging integration, two halves. **Workers now carry their Codeman session names as messaging peer names**: local claude spawns pass `--name <session name>` when the installed CLI is 2.1.224+ (the cross-session-messaging release). The gate is fail-closed, since an older claude aborts startup on an unknown option: an unknown or older version yields a spawn command byte-identical to before, the value is allowlist-sanitized before shell interpolation, and docker/remote spawns never carry the flag (their CLI is not the probed binary). Verified end to end on an isolated instance: the worker lists as its session name in `ListAgents`, and its replies arrive tagged `from-name="<session name>"`.
+
+  **The Codeman agent skill teaches cross-session messaging**: drive claude workers over `ListAgents`/`SendMessage` where available, map rows to Codeman sessions via the `tmux codeman-<id8>` column, deliver multi-line exactly-once task messages (including mid-turn steering), collect results as latched replies instead of polling, and fall back to the HTTP recipes whenever the feature is absent (version, feature flag, telemetry-disabling env vars, Docker/remote cases, non-claude modes). Adds `reference/messaging.md` (ships automatically, the installer enumerates `reference/*.md`), fan-out Flow 5 in `reference/recipes.md`, troubleshooting rows in `reference/endpoints.md`, and safety rules for the shared peer namespace (message only workers you created, no permission laundering in either direction). All mechanics verified live against claude-cli 2.1.226.
+
+### Patch Changes
+
+- c50bb02: The File Viewer can show hidden files and folders.
+
+  `GET /api/sessions/:id/files` has always accepted `showHidden=true`, but the panel
+  hardcoded `showHidden=false`, so dot-prefixed entries were unreachable from the
+  tree: no `.gitignore`, no `.github/`, no `.env.example`, and nothing under them.
+  Opening one meant guessing its path.
+
+  The panel header gains a `.*` toggle. It re-fetches rather than re-rendering the
+  cached tree, because the filtering happens server-side, and it keeps the expanded
+  directories so toggling does not collapse the tree you just navigated. The state
+  is per-device (its own `codeman:fileBrowserShowHidden` key rather than the
+  app-settings object, which is rebuilt from the settings-modal DOM on save and
+  would drop a key toggled from outside it), defaults to OFF, and survives a reload.
+
+  Generated and version-control directories (`.git`, `node_modules`, `.next`,
+  `.venv`, ...) stay excluded either way: that list is about tree size, not about
+  hiding dotfiles.
+
+  Closes #221.
+
+- ce22c2a: The filesystem path picker can show hidden files and folders, and the shared secret blocklist grew to make that safe.
+
+  The picker behind Link Existing's "Browse" and the mobile keyboard's `Path` key
+  refused every path with a dot-prefixed segment, so `.github/workflows/ci.yml`
+  could not be selected and a hidden folder could not even be opened. It now has
+  the same `.*` toggle as the File Viewer, default OFF, per-device, and it applies
+  to both the listing and the preview endpoint (which re-resolves the path
+  independently).
+
+  That filter was quietly doing security work. With every hidden path unreachable,
+  `isSensitivePath` never had to name the credentials that live in dot-directories,
+  because the picker's roots include Home. Lifting the filter removes that
+  accident, so the blocklist now covers them explicitly: SSH keys at any depth (not
+  only under `$HOME`), GPG keyrings, AWS/GCloud/Azure/Docker/Kubernetes
+  credentials, npm, Yarn, git, `gh`, netrc, PyPI, RubyGems, Cargo and Terraform
+  tokens, `.pgpass` and `.my.cnf`, and the Claude and Codeman agent credentials.
+  `~/.codeman/` and `~/.claude/` stay attachable as trees, since the publish skill
+  and the review-card loop read from them; only their secret-bearing members are
+  named.
+
+  Blocked trees, sensitive files, root confinement and symlink-escape checks are
+  all unchanged and still apply with the toggle on: a hidden entry that resolves
+  to a secret is dropped from the listing, and opening it is refused.
+
+  Follows #221.
+
 ## 1.15.0
 
 ### Minor Changes

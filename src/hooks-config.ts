@@ -15,9 +15,10 @@
  * - `updateCaseEnvVars(casePath, envVars)` — merges env vars into settings
  *
  * Hook events generated: `idle_prompt`, `permission_prompt`, `elicitation_dialog`,
- * `stop`, `teammate_idle`, `task_completed`
+ * `elicitation_complete`, `elicitation_response`, `stop`, `teammate_idle`,
+ * `task_completed`
  *
- * Hook categories: `Notification` (3 matchers), `Stop` (1), `SubagentStop` (1),
+ * Hook categories: `Notification` (5 matchers), `Stop` (1), `SubagentStop` (1),
  * `TeammateIdle` (1), `TaskCompleted` (1), `PostToolUse` (1 self-contained
  * background Bash rewake)
  *
@@ -390,6 +391,16 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
           matcher: 'elicitation_dialog',
           hooks: [{ type: 'command', command: curlCmd('elicitation_dialog'), timeout: HOOK_TIMEOUT_SECONDS }],
         },
+        // The two dialog-closed notifications resolve Approvals Inbox items the
+        // moment a question is answered IN the terminal (long before `stop`).
+        {
+          matcher: 'elicitation_complete',
+          hooks: [{ type: 'command', command: curlCmd('elicitation_complete'), timeout: HOOK_TIMEOUT_SECONDS }],
+        },
+        {
+          matcher: 'elicitation_response',
+          hooks: [{ type: 'command', command: curlCmd('elicitation_response'), timeout: HOOK_TIMEOUT_SECONDS }],
+        },
       ],
       Stop: [
         {
@@ -712,7 +723,14 @@ export async function refreshStaleCodemanHooks(casePath: string): Promise<void> 
     // on a self-signed HTTPS install.
     const hasTlsFlaglessCurl = hooksJson.includes('curl -s -X POST');
     const hasSubagentStopGuard = hooksJson.includes(SUBAGENT_STOP_GUARD_MARKER);
-    if (!isOurs || (hasSecret && hasBackgroundWake && hasSubagentStopGuard && !hasTlsFlaglessCurl)) return;
+    // Approvals Inbox needs the elicitation_complete/elicitation_response
+    // matchers; their absence marks a pre-inbox hooks block.
+    const hasElicitationComplete = hooksJson.includes('elicitation_complete');
+    if (
+      !isOurs ||
+      (hasSecret && hasBackgroundWake && hasSubagentStopGuard && hasElicitationComplete && !hasTlsFlaglessCurl)
+    )
+      return;
     const generated = generateHooksConfig();
     const merged = {
       ...existing,

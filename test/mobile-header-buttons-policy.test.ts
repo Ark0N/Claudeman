@@ -143,3 +143,48 @@ describe('Mobile header button policy (static guard)', () => {
     }
   });
 });
+
+// The flip side of the policy above: the ONE header control phones do keep has
+// to be pressable. The brand "C" is the way back to the home screen and was a
+// 0.85rem inline span — roughly a 12x13px target, well under the 44px minimum.
+describe('Phone home button tap target (static guard)', () => {
+  const css = readFileSync(join(PUBLIC, 'mobile.css'), 'utf-8');
+
+  /** Declarations applying to `.header-brand .logo` inside a phone media query. */
+  function phoneLogoDecls(): Map<string, string> {
+    const decls = new Map<string, string>();
+    postcss.parse(css).walkAtRules('media', (atRule) => {
+      if (!appliesToPhone(atRule.params)) return;
+      atRule.walkRules((rule) => {
+        if (!/\.header-brand\s+\.logo\s*$/.test(rule.selector)) return;
+        rule.walkDecls((decl) => decls.set(decl.prop, decl.value));
+      });
+    });
+    return decls;
+  }
+
+  it('gives the brand button a 44x44 hit area on phones', () => {
+    const decls = phoneLogoDecls();
+    expect(decls.get('min-width'), 'the "C" home button needs an explicit 44px min-width on phones').toBe('44px');
+    // A bare inline span ignores width entirely — the box only exists once it
+    // stops being inline.
+    expect(decls.get('display')).toBe('inline-flex');
+    // The other axis is the header's, so the two have to be read together: the
+    // button is only 44 tall because the phone header is.
+    expect(decls.get('height')).toBe('var(--header-height)');
+  });
+
+  it('keeps the phone header at 44px, the height that makes that target square', () => {
+    // The bar was 36px. Shrinking it again silently takes 8px back off every
+    // header touch target, the home button included.
+    let phoneHeaderHeight: string | undefined;
+    postcss.parse(css).walkAtRules('media', (atRule) => {
+      if (!appliesToPhone(atRule.params)) return;
+      atRule.walkRules((rule) => {
+        if (rule.selector.trim() !== ':root') return;
+        rule.walkDecls('--header-height', (decl) => (phoneHeaderHeight = decl.value.trim()));
+      });
+    });
+    expect(phoneHeaderHeight, '--header-height must be redefined for phones in mobile.css').toBe('44px');
+  });
+});

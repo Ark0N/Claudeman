@@ -4,10 +4,12 @@
  * Defines three exports:
  *
  * - KeyboardAccessoryBar (singleton object) — Quick action buttons shown above the virtual
- *   keyboard on mobile: arrow up/down, /init, /clear, /compact, paste, Esc, and dismiss.
+ *   keyboard on mobile: arrow up/down, /init, Tab, paste, Esc, and dismiss (the extended
+ *   bar adds /clear, /compact, Shift+Tab and more). Tab flushes any locally-buffered
+ *   prompt text to the PTY before sending \t, so completion applies to what was typed.
  *   The paste button opens a dialog that handles both text paste and image attach
  *   (native picker + best-effort image paste, routed through app._uploadAndInsertImages).
- *   Destructive actions (/clear, /compact) require double-tap confirmation (2s amber state).
+ *   Destructive actions (/clear, /compact, extended bar only) require double-tap confirmation (2s amber state).
  *   Commands are sent as text + Enter separately for Ink compatibility.
  *   Only initializes on touch devices (MobileDetection.isTouchDevice guard).
  * - PathPicker (singleton object) — Lazy server-side file/folder browser shared
@@ -33,6 +35,12 @@
 // Shared Filesystem Path Picker
 // ═══════════════════════════════════════════════════════════════
 
+// Per-device, and deliberately its own key rather than a shared "show hidden"
+// preference with the File Viewer: that tree is confined to one workspace, while
+// the picker browses Home and every configured root, so wanting dotfiles in a
+// project does not imply wanting them in ~.
+const PATH_PICKER_SHOW_HIDDEN_KEY = 'codeman:pathPickerShowHidden';
+
 const PathPicker = {
   overlay: null,
   _options: null,
@@ -43,6 +51,7 @@ const PathPicker = {
   _previewOverlay: null,
   _previewRequestSequence: 0,
   _previewPreviousFocus: null,
+  _showHidden: false,
 
   /**
    * Open the lazy filesystem browser.
@@ -53,6 +62,7 @@ const PathPicker = {
     this.close(false);
     this._options = options;
     this._selectedPath = '';
+    this._showHidden = this._loadShowHidden();
     this._previousFocus = document.activeElement;
     this._previousFocus?.blur?.();
 
@@ -74,6 +84,7 @@ const PathPicker = {
         <div class="path-picker-nav">
           <button type="button" class="path-picker-up" title="Parent folder" aria-label="Parent folder">&#x2191;</button>
           <div class="path-picker-current" title="Current folder"></div>
+          <button type="button" class="path-picker-hidden" title="Show hidden files and folders" aria-label="Show hidden files and folders" aria-pressed="false">.*</button>
           <button type="button" class="path-picker-refresh" title="Refresh" aria-label="Refresh">&#x21BB;</button>
         </div>
         <div class="path-picker-status" aria-live="polite">Loading...</div>
@@ -100,6 +111,8 @@ const PathPicker = {
       if (current) this.select(current);
     });
     overlay.querySelector('.path-picker-refresh').addEventListener('click', () => this.load());
+    overlay.querySelector('.path-picker-hidden').addEventListener('click', () => this.toggleHidden());
+    this._syncHiddenButton();
     overlay.querySelector('.path-picker-up').addEventListener('click', () => {
       const parent = overlay.querySelector('.path-picker-up').dataset.parent;
       if (parent) this.load(parent);
@@ -120,6 +133,38 @@ const PathPicker = {
     this.load(options.initialPath || '');
   },
 
+  _loadShowHidden() {
+    try {
+      return localStorage.getItem(PATH_PICKER_SHOW_HIDDEN_KEY) === '1';
+    } catch {
+      return false;
+    }
+  },
+
+  _syncHiddenButton() {
+    const btn = this.overlay?.querySelector('.path-picker-hidden');
+    if (!btn) return;
+    const label = this._showHidden ? 'Hide hidden files and folders' : 'Show hidden files and folders';
+    btn.classList.toggle('active', this._showHidden);
+    btn.setAttribute('aria-pressed', this._showHidden ? 'true' : 'false');
+    btn.setAttribute('title', label);
+    btn.setAttribute('aria-label', label);
+  },
+
+  toggleHidden() {
+    if (!this.overlay) return;
+    this._showHidden = !this._showHidden;
+    try {
+      localStorage.setItem(PATH_PICKER_SHOW_HIDDEN_KEY, this._showHidden ? '1' : '0');
+    } catch {}
+    this._syncHiddenButton();
+    // Reload where we are rather than resetting to the root. Turning the toggle
+    // OFF inside a hidden folder makes the current path unbrowsable again; the
+    // server answers 403 and load()'s catch falls back to the default root,
+    // which is the only place left to stand.
+    this.load(this.overlay.querySelector('.path-picker-current').textContent || '');
+  },
+
   async load(path) {
     if (!this.overlay || !this._options) return;
     const loadSequence = ++this._loadSequence;
@@ -131,6 +176,7 @@ const PathPicker = {
     const params = new URLSearchParams();
     if (path) params.set('path', path);
     if (this._options.sessionId) params.set('sessionId', this._options.sessionId);
+    if (this._showHidden) params.set('showHidden', 'true');
     try {
       const response = await fetch(`/api/filesystem/browse?${params.toString()}`);
       const result = await response.json();
@@ -248,6 +294,9 @@ const PathPicker = {
     const requestSequence = ++this._previewRequestSequence;
     const params = new URLSearchParams({ path: entry.path });
     if (this._options?.sessionId) params.set('sessionId', this._options.sessionId);
+    // A hidden file is only reachable while the toggle is on, and the preview
+    // endpoint re-resolves the path independently, so it needs the flag too.
+    if (this._showHidden) params.set('showHidden', 'true');
     const previewUrl = `/api/filesystem/preview?${params.toString()}`;
 
     const overlay = document.createElement('div');
@@ -385,7 +434,7 @@ const KeyboardAccessoryBar = {
         </svg>
       </button>
       <button class="accessory-btn" data-action="init" title="/init">/init</button>
-      <button class="accessory-btn" data-action="clear" title="/clear">/clear</button>
+      <button class="accessory-btn" data-action="tab" title="Tab">Tab</button>
       <button class="accessory-btn" data-action="paste" title="Paste from clipboard">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
@@ -515,9 +564,26 @@ const KeyboardAccessoryBar = {
       case 'opt-enter':
         this.sendKey('\x1b\r');
         break;
-      case 'tab':
-        this.sendKey('\t');
+      case 'tab': {
+        // Tab means "complete what I just typed", but with local echo the typed
+        // text is still buffered in the overlay and has never reached the PTY —
+        // a bare \t would ask the CLI to complete an empty composer. Flush the
+        // pending text first (same steps as the Shift+Enter branch in
+        // terminal-ui.js), then send \t after the sendCommand settle delay.
+        const overlay = app._localEchoOverlay;
+        const pending = (app._localEchoEnabled && overlay?.pendingText) || '';
+        if (pending) {
+          overlay.clear();
+          overlay.suppressBufferDetection?.();
+          app._flushedOffsets?.delete(app.activeSessionId);
+          app._flushedTexts?.delete(app.activeSessionId);
+          app.sendInput(pending);
+          setTimeout(() => this.sendKey('\t'), 120);
+        } else {
+          this.sendKey('\t');
+        }
         break;
+      }
       case 'shift-tab':
         this.sendKey('\x1b[Z');
         break;

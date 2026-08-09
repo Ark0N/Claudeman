@@ -65,6 +65,14 @@ const filesystemPickerPathSchema = z
   })
   .refine((p) => !p.split('/').includes('..'), { message: 'Path traversal is not allowed' });
 
+/**
+ * Opt-in flag for listing dot-prefixed entries in the path picker. Absent means
+ * off, so an old client keeps the previous behavior. It is a string rather than
+ * a boolean because it arrives as a query parameter; `'false'` is accepted (and
+ * means off) so a client can send the flag unconditionally.
+ */
+const showHiddenQuerySchema = z.enum(['true', 'false']).optional();
+
 /** Query validation for the lazy, allowlisted filesystem path picker. */
 export const FilesystemBrowseQuerySchema = z.object({
   path: filesystemPickerPathSchema.optional(),
@@ -73,6 +81,7 @@ export const FilesystemBrowseQuerySchema = z.object({
     .max(100)
     .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid session id')
     .optional(),
+  showHidden: showHiddenQuerySchema,
 });
 
 /** Query validation for a single allowlisted path-picker file preview. */
@@ -83,6 +92,7 @@ export const FilesystemPreviewQuerySchema = z.object({
     .max(100)
     .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid session id')
     .optional(),
+  showHidden: showHiddenQuerySchema,
 });
 
 /**
@@ -114,6 +124,14 @@ export const FileWriteSchema = z
 /** Allowlisted env var key prefixes */
 const ALLOWED_ENV_PREFIXES = ['CLAUDE_CODE_', 'OPENCODE_', 'CODEX_', 'GEMINI_', 'GOOGLE_', 'ANTIGRAVITY_'];
 
+/**
+ * Allowlisted exact env var keys (checked alongside the prefixes).
+ * CLAUDE_CONFIG_DIR relocates the Claude CLI's user config (credentials,
+ * settings, stats) so a case can run on a separate Claude subscription (#255).
+ * Exact match only — CLAUDE_CONFIG_DIR_EXTRA etc. stay rejected.
+ */
+const ALLOWED_ENV_KEYS = new Set(['CLAUDE_CONFIG_DIR']);
+
 /** Env var keys that are always blocked (security-sensitive) */
 const BLOCKED_ENV_KEYS = new Set([
   'PATH',
@@ -128,6 +146,7 @@ const BLOCKED_ENV_KEYS = new Set([
 /** Validate that an env var key is allowed */
 function isAllowedEnvKey(key: string): boolean {
   if (BLOCKED_ENV_KEYS.has(key)) return false;
+  if (ALLOWED_ENV_KEYS.has(key)) return true;
   return ALLOWED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix));
 }
 
@@ -142,7 +161,7 @@ const safeEnvOverridesSchema = z
     },
     {
       message:
-        'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_*, OPENCODE_*, CODEX_*, GEMINI_*, GOOGLE_*, and ANTIGRAVITY_* keys are allowed.',
+        'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_*, OPENCODE_*, CODEX_*, GEMINI_*, GOOGLE_*, ANTIGRAVITY_* keys and CLAUDE_CONFIG_DIR are allowed.',
     }
   );
 
@@ -688,10 +707,42 @@ export const QuickStartSchema = z.object({
  * Receives Claude Code hook events.
  */
 export const HookEventSchema = z.object({
-  event: z.enum(['permission_prompt', 'elicitation_dialog', 'idle_prompt', 'stop', 'teammate_idle', 'task_completed']),
+  event: z.enum([
+    'permission_prompt',
+    'elicitation_dialog',
+    'elicitation_complete',
+    'elicitation_response',
+    'idle_prompt',
+    'stop',
+    'teammate_idle',
+    'task_completed',
+  ]),
   sessionId: z.string().min(1),
   data: z.record(z.string(), z.unknown()).nullable().optional(),
 });
+
+/**
+ * Body of POST /api/approvals/:id/answer (Approvals Inbox).
+ * `option` digits are additionally validated against the item's PARSED options
+ * in the route; the schema alone must not authorize blind digit-poking.
+ */
+export const ApprovalAnswerSchema = z
+  .object({
+    action: z.enum(['approve', 'deny', 'option', 'text']),
+    option: z.number().int().min(1).max(9).optional(),
+    text: z.string().min(1).max(4000).optional(),
+  })
+  .strict();
+
+/**
+ * Body of PUT /api/sessions/:id/intent (Read My Mind). The 8192 cap mirrors
+ * MAX_GOALS_CHARS in intent-store.ts.
+ */
+export const IntentGoalsSchema = z
+  .object({
+    goals: z.string().max(8192),
+  })
+  .strict();
 
 // ========== Configuration ==========
 
@@ -793,6 +844,22 @@ export const SettingsUpdateSchema = z
      * add-only at create; a marker keeps user-authored copies untouched.
      */
     agentSkillEnabled: z.boolean().optional(),
+    /**
+     * Approvals Inbox (header bell + drawer, phone overview answer buttons,
+     * push Approve/Deny action buttons). SYNCED, default OFF (opt-in): even
+     * with items pending, no surface renders and push payloads carry no
+     * actions/approvalId until this is enabled. The server-side store and the
+     * answer endpoints run regardless, so flipping it ON shows anything
+     * already pending immediately.
+     */
+    approvalsInboxEnabled: z.boolean().optional(),
+    /**
+     * Read My Mind (docs/readmymind-plan.md): capture the user's submitted
+     * prompts into per-case intent profiles. SYNCED, default OFF (opt-in:
+     * captured prompts are sensitive). OFF stops capture immediately; already
+     * stored profiles stay until DELETE /api/sessions/:id/intent.
+     */
+    readMyMindEnabled: z.boolean().optional(),
     tunnelEnabled: z.boolean().optional(),
     // Action field (NOT persisted): explicit per-request acknowledgment that the
     // operator accepts exposing an UNAUTHENTICATED public tunnel (no CODEMAN_PASSWORD).

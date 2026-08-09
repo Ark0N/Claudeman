@@ -47,6 +47,9 @@ read the status with `-w '%{http_code}'` and the raw body before assuming a bug.
 | full tmux scrollback (context bomb; post-mortems only) | `GET /api/v1/sessions/:id/terminal?full=1` |
 | background agents, one session | `GET /api/v1/sessions/:id/subagents` |
 | background agents, global list | `GET /api/v1/subagents` (admin-only in multi-user mode) |
+| the case's intent profile (Read My Mind: user goals + recent real prompts) | `GET /api/v1/sessions/:id/intent` → `.data.intent.{goals,recentPrompts}` (empty with `updatedAt: 0` until something is recorded) |
+| replace the user-goals text on the case's intent profile | `PUT /api/v1/sessions/:id/intent` body `{"goals":"…"}` (≤ 8192 chars, strict schema; REPLACES the text, read + merge first) |
+| forget the case's intent profile (only when the user asks) | `DELETE /api/v1/sessions/:id/intent` → `.data.deleted` |
 | server status / version | `GET /api/v1/status` → `.data.version` |
 | delete one session (yours only, via `delete_session`) | `DELETE /api/v1/sessions/:id` — never call it bare; the fail-closed helper in SKILL.md §0 is the only self-protection that exists. Answers `{"success":true,"data":{}}`: an **empty** body is the success signal, there is nothing to read back |
 
@@ -282,3 +285,6 @@ whose prompt was never submitted (missing `\r`) produces the same
 | `wait-output` matched instantly with stale text | generic marker + tmux repaint; use `DONE_$RANDOM` |
 | 409 `SESSION_BUSY` on a wait | too many concurrent waiters on that session (cap 16 combined); reuse one wait per worker |
 | 429 `RATE_LIMITED` on a wait | global/owner waiter pool full; back off, do not switch sessions |
+| ready claude worker missing from `ListAgents` | cross-session messaging is off for that end: CLI < 2.1.224, the feature flag not (yet) on (observed: two 2.1.226 sessions on one box, only one with an inbox socket), a telemetry-disabling env var, a Docker/remote case, or a non-claude mode. Not an error: drive it over the HTTP recipes. See `reference/messaging.md` |
+| `SendMessage` says "not an agent in this conversation" | first contact with a peer needs the ref: re-send with the exact `name [ref]` string from the `ListAgents` row, or from that error's own suggestion |
+| message sent, worker never acts, no reply, no `stop` | the message was held (permission-class mismatch: a non-default `claudeMode` spawns prompting-class workers, and the approval dialog expires unattended after ~5 min) or refused (`crossSessionInbound`). Run the bounded backstop, then deliver once over HTTP input. See `reference/messaging.md` |

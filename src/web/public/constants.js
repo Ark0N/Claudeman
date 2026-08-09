@@ -180,6 +180,81 @@ function planWsReconnect(code, attempt) {
   return { action: 'reconnect', delayMs };
 }
 
+// Connection-loss UI policy.
+//
+// With the service worker serving the cached app shell, Codeman still *renders*
+// when the server is unreachable (phone off the tailnet, VPN down, server
+// stopped): a dashboard with no sessions and an 8px red dot in the header
+// corner. That reads as "there are no sessions", not "you are not connected".
+// This decides what the app surfaces instead:
+//
+//   'overlay': full-screen "can't reach Codeman". Used while the page has
+//               never loaded server state, where the UI behind it is empty
+//               anyway, so blocking it costs nothing and explains everything.
+//   'banner':  non-blocking bar under the header. Used once state HAS loaded,
+//               so the terminal scrollback stays readable while the link is down.
+//   'hidden':  connected, or still inside the grace window.
+//
+// Grace: a COM deploy restarts the server and SSE is back in ~200ms. Shouting
+// on every deploy trains the user to ignore the warning, so a transport that is
+// merely *not yet connected* gets CONNECTION_LOSS_GRACE_MS to recover.
+// `navigator.onLine === false` skips the grace entirely: the device itself is
+// saying there is no network, which is never a 200ms blip.
+//
+// Pure: no DOM, no timers, no side effects. `now` is passed in.
+const CONNECTION_LOSS_GRACE_MS = 2500;
+
+function computeConnectionLossUi(input) {
+  const {
+    isOnline = true,
+    status = 'connected',
+    everLoaded = false,
+    downSince = null,
+    now = 0,
+    nextRetryAt = null,
+    overlayDismissed = false,
+    retryPending = false,
+  } = input || {};
+
+  const hidden = { mode: 'hidden', kind: 'connected', title: '', detail: '', retryInSec: null };
+
+  // The browser's own offline flag outranks the transport state: no network
+  // means no reconnect is coming until it returns.
+  const hardOffline = !isOnline || status === 'offline';
+  if (!hardOffline) {
+    if (status === 'connected') return hidden;
+    const downMs = downSince == null ? 0 : Math.max(0, now - downSince);
+    if (downMs < CONNECTION_LOSS_GRACE_MS) return { ...hidden, kind: 'connecting' };
+  }
+
+  // Dismissing the overlay ("show cached view") demotes it to the banner for
+  // the rest of this outage, never back to invisible.
+  const mode = everLoaded || overlayDismissed ? 'banner' : 'overlay';
+  // A retry the user just triggered has no scheduled time; the caller renders
+  // an indeterminate "Retrying…" for null.
+  const retryInSec =
+    retryPending || nextRetryAt == null ? null : Math.max(0, Math.ceil((nextRetryAt - now) / 1000));
+
+  if (hardOffline) {
+    return {
+      mode,
+      kind: 'offline',
+      title: 'No network connection',
+      detail: 'This device is offline. Codeman is showing the last cached view.',
+      retryInSec,
+    };
+  }
+  return {
+    mode,
+    kind: 'unreachable',
+    title: "Can't reach the Codeman server",
+    detail:
+      'This device has a network, but the Codeman server is not answering. ' +
+      'If you reach Codeman over Tailscale or a VPN, check that it is connected.',
+    retryInSec,
+  };
+}
+
 if (typeof window !== 'undefined') {
   window.WEBGL_FALLBACK = WEBGL_FALLBACK;
   window.evaluateWebGLLongTaskTrip = evaluateWebGLLongTaskTrip;
@@ -189,6 +264,10 @@ if (typeof window !== 'undefined') {
   };
   window.CodemanWsReconnect = {
     plan: planWsReconnect,
+  };
+  window.CodemanConnectionLoss = {
+    compute: computeConnectionLossUi,
+    GRACE_MS: CONNECTION_LOSS_GRACE_MS,
   };
 }
 
@@ -408,9 +487,16 @@ const SSE_EVENTS = {
   HOOK_IDLE_PROMPT: 'hook:idle_prompt',
   HOOK_PERMISSION_PROMPT: 'hook:permission_prompt',
   HOOK_ELICITATION_DIALOG: 'hook:elicitation_dialog',
+  HOOK_ELICITATION_COMPLETE: 'hook:elicitation_complete',
+  HOOK_ELICITATION_RESPONSE: 'hook:elicitation_response',
   HOOK_STOP: 'hook:stop',
   HOOK_TEAMMATE_IDLE: 'hook:teammate_idle',
   HOOK_TASK_COMPLETED: 'hook:task_completed',
+
+  // Approvals Inbox
+  APPROVAL_PENDING: 'approval:pending',
+  APPROVAL_UPDATED: 'approval:updated',
+  APPROVAL_RESOLVED: 'approval:resolved',
 
   // Subagents (Claude Code background agents)
   SUBAGENT_DISCOVERED: 'subagent:discovered',

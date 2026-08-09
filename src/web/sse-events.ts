@@ -5,7 +5,7 @@
  * and referenced by the frontend (`SSE_EVENTS` in `constants.js`).
  * Both files MUST be kept in sync.
  *
- * 149 event constants organized by category:
+ * 154 event constants organized by category:
  * - **Core** (1): init
  * - **Session lifecycle** (23): created, updated, deleted, terminal, idle, working, ...
  * - **Session: Ralph** (6): ralphLoopUpdate, todoUpdate, completionDetected, ...
@@ -24,7 +24,8 @@
  * - **Plan orchestration** (5): started, progress, subagent, completed, cancelled
  * - **Tunnel** (7): started, stopped, progress, error, qrRotated, qrRegenerated, qrAuthUsed
  * - **Image / attachments** (2): image:detected, attachment:detected
- * - **Hooks** (6): idle_prompt, permission_prompt, elicitation_dialog, stop, teammate_idle, task_completed
+ * - **Hooks** (8): idle_prompt, permission_prompt, elicitation_dialog, elicitation_complete, elicitation_response, stop, teammate_idle, task_completed
+ * - **Approvals** (3): pending, updated, resolved (cross-session Approvals Inbox)
  * - **Orchestrator** (12): stateChanged, planProgress, planReady, phase*, verification, task*, completed, error
  * - **Clipboard** (1): write
  * - **Cases** (4): created, linked, deleted, order-changed
@@ -336,12 +337,25 @@ export const HookIdlePrompt = 'hook:idle_prompt' as const;
 export const HookPermissionPrompt = 'hook:permission_prompt' as const;
 /** Claude Code hook: elicitation dialog (Claude asking a question). */
 export const HookElicitationDialog = 'hook:elicitation_dialog' as const;
+/** Claude Code hook: elicitation dialog closed (question answered in the terminal). */
+export const HookElicitationComplete = 'hook:elicitation_complete' as const;
+/** Claude Code hook: elicitation answer submitted. */
+export const HookElicitationResponse = 'hook:elicitation_response' as const;
 /** Claude Code hook: response complete. */
 export const HookStop = 'hook:stop' as const;
 /** Claude Code hook: teammate went idle. */
 export const HookTeammateIdle = 'hook:teammate_idle' as const;
 /** Claude Code hook: teammate task completed. */
 export const HookTaskCompleted = 'hook:task_completed' as const;
+
+// ─── Approvals Inbox ─────────────────────────────────────────────────────────
+
+/** A prompt is waiting on a human (permission dialog, question, idle prompt). */
+export const ApprovalPending = 'approval:pending' as const;
+/** A pending approval's captured context/options were refreshed. */
+export const ApprovalUpdated = 'approval:updated' as const;
+/** A pending approval left the inbox (answered, superseded, expired, ...). */
+export const ApprovalResolved = 'approval:resolved' as const;
 
 // ─── Orchestrator ────────────────────────────────────────────────────────────
 
@@ -580,9 +594,16 @@ export const SseEvent = {
   HookIdlePrompt,
   HookPermissionPrompt,
   HookElicitationDialog,
+  HookElicitationComplete,
+  HookElicitationResponse,
   HookStop,
   HookTeammateIdle,
   HookTaskCompleted,
+
+  // Approvals Inbox
+  ApprovalPending,
+  ApprovalUpdated,
+  ApprovalResolved,
 
   // Orchestrator
   OrchestratorStateChanged,

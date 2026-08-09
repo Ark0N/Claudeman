@@ -1,0 +1,248 @@
+/**
+ * Working/idle detection for an interactive Claude pane.
+ *
+ * The bug this pins: Claude redraws the composer (`❯`) about once a second all
+ * the way through a turn, so the old "saw a ❯, wait 2s, call it idle" rule
+ * flipped a busy session to idle two seconds into every turn. Measured on a live
+ * worker: `GET /api/sessions` reported `idle` for a session that had been
+ * running for 17 minutes and was mid-tool-call.
+ *
+ * The status-line fixtures below are verbatim captures from live panes
+ * (`tmux -L codeman capture-pane -p`) on Claude Code 2.1.220.
+ */
+import { describe, expect, it, vi, afterEach } from 'vitest';
+import { Session } from '../src/session.js';
+import { CLAUDE_WORKING_LINE_PATTERN } from '../src/utils/regex-patterns.js';
+import {
+  trackActivityStreak,
+  isSustainedActivity,
+  isPaneQuiet,
+  ACTIVITY_GAP_MS,
+  WORKING_STREAK_MS,
+  IDLE_SILENCE_MS,
+} from '../src/session-activity.js';
+
+type SessionInternals = {
+  _handleTerminalOutput(data: string): void;
+  _detectInteractiveActivity(data: string): void;
+};
+
+/** One PTY chunk: what the pane emitted, exactly as the interactive handler sees it. */
+function feed(session: Session, data: string): void {
+  const internals = session as unknown as SessionInternals;
+  internals._handleTerminalOutput(data);
+  internals._detectInteractiveActivity(data);
+}
+
+/**
+ * A session whose mux reports a fixed (or scripted) screen, so the pane probe has
+ * something to read. Only `capturePaneText` is exercised by these paths.
+ */
+function withFakePane(screen: string | (() => string)): Session {
+  const read = typeof screen === 'function' ? screen : () => screen;
+  const mux = {
+    isAvailable: () => true,
+    capturePaneText: () => read(),
+  } as unknown as NonNullable<Parameters<typeof Session.prototype.constructor>[0]>['mux'];
+  return new Session({
+    workingDir: '/tmp',
+    mode: 'claude',
+    mux,
+    muxSession: { muxName: 'codeman-test', sessionId: 'test', createdAt: Date.now() },
+  } as ConstructorParameters<typeof Session>[0]);
+}
+
+/** A composer repaint: the frame Claude ships roughly once a second while working. */
+const COMPOSER_REPAINT =
+  '\x1b[31;1H\x1b[38;5;246m❯\xa0\x1b[39m\x1b[0m\x1b[33;1H  \x1b[38;5;246mOpus 5  in:143,699 out:669  ctx:14%\x1b[39m';
+
+describe('CLAUDE_WORKING_LINE_PATTERN', () => {
+  it('matches the live status line, whatever the glyph and gerund are', () => {
+    // Captured from three different live panes: the glyph animates through
+    // `· ✢ ✳ ∗ ✻ ✽` and the gerund is randomized per turn, so neither is matchable.
+    expect(CLAUDE_WORKING_LINE_PATTERN.test('✻ Actualizing… (15m 17s · ↓ 47.5k tokens)')).toBe(true);
+    expect(CLAUDE_WORKING_LINE_PATTERN.test('* Implementing the backend… (18m 59s · ↓ 69.9k tokens)')).toBe(true);
+    expect(CLAUDE_WORKING_LINE_PATTERN.test('· Finagling… (4m 45s · ↓ 13.3k tokens)')).toBe(true);
+    expect(CLAUDE_WORKING_LINE_PATTERN.test('✽ Herding… (3s · esc to interrupt)')).toBe(true);
+  });
+
+  it('does not match the FINISHED line, which carries the same glyph', () => {
+    // `✻ Cooked for 2m 49s` sits on screen for the whole idle period afterwards.
+    // Matching the glyph alone would pin such a session at "working" forever.
+    expect(CLAUDE_WORKING_LINE_PATTERN.test('✻ Cooked for 2m 49s')).toBe(false);
+    expect(CLAUDE_WORKING_LINE_PATTERN.test('✻ Brewed for 18m 41s')).toBe(false);
+    expect(CLAUDE_WORKING_LINE_PATTERN.test('✻ Worked for 2m 46s')).toBe(false);
+  });
+
+  it('ignores ordinary prose and the idle footer', () => {
+    expect(CLAUDE_WORKING_LINE_PATTERN.test(COMPOSER_REPAINT)).toBe(false);
+    expect(CLAUDE_WORKING_LINE_PATTERN.test('  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents')).toBe(
+      false
+    );
+    expect(CLAUDE_WORKING_LINE_PATTERN.test('the build took 45s to finish')).toBe(false);
+  });
+});
+
+describe('activity streak helpers', () => {
+  it('extends a streak while chunks keep arriving', () => {
+    let streak = trackActivityStreak(null, 1000);
+    streak = trackActivityStreak(streak, 2000);
+    streak = trackActivityStreak(streak, 3000);
+    expect(streak).toEqual({ startedAt: 1000, lastAt: 3000 });
+  });
+
+  it('restarts the streak after a gap', () => {
+    const first = trackActivityStreak(null, 1000);
+    const after = trackActivityStreak(first, 1000 + ACTIVITY_GAP_MS + 1);
+    expect(after.startedAt).toBe(1000 + ACTIVITY_GAP_MS + 1);
+  });
+
+  it('calls it working only once the streak spans the threshold', () => {
+    expect(isSustainedActivity(null)).toBe(false);
+    expect(isSustainedActivity({ startedAt: 0, lastAt: WORKING_STREAK_MS - 1 })).toBe(false);
+    expect(isSustainedActivity({ startedAt: 0, lastAt: WORKING_STREAK_MS })).toBe(true);
+  });
+
+  it('measures the streak on its own span, so a stale streak cannot age into working', () => {
+    // A single old chunk stays a single chunk no matter how much later we ask.
+    const oneChunk = { startedAt: 0, lastAt: 0 };
+    expect(isSustainedActivity(oneChunk)).toBe(false);
+  });
+
+  it('calls the pane quiet only after the silence window', () => {
+    expect(isPaneQuiet(1000, 1000 + IDLE_SILENCE_MS - 1)).toBe(false);
+    expect(isPaneQuiet(1000, 1000 + IDLE_SILENCE_MS)).toBe(true);
+  });
+});
+
+describe('Session interactive idle detection', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('stays busy through a long turn of composer repaints', () => {
+    vi.useFakeTimers();
+    const session = new Session({ workingDir: '/tmp', mode: 'claude' });
+    const events: string[] = [];
+    session.on('idle', () => events.push('idle'));
+    session.on('working', () => events.push('working'));
+
+    // 30 seconds of the once-a-second repaint a working pane emits. Every one of
+    // these carries a ❯; the old rule went idle after the first two seconds.
+    for (let i = 0; i < 30; i++) {
+      feed(session, COMPOSER_REPAINT);
+      vi.advanceTimersByTime(1000);
+    }
+
+    expect(events).toEqual(['working']);
+    expect(session.status).toBe('busy');
+  });
+
+  it('goes idle once the pane falls silent', () => {
+    vi.useFakeTimers();
+    const session = new Session({ workingDir: '/tmp', mode: 'claude' });
+    const events: string[] = [];
+    session.on('idle', () => events.push('idle'));
+
+    for (let i = 0; i < 5; i++) {
+      feed(session, COMPOSER_REPAINT);
+      vi.advanceTimersByTime(1000);
+    }
+    expect(events).toEqual([]);
+
+    // Turn over: nothing more is emitted.
+    vi.advanceTimersByTime(IDLE_SILENCE_MS + 1000);
+
+    expect(events).toEqual(['idle']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('emits idle once, not once per re-check', () => {
+    vi.useFakeTimers();
+    const session = new Session({ workingDir: '/tmp', mode: 'claude' });
+    const events: string[] = [];
+    session.on('idle', () => events.push('idle'));
+
+    for (let i = 0; i < 4; i++) {
+      feed(session, COMPOSER_REPAINT);
+      vi.advanceTimersByTime(1000);
+    }
+    vi.advanceTimersByTime(60_000);
+
+    expect(events).toEqual(['idle']);
+  });
+
+  it('refuses to go idle while the screen still shows the working line', () => {
+    vi.useFakeTimers();
+    // A turn can go completely silent inside one tool call (measured at 20+
+    // seconds on a live worker) while `✻ Elucidating… (39s · ↓ 2.0k tokens)`
+    // sits on screen the whole time. Silence alone must not end the turn.
+    const session = withFakePane('✻ Elucidating… (39s · ↓ 2.0k tokens)\n❯ \n');
+    const events: string[] = [];
+    session.on('idle', () => events.push('idle'));
+
+    for (let i = 0; i < 3; i++) {
+      feed(session, COMPOSER_REPAINT);
+      vi.advanceTimersByTime(1000);
+    }
+    vi.advanceTimersByTime(60_000); // silent for a minute
+
+    expect(events).toEqual([]);
+    expect(session.status).toBe('busy');
+  });
+
+  it('goes idle once the working line leaves the screen', () => {
+    vi.useFakeTimers();
+    const pane = { text: '✻ Elucidating… (39s · ↓ 2.0k tokens)\n❯ \n' };
+    const session = withFakePane(() => pane.text);
+    const events: string[] = [];
+    session.on('idle', () => events.push('idle'));
+
+    for (let i = 0; i < 3; i++) {
+      feed(session, COMPOSER_REPAINT);
+      vi.advanceTimersByTime(1000);
+    }
+    vi.advanceTimersByTime(20_000);
+    expect(events).toEqual([]);
+
+    // Turn over: the same glyph remains, on the FINISHED line this time.
+    pane.text = '✻ Cooked for 2m 49s\n❯ \n';
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['idle']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('does not call typing into the composer "working"', () => {
+    vi.useFakeTimers();
+    // Keystroke echo is a steady stream of repaints too, so the streak alone
+    // would call it work. The screen has no working line, which vetoes it.
+    const session = withFakePane('❯ some prompt being typed\n');
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+
+    for (let i = 0; i < 10; i++) {
+      feed(session, '\x1b[31;3Hx');
+      vi.advanceTimersByTime(300);
+    }
+
+    expect(events).toEqual([]);
+    expect(session.status).toBe('idle');
+  });
+
+  it('does not mark an external CLI pane working off raw activity', () => {
+    vi.useFakeTimers();
+    // Codex/Gemini/OpenCode render their own TUIs and have no ❯, so nothing would
+    // arm the idle confirmation, so a session marked working here would never recover.
+    const session = new Session({ workingDir: '/tmp', mode: 'codex' });
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+
+    for (let i = 0; i < 10; i++) {
+      feed(session, '\x1b[2K▌ Working (12s)');
+      vi.advanceTimersByTime(1000);
+    }
+
+    expect(events).toEqual([]);
+  });
+});
