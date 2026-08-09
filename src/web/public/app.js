@@ -3686,6 +3686,8 @@ class CodemanApp {
     // (create, delete, idle, working, exit, hook alerts via updateTabAlertFromHooks)
     // already funnels through here. No-ops unless that surface is showing.
     this._refreshMobileOverviewIfVisible?.();
+    // Same deal for the desktop home screen's tab column.
+    this._refreshHomeSessionsIfVisible?.();
   }
 
   // Auto-wrap desktop session tabs to a second row when they overflow one row,

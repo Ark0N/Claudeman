@@ -353,13 +353,46 @@ html.mobile-init .file-browser-panel {
   /* Phone brand collapses to a single "C" home button: hide the wordmark,
      keep the tap target */
   .header-brand {
-    padding-right: 0.25rem;
-    margin-right: 0.2rem;
+    padding-right: 0;
+    margin-right: 0.1rem;
     border-right: none;
+    /* styles.css sizes this to the FULL header height, so inside the header's
+       0.15rem vertical padding it overflows and the last 2.4px are clipped
+       (`overflow: hidden` on the phone header). Harmless while the brand was
+       bare text; it would cut the bottom off the tap target's pressed state.
+       Cancelling the padding for this one item is what makes the button fill
+       the header edge to edge. `height: 100%` cannot do it: the header sets
+       min/max-height rather than height, so the percentage has no definite
+       containing block to resolve against and silently falls back to auto. */
+    margin-block: -0.15rem;
   }
 
+  /* The "C" was a 0.85rem inline span — about a 12x13px hit area, far under the
+     44px minimum, on the one control that gets you back to the home screen.
+     It is now a real 44px-wide button spanning the full header height, with the
+     glyph scaled to match. 44 is reachable on the horizontal axis only: the
+     phone header is pinned to 36px tall (min-height/max-height below) and
+     `overflow: hidden` clips anything taller, so a true 44x44 would mean growing
+     the header and taking that height off the terminal. The negative margin
+     spends the header's OWN left padding on the target instead of pushing the
+     tab strip right. */
   .header-brand .logo {
-    font-size: 0.85rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    /* Taller than its parent on purpose: centred in the padded brand box, this
+       makes the button fill all 36 header pixels edge to edge. */
+    height: var(--header-height);
+    margin-left: -0.3rem;
+    font-size: 1.15rem;
+    line-height: 1;
+    border-radius: 8px;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .header-brand .logo:active {
+    background: rgba(96, 165, 250, 0.16);
   }
 
   .header-brand .logo .logo-text {
@@ -2690,10 +2723,13 @@ html.mobile-init .file-browser-panel {
   }
 
   /* Same as .session-tab .tab-status: green when the session is fine, and the
-     shared `pulse` keyframes while it is working. */
+     shared `pulse` keyframes while it is working. The halo matches the busy tab
+     dot and the desktop home column (.home-sessions-dot--working, styles.css):
+     working reads identically on every surface or it reads as three features. */
   .mobile-overview-dot--working {
     background: var(--green);
     animation: pulse 1.5s infinite;
+    box-shadow: 0 0 8px 2px color-mix(in srgb, var(--green) 55%, transparent);
     will-change: opacity;
   }
 

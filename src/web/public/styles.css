@@ -13922,3 +13922,299 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   color: #8b93a1;
   min-height: 1em;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Home screen: open tabs in the left gutter (home-sessions.js)
+
+   The welcome content is 560px wide and centered, so this column lives in dead
+   space. It is `position: absolute` precisely so that stays true: the centered
+   content does not move by a pixel whether the column renders or not. That in
+   turn is why the width gate below has to exist — in a narrow window there is
+   no gutter to sit in, and an absolute box would simply overlap the search
+   panel. JS gates on the same 1180px so the two can never disagree.
+
+   The working dot is the phone's, exactly: pulsing green ringed by the very
+   same `tab-load-spin` a tab shows while it loads (reused from above, never
+   re-declared), plus a green halo. One signal, one motion, both home screens.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.home-sessions {
+  position: absolute;
+  left: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 256px;
+  max-height: calc(100% - 3rem);
+  text-align: left;
+  z-index: 1;
+}
+
+/* `hidden` has to be re-asserted over the display above, or the module's only
+   lever (el.hidden) does nothing. */
+.home-sessions[hidden] {
+  display: none;
+}
+
+/* Belt and braces with shouldShowHomeSessions(): a resize that outruns the
+   matchMedia listener must never leave the column overlapping the content. */
+@media (max-width: 1179px) {
+  .home-sessions {
+    display: none !important;
+  }
+}
+
+.home-sessions-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+}
+
+.home-sessions-title {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.home-sessions-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.6rem;
+  font-weight: 700;
+  font-family: monospace;
+}
+
+.home-sessions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 2px 2px 6px;
+}
+
+.home-sessions-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.home-sessions-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+
+.home-sessions-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border-radius: 9px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 0.76rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition-smooth), border-color var(--transition-smooth), color var(--transition-smooth);
+}
+
+.home-sessions-row:hover {
+  background: var(--bg-hover);
+  border-color: rgba(34, 197, 94, 0.35);
+  color: var(--text);
+}
+
+.home-sessions-row:active {
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.home-sessions-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.58rem;
+  font-weight: 700;
+  font-family: monospace;
+}
+
+.home-sessions-dot {
+  position: relative;
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.home-sessions-dot--needs,
+.home-sessions-dot--error {
+  background: var(--red);
+}
+
+.home-sessions-dot--waiting {
+  background: var(--yellow);
+}
+
+.home-sessions-dot--idle {
+  background: var(--green);
+}
+
+.home-sessions-dot--done {
+  background: var(--text-muted);
+  opacity: 0.5;
+}
+
+.home-sessions-dot--web {
+  background: #60a5fa;
+}
+
+.home-sessions-dot--working {
+  background: var(--green);
+  animation: pulse 1.5s infinite;
+  box-shadow: 0 0 8px 2px color-mix(in srgb, var(--green) 55%, transparent);
+  will-change: opacity;
+}
+
+.home-sessions-dot--working::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border: 2px solid color-mix(in srgb, var(--green) 25%, transparent);
+  border-top-color: var(--green);
+  border-radius: 50%;
+  animation: tab-load-spin 0.7s linear infinite;
+}
+
+.home-sessions-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.home-sessions-row-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.home-sessions-row-title .session-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-sessions-row-sub {
+  font-size: 0.66rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-sessions-mode {
+  flex-shrink: 0;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.55rem;
+  font-weight: 700;
+  font-family: monospace;
+  text-transform: uppercase;
+}
+
+.home-sessions-pill {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.home-sessions-pill--needs,
+.home-sessions-pill--error {
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  color: var(--red);
+}
+
+.home-sessions-pill--waiting {
+  background: color-mix(in srgb, var(--yellow) 18%, transparent);
+  border-color: color-mix(in srgb, var(--yellow) 45%, transparent);
+  color: var(--yellow);
+}
+
+.home-sessions-pill--working,
+.home-sessions-pill--idle {
+  background: color-mix(in srgb, var(--green) 15%, transparent);
+  border-color: color-mix(in srgb, var(--green) 40%, transparent);
+  color: var(--green);
+}
+
+/* Row accents: same language as the session tabs and the phone overview — red
+   means a question is pending, yellow means it wants input, green means work is
+   happening. Nothing else on this screen may reuse these colors. */
+.home-sessions-row--needs,
+.home-sessions-row--error {
+  border-color: color-mix(in srgb, var(--red) 50%, transparent);
+  animation: home-sessions-blink-red 2.5s ease-in-out infinite;
+}
+
+.home-sessions-row--waiting {
+  border-color: color-mix(in srgb, var(--yellow) 50%, transparent);
+  animation: home-sessions-blink-yellow 3.5s ease-in-out infinite;
+}
+
+.home-sessions-row--working {
+  border-color: color-mix(in srgb, var(--green) 35%, transparent);
+}
+
+@keyframes home-sessions-blink-red {
+  0%, 100% { border-color: color-mix(in srgb, var(--red) 50%, transparent); }
+  50% { border-color: color-mix(in srgb, var(--red) 95%, transparent); }
+}
+
+@keyframes home-sessions-blink-yellow {
+  0%, 100% { border-color: color-mix(in srgb, var(--yellow) 45%, transparent); }
+  50% { border-color: color-mix(in srgb, var(--yellow) 90%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-sessions-row,
+  .home-sessions-dot,
+  .home-sessions-dot::after {
+    animation: none !important;
+  }
+}

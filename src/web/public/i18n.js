@@ -387,6 +387,9 @@
       '在手机上，点击 C 图标打开会话概览（需要你 / 空间 / 空闲），而不是欢迎页',
     Phone: '手机',
 
+    // Desktop home screen tab column (home-sessions.js)
+    'Open tabs': '打开的标签',
+
     // Session/case dialogs
     'Session Options': '会话选项',
     'Session Name': '会话名称',

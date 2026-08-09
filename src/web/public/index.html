@@ -322,6 +322,11 @@
 
       <!-- Welcome Overlay (shown when no session active) -->
       <div class="welcome-overlay" id="welcomeOverlay">
+        <!-- Open tabs as a vertical column in the left gutter (home-sessions.js).
+             Absolutely positioned so the centered content below never moves, and
+             therefore only rendered where the gutter is wider than the column;
+             ships `hidden` and only that module reveals it. -->
+        <aside class="home-sessions" id="homeSessions" hidden></aside>
         <div class="welcome-content">
           <h1 class="welcome-title">Codeman</h1>
           <p class="welcome-desc">Manage AI Coding tools in persistent tmux sessions.</p>
@@ -2769,6 +2774,7 @@
   <script defer src="session-ui.js"></script>
   <script defer src="webview-tabs.js"></script>
   <script defer src="mobile-overview.js"></script>
+  <script defer src="home-sessions.js"></script>
   <script defer src="entrance-animations.js"></script>
   <script defer src="ralph-wizard.js"></script>
   <script defer src="api-client.js"></script>
