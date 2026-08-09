@@ -143,6 +143,22 @@ describe('codex replay', () => {
     rt.cleanup();
   }, 15000);
 
+  it('streaming-real: mid-stream typing survives real baseY growth (recorded with real auth)', async () => {
+    // The one shape the fake-key lab cannot produce: a genuine model reply
+    // streaming above the pinned composer pushes lines into history, so
+    // baseY GROWS while predictions are outstanding: the no-drop-on-baseY
+    // rule against reality instead of a synthetic scroll.
+    const { rt, addon, events } = await replay('streaming-real');
+    expect(rt.term.buffer.active.baseY).toBeGreaterThan(0); // history really grew
+    const midStream = events.filter((e) => e.kind === 'char' && ['a', 'b', 'c'].includes(e.key));
+    expect(midStream.length).toBe(3);
+    expect(midStream.some((e) => e.painted)).toBe(true); // predictions ran mid-stream
+    await converge(rt, addon);
+    expect(rt.cursorRowText()).toBe('› abc'); // the mid-stream chars landed intact
+    addon.dispose();
+    rt.cleanup();
+  }, 15000);
+
   it('paste-bracketed: typed chars confirm, the paste clears predictions, content intact', async () => {
     const { rt, addon, events } = await replay('paste-bracketed');
     const paste = events.find((e) => e.key.startsWith('\x1b[200~'))!;

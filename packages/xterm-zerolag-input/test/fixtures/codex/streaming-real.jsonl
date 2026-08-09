@@ -1,0 +1,154 @@
+{"scenario":"streaming-real","cols":100,"rows":30,"codexVersion":"codex-cli 0.147.0","recordedAt":"2026-08-09T09:31:57.351Z"}
+{"delayMs":0,"data":"\u001b[22;0;0t\u001b[?1h\u001b=\u001b[H\u001b[2J\u001b[?12l\u001b[?25h\u001b[?2004h\u001b(B\u001b[m\u001b[?12l\u001b[?25h\u001b[1;1H\u001b[1;30r\u001b[c\u001b[>c\u001b[>q\u001b]10;?\u001b\\\u001b]11;?\u001b\\\u001b[1;1H"}
+{"delayMs":1,"data":"\u001b[?25l\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\u001b[?12l\u001b[?25h\u001b[H\u001b(B\u001b[m\u001b[?12l\u001b[?25h\u001b[1;1H\u001b[1;30r\u001b[1;1H\u001b[?25l\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\u001b[?12l\u001b[?25h\u001b[H"}
+{"delayMs":35,"data":"\u001b[32m\u001b[1markon@tnode\u001b(B\u001b[m:\u001b[34m\u001b[1m~/default/claudeman-predictive/tmp/codexrec-work-SFpno1\u001b(B\u001b[m$ "}
+{"delayMs":647,"data":"exec codex\r\n"}
+{"delayMs":479,"data":"\u001b[30d\n\u001b[K\u001b[2d\u001b[J\u001b[H\u001b[K\u001b[?25l\u001b[?12l\u001b[?25h"}
+{"delayMs":2,"data":">\u001b[C\u001b[1mYou are in \u001b(B\u001b[m/home/arkon/default/claudeman-predictive/tmp/codexrec-work-SFpno1\u001b[3;3H\u001b[33mNote: You’re in a subdirectory of a Git project. Trusting will apply to the repository root:\u001b[4;3H/home/arkon/default/claudeman\u001b[6;3H\u001b[39mDo\u001b[Cyou\u001b[Ctrust\u001b[Cthe\u001b[Ccontents\u001b[Cof\u001b[Cthis\u001b[Cdirectory?\u001b[CWorking\u001b[Cwith\u001b[Cuntrusted\u001b[Ccontents\u001b[Ccomes\u001b[Cwith\u001b[Chigher\u001b[7;3Hrisk\u001b[Cof\u001b[Cprompt\u001b[Cinjection.\u001b[CTrusting\u001b[Cthe\u001b[Cdirectory\u001b[Callows\u001b[Cproject-local\u001b[Cconfig,\u001b[Chooks,\u001b[Cand\u001b[Cexec\u001b[8;3Hpolicies\u001b[Cto\u001b[Cload.\u001b[10;1H\u001b[36m› 1. Yes, continue\u001b[11;3H\u001b[39m2.\u001b[CNo,\u001b[Cquit\u001b[13;3H\u001b[2mPress enter to continue\u001b[?25l\u001b(B\u001b[m"}
+{"delayMs":3830,"data":"\u001b[?7727h\u001b(B\u001b[m\u001b[?12l\u001b[?25h\u001b[1;1H\u001b[1;30r\u001b[13;26H\u001b[?25l"}
+{"delayMs":1,"data":"\u001b[H>\u001b[1X\u001b[1m\u001b[CYou are in \u001b(B\u001b[m/home/arkon/default/claudeman-predictive/tmp/codexrec-work-SFpno1\u001b[K\r\n\u001b[K\u001b[3;2H\u001b[1K\u001b[33m\u001b[CNote: You’re in a subdirectory of a Git project. Trusting will apply to the repository root:\u001b[39m\u001b[K\u001b[4;2H\u001b[1K\u001b[33m\u001b[C/home/arkon/default/claudeman\u001b[39m\u001b[K\r\n\u001b[K\u001b[6;2H\u001b[1K\u001b[CDo\u001b[1X\u001b[Cyou\u001b[1X\u001b[Ctrust\u001b[1X\u001b[Cthe\u001b[1X\u001b[Ccontents\u001b[1X\u001b[Cof\u001b[1X\u001b[Cthis\u001b[1X\u001b[Cdirectory?\u001b[1X\u001b[CWorking\u001b[1X\u001b[Cwith\u001b[1X\u001b[Cuntrusted\u001b[1X\u001b[Ccontents\u001b[1X\u001b[Ccomes\u001b[1X\u001b[Cwith\u001b[1X\u001b[Chigher\u001b[K\u001b[7;2H\u001b[1K\u001b[Crisk\u001b[1X\u001b[Cof\u001b[1X\u001b[Cprompt\u001b[1X\u001b[Cinjection.\u001b[1X\u001b[CTrusting\u001b[1X\u001b[Cthe\u001b[1X\u001b[Cdirectory\u001b[1X\u001b[Callows\u001b[1X\u001b[Cproject-local\u001b[1X\u001b[Cconfig,\u001b[1X\u001b[Chooks,\u001b[1X\u001b[Cand\u001b[1X\u001b[Cexec\u001b[K\u001b[8;2H\u001b[1K\u001b[Cpolicies\u001b[1X\u001b[Cto\u001b[1X\u001b[Cload.\u001b[K\r\n\u001b[K\u001b[36m\r\n› 1. Yes, continue\u001b[39m\u001b[K\u001b[11;2H\u001b[1K\u001b[C2.\u001b[1X\u001b[CNo,\u001b[1X\u001b[Cquit\u001b[K\r\n\u001b[K\u001b[13;2H\u001b[1K\u001b[2m\u001b[CPress enter to continue\u001b(B\u001b[m\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\u001b[13;26H"}
+{"keyAt":true,"data":"\r"}
+{"delayMs":235,"data":"\u001b[2;1H\u001b[J\u001b[H\u001b[K"}
+{"delayMs":0,"data":"\u001bM\u001bM\u001bM\r\n\u001b[33m⚠\u001b[39m\u001b[1;3r\u001b[3;1H\n\u001b[1;2H\u001b[33m Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the\r\n\u001b[39m  \u001b[33msandbox prerequisites: https://developers.openai.com/codex/concepts/sandboxing#prerequisites.\u001b[39m\r\n\u001b[K\u001b[1;30r\u001b[3;1H"}
+{"delayMs":1,"data":"  \u001b[33mCodex will use the bundled bubblewrap in the meantime.\u001b[5;1H\u001b[39m\u001b[2m╭─────────────────────────────────────────────────╮\r\n│ >_ \u001b(B\u001b[m\u001b[1mOpenAI Codex\u001b(B\u001b[m\u001b[2m (v0.147.0)                      │\r\n│                                                 │\r\n│ model:     \u001b[3mloading\u001b(B\u001b[m\u001b[2m   \u001b(B\u001b[m\u001b[36m/model\u001b[39m\u001b[2m to change           │\r\n│ directory: \u001b(B\u001b[m~/default/…/tmp/codexrec-work-SFpno1\u001b[2m │\r\n╰─────────────────────────────────────────────────╯\u001b[13;1H\u001b(B\u001b[m\u001b[1m›\u001b[C\u001b(B\u001b[m\u001b[2mUse /skills t\u001b(B\u001b[m\u001b[2mo list available skills\u001b[15;3H\u001b(B\u001b[m\u001b[38;5;223mgpt-5.6-terra default\u001b[39m\u001b[2m · \u001b(B\u001b[m\u001b[38;5;151m~/default/claudeman-predictive/tmp/codexrec-work-SFpno1\u001b[13;3H\u001b[?12l\u001b[?25h\u001b(B\u001b[m"}
+{"delayMs":10,"data":"\u001b[5;52H\u001b[K\n\u001b[K\n\u001b[K\n\u001b[K\n\u001b[K\n\u001b[K\u001b[13;39H\u001b[K\u001b[15;82H\u001b[K\u001b[13;3H"}
+{"delayMs":12,"data":"\u001b[5;52H\u001b[K\n\u001b[K\n\u001b[K\n\u001b[K\n\u001b[K\n\u001b[K\u001b[13;39H\u001b[K\u001b[15;82H\u001b[K\u001b[13;3H"}
+{"delayMs":208,"data":"\u001b[?25l\u001b[?12l\u001b[?25h"}
+{"delayMs":0,"data":"\u001b[5;1H\u001b[J\u001b[A\u001b[K\u001b[4;30r\u001b[4;1H\u001bM\u001bM\u001bM\u001bM\u001bM\u001bM\u001bM\u001bM\u001bM\u001b[1;30r\u001b[5;1H"}
+{"delayMs":0,"data":"\u001b[2m╭─────────────────────────────────────────────────╮\r\n│ >_ \u001b(B\u001b[m\u001b[1mOpenAI Codex\u001b(B\u001b[m\u001b[2m (v0.147.0)                      │\r\n│                                                 │\r\n\u001b(B\u001b[m"}
+{"delayMs":0,"data":"\u001b[2m│ model:     \u001b(B\u001b[mgpt-5.6-terra\u001b[2m   \u001b(B\u001b[m\u001b[36m/model\u001b[39m\u001b[2m to change     │\r\n│ directory: \u001b(B\u001b[m~/default/…/tmp/codexrec-work-SFpno1\u001b[2m │\r\n╰─────────────────────────────────────────────────╯\u001b[12;1H\u001b(B\u001b[m"}
+{"delayMs":0,"data":"  \u001b[1mTip:\u001b(B\u001b[m \u001b[3mNew\u001b(B\u001b[m For a limited time, Codex is included in your plan for free – let’s build together.\u001b[14;1H•\u001b[C\u001b[2mBooting MCP server: codex_apps\u001b[C(0s • esc to interrupt)\u001b[17;1H\u001b(B\u001b[m\u001b[1m›\u001b[C\u001b(B\u001b[m\u001b[2mUse /skills to list available skills\u001b[19;3H\u001b(B\u001b[m\u001b[38;5;223mgpt-5.6-terra default\u001b[39m\u001b[2m · \u001b(B\u001b[m\u001b[38;5;151m~/default/claudeman-predictive/tmp/codexrec-work-SFpno1\u001b[17;3H\u001b(B\u001b[m"}
+{"delayMs":0,"data":"\u001b[14;57H\u001b[K\u001b[17;39H\u001b[K\u001b[19;82H\u001b[K\u001b[17;3H"}
+{"delayMs":19,"data":"\u001b[14;57H\u001b[K\u001b[17;39H\u001b[K\u001b[19;82H\u001b[K\u001b[17;3H"}
+{"delayMs":1,"data":"\u001b[14;57H\u001b[K\u001b[17;39H\u001b[K\u001b[19;82H\u001b[K\u001b[17;3H"}
+{"delayMs":33,"data":"\u001b[14;57H\u001b[K\u001b[17;39H\u001b[K\u001b[19;82H\u001b[K\u001b[17;3H"}
+{"delayMs":33,"data":"\u001b[?25l\u001b[?12l\u001b[?25h"}
+{"delayMs":1,"data":"\u001b[14;57H\u001b[K\u001b[17;39H\u001b[K\u001b[19;82H\u001b[K\u001b[17;3H"}
+{"delayMs":33,"data":"\u001b[14;57H\u001b[K\u001b[17;39H\u001b[K\u001b[19;82H\u001b[K\u001b[17;3H"}
+{"delayMs":33,"data":"\u001b[14;57H\u001b[K\u001b[17;39H\u001b[K\u001b[19;82H\u001b[K\u001b[17;3H"}
+{"delayMs":34,"data":"\u001b[?25l\u001b[?12l\u001b[?25h\u001b[14;57H\u001b[K\u001b[17;39H\u001b[K\u001b[19;82H\u001b[K\u001b[17;3H"}
+{"delayMs":28,"data":"\u001b[14;57H\u001b[K\u001b[17;39H\u001b[K\u001b[19;82H\u001b[K\u001b[17;3H"}
+{"delayMs":34,"data":"\u001b[14;57H\u001b[K\u001b[17;39H\u001b[K\u001b[19;82H\u001b[K\u001b[17;3H"}
+{"delayMs":33,"data":"\u001b[?25l\u001b[?12l\u001b[?25h"}
+{"delayMs":0,"data":"\u001b[3AB\u001b[53C\u001b[K\u001b[17;39H\u001b[K\u001b[19;82H\u001b[K\u001b[17;3H"}
+{"delayMs":2,"data":"\u001b[?25l\u001b[?12l\u001b[?25h"}
+{"delayMs":5,"data":"\u001b[14;1H\u001b[J\u001b[A\u001b[K"}
+{"delayMs":1,"data":"\u001b[2B\u001b[1m›\u001b[C\u001b(B\u001b[m\u001b[2mUse /skills to list available skills\u001b[17;3H\u001b(B\u001b[m\u001b[38;5;223mgpt-5.6-terra default\u001b[39m\u001b[2m · \u001b(B\u001b[m\u001b[38;5;151m~/default/claudeman-predictive/tmp/codexrec-work-SFpno1\u001b[15;3H\u001b(B\u001b[m"}
+{"delayMs":279,"data":"\u001b[36C\u001b[K\u001b[17;82H\u001b[K\u001b[15;3H"}
+{"delayMs":86,"data":"\u001b[36C\u001b[K\u001b[17;82H\u001b[K\u001b[15;3H"}
+{"delayMs":71,"data":"\u001b[36C\u001b[K\u001b[17;82H\u001b[K\u001b[15;3H"}
+{"keyAt":true,"data":"r"}
+{"keyAt":true,"data":"e"}
+{"keyAt":true,"data":"p"}
+{"keyAt":true,"data":"l"}
+{"keyAt":true,"data":"y"}
+{"keyAt":true,"data":" "}
+{"keyAt":true,"data":"w"}
+{"keyAt":true,"data":"i"}
+{"keyAt":true,"data":"t"}
+{"keyAt":true,"data":"h"}
+{"keyAt":true,"data":" "}
+{"keyAt":true,"data":"t"}
+{"keyAt":true,"data":"h"}
+{"keyAt":true,"data":"e"}
+{"keyAt":true,"data":" "}
+{"keyAt":true,"data":"s"}
+{"keyAt":true,"data":"i"}
+{"keyAt":true,"data":"n"}
+{"keyAt":true,"data":"g"}
+{"keyAt":true,"data":"l"}
+{"keyAt":true,"data":"e"}
+{"keyAt":true,"data":" "}
+{"keyAt":true,"data":"w"}
+{"keyAt":true,"data":"o"}
+{"keyAt":true,"data":"r"}
+{"keyAt":true,"data":"d"}
+{"keyAt":true,"data":" "}
+{"keyAt":true,"data":"h"}
+{"keyAt":true,"data":"e"}
+{"keyAt":true,"data":"l"}
+{"keyAt":true,"data":"l"}
+{"keyAt":true,"data":"o"}
+{"delayMs":2010,"data":"reply with the single word hello\u001b[K\u001b[17;82H\u001b[K\u001b[15;35H"}
+{"keyAt":true,"data":"\r"}
+{"delayMs":382,"data":"\u001b[13;30r\u001b[13;1H\u001bM\u001bM\u001bM\u001bM\u001b[1;30r\u001b[15;1H"}
+{"delayMs":0,"data":"\u001b[1m\u001b[2m› \u001b(B\u001b[mreply with the single word hello\r\n"}
+{"delayMs":0,"data":"\u001b[19;3H\u001b[2mUse /skills to list available skills\u001b(B\u001b[m\u001b[K\u001b[21;82H\u001b[K\u001b[19;3H"}
+{"delayMs":0,"data":"\u001b[36C\u001b[K\u001b[21;82H\u001b[K\u001b[19;3H"}
+{"delayMs":20,"data":"\u001b[36C\u001b[K\u001b[21;82H\u001b[K\u001b[19;3H"}
+{"delayMs":8,"data":"\u001b[36C\u001b[K\u001b[21;82H\u001b[K\u001b[19;3H"}
+{"delayMs":78,"data":"\u001b[?25l\u001b[?12l\u001b[?25h"}
+{"delayMs":0,"data":"\u001b[18;1H\u001b[J\u001b[A\u001b[K"}
+{"delayMs":0,"data":"\r\n•\u001b[C\u001b[2mWor\u001b(B\u001b[mk\u001b[1ming\u001b[C\u001b(B\u001b[m\u001b[2m(0s • esc to interrupt)\u001b[21;1H\u001b(B\u001b[m\u001b[1m›\u001b[C\u001b(B\u001b[m\u001b[2mUse /skills to list available skills\u001b[23;3H\u001b(B\u001b[m\u001b[38;5;223mgpt-5.6-terra default\u001b[39m\u001b[2m · \u001b(B\u001b[m\u001b[38;5;151m~/default/claudeman-predictive/tmp/codexrec-work-SFpno1\u001b[21;3H\u001b(B\u001b[m"}
+{"delayMs":33,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[?25l\u001b[?12l\u001b[?25h"}
+{"delayMs":0,"data":"\u001b[18;6H\u001b[2mk\u001b(B\u001b[mi\u001b[26C\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":34,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":35,"data":"\u001b[18;7H\u001b[2mi\u001b(B\u001b[mn\u001b[25C\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[?25l\u001b[?12l\u001b[?25h\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[18;8H\u001b[2mn\u001b(B\u001b[mg\u001b[24C\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[?25l\u001b[?12l\u001b[?25h"}
+{"delayMs":0,"data":"\u001b[18;9H\u001b[2mg\u001b(B\u001b[m\u001b[24C\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":34,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":34,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[?25l\u001b[?12l\u001b[?25h"}
+{"delayMs":0,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[?25l\u001b[?12l\u001b[?25h"}
+{"delayMs":0,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[?25l\u001b[?12l\u001b[?25h\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[18;1H\u001b[2m◦\u001b[21;3H\u001b(B\u001b[m"}
+{"delayMs":34,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[?25l\u001b[?12l\u001b[?25h"}
+{"delayMs":0,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":32,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[?25l\u001b[?12l\u001b[?25h\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":34,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[?25l\u001b[?12l\u001b[?25h\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":34,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[?25l\u001b[?12l\u001b[?25h"}
+{"delayMs":0,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[18;12H\u001b[2m1\u001b(B\u001b[m\u001b[21C\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":0,"data":"\u001b[?25l\u001b[?12l\u001b[?25h"}
+{"delayMs":33,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":34,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":34,"data":"\u001b[?25l\u001b[?12l\u001b[?25h"}
+{"delayMs":0,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":32,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[18;1H•\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":34,"data":"\u001b[?25l\u001b[?12l\u001b[?25h\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":34,"data":"\u001b[3AW\u001b[30C\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[?25l\u001b[?12l\u001b[?25h"}
+{"delayMs":0,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[3A\u001b[1mW\u001b(B\u001b[mo\u001b[29C\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[?25l\u001b[?12l\u001b[?25h"}
+{"delayMs":0,"data":"\u001b[18;4H\u001b[1mo\u001b(B\u001b[mr\u001b[28C\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[18;5H\u001b[1mr\u001b(B\u001b[mk\u001b[27C\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[?25l\u001b[?12l\u001b[?25h"}
+{"delayMs":0,"data":"\u001b[18;34H\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":33,"data":"\u001b[18;6H\u001b[1mk\u001b(B\u001b[mi\u001b[26C\u001b[K\u001b[21;39H\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":32,"data":"\u001b[18;1H\u001b[J\u001b[A\u001b[K"}
+{"delayMs":0,"data":"\u001b[17;30r\u001b[17;1H\u001bM\u001bM\u001b[1;30r\u001b[18;1H"}
+{"delayMs":0,"data":"\u001b[2m• \u001b(B\u001b[mhello\u001b[21;1H\u001b[1m›\u001b[C\u001b(B\u001b[m\u001b[2mUse /skills to list available skills\u001b[23;3H\u001b(B\u001b[m\u001b[38;5;223mgpt-5.6-terra default\u001b[39m\u001b[2m · \u001b(B\u001b[m\u001b[38;5;151m~/default/claudeman-predictive/tmp/codexrec-work-SFpno1\u001b[21;3H\u001b(B\u001b[m"}
+{"delayMs":25,"data":"\u001b[?25l\u001b[?12l\u001b[?25h"}
+{"delayMs":0,"data":"\u001b[36C\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"delayMs":6,"data":"\u001b[?25l\u001b[?12l\u001b[?25h"}
+{"delayMs":3,"data":"\u001b[36C\u001b[K\u001b[23;82H\u001b[K\u001b[21;3H"}
+{"keyAt":true,"data":"a"}
+{"delayMs":2252,"data":"a\u001b[K\u001b[23;82H\u001b[K\u001b[21;4H"}
+{"keyAt":true,"data":"b"}
+{"delayMs":121,"data":"b\u001b[K\u001b[23;82H\u001b[K\u001b[21;5H"}
+{"keyAt":true,"data":"c"}
+{"delayMs":121,"data":"c\u001b[K\u001b[23;82H\u001b[K\u001b[21;6H"}

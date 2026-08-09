@@ -14,6 +14,7 @@ import type { XtermTerminal } from '../src/types.js';
 import pasteBracketed from './fixtures/codex/paste-bracketed.jsonl?raw';
 import slashPicker from './fixtures/codex/slash-picker.jsonl?raw';
 import streamingBurst from './fixtures/codex/streaming-burst.jsonl?raw';
+import streamingReal from './fixtures/codex/streaming-real.jsonl?raw';
 import trustModal from './fixtures/codex/trust-modal.jsonl?raw';
 import typeHello from './fixtures/codex/type-hello.jsonl?raw';
 import wrap from './fixtures/codex/wrap.jsonl?raw';
@@ -22,6 +23,7 @@ const FIXTURES: Record<string, string> = {
   'paste-bracketed': pasteBracketed,
   'slash-picker': slashPicker,
   'streaming-burst': streamingBurst,
+  'streaming-real': streamingReal,
   'trust-modal': trustModal,
   'type-hello': typeHello,
   wrap,

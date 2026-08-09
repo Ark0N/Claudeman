@@ -86,6 +86,25 @@ const SCENARIOS = {
     { waitMs: 400, keys: '\x1b[200~XYZpasted\x1b[201~' },
     { waitMs: 1500, keys: '' },
   ],
+  // REAL-AUTH streaming (CODEX_RECORD_REAL=1 only): a genuine model response
+  // streaming above the pinned composer while keystrokes land mid-stream.
+  // This is the one shape the fake-key lab can never produce: real output
+  // pushes lines to history (baseY grows), exercising the no-drop-on-baseY
+  // rule against reality. Uses the user's real ~/.codex; the fixture is
+  // secret-scanned (sk- / JWT prefixes) before it is written.
+  'streaming-real': {
+    realAuth: true,
+    steps: [
+      { waitMs: BOOT_WAIT_MS, keys: '\r' }, // trust dialog (untrusted workdir)
+      { waitMs: 2500, keys: '' },
+      ...'reply with the single word hello'.split('').map((ch) => ({ waitMs: 15, keys: ch })),
+      { waitMs: 400, keys: '\r' },
+      { waitMs: 4000, keys: 'a' }, // typed MID-STREAM
+      { waitMs: 120, keys: 'b' },
+      { waitMs: 120, keys: 'c' },
+      { waitMs: 14000, keys: '' },
+    ],
+  },
   // First-run trust dialog: the modal surface where typed chars must NOT be
   // predicted (the predictWhen ghost eliminator). Recorded UNTRUSTED so the
   // dialog actually appears; 'x' exercises typing at a non-composer cursor.
@@ -104,15 +123,22 @@ async function record(scenario, outDir) {
   if (!spec) throw new Error(`unknown scenario ${scenario}`);
   const steps = Array.isArray(spec) ? spec : spec.steps;
   const trusted = Array.isArray(spec) ? true : (spec.trusted ?? true);
+  const realAuth = Array.isArray(spec) ? false : (spec.realAuth ?? false);
+  if (realAuth && process.env.CODEX_RECORD_REAL !== '1') {
+    console.log(`${scenario}: SKIPPED (needs CODEX_RECORD_REAL=1 and a real ~/.codex login)`);
+    return;
+  }
 
   mkdirSync(SCRATCH, { recursive: true });
   const lab = mkdtempSync(join(SCRATCH, 'codexrec-'));
-  writeFileSync(join(lab, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: FAKE_KEY }));
   const workdir = mkdtempSync(join(SCRATCH, 'codexrec-work-'));
-  if (trusted) {
-    // Pre-trust the workdir so boot goes straight to the composer instead of
-    // the first-run trust dialog (which trust-modal records deliberately).
-    writeFileSync(join(lab, 'config.toml'), `[projects."${workdir}"]\ntrust_level = "trusted"\n`);
+  if (!realAuth) {
+    writeFileSync(join(lab, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: FAKE_KEY }));
+    if (trusted) {
+      // Pre-trust the workdir so boot goes straight to the composer instead of
+      // the first-run trust dialog (which trust-modal records deliberately).
+      writeFileSync(join(lab, 'config.toml'), `[projects."${workdir}"]\ntrust_level = "trusted"\n`);
+    }
   }
   const sock = `codexrec-${process.pid}`;
   const codexVersion = execSync('codex --version', { encoding: 'utf8' }).trim();
@@ -129,7 +155,7 @@ async function record(scenario, outDir) {
       cols: COLS,
       rows: ROWS,
       cwd: workdir,
-      env: { ...process.env, CODEX_HOME: lab, SHELL: '/bin/bash' },
+      env: realAuth ? { ...process.env, SHELL: '/bin/bash' } : { ...process.env, CODEX_HOME: lab, SHELL: '/bin/bash' },
     }
   );
   proc.onData((data) => {
@@ -166,6 +192,8 @@ async function record(scenario, outDir) {
   const allBytes = lines.map((l) => l.data).join('');
   if (allBytes.includes(FAKE_KEY)) throw new Error(`fixture ${scenario} leaked the fake key; NOT writing`);
   if (allBytes.includes(lab)) throw new Error(`fixture ${scenario} leaked the lab path; NOT writing`);
+  if (realAuth && /sk-[A-Za-z0-9_-]{8}|eyJ[A-Za-z0-9_-]{20}/.test(allBytes))
+    throw new Error(`fixture ${scenario} may contain credential material; NOT writing`);
 
   mkdirSync(outDir, { recursive: true });
   const meta = { scenario, cols: COLS, rows: ROWS, codexVersion, recordedAt: new Date().toISOString() };
