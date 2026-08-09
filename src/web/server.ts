@@ -86,6 +86,7 @@ import {
   detachSessionListeners,
 } from './session-listener-wiring.js';
 import { sessionWaits } from './session-wait-registry.js';
+import { approvalInbox } from './approval-inbox.js';
 import {
   wireRespawnListeners,
   setupTimedRespawn,
@@ -147,6 +148,7 @@ import {
   registerFileRoutes,
   registerScheduledRoutes,
   registerHookEventRoutes,
+  registerApprovalRoutes,
   registerStatusTelemetryRoutes,
   registerSystemRoutes,
   registerCaseRoutes,
@@ -342,6 +344,13 @@ export class WebServer extends EventEmitter {
       },
       this.cleanup
     );
+
+    // Approvals Inbox → SSE. The singleton has no server reference; these
+    // callbacks are its only way out. Broadcasts carry sessionId, so the
+    // multi-user SSE scoping applies to them like any session event.
+    approvalInbox.onPending = (item) => this.broadcast(SseEvent.ApprovalPending, { ...item });
+    approvalInbox.onUpdated = (item) => this.broadcast(SseEvent.ApprovalUpdated, { ...item });
+    approvalInbox.onResolved = (info) => this.broadcast(SseEvent.ApprovalResolved, { ...info });
 
     // Set up mux event listeners
     this.mux.on('sessionCreated', (session) => {
@@ -945,6 +954,7 @@ export class WebServer extends EventEmitter {
     registerFileRoutes(this.app, ctx);
     registerScheduledRoutes(this.app, ctx);
     registerHookEventRoutes(this.app, ctx);
+    registerApprovalRoutes(this.app, ctx);
     registerStatusTelemetryRoutes(this.app, ctx);
     registerSystemRoutes(this.app, ctx);
     registerCaseRoutes(this.app, ctx);
@@ -1258,6 +1268,7 @@ export class WebServer extends EventEmitter {
     // session's own exit event never reaches the registry.
     sessionWaits.notifySignal(sessionId, 'exit');
     sessionWaits.cancelAll(sessionId);
+    approvalInbox.resolveForSession(sessionId, 'session_ended');
 
     this.broadcast(SseEvent.SessionDeleted, { id: sessionId });
   }
@@ -2028,6 +2039,7 @@ export class WebServer extends EventEmitter {
       'plan:',
       'orchestrator:',
       'hook:',
+      'approval:',
       'image:',
       'scheduled:',
       'team:',
@@ -2092,12 +2104,26 @@ export class WebServer extends EventEmitter {
    * Only events in PUSH_EVENT_MAP trigger push. Per-subscription preferences are checked.
    * Expired subscriptions (410/404) are auto-removed.
    */
-  private sendPushNotifications(event: string, data: Record<string, unknown>): void {
+  // Async only for the Approvals Inbox settings read below; every call site is
+  // fire-and-forget (the EventPort signature stays `void`).
+  private async sendPushNotifications(event: string, data: Record<string, unknown>): Promise<void> {
     const template = WebServer.PUSH_EVENT_MAP[event];
     if (!template) return;
 
     const subscriptions = this.pushStore.getAll();
     if (subscriptions.length === 0) return;
+
+    // Approvals Inbox gating: the Approve/Deny action buttons answer through
+    // the inbox, so both the buttons and the approvalId they act on ship only
+    // when the OPT-IN `approvalsInboxEnabled` setting is on (default OFF).
+    // Pre-inbox these buttons rendered and did nothing; stripping them when
+    // the feature is off is the honest shape. Cheap: the settings read is
+    // cached (~2s TTL) and only taken for events that carry approval parts.
+    let approvalsEnabled = false;
+    if (template.actions || typeof data.approvalId === 'string') {
+      const settings = await this.readSettings();
+      approvalsEnabled = settings.approvalsInboxEnabled === true;
+    }
 
     const vapidKeys = this.pushStore.getVapidKeys();
     webpush.setVapidDetails('mailto:codeman@localhost', vapidKeys.publicKey, vapidKeys.privateKey);
@@ -2140,8 +2166,12 @@ export class WebServer extends EventEmitter {
       body,
       tag: `codeman-${event}-${sessionId}`,
       sessionId,
+      // Approvals Inbox item id: lets sw.js answer an Approve/Deny action
+      // click directly (POST /api/approvals/:id/answer) with no tab open.
+      // Gated on the opt-in setting together with the action buttons.
+      approvalId: approvalsEnabled && typeof data.approvalId === 'string' ? data.approvalId : undefined,
       urgency: template.urgency,
-      actions: template.actions,
+      actions: approvalsEnabled ? template.actions : undefined,
     });
 
     for (const sub of subscriptions) {
@@ -2868,6 +2898,7 @@ export class WebServer extends EventEmitter {
     // unref'd (an unref'd timer can let the process exit mid-wait and strand the
     // response), so without this a 10-minute wait holds shutdown open.
     sessionWaits.cancelEverything();
+    approvalInbox.stop();
 
     this.lastRecordedTokens.clear();
 

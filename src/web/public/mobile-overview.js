@@ -639,7 +639,56 @@ Object.assign(CodemanApp.prototype, {
     chevron.textContent = '›';
     item.appendChild(chevron);
 
+    // Approvals Inbox: a pending dialog for this session gets an answer strip
+    // BELOW the row (the row itself is a <button>, so actions cannot nest
+    // inside it). Tapping the row still opens the session, unchanged.
+    const approval = this._pendingApprovalForSession(row.id);
+    if (approval) {
+      const wrap = document.createElement('div');
+      wrap.className = 'mobile-overview-row-wrap';
+      wrap.appendChild(item);
+      wrap.appendChild(this._buildMobileOverviewApprovalStrip(approval));
+      return wrap;
+    }
+
     return item;
+  },
+
+  /** The session's pending approval, when the strip should render (dialogs only). */
+  _pendingApprovalForSession(sessionId) {
+    if (!this.approvals || !this.approvalsInboxEnabled || !this.approvalsInboxEnabled()) return null;
+    for (const item of this.approvals.values()) {
+      if (item.sessionId === sessionId && item.kind !== 'idle') return item;
+    }
+    return null;
+  },
+
+  /** Compact answer buttons for a NEEDS YOU row: parsed options, else Approve/Deny. */
+  _buildMobileOverviewApprovalStrip(approval) {
+    const strip = document.createElement('div');
+    strip.className = 'mobile-overview-approval-strip';
+    strip.setAttribute('data-i18n-skip', '');
+    const addBtn = (label, cls, onTap) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'mobile-overview-approval-btn' + (cls ? ' ' + cls : '');
+      btn.textContent = label;
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        onTap();
+      });
+      strip.appendChild(btn);
+    };
+    if (approval.options && approval.options.length) {
+      for (const o of approval.options) {
+        const label = o.label.length > 24 ? o.label.slice(0, 24) + '…' : o.label;
+        addBtn(`${o.n}. ${label}`, o.n === 1 ? 'primary' : '', () => this.answerApproval(approval.id, 'option', o.n));
+      }
+    } else {
+      addBtn('Approve', 'primary', () => this.answerApproval(approval.id, 'approve'));
+      addBtn('Deny', 'danger', () => this.answerApproval(approval.id, 'deny'));
+    }
+    return strip;
   },
 
   /** A past conversation. Tapping it resumes, which creates a fresh session. */

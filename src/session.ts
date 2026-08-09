@@ -60,10 +60,27 @@ import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { RalphTracker } from './ralph-tracker.js';
 import { BashToolParser } from './bash-tool-parser.js';
 import {
+  isTrustDialogScreen,
+  TRUST_DIALOG_WINDOW_MS,
+  TRUST_DIALOG_RETRY_MS,
+  TRUST_DIALOG_MAX_ATTEMPTS,
+  TRUST_DIALOG_SCAN_BYTES,
+} from './session-trust-dialog.js';
+import {
+  trackActivityStreak,
+  isSustainedActivity,
+  isPaneQuiet,
+  IDLE_RECHECK_MS,
+  PANE_PROBE_MIN_INTERVAL_MS,
+  PANE_PROBE_RECHECK_MS,
+  type ActivityStreak,
+} from './session-activity.js';
+import {
   BufferAccumulator,
   ANSI_ESCAPE_PATTERN_FULL,
   TOKEN_PATTERN,
   SPINNER_PATTERN,
+  CLAUDE_WORKING_LINE_PATTERN,
   MAX_SESSION_TOKENS,
   execPattern,
   getClaudeCliVersion,
@@ -376,7 +393,13 @@ export class Session extends EventEmitter {
   private _lastPromptTime: number = 0;
   private activityTimeout: NodeJS.Timeout | null = null;
   private _awaitingIdleConfirmation: boolean = false; // Prevents timeout reset during idle detection
-  private _trustDialogAccepted: boolean = false; // Prevents repeated trust dialog auto-accept
+  private _activityStreak: ActivityStreak | null = null; // Unbroken run of PTY repaints (working detection)
+  private _lastPaneProbeAt = 0; // Throttle for the tmux screen probe
+  private _lastPaneProbeWorking: boolean | null = null; // Its last verdict (null = could not read)
+  private _trustDialogAccepted: boolean = false; // Stops the trust-dialog scan (answered, or given up)
+  private _trustDialogAttempts = 0; // Enter presses sent at the trust dialog
+  private _lastTrustDialogScanAt = 0; // Throttle for the trust-dialog screen read
+  private _interactiveStartedAt = 0; // When the interactive pane launched (bounds that scan)
   private _taskTracker: TaskTracker;
 
   // Token tracking for auto-clear
@@ -1406,6 +1429,7 @@ export class Session extends EventEmitter {
       sessionId: this.id,
       workingDir: this.workingDir,
       mode: this.mode,
+      name: this._name,
       niceConfig: this._niceConfig,
       model: this._model,
       claudeMode: this._claudeMode,
@@ -1513,6 +1537,12 @@ export class Session extends EventEmitter {
     if (this.ptyProcess) {
       throw new Error('Session already has a running process');
     }
+
+    // Bounds the workspace-trust scan (see _maybeAcceptTrustDialog). Stamped here
+    // rather than at PTY spawn so a slow mux attach still counts as startup.
+    this._interactiveStartedAt = Date.now();
+    this._trustDialogAttempts = 0;
+    this._lastTrustDialogScanAt = 0;
 
     // COD-118: if the PTY exit breaker has tripped (repeated non-zero exits in a
     // short window), refuse to respawn. This is the uniform choke point that stops
@@ -1710,7 +1740,15 @@ export class Session extends EventEmitter {
       try {
         // Pass --session-id to use the SAME ID as the Codeman session
         // This ensures subagents can be directly matched to the correct tab
-        const args = buildInteractiveArgs(this.id, this._claudeMode, this._model, this._allowedTools, this._effort);
+        const args = buildInteractiveArgs(
+          this.id,
+          this._claudeMode,
+          this._model,
+          this._allowedTools,
+          this._effort,
+          this._name,
+          getClaudeCliVersion()
+        );
         this.ptyProcess = spawnPtyWithHelperRepair(() =>
           pty.spawn(getClaudeBinaryPath(), args, {
             name: 'xterm-256color',
@@ -1743,54 +1781,10 @@ export class Session extends EventEmitter {
       this._handleTerminalOutput(data);
 
       // === Auto-accept workspace trust dialog ===
-      // Claude CLI 2.x shows "Yes, I trust this folder" prompt on first launch per directory.
-      // Codeman sessions run permission-skipping or classifier-guarded (auto) modes, so auto-accept.
-      if (!this._trustDialogAccepted && data.includes('trust this folder')) {
-        this._trustDialogAccepted = true;
-        console.log(`[Session] Auto-accepting workspace trust dialog for: ${this.id}`);
-        // Send Enter to accept the default selection ("Yes, I trust this folder")
-        this.writeViaMux('\r');
-      }
+      this._maybeAcceptTrustDialog();
 
       // === Idle/working detection runs on every chunk (latency-sensitive) ===
-      // Detect if Claude is working or at prompt
-      // The prompt line contains "❯" when waiting for input
-      if (data.includes('❯') || data.includes('\u276f')) {
-        // Only start a new timeout if we're not already awaiting idle confirmation
-        // This prevents status bar redraws (which include ❯) from resetting the timer
-        if (!this._awaitingIdleConfirmation) {
-          if (this.activityTimeout) clearTimeout(this.activityTimeout);
-          this._awaitingIdleConfirmation = true;
-          this.activityTimeout = setTimeout(() => {
-            this._awaitingIdleConfirmation = false;
-            // Emit idle if either:
-            // 1. Claude was working and is now at prompt (normal case)
-            // 2. Session just started and is ready (status is 'busy' but _isWorking is false)
-            const wasWorking = this._isWorking;
-            const isInitialReady = this._status === 'busy' && !this._isWorking;
-            if (wasWorking || isInitialReady) {
-              this._isWorking = false;
-              this._status = 'idle';
-              this._lastPromptTime = Date.now();
-              this.emit('idle');
-            }
-          }, IDLE_DETECTION_DELAY_MS);
-        }
-      }
-
-      // Detect when Claude starts working (thinking, writing, etc)
-      // Fast path: check spinner characters on raw data (Unicode, never in ANSI sequences)
-      const hasSpinner = SPINNER_PATTERN.test(data);
-      if (hasSpinner) {
-        if (!this._isWorking) {
-          this._isWorking = true;
-          this._status = 'busy';
-          this.emit('working');
-          this._autoOps.notifyWorking();
-        }
-        this._awaitingIdleConfirmation = false;
-        if (this.activityTimeout) clearTimeout(this.activityTimeout);
-      }
+      this._detectInteractiveActivity(data);
 
       // === Expensive processing (ANSI strip, Ralph, bash parser) is throttled ===
       // Instead of running regex-heavy parsers on every PTY chunk, we accumulate
@@ -1839,6 +1833,7 @@ export class Session extends EventEmitter {
       this._pid = null;
       this._status = 'idle';
       this._awaitingIdleConfirmation = false;
+      this._activityStreak = null;
       // Clear all timers to prevent memory leaks
       if (this.activityTimeout) {
         clearTimeout(this.activityTimeout);
@@ -1895,6 +1890,180 @@ export class Session extends EventEmitter {
   }
 
   /**
+   * Answer Claude's workspace-trust dialog, which blocks a fresh case until
+   * someone presses Enter. Codeman sessions run permission-skipping or
+   * classifier-guarded modes, so the answer is always "yes, I trust this folder".
+   *
+   * Reads the RENDERED SCREEN rather than the chunk that just arrived. tmux
+   * repaints a row with cursor-forward escapes in place of spaces, so the wire
+   * carries `I\x1b[Ctrust\x1b[Cthis\x1b[Cfolder` and the old
+   * `data.includes('trust this folder')` could never match: the auto-accept had
+   * been dead for every session that hit the dialog. The screen is also what
+   * makes a retry safe, since the terminal buffer is append-only and keeps the
+   * dialog in its tail long after it has been answered.
+   *
+   * Three guards keep an Enter press off a live session: a startup-only window,
+   * a two-marker match (isTrustDialogScreen), and an attempt cap.
+   */
+  private _maybeAcceptTrustDialog(): void {
+    if (this._trustDialogAccepted) return;
+    const now = Date.now();
+    if (now - this._interactiveStartedAt > TRUST_DIALOG_WINDOW_MS) {
+      this._trustDialogAccepted = true; // window closed; anything matching now is not the dialog
+      return;
+    }
+    if (now - this._lastTrustDialogScanAt < TRUST_DIALOG_RETRY_MS) return;
+    this._lastTrustDialogScanAt = now;
+
+    // Prefer the pane; fall back to the buffer tail on a direct-PTY session,
+    // where there is no screen to read.
+    const screen =
+      (this._mux && this._muxSession ? this._mux.capturePaneText?.(this._muxSession.muxName) : null) ??
+      this._terminalBuffer.value.slice(-TRUST_DIALOG_SCAN_BYTES);
+    if (!isTrustDialogScreen(screen)) return;
+
+    this._trustDialogAttempts++;
+    if (this._trustDialogAttempts > TRUST_DIALOG_MAX_ATTEMPTS) {
+      this._trustDialogAccepted = true; // leave it to the user rather than keep typing
+      console.warn(`[Session] Workspace trust dialog did not clear after retries: ${this.id}`);
+      return;
+    }
+    console.log(
+      `[Session] Auto-accepting workspace trust dialog for: ${this.id} (attempt ${this._trustDialogAttempts})`
+    );
+    // Enter confirms the highlighted default, "1. Yes, I trust this folder".
+    this.writeViaMux('\r');
+  }
+
+  /**
+   * Per-chunk working/idle detection for an interactive pane. Split out of the
+   * PTY `onData` handler so it can be unit tested without spawning one.
+   *
+   * @param data raw PTY chunk, ANSI included
+   */
+  private _detectInteractiveActivity(data: string): void {
+    // The prompt line contains "❯" when Claude is waiting for input. It only ARMS
+    // the check and is NOT evidence the turn ended: Claude redraws the composer
+    // about once a second all the way through a turn, which is exactly how a
+    // working session used to flip to idle two seconds in. _confirmIdle() waits
+    // for the pane to actually go quiet before believing it.
+    if (data.includes('❯')) {
+      // Only start a new timeout if we're not already awaiting idle confirmation.
+      // This prevents status bar redraws (which include the prompt) from resetting it.
+      if (!this._awaitingIdleConfirmation) {
+        if (this.activityTimeout) clearTimeout(this.activityTimeout);
+        this._awaitingIdleConfirmation = true;
+        this.activityTimeout = setTimeout(() => this._confirmIdle(), IDLE_DETECTION_DELAY_MS);
+      }
+    }
+
+    // Detect when Claude starts working (thinking, writing, etc).
+    // Fast path: spinner characters on raw data (Unicode, never inside ANSI sequences).
+    if (SPINNER_PATTERN.test(data)) this._markWorking();
+
+    // Activity fallback: current Claude Code animates `✻ Actualizing…` instead of a
+    // braille spinner, so the fast path above misses entire turns, and matching the
+    // new status line does not rescue it either (tmux repaints partially, so the
+    // complete line reaches the PTY only every few tens of seconds). An unbroken run
+    // of repaints is the signal that survives. See session-activity.ts for the
+    // measurement. Claude only: an external CLI's TUI has no ❯, so nothing would
+    // ever arm the idle confirmation and such a session would latch busy forever.
+    if (!isExternalCliMode(this.mode)) {
+      this._activityStreak = trackActivityStreak(this._activityStreak, Date.now());
+      // A streak is the TRIGGER to look, not the verdict: typing into the composer
+      // also produces a steady stream of repaints. The screen settles it, and only
+      // an explicit "no working line" vetoes; a probe that cannot read the pane
+      // (null) leaves the streak in charge.
+      if (!this._isWorking && isSustainedActivity(this._activityStreak) && this._probePaneWorking() !== false) {
+        this._markWorking();
+      }
+    }
+  }
+
+  /**
+   * Ask the pane what it is rendering right now.
+   *
+   * The PTY stream cannot answer this on its own: measured on a live worker,
+   * Claude repaints roughly once a second for most of a turn but can then sit
+   * completely silent for tens of seconds inside a single tool call, while the
+   * `✻ Elucidating… (39s · ↓ 2.0k tokens)` line stays on screen the whole time.
+   * Silence therefore proves nothing, and the rendered frame is the only cheap
+   * source that is right in both directions.
+   *
+   * Costs one `capture-pane`, floored at PANE_PROBE_MIN_INTERVAL_MS per session
+   * and only ever called at a transition, never on the output hot path.
+   *
+   * @returns true/false when the screen could be read, null when it could not
+   *   (no mux, capture failed, tests). Callers must treat null as "no evidence"
+   *   and fall back to their stream heuristics.
+   */
+  private _probePaneWorking(): boolean | null {
+    if (!this._mux || !this._muxSession) return null;
+    const now = Date.now();
+    if (now - this._lastPaneProbeAt < PANE_PROBE_MIN_INTERVAL_MS) return this._lastPaneProbeWorking;
+    this._lastPaneProbeAt = now;
+    const text = this._mux.capturePaneText?.(this._muxSession.muxName) ?? null;
+    this._lastPaneProbeWorking = text === null ? null : CLAUDE_WORKING_LINE_PATTERN.test(text);
+    return this._lastPaneProbeWorking;
+  }
+
+  /**
+   * Mark the pane as working. Idempotent: `working` is emitted on the transition
+   * only, so the per-chunk detectors can all call it freely.
+   *
+   * Deliberately does NOT cancel a pending idle confirmation. That confirmation
+   * is what eventually notices the turn ended, and it already refuses to fire
+   * while the pane is noisy, and cancelling it here would leave a session that
+   * finished during a lull with nothing armed to ever call it idle.
+   */
+  private _markWorking(): void {
+    if (this._isWorking) return;
+    this._isWorking = true;
+    this._status = 'busy';
+    this.emit('working');
+    this._autoOps.notifyWorking();
+  }
+
+  /**
+   * Decide whether the armed idle confirmation is real.
+   *
+   * A ❯ sighting alone means nothing (Claude redraws the composer through the
+   * whole turn), so the pane must ALSO have gone quiet. While output is still
+   * flowing the check re-arms instead of concluding. That loop is a timestamp
+   * compare every IDLE_RECHECK_MS and ends the moment the pane falls silent.
+   */
+  private _confirmIdle(): void {
+    if (this._isStopped) {
+      this._awaitingIdleConfirmation = false;
+      return;
+    }
+    if (!isPaneQuiet(this._lastActivityAt, Date.now())) {
+      this.activityTimeout = setTimeout(() => this._confirmIdle(), IDLE_RECHECK_MS);
+      return; // stays _awaitingIdleConfirmation, so ❯ redraws do not pile up timers
+    }
+    // Quiet is necessary but NOT sufficient: a turn can go silent mid-tool-call.
+    // Ask the screen before concluding, and keep asking on a slow cadence.
+    if (this._probePaneWorking() === true) {
+      this._markWorking();
+      this.activityTimeout = setTimeout(() => this._confirmIdle(), PANE_PROBE_RECHECK_MS);
+      return;
+    }
+    this._awaitingIdleConfirmation = false;
+    this.activityTimeout = null;
+    // Emit idle if either:
+    // 1. Claude was working and is now at prompt (normal case)
+    // 2. Session just started and is ready (status is 'busy' but _isWorking is false)
+    const wasWorking = this._isWorking;
+    const isInitialReady = this._status === 'busy' && !this._isWorking;
+    if (wasWorking || isInitialReady) {
+      this._isWorking = false;
+      this._status = 'idle';
+      this._lastPromptTime = Date.now();
+      this.emit('idle');
+    }
+  }
+
+  /**
    * Process expensive parsers (ANSI strip, Ralph, bash tool, token, CLI info, task descriptions).
    * Called on a throttled schedule (every EXPENSIVE_PROCESS_INTERVAL_MS) instead of on every
    * PTY data chunk. Receives accumulated raw data to process in one batch.
@@ -1944,22 +2113,22 @@ export class Session extends EventEmitter {
       this.parseTaskDescriptionsFromTerminalData(getCleanData());
     }
 
-    // Work keyword detection (text-based, needs clean data)
-    // Only check if spinner didn't already trigger working state
+    // Work detection (text-based, needs clean data: the status line is coloured,
+    // so raw data has escape sequences between the `…` and the elapsed timer).
+    // Only check if a faster path didn't already trigger working state.
     if (!this._isWorking) {
       const cleanData = getCleanData();
       if (
+        CLAUDE_WORKING_LINE_PATTERN.test(cleanData) ||
+        // Legacy gerunds. Current Claude randomizes the word ("Actualizing…",
+        // "Finagling…"), so these catch only a fraction of turns; the pattern
+        // above and the activity streak carry the rest.
         cleanData.includes('Thinking') ||
         cleanData.includes('Writing') ||
         cleanData.includes('Reading') ||
         cleanData.includes('Running')
       ) {
-        this._isWorking = true;
-        this._status = 'busy';
-        this.emit('working');
-        this._autoOps.notifyWorking();
-        this._awaitingIdleConfirmation = false;
-        if (this.activityTimeout) clearTimeout(this.activityTimeout);
+        this._markWorking();
       }
     }
   }

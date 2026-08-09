@@ -81,6 +81,25 @@ describe('refreshStaleCodemanHooks', () => {
     expect(readFileSync(settingsPath, 'utf-8')).toBe(healed); // byte-identical: no rewrite
   });
 
+  it('heals a hooks block that predates the elicitation-closed matchers (Approvals Inbox)', async () => {
+    // A current-at-the-time block from before elicitation_complete/response
+    // existed: secret + markers all present, so ONLY the new-matcher probe can
+    // mark it stale. Build one by healing, then stripping the two matchers.
+    writeFileSync(settingsPath, JSON.stringify({ hooks: staleCodemanHooks() }, null, 2));
+    await refreshStaleCodemanHooks(dir);
+    const healed = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+    healed.hooks.Notification = (healed.hooks.Notification as Array<{ matcher?: string }>).filter(
+      (n) => n.matcher !== 'elicitation_complete' && n.matcher !== 'elicitation_response'
+    );
+    writeFileSync(settingsPath, JSON.stringify(healed, null, 2));
+    expect(readFileSync(settingsPath, 'utf-8')).not.toContain('elicitation_complete');
+
+    await refreshStaleCodemanHooks(dir);
+    const after = readFileSync(settingsPath, 'utf-8');
+    expect(after).toContain('elicitation_complete');
+    expect(after).toContain('elicitation_response');
+  });
+
   it('does not touch hooks that are not Codeman’s (no /api/hook-event)', async () => {
     const foreign = JSON.stringify(
       { hooks: { Stop: [{ matcher: '', hooks: [{ type: 'command', command: 'echo hi', timeout: 5 }] }] } },

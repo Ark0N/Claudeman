@@ -65,6 +65,14 @@ const filesystemPickerPathSchema = z
   })
   .refine((p) => !p.split('/').includes('..'), { message: 'Path traversal is not allowed' });
 
+/**
+ * Opt-in flag for listing dot-prefixed entries in the path picker. Absent means
+ * off, so an old client keeps the previous behavior. It is a string rather than
+ * a boolean because it arrives as a query parameter; `'false'` is accepted (and
+ * means off) so a client can send the flag unconditionally.
+ */
+const showHiddenQuerySchema = z.enum(['true', 'false']).optional();
+
 /** Query validation for the lazy, allowlisted filesystem path picker. */
 export const FilesystemBrowseQuerySchema = z.object({
   path: filesystemPickerPathSchema.optional(),
@@ -73,6 +81,7 @@ export const FilesystemBrowseQuerySchema = z.object({
     .max(100)
     .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid session id')
     .optional(),
+  showHidden: showHiddenQuerySchema,
 });
 
 /** Query validation for a single allowlisted path-picker file preview. */
@@ -83,6 +92,7 @@ export const FilesystemPreviewQuerySchema = z.object({
     .max(100)
     .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid session id')
     .optional(),
+  showHidden: showHiddenQuerySchema,
 });
 
 /**
@@ -663,10 +673,32 @@ export const QuickStartSchema = z.object({
  * Receives Claude Code hook events.
  */
 export const HookEventSchema = z.object({
-  event: z.enum(['permission_prompt', 'elicitation_dialog', 'idle_prompt', 'stop', 'teammate_idle', 'task_completed']),
+  event: z.enum([
+    'permission_prompt',
+    'elicitation_dialog',
+    'elicitation_complete',
+    'elicitation_response',
+    'idle_prompt',
+    'stop',
+    'teammate_idle',
+    'task_completed',
+  ]),
   sessionId: z.string().min(1),
   data: z.record(z.string(), z.unknown()).nullable().optional(),
 });
+
+/**
+ * Body of POST /api/approvals/:id/answer (Approvals Inbox).
+ * `option` digits are additionally validated against the item's PARSED options
+ * in the route; the schema alone must not authorize blind digit-poking.
+ */
+export const ApprovalAnswerSchema = z
+  .object({
+    action: z.enum(['approve', 'deny', 'option', 'text']),
+    option: z.number().int().min(1).max(9).optional(),
+    text: z.string().min(1).max(4000).optional(),
+  })
+  .strict();
 
 // ========== Configuration ==========
 
@@ -768,6 +800,15 @@ export const SettingsUpdateSchema = z
      * add-only at create; a marker keeps user-authored copies untouched.
      */
     agentSkillEnabled: z.boolean().optional(),
+    /**
+     * Approvals Inbox (header bell + drawer, phone overview answer buttons,
+     * push Approve/Deny action buttons). SYNCED, default OFF (opt-in): even
+     * with items pending, no surface renders and push payloads carry no
+     * actions/approvalId until this is enabled. The server-side store and the
+     * answer endpoints run regardless, so flipping it ON shows anything
+     * already pending immediately.
+     */
+    approvalsInboxEnabled: z.boolean().optional(),
     tunnelEnabled: z.boolean().optional(),
     // Action field (NOT persisted): explicit per-request acknowledgment that the
     // operator accepts exposing an UNAUTHENTICATED public tunnel (no CODEMAN_PASSWORD).

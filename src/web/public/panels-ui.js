@@ -14,6 +14,7 @@
  */
 
 const AWAY_DIGEST_LAST_VIEWED_KEY = 'codeman-away-digest-last-viewed';
+const FILE_BROWSER_SHOW_HIDDEN_KEY = 'codeman:fileBrowserShowHidden';
 const AWAY_DIGEST_SECTIONS = [
   ['needsAttention', 'Needs Attention'],
   ['completed', 'Completed'],
@@ -2944,18 +2945,56 @@ Object.assign(CodemanApp.prototype, {
   // File Browser Panel
   // ═══════════════════════════════════════════════════════════════
 
+  // Hidden files/folders (dot-prefixed) are filtered SERVER-side by
+  // GET /api/sessions/:id/files, so the toggle re-fetches rather than
+  // re-rendering the cached tree (issue #221). The flag is per-device and lives
+  // in its own localStorage key instead of the app-settings object: that object
+  // is rebuilt from the settings-modal DOM on every save, so a key toggled from
+  // outside the modal would be dropped the next time settings are saved.
+  _loadFileBrowserShowHidden() {
+    try {
+      return localStorage.getItem(FILE_BROWSER_SHOW_HIDDEN_KEY) === '1';
+    } catch {
+      return false;
+    }
+  },
+
+  _syncFileBrowserHiddenBtn() {
+    const btn = this.$('fileBrowserHiddenBtn');
+    if (!btn) return;
+    const on = this.fileBrowserShowHidden === true;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', String(on));
+    const label = on ? 'Hide hidden files and folders' : 'Show hidden files and folders';
+    btn.setAttribute('title', label);
+    btn.setAttribute('aria-label', label);
+  },
+
+  async toggleFileBrowserHidden() {
+    this.fileBrowserShowHidden = !this.fileBrowserShowHidden;
+    try {
+      localStorage.setItem(FILE_BROWSER_SHOW_HIDDEN_KEY, this.fileBrowserShowHidden ? '1' : '0');
+    } catch {}
+    this._syncFileBrowserHiddenBtn();
+    // Expanded-directory state is deliberately preserved so toggling does not
+    // collapse the tree the user just navigated.
+    if (this.activeSessionId) await this.loadFileBrowser(this.activeSessionId);
+  },
+
   async loadFileBrowser(sessionId) {
     if (!sessionId) return;
 
     const treeEl = this.$('fileBrowserTree');
     const statusEl = this.$('fileBrowserStatus');
+    this._syncFileBrowserHiddenBtn();
     if (!treeEl) return;
 
     // Show loading state
     treeEl.innerHTML = '<div class="file-browser-loading">Loading files...</div>';
 
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/files?depth=5&showHidden=false`);
+      const showHidden = this.fileBrowserShowHidden === true;
+      const res = await fetch(`/api/sessions/${sessionId}/files?depth=5&showHidden=${showHidden}`);
       if (!res.ok) throw new Error('Failed to load files');
 
       const result = await res.json();
@@ -2967,7 +3006,7 @@ Object.assign(CodemanApp.prototype, {
       // Update status
       if (statusEl) {
         const { totalFiles, totalDirectories, truncated } = result.data;
-        statusEl.textContent = `${totalFiles} files, ${totalDirectories} dirs${truncated ? ' (truncated)' : ''}`;
+        statusEl.textContent = `${totalFiles} files, ${totalDirectories} dirs${truncated ? ' (truncated)' : ''}${showHidden ? ' · hidden shown' : ''}`;
       }
     } catch (err) {
       console.error('Failed to load file browser:', err);

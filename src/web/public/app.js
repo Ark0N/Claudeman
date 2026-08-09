@@ -237,9 +237,16 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.HOOK_IDLE_PROMPT, '_onHookIdlePrompt'],
   [SSE_EVENTS.HOOK_PERMISSION_PROMPT, '_onHookPermissionPrompt'],
   [SSE_EVENTS.HOOK_ELICITATION_DIALOG, '_onHookElicitationDialog'],
+  [SSE_EVENTS.HOOK_ELICITATION_COMPLETE, '_onHookElicitationComplete'],
+  [SSE_EVENTS.HOOK_ELICITATION_RESPONSE, '_onHookElicitationResponse'],
   [SSE_EVENTS.HOOK_STOP, '_onHookStop'],
   [SSE_EVENTS.HOOK_TEAMMATE_IDLE, '_onHookTeammateIdle'],
   [SSE_EVENTS.HOOK_TASK_COMPLETED, '_onHookTaskCompleted'],
+
+  // Approvals Inbox (handlers in approvals-ui.js)
+  [SSE_EVENTS.APPROVAL_PENDING, '_onApprovalPending'],
+  [SSE_EVENTS.APPROVAL_UPDATED, '_onApprovalUpdated'],
+  [SSE_EVENTS.APPROVAL_RESOLVED, '_onApprovalResolved'],
 
   // Subagents (Claude Code background agents)
   [SSE_EVENTS.SUBAGENT_DISCOVERED, '_onSubagentDiscovered'],
@@ -615,6 +622,11 @@ class CodemanApp {
     this.fileBrowserFilter = '';
     this.fileBrowserAllExpanded = false;
     this.fileBrowserDragListeners = null;
+    // Show hidden (dot-prefixed) files and folders in the File Viewer tree.
+    // Per-device, persisted to its own localStorage key by panels-ui.js. Safe to
+    // call a mixin method here: instantiation is deferred to DOMContentLoaded,
+    // so every module's Object.assign has already run.
+    this.fileBrowserShowHidden = this._loadFileBrowserShowHidden?.() ?? false;
     this.filePreviewContent = '';
 
     // Toast container cache (methods in panels-ui.js)
@@ -629,6 +641,9 @@ class CodemanApp {
     // Pending hooks per session: Map<sessionId, Set<hookType>>
     // Tracks pending hook events that need resolution (permission_prompt, elicitation_dialog, idle_prompt)
     this.pendingHooks = new Map();
+
+    // Approvals Inbox: Map<approvalId, ApprovalItem> (methods in approvals-ui.js)
+    this.approvals = new Map();
 
     // WebSocket terminal I/O (low-latency bypass of HTTP POST + SSE)
     this._ws = null;            // WebSocket instance for active session
@@ -3168,6 +3183,8 @@ class CodemanApp {
     this._predictiveEcho?.clearPredictions();
     // Clear pending hooks
     this.pendingHooks.clear();
+    // Clear approvals (re-seeded from GET /api/approvals right after init)
+    this.approvals?.clear();
     // Clear parent name cache (prevents stale session name entries accumulating)
     if (this._parentNameCache) this._parentNameCache.clear();
     // Clear subagent activity/results maps (prevents leaks if data.subagents is missing)
@@ -3307,6 +3324,10 @@ class CodemanApp {
 
     this.updateCost();
     this.renderSessionTabs();
+
+    // Approvals Inbox: re-seed pending prompts from the server so alerts
+    // survive reloads and SSE reconnects (methods in approvals-ui.js).
+    this.seedApprovals?.();
 
     // Start/stop system stats polling based on session count
     if (this.sessions.size > 0) {

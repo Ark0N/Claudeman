@@ -282,3 +282,6 @@ whose prompt was never submitted (missing `\r`) produces the same
 | `wait-output` matched instantly with stale text | generic marker + tmux repaint; use `DONE_$RANDOM` |
 | 409 `SESSION_BUSY` on a wait | too many concurrent waiters on that session (cap 16 combined); reuse one wait per worker |
 | 429 `RATE_LIMITED` on a wait | global/owner waiter pool full; back off, do not switch sessions |
+| ready claude worker missing from `ListAgents` | cross-session messaging is off for that end: CLI < 2.1.224, the feature flag not (yet) on (observed: two 2.1.226 sessions on one box, only one with an inbox socket), a telemetry-disabling env var, a Docker/remote case, or a non-claude mode. Not an error: drive it over the HTTP recipes. See `reference/messaging.md` |
+| `SendMessage` says "not an agent in this conversation" | first contact with a peer needs the ref: re-send with the exact `name [ref]` string from the `ListAgents` row, or from that error's own suggestion |
+| message sent, worker never acts, no reply, no `stop` | the message was held (permission-class mismatch: a non-default `claudeMode` spawns prompting-class workers, and the approval dialog expires unattended after ~5 min) or refused (`crossSessionInbound`). Run the bounded backstop, then deliver once over HTTP input. See `reference/messaging.md` |

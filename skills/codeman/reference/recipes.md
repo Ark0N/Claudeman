@@ -279,6 +279,37 @@ if [ "$(jq -r '.data.wait.signal' <<<"$R")" = blocked ]; then
 fi
 ```
 
+## Flow 5: claude fan-out over cross-session messaging
+
+Preferred over Flow 3b when messaging is available (probe per worker first; see
+[messaging.md](messaging.md)): tasks go out as multi-line, exactly-once messages with
+no `\r`/marker discipline, and results come back as latched replies that, unlike the
+edge-triggered signals, cannot be missed by a late gather. Spawn, readiness and
+cleanup do not change.
+
+1. Spawn N workers with quick-start and run Flow 1's readiness ladder on each
+   (messaging cannot answer a trust dialog).
+2. `ListAgents` once. Map each row to a worker by its `tmux codeman-<id8>` column
+   (`<id8>` = first 8 chars of the quick-start `sessionId`); note each `name [ref]`.
+   A worker without a row is driven over Flow 3b instead; mixed fleets are fine.
+3. `SendMessage` each worker its task, first contact in the `name [ref]` form, with a
+   per-worker reply token baked in: "... when done, reply to the sender of this
+   message with one line: RESULT_<token-i>: <one-line summary>".
+4. Gather = the replies themselves; they attach to your subsequent tool results in
+   completion order. Pace the loop with the bounded HTTP backstop per worker still
+   missing a reply: `wait until=stop,exit&timeout=60000`, then a `last-response`
+   read (`stop` can lose the registration race to a fast worker; the poll covers
+   that). Stop fired or `last-response` non-empty but no reply = the worker ignored
+   the reply instruction: take `last-response` as its result. Nothing after a few
+   bounded rounds = the message was held or dropped (messaging.md, delivery
+   classes): deliver that one task over HTTP input instead (Flow 3b B), once, and
+   say so in your report.
+5. `delete_session` each worker; the §0 guard as always.
+
+Never resend the same message text as a nag: identical repeats are dropped by the
+loop throttle. If a second message is genuinely needed, change the text ("status?"),
+and cap the total.
+
 ## Cleanup discipline
 
 At the end of the conversation (or on abort), delete exactly what you created:

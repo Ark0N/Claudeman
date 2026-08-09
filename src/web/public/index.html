@@ -131,6 +131,10 @@
         <button class="btn-icon-header btn-response-viewer-header btn-response-viewer-header--hidden" onclick="app.toggleResponseViewer()" title="View last response" aria-label="View last response"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
         <button class="btn-icon-header btn-away-digest btn-away-digest--hidden" onclick="app.openAwayDigest()" title="Away Digest" aria-label="Open away digest"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg></button>
         <button class="btn-icon-header btn-session-manager btn-session-manager--hidden" onclick="app.openSessionManager()" title="Session Manager" aria-label="Open session manager"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg></button>
+        <button class="btn-icon-header btn-approvals btn-approvals--hidden" id="approvalsBtn" onclick="app.toggleApprovalsInbox()" title="Approvals waiting on you" aria-label="Open approvals inbox" aria-expanded="false">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          <span class="approvals-badge" id="approvalsBadge">0</span>
+        </button>
         <button class="btn-icon-header btn-attachments-history btn-attachments-history--hidden" id="attachmentsHistoryBtn" onclick="app.toggleAttachmentHistory()" title="Attachments" aria-label="Open attachment history" aria-expanded="false">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
           <span class="attachment-history-badge" id="attachmentHistoryBadge" style="display:none;">0</span>
@@ -417,6 +421,7 @@
       <div class="file-browser-header">
         <span class="file-browser-title">Files</span>
         <div class="file-browser-actions">
+          <button class="btn-icon-sm btn-file-browser-hidden" onclick="app.toggleFileBrowserHidden()" title="Show hidden files and folders" aria-label="Show hidden files and folders" aria-pressed="false" id="fileBrowserHiddenBtn">.*</button>
           <button class="btn-icon-sm" onclick="app.refreshFileBrowser()" title="Refresh">&#x21BB;</button>
           <button class="btn-icon-sm" onclick="app.toggleFileBrowserExpand()" title="Expand/Collapse All" id="fileBrowserExpandBtn">&#x229E;</button>
           <button class="btn-icon-sm" onclick="app.closeFileBrowserPanel()" title="Close">&times;</button>
@@ -1529,6 +1534,13 @@
                 <span class="settings-item-label">Subagents</span>
                 <label class="switch switch-sm">
                   <input type="checkbox" id="appSettingsShowSubagents">
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item" title="Cross-session inbox of prompts waiting on you (permission dialogs, questions, idle prompts) with answer-in-place buttons; the header bell appears only while something is pending">
+                <span class="settings-item-label">Approvals Inbox</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsApprovalsInbox">
                   <span class="slider"></span>
                 </label>
               </div>
@@ -2722,6 +2734,18 @@
     </div>
   </div>
 
+  <!-- Approvals Inbox drawer (populated by approvals-ui.js; opened from the header bell) -->
+  <div class="approvals-drawer" id="approvalsDrawer" role="complementary" aria-label="Approvals inbox">
+    <div class="approvals-header">
+      <div>
+        <div class="approvals-title">Approvals</div>
+        <div class="approvals-subtitle">Prompts waiting on you, across all sessions</div>
+      </div>
+      <button class="approvals-close" onclick="app.closeApprovalsInbox()" title="Close" aria-label="Close approvals inbox">✕</button>
+    </div>
+    <div class="approvals-list"></div>
+  </div>
+
   <script defer src="constants.js"></script>
   <script defer src="i18n.js"></script>
   <script defer src="mobile-handlers.js"></script>
@@ -2740,6 +2764,7 @@
   <script defer src="settings-ui.js"></script>
   <script defer src="panels-ui.js"></script>
   <script defer src="ultracode-panel.js"></script>
+  <script defer src="approvals-ui.js"></script>
   <script defer src="admin-ui.js"></script>
   <script defer src="session-ui.js"></script>
   <script defer src="webview-tabs.js"></script>

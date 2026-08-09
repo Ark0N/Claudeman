@@ -9192,6 +9192,20 @@ kbd {
   gap: 0.25rem;
 }
 
+/* Show-hidden toggle: a literal `.*` glyph rather than an icon, so its meaning
+ * (dot-prefixed files and folders) survives every skin and font stack. */
+.btn-file-browser-hidden {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: -0.05em;
+}
+
+.btn-file-browser-hidden.active {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
 .file-browser-search {
   padding: 0.4rem;
   border-bottom: 1px solid var(--border);
@@ -10643,6 +10657,222 @@ kbd {
   display: none !important;
 }
 
+/* "Approvals" header bell: appears ONLY while prompts are pending (JS toggles
+   the marker class on count changes), so it ships hidden and stays out of the
+   default header. Same marker pattern as the attachments button. */
+.btn-approvals {
+  display: inline-flex !important;
+  position: relative;
+}
+.btn-approvals.btn-approvals--hidden {
+  display: none !important;
+}
+
+.approvals-badge {
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  background: var(--error, #e5484d);
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 700;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+/* Approvals Inbox drawer: same shell as the attachment history drawer. */
+.approvals-drawer {
+  position: fixed;
+  top: var(--header-height);
+  right: 0;
+  width: 420px;
+  max-width: calc(100vw - 24px);
+  height: calc(100vh - var(--header-height) - var(--toolbar-height));
+  height: calc(100dvh - var(--header-height) - var(--toolbar-height));
+  background: var(--floating-bg);
+  border-left: 1px solid var(--border);
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.18s ease;
+  box-shadow: -10px 0 28px rgba(0, 0, 0, 0.36);
+}
+.approvals-drawer.open {
+  transform: translateX(0);
+}
+.approvals-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.approvals-title {
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+.approvals-subtitle {
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: 0.68rem;
+}
+.approvals-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+.approvals-close:hover {
+  color: var(--text);
+}
+.approvals-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+.approvals-empty {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  text-align: center;
+  padding: 24px 8px;
+}
+
+.approval-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 8px;
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.02));
+}
+.approval-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.approval-kind-badge {
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+}
+.approval-kind-question .approval-kind-badge {
+  background: #d97706;
+}
+.approval-kind-idle .approval-kind-badge {
+  background: #6b7280;
+}
+.approval-session {
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.approval-age {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 0.68rem;
+}
+.approval-summary {
+  color: var(--text);
+  font-size: 0.76rem;
+  margin-bottom: 6px;
+  word-break: break-word;
+}
+.approval-context {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.66rem;
+  line-height: 1.35;
+  color: var(--text-dim);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  margin: 0 0 8px;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre;
+}
+.approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.approval-btn {
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary, rgba(255, 255, 255, 0.05));
+  color: var(--text);
+  font-size: 0.72rem;
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.approval-btn:hover {
+  border-color: var(--accent);
+}
+.approval-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.approval-btn-danger {
+  border-color: var(--error, #e5484d);
+  color: var(--error, #e5484d);
+}
+.approval-text-row {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+}
+.approval-text-input {
+  flex: 1;
+  background: var(--bg, rgba(0, 0, 0, 0.3));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.74rem;
+  padding: 5px 8px;
+}
+.approval-meta-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+}
+.approval-link {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+.approval-link:hover {
+  color: var(--text);
+}
+
 /* "Attachments" header button — opt-in (App Settings → Display), hidden by
    default. Same pattern as the response viewer: a base inline-flex !important so
    an inline style can't override it, and a more-specific marker rule to hide. */
@@ -11980,7 +12210,8 @@ body.touch-device.cjk-input-visible .main {
 }
 
 .path-picker-up,
-.path-picker-refresh {
+.path-picker-refresh,
+.path-picker-hidden {
   flex: 0 0 38px;
   height: 38px;
   color: var(--text);
@@ -11988,6 +12219,20 @@ body.touch-device.cjk-input-visible .main {
   border: 1px solid var(--border);
   border-radius: 8px;
   cursor: pointer;
+}
+
+/* Show-hidden toggle: a literal `.*` glyph rather than an icon, so its meaning
+ * (dot-prefixed files and folders) survives every skin and font stack. */
+.path-picker-hidden {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: -0.05em;
+}
+
+.path-picker-hidden.active {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .path-picker-up:disabled {

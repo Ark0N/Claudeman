@@ -407,6 +407,33 @@ count against the same 16, not 16 of each. An abandoned request no longer holds 
 slot, because the routes release the waiter when the client disconnects, but a
 client that opens many concurrent waits against one session will still hit the cap.
 
+## Approvals Inbox
+
+Cross-session queue of prompts waiting on a human (permission dialogs,
+AskUserQuestion questions, idle prompts). Claude-mode sessions only; items are
+in-memory (a server restart drops them; the next prompt re-fires the hook).
+Design: [`approvals-inbox-plan.md`](approvals-inbox-plan.md).
+
+- `GET /api/v1/approvals` → `{ approvals: ApprovalItem[] }`, oldest first,
+  ownership-scoped in multi-user mode. `ApprovalItem`: `{ id, sessionId,
+  sessionName, kind: 'permission'|'question'|'idle', createdAt, toolName?,
+  toolSummary?, message?, cwd?, context?, options?: {n, label}[] }`. `context`
+  is the ANSI-stripped visible pane frame; `options` is present only when the
+  dialog's numbered choices parsed confidently.
+- `POST /api/v1/approvals/:id/answer` with `{ action: 'approve' }` (sends the
+  digit `1`), `{ action: 'deny' }` (sends Esc), `{ action: 'option', option: n }`
+  (sends the digit; accepted only when `n` is among the item's parsed
+  `options`), or `{ action: 'text', text }` (idle prompts only; submits the
+  line as a prompt). `404 NOT_FOUND` when the item is no longer pending,
+  `409 CONFLICT` when the dialog left the screen or another actor answered
+  first, `422 OPERATION_FAILED` when the session refused input.
+- `POST /api/v1/approvals/:id/dismiss` removes the item without keystrokes.
+
+SSE events: `approval:pending` (full item), `approval:updated` (context/options
+re-captured), `approval:resolved` (`{ id, sessionId, kind, resolution }` with
+`resolution` one of `answered | resolved_in_terminal | superseded |
+session_ended | dismissed | expired`).
+
 ## Authentication
 
 Optional HTTP Basic (`CODEMAN_USERNAME`/`CODEMAN_PASSWORD`) → opaque

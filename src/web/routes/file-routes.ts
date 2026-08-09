@@ -315,9 +315,23 @@ function findMatchingPickerRoot(roots: FilesystemBrowseRoot[], candidate: string
     .sort((a, b) => b.path.length - a.path.length)[0];
 }
 
+/**
+ * Whether a path has a dot-prefixed segment anywhere below its browse root.
+ *
+ * Checked against the REALPATH, so a plainly-named symlink pointing into a
+ * hidden tree is caught too. Callers skip it when the request opts into hidden
+ * entries (`showHidden`), which is why the sensitive-path blocklist and the
+ * blocked-tree checks must stand on their own: with the toggle on, this is no
+ * longer the thing keeping `~/.config/gh/hosts.yml` out of reach.
+ */
 function containsHiddenPickerSegment(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel !== '' && rel.split(sep).some((segment) => segment.startsWith('.'));
+}
+
+/** Parses the picker's opt-in `showHidden` query flag (absent means off). */
+function wantsHiddenPickerEntries(showHidden?: string): boolean {
+  return showHidden === 'true';
 }
 
 function getFilesystemPreviewKind(fileName: string): FilesystemPreviewKind | undefined {
@@ -431,7 +445,8 @@ async function resolveFilesystemPickerPath(
   ctx: SessionPort & ConfigPort,
   req: FastifyRequest,
   requestedPath: string | undefined,
-  sessionId?: string
+  sessionId?: string,
+  showHidden = false
 ): Promise<ResolvedFilesystemPickerPath> {
   const roots = await resolveFilesystemPickerRoots(ctx, req, sessionId);
   if (roots.length === 0) {
@@ -453,7 +468,7 @@ async function resolveFilesystemPickerPath(
   if (!matchingRoot) {
     throwFilesystemPickerError(403, ApiErrorCode.INVALID_INPUT, 'Path is outside the allowed browse roots');
   }
-  if (containsHiddenPickerSegment(matchingRoot.path, resolvedPath)) {
+  if (!showHidden && containsHiddenPickerSegment(matchingRoot.path, resolvedPath)) {
     throwFilesystemPickerError(403, ApiErrorCode.INVALID_INPUT, 'Hidden paths are not available in the file picker');
   }
 
@@ -662,12 +677,14 @@ function inheritedHeaders(reply: {
 export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & EventPort & ConfigPort): void {
   // Lazy filesystem listing for the Link Existing and mobile input path pickers.
   app.get('/api/filesystem/browse', async (req, reply): Promise<ApiResponse<FilesystemBrowseData>> => {
-    const { path: requestedPath, sessionId } = parseBody(FilesystemBrowseQuerySchema, req.query);
+    const { path: requestedPath, sessionId, showHidden } = parseBody(FilesystemBrowseQuerySchema, req.query);
+    const includeHidden = wantsHiddenPickerEntries(showHidden);
     const { candidatePath, resolvedPath, roots, matchingRoot, blockedTrees } = await resolveFilesystemPickerPath(
       ctx,
       req,
       requestedPath,
-      sessionId
+      sessionId,
+      includeHidden
     );
 
     if (isBlockedPickerPath(resolvedPath, blockedTrees, true)) {
@@ -703,7 +720,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     const entries: FilesystemBrowseEntry[] = [];
     let truncated = false;
     for (const entry of dirEntries) {
-      if (entry.name.startsWith('.')) continue;
+      if (!includeHidden && entry.name.startsWith('.')) continue;
       if (entries.length >= FILESYSTEM_PICKER_ENTRY_LIMIT) {
         truncated = true;
         break;
@@ -718,7 +735,8 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       }
 
       const targetRoot = findMatchingPickerRoot(roots, targetPath);
-      if (!targetRoot || containsHiddenPickerSegment(targetRoot.path, targetPath)) continue;
+      if (!targetRoot) continue;
+      if (!includeHidden && containsHiddenPickerSegment(targetRoot.path, targetPath)) continue;
 
       let type: FilesystemBrowseEntry['type'];
       let size: number | undefined;
@@ -783,12 +801,13 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
 
   // Inline preview for files selected through the root-confined filesystem picker.
   app.get('/api/filesystem/preview', { compress: false }, async (req, reply): Promise<void> => {
-    const { path: requestedPath, sessionId } = parseBody(FilesystemPreviewQuerySchema, req.query);
+    const { path: requestedPath, sessionId, showHidden } = parseBody(FilesystemPreviewQuerySchema, req.query);
     const { candidatePath, resolvedPath, blockedTrees } = await resolveFilesystemPickerPath(
       ctx,
       req,
       requestedPath,
-      sessionId
+      sessionId,
+      wantsHiddenPickerEntries(showHidden)
     );
     if (isBlockedPickerPath(resolvedPath, blockedTrees)) {
       throwFilesystemPickerError(403, ApiErrorCode.INVALID_INPUT, 'Access to this file is blocked');
