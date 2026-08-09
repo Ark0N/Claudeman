@@ -163,15 +163,28 @@ describe('Phone home button tap target (static guard)', () => {
     return decls;
   }
 
-  it('gives the brand button a 44px-wide hit area on phones', () => {
+  it('gives the brand button a 44x44 hit area on phones', () => {
     const decls = phoneLogoDecls();
     expect(decls.get('min-width'), 'the "C" home button needs an explicit 44px min-width on phones').toBe('44px');
     // A bare inline span ignores width entirely — the box only exists once it
     // stops being inline.
     expect(decls.get('display')).toBe('inline-flex');
-    // Full header height on the short axis: the phone header is pinned to 36px
-    // (min/max-height) and clips overflow, so this is as tall as the target can
-    // get without growing the header and taking it off the terminal.
+    // The other axis is the header's, so the two have to be read together: the
+    // button is only 44 tall because the phone header is.
     expect(decls.get('height')).toBe('var(--header-height)');
+  });
+
+  it('keeps the phone header at 44px, the height that makes that target square', () => {
+    // The bar was 36px. Shrinking it again silently takes 8px back off every
+    // header touch target, the home button included.
+    let phoneHeaderHeight: string | undefined;
+    postcss.parse(css).walkAtRules('media', (atRule) => {
+      if (!appliesToPhone(atRule.params)) return;
+      atRule.walkRules((rule) => {
+        if (rule.selector.trim() !== ':root') return;
+        rule.walkDecls('--header-height', (decl) => (phoneHeaderHeight = decl.value.trim()));
+      });
+    });
+    expect(phoneHeaderHeight, '--header-height must be redefined for phones in mobile.css').toBe('44px');
   });
 });

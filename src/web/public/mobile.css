@@ -350,30 +350,34 @@ html.mobile-init .file-browser-panel {
    Phone Breakpoint (<430px)
    ============================================================================ */
 @media (max-width: 430px) {
+  /* Phones get a 44px header, up from 36px. Every header control is a touch
+     target and 44px is the floor for one; the brand "C" that gets you home is
+     the one that matters most. Redefined as the TOKEN rather than a literal so
+     the panels positioned off `var(--header-height)` (file browser, insights,
+     plan overlays in styles.css) follow it instead of drifting 8px under the
+     header. Costs 8px of terminal height on a phone. */
+  :root {
+    --header-height: 44px;
+  }
+
   /* Phone brand collapses to a single "C" home button: hide the wordmark,
      keep the tap target */
   .header-brand {
     padding-right: 0;
     margin-right: 0.1rem;
     border-right: none;
-    /* styles.css sizes this to the FULL header height, so inside the header's
-       0.15rem vertical padding it overflows and the last 2.4px are clipped
-       (`overflow: hidden` on the phone header). Harmless while the brand was
-       bare text; it would cut the bottom off the tap target's pressed state.
-       Cancelling the padding for this one item is what makes the button fill
-       the header edge to edge. `height: 100%` cannot do it: the header sets
-       min/max-height rather than height, so the percentage has no definite
-       containing block to resolve against and silently falls back to auto. */
-    margin-block: -0.15rem;
+    /* styles.css sizes this to the FULL header height, which is taller than the
+       header's padding box; centred by the header's `align-items: center` above,
+       that overflow is symmetric and the button lands flush with both edges.
+       Do not "fix" it with `height: 100%`: the header sets min/max-height and no
+       height, so the percentage has no definite containing block to resolve
+       against and silently falls back to auto. */
   }
 
   /* The "C" was a 0.85rem inline span — about a 12x13px hit area, far under the
      44px minimum, on the one control that gets you back to the home screen.
-     It is now a real 44px-wide button spanning the full header height, with the
-     glyph scaled to match. 44 is reachable on the horizontal axis only: the
-     phone header is pinned to 36px tall (min-height/max-height below) and
-     `overflow: hidden` clips anything taller, so a true 44x44 would mean growing
-     the header and taking that height off the terminal. The negative margin
+     It is now a real 44x44 button: 44px wide, and the full height of the phone
+     header, which is itself 44px for exactly this reason. The negative margin
      spends the header's OWN left padding on the target instead of pushing the
      tab strip right. */
   .header-brand .logo {
@@ -437,8 +441,12 @@ html.mobile-init .file-browser-panel {
     top: 0;
     left: 0;
     right: 0;
-    min-height: 36px;
-    max-height: 36px;
+    min-height: var(--header-height);
+    max-height: var(--header-height);
+    /* styles.css top-aligns header children. That read as centred while the bar
+       was 36px and its contents ~31px; in a 44px bar it leaves a visible gap
+       under everything. */
+    align-items: center;
     padding: 0.15rem 0.3rem;
     padding-left: calc(0.3rem + var(--safe-area-left));
     padding-right: calc(0.3rem + var(--safe-area-right));
@@ -453,8 +461,8 @@ html.mobile-init .file-browser-panel {
   /* iOS safe area adjustment for fixed header - header extends into notch area */
   .ios-device .header {
     padding-top: calc(0.15rem + var(--safe-area-top));
-    min-height: calc(36px + var(--safe-area-top));
-    max-height: calc(36px + var(--safe-area-top));
+    min-height: calc(var(--header-height) + var(--safe-area-top));
+    max-height: calc(var(--header-height) + var(--safe-area-top));
   }
 
   /* Push ALL content below fixed header (not just .main) so banners
@@ -464,11 +472,13 @@ html.mobile-init .file-browser-panel {
      when keyboard is visible, and resetLayout() clears the inline
      style to re-expose this CSS value. */
   .app {
-    padding-top: 42px;
+    /* Header height plus its 1px border and a little slack. Derived from the
+       token so the offset cannot fall out of step with the bar it clears. */
+    padding-top: calc(var(--header-height) + 6px);
   }
 
   .ios-device .app {
-    padding-top: calc(42px + var(--safe-area-top));
+    padding-top: calc(var(--header-height) + 6px + var(--safe-area-top));
   }
 
   .main {
