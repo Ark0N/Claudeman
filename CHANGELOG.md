@@ -1,5 +1,34 @@
 # aicodeman
 
+## 1.14.0
+
+### Minor Changes
+
+- Daemon mode and service install, plus subagent hook hardening and terminal/idle-checker fixes.
+
+  **New: run Codeman in the background without a terminal (#239, closes #231)**
+  - `codeman web -d` starts the server detached: it survives closing the shell, logs to `~/.codeman/web.log`, records a pidfile, and only reports success after the server actually answers `/api/status` (a port clash or missing dependency can never read as a clean start). `codeman web --status` and `codeman web --stop` manage it; `--stop` verifies the pid still looks like a Codeman server before signalling, so a recycled pid is never SIGTERMed.
+  - `codeman service install` / `status` / `uninstall`: installs a systemd user unit (Linux) or LaunchAgent (macOS) so the server comes back after reboots. The unit carries the installing shell's PATH (launchd's default PATH finds neither an nvm/Homebrew `node` nor `tmux`/`claude`), never contains `CODEMAN_PASSWORD`, and uses the same instance-scoped unit names as `install.sh` and the self-updater so no second copy can end up supervised.
+  - Both refuse to start a second server on one data dir (pidfile check plus a live probe): two servers on the shared tmux socket would attach to each other's sessions.
+  - Why `-d` exists at all: `nohup` does not protect a Node process, Node re-arms SIGHUP even when it inherits "ignore", so `nohup codeman web &` still dies on HUP. The detached relaunch (setsid) removes the controlling terminal instead.
+
+  **Subagent background-work hooks (#233, thanks @Lint111)**
+  - The background Bash rewake helper now also watches the top-level parent transcript when the hook fires inside a subagent: Claude records a subagent's Bash result in its own `subagents/agent-*.jsonl` but queues the completion in the lead session transcript, so subagents previously never woke. It can also inline a `CODEMAN_RESULT_BEGIN/END` marked report (up to 64 KiB) from the task output file into the wake feedback.
+  - New SubagentStop guard: a subagent that still owns live Monitor or background Bash processes is kept working instead of publishing an intermediate progress line as its final report. Ownership is verified against live process descriptors on `tasks/<id>.output`, so stale transcript text alone never blocks, and the guard fails open on systems without `/proc`.
+  - Existing cases self-heal to the new hooks on next launch.
+
+  **AI idle checker: stderr kept out of the verdict (#234, thanks @Lint111)**
+
+  The `claude -p` verdict command no longer merges stderr into the verdict file, where CLI warnings could turn a valid verdict into a parse error. On failures, the first 200 chars of stderr are attached to the diagnostic instead.
+
+  **Terminal: large final batches drain fully (#235, thanks @Lint111)**
+
+  A render-scheduling flag was cleared after the flush instead of before it, so when a large batch left a remainder behind, the remainder stayed unrendered until unrelated output arrived. This looked like truncated responses or shell commands that never finish. The flush now reschedules itself until the queue is empty.
+
+  **Docs and tests**
+  - README documents daemon mode and service install.
+  - Unique test port for the daemon-control suite.
+
 ## 1.13.0
 
 ### Minor Changes

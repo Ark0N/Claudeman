@@ -240,6 +240,8 @@ codeman web                       # localhost:3000 (loopback only — safe defau
 codeman web --port 8080           # custom port (or set CODEMAN_PORT)
 codeman web --https               # self-signed TLS (only needed for remote access)
 codeman web -H 0.0.0.0            # bind LAN — REQUIRES CODEMAN_PASSWORD (see Security)
+codeman web -d                    # detach: survives closing the shell (--status, --stop)
+codeman service install           # systemd/launchd service: comes back after reboots
 ```
 
 Open the printed URL. The page is a single dashboard; everything below happens there.
@@ -288,6 +290,7 @@ Hit start — Codeman spawns the CLI via a real PTY and streams it to your brows
 ### 7. Operate & maintain
 
 - **App Settings** — model, effort, permission startup mode, theme/skin, notifications, display toggles, per-CLI options, a synced custom display name, and per-device English/Simplified Chinese UI language.
+- **Run it in the background** — `codeman web -d` detaches from your shell (`--status`, `--stop`); `codeman service install` makes it a systemd user unit / macOS LaunchAgent that survives reboots. Both verify the server actually answers before reporting success, and both refuse to start a second server on one data dir. See [Keep it running in the background](#quick-start---installation).
 - **Self-update** — git-clone installs update in place from **Settings → Updates**.
 - **Deploy your own changes** — see [Development](#development).
 
@@ -423,6 +426,7 @@ PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xt
 
 ## More Features
 
+- **Background daemon & service install** — `codeman web -d` runs the server detached with a pidfile, `~/.codeman/web.log`, and verified startup (it polls the server until it answers, so a port clash never reads as success); `codeman service install` writes a systemd user unit (Linux) or LaunchAgent (macOS) with your shell's PATH baked in, so an nvm or Homebrew `node`, `tmux` and `claude` are actually found. Secrets are never written into unit files
 - **Self-update** — git-clone installs under systemd/launchd update in place from **App Settings → Updates**: it detects the latest release, auto-stashes a dirty tree, and streams build progress across the service restart (npm installs report as non-updatable)
 - **Multi-CLI** — run **Claude Code**, **OpenCode**, **Codex**, **Antigravity**, or **Gemini** per session; env-var prefixes auto-gate (`CLAUDE_CODE_*` vs `OPENCODE_*` vs `CODEX_*` vs `ANTIGRAVITY_*` vs `GEMINI_*`/`GOOGLE_*`). See [`docs/opencode-integration.md`](docs/opencode-integration.md)
 - **Docker sessions** — run a case inside an isolated, hardened container. One checkbox on **Create New** spins up a container with sensible defaults and starts the agent inside it; multiple sessions share one per-case container; export a container + its workspace to a portable `.tar.gz` to move it to another machine. See [`docs/docker-cases.md`](docs/docker-cases.md)
