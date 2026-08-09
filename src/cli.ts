@@ -577,47 +577,152 @@ function printStats(stats: ReturnType<ReturnType<typeof getRalphLoop>['getStats'
 
 // ============ Utility Commands ============
 
+/** What probing the web server found. */
+interface WebServerProbe {
+  reachable: boolean;
+  /** The URL that answered, or the first candidate when nothing did. */
+  url: string;
+  statusCode?: number;
+  version?: string;
+  authRequired?: boolean;
+  /** Live session states from `/api/status`, when the probe could read them. */
+  sessions?: Array<{ status?: string }>;
+}
+
+/**
+ * GET `<base>/api/status` with a short timeout, tolerating the self-signed cert an
+ * `--https` install uses. ANY HTTP answer proves the server is up: a 401 just
+ * means it wants credentials (sent when available, same env → data-dir `.env`
+ * fallback as `codeman attach`).
+ */
+function probeWebServerAt(base: string): Promise<WebServerProbe | null> {
+  let url: URL;
+  try {
+    url = new URL('/api/status', base);
+  } catch {
+    return Promise.resolve(null);
+  }
+  const envFile = readCodemanEnv();
+  const username = process.env.CODEMAN_USERNAME || envFile.CODEMAN_USERNAME || 'admin';
+  const password = process.env.CODEMAN_PASSWORD || envFile.CODEMAN_PASSWORD;
+  const transport = url.protocol === 'https:' ? https : http;
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (password) {
+    headers.Authorization = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
+  }
+
+  return new Promise((resolve) => {
+    const req = transport.request(
+      {
+        protocol: url.protocol,
+        hostname: url.hostname,
+        port: url.port,
+        method: 'GET',
+        path: url.pathname,
+        rejectUnauthorized: false,
+        headers,
+        timeout: 3000,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        let received = 0;
+        res.on('data', (chunk: Buffer) => {
+          received += chunk.length;
+          if (received <= 1024 * 1024) chunks.push(chunk);
+        });
+        res.on('end', () => {
+          const statusCode = res.statusCode ?? 0;
+          if (statusCode === 401) {
+            resolve({ reachable: true, url: base, statusCode, authRequired: true });
+            return;
+          }
+          let version: string | undefined;
+          let sessions: Array<{ status?: string }> | undefined;
+          try {
+            const parsed = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as {
+              data?: { version?: unknown; sessions?: unknown };
+            };
+            const data = parsed?.data ?? (parsed as { version?: unknown; sessions?: unknown });
+            if (typeof data?.version === 'string') version = data.version;
+            if (Array.isArray(data?.sessions)) sessions = data.sessions as Array<{ status?: string }>;
+          } catch {
+            // Not JSON, but still an answer, so still running.
+          }
+          resolve({ reachable: true, url: base, statusCode, version, sessions });
+        });
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', () => resolve(null));
+    req.end();
+  });
+}
+
 program
   .command('status')
-  .description('Show overall status')
-  .action(() => {
-    const manager = getSessionManager();
-    const queue = getTaskQueue();
-    const loop = getRalphLoop();
-
-    const sessions = manager.getAllSessions();
-    const stored = manager.getStoredSessions();
-    const storedValues = Object.values(stored);
-    const taskCounts = queue.getCount();
-    const loopStatus = loop.status;
-
-    // Use live sessions if available, otherwise fall back to stored state
-    const activeCount = sessions.length || storedValues.filter((s) => s.status !== 'stopped').length;
-    const idleCount = sessions.length
-      ? sessions.filter((s) => s.isIdle()).length
-      : storedValues.filter((s) => s.status === 'idle').length;
-    const busyCount = sessions.length
-      ? sessions.filter((s) => s.isBusy()).length
-      : storedValues.filter((s) => s.status === 'busy').length;
+  .description('Show whether the Codeman web server is running, plus session/task state')
+  .option('--url <url>', 'Server URL to probe (defaults to CODEMAN_API_URL, then local port)')
+  .action(async (options: { url?: string }) => {
+    // Issue #230: this command runs in its own fresh process, and the old output
+    // reported THAT process's (always-stopped) Ralph loop under a bare "Status:",
+    // reading as "the server is down" while the web service ran fine. Probe the
+    // real server first; the Ralph loop has its own `codeman ralph status`.
+    const port = process.env.CODEMAN_PORT || '3000';
+    const candidates = options.url
+      ? [options.url]
+      : process.env.CODEMAN_API_URL
+        ? [process.env.CODEMAN_API_URL]
+        : [`https://127.0.0.1:${port}`, `http://127.0.0.1:${port}`];
+    let probe: WebServerProbe = { reachable: false, url: candidates[0] };
+    for (const candidate of candidates) {
+      const answer = await probeWebServerAt(candidate);
+      if (answer) {
+        probe = answer;
+        break;
+      }
+    }
 
     console.log(chalk.bold('\nCodeman Status'));
     console.log('─'.repeat(40));
 
-    console.log(chalk.bold('\nSessions:'));
-    console.log(`  Active: ${activeCount}`);
-    console.log(`  Idle: ${idleCount}`);
-    console.log(`  Busy: ${busyCount}`);
+    console.log(chalk.bold('\nWeb Server:'));
+    if (probe.reachable) {
+      const version = probe.version ? ` (v${probe.version})` : '';
+      console.log(`  Status: ${chalk.green('running')}${version} at ${probe.url}`);
+      if (probe.authRequired) {
+        console.log(chalk.gray('  (answers 401: set CODEMAN_PASSWORD/CODEMAN_USERNAME to see session details)'));
+      }
+    } else {
+      console.log(`  Status: ${chalk.red('not reachable')} at ${candidates.join(' or ')}`);
+      console.log(
+        chalk.gray('  (start it with `codeman web`, or check your service: systemctl --user status codeman-web)')
+      );
+    }
 
+    // Prefer the server's live view; fall back to the shared saved state, labeled
+    // as such, so the numbers are never silently a different thing.
+    if (probe.sessions) {
+      const live = probe.sessions;
+      console.log(chalk.bold('\nSessions (live, from the server):'));
+      console.log(`  Total: ${live.length}`);
+      console.log(`  Idle: ${live.filter((s) => s.status === 'idle').length}`);
+      console.log(`  Busy: ${live.filter((s) => s.status === 'busy').length}`);
+    } else {
+      const manager = getSessionManager();
+      const storedValues = Object.values(manager.getStoredSessions());
+      console.log(chalk.bold('\nSessions (from saved state):'));
+      console.log(`  Active: ${storedValues.filter((s) => s.status !== 'stopped').length}`);
+      console.log(`  Idle: ${storedValues.filter((s) => s.status === 'idle').length}`);
+      console.log(`  Busy: ${storedValues.filter((s) => s.status === 'busy').length}`);
+    }
+
+    const taskCounts = getTaskQueue().getCount();
     console.log(chalk.bold('\nTasks:'));
     console.log(`  Total: ${taskCounts.total}`);
     console.log(`  Pending: ${taskCounts.pending}`);
     console.log(`  Running: ${taskCounts.running}`);
     console.log(`  Completed: ${taskCounts.completed}`);
     console.log(`  Failed: ${taskCounts.failed}`);
-
-    const statusColor = loopStatus === 'running' ? chalk.green : loopStatus === 'paused' ? chalk.yellow : chalk.gray;
-    console.log(chalk.bold('\nRalph Loop:'));
-    console.log(`  Status: ${statusColor(loopStatus)}`);
     console.log('');
   });
 
