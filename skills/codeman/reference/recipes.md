@@ -39,13 +39,20 @@ SEQ=1               # $CID is the fixed literal from §0; never rebuild it from 
 #    virgin case can never pass it (the dialog is up) and always pays it in full —
 #    the long budget belongs to stage 3, after the dialog is answered.
 #    Single-token matches only: TUI text is space-less in the stream.
+#    ⚠️ `bypass` is the statusline of ONE permission mode (the default one Codeman
+#    spawns). The server's `claudeMode` setting also has auto/allowedTools/normal
+#    spawns whose statusline differs, and the mode is not exposed on GET
+#    /api/v1/sessions/:id. `shift+tab` is the one token EVERY mode's status bar ends
+#    with ('(shift+tab to cycle)'), measured per mode, so match that and not `bypass`.
+#    The `+` needs --data-urlencode or it decodes to a space. Stage 4 remains the last
+#    resort: proving readiness by making the worker answer rather than by chrome.
 for _ in $(seq 1 30); do
   [ "$("${CURL[@]}" "$API/api/v1/sessions/$SID" | jq '.data.pid')" != null ] && break; sleep 1
 done
 # (pid != null proves startup only — a worker that later dies inside its pane keeps
 #  status "idle" and a pid. The death check is wait?until=exit.)
 R=$("${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
-    --data-urlencode 'match=bypass' --data-urlencode 'from=buffer' --data-urlencode 'timeout=5000')
+    --data-urlencode 'match=shift+tab' --data-urlencode 'from=buffer' --data-urlencode 'timeout=5000')
 if ! jq -e '.data.wait.matched' <<<"$R" >/dev/null; then
   T=$("${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
       --data-urlencode 'match=trust' --data-urlencode 'from=buffer' --data-urlencode 'timeout=2000')
@@ -55,8 +62,21 @@ if ! jq -e '.data.wait.matched' <<<"$R" >/dev/null; then
     SEQ=$((SEQ+1))
   fi
   R=$("${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
-      --data-urlencode 'match=bypass' --data-urlencode 'from=buffer' --data-urlencode 'timeout=45000')
-  jq -e '.data.wait.matched' <<<"$R" >/dev/null || echo "worker $SID not ready; inspect terminal?tail="
+      --data-urlencode 'match=shift+tab' --data-urlencode 'from=buffer' --data-urlencode 'timeout=45000')
+fi
+if ! jq -e '.data.wait.matched' <<<"$R" >/dev/null; then
+  # stage 4, mode-agnostic and bounded: answering a trivial prompt IS readiness.
+  # Costs the worker one turn, so it only runs when the fast marker missed. Split
+  # token (the typed line echoes into the stream) and unique per call. Must stay AFTER
+  # the dialog fallback: free text plus \r into a trust dialog still up answers it
+  # blind, the same footgun as an up-front Enter.
+  TOK="${RANDOM}_$$"
+  "${CURL[@]}" -X POST "$API/api/v1/sessions/$SID/input" -H 'Content-Type: application/json' \
+    -d '{"input":"reply with the word READY immediately followed by _'"$TOK"' and nothing else\r","useMux":true,"clientId":"'"$CID"'","seq":'$SEQ'}' >/dev/null
+  SEQ=$((SEQ+1))
+  "${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
+    --data-urlencode "match=READY_$TOK" --data-urlencode 'from=buffer' --data-urlencode 'timeout=60000' \
+    | jq -e '.data.wait.matched' >/dev/null || echo "worker $SID not ready; inspect terminal?tail="
 fi
 
 # 3. send-and-wait, looping on the IDENTICAL request (tagged duplicate: no retype).
@@ -244,13 +264,16 @@ the worker remembering to print a token.
 
 Claude workers can block on a permission dialog. `blocked` is a wait signal
 (claude-mode only), so watch for it and surface the question to the user instead of
-guessing an answer:
+guessing an answer. Expect it routinely on a server whose `claudeMode` is not the
+default bypass one (the same setting that decides whether the readiness marker in
+Flow 1 ever appears):
 
 ```bash
+ESC=$(printf '\033')   # \x1b is GNU-sed only; BSD sed (macOS) would strip nothing
 R=$("${CURL[@]}" "$API/api/v1/sessions/$SID/wait?until=stop,blocked,exit&timeout=60000")
 if [ "$(jq -r '.data.wait.signal' <<<"$R")" = blocked ]; then
   "${CURL[@]}" "$API/api/v1/sessions/$SID/terminal?tail=2000" | jq -r '.data.terminalBuffer' \
-    | sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' | grep -v '^[[:space:]]*$' | tail -15
+    | sed -e "s/${ESC}\[[0-9;?]*[a-zA-Z]//g" | grep -v '^[[:space:]]*$' | tail -15
   # show this to the user and ask how to answer; do NOT auto-confirm another
   # session's permission prompt
 fi

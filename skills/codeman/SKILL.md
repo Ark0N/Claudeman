@@ -158,7 +158,9 @@ You are yourself a session on this server, and the API has **no undo**.
   `{"success":false,"error","errorCode"}`. Read `.data`. Use `/api/v1/*` paths.
 - **A wait timeout is HTTP 200**, `{wait:{timedOut:true,signal:null}}` — not an error.
   Loop over short waits (60 s); proxies cut long-idle connections. Timeouts are
-  **clamped** (ceiling 600 s): read back `wait.timeoutMs` for what was applied.
+  **clamped** (ceiling 600 s): read back `wait.timeoutMs` for what was applied. The
+  clamp covers positive integers only: `0`, a negative, a fraction or `30s` is a 400,
+  so round any computed remainder and drop it entirely rather than sending zero.
 - **`stop` and `blocked` fire for `claude` sessions only** (Claude Code hooks). On
   `shell`/`opencode`/`codex`/`gemini`/`antigravity`, requesting them explicitly is a
   400 — and lifecycle transitions there are coarse (a short shell command may emit
@@ -191,10 +193,35 @@ contains `❯` too — observed live). Codeman *can* auto-accept that dialog its
 the accept rides a stream match that misses on some runs (both outcomes seen live),
 so wait for the composer first and handle the dialog only as the bounded fallback —
 never send a blind Enter up front (if auto-accept already fired, it lands in the
-composer). Stage 1 is short on purpose: an already-trusted case matches `bypass` in
+composer). Stage 1 is short on purpose: an already-trusted case matches `shift+tab` in
 under a second, while a **virgin case can never pass stage 1** (the dialog is up, so
 the composer is not) and always pays it in full before the fallback runs — the long
-budget belongs to stage 3, after the dialog is answered:
+budget belongs to stage 3, after the dialog is answered.
+
+⚠️ **Match `shift+tab`, never `bypass`.** The permission mode is a server-side setting
+(`claudeMode`) that is **not** exposed on `GET /api/v1/sessions/:id`, so you cannot read
+which mode a worker runs. `bypass permissions on` is only the DEFAULT mode's statusline.
+Measured against claude-cli 2.1.226, one pane per mode:
+
+| how Codeman spawned it | statusline reads | `shift+tab` | `bypass` |
+|------------------------|------------------|-------------|----------|
+| `--dangerously-skip-permissions` (default) | `bypass permissions on` | yes | yes |
+| `--permission-mode auto` | `auto mode on` | yes | no |
+| `--allowedTools …` | `don't ask on` | yes | no |
+| neither (`normal`) | `don't ask on` | yes | no |
+
+Every mode ends its status bar with `(shift+tab to cycle)`, so `shift+tab` is the one
+token that means "the composer is up" regardless of mode, and it is space-free, which is
+what makes it survive the TUI stream. Matching `bypass` instead reports a perfectly
+healthy non-default worker as broken after burning the full ladder.
+
+⚠️ **`shift+tab` contains a `+`, so it MUST go through `--data-urlencode`.** In a
+hand-built query the `+` decodes to a space and the server searches for `shift tab`,
+which never appears (measured: `matched:false`, and the response echoes back
+`match: "shift tab"`, which is how you spot it).
+
+Stage 4 stays as the last resort for the case where even that misses: a worker that
+answers a trivial prompt **is** ready, whatever its statusline reads.
 
 ```bash
 # ALWAYS check .success: on failure `.data.sessionId` is null, jq -r prints the string
@@ -216,10 +243,11 @@ done
 # its pane keeps status "idle" and a pid (the local tmux attach client, not the
 # worker). The death check is wait?until=exit, below.
 SEQ=1   # $CID came from the §0 preamble; do NOT rebuild it from $$
-# the composer's status bar ("bypass permissions on") is the ready marker — Codeman
-# spawns claude in bypass mode. Single-token matches only: TUI text is space-less.
+# stage 1-3: `shift+tab` is the composer's status bar in EVERY permission mode (see the
+# table above), so this works whatever `claudeMode` the server runs. Single-token
+# matches only: TUI text is space-less. The `+` needs --data-urlencode.
 R=$("${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
-    --data-urlencode 'match=bypass' --data-urlencode 'from=buffer' --data-urlencode 'timeout=5000')
+    --data-urlencode 'match=shift+tab' --data-urlencode 'from=buffer' --data-urlencode 'timeout=5000')
 if ! jq -e '.data.wait.matched' <<<"$R" >/dev/null; then
   # composer never appeared → the trust dialog is probably still up; accept it once
   T=$("${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
@@ -230,9 +258,23 @@ if ! jq -e '.data.wait.matched' <<<"$R" >/dev/null; then
     SEQ=$((SEQ+1))
   fi
   R=$("${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
-      --data-urlencode 'match=bypass' --data-urlencode 'from=buffer' --data-urlencode 'timeout=45000')
-  jq -e '.data.wait.matched' <<<"$R" >/dev/null || \
-    { echo "worker $SID never became ready; inspect terminal?tail="; }
+      --data-urlencode 'match=shift+tab' --data-urlencode 'from=buffer' --data-urlencode 'timeout=45000')
+fi
+if ! jq -e '.data.wait.matched' <<<"$R" >/dev/null; then
+  # stage 4, last resort: the composer never appeared at all. A miss is still not proof
+  # of a broken worker, and answering is proof that it works. Split the token (your keystrokes echo
+  # into the stream) and keep it unique per call. This costs the worker one turn, so
+  # it runs only after the fast path missed. It must stay AFTER stage 2, which is the
+  # only thing that clears the trust dialog: free text plus \r into a dialog still up
+  # answers it blind, which is the same footgun as the up-front Enter.
+  TOK="${RANDOM}_$$"
+  "${CURL[@]}" -X POST "$API/api/v1/sessions/$SID/input" -H 'Content-Type: application/json' \
+    -d '{"input":"reply with the word READY immediately followed by _'"$TOK"' and nothing else\r","useMux":true,"clientId":"'"$CID"'","seq":'$SEQ'}' >/dev/null
+  SEQ=$((SEQ+1))
+  "${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
+    --data-urlencode "match=READY_$TOK" --data-urlencode 'from=buffer' --data-urlencode 'timeout=60000' \
+    | jq -e '.data.wait.matched' >/dev/null \
+    || echo "worker $SID never became ready; inspect terminal?tail="
 fi
 ```
 
@@ -313,8 +355,11 @@ why the loop above is bounded rather than open-ended. Fall back to the terminal 
 (`textOutput` in `GET .../output` stays empty for interactive sessions; don't use it):
 
 ```bash
+# \x1b is a GNU-sed extension: BSD sed (macOS) matches it as a literal "x1b", so the
+# same one-liner strips NOTHING there and hands you raw ANSI. Feed sed a real ESC.
+ESC=$(printf '\033')
 "${CURL[@]}" "$API/api/v1/sessions/$SID/terminal?tail=3000" | jq -r '.data.terminalBuffer' \
-  | sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' -e 's/\x1b([B0]//g' | grep -v '^[[:space:]]*$' | tail -30
+  | sed -e "s/${ESC}\[[0-9;?]*[a-zA-Z]//g" -e "s/${ESC}([B0]//g" | grep -v '^[[:space:]]*$' | tail -30
 ```
 
 ⚠️ Do not use that pipeline to read a **claude/codex** answer. A full-screen TUI draws

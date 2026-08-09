@@ -13,6 +13,7 @@ Every JSON response: `{"success":true,"data":…}` or
 |-------------|------|---------|
 | `INVALID_INPUT` | 400 | malformed request; the message names the bad field |
 | `UNAUTHORIZED` | 401 | auth required or failed (send `-u user:password`). ⚠️ The 401 body is plain text, NOT this envelope — `jq` dies with a parse error, see the guard in SKILL.md |
+| `FORBIDDEN` | 403 | authenticated but not permitted: an admin-only route in multi-user mode, a `workingDir`/case path outside your own workspace, or a shell session without the can-bypass-permissions grant. ⚠️ **Not** what an ownership miss on a session returns: a session you do not own answers 404 `NOT_FOUND`, identically to one that does not exist (deliberate, it leaks no existence) |
 | `NOT_FOUND` | 404 | no such session, or one this caller does not own |
 | `SESSION_BUSY` | 409 | on a **wait**: this session's waiter cap (16, combined signal+output) is full. On **quick-start**: the 50-session cap is full, so clean up before starting more |
 | `CONFLICT` / `ALREADY_EXISTS` | 409 | conflicts with current state |
@@ -22,6 +23,15 @@ Every JSON response: `{"success":true,"data":…}` or
 
 `SESSION_BUSY` vs `RATE_LIMITED` on the wait endpoints is deliberate: the first means
 "too many waiters on *this* session", the second means the *pool* is full.
+
+⚠️ **The guards that run before any handler answer in PLAIN TEXT, not this envelope**,
+so `jq` reports a parse error and `.errorCode` is simply absent. All of them:
+`401 Unauthorized` (Basic auth, carries `WWW-Authenticate`), `401 Unauthorized: hook
+secret required`, `403 Forbidden: host not allowed` (Host allowlist), `403 Forbidden:
+cross-site request blocked` (Origin/CSRF guard), and the auth rate limiter's
+`429 Too Many Requests` (with `Retry-After`; distinct from the JSON `RATE_LIMITED`
+above, which is the waiter pool). When a call returns something `jq` cannot parse,
+read the status with `-w '%{http_code}'` and the raw body before assuming a bug.
 
 ## Sessions
 
@@ -38,7 +48,17 @@ Every JSON response: `{"success":true,"data":…}` or
 | background agents, one session | `GET /api/v1/sessions/:id/subagents` |
 | background agents, global list | `GET /api/v1/subagents` (admin-only in multi-user mode) |
 | server status / version | `GET /api/v1/status` → `.data.version` |
-| delete one session (yours only, via `delete_session`) | `DELETE /api/v1/sessions/:id` — never call it bare; the fail-closed helper in SKILL.md §0 is the only self-protection that exists |
+| delete one session (yours only, via `delete_session`) | `DELETE /api/v1/sessions/:id` — never call it bare; the fail-closed helper in SKILL.md §0 is the only self-protection that exists. Answers `{"success":true,"data":{}}`: an **empty** body is the success signal, there is nothing to read back |
+
+`DELETE /api/v1/sessions/:id` takes one undocumented query parameter, `killMux`, and
+it defaults to `true` (anything other than the exact string `false` means kill). With
+`?killMux=false` the call **detaches instead of killing**: the tmux session and the
+agent inside it keep running, the session drops out of `GET /api/v1/sessions` so it
+looks deleted, and it is deliberately left in persisted state for recovery (the
+lifecycle log records `detached`, not `deleted`). That is the wrong tool for agent
+cleanup: your worker keeps burning tokens where neither you nor the user can see it,
+and the list you would check to confirm cleanup shows it gone. Delete plainly, and let
+`killMux` default.
 
 ⚠️ `GET /api/v1/sessions/:id/output` → `.data.textOutput` looks like the obvious read
 but stays **empty for interactive tmux-backed sessions** (it is fed only by the legacy
@@ -47,7 +67,11 @@ JSON-stream path). Verified empty on live claude and shell sessions. Use
 hook-less modes, or to diagnose a prompt that was never submitted, and strip ANSI:
 
 ```bash
-… | jq -r '.data.terminalBuffer' | sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' -e 's/\x1b([B0]//g'
+# `\x1b` is a GNU-sed extension. BSD sed (macOS, the default there) reads it as a
+# literal "x1b", matches nothing, and hands back raw ANSI, silently. Feed sed a real
+# ESC byte instead; that form works on GNU and BSD alike.
+ESC=$(printf '\033')
+… | jq -r '.data.terminalBuffer' | sed -e "s/${ESC}\[[0-9;?]*[a-zA-Z]//g" -e "s/${ESC}([B0]//g"
 ```
 
 `POST /api/v1/quick-start` body (all optional):
@@ -83,6 +107,12 @@ do want a worker in an existing checkout.
   confirmation at all.
 - `input` must be single-line (newlines are stripped). To send a bare Enter (confirm
   a dialog), send `{"input":"\r"}`.
+- `input` is capped at **100 000 characters**; one character over is a 400
+  `INVALID_INPUT` and **nothing is typed** (the schema rejects the whole body, so it
+  is not a truncation). Since the value is one line anyway, a prompt that big means
+  you are pasting a file into the composer: write it to disk in the worker's case
+  directory and send a path instead. `clientId` is capped at 128 characters on the
+  same terms.
 - `clientId`+`seq` give exactly-once delivery: the server applies each pair at most
   once. Increment `seq` per new input.
 
@@ -94,6 +124,13 @@ Three bounded long-polls. Shared semantics:
   `tailscale serve` / cloudflared cut idle connections.
 - Timeouts are **clamped** to `[1000, 600000]` ms (operator-tunable); the applied
   value is echoed as `wait.timeoutMs` — read it back, never assume.
+- ⚠️ Clamping only covers **positive integers**. `timeout=0`, a negative value, a
+  fraction (`timeout=1500.5`) and anything non-numeric (`timeout=30s`) are rejected by
+  the schema as a 400 `INVALID_INPUT` naming the field, not silently clamped up to
+  the floor. Omit the parameter to take the 60 000 ms default; never send a computed
+  remainder without rounding it and checking it is still above zero. Same rule for
+  `waitTimeout` in the input body, where the value must additionally be a JSON number
+  (a quoted `"60000"` is a 400).
 - All three nest the result under `.data.wait`, same shape, so one helper parses all.
 - `.data.status` (post-wait `SessionStatus`) and `.data.limitPaused` ride along.
   `limitPaused:true` means the session is paused on a usage limit and will emit
@@ -136,7 +173,7 @@ worker that finishes before its gather is unobservable (see recipes.md Flow 3b).
 | Param | Default | Notes |
 |-------|---------|-------|
 | `until` | `stop,idle,exit` | comma list; unknown token → 400 naming it |
-| `timeout` | 60000 | ms, clamped; applied value echoed as `wait.timeoutMs` |
+| `timeout` | 60000 | ms, positive integer only (0/negative/fractional = 400); clamped, applied value echoed as `wait.timeoutMs` |
 | `fresh` | `0` | `1` requires an actual *transition*, ignoring the state at call time |
 
 ⚠️ A session whose PTY has not spawned (`pid:null`) or has exited counts as `exit`
@@ -152,7 +189,7 @@ SKILL.md, not this endpoint.
 | `match` | required | literal substring, 1–200 chars, ANSI-stripped; chunk-straddling matches found; **no regex** — a `regex=` param is a 400 |
 | `nocase` | `0` | case-insensitive compare; snippet keeps original casing |
 | `from` | `now` | `buffer` scans the tail (~256 KB) of existing output first |
-| `timeout` | 60000 | same clamp |
+| `timeout` | 60000 | same clamp, same positive-integer rule |
 
 Four traps, all observed live:
 
@@ -173,7 +210,7 @@ Four traps, all observed live:
    spaced phrase. Whether a given phrase keeps its spaces depends on how the TUI
    drew it (observed live: some multi-word matches fire, some never do), so treat
    multi-word matches against TUI screens as unreliable and match a **single
-   space-free token** (`trust`, `bypass`). Plain command output (shell workers,
+   space-free token** (`trust`, `shift+tab`). Plain command output (shell workers,
    `echo` lines) keeps real spaces and multi-word matches work there.
 
 Build the query with `-G --data-urlencode` (a `+` in a hand-built query decodes to a
@@ -185,7 +222,7 @@ around the match, blank runs collapsed — the snippet is often all you need to 
 | Field | Notes |
 |-------|-------|
 | `wait` | `true` (default signal set) or the same comma grammar as `until`; absent = historical fire-and-forget |
-| `waitTimeout` | ms, same clamp |
+| `waitTimeout` | ms, same clamp; a JSON number, positive integer (`"60000"` is a 400) |
 
 Registers the waiter **before** typing, which closes the race where send-then-wait
 sees the previous turn's idle state and returns instantly. Response adds `delivered`
@@ -222,7 +259,9 @@ whose prompt was never submitted (missing `\r`) produces the same
 | connection refused from inside a container | a loopback-bound server is unreachable from a container, and `CODEMAN_DOCKER_BRIDGE_HOOKS=1` does **not** fix that: it opens a hooks-only listener, so hook events start flowing but `/api/v1/*` stays refused. Driving the API from inside a Docker case needs a reachable bind (an operator decision); report it, don't retry |
 | wait routes 404 on a valid session id | read the `.error` text: a `Route ...` prefix means the server predates the wait endpoints (< 1.13.0; a dev build can serve them while reporting an older version, so probe, never version-compare) — poll `terminal?tail=` and say so. `Session ... not found` means your id is wrong, not the server |
 | wait on `stop` never resolves | non-claude mode, or hooks not reaching the server (Docker/remote), or a case created by Codeman < 1.13.0 against an `--https` install (its hook curls lacked `-k` and TLS-failed silently; a 1.13.0+ server rewrites them the next time a session starts in that case). Use markers or `idle,exit` |
-| new claude worker ignores its first prompt | it was showing the first-run trust dialog and Codeman's auto-accept missed; use the readiness recipe in SKILL.md (wait for `bypass` first, accept the dialog only as the bounded fallback) |
+| new claude worker ignores its first prompt | it was showing the first-run trust dialog and Codeman's auto-accept missed; use the readiness recipe in SKILL.md (wait for `shift+tab` first, accept the dialog only as the bounded fallback) |
+| readiness burns its whole budget, then the worker answers fine anyway | you matched `bypass`, which is the statusline of ONE permission mode. Codeman spawns `--dangerously-skip-permissions` by default, but the server's `claudeMode` setting also has `auto` (`auto mode on`), `allowedTools` and `normal` (both `don't ask on`), and the mode is not exposed on `GET /api/v1/sessions/:id`. Match **`shift+tab`** instead: every mode's status bar ends `(shift+tab to cycle)` (measured per mode against claude-cli 2.1.226). ⚠️ It must go through `--data-urlencode`, or the `+` decodes to a space and you silently search for `shift tab`. Expect `blocked` signals mid-turn on the non-default modes |
+| ANSI escapes survive the strip pipeline | `sed -e 's/\x1b…'` on macOS: `\x1b` is GNU-only, BSD sed matches nothing and strips nothing. Use the `ESC=$(printf '\033')` form above |
 | `wait-output` times out although the pane shows the text | multi-word match against a TUI screen; the stream has no spaces there — match one token |
 | `wait-output` matched instantly with stale text | generic marker + tmux repaint; use `DONE_$RANDOM` |
 | 409 `SESSION_BUSY` on a wait | too many concurrent waiters on that session (cap 16 combined); reuse one wait per worker |
