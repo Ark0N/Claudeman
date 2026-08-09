@@ -38,6 +38,18 @@ Object.assign(CodemanApp.prototype, {
     this._notifySession(data.sessionId, 'critical', 'hook-elicitation', 'Question Asked', data.question || 'Claude is asking a question and waiting for your answer');
   },
 
+  _onHookElicitationComplete(data) {
+    // Question answered in the terminal — clear the action alert without
+    // waiting for `stop` (the turn may keep running for a long time).
+    if (data.sessionId) {
+      this.clearPendingHooks(data.sessionId, 'elicitation_dialog');
+    }
+  },
+
+  _onHookElicitationResponse(data) {
+    this._onHookElicitationComplete(data);
+  },
+
   _onHookStop(data) {
     // Clear all pending hooks when Claude finishes responding
     if (data.sessionId) {
@@ -158,8 +170,12 @@ Object.assign(CodemanApp.prototype, {
       // Listen for messages from service worker (notification clicks)
       navigator.serviceWorker.addEventListener('message', (event) => {
         if (event.data?.type === 'notification-click') {
-          const { sessionId } = event.data;
-          if (sessionId && this.sessions.has(sessionId)) {
+          const { sessionId, action, approvalId } = event.data;
+          if (action) {
+            // Approve/Deny action buttons on a push — answer via the
+            // Approvals Inbox instead of just focusing the session.
+            this.handleNotificationAction?.(action, approvalId, sessionId);
+          } else if (sessionId && this.sessions.has(sessionId)) {
             this.selectSession(sessionId);
           }
           window.focus();
@@ -326,6 +342,8 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsShowFileBrowser').checked = settings.showFileBrowser ?? defaults.showFileBrowser ?? false;
     document.getElementById('appSettingsShowSubagents').checked = settings.showSubagents ?? defaults.showSubagents ?? false;
     document.getElementById('appSettingsShowUltracodeAgents').checked = settings.showUltracodeAgents ?? defaults.showUltracodeAgents ?? false;
+    // Approvals Inbox: synced, default ON (only an explicit false disables).
+    document.getElementById('appSettingsApprovalsInbox').checked = settings.approvalsInboxEnabled !== false;
     document.getElementById('appSettingsUltracodeFloatingWindows').checked =
       settings.ultracodeFloatingWindows ?? defaults.ultracodeFloatingWindows ?? false;
     document.getElementById('appSettingsShowMultiMonitorButton').checked = settings.showMultiMonitorButton ?? defaults.showMultiMonitorButton ?? false;
@@ -1525,6 +1543,7 @@ Object.assign(CodemanApp.prototype, {
       showFileBrowser: document.getElementById('appSettingsShowFileBrowser').checked,
       showSubagents: document.getElementById('appSettingsShowSubagents').checked,
       showUltracodeAgents: document.getElementById('appSettingsShowUltracodeAgents').checked,
+      approvalsInboxEnabled: document.getElementById('appSettingsApprovalsInbox').checked,
       ultracodeFloatingWindows: document.getElementById('appSettingsUltracodeFloatingWindows').checked,
       showMultiMonitorButton: document.getElementById('appSettingsShowMultiMonitorButton').checked,
       showPlanUsageLimits: document.getElementById('appSettingsShowPlanUsageLimits').checked,
@@ -1690,6 +1709,7 @@ Object.assign(CodemanApp.prototype, {
     this.applyTabWrapSettings();
     this._updateTokensImmediate();  // Re-render token display (picks up showCost change)
     this.applyMonitorVisibility();
+    this.renderApprovals?.();  // Approvals Inbox toggle (hide/show bell + drawer)
     this.renderProjectInsightsPanel();  // Re-render to apply visibility setting
     this.updateSubagentWindowVisibility();  // Apply subagent window visibility setting
 

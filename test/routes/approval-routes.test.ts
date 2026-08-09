@@ -1,0 +1,348 @@
+/**
+ * Approvals Inbox route tests (src/web/routes/approval-routes.ts) via app.inject()
+ * — no live port. The hook-event route is registered alongside so items are
+ * created through the REAL ingestion path (sanitize → notePrompt with the
+ * terminal-buffer capture fallback), not by poking the store directly.
+ *
+ * The routes read the process-wide `approvalInbox` singleton, so every test
+ * drains it in afterEach — a leaked pending item would bleed into the next test.
+ */
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import Fastify, { type FastifyInstance } from 'fastify';
+import fastifyCookie from '@fastify/cookie';
+import { registerApprovalRoutes } from '../../src/web/routes/approval-routes.js';
+import { registerHookEventRoutes } from '../../src/web/routes/hook-event-routes.js';
+import { approvalInbox } from '../../src/web/approval-inbox.js';
+import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
+import { httpStatusForErrorCode, type ApiErrorCode } from '../../src/types.js';
+import { createMockRouteContext, type MockSession } from '../mocks/index.js';
+
+type MockRouteContext = ReturnType<typeof createMockRouteContext>;
+
+interface RouteTestHarness {
+  app: FastifyInstance;
+  ctx: MockRouteContext;
+}
+
+/**
+ * Local harness mirroring production's uniform-envelope preSerialization hook
+ * (server.ts), so `{success:false}` bodies carry their conventional 4xx status.
+ * The shared createRouteTestHarness deliberately omits that hook; these routes
+ * signal every guard through returned error envelopes, so the status IS the
+ * behavior under test. Pattern copied from hook-event-routes.test.ts.
+ */
+async function createEnvelopeHarness(authUser?: {
+  username: string;
+  role: 'admin' | 'user';
+}): Promise<RouteTestHarness> {
+  const app = Fastify({ logger: false });
+  await app.register(fastifyCookie);
+  if (authUser) {
+    app.addHook('onRequest', async (req) => {
+      (req as unknown as { authUser: typeof authUser }).authUser = authUser;
+    });
+  }
+
+  const ctx = createMockRouteContext({ sessionId: SESSION_ID });
+  registerHookEventRoutes(app, ctx as never);
+  registerApprovalRoutes(app, ctx as never);
+
+  app.addHook('preSerialization', (req, reply, payload: unknown, done) => {
+    if (!req.url.startsWith('/api')) return done(null, payload);
+    if (payload === null || typeof payload !== 'object') return done(null, payload);
+    const p = payload as { success?: unknown; errorCode?: unknown };
+    if (p.success === false) {
+      if (reply.statusCode === 200 && typeof p.errorCode === 'string') {
+        reply.code(httpStatusForErrorCode(p.errorCode as ApiErrorCode));
+      }
+      return done(null, payload);
+    }
+    if (p.success === true) return done(null, payload);
+    return done(null, { success: true, data: payload });
+  });
+
+  installRouteErrorHandler(app);
+  await app.ready();
+  return { app, ctx };
+}
+
+const SESSION_ID = 'approval-test-session';
+
+const PERMISSION_DIALOG = [
+  ' Claude needs your permission to use Bash',
+  ' ❯ 1. Yes',
+  '   2. Yes, and don’t ask again for this command',
+  '   3. No, and tell Claude what to do differently (esc)',
+].join('\n');
+
+async function postHook(harness: RouteTestHarness, event: string, data: Record<string, unknown> = {}): Promise<void> {
+  const res = await harness.app.inject({
+    method: 'POST',
+    url: '/api/hook-event',
+    payload: { event, sessionId: SESSION_ID, data },
+  });
+  expect(res.statusCode).toBe(200);
+}
+
+async function listApprovals(harness: RouteTestHarness): Promise<Array<Record<string, unknown>>> {
+  const res = await harness.app.inject({ method: 'GET', url: '/api/approvals' });
+  expect(res.statusCode).toBe(200);
+  return res.json().data.approvals;
+}
+
+describe('approval routes', () => {
+  let harness: RouteTestHarness;
+  let session: MockSession;
+
+  beforeEach(async () => {
+    harness = await createEnvelopeHarness();
+    session = harness.ctx.sessions.get(SESSION_ID)!;
+    session.terminalBuffer = PERMISSION_DIALOG;
+  });
+
+  afterEach(async () => {
+    for (const item of approvalInbox.listPending()) {
+      approvalInbox.resolveForSession(item.sessionId, 'dismissed');
+    }
+    approvalInbox.onPending = approvalInbox.onUpdated = approvalInbox.onResolved = undefined;
+    await harness.app.close();
+  });
+
+  it('a permission_prompt hook creates a pending item with parsed options and context', async () => {
+    await postHook(harness, 'permission_prompt', {
+      tool_name: 'Bash',
+      tool_input: { command: 'rm -rf node_modules' },
+      message: 'Claude needs your permission to use Bash',
+      cwd: '/tmp/case',
+    });
+    const approvals = await listApprovals(harness);
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({
+      sessionId: SESSION_ID,
+      kind: 'permission',
+      toolName: 'Bash',
+      toolSummary: 'rm -rf node_modules',
+      message: 'Claude needs your permission to use Bash',
+    });
+    expect(approvals[0].options).toHaveLength(3);
+    expect(String(approvals[0].context)).toContain('permission to use Bash');
+  });
+
+  it('broadcast and push for the prompt carry the approvalId', async () => {
+    await postHook(harness, 'permission_prompt', { tool_name: 'Bash' });
+    const [item] = await listApprovals(harness);
+    const hookBroadcast = harness.ctx.broadcast.mock.calls.find((c) => c[0] === 'hook:permission_prompt');
+    expect(hookBroadcast?.[1]).toMatchObject({ approvalId: item.id });
+    const push = harness.ctx.sendPushNotifications.mock.calls.find((c) => c[0] === 'hook:permission_prompt');
+    expect(push?.[1]).toMatchObject({ approvalId: item.id });
+  });
+
+  it('answering with a parsed option sends exactly that digit (no Enter)', async () => {
+    await postHook(harness, 'permission_prompt', { tool_name: 'Bash' });
+    const [item] = await listApprovals(harness);
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: `/api/approvals/${item.id}/answer`,
+      payload: { action: 'option', option: 2 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(session.writeBuffer).toEqual(['2']);
+    expect(await listApprovals(harness)).toHaveLength(0);
+  });
+
+  it('approve sends "1", deny sends Esc', async () => {
+    await postHook(harness, 'permission_prompt', {});
+    let [item] = await listApprovals(harness);
+    await harness.app.inject({
+      method: 'POST',
+      url: `/api/approvals/${item.id}/answer`,
+      payload: { action: 'approve' },
+    });
+    expect(session.writeBuffer).toEqual(['1']);
+
+    session.writeBuffer.length = 0;
+    await postHook(harness, 'permission_prompt', {});
+    [item] = await listApprovals(harness);
+    await harness.app.inject({
+      method: 'POST',
+      url: `/api/approvals/${item.id}/answer`,
+      payload: { action: 'deny' },
+    });
+    expect(session.writeBuffer).toEqual(['\x1b']);
+  });
+
+  it('a second answer 404s (answered items leave the inbox)', async () => {
+    await postHook(harness, 'permission_prompt', {});
+    const [item] = await listApprovals(harness);
+    await harness.app.inject({
+      method: 'POST',
+      url: `/api/approvals/${item.id}/answer`,
+      payload: { action: 'approve' },
+    });
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: `/api/approvals/${item.id}/answer`,
+      payload: { action: 'deny' },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(session.writeBuffer).toEqual(['1']);
+  });
+
+  it('rejects option digits outside the parsed options', async () => {
+    await postHook(harness, 'permission_prompt', {});
+    const [item] = await listApprovals(harness);
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: `/api/approvals/${item.id}/answer`,
+      payload: { action: 'option', option: 7 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(session.writeBuffer).toEqual([]);
+  });
+
+  it('refuses with 409 when the dialog left the screen since capture', async () => {
+    await postHook(harness, 'permission_prompt', {});
+    const [item] = await listApprovals(harness);
+    // The dialog scrolled away — the re-capture at answer time must refuse.
+    session.terminalBuffer = 'claude is off doing something else now';
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: `/api/approvals/${item.id}/answer`,
+      payload: { action: 'approve' },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(session.writeBuffer).toEqual([]);
+    expect(await listApprovals(harness)).toHaveLength(0);
+  });
+
+  it('idle prompts take a text answer, submitted with \\r; approve/deny are rejected', async () => {
+    session.terminalBuffer = 'claude> waiting at the composer';
+    await postHook(harness, 'idle_prompt', { message: 'Claude is waiting for your input' });
+    const [item] = await listApprovals(harness);
+    expect(item.kind).toBe('idle');
+
+    const bad = await harness.app.inject({
+      method: 'POST',
+      url: `/api/approvals/${item.id}/answer`,
+      payload: { action: 'approve' },
+    });
+    expect(bad.statusCode).toBe(400);
+
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: `/api/approvals/${item.id}/answer`,
+      payload: { action: 'text', text: 'continue with the plan\nplease' },
+    });
+    expect(res.statusCode).toBe(200);
+    // Embedded newlines are flattened; the trailing \r submits.
+    expect(session.writeBuffer).toEqual(['continue with the plan please\r']);
+  });
+
+  it('text answers on dialog items are rejected', async () => {
+    await postHook(harness, 'elicitation_dialog', {});
+    const [item] = await listApprovals(harness);
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: `/api/approvals/${item.id}/answer`,
+      payload: { action: 'text', text: 'hello' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('stop resolves the pending item; elicitation_complete resolves questions', async () => {
+    await postHook(harness, 'elicitation_dialog', {});
+    expect(await listApprovals(harness)).toHaveLength(1);
+    await postHook(harness, 'elicitation_complete', {});
+    expect(await listApprovals(harness)).toHaveLength(0);
+
+    await postHook(harness, 'permission_prompt', {});
+    expect(await listApprovals(harness)).toHaveLength(1);
+    await postHook(harness, 'stop', {});
+    expect(await listApprovals(harness)).toHaveLength(0);
+  });
+
+  it('a failed write restores the item and reports 422', async () => {
+    await postHook(harness, 'permission_prompt', {});
+    const [item] = await listApprovals(harness);
+    session.failWrites = true;
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: `/api/approvals/${item.id}/answer`,
+      payload: { action: 'approve' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(await listApprovals(harness)).toHaveLength(1);
+  });
+
+  it('dismiss removes without keystrokes', async () => {
+    await postHook(harness, 'permission_prompt', {});
+    const [item] = await listApprovals(harness);
+    const res = await harness.app.inject({ method: 'POST', url: `/api/approvals/${item.id}/dismiss`, payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(session.writeBuffer).toEqual([]);
+    expect(await listApprovals(harness)).toHaveLength(0);
+  });
+
+  it('non-claude sessions never get inbox items', async () => {
+    session.mode = 'codex';
+    await postHook(harness, 'permission_prompt', {});
+    expect(await listApprovals(harness)).toHaveLength(0);
+  });
+
+  it('unknown ids 404 on answer and dismiss', async () => {
+    for (const url of ['/api/approvals/nope:1/answer', '/api/approvals/nope:1/dismiss']) {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url,
+        payload: url.endsWith('answer') ? { action: 'approve' } : {},
+      });
+      expect(res.statusCode).toBe(404);
+    }
+  });
+});
+
+describe('approval routes — multi-user scoping', () => {
+  const saved: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    saved.CODEMAN_MULTIUSER = process.env.CODEMAN_MULTIUSER;
+    process.env.CODEMAN_MULTIUSER = '1';
+  });
+
+  afterEach(() => {
+    if (saved.CODEMAN_MULTIUSER === undefined) delete process.env.CODEMAN_MULTIUSER;
+    else process.env.CODEMAN_MULTIUSER = saved.CODEMAN_MULTIUSER;
+    for (const item of approvalInbox.listPending()) {
+      approvalInbox.resolveForSession(item.sessionId, 'dismissed');
+    }
+  });
+
+  it("a non-admin neither lists nor answers another user's approvals (404, not 403)", async () => {
+    const harness = await createEnvelopeHarness({ username: 'bob', role: 'user' });
+    const session = harness.ctx.sessions.get(SESSION_ID)!;
+    session.terminalBuffer = PERMISSION_DIALOG;
+    (session as unknown as { owner?: string }).owner = 'alice';
+
+    await harness.app.inject({
+      method: 'POST',
+      url: '/api/hook-event',
+      payload: { event: 'permission_prompt', sessionId: SESSION_ID, data: {} },
+    });
+    // The item exists in the store...
+    expect(approvalInbox.listPending()).toHaveLength(1);
+    const [item] = approvalInbox.listPending();
+
+    // ...but bob sees an empty list and cannot act on the id.
+    const list = await harness.app.inject({ method: 'GET', url: '/api/approvals' });
+    expect(list.json().data.approvals).toHaveLength(0);
+    const answer = await harness.app.inject({
+      method: 'POST',
+      url: `/api/approvals/${item.id}/answer`,
+      payload: { action: 'approve' },
+    });
+    expect(answer.statusCode).toBe(404);
+    expect(session.writeBuffer).toEqual([]);
+
+    await harness.app.close();
+  });
+});

@@ -28,7 +28,7 @@ describe('generateHooksConfig', () => {
   it('should have Notification hooks array', () => {
     const config = generateHooksConfig();
     expect(config.hooks.Notification).toBeInstanceOf(Array);
-    expect(config.hooks.Notification).toHaveLength(3);
+    expect(config.hooks.Notification).toHaveLength(5);
   });
 
   it('should have Stop hooks array', () => {
@@ -194,7 +194,7 @@ describe('writeHooksConfig', () => {
     const settingsPath = join(testDir, '.claude', 'settings.local.json');
     const parsed = JSON.parse(readFileSync(settingsPath, 'utf-8'));
     expect(parsed.hooks).toBeDefined();
-    expect(parsed.hooks.Notification).toHaveLength(3);
+    expect(parsed.hooks.Notification).toHaveLength(5);
     expect(parsed.hooks.Stop).toHaveLength(1);
   });
 
@@ -1085,7 +1085,7 @@ describe('Hook Config Generation - Extended', () => {
   it('should generate valid JSON structure', () => {
     const config = generateHooksConfig();
     expect(config.hooks).toBeDefined();
-    expect(config.hooks.Notification).toHaveLength(3);
+    expect(config.hooks.Notification).toHaveLength(5);
     expect(config.hooks.Stop).toHaveLength(1);
   });
 
@@ -1096,6 +1096,9 @@ describe('Hook Config Generation - Extended', () => {
     expect(matchers).toContain('idle_prompt');
     expect(matchers).toContain('permission_prompt');
     expect(matchers).toContain('elicitation_dialog');
+    // Approvals Inbox resolution signals (dialog answered in the terminal).
+    expect(matchers).toContain('elicitation_complete');
+    expect(matchers).toContain('elicitation_response');
   });
 
   it('should use environment variable placeholders', () => {

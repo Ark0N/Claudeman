@@ -111,14 +111,14 @@ self.addEventListener('push', (event) => {
     return;
   }
 
-  const { title, hostTitle, body, tag, sessionId, urgency, actions } = payload;
+  const { title, hostTitle, body, tag, sessionId, approvalId, urgency, actions } = payload;
 
   const options = {
     body: body || '',
     tag: tag || 'codeman-default',
     icon: '/icon-192.png',
     badge: '/icon-192.png',
-    data: { sessionId, url: sessionId ? `/?session=${sessionId}` : '/' },
+    data: { sessionId, approvalId, url: sessionId ? `/?session=${sessionId}` : '/' },
     renotify: true,
     requireInteraction: urgency === 'critical',
   };
@@ -142,24 +142,48 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
-  const { sessionId, url } = event.notification.data || {};
+  const { sessionId, approvalId, url } = event.notification.data || {};
   const targetUrl = url || '/';
+  const action = event.action || null;
 
-  event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
-      // Try to find an existing Codeman tab
-      for (const client of clients) {
-        if (client.url.includes(self.location.origin)) {
-          client.postMessage({
-            type: 'notification-click',
-            sessionId,
-            action: event.action || null,
-          });
-          return client.focus();
-        }
-      }
-      // No existing tab -- open a new one
-      return self.clients.openWindow(targetUrl);
-    })
-  );
+  // Approve/Deny action buttons answer the Approvals Inbox item directly from
+  // the worker, so they work with NO Codeman tab open (lock-screen approvals).
+  // Same-origin POST with cookie credentials; the CSRF Origin check passes
+  // because a service worker fetch carries the worker's own (same) origin.
+  if ((action === 'approve' || action === 'deny') && approvalId) {
+    event.waitUntil(
+      fetch(`/api/approvals/${encodeURIComponent(approvalId)}/answer`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      }).then((res) => {
+        if (res && res.ok) return undefined;
+        // 401/404/409: let the human see the state — fall back to a tab.
+        return openOrFocus(sessionId, action, approvalId, targetUrl);
+      }).catch(() => openOrFocus(sessionId, action, approvalId, targetUrl))
+    );
+    return;
+  }
+
+  event.waitUntil(openOrFocus(sessionId, action, approvalId, targetUrl));
 });
+
+function openOrFocus(sessionId, action, approvalId, targetUrl) {
+  return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+    // Try to find an existing Codeman tab
+    for (const client of clients) {
+      if (client.url.includes(self.location.origin)) {
+        client.postMessage({
+          type: 'notification-click',
+          sessionId,
+          approvalId,
+          action,
+        });
+        return client.focus();
+      }
+    }
+    // No existing tab -- open a new one
+    return self.clients.openWindow(targetUrl);
+  });
+}

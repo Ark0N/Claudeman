@@ -663,10 +663,32 @@ export const QuickStartSchema = z.object({
  * Receives Claude Code hook events.
  */
 export const HookEventSchema = z.object({
-  event: z.enum(['permission_prompt', 'elicitation_dialog', 'idle_prompt', 'stop', 'teammate_idle', 'task_completed']),
+  event: z.enum([
+    'permission_prompt',
+    'elicitation_dialog',
+    'elicitation_complete',
+    'elicitation_response',
+    'idle_prompt',
+    'stop',
+    'teammate_idle',
+    'task_completed',
+  ]),
   sessionId: z.string().min(1),
   data: z.record(z.string(), z.unknown()).nullable().optional(),
 });
+
+/**
+ * Body of POST /api/approvals/:id/answer (Approvals Inbox).
+ * `option` digits are additionally validated against the item's PARSED options
+ * in the route — the schema alone must not authorize blind digit-poking.
+ */
+export const ApprovalAnswerSchema = z
+  .object({
+    action: z.enum(['approve', 'deny', 'option', 'text']),
+    option: z.number().int().min(1).max(9).optional(),
+    text: z.string().min(1).max(4000).optional(),
+  })
+  .strict();
 
 // ========== Configuration ==========
 
@@ -768,6 +790,12 @@ export const SettingsUpdateSchema = z
      * add-only at create; a marker keeps user-authored copies untouched.
      */
     agentSkillEnabled: z.boolean().optional(),
+    /**
+     * Approvals Inbox UI (header badge + drawer, phone overview answer buttons).
+     * SYNCED, default ON: the surfaces only appear while a prompt is pending.
+     * The server-side store runs regardless (push actions keep working).
+     */
+    approvalsInboxEnabled: z.boolean().optional(),
     tunnelEnabled: z.boolean().optional(),
     // Action field (NOT persisted): explicit per-request acknowledgment that the
     // operator accepts exposing an UNAUTHENTICATED public tunnel (no CODEMAN_PASSWORD).

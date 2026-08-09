@@ -408,9 +408,16 @@ const SSE_EVENTS = {
   HOOK_IDLE_PROMPT: 'hook:idle_prompt',
   HOOK_PERMISSION_PROMPT: 'hook:permission_prompt',
   HOOK_ELICITATION_DIALOG: 'hook:elicitation_dialog',
+  HOOK_ELICITATION_COMPLETE: 'hook:elicitation_complete',
+  HOOK_ELICITATION_RESPONSE: 'hook:elicitation_response',
   HOOK_STOP: 'hook:stop',
   HOOK_TEAMMATE_IDLE: 'hook:teammate_idle',
   HOOK_TASK_COMPLETED: 'hook:task_completed',
+
+  // Approvals Inbox
+  APPROVAL_PENDING: 'approval:pending',
+  APPROVAL_UPDATED: 'approval:updated',
+  APPROVAL_RESOLVED: 'approval:resolved',
 
   // Subagents (Claude Code background agents)
   SUBAGENT_DISCOVERED: 'subagent:discovered',

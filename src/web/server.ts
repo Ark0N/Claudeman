@@ -86,6 +86,7 @@ import {
   detachSessionListeners,
 } from './session-listener-wiring.js';
 import { sessionWaits } from './session-wait-registry.js';
+import { approvalInbox } from './approval-inbox.js';
 import {
   wireRespawnListeners,
   setupTimedRespawn,
@@ -147,6 +148,7 @@ import {
   registerFileRoutes,
   registerScheduledRoutes,
   registerHookEventRoutes,
+  registerApprovalRoutes,
   registerStatusTelemetryRoutes,
   registerSystemRoutes,
   registerCaseRoutes,
@@ -342,6 +344,13 @@ export class WebServer extends EventEmitter {
       },
       this.cleanup
     );
+
+    // Approvals Inbox → SSE. The singleton has no server reference; these
+    // callbacks are its only way out. Broadcasts carry sessionId, so the
+    // multi-user SSE scoping applies to them like any session event.
+    approvalInbox.onPending = (item) => this.broadcast(SseEvent.ApprovalPending, { ...item });
+    approvalInbox.onUpdated = (item) => this.broadcast(SseEvent.ApprovalUpdated, { ...item });
+    approvalInbox.onResolved = (info) => this.broadcast(SseEvent.ApprovalResolved, { ...info });
 
     // Set up mux event listeners
     this.mux.on('sessionCreated', (session) => {
@@ -945,6 +954,7 @@ export class WebServer extends EventEmitter {
     registerFileRoutes(this.app, ctx);
     registerScheduledRoutes(this.app, ctx);
     registerHookEventRoutes(this.app, ctx);
+    registerApprovalRoutes(this.app, ctx);
     registerStatusTelemetryRoutes(this.app, ctx);
     registerSystemRoutes(this.app, ctx);
     registerCaseRoutes(this.app, ctx);
@@ -1258,6 +1268,7 @@ export class WebServer extends EventEmitter {
     // session's own exit event never reaches the registry.
     sessionWaits.notifySignal(sessionId, 'exit');
     sessionWaits.cancelAll(sessionId);
+    approvalInbox.resolveForSession(sessionId, 'session_ended');
 
     this.broadcast(SseEvent.SessionDeleted, { id: sessionId });
   }
@@ -2028,6 +2039,7 @@ export class WebServer extends EventEmitter {
       'plan:',
       'orchestrator:',
       'hook:',
+      'approval:',
       'image:',
       'scheduled:',
       'team:',
@@ -2140,6 +2152,9 @@ export class WebServer extends EventEmitter {
       body,
       tag: `codeman-${event}-${sessionId}`,
       sessionId,
+      // Approvals Inbox item id — lets sw.js answer an Approve/Deny action
+      // click directly (POST /api/approvals/:id/answer) with no tab open.
+      approvalId: typeof data.approvalId === 'string' ? data.approvalId : undefined,
       urgency: template.urgency,
       actions: template.actions,
     });
@@ -2868,6 +2883,7 @@ export class WebServer extends EventEmitter {
     // unref'd (an unref'd timer can let the process exit mid-wait and strand the
     // response), so without this a 10-minute wait holds shutdown open.
     sessionWaits.cancelEverything();
+    approvalInbox.stop();
 
     this.lastRecordedTokens.clear();
 

@@ -2,6 +2,9 @@
  * @fileoverview Hook event route.
  * Receives Claude Code hook events and broadcasts to SSE clients.
  * This endpoint bypasses auth (Claude Code hooks curl from localhost).
+ * Prompt events (permission_prompt / elicitation_dialog / idle_prompt) also
+ * open Approvals Inbox items; stop and the elicitation-closed events clear
+ * them (see web/approval-inbox.ts and docs/approvals-inbox-plan.md).
  */
 
 import { FastifyInstance } from 'fastify';
@@ -11,7 +14,18 @@ import { sanitizeHookData, parseBody } from '../route-helpers.js';
 import { persistDockerCaseClaudeSessionId } from '../../docker-hosts.js';
 import { getDataDir } from '../../config/instance.js';
 import { sessionWaits, hooksAvailableForMode } from '../session-wait-registry.js';
+import { approvalInbox, type ApprovalKind } from '../approval-inbox.js';
 import type { SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort } from '../ports/index.js';
+
+/** Hook events that open an Approvals Inbox item. */
+const APPROVAL_KIND_BY_EVENT: Record<string, ApprovalKind> = {
+  permission_prompt: 'permission',
+  elicitation_dialog: 'question',
+  idle_prompt: 'idle',
+};
+
+/** Hook events that close a session's pending item without an inbox answer. */
+const APPROVAL_RESOLVING_EVENTS = new Set(['stop', 'elicitation_complete', 'elicitation_response']);
 
 export function registerHookEventRoutes(
   app: FastifyInstance,
@@ -88,12 +102,60 @@ export function registerHookEventRoutes(
 
     // Sanitize forwarded data: only include known safe fields, limit size
     const safeData = sanitizeHookData(data);
-    ctx.broadcast(`hook:${event}`, { sessionId, timestamp: Date.now(), ...safeData });
-
-    // Send push notifications for hook events
     const session = ctx.sessions.get(sessionId);
     const sessionName = session?.name ?? sessionId.slice(0, 8);
-    ctx.sendPushNotifications(`hook:${event}`, { sessionId, sessionName, ...safeData });
+
+    // Approvals Inbox: prompt events open an item, dialog-closed/stop events
+    // clear it. Mode-gated like the wait signals above (hook events carry no
+    // identity beyond the shared per-instance secret, so a prompt claimed for a
+    // session that can never show one must not create an answerable item).
+    let approvalId: string | undefined;
+    const approvalKind = APPROVAL_KIND_BY_EVENT[event];
+    if (session && hooksAvailableForMode(session.mode)) {
+      if (approvalKind) {
+        const toolInput =
+          safeData.tool_input && typeof safeData.tool_input === 'object'
+            ? (safeData.tool_input as Record<string, unknown>)
+            : undefined;
+        const toolSummary = toolInput
+          ? [toolInput.command, toolInput.file_path, toolInput.description].find((v) => typeof v === 'string')
+          : undefined;
+        const item = approvalInbox.notePrompt({
+          sessionId,
+          sessionName,
+          kind: approvalKind,
+          toolName: typeof safeData.tool_name === 'string' ? safeData.tool_name : undefined,
+          toolSummary: typeof toolSummary === 'string' ? toolSummary : undefined,
+          message: typeof safeData.message === 'string' ? safeData.message : undefined,
+          cwd: typeof safeData.cwd === 'string' ? safeData.cwd : undefined,
+          // Visible tmux frame first (it IS the dialog); raw byte-buffer tail as
+          // the fallback for direct-PTY sessions and the no-op test mux.
+          capture: () => {
+            const muxName = session.muxName;
+            const frame = muxName ? (ctx.mux.capturePaneBuffer?.(muxName) ?? null) : null;
+            return frame ?? session.terminalBuffer.slice(-8192) ?? null;
+          },
+        });
+        approvalId = item.id;
+      } else if (APPROVAL_RESOLVING_EVENTS.has(event)) {
+        approvalInbox.resolveForSession(sessionId, 'resolved_in_terminal');
+      }
+    }
+
+    ctx.broadcast(`hook:${event}`, {
+      sessionId,
+      timestamp: Date.now(),
+      ...safeData,
+      ...(approvalId && { approvalId }),
+    });
+
+    // Send push notifications for hook events
+    ctx.sendPushNotifications(`hook:${event}`, {
+      sessionId,
+      sessionName,
+      ...safeData,
+      ...(approvalId && { approvalId }),
+    });
 
     // Track in run summary
     const summaryTracker = ctx.runSummaryTrackers.get(sessionId);
