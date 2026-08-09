@@ -120,7 +120,7 @@ Codeman is a Claude Code session manager with web interface and autonomous Ralph
 
 ## Common Gotchas
 
-- **Single-line prompts only** — `writeViaMux()` sends text+Enter separately; multi-line breaks Ink
+- **Single-line prompts only** — `writeViaMux()` sends text+Enter separately; multi-line breaks Ink. ⚠️ **Input must END with `\r` or Enter is never sent**: `sendInput()` only issues `send-keys Enter` when the payload contains a carriage return, a `\r`-less `POST /api/sessions/:id/input` still succeeds (send-and-wait even reports `delivered:true`) while the text sits unsubmitted on the composer, and any `wait` burns its whole timeout on a turn that never started. Embedded newlines are stripped, not rejected, so `"echo A\necho B\r"` runs the joined `echo Aecho B`
 - **ESM only** — Never `require()`, use `await import()`. `tsx` masks CJS/ESM issues in dev but production breaks
 - **Package ≠ product name** — npm: `aicodeman`, product: **Codeman**. Release renames tags accordingly. Both `aicodeman` and `codeman` bin aliases are installed (`package.json` `bin`)
 - **Global regex `lastIndex`** — Shared `g`-flag patterns in loops must reset `lastIndex = 0` first, or use the `execPattern()` helper in `utils/regex-patterns.ts` (resets automatically)

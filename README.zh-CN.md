@@ -657,6 +657,16 @@ sc -l           # 列出会话
 
 面向不经浏览器控制 Codeman 的 AI 智能体与自动化：一个拉起工作会话的智能体、一个 CI 机器人，或是**运行在 Codeman 会话*内部*、编排其他会话的 Claude Code**。UI 能做的一切都是 HTTP + CLI，因此智能体也能做。
 
+> **捷径：装上打包好的智能体技能。** 下面这一整套（外加多工作会话的实战配方）已经作为 Claude Code 技能随仓库发布在 [`skills/codeman`](skills/codeman/SKILL.md)，会话内部的智能体不必等你把文档粘进提示词就能驱动 Codeman。三种获取方式：
+>
+> - `npx skills add Ark0N/Codeman --skill codeman -g`：全局安装，任何支持技能的智能体都能用
+> - `codeman skill install`（全局）或 `codeman skill install --case <name>`：给那些从 npm 安装、从未克隆过仓库的用户；`codeman skill uninstall` 可撤销
+> - **App Settings → Agent Skill**（`agentSkillEnabled`，默认关闭）：开启后，Codeman 会在每次于某个 case 中创建 Claude 会话时把技能注入该 case；case 里用户自己写的 `skills/codeman` 永远不会被覆盖
+>
+> 全局安装（`codeman skill install` 或 `npx skills add`）会被**本机每一个新建的 Claude Code 会话**读到，无论它在不在 Codeman 里。技能自带门禁：不在 Codeman 会话中（`CODEMAN_MUX` 未设置）时它拒绝动作，所以全局装上它对无关会话没有代价。
+>
+> ⚠️ 把 `agentSkillEnabled` 关回去**不会删掉已经注入的副本**（在创建时做清扫，会把技能从共用同一个 `.claude/` 目录的其他活动会话脚下抽走）。要删就按 case 删：`codeman skill uninstall --case <name>`。
+
 ### 检测自己身处 Codeman 内部
 
 当 CLI 运行在 Codeman 受管会话中时，以下环境变量会被设置 —— 读取它们，别硬编码任何东西：
@@ -670,15 +680,21 @@ sc -l           # 列出会话
 
 ### 行路规则（POST 之前先读）
 
-1. **只发单行输入。** 编程输入会作为字面文本 **+ Enter** 一次性发送。多行字符串会破坏智能体 TUI（Ink）—— 发送一行，或拆成多次调用。
+1. **只发单行输入，而且必须以 `\r` 结尾。** 编程输入按字面文本发送，**只有当输入里含回车符时才会触发 Enter**：`{"input":"run tests\r"}`。少了 `\r`，文本就停在会话的输入框里不被提交（同一次调用里的 `wait` 还会在一个压根没开始的回合上耗满整个超时）。内嵌的换行会被剥掉而不是报错，因此 `"echo A\necho B\r"` 执行的是拼起来的 `echo Aecho B`：一次调用只发一行。
 2. **让输入幂等。** 在 `POST …/input` 上带上稳定的 `clientId` 和按会话单调递增的 `seq`。服务端会去重，因此连接中断后的重试不会重复投递提示。
-3. **认证。** 若设置了 `CODEMAN_PASSWORD`，发送 HTTP Basic 认证（用户 `admin` 或 `CODEMAN_USERNAME`）或 `codeman_session` cookie。默认的环回安装无密码。缺失的 `Origin` 头被允许，因此普通 `curl` 可用；跨站的浏览器 origin 会被拒绝（CSRF 防护）。
+3. **认证。** 若设置了 `CODEMAN_PASSWORD`，发送 HTTP Basic 认证（用户 `admin` 或 `CODEMAN_USERNAME`）或 `codeman_session` cookie。默认的环回安装无密码。缺失的 `Origin` 头被允许，因此普通 `curl` 可用；跨站的浏览器 origin 会被拒绝（CSRF 防护）。⚠️ `401` 回的是裸字符串 `Unauthorized`，**不是** JSON 信封，直接喂给 `jq` 只会抛解析错误而看不到真正的失败原因：先看状态码，再解析。
 4. **响应信封。** 多数端点返回 `{ "success": true, "data": … }`（错误：`{ "success": false, "error", "errorCode" }`）。少数遗留 GET 返回裸响应体 —— **两种都要处理**（`body.data ?? body`）。
 5. **`/api/v1/*`** 是 `/api/*` 的稳定别名。
+6. **用等待代替轮询，别把超时当成错误。** 等待类端点在没等到事情发生时也以 HTTP `200` 加 `wait.timedOut: true` 应答，所以要循环调用短等待（默认 60 秒），而不是发一个超长的调用：隧道会掐断空闲连接。`wait.timeoutMs` 告诉你服务端钳制之后真正采用的超时（上限 600 秒）。
+7. **只有 `claude` 会话会发出 `stop` 与 `blocked`。** 这两个来自 Claude Code hook；`shell` 与外部 CLI（opencode/codex/gemini/antigravity）只接受 `idle`、`working` 与 `exit`。在这些模式上显式索要 `stop` 会得到 `400`；不传 `until` 则永远安全。⚠️ `shell` 会话的 `idle` 只在启动时触发**一次**，此后再也不会，所以在那里用「发送并等待」只能等到超时：没有 hook 的会话请用 `wait-output` 标记来同步。
+8. **没有任何东西会报告「就绪」，得自己显式等。** 新会话在 PID 出现之前一律回答 `{"signal":"exit","immediate":true}`（意思是*还没启动*，不是*崩了*），而全新 case 里的 `claude` 工作会话接着会停在 CLI 的信任对话框上。此时给它发提示，等待会在约 2 秒后因 `idle` 解除，看上去和一个跑完的回合一模一样，而文本其实卡在对话框里。下面的配方 2b 就是避开它的顺序。
 
 ### 常用配方
 
 ```bash
+# 每个 Codeman 会话里都自动设好了 CODEMAN_API_URL，协议也是对的。
+# 下面的兜底值适用于标准安装；在 --https 安装上请自己写 https:// 的地址，
+# 并给每个 curl 加上 -k（自签名证书）。
 API="${CODEMAN_API_URL:-http://127.0.0.1:3000}"
 # （若设置了密码，给每个调用加上  -u admin:"$CODEMAN_PASSWORD"）
 
@@ -690,18 +706,69 @@ curl -s -X POST "$API/api/quick-start" \
   -H 'Content-Type: application/json' \
   -d '{"caseName":"refactor-auth","mode":"claude","effort":"high"}' | jq
 
+# 2b. 等这个工作会话真正就绪（见规则 8）：先探输入框的标记，信任对话框只作兜底。
+#     （反过来先探信任对话框、再盲发一个 Enter，在重复运行时会误伤：对话框的文字
+#     会一直留在缓冲区里，探测因此匹配到旧文本，而那个 Enter 落进了已经就绪的输入框。）
+#     匹配单个词：TUI 的文字到达匹配器时可能已经丢掉了词间空格。
+until [ "$(curl -s "$API/api/sessions/$SID" | jq '.data.pid')" != null ]; do sleep 1; done
+R=$(curl -sG "$API/api/sessions/$SID/wait-output" --data-urlencode 'match=bypass' \
+      --data-urlencode 'from=buffer' --data-urlencode 'timeout=5000')
+if ! jq -e '.data.wait.matched' <<<"$R" >/dev/null; then
+  T=$(curl -sG "$API/api/sessions/$SID/wait-output" --data-urlencode 'match=trust' \
+        --data-urlencode 'from=buffer' --data-urlencode 'timeout=2000')
+  jq -e '.data.wait.matched' <<<"$T" >/dev/null && \
+    curl -s -X POST "$API/api/sessions/$SID/input" -H 'Content-Type: application/json' \
+      -d '{"input":"\r","useMux":true}'        # 接受首次运行的信任对话框
+  curl -sG "$API/api/sessions/$SID/wait-output" --data-urlencode 'match=bypass' \
+    --data-urlencode 'from=buffer' --data-urlencode 'timeout=45000' >/dev/null
+fi
+
 # 3. 向会话发送提示（精确一次：clientId + seq）
 curl -s -X POST "$API/api/sessions/$SID/input" \
   -H 'Content-Type: application/json' \
-  -d '{"input":"Run the test suite and summarize failures","useMux":true,"clientId":"agent-1","seq":1}'
+  -d '{"input":"Run the test suite and summarize failures\r","useMux":true,"clientId":"agent-1","seq":1}'
 
-# 4. 读回终端内容
-curl -s "$API/api/sessions/$SID/output" | jq -r '.data // .'
+# 4. 发送提示并阻塞到这一回合结束（先注册等待再写入，因此不会拿上一回合的状态来应答）
+curl -s -X POST "$API/api/sessions/$SID/input" \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"Run the test suite and summarize failures\r","useMux":true,
+       "clientId":"agent-1","seq":2,"wait":"stop,exit","waitTimeout":60000}' \
+  | jq '.data.wait'      # -> {"signal":"stop","timedOut":false,"waitedMs":41230,...}
+#    （`stop` 是回合结束的权威 hook。加上 `idle` 会让它在转圈停顿时也解除，
+#      任何重画出 ❯ 提示符的东西同理，比如一个对话框。）
 
-# 5. 流式接收实时事件（会话输出、智能体活动、状态）
+# 4b. 超时了？那是 200，不是失败。循环调用短等待即可。
+curl -s "$API/api/sessions/$SID/wait?until=stop,exit&timeout=60000" | jq '.data.wait'
+
+# 4c. 或者等输出里出现某个标记（shell 会话也适用）。
+#     ⚠️ 每次调用都要用不同的标记（tmux 重画会重放旧屏幕文字），并且把标记拆开写，
+#     让敲进去的那一行本身不包含它：你自己的按键会回显进输出流，不拆开的标记会在
+#     命令还没跑之前就匹配上。from=buffer 用来接住在等待落地之前就已打印的标记。
+N=$RANDOM
+curl -s -X POST "$API/api/sessions/$SID/input" -H 'Content-Type: application/json' \
+  -d "{\"input\":\"M=DONE; npm test; echo \${M}_$N rc=\$?\r\",\"useMux\":true}"
+curl -sG "$API/api/sessions/$SID/wait-output" \
+  --data-urlencode "match=DONE_$N" --data-urlencode 'from=buffer' \
+  --data-urlencode 'timeout=60000' | jq '.data.wait'
+
+# 5. 读回答案。claude / codex 会话用 last-response：它取自 transcript 而不是屏幕，
+#    因此不带 TUI 的画框与重画噪声。⚠️ 要轮询，别只读一次：transcript 落盘比 stop
+#    信号稍晚，紧跟着「发送并等待」返回后立刻读，常常拿到空串。
+for _ in $(seq 1 10); do
+  TXT=$(curl -s "$API/api/sessions/$SID/last-response" | jq -r '.data.text')
+  [ -n "$TXT" ] && break; sleep 1
+done
+printf '%s\n' "$TXT"
+
+# 5b. 其他模式（shell/opencode/gemini/antigravity）没有 transcript，读终端。
+#     ⚠️ 用 terminal?tail=，不要用 /output：后者的 textOutput 对每个由 tmux 承载的
+#     （也就是每个交互式）会话都是空的。tail 按字节计，返回的是含 ANSI 的终端数据。
+curl -s "$API/api/sessions/$SID/terminal?tail=8000" | jq -r '.data.terminalBuffer'
+
+# 6. 流式接收实时事件（会话输出、智能体活动、状态）
 curl -sN "$API/api/events"          # Server-Sent Events
 
-# 6. 调度周期性工作（cron 风格任务）
+# 7. 调度周期性工作（cron 风格任务）
 curl -s -X POST "$API/api/cron/jobs" \
   -H 'Content-Type: application/json' \
   -d '{"name":"nightly-deps","agentType":"claude","workingDir":"/home/me/proj",
@@ -709,11 +776,11 @@ curl -s -X POST "$API/api/cron/jobs" \
        "inputMode":"typed","scheduleType":"daily","dailyTime":"03:00",
        "enabled":true,"concurrencyPolicy":"warn_only"}' | jq
 
-# 7. 查看后台子智能体及其活动记录
+# 8. 查看后台子智能体及其活动记录
 curl -s "$API/api/subagents" | jq '.data // .'
 curl -s "$API/api/subagents/$AID/transcript" | jq -r '.data // .'
 
-# 8. 全系统快照（会话、设置、重生、统计）
+# 9. 全系统快照（会话、设置、重生、统计）
 curl -s "$API/api/status" | jq
 ```
 
@@ -739,20 +806,23 @@ Codeman 会注册 Claude Code hook，它们 `POST /api/hook-event`（`permission
 
 ## API
 
-基于 Fastify 的 REST —— **20 个路由模块中约 190 个处理器**，外加一条 SSE 流和一条 WebSocket 终端通道。所有响应都使用 `ApiResponse<T>` 信封（`{success, data}` / `{success, error, errorCode}`）；`/api/v1/*` 是稳定别名。以下是一个有代表性的子集：
+基于 Fastify 的 REST —— **21 个路由模块中约 200 个处理器**，外加一条 SSE 流和一条 WebSocket 终端通道。所有响应都使用 `ApiResponse<T>` 信封（`{success, data}` / `{success, error, errorCode}`）；`/api/v1/*` 是稳定别名。以下是一个有代表性的子集：
 
 ### 会话（Sessions）
 
-| 方法     | 端点                       | 说明                                                                           |
-| -------- | -------------------------- | ------------------------------------------------------------------------------ |
-| `GET`    | `/api/sessions`            | 列出全部                                                                       |
-| `POST`   | `/api/quick-start`         | 创建 case + 启动会话（`{caseName?, mode?, effort?, envOverrides?}`）           |
-| `POST`   | `/api/sessions/:id/input`  | 发送输入（`{input, useMux?, clientId?, seq?}` —— `clientId`+`seq` = 精确一次） |
-| `GET`    | `/api/sessions/:id/output` | 读取终端输出                                                                   |
-| `GET`    | `/api/sessions/unified`    | 统一的活动 + 历史清单（会话管理器）：`?q=&limit=`                              |
-| `POST`   | `/api/sessions/:id/pin`    | 在会话管理器中置顶 / 取消置顶（`{pinned}`）                                    |
-| `PUT`    | `/api/session-order`       | 跨设备同步标签顺序（`{order: [ids]}`）                                         |
-| `DELETE` | `/api/sessions/:id`        | 删除会话                                                                       |
+| 方法     | 端点                            | 说明                                                                                                                         |
+| -------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `GET`    | `/api/sessions`                 | 列出全部                                                                                                                     |
+| `POST`   | `/api/quick-start`              | 创建 case + 启动会话（`{caseName?, mode?, effort?, envOverrides?}`）                                                         |
+| `POST`   | `/api/sessions/:id/input`       | 发送输入（`{input, useMux?, clientId?, seq?, wait?, waitTimeout?}`：`clientId`+`seq` = 精确一次；`wait` 阻塞到这一回合结束） |
+| `GET`    | `/api/sessions/:id/terminal`    | 读取终端输出（`?tail=<bytes>`、`?full=1`）：交互式会话的读取路径                                                             |
+| `GET`    | `/api/sessions/:id/output`      | 一次性的解析输出（tmux 承载的会话里 `textOutput` 为空）                                                                      |
+| `GET`    | `/api/sessions/:id/wait`        | 阻塞到某个信号触发（`?until=stop,idle,exit&timeout=&fresh=`）；超时是 `200`                                                  |
+| `GET`    | `/api/sessions/:id/wait-output` | 阻塞到某个字面串出现（`?match=&nocase=&from=now\|buffer&timeout=`）                                                          |
+| `GET`    | `/api/sessions/unified`         | 统一的活动 + 历史清单（会话管理器）：`?q=&limit=`                                                                            |
+| `POST`   | `/api/sessions/:id/pin`         | 在会话管理器中置顶 / 取消置顶（`{pinned}`）                                                                                  |
+| `PUT`    | `/api/session-order`            | 跨设备同步标签顺序（`{order: [ids]}`）                                                                                       |
+| `DELETE` | `/api/sessions/:id`             | 删除会话                                                                                                                     |
 
 ### 重生（Respawn）
 

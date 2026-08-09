@@ -1,10 +1,12 @@
 # Agent Control Plan: skill packaging + wait primitives
 
-**Status**: steps 1 to 6 IMPLEMENTED, uncommitted as of 2026-08-09. Steps 1 to 5 were
-multi-round verified on 2026-08-08; step 6 (CLI install command + per-case injection +
-`agentSkillEnabled`) was built 2026-08-09; see the step-6 entry at the end of
-[§7 Build log](#7-build-log-what-actually-happened) for what shipped, what each
-verification round found, and what is still open.
+**Status**: steps 1 to 8 DONE and RELEASED. The wait primitives and the skill itself
+(steps 1 to 5) shipped in **1.13.0**; the `codeman skill install` CLI, per-case injection
+and `agentSkillEnabled` (step 6) shipped in **1.14.1** and were republished with fixes in
+**1.14.2**. Steps 1 to 5 were multi-round verified on 2026-08-08, step 6 on 2026-08-09;
+see [§7 Build log](#7-build-log-what-actually-happened) for what shipped, what each
+verification round found, and the two items that genuinely remain open (§2.4's footgun
+guard and the Part 3 deferrals).
 
 **Date**: 2026-08-08
 **Scope**: Part 1 (agent skill) and Part 2 (wait primitives) were specified and built.
@@ -67,6 +69,11 @@ Codeman that is a packaging problem plus one missing primitive, not an architect
 
 **Conclusion**: roughly 90% of the capability surface already exists. Parts 1 and 2 below close
 the two real gaps.
+
+The table is the 2026-08-08 snapshot that motivated the work, kept as written. The three rows
+marked missing are closed since: `GET .../wait` and `GET .../wait-output` shipped in 1.13.0, and
+the skill is packaged at `skills/codeman` (npm tarball included). `blocked` as a wire-contract
+state, and the machine-readable schema, are still open (Parts 3 and 4).
 
 ---
 
@@ -525,8 +532,8 @@ Bundled manifests plus local override only, no network.
 | 4 ✅ | `wait` field on `POST .../input`, non-wait path proven unchanged                | 16 route tests green; live-verified (no-wait returns in 26ms with the historical bare body; an idle session did NOT satisfy a `wait` request, blocking the full 2001ms, which is the race the endpoint exists to close; the stop hook resolved a send-and-wait at 1510ms and the input was confirmed in the tmux pane; `wait:null` accepted) |
 | 5 ✅ | `skills/codeman/SKILL.md` + reference files + `.claude/skills` symlink          | live dogfood: a real session orchestrates a worker end to end                                                                                                                                                                                                                                                                                |
 | 6 ✅ | `codeman skill install` CLI + `applyAgentSkill()` + `agentSkillEnabled` setting | 10 unit tests (`test/agent-skill.test.ts`) + real-server case-creation tests (`test/quick-start.test.ts`, incl. the settings PUT accepting the key) green; CLI verified live (install/uninstall, global + `--case`, foreign/symlink refusals)                                                                                                 |
-| 7    | Docs: api-reference, extending-codeman, README                                  |                                                                                                                                                                                                                                                                                                                                              |
-| 8    | COM (minor bump: new endpoints, new setting, new optional fields)               | both CI and Release workflows green                                                                                                                                                                                                                                                                                                          |
+| 7 ✅ | Docs: api-reference, extending-codeman, README                                  | plus `architecture-invariants.md` (§agent-wait-primitives), `CLAUDE.md` and the API reference's per-mode signal table                                                                                                                                                                                                                        |
+| 8 ✅ | COM (minor bump: new endpoints, new setting, new optional fields)               | released as 1.13.0 (wait primitives + skill); step 6 followed in 1.14.1 and was republished as 1.14.2 after live-testing the packaged skill                                                                                                                                                                                                  |
 
 Parts 1 and 2 are independent enough to land separately, but the skill is much less useful
 without the wait endpoints, so the wait work goes first.
@@ -541,7 +548,9 @@ without the wait endpoints, so the wait work goes first.
    marker-guarded, so a user-authored copy is never touched.
 4. Is `X-Codeman-Caller-Session` self-protection worth the 10 lines, given it is a footgun guard
    and not a security boundary? (Still open, not built with step 6.)
-5. Regex support in `wait-output`: confirm literal-only for v1.
+5. ✅ Regex support in `wait-output`: literal-only shipped, and a `regex` query param is
+   rejected with a 400 rather than ignored, so an agent that assumed otherwise cannot
+   silently wait on the wrong thing.
 
 ---
 
@@ -654,16 +663,14 @@ success without running its task. Two traps recurred often enough to name:
 
 ### Still open
 
-- **Release checklist**: `package.json` `files` includes `skills`, which is still
-  untracked. `git add skills/` must be part of the release commit, or npm publishes
-  a tarball without the skill (a `files` entry that does not exist is silently
-  ignored, so nothing fails). `test/agent-skill.test.ts` reads the packaged source,
-  so CI at least fails loudly if the directory goes missing from a checkout.
-- The 1.13.0 changeset is written under `.changeset/`; consuming it (COM flow),
-  the release commit, and the deploy remain.
+Both release-checklist items that used to sit here are done: `skills/` is tracked and
+ships through `package.json` `files` (published with 1.13.0, republished with 1.14.2),
+and the changeset was consumed, committed and deployed. What is left:
+
 - Deferred with Part 3: the latched last-signal-per-turn. Nice-to-haves from the
-  reviews: N2 (create the death-watcher inside its `try`) and converting
-  timeout-shaped test detections into fast assertions.
+  reviews: N2 (create the death-watcher inside its `try`, still built one line above
+  it in `GET .../wait`) and converting timeout-shaped test detections into fast
+  assertions.
 - §2.4's `X-Codeman-Caller-Session` footgun guard: still not built (open question 4).
 
 ### Step 6 (2026-08-09): install command, per-case injection, the setting
