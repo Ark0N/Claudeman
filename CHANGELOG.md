@@ -1,5 +1,11 @@
 # aicodeman
 
+## 1.17.0
+
+### Minor Changes
+
+- 161f1da: Read My Mind phase 1: per-case intent profiles (docs/readmymind-plan.md). Codeman can now capture the prompts a user actually submits (from the Claude session transcript, opt-in via the new synced readMyMindEnabled setting, default OFF) into a per-case intent profile alongside user-stated goals, stored in ~/.codeman/intents.json (mode 0600, never searched). New endpoints GET/PUT/DELETE /api/sessions/:id/intent (ownership-scoped, strict schemas), a transcript:user_prompt event on TranscriptWatcher, and agent-skill coverage (SKILL.md recipe + endpoints.md rows) so agents can read and record the user's intent. Groundwork for the phase-2 predictor button: nothing is ever auto-sent.
+
 ## 1.16.0
 
 ### Minor Changes
