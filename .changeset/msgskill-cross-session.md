@@ -1,0 +1,5 @@
+---
+"aicodeman": minor
+---
+
+Codeman agent skill: cross-session messaging integration. The skill now teaches agents to drive claude workers over Claude Code's cross-session messaging (`ListAgents`/`SendMessage`, CLI v2.1.224+) where available: map `ListAgents` rows to Codeman sessions via the `tmux codeman-<id8>` column, deliver multi-line exactly-once task messages (including mid-turn steering of a busy worker), collect results as latched replies instead of polling, and fall back to the HTTP recipes whenever the feature is absent (version, feature flag, telemetry-disabling env vars, Docker/remote cases, non-claude modes). Adds `reference/messaging.md` (ships automatically, the skill installer enumerates `reference/*.md`), fan-out Flow 5 in `reference/recipes.md`, new troubleshooting rows in `reference/endpoints.md`, and safety rules for the shared peer namespace (message only workers you created, no permission laundering in either direction). All mechanics verified live against claude-cli 2.1.226.

@@ -708,3 +708,37 @@ Decisions worth keeping:
 - **Nothing acts on the setting at PUT time**: injection reads the merged persisted
   settings at session create (`readSettings`, ~2s cache), so the partial-PUT invariant
   (`toggleService` reading `merged`) is untouched by construction.
+
+### 2026-08-09 addendum: cross-session messaging folded into the skill
+
+Claude Code 2.1.224+ ships cross-session messaging: `ListAgents`/`SendMessage`
+tools, a per-session Unix inbox socket, and a registry in
+`~/.claude/sessions/<pid>.json`. Codeman's claude workers are ordinary local Claude
+Code sessions, so the skill now routes task delivery and result collection over it
+when available, while the HTTP primitives keep spawn, readiness, synchronization,
+liveness and delete. New `skills/codeman/reference/messaging.md` (ships with zero
+installer changes: `readAgentSkillSource()` enumerates `reference/*.md` from disk),
+Flow 5 in recipes.md, and §4 in SKILL.md.
+
+Verified live (claude-cli 2.1.226, Linux):
+
+- A message to an idle worker starts a turn and that turn fires the normal `stop`
+  hook (8.3 s send-to-stop measured), so the HTTP wait primitives compose with
+  messaging unchanged; delivery to a busy session lands between tool calls.
+- First contact needs the `name [ref]` form; the bare name errors with the exact
+  string to resend. The `uds:` reply address of an inbound message works as a `to`.
+- The `tmux codeman-<id8>` column in `ListAgents` (and the registry's `tmux` field)
+  is the join key to Codeman session ids. The registry's `sessionId` field starts as
+  the Codeman id (we spawn `claude --session-id <id>`) but drifts after `/clear` or
+  resume, so it must never be the join key.
+- The feature is flag-gated beyond the version: two 2.1.226 sessions on one machine,
+  one with an inbox socket and one without. Absence is a fallback case, not an error.
+- Codeman's default `--dangerously-skip-permissions` spawn puts both ends in the
+  bypassing class, which delivers; mixed classes hold behind an approval dialog that
+  expires unattended (upstream default 5 min), which on a headless worker means the
+  message silently dies. The skill's backstop covers it.
+
+Deliberately NOT done: passing `claude --name <sessionName>` at spawn so peers carry
+Codeman session names. The flag exists in 2.1.226, but gating it against older CLIs
+risks the worst regression class (sessions failing to spawn on an unknown flag), so
+it stays a follow-up behind a version/flag probe.
