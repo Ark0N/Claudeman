@@ -62,6 +62,42 @@
     return COMPOSER_NAV_KEY_PATTERN.test(data);
   }
 
+  // Codex composer-row signature, measured against codex-cli 0.147.0
+  // (docs/predictive-echo-plan.md): the composer's cursor row starts with
+  // "› " (U+203A + space) when empty (placeholder text), while typing, and
+  // while the slash picker filters. Modal rows ("Press enter to continue")
+  // and wrapped continuation rows (2-space indent) do NOT match — that is
+  // the ghost eliminator: no prediction is ever painted there.
+  const CODEX_COMPOSER_ROW_RE = /^› /;
+
+  // Classify onData for the predictive echo hook. Terminal query responses
+  // never reach this (suppressed earlier in onData); bracketed pastes, nav
+  // keys and mouse reports all start with ESC => 'clear'.
+  function classifyPredictInput(data) {
+    const cps = Array.from(data); // astral-safe
+    if (cps.length === 1) {
+      const cp = cps[0].codePointAt(0);
+      if (cp === 0x7f) return 'backspace';
+      if (cp >= 0x20) return 'char'; // incl. a single astral emoji
+      return 'clear'; // \r \n \t \x03, bare ESC, ...
+    }
+    if (data.charCodeAt(0) === 0x1b) return 'clear'; // ESC seq: nav, paste, mouse SGR
+    if (data.charCodeAt(0) >= 0x20) return 'text'; // multi-char printable (plain paste,
+    return 'clear'; //   ZWJ emoji cluster): wire only, no visual
+  }
+
+  // Predictive-echo gate: predict only while the cursor sits on the codex
+  // composer row. cursorY is baseY-relative (xterm API), hence baseY + cursorY.
+  function isCodexComposerRow(terminal) {
+    try {
+      const buf = terminal.buffer.active;
+      const line = buf.getLine(buf.baseY + buf.cursorY);
+      return !!line && CODEX_COMPOSER_ROW_RE.test(line.translateToString(true));
+    } catch {
+      return false;
+    }
+  }
+
   function isTerminalQueryResponse(data) {
     return TERMINAL_QUERY_RESPONSE_PATTERN.test(data) || TERMINAL_OSC_RESPONSE_PATTERN.test(data);
   }
@@ -99,6 +135,9 @@
     isTerminalQueryResponse,
     shouldSuppressTerminalQueryResponse,
     isComposerNavKey,
+    classifyPredictInput,
+    isCodexComposerRow,
+    CODEX_COMPOSER_ROW_RE,
     BRACKETED_PASTE_START,
     USER_SCROLL_STICKY_SUPPRESS_MS,
     TOUCH_COMPAT_MOUSE_SUPPRESS_MS,
@@ -399,6 +438,12 @@ Object.assign(CodemanApp.prototype, {
     }
 
     this._localEchoOverlay = new LocalEchoOverlay(this.terminal);
+    // Predictive write-through echo (codex): separate opt-in bundle
+    // (vendor/xterm-predictive-echo.js); when it is missing or failed to
+    // load, codex falls back to plain PTY echo exactly like 1.12.2.
+    this._predictiveEcho =
+      typeof PredictiveEchoOverlay !== 'undefined' ? new PredictiveEchoOverlay(this.terminal) : null;
+    this._predictiveEcho?.setPredictWhen((terminal) => window.CodemanTerminalInput.isCodexComposerRow(terminal));
     if (MobileDetection.isTouchDevice()) {
       this.terminal.onCursorMove(() => this._syncMobileHelperTextareaToCursor());
       this.terminal.onRender(() => this._syncMobileHelperTextareaToCursor());
@@ -1107,6 +1152,13 @@ Object.assign(CodemanApp.prototype, {
             return;
           }
         }
+
+        // ── Predictive Echo (codex): visual only. A plain statement, never a
+        // `return`: control ALWAYS falls through into the send path below,
+        // which is the byte-identity guarantee for #218/#219/#220/#222 —
+        // with the predictor active, absent or throwing, the wire sees the
+        // same bytes. Body in _predictHookOnData (vm-testable).
+        this._predictHookOnData(data);
 
         // ── Normal Mode (echo disabled) ──
         this._pendingInput += data;
@@ -2450,8 +2502,9 @@ Object.assign(CodemanApp.prototype, {
         // grows and rewraps as it fills (#220), pastes are bracketed (#219)
         // and arrows/history edit server-side state (#218). Buffering
         // keystrokes until Enter starves all of that, so codex sessions use
-        // plain PTY echo like shell.
-        // Disable it by clearing any pending text.
+        // plain PTY echo like shell — visually augmented by the predictive
+        // write-through echo (see _localEchoPolicy below and the onData hook).
+        // Disable the buffer overlay by clearing any pending text.
         this._localEchoOverlay.clear();
         this._localEchoEnabled = false;
       } else {
@@ -2483,6 +2536,37 @@ Object.assign(CodemanApp.prototype, {
           },
         });
       }
+    }
+
+    // Per-session echo policy: 'buffer' (overlay), 'predict' (codex
+    // write-through, see the onData predict hook), 'off'. _localEchoEnabled
+    // keeps its exact historical values above (false for codex/shell), so
+    // every existing consumer is unchanged; this field is purely additive.
+    let policy = 'off';
+    if (session && echoEnabled) {
+      if (session.mode === 'codex') policy = 'predict';
+      else if (session.mode !== 'shell') policy = 'buffer';
+    }
+    this._localEchoPolicy = policy;
+    if (policy !== 'predict') this._predictiveEcho?.clearPredictions();
+  },
+
+  /**
+   * Predictive-echo onData hook (codex write-through). VISUAL ONLY: paints,
+   * pops or clears prediction spans and never touches _pendingInput, never
+   * sends, never throws into the caller. The onData wire path behaves
+   * byte-identically with this active, absent or broken.
+   */
+  _predictHookOnData(data) {
+    if (this._localEchoPolicy !== 'predict' || !this._predictiveEcho) return;
+    try {
+      const kind = window.CodemanTerminalInput.classifyPredictInput(data);
+      if (kind === 'char') this._predictiveEcho.predictChar(data);
+      else if (kind === 'backspace') this._predictiveEcho.predictBackspace();
+      else if (kind === 'clear') this._predictiveEcho.clearPredictions();
+      // kind === 'text' (plain multi-char paste): wire only, no visual
+    } catch {
+      /* predictions must never block the wire */
     }
   },
 
@@ -2848,6 +2932,9 @@ Object.assign(CodemanApp.prototype, {
   /** Insert editable text at the active prompt without pressing Enter. */
   insertTerminalText(text) {
     if (!this.activeSessionId || !text) return;
+    // Under predict the text goes out via sendInput (bypasses onData), so the
+    // hook never sees it: clear outstanding predictions here instead.
+    if (this._localEchoPolicy === 'predict') this._predictiveEcho?.clearPredictions();
     if (
       this._localEchoEnabled &&
       this._localEchoOverlay &&
@@ -2873,6 +2960,8 @@ Object.assign(CodemanApp.prototype, {
       this._inputFlushTimeout = null;
     }
     this._pendingInput = '';
+    // Composer content is about to change out from under any predictions
+    if (this._localEchoPolicy === 'predict') this._predictiveEcho?.clearPredictions();
 
     if (this._localEchoEnabled && this._localEchoOverlay) {
       const flushed = this._localEchoOverlay.getFlushed?.() || { count: 0, text: '' };
@@ -3379,6 +3468,7 @@ Object.assign(CodemanApp.prototype, {
     localStorage.setItem('codeman-font-size', size);
     // Update overlay font cache and re-render at new cell dimensions
     this._localEchoOverlay?.refreshFont();
+    this._predictiveEcho?.refreshFont();
   },
 
   loadFontSize() {
@@ -3513,6 +3603,7 @@ Object.assign(CodemanApp.prototype, {
       // Refresh it on live skin changes so typed text never keeps the prior
       // theme's dark backing surface or foreground color.
       this._localEchoOverlay?.refreshFont();
+      this._predictiveEcho?.refreshFont();
       try {
         this.terminal.refresh(0, this.terminal.rows - 1);
       } catch {}

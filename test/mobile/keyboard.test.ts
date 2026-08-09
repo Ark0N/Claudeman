@@ -841,7 +841,7 @@ describe('Virtual Keyboard', () => {
         app.activeSessionId = 'mobile-visible-input-test';
         app.sessions.set('mobile-visible-input-test', {
           id: 'mobile-visible-input-test',
-          mode: 'codex',
+          mode: 'claude',
           status: 'running',
         });
         app.hideWelcome();
@@ -887,7 +887,7 @@ describe('Virtual Keyboard', () => {
         app.activeSessionId = 'mobile-cursor-fallback-test';
         app.sessions.set('mobile-cursor-fallback-test', {
           id: 'mobile-cursor-fallback-test',
-          mode: 'codex',
+          mode: 'claude',
           status: 'running',
         });
         app.hideWelcome();
@@ -914,6 +914,58 @@ describe('Virtual Keyboard', () => {
       expect(state.pendingText).toBe('abc');
       expect(state.overlayState?.visible).toBe(true);
       expect(state.overlayState?.promptPosition).not.toBeNull();
+    });
+
+    it('codex: streams keystrokes write-through and paints predictions (no buffering)', async () => {
+      await page.evaluate(async () => {
+        window.__sentInputs = [];
+        app.activeSessionId = 'mobile-codex-predict-test';
+        app.sessions.set('mobile-codex-predict-test', {
+          id: 'mobile-codex-predict-test',
+          mode: 'codex',
+          status: 'running',
+        });
+        app.hideWelcome();
+        app._sendInputAsync = (_sessionId: string, input: string) => {
+          window.__sentInputs.push(input);
+        };
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        settings.localEchoEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app._updateLocalEchoState();
+        // Paint a codex-like composer row so the predictWhen gate passes
+        app.terminal.reset();
+        await new Promise<void>((resolve) => app.terminal.write('\u203a ', resolve));
+        app.terminal.focus();
+      });
+
+      await page.locator('#terminalContainer').tap({ position: { x: 40, y: 40 } });
+      await page.keyboard.type('hey');
+
+      // Write-through: the keystrokes reach the send path BEFORE any Enter,
+      // and the buffer overlay holds nothing
+      await page.waitForFunction(() => window.__sentInputs?.join('') === 'hey');
+      const typed = await page.evaluate(() => ({
+        policy: app._localEchoPolicy,
+        pendingText: app._localEchoOverlay?.pendingText ?? '',
+        outstanding: app._predictiveEcho?.state.outstanding ?? -1,
+        spans: document.querySelectorAll('.xterm-screen [data-predictive-echo] span').length,
+      }));
+      expect(typed.policy).toBe('predict');
+      expect(typed.pendingText).toBe('');
+      expect(typed.outstanding).toBeGreaterThan(0);
+      expect(typed.spans).toBe(typed.outstanding);
+
+      // No echo ever arrives (stubbed session): TTL self-heals within ~1s
+      await page.waitForFunction(
+        () => document.querySelectorAll('.xterm-screen [data-predictive-echo] span').length === 0,
+        undefined,
+        { timeout: 4000 }
+      );
+      const settled = await page.evaluate(() => app._predictiveEcho?.state.outstanding);
+      expect(settled).toBe(0);
     });
   });
 

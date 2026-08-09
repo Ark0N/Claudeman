@@ -238,3 +238,230 @@ describe('insertTerminalText pass-through routing', () => {
     expect(overlay.appendText).not.toHaveBeenCalled();
   });
 });
+
+// ─── Predictive write-through echo (codex) ──────────────────────────────────
+
+type PredictorStub = {
+  predictChar: ReturnType<typeof vi.fn>;
+  predictBackspace: ReturnType<typeof vi.fn>;
+  clearPredictions: ReturnType<typeof vi.fn>;
+};
+
+type PredictiveApp = AppInstance & {
+  _localEchoPolicy?: string;
+  _predictiveEcho?: PredictorStub | null;
+  _predictHookOnData(data: string): void;
+};
+
+function makePredictor(): PredictorStub {
+  return {
+    predictChar: vi.fn().mockReturnValue(true),
+    predictBackspace: vi.fn().mockReturnValue(true),
+    clearPredictions: vi.fn(),
+  };
+}
+
+const classifyPredictInput = terminalInput.classifyPredictInput as (data: string) => string;
+const isCodexComposerRow = terminalInput.isCodexComposerRow as (t: unknown) => boolean;
+
+describe('CodemanTerminalInput.classifyPredictInput', () => {
+  it.each([
+    ['a', 'char'],
+    [' ', 'char'],
+    ['€', 'char'],
+    ['你', 'char'],
+    ['😀', 'char'], // single astral codepoint
+    ['\x7f', 'backspace'],
+    ['\r', 'clear'],
+    ['\n', 'clear'],
+    ['\t', 'clear'],
+    ['\x03', 'clear'], // Ctrl+C
+    ['\x15', 'clear'], // Ctrl+U
+    ['\x1b', 'clear'], // bare ESC
+    ['\x1b[A', 'clear'], // arrow
+    ['\x1bOA', 'clear'], // SS3 arrow
+    ['\x1b[3~', 'clear'], // Delete
+    ['\x1b[200~hi\x1b[201~', 'clear'], // bracketed paste
+    ['\x1b[<0;10;5M', 'clear'], // mouse SGR report
+    ['abc', 'text'], // plain multi-char paste
+    ['👨‍👩‍👧', 'text'], // ZWJ emoji cluster
+    ['\r\n', 'clear'],
+  ])('classifies %j as %s', (data, expected) => {
+    expect(classifyPredictInput(data)).toBe(expected);
+  });
+});
+
+describe('CodemanTerminalInput.isCodexComposerRow', () => {
+  function terminalWithCursorRow(text: string | null) {
+    return {
+      buffer: {
+        active: {
+          baseY: 4,
+          cursorY: 2,
+          getLine: (y: number) => (y === 6 && text !== null ? { translateToString: () => text } : undefined),
+        },
+      },
+    };
+  }
+
+  it.each([
+    '› ', // empty composer
+    '› Use /skills to list available skills', // placeholder
+    '› hello', // typed text
+    '› /mo', // slash picker filtering
+  ])('matches the composer row %j', (row) => {
+    expect(isCodexComposerRow(terminalWithCursorRow(row))).toBe(true);
+  });
+
+  it.each([
+    '  Press enter to continue', // trust/approval modal
+    '  this line twice over', // wrapped continuation row (2-space indent)
+    '›no-space',
+    '1. Yes, continue',
+    '',
+  ])('rejects the non-composer row %j', (row) => {
+    expect(isCodexComposerRow(terminalWithCursorRow(row))).toBe(false);
+  });
+
+  it('reads the cursor row baseY-relative (baseY + cursorY)', () => {
+    // terminalWithCursorRow only answers getLine(6) = baseY 4 + cursorY 2;
+    // a viewportY-based read would ask for a different line and get undefined
+    expect(isCodexComposerRow(terminalWithCursorRow('› x'))).toBe(true);
+  });
+
+  it('returns false when the row is missing or getLine throws', () => {
+    expect(isCodexComposerRow(terminalWithCursorRow(null))).toBe(false);
+    const hostile = {
+      buffer: {
+        active: {
+          baseY: 0,
+          cursorY: 0,
+          getLine: () => {
+            throw new Error('boom');
+          },
+        },
+      },
+    };
+    expect(isCodexComposerRow(hostile)).toBe(false);
+  });
+});
+
+describe('_updateLocalEchoState echo policy', () => {
+  it("codex + setting ON -> policy 'predict' while _localEchoEnabled stays false", () => {
+    const app = makeApp('codex') as PredictiveApp;
+    app._predictiveEcho = makePredictor();
+    app._updateLocalEchoState();
+    expect(app._localEchoPolicy).toBe('predict');
+    expect(app._localEchoEnabled).toBe(false); // 1.12.2 invariant untouched
+    expect(app._predictiveEcho.clearPredictions).not.toHaveBeenCalled();
+  });
+
+  it("codex + setting OFF -> policy 'off' and predictions cleared (kill switch)", () => {
+    const app = makeApp('codex') as PredictiveApp;
+    app._predictiveEcho = makePredictor();
+    app.loadAppSettingsFromStorage = () => ({ localEchoEnabled: false });
+    app._updateLocalEchoState();
+    expect(app._localEchoPolicy).toBe('off');
+    expect(app._predictiveEcho.clearPredictions).toHaveBeenCalled();
+  });
+
+  it("shell -> policy 'off'", () => {
+    const app = makeApp('shell') as PredictiveApp;
+    app._predictiveEcho = makePredictor();
+    app._updateLocalEchoState();
+    expect(app._localEchoPolicy).toBe('off');
+    expect(app._predictiveEcho.clearPredictions).toHaveBeenCalled();
+  });
+
+  it.each(['claude', 'gemini', 'opencode'])("%s -> policy 'buffer' + overlay enabled (existing behavior)", (mode) => {
+    const overlay = makeOverlay();
+    const app = makeApp(mode, overlay) as PredictiveApp;
+    app._predictiveEcho = makePredictor();
+    app._updateLocalEchoState();
+    expect(app._localEchoPolicy).toBe('buffer');
+    expect(app._localEchoEnabled).toBe(true);
+    expect(overlay.prompts.length).toBeGreaterThan(0); // setPrompt still called
+    expect(app._predictiveEcho.clearPredictions).toHaveBeenCalled(); // not predict -> stray spans cleared
+  });
+
+  it('no active session -> policy off, no crash without a predictor instance', () => {
+    const app = makeApp('codex') as PredictiveApp;
+    app._predictiveEcho = null;
+    app.activeSessionId = null;
+    expect(() => app._updateLocalEchoState()).not.toThrow();
+    expect(app._localEchoPolicy).toBe('off');
+  });
+});
+
+describe('_predictHookOnData (wire neutrality)', () => {
+  function makePredictApp(): PredictiveApp {
+    const app = makeApp('codex') as PredictiveApp;
+    app._predictiveEcho = makePredictor();
+    app._updateLocalEchoState(); // -> 'predict'
+    return app;
+  }
+
+  it('routes char/backspace/clear kinds to the predictor', () => {
+    const app = makePredictApp();
+    app._predictHookOnData('h');
+    expect(app._predictiveEcho!.predictChar).toHaveBeenCalledWith('h');
+    app._predictHookOnData('\x7f');
+    expect(app._predictiveEcho!.predictBackspace).toHaveBeenCalled();
+    app._predictHookOnData('\r');
+    expect(app._predictiveEcho!.clearPredictions).toHaveBeenCalled();
+  });
+
+  it("kind 'text' (plain paste) takes no visual action", () => {
+    const app = makePredictApp();
+    app._predictHookOnData('pasted text');
+    expect(app._predictiveEcho!.predictChar).not.toHaveBeenCalled();
+    expect(app._predictiveEcho!.clearPredictions).not.toHaveBeenCalled();
+  });
+
+  it('never touches _pendingInput and never sends (visual-only pin)', () => {
+    const app = makePredictApp();
+    app._pendingInput = 'queued';
+    for (const data of ['h', 'i', '\x7f', '\r', '\x1b[A', 'multi char', '\x1b[200~x\x1b[201~']) {
+      app._predictHookOnData(data);
+    }
+    expect(app._pendingInput).toBe('queued');
+    expect(app.sendInput).not.toHaveBeenCalled();
+  });
+
+  it('is inert under buffer/off policies and without a predictor', () => {
+    const buffered = makeApp('claude') as PredictiveApp;
+    buffered._predictiveEcho = makePredictor();
+    buffered._updateLocalEchoState(); // 'buffer'
+    buffered._predictHookOnData('h');
+    expect(buffered._predictiveEcho.predictChar).not.toHaveBeenCalled();
+
+    const bundleless = makeApp('codex') as PredictiveApp;
+    bundleless._predictiveEcho = null;
+    bundleless._updateLocalEchoState();
+    expect(() => bundleless._predictHookOnData('h')).not.toThrow();
+  });
+
+  it('a throwing predictor cannot break the hook (exception pin)', () => {
+    const app = makePredictApp();
+    app._predictiveEcho!.predictChar.mockImplementation(() => {
+      throw new Error('boom');
+    });
+    app._pendingInput = 'queued';
+    expect(() => app._predictHookOnData('h')).not.toThrow();
+    expect(app._pendingInput).toBe('queued');
+    expect(app.sendInput).not.toHaveBeenCalled();
+  });
+});
+
+describe('insertTerminalText under predict policy', () => {
+  it('routes to sendInput (not the overlay) and clears predictions', () => {
+    const overlay = makeOverlay();
+    const app = makeApp('codex', overlay) as PredictiveApp;
+    app._predictiveEcho = makePredictor();
+    app._updateLocalEchoState(); // predict; _localEchoEnabled false
+    app.insertTerminalText('path.txt');
+    expect(app.sendInput).toHaveBeenCalledWith('path.txt');
+    expect(overlay.appendText).not.toHaveBeenCalled();
+    expect(app._predictiveEcho.clearPredictions).toHaveBeenCalled();
+  });
+});
