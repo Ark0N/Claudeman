@@ -46,7 +46,11 @@ Codeman, including a phone that is not on the tailnet.
 
 `direct` mode (a plain cross-origin iframe) still exists and is cheaper, but it only
 works for an HTTPS dashboard that permits framing. The **Test** button probes from
-the server and tells you which mode applies.
+the server and tells you which mode applies. Note what Test actually verifies:
+**server-to-upstream reachability, nothing else**. It does not exercise the browser
+sandbox, cookies, CORS, CSP, or any reverse proxy sitting in front of Codeman, so a
+passing Test does not guarantee the embedded page will render (see the
+cookie-authenticated reverse proxy caveat below).
 
 ## The sandbox, and when to turn it off
 
@@ -65,6 +69,17 @@ dashboard with its own login that stores a session in a cookie or `localStorage`
 Even in trusted mode, Codeman never forwards its own credentials upstream: the
 `Authorization` header and the `codeman_session` cookie are stripped on the way out,
 so `CODEMAN_PASSWORD` cannot leak into a dashboard.
+
+⚠️ **Sandboxed tabs may not work when Codeman itself is behind a
+cookie-authenticated reverse proxy** (Cloudflare Access, Authelia, oauth2-proxy and
+similar). The sandboxed frame is opaque-origin, so its stylesheet, script, and API
+requests do not carry the proxy's authentication cookie; the proxy redirects them to
+the login provider, where CORS/CSP kills them, and the embedded app renders
+unstyled or broken while the Codeman page around it works fine. Trusted mode
+(**Open sandboxed** off) keeps a real origin and the cookie, so it works. The
+**Test** button cannot catch this: it checks that the Codeman *server* can reach the
+upstream, not that a sandboxed *browser* frame can load assets through the public
+authentication layer.
 
 ## How the proxy authenticates
 
@@ -137,6 +152,15 @@ then every API call fails, which looks like the dashboard being broken.
 - **Login-protected dashboards need trusted mode**, since a sandboxed frame has no
   cookie jar. A server-side per-dashboard cookie jar would lift this and is the
   natural next step if it becomes annoying.
+- **Cookie-authenticated reverse proxies in front of Codeman break sandboxed tabs**
+  (#238). The sandboxed frame's requests carry no auth cookie, so the proxy bounces
+  them to its login provider and the app loads broken while Test reports reachable.
+  Use trusted mode behind Cloudflare Access and friends; see the warning above.
+- **Slow endpoints and the upstream timeout** (#237). The proxy waits
+  `CODEMAN_WEBVIEW_TIMEOUT_MS` (default 300s) for the upstream's response *headers*,
+  then streams the body without any time bound; a header timeout is logged
+  server-side and answered as a 502 that names the limit. WebSocket handshakes use
+  the separate `CODEMAN_WEBVIEW_WS_HANDSHAKE_TIMEOUT_MS` (default 30s).
 - **Not a security boundary.** The proxy reaches whatever the Codeman server can
   reach. That is not an escalation for someone who already commands
   `--dangerously-skip-permissions` agents, but in multi-user mode it does mean a

@@ -396,9 +396,13 @@ Object.assign(CodemanApp.prototype, {
       out.textContent = 'Test failed (invalid URL?).';
       return;
     }
+    // #238: the probe runs server-to-upstream; say so, or a passing Test reads as
+    // "the embedded page will work" when the browser sandbox / a cookie-auth
+    // reverse proxy in front of Codeman can still break it.
     out.textContent = probe.reachable
-      ? `Reachable (HTTP ${probe.status}). ${probe.reason}`
-      : `Not reachable. ${probe.reason}`;
+      ? `Reachable (HTTP ${probe.status}) from the Codeman server. ${probe.reason} ` +
+        `(Tests server-to-upstream reachability only, not how the page behaves in a sandboxed frame.)`
+      : `Not reachable from the Codeman server. ${probe.reason}`;
     out.className = 'form-hint webview-probe-result ' + (probe.reachable ? 'ok' : 'bad');
   },
 

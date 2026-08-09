@@ -43,6 +43,7 @@ import {
   WEBVIEW_PROBE_TIMEOUT_MS,
   WEBVIEW_PROXY_PREFIX,
   WEBVIEW_UPSTREAM_TIMEOUT_MS,
+  WEBVIEW_WS_HANDSHAKE_TIMEOUT_MS,
 } from '../../config/webview-limits.js';
 import { readWebviews, writeWebviews } from '../../webview-store.js';
 import { webviewCapabilities } from '../../webview-capabilities.js';
@@ -420,6 +421,34 @@ async function proxyRequest(
     refererPath: typeof req.headers.referer === 'string' ? stripProxyPrefix(req.headers.referer, cap) : undefined,
   });
 
+  // #237: the timeout bounds TIME-TO-HEADERS only. A plain AbortSignal.timeout on
+  // the fetch bounded the entire exchange, so a legitimately slow endpoint (AI
+  // inference behind the dashboard) and an actively streaming response both died at
+  // 30s as an unlogged generic 502. The timer is cleared the moment headers arrive;
+  // what reclaims an abandoned upstream afterwards is the client hangup below.
+  const startedAt = Date.now();
+  const abort = new AbortController();
+  let headerTimedOut = false;
+  let clientGone = false;
+  const headerTimer = setTimeout(() => {
+    headerTimedOut = true;
+    abort.abort();
+  }, WEBVIEW_UPSTREAM_TIMEOUT_MS);
+  // A browser that navigates away mid-request (or mid-stream) must abort the
+  // upstream fetch, or slow endpoints accumulate as orphaned upstream sockets.
+  // Guarded by writableFinished, same as abortOnClientHangUp in session-routes:
+  // `close` also fires after a completed response, which must not abort anything.
+  reply.raw.on('close', () => {
+    if (!reply.raw.writableFinished) {
+      clientGone = true;
+      abort.abort();
+    }
+  });
+
+  // Sanitized request identity for logs: method + origin + path, never the query
+  // string (it can carry the dashboard's tokens).
+  const logTarget = `${req.method} ${upstream.origin}${upstream.pathname}`;
+
   let response: Response;
   try {
     response = await fetch(upstream.href, {
@@ -431,11 +460,37 @@ async function proxyRequest(
       // Redirects are rewritten into the proxy prefix instead of followed, so the
       // browser's URL stays inside the frame and relative assets keep resolving.
       redirect: 'manual',
-      signal: AbortSignal.timeout(WEBVIEW_UPSTREAM_TIMEOUT_MS),
+      signal: abort.signal,
     } as RequestInit);
   } catch (err) {
+    const elapsed = Date.now() - startedAt;
+    if (clientGone) {
+      // Nobody is listening; the abort was ours and intentional. Not an upstream
+      // failure, so no warn (it would read as the dashboard being broken).
+      return reply;
+    }
+    if (headerTimedOut) {
+      console.warn(
+        `[Webview] upstream sent no response headers within ${WEBVIEW_UPSTREAM_TIMEOUT_MS}ms: ` +
+          `${logTarget} (webview "${webview.name}")`
+      );
+      return reply
+        .code(502)
+        .type('text/plain')
+        .send(
+          `Dashboard unreachable: upstream sent no response headers within ${WEBVIEW_UPSTREAM_TIMEOUT_MS}ms ` +
+            `(CODEMAN_WEBVIEW_TIMEOUT_MS raises this limit)`
+        );
+    }
     const message = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[Webview] upstream fetch failed after ${elapsed}ms: ${logTarget} (webview "${webview.name}"): ${message}`
+    );
     return reply.code(502).type('text/plain').send(`Dashboard unreachable: ${message}`);
+  } finally {
+    // Headers arrived (or the fetch failed): from here on the timeout must never
+    // fire, a streaming body is allowed to take as long as it takes.
+    clearTimeout(headerTimer);
   }
 
   const secureContext = req.protocol === 'https';
@@ -581,7 +636,7 @@ function proxyWebSocket(socket: WebSocket, req: FastifyRequest<{ Params: ProxyPa
           origin: upstream.origin,
           ...(webview.trusted && req.headers.cookie ? { cookie: String(req.headers.cookie) } : {}),
         },
-        handshakeTimeout: WEBVIEW_UPSTREAM_TIMEOUT_MS,
+        handshakeTimeout: WEBVIEW_WS_HANDSHAKE_TIMEOUT_MS,
       }
     );
 

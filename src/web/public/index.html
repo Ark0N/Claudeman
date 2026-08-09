@@ -708,7 +708,10 @@
             <span class="form-hint">
               Recommended. A proxied dashboard is served from Codeman's own address, so unchecking
               this lets its JavaScript read this page and call the API that starts agents. Uncheck
-              only for a dashboard you fully trust, or one whose own login needs cookies.
+              only for a dashboard you fully trust, or one whose own login needs cookies. Also
+              uncheck it if Codeman itself sits behind a cookie-authenticated reverse proxy
+              (e.g. Cloudflare Access): a sandboxed frame carries no auth cookie, so its asset
+              and API requests bounce to the login provider and the page loads broken.
             </span>
           </div>
           <div class="form-row">
