@@ -441,7 +441,8 @@ goals plus the user's recently submitted prompts, captured from the Claude
 session transcript while the opt-in `readMyMindEnabled` setting is on (default
 OFF). Keyed by owner + workingDir, so the profile survives `/clear`, respawns,
 and session churn. Stored in `~/.codeman/intents.json` (mode 0600); never fed
-into `/api/v1/search`. Design: [`readmymind-plan.md`](readmymind-plan.md).
+into `/api/v1/search`. Design: [`readmymind-plan.md`](readmymind-plan.md);
+user guide: [`readmymind.md`](readmymind.md).
 
 - `GET /api/v1/sessions/:id/intent` -> `{ intent: IntentProfile }` for the
   session's case. `IntentProfile`: `{ key, workingDir, updatedAt, goals,
