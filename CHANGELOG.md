@@ -1,5 +1,61 @@
 # aicodeman
 
+## 1.16.0
+
+### Minor Changes
+
+- 1e1db94: Cross-session messaging integration, two halves. **Workers now carry their Codeman session names as messaging peer names**: local claude spawns pass `--name <session name>` when the installed CLI is 2.1.224+ (the cross-session-messaging release). The gate is fail-closed, since an older claude aborts startup on an unknown option: an unknown or older version yields a spawn command byte-identical to before, the value is allowlist-sanitized before shell interpolation, and docker/remote spawns never carry the flag (their CLI is not the probed binary). Verified end to end on an isolated instance: the worker lists as its session name in `ListAgents`, and its replies arrive tagged `from-name="<session name>"`.
+
+  **The Codeman agent skill teaches cross-session messaging**: drive claude workers over `ListAgents`/`SendMessage` where available, map rows to Codeman sessions via the `tmux codeman-<id8>` column, deliver multi-line exactly-once task messages (including mid-turn steering), collect results as latched replies instead of polling, and fall back to the HTTP recipes whenever the feature is absent (version, feature flag, telemetry-disabling env vars, Docker/remote cases, non-claude modes). Adds `reference/messaging.md` (ships automatically, the installer enumerates `reference/*.md`), fan-out Flow 5 in `reference/recipes.md`, troubleshooting rows in `reference/endpoints.md`, and safety rules for the shared peer namespace (message only workers you created, no permission laundering in either direction). All mechanics verified live against claude-cli 2.1.226.
+
+### Patch Changes
+
+- c50bb02: The File Viewer can show hidden files and folders.
+
+  `GET /api/sessions/:id/files` has always accepted `showHidden=true`, but the panel
+  hardcoded `showHidden=false`, so dot-prefixed entries were unreachable from the
+  tree: no `.gitignore`, no `.github/`, no `.env.example`, and nothing under them.
+  Opening one meant guessing its path.
+
+  The panel header gains a `.*` toggle. It re-fetches rather than re-rendering the
+  cached tree, because the filtering happens server-side, and it keeps the expanded
+  directories so toggling does not collapse the tree you just navigated. The state
+  is per-device (its own `codeman:fileBrowserShowHidden` key rather than the
+  app-settings object, which is rebuilt from the settings-modal DOM on save and
+  would drop a key toggled from outside it), defaults to OFF, and survives a reload.
+
+  Generated and version-control directories (`.git`, `node_modules`, `.next`,
+  `.venv`, ...) stay excluded either way: that list is about tree size, not about
+  hiding dotfiles.
+
+  Closes #221.
+
+- ce22c2a: The filesystem path picker can show hidden files and folders, and the shared secret blocklist grew to make that safe.
+
+  The picker behind Link Existing's "Browse" and the mobile keyboard's `Path` key
+  refused every path with a dot-prefixed segment, so `.github/workflows/ci.yml`
+  could not be selected and a hidden folder could not even be opened. It now has
+  the same `.*` toggle as the File Viewer, default OFF, per-device, and it applies
+  to both the listing and the preview endpoint (which re-resolves the path
+  independently).
+
+  That filter was quietly doing security work. With every hidden path unreachable,
+  `isSensitivePath` never had to name the credentials that live in dot-directories,
+  because the picker's roots include Home. Lifting the filter removes that
+  accident, so the blocklist now covers them explicitly: SSH keys at any depth (not
+  only under `$HOME`), GPG keyrings, AWS/GCloud/Azure/Docker/Kubernetes
+  credentials, npm, Yarn, git, `gh`, netrc, PyPI, RubyGems, Cargo and Terraform
+  tokens, `.pgpass` and `.my.cnf`, and the Claude and Codeman agent credentials.
+  `~/.codeman/` and `~/.claude/` stay attachable as trees, since the publish skill
+  and the review-card loop read from them; only their secret-bearing members are
+  named.
+
+  Blocked trees, sensitive files, root confinement and symlink-escape checks are
+  all unchanged and still apply with the toggle on: a hidden entry that resolves
+  to a secret is dropped from the listing, and opening it is refused.
+
+  Follows #221.
+
 ## 1.15.0
 
 ### Minor Changes
