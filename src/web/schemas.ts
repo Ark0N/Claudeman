@@ -366,6 +366,31 @@ export const CreateCaseSchema = z.object({
   description: z.string().max(1000).optional(),
 });
 
+/**
+ * Schema for POST /api/cases/clone — issue #236.
+ *
+ * `repository` is only length-bounded here on purpose: what makes an operand safe
+ * is the transport/shape analysis in `parseGitRepositoryUrl` (which also produces
+ * the user-facing rejection reason), and duplicating a weaker version of that as a
+ * regex would be the copy that drifts. The route parses before touching git.
+ */
+export const CloneCaseSchema = z.object({
+  name: z
+    .string()
+    .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format. Use only letters, numbers, hyphens, underscores.'),
+  repository: z.string().min(1).max(2048),
+  /** Branch or tag → `--branch <ref> --single-branch`. */
+  ref: z.string().min(1).max(200).optional(),
+  /** `--depth 1`. */
+  shallow: z.boolean().optional(),
+  description: z.string().max(1000).optional(),
+});
+
+/** Schema for POST /api/cases/clone-preflight — ask the remote what it has, clone nothing. */
+export const ClonePreflightSchema = z.object({
+  repository: z.string().min(1).max(2048),
+});
+
 const RemoteCommandOverridesSchema = z
   .object({
     shell: z.string().min(1).max(300).optional(),

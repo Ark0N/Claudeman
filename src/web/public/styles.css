@@ -5323,6 +5323,22 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   margin-top: 0.35rem;
 }
 
+/* Clone Repo tab (issue #236): live verdict on the URL being typed. Semantic
+   tokens, so light skins inherit readable variants automatically. */
+.clone-status {
+  min-height: 1.6em;
+  overflow-wrap: anywhere;
+}
+.clone-status-ok {
+  color: var(--green);
+}
+.clone-status-warn {
+  color: var(--yellow);
+}
+.clone-status-err {
+  color: var(--red);
+}
+
 /* Preset selector */
 .preset-selector {
   display: flex;

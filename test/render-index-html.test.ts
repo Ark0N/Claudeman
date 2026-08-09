@@ -18,6 +18,7 @@ import { isCodexAvailable } from '../src/utils/codex-cli-resolver.js';
 import { isGeminiAvailable } from '../src/utils/gemini-cli-resolver.js';
 import { isAntigravityAvailable } from '../src/utils/antigravity-cli-resolver.js';
 import { isCloudflaredAvailable } from '../src/utils/cloudflared-resolver.js';
+import { isGitAvailable } from '../src/git-clone.js';
 
 // renderIndexHtml probes the real PATH for every CLI, which would make the
 // assertions below depend on whatever happens to be installed on the machine
@@ -45,6 +46,10 @@ vi.mock('../src/utils/antigravity-cli-resolver.js', () => ({
 vi.mock('../src/utils/cloudflared-resolver.js', () => ({
   isCloudflaredAvailable: vi.fn(() => false),
   resolveCloudflaredPath: vi.fn(() => null),
+}));
+// git gates the Add Case -> Clone Repo tab (#236), so it rides in the same object.
+vi.mock('../src/git-clone.js', () => ({
+  isGitAvailable: vi.fn(() => false),
 }));
 
 const TEMPLATE = [
@@ -127,6 +132,7 @@ describe('WebServer.renderIndexHtml', () => {
     vi.mocked(isGeminiAvailable).mockReturnValue(false);
     vi.mocked(isAntigravityAvailable).mockReturnValue(false);
     vi.mocked(isCloudflaredAvailable).mockReturnValue(true);
+    vi.mocked(isGitAvailable).mockReturnValue(true);
     const { server } = makeServer({});
     const html = await render(server);
     const flags = JSON.parse(html.match(/window\.__codemanCliAvailable=(\{.*?\});/)![1]);
@@ -139,6 +145,7 @@ describe('WebServer.renderIndexHtml', () => {
       gemini: false,
       antigravity: false,
       cloudflared: true,
+      git: true,
     });
   });
 
@@ -152,6 +159,7 @@ describe('WebServer.renderIndexHtml', () => {
       isGeminiAvailable,
       isAntigravityAvailable,
       isCloudflaredAvailable,
+      isGitAvailable,
     ]) {
       vi.mocked(probe).mockReturnValue(false);
     }
