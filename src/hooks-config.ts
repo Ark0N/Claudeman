@@ -11,6 +11,7 @@
  * - `generateHooksConfig()` — returns hooks object for settings.local.json
  * - `writeHooksConfig(casePath)` — writes hooks + env config to disk
  * - `ensureCodemanHooks(casePath)` — safely installs/updates hooks for a managed case
+ *   (no production call site yet; see its doc comment before wiring one)
  * - `updateCaseEnvVars(casePath, envVars)` — merges env vars into settings
  *
  * Hook events generated: `idle_prompt`, `permission_prompt`, `elicitation_dialog`,
@@ -26,8 +27,9 @@
  * @module hooks-config
  */
 
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { readFile, writeFile, mkdir, lstat, readdir, unlink, rmdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, lstat, readdir, rename, unlink, rmdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -41,6 +43,9 @@ import { HOOK_TIMEOUT_SECONDS } from './config/auth-config.js';
  * while an App-Settings toggle injects the statusLine into the same repo — can't
  * lose each other's changes through interleaved read-then-write. Per-path chains
  * are independent; the map self-prunes when a path's chain goes idle.
+ *
+ * The agent-skill injector keys the same map on its skill DIRECTORY, which can never
+ * collide with a settings-file path, so those writers serialize against each other too.
  */
 const settingsWriteLocks = new Map<string, Promise<unknown>>();
 /**
@@ -582,6 +587,16 @@ export async function writeHooksConfig(casePath: string): Promise<void> {
  * user-owned settings file. It is therefore reserved for case quick-starts,
  * where the user has explicitly asked Codeman to manage that workspace. A
  * malformed existing file is left untouched rather than replaced.
+ *
+ * ⚠️ It has NO production call site: PR #233 landed it with the hook scripts and never
+ * wired it up, and knip can't flag it (`test/**` are entry points, so its tests count as
+ * a use). Kept anyway, because it is redundant with neither sibling: `writeHooksConfig`
+ * REPLACES a malformed settings file and rewrites unconditionally, and
+ * `refreshStaleCodemanHooks` deliberately never adds hooks to a case that has none. The
+ * one place it fits is quick-start's existing-case branch in session-routes.ts, and
+ * moving that branch onto this function is a POLICY change (hooks would come back for a
+ * user who deleted them from their case, and linked cases would start getting a hooks
+ * block they have never had), so that call is left to the owner rather than made here.
  */
 export async function ensureCodemanHooks(casePath: string): Promise<void> {
   const claudeDir = join(casePath, '.claude');
@@ -775,6 +790,29 @@ async function readAgentSkillSource(): Promise<AgentSkillFile[]> {
   return files;
 }
 
+/**
+ * Publish one skill file with a temp + rename, never a bare overwrite.
+ *
+ * Claude Code reads SKILL.md whole when it loads the skill, so an in-place rewrite of
+ * the file (20KB+, several write() syscalls) lets a load that lands mid-write see a
+ * TRUNCATED skill. rename() swaps the finished file in one step, so a
+ * reader sees either the old copy or the new one. The pid+random temp name matters
+ * because `codeman skill install` writes these same paths from a DIFFERENT process than
+ * the server, where the in-process lock cannot help: a shared temp name would let the
+ * two tear each other's payload (same reasoning as user-store.ts).
+ */
+async function writeSkillFileAtomic(target: string, content: string): Promise<void> {
+  // `.tmp` last, so a leftover temp is never picked up as a `.md` skill file.
+  const tmpPath = `${target}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    await writeFile(tmpPath, content);
+    await rename(tmpPath, target);
+  } catch (err) {
+    await unlink(tmpPath).catch(() => {});
+    throw err;
+  }
+}
+
 async function isSymlink(path: string): Promise<boolean> {
   try {
     return (await lstat(path)).isSymbolicLink();
@@ -806,35 +844,43 @@ export type AgentSkillApplyResult =
  *
  * Idempotent and cheap: unchanged files are not rewritten, so calling on every
  * session create causes no mtime churn.
+ *
+ * Serialized on the skill dir through the same lock the settings writers use: two
+ * sessions created at once in one repo both inject this skill, and interleaving their
+ * ownership read with the other's write reports a bogus result (an 'unchanged' for a
+ * copy the other writer had not finished). Writes go out via temp + rename, which is
+ * what protects a concurrent skill LOAD, in this process or the CLI's.
  */
 export async function installAgentSkillInto(skillDir: string): Promise<AgentSkillApplyResult> {
-  if ((await isSymlink(dirname(skillDir))) || (await isSymlink(skillDir))) return 'symlink';
+  return withSettingsLock(skillDir, async () => {
+    if ((await isSymlink(dirname(skillDir))) || (await isSymlink(skillDir))) return 'symlink';
 
-  let existing: string | null = null;
-  try {
-    existing = await readFile(join(skillDir, 'SKILL.md'), 'utf-8');
-  } catch {
-    // absent: fresh install
-  }
-  if (existing !== null && !existing.includes(AGENT_SKILL_MARKER_PREFIX)) return 'foreign';
-
-  const files = await readAgentSkillSource();
-  let changed = false;
-  for (const file of files) {
-    const target = join(skillDir, file.relPath);
-    let current: string | null = null;
+    let existing: string | null = null;
     try {
-      current = await readFile(target, 'utf-8');
+      existing = await readFile(join(skillDir, 'SKILL.md'), 'utf-8');
     } catch {
-      // missing: will be written
+      // absent: fresh install
     }
-    if (current === file.content) continue;
-    await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, file.content);
-    changed = true;
-  }
-  if (!changed) return 'unchanged';
-  return existing === null ? 'installed' : 'refreshed';
+    if (existing !== null && !existing.includes(AGENT_SKILL_MARKER_PREFIX)) return 'foreign';
+
+    const files = await readAgentSkillSource();
+    let changed = false;
+    for (const file of files) {
+      const target = join(skillDir, file.relPath);
+      let current: string | null = null;
+      try {
+        current = await readFile(target, 'utf-8');
+      } catch {
+        // missing: will be written
+      }
+      if (current === file.content) continue;
+      await mkdir(dirname(target), { recursive: true });
+      await writeSkillFileAtomic(target, file.content);
+      changed = true;
+    }
+    if (!changed) return 'unchanged';
+    return existing === null ? 'installed' : 'refreshed';
+  });
 }
 
 /**
@@ -842,28 +888,33 @@ export async function installAgentSkillInto(skillDir: string): Promise<AgentSkil
  * refusals as the install path. Deletes only files the packaged source would have
  * written (never `rm -rf`, so a user's extra files in the directory survive), then
  * prunes the directories bottom-up if they emptied.
+ *
+ * Shares the install path's per-dir lock so an uninstall can't run between an install's
+ * ownership read and its writes, which would leave half the skill back on disk.
  */
 export async function removeAgentSkillFrom(skillDir: string): Promise<AgentSkillApplyResult> {
-  if ((await isSymlink(dirname(skillDir))) || (await isSymlink(skillDir))) return 'symlink';
+  return withSettingsLock(skillDir, async () => {
+    if ((await isSymlink(dirname(skillDir))) || (await isSymlink(skillDir))) return 'symlink';
 
-  let existing: string | null = null;
-  try {
-    existing = await readFile(join(skillDir, 'SKILL.md'), 'utf-8');
-  } catch {
-    return 'absent';
-  }
-  if (!existing.includes(AGENT_SKILL_MARKER_PREFIX)) return 'foreign';
+    let existing: string | null = null;
+    try {
+      existing = await readFile(join(skillDir, 'SKILL.md'), 'utf-8');
+    } catch {
+      return 'absent';
+    }
+    if (!existing.includes(AGENT_SKILL_MARKER_PREFIX)) return 'foreign';
 
-  // Manifest-based, with SKILL.md as the fallback when the packaged source is
-  // unreadable: removal must still work on an install whose skills/ dir went missing.
-  const files = await readAgentSkillSource().catch((): AgentSkillFile[] => [{ relPath: 'SKILL.md', content: '' }]);
-  for (const file of files) {
-    await unlink(join(skillDir, file.relPath)).catch(() => {});
-  }
-  await rmdir(join(skillDir, 'reference')).catch(() => {}); // fails when non-empty, fine
-  await rmdir(skillDir).catch(() => {});
-  await rmdir(dirname(skillDir)).catch(() => {}); // prune `.claude/skills` if now empty
-  return 'removed';
+    // Manifest-based, with SKILL.md as the fallback when the packaged source is
+    // unreadable: removal must still work on an install whose skills/ dir went missing.
+    const files = await readAgentSkillSource().catch((): AgentSkillFile[] => [{ relPath: 'SKILL.md', content: '' }]);
+    for (const file of files) {
+      await unlink(join(skillDir, file.relPath)).catch(() => {});
+    }
+    await rmdir(join(skillDir, 'reference')).catch(() => {}); // fails when non-empty, fine
+    await rmdir(skillDir).catch(() => {});
+    await rmdir(dirname(skillDir)).catch(() => {}); // prune `.claude/skills` if now empty
+    return 'removed';
+  });
 }
 
 /**

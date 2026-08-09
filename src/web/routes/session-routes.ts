@@ -556,6 +556,37 @@ function abortOnClientHangUp(reply: FastifyReply): AbortController {
   return controller;
 }
 
+/**
+ * Inject the agent skill into a case on create, surfacing only the REFUSALS.
+ *
+ * `applyAgentSkill` declines two shapes rather than writing through them ('foreign':
+ * an unmarked skills/codeman the user authored; 'symlink': the skill dir or its
+ * parent is a link). Both were silent: the user flips `agentSkillEnabled` on, nothing
+ * appears in the case, and there is nowhere to look for why. The ordinary outcomes
+ * ('installed'/'refreshed'/'unchanged') stay unlogged since they would print on every
+ * single session create.
+ *
+ * Injection is best-effort and stays that way: neither a refusal nor a thrown error
+ * may fail the create.
+ */
+async function injectAgentSkill(casePath: string): Promise<void> {
+  const skillDir = join(casePath, '.claude', 'skills', 'codeman');
+  try {
+    const result = await applyAgentSkill(casePath, true);
+    if (result === 'foreign') {
+      console.warn(
+        `[agent-skill] not injected: ${skillDir} exists but is not Codeman-managed (no marker), refusing to touch it. Remove that copy if you want the packaged skill there.`
+      );
+    } else if (result === 'symlink') {
+      console.warn(
+        `[agent-skill] not injected: ${skillDir} (or its parent) is a symlink, refusing to write through it. Replace it with a real directory to let Codeman install the skill.`
+      );
+    }
+  } catch (err: unknown) {
+    console.warn(`[agent-skill] injection failed for ${skillDir}: ${getErrorMessage(err)}`);
+  }
+}
+
 export function registerSessionRoutes(
   app: FastifyInstance,
   ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort
@@ -705,7 +736,7 @@ export function registerSessionRoutes(
       // skill from under other live sessions in the repo. Marker-guarded, so a
       // user's own skills/codeman is never touched.
       if (await ctx.getAgentSkillEnabled()) {
-        await applyAgentSkill(workingDir, true).catch(() => {});
+        await injectAgentSkill(workingDir);
       }
     }
 
@@ -2780,7 +2811,7 @@ export function registerSessionRoutes(
     // casePath lives on another host. Docker cases qualify: hostWorkspacePath is a
     // real host dir and the skill crosses the bind mount like the rest of `.claude/`.
     if (!remote && mode === 'claude' && (await ctx.getAgentSkillEnabled())) {
-      await applyAgentSkill(resolvedCasePath, true).catch(() => {});
+      await injectAgentSkill(resolvedCasePath);
     }
 
     // Docker cases: the workspace is a REAL host dir bind-mounted into the container.
