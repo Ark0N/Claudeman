@@ -6,16 +6,21 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
-import { closeSync, existsSync, openSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import {
+  applyStatusLineConfig,
   ensureCodemanHooks,
   generateBackgroundWakeScript,
   generateHooksConfig,
   generateSubagentStopGuardScript,
   refreshStaleCodemanHooks,
+  settingsWriteBlocker,
+  stripCaseEnvKeys,
+  updateCaseEnvVars,
+  updateCaseModel,
   writeHooksConfig,
 } from '../src/hooks-config.js';
 
@@ -196,6 +201,62 @@ describe('writeHooksConfig', () => {
     expect(parsed.hooks).toBeDefined();
     expect(parsed.hooks.Notification).toHaveLength(5);
     expect(parsed.hooks.Stop).toHaveLength(1);
+  });
+
+  it('refuses to write through a symlinked .claude directory (#251 review)', async () => {
+    // Case contents can be foreign (a freshly cloned repository): a symlinked
+    // .claude would redirect the scaffold write outside the case.
+    const outside = join(testDir, 'outside-target');
+    mkdirSync(outside);
+    const caseDir = join(testDir, 'case');
+    mkdirSync(caseDir);
+    symlinkSync(outside, join(caseDir, '.claude'));
+    expect(await settingsWriteBlocker(caseDir)).toMatch(/symlink/);
+    await writeHooksConfig(caseDir);
+    expect(existsSync(join(outside, 'settings.local.json'))).toBe(false);
+  });
+
+  it('refuses to write through a symlinked settings.local.json (#251 review)', async () => {
+    const outsideFile = join(testDir, 'victim-settings.json');
+    writeFileSync(outsideFile, '{"model":"precious"}\n');
+    const caseDir = join(testDir, 'case2');
+    mkdirSync(join(caseDir, '.claude'), { recursive: true });
+    symlinkSync(outsideFile, join(caseDir, '.claude', 'settings.local.json'));
+    expect(await settingsWriteBlocker(caseDir)).toMatch(/symlink/);
+    await writeHooksConfig(caseDir);
+    // The link target is untouched: no hooks were merged into it.
+    expect(readFileSync(outsideFile, 'utf-8')).toBe('{"model":"precious"}\n');
+  });
+
+  it('reports a real, confined .claude as safe', async () => {
+    const caseDir = join(testDir, 'case3');
+    mkdirSync(join(caseDir, '.claude'), { recursive: true });
+    expect(await settingsWriteBlocker(caseDir)).toBeNull();
+  });
+
+  it('EVERY settings writer refuses a symlinked settings.local.json (#251 review round 2)', async () => {
+    // Round 1 guarded only writeHooksConfig/updateCaseModel; the reviewer
+    // demonstrated applyStatusLineConfig writing through the link. All
+    // writers now share one safe-write gate, so pin all of them at once.
+    const outsideFile = join(testDir, 'victim-all-writers.json');
+    const precious =
+      '{"env":{"CLAUDE_CODE_KEEP":"me"},"hooks":{"Stop":[{"hooks":[{"command":"curl /api/hook-event"}]}]}}\n';
+    writeFileSync(outsideFile, precious);
+    const caseDir = join(testDir, 'case-writers');
+    mkdirSync(join(caseDir, '.claude'), { recursive: true });
+    symlinkSync(outsideFile, join(caseDir, '.claude', 'settings.local.json'));
+
+    await writeHooksConfig(caseDir);
+    await ensureCodemanHooks(caseDir);
+    await refreshStaleCodemanHooks(caseDir);
+    await updateCaseModel(caseDir, 'opus');
+    await updateCaseEnvVars(caseDir, { CLAUDE_CODE_NEW: 'value' });
+    await stripCaseEnvKeys(caseDir, ['CLAUDE_CODE_KEEP']);
+    await applyStatusLineConfig(caseDir, true);
+    await applyStatusLineConfig(caseDir, false);
+
+    // The link target is byte-identical: none of the writers went through it.
+    expect(readFileSync(outsideFile, 'utf-8')).toBe(precious);
   });
 
   it('should merge with existing settings.local.json', async () => {

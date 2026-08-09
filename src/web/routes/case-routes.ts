@@ -1,11 +1,13 @@
 /**
  * @fileoverview Case management routes.
  * Handles CRUD for cases (directories under ~/codeman-cases and linked folders),
- * fix-plan reading, and ralph-wizard file serving.
+ * cloning a repository into a new case (`/api/cases/clone` + `/clone-preflight`,
+ * issue #236 — the URL-safety rules live in `src/git-clone.ts`), fix-plan reading,
+ * and ralph-wizard file serving.
  */
 
 import { FastifyInstance } from 'fastify';
-import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, createReadStream } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, writeFileSync, readdirSync, readFileSync, createReadStream } from 'node:fs';
 import { exec } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { join, resolve, basename } from 'node:path';
@@ -15,6 +17,8 @@ import type { ApiResponse, CaseInfo, DockerHost, RemoteSessionInfo, SessionDocke
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import {
   CreateCaseSchema,
+  CloneCaseSchema,
+  ClonePreflightSchema,
   LinkCaseSchema,
   CaseOrderSchema,
   RemoteCaseLinkSchema,
@@ -26,8 +30,16 @@ import {
   DockerQuickCreateSchema,
 } from '../schemas.js';
 import { exportDockerCase, importDockerBundle, listDockerExports, exportBundleName } from '../../docker-export.js';
+import {
+  cloneRepository,
+  isGitAvailable,
+  isSafeGitRef,
+  parseGitRepositoryUrl,
+  probeGitRemote,
+} from '../../git-clone.js';
+import type { GitRemoteProbe, GitUrlParse } from '../../git-clone.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
-import { writeHooksConfig } from '../../hooks-config.js';
+import { settingsWriteBlocker, writeHooksConfig } from '../../hooks-config.js';
 import {
   canAccessOwned,
   getAuthUser,
@@ -88,6 +100,41 @@ const APP_VERSION = (() => {
     return 'unknown';
   }
 })();
+
+/**
+ * Refusal text for a `local`-transport clone by a non-admin in multi-user mode.
+ * Per-user case spaces live inside one $HOME, so cloning from an absolute path
+ * would copy another user's workspace into the caller's own (the same escape
+ * `/api/cases/link` is admin-only for).
+ */
+const LOCAL_CLONE_ADMIN_ONLY =
+  'Cloning from a local path is admin-only in multi-user mode. Use a repository URL instead.';
+
+/**
+ * The one line of git's stderr worth appending to an error message.
+ *
+ * NOT the first line: `git clone` opens with "Cloning into '<dest>'…", so a naive
+ * first-line pick reported the destination path as the reason a bad branch failed
+ * (observed against a real remote). Prefer the LAST diagnostic line
+ * (`fatal:`/`error:`/`remote:`), which is where git puts the actual cause.
+ */
+function gitDiagnosticLine(stderr: string): string {
+  const lines = stderr
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const line = [...lines].reverse().find((l) => /^(fatal|error|remote|warning):/i.test(l)) ?? lines.at(-1) ?? '';
+  return line.length > 200 ? `${line.slice(0, 200)}…` : line;
+}
+
+/**
+ * Does the freshly cloned tree carry its own Claude settings? Those can contain
+ * hooks, which run on the user's machine when a session starts in the case, so
+ * the clone response says so out loud instead of silently merging into them.
+ */
+function repoShipsClaudeSettings(casePath: string): boolean {
+  return ['settings.json', 'settings.local.json'].some((file) => existsSync(join(casePath, '.claude', file)));
+}
 
 /** Read and parse linked-cases.json, returning empty object on missing/invalid file. */
 async function readLinkedCases(): Promise<Record<string, string>> {
@@ -300,6 +347,197 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
     }
   });
+
+  // ========== Clone a repository as a case (issue #236) ==========
+
+  /**
+   * Ask a remote what it has, without cloning anything.
+   *
+   * Two jobs: tell the user whether the URL they typed can be cloned *anonymously*
+   * (Codeman supplies no credentials, so "private" and "typo" both have to be
+   * distinguishable from "fine"), and hand back the branch/tag lists so the ref
+   * field is a picker instead of a guess.
+   *
+   * Always 200 with `reachable: false` on a dead remote — an unreachable URL is a
+   * normal answer to a preflight, not a server error, and the UI renders the reason.
+   */
+  app.post(
+    '/api/cases/clone-preflight',
+    async (
+      req,
+      reply
+    ): Promise<ApiResponse<{ parse: GitUrlParse; remote?: GitRemoteProbe; gitAvailable: boolean }>> => {
+      const { repository } = parseBody(ClonePreflightSchema, req.body);
+      const parsed = parseGitRepositoryUrl(repository);
+      if (!parsed.cloneable) {
+        return { success: true, data: { parse: parsed, gitAvailable: isGitAvailable() } };
+      }
+      if (parsed.transport === 'local' && isMultiUserMode() && !isAdmin(req)) {
+        reply.code(403);
+        return createErrorResponse(ApiErrorCode.FORBIDDEN, LOCAL_CLONE_ADMIN_ONLY);
+      }
+      if (!isGitAvailable()) {
+        return { success: true, data: { parse: parsed, gitAvailable: false } };
+      }
+      const remote = await probeGitRemote(parsed.repository);
+      return { success: true, data: { parse: parsed, remote, gitAvailable: true } };
+    }
+  );
+
+  /**
+   * Clone a repository into the caller's case space and register it as a normal
+   * local case (issue #236).
+   *
+   * SYNCHRONOUS by design for v1: the request stays open for the whole clone
+   * (bounded by `GIT_CLONE_TIMEOUT_MS`), so there is no job store, no polling and
+   * no cancellation surface to get wrong. The `case:created` broadcast is what
+   * makes that safe behind a proxy with its own idle timeout — a client whose
+   * request died mid-clone still sees the case appear over SSE when git finishes.
+   *
+   * Deliberately NOT admin-gated in multi-user mode: unlike `/api/cases/link`,
+   * this writes only inside the caller's own `resolveCasesDir`. The one exception
+   * is a `local`-transport source, which would read through that boundary.
+   *
+   * Repository contents win over scaffolding: an existing CLAUDE.md is left
+   * alone, and hooks are MERGED into whatever `.claude/settings.local.json` the
+   * repo ships (`writeHooksConfig` preserves non-Codeman handlers). A repo that
+   * ships its own hooks is reported back as a warning, because those run on the
+   * user's machine the moment a session starts in the case.
+   */
+  app.post(
+    '/api/cases/clone',
+    async (
+      req,
+      reply
+    ): Promise<
+      ApiResponse<{
+        case: { name: string; path: string };
+        repository: string;
+        ref?: string;
+        provider: string;
+        warnings: string[];
+      }>
+    > => {
+      const { name, repository, ref, shallow, description } = parseBody(CloneCaseSchema, req.body);
+      const user = getAuthUser(req);
+
+      const parsed = parseGitRepositoryUrl(repository);
+      if (!parsed.cloneable) return createErrorResponse(ApiErrorCode.INVALID_INPUT, parsed.message);
+      if (ref && !isSafeGitRef(ref)) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid branch or tag name');
+      }
+      if (parsed.transport === 'local' && isMultiUserMode() && !isAdmin(req)) {
+        reply.code(403);
+        return createErrorResponse(ApiErrorCode.FORBIDDEN, LOCAL_CLONE_ADMIN_ONLY);
+      }
+      if (!isGitAvailable()) {
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          'git is not installed on this machine (or not on the server’s PATH).'
+        );
+      }
+
+      const casesDir = resolveCasesDir(user);
+      const casePath = validatePathWithinBase(name, casesDir);
+      if (!casePath) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
+
+      // Reject a duplicate name across EVERY case kind before invoking git, so a
+      // clone can never be the thing that discovers the collision (it would have
+      // spent minutes of network first, and git's own error is about a directory).
+      const linkedCases = await readLinkedCases();
+      const dockerCases = await readDockerCases(CODEMAN_CONFIG_DIR);
+      const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
+      if (
+        existsSync(casePath) ||
+        linkedCases[name] ||
+        dockerCases.some((item) => item.name === name) ||
+        remoteCases.some((item) => item.name === name)
+      ) {
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
+      }
+
+      // git creates the leaf, not necessarily the case space above it.
+      try {
+        mkdirSync(casesDir, { recursive: true });
+      } catch (err) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+      }
+
+      const clone = await cloneRepository({
+        repository: parsed.repository,
+        destination: casePath,
+        ...(ref ? { ref } : {}),
+        ...(shallow ? { shallow: true } : {}),
+      });
+      if (!clone.ok) {
+        const code =
+          clone.failure.code === 'NOT_FOUND'
+            ? ApiErrorCode.NOT_FOUND
+            : clone.failure.code === 'DESTINATION_EXISTS'
+              ? ApiErrorCode.ALREADY_EXISTS
+              : clone.failure.code === 'REF_NOT_FOUND'
+                ? ApiErrorCode.INVALID_INPUT
+                : clone.failure.code === 'BUSY'
+                  ? ApiErrorCode.RATE_LIMITED
+                  : ApiErrorCode.OPERATION_FAILED;
+        const detail = clone.failure.stderr
+          ? `${clone.failure.message} (${gitDiagnosticLine(clone.failure.stderr)})`
+          : clone.failure.message;
+        return createErrorResponse(code, detail);
+      }
+
+      // Scaffold WITHOUT overwriting anything the repository shipped, and
+      // WITHOUT writing through anything it shipped as a symlink.
+      const warnings = [...parsed.warnings];
+      try {
+        // Presence via lstat, not existsSync: a repo-shipped CLAUDE.md SYMLINK
+        // counts as "the repository ships its own" even when the link is
+        // broken (existsSync follows links and reports a broken one as
+        // absent), because writeFileSync would write THROUGH it to a
+        // repository-chosen path outside the case.
+        if (!lstatSync(join(casePath, 'CLAUDE.md'), { throwIfNoEntry: false })) {
+          const templatePath = await ctx.getDefaultClaudeMdPath();
+          const summary = description || `Cloned from ${parsed.repository}`;
+          writeFileSync(join(casePath, 'CLAUDE.md'), generateClaudeMd(name, summary, templatePath));
+        } else {
+          warnings.push('Kept the repository’s own CLAUDE.md.');
+        }
+        if (repoShipsClaudeSettings(casePath)) {
+          warnings.push(
+            'This repository ships its own .claude/settings files. Codeman merged its hooks alongside them without removing anything — review them before starting a session, since repo-supplied hooks run on this machine.'
+          );
+        }
+        // A repository can ship `.claude` (or the settings file) as a symlink
+        // pointing anywhere on this machine; writeHooksConfig itself refuses
+        // to write through those (settingsWriteBlocker in hooks-config.ts).
+        // Checking here too turns that refusal into a user-visible warning.
+        const hooksBlocker = await settingsWriteBlocker(casePath);
+        if (hooksBlocker) {
+          warnings.push(
+            `Codeman hooks were NOT installed: ${hooksBlocker}. Codeman refuses to write through repository-controlled links; replace the link with a real file or directory if you want hooks in this case.`
+          );
+        } else {
+          await writeHooksConfig(casePath);
+        }
+      } catch (err) {
+        // The clone itself succeeded: keep the case and report the scaffolding
+        // problem, rather than deleting a tree the user just waited for.
+        warnings.push(`Case scaffolding was incomplete: ${getErrorMessage(err)}`);
+      }
+
+      ctx.broadcast(SseEvent.CaseCreated, { name, path: casePath });
+      return {
+        success: true,
+        data: {
+          case: { name, path: casePath },
+          repository: parsed.repository,
+          ...(ref ? { ref } : {}),
+          provider: parsed.provider,
+          warnings,
+        },
+      };
+    }
+  );
 
   // Hosts are machine-level infra config (ssh users/identity paths): non-admins get an
   // empty list in multi-user mode, matching the admin-only write side. No-op otherwise.
