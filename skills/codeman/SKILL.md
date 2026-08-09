@@ -161,6 +161,13 @@ You are yourself a session on this server, and the API has **no undo**.
   **clamped** (ceiling 600 s): read back `wait.timeoutMs` for what was applied. The
   clamp covers positive integers only: `0`, a negative, a fraction or `30s` is a 400,
   so round any computed remainder and drop it entirely rather than sending zero.
+- **Never branch on `.data.status`.** It is a heuristic and is often wrong in both
+  directions: measured on a live claude worker reading `idle` while it was mid-turn
+  and actively producing output (`lastActivityAt` equal to the moment of the call),
+  and a worker that died inside its pane also reads `idle`. Synchronize on `stop` via
+  send-and-wait, or on an output marker. To judge from outside, sample
+  `terminal?tail=` twice a few seconds apart: a changing buffer is the only cheap
+  positive proof a worker is still working. `wait?until=exit` is the death check.
 - **`stop` and `blocked` fire for `claude` sessions only** (Claude Code hooks). On
   `shell`/`opencode`/`codex`/`gemini`/`antigravity`, requesting them explicitly is a
   400 — and lifecycle transitions there are coarse (a short shell command may emit

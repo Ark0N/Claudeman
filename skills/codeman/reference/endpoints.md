@@ -38,7 +38,7 @@ read the status with `-w '%{http_code}'` and the raw body before assuming a bug.
 | Task | Call |
 |------|------|
 | list sessions (metadata only, ~1.5 KB each, safe to poll) | `GET /api/v1/sessions` |
-| one session (has `.data.pid`, `null` until the PTY spawns) | `GET /api/v1/sessions/:id` — ⚠️ **not a liveness check**: a worker that dies inside its pane keeps `status:"idle"` and a pid (the tmux attach client); `wait?until=exit` is the death check |
+| one session (has `.data.pid`, `null` until the PTY spawns) | `GET /api/v1/sessions/:id` — ⚠️ **neither a liveness nor a busy check**, see below |
 | unified list incl. history | `GET /api/v1/sessions/unified` → `.data.sessions[]` (NOT `.data[]`), and it folds in transcript history from the whole machine — never use it to verify cleanup; `GET /api/v1/sessions` is the cleanup check |
 | start case + session in one call | `POST /api/v1/quick-start` |
 | send input | `POST /api/v1/sessions/:id/input` |
@@ -59,6 +59,22 @@ lifecycle log records `detached`, not `deleted`). That is the wrong tool for age
 cleanup: your worker keeps burning tokens where neither you nor the user can see it,
 and the list you would check to confirm cleanup shows it gone. Delete plainly, and let
 `killMux` default.
+
+⚠️ **`.data.status` is a heuristic and is often simply wrong. Never branch on it.**
+Measured on a live claude worker: `status` read `idle` while the worker was mid-turn
+and actively producing output, with `lastActivityAt` equal to the moment of the call.
+It is wrong in both directions, so neither value tells you anything you can act on:
+
+- **`idle` does not mean finished.** Use `stop` (the definitive end-of-turn hook) via
+  send-and-wait, or an output marker. If you must judge from outside, sample
+  `terminal?tail=` twice a few seconds apart and compare: a changing buffer is the
+  only cheap positive proof that a worker is still working.
+- **`idle` does not mean alive.** A worker that dies inside its pane keeps
+  `status:"idle"` and a pid (that pid is the local tmux attach client, not the
+  worker). `wait?until=exit` is the death check.
+
+Treat `status` as a UI hint. Every synchronization decision in these recipes is built
+on signals and markers for exactly this reason.
 
 ⚠️ `GET /api/v1/sessions/:id/output` → `.data.textOutput` looks like the obvious read
 but stays **empty for interactive tmux-backed sessions** (it is fed only by the legacy
