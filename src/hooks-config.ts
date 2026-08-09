@@ -10,13 +10,15 @@
  * Key exports:
  * - `generateHooksConfig()` — returns hooks object for settings.local.json
  * - `writeHooksConfig(casePath)` — writes hooks + env config to disk
+ * - `ensureCodemanHooks(casePath)` — safely installs/updates hooks for a managed case
  * - `updateCaseEnvVars(casePath, envVars)` — merges env vars into settings
  *
  * Hook events generated: `idle_prompt`, `permission_prompt`, `elicitation_dialog`,
  * `stop`, `teammate_idle`, `task_completed`
  *
- * Hook categories: `Notification` (3 matchers), `Stop` (1), `TeammateIdle` (1),
- * `TaskCompleted` (1), `PostToolUse` (1 self-contained background Bash rewake)
+ * Hook categories: `Notification` (3 matchers), `Stop` (1), `SubagentStop` (1),
+ * `TeammateIdle` (1), `TaskCompleted` (1), `PostToolUse` (1 self-contained
+ * background Bash rewake)
  *
  * @dependencies types (HookEventType), config/auth-config (HOOK_TIMEOUT_SECONDS)
  * @consumedby web/server (session creation), session-cli-builder (env setup)
@@ -52,15 +54,19 @@ const BACKGROUND_WAKE_MARKER_PREFIX = 'CODEMAN_BACKGROUND_REWAKE_V';
  * changes: `refreshStaleCodemanHooks` treats the absence of the CURRENT marker as
  * stale, so healed cases pick up the new script on next launch.
  */
-const BACKGROUND_WAKE_MARKER = `${BACKGROUND_WAKE_MARKER_PREFIX}2`;
+const BACKGROUND_WAKE_MARKER = `${BACKGROUND_WAKE_MARKER_PREFIX}3`;
+const SUBAGENT_STOP_GUARD_MARKER_PREFIX = 'CODEMAN_SUBAGENT_STOP_GUARD_V';
+const SUBAGENT_STOP_GUARD_MARKER = `${SUBAGENT_STOP_GUARD_MARKER_PREFIX}1`;
 const BACKGROUND_WAKE_TIMEOUT_SECONDS = 6 * 60 * 60;
 
 /**
  * Inline Node helper for Claude Code's `asyncRewake` hook.
  *
  * A background Bash tool returns immediately with a task ID, then Claude writes
- * its completion as a queue-operation in the transcript. Watching that durable
- * record avoids injecting terminal input (which could submit a user's draft).
+ * its completion as a queue-operation in the top-level transcript. Subagent hooks
+ * receive their own transcript path even though their completion is parent-owned,
+ * so the helper watches both paths. Watching durable records avoids injecting
+ * terminal input (which could submit a user's draft).
  * The helper is embedded in settings via `node -e`, so it has no script path
  * that can go stale after an install or plugin-cache cleanup.
  *
@@ -72,8 +78,12 @@ const BACKGROUND_WAKE_TIMEOUT_SECONDS = 6 * 60 * 60;
 export function generateBackgroundWakeScript(): string {
   return [
     "const fs = require('node:fs');",
+    "const path = require('node:path');",
     `const ${BACKGROUND_WAKE_MARKER} = true;`,
     `const deadline = Date.now() + ${BACKGROUND_WAKE_TIMEOUT_SECONDS} * 1000;`,
+    "const RESULT_BEGIN = '=== CODEMAN_RESULT_BEGIN ===';",
+    "const RESULT_END = '=== CODEMAN_RESULT_END ===';",
+    'const MAX_RESULT_CHARS = 65536;',
     'let input = {};',
     "try { input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}'); } catch { process.exit(0); }",
     'function findTaskId(value) {',
@@ -98,43 +108,161 @@ export function generateBackgroundWakeScript(): string {
     'const taskId = findTaskId(input.tool_response);',
     "const transcriptPath = typeof input.transcript_path === 'string' ? input.transcript_path : '';",
     'if (!taskId || !transcriptPath) process.exit(0);',
-    'let position = 0;',
-    'try { position = Math.max(0, fs.statSync(transcriptPath).size - 262144); } catch { process.exit(0); }',
-    "let carry = '';",
+    'const transcriptPaths = [transcriptPath];',
+    'const sessionDir = path.dirname(path.dirname(transcriptPath));',
+    "if (typeof input.agent_id === 'string' && path.basename(path.dirname(transcriptPath)) === 'subagents' &&",
+    "    typeof input.session_id === 'string' && path.basename(sessionDir) === input.session_id) {",
+    "  transcriptPaths.push(sessionDir + '.jsonl');",
+    '}',
+    'const transcripts = [...new Set(transcriptPaths)].map((transcript) => {',
+    '  let position = 0;',
+    '  try { position = Math.max(0, fs.statSync(transcript).size - 262144); } catch {}',
+    "  return { path: transcript, position, carry: '' };",
+    '});',
+    'if (!transcripts.some((transcript) => fs.existsSync(transcript.path))) process.exit(0);',
+    'function readMarkedResult(outputPath) {',
+    "  if (!outputPath || !path.isAbsolute(outputPath) || path.basename(outputPath) !== taskId + '.output') return '';",
+    "  if (path.basename(path.dirname(outputPath)) !== 'tasks') return '';",
+    '  try {',
+    '    const size = fs.statSync(outputPath).size;',
+    '    const length = Math.min(size, MAX_RESULT_CHARS * 2);',
+    '    const buffer = Buffer.allocUnsafe(length);',
+    "    const fd = fs.openSync(outputPath, 'r');",
+    '    const bytes = fs.readSync(fd, buffer, 0, length, size - length);',
+    '    fs.closeSync(fd);',
+    "    const text = buffer.subarray(0, bytes).toString('utf8');",
+    '    const begin = text.lastIndexOf(RESULT_BEGIN);',
+    '    const end = text.indexOf(RESULT_END, begin + RESULT_BEGIN.length);',
+    "    if (begin < 0 || end < 0) return '';",
+    '    let result = text.slice(begin + RESULT_BEGIN.length, end).trim();',
+    "    if (!result) return '';",
+    '    if (result.length > MAX_RESULT_CHARS) {',
+    '      const half = Math.floor(MAX_RESULT_CHARS / 2);',
+    "      result = result.slice(0, half) + '\\n\\n[report truncated by Codeman]\\n\\n' + result.slice(-half);",
+    '    }',
+    "    return '\\n\\nCompleted task report:\\n<codeman-background-result>\\n' + result + '\\n</codeman-background-result>';",
+    "  } catch { return ''; }",
+    '}',
     'function inspect(text) {',
     '  for (const line of text.split(/\\r?\\n/)) {',
     '    if (!line.includes(taskId)) continue;',
     '    let entry;',
     '    try { entry = JSON.parse(line); } catch { continue; }',
-    "    if (entry.type !== 'queue-operation' || typeof entry.content !== 'string') continue;",
+    "    if (entry.type !== 'queue-operation' || entry.operation !== 'enqueue' || typeof entry.content !== 'string') continue;",
     "    if (!entry.content.includes('<task-id>' + taskId + '</task-id>')) continue;",
     '    const status = entry.content.match(/<status>(completed|failed|killed|error)<\\/status>/i);',
     '    if (!status) continue;',
     '    const output = entry.content.match(/<output-file>([^<]+)<\\/output-file>/i);',
-    "    const location = output ? ' Read ' + output[1] + ' and' : '';",
-    "    console.error('Background command ' + taskId + ' ' + status[1].toLowerCase() + '.' + location + ' continue the task.');",
+    "    const outputPath = output ? output[1].trim() : '';",
+    "    const location = outputPath ? ' Read ' + outputPath + ' and' : '';",
+    '    const result = readMarkedResult(outputPath);',
+    "    console.error('Background command ' + taskId + ' ' + status[1].toLowerCase() + '.' + location + ' continue the task.' + result);",
     '    process.exit(2);',
     '  }',
     '}',
-    'function poll() {',
-    '  if (Date.now() > deadline || process.ppid === 1) process.exit(0);',
+    'function pollTranscript(transcript) {',
     '  try {',
-    '    const size = fs.statSync(transcriptPath).size;',
-    "    if (size < position) { position = 0; carry = ''; }",
-    '    if (size > position) {',
-    '      const length = Math.min(size - position, 1048576);',
+    '    const size = fs.statSync(transcript.path).size;',
+    "    if (size < transcript.position) { transcript.position = 0; transcript.carry = ''; }",
+    '    if (size > transcript.position) {',
+    '      const length = Math.min(size - transcript.position, 1048576);',
     '      const buffer = Buffer.allocUnsafe(length);',
-    "      const fd = fs.openSync(transcriptPath, 'r');",
-    '      const bytes = fs.readSync(fd, buffer, 0, length, position);',
+    "      const fd = fs.openSync(transcript.path, 'r');",
+    '      const bytes = fs.readSync(fd, buffer, 0, length, transcript.position);',
     '      fs.closeSync(fd);',
-    '      position += bytes;',
-    "      carry = (carry + buffer.subarray(0, bytes).toString('utf8')).slice(-262144);",
-    '      inspect(carry);',
+    '      transcript.position += bytes;',
+    "      transcript.carry = (transcript.carry + buffer.subarray(0, bytes).toString('utf8')).slice(-262144);",
+    '      inspect(transcript.carry);',
     '    }',
     '  } catch {}',
+    '}',
+    'function poll() {',
+    '  if (Date.now() > deadline || process.ppid === 1) process.exit(0);',
+    '  for (const transcript of transcripts) pollTranscript(transcript);',
     '  setTimeout(poll, 1000);',
     '}',
     'poll();',
+  ].join('\n');
+}
+
+/**
+ * Keep a Claude subagent alive while its Monitor or background Bash work is live.
+ * Claude otherwise can publish the worker's last progress sentence as an Agent
+ * result when one watcher ends, even if other tracked tasks are still running.
+ */
+export function generateSubagentStopGuardScript(): string {
+  return [
+    "const fs = require('node:fs');",
+    `const ${SUBAGENT_STOP_GUARD_MARKER} = true;`,
+    'let input = {};',
+    "try { input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}'); } catch { process.exit(0); }",
+    "const transcriptPath = typeof input.agent_transcript_path === 'string' ? input.agent_transcript_path : '';",
+    'if (!transcriptPath) process.exit(0);',
+    'let text;',
+    'try {',
+    '  const size = fs.statSync(transcriptPath).size;',
+    '  const length = Math.min(size, 16 * 1024 * 1024);',
+    '  const buffer = Buffer.allocUnsafe(length);',
+    "  const fd = fs.openSync(transcriptPath, 'r');",
+    '  const bytes = fs.readSync(fd, buffer, 0, length, size - length);',
+    '  fs.closeSync(fd);',
+    "  text = buffer.subarray(0, bytes).toString('utf8');",
+    '} catch { process.exit(0); }',
+    'const launched = new Set();',
+    'const finished = new Set();',
+    'function inspectToolResult(value) {',
+    "  const serialized = typeof value === 'string' ? value : JSON.stringify(value ?? '');",
+    '  for (const match of serialized.matchAll(/Command running in background with ID:\\s*([A-Za-z0-9_-]+)/gi)) launched.add(match[1]);',
+    '  for (const match of serialized.matchAll(/Monitor started \\(task ([A-Za-z0-9_-]+)/gi)) launched.add(match[1]);',
+    '}',
+    'function inspectNotifications(value) {',
+    "  if (typeof value !== 'string' || !value.includes('<task-notification>')) return;",
+    '  for (const match of value.matchAll(/<task-notification>([\\s\\S]*?)<\\/task-notification>/gi)) {',
+    '    const body = match[1];',
+    '    const id = body.match(/<task-id>([^<]+)<\\/task-id>/i);',
+    '    const status = body.match(/<status>(completed|failed|killed|error)<\\/status>/i);',
+    '    if (id && status) finished.add(id[1].trim());',
+    '  }',
+    '}',
+    'for (const line of text.split(/\\r?\\n/)) {',
+    '  let entry;',
+    '  try { entry = JSON.parse(line); } catch { continue; }',
+    '  const content = entry && entry.message ? entry.message.content : undefined;',
+    '  if (Array.isArray(content)) {',
+    '    for (const block of content) {',
+    "      if (block && block.type === 'tool_result') inspectToolResult(block.content);",
+    "      if (block && block.type === 'text') inspectNotifications(block.text);",
+    '    }',
+    '  } else {',
+    '    inspectNotifications(content);',
+    '  }',
+    '  inspectNotifications(entry && entry.content);',
+    '}',
+    'function findLiveTasks(candidates) {',
+    '  const live = new Set();',
+    "  if (candidates.size === 0 || !fs.existsSync('/proc')) return live;",
+    '  let processIds;',
+    "  try { processIds = fs.readdirSync('/proc').filter((name) => /^\\d+$/.test(name)); } catch { return live; }",
+    '  for (const processId of processIds) {',
+    "    for (const descriptor of ['0', '1', '2']) {",
+    '      let target;',
+    "      try { target = fs.readlinkSync('/proc/' + processId + '/fd/' + descriptor); } catch { continue; }",
+    '      const match = target.match(/[\\/]tasks[\\/]([A-Za-z0-9_-]+)\\.output(?: \\(deleted\\))?$/);',
+    '      if (match && candidates.has(match[1])) live.add(match[1]);',
+    '    }',
+    '    if (live.size === candidates.size) break;',
+    '  }',
+    '  return live;',
+    '}',
+    'const unfinished = new Set([...launched].filter((taskId) => !finished.has(taskId)));',
+    'const active = [...findLiveTasks(unfinished)];',
+    'if (active.length === 0) process.exit(0);',
+    'const shown = active.slice(0, 8);',
+    "const suffix = active.length > shown.length ? ' and ' + (active.length - shown.length) + ' more' : '';",
+    'process.stdout.write(JSON.stringify({',
+    "  decision: 'block',",
+    "  reason: 'You still own active background work (' + shown.join(', ') + suffix + '). Do not return an intermediate progress message as your final report. Process the task notifications or keep actively polling until every task completes, then return one complete summary.',",
+    '}));',
   ].join('\n');
 }
 
@@ -204,6 +332,18 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
           hooks: [{ type: 'command', command: curlCmd('stop'), timeout: HOOK_TIMEOUT_SECONDS }],
         },
       ],
+      SubagentStop: [
+        {
+          hooks: [
+            {
+              type: 'command',
+              command: 'node',
+              args: ['-e', generateSubagentStopGuardScript()],
+              timeout: HOOK_TIMEOUT_SECONDS,
+            },
+          ],
+        },
+      ],
       TeammateIdle: [
         {
           hooks: [{ type: 'command', command: curlCmd('teammate_idle'), timeout: HOOK_TIMEOUT_SECONDS }],
@@ -235,8 +375,12 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
 function isCodemanHookHandler(value: unknown): boolean {
   try {
     const serialized = JSON.stringify(value);
-    // Prefix, not the versioned marker: older script versions must still be ours.
-    return serialized.includes('/api/hook-event') || serialized.includes(BACKGROUND_WAKE_MARKER_PREFIX);
+    // Prefixes, not versioned markers: older script versions must still be ours.
+    return (
+      serialized.includes('/api/hook-event') ||
+      serialized.includes(BACKGROUND_WAKE_MARKER_PREFIX) ||
+      serialized.includes(SUBAGENT_STOP_GUARD_MARKER_PREFIX)
+    );
   } catch {
     return false;
   }
@@ -431,16 +575,50 @@ export async function writeHooksConfig(casePath: string): Promise<void> {
 }
 
 /**
+ * Ensures an explicitly managed case has the current Codeman hooks.
+ *
+ * Unlike `refreshStaleCodemanHooks`, this may add Codeman handlers to a valid
+ * user-owned settings file. It is therefore reserved for case quick-starts,
+ * where the user has explicitly asked Codeman to manage that workspace. A
+ * malformed existing file is left untouched rather than replaced.
+ */
+export async function ensureCodemanHooks(casePath: string): Promise<void> {
+  const claudeDir = join(casePath, '.claude');
+  const settingsPath = join(claudeDir, 'settings.local.json');
+  await withSettingsLock(settingsPath, async () => {
+    if (!existsSync(claudeDir)) {
+      await mkdir(claudeDir, { recursive: true });
+    }
+
+    let existing: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = JSON.parse(await readFile(settingsPath, 'utf-8'));
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+      existing = parsed as Record<string, unknown>;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return;
+    }
+
+    const generated = generateHooksConfig();
+    const hooks = mergeCodemanHooks(existing.hooks, generated.hooks);
+    if (JSON.stringify(existing.hooks ?? {}) === JSON.stringify(hooks)) return;
+
+    await writeFile(settingsPath, JSON.stringify({ ...existing, hooks }, null, 2) + '\n');
+  });
+}
+
+/**
  * Self-heal a case's Codeman-owned hooks block.
  *
  * `writeHooksConfig` only runs when a case is first CREATED. Cases created before the
  * X-Codeman-Hook-Secret header was added (COD-54, 2026-06-10) keep hook curls in their
  * settings.local.json that POST to /api/hook-event WITHOUT the secret — which, once the
  * gate requires it unconditionally (COD-91), silently 401 on a password-protected install.
- * Older Codeman blocks also lack the background Bash async-rewake hook. A third stale
- * shape: hook curls without `-k`, which exit 60 on every --https/tailscale install (the
- * cert is self-signed), swallowed by the hooks' own `|| true` — all six hook events die
- * silently. Refresh any of these stale shapes on launch so existing cases heal.
+ * Older Codeman blocks also lack the current background Bash async-rewake hook or the
+ * SubagentStop guard. A further stale shape: hook curls without `-k`, which exit 60 on
+ * every --https/tailscale install (the cert is self-signed), swallowed by the hooks'
+ * own `|| true` — all six hook events die silently. Refresh any of these stale shapes
+ * on launch so existing cases heal.
  *
  * Deliberately surgical: regenerates ONLY when settings.local.json already contains
  * Codeman's own hook curls (they target `/api/hook-event`) and they are stale. No-op
@@ -467,7 +645,8 @@ export async function refreshStaleCodemanHooks(casePath: string): Promise<void> 
     // as a substring, so this cleanly identifies hook curls that die with exit 60
     // on a self-signed HTTPS install.
     const hasTlsFlaglessCurl = hooksJson.includes('curl -s -X POST');
-    if (!isOurs || (hasSecret && hasBackgroundWake && !hasTlsFlaglessCurl)) return;
+    const hasSubagentStopGuard = hooksJson.includes(SUBAGENT_STOP_GUARD_MARKER);
+    if (!isOurs || (hasSecret && hasBackgroundWake && hasSubagentStopGuard && !hasTlsFlaglessCurl)) return;
     const generated = generateHooksConfig();
     const merged = {
       ...existing,
