@@ -621,6 +621,16 @@ html.mobile-init .file-browser-panel {
     height: 4px;
   }
 
+  /* The working dot is the one glance-state a phone needs: keep idle tiny, but
+     let the pulsing green "working" dot read from arm's length. !important on
+     the glow because the skin block's no-halo rule (styles.css, nested under
+     html:not([data-skin="og"])) outranks any plain class rule here. */
+  .session-tab .tab-status.busy {
+    width: 9px;
+    height: 9px;
+    box-shadow: 0 0 8px 2px color-mix(in srgb, var(--green) 55%, transparent) !important;
+  }
+
   /* Truncate tab names more aggressively on mobile */
   .session-tab .tab-name {
     max-width: 50px;

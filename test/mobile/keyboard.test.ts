@@ -469,7 +469,9 @@ describe('Virtual Keyboard', () => {
           (button) => (button as HTMLElement).dataset.action
         );
       });
-      expect(actions).toEqual(['scroll-up', 'scroll-down', 'init', 'clear', 'paste', 'dismiss']);
+      // Tab replaced /clear in the simple bar; /clear and /compact live in the
+      // extended bar only.
+      expect(actions).toEqual(['scroll-up', 'scroll-down', 'init', 'tab', 'paste', 'esc', 'dismiss']);
     });
 
     it('double-tap confirm on /clear button', async () => {
@@ -477,9 +479,11 @@ describe('Virtual Keyboard', () => {
       await showKeyboard(page, KEYBOARD.TYPICAL_IOS_HEIGHT);
       await page.waitForTimeout(WAIT.KEYBOARD_ANIMATION);
 
-      // handleAction() early-returns if app.activeSessionId is falsy — mock it
+      // handleAction() early-returns if app.activeSessionId is falsy — mock it.
+      // /clear only exists in the extended bar now, so switch modes first.
       await page.evaluate(`
         if (typeof app !== 'undefined') app.activeSessionId = 'test-session';
+        KeyboardAccessoryBar.setMode('extended');
       `);
 
       // Click via JS since the button is positioned outside the viewport
@@ -503,6 +507,8 @@ describe('Virtual Keyboard', () => {
         return btn?.textContent?.trim();
       });
       expect(text).toBe('Tap again');
+
+      await page.evaluate(`KeyboardAccessoryBar.setMode('simple');`);
     });
 
     it('double-tap expires after 2s', async () => {
@@ -511,6 +517,7 @@ describe('Virtual Keyboard', () => {
 
       await page.evaluate(`
         if (typeof app !== 'undefined') app.activeSessionId = 'test-session';
+        KeyboardAccessoryBar.setMode('extended');
       `);
 
       // First tap on clear via JS
@@ -535,6 +542,8 @@ describe('Virtual Keyboard', () => {
         return btn?.classList.contains('confirming') ?? false;
       });
       expect(afterExpiry).toBe(false);
+
+      await page.evaluate(`KeyboardAccessoryBar.setMode('simple');`);
     });
 
     it('dismiss button blurs active element', async () => {

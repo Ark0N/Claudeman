@@ -4,10 +4,12 @@
  * Defines three exports:
  *
  * - KeyboardAccessoryBar (singleton object) — Quick action buttons shown above the virtual
- *   keyboard on mobile: arrow up/down, /init, /clear, /compact, paste, Esc, and dismiss.
+ *   keyboard on mobile: arrow up/down, /init, Tab, paste, Esc, and dismiss (the extended
+ *   bar adds /clear, /compact, Shift+Tab and more). Tab flushes any locally-buffered
+ *   prompt text to the PTY before sending \t, so completion applies to what was typed.
  *   The paste button opens a dialog that handles both text paste and image attach
  *   (native picker + best-effort image paste, routed through app._uploadAndInsertImages).
- *   Destructive actions (/clear, /compact) require double-tap confirmation (2s amber state).
+ *   Destructive actions (/clear, /compact, extended bar only) require double-tap confirmation (2s amber state).
  *   Commands are sent as text + Enter separately for Ink compatibility.
  *   Only initializes on touch devices (MobileDetection.isTouchDevice guard).
  * - PathPicker (singleton object) — Lazy server-side file/folder browser shared
@@ -432,7 +434,7 @@ const KeyboardAccessoryBar = {
         </svg>
       </button>
       <button class="accessory-btn" data-action="init" title="/init">/init</button>
-      <button class="accessory-btn" data-action="clear" title="/clear">/clear</button>
+      <button class="accessory-btn" data-action="tab" title="Tab">Tab</button>
       <button class="accessory-btn" data-action="paste" title="Paste from clipboard">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
@@ -562,9 +564,26 @@ const KeyboardAccessoryBar = {
       case 'opt-enter':
         this.sendKey('\x1b\r');
         break;
-      case 'tab':
-        this.sendKey('\t');
+      case 'tab': {
+        // Tab means "complete what I just typed", but with local echo the typed
+        // text is still buffered in the overlay and has never reached the PTY —
+        // a bare \t would ask the CLI to complete an empty composer. Flush the
+        // pending text first (same steps as the Shift+Enter branch in
+        // terminal-ui.js), then send \t after the sendCommand settle delay.
+        const overlay = app._localEchoOverlay;
+        const pending = (app._localEchoEnabled && overlay?.pendingText) || '';
+        if (pending) {
+          overlay.clear();
+          overlay.suppressBufferDetection?.();
+          app._flushedOffsets?.delete(app.activeSessionId);
+          app._flushedTexts?.delete(app.activeSessionId);
+          app.sendInput(pending);
+          setTimeout(() => this.sendKey('\t'), 120);
+        } else {
+          this.sendKey('\t');
+        }
         break;
+      }
       case 'shift-tab':
         this.sendKey('\x1b[Z');
         break;
