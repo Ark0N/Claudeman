@@ -3729,8 +3729,33 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  max-height: 240px;
+  /* Was a flat 240px (~4 rows), which "Show N more" then crammed 30+ rows into
+     (#260). Viewport-relative so the expanded list is actually scannable; the
+     collapsed list is shorter than this anyway, so it looks unchanged. */
+  max-height: min(60vh, 640px);
   overflow-y: auto;
+}
+
+.history-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.history-sort-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.7rem;
+  opacity: 0.75;
+  padding: 0.1rem 0.45rem;
+}
+
+.history-sort-btn:hover {
+  opacity: 1;
 }
 
 .history-item {

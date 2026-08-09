@@ -1954,7 +1954,47 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /** Number of history items shown before "Show More" */
-  _HISTORY_INITIAL_COUNT: 4,
+  _HISTORY_INITIAL_COUNT: 8,
+
+  /** How many unified sessions to pull for the Resume list + client-side search. */
+  _HISTORY_FETCH_LIMIT: 200,
+
+  /** Sort order for the Resume list: 'recent' (default) or 'name' (A–Z by folder). */
+  _historySort: 'recent',
+
+  /** Unified sessions from the last loadHistorySessions() — the search panel's
+   *  corpus for PAST sessions, which /api/search cannot see (#261). */
+  _historySessionsCache: null,
+  _historyCasesCache: null,
+
+  /**
+   * Order the Resume list. 'name' sorts by folder basename then session name so
+   * the same project's sessions cluster; 'recent' keeps the server's ordering
+   * (already newest-first) rather than re-deriving it.
+   */
+  _sortHistorySessions(sessions) {
+    if (this._historySort !== 'name') return sessions;
+    const key = (s) => {
+      const dir = String(s.workingDir || '');
+      const base = dir.slice(dir.lastIndexOf('/') + 1);
+      return (base || s.name || s.sessionId || '').toLowerCase();
+    };
+    return sessions.slice().sort((a, b) => {
+      const c = key(a).localeCompare(key(b), undefined, { sensitivity: 'base', numeric: true });
+      return c !== 0 ? c : String(a.name || '').localeCompare(String(b.name || ''));
+    });
+  },
+
+  /** Flip the Resume list between newest-first and A–Z, then re-render. */
+  toggleHistorySort() {
+    this._historySort = this._historySort === 'name' ? 'recent' : 'name';
+    try {
+      localStorage.setItem('codeman:historySort', this._historySort);
+    } catch { /* private mode — order just won't persist */ }
+    const btn = document.getElementById('historySortBtn');
+    if (btn) btn.textContent = this._historySort === 'name' ? 'A–Z' : 'Recent';
+    void this.loadHistorySessions();
+  },
 
   async loadHistorySessions() {
     const container = document.getElementById('historySessions');
@@ -1962,19 +2002,35 @@ Object.assign(CodemanApp.prototype, {
     if (!container || !list) return;
 
     try {
+      const saved = localStorage.getItem('codeman:historySort');
+      if (saved === 'name' || saved === 'recent') this._historySort = saved;
+    } catch { /* private mode — fall back to the default order */ }
+    const sortBtn = document.getElementById('historySortBtn');
+    if (sortBtn) sortBtn.textContent = this._historySort === 'name' ? 'A–Z' : 'Recent';
+
+    try {
       // Load cases in parallel so subtitle can show "#caseName" labels.
       // Prefer already-loaded this.cases to avoid an extra request.
       const casesPromise = Array.isArray(this.cases) && this.cases.length > 0
         ? Promise.resolve(this.cases)
         : fetch('/api/cases').then((r) => (r.ok ? r.json() : null)).then((d) => d?.data || []).catch(() => []);
-      const [allSessions, cases] = await Promise.all([
-        this._fetchUnifiedSessions(60),
+      let [allSessions, cases] = await Promise.all([
+        this._fetchUnifiedSessions(this._HISTORY_FETCH_LIMIT),
         casesPromise,
       ]);
       if (allSessions.length === 0) {
+        this._historySessionsCache = [];
         container.style.display = 'none';
         return;
       }
+
+      // Cache for the search panel. /api/search harvests only LIVE in-memory
+      // sessions, so past sessions are invisible to it (#261); the search box
+      // filters this array client-side to cover them.
+      this._historySessionsCache = allSessions;
+      this._historyCasesCache = cases;
+
+      allSessions = this._sortHistorySessions(allSessions);
 
       list.replaceChildren();
       const initialCount = this._HISTORY_INITIAL_COUNT;
@@ -3799,9 +3855,72 @@ Object.assign(CodemanApp.prototype, {
       // null = request error or 400 (bad input). Show an empty/error state.
       this._searchLastData = { query: q, groups: [], totalResults: 0, truncated: false, _error: true };
     } else {
-      this._searchLastData = data;
+      this._searchLastData = this._mergeHistoryMatches(data, q);
     }
     this._renderSearch(this._searchLastData);
+  },
+
+  /**
+   * Fold PAST sessions into the server's result set (#261).
+   *
+   * /api/search harvests `ctx.sessions.values()` — the live in-memory map — so a
+   * session that has ended is unfindable, including by its folder name. The home
+   * screen already holds the unified list for the Resume UI, so match against
+   * that here rather than adding disk I/O to the search request path (the harvest
+   * documents itself as no-disk-I/O, and that property is worth keeping).
+   *
+   * Server rows win: anything already returned is skipped by session id.
+   */
+  _mergeHistoryMatches(data, query) {
+    const history = this._historySessionsCache;
+    if (!Array.isArray(history) || history.length === 0) return data;
+    if (this._searchTypes && !this._searchTypes.has('session')) return data;
+
+    const needle = String(query || '').trim().toLowerCase();
+    if (!needle) return data;
+
+    const groups = (data.groups || []).map((g) => ({ type: g.type, results: (g.results || []).slice() }));
+    const sessionGroup = groups.find((g) => g.type === 'session');
+    const seen = new Set();
+    for (const g of groups) {
+      for (const r of g.results) if (r.sessionId) seen.add(r.sessionId);
+    }
+
+    const extra = [];
+    for (const s of history) {
+      const id = s.claudeSessionId || s.sessionId;
+      if (!id || seen.has(id) || seen.has(s.sessionId)) continue;
+      const name = s.name || '';
+      const dir = s.workingDir || '';
+      if (
+        !name.toLowerCase().includes(needle) &&
+        !dir.toLowerCase().includes(needle) &&
+        !String(s.sessionId || '').toLowerCase().includes(needle)
+      ) {
+        continue;
+      }
+      seen.add(id);
+      extra.push({
+        type: 'session',
+        sessionId: id,
+        sessionName: name || dir.slice(dir.lastIndexOf('/') + 1) || id,
+        timestamp: s.lastActivityAt || s.createdAt || 0,
+        snippet: dir ? `${name || '(session)'} — ${dir}` : name,
+        exactMatch: name.toLowerCase() === needle,
+        // Distinct kind: these are not live, so selectSession() would find nothing.
+        jumpTo: { kind: 'history', sessionId: id, workingDir: dir, name: name || undefined },
+      });
+    }
+
+    if (extra.length === 0) return data;
+    extra.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+    if (sessionGroup) {
+      sessionGroup.results = sessionGroup.results.concat(extra);
+    } else {
+      groups.unshift({ type: 'session', results: extra });
+    }
+    return { ...data, groups, totalResults: (data.totalResults || 0) + extra.length };
   },
 
   /**
@@ -3952,7 +4071,11 @@ Object.assign(CodemanApp.prototype, {
     if (typeof this.hideWelcome === 'function') this.hideWelcome();
 
     try {
-      if (jt.kind === 'run-summary') {
+      if (jt.kind === 'history') {
+        // Past session — not in the live map, so resume it the way the Resume
+        // Conversation list does rather than trying to switch to a live tab.
+        void this.resumeHistorySession(jt.sessionId, jt.workingDir || '', jt.name);
+      } else if (jt.kind === 'run-summary') {
         this.openRunSummary(jt.sessionId);
       } else if (jt.kind === 'file-preview') {
         this.openFilePreview(jt.relativePath || '', jt.sessionId, jt.targetId || null);

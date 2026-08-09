@@ -397,7 +397,16 @@
               </div>
               <div class="search-results" id="searchResults" hidden></div>
             </div>
-            <h3 class="history-title" id="historyTitle">Resume Conversation</h3>
+            <div class="history-title-row" id="historyTitle">
+              <h3 class="history-title">Resume Conversation</h3>
+              <button
+                type="button"
+                class="history-sort-btn"
+                id="historySortBtn"
+                title="Toggle sort: newest first / A–Z by folder"
+                onclick="app.toggleHistorySort()"
+              >Recent</button>
+            </div>
             <div class="history-list" id="historyList"></div>
           </div>
           <p class="welcome-hint">Or click Run to start</p>
