@@ -167,6 +167,118 @@ describe('file-routes', () => {
       expect(res.statusCode).toBe(403);
       expect(JSON.parse(res.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.INVALID_INPUT });
     });
+
+    // ===== showHidden=true (issue #221) =====
+    //
+    // The dotfile filter used to be doing security work by accident: with every
+    // hidden path unreachable, the sensitive-path blocklist never had to cover
+    // `~/.config/gh/hosts.yml` and friends. These pin that opting in lifts the
+    // hidden filter and NOTHING else — blocked trees, sensitive files and root
+    // confinement all still apply.
+    describe('showHidden=true', () => {
+      it('lists dot-prefixed entries', async () => {
+        mockedReaddir.mockResolvedValueOnce([
+          { name: '.github', isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false },
+          { name: '.gitignore', isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false },
+          { name: 'src', isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false },
+        ] as never);
+
+        const root = harness.ctx._session.workingDir;
+        const res = await harness.app.inject({
+          method: 'GET',
+          url: `/api/filesystem/browse?sessionId=${harness.ctx._sessionId}&path=${encodeURIComponent(root)}&showHidden=true`,
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(res.body).data.entries.map((e: { name: string }) => e.name)).toEqual([
+          '.github',
+          'src',
+          '.gitignore',
+        ]);
+      });
+
+      it('allows navigating into a hidden descendant', async () => {
+        mockedReaddir.mockResolvedValueOnce([
+          { name: 'workflows', isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false },
+        ] as never);
+
+        const hidden = `${harness.ctx._session.workingDir}/.github`;
+        const res = await harness.app.inject({
+          method: 'GET',
+          url: `/api/filesystem/browse?sessionId=${harness.ctx._sessionId}&path=${encodeURIComponent(hidden)}&showHidden=true`,
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(res.body).data.path).toBe(hidden);
+      });
+
+      it('still hides dot-prefixed entries when the flag is absent or false', async () => {
+        const entries = [
+          { name: '.gitignore', isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false },
+          { name: 'src', isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false },
+        ];
+        const root = harness.ctx._session.workingDir;
+
+        for (const query of ['', '&showHidden=false']) {
+          mockedReaddir.mockResolvedValueOnce(entries as never);
+          const res = await harness.app.inject({
+            method: 'GET',
+            url: `/api/filesystem/browse?sessionId=${harness.ctx._sessionId}&path=${encodeURIComponent(root)}${query}`,
+          });
+          expect(res.statusCode).toBe(200);
+          expect(JSON.parse(res.body).data.entries.map((e: { name: string }) => e.name)).toEqual(['src']);
+        }
+      });
+
+      it('rejects a showHidden value that is not a boolean string', async () => {
+        const res = await harness.app.inject({
+          method: 'GET',
+          url: `/api/filesystem/browse?sessionId=${harness.ctx._sessionId}&showHidden=yes`,
+        });
+
+        expect(res.statusCode).toBe(400);
+        expect(JSON.parse(res.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.INVALID_INPUT });
+      });
+
+      it('still omits blocked and sensitive entries', async () => {
+        const root = harness.ctx._session.workingDir;
+        mockedReaddir.mockResolvedValueOnce([
+          { name: '.ssh', isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false },
+          { name: '.npmrc', isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false },
+          { name: '.env', isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false },
+          { name: '.gitignore', isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false },
+          // A plainly-named symlink whose target is a secret: caught on the
+          // resolved path, not the visible name.
+          { name: 'notes', isDirectory: () => false, isFile: () => false, isSymbolicLink: () => true },
+        ] as never);
+        mockedRealpathSync.mockImplementation((p: string) =>
+          p === `${root}/notes` ? (`${root}/.aws/credentials` as never) : (p as never)
+        );
+
+        const res = await harness.app.inject({
+          method: 'GET',
+          url: `/api/filesystem/browse?sessionId=${harness.ctx._sessionId}&path=${encodeURIComponent(root)}&showHidden=true`,
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(res.body).data.entries.map((e: { name: string }) => e.name)).toEqual(['.gitignore']);
+      });
+
+      it('refuses a hidden path that resolves outside every root', async () => {
+        const outside = `${harness.ctx._session.workingDir}/.cache`;
+        mockedRealpathSync.mockImplementation((p: string) =>
+          p === outside ? ('/tmp/somewhere-else' as never) : (p as never)
+        );
+
+        const res = await harness.app.inject({
+          method: 'GET',
+          url: `/api/filesystem/browse?sessionId=${harness.ctx._sessionId}&path=${encodeURIComponent(outside)}&showHidden=true`,
+        });
+
+        expect(res.statusCode).toBe(403);
+        expect(JSON.parse(res.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.INVALID_INPUT });
+      });
+    });
   });
 
   // ========== Multi-user scoping for the filesystem picker ==========
