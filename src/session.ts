@@ -766,6 +766,11 @@ export class Session extends EventEmitter {
     return this._docker;
   }
 
+  /** Remote-SSH metadata when this session runs on a remote host, else undefined. */
+  get remote(): SessionRemote | undefined {
+    return this._remote;
+  }
+
   /** Owning username in multi-user mode, else undefined. */
   get owner(): string | undefined {
     return this._owner;

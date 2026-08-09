@@ -87,6 +87,7 @@ import {
 } from './session-listener-wiring.js';
 import { sessionWaits, hooksAvailableForMode } from './session-wait-registry.js';
 import { intentStore } from '../intent-store.js';
+import { AI_CHECK_MODEL } from '../config/ai-defaults.js';
 import { approvalInbox } from './approval-inbox.js';
 import {
   wireRespawnListeners,
@@ -639,6 +640,8 @@ export class WebServer extends EventEmitter {
       getLightSessionsState: this.getLightSessionsState.bind(this),
       startTranscriptWatcher: this.startTranscriptWatcher.bind(this),
       stopTranscriptWatcher: this.stopTranscriptWatcher.bind(this),
+      getTranscriptPath: (sessionId: string) => this.transcriptWatchers.get(sessionId)?.getPath() ?? null,
+      getReadMyMindModel: this.getReadMyMindModel.bind(this),
       // InfraPort
       mux: this.mux,
       runSummaryTrackers: this.runSummaryTrackers,
@@ -1694,6 +1697,18 @@ export class WebServer extends EventEmitter {
   private async getAgentSkillEnabled(): Promise<boolean> {
     const settings = await this.readSettings();
     return settings.agentSkillEnabled === true;
+  }
+
+  /**
+   * Read My Mind predictor model (docs/readmymind-plan.md): `readMyMindModel`
+   * setting, defaulting to the AI-checker opus model. Prediction quality is
+   * the product and runs only on an explicit press, so the cost profile is
+   * nothing like the idle checker's.
+   */
+  private async getReadMyMindModel(): Promise<string> {
+    const settings = await this.readSettings();
+    const model = typeof settings.readMyMindModel === 'string' ? settings.readMyMindModel.trim() : '';
+    return model || AI_CHECK_MODEL;
   }
 
   // Helper to get model configuration from settings

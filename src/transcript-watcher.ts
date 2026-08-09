@@ -184,6 +184,15 @@ export class TranscriptWatcher extends EventEmitter {
   }
 
   /**
+   * Path currently being watched, or null. Read My Mind's transcript collector
+   * (readmymind-collectors.ts) tail-reads the file directly: the watcher keeps
+   * only a 500-char snippet and starts empty after a server restart.
+   */
+  getPath(): string | null {
+    return this.transcriptPath;
+  }
+
+  /**
    * Update the transcript path (e.g., from a new hook event)
    */
   updatePath(transcriptPath: string): void {

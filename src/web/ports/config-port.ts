@@ -24,4 +24,12 @@ export interface ConfigPort {
   getLightSessionsState(): unknown[];
   startTranscriptWatcher(sessionId: string, transcriptPath: string): void;
   stopTranscriptWatcher(sessionId: string): void;
+  /**
+   * Transcript JSONL path from the session's live watcher, or null (no hook
+   * has fired yet / not a claude-mode session). Read My Mind's transcript
+   * collector tail-reads this file for prediction context.
+   */
+  getTranscriptPath(sessionId: string): string | null;
+  /** Read My Mind predictor model: the `readMyMindModel` setting, defaulting to AI_CHECK_MODEL. */
+  getReadMyMindModel(): Promise<string>;
 }

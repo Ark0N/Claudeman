@@ -50,6 +50,7 @@ read the status with `-w '%{http_code}'` and the raw body before assuming a bug.
 | the case's intent profile (Read My Mind: user goals + recent real prompts) | `GET /api/v1/sessions/:id/intent` → `.data.intent.{goals,recentPrompts}` (empty with `updatedAt: 0` until something is recorded) |
 | replace the user-goals text on the case's intent profile | `PUT /api/v1/sessions/:id/intent` body `{"goals":"…"}` (≤ 8192 chars, strict schema; REPLACES the text, read + merge first) |
 | forget the case's intent profile (only when the user asks) | `DELETE /api/v1/sessions/:id/intent` → `.data.deleted` |
+| predict the user's next prompt (Read My Mind; claude-mode only, 5-90 s, costs real tokens) | `POST /api/v1/sessions/:id/readmymind` body `{}` (rethink: `{"steer":"…","rejected":["…"]}`) → `.data.suggestions[].{prompt,why,kind}` — suggestions are PROPOSALS; never send one to a session unless the user asked. 409 = one already running; 400 = non-claude mode |
 | server status / version | `GET /api/v1/status` → `.data.version` |
 | delete one session (yours only, via `delete_session`) | `DELETE /api/v1/sessions/:id` — never call it bare; the fail-closed helper in SKILL.md §0 is the only self-protection that exists. Answers `{"success":true,"data":{}}`: an **empty** body is the success signal, there is nothing to read back |
 

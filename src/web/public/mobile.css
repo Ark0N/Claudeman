@@ -530,6 +530,12 @@ html.mobile-init .file-browser-panel {
     display: none !important;
   }
 
+  /* Read My Mind 🧠 button: desktop header only in phase 2; the phone surface
+     is a planned keyboard-accessory key (docs/readmymind-plan.md phase 3). */
+  .btn-icon-header.btn-readmymind {
+    display: none !important;
+  }
+
   /* The big labeled Admin Panel button is desktop-only (admin-gated, revealed by
      admin-ui.js). On phones admins still reach user management via App Settings →
      Users, so the cramped header stays minimal. */

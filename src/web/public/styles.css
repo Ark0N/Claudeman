@@ -10668,6 +10668,80 @@ kbd {
   display: none !important;
 }
 
+/* Read My Mind 🧠 header button: opt-in (`readMyMindEnabled`, synced, default
+   OFF), revealed by applyHeaderVisibilitySettings(). Marker-class pattern:
+   the base display rule is !important, so hiding must also be a class. */
+.btn-readmymind {
+  display: inline-flex !important;
+}
+.btn-readmymind.btn-readmymind--hidden {
+  display: none !important;
+}
+.btn-readmymind .readmymind-icon {
+  font-size: 13px;
+  line-height: 1;
+}
+
+/* Read My Mind modal: top suggestion in an editable single-line field with the
+   kind badge beside it and the rationale below. */
+.modal-content.readmymind-modal {
+  max-width: 560px;
+}
+.readmymind-loading {
+  padding: 14px 4px;
+  color: var(--text-dim);
+  animation: readmymind-pulse 1.4s ease-in-out infinite;
+}
+@keyframes readmymind-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+.readmymind-suggestion-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.readmymind-kind {
+  flex: 0 0 auto;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 3px 7px;
+  border-radius: 9px;
+  border: 1px solid var(--control-border);
+  color: var(--text-dim);
+}
+.readmymind-kind-verify {
+  color: var(--warning, #e5c07b);
+}
+.readmymind-kind-redirect {
+  color: var(--accent);
+}
+.readmymind-prompt-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--mono-font, monospace);
+  font-size: 13px;
+  padding: 8px 10px;
+  background: var(--bg-dark);
+  color: var(--text);
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+}
+.readmymind-prompt-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.readmymind-why {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.readmymind-error {
+  padding: 12px 4px;
+  color: var(--text-dim);
+}
+
 .approvals-badge {
   position: absolute;
   top: 2px;

@@ -410,6 +410,22 @@ profile (`DELETE .../intent`) unless the user asks: it is their memory, not
 yours. Older servers 404 these routes; treat that as "feature absent", not an
 error.
 
+**Predict the user's next prompt.** The same profile feeds a one-shot
+predictor (claude-mode sessions only; takes 5-90 s and costs real tokens, so
+call it only when asked or when genuinely deciding what the user wants next):
+
+```bash
+"${CURL[@]}" -X POST -H 'Content-Type: application/json' -d '{}' \
+  "$API/api/v1/sessions/$SELF/readmymind" | jq '.data.suggestions'
+```
+
+Each suggestion is `{prompt, why, kind}` (`kind`: `continue` / `verify` /
+`redirect`). To re-run after a miss, pass `{"steer":"…","rejected":["…"]}` with
+the rejected prompt texts. A 409 means a prediction is already running for the
+session; a 400 means non-claude mode. ⚠️ Suggestions are **proposals for the
+user**: never send one into a session (yours or another's) unless the user
+explicitly asked you to act on it.
+
 Everything else (endpoint tables, per-mode signal table, error codes, capacity
 limits, Docker/remote caveats): [reference/endpoints.md](reference/endpoints.md).
 Fan-out orchestration and blocked-worker handling:
