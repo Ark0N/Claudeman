@@ -9192,6 +9192,20 @@ kbd {
   gap: 0.25rem;
 }
 
+/* Show-hidden toggle: a literal `.*` glyph rather than an icon, so its meaning
+ * (dot-prefixed files and folders) survives every skin and font stack. */
+.btn-file-browser-hidden {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: -0.05em;
+}
+
+.btn-file-browser-hidden.active {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
 .file-browser-search {
   padding: 0.4rem;
   border-bottom: 1px solid var(--border);
