@@ -12210,7 +12210,8 @@ body.touch-device.cjk-input-visible .main {
 }
 
 .path-picker-up,
-.path-picker-refresh {
+.path-picker-refresh,
+.path-picker-hidden {
   flex: 0 0 38px;
   height: 38px;
   color: var(--text);
@@ -12218,6 +12219,20 @@ body.touch-device.cjk-input-visible .main {
   border: 1px solid var(--border);
   border-radius: 8px;
   cursor: pointer;
+}
+
+/* Show-hidden toggle: a literal `.*` glyph rather than an icon, so its meaning
+ * (dot-prefixed files and folders) survives every skin and font stack. */
+.path-picker-hidden {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: -0.05em;
+}
+
+.path-picker-hidden.active {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .path-picker-up:disabled {

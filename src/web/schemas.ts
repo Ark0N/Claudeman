@@ -65,6 +65,14 @@ const filesystemPickerPathSchema = z
   })
   .refine((p) => !p.split('/').includes('..'), { message: 'Path traversal is not allowed' });
 
+/**
+ * Opt-in flag for listing dot-prefixed entries in the path picker. Absent means
+ * off, so an old client keeps the previous behavior. It is a string rather than
+ * a boolean because it arrives as a query parameter; `'false'` is accepted (and
+ * means off) so a client can send the flag unconditionally.
+ */
+const showHiddenQuerySchema = z.enum(['true', 'false']).optional();
+
 /** Query validation for the lazy, allowlisted filesystem path picker. */
 export const FilesystemBrowseQuerySchema = z.object({
   path: filesystemPickerPathSchema.optional(),
@@ -73,6 +81,7 @@ export const FilesystemBrowseQuerySchema = z.object({
     .max(100)
     .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid session id')
     .optional(),
+  showHidden: showHiddenQuerySchema,
 });
 
 /** Query validation for a single allowlisted path-picker file preview. */
@@ -83,6 +92,7 @@ export const FilesystemPreviewQuerySchema = z.object({
     .max(100)
     .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid session id')
     .optional(),
+  showHidden: showHiddenQuerySchema,
 });
 
 /**
