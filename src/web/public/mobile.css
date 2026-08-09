@@ -2872,3 +2872,47 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
     padding: 4px 7px;
   }
 }
+
+/* ============================================================================
+   Connection loss: phone sizing
+   The banner sits in normal flow directly under the fixed header (the container
+   already reserves that space), so it needs the same safe-area padding as the
+   other banners. The overlay is fixed and handles its own insets.
+   ============================================================================ */
+@media (max-width: 430px) {
+  .offline-banner {
+    padding: 0.4rem 0.5rem;
+    padding-left: calc(0.5rem + var(--safe-area-left));
+    padding-right: calc(0.5rem + var(--safe-area-right));
+    font-size: 0.7rem;
+    gap: 0.4rem;
+  }
+
+  /* The countdown is the first thing to go when the bar gets tight. The
+     wording plus the Retry button carry the message on their own. */
+  .offline-banner-detail {
+    display: none;
+  }
+
+  .offline-banner-retry {
+    padding: 0.25rem 0.5rem;
+    margin-left: auto;
+  }
+
+  .offline-overlay-card {
+    padding: 22px 18px 18px;
+  }
+
+  .offline-overlay-title {
+    font-size: 1.05rem;
+  }
+
+  .offline-overlay-actions {
+    flex-direction: column;
+  }
+
+  .offline-overlay-btn {
+    width: 100%;
+    padding: 0.65rem 1rem;
+  }
+}
