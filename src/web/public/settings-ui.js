@@ -39,7 +39,7 @@ Object.assign(CodemanApp.prototype, {
   },
 
   _onHookElicitationComplete(data) {
-    // Question answered in the terminal — clear the action alert without
+    // Question answered in the terminal: clear the action alert without
     // waiting for `stop` (the turn may keep running for a long time).
     if (data.sessionId) {
       this.clearPendingHooks(data.sessionId, 'elicitation_dialog');
@@ -172,7 +172,7 @@ Object.assign(CodemanApp.prototype, {
         if (event.data?.type === 'notification-click') {
           const { sessionId, action, approvalId } = event.data;
           if (action) {
-            // Approve/Deny action buttons on a push — answer via the
+            // Approve/Deny action buttons on a push: answer via the
             // Approvals Inbox instead of just focusing the session.
             this.handleNotificationAction?.(action, approvalId, sessionId);
           } else if (sessionId && this.sessions.has(sessionId)) {
@@ -342,8 +342,8 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsShowFileBrowser').checked = settings.showFileBrowser ?? defaults.showFileBrowser ?? false;
     document.getElementById('appSettingsShowSubagents').checked = settings.showSubagents ?? defaults.showSubagents ?? false;
     document.getElementById('appSettingsShowUltracodeAgents').checked = settings.showUltracodeAgents ?? defaults.showUltracodeAgents ?? false;
-    // Approvals Inbox: synced, default ON (only an explicit false disables).
-    document.getElementById('appSettingsApprovalsInbox').checked = settings.approvalsInboxEnabled !== false;
+    // Approvals Inbox: synced, default OFF (opt-in; only an explicit true enables).
+    document.getElementById('appSettingsApprovalsInbox').checked = settings.approvalsInboxEnabled === true;
     document.getElementById('appSettingsUltracodeFloatingWindows').checked =
       settings.ultracodeFloatingWindows ?? defaults.ultracodeFloatingWindows ?? false;
     document.getElementById('appSettingsShowMultiMonitorButton').checked = settings.showMultiMonitorButton ?? defaults.showMultiMonitorButton ?? false;

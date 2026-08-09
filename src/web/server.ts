@@ -2152,7 +2152,7 @@ export class WebServer extends EventEmitter {
       body,
       tag: `codeman-${event}-${sessionId}`,
       sessionId,
-      // Approvals Inbox item id — lets sw.js answer an Approve/Deny action
+      // Approvals Inbox item id: lets sw.js answer an Approve/Deny action
       // click directly (POST /api/approvals/:id/answer) with no tab open.
       approvalId: typeof data.approvalId === 'string' ? data.approvalId : undefined,
       urgency: template.urgency,

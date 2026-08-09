@@ -159,7 +159,7 @@ self.addEventListener('notificationclick', (event) => {
         body: JSON.stringify({ action }),
       }).then((res) => {
         if (res && res.ok) return undefined;
-        // 401/404/409: let the human see the state — fall back to a tab.
+        // 401/404/409: let the human see the state by falling back to a tab.
         return openOrFocus(sessionId, action, approvalId, targetUrl);
       }).catch(() => openOrFocus(sessionId, action, approvalId, targetUrl))
     );

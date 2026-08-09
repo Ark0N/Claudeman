@@ -1,7 +1,7 @@
 /**
  * Approvals Inbox store unit tests (src/web/approval-inbox.ts).
  *
- * Pure in-memory registry — no ports, no server. Constructs its own
+ * Pure in-memory registry: no ports, no server. Constructs its own
  * ApprovalInbox instances (never the process singleton) so tests cannot
  * leak state into the route tests that share the module.
  */
@@ -118,7 +118,7 @@ describe('normalizeCapturedFrame', () => {
   });
 
   it('converts absolute row repaints (formatPaneSnapshot frames) into lines', () => {
-    // The visible tmux capture carries NO newlines — every row is painted at
+    // The visible tmux capture carries NO newlines; every row is painted at
     // `ESC[<row>;1H`. Measured against a live dialog frame.
     const raw = '\x1b[12;1H Which color do you prefer?\x1b[13;1H❯ 1. Red\x1b[14;1H     Prefer red\x1b[15;1H  2. Blue';
     const out = normalizeCapturedFrame(raw)!;

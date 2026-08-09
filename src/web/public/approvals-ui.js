@@ -1,10 +1,12 @@
 /**
- * @fileoverview Approvals Inbox UI — cross-session queue of prompts waiting on a human.
+ * @fileoverview Approvals Inbox UI: cross-session queue of prompts waiting on a human.
  *
- * Renders the header bell (count badge, shown only while items are pending) and
- * the right-side drawer of approval cards, seeds pending items from
- * `GET /api/approvals` on init/reconnect (so tab alerts survive a reload), and
- * answers items in place via `POST /api/approvals/:id/answer`. Cards render
+ * Everything here is gated on the OPT-IN `approvalsInboxEnabled` setting
+ * (synced, default OFF): with it off, no bell, no drawer, no overview strips,
+ * no seeding. When on, the header bell renders only while items are pending
+ * (count badge), opening a right-side drawer of approval cards; pending items
+ * are seeded from `GET /api/approvals` on init/reconnect (so tab alerts
+ * survive a reload) and answered in place via `POST /api/approvals/:id/answer`. Cards render
  * buttons from the server-parsed dialog options; without parsed options they
  * fall back to Approve/Deny (permission/question) or a text prompt (idle).
  * Backend: src/web/approval-inbox.ts, design: docs/approvals-inbox-plan.md.
@@ -13,7 +15,7 @@
  * @dependency app.js (CodemanApp class, this.approvals, setPendingHook/clearPendingHooks, selectSession)
  * @dependency constants.js (escapeHtml)
  * @dependency api-client.js at runtime (this._apiJson; loads later but is only called after init)
- * @loadorder 11.6 of 17 — after ultracode-panel.js, before admin-ui.js
+ * @loadorder 11.6 of 17, after ultracode-panel.js, before admin-ui.js
  */
 
 /** Map an approval kind to the pendingHooks entry that drives tab alerts. */
@@ -22,14 +24,14 @@ function approvalKindToHook(kind) {
 }
 
 Object.assign(CodemanApp.prototype, {
-  /** Synced setting, default ON (only an explicit false disables). */
+  /** Synced setting, default OFF, opt-in via App Settings → Panels. */
   approvalsInboxEnabled() {
-    return this.loadAppSettingsFromStorage().approvalsInboxEnabled !== false;
+    return this.loadAppSettingsFromStorage().approvalsInboxEnabled === true;
   },
 
   /**
    * Seed pending approvals from the server. Called from handleInit, i.e. on
-   * every page load AND SSE reconnect — this is what makes pending alerts
+   * every page load AND SSE reconnect; this is what makes pending alerts
    * survive a reload (pre-inbox they lived only in SSE-transient memory).
    */
   async seedApprovals() {
@@ -51,7 +53,7 @@ Object.assign(CodemanApp.prototype, {
   _onApprovalPending(item) {
     if (!item || !item.id) return;
     if (!this.approvals) this.approvals = new Map();
-    // One active item per session (server invariant) — drop any stale sibling.
+    // One active item per session (server invariant): drop any stale sibling.
     for (const [id, existing] of this.approvals) {
       if (existing.sessionId === item.sessionId) this.approvals.delete(id);
     }
@@ -88,7 +90,7 @@ Object.assign(CodemanApp.prototype, {
       this.showToast(action === 'deny' ? 'Denied' : 'Answer sent', 'success');
     } else {
       // 404/409 = resolved elsewhere or the dialog left the screen; refresh truth.
-      this.showToast('Could not answer — prompt may already be resolved', 'warning');
+      this.showToast('Could not answer, the prompt may already be resolved', 'warning');
       this.seedApprovals();
     }
   },
@@ -104,7 +106,7 @@ Object.assign(CodemanApp.prototype, {
     });
     if (data) this.showToast('Prompt sent', 'success');
     else {
-      this.showToast('Could not send — session may be busy', 'warning');
+      this.showToast('Could not send, the session may be busy', 'warning');
       this.seedApprovals();
     }
   },

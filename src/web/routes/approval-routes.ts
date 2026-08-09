@@ -3,10 +3,10 @@
  *
  * The cross-session queue of prompts waiting on a human (see
  * web/approval-inbox.ts, docs/approvals-inbox-plan.md):
- * - `GET  /api/approvals` — pending items, ownership-scoped in multi-user mode
- * - `POST /api/approvals/:id/answer` — answer in place by sending the
+ * - `GET  /api/approvals`: pending items, ownership-scoped in multi-user mode
+ * - `POST /api/approvals/:id/answer`: answer in place by sending the
  *   corresponding keystrokes to the session (digit / Esc / idle-prompt text)
- * - `POST /api/approvals/:id/dismiss` — drop the item without keystrokes
+ * - `POST /api/approvals/:id/dismiss`: drop the item without keystrokes
  *
  * Normal authed API surface (NOT the localhost hook-secret bypass). Answering
  * is take-then-write: the item is removed BEFORE keystrokes go out so a
@@ -24,8 +24,8 @@ import type { SessionPort } from '../ports/index.js';
 
 /**
  * Keystrokes for an answer, or an error string. Menu answers are a single digit
- * or Esc — dialogs react to the keypress itself, so no Enter is ever sent for
- * them. Free text is allowed only for idle prompts (there IS no dialog; the
+ * or Esc (dialogs react to the keypress itself, so no Enter is ever sent for
+ * them). Free text is allowed only for idle prompts (there IS no dialog; the
  * text lands in the composer and `\r` submits it, per the CLAUDE.md input
  * discipline). `option` digits must match a PARSED option so a blind digit can
  * never be routed at a dialog we could not read.
@@ -82,7 +82,7 @@ export function registerApprovalRoutes(app: FastifyInstance, ctx: SessionPort): 
       // Covers unknown, already-answered, superseded and expired ids alike.
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Approval not found or no longer pending');
     }
-    // Throws 404 (not 403) for sessions the caller does not own — same
+    // Throws 404 (not 403) for sessions the caller does not own, same
     // no-existence-leak rule as every other session route.
     const session = findSessionOrFail(ctx, item.sessionId, req);
     if (!hooksAvailableForMode(session.mode)) {

@@ -1,5 +1,5 @@
 /**
- * @fileoverview Approvals Inbox — server-side registry of prompts waiting on a human.
+ * @fileoverview Approvals Inbox: server-side registry of prompts waiting on a human.
  *
  * One cross-session queue of pending Claude prompts (permission dialogs,
  * AskUserQuestion/elicitation questions, idle prompts), fed by `/api/hook-event`
@@ -48,7 +48,7 @@ export interface ApprovalOption {
 }
 
 export interface ApprovalItem {
-  /** `${sessionId}:${seq}` — stable across re-captures, unique per prompt. */
+  /** `${sessionId}:${seq}`, stable across re-captures, unique per prompt. */
   id: string;
   sessionId: string;
   sessionName: string;
@@ -96,7 +96,7 @@ const ITEM_TTL_MS = 12 * 60 * 60 * 1000;
  * single delayed re-capture picks up the frame the immediate capture missed.
  */
 const RECAPTURE_DELAY_MS = 600;
-/** Context kept per item — enough for a dialog plus a few lines above it. */
+/** Context kept per item: enough for a dialog plus a few lines above it. */
 const MAX_CONTEXT_CHARS = 4000;
 const MAX_CONTEXT_LINES = 30;
 const MAX_OPTION_LABEL_CHARS = 120;
@@ -144,9 +144,9 @@ export function normalizeCapturedFrame(raw: string | null | undefined): string |
  * Options must be consecutively numbered from 1 (2..6 of them); description /
  * wrap / separator lines between options are tolerated up to a small gap
  * (AskUserQuestion puts a description under every option and a ─ separator
- * before its "Chat about this" entry — measured against the live dialog). The
+ * before its "Chat about this" entry, measured against the live dialog). The
  * LAST complete block in the frame wins (dialogs render at the bottom).
- * Returns undefined when nothing parses — callers then fall back to
+ * Returns undefined when nothing parses; callers then fall back to
  * approve/deny only, so a mis-parse can never route a digit at a dialog that
  * does not have it.
  */
@@ -171,7 +171,7 @@ export function parseDialogOptions(context: string | undefined): ApprovalOption[
       commit();
       run = [{ n: 1, label: m[2].trim().slice(0, MAX_OPTION_LABEL_CHARS) }];
     } else if (run.length > 0 && ++gap > 3) {
-      // Too far past the last option for this to still be its description —
+      // Too far past the last option for this to still be its description:
       // the block is over.
       commit();
     }
@@ -183,7 +183,7 @@ export function parseDialogOptions(context: string | undefined): ApprovalOption[
 // ─── Registry ────────────────────────────────────────────────────────────────
 
 export class ApprovalInbox {
-  /** Keyed by sessionId — the one-active-item-per-session invariant lives here. */
+  /** Keyed by sessionId; the one-active-item-per-session invariant lives here. */
   private items = new Map<string, ApprovalItem>();
   private recaptureTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Capture callbacks kept for answer-time re-verification; dropped on remove. */
@@ -235,7 +235,7 @@ export class ApprovalInbox {
    * Answer-time guard: re-capture the pane and check the dialog is still on
    * screen before keystrokes are sent at it. Only conclusive when the ORIGINAL
    * frame parsed options: if a fresh capture then parses none, the dialog is
-   * gone (answered in the terminal moments ago) — the item resolves and the
+   * gone (answered in the terminal moments ago), so the item resolves and the
    * answer must be refused, because the digit would land in whatever now has
    * focus. Unparseable-from-the-start items stay answerable (approve/deny
    * only), same risk the terminal user already carries.
@@ -250,7 +250,7 @@ export class ApprovalInbox {
     try {
       raw = capture();
     } catch {
-      return true; // capture hiccup — inconclusive, keep the item answerable
+      return true; // capture hiccup: inconclusive, keep the item answerable
     }
     const context = normalizeCapturedFrame(raw);
     if (!context) return true;
@@ -316,7 +316,7 @@ export class ApprovalInbox {
 
   /**
    * Resolve a session's pending item, if any (stop hook, exit, ...). `kinds`
-   * restricts which item kinds the signal may clear — the heuristic `working`
+   * restricts which item kinds the signal may clear: the heuristic `working`
    * transition passes `['idle']` so a mid-turn flap cannot false-clear a
    * pending permission/question dialog.
    */
@@ -347,7 +347,7 @@ export class ApprovalInbox {
     const context = normalizeCapturedFrame(raw);
     if (!context) return;
     item.context = context;
-    // Idle prompts are not dialogs — never offer digit answers for them.
+    // Idle prompts are not dialogs; never offer digit answers for them.
     if (item.kind !== 'idle') item.options = parseDialogOptions(context);
   }
 

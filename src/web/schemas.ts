@@ -680,7 +680,7 @@ export const HookEventSchema = z.object({
 /**
  * Body of POST /api/approvals/:id/answer (Approvals Inbox).
  * `option` digits are additionally validated against the item's PARSED options
- * in the route — the schema alone must not authorize blind digit-poking.
+ * in the route; the schema alone must not authorize blind digit-poking.
  */
 export const ApprovalAnswerSchema = z
   .object({
@@ -791,9 +791,10 @@ export const SettingsUpdateSchema = z
      */
     agentSkillEnabled: z.boolean().optional(),
     /**
-     * Approvals Inbox UI (header badge + drawer, phone overview answer buttons).
-     * SYNCED, default ON: the surfaces only appear while a prompt is pending.
-     * The server-side store runs regardless (push actions keep working).
+     * Approvals Inbox UI (header bell + drawer, phone overview answer buttons).
+     * SYNCED, default OFF (opt-in): even with items pending, no surface renders
+     * until this is enabled. The server-side store and answer endpoints run
+     * regardless, so push Approve/Deny actions keep working either way.
      */
     approvalsInboxEnabled: z.boolean().optional(),
     tunnelEnabled: z.boolean().optional(),

@@ -1,11 +1,11 @@
 /**
- * Approvals Inbox route tests (src/web/routes/approval-routes.ts) via app.inject()
- * — no live port. The hook-event route is registered alongside so items are
+ * Approvals Inbox route tests (src/web/routes/approval-routes.ts) via app.inject(),
+ * no live port. The hook-event route is registered alongside so items are
  * created through the REAL ingestion path (sanitize → notePrompt with the
  * terminal-buffer capture fallback), not by poking the store directly.
  *
  * The routes read the process-wide `approvalInbox` singleton, so every test
- * drains it in afterEach — a leaked pending item would bleed into the next test.
+ * drains it in afterEach; a leaked pending item would bleed into the next test.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -203,7 +203,7 @@ describe('approval routes', () => {
   it('refuses with 409 when the dialog left the screen since capture', async () => {
     await postHook(harness, 'permission_prompt', {});
     const [item] = await listApprovals(harness);
-    // The dialog scrolled away — the re-capture at answer time must refuse.
+    // The dialog scrolled away, so the re-capture at answer time must refuse.
     session.terminalBuffer = 'claude is off doing something else now';
     const res = await harness.app.inject({
       method: 'POST',
@@ -301,7 +301,7 @@ describe('approval routes', () => {
   });
 });
 
-describe('approval routes — multi-user scoping', () => {
+describe('approval routes: multi-user scoping', () => {
   const saved: Record<string, string | undefined> = {};
 
   beforeEach(() => {

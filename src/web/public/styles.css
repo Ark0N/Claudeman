@@ -10643,7 +10643,7 @@ kbd {
   display: none !important;
 }
 
-/* "Approvals" header bell — appears ONLY while prompts are pending (JS toggles
+/* "Approvals" header bell: appears ONLY while prompts are pending (JS toggles
    the marker class on count changes), so it ships hidden and stays out of the
    default header. Same marker pattern as the attachments button. */
 .btn-approvals {
@@ -10672,7 +10672,7 @@ kbd {
   pointer-events: none;
 }
 
-/* Approvals Inbox drawer — same shell as the attachment history drawer. */
+/* Approvals Inbox drawer: same shell as the attachment history drawer. */
 .approvals-drawer {
   position: fixed;
   top: var(--header-height);

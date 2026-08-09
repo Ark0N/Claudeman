@@ -2509,7 +2509,7 @@ html.mobile-init .file-browser-panel {
 
   /* Approvals Inbox answer strip: sits under a NEEDS YOU row (sibling of the
      row <button>, see _buildMobileOverviewApprovalStrip). Buttons inherit no
-     toolbar styling on purpose — they are one-tap dialog answers, not runs. */
+     toolbar styling on purpose; they are one-tap dialog answers, not runs. */
   .mobile-overview-row-wrap {
     width: 100%;
   }
