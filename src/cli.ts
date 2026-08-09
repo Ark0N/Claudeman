@@ -136,7 +136,7 @@ const LINKED_CASES_FILE = dataPath('linked-cases.json');
  * Sync and tolerant on purpose: a missing or malformed registry means "no linked
  * cases", never a crash.
  */
-function resolveCliCasePath(name: string): string {
+export function resolveCliCasePath(name: string): string {
   try {
     const linked = JSON.parse(readFileSync(LINKED_CASES_FILE, 'utf-8')) as Record<string, string>;
     const target = linked?.[name];
@@ -154,17 +154,30 @@ function resolveCliCasePath(name: string): string {
  * `resolveCliCasePath()` above. The web server's automatic per-case injection
  * (`agentSkillEnabled`) covers multi-user spaces; this CLI is a local operator tool
  * and stays single-user.
+ *
+ * A missing case is REPORTED, not exited on: the exit lives in the wrapper below so
+ * this resolution (including the linked-cases lookup, which shipped unguarded) can be
+ * unit-tested without `process.exit(1)` taking the test runner down with it.
  */
-function resolveSkillTarget(options: { case?: string }): string {
+export function resolveSkillTargetPath(options: {
+  case?: string;
+}): { target: string; missingCase?: undefined } | { target?: undefined; missingCase: string } {
   if (options.case) {
     const casePath = resolveCliCasePath(options.case);
-    if (!existsSync(casePath)) {
-      console.error(chalk.red(`✗ Case not found: ${casePath}`));
-      process.exit(1);
-    }
-    return join(casePath, '.claude', 'skills', 'codeman');
+    if (!existsSync(casePath)) return { missingCase: casePath };
+    return { target: join(casePath, '.claude', 'skills', 'codeman') };
   }
-  return join(homedir(), '.claude', 'skills', 'codeman');
+  return { target: join(homedir(), '.claude', 'skills', 'codeman') };
+}
+
+/** Exit-owning wrapper around `resolveSkillTargetPath()` for the two commands below. */
+function resolveSkillTarget(options: { case?: string }): string {
+  const resolved = resolveSkillTargetPath(options);
+  if (resolved.missingCase !== undefined) {
+    console.error(chalk.red(`✗ Case not found: ${resolved.missingCase}`));
+    process.exit(1);
+  }
+  return resolved.target;
 }
 
 /** Print an AgentSkillApplyResult for humans; exit non-zero when nothing was done. */
