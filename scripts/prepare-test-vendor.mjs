@@ -26,7 +26,8 @@
  * silently disables the terminal.
  * `src/web/public/vendor/` is gitignored, so these stay build artifacts.
  *
- * Idempotent: skips outputs newer than every input they derive from.
+ * Idempotent: skips outputs that are complete and newer than every input they
+ * derive from.
  */
 import { execFileSync } from 'node:child_process';
 import {
@@ -99,10 +100,35 @@ function sourcesOf(asset) {
   }
 }
 
+/**
+ * A truncated output is the other half of the poisoned-cache problem, and the one
+ * `mustContain` cannot cover on its own: an interrupted write leaves a SHORT file
+ * carrying a current mtime, which the cache then trusts forever. This script
+ * publishes atomically so it can no longer create one, but postinstall.js:266-303
+ * still writes this same directory in place, so a Ctrl+C during `npm install`
+ * produces exactly that, and a 200-byte xterm.min.js means `Terminal` is undefined
+ * and every test dies on a null `app.terminal`.
+ *
+ * A copy must match its source byte for byte. A derived output is held to a floor
+ * far below the real ratios (0.97-1.00 for the minified assets, 0.51 for the
+ * bundle), so a dependency upgrade cannot trip it while a truncation misses by
+ * orders of magnitude.
+ */
+const MIN_DERIVED_RATIO = 0.1;
+
+function isCompleteSize(asset, dest) {
+  const srcBytes = statSync(asset.src).size;
+  const destBytes = statSync(dest).size;
+  if (asset.mode === 'copy') return destBytes === srcBytes;
+  return destBytes >= srcBytes * MIN_DERIVED_RATIO;
+}
+
 function isFresh(asset, dest) {
   if (!existsSync(dest)) return false;
   try {
-    // Content check before the mtime check, because mtime cannot see a WRONG file.
+    // Size and content checks before the mtime check, because mtime cannot see a
+    // WRONG file.
+    if (!isCompleteSize(asset, dest)) return false;
     // The atomic rename below stops this script from ever publishing a half-written
     // bundle, but it cannot repair one already on disk: anyone who ran an earlier
     // version that appended the aliases in place has a complete-looking file with a
@@ -118,6 +144,31 @@ function isFresh(asset, dest) {
 }
 
 mkdirSync(OUT, { recursive: true });
+
+// A run killed between its build and its rename leaks a temp, and the per-pid
+// names above mean nothing reclaims it later. Sweep the ones whose owning process
+// is gone, and ONLY those: deleting a live run's temp is the collision the per-pid
+// name exists to prevent. `kill(pid, 0)` throws ESRCH only when no such process
+// exists (EPERM means it does, owned by someone else, so leave it alone).
+for (const name of readdirSync(OUT)) {
+  const owner = /\.(\d+)\.tmp$/.exec(name);
+  const pid = owner ? Number(owner[1]) : 0;
+  // 0 is never a real owner: to kill(2) it means "this process group".
+  if (!pid) continue;
+  try {
+    process.kill(pid, 0);
+  } catch (err) {
+    // ESRCH alone means the owner is gone. Anything else (EPERM = alive under
+    // another user, a pid too large to be valid) leaves the file where it is.
+    if (err.code !== 'ESRCH') continue;
+    try {
+      rmSync(join(OUT, name), { force: true });
+    } catch {
+      // Reclaiming litter must never fail the run: a leftover temp is inert
+      // (gitignored, referenced by nothing), a crashed prepare step is not.
+    }
+  }
+}
 
 let built = 0;
 let skipped = 0;
@@ -139,7 +190,13 @@ for (const asset of ASSETS) {
   // this script exists to prevent. An interrupted esbuild or copy poisons the
   // cache the same way. rename(2) is atomic within a directory, so a reader sees
   // either the old file or the finished new one, never a half-written one.
-  const tmp = `${dest}.tmp`;
+  // The name carries our pid: the path must be private to this run. Two runs
+  // sharing one temp path fight over it, and losing that fight is not just a
+  // crash — a sibling's `rmSync` landing between the esbuild and the append below
+  // makes appendFileSync CREATE the file, so the rename publishes a bundle-less
+  // file consisting only of the alias tail. That file still contains
+  // `mustContain`, so the cache would bless it forever.
+  const tmp = `${dest}.${process.pid}.tmp`;
   rmSync(tmp, { force: true });
   // cwd: ROOT so `npx` resolves the repo's pinned esbuild. Without it a run from
   // another directory misses the local install and fetches an unpinned one.
@@ -160,36 +217,38 @@ for (const asset of ASSETS) {
         `--outfile=${tmp}`,
       ]);
     }
+
+    // The zerolag bundle exports only `XtermZerolagInput`. app.js constructs
+    // `new LocalEchoOverlay(terminal)` directly, so scripts/build.mjs appends
+    // global aliases after esbuild — without them initTerminal() throws
+    // `LocalEchoOverlay is not defined` at the point it builds the overlay, and
+    // every later step (including the mobile touch handlers) silently never runs.
+    if (asset.out === 'xterm-zerolag-input.js') {
+      appendFileSync(
+        tmp,
+        '\n// Global aliases for browser usage\n' +
+          'if(typeof window!=="undefined"){' +
+          'window.ZerolagInputAddon=XtermZerolagInput.ZerolagInputAddon;' +
+          'window.LocalEchoOverlay=class extends XtermZerolagInput.ZerolagInputAddon{' +
+          'constructor(terminal){' +
+          'super({prompt:{type:"character",char:"\\u276f",offset:2}});' +
+          'this.activate(terminal);' +
+          '}' +
+          '};' +
+          '}\n'
+      );
+    }
+
+    // Only now is the output complete, so publish it. The append and the rename
+    // are inside this try as well: a failure there has to clean the temp up and
+    // report like any other, not leak it behind a raw stack trace.
+    renameSync(tmp, dest);
   } catch (err) {
     rmSync(tmp, { force: true });
-    console.error(`[test-vendor] failed to build ${asset.out} from ${asset.src}\n  ${err.message}`);
+    console.error(`[test-vendor] failed to produce ${asset.out} from ${asset.src}\n  ${err.message}`);
     process.exit(1);
   }
   built += 1;
-
-  // The zerolag bundle exports only `XtermZerolagInput`. app.js constructs
-  // `new LocalEchoOverlay(terminal)` directly, so scripts/build.mjs appends
-  // global aliases after esbuild — without them initTerminal() throws
-  // `LocalEchoOverlay is not defined` at the point it builds the overlay, and
-  // every later step (including the mobile touch handlers) silently never runs.
-  if (asset.out === 'xterm-zerolag-input.js') {
-    appendFileSync(
-      tmp,
-      '\n// Global aliases for browser usage\n' +
-        'if(typeof window!=="undefined"){' +
-        'window.ZerolagInputAddon=XtermZerolagInput.ZerolagInputAddon;' +
-        'window.LocalEchoOverlay=class extends XtermZerolagInput.ZerolagInputAddon{' +
-        'constructor(terminal){' +
-        'super({prompt:{type:"character",char:"\\u276f",offset:2}});' +
-        'this.activate(terminal);' +
-        '}' +
-        '};' +
-        '}\n'
-    );
-  }
-
-  // Only now is the output complete, so publish it.
-  renameSync(tmp, dest);
 }
 
 console.log(`[test-vendor] ${built} built, ${skipped} up to date -> src/web/public/vendor/`);
