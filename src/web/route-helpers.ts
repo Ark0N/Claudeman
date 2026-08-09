@@ -335,12 +335,22 @@ export function sanitizeHookData(data: Record<string, unknown> | null | undefine
     'permission_mode',
     'stop_hook_active',
     'transcript_path',
+    'message',
   ];
 
   for (const key of allowedKeys) {
     if (key in data && data[key] !== undefined) {
       safeFields[key] = data[key];
     }
+  }
+
+  // Notification hooks carry the human-readable prompt text in `message`
+  // ("Claude needs your permission to use Bash"). Bound it like the
+  // tool_input summaries; the frontend and the Approvals Inbox both read it.
+  if (typeof safeFields.message === 'string') {
+    safeFields.message = safeFields.message.slice(0, 500);
+  } else if ('message' in safeFields) {
+    delete safeFields.message;
   }
 
   // For tool_input, extract only summary fields (not full file content)

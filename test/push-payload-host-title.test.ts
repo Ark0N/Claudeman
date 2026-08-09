@@ -76,11 +76,11 @@ describe('push payload hostTitle (Web Push hostname plumbing)', () => {
     setVapidDetails.mockClear();
   });
 
-  it('includes hostTitle = codeman:<titleHostname> in the payload', () => {
+  it('includes hostTitle = codeman:<titleHostname> in the payload', async () => {
     const server = makeServerWithHost('laptop');
-    (
+    await (
       server as unknown as {
-        sendPushNotifications: (e: string, d: Record<string, unknown>) => void;
+        sendPushNotifications: (e: string, d: Record<string, unknown>) => Promise<void>;
       }
     ).sendPushNotifications('hook:idle_prompt', {
       sessionId: 's-1',
@@ -93,11 +93,11 @@ describe('push payload hostTitle (Web Push hostname plumbing)', () => {
     expect(payload.title).toBe('Waiting for Input');
   });
 
-  it('falls back to os.hostname() when --title-hostname is not provided', () => {
+  it('falls back to os.hostname() when --title-hostname is not provided', async () => {
     const server = makeServerWithHost(''); // empty -> constructor uses getHostname()
-    (
+    await (
       server as unknown as {
-        sendPushNotifications: (e: string, d: Record<string, unknown>) => void;
+        sendPushNotifications: (e: string, d: Record<string, unknown>) => Promise<void>;
       }
     ).sendPushNotifications('hook:permission_prompt', {
       sessionId: 's-2',
@@ -111,18 +111,18 @@ describe('push payload hostTitle (Web Push hostname plumbing)', () => {
     expect(payload.title).toBe('Permission Required');
   });
 
-  it('different WebServer instances ship distinct hostTitles', () => {
+  it('different WebServer instances ship distinct hostTitles', async () => {
     const a = makeServerWithHost('host-a');
     const b = makeServerWithHost('host-b');
 
-    (
+    await (
       a as unknown as {
-        sendPushNotifications: (e: string, d: Record<string, unknown>) => void;
+        sendPushNotifications: (e: string, d: Record<string, unknown>) => Promise<void>;
       }
     ).sendPushNotifications('hook:stop', { sessionId: 's-a', sessionName: 'A' });
-    (
+    await (
       b as unknown as {
-        sendPushNotifications: (e: string, d: Record<string, unknown>) => void;
+        sendPushNotifications: (e: string, d: Record<string, unknown>) => Promise<void>;
       }
     ).sendPushNotifications('hook:stop', { sessionId: 's-b', sessionName: 'B' });
 
@@ -162,5 +162,68 @@ describe('service worker displayTitle composition (mirrors sw.js)', () => {
 
   it('defaults to "Codeman" when both missing', () => {
     expect(computeSwDisplayTitle({})).toBe('Codeman');
+  });
+});
+
+// ─── Approvals Inbox gating ──────────────────────────────────────────────
+// The Approve/Deny action buttons answer through the Approvals Inbox, so the
+// payload ships them (and the approvalId they act on) only when the OPT-IN
+// `approvalsInboxEnabled` setting is on. Pre-inbox these buttons rendered and
+// did nothing; with the feature off they must not render at all.
+
+interface ApprovalAwarePayload extends PushPayload {
+  approvalId?: string;
+}
+
+function setSettings(server: WebServer, settings: Record<string, unknown>): void {
+  (server as unknown as { readSettings: () => Promise<Record<string, unknown>> }).readSettings = async () => settings;
+}
+
+async function sendPermissionPush(server: WebServer): Promise<ApprovalAwarePayload> {
+  await (
+    server as unknown as {
+      sendPushNotifications: (e: string, d: Record<string, unknown>) => Promise<void>;
+    }
+  ).sendPushNotifications('hook:permission_prompt', {
+    sessionId: 's-gate',
+    sessionName: 'sess',
+    tool_name: 'Bash',
+    approvalId: 's-gate:1',
+  });
+  return lastPayload() as ApprovalAwarePayload;
+}
+
+describe('push payload Approvals Inbox gating', () => {
+  beforeEach(() => {
+    sendNotification.mockClear();
+  });
+
+  it('strips actions and approvalId when the setting is off (the default)', async () => {
+    const server = makeServerWithHost('gate-off');
+    setSettings(server, {});
+    const payload = await sendPermissionPush(server);
+    expect(payload.actions).toBeUndefined();
+    expect(payload.approvalId).toBeUndefined();
+    // The notification itself still goes out; only the inbox parts are gated.
+    expect(payload.title).toBe('Permission Required');
+  });
+
+  it('ships Approve/Deny actions and the approvalId when the setting is on', async () => {
+    const server = makeServerWithHost('gate-on');
+    setSettings(server, { approvalsInboxEnabled: true });
+    const payload = await sendPermissionPush(server);
+    expect(payload.actions).toEqual([
+      { action: 'approve', title: 'Approve' },
+      { action: 'deny', title: 'Deny' },
+    ]);
+    expect(payload.approvalId).toBe('s-gate:1');
+  });
+
+  it('an explicit false behaves like the default (only true enables)', async () => {
+    const server = makeServerWithHost('gate-false');
+    setSettings(server, { approvalsInboxEnabled: false });
+    const payload = await sendPermissionPush(server);
+    expect(payload.actions).toBeUndefined();
+    expect(payload.approvalId).toBeUndefined();
   });
 });

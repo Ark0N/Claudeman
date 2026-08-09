@@ -479,7 +479,11 @@ html.mobile-init .file-browser-panel {
   .btn-icon-header.btn-lifecycle-log,
   .btn-icon-header.btn-away-digest,
   .btn-icon-header.btn-session-manager,
-  .btn-icon-header.btn-file-viewer {
+  .btn-icon-header.btn-file-viewer,
+  /* Approvals bell: phones answer from the overview's NEEDS YOU rows instead
+     (inline approve/deny in mobile-overview.js); the bell would only crowd the
+     header it was designed to stay out of. */
+  .btn-icon-header.btn-approvals {
     display: none !important;
   }
 
@@ -2501,6 +2505,41 @@ html.mobile-init .file-browser-panel {
 
   .mobile-overview-row:active {
     background: var(--bg-hover);
+  }
+
+  /* Approvals Inbox answer strip: sits under a NEEDS YOU row (sibling of the
+     row <button>, see _buildMobileOverviewApprovalStrip). Buttons inherit no
+     toolbar styling on purpose; they are one-tap dialog answers, not runs. */
+  .mobile-overview-row-wrap {
+    width: 100%;
+  }
+  .mobile-overview-approval-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    padding: 0.4rem 0.2rem 0.1rem;
+  }
+  .mobile-overview-approval-btn {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-card);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.72rem;
+    padding: 0.35rem 0.6rem;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mobile-overview-approval-btn.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+  }
+  .mobile-overview-approval-btn.danger {
+    border-color: var(--error);
+    color: var(--error);
   }
 
   /* Attention states mirror the session tabs exactly: red blink when the agent
