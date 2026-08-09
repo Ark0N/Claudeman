@@ -684,6 +684,17 @@ class CodemanApp {
     this.maxReconnectAttempts = 10;
     this.isOnline = navigator.onLine;
 
+    // Connection-loss UI (banner + full-screen overlay). The decision itself is
+    // pure and lives in constants.js (computeConnectionLossUi); these are just
+    // its inputs. `_connDownSince` is the timestamp the transport LEFT the
+    // connected state, which is what the grace window is measured from.
+    this._connDownSince = null;
+    this._nextSseRetryAt = null;      // when the scheduled SSE retry fires (countdown)
+    this._offlineOverlayDismissed = false;
+    this._offlineRetryPending = false; // a user-triggered retry is in flight
+    this._offlineUiTicker = null;
+    this._lastOfflineUiKey = '';
+
     // Reliable, durable input delivery (replaces the old best-effort queue).
     // Every input byte is recorded with a stable clientId + a monotonic
     // per-session seq, persisted to localStorage, and only dropped once the
@@ -1472,6 +1483,10 @@ class CodemanApp {
       // then ramp up for real network issues.
       const delay = this.reconnectAttempts <= 1 ? 200
         : Math.min(500 * Math.pow(2, this.reconnectAttempts - 2), 30000);
+      // Feeds the "Retrying in Ns" countdown. With a 30s cap on the backoff, a
+      // silent wait that long is indistinguishable from a hung app.
+      this._nextSseRetryAt = Date.now() + delay;
+      this._updateConnectionLossUi();
       this.sseReconnectTimeout = setTimeout(() => this.connectSSE(), delay);
     };
 
@@ -2348,7 +2363,17 @@ class CodemanApp {
 
   setConnectionStatus(status) {
     this._connectionStatus = status;
+    // Track when the transport left 'connected'. The connection-loss UI waits
+    // out a deploy-length blip before showing anything (see constants.js).
+    if (status === 'connected') {
+      this._connDownSince = null;
+      this._nextSseRetryAt = null;
+      this._offlineOverlayDismissed = false;
+    } else if (this._connDownSince === null) {
+      this._connDownSince = Date.now();
+    }
     this._updateConnectionIndicator();
+    this._updateConnectionLossUi();
     if (status === 'connected') {
       // Reconnected (SSE) — push any durably-queued input out immediately
       // instead of waiting for the next 2s sweep.
@@ -2970,6 +2995,9 @@ class CodemanApp {
     window.addEventListener('online', () => {
       this.isOnline = true;
       this.reconnectAttempts = 0;
+      // Restart the grace window: the radio just came back, so the next couple
+      // of seconds of "not connected" are expected, not a server problem.
+      this._connDownSince = Date.now();
       this.connectSSE();
       // Network came back — drain durably-queued input right away.
       this._redeliverSweep();
@@ -2978,6 +3006,116 @@ class CodemanApp {
       this.isOnline = false;
       this.setConnectionStatus('offline');
     });
+  }
+
+  // ── Connection-loss UI ─────────────────────────────────────────────────────
+  // Why this exists: the service worker serves the cached app shell, so opening
+  // Codeman with the server unreachable (phone off the tailnet, VPN down,
+  // server stopped) rendered a normal-looking but empty dashboard whose only
+  // hint was an 8px red dot in the header corner. The decision of what to show
+  // is pure (computeConnectionLossUi in constants.js); this is the writer.
+
+  /** Apply the offline banner / overlay for the current connection state. */
+  _updateConnectionLossUi() {
+    const policy = window.CodemanConnectionLoss;
+    const banner = this.$('offlineBanner');
+    const overlay = this.$('offlineOverlay');
+    if (!policy || !banner || !overlay) return;
+
+    const state = policy.compute({
+      isOnline: this.isOnline,
+      status: this._connectionStatus,
+      // Server state has landed at least once this page load (SSE `init`), so
+      // there is a UI worth keeping visible behind a non-blocking banner.
+      everLoaded: this._initGeneration > 0,
+      downSince: this._connDownSince,
+      now: Date.now(),
+      nextRetryAt: this._nextSseRetryAt,
+      overlayDismissed: this._offlineOverlayDismissed,
+      retryPending: this._offlineRetryPending,
+    });
+
+    // The ticker drives both the countdown and the grace deadline; neither is
+    // event-driven, so it must run whenever the transport is down, including
+    // while the decision is still 'hidden' inside the grace window.
+    if (this._connDownSince === null) this._stopOfflineTicker();
+    else this._startOfflineTicker();
+
+    const retryLabel = this._offlineRetryPending
+      ? 'Reconnecting…'
+      : state.retryInSec != null && state.retryInSec > 0
+        ? `Retrying in ${state.retryInSec}s`
+        : 'Retrying…';
+
+    // Called every second by the ticker, so skip the DOM writes when the rendered
+    // result is unchanged (same reasoning as _updateConnectionIndicator).
+    const key = `${state.mode}|${state.kind}|${retryLabel}`;
+    if (key === this._lastOfflineUiKey) return;
+    this._lastOfflineUiKey = key;
+
+    banner.hidden = state.mode !== 'banner';
+    overlay.hidden = state.mode !== 'overlay';
+    document.body.classList.toggle('connection-lost', state.mode !== 'hidden');
+
+    if (state.mode === 'banner') {
+      const text = this.$('offlineBannerText');
+      const detail = this.$('offlineBannerDetail');
+      if (text) text.textContent = state.title;
+      if (detail) detail.textContent = retryLabel;
+    } else if (state.mode === 'overlay') {
+      const title = this.$('offlineOverlayTitle');
+      const body = this.$('offlineOverlayBody');
+      const host = this.$('offlineOverlayHost');
+      const status = this.$('offlineOverlayStatus');
+      if (title) title.textContent = state.title;
+      if (body) body.textContent = state.detail;
+      if (host) host.textContent = location.host;
+      if (status) status.textContent = retryLabel;
+    }
+  }
+
+  _startOfflineTicker() {
+    if (this._offlineUiTicker) return;
+    this._offlineUiTicker = setInterval(() => this._updateConnectionLossUi(), 1000);
+  }
+
+  _stopOfflineTicker() {
+    if (!this._offlineUiTicker) return;
+    clearInterval(this._offlineUiTicker);
+    this._offlineUiTicker = null;
+  }
+
+  /** Retry button on the banner/overlay: reconnect now instead of waiting out
+   *  the backoff (capped at 30s, and the WS plan can give up entirely). */
+  retryConnection() {
+    this._offlineRetryPending = true;
+    this._nextSseRetryAt = null;
+    this.reconnectAttempts = 0;
+    this._clearTimer('sseReconnectTimeout');
+    this.isOnline = navigator.onLine;
+    this._lastOfflineUiKey = '';
+    this._updateConnectionLossUi();
+    this.connectSSE();
+    // The terminal socket does not always come back on its own (planWsReconnect
+    // 'give-up'), so the same button re-arms it.
+    if (this.activeSessionId && this._wsState !== 'connected') {
+      this._wsReconnectAttempts = 0;
+      this._connectWs(this.activeSessionId);
+    }
+    this._clearTimer('_offlineRetryTimer');
+    this._offlineRetryTimer = setTimeout(() => {
+      this._offlineRetryPending = false;
+      this._lastOfflineUiKey = '';
+      this._updateConnectionLossUi();
+    }, 1500);
+  }
+
+  /** "Show cached view": demote the blocking overlay to the banner for the rest
+   *  of this outage, so the cached UI can be inspected offline. */
+  dismissOfflineOverlay() {
+    this._offlineOverlayDismissed = true;
+    this._lastOfflineUiKey = '';
+    this._updateConnectionLossUi();
   }
 
   /** Show/hide the CJK input textarea based on user setting or server override */

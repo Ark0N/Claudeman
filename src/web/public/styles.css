@@ -13725,3 +13725,200 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 /* Delete sits apart from Cancel/Save so it is not fat-fingered on the way to Save. */
 .webview-modal-actions { justify-content: space-between; }
 .webview-modal-actions .btn-danger { margin-right: auto; }
+
+/* ═══════════════════════════════════════════════════════════════
+   Connection loss: banner + full-screen overlay
+   ═══════════════════════════════════════════════════════════════
+   The service worker serves the cached shell, so an unreachable server used to
+   render as an empty-but-normal dashboard with only an 8px red dot in the
+   header. Both surfaces below are deliberately skin-independent (literal
+   colors, not tokens): "you are disconnected" must read identically on every
+   skin, including the light ones. Visibility is driven by the `hidden`
+   attribute, so the display rules need !important to lose to it. */
+
+.offline-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 1rem;
+  background: linear-gradient(90deg, #b91c1c, #991b1b);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.35);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  flex-shrink: 0;
+  z-index: 1250;
+}
+
+.offline-banner[hidden] {
+  display: none !important;
+}
+
+.offline-banner-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #fff;
+  flex-shrink: 0;
+  animation: offline-banner-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes offline-banner-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.offline-banner-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.offline-banner-detail {
+  color: rgba(255, 255, 255, 0.8);
+  font-weight: 500;
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+.offline-banner-retry {
+  flex-shrink: 0;
+  padding: 0.2rem 0.6rem;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.offline-banner-retry:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+/* Above the mobile fixed header (1200) and modals (1300): this is a blocking
+   "nothing works right now" state, and it only appears before any session
+   state has loaded, so there is no modal underneath to bury. Stays below the
+   image popup layer (3000). */
+.offline-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  padding-top: calc(20px + var(--safe-area-top));
+  padding-bottom: calc(20px + var(--safe-area-bottom));
+  background: rgba(6, 8, 12, 0.93);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  overflow-y: auto;
+}
+
+.offline-overlay[hidden] {
+  display: none !important;
+}
+
+.offline-overlay-card {
+  width: min(420px, 100%);
+  box-sizing: border-box;
+  padding: 26px 24px 22px;
+  border-radius: 14px;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  background: #16181d;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+  color: #f3f6fa;
+  text-align: center;
+}
+
+.offline-overlay-icon {
+  color: #ef4444;
+  margin-bottom: 10px;
+}
+
+.offline-overlay-title {
+  margin: 0 0 8px;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.offline-overlay-body {
+  margin: 0 0 14px;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: #b9c0cc;
+}
+
+.offline-overlay-host {
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.75rem;
+  color: #8b93a1;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-bottom: 14px;
+  word-break: break-all;
+}
+
+.offline-overlay-hints {
+  margin: 0 0 18px;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+  font-size: 0.8rem;
+  line-height: 1.7;
+  color: #a7aebb;
+}
+
+.offline-overlay-hints li::before {
+  content: '›';
+  color: #ef4444;
+  font-weight: 700;
+  margin-right: 8px;
+}
+
+.offline-overlay-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.offline-overlay-btn {
+  padding: 0.5rem 1rem;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e7ebf2;
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.offline-overlay-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.offline-overlay-btn--primary {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #fff;
+}
+
+.offline-overlay-btn--primary:hover {
+  background: #ef4444;
+}
+
+.offline-overlay-status {
+  margin-top: 14px;
+  font-size: 0.75rem;
+  color: #8b93a1;
+  min-height: 1em;
+}

@@ -153,6 +153,16 @@
       </div>
     </header>
 
+    <!-- Connection-loss banner: shown once session state HAS loaded and the
+         link then drops, so the terminal stays readable behind it.
+         The blocking variant is #offlineOverlay at the end of <body>. -->
+    <div class="offline-banner" id="offlineBanner" role="status" hidden>
+      <span class="offline-banner-dot" aria-hidden="true"></span>
+      <span class="offline-banner-text" id="offlineBannerText">No connection to the Codeman server</span>
+      <span class="offline-banner-detail" id="offlineBannerDetail"></span>
+      <button class="offline-banner-retry" id="offlineBannerRetry" onclick="app.retryConnection()">Retry now</button>
+    </div>
+
     <!-- Timer Banner (shown when timed run is active) -->
     <div class="timer-banner" id="timerBanner" style="display: none;">
       <div class="timer-content">
@@ -2690,6 +2700,39 @@
   <svg id="connectionLines" class="connection-lines-svg">
     <!-- Lines drawn dynamically -->
   </svg>
+
+  <!-- Connection-loss overlay: the app shell is served from the service-worker
+       cache, so Codeman renders even with nothing reachable. Without this, that
+       looks like an empty dashboard rather than a dead connection. Only shown
+       while no server state has loaded this page load. -->
+  <div class="offline-overlay" id="offlineOverlay" hidden>
+    <div class="offline-overlay-card" role="alertdialog" aria-labelledby="offlineOverlayTitle" aria-describedby="offlineOverlayBody">
+      <div class="offline-overlay-icon" aria-hidden="true">
+        <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M1 1l22 22"/>
+          <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/>
+          <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/>
+          <path d="M10.71 5.05A16 16 0 0 1 22.58 9"/>
+          <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/>
+          <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
+          <line x1="12" y1="20" x2="12.01" y2="20"/>
+        </svg>
+      </div>
+      <h2 class="offline-overlay-title" id="offlineOverlayTitle">Can't reach the Codeman server</h2>
+      <p class="offline-overlay-body" id="offlineOverlayBody"></p>
+      <div class="offline-overlay-host" id="offlineOverlayHost"></div>
+      <ul class="offline-overlay-hints">
+        <li>Check Wi-Fi or mobile data</li>
+        <li>Check your VPN / Tailscale is connected</li>
+        <li>Check the Codeman server is still running</li>
+      </ul>
+      <div class="offline-overlay-actions">
+        <button class="offline-overlay-btn offline-overlay-btn--primary" id="offlineOverlayRetry" onclick="app.retryConnection()">Retry now</button>
+        <button class="offline-overlay-btn" onclick="app.dismissOfflineOverlay()">Show cached view</button>
+      </div>
+      <div class="offline-overlay-status" id="offlineOverlayStatus">Retrying…</div>
+    </div>
+  </div>
 
   <!-- Approvals Inbox drawer (populated by approvals-ui.js; opened from the header bell) -->
   <div class="approvals-drawer" id="approvalsDrawer" role="complementary" aria-label="Approvals inbox">
