@@ -61,6 +61,17 @@ your quick-start's `sessionId`. The peer NAME (`msgtest-worker-cf`) is assigned 
 Claude Code, derived from the case directory's folder name plus a suffix Codeman does
 not control: never guess it from the case name, read it from the listing.
 
+From Codeman 1.16 a LOCAL claude spawn passes `--name <session name>` when the local
+CLI is 2.1.224+, so a worker's peer name usually IS its Codeman session name
+(verified live: quick-start with `sessionName: "w9-msgtest"` listed as `w9-msgtest`,
+and its messages arrive tagged `from-name="w9-msgtest"`; a derived-name worker's
+messages carry no `from-name`). Name your workers: a quick-start WITHOUT
+`sessionName` leaves the Codeman name empty, so there is nothing to pass and the
+peer name stays derived. The flag is fail-closed (older/unknown CLI omits it) and
+allowlist-sanitized (a name of only unsafe characters is dropped), and docker/remote
+spawns never carry it, which is why the `tmux` column stays the canonical join key
+rather than the name.
+
 Scriptable probe + name lookup, against the registry Claude Code maintains (one JSON
 object per process in `~/.claude/sessions/<pid>.json`):
 

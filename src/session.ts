@@ -1406,6 +1406,7 @@ export class Session extends EventEmitter {
       sessionId: this.id,
       workingDir: this.workingDir,
       mode: this.mode,
+      name: this._name,
       niceConfig: this._niceConfig,
       model: this._model,
       claudeMode: this._claudeMode,
@@ -1710,7 +1711,15 @@ export class Session extends EventEmitter {
       try {
         // Pass --session-id to use the SAME ID as the Codeman session
         // This ensures subagents can be directly matched to the correct tab
-        const args = buildInteractiveArgs(this.id, this._claudeMode, this._model, this._allowedTools, this._effort);
+        const args = buildInteractiveArgs(
+          this.id,
+          this._claudeMode,
+          this._model,
+          this._allowedTools,
+          this._effort,
+          this._name,
+          getClaudeCliVersion()
+        );
         this.ptyProcess = spawnPtyWithHelperRepair(() =>
           pty.spawn(getClaudeBinaryPath(), args, {
             name: 'xterm-256color',

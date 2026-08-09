@@ -97,6 +97,8 @@ export interface RespawnPaneOptions {
   sessionId: string;
   workingDir: string;
   mode: SessionMode;
+  /** Session display name; a respawned claude keeps its `--name` peer name (version-gated, local only). */
+  name?: string;
   niceConfig?: NiceConfig;
   model?: string;
   claudeMode?: ClaudeMode;

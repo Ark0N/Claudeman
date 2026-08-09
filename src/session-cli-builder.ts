@@ -11,6 +11,7 @@
 import type { ClaudeMode, EffortLevel } from './types.js';
 import { isEffortLevel } from './types.js';
 import { getAugmentedPath } from './utils/index.js';
+import { compareVersions } from './utils/dependency-checker.js';
 import { dataPath } from './config/instance.js';
 
 /**
@@ -53,6 +54,53 @@ export function buildEffortCliArgs(effort?: EffortLevel): string[] {
 }
 
 /**
+ * Minimum Claude CLI version for passing `--name` at spawn. 2.1.224 is the release
+ * that ships cross-session messaging (the feature that makes the peer name matter),
+ * and the flag's presence at exactly this version was verified against the installed
+ * binary (`2.1.224 --help` lists `-n, --name`). The gate MUST stay fail-closed: an
+ * older or unknown CLI aborts startup on an unknown flag ("error: unknown option"),
+ * which would kill every session spawn — so no version means no flag, and the
+ * command line stays byte-identical to the pre-`--name` one.
+ */
+export const CLAUDE_NAME_FLAG_MIN_VERSION = '2.1.224';
+
+/**
+ * Reduce a Codeman session name to a string safe to pass as the Claude CLI
+ * `--name` value. Allowlist, not escaping: keeps Unicode letters/digits (CJK
+ * session names survive) plus ` . _ : -`, which excludes every character that is
+ * special inside the double-quoted shell interpolation buildSpawnCommand uses
+ * (`"`, `$`, backslash, backtick) as well as newlines. Leading dashes/punctuation
+ * are stripped so the value can never be parsed as another CLI option, and the
+ * result is capped at 64 chars. Returns undefined when nothing safe remains —
+ * callers must then omit the flag entirely (never send `--name ""`).
+ */
+export function sanitizeCliSessionName(name?: string): string | undefined {
+  if (!name) return undefined;
+  const cleaned = name
+    .replace(/[^\p{L}\p{N} ._:-]/gu, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s._:-]+/, '')
+    .trim()
+    .slice(0, 64)
+    .trim();
+  return cleaned.length > 0 ? cleaned : undefined;
+}
+
+/**
+ * Build the `--name <session name>` args pair, version-gated and fail-closed.
+ * Returns [] unless the CLI version is KNOWN to support the flag (>= 2.1.224):
+ * a null/undefined version (probe failed, or running under vitest where
+ * getClaudeCliVersion() is hermetically null) yields [], keeping the spawn
+ * command identical to a Codeman without this feature. The name itself is a
+ * SOFT default, exactly like model and effort: `/rename` in-session still works.
+ */
+export function buildNameCliArgs(sessionName: string | undefined, cliVersion: string | null | undefined): string[] {
+  if (!cliVersion || compareVersions(cliVersion, CLAUDE_NAME_FLAG_MIN_VERSION) < 0) return [];
+  const name = sanitizeCliSessionName(sessionName);
+  return name ? ['--name', name] : [];
+}
+
+/**
  * Build args for an interactive Claude CLI session (direct PTY, non-mux fallback).
  *
  * @param sessionId - The Codeman session ID (passed as --session-id to Claude)
@@ -60,6 +108,8 @@ export function buildEffortCliArgs(effort?: EffortLevel): string[] {
  * @param model - Optional model override (e.g., 'opus', 'sonnet')
  * @param allowedTools - Optional comma-separated allowed tools list
  * @param effort - Optional effort level, injected via --settings (overridable in-session)
+ * @param sessionName - Optional Codeman session name, passed as `--name` (version-gated)
+ * @param cliVersion - Installed Claude CLI version for the `--name` gate (null = omit the flag)
  * @returns Array of CLI arguments
  */
 export function buildInteractiveArgs(
@@ -67,11 +117,14 @@ export function buildInteractiveArgs(
   claudeMode: ClaudeMode,
   model?: string,
   allowedTools?: string,
-  effort?: EffortLevel
+  effort?: EffortLevel,
+  sessionName?: string,
+  cliVersion?: string | null
 ): string[] {
   const args = [...buildPermissionArgs(claudeMode, allowedTools), '--session-id', sessionId];
   if (model) args.push('--model', model);
   args.push(...buildEffortCliArgs(effort));
+  args.push(...buildNameCliArgs(sessionName, cliVersion));
   return args;
 }
 

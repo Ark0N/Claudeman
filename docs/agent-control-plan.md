@@ -738,7 +738,22 @@ Verified live (claude-cli 2.1.226, Linux):
   expires unattended (upstream default 5 min), which on a headless worker means the
   message silently dies. The skill's backstop covers it.
 
-Deliberately NOT done: passing `claude --name <sessionName>` at spawn so peers carry
-Codeman session names. The flag exists in 2.1.226, but gating it against older CLIs
-risks the worst regression class (sessions failing to spawn on an unknown flag), so
-it stays a follow-up behind a version/flag probe.
+Follow-up, landed in the same PR: local claude spawns now pass
+`--name <session name>` so peers carry Codeman session names. The gate is
+`buildNameCliArgs()` (session-cli-builder.ts), fail-closed at
+`CLAUDE_NAME_FLAG_MIN_VERSION = 2.1.224`: that is the messaging release, the flag's
+presence there was verified against the installed 2.1.224 binary, and the version
+comes from `getClaudeCliVersion()` (null on probe failure and under vitest), so an
+older or unknown CLI gets a command byte-identical to before. That matters because
+claude aborts startup on an unknown option, which would kill every session spawn.
+The value is allowlist-sanitized (Unicode letters/digits plus ` ._:-`, leading
+dashes stripped so it cannot parse as another option, 64-char cap, empty result =
+flag omitted) before the double-quoted interpolation in `buildSpawnCommand`, and
+only the LOCAL command carries it: the docker/remote builders never see it, since
+their CLI is not the binary the probe measured. E2E on an isolated instance
+(`CODEMAN_INSTANCE`): process cmdline `claude ... --name w9-msgtest`, registry
+`name: "w9-msgtest"`, `ListAgents` lists it under that name, a message round-trip
+works, and its replies arrive tagged `from-name="w9-msgtest"` (a derived-name
+worker's replies carry no `from-name`). A quick-start without `sessionName` has an
+empty Codeman name, so the peer name stays derived: agents should name their
+workers. Tests: `test/name-flag-injection.test.ts`.
