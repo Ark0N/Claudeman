@@ -50,6 +50,7 @@
     "directory": "packages/xterm-zerolag-input"
   },
   "devDependencies": {
+    "@xterm/headless": "^6.0.0",
     "jsdom": "^24.1.3",
     "tsup": "^8.5.1",
     "typescript": "^5.5.0",
