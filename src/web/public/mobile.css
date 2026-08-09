@@ -2522,6 +2522,51 @@ html.mobile-init .file-browser-panel {
     border-color: var(--red);
   }
 
+  /* Working is not an alert, so it gets a calm green breathing edge rather than a
+     blink: at a glance the row reads "this one is moving", without competing with
+     the two states that actually want you. Slower than both of them on purpose. */
+  .mobile-overview-row--working {
+    border-color: var(--green);
+    animation: mobile-overview-breathe-green 2.2s ease-in-out infinite;
+  }
+
+  @keyframes mobile-overview-breathe-green {
+    0%,
+    100% {
+      background: var(--bg-card);
+      border-color: var(--border);
+    }
+    50% {
+      background: rgba(34, 197, 94, 0.1);
+      border-color: var(--green);
+    }
+  }
+
+  /* The pill picks up a three-dot ellipsis that fills in and empties, so the row
+     still reads as active on a skin where the border tint is subtle. */
+  .mobile-overview-pill--working::after {
+    content: '';
+    display: inline-block;
+    width: 0.75em;
+    text-align: left;
+    animation: mobile-overview-pill-dots 1.5s steps(1, end) infinite;
+  }
+
+  @keyframes mobile-overview-pill-dots {
+    0% {
+      content: '';
+    }
+    25% {
+      content: '.';
+    }
+    50% {
+      content: '..';
+    }
+    75% {
+      content: '...';
+    }
+  }
+
   @keyframes mobile-overview-blink-red {
     0%,
     100% {
@@ -2601,6 +2646,25 @@ html.mobile-init .file-browser-panel {
     background: var(--green);
     animation: pulse 1.5s infinite;
     will-change: opacity;
+  }
+
+  /* Ring the pulsing dot with the SAME spinner a tab shows while it loads: same
+     2px ring, same bright leading edge, same `tab-load-spin` keyframes from
+     styles.css (reused, not re-declared, so the two can never drift). Green
+     rather than the tab's blue because here it means "running", not "loading":
+     the motion is the shared part, the color still belongs to the state. */
+  .mobile-overview-dot {
+    position: relative;
+  }
+
+  .mobile-overview-dot--working::after {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border: 2px solid rgba(34, 197, 94, 0.25);
+    border-top-color: var(--green);
+    border-radius: 50%;
+    animation: tab-load-spin 0.7s linear infinite;
   }
 
   .mobile-overview-dot--idle {
@@ -2711,6 +2775,24 @@ html.mobile-init .file-browser-panel {
   }
 
   .mobile-overview-dot--working {
+    animation: none;
+  }
+
+  /* The ring stays as a static full circle: it still marks the row, it just
+     stops turning. */
+  .mobile-overview-dot--working::after {
+    border-color: var(--green);
+    animation: none;
+  }
+
+  /* Working is only informational, so it drops to a static green edge and a
+     static ellipsis rather than holding a tint the way the alerts do. */
+  .mobile-overview-row--working {
+    animation: none;
+  }
+
+  .mobile-overview-pill--working::after {
+    content: '...';
     animation: none;
   }
 }

@@ -8,7 +8,7 @@
  * @module respawn-patterns
  */
 
-import { TOKEN_PATTERN } from './utils/index.js';
+import { TOKEN_PATTERN, CLAUDE_WORKING_LINE_PATTERN } from './utils/index.js';
 
 // ========== Constants ==========
 
@@ -108,7 +108,12 @@ export function isCompletionMessage(data: string): boolean {
  * @returns True if any working pattern is found in the window
  */
 export function hasWorkingPattern(window: string): boolean {
-  return WORKING_PATTERNS.some((pattern) => window.includes(pattern));
+  // Current Claude randomizes the gerund ("Actualizing…", "Finagling…"), so the
+  // list above catches only a fraction of turns. The live status line's own shape
+  // (`… (13m 23s · ↓ 47.5k tokens)`) is what identifies the rest. Kept as an
+  // extra signal rather than a replacement: this window is RAW terminal data, and
+  // a partial repaint can split the line across chunks.
+  return CLAUDE_WORKING_LINE_PATTERN.test(window) || WORKING_PATTERNS.some((pattern) => window.includes(pattern));
 }
 
 /**
