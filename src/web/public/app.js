@@ -3438,14 +3438,19 @@ class CodemanApp {
           statusEl.className = `tab-status ${status}`;
         }
 
-        // Update name if changed
+        // Update name if changed. #232: a description (the `: suffix` part of the
+        // name) is the whole tab label; the generated id lives in the tooltip. The
+        // compare targets the DISPLAY text, or a described tab would re-render on
+        // every pass (textContent never equals the full name there).
         const nameEl = tab.querySelector('.tab-name');
-        if (nameEl && nameEl.textContent !== name) {
+        if (nameEl) {
           const _p = parseSessionPrefix(name);
-          if (_p && _p.suffix) {
-            nameEl.innerHTML = '<span class="tab-prefix">' + escapeHtml(_p.prefix) + '</span><span class="tab-suffix">: ' + escapeHtml(_p.suffix) + '</span>';
-          } else {
-            nameEl.textContent = name;
+          const _label = _p && _p.suffix ? _p.suffix : name;
+          if (nameEl.textContent !== _label) {
+            nameEl.textContent = _label;
+            tab.title = _p && _p.suffix
+              ? (session.workingDir ? `${_p.prefix} (${session.workingDir})` : _p.prefix)
+              : (session.workingDir || '');
           }
         }
 
@@ -3617,14 +3622,23 @@ class CodemanApp {
       const tallTabsEnabled = this._tallTabsEnabled ?? false;
       const showFolder = tallTabsEnabled && session.name && folderName && folderName !== name;
 
-      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${loadState ? ' tab-loading' : ''}" data-id="${id}" data-color="${color}" ${loadState ? `data-load-phase="${escapeHtml(loadState.phase)}"` : ''} onclick="app.handleSessionTabClick(event, ${escapeHtml(JSON.stringify(id))})" oncontextmenu="event.preventDefault(); app.startInlineRename(${escapeHtml(JSON.stringify(id))})" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-busy="${loadState ? 'true' : 'false'}" aria-label="${escapeHtml(name)} session" ${session.workingDir ? `title="${escapeHtml(session.workingDir)}"` : ''}>
+      // #232: a session with a description (the `: suffix` part of its name) shows
+      // JUST the description on the tab; the generated w<n>-<case> id moves to the
+      // tooltip and stays visible in the session settings modal.
+      const parsedName = parseSessionPrefix(name);
+      const tabLabel = parsedName && parsedName.suffix ? parsedName.suffix : name;
+      const tabTooltip = parsedName && parsedName.suffix
+        ? (session.workingDir ? `${parsedName.prefix} (${session.workingDir})` : parsedName.prefix)
+        : (session.workingDir || '');
+
+      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${loadState ? ' tab-loading' : ''}" data-id="${id}" data-color="${color}" ${loadState ? `data-load-phase="${escapeHtml(loadState.phase)}"` : ''} onclick="app.handleSessionTabClick(event, ${escapeHtml(JSON.stringify(id))})" oncontextmenu="event.preventDefault(); app.startInlineRename(${escapeHtml(JSON.stringify(id))})" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-busy="${loadState ? 'true' : 'false'}" aria-label="${escapeHtml(name)} session" ${tabTooltip ? `title="${escapeHtml(tabTooltip)}"` : ''}>
           ${_tabIdx < 9 ? '<span class="tab-number">' + (_tabIdx + 1) + '</span>' : ''}
           ${loadState ? '<span class="tab-load-spinner" aria-hidden="true"></span>' : ''}
           <span class="tab-status ${status}" aria-hidden="true"></span>
           <span class="tab-info">
             <span class="tab-name-row">
               ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : mode === 'opencode' ? '<span class="tab-mode opencode" aria-hidden="true">oc</span>' : mode === 'codex' ? '<span class="tab-mode codex" aria-hidden="true">cx</span>' : mode === 'gemini' ? '<span class="tab-mode gemini" aria-hidden="true">gm</span>' : mode === 'antigravity' ? '<span class="tab-mode antigravity" aria-hidden="true">ag</span>' : ''}
-              <span class="tab-name" data-session-id="${id}">${(() => { const p = parseSessionPrefix(name); return p && p.suffix ? '<span class="tab-prefix">' + escapeHtml(p.prefix) + '</span><span class="tab-suffix">: ' + escapeHtml(p.suffix) + '</span>' : escapeHtml(name); })()}</span>
+              <span class="tab-name" data-session-id="${id}">${escapeHtml(tabLabel)}</span>
               <span class="tab-detached-badge" aria-hidden="true">detached</span>
             </span>
             ${showFolder ? `<span class="tab-folder">\u{1F4C1} ${escapeHtml(folderName)}</span>` : ''}
