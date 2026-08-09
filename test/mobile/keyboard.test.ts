@@ -775,6 +775,76 @@ describe('Virtual Keyboard', () => {
       expect(activeClass).toContain('xterm-helper-textarea');
     });
 
+    // Regression guard for the phone-keyboard blocker reduced in #173 and re-hit
+    // by #244. selectSession() ends with scrollToLastNonEmptyLine(), which parks
+    // the viewport ABOVE the bottom for any session whose buffer is taller than
+    // the screen and ends in blank rows, i.e. every real session after a tab
+    // switch. A tap-routing scheme that treats "viewport is scrolled up" as a
+    // reason to blur strands document.activeElement on <body> with no way to
+    // raise the keyboard, and the prompt row is no exception. Suppressing the
+    // MOUSE REPORT while scrolled up is correct and pinned below; suppressing
+    // FOCUS is not. Measured against PR #244 on 2026-08-09: body vs textarea.
+    //
+    // Must be a dispatched gesture: calling the touchend handler directly
+    // bypasses touchstart's preventDefault, which is half of what closes the
+    // focus path, so a direct call reports the right intent and still misses.
+    it('keeps the terminal input focusable after a tab switch parks the viewport off-bottom', async () => {
+      const probe = await page.evaluate(async () => {
+        window.__sentInputs = [];
+        app.activeSessionId = 'mobile-offbottom-tap-test';
+        app.sessions.set('mobile-offbottom-tap-test', {
+          id: 'mobile-offbottom-tap-test',
+          mode: 'claude',
+          cliVersion: '2.1.220',
+          status: 'running',
+        });
+        app._sendInputAsync = (_sessionId: string, input: string) => {
+          window.__sentInputs.push(input);
+        };
+        app.hideWelcome();
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = false;
+        app.saveAppSettingsToStorage(settings);
+        app._updateCjkInputState();
+        app.terminal.reset();
+
+        // Taller than the viewport, ending in the trailing blank rows that make
+        // scrollToLastNonEmptyLine() stop short of the bottom.
+        const lines: string[] = [];
+        for (let i = 1; i <= app.terminal.rows * 3; i++) lines.push(`Transcript row ${i}`);
+        lines.push('', '❯ ', '', '');
+        await new Promise<void>((resolve) => app.terminal.write(lines.join('\r\n'), resolve));
+
+        app.scrollToLastNonEmptyLine(); // what selectSession() does on every tab switch
+        (document.activeElement as HTMLElement | null)?.blur?.();
+
+        const screen = app.terminal.element?.querySelector('.xterm-screen');
+        const cell = app.terminal._core?._renderService?.dimensions?.css?.cell;
+        const rect = screen?.getBoundingClientRect();
+        if (!rect || !cell?.width || !cell?.height) return null;
+        const buffer = app.terminal.buffer.active;
+        return {
+          x: rect.left + cell.width * 2,
+          y: rect.top + cell.height * 5.5,
+          atBottom: buffer.viewportY >= buffer.baseY,
+        };
+      });
+
+      expect(probe).not.toBeNull();
+      // The guard only means anything if the viewport really did park off-bottom.
+      expect(probe!.atBottom).toBe(false);
+
+      await page.touchscreen.tap(probe!.x, probe!.y);
+
+      const state = await page.evaluate(() => ({
+        activeClass: document.activeElement?.className,
+        sentInputs: window.__sentInputs,
+      }));
+      expect(state.activeClass).toContain('xterm-helper-textarea');
+      // SGR coordinates are meaningless off-bottom, so the tap must stay silent.
+      expect(state.sentInputs).toEqual([]);
+    });
+
     it('keeps terminal touch drag available for scrollback with the visible textarea enabled', async () => {
       const calls = await page.evaluate(async () => {
         app.activeSessionId = 'mobile-touch-scroll-test';
