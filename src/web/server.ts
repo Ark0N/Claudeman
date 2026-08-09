@@ -622,6 +622,7 @@ export class WebServer extends EventEmitter {
       getModelConfig: this.getModelConfig.bind(this),
       getClaudeModeConfig: this.getClaudeModeConfig.bind(this),
       getTerminalHistoryConfig: this.getTerminalHistoryConfig.bind(this),
+      getAgentSkillEnabled: this.getAgentSkillEnabled.bind(this),
       getDefaultClaudeMdPath: this.getDefaultClaudeMdPath.bind(this),
       getLightState: this.getLightState.bind(this),
       getLightSessionsState: this.getLightSessionsState.bind(this),
@@ -1650,6 +1651,13 @@ export class WebServer extends EventEmitter {
   private async getTerminalHistoryConfig() {
     const settings = await this.readSettings();
     return resolveTerminalHistoryConfig(settings);
+  }
+
+  // Whether the Codeman agent skill is injected into cases on Claude session create
+  // (synced `agentSkillEnabled` setting, default OFF; docs/agent-control-plan.md §2).
+  private async getAgentSkillEnabled(): Promise<boolean> {
+    const settings = await this.readSettings();
+    return settings.agentSkillEnabled === true;
   }
 
   // Helper to get model configuration from settings

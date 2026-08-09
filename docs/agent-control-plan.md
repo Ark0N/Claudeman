@@ -1,8 +1,9 @@
 # Agent Control Plan: skill packaging + wait primitives
 
-**Status**: steps 1 to 5 IMPLEMENTED and multi-round verified, uncommitted as of 2026-08-08.
-Step 6 (CLI install command + per-case injection + `agentSkillEnabled`) is not built.
-See [§7 Build log](#7-build-log-what-actually-happened) for what shipped, what each
+**Status**: steps 1 to 6 IMPLEMENTED, uncommitted as of 2026-08-09. Steps 1 to 5 were
+multi-round verified on 2026-08-08; step 6 (CLI install command + per-case injection +
+`agentSkillEnabled`) was built 2026-08-09; see the step-6 entry at the end of
+[§7 Build log](#7-build-log-what-actually-happened) for what shipped, what each
 verification round found, and what is still open.
 
 **Date**: 2026-08-08
@@ -522,8 +523,8 @@ Bundled manifests plus local override only, no network.
 | 2 ✅ | `GET .../wait` + wiring in listener-wiring, hook-event-routes, server teardown  | 15 route tests green; live-verified on an isolated `CODEMAN_INSTANCE=waittest` instance (immediate resolve, 400 on a bad signal, 200+`timedOut` on timeout, hook `stop` and `permission_prompt`→`blocked` waking an in-flight wait, delete delivering `exit`, SIGTERM not blocked); full `test:ci` sweep green                               |
 | 3 ✅ | `GET .../wait-output`                                                           | 16 route tests green; live-verified on real PTY bytes (`echo MARKER` waking a blocked request in ~1s, `from=buffer` immediate hit, never-seen marker timing out at exactly 2001ms, nocase, `regex` refused with a 400); full `test:ci` sweep green                                                                                           |
 | 4 ✅ | `wait` field on `POST .../input`, non-wait path proven unchanged                | 16 route tests green; live-verified (no-wait returns in 26ms with the historical bare body; an idle session did NOT satisfy a `wait` request, blocking the full 2001ms, which is the race the endpoint exists to close; the stop hook resolved a send-and-wait at 1510ms and the input was confirmed in the tmux pane; `wait:null` accepted) |
-| 5    | `skills/codeman/SKILL.md` + reference files + `.claude/skills` symlink          | live dogfood: a real session orchestrates a worker end to end                                                                                                                                                                                                                                                                                |
-| 6    | `codeman skill install` CLI + `applyAgentSkill()` + `agentSkillEnabled` setting | settings partial-PUT test, case-creation test                                                                                                                                                                                                                                                                                                |
+| 5 ✅ | `skills/codeman/SKILL.md` + reference files + `.claude/skills` symlink          | live dogfood: a real session orchestrates a worker end to end                                                                                                                                                                                                                                                                                |
+| 6 ✅ | `codeman skill install` CLI + `applyAgentSkill()` + `agentSkillEnabled` setting | 10 unit tests (`test/agent-skill.test.ts`) + real-server case-creation tests (`test/quick-start.test.ts`, incl. the settings PUT accepting the key) green; CLI verified live (install/uninstall, global + `--case`, foreign/symlink refusals)                                                                                                 |
 | 7    | Docs: api-reference, extending-codeman, README                                  |                                                                                                                                                                                                                                                                                                                                              |
 | 8    | COM (minor bump: new endpoints, new setting, new optional fields)               | both CI and Release workflows green                                                                                                                                                                                                                                                                                                          |
 
@@ -532,12 +533,14 @@ without the wait endpoints, so the wait work goes first.
 
 ## 6. Open questions for the owner
 
-1. `skills/` at the repo root, accepted despite the short-root rule? (Recommended yes, the
-   install one-liner depends on it.)
-2. `agentSkillEnabled` default: OFF for the first release then flip, or ON immediately?
-3. Auto-inject the skill into every case's `.claude/skills/`, or global install only?
+1. ✅ `skills/` at the repo root: accepted (built that way; the install one-liner depends on it).
+2. ✅ `agentSkillEnabled` default: **OFF** for the first release, per §2.2's rationale (skills
+   cost context on every turn; measure before defaulting on). Flip later if dogfooding earns it.
+3. ✅ Both: global install via `npx skills add` / `codeman skill install`, AND per-case
+   auto-injection behind the (default-off) setting. Injection is add-only at session create and
+   marker-guarded, so a user-authored copy is never touched.
 4. Is `X-Codeman-Caller-Session` self-protection worth the 10 lines, given it is a footgun guard
-   and not a security boundary?
+   and not a security boundary? (Still open, not built with step 6.)
 5. Regex support in `wait-output`: confirm literal-only for v1.
 
 ---
@@ -654,9 +657,47 @@ success without running its task. Two traps recurred often enough to name:
 - **Release checklist**: `package.json` `files` includes `skills`, which is still
   untracked. `git add skills/` must be part of the release commit, or npm publishes
   a tarball without the skill (a `files` entry that does not exist is silently
-  ignored, so nothing fails).
+  ignored, so nothing fails). `test/agent-skill.test.ts` reads the packaged source,
+  so CI at least fails loudly if the directory goes missing from a checkout.
 - The 1.13.0 changeset is written under `.changeset/`; consuming it (COM flow),
   the release commit, and the deploy remain.
 - Deferred with Part 3: the latched last-signal-per-turn. Nice-to-haves from the
   reviews: N2 (create the death-watcher inside its `try`) and converting
   timeout-shaped test detections into fast assertions.
+- §2.4's `X-Codeman-Caller-Session` footgun guard: still not built (open question 4).
+
+### Step 6 (2026-08-09): install command, per-case injection, the setting
+
+Built to the §2.6 file list, mirroring the statusLine mechanism throughout:
+
+| Piece | Where |
+| ----- | ----- |
+| `applyAgentSkill(casePath, enabled)` + `installAgentSkillInto` / `removeAgentSkillFrom` | `src/hooks-config.ts` |
+| `codeman skill install` / `skill uninstall` (`--global` default, `--case <name>`) | `src/cli.ts` |
+| `agentSkillEnabled` (SYNCED, default OFF) | `schemas.ts` (`SettingsUpdateSchema`), `getAgentSkillEnabled()` on `ConfigPort`/`server.ts`, checkbox in `index.html` + `settings-ui.js` |
+| Injection call sites (Claude mode only) | `POST /api/sessions` next to `refreshStaleCodemanHooks`; `POST /api/quick-start` after the case-create/self-heal blocks (local + docker cases; remote skipped, its path lives on another host) |
+| Tests | `test/agent-skill.test.ts` (10 unit), `test/quick-start.test.ts` (real server: default-off, PUT accepts key, injection on create, shell-mode skipped) |
+
+Decisions worth keeping:
+
+- **Ownership marker, prefix-matched.** The injected SKILL.md ends with
+  `<!-- codeman-managed-agent-skill: … -->`; install/refresh/remove all refuse a copy
+  without the marker (a user's own skill) and match on the PREFIX so a wording change
+  cannot disown older injected copies (the `BACKGROUND_WAKE_MARKER_PREFIX` pattern).
+- **Symlink refusal.** This repo's own dogfooding layout
+  (`.claude/skills/codeman -> ../../skills/codeman`) means the injector must `lstat`
+  the skill dir AND its `skills/` parent and bail on a symlink, or enabling the
+  setting in the Codeman repo itself would overwrite the skill source through the link.
+- **ADD-ONLY at session create**, same shared-`.claude` rationale as the statusLine:
+  a create while the setting is off must not yank the skill out from under other live
+  sessions in the repo. The remove path exists (CLI `skill uninstall`, tests); no
+  automatic sweep removes on toggle-off.
+- **Removal is manifest-based, never `rm -rf`**: only files the packaged source would
+  have written are deleted, directories are pruned bottom-up only if they emptied, so
+  a user's extra notes in `reference/` survive an uninstall.
+- **Source resolution**: `join(moduleDir, '..', 'skills', 'codeman')` works from
+  `src/` (tsx), `dist/` (tsc build), and the npm tarball alike, because all three sit
+  one level below the package root and `files` ships `skills/`.
+- **Nothing acts on the setting at PUT time**: injection reads the merged persisted
+  settings at session create (`readSettings`, ~2s cache), so the partial-PUT invariant
+  (`toggleService` reading `merged`) is untouched by construction.

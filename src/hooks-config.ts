@@ -27,8 +27,9 @@
  */
 
 import { existsSync } from 'node:fs';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile, writeFile, mkdir, lstat, readdir, unlink, rmdir } from 'node:fs/promises';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import type { HookEventType } from './types.js';
 import { HOOK_TIMEOUT_SECONDS } from './config/auth-config.js';
@@ -719,4 +720,172 @@ export async function applyStatusLineConfig(casePath: string, enabled: boolean):
 
     await writeFile(settingsPath, JSON.stringify(existing, null, 2) + '\n');
   });
+}
+
+// ─── Agent skill injection ───────────────────────────────────────────────────
+
+/**
+ * Version-agnostic ownership prefix for the injected agent skill, same pattern as
+ * `BACKGROUND_WAKE_MARKER_PREFIX`: ownership is decided on the prefix so a wording
+ * change in the full marker cannot disown every previously injected copy.
+ */
+const AGENT_SKILL_MARKER_PREFIX = '<!-- codeman-managed-agent-skill';
+
+/**
+ * Marker appended to the injected SKILL.md. Its presence is what makes a copy OURS:
+ * install/refresh/remove all refuse to touch a `skills/codeman` whose SKILL.md lacks
+ * it, so a user's hand-authored or hand-edited-and-de-marked skill is never clobbered.
+ */
+const AGENT_SKILL_MARKER = `${AGENT_SKILL_MARKER_PREFIX}: installed by Codeman; edits are overwritten while the agent-skill setting is on -->`;
+
+/**
+ * Packaged source of the skill: `skills/codeman/` at the package root. Resolved
+ * relative to this module so it works from `src/` (tsx dev), `dist/` (tsc build),
+ * and an npm install (`files` includes `skills`), all of which sit one level below
+ * the package root.
+ */
+function agentSkillSourceDir(): string {
+  return join(dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'codeman');
+}
+
+interface AgentSkillFile {
+  /** Path relative to the target skill dir (e.g. `reference/endpoints.md`). */
+  relPath: string;
+  content: string;
+}
+
+/**
+ * Read the packaged skill: SKILL.md (marker appended) plus every markdown file
+ * under `reference/`. Enumerated from disk rather than a hardcoded manifest so a
+ * new reference file ships without touching this module.
+ */
+async function readAgentSkillSource(): Promise<AgentSkillFile[]> {
+  const src = agentSkillSourceDir();
+  const skill = await readFile(join(src, 'SKILL.md'), 'utf-8');
+  const files: AgentSkillFile[] = [{ relPath: 'SKILL.md', content: `${skill.trimEnd()}\n\n${AGENT_SKILL_MARKER}\n` }];
+  let referenceNames: string[] = [];
+  try {
+    referenceNames = (await readdir(join(src, 'reference'))).filter((name) => name.endsWith('.md')).sort();
+  } catch {
+    // no reference dir in the source; SKILL.md alone is still a valid skill
+  }
+  for (const name of referenceNames) {
+    files.push({ relPath: join('reference', name), content: await readFile(join(src, 'reference', name), 'utf-8') });
+  }
+  return files;
+}
+
+async function isSymlink(path: string): Promise<boolean> {
+  try {
+    return (await lstat(path)).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/** What an install/remove actually did, so callers (CLI, logs) can say so. */
+export type AgentSkillApplyResult =
+  | 'installed' // fresh copy written
+  | 'refreshed' // our copy was stale and got rewritten
+  | 'unchanged' // our copy already matches the packaged source
+  | 'removed' // our copy deleted
+  | 'absent' // nothing there to remove
+  | 'foreign' // a copy exists but is not ours; left untouched
+  | 'symlink'; // the skill dir (or its parent) is a symlink; left untouched
+
+/**
+ * Install or refresh the Codeman agent skill into `skillDir` (a `.../codeman`
+ * directory, e.g. `<case>/.claude/skills/codeman` or `~/.claude/skills/codeman`).
+ *
+ * Refuses two shapes rather than writing through them:
+ * - a SYMLINK at the skill dir or its `skills/` parent: this repo's own dogfooding
+ *   layout (`.claude/skills/codeman -> ../../skills/codeman`) would otherwise have
+ *   the injector overwrite the repo source through the link;
+ * - a FOREIGN copy (SKILL.md present without our marker): that is the user's own
+ *   skill, and per the statusLine rule we never clobber what we did not write.
+ *
+ * Idempotent and cheap: unchanged files are not rewritten, so calling on every
+ * session create causes no mtime churn.
+ */
+export async function installAgentSkillInto(skillDir: string): Promise<AgentSkillApplyResult> {
+  if ((await isSymlink(dirname(skillDir))) || (await isSymlink(skillDir))) return 'symlink';
+
+  let existing: string | null = null;
+  try {
+    existing = await readFile(join(skillDir, 'SKILL.md'), 'utf-8');
+  } catch {
+    // absent: fresh install
+  }
+  if (existing !== null && !existing.includes(AGENT_SKILL_MARKER_PREFIX)) return 'foreign';
+
+  const files = await readAgentSkillSource();
+  let changed = false;
+  for (const file of files) {
+    const target = join(skillDir, file.relPath);
+    let current: string | null = null;
+    try {
+      current = await readFile(target, 'utf-8');
+    } catch {
+      // missing: will be written
+    }
+    if (current === file.content) continue;
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, file.content);
+    changed = true;
+  }
+  if (!changed) return 'unchanged';
+  return existing === null ? 'installed' : 'refreshed';
+}
+
+/**
+ * Remove a Codeman-managed skill copy from `skillDir`. Same ownership and symlink
+ * refusals as the install path. Deletes only files the packaged source would have
+ * written (never `rm -rf`, so a user's extra files in the directory survive), then
+ * prunes the directories bottom-up if they emptied.
+ */
+export async function removeAgentSkillFrom(skillDir: string): Promise<AgentSkillApplyResult> {
+  if ((await isSymlink(dirname(skillDir))) || (await isSymlink(skillDir))) return 'symlink';
+
+  let existing: string | null = null;
+  try {
+    existing = await readFile(join(skillDir, 'SKILL.md'), 'utf-8');
+  } catch {
+    return 'absent';
+  }
+  if (!existing.includes(AGENT_SKILL_MARKER_PREFIX)) return 'foreign';
+
+  // Manifest-based, with SKILL.md as the fallback when the packaged source is
+  // unreadable: removal must still work on an install whose skills/ dir went missing.
+  const files = await readAgentSkillSource().catch((): AgentSkillFile[] => [{ relPath: 'SKILL.md', content: '' }]);
+  for (const file of files) {
+    await unlink(join(skillDir, file.relPath)).catch(() => {});
+  }
+  await rmdir(join(skillDir, 'reference')).catch(() => {}); // fails when non-empty, fine
+  await rmdir(skillDir).catch(() => {});
+  await rmdir(dirname(skillDir)).catch(() => {}); // prune `.claude/skills` if now empty
+  return 'removed';
+}
+
+/**
+ * Add or remove the Codeman agent skill in `<case>/.claude/skills/codeman`,
+ * mirroring `applyStatusLineConfig`'s shape. Gated by the synced `agentSkillEnabled`
+ * app setting (default OFF); callers gate on Claude mode, since the skill is discovered
+ * via `.claude/skills/`, which only Claude Code reads.
+ *
+ * Call-site policy is ADD-ONLY on session create (callers pass `enabled: true` or
+ * skip the call), for the statusLine reason: sessions in a repo share one `.claude/`
+ * dir, so a single create while the setting is off must not yank the skill out from
+ * under other live sessions.
+ *
+ * ⚠️ Consequence: turning `agentSkillEnabled` OFF sweeps nothing. There is deliberately
+ * no server-side toggle-off sweep (it would have to walk every case, including ones
+ * with live sessions, and would hit exactly the shared-`.claude/` hazard above), so
+ * already-injected copies stay on disk until removed per case with
+ * `codeman skill uninstall --case <name>`. The `enabled: false` branch here backs that
+ * CLI and the tests; it has no server call site. Keep the README's Agent Skill note in
+ * sync if this ever changes.
+ */
+export async function applyAgentSkill(casePath: string, enabled: boolean): Promise<AgentSkillApplyResult> {
+  const skillDir = join(casePath, '.claude', 'skills', 'codeman');
+  return enabled ? installAgentSkillInto(skillDir) : removeAgentSkillFrom(skillDir);
 }

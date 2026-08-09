@@ -79,6 +79,7 @@ import {
   updateCaseModel,
   stripCaseEnvKeys,
   applyStatusLineConfig,
+  applyAgentSkill,
   refreshStaleCodemanHooks,
 } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
@@ -699,6 +700,13 @@ export function registerSessionRoutes(
     // cases (writeHooksConfig already wrote the secret) and for non-Codeman/absent hooks.
     if ((body.mode ?? 'claude') === 'claude') {
       await refreshStaleCodemanHooks(workingDir).catch(() => {});
+      // Agent skill (docs/agent-control-plan.md §2): ADD-ONLY on create, same shared-
+      // .claude rationale as the statusLine above: a create must never remove the
+      // skill from under other live sessions in the repo. Marker-guarded, so a
+      // user's own skills/codeman is never touched.
+      if (await ctx.getAgentSkillEnabled()) {
+        await applyAgentSkill(workingDir, true).catch(() => {});
+      }
     }
 
     // Check OpenCode availability if requested
@@ -2764,6 +2772,15 @@ export function registerSessionRoutes(
       // the hooks aren't ours or already carry the secret. Skipped for remote cases —
       // resolvedCasePath is a REMOTE path that doesn't exist on the local filesystem.
       await refreshStaleCodemanHooks(resolvedCasePath).catch(() => {});
+    }
+
+    // Agent skill injection (docs/agent-control-plan.md §2): ADD-ONLY on create,
+    // marker-guarded (a user's own skills/codeman is never touched). Claude mode only
+    // (`.claude/skills/` is a Claude Code surface); skipped for remote cases, whose
+    // casePath lives on another host. Docker cases qualify: hostWorkspacePath is a
+    // real host dir and the skill crosses the bind mount like the rest of `.claude/`.
+    if (!remote && mode === 'claude' && (await ctx.getAgentSkillEnabled())) {
+      await applyAgentSkill(resolvedCasePath, true).catch(() => {});
     }
 
     // Docker cases: the workspace is a REAL host dir bind-mounted into the container.

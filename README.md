@@ -691,6 +691,18 @@ Single-digit selection (1-9), color-coded status, token counts, auto-refresh. De
 
 For AI agents and automation that control Codeman without a browser: an agent that spins up worker sessions, a CI bot, or **Claude Code running _inside_ a Codeman session orchestrating other sessions**. Everything the UI does is HTTP + a CLI, so an agent can do it too.
 
+> **Shortcut: install the packaged agent skill.** Everything below (plus worked multi-worker recipes) ships as a Claude Code skill in [`skills/codeman`](skills/codeman/SKILL.md), so an agent inside a session can drive Codeman without you pasting docs into the prompt. Three ways to get it:
+>
+> - `npx skills add Ark0N/Codeman --skill codeman -g`: global, works for any skills-aware agent
+> - `codeman skill install` (global) or `codeman skill install --case <name>`: for npm installs that never cloned the repo; `codeman skill uninstall` reverses it
+> - **App Settings → Agent Skill** (`agentSkillEnabled`, default off): Codeman then injects the skill into each case on Claude session create; a user-authored `skills/codeman` in the case is never overwritten
+>
+> A global install (`codeman skill install`, or `npx skills add`) is picked up by **every new Claude Code session on the machine**, inside Codeman or not. The skill self-gates: outside a Codeman session (`CODEMAN_MUX` unset) it refuses to act, so a global install costs an idle session nothing.
+>
+> ⚠️ Turning `agentSkillEnabled` back off **does not remove already-injected copies** (a create-time sweep would yank the skill out from under other live sessions sharing that `.claude/` dir). Remove them per case with `codeman skill uninstall --case <name>`.
+
+
+
 ### Detect that you're inside Codeman
 
 When a CLI runs in a Codeman-managed session, these environment variables are set — read them instead of hardcoding anything:

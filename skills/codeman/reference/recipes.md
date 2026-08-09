@@ -1,10 +1,17 @@
 # Worked orchestration flows
 
-Loaded on demand from the `codeman` skill. Every flow assumes the guard preamble from
-SKILL.md ran (`$API`, `$SELF`, `"${CURL[@]}"`, `is_self`). Track every session id you
-create; delete them (and only them) when done. Remember the two silent killers:
-**every input ends with `\r`**, and **markers must be split** so the typed-line echo
-does not match them.
+Loaded on demand from the `codeman` skill. Every flow assumes the SKILL.md §0 preamble
+is in scope (`$API`, `$SELF`, `$CID`, `"${CURL[@]}"`, `delete_session`).
+
+⚠️ **That preamble does not survive between tool calls**, so re-run it at the top of
+every Bash call that uses these flows, in full. Re-pasting only part of it is the
+failure mode the fail-closed `delete_session` exists to contain, and a `clientId` you
+rebuild from `$$` changes per call, which turns the duplicate-resend loop in Flow 1
+into a second typed prompt.
+
+Track every session id you create; delete them (and only them) when done. The two
+silent killers: **every input ends with `\r`**, and **markers must be split** so the
+typed-line echo does not match them.
 
 ## Flow 1: claude worker, end to end
 
@@ -13,11 +20,15 @@ the turn to finish, read the answer, clean up. Verified live: the stop hook reso
 the send-and-wait within seconds of the turn ending.
 
 ```bash
-# 1. start (returns before the CLI inside is ready)
-SID=$("${CURL[@]}" -X POST "$API/api/v1/quick-start" -H 'Content-Type: application/json' \
-  -d '{"caseName":"worker-tests","mode":"claude"}' | jq -r '.data.sessionId')
+# 1. start (returns before the CLI inside is ready). ALWAYS check .success: on failure
+#    .data.sessionId is null, jq -r yields the string "null", and every step below
+#    then runs against /api/v1/sessions/null and reports jq noise, not the cause.
+Q=$("${CURL[@]}" -X POST "$API/api/v1/quick-start" -H 'Content-Type: application/json' \
+  -d '{"caseName":"worker-tests","mode":"claude"}')
+SID=$(jq -r 'if .success then .data.sessionId else empty end' <<<"$Q")
+[ -n "$SID" ] || { jq -c '{error, errorCode}' <<<"$Q"; echo "quick-start failed"; exit 1; }
 CREATED+=("$SID")   # the cleanup list
-CID="agent-$$"; SEQ=1
+SEQ=1               # $CID is the fixed literal from §0; never rebuild it from $$
 
 # 2. readiness. "wait for idle" or "wait for ❯" is NOT readiness: a fresh session
 #    reports idle before anything spawned, and the first-run trust dialog contains ❯.
@@ -84,13 +95,23 @@ case "$(jq -r '.data.wait.signal' <<<"$R")" in
   null) jq -e '.data.wait.ended' <<<"$R" >/dev/null && echo "worker deleted mid-wait" ;;
 esac
 
-# 5. read the answer: terminal tail (BYTES), ANSI-stripped. textOutput stays empty
-#    for interactive sessions; terminal?full=1 is a context bomb.
-"${CURL[@]}" "$API/api/v1/sessions/$SID/terminal?tail=4000" | jq -r '.data.terminalBuffer' \
-  | sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' -e 's/\x1b([B0]//g' | grep -v '^[[:space:]]*$' | tail -30
+# 5. read the answer. For a claude worker this is last-response: clean transcript text,
+#    no TUI repaint noise. Do NOT scrape the terminal for this — a full-screen TUI
+#    draws with cursor moves, so the stripped buffer is nearly one long line and the
+#    answer arrives buried in redraw garbage.
+#    POLL it: the transcript flush lags the stop signal, so a single read taken the
+#    instant step 3 returned comes back "" even though the turn finished (verified live).
+for _ in $(seq 1 10); do
+  TXT=$("${CURL[@]}" "$API/api/v1/sessions/$SID/last-response" | jq -r '.data.text')
+  [ -n "$TXT" ] && break; sleep 1
+done
+printf '%s\n' "$TXT"
+#    (.data is {text,timestamp}; text is also "" before the first completed turn and
+#     always "" for shell/opencode/gemini/antigravity, which have no transcript — use
+#     the terminal tail there, and here only to diagnose an unsubmitted prompt.)
 
-# 6. clean up — exact id, own list only, self-check
-is_self "$SID" || "${CURL[@]}" -X DELETE "$API/api/v1/sessions/$SID"
+# 6. clean up — exact id, own list only, through the fail-closed §0 helper
+delete_session "$SID"
 ```
 
 Increment `SEQ` for every *new* input to the same worker. Reuse the same `SEQ` only to
@@ -104,8 +125,10 @@ live), so send-and-wait can burn its whole timeout. The reliable pattern is a sp
 unique marker plus `wait-output from=buffer`:
 
 ```bash
-SID=$("${CURL[@]}" -X POST "$API/api/v1/quick-start" -H 'Content-Type: application/json' \
-  -d '{"caseName":"builder","mode":"shell"}' | jq -r '.data.sessionId')
+Q=$("${CURL[@]}" -X POST "$API/api/v1/quick-start" -H 'Content-Type: application/json' \
+  -d '{"caseName":"builder","mode":"shell"}')
+SID=$(jq -r 'if .success then .data.sessionId else empty end' <<<"$Q")
+[ -n "$SID" ] || { jq -c '{error, errorCode}' <<<"$Q"; echo "quick-start failed"; exit 1; }
 CREATED+=("$SID")
 for _ in $(seq 1 30); do
   [ "$("${CURL[@]}" "$API/api/v1/sessions/$SID" | jq '.data.pid')" != null ] && break; sleep 1
@@ -115,7 +138,7 @@ done
 # An unsplit marker matches the echo of your own keystrokes before the build runs.
 N="${RANDOM}_$$"; MARK="DONE_$N"
 "${CURL[@]}" -X POST "$API/api/v1/sessions/$SID/input" -H 'Content-Type: application/json' \
-  -d '{"input":"M=DONE; npm run build; echo ${M}_'"$N"' rc=$?\r","useMux":true,"clientId":"build-'$$'","seq":1}'
+  -d '{"input":"M=DONE; npm run build; echo ${M}_'"$N"' rc=$?\r","useMux":true,"clientId":"codeman-build-1","seq":1}'
 
 for TRY in $(seq 1 30); do   # BOUNDED (30 min): a \r-less send makes an uncapped loop infinite
   R=$("${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
@@ -136,8 +159,10 @@ waiter cap is 16 and abandoned concurrent waits pile up against it.
 ```bash
 declare -A WORKER MARKS
 for task in lint typecheck unit; do
-  SID=$("${CURL[@]}" -X POST "$API/api/v1/quick-start" -H 'Content-Type: application/json' \
-    -d '{"caseName":"fan-'"$task"'","mode":"shell"}' | jq -r '.data.sessionId')
+  Q=$("${CURL[@]}" -X POST "$API/api/v1/quick-start" -H 'Content-Type: application/json' \
+    -d '{"caseName":"fan-'"$task"'","mode":"shell"}')
+  SID=$(jq -r 'if .success then .data.sessionId else empty end' <<<"$Q")
+  [ -n "$SID" ] || { jq -c '{error, errorCode}' <<<"$Q"; echo "$task: spawn failed"; continue; }
   WORKER[$task]=$SID; CREATED+=("$SID")
 done
 for task in "${!WORKER[@]}"; do
@@ -147,7 +172,7 @@ for task in "${!WORKER[@]}"; do
   done
   N="${task}_${RANDOM}"; MARKS[$task]="DONE_$N"
   "${CURL[@]}" -X POST "$API/api/v1/sessions/$SID/input" -H 'Content-Type: application/json' \
-    -d '{"input":"M=DONE; npm run '"$task"'; echo ${M}_'"$N"' rc=$?\r","useMux":true,"clientId":"fan-'$$'","seq":1}'
+    -d '{"input":"M=DONE; npm run '"$task"'; echo ${M}_'"$N"' rc=$?\r","useMux":true,"clientId":"codeman-fan-'"$task"'","seq":1}'
 done
 for task in "${!WORKER[@]}"; do        # sequential gather; each wait blocks until that worker is done
   for TRY in $(seq 1 30); do           # BOUNDED per worker, same reasoning as Flow 2
@@ -171,8 +196,8 @@ other was still running):
 
 ```bash
 sendwait() {  # $1=sid $2=prompt $3=seq — assumes the worker passed Flow 1's readiness
-  local body; body=$(jq -n --arg p "$2" --argjson s "$3" \
-    '{input:($p+"\r"),useMux:true,clientId:"fan-'$$'",seq:$s,wait:true,waitTimeout:600000}')
+  local body; body=$(jq -n --arg p "$2" --argjson s "$3" --arg c "codeman-fan-$1" \
+    '{input:($p+"\r"),useMux:true,clientId:$c,seq:$s,wait:true,waitTimeout:600000}')
   "${CURL[@]}" -X POST "$API/api/v1/sessions/$1/input" \
     -H 'Content-Type: application/json' --data-binary "$body" > "/tmp/fan-$1.json"
 }
@@ -200,7 +225,7 @@ declare -A TOK
 for i in 1 2; do
   TOK[$i]="${RANDOM}_$i"
   BODY=$(jq -n --arg p "do task $i; when completely done print the word WORKDONE immediately followed by _${TOK[$i]}" \
-    --arg c "fan-$$" --argjson s 2 '{input:($p+"\r"),useMux:true,clientId:$c,seq:$s}')
+    --arg c "codeman-fan-$i" --argjson s 2 '{input:($p+"\r"),useMux:true,clientId:$c,seq:$s}')
   "${CURL[@]}" -X POST "$API/api/v1/sessions/${SIDS[$i]}/input" \
     -H 'Content-Type: application/json' --data-binary "$BODY"
 done
@@ -237,12 +262,17 @@ At the end of the conversation (or on abort), delete exactly what you created:
 
 ```bash
 for id in "${CREATED[@]}"; do
-  is_self "$id" || "${CURL[@]}" -X DELETE "$API/api/v1/sessions/$id"
+  delete_session "$id"
 done
 ```
 
 - Only ids from your own `CREATED` list. Never enumerate `/api/v1/sessions` and
   delete by pattern; other sessions belong to the user.
+- Always go through `delete_session`. It refuses an empty id, refuses when `$SELF` is
+  unset or too short to prove the target is not you, and prefix-checks in both
+  directions. A hand-written `curl -X DELETE`, or the old
+  `is_self "$id" || curl -X DELETE …`, has none of that: an undefined `is_self` exits
+  127 and the `||` branch deletes unguarded.
 - If you created a *case* purely as scratch and the user confirmed it is disposable,
   `DELETE /api/v1/cases/:name` removes it — but that recursively deletes the
   directory from disk, so never do it without the user's explicit go-ahead for that

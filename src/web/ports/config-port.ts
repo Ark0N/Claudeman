@@ -17,6 +17,8 @@ export interface ConfigPort {
   getModelConfig(): Promise<{ defaultModel?: string; agentTypeOverrides?: Record<string, string> } | null>;
   getClaudeModeConfig(): Promise<{ claudeMode?: ClaudeMode; allowedTools?: string }>;
   getTerminalHistoryConfig(): Promise<TerminalHistoryConfig>;
+  /** Synced `agentSkillEnabled` app setting (default OFF); gates per-case agent-skill injection. */
+  getAgentSkillEnabled(): Promise<boolean>;
   getDefaultClaudeMdPath(): Promise<string | undefined>;
   getLightState(identity?: { username: string; role: 'admin' | 'user' }): unknown;
   getLightSessionsState(): unknown[];

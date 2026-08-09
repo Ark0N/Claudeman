@@ -12,9 +12,11 @@ import chalk from 'chalk';
 import { createRequire } from 'module';
 import http from 'node:http';
 import https from 'node:https';
-import { readFileSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
+import { homedir } from 'node:os';
 import { dataPath } from './config/instance.js';
+import { installAgentSkillInto, removeAgentSkillFrom, type AgentSkillApplyResult } from './hooks-config.js';
 import { getSessionManager } from './session-manager.js';
 import { getTaskQueue } from './task-queue.js';
 import { getRalphLoop } from './ralph-loop.js';
@@ -117,6 +119,112 @@ program
     }
 
     console.log(makeAttachmentMagicLink(filePath));
+  });
+
+// ============ Skill Commands ============
+
+/** Same registry the server resolves case names through (mirrors `case-routes.ts`). */
+const LINKED_CASES_FILE = dataPath('linked-cases.json');
+
+/**
+ * Case name to directory, checking `linked-cases.json` FIRST and falling back to the
+ * shared single-user cases dir. Mirrors `resolveCasePath()` in `case-routes.ts`, which
+ * is what the web UI and `quick-start` use. Without the linked-cases lookup this
+ * command rejected every case linked in from outside `~/codeman-cases` with
+ * "Case not found", even though the server resolved the same name fine.
+ *
+ * Sync and tolerant on purpose: a missing or malformed registry means "no linked
+ * cases", never a crash.
+ */
+function resolveCliCasePath(name: string): string {
+  try {
+    const linked = JSON.parse(readFileSync(LINKED_CASES_FILE, 'utf-8')) as Record<string, string>;
+    const target = linked?.[name];
+    if (typeof target === 'string' && target) return target;
+  } catch {
+    // no registry yet, or unreadable/invalid JSON: fall through to the cases dir
+  }
+  return join(homedir(), 'codeman-cases', name);
+}
+
+/**
+ * Resolve where `skill install` / `skill uninstall` operate. Global is
+ * `~/.claude/skills/codeman` (Claude Code's user-scope skill dir, read by every new
+ * session); `--case <name>` targets `<case>/.claude/skills/codeman`, resolved through
+ * `resolveCliCasePath()` above. The web server's automatic per-case injection
+ * (`agentSkillEnabled`) covers multi-user spaces; this CLI is a local operator tool
+ * and stays single-user.
+ */
+function resolveSkillTarget(options: { case?: string }): string {
+  if (options.case) {
+    const casePath = resolveCliCasePath(options.case);
+    if (!existsSync(casePath)) {
+      console.error(chalk.red(`✗ Case not found: ${casePath}`));
+      process.exit(1);
+    }
+    return join(casePath, '.claude', 'skills', 'codeman');
+  }
+  return join(homedir(), '.claude', 'skills', 'codeman');
+}
+
+/** Print an AgentSkillApplyResult for humans; exit non-zero when nothing was done. */
+function reportSkillResult(result: AgentSkillApplyResult, target: string): void {
+  const messages: Record<AgentSkillApplyResult, { ok: boolean; text: string }> = {
+    installed: { ok: true, text: `Agent skill installed: ${target}` },
+    refreshed: { ok: true, text: `Agent skill refreshed (was stale): ${target}` },
+    unchanged: { ok: true, text: `Agent skill already up to date: ${target}` },
+    removed: { ok: true, text: `Agent skill removed: ${target}` },
+    absent: { ok: true, text: `Nothing to remove at ${target}` },
+    foreign: {
+      ok: false,
+      text: `${target} exists but is not Codeman-managed (no marker), refusing to touch it. Remove it yourself if you want the packaged skill there.`,
+    },
+    symlink: {
+      ok: false,
+      text: `${target} (or its parent) is a symlink, refusing to write through it.`,
+    },
+  };
+  const message = messages[result];
+  if (message.ok) {
+    console.log(chalk.green(`✓ ${message.text}`));
+  } else {
+    console.error(chalk.red(`✗ ${message.text}`));
+    process.exit(1);
+  }
+}
+
+const skillCmd = program
+  .command('skill')
+  .description('Manage the Codeman agent skill (lets an agent inside a session drive the API)');
+
+skillCmd
+  .command('install')
+  .description('Install the agent skill globally (~/.claude/skills/codeman) or into one case')
+  .option('-g, --global', 'Install into ~/.claude/skills/codeman, picked up by every new session (the default)')
+  .option('-c, --case <name>', 'Install into <case>/.claude/skills/codeman instead (linked cases resolve too)')
+  .action(async (options: { global?: boolean; case?: string }) => {
+    try {
+      const target = resolveSkillTarget(options);
+      reportSkillResult(await installAgentSkillInto(target), target);
+    } catch (err) {
+      console.error(chalk.red(`✗ Failed to install agent skill: ${getErrorMessage(err)}`));
+      process.exit(1);
+    }
+  });
+
+skillCmd
+  .command('uninstall')
+  .description('Remove a Codeman-managed agent skill copy (never touches a user-authored one)')
+  .option('-g, --global', 'Remove from ~/.claude/skills/codeman (the default)')
+  .option('-c, --case <name>', 'Remove from <case>/.claude/skills/codeman instead (linked cases resolve too)')
+  .action(async (options: { global?: boolean; case?: string }) => {
+    try {
+      const target = resolveSkillTarget(options);
+      reportSkillResult(await removeAgentSkillFrom(target), target);
+    } catch (err) {
+      console.error(chalk.red(`✗ Failed to remove agent skill: ${getErrorMessage(err)}`));
+      process.exit(1);
+    }
   });
 
 // ============ Session Commands ============

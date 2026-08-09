@@ -160,6 +160,13 @@ Around 200 handlers across 21 route files cover sessions, cases, files, cron,
 respawn, Ralph, the orchestrator, search, and admin. Each route module carries an
 `@fileoverview` describing its endpoints.
 
+If the caller is an agent running _inside_ a Codeman session, install the packaged
+agent skill instead of teaching it these calls by hand: `skills/codeman` in the repo
+(`npx skills add Ark0N/Codeman --skill codeman -g`, or `codeman skill install
+[--case <name>]`, or the synced `agentSkillEnabled` App Setting for automatic
+per-case injection on Claude session create). The skill carries the guard, the
+safety rules, and verified wait/orchestration recipes.
+
 The common ones:
 
 ```bash

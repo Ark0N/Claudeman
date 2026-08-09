@@ -14,7 +14,7 @@ Every JSON response: `{"success":true,"data":…}` or
 | `INVALID_INPUT` | 400 | malformed request; the message names the bad field |
 | `UNAUTHORIZED` | 401 | auth required or failed (send `-u user:password`). ⚠️ The 401 body is plain text, NOT this envelope — `jq` dies with a parse error, see the guard in SKILL.md |
 | `NOT_FOUND` | 404 | no such session, or one this caller does not own |
-| `SESSION_BUSY` | 409 | this session's waiter cap (16, combined signal+output) is full |
+| `SESSION_BUSY` | 409 | on a **wait**: this session's waiter cap (16, combined signal+output) is full. On **quick-start**: the 50-session cap is full, so clean up before starting more |
 | `CONFLICT` / `ALREADY_EXISTS` | 409 | conflicts with current state |
 | `OPERATION_FAILED` | 422 | well-formed but could not be completed |
 | `RATE_LIMITED` | 429 | per-owner or process-wide waiter pool is full — back off; switching sessions will not help |
@@ -32,16 +32,19 @@ Every JSON response: `{"success":true,"data":…}` or
 | unified list incl. history | `GET /api/v1/sessions/unified` → `.data.sessions[]` (NOT `.data[]`), and it folds in transcript history from the whole machine — never use it to verify cleanup; `GET /api/v1/sessions` is the cleanup check |
 | start case + session in one call | `POST /api/v1/quick-start` |
 | send input | `POST /api/v1/sessions/:id/input` |
-| read terminal (tail is in **BYTES**, raw ANSI) | `GET /api/v1/sessions/:id/terminal?tail=3000` → `.data.terminalBuffer` |
+| **read a worker's answer** (claude/codex) | `GET /api/v1/sessions/:id/last-response` → `.data.{text,timestamp}` — clean transcript text, no TUI noise. ⚠️ **Poll it**: the transcript flush lags the `stop` signal, so a read taken the instant send-and-wait returns is `""` (verified live). Also `""` before the first completed turn, and always `""` for `shell`/`opencode`/`gemini`/`antigravity` (no transcript) |
+| read terminal (tail is in **BYTES**, raw ANSI) | `GET /api/v1/sessions/:id/terminal?tail=3000` → `.data.terminalBuffer` — for *diagnosis* (unsubmitted prompt?), not for reading answers |
 | full tmux scrollback (context bomb; post-mortems only) | `GET /api/v1/sessions/:id/terminal?full=1` |
-| background agents of a session | `GET /api/v1/subagents` |
+| background agents, one session | `GET /api/v1/sessions/:id/subagents` |
+| background agents, global list | `GET /api/v1/subagents` (admin-only in multi-user mode) |
 | server status / version | `GET /api/v1/status` → `.data.version` |
-| delete one session (yours, `is_self`-checked) | `DELETE /api/v1/sessions/:id` |
+| delete one session (yours only, via `delete_session`) | `DELETE /api/v1/sessions/:id` — never call it bare; the fail-closed helper in SKILL.md §0 is the only self-protection that exists |
 
 ⚠️ `GET /api/v1/sessions/:id/output` → `.data.textOutput` looks like the obvious read
 but stays **empty for interactive tmux-backed sessions** (it is fed only by the legacy
-JSON-stream path). Verified empty on live claude and shell sessions. Read
-`terminal?tail=` instead and strip ANSI:
+JSON-stream path). Verified empty on live claude and shell sessions. Use
+`last-response` for claude/codex answers; only fall back to `terminal?tail=` for
+hook-less modes, or to diagnose a prompt that was never submitted, and strip ANSI:
 
 ```bash
 … | jq -r '.data.terminalBuffer' | sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' -e 's/\x1b([B0]//g'
@@ -52,6 +55,18 @@ JSON-stream path). Verified empty on live claude and shell sessions. Read
 — `mode` ∈ `claude|shell|opencode|codex|gemini|antigravity`; response is
 `.data.{sessionId, caseName, casePath}`. Creates the case directory (a real directory
 on the user's disk) if missing — do not retry it in a loop, and remember the name.
+
+⚠️ **Branch on `.success` before reading `.data.sessionId`.** On any failure the field
+is absent, `jq -r` prints the literal string `null`, and every later call then targets
+`/api/v1/sessions/null`, burning the full readiness budget and reporting jq noise
+instead of the real cause. Failure modes here are `SESSION_BUSY` (the **50-session
+cap**, not the waiter cap), `FORBIDDEN`, `CONFLICT`, `OPERATION_FAILED` and
+`INVALID_INPUT`; none of them are retryable in a loop.
+
+⚠️ `caseName` resolves through the linked-cases registry first, so a name that happens
+to match a case the user linked in lands in that **real repo**, not a fresh scratch
+directory. Pick distinctive scratch names, and use a linked name deliberately when you
+do want a worker in an existing checkout.
 
 `POST /api/v1/sessions/:id/input` body:
 `{"input":"one line\r","useMux":true,"clientId":"agent-1","seq":1}` plus optionally

@@ -760,6 +760,14 @@ export const SettingsUpdateSchema = z
     /** Floating ultracode run windows w/ tab connector lines (default OFF). Also starts workflowRunWatcher. SYNCED. */
     ultracodeFloatingWindows: z.boolean().optional(),
     imageWatcherEnabled: z.boolean().optional(),
+    /**
+     * Inject the Codeman agent skill (`skills/codeman`) into `<case>/.claude/skills/`
+     * on Claude session create, so an agent inside the session can drive the API
+     * (see docs/agent-control-plan.md §2). SYNCED, default OFF: every skill's
+     * name+description costs context on every turn, so it is opt-in. Injection is
+     * add-only at create; a marker keeps user-authored copies untouched.
+     */
+    agentSkillEnabled: z.boolean().optional(),
     tunnelEnabled: z.boolean().optional(),
     // Action field (NOT persisted): explicit per-request acknowledgment that the
     // operator accepts exposing an UNAUTHENTICATED public tunnel (no CODEMAN_PASSWORD).

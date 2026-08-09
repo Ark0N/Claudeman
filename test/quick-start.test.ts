@@ -332,3 +332,83 @@ describe('Case Management', () => {
     });
   });
 });
+
+describe('Agent skill injection (agentSkillEnabled)', () => {
+  let server: WebServer;
+  let baseUrl: string;
+  const createdCases: string[] = [];
+
+  beforeAll(async () => {
+    server = await createTestServer(TEST_PORT + 4); // 3103
+    await server.start();
+    baseUrl = `http://localhost:${TEST_PORT + 4}`;
+  });
+
+  afterAll(async () => {
+    await server.stop();
+    for (const caseName of createdCases) {
+      const casePath = join(CASES_DIR, caseName);
+      if (existsSync(casePath)) {
+        rmSync(casePath, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('does not inject by default, accepts the setting via PUT, then injects on quick-start', async () => {
+    // 1. Default OFF: a claude quick-start creates the case without the skill.
+    const offCase = 'test-skill-off-' + Date.now();
+    createdCases.push(offCase);
+    const offResponse = await fetch(`${baseUrl}/api/quick-start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ caseName: offCase }),
+    });
+    const offData = await offResponse.json();
+    expect(offData.success).toBe(true);
+    expect(existsSync(join(CASES_DIR, offCase, '.claude', 'skills', 'codeman'))).toBe(false);
+
+    // 2. The `.strict()` settings schema accepts the new synced key.
+    const putResponse = await fetch(`${baseUrl}/api/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentSkillEnabled: true }),
+    });
+    const putData = await putResponse.json();
+    expect(putData.success).toBe(true);
+
+    // 3. The server's settings read is cached ~2s; outwait it so the create sees the toggle.
+    await new Promise((resolve) => setTimeout(resolve, 2100));
+
+    // 4. Quick-start now injects the marker-carrying skill into the new case.
+    const onCase = 'test-skill-on-' + Date.now();
+    createdCases.push(onCase);
+    const onResponse = await fetch(`${baseUrl}/api/quick-start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ caseName: onCase }),
+    });
+    const onData = await onResponse.json();
+    expect(onData.success).toBe(true);
+
+    const skillDir = join(CASES_DIR, onCase, '.claude', 'skills', 'codeman');
+    const { readFileSync } = await import('node:fs');
+    const skillMd = readFileSync(join(skillDir, 'SKILL.md'), 'utf-8');
+    expect(skillMd.startsWith('---\nname: codeman')).toBe(true);
+    expect(skillMd).toContain('<!-- codeman-managed-agent-skill');
+    expect(existsSync(join(skillDir, 'reference', 'endpoints.md'))).toBe(true);
+    expect(existsSync(join(skillDir, 'reference', 'recipes.md'))).toBe(true);
+  }, 30000);
+
+  it('does not inject for shell-mode quick-start even when enabled', async () => {
+    const shellCase = 'test-skill-shell-' + Date.now();
+    createdCases.push(shellCase);
+    const response = await fetch(`${baseUrl}/api/quick-start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ caseName: shellCase, mode: 'shell' }),
+    });
+    const data = await response.json();
+    expect(data.success).toBe(true);
+    expect(existsSync(join(CASES_DIR, shellCase, '.claude', 'skills', 'codeman'))).toBe(false);
+  });
+});
