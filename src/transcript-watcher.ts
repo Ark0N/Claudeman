@@ -6,6 +6,7 @@
  * - Tool execution state
  * - Error conditions
  * - Plan mode prompts
+ * - User-authored prompts (`transcript:user_prompt`, Read My Mind intent capture)
  *
  * The transcript path is provided by Claude Code hooks in the `transcript_path` field.
  */
@@ -372,12 +373,23 @@ export class TranscriptWatcher extends EventEmitter {
     this.state.errorMessage = null;
 
     const content = entry.message?.content;
+    if (typeof content === 'string') {
+      if (content.trim()) this.emit('transcript:user_prompt', content, entry.timestamp);
+      return;
+    }
     if (!Array.isArray(content)) return;
+    let promptText = '';
     for (const block of content) {
       if (block.type === 'tool_result') {
         this.handleToolResult(block);
+      } else if (block.type === 'text' && block.text) {
+        promptText += (promptText ? ' ' : '') + block.text;
       }
     }
+    // Text blocks mean a typed prompt; tool_result-only entries are Claude's own
+    // tool plumbing, not intent. Filtering of command echo / system wrappers is
+    // the intent store's job (`isCapturablePrompt`), not the watcher's.
+    if (promptText.trim()) this.emit('transcript:user_prompt', promptText, entry.timestamp);
   }
 
   private handleToolResult(block: TranscriptContentBlock): void {

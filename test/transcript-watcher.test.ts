@@ -232,6 +232,88 @@ describe('TranscriptWatcher', () => {
     });
   });
 
+  describe('User prompt capture (Read My Mind)', () => {
+    it('emits transcript:user_prompt with the raw text for string content', async () => {
+      writeFileSync(testFile, '');
+      watcher.start(testFile);
+
+      const promptHandler = vi.fn();
+      watcher.on('transcript:user_prompt', promptHandler);
+
+      const ts = new Date().toISOString();
+      appendFileSync(
+        testFile,
+        JSON.stringify({ type: 'user', timestamp: ts, message: { role: 'user', content: 'fix the login bug' } }) + '\n'
+      );
+
+      await vi.waitFor(() => {
+        expect(promptHandler).toHaveBeenCalledWith('fix the login bug', ts);
+      });
+    });
+
+    it('emits joined text blocks but stays silent for tool_result-only entries', async () => {
+      writeFileSync(testFile, '');
+      watcher.start(testFile);
+
+      const promptHandler = vi.fn();
+      watcher.on('transcript:user_prompt', promptHandler);
+
+      appendFileSync(
+        testFile,
+        JSON.stringify({
+          type: 'user',
+          timestamp: new Date().toISOString(),
+          message: {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok', is_error: false }],
+          },
+        }) + '\n'
+      );
+      appendFileSync(
+        testFile,
+        JSON.stringify({
+          type: 'user',
+          timestamp: new Date().toISOString(),
+          message: {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'run the tests' },
+              { type: 'text', text: 'then push' },
+            ],
+          },
+        }) + '\n'
+      );
+
+      await vi.waitFor(() => {
+        expect(promptHandler).toHaveBeenCalledTimes(1);
+      });
+      expect(promptHandler).toHaveBeenCalledWith('run the tests then push', expect.any(String));
+    });
+
+    it('does not emit for whitespace-only string content', async () => {
+      writeFileSync(testFile, '');
+      watcher.start(testFile);
+
+      const promptHandler = vi.fn();
+      watcher.on('transcript:user_prompt', promptHandler);
+
+      appendFileSync(
+        testFile,
+        JSON.stringify({
+          type: 'user',
+          timestamp: new Date().toISOString(),
+          message: { role: 'user', content: '  ' },
+        }) + '\n'
+      );
+
+      // Wait for the entry to be processed, then assert no emission happened.
+      await vi.waitFor(() => {
+        expect(watcher.getState().entryCount).toBeGreaterThanOrEqual(1);
+      });
+      expect(promptHandler).not.toHaveBeenCalled();
+    });
+  });
+
   describe('State Management', () => {
     it('should return a copy of state', () => {
       const state1 = watcher.getState();

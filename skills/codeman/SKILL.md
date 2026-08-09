@@ -392,6 +392,24 @@ is parked resolves it within ~3 s. A session deleted mid-wait resolves in ~1 s.
 delete_session "$SID"
 ```
 
+**Read My Mind: read and record the user's intent.** Each case has an intent
+profile: user-stated goals plus the user's recent real prompts (captured
+server-side while the opt-in `readMyMindEnabled` setting is on). Read it to
+ground your work in what the user actually wants; write it when the user states
+an intention worth remembering ("the goal is shipping 1.17"):
+
+```bash
+"${CURL[@]}" "$API/api/v1/sessions/$SELF/intent" | jq '.data.intent'
+"${CURL[@]}" -X PUT -H 'Content-Type: application/json' \
+  -d '{"goals":"shipping 1.17; mobile polish next"}' "$API/api/v1/sessions/$SELF/intent"
+```
+
+⚠️ PUT **replaces** the whole goals text: read it first and merge, never
+blind-write. Never write goals the user did not state, and never delete the
+profile (`DELETE .../intent`) unless the user asks: it is their memory, not
+yours. Older servers 404 these routes; treat that as "feature absent", not an
+error.
+
 Everything else (endpoint tables, per-mode signal table, error codes, capacity
 limits, Docker/remote caveats): [reference/endpoints.md](reference/endpoints.md).
 Fan-out orchestration and blocked-worker handling:

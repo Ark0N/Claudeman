@@ -700,6 +700,16 @@ export const ApprovalAnswerSchema = z
   })
   .strict();
 
+/**
+ * Body of PUT /api/sessions/:id/intent (Read My Mind). The 8192 cap mirrors
+ * MAX_GOALS_CHARS in intent-store.ts.
+ */
+export const IntentGoalsSchema = z
+  .object({
+    goals: z.string().max(8192),
+  })
+  .strict();
+
 // ========== Configuration ==========
 
 /**
@@ -809,6 +819,13 @@ export const SettingsUpdateSchema = z
      * already pending immediately.
      */
     approvalsInboxEnabled: z.boolean().optional(),
+    /**
+     * Read My Mind (docs/readmymind-plan.md): capture the user's submitted
+     * prompts into per-case intent profiles. SYNCED, default OFF (opt-in:
+     * captured prompts are sensitive). OFF stops capture immediately; already
+     * stored profiles stay until DELETE /api/sessions/:id/intent.
+     */
+    readMyMindEnabled: z.boolean().optional(),
     tunnelEnabled: z.boolean().optional(),
     // Action field (NOT persisted): explicit per-request acknowledgment that the
     // operator accepts exposing an UNAUTHENTICATED public tunnel (no CODEMAN_PASSWORD).

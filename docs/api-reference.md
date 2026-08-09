@@ -434,6 +434,30 @@ re-captured), `approval:resolved` (`{ id, sessionId, kind, resolution }` with
 `resolution` one of `answered | resolved_in_terminal | superseded |
 session_ended | dismissed | expired`).
 
+## Read My Mind intent profiles
+
+Per-case profiles of what the user is trying to accomplish: user/agent-stated
+goals plus the user's recently submitted prompts, captured from the Claude
+session transcript while the opt-in `readMyMindEnabled` setting is on (default
+OFF). Keyed by owner + workingDir, so the profile survives `/clear`, respawns,
+and session churn. Stored in `~/.codeman/intents.json` (mode 0600); never fed
+into `/api/v1/search`. Design: [`readmymind-plan.md`](readmymind-plan.md).
+
+- `GET /api/v1/sessions/:id/intent` -> `{ intent: IntentProfile }` for the
+  session's case. `IntentProfile`: `{ key, workingDir, updatedAt, goals,
+  recentPrompts: { ts, sessionId, text }[] }` (prompts oldest first, FIFO cap
+  50, each <= 500 chars). A case with nothing recorded answers an empty
+  profile with `updatedAt: 0`; nothing is persisted by reads.
+- `PUT /api/v1/sessions/:id/intent` with `{ goals }` (<= 8192 chars, strict
+  schema) replaces the goals text and answers the updated profile.
+  `400 INVALID_INPUT` on over-long or unknown fields.
+- `DELETE /api/v1/sessions/:id/intent` -> `{ deleted: boolean }` forgets the
+  case's profile entirely.
+
+All three enforce session ownership in multi-user mode; a foreign session id
+answers `404 NOT_FOUND` (no existence leak), and profiles of two owners of the
+same directory are distinct by construction.
+
 ## Authentication
 
 Optional HTTP Basic (`CODEMAN_USERNAME`/`CODEMAN_PASSWORD`) → opaque
