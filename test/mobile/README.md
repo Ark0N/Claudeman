@@ -16,22 +16,30 @@ Validates Codeman's mobile UI across 136 devices, covering:
 
 ## Quick Start
 
+⚠️ Go through `npm run test:mobile`, not `npx vitest` directly. The suite serves the
+page from `src/web/public`, but `npm run build` puts the xterm vendor bundles in
+`dist/web/public`, so without them every `/vendor/xterm*` request 404s, `Terminal` is
+never defined and every test touching `app.terminal` fails on a null. The
+`pretest:mobile` hook (`scripts/prepare-test-vendor.mjs`) is what puts them in place,
+and npm only fires it for `npm run test:mobile`. Run the prepare script by hand first
+if you really need a bare `npx vitest`.
+
 ```bash
 # Run all mobile tests
-npx vitest run --config test/mobile/vitest.config.ts
+npm run test:mobile
 
 # Run a single test file
-npx vitest run --config test/mobile/vitest.config.ts test/mobile/keyboard.test.ts
+npm run test:mobile -- test/mobile/keyboard.test.ts
 
-# Quick mode — 6 representative devices, skip full matrix
-CI_QUICK=1 npx vitest run --config test/mobile/vitest.config.ts
+# Quick mode: 6 representative devices, skip full matrix
+CI_QUICK=1 npm run test:mobile
 
 # Full device matrix only (136 devices)
-npx vitest run --config test/mobile/vitest.config.ts test/mobile/device-matrix.test.ts
+npm run test:mobile -- test/mobile/device-matrix.test.ts
 
 # Update visual baselines (delete old baselines, re-run)
 rm -rf test/mobile/snapshots/*.png
-npx vitest run --config test/mobile/vitest.config.ts test/mobile/visual-regression.test.ts
+npm run test:mobile -- test/mobile/visual-regression.test.ts
 ```
 
 ## Test Files
