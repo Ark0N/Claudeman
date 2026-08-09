@@ -59,7 +59,7 @@ export function buildEffortCliArgs(effort?: EffortLevel): string[] {
  * and the flag's presence at exactly this version was verified against the installed
  * binary (`2.1.224 --help` lists `-n, --name`). The gate MUST stay fail-closed: an
  * older or unknown CLI aborts startup on an unknown flag ("error: unknown option"),
- * which would kill every session spawn — so no version means no flag, and the
+ * which would kill every session spawn: so no version means no flag, and the
  * command line stays byte-identical to the pre-`--name` one.
  */
 export const CLAUDE_NAME_FLAG_MIN_VERSION = '2.1.224';
@@ -71,7 +71,7 @@ export const CLAUDE_NAME_FLAG_MIN_VERSION = '2.1.224';
  * special inside the double-quoted shell interpolation buildSpawnCommand uses
  * (`"`, `$`, backslash, backtick) as well as newlines. Leading dashes/punctuation
  * are stripped so the value can never be parsed as another CLI option, and the
- * result is capped at 64 chars. Returns undefined when nothing safe remains —
+ * result is capped at 64 chars. Returns undefined when nothing safe remains;
  * callers must then omit the flag entirely (never send `--name ""`).
  */
 export function sanitizeCliSessionName(name?: string): string | undefined {

@@ -785,7 +785,7 @@ export function buildSpawnCommand(options: {
    * Claude CLI version for the `--name` gate. Omitted = probe the local CLI
    * (getClaudeCliVersion; null under vitest). Tests inject a value here; the
    * docker/remote paths never see this builder's output, which is what keeps the
-   * gate measuring the RIGHT binary — the local one.
+   * gate measuring the RIGHT binary, the local one.
    */
   claudeCliVersion?: string | null;
 }): string {
