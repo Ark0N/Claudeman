@@ -411,11 +411,13 @@ describe('_predictHookOnData (wire neutrality)', () => {
     expect(app._predictiveEcho!.clearPredictions).toHaveBeenCalled();
   });
 
-  it("kind 'text' (plain paste) takes no visual action", () => {
+  it("kind 'text' (plain paste, IME commit) clears the run like 'clear'", () => {
+    // Review finding: an IME word-commit changes the composer without a
+    // prediction; new predictions after it would mis-anchor until cascade.
     const app = makePredictApp();
     app._predictHookOnData('pasted text');
     expect(app._predictiveEcho!.predictChar).not.toHaveBeenCalled();
-    expect(app._predictiveEcho!.clearPredictions).not.toHaveBeenCalled();
+    expect(app._predictiveEcho!.clearPredictions).toHaveBeenCalled();
   });
 
   it('never touches _pendingInput and never sends (visual-only pin)', () => {

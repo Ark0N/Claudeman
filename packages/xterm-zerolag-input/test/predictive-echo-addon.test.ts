@@ -335,6 +335,7 @@ describe('PredictiveEchoAddon', () => {
 
   it('predictBackspace pops newest, returns false when empty, never touches confirmed', async () => {
     expect(addon.predictBackspace()).toBe(false);
+    addon.reconcile(); // the empty pop armed the anchor hold; release it
     addon.predictChar('a');
     addon.predictChar('b');
     expect(addon.predictBackspace()).toBe(true);
@@ -478,11 +479,43 @@ describe('PredictiveEchoAddon', () => {
     rows.style.color = 'rgb(255, 0, 0)'; // skin change
     a.refreshFont();
     a.clearPredictions();
+    a.reconcile(); // release the anchor hold armed by the clear
     a.predictChar('v');
     const span2 = themed.terminal.element.querySelector('.xterm-screen span') as HTMLSpanElement;
     expect(span2.style.color).toBe('rgb(255, 0, 0)');
     a.dispose();
     themed.cleanup();
+  });
+
+  it('anchor hold: backspace into echoed text suppresses prediction until a write parses', async () => {
+    // \x7f went to the wire with nothing outstanding: the cursor will move
+    // in a way the display has not shown, so anchoring now paints one cell
+    // off (review finding: "tehh" ghosts on backspace-then-retype at RTT)
+    expect(addon.predictBackspace()).toBe(false);
+    expect(addon.predictChar('x')).toBe(false);
+    expect(spansOf(mock)).toHaveLength(0);
+    mock.fireWriteParsed(); // the display caught up
+    await flushMicrotasks();
+    expect(addon.predictChar('x')).toBe(true);
+  });
+
+  it('anchor hold: clearPredictions suppresses until a write parses (or manual reconcile)', async () => {
+    addon.predictChar('a');
+    addon.clearPredictions(); // consumer saw Enter/Esc/arrow/paste
+    expect(addon.predictChar('b')).toBe(false);
+    mock.fireWriteParsed();
+    await flushMicrotasks();
+    expect(addon.predictChar('b')).toBe(true);
+  });
+
+  it('anchor hold: the inline predictChar reconcile does NOT release it', () => {
+    addon.clearPredictions();
+    // Several keystrokes in a row before any echo: all suppressed, because
+    // predictChar's inline pass must not count as the display catching up
+    expect(addon.predictChar('a')).toBe(false);
+    expect(addon.predictChar('b')).toBe(false);
+    addon.reconcile(); // public/manual pass IS the caught-up contract
+    expect(addon.predictChar('c')).toBe(true);
   });
 
   it('state getter reports outstanding/confirmedTotal/droppedTotal/anchor', async () => {

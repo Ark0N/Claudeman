@@ -62,7 +62,7 @@ async function replay(name: string) {
       let painted = false;
       if (kind === 'char') painted = addon.predictChar(line.data);
       else if (kind === 'backspace') addon.predictBackspace();
-      else if (kind === 'clear') addon.clearPredictions();
+      else addon.clearPredictions(); // 'clear' AND 'text', like the terminal-ui hook
       // Span/record parity and grid bounds hold at every step
       expect(rt.spanCount()).toBe(addon.state.outstanding);
       assertSpansInGrid(rt);

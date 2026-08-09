@@ -88,6 +88,14 @@ export class PredictiveEchoAddon implements XtermAddon {
   private _confirmedTotal = 0;
   private _droppedTotal = 0;
   private _ttlTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Anchor hold: set after an unpredicted wire edit (backspace into echoed
+   *  text, any cleared input, an IME text commit). While held, new
+   *  predictions are suppressed: the displayed cursor is stale until the
+   *  next parsed write, and anchoring on it paints ghosts one cell off
+   *  (found by review: backspace-then-retype within RTT). Cleared by the
+   *  onWriteParsed pass and by public reconcile(), never by the inline
+   *  predictChar pass (which runs before the display could catch up). */
+  private _anchorHold = false;
   private _reconcileScheduled = false;
   private _disposables: Array<{ dispose(): void }> = [];
   private _predictWhen: ((terminal: XtermTerminal) => boolean) | null;
@@ -141,6 +149,7 @@ export class PredictiveEchoAddon implements XtermAddon {
             this._reconcileScheduled = true;
             queueMicrotask(() => {
               this._reconcileScheduled = false;
+              this._anchorHold = false; // a parse pass ran: the display caught up
               this._safeReconcile();
             });
           })
@@ -183,6 +192,7 @@ export class PredictiveEchoAddon implements XtermAddon {
   predictChar(ch: string): boolean {
     try {
       this._reconcile();
+      if (this._anchorHold) return false; // display has not caught up with a wire edit
 
       const t = this._terminal;
       if (!t || !this._container) return false;
@@ -247,7 +257,12 @@ export class PredictiveEchoAddon implements XtermAddon {
   predictBackspace(): boolean {
     try {
       const rec = this._outstanding.pop();
-      if (!rec) return false;
+      if (!rec) {
+        // \x7f goes to the wire and will delete ECHOED text: the cursor is
+        // about to move in a way we cannot see yet
+        this._anchorHold = true;
+        return false;
+      }
       removePredictionSpan(this._spans, rec.seq);
       if (this._outstanding.length === 0) this._resetRun();
       return true;
@@ -256,9 +271,12 @@ export class PredictiveEchoAddon implements XtermAddon {
     }
   }
 
-  /** Drop every outstanding prediction and its spans. */
+  /** Drop every outstanding prediction and its spans. Also arms the anchor
+   *  hold: consumers clear on inputs (Enter, Esc, arrows, pastes) whose
+   *  cursor effect is unknown until the next parsed write. */
   clearPredictions(): void {
     try {
+      this._anchorHold = true;
       this._droppedTotal += this._outstanding.length;
       this._outstanding = [];
       clearAllSpans(this._spans);
@@ -268,8 +286,10 @@ export class PredictiveEchoAddon implements XtermAddon {
     }
   }
 
-  /** Manual reconcile pass, for consumers without onWriteParsed. */
+  /** Manual reconcile pass, for consumers without onWriteParsed. By contract
+   *  it is called after writes parsed, so it also releases the anchor hold. */
   reconcile(): void {
+    this._anchorHold = false;
     this._safeReconcile();
   }
 

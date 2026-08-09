@@ -333,7 +333,12 @@ identical in-place repaint, never false-confirms). A cell showing foreign
 non-blank content on two consecutive passes drops that prediction and all
 later ones (one pass tolerates half-parsed frames). Blank cells are neutral:
 they are what "not yet echoed" looks like. Whatever remains is dropped by TTL.
-Scrolling up, resizing, or a sustained cursor move clears the run.
+Scrolling up, resizing, or a sustained cursor move clears the run. After a
+backspace into already-echoed text, a cleared input, or a multi-char commit,
+the addon **holds** new predictions until the next parsed write: the displayed
+cursor is stale for one round trip, and anchoring on it would paint ghosts one
+cell off (worst case: exactly one unpredicted keystroke, whose own echo
+releases the hold).
 
 ### API
 

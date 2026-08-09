@@ -83,6 +83,14 @@ rules and why each exists:
 - **No drop on baseY change**: codex streams push lines to history while the
   composer stays viewport-pinned; predictions are row-relative to the pinned
   composer and remain valid (measured above).
+- **Anchor hold** (added by the independent post-build review): after any wire
+  input whose cursor effect the display has not shown yet (backspace with
+  nothing outstanding = deleting echoed text, every 'clear'-classified input,
+  an IME/plain-paste 'text' commit, and the bypass send paths), new
+  predictions are suppressed until the next PARSED write. Anchoring on the
+  stale cursor painted ghosts one cell off ("tehh" on backspace-then-retype
+  within RTT), blank-neutral and therefore TTL-lived. Worst case is exactly
+  one unpredicted keystroke: its own echo is a write, which releases the hold.
 - **predictBackspace()** pops the newest outstanding record (informational
   return; the consumer forwards `\x7f` unconditionally). Deleting already-echoed
   text renders at RTT in v1.

@@ -2563,8 +2563,10 @@ Object.assign(CodemanApp.prototype, {
       const kind = window.CodemanTerminalInput.classifyPredictInput(data);
       if (kind === 'char') this._predictiveEcho.predictChar(data);
       else if (kind === 'backspace') this._predictiveEcho.predictBackspace();
-      else if (kind === 'clear') this._predictiveEcho.clearPredictions();
-      // kind === 'text' (plain multi-char paste): wire only, no visual
+      // 'clear' AND 'text' (plain paste, IME word commits) both change the
+      // composer in ways the display has not shown yet: clear the run and let
+      // the addon's anchor hold suppress prediction until the echo catches up
+      else this._predictiveEcho.clearPredictions();
     } catch {
       /* predictions must never block the wire */
     }
@@ -2577,6 +2579,8 @@ Object.assign(CodemanApp.prototype, {
       _crashDiag.log(`CJK send DROP no-session len=${text.length}`);
       return;
     }
+    // Bypasses onData (like insertTerminalText): predictions cannot see this
+    if (this._localEchoPolicy === 'predict') this._predictiveEcho?.clearPredictions();
     _crashDiag.log(`CJK send→${this.activeSessionId.slice(0, 8)} len=${text.length}`);
     this._sendInputAsync(this.activeSessionId, text);
   },
