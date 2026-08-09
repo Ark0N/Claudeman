@@ -9,7 +9,7 @@
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-1e3a5f?style=flat-square" alt="MIT"></a>
     <img src="https://img.shields.io/badge/Dependencies-0-22c55e?style=flat-square" alt="Zero dependencies">
     <img src="https://img.shields.io/badge/Size-6.1%20kB%20gzip-22c55e?style=flat-square" alt="6.1 kB gzipped">
-    <img src="https://img.shields.io/badge/Tests-175-22c55e?style=flat-square" alt="175 tests">
+    <img src="https://img.shields.io/badge/Tests-227-22c55e?style=flat-square" alt="175 tests">
     <img src="https://img.shields.io/badge/xterm.js-v5%20%7C%20v7+-3b82f6?style=flat-square" alt="xterm.js v5 and v7+">
   </p>
 </p>
@@ -45,6 +45,15 @@ Same keystroke, same link. The only difference is who you wait for: the server, 
 `xterm-zerolag-input` paints your keystrokes **immediately**, as an absolutely-positioned DOM overlay locked to the terminal's character grid. The byte still goes to the PTY exactly as before, so nothing about your shell changes. When the server echo lands 300ms later, the overlay clears and the real terminal text takes over on the same pixels. The handoff is invisible.
 
 **No backend changes. No protocol. No server support.** It is a client-side addon that never touches the wire.
+
+Since 0.2.0 the package ships **two addons for two kinds of TUIs**:
+
+| Addon                 | Model                                                          | Use when                                                                                                              |
+| --------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `ZerolagInputAddon`   | **Buffer**: hold keystrokes locally, flush on Enter            | The remote side is a line-oriented prompt (shells, REPLs, Claude Code's composer) that only needs the finished line     |
+| `PredictiveEchoAddon` | **Predictive write-through**: send every keystroke immediately, paint a prediction, confirm against the parsed buffer | The remote side is a per-keystroke TUI (OpenAI Codex's composer, live pickers) that buffering would starve              |
+
+`ZerolagInputAddon` is documented below; jump to [PredictiveEchoAddon](#predictiveechoaddon-write-through-prediction) for the second mode.
 
 ## Why this one
 
@@ -265,6 +274,105 @@ Finds text that exists after the prompt but was never typed through the overlay.
   scrollDebounceMs?: number,   // Default: 50
 }
 ```
+
+---
+
+## `PredictiveEchoAddon` (write-through prediction)
+
+Buffering is the wrong model for TUIs that react to every keystroke: a slash
+command picker filters live, arrows edit server-side state, the composer
+rewraps as it grows. For those, `PredictiveEchoAddon` works like
+[mosh](https://mosh.org/): the keystroke goes to the PTY **immediately and
+unchanged**, and the addon simultaneously paints the predicted glyph at the
+predicted cell. When the real echo lands, the prediction is confirmed and its
+span removed: an invisible swap, identical glyph beneath. Mispredictions
+self-heal via a mismatch cascade and a TTL. It is visual-only by construction:
+nothing it does can gate, delay, reorder or rewrite what you send.
+
+```typescript
+import { Terminal } from '@xterm/xterm';
+import { PredictiveEchoAddon } from 'xterm-zerolag-input';
+
+const terminal = new Terminal();
+const predictor = new PredictiveEchoAddon({
+  // Optional: only predict when the cursor sits on a composer row
+  predictWhen: (t) => {
+    const buf = t.buffer.active;
+    const line = buf.getLine(buf.baseY + buf.cursorY);
+    return !!line && /^› /.test(line.translateToString(true));
+  },
+});
+terminal.loadAddon(predictor);
+
+terminal.onData((data) => {
+  const cps = Array.from(data);
+  if (cps.length === 1) {
+    const cp = cps[0].codePointAt(0);
+    if (cp === 0x7f) predictor.predictBackspace();
+    else if (cp >= 0x20) predictor.predictChar(data);
+    else predictor.clearPredictions();          // Enter, Ctrl+C, ...
+  } else if (data.charCodeAt(0) === 0x1b) {
+    predictor.clearPredictions();               // nav keys, bracketed paste
+  }
+  pty.write(data);                              // ALWAYS, unconditionally
+});
+```
+
+### How reconciliation works
+
+Predictions are reconciled against the **parsed terminal buffer** (cells after
+xterm's parser ran), never the raw output stream. That distinction is
+load-bearing: TUIs redraw whole lines, paint gaps with `ECH` + cursor-forward
+instead of spaces, and multiplexers like tmux rewrite everything into minimal
+deltas. Stream matching breaks on all of that; buffer cells converge to the
+same values no matter how the bytes arrived.
+
+A prediction is **confirmed** only when its cell shows the predicted glyph AND
+the cursor has advanced past it (so a placeholder that happens to match, or an
+identical in-place repaint, never false-confirms). A cell showing foreign
+non-blank content on two consecutive passes drops that prediction and all
+later ones (one pass tolerates half-parsed frames). Blank cells are neutral:
+they are what "not yet echoed" looks like. Whatever remains is dropped by TTL.
+Scrolling up, resizing, or a sustained cursor move clears the run.
+
+### API
+
+```typescript
+predictChar(ch: string): boolean;     // false = suppressed (still SEND the key)
+predictBackspace(): boolean;          // pops the newest prediction (still send \x7f)
+clearPredictions(): void;
+reconcile(): void;                    // manual pass (no onWriteParsed available)
+setPredictWhen(fn | null): void;      // swap the gate at runtime
+refreshFont(): void;                  // after font/theme changes
+get hasPredictions(): boolean;
+get state(): PredictionState;         // { outstanding, confirmedTotal, droppedTotal, anchor }
+```
+
+### Options
+
+```typescript
+{
+  zIndex?: number,                // Default: 7
+  underlinePredictions?: boolean, // Default: false (underline unconfirmed glyphs)
+  foregroundColor?: string,       // Default: terminal theme / computed .xterm-rows style
+  backgroundColor?: string,       // Default: terminal theme background
+  ttlMs?: number,                 // Default: 1000
+  maxPending?: number,            // Default: 32
+  cursorGraceMs?: number,         // Default: 150
+  edgeMarginCells?: number,       // Default: 4 (suppress near the right edge)
+  predictWhen?: (t) => boolean,   // Default: predict everywhere
+}
+```
+
+### Which addon should I use?
+
+- The remote program shows a **line prompt** and ignores partial input:
+  `ZerolagInputAddon`. You also get backspace-before-send and batching.
+- The remote program **reacts per keystroke** (pickers, filters, composers
+  that rewrap): `PredictiveEchoAddon`. It never withholds bytes, so the TUI
+  behaves exactly as with no addon at all; you just stop waiting for the RTT.
+- Both can be loaded on one terminal and toggled per session mode; that is
+  exactly what Codeman does (buffer for Claude Code, predict for Codex).
 
 ---
 
