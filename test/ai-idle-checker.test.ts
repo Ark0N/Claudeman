@@ -71,7 +71,8 @@ describe('AiIdleChecker', () => {
   describe('Output Parsing', () => {
     it('should parse IDLE verdict', async () => {
       // Set up mock to return IDLE result after polling
-      mockedReadFileSync.mockReturnValueOnce('') // writeFileSync creates empty file
+      mockedReadFileSync
+        .mockReturnValueOnce('') // writeFileSync creates empty file
         .mockReturnValueOnce('IDLE\nSession shows completion message and prompt.\n__AICHECK_DONE__');
 
       const checkPromise = checker.check('some terminal output');
@@ -87,7 +88,8 @@ describe('AiIdleChecker', () => {
     });
 
     it('should parse WORKING verdict', async () => {
-      mockedReadFileSync.mockReturnValueOnce('')
+      mockedReadFileSync
+        .mockReturnValueOnce('')
         .mockReturnValueOnce('WORKING\nSpinner characters detected, still processing.\n__AICHECK_DONE__');
 
       const checkPromise = checker.check('some terminal output');
@@ -100,8 +102,7 @@ describe('AiIdleChecker', () => {
     });
 
     it('should handle lowercase verdict', async () => {
-      mockedReadFileSync.mockReturnValueOnce('')
-        .mockReturnValueOnce('idle\nDone.\n__AICHECK_DONE__');
+      mockedReadFileSync.mockReturnValueOnce('').mockReturnValueOnce('idle\nDone.\n__AICHECK_DONE__');
 
       const checkPromise = checker.check('output');
       await vi.advanceTimersByTimeAsync(500);
@@ -112,7 +113,8 @@ describe('AiIdleChecker', () => {
     });
 
     it('should return ERROR for unparseable output', async () => {
-      mockedReadFileSync.mockReturnValueOnce('')
+      mockedReadFileSync
+        .mockReturnValueOnce('')
         .mockReturnValueOnce('Something unexpected happened.\n__AICHECK_DONE__');
 
       const checkPromise = checker.check('output');
@@ -125,8 +127,7 @@ describe('AiIdleChecker', () => {
     });
 
     it('should return ERROR for empty output', async () => {
-      mockedReadFileSync.mockReturnValueOnce('')
-        .mockReturnValueOnce('__AICHECK_DONE__');
+      mockedReadFileSync.mockReturnValueOnce('').mockReturnValueOnce('__AICHECK_DONE__');
 
       const checkPromise = checker.check('output');
       await vi.advanceTimersByTimeAsync(500);
@@ -175,10 +176,34 @@ describe('AiIdleChecker', () => {
       await vi.advanceTimersByTimeAsync(500);
       await checkPromise;
 
-      expect(mockedWriteFileSync).toHaveBeenCalledWith(
-        expect.stringContaining('codeman-aicheck-'),
-        ''
+      expect(mockedWriteFileSync).toHaveBeenCalledWith(expect.stringContaining('codeman-aicheck-'), '');
+    });
+
+    it('should keep Claude stderr separate from verdict output', async () => {
+      mockedReadFileSync.mockReturnValue('IDLE\n__AICHECK_DONE__');
+
+      const checkPromise = checker.check('output');
+      await vi.advanceTimersByTimeAsync(500);
+      await checkPromise;
+
+      const spawnArgs = mockedSpawn.mock.calls[0]?.[1];
+      const command = spawnArgs?.[spawnArgs.length - 1];
+      expect(command).toEqual(expect.any(String));
+      expect(command).toContain(' 2> "');
+      expect(command).not.toContain('2>&1');
+    });
+
+    it('should include Claude stderr when no verdict is produced', async () => {
+      mockedReadFileSync.mockImplementation((path) =>
+        String(path).includes('-stderr-') ? 'Claude CLI failed to load settings' : '__AICHECK_DONE__'
       );
+
+      const checkPromise = checker.check('output');
+      await vi.advanceTimersByTimeAsync(500);
+
+      const result = await checkPromise;
+      expect(result.verdict).toBe('ERROR');
+      expect(result.reasoning).toContain('Claude CLI failed to load settings');
     });
   });
 
@@ -223,7 +248,7 @@ describe('AiIdleChecker', () => {
 
       // Should have tried to kill the tmux session (initial kill + cleanup kill)
       const killCalls = mockedExecSync.mock.calls.filter(
-        call => typeof call[0] === 'string' && call[0].includes('kill-session')
+        (call) => typeof call[0] === 'string' && call[0].includes('kill-session')
       );
       expect(killCalls.length).toBeGreaterThan(0);
     });
@@ -236,8 +261,7 @@ describe('AiIdleChecker', () => {
 
   describe('Cooldown', () => {
     it('should start cooldown after WORKING verdict', async () => {
-      mockedReadFileSync.mockReturnValueOnce('')
-        .mockReturnValueOnce('WORKING\nStill processing.\n__AICHECK_DONE__');
+      mockedReadFileSync.mockReturnValueOnce('').mockReturnValueOnce('WORKING\nStill processing.\n__AICHECK_DONE__');
 
       const checkPromise = checker.check('output');
       await vi.advanceTimersByTimeAsync(500);
@@ -250,8 +274,7 @@ describe('AiIdleChecker', () => {
     });
 
     it('should return to ready after cooldown expires', async () => {
-      mockedReadFileSync.mockReturnValueOnce('')
-        .mockReturnValueOnce('WORKING\nBusy.\n__AICHECK_DONE__');
+      mockedReadFileSync.mockReturnValueOnce('').mockReturnValueOnce('WORKING\nBusy.\n__AICHECK_DONE__');
 
       const checkPromise = checker.check('output');
       await vi.advanceTimersByTimeAsync(1000);
@@ -267,8 +290,7 @@ describe('AiIdleChecker', () => {
     });
 
     it('should not start new check during cooldown', async () => {
-      mockedReadFileSync.mockReturnValueOnce('')
-        .mockReturnValueOnce('WORKING\nBusy.\n__AICHECK_DONE__');
+      mockedReadFileSync.mockReturnValueOnce('').mockReturnValueOnce('WORKING\nBusy.\n__AICHECK_DONE__');
 
       const firstCheck = checker.check('output');
       await vi.advanceTimersByTimeAsync(1000);
@@ -283,8 +305,7 @@ describe('AiIdleChecker', () => {
 
   describe('Error Handling', () => {
     it('should start error cooldown after parse error', async () => {
-      mockedReadFileSync.mockReturnValueOnce('')
-        .mockReturnValueOnce('garbage output\n__AICHECK_DONE__');
+      mockedReadFileSync.mockReturnValueOnce('').mockReturnValueOnce('garbage output\n__AICHECK_DONE__');
 
       const checkPromise = checker.check('output');
       await vi.advanceTimersByTimeAsync(1000);
@@ -302,8 +323,7 @@ describe('AiIdleChecker', () => {
       const cooldowns = [1100, 2100]; // Wait slightly longer than each cooldown
 
       for (let i = 0; i < 3; i++) {
-        mockedReadFileSync.mockReturnValueOnce('')
-          .mockReturnValueOnce('garbage\n__AICHECK_DONE__');
+        mockedReadFileSync.mockReturnValueOnce('').mockReturnValueOnce('garbage\n__AICHECK_DONE__');
 
         const checkPromise = checker.check('output');
         await vi.advanceTimersByTimeAsync(1000);
@@ -321,8 +341,7 @@ describe('AiIdleChecker', () => {
 
     it('should reset error counter on successful check', async () => {
       // First check: error
-      mockedReadFileSync.mockReturnValueOnce('')
-        .mockReturnValueOnce('garbage\n__AICHECK_DONE__');
+      mockedReadFileSync.mockReturnValueOnce('').mockReturnValueOnce('garbage\n__AICHECK_DONE__');
       const firstCheck = checker.check('output');
       await vi.advanceTimersByTimeAsync(1000);
       await firstCheck;
@@ -332,8 +351,7 @@ describe('AiIdleChecker', () => {
       await vi.advanceTimersByTimeAsync(1100);
 
       // Second check: success
-      mockedReadFileSync.mockReturnValueOnce('')
-        .mockReturnValueOnce('IDLE\nDone.\n__AICHECK_DONE__');
+      mockedReadFileSync.mockReturnValueOnce('').mockReturnValueOnce('IDLE\nDone.\n__AICHECK_DONE__');
       const secondCheck = checker.check('output');
       await vi.advanceTimersByTimeAsync(1000);
       await secondCheck;
@@ -352,8 +370,7 @@ describe('AiIdleChecker', () => {
 
   describe('Buffer Handling', () => {
     it('should strip ANSI codes from terminal buffer', async () => {
-      mockedReadFileSync.mockReturnValueOnce('')
-        .mockReturnValueOnce('IDLE\n__AICHECK_DONE__');
+      mockedReadFileSync.mockReturnValueOnce('').mockReturnValueOnce('IDLE\n__AICHECK_DONE__');
 
       const ansiBuffer = '\x1b[1mBold\x1b[0m \x1b[32mGreen\x1b[0m text';
       const checkPromise = checker.check(ansiBuffer);
@@ -365,8 +382,7 @@ describe('AiIdleChecker', () => {
     });
 
     it('should trim buffer to maxContextChars', async () => {
-      mockedReadFileSync.mockReturnValueOnce('')
-        .mockReturnValueOnce('IDLE\n__AICHECK_DONE__');
+      mockedReadFileSync.mockReturnValueOnce('').mockReturnValueOnce('IDLE\n__AICHECK_DONE__');
 
       // Create buffer longer than maxContextChars (1000)
       const longBuffer = 'x'.repeat(2000);
@@ -402,8 +418,7 @@ describe('AiIdleChecker', () => {
   describe('Reset', () => {
     it('should clear all state on reset', async () => {
       // Trigger a WORKING verdict to set state
-      mockedReadFileSync.mockReturnValueOnce('')
-        .mockReturnValueOnce('WORKING\nBusy.\n__AICHECK_DONE__');
+      mockedReadFileSync.mockReturnValueOnce('').mockReturnValueOnce('WORKING\nBusy.\n__AICHECK_DONE__');
 
       const checkPromise = checker.check('output');
       await vi.advanceTimersByTimeAsync(1000);
@@ -440,24 +455,24 @@ describe('AiIdleChecker', () => {
       const handler = vi.fn();
       checker.on('checkCompleted', handler);
 
-      mockedReadFileSync.mockReturnValueOnce('')
-        .mockReturnValueOnce('IDLE\nAll done.\n__AICHECK_DONE__');
+      mockedReadFileSync.mockReturnValueOnce('').mockReturnValueOnce('IDLE\nAll done.\n__AICHECK_DONE__');
 
       const checkPromise = checker.check('output');
       await vi.advanceTimersByTimeAsync(1000);
       await checkPromise;
 
-      expect(handler).toHaveBeenCalledWith(expect.objectContaining({
-        verdict: 'IDLE',
-      }));
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          verdict: 'IDLE',
+        })
+      );
     });
 
     it('should emit cooldownStarted event after WORKING', async () => {
       const handler = vi.fn();
       checker.on('cooldownStarted', handler);
 
-      mockedReadFileSync.mockReturnValueOnce('')
-        .mockReturnValueOnce('WORKING\nBusy.\n__AICHECK_DONE__');
+      mockedReadFileSync.mockReturnValueOnce('').mockReturnValueOnce('WORKING\nBusy.\n__AICHECK_DONE__');
 
       const checkPromise = checker.check('output');
       await vi.advanceTimersByTimeAsync(1000);
@@ -477,8 +492,7 @@ describe('AiIdleChecker', () => {
       const cooldowns = [1100, 2100]; // Wait longer than exponential backoff
 
       for (let i = 0; i < 3; i++) {
-        mockedReadFileSync.mockReturnValueOnce('')
-          .mockReturnValueOnce('garbage\n__AICHECK_DONE__');
+        mockedReadFileSync.mockReturnValueOnce('').mockReturnValueOnce('garbage\n__AICHECK_DONE__');
         const checkPromise = checker.check('output');
         await vi.advanceTimersByTimeAsync(1000);
         await checkPromise;
