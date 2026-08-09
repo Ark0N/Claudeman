@@ -2078,6 +2078,7 @@
         </div>
         <div class="modal-tabs">
           <button class="modal-tab-btn active" data-tab="case-create">Create New</button>
+          <button class="modal-tab-btn" data-tab="case-clone" id="caseCloneTabBtn">Clone Repo</button>
           <button class="modal-tab-btn" data-tab="case-link">Link Existing</button>
           <button class="modal-tab-btn" data-tab="case-remote">Remote</button>
           <button class="modal-tab-btn" data-tab="case-docker">Docker</button>
@@ -2142,6 +2143,51 @@
                 </div>
               </div>
             </details>
+          </div>
+          <!-- Clone Repo Tab (issue #236) -->
+          <div class="modal-tab-content hidden" id="case-clone">
+            <div class="form-row">
+              <label>Repository URL</label>
+              <input type="url" id="cloneRepoUrl" placeholder="https://github.com/owner/repo.git" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" oninput="app.onCloneUrlInput()">
+              <span class="form-hint clone-status" id="cloneRepoStatus">Public repositories only: Codeman clones with no credentials.</span>
+            </div>
+            <div class="form-row">
+              <label>Case Name</label>
+              <input type="text" id="cloneCaseName" placeholder="repo" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="app.onCloneNameEdited()">
+              <span class="form-hint">Filled in from the URL. Cloned into ~/codeman-cases/&lt;name&gt;, so deleting the case deletes this working tree.</span>
+            </div>
+            <div class="form-row">
+              <label>Branch or Tag (optional)</label>
+              <input type="text" id="cloneRepoRef" list="cloneRepoRefOptions" placeholder="default branch" autocomplete="off" autocapitalize="off" spellcheck="false">
+              <datalist id="cloneRepoRefOptions"></datalist>
+              <span class="form-hint" id="cloneRefHint">Leave blank for the repository's default branch.</span>
+            </div>
+            <div class="form-row">
+              <label>Brain</label>
+              <select id="cloneCaseBrain" class="form-select">
+                <option value="">Leave the Run button as it is</option>
+                <option value="claude" data-cli="claude">Claude Code</option>
+                <option value="codex" data-cli="codex">Codex</option>
+                <option value="gemini" data-cli="gemini">Gemini</option>
+                <option value="opencode" data-cli="opencode">OpenCode</option>
+                <option value="antigravity" data-cli="antigravity">Antigravity</option>
+                <option value="shell">Shell (no agent)</option>
+              </select>
+              <span class="form-hint">Which CLI to point the Run button at once the clone finishes. Changeable any time from the Run dropdown.</span>
+            </div>
+            <details class="advanced-options">
+              <summary>Clone options</summary>
+              <div class="advanced-options-content">
+                <div class="form-row">
+                  <label class="checkbox-row"><input type="checkbox" id="cloneShallow"> Shallow clone (--depth 1)</label>
+                  <span class="form-hint">Much faster on big repositories, but there is no history to read afterwards.</span>
+                </div>
+                <div class="form-row">
+                  <label class="checkbox-row"><input type="checkbox" id="cloneStartSession"> Start a session when the clone finishes</label>
+                </div>
+              </div>
+            </details>
+            <span class="form-hint" id="cloneCaseNote" style="margin-top: 8px; display: block;">The clone runs while this request is open, so a large repository takes a while. The case appears as soon as git finishes, even if the browser gave up waiting.</span>
           </div>
           <!-- Link Existing Tab -->
           <div class="modal-tab-content hidden" id="case-link">

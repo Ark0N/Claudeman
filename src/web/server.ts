@@ -1378,6 +1378,7 @@ export class WebServer extends EventEmitter {
         { isGeminiAvailable },
         { isAntigravityAvailable },
         { isCloudflaredAvailable },
+        { isGitAvailable },
       ] = await Promise.all([
         import('../utils/claude-cli-resolver.js'),
         import('../utils/opencode-cli-resolver.js'),
@@ -1385,6 +1386,7 @@ export class WebServer extends EventEmitter {
         import('../utils/gemini-cli-resolver.js'),
         import('../utils/antigravity-cli-resolver.js'),
         import('../utils/cloudflared-resolver.js'),
+        import('../git-clone.js'),
       ]);
       const available = {
         claude: isClaudeAvailable(),
@@ -1393,6 +1395,9 @@ export class WebServer extends EventEmitter {
         gemini: isGeminiAvailable(),
         antigravity: isAntigravityAvailable(),
         cloudflared: isCloudflaredAvailable(),
+        // Not a run mode: the Add Case → Clone tab is an offer this box cannot
+        // keep without git (issue #236), same reasoning as cloudflared above.
+        git: isGitAvailable(),
       };
       html = html.replace(
         '</head>',

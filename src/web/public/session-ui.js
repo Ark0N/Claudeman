@@ -1772,6 +1772,11 @@ Object.assign(CodemanApp.prototype, {
       const el = document.getElementById(id);
       if (el) el.value = '';
     });
+    this._resetCloneForm();
+    // Cloning needs git ON THE SERVER: hide the whole tab rather than let it fail
+    // at submit. Unknown reads as available (isCliAvailable's rule).
+    const cloneTabBtn = document.getElementById('caseCloneTabBtn');
+    if (cloneTabBtn) cloneTabBtn.style.display = this.isCliAvailable('git') ? '' : 'none';
     // Reset to first tab
     this.caseModalTab = 'case-create';
     this.switchCaseModalTab('case-create');
@@ -1817,15 +1822,19 @@ Object.assign(CodemanApp.prototype, {
       submitBtn.textContent =
         tabName === 'case-create'
           ? 'Create'
-          : tabName === 'case-remote'
-            ? 'Link Remote'
-            : tabName === 'case-docker'
-              ? 'Link Docker'
-              : 'Link';
+          : tabName === 'case-clone'
+            ? 'Clone'
+            : tabName === 'case-remote'
+              ? 'Link Remote'
+              : tabName === 'case-docker'
+                ? 'Link Docker'
+                : 'Link';
     }
     // Focus appropriate input
     if (tabName === 'case-create') {
       document.getElementById('newCaseName').focus();
+    } else if (tabName === 'case-clone') {
+      document.getElementById('cloneRepoUrl').focus();
     } else if (tabName === 'case-link') {
       document.getElementById('linkCaseName').focus();
     } else if (tabName === 'case-remote') {
@@ -1843,10 +1852,16 @@ Object.assign(CodemanApp.prototype, {
     const btn = document.getElementById('caseModalSubmit');
     const originalText = btn.textContent;
     btn.classList.add('loading');
-    btn.textContent = this.caseModalTab === 'case-create' ? 'Creating...' : 'Linking...';
+    btn.textContent =
+      this.caseModalTab === 'case-create' ? 'Creating...' : this.caseModalTab === 'case-clone' ? 'Cloning...' : 'Linking...';
+    // A clone holds this request open for minutes; without disabling the button a
+    // second click fires a second clone (the loser then fails on ALREADY_EXISTS).
+    btn.disabled = true;
     try {
       if (this.caseModalTab === 'case-create') {
         await this.createCase();
+      } else if (this.caseModalTab === 'case-clone') {
+        await this.cloneCase();
       } else if (this.caseModalTab === 'case-remote') {
         await this.linkRemoteCase();
       } else if (this.caseModalTab === 'case-docker') {
@@ -1856,6 +1871,7 @@ Object.assign(CodemanApp.prototype, {
       }
     } finally {
       btn.classList.remove('loading');
+      btn.disabled = false;
       btn.textContent = originalText;
     }
   },
@@ -1994,6 +2010,231 @@ Object.assign(CodemanApp.prototype, {
     } catch (err) {
       console.error('Failed to link case:', err);
       this.showToast('Failed to link case: ' + err.message, 'error');
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // Clone Repo tab (issue #236)
+  // ═══════════════════════════════════════════════════════════════
+
+  /** Clear the Clone tab and drop any preflight state. Called from showCreateCaseModal(). */
+  _resetCloneForm() {
+    const set = (id, value) => {
+      const el = document.getElementById(id);
+      if (el) el.value = value;
+    };
+    set('cloneRepoUrl', '');
+    set('cloneCaseName', '');
+    set('cloneRepoRef', '');
+    const shallow = document.getElementById('cloneShallow');
+    if (shallow) shallow.checked = false;
+    const start = document.getElementById('cloneStartSession');
+    if (start) start.checked = false;
+    const refs = document.getElementById('cloneRepoRefOptions');
+    if (refs) refs.replaceChildren();
+    const refHint = document.getElementById('cloneRefHint');
+    if (refHint) refHint.textContent = "Leave blank for the repository's default branch.";
+    this._cloneNameEdited = false;
+    this._clonePreflight = null;
+    clearTimeout(this._clonePreflightTimer);
+    this._clonePreflightAbort?.abort();
+    this._clonePreflightAbort = null;
+    this._setCloneStatus('Public repositories only: Codeman clones with no credentials.', '');
+    // The brain picker mirrors the toolbar run menu: never offer a CLI this box
+    // lacks (#201's rule), and preselect whatever Run is currently pointing at.
+    const brain = document.getElementById('cloneCaseBrain');
+    if (brain) {
+      for (const option of brain.options) {
+        const cli = option.dataset.cli;
+        option.hidden = !!cli && !this.isCliAvailable(cli);
+      }
+      const current = this.runMode || 'claude';
+      brain.value = [...brain.options].some((o) => o.value === current && !o.hidden) ? current : '';
+    }
+  },
+
+  _setCloneStatus(message, kind) {
+    const el = document.getElementById('cloneRepoStatus');
+    if (!el) return;
+    el.textContent = message;
+    el.className = `form-hint clone-status${kind ? ' clone-status-' + kind : ''}`;
+  },
+
+  /**
+   * Best-effort repo name out of a URL, for filling the case name as you type.
+   *
+   * Deliberately a THIN mirror of `suggestCaseNameFromRepo` (git-clone.ts) rather
+   * than a second URL parser: it only ever suggests a name, and the server's parse
+   * is the authority on whether the URL is cloneable at all. The preflight reply
+   * overwrites whatever this guessed.
+   */
+  _repoNameFromUrl(url) {
+    const trimmed = (url || '').trim().replace(/\/+$/, '');
+    if (!trimmed) return '';
+    const segment = trimmed
+      .replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '')
+      .replace(/^[^@/]*@/, '')
+      .split(/[/:]/)
+      .filter(Boolean)
+      .pop() || '';
+    return segment
+      .replace(/\.git$/i, '')
+      .replace(/[^a-zA-Z0-9_-]+/g, '-')
+      .replace(/-{2,}/g, '-')
+      .replace(/^[-_]+|[-_]+$/g, '')
+      .slice(0, 64);
+  },
+
+  onCloneNameEdited() {
+    // Once the user types a name, autofill stops fighting them.
+    this._cloneNameEdited = !!document.getElementById('cloneCaseName')?.value.trim();
+  },
+
+  onCloneUrlInput() {
+    const url = document.getElementById('cloneRepoUrl')?.value.trim() || '';
+    const nameInput = document.getElementById('cloneCaseName');
+    if (nameInput && !this._cloneNameEdited) nameInput.value = this._repoNameFromUrl(url);
+    clearTimeout(this._clonePreflightTimer);
+    this._clonePreflightAbort?.abort();
+    this._clonePreflightAbort = null;
+    if (!url) {
+      this._setCloneStatus('Public repositories only: Codeman clones with no credentials.', '');
+      return;
+    }
+    if (this.isCliAvailable('git') === false) {
+      this._setCloneStatus('git is not installed on the Codeman host, so cloning is unavailable.', 'err');
+      return;
+    }
+    this._setCloneStatus('Checking the repository…', '');
+    this._clonePreflightTimer = setTimeout(() => this._runClonePreflight(url), 450);
+  },
+
+  /**
+   * Ask the server to parse the URL and (if it survives) query the remote, so the
+   * user learns "private repo" / "typo" / "3 tags" BEFORE waiting on a clone.
+   * Stale replies are dropped: only the response for the URL currently in the
+   * field is allowed to paint.
+   */
+  async _runClonePreflight(url) {
+    const controller = new AbortController();
+    this._clonePreflightAbort = controller;
+    try {
+      const res = await fetch('/api/cases/clone-preflight', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repository: url }),
+        signal: controller.signal,
+      });
+      const env = await res.json();
+      if (document.getElementById('cloneRepoUrl')?.value.trim() !== url) return;
+      if (!env.success) {
+        this._setCloneStatus(env.error || 'Could not check that URL.', 'err');
+        return;
+      }
+      this._applyClonePreflight(env.data, url);
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+      this._setCloneStatus('Could not reach Codeman to check that URL.', 'err');
+    }
+  },
+
+  _applyClonePreflight(data, url) {
+    this._clonePreflight = data;
+    const parse = data?.parse;
+    if (!parse?.cloneable) {
+      this._setCloneStatus(parse?.message || 'That URL cannot be cloned.', 'err');
+      return;
+    }
+    // The server's suggestion wins over the local guess (it is the same function
+    // the case name is validated against), but never over a name the user typed.
+    const nameInput = document.getElementById('cloneCaseName');
+    if (nameInput && !this._cloneNameEdited && parse.suggestedName) nameInput.value = parse.suggestedName;
+
+    const where = parse.owner ? `${parse.provider} ${parse.owner}/${parse.repo}` : `${parse.provider} ${parse.repo}`;
+    if (data.gitAvailable === false) {
+      this._setCloneStatus(`${where}: git is not installed on the Codeman host.`, 'err');
+      return;
+    }
+    const remote = data.remote;
+    if (remote && !remote.reachable) {
+      this._setCloneStatus(`${where}: ${remote.failure?.message || 'the remote could not be read.'}`, 'err');
+      return;
+    }
+    const refHint = document.getElementById('cloneRefHint');
+    const options = document.getElementById('cloneRepoRefOptions');
+    if (remote && options) {
+      options.replaceChildren();
+      for (const ref of [...(remote.branches || []), ...(remote.tags || [])]) {
+        const option = document.createElement('option');
+        option.value = ref;
+        options.appendChild(option);
+      }
+      if (refHint) {
+        const counts = `${remote.branches?.length || 0} branches, ${remote.tags?.length || 0} tags`;
+        refHint.textContent = remote.defaultBranch
+          ? `Blank clones the default branch (${remote.defaultBranch}). ${counts} available.`
+          : `Blank clones the default branch. ${counts} available.`;
+      }
+    }
+    const warning = parse.warnings?.[0];
+    this._setCloneStatus(warning ? `${where}: ${warning}` : `${where}: ready to clone.`, warning ? 'warn' : 'ok');
+  },
+
+  async cloneCase() {
+    const url = document.getElementById('cloneRepoUrl').value.trim();
+    const name = document.getElementById('cloneCaseName').value.trim();
+    const ref = document.getElementById('cloneRepoRef').value.trim();
+    const shallow = !!document.getElementById('cloneShallow')?.checked;
+    const brain = document.getElementById('cloneCaseBrain')?.value || '';
+    const startSession = !!document.getElementById('cloneStartSession')?.checked;
+
+    if (!url) {
+      this.showToast('Please enter a repository URL', 'error');
+      return;
+    }
+    if (!name) {
+      this.showToast('Please enter a case name', 'error');
+      return;
+    }
+    if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+      this.showToast('Invalid name. Use only letters, numbers, hyphens, underscores.', 'error');
+      return;
+    }
+
+    this._setCloneStatus(`Cloning ${url}… this can take a while for a large repository.`, '');
+    try {
+      const res = await fetch('/api/cases/clone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // Zod `.optional()` rejects an explicit null, and JSON.stringify keeps one
+        // on the wire — omit the empty fields instead of sending null.
+        body: JSON.stringify({ name, repository: url, ...(ref ? { ref } : {}), ...(shallow ? { shallow: true } : {}) }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        this._setCloneStatus(data.error || 'Clone failed.', 'err');
+        this.showToast(data.error || 'Failed to clone repository', 'error');
+        return;
+      }
+
+      // Setting the brain before the tab closes means the Run button is already
+      // pointing at the chosen CLI, whether or not a session starts now.
+      if (brain) this.setRunMode(brain);
+      this.closeCreateCaseModal();
+      await this.loadQuickStartCases(name);
+      await this.saveLastUsedCase(name);
+      this.showToast(`Cloned into case "${name}"`, 'success');
+      for (const warning of data.data?.warnings || []) this.showToast(warning, 'warning');
+      if (startSession) await this.run();
+    } catch (err) {
+      // A proxy/idle timeout can kill the request while git keeps going: the
+      // case:created broadcast is what makes the case show up regardless.
+      console.error('Failed to clone repository:', err);
+      this._setCloneStatus(
+        `Lost the connection while cloning: ${err.message}. If git finishes, the case still appears in the list.`,
+        'warn'
+      );
+      this.showToast('Clone request interrupted — watch the case list', 'error');
     }
   },
 
