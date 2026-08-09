@@ -49,7 +49,7 @@ import {
   type SessionDocker,
   type DockerCommandMode,
 } from './types.js';
-import { buildEffortCliArgs } from './session-cli-builder.js';
+import { buildEffortCliArgs, buildNameCliArgs } from './session-cli-builder.js';
 import {
   buildSshConnectionArgs,
   defaultRemoteCommandForMode,
@@ -73,6 +73,7 @@ import {
   wrapWithNice,
   SAFE_PATH_PATTERN,
   findClaudeDir,
+  getClaudeCliVersion,
   resolveOpenCodeDir,
   resolveCodexDir,
   resolveGeminiDir,
@@ -752,6 +753,20 @@ function buildEffortSettingsFlag(effort?: EffortLevel): string {
   return flag && value ? ` ${flag} '${value}'` : '';
 }
 
+/**
+ * Build the ` --name "<session name>"` shell fragment, or '' when it must be
+ * omitted. Version-gated FAIL-CLOSED in buildNameCliArgs (an older/unknown CLI
+ * aborts startup on an unknown flag, which would kill every claude spawn), and
+ * the value is allowlist-sanitized there, so it contains none of the characters
+ * that are special inside this double-quoted interpolation. The peer name is a
+ * soft default (in-session /rename still wins), which is why this rides the
+ * spawn command rather than any persisted config.
+ */
+function buildClaudeNameFlag(sessionName: string | undefined, cliVersion: string | null): string {
+  const [flag, value] = buildNameCliArgs(sessionName, cliVersion);
+  return flag && value ? ` ${flag} "${value}"` : '';
+}
+
 export function buildSpawnCommand(options: {
   mode: SessionMode;
   sessionId: string;
@@ -764,12 +779,25 @@ export function buildSpawnCommand(options: {
   antigravityConfig?: AntigravityConfig;
   resumeSessionId?: string;
   effort?: EffortLevel;
+  /** Codeman session name, passed to claude as `--name` (version-gated, sanitized; local spawns only). */
+  sessionName?: string;
+  /**
+   * Claude CLI version for the `--name` gate. Omitted = probe the local CLI
+   * (getClaudeCliVersion; null under vitest). Tests inject a value here; the
+   * docker/remote paths never see this builder's output, which is what keeps the
+   * gate measuring the RIGHT binary, the local one.
+   */
+  claudeCliVersion?: string | null;
 }): string {
   if (options.mode === 'claude') {
     // Validate model to prevent command injection
     const safeModel = options.model && /^[a-zA-Z0-9._\-[\]]+$/.test(options.model) ? options.model : undefined;
     const modelFlag = safeModel ? ` --model "${safeModel}"` : '';
     const effortFlag = buildEffortSettingsFlag(options.effort);
+    const nameFlag = buildClaudeNameFlag(
+      options.sessionName,
+      options.claudeCliVersion !== undefined ? options.claudeCliVersion : getClaudeCliVersion()
+    );
     // Use --resume to restore a previous conversation, otherwise --session-id for new sessions.
     // Wrap --resume in a fallback: if it exits non-zero (session not found, corrupt, etc.),
     // fall back to a new session with --session-id so the pane doesn't die.
@@ -777,11 +805,11 @@ export function buildSpawnCommand(options: {
       options.resumeSessionId && /^[a-f0-9-]+$/.test(options.resumeSessionId) ? options.resumeSessionId : undefined;
     const permFlags = buildClaudePermissionFlags(options.claudeMode, options.allowedTools);
     if (safeResumeId) {
-      const resumeCmd = `claude${permFlags} --resume "${safeResumeId}"${modelFlag}${effortFlag}`;
-      const fallbackCmd = `claude${permFlags} --session-id "${options.sessionId}"${modelFlag}${effortFlag}`;
+      const resumeCmd = `claude${permFlags} --resume "${safeResumeId}"${modelFlag}${effortFlag}${nameFlag}`;
+      const fallbackCmd = `claude${permFlags} --session-id "${options.sessionId}"${modelFlag}${effortFlag}${nameFlag}`;
       return `${resumeCmd} || ${fallbackCmd}`;
     }
-    return `claude${permFlags} --session-id "${options.sessionId}"${modelFlag}${effortFlag}`;
+    return `claude${permFlags} --session-id "${options.sessionId}"${modelFlag}${effortFlag}${nameFlag}`;
   }
   if (options.mode === 'opencode') {
     return buildOpenCodeCommand(options.openCodeConfig);
@@ -1789,6 +1817,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       antigravityConfig,
       resumeSessionId,
       effort,
+      sessionName: name,
     });
 
     const config = niceConfig || DEFAULT_NICE_CONFIG;
@@ -2016,6 +2045,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       historyLimit = DEFAULT_TMUX_HISTORY_LIMIT,
       remote,
       docker,
+      name,
     } = options;
     const session = this.sessions.get(sessionId);
     if (!session) return null;
@@ -2050,6 +2080,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       antigravityConfig,
       resumeSessionId,
       effort,
+      sessionName: name,
     });
     const config = niceConfig || DEFAULT_NICE_CONFIG;
     const cmd = wrapWithNice(baseCmd, config);
