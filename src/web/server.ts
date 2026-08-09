@@ -2104,12 +2104,26 @@ export class WebServer extends EventEmitter {
    * Only events in PUSH_EVENT_MAP trigger push. Per-subscription preferences are checked.
    * Expired subscriptions (410/404) are auto-removed.
    */
-  private sendPushNotifications(event: string, data: Record<string, unknown>): void {
+  // Async only for the Approvals Inbox settings read below; every call site is
+  // fire-and-forget (the EventPort signature stays `void`).
+  private async sendPushNotifications(event: string, data: Record<string, unknown>): Promise<void> {
     const template = WebServer.PUSH_EVENT_MAP[event];
     if (!template) return;
 
     const subscriptions = this.pushStore.getAll();
     if (subscriptions.length === 0) return;
+
+    // Approvals Inbox gating: the Approve/Deny action buttons answer through
+    // the inbox, so both the buttons and the approvalId they act on ship only
+    // when the OPT-IN `approvalsInboxEnabled` setting is on (default OFF).
+    // Pre-inbox these buttons rendered and did nothing; stripping them when
+    // the feature is off is the honest shape. Cheap: the settings read is
+    // cached (~2s TTL) and only taken for events that carry approval parts.
+    let approvalsEnabled = false;
+    if (template.actions || typeof data.approvalId === 'string') {
+      const settings = await this.readSettings();
+      approvalsEnabled = settings.approvalsInboxEnabled === true;
+    }
 
     const vapidKeys = this.pushStore.getVapidKeys();
     webpush.setVapidDetails('mailto:codeman@localhost', vapidKeys.publicKey, vapidKeys.privateKey);
@@ -2154,9 +2168,10 @@ export class WebServer extends EventEmitter {
       sessionId,
       // Approvals Inbox item id: lets sw.js answer an Approve/Deny action
       // click directly (POST /api/approvals/:id/answer) with no tab open.
-      approvalId: typeof data.approvalId === 'string' ? data.approvalId : undefined,
+      // Gated on the opt-in setting together with the action buttons.
+      approvalId: approvalsEnabled && typeof data.approvalId === 'string' ? data.approvalId : undefined,
       urgency: template.urgency,
-      actions: template.actions,
+      actions: approvalsEnabled ? template.actions : undefined,
     });
 
     for (const sub of subscriptions) {

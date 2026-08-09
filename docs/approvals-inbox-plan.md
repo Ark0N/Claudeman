@@ -75,9 +75,9 @@ Normal authed API (NOT the hook-secret bypass), `ApiResponse` envelope, Zod sche
 
 ### Push
 
-- `sendPushNotifications` payload gains `approvalId` for the three hook events.
+- `sendPushNotifications` payload gains `approvalId` for the three hook events. Both `approvalId` and the Approve/Deny `actions` are **gated on the opt-in setting**: with it off, permission pushes carry no buttons at all (pre-inbox they rendered and did nothing, so stripping them is the honest shape).
 - `sw.js` `notificationclick`: when `event.action` is `approve`/`deny`, POST `/api/approvals/:id/answer` directly from the worker (same-origin, cookie credentials) so the buttons work **with no tab open**; on failure fall back to focusing/opening a tab. Non-action clicks keep today's behavior.
-- Page-side `notification-click` handler: honor `action` instead of dropping it.
+- Page-side `notification-click` handler: honor `action` instead of dropping it (also setting-gated, for stale notifications sent before the toggle flipped).
 - Question/idle pushes keep no action buttons (options vary per dialog); tapping opens the inbox.
 
 ## Frontend
@@ -88,7 +88,7 @@ New module `approvals-ui.js` (@loadorder 11.2, after panels-ui.js), prettier-for
 - **Desktop**: header bell `btn-approvals` with count badge. Ships default-hidden via marker class `btn-approvals--hidden` (same policy as the attachments button, so `test/mobile-header-buttons-policy.test.ts` excludes it from the default-visible enumeration); JS shows it only while count > 0. Click toggles a drawer of cards: session name + kind, tool/message summary, mono context block, buttons rendered from parsed options (else Approve/Deny), plus Dismiss and Open session. Esc closes; existing z-index layers respected.
 - **Phone**: header button stays hidden (`mobile.css`); the phone surface is the overview's NEEDS YOU section, whose rows gain inline ✓/✗ buttons for permission items (tap-through to the session remains the row's main action). Toolbar classes/status language rules from the mobile-overview section of CLAUDE.md apply.
 - **i18n**: new strings registered in i18n.js (en + zh-CN); status words carry `data-i18n-skip` where they would collide (mirroring the overview pills).
-- **Setting**: `approvalsInboxEnabled`, synced (in `SettingsUpdateSchema`), **default OFF** (owner decision: every UI surface is opt-in, meaning no bell, no drawer, no overview strips, no seeding until enabled in App Settings → Panels). The store and answer endpoints keep running regardless, so the push Approve/Deny actions work either way (they are already opt-in per-subscription via push preferences).
+- **Setting**: `approvalsInboxEnabled`, synced (in `SettingsUpdateSchema`), **default OFF** (owner decision: the entire feature is opt-in, meaning no bell, no drawer, no overview strips, no seeding, and no push action buttons until enabled in App Settings → Panels). Only the store and answer endpoints keep running regardless, so flipping the toggle ON surfaces anything already pending immediately, with no restart.
 
 ## Race honesty
 

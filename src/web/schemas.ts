@@ -791,10 +791,12 @@ export const SettingsUpdateSchema = z
      */
     agentSkillEnabled: z.boolean().optional(),
     /**
-     * Approvals Inbox UI (header bell + drawer, phone overview answer buttons).
-     * SYNCED, default OFF (opt-in): even with items pending, no surface renders
-     * until this is enabled. The server-side store and answer endpoints run
-     * regardless, so push Approve/Deny actions keep working either way.
+     * Approvals Inbox (header bell + drawer, phone overview answer buttons,
+     * push Approve/Deny action buttons). SYNCED, default OFF (opt-in): even
+     * with items pending, no surface renders and push payloads carry no
+     * actions/approvalId until this is enabled. The server-side store and the
+     * answer endpoints run regardless, so flipping it ON shows anything
+     * already pending immediately.
      */
     approvalsInboxEnabled: z.boolean().optional(),
     tunnelEnabled: z.boolean().optional(),

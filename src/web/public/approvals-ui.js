@@ -126,10 +126,12 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * Push-notification action relay (sw.js → settings-ui notification-click →
-   * here). Falls back to opening the session when the item is unknown.
+   * here). Falls back to opening the session when the item is unknown, or
+   * when the inbox is disabled (a stale notification from before the toggle
+   * flipped can still carry an action).
    */
   handleNotificationAction(action, approvalId, sessionId) {
-    if ((action === 'approve' || action === 'deny') && approvalId) {
+    if ((action === 'approve' || action === 'deny') && approvalId && this.approvalsInboxEnabled()) {
       this.answerApproval(approvalId, action);
       return;
     }
