@@ -744,6 +744,19 @@ export const IntentGoalsSchema = z
   })
   .strict();
 
+/**
+ * Body of POST /api/sessions/:id/readmymind (Read My Mind predict). Both
+ * fields are the Rethink flow: `rejected` carries suggestions the user
+ * dismissed (strong negative signal, fed back verbatim), `steer` an optional
+ * free-text correction ("no, I meant the mobile bug").
+ */
+export const ReadMyMindPredictSchema = z
+  .object({
+    steer: z.string().max(2000).optional(),
+    rejected: z.array(z.string().max(1000)).max(10).optional(),
+  })
+  .strict();
+
 // ========== Configuration ==========
 
 /**
@@ -860,6 +873,12 @@ export const SettingsUpdateSchema = z
      * stored profiles stay until DELETE /api/sessions/:id/intent.
      */
     readMyMindEnabled: z.boolean().optional(),
+    /**
+     * Read My Mind predictor model override. Empty/absent = the AI-checker
+     * default (opus: prediction quality is the product and it runs only on an
+     * explicit press). Shell-safety is validated again at spawn time.
+     */
+    readMyMindModel: z.string().max(100).optional(),
     tunnelEnabled: z.boolean().optional(),
     // Action field (NOT persisted): explicit per-request acknowledgment that the
     // operator accepts exposing an UNAUTHENTICATED public tunnel (no CODEMAN_PASSWORD).

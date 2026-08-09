@@ -454,8 +454,20 @@ user guide: [`readmymind.md`](readmymind.md).
   `400 INVALID_INPUT` on over-long or unknown fields.
 - `DELETE /api/v1/sessions/:id/intent` -> `{ deleted: boolean }` forgets the
   case's profile entirely.
+- `POST /api/v1/sessions/:id/readmymind` predicts the user's next prompt:
+  a one-shot model call over the intent profile plus live session signals
+  (pending approval dialog, transcript tail, git state, run-summary events,
+  sibling sessions). Body is optional; the rethink flow passes
+  `{ steer?, rejected? }` (strict schema: `steer` <= 2000 chars, `rejected`
+  up to 10 strings <= 1000 chars). Answers
+  `{ suggestions: { prompt, why, kind }[], durationMs }` with 1-3 suggestions
+  (`kind`: `continue` | `verify` | `redirect`; prompts are single-line).
+  Claude-mode sessions only (`400 INVALID_INPUT` otherwise); one prediction in
+  flight per session (`409 CONFLICT`); predictor failures answer
+  `502 OPERATION_FAILED`. Takes 5-90 s and costs real tokens. Suggestions are
+  only ever returned, never sent: submitting one is the caller's explicit act.
 
-All three enforce session ownership in multi-user mode; a foreign session id
+All four enforce session ownership in multi-user mode; a foreign session id
 answers `404 NOT_FOUND` (no existence leak), and profiles of two owners of the
 same directory are distinct by construction.
 

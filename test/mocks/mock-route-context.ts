@@ -101,6 +101,8 @@ export function createMockRouteContext(options?: { sessionId?: string; agentSkil
     }),
     startTranscriptWatcher: vi.fn(),
     stopTranscriptWatcher: vi.fn(),
+    getTranscriptPath: vi.fn(() => null),
+    getReadMyMindModel: vi.fn(async () => 'claude-opus-4-5-20251101'),
 
     // -- InfraPort --
     mux: {

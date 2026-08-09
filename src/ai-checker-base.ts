@@ -37,8 +37,9 @@ import { getErrorMessage } from './types.js';
 /**
  * Validates that a model name is safe for shell use.
  * Model names should only contain alphanumeric characters, hyphens, underscores, and dots.
+ * Exported for the Read My Mind predictor, which reuses these spawn mechanics standalone.
  */
-function isValidModelName(model: string): boolean {
+export function isValidModelName(model: string): boolean {
   if (!model || typeof model !== 'string') return false;
   // Allow: alphanumeric, hyphens, underscores, dots, slashes (for model paths like claude/opus-4.5)
   // Max length 100 to prevent abuse
@@ -48,8 +49,9 @@ function isValidModelName(model: string): boolean {
 /**
  * Validates that a mux session name is safe for shell use.
  * Names should only contain alphanumeric characters, hyphens, and underscores.
+ * Exported for the Read My Mind predictor (see isValidModelName).
  */
-function isValidMuxName(muxName: string): boolean {
+export function isValidMuxName(muxName: string): boolean {
   if (!muxName || typeof muxName !== 'string') return false;
   return /^[a-zA-Z0-9_-]+$/.test(muxName) && muxName.length <= 100;
 }

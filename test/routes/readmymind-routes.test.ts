@@ -1,5 +1,5 @@
 /**
- * @fileoverview Read My Mind intent route tests (src/web/routes/readmymind-routes.ts)
+ * @fileoverview Read My Mind route tests (src/web/routes/readmymind-routes.ts)
  * via app.inject(), no live port.
  *
  * The routes read the process-wide `intentStore` singleton, whose data file
@@ -7,10 +7,14 @@
  * in-memory map lives for the whole file, so each test uses a distinct
  * session workingDir to stay isolated.
  *
- * Port: SessionPort.
+ * The predictor singleton is stubbed (`vi.spyOn(readMyMindPredictor,
+ * 'predict')`): nothing here ever spawns tmux or the claude CLI.
+ *
+ * Port: SessionPort & ConfigPort & InfraPort.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { registerReadMyMindRoutes } from '../../src/web/routes/readmymind-routes.js';
+import { readMyMindPredictor, type PredictionResult } from '../../src/readmymind-predictor.js';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
 
 const SESSION_ID = 'test-session-1';
@@ -101,6 +105,113 @@ describe('DELETE /api/sessions/:id/intent', () => {
 
     const get = await harness.app.inject({ method: 'GET', url: `/api/sessions/${SESSION_ID}/intent` });
     expect(get.json().data.intent.goals).toBe('');
+  });
+});
+
+describe('POST /api/sessions/:id/readmymind', () => {
+  const RESULT: PredictionResult = {
+    suggestions: [{ prompt: 'run the tests', why: 'a fix just landed', kind: 'verify' }],
+    durationMs: 1234,
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns the stubbed suggestions and feeds user signals into the prompt', async () => {
+    const predict = vi.spyOn(readMyMindPredictor, 'predict').mockResolvedValue(RESULT);
+    await harness.app.inject({
+      method: 'PUT',
+      url: `/api/sessions/${SESSION_ID}/intent`,
+      payload: { goals: 'GOALS_MARKER ship the release' },
+    });
+
+    const res = await harness.app.inject({ method: 'POST', url: `/api/sessions/${SESSION_ID}/readmymind` });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.success).toBe(true);
+    expect(body.data.suggestions).toEqual(RESULT.suggestions);
+    expect(body.data.durationMs).toBe(1234);
+
+    expect(predict).toHaveBeenCalledTimes(1);
+    const options = predict.mock.calls[0][0];
+    expect(options.sessionId).toBe(SESSION_ID);
+    expect(options.model).toBe('claude-opus-4-5-20251101');
+    expect(options.prompt).toContain('TRUST TIERS');
+    expect(options.prompt).toContain('GOALS_MARKER');
+  });
+
+  it('threads steer and rejected suggestions into the rethink section', async () => {
+    const predict = vi.spyOn(readMyMindPredictor, 'predict').mockResolvedValue(RESULT);
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: `/api/sessions/${SESSION_ID}/readmymind`,
+      payload: { steer: 'STEER_MARKER the mobile bug', rejected: ['REJECTED_MARKER run the tests'] },
+    });
+    expect(res.statusCode).toBe(200);
+    const prompt = predict.mock.calls[0][0].prompt;
+    expect(prompt).toContain('STEER_MARKER');
+    expect(prompt).toContain('REJECTED_MARKER');
+  });
+
+  it('409s while a prediction is already running for the session', async () => {
+    let release: (value: PredictionResult) => void = () => {};
+    // First call hangs until released; later calls resolve immediately.
+    vi.spyOn(readMyMindPredictor, 'predict')
+      .mockImplementationOnce(() => new Promise<PredictionResult>((resolve) => (release = resolve)))
+      .mockResolvedValue(RESULT);
+
+    const first = harness.app.inject({ method: 'POST', url: `/api/sessions/${SESSION_ID}/readmymind` });
+    // Let the first request reach the in-flight registration.
+    await vi.waitFor(() => expect(readMyMindPredictor.predict).toHaveBeenCalled());
+
+    const second = await harness.app.inject({ method: 'POST', url: `/api/sessions/${SESSION_ID}/readmymind` });
+    expect(second.statusCode).toBe(409);
+    expect(second.json().errorCode).toBe('CONFLICT');
+
+    release(RESULT);
+    expect((await first).statusCode).toBe(200);
+
+    // The slot frees once the prediction settles.
+    const third = await harness.app.inject({ method: 'POST', url: `/api/sessions/${SESSION_ID}/readmymind` });
+    expect(third.statusCode).toBe(200);
+  });
+
+  it('400s non-claude sessions', async () => {
+    vi.spyOn(readMyMindPredictor, 'predict').mockResolvedValue(RESULT);
+    (harness.ctx.sessions.get(SESSION_ID) as unknown as { mode: string }).mode = 'shell';
+    const res = await harness.app.inject({ method: 'POST', url: `/api/sessions/${SESSION_ID}/readmymind` });
+    expect(res.statusCode).toBe(400);
+    expect(readMyMindPredictor.predict).not.toHaveBeenCalled();
+  });
+
+  it('502s a predictor failure with the clean error message', async () => {
+    vi.spyOn(readMyMindPredictor, 'predict').mockRejectedValue(new Error('Predictor returned malformed JSON'));
+    const res = await harness.app.inject({ method: 'POST', url: `/api/sessions/${SESSION_ID}/readmymind` });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error).toContain('malformed JSON');
+
+    // The in-flight slot is released after a failure.
+    vi.spyOn(readMyMindPredictor, 'predict').mockResolvedValue(RESULT);
+    const retry = await harness.app.inject({ method: 'POST', url: `/api/sessions/${SESSION_ID}/readmymind` });
+    expect(retry.statusCode).toBe(200);
+  });
+
+  it('rejects unknown body keys (strict schema)', async () => {
+    vi.spyOn(readMyMindPredictor, 'predict').mockResolvedValue(RESULT);
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: `/api/sessions/${SESSION_ID}/readmymind`,
+      payload: { autoSend: true },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(readMyMindPredictor.predict).not.toHaveBeenCalled();
+  });
+
+  it('404s an unknown session id', async () => {
+    vi.spyOn(readMyMindPredictor, 'predict').mockResolvedValue(RESULT);
+    const res = await harness.app.inject({ method: 'POST', url: '/api/sessions/nope/readmymind' });
+    expect(res.statusCode).toBe(404);
   });
 });
 

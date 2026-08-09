@@ -344,6 +344,8 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsShowUltracodeAgents').checked = settings.showUltracodeAgents ?? defaults.showUltracodeAgents ?? false;
     // Approvals Inbox: synced, default OFF (opt-in; only an explicit true enables).
     document.getElementById('appSettingsApprovalsInbox').checked = settings.approvalsInboxEnabled === true;
+    // Read My Mind: synced, default OFF (opt-in; capture + prediction cost real tokens).
+    document.getElementById('appSettingsReadMyMind').checked = settings.readMyMindEnabled === true;
     document.getElementById('appSettingsUltracodeFloatingWindows').checked =
       settings.ultracodeFloatingWindows ?? defaults.ultracodeFloatingWindows ?? false;
     document.getElementById('appSettingsShowMultiMonitorButton').checked = settings.showMultiMonitorButton ?? defaults.showMultiMonitorButton ?? false;
@@ -1544,6 +1546,7 @@ Object.assign(CodemanApp.prototype, {
       showSubagents: document.getElementById('appSettingsShowSubagents').checked,
       showUltracodeAgents: document.getElementById('appSettingsShowUltracodeAgents').checked,
       approvalsInboxEnabled: document.getElementById('appSettingsApprovalsInbox').checked,
+      readMyMindEnabled: document.getElementById('appSettingsReadMyMind').checked,
       ultracodeFloatingWindows: document.getElementById('appSettingsUltracodeFloatingWindows').checked,
       showMultiMonitorButton: document.getElementById('appSettingsShowMultiMonitorButton').checked,
       showPlanUsageLimits: document.getElementById('appSettingsShowPlanUsageLimits').checked,
@@ -2104,6 +2107,15 @@ Object.assign(CodemanApp.prototype, {
     const ultracodeBtn = document.querySelector('.btn-ultracode-agents');
     if (ultracodeBtn) {
       ultracodeBtn.classList.toggle('btn-ultracode-agents--hidden', !showUltracodeAgents);
+    }
+
+    // Read My Mind 🧠 — hidden unless the synced opt-in `readMyMindEnabled` is
+    // ON (only an explicit true enables, mirroring the Approvals bell). Marker
+    // class (base is display:inline-flex !important); phones hide it in
+    // mobile.css regardless (the phase-3 surface there is an accessory key).
+    const readMyMindBtn = document.querySelector('.btn-readmymind');
+    if (readMyMindBtn) {
+      readMyMindBtn.classList.toggle('btn-readmymind--hidden', settings.readMyMindEnabled !== true);
     }
 
     // Plan-usage chip — shown by default on desktop, OFF on handhelds (App
