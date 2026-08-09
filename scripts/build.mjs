@@ -65,6 +65,22 @@ appendFileSync(
   '}\n'
 );
 
+// Predictive echo (codex): separate bundle so the zerolag bundle stays byte-identical
+run('xterm-predictive-echo', 'npx esbuild packages/xterm-zerolag-input/src/predictive-echo-addon.ts --bundle --minify --format=iife --global-name=XtermPredictiveEcho --outfile=dist/web/public/vendor/xterm-predictive-echo.js');
+appendFileSync(
+  join(ROOT, 'dist/web/public/vendor/xterm-predictive-echo.js'),
+  '\n// Global aliases for browser usage\n' +
+  'if(typeof window!=="undefined"){' +
+    'window.PredictiveEchoAddon=XtermPredictiveEcho.PredictiveEchoAddon;' +
+    'window.PredictiveEchoOverlay=class extends XtermPredictiveEcho.PredictiveEchoAddon{' +
+      'constructor(terminal){' +
+        'super({});' +
+        'this.activate(terminal);' +
+      '}' +
+    '};' +
+  '}\n'
+);
+
 // 4. Minify frontend assets
 run('minify input-cjk.js', 'npx esbuild dist/web/public/input-cjk.js --minify --outfile=dist/web/public/input-cjk.js --allow-overwrite');
 run('minify i18n.js', 'npx esbuild dist/web/public/i18n.js --minify --outfile=dist/web/public/i18n.js --allow-overwrite');
@@ -106,6 +122,7 @@ console.log('\n[build] content-hash cache busting');
     'subagent-windows.js',
     'image-input.js',
     'vendor/xterm-zerolag-input.js',
+    'vendor/xterm-predictive-echo.js',
   ];
   const manifest = {};
   for (const file of HASHABLE) {

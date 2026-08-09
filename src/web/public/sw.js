@@ -40,6 +40,7 @@ const APP_SHELL = [
   '/vendor/xterm-addon-fit.min.js',
   '/vendor/xterm-addon-unicode11.min.js',
   '/vendor/xterm-zerolag-input.js',
+  '/vendor/xterm-predictive-echo.js',
   '/vendor/xterm.css',
   '/icon-192.png',
   '/icon-512.png',
