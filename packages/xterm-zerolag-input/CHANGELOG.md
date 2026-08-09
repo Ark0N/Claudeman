@@ -1,5 +1,19 @@
 # xterm-zerolag-input
 
+## 0.3.0
+
+### Minor Changes
+
+- 55bff4a: Zero-lag predictive echo for Codex sessions (mosh-style write-through prediction).
+
+  Codex's per-keystroke composer forced 1.12.2 to disable the local-echo overlay (issues #218/#219/#220/#222), leaving Codex typing at full round-trip latency on remote links. This release adds a second echo mode instead of re-enabling the first: every keystroke still goes to the PTY exactly as before (byte-identical wire behavior, pinned by vm-level and end-to-end trace-equality tests), while the new `PredictiveEchoAddon` in `xterm-zerolag-input` 0.2.0 paints the predicted glyph at the predicted cell. When the real echo lands, the prediction is confirmed and its span removed (an invisible swap); mispredictions self-heal via a two-pass mismatch cascade and a TTL.
+  - Reconciliation reads the parsed terminal buffer, never the raw stream: full-line redraws, ECH gap painting and tmux's in-place deltas all converge to the same cells. Confirmation requires the cell match PLUS a cursor advance, so placeholder glyphs and identical repaints never false-confirm; blank cells are neutral (codex clears its placeholder on the first echo).
+  - Predictions paint only while the cursor sits on the measured Codex composer row (`/^› /`, codex-cli 0.147): trust/approval modals and wrapped continuation rows get no ghosts, deliberately falling back to real echo.
+  - Ships as a SEPARATE `vendor/xterm-predictive-echo.js` bundle: the existing zerolag bundle is byte-identical (sha256-verified), and a missing or broken bundle degrades Codex to exact 1.12.2 behavior. The per-device `localEchoEnabled` toggle is the kill switch.
+  - Claude/Gemini/OpenCode/Antigravity keep buffer mode untouched; shell stays off.
+  - A post-build adversarial review added the anchor-hold rule: after an unpredicted wire edit (backspace into echoed text, cleared input, IME text commits) new predictions hold until the next parsed write, so a stale displayed cursor can never mis-anchor a run.
+  - Tests: 55 new package tests including replay suites driven by fixtures recorded from a real codex TUI through the production tmux+strip pipeline (`scripts/dev/record-codex-frames.mjs`) and a 500-iteration seeded fuzz; new vm policy/wire-neutrality suites; a 10-scenario Playwright E2E against real codex covering the #218/#219/#220/#222 retests, byte-identity, and a simulated 300ms-RTT run. The package test suite now runs in CI.
+
 ## 0.2.0
 
 ### Minor Changes
@@ -10,7 +24,6 @@
   - `XtermTerminal` type gains OPTIONAL members (`buffer.active.cursorX/cursorY`, `getLine().getCell?`, `onWriteParsed?`, `onResize?`). Additive only: existing consumers and mocks are unaffected.
   - IIFE build exposes `window.PredictiveEchoAddon` and a self-activating `window.PredictiveEchoOverlay`, alongside the unchanged `ZerolagInputAddon` / `LocalEchoOverlay` globals.
   - Tests: 52 new (30 addon-law specs, renderer geometry, 6 replay suites driven by fixtures recorded from real codex 0.147 through tmux + the production strip, and a 500-iteration seeded fuzz with per-op invariants). `@xterm/headless` as a devDependency; runtime dependencies remain zero.
-
 
 ## 0.1.8
 

@@ -1,5 +1,59 @@
 # aicodeman
 
+## 1.15.0
+
+### Minor Changes
+
+- 55bff4a: Zero-lag predictive echo for Codex sessions (mosh-style write-through prediction).
+
+  Codex's per-keystroke composer forced 1.12.2 to disable the local-echo overlay (issues #218/#219/#220/#222), leaving Codex typing at full round-trip latency on remote links. This release adds a second echo mode instead of re-enabling the first: every keystroke still goes to the PTY exactly as before (byte-identical wire behavior, pinned by vm-level and end-to-end trace-equality tests), while the new `PredictiveEchoAddon` in `xterm-zerolag-input` 0.2.0 paints the predicted glyph at the predicted cell. When the real echo lands, the prediction is confirmed and its span removed (an invisible swap); mispredictions self-heal via a two-pass mismatch cascade and a TTL.
+  - Reconciliation reads the parsed terminal buffer, never the raw stream: full-line redraws, ECH gap painting and tmux's in-place deltas all converge to the same cells. Confirmation requires the cell match PLUS a cursor advance, so placeholder glyphs and identical repaints never false-confirm; blank cells are neutral (codex clears its placeholder on the first echo).
+  - Predictions paint only while the cursor sits on the measured Codex composer row (`/^› /`, codex-cli 0.147): trust/approval modals and wrapped continuation rows get no ghosts, deliberately falling back to real echo.
+  - Ships as a SEPARATE `vendor/xterm-predictive-echo.js` bundle: the existing zerolag bundle is byte-identical (sha256-verified), and a missing or broken bundle degrades Codex to exact 1.12.2 behavior. The per-device `localEchoEnabled` toggle is the kill switch.
+  - Claude/Gemini/OpenCode/Antigravity keep buffer mode untouched; shell stays off.
+  - A post-build adversarial review added the anchor-hold rule: after an unpredicted wire edit (backspace into echoed text, cleared input, IME text commits) new predictions hold until the next parsed write, so a stale displayed cursor can never mis-anchor a run.
+  - Tests: 55 new package tests including replay suites driven by fixtures recorded from a real codex TUI through the production tmux+strip pipeline (`scripts/dev/record-codex-frames.mjs`) and a 500-iteration seeded fuzz; new vm policy/wire-neutrality suites; a 10-scenario Playwright E2E against real codex covering the #218/#219/#220/#222 retests, byte-identity, and a simulated 300ms-RTT run. The package test suite now runs in CI.
+
+### Patch Changes
+
+- Agent-skill hardening, plus a fix for the mobile browser suite.
+
+  ## The Codeman agent skill
+
+  Twelve issues found by auditing the skill against a live instance, and fixing them meant measuring things rather than reasoning about them.
+
+  **Readiness now works in every permission mode.** The ladder matched `bypass`, which is the status bar of only ONE mode. Measured one pane per mode against claude-cli 2.1.226:
+
+  | how Codeman spawned it                     | statusline              | `shift+tab` | `bypass` |
+  | ------------------------------------------ | ----------------------- | ----------- | -------- |
+  | `--dangerously-skip-permissions` (default) | `bypass permissions on` | yes         | yes      |
+  | `--permission-mode auto`                   | `auto mode on`          | yes         | no       |
+  | `--allowedTools …`                         | `don't ask on`          | yes         | no       |
+  | neither (`normal`)                         | `don't ask on`          | yes         | no       |
+  | `--permission-mode plan`                   | `plan mode on`          | yes         | no       |
+
+  Every mode ends `(shift+tab to cycle)`, and the `claudeMode` setting is not exposed on `GET /api/v1/sessions/:id`, so there was nothing to branch on. The ladder matches `shift+tab` now: universal, and space-free, which is what makes it survive the TUI stream. A non-default worker used to be reported broken after burning the full budget. ⚠️ The `+` means it only works through `--data-urlencode`; a hand-built query silently searches for `shift tab`.
+
+  **`.status` is documented as unreliable in both directions.** Measured on a live worker reading `idle` while mid-turn and actively producing output, with `lastActivityAt` equal to the moment of the call. A worker that dies inside its pane also reads `idle`. Synchronize on `stop` or an output marker; to judge from outside, sample `terminal?tail=` twice and compare.
+
+  **The self-delete guard is fail-closed.** Documented in 1.14.2; the reference files and every recipe now route through it consistently.
+
+  **Reads work on macOS.** The ANSI-strip pipelines used `sed 's/\x1b…'`, and BSD sed has no `\xHH` escape, so on macOS they silently stripped nothing and handed the agent raw ANSI.
+
+  **Injection is atomic and no longer silent.** `installAgentSkillInto()` wrote each file with a bare `writeFile`, so two sessions created concurrently in one repo could leave a reader observing a truncated SKILL.md; writes now go through temp+rename under the same lock every sibling mutator uses. And both server call sites discarded the outcome, so a `foreign` refusal (a user-authored skill is present) or a `symlink` refusal was invisible: turning the setting on, seeing nothing, and having no way to find out why. Refusals are logged now; injection stays best-effort and still cannot fail session creation.
+
+  **Reference corrections**: the `FORBIDDEN` 403 row and which auth responses are plain text rather than the JSON envelope, the input size cap, the undocumented `killMux` parameter on DELETE, and the fact that zero, negative and non-integer timeouts are rejected with a 400 rather than clamped.
+
+  **README.zh-CN.md taught a recipe that could not work**: its input example had no trailing `\r`, so Enter was never sent and the prompt sat unsubmitted, and its read step used `/output`, whose `textOutput` is always empty for interactive sessions. Its agent section is now in line with the English one. CLAUDE.md's single-line gotcha also gained the `\r` rule.
+
+  **Tests**: the `codeman skill install`/`uninstall` CLI had none, including the linked-case resolution shipped in 1.14.2; the `POST /api/sessions` injection call site was never exercised because the shared route mock hardcoded the gate off; and nothing guarded `reference/endpoints.md` against drifting from the routes it documents. All three covered now.
+
+  ## Mobile browser suite
+
+  The suite drives a real browser against a server started from TypeScript source, so it serves `src/web/public`, while `npm run build` puts the xterm vendor bundles in `dist/web/public`. Without them every `/vendor/xterm*` request 404s, `Terminal` is never defined, and every test touching `app.terminal` dies on a null. A `pretest:mobile` step now prepares them.
+
+  Hardened after two review rounds, each defect reproduced: the freshness cache trusted mtime alone, so a bundle left without its alias tail (or truncated by an interrupted `npm install`) was reported "up to date" forever while the suite died on `LocalEchoOverlay is not defined`; it now verifies content and size, and repairs what an earlier run poisoned. Builds go to a temp file private to the run and rename into place, so a partial write can never be published and two concurrent runs cannot corrupt each other. Temps whose owning process is gone are reclaimed, and only those. Freshness tracks every input the bundle derives from, not just the entry, so editing a sibling of the addon no longer leaves the suite testing a stale overlay. `npx` runs with the repo as cwd, so it uses the pinned esbuild instead of fetching an unpinned one.
+
 ## 1.14.2
 
 ### Patch Changes
