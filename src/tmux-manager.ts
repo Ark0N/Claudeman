@@ -3144,6 +3144,30 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    *   Used for full page reloads so the user gets back their scroll history.
    *   Caveat: lines tmux has already evicted past its history-limit are gone.
    */
+  /**
+   * Plain visible-frame text for the working/idle probe (see `session.ts`).
+   *
+   * One `capture-pane` and nothing else: no `-e` styles, no `display-message`
+   * cursor query, no repaint reconstruction: this feeds a regex, not a
+   * terminal. Returns null in tests (no tmux) so callers fall back to their
+   * stream heuristics rather than reading an empty screen as "not working".
+   */
+  capturePaneText(muxName: string, paneTarget?: string): string | null {
+    if (IS_TEST_MODE) return null;
+    const target = resolveTmuxPaneTarget(muxName, paneTarget);
+    if (!target) return null;
+    try {
+      return execSync(`${this.tmux()} capture-pane -p -t ${shellescape(target)}`, {
+        encoding: 'utf-8',
+        timeout: EXEC_TIMEOUT_MS,
+      });
+    } catch {
+      // A dead/renamed pane is an ordinary outcome here, not an error worth logging
+      // on a timer; the caller treats null as "no evidence either way".
+      return null;
+    }
+  }
+
   capturePaneBuffer(muxName: string, paneTarget?: string, opts?: PaneCaptureOptions): string | null {
     if (IS_TEST_MODE) return '';
     const target = resolveTmuxPaneTarget(muxName, paneTarget);

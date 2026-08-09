@@ -115,6 +115,21 @@ describe('hasWorkingPattern', () => {
     });
   });
 
+  describe('current Claude status line', () => {
+    it('should detect the randomized gerund by the elapsed timer', () => {
+      // Live captures on Claude Code 2.1.220. The word changes every turn, so the
+      // WORKING_PATTERNS list above cannot see any of these.
+      expect(hasWorkingPattern('✻ Actualizing… (15m 17s · ↓ 47.5k tokens)')).toBe(true);
+      expect(hasWorkingPattern('· Finagling… (4m 45s · ↓ 13.3k tokens)')).toBe(true);
+      expect(hasWorkingPattern('✽ Herding… (3s · esc to interrupt)')).toBe(true);
+    });
+
+    it('should NOT treat the completion line as working', () => {
+      expect(hasWorkingPattern('✻ Cooked for 2m 49s')).toBe(false);
+      expect(hasWorkingPattern('✻ Brewed for 18m 41s')).toBe(false);
+    });
+  });
+
   describe('spinner characters', () => {
     it('should detect braille spinner characters', () => {
       expect(hasWorkingPattern('Loading... \u280B')).toBe(true);
