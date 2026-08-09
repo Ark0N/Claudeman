@@ -1219,7 +1219,9 @@ export class Session extends EventEmitter {
 
   /**
    * Returns a subset of env overrides safe for disk persistence (state.json).
-   * Only non-sensitive `CLAUDE_CODE_*` keys are included. `OPENCODE_*` keys are
+   * Only non-sensitive `CLAUDE_CODE_*` keys plus CLAUDE_CONFIG_DIR (a path, not
+   * a secret — and losing it across a restart would silently move a session back
+   * to the default Claude account, #255) are included. `OPENCODE_*` keys are
    * filtered out because the schema permits them and they can carry secrets
    * (e.g., OPENCODE_API_KEY); secrets must not land in `~/.codeman/state.json`.
    * Must NOT be included in any API-bound serializer — see toState() comment.
@@ -1228,7 +1230,7 @@ export class Session extends EventEmitter {
     if (!this._envOverrides) return undefined;
     const safe: Record<string, string> = {};
     for (const [key, value] of Object.entries(this._envOverrides)) {
-      if (key.startsWith('CLAUDE_CODE_')) safe[key] = value;
+      if (key.startsWith('CLAUDE_CODE_') || key === 'CLAUDE_CONFIG_DIR') safe[key] = value;
     }
     return Object.keys(safe).length > 0 ? safe : undefined;
   }
