@@ -85,7 +85,8 @@ import {
   attachSessionListeners,
   detachSessionListeners,
 } from './session-listener-wiring.js';
-import { sessionWaits } from './session-wait-registry.js';
+import { sessionWaits, hooksAvailableForMode } from './session-wait-registry.js';
+import { intentStore } from '../intent-store.js';
 import { approvalInbox } from './approval-inbox.js';
 import {
   wireRespawnListeners,
@@ -149,6 +150,7 @@ import {
   registerScheduledRoutes,
   registerHookEventRoutes,
   registerApprovalRoutes,
+  registerReadMyMindRoutes,
   registerStatusTelemetryRoutes,
   registerSystemRoutes,
   registerCaseRoutes,
@@ -955,6 +957,7 @@ export class WebServer extends EventEmitter {
     registerScheduledRoutes(this.app, ctx);
     registerHookEventRoutes(this.app, ctx);
     registerApprovalRoutes(this.app, ctx);
+    registerReadMyMindRoutes(this.app, ctx);
     registerStatusTelemetryRoutes(this.app, ctx);
     registerSystemRoutes(this.app, ctx);
     registerCaseRoutes(this.app, ctx);
@@ -1022,11 +1025,33 @@ export class WebServer extends EventEmitter {
         console.error(`[Transcript] Error for session ${sessionId}:`, error.message);
       });
 
+      watcher.on('transcript:user_prompt', (text: string) => {
+        void this.captureIntentPrompt(sessionId, text);
+      });
+
       this.transcriptWatchers.set(sessionId, watcher);
     }
 
     // Start or update the watcher with the transcript path
     watcher.updatePath(transcriptPath);
+  }
+
+  /**
+   * Read My Mind intent capture: fold one transcript user prompt into the
+   * case's intent profile (docs/readmymind-plan.md). Opt-in via
+   * `readMyMindEnabled` (default OFF) and claude-only; the mode gate is
+   * belt-and-braces since only hook-fed sessions have a transcript watcher.
+   */
+  private async captureIntentPrompt(sessionId: string, text: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session || !hooksAvailableForMode(session.mode)) return;
+    try {
+      const settings = await this.readSettings();
+      if (settings.readMyMindEnabled !== true) return;
+      intentStore.recordPrompt(session.owner, session.workingDir, sessionId, text);
+    } catch (err) {
+      console.warn(`[IntentStore] Capture failed for session ${sessionId}:`, err);
+    }
   }
 
   /**
