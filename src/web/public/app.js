@@ -615,6 +615,11 @@ class CodemanApp {
     this.fileBrowserFilter = '';
     this.fileBrowserAllExpanded = false;
     this.fileBrowserDragListeners = null;
+    // Show hidden (dot-prefixed) files and folders in the File Viewer tree.
+    // Per-device, persisted to its own localStorage key by panels-ui.js. Safe to
+    // call a mixin method here: instantiation is deferred to DOMContentLoaded,
+    // so every module's Object.assign has already run.
+    this.fileBrowserShowHidden = this._loadFileBrowserShowHidden?.() ?? false;
     this.filePreviewContent = '';
 
     // Toast container cache (methods in panels-ui.js)
