@@ -14,9 +14,9 @@
  * Port: N/A (no server).
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -133,6 +133,13 @@ describe('parseGitRepositoryUrl', () => {
 
   it('REFUSES a URL with no repository name', () => {
     expect(rejected('https://github.com/').code).toBe('NO_REPOSITORY_NAME');
+  });
+
+  it('REFUSES a malformed percent-escape as BAD_SYNTAX instead of throwing', () => {
+    // `new URL` tolerates "%zz" in a path; decodeURIComponent throws on it,
+    // and uncaught that URIError surfaced as a 500 from the route.
+    expect(rejected('https://github.com/%zz/repo.git').code).toBe('BAD_SYNTAX');
+    expect(rejected('https://github.com/owner/repo%').code).toBe('BAD_SYNTAX');
   });
 });
 
@@ -377,8 +384,29 @@ describe.skipIf(!gitPresent)('cloneRepository / probeGitRemote (real git)', () =
     const result = await cloneRepository({ repository: origin, destination: dest, ref: 'no-such-branch' });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.failure.code).toBe('REF_NOT_FOUND');
-    // The half-written tree must not survive as a phantom case directory.
+    // The half-written tree must not survive as a phantom case directory,
+    // and neither may the attempt-owned temp directory it cloned into.
     expect(existsSync(dest)).toBe(false);
+    expect(readdirSync(root).filter((n) => n.includes('.cloning-'))).toEqual([]);
+  });
+
+  it('lets two concurrent clones of the SAME destination race safely', async () => {
+    // Both used to pass the existence check; the loser's cleanup then DELETED
+    // the winner's finished tree. Now each attempt clones into its own temp
+    // sibling and an atomic rename decides the winner.
+    const dest = join(root, 'clone-race');
+    const results = await Promise.all([
+      cloneRepository({ repository: origin, destination: dest }),
+      cloneRepository({ repository: origin, destination: dest }),
+    ]);
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    const loser = results.find((r) => !r.ok);
+    if (loser && !loser.ok) expect(loser.failure.code).toBe('DESTINATION_EXISTS');
+    // The winner's tree survives the loser's cleanup intact...
+    expect(existsSync(join(dest, 'README.md'))).toBe(true);
+    expect(existsSync(join(dest, '.git'))).toBe(true);
+    // ...and neither attempt leaves its temp directory behind.
+    expect(readdirSync(root).filter((n) => n.includes('.cloning-'))).toEqual([]);
   });
 
   it('refuses a destination that already exists instead of cloning into it', async () => {
@@ -418,6 +446,70 @@ describe.skipIf(!gitPresent)('cloneRepository / probeGitRemote (real git)', () =
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.failure.code).toBe('TIMEOUT');
     expect(existsSync(join(root, 'clone-timeout'))).toBe(false);
+    expect(readdirSync(root).filter((n) => n.includes('.cloning-'))).toEqual([]);
+  });
+});
+
+// ─── Pool bounds, driven with a fake `git` that sleeps ──────────────────────
+//
+// A fresh module instance (vi.resetModules + dynamic import) picks up the
+// 1-slot/1-waiter env config, and a PATH-shimmed `git` that answers --version
+// then sleeps lets one operation HOLD the slot deterministically with no
+// network. Placed after the real-git suite so the PATH shim never leaks into it.
+describe('git pool queue bounds (fake git)', () => {
+  let fakeDir: string;
+  let savedPath: string | undefined;
+  let mod: typeof import('../src/git-clone.js');
+
+  beforeAll(async () => {
+    fakeDir = mkdtempSync(join(tmpdir(), 'codeman-fake-git-'));
+    writeFileSync(
+      join(fakeDir, 'git'),
+      '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "git version 2.43.0"; exit 0; fi\nsleep 30\n',
+      { mode: 0o755 }
+    );
+    savedPath = process.env.PATH;
+    process.env.PATH = `${fakeDir}:${savedPath}`;
+    process.env.CODEMAN_MAX_GIT_OPERATIONS = '1';
+    process.env.CODEMAN_MAX_GIT_QUEUE = '1';
+    vi.resetModules();
+    mod = await import('../src/git-clone.js');
+  });
+
+  afterAll(() => {
+    process.env.PATH = savedPath;
+    delete process.env.CODEMAN_MAX_GIT_OPERATIONS;
+    delete process.env.CODEMAN_MAX_GIT_QUEUE;
+    rmSync(fakeDir, { recursive: true, force: true });
+    vi.resetModules();
+  });
+
+  it('bounds the queue with BUSY and counts queue time against the deadline', async () => {
+    // Occupies the single slot: the fake git sleeps far past its 3s budget.
+    const holder = mod.probeGitRemote('https://pool.invalid/repo.git', 3_000);
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Fills the single queue seat; its 300ms deadline must elapse IN the queue.
+    const queued = mod.probeGitRemote('https://pool.invalid/repo.git', 300);
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Queue full: answered BUSY immediately, without waiting out its own 5s budget.
+    const before = Date.now();
+    const overflow = await mod.probeGitRemote('https://pool.invalid/repo.git', 5_000);
+    expect(Date.now() - before).toBeLessThan(1_000);
+    expect(overflow.reachable).toBe(false);
+    expect(overflow.failure?.code).toBe('BUSY');
+
+    // The queued waiter timed out WITHOUT ever spawning git (slot never freed).
+    const queuedResult = await queued;
+    expect(queuedResult.reachable).toBe(false);
+    expect(queuedResult.failure?.code).toBe('TIMEOUT');
+
+    // The slot holder is killed by its own deadline, and nothing leaks.
+    const holderResult = await holder;
+    expect(holderResult.failure?.code).toBe('TIMEOUT');
+    expect(mod.getActiveGitOperationCount()).toBe(0);
+    expect(mod.getQueuedGitOperationCount()).toBe(0);
   });
 });
 

@@ -29,7 +29,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { readFile, writeFile, mkdir, lstat, readdir, rename, unlink, rmdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, lstat, readdir, realpath, rename, unlink, rmdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -526,6 +526,13 @@ export async function updateCaseEnvVars(casePath: string, envVars: Record<string
  * Pass a non-empty string to set, or empty/null to remove.
  */
 export async function updateCaseModel(casePath: string, model: string | null): Promise<void> {
+  // Same symlink refusal as writeHooksConfig: this writer runs for cloned
+  // cases too (modelOverride at quick-start), against foreign tree contents.
+  const blocker = await settingsWriteBlocker(casePath);
+  if (blocker) {
+    console.warn(`[hooks-config] Refusing to write model for ${casePath}: ${blocker}`);
+    return;
+  }
   const claudeDir = join(casePath, '.claude');
   const settingsPath = join(claudeDir, 'settings.local.json');
   await withSettingsLock(settingsPath, async () => {
@@ -551,10 +558,46 @@ export async function updateCaseModel(casePath: string, model: string | null): P
 }
 
 /**
+ * Why writing into `<casePath>/.claude/settings.local.json` must NOT proceed,
+ * or null when it is safe.
+ *
+ * Case contents can be FOREIGN (a freshly cloned repository, an imported
+ * tree): `.claude` or the settings file itself can arrive as a symlink
+ * pointing anywhere on this machine, and `writeFile` follows links, so a
+ * scaffold write would land outside the case, up to and including replacing
+ * the user's own `~/.claude/settings.json` (#251 review). Any symlink in the
+ * chain, or a `.claude` that resolves outside the case, refuses the write.
+ * A missing `.claude` is fine (the writer creates it).
+ */
+export async function settingsWriteBlocker(casePath: string): Promise<string | null> {
+  const claudeDir = join(casePath, '.claude');
+  try {
+    const dirStat = await lstat(claudeDir).catch(() => null);
+    if (dirStat?.isSymbolicLink()) return 'its .claude is a symlink';
+    if (dirStat && !dirStat.isDirectory()) return 'its .claude is a file, not a directory';
+    if (dirStat && (await realpath(claudeDir)) !== join(await realpath(casePath), '.claude')) {
+      return 'its .claude directory resolves outside the case';
+    }
+    const settingsStat = await lstat(join(claudeDir, 'settings.local.json')).catch(() => null);
+    if (settingsStat?.isSymbolicLink()) return 'its .claude/settings.local.json is a symlink';
+  } catch (err) {
+    return `its .claude paths could not be verified (${String(err)})`;
+  }
+  return null;
+}
+
+/**
  * Writes hooks config to .claude/settings.local.json in the given case path.
  * Merges with existing file content, only touching the `hooks` key.
+ * Refuses (with a console.warn, not a throw: hooks degrade to output-based
+ * idle detection) when `settingsWriteBlocker` reports the target unsafe.
  */
 export async function writeHooksConfig(casePath: string): Promise<void> {
+  const blocker = await settingsWriteBlocker(casePath);
+  if (blocker) {
+    console.warn(`[hooks-config] Refusing to write hooks for ${casePath}: ${blocker}`);
+    return;
+  }
   const claudeDir = join(casePath, '.claude');
   const settingsPath = join(claudeDir, 'settings.local.json');
   await withSettingsLock(settingsPath, async () => {

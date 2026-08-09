@@ -37,15 +37,21 @@
  * Every git spawn has a timeout, a hard kill escalation, captured-output caps,
  * and shares a small global concurrency pool (same reasoning as
  * `document-conversion-limiter.ts`: N simultaneous clones of large repos is a
- * localhost resource-exhaustion vector). Cloning is otherwise unbounded in disk
- * and time, which is exactly why the caller must treat the timeout as normal.
+ * localhost resource-exhaustion vector). The pool's waiter queue is itself
+ * bounded (overflow answers BUSY immediately), and time spent queued counts
+ * against the operation's own deadline, so a caller's timeout bounds the whole
+ * call rather than starting when a slot happens to free up. Cloning is
+ * otherwise unbounded in disk and time, which is exactly why the caller must
+ * treat the timeout as normal.
  *
  * @module git-clone
  */
 
 import { spawn, execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { rename, rm } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
@@ -76,6 +82,18 @@ export const GIT_LS_REMOTE_TIMEOUT_MS = envMs('CODEMAN_GIT_LS_REMOTE_TIMEOUT_MS'
 const MAX_CONCURRENT_GIT_OPERATIONS = (() => {
   const raw = Number(process.env.CODEMAN_MAX_GIT_OPERATIONS);
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 2;
+})();
+
+/**
+ * Waiters allowed BEHIND the pool before new work is refused outright with
+ * BUSY. Without a bound, every queued request holds its HTTP connection (and
+ * its closure) open indefinitely, so a burst of clone requests becomes the
+ * memory/socket exhaustion the pool exists to prevent. Override with
+ * CODEMAN_MAX_GIT_QUEUE (0 disables queuing entirely).
+ */
+const MAX_QUEUED_GIT_OPERATIONS = (() => {
+  const raw = Number(process.env.CODEMAN_MAX_GIT_QUEUE);
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 16;
 })();
 
 /** Longest accepted repository operand. Real URLs are far shorter; this bounds abuse. */
@@ -156,6 +174,7 @@ export type GitFailureCode =
   | 'REF_NOT_FOUND'
   | 'HOST_UNREACHABLE'
   | 'DESTINATION_EXISTS'
+  | 'BUSY'
   | 'FAILED';
 
 export interface GitFailure {
@@ -314,7 +333,16 @@ export function parseGitRepositoryUrl(input: string): GitUrlParse {
     }
     const host = url.host;
     if (!host || !HOST_RE.test(host)) return reject('BAD_SYNTAX', 'That URL has no usable hostname.');
-    const { owner, repo } = splitRepoPath(decodeURIComponent(url.pathname));
+    // `new URL` tolerates malformed percent-escapes ("%zz" passes through), but
+    // decodeURIComponent throws on them: uncaught, that URIError was a 500 for
+    // what is simply a malformed URL.
+    let pathname: string;
+    try {
+      pathname = decodeURIComponent(url.pathname);
+    } catch {
+      return reject('BAD_SYNTAX', 'That URL contains an invalid percent-escape.');
+    }
+    const { owner, repo } = splitRepoPath(pathname);
 
     const warnings: string[] = [];
     if (scheme === 'http') warnings.push('Plain http:// is unencrypted. Prefer https:// when the host offers it.');
@@ -519,6 +547,13 @@ export function classifyGitFailure(stderr: string, timedOut: boolean, spawnError
       stderr: clean,
     };
   }
+  if (spawnError && spawnError.startsWith('EBUSY')) {
+    return {
+      code: 'BUSY',
+      message: 'Too many git operations are already running on this server. Try again in a moment.',
+      stderr: clean,
+    };
+  }
   if (timedOut) {
     return {
       code: 'TIMEOUT',
@@ -571,25 +606,57 @@ function firstLine(text: string): string {
 // ─── IO: bounded git spawns ──────────────────────────────────────────────────
 
 let activeGitOperations = 0;
-const gitWaiters: Array<() => void> = [];
+
+type SlotAcquisition = 'acquired' | 'queue-full' | 'timed-out';
+interface GitSlotWaiter {
+  grant: () => void;
+}
+const gitWaiters: GitSlotWaiter[] = [];
 
 /** Test/diagnostic hook: git operations currently holding a slot. */
 export function getActiveGitOperationCount(): number {
   return activeGitOperations;
 }
 
-function acquireGitSlot(): Promise<void> {
+/** Test/diagnostic hook: git operations currently queued behind the pool. */
+export function getQueuedGitOperationCount(): number {
+  return gitWaiters.length;
+}
+
+/**
+ * Acquire a pool slot, waiting at most `maxWaitMs` in a BOUNDED queue.
+ *
+ * Both failure modes resolve (never reject): a full queue answers immediately,
+ * and a queue wait that exhausts the caller's deadline removes itself before
+ * resolving, so an abandoned waiter can never be granted a slot later and leak
+ * it.
+ */
+function acquireGitSlot(maxWaitMs: number): Promise<SlotAcquisition> {
   if (activeGitOperations < MAX_CONCURRENT_GIT_OPERATIONS) {
     activeGitOperations++;
-    return Promise.resolve();
+    return Promise.resolve('acquired');
   }
-  return new Promise<void>((resolve) => gitWaiters.push(resolve));
+  if (gitWaiters.length >= MAX_QUEUED_GIT_OPERATIONS) return Promise.resolve('queue-full');
+  return new Promise<SlotAcquisition>((resolve) => {
+    const waiter: GitSlotWaiter = {
+      grant: () => {
+        clearTimeout(timer);
+        resolve('acquired');
+      },
+    };
+    const timer = setTimeout(() => {
+      const idx = gitWaiters.indexOf(waiter);
+      if (idx !== -1) gitWaiters.splice(idx, 1);
+      resolve('timed-out');
+    }, maxWaitMs);
+    gitWaiters.push(waiter);
+  });
 }
 
 function releaseGitSlot(): void {
   const next = gitWaiters.shift();
   // Hand the slot straight over so the active count can never exceed the cap.
-  if (next) next();
+  if (next) next.grant();
   else activeGitOperations--;
 }
 
@@ -611,7 +678,18 @@ interface GitRun {
  * signal is used rather than `child.kill()`.
  */
 async function runGit(args: string[], timeoutMs: number, maxStdoutBytes: number): Promise<GitRun> {
-  await acquireGitSlot();
+  // The queue wait spends the SAME deadline as the operation: `timeoutMs` is a
+  // promise about the whole call, not about git's runtime after some unbounded
+  // wait. A full queue is refused outright rather than queued.
+  const queuedAt = Date.now();
+  const slot = await acquireGitSlot(timeoutMs);
+  if (slot === 'queue-full') {
+    return { stdout: '', stderr: '', code: null, timedOut: false, spawnError: 'EBUSY: git operation queue is full' };
+  }
+  if (slot === 'timed-out') {
+    return { stdout: '', stderr: '', code: null, timedOut: true };
+  }
+  const remainingMs = Math.max(1, timeoutMs - (Date.now() - queuedAt));
   try {
     return await new Promise<GitRun>((resolve) => {
       let child: ReturnType<typeof spawn>;
@@ -649,7 +727,7 @@ async function runGit(args: string[], timeoutMs: number, maxStdoutBytes: number)
         timedOut = true;
         killTree('SIGTERM');
         killTimer = setTimeout(() => killTree('SIGKILL'), 3_000);
-      }, timeoutMs);
+      }, remainingMs);
 
       child.stdout?.on('data', (chunk: Buffer) => {
         stdoutBytes += chunk.length;
@@ -735,10 +813,14 @@ export async function probeGitRemote(
 /**
  * Clone `repository` into `destination`.
  *
- * On failure the destination is removed — but only when it did not exist before
- * the attempt, so a half-written clone is cleaned up while an existing
- * directory is never touched. Callers still reject a pre-existing destination
- * upfront; this is the second line of that same defence.
+ * git clones into an ATTEMPT-OWNED temp sibling (`.<name>.cloning-<random>`,
+ * dot-prefixed so an orphan from a crash never shows up as a case), which is
+ * atomically renamed into place on success. Two concurrent requests for the
+ * same destination used to both pass the existence check, and the loser's
+ * failure cleanup then deleted the WINNER's freshly cloned tree; now each
+ * attempt only ever creates and removes its own directory, the rename decides
+ * the winner, and the loser reports DESTINATION_EXISTS. The upfront existence
+ * check stays as the fast path for the common non-racing case.
  *
  * Never throws; every outcome is a `CloneResult`.
  */
@@ -752,19 +834,51 @@ export async function cloneRepository(opts: CloneOptions): Promise<CloneResult> 
       failure: { code: 'REF_NOT_FOUND', message: 'Invalid branch or tag name.', stderr: '' },
     };
   }
-  const preexisting = existsSync(opts.destination);
-  if (preexisting) {
+  if (existsSync(opts.destination)) {
     return {
       ok: false,
       failure: { code: 'DESTINATION_EXISTS', message: 'The destination directory already exists.', stderr: '' },
     };
   }
 
-  const run = await runGit(buildCloneArgs(opts), opts.timeoutMs ?? GIT_CLONE_TIMEOUT_MS, MAX_STDERR_BYTES);
-  if (run.code === 0 && !run.spawnError) return { ok: true, stderr: sanitizeGitOutput(run.stderr) };
+  // Sibling of the destination (same filesystem), so the rename is atomic.
+  const attemptDir = join(
+    dirname(opts.destination),
+    `.${basename(opts.destination)}.cloning-${randomBytes(6).toString('hex')}`
+  );
+  const run = await runGit(
+    buildCloneArgs({ ...opts, destination: attemptDir }),
+    opts.timeoutMs ?? GIT_CLONE_TIMEOUT_MS,
+    MAX_STDERR_BYTES
+  );
+  if (run.code === 0 && !run.spawnError) {
+    try {
+      await rename(attemptDir, opts.destination);
+      return { ok: true, stderr: sanitizeGitOutput(run.stderr) };
+    } catch (err) {
+      // Renaming a directory onto an existing non-empty one fails: someone
+      // else won the race. Clean up OUR tree only; theirs is never touched.
+      await rm(attemptDir, { recursive: true, force: true }).catch(() => {});
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EEXIST' || code === 'ENOTEMPTY' || code === 'ENOTDIR' || code === 'EPERM') {
+        return {
+          ok: false,
+          failure: { code: 'DESTINATION_EXISTS', message: 'The destination directory already exists.', stderr: '' },
+        };
+      }
+      return {
+        ok: false,
+        failure: {
+          code: 'FAILED',
+          message: `Could not move the finished clone into place: ${String(err)}`,
+          stderr: '',
+        },
+      };
+    }
+  }
 
-  // Remove ONLY the directory this attempt created (git may have written a
-  // partial tree, or nothing at all).
-  await rm(opts.destination, { recursive: true, force: true }).catch(() => {});
+  // Remove ONLY this attempt's temp directory (git may have written a partial
+  // tree, or nothing at all). The destination is never deleted on failure.
+  await rm(attemptDir, { recursive: true, force: true }).catch(() => {});
   return { ok: false, failure: classifyGitFailure(run.stderr, run.timedOut, run.spawnError) };
 }

@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
-import { closeSync, existsSync, openSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
@@ -16,6 +16,7 @@ import {
   generateHooksConfig,
   generateSubagentStopGuardScript,
   refreshStaleCodemanHooks,
+  settingsWriteBlocker,
   writeHooksConfig,
 } from '../src/hooks-config.js';
 
@@ -196,6 +197,37 @@ describe('writeHooksConfig', () => {
     expect(parsed.hooks).toBeDefined();
     expect(parsed.hooks.Notification).toHaveLength(3);
     expect(parsed.hooks.Stop).toHaveLength(1);
+  });
+
+  it('refuses to write through a symlinked .claude directory (#251 review)', async () => {
+    // Case contents can be foreign (a freshly cloned repository): a symlinked
+    // .claude would redirect the scaffold write outside the case.
+    const outside = join(testDir, 'outside-target');
+    mkdirSync(outside);
+    const caseDir = join(testDir, 'case');
+    mkdirSync(caseDir);
+    symlinkSync(outside, join(caseDir, '.claude'));
+    expect(await settingsWriteBlocker(caseDir)).toMatch(/symlink/);
+    await writeHooksConfig(caseDir);
+    expect(existsSync(join(outside, 'settings.local.json'))).toBe(false);
+  });
+
+  it('refuses to write through a symlinked settings.local.json (#251 review)', async () => {
+    const outsideFile = join(testDir, 'victim-settings.json');
+    writeFileSync(outsideFile, '{"model":"precious"}\n');
+    const caseDir = join(testDir, 'case2');
+    mkdirSync(join(caseDir, '.claude'), { recursive: true });
+    symlinkSync(outsideFile, join(caseDir, '.claude', 'settings.local.json'));
+    expect(await settingsWriteBlocker(caseDir)).toMatch(/symlink/);
+    await writeHooksConfig(caseDir);
+    // The link target is untouched: no hooks were merged into it.
+    expect(readFileSync(outsideFile, 'utf-8')).toBe('{"model":"precious"}\n');
+  });
+
+  it('reports a real, confined .claude as safe', async () => {
+    const caseDir = join(testDir, 'case3');
+    mkdirSync(join(caseDir, '.claude'), { recursive: true });
+    expect(await settingsWriteBlocker(caseDir)).toBeNull();
   });
 
   it('should merge with existing settings.local.json', async () => {

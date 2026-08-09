@@ -7,7 +7,7 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, createReadStream } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, writeFileSync, readdirSync, readFileSync, createReadStream } from 'node:fs';
 import { exec } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { join, resolve, basename } from 'node:path';
@@ -39,7 +39,7 @@ import {
 } from '../../git-clone.js';
 import type { GitRemoteProbe, GitUrlParse } from '../../git-clone.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
-import { writeHooksConfig } from '../../hooks-config.js';
+import { settingsWriteBlocker, writeHooksConfig } from '../../hooks-config.js';
 import {
   canAccessOwned,
   getAuthUser,
@@ -477,17 +477,25 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
               ? ApiErrorCode.ALREADY_EXISTS
               : clone.failure.code === 'REF_NOT_FOUND'
                 ? ApiErrorCode.INVALID_INPUT
-                : ApiErrorCode.OPERATION_FAILED;
+                : clone.failure.code === 'BUSY'
+                  ? ApiErrorCode.RATE_LIMITED
+                  : ApiErrorCode.OPERATION_FAILED;
         const detail = clone.failure.stderr
           ? `${clone.failure.message} (${gitDiagnosticLine(clone.failure.stderr)})`
           : clone.failure.message;
         return createErrorResponse(code, detail);
       }
 
-      // Scaffold WITHOUT overwriting anything the repository shipped.
+      // Scaffold WITHOUT overwriting anything the repository shipped, and
+      // WITHOUT writing through anything it shipped as a symlink.
       const warnings = [...parsed.warnings];
       try {
-        if (!existsSync(join(casePath, 'CLAUDE.md'))) {
+        // Presence via lstat, not existsSync: a repo-shipped CLAUDE.md SYMLINK
+        // counts as "the repository ships its own" even when the link is
+        // broken (existsSync follows links and reports a broken one as
+        // absent), because writeFileSync would write THROUGH it to a
+        // repository-chosen path outside the case.
+        if (!lstatSync(join(casePath, 'CLAUDE.md'), { throwIfNoEntry: false })) {
           const templatePath = await ctx.getDefaultClaudeMdPath();
           const summary = description || `Cloned from ${parsed.repository}`;
           writeFileSync(join(casePath, 'CLAUDE.md'), generateClaudeMd(name, summary, templatePath));
@@ -499,7 +507,18 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
             'This repository ships its own .claude/settings files. Codeman merged its hooks alongside them without removing anything — review them before starting a session, since repo-supplied hooks run on this machine.'
           );
         }
-        await writeHooksConfig(casePath);
+        // A repository can ship `.claude` (or the settings file) as a symlink
+        // pointing anywhere on this machine; writeHooksConfig itself refuses
+        // to write through those (settingsWriteBlocker in hooks-config.ts).
+        // Checking here too turns that refusal into a user-visible warning.
+        const hooksBlocker = await settingsWriteBlocker(casePath);
+        if (hooksBlocker) {
+          warnings.push(
+            `Codeman hooks were NOT installed: ${hooksBlocker}. Codeman refuses to write through repository-controlled links; replace the link with a real file or directory if you want hooks in this case.`
+          );
+        } else {
+          await writeHooksConfig(casePath);
+        }
       } catch (err) {
         // The clone itself succeeded: keep the case and report the scaffolding
         // problem, rather than deleting a tree the user just waited for.

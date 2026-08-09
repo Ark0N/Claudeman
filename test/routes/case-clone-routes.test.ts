@@ -19,7 +19,16 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
@@ -146,6 +155,9 @@ describe('POST /api/cases/clone — input rejection', () => {
 describe.skipIf(!gitPresent)('POST /api/cases/clone — real clone', () => {
   let root: string;
   let origin: string;
+  let hostileOrigin: string;
+  let victimDir: string;
+  let victimFile: string;
   const created: string[] = [];
 
   const git = (args: string[], cwd: string) =>
@@ -174,6 +186,33 @@ describe.skipIf(!gitPresent)('POST /api/cases/clone — real clone', () => {
     git(['remote', 'add', 'origin', origin], work);
     git(['push', '--quiet', 'origin', 'main', '--tags'], work);
     git(['symbolic-ref', 'HEAD', 'refs/heads/main'], origin);
+
+    // A HOSTILE repository: it ships the scaffold paths as symlinks aimed
+    // outside the case, so a scaffolder that follows them writes onto this
+    // machine's own files. victimFile deliberately does NOT exist, because a
+    // BROKEN CLAUDE.md link is the case existsSync gets wrong (it follows the
+    // link, reports "absent", and the scaffold write would then CREATE the
+    // outside file).
+    victimDir = join(root, 'victim-claude');
+    mkdirSync(victimDir);
+    victimFile = join(root, 'victim-file.md');
+    hostileOrigin = join(root, 'hostile.git');
+    mkdirSync(hostileOrigin);
+    git(['init', '--bare', '--quiet'], hostileOrigin);
+    const hostileWork = join(root, 'hostile-work');
+    mkdirSync(hostileWork);
+    git(['init', '--quiet'], hostileWork);
+    git(['config', 'user.email', 'test@example.com'], hostileWork);
+    git(['config', 'user.name', 'Codeman Test'], hostileWork);
+    writeFileSync(join(hostileWork, 'README.md'), '# hostile fixture\n');
+    symlinkSync(victimFile, join(hostileWork, 'CLAUDE.md'));
+    symlinkSync(victimDir, join(hostileWork, '.claude'));
+    git(['add', '.'], hostileWork);
+    git(['commit', '--quiet', '-m', 'hostile'], hostileWork);
+    git(['branch', '-M', 'main'], hostileWork);
+    git(['remote', 'add', 'origin', hostileOrigin], hostileWork);
+    git(['push', '--quiet', 'origin', 'main'], hostileWork);
+    git(['symbolic-ref', 'HEAD', 'refs/heads/main'], hostileOrigin);
   });
 
   afterAll(() => {
@@ -247,6 +286,24 @@ describe.skipIf(!gitPresent)('POST /api/cases/clone — real clone', () => {
     const error = JSON.parse(res.body).error as string;
     expect(error).not.toMatch(/Cloning into/);
     expect(error).toMatch(/branch or tag/i);
+  });
+
+  it('refuses to scaffold through repository-shipped symlinks (keeps the clone, warns)', async () => {
+    created.push('hostile');
+    const res = await clone({ name: 'hostile', repository: hostileOrigin });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.success).toBe(true);
+    const casePath = join(CASES_DIR, 'hostile');
+    // The repo's symlinks are still symlinks: nothing wrote through them.
+    expect(lstatSync(join(casePath, 'CLAUDE.md')).isSymbolicLink()).toBe(true);
+    expect(lstatSync(join(casePath, '.claude')).isSymbolicLink()).toBe(true);
+    // The outside targets were neither created nor written.
+    expect(existsSync(victimFile)).toBe(false);
+    expect(existsSync(join(victimDir, 'settings.local.json'))).toBe(false);
+    // And the response says the hooks scaffold was skipped, and why.
+    expect(body.data.warnings.join(' ')).toMatch(/hooks were NOT installed/i);
+    expect(body.data.warnings.join(' ')).toMatch(/symlink/i);
   });
 
   it('preflights the local fixture for its branches and tags', async () => {
