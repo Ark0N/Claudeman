@@ -1,5 +1,91 @@
 # aicodeman
 
+## 1.14.1
+
+### Patch Changes
+
+- The Codeman agent skill is now installable, so an agent running inside a Codeman session can drive the API without you pasting docs into its prompt. Plus six fixes to the packaged skill, each found by running it live against a real instance.
+
+  ## What the skill is
+
+  `skills/codeman` is a Claude Code skill that teaches an agent inside a Codeman session how to start worker sessions, send them prompts, block until they finish, read their answers and clean up. It ships in the npm package. It self-gates: outside a Codeman session (`CODEMAN_MUX` unset) it refuses to act, so installing it globally costs unrelated sessions nothing.
+
+  ## Installing it
+
+  Three ways, pick one:
+
+  ```bash
+  codeman skill install                  # ~/.claude/skills/codeman, every new Claude Code session sees it
+  codeman skill install --case myproject # just that case; linked cases resolve by name too
+  codeman skill uninstall                # reverses either one
+  ```
+
+  Or turn on **App Settings > Agent Skill** (`agentSkillEnabled`, synced, default off) and Codeman injects the skill into each case when a Claude session is created there.
+
+  Installs are marker-owned: a `skills/codeman` that Codeman did not write is never touched, a stale managed copy is refreshed in place, and a symlinked skill directory is refused rather than written through. Re-run `codeman skill install` after upgrading Codeman to refresh the copy.
+
+  Note that turning `agentSkillEnabled` back off does **not** remove already-injected copies, because a create-time sweep would yank the skill out from under other live sessions sharing that `.claude/` directory. Remove them per case with `codeman skill uninstall --case <name>`.
+
+  ## Using it
+
+  Once installed, just ask: "spin up three workers and have them lint, typecheck and test in parallel, then report back". The skill supplies the guard, the safety rules and the recipes. What it does under the hood:
+
+  **1. Guard.** Every Bash call re-runs a preamble that refuses outside `CODEMAN_MUX=1`, reads `CODEMAN_API_URL` and `CODEMAN_SESSION_ID`, recovers a password from the data dir `.env` or the install's service definition if one is set, and defines a fail-closed `delete_session`. It re-runs it every call because shell state does not survive between an agent's tool calls.
+
+  **2. Start a worker.**
+
+  ```bash
+  Q=$("${CURL[@]}" -X POST "$API/api/v1/quick-start" -H 'Content-Type: application/json' \
+    -d '{"caseName":"worker-1","mode":"claude"}')
+  SID=$(jq -r 'if .success then .data.sessionId else empty end' <<<"$Q")
+  ```
+
+  `mode` is any of `claude`, `shell`, `opencode`, `codex`, `gemini`, `antigravity`.
+
+  **3. Wait until it is actually ready.** A new session reports `idle` before its CLI has spawned, and a brand-new case shows a trust dialog first, so the skill waits for the composer's own status bar and treats the dialog as a bounded fallback.
+
+  **4. Send a prompt and wait for the turn to end.**
+
+  ```bash
+  BODY=$(jq -n --arg p "$PROMPT" '{input:($p+"\r"),useMux:true,clientId:"codeman-agent-1",seq:1,wait:true,waitTimeout:60000}')
+  "${CURL[@]}" -X POST "$API/api/v1/sessions/$SID/input" -H 'Content-Type: application/json' --data-binary "$BODY"
+  ```
+
+  Send-and-wait registers the waiter before typing, which closes the race where a separate wait reports the previous turn's idle state as this turn's answer. For `claude` workers it resolves on the `stop` hook, typically within seconds.
+
+  **5. Read the answer.**
+
+  ```bash
+  "${CURL[@]}" "$API/api/v1/sessions/$SID/last-response" | jq -r '.data.text'
+  ```
+
+  **6. Clean up.** `delete_session "$SID"`, for ids you created and nothing else.
+
+  Hook-less modes (`shell` and the external CLIs) have no `stop` signal and coarse lifecycle transitions, so the skill synchronizes those with a unique split marker and `wait-output ... from=buffer` instead. Worked fan-out flows, the per-mode signal table, error codes and the Docker/remote caveats live in the skill's `reference/` files, loaded on demand.
+
+  ## The rules that bite
+
+  The skill documents these because each one silently wastes a run:
+  - **Every input must end with `\r`** or Enter is never sent and the text sits unsubmitted on the worker's prompt. `delivered:true` means "written to the pane", not "submitted".
+  - **Input is single-line.** Newlines are stripped.
+  - **A wait timeout is HTTP 200** with `wait.timedOut:true`, not an error. Loop over short waits; timeouts clamp to [1s, 600s] and the applied value comes back as `wait.timeoutMs`.
+  - **`stop` and `blocked` are `claude`-only.** Requesting them elsewhere is a 400.
+  - **Signals are edge-triggered with no history.** One that fires while no waiter is registered is unobservable afterwards, so never fire-and-forget N prompts and then gather signal-waits worker by worker.
+  - **Your typed command echoes into the output stream**, so a marker that appears verbatim in the input line matches before the command runs. Split it.
+  - **A full-screen TUI stream is space-less**, so match a single space-free token, never a phrase.
+  - **`pid != null` proves startup, not life.** A worker that dies inside its pane keeps `status:"idle"` and a pid. `wait?until=exit` is the death check.
+
+  ## Fixes to the packaged skill
+  - **The self-delete guard failed open.** The old `is_self "$SID" || curl -X DELETE ...` shape meant an undefined `is_self` exited 127, the `||` branch fired, and the agent deleted its own session with the one guard bypassed. That is reachable because shell state does not survive between tool calls, so a partially re-pasted preamble was enough. The DELETE now lives inside a fail-closed `delete_session`, which also refuses an empty id and refuses when `$SELF` is unset or too short to prove the target is not the caller.
+  - **`clientId` was built from `$$`.** The pid changes between tool calls, so the documented "resend the identical request" loop stopped being recognized as a duplicate and retyped the prompt, submitting the turn twice. It is a fixed literal now.
+  - **`GET /api/v1/sessions/:id/last-response` was undocumented.** It returns the agent's final message as clean transcript text; the terminal scrape the skill previously recommended returns a wall of TUI repaint noise with the answer buried in it. It is now the documented read path for `claude` and `codex`, with the terminal buffer demoted to diagnosis and hook-less modes. Because the transcript flush lags the `stop` signal, the recipes poll it instead of reading once.
+  - **`quick-start` responses were never checked for `.success`.** On failure `.data.sessionId` is absent, `jq -r` prints the string `null`, and the flow burned its full readiness budget against `/api/v1/sessions/null` before reporting jq noise instead of the cause.
+  - **`codeman skill install --case <name>` could not resolve a linked case.** It hardcoded `~/codeman-cases/<name>` while the server resolves through `linked-cases.json` first, so it failed with "Case not found" for a case the web UI handled fine.
+  - **Documentation corrections**: `SESSION_BUSY` on `quick-start` is the 50-session cap rather than the waiter cap; `caseName` resolves linked cases, so a generic name can land a worker in a real repo; and the claim that a toggle-off sweep exists was wrong, so the per-case `skill uninstall` cleanup is now stated in both the README and the code.
+
+  ## Also in this release
+  - **Terminal**: the wheel is no longer forwarded to codex, which ignores SGR mouse reports.
+
 ## 1.14.0
 
 ### Minor Changes
