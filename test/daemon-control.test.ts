@@ -16,7 +16,7 @@ import {
   probeServer,
 } from '../src/daemon-control.js';
 
-const PORT = 3212;
+const PORT = 3216;
 
 describe('buildWebArgs', () => {
   it('always passes host and port through explicitly', () => {
