@@ -163,6 +163,57 @@ both self-reporting, so the retest ask is now "open the console and paste the `[
 - iPhone: Claude or shell session, and whether a full tab kill changes anything.
 - Browser console: `app.terminalUi?.terminal?.modes?.mouseTrackingMode` (false-path 4).
 
+## ROUND 3 (2026-08-09): Codex wheel dead — CONFIRMED AND FIXED
+
+DodgyBadger (Codex latest, Chrome, Windows 11): mouse wheel does nothing in a CODEX session
+while working fine in shell and web tabs; DRAGGING THE SCROLLBAR WORKS, so xterm's local
+buffer demonstrably has content for their codex pane. Analysis against the shipped code:
+
+- `_shouldForwardWheelToApp` returns true UNCONDITIONALLY for `codex` (no version gate, unlike
+  claude's `>= 2.1.187`), so every plain wheel tick is sent as SGR reports to Codex.
+- The "verified to scroll its transcript on SGR wheel reports" claim for codex predates
+  current Codex builds; if Codex latest ignores SGR wheel, forwarding eats the gesture while
+  the healthy local scrollback (proven by the working scrollbar) sits unused.
+- The #227 PageUp fallback cannot rescue this: it is gated to `claude` mode AND `baseY === 0`,
+  and codex here has real local scrollback. The `[scroll]` diagnostic will still say
+  `forward-sgr (mode=codex, ...)`, confirming the branch, worth asking the reporter to paste.
+
+**CONFIRMED by the reporter's `[scroll]` line (2026-08-09, PR #227 comment)**:
+`forward-sgr (mode=codex, cliVersion=unknown, localScrollbackOptOut=false, mouseTracking=none,
+localScrollbackRows=967)`. Forwarding branch active, 967 rows of healthy local scrollback
+unused, Codex ignoring the SGR reports. Environment: Codex latest, Chrome, Windows 11.
+
+**Measured against codex-cli 0.147.0** (isolated `tmux -L codexwheel`, fake `CODEX_HOME/auth.json`,
+history built with 401ing prompts), which settles it without needing a version gate at all:
+
+| Probe                                          | Result                                          |
+| ---------------------------------------------- | ----------------------------------------------- |
+| `#{mouse_any_flag}` once the TUI is up         | `0`: codex never enables mouse tracking         |
+| `#{alternate_on}`                              | `0`: inline viewport, not an alt-screen pager   |
+| `#{history_size}` while prompting              | grows 3 → 32: the transcript goes to scrollback |
+| 6 × `\x1b[<64;10;10M` written to the pane      | pane capture byte-identical, nothing happens    |
+| control: literal `zz`                          | pane changes, so the probe can see changes      |
+| `\x1b[<0;12;5M` + release (the click-tap path) | no change either: taps are no-ops, not garbage  |
+
+Codex has no in-app pager to drive: its history lives in the terminal's own scrollback, which is
+exactly what forwarding was stealing the gesture from. A version gate would be the wrong fix (and
+`cliVersion=unknown` means there is no codex probe to gate on anyway).
+
+**Fix (shipped):** `_shouldForwardWheelToApp` now returns true for `claude >= 2.1.187` and nothing
+else. Codex falls to the normal local-scrollback path like shell/gemini/opencode, so wheel and touch
+scroll the same history the scrollbar drag was already scrolling. The claude-only PageUp fallback is
+untouched: codex never needs it, its local buffer is real. Taps stay hand-encoded for codex
+(`_sessionUsesServerMouseStrip`), measured harmless, so click-to-position is merely unavailable
+there rather than damaging. Lesson for the next mode added to the forward list: "it is a strip mode"
+proves nothing, write a real SGR report into a live pane and diff the capture first.
+
+Verified end-to-end in Chromium against a live codex session on an isolated instance
+(`CODEMAN_INSTANCE=codexwheel`, port 5055, `envOverrides.CODEX_HOME` pointing at the fake auth
+dir): trusted `page.mouse.wheel` up now logs
+`[scroll] … → local-scrollback (mode=codex, …, localScrollbackRows=43)`, moves the viewport
+39 → 4 (back to the Codex banner), and sends ZERO bytes to the PTY. Unit coverage:
+`test/terminal-touch-tap.test.ts` ("only claude forwards — codex and gemini keep the local wheel").
+
 Original plan follows.
 
 ## Reports

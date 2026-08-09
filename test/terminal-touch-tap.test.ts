@@ -379,7 +379,7 @@ describe('terminal touch tap mouse guard', () => {
     expect(withVersion('garbage')).toBe(false); // unparseable → assume older
   });
 
-  it('wheel: codex forwards without a version; gemini never forwards', () => {
+  it('wheel: only claude forwards — codex and gemini keep the local wheel', () => {
     const { app } = loadTerminalUiHarness();
     app.activeSessionId = 'sess-1';
     app.terminal = {
@@ -387,8 +387,14 @@ describe('terminal touch tap mouse guard', () => {
       buffer: { active: { viewportY: 50, baseY: 50 } },
     };
 
-    app.sessions = new Map([['sess-1', { mode: 'codex' }]]); // verified TUI, no version gate
-    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(true);
+    // Codex used to forward unconditionally, which is PR #227's regression: measured
+    // on codex-cli 0.147.0, it never enables mouse tracking and ignores SGR wheel
+    // reports outright, so forwarding ate every tick while its real local scrollback
+    // (the codex transcript lives there — inline viewport, no in-app pager) sat unused.
+    app.sessions = new Map([['sess-1', { mode: 'codex' }]]);
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
+    app.sessions = new Map([['sess-1', { mode: 'codex', cliVersion: '9.9.9' }]]); // no version rescues it
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
 
     app.sessions = new Map([['sess-1', { mode: 'gemini', cliVersion: '9.9.9' }]]); // unverified TUI
     expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);

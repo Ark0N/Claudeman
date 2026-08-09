@@ -452,8 +452,8 @@ Object.assign(CodemanApp.prototype, {
     this.registerFilePathLinkProvider();
 
     // Mouse wheel: forward to the TUI only for sessions verified to handle SGR
-    // wheel reports (codex, and claude 2.1.187+ — see _shouldForwardWheelToApp),
-    // local scrollback otherwise. Claude Code 2.1.187+ scrolls its own
+    // wheel reports (claude 2.1.187+ — see _shouldForwardWheelToApp), local
+    // scrollback otherwise. Claude Code 2.1.187+ scrolls its own
     // transcript on SGR wheel reports — scrolled-away tool blocks re-render
     // live and stay clickable — and its select menus no longer capture wheel
     // as option navigation (verified against 2.1.202: /model menu highlight
@@ -3107,11 +3107,20 @@ Object.assign(CodemanApp.prototype, {
 
   // Wheel forwarding gate for the container wheel handler: no Shift override,
   // xterm's own encoder dormant, viewport at the bottom, and a TUI VERIFIED to
-  // scroll its transcript on SGR wheel reports: codex, or claude 2.1.187+
-  // (older Claude Code captures wheel as select-menu option navigation; an
-  // unknown version is treated as older). Gemini is a strip mode too but its
-  // wheel behavior is unverified, so it keeps the local wheel — taps/clicks
-  // are still forwarded for it (harmless no-ops at worst).
+  // scroll its transcript on SGR wheel reports — which today is claude 2.1.187+
+  // and nothing else (older Claude Code captures wheel as select-menu option
+  // navigation; an unknown version is treated as older). Gemini and codex are
+  // strip modes too but keep the local wheel — taps/clicks are still forwarded
+  // for them (harmless no-ops at worst).
+  //
+  // Codex USED to forward here and was the #227 regression (DodgyBadger, Codex
+  // latest / Chrome / Win11: dead wheel in codex, working scrollbar drag).
+  // Measured on codex-cli 0.147.0 in a bare tmux: it never enables mouse
+  // tracking (`mouse_any_flag=0`) and SGR wheel reports fed to its PTY change
+  // NOTHING on screen — it runs an inline viewport (`alternate_on=0`) and pushes
+  // its transcript into the terminal's own scrollback (tmux `history_size`
+  // grows), so there is no in-app pager to drive and local scrollback IS the
+  // codex transcript. Forwarding therefore swallowed every tick.
   // Wheel delta → whole scroll lines. macOS trackpads turn Shift+two-finger
   // scroll into a HORIZONTAL wheel (deltaY≈0, deltaX carries the magnitude), and
   // Shift routes the wheel to local scrollback (_shouldForwardWheelToApp returns
@@ -3165,11 +3174,8 @@ Object.assign(CodemanApp.prototype, {
     if (mode && mode !== 'none') return false;
     const session = this.sessions?.get(this.activeSessionId);
     const sessionMode = session?.mode || 'claude';
-    if (sessionMode === 'claude') {
-      if (!this._cliVersionAtLeast(session?.cliVersion, '2.1.187')) return false;
-    } else if (sessionMode !== 'codex') {
-      return false;
-    }
+    if (sessionMode !== 'claude') return false;
+    if (!this._cliVersionAtLeast(session?.cliVersion, '2.1.187')) return false;
     // Deliberately NOT gated on _terminalViewportAtBottom(). It used to be, so
     // that leaving the bottom handed the wheel back to local scrollback and both
     // histories stayed reachable without a mode switch. In practice that inverted
