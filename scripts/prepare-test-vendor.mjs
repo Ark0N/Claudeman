@@ -19,7 +19,7 @@
  * Idempotent: skips outputs already newer than their source.
  */
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -100,6 +100,27 @@ for (const asset of ASSETS) {
     );
   }
   built += 1;
+
+  // The zerolag bundle exports only `XtermZerolagInput`. app.js constructs
+  // `new LocalEchoOverlay(terminal)` directly, so scripts/build.mjs appends
+  // global aliases after esbuild — without them initTerminal() throws
+  // `LocalEchoOverlay is not defined` at the point it builds the overlay, and
+  // every later step (including the mobile touch handlers) silently never runs.
+  if (asset.out === 'xterm-zerolag-input.js') {
+    appendFileSync(
+      dest,
+      '\n// Global aliases for browser usage\n' +
+        'if(typeof window!=="undefined"){' +
+        'window.ZerolagInputAddon=XtermZerolagInput.ZerolagInputAddon;' +
+        'window.LocalEchoOverlay=class extends XtermZerolagInput.ZerolagInputAddon{' +
+        'constructor(terminal){' +
+        'super({prompt:{type:"character",char:"\\u276f",offset:2}});' +
+        'this.activate(terminal);' +
+        '}' +
+        '};' +
+        '}\n'
+    );
+  }
 }
 
 console.log(`[test-vendor] ${built} built, ${skipped} up to date -> src/web/public/vendor/`);
