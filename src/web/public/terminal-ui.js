@@ -3462,6 +3462,60 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  /**
+   * Which 'content' taps should DISMISS the mobile keyboard. Expandable
+   * readbacks, tool results and decision rows are TUI-owned: tapping them acts
+   * on the CLI, so popping the keyboard there is wrong. An inert transcript row
+   * still sends its mouse report, but must keep the keyboard reachable —
+   * touchstart's preventDefault cancels the compatibility click that would
+   * otherwise focus xterm, so focus has to be restored explicitly.
+   */
+  _isActionableMobileTerminalTap(clientX, clientY) {
+    if (document.body?.classList?.contains('terminal-action-pending')) return true;
+
+    const pos = this._clientPointToCell(clientX, clientY);
+    const buffer = this.terminal?.buffer?.active;
+    if (!pos || !buffer?.getLine) return false;
+
+    const rows = Math.max(1, this.terminal.rows || 1);
+    const lines = [];
+    const wrappedRows = [];
+    for (let row = 0; row < rows; row++) {
+      const line = buffer.getLine(buffer.viewportY + row);
+      lines.push(line?.translateToString?.(true) || '');
+      wrappedRows.push(Boolean(line?.isWrapped));
+    }
+
+    const tappedRow = pos.row - 1;
+    let logicalLineStart = tappedRow;
+    while (logicalLineStart > 0 && wrappedRows[logicalLineStart]) logicalLineStart--;
+    let logicalLineEnd = tappedRow;
+    while (logicalLineEnd + 1 < rows && wrappedRows[logicalLineEnd + 1]) logicalLineEnd++;
+    const tappedLine = lines.slice(logicalLineStart, logicalLineEnd + 1).join('');
+
+    // Match the AFFORDANCE a CLI prints, not the row's title text: an
+    // expandable readback, tool result or status row advertises how to act on
+    // it ("ctrl+r to expand", "tap to collapse", "esc to interrupt"). Keying on
+    // titles instead would only recognise the exact strings a fixture happens
+    // to use, and would let a real readback keep the keyboard open.
+    //
+    // The hint sits on its own row, so a readback's TITLE row — the one a
+    // finger actually lands on — carries no affordance text itself. Look at the
+    // adjacent row too, which is how these blocks are laid out in practice.
+    const affordance =
+      /\b(?:ctrl\+\w+|tap|click|enter|esc)\b[^.]{0,24}\bto\s+(?:expand|collapse|view|open|interrupt|see)\b/i;
+    const blockStart = Math.max(0, logicalLineStart - 1);
+    const blockEnd = Math.min(rows - 1, logicalLineEnd + 1);
+    for (let row = blockStart; row <= blockEnd; row++) {
+      if (affordance.test(lines[row])) return true;
+    }
+    if (/^\s*[•·]\s*Working\b/i.test(tappedLine)) return true;
+
+    const hasMenuPrompt = lines.some((line) => /^\s*[❯›]\s+\d+[.)]\s/.test(line));
+    const hasMenuChoice = lines.some((line) => /^\s+\d+[.)]\s/.test(line));
+    return hasMenuPrompt && hasMenuChoice;
+  },
+
   _focusMobileTerminalInput() {
     this._syncMobileHelperTextareaToCursor();
     const cjkInput = document.getElementById('cjkInput');
@@ -3493,7 +3547,7 @@ Object.assign(CodemanApp.prototype, {
       this._sendSyntheticSgrTap(touch.clientX, touch.clientY);
     }
 
-    if (intent === 'content') {
+    if (intent === 'content' && this._isActionableMobileTerminalTap(touch.clientX, touch.clientY)) {
       // A synthetic xterm click can focus its helper textarea. Blur after the
       // report so collapsing a readback never opens or retains the keyboard.
       this._blurMobileTerminalInput();
