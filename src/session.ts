@@ -60,6 +60,13 @@ import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { RalphTracker } from './ralph-tracker.js';
 import { BashToolParser } from './bash-tool-parser.js';
 import {
+  isTrustDialogScreen,
+  TRUST_DIALOG_WINDOW_MS,
+  TRUST_DIALOG_RETRY_MS,
+  TRUST_DIALOG_MAX_ATTEMPTS,
+  TRUST_DIALOG_SCAN_BYTES,
+} from './session-trust-dialog.js';
+import {
   trackActivityStreak,
   isSustainedActivity,
   isPaneQuiet,
@@ -389,7 +396,10 @@ export class Session extends EventEmitter {
   private _activityStreak: ActivityStreak | null = null; // Unbroken run of PTY repaints (working detection)
   private _lastPaneProbeAt = 0; // Throttle for the tmux screen probe
   private _lastPaneProbeWorking: boolean | null = null; // Its last verdict (null = could not read)
-  private _trustDialogAccepted: boolean = false; // Prevents repeated trust dialog auto-accept
+  private _trustDialogAccepted: boolean = false; // Stops the trust-dialog scan (answered, or given up)
+  private _trustDialogAttempts = 0; // Enter presses sent at the trust dialog
+  private _lastTrustDialogScanAt = 0; // Throttle for the trust-dialog screen read
+  private _interactiveStartedAt = 0; // When the interactive pane launched (bounds that scan)
   private _taskTracker: TaskTracker;
 
   // Token tracking for auto-clear
@@ -1528,6 +1538,12 @@ export class Session extends EventEmitter {
       throw new Error('Session already has a running process');
     }
 
+    // Bounds the workspace-trust scan (see _maybeAcceptTrustDialog). Stamped here
+    // rather than at PTY spawn so a slow mux attach still counts as startup.
+    this._interactiveStartedAt = Date.now();
+    this._trustDialogAttempts = 0;
+    this._lastTrustDialogScanAt = 0;
+
     // COD-118: if the PTY exit breaker has tripped (repeated non-zero exits in a
     // short window), refuse to respawn. This is the uniform choke point that stops
     // automatic recovery/reconnect callers from re-creating a crash-looping PTY.
@@ -1765,14 +1781,7 @@ export class Session extends EventEmitter {
       this._handleTerminalOutput(data);
 
       // === Auto-accept workspace trust dialog ===
-      // Claude CLI 2.x shows "Yes, I trust this folder" prompt on first launch per directory.
-      // Codeman sessions run permission-skipping or classifier-guarded (auto) modes, so auto-accept.
-      if (!this._trustDialogAccepted && data.includes('trust this folder')) {
-        this._trustDialogAccepted = true;
-        console.log(`[Session] Auto-accepting workspace trust dialog for: ${this.id}`);
-        // Send Enter to accept the default selection ("Yes, I trust this folder")
-        this.writeViaMux('\r');
-      }
+      this._maybeAcceptTrustDialog();
 
       // === Idle/working detection runs on every chunk (latency-sensitive) ===
       this._detectInteractiveActivity(data);
@@ -1878,6 +1887,52 @@ export class Session extends EventEmitter {
   /** Whether the interactive-PTY exit circuit breaker is currently tripped (COD-118). */
   get respawnBlocked(): boolean {
     return this._respawnBlocked;
+  }
+
+  /**
+   * Answer Claude's workspace-trust dialog, which blocks a fresh case until
+   * someone presses Enter. Codeman sessions run permission-skipping or
+   * classifier-guarded modes, so the answer is always "yes, I trust this folder".
+   *
+   * Reads the RENDERED SCREEN rather than the chunk that just arrived. tmux
+   * repaints a row with cursor-forward escapes in place of spaces, so the wire
+   * carries `I\x1b[Ctrust\x1b[Cthis\x1b[Cfolder` and the old
+   * `data.includes('trust this folder')` could never match: the auto-accept had
+   * been dead for every session that hit the dialog. The screen is also what
+   * makes a retry safe, since the terminal buffer is append-only and keeps the
+   * dialog in its tail long after it has been answered.
+   *
+   * Three guards keep an Enter press off a live session: a startup-only window,
+   * a two-marker match (isTrustDialogScreen), and an attempt cap.
+   */
+  private _maybeAcceptTrustDialog(): void {
+    if (this._trustDialogAccepted) return;
+    const now = Date.now();
+    if (now - this._interactiveStartedAt > TRUST_DIALOG_WINDOW_MS) {
+      this._trustDialogAccepted = true; // window closed; anything matching now is not the dialog
+      return;
+    }
+    if (now - this._lastTrustDialogScanAt < TRUST_DIALOG_RETRY_MS) return;
+    this._lastTrustDialogScanAt = now;
+
+    // Prefer the pane; fall back to the buffer tail on a direct-PTY session,
+    // where there is no screen to read.
+    const screen =
+      (this._mux && this._muxSession ? this._mux.capturePaneText?.(this._muxSession.muxName) : null) ??
+      this._terminalBuffer.value.slice(-TRUST_DIALOG_SCAN_BYTES);
+    if (!isTrustDialogScreen(screen)) return;
+
+    this._trustDialogAttempts++;
+    if (this._trustDialogAttempts > TRUST_DIALOG_MAX_ATTEMPTS) {
+      this._trustDialogAccepted = true; // leave it to the user rather than keep typing
+      console.warn(`[Session] Workspace trust dialog did not clear after retries: ${this.id}`);
+      return;
+    }
+    console.log(
+      `[Session] Auto-accepting workspace trust dialog for: ${this.id} (attempt ${this._trustDialogAttempts})`
+    );
+    // Enter confirms the highlighted default, "1. Yes, I trust this folder".
+    this.writeViaMux('\r');
   }
 
   /**
