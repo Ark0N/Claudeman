@@ -30,6 +30,7 @@ import { homedir, tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { dataPath } from '../config/instance.js';
+import { LAUNCHD_LABEL, SYSTEMD_UNIT } from '../config/service-names.js';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
 import type {
   InstallInfo,
@@ -43,10 +44,9 @@ import type {
 const require = createRequire(import.meta.url);
 const { version: APP_VERSION } = require('../../package.json') as { version: string };
 
-/** systemd unit name (matches install.sh + scripts/codeman-web.service). */
-const SYSTEMD_UNIT = 'codeman-web.service';
-/** launchd agent label (matches install.sh setup_launchd_service). */
-const LAUNCHD_LABEL = 'com.codeman.web';
+// Unit name / job label live in config/service-names.ts so install.sh, this
+// detector and `codeman service install` cannot drift apart. Unchanged for the
+// default instance.
 /** Path to the persisted update status file. */
 const STATUS_FILE = dataPath('update-status.json');
 /** Network/git timeout for the "check" path (longer than EXEC_TIMEOUT_MS — ls-remote hits the network). */

@@ -21,6 +21,9 @@ import { getRalphLoop } from './ralph-loop.js';
 import { getStore } from './state-store.js';
 import { getErrorMessage } from './types.js';
 import { isSupportedAttachmentExtension } from './attachment-registry.js';
+import { daemonStatus, startDaemon, stopDaemon, type WebLaunchOptions } from './daemon-control.js';
+import { installService, serviceStatus, uninstallService } from './service-installer.js';
+import { isLoopbackBindHost, isUnauthenticatedNetworkAcknowledged } from './web/network-auth-policy.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
@@ -572,63 +575,223 @@ program
     console.log('');
   });
 
+// ============ Web / daemon / service Commands ============
+
+/** Shared option set for the commands that can launch a web server. */
+function addWebLaunchOptions(cmd: Command): Command {
+  return cmd
+    .option('-H, --host <host>', 'Host to bind to', process.env.CODEMAN_HOST || '127.0.0.1')
+    .option('-p, --port <port>', 'Port to listen on (env: CODEMAN_PORT)', process.env.CODEMAN_PORT || '3000')
+    .option('--https', 'Enable HTTPS with self-signed certificate (only needed for remote access, not localhost)')
+    .option('--title-hostname <hostname>', 'Override the hostname shown in the browser title')
+    .option(
+      '--allow-unauthenticated-network',
+      'Allow non-loopback web access without CODEMAN_PASSWORD (dangerous; terminal control is exposed)'
+    )
+    .option(
+      '--multiuser',
+      'Enable opt-in multi-user mode (named users in ~/.codeman/users.json; env: CODEMAN_MULTIUSER)'
+    );
+}
+
+/** Normalize commander's strings into the shape daemon-control/service-installer take. */
+function toWebLaunchOptions(options: {
+  host: string;
+  port: string;
+  https?: boolean;
+  titleHostname?: string;
+  allowUnauthenticatedNetwork?: boolean;
+  multiuser?: boolean;
+}): WebLaunchOptions {
+  const port = parseInt(options.port, 10);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    console.error(chalk.red(`✗ Invalid port: ${options.port}`));
+    process.exit(1);
+  }
+  return {
+    host: options.host,
+    port,
+    https: !!options.https,
+    titleHostname: options.titleHostname,
+    allowUnauthenticatedNetwork: !!options.allowUnauthenticatedNetwork,
+    multiuser: !!options.multiuser,
+  };
+}
+
+/**
+ * The server prints this itself, but into a log file nobody reads when it is
+ * detached or supervised. Repeat it where the operator is actually looking.
+ */
+function warnIfUnauthenticatedNetwork(launch: WebLaunchOptions): void {
+  if (isLoopbackBindHost(launch.host)) return;
+  if (isUnauthenticatedNetworkAcknowledged(launch.allowUnauthenticatedNetwork)) return;
+  console.log(
+    chalk.yellow(
+      `⚠ Binding ${launch.host} without CODEMAN_PASSWORD: anyone who can reach this port gets terminal control.`
+    )
+  );
+  console.log(chalk.yellow('  Set CODEMAN_PASSWORD, or bind 127.0.0.1 and front it with tailscale serve.'));
+}
+
 // Web interface command
-program
-  .command('web')
-  .description('Start the web interface')
-  .option('-H, --host <host>', 'Host to bind to', process.env.CODEMAN_HOST || '127.0.0.1')
-  .option('-p, --port <port>', 'Port to listen on (env: CODEMAN_PORT)', process.env.CODEMAN_PORT || '3000')
-  .option('--https', 'Enable HTTPS with self-signed certificate (only needed for remote access, not localhost)')
-  .option('--title-hostname <hostname>', 'Override the hostname shown in the browser title')
-  .option(
-    '--allow-unauthenticated-network',
-    'Allow non-loopback web access without CODEMAN_PASSWORD (dangerous; terminal control is exposed)'
-  )
-  .option('--multiuser', 'Enable opt-in multi-user mode (named users in ~/.codeman/users.json; env: CODEMAN_MULTIUSER)')
-  .action(async (options) => {
-    // The flag is surfaced to the rest of the process via the env var so
-    // isMultiUserMode() has a single source of truth (see config/multiuser.ts).
-    if (options.multiuser) process.env.CODEMAN_MULTIUSER = '1';
-    const { startWebServer } = await import('./web/server.js');
-    const host = options.host;
-    const port = parseInt(options.port, 10);
-    const https = !!options.https;
-    const titleHostname = options.titleHostname;
-    const allowUnauthenticatedNetwork = !!options.allowUnauthenticatedNetwork;
-    const protocol = https ? 'https' : 'http';
-    const displayHost = host === '0.0.0.0' ? 'localhost' : host;
+const webCmd = addWebLaunchOptions(program.command('web').description('Start the web interface'))
+  .option('-d, --daemon', 'Run detached in the background; survives the shell, logs to <data dir>/web.log')
+  .option('--stop', 'Stop a server started with --daemon')
+  .option('--status', 'Report whether a detached server is running');
 
-    console.log(chalk.cyan(`Starting Codeman web interface on ${displayHost}:${port}${https ? ' (HTTPS)' : ''}...`));
+webCmd.action(async (options) => {
+  // The flag is surfaced to the rest of the process via the env var so
+  // isMultiUserMode() has a single source of truth (see config/multiuser.ts).
+  if (options.multiuser) process.env.CODEMAN_MULTIUSER = '1';
+  const launch = toWebLaunchOptions(options);
 
-    try {
-      const server = await startWebServer(port, https, false, host, titleHostname, allowUnauthenticatedNetwork);
-      console.log(chalk.green(`\n✓ Web interface running at ${protocol}://${displayHost}:${port}`));
-      if (https) {
-        console.log(chalk.yellow('  Note: Accept the self-signed certificate in your browser on first visit'));
+  if (options.stop) {
+    const result = await stopDaemon(launch);
+    if (result.ok && result.reason === 'not-running') {
+      console.log(chalk.gray(`○ ${result.message}`));
+      return;
+    }
+    if (result.ok) {
+      console.log(chalk.green(`✓ ${result.message ?? `Stopped Codeman (pid ${result.pid})`}`));
+      console.log(chalk.gray('  Your agents keep running in tmux.'));
+      return;
+    }
+    console.error(chalk.red(`✗ ${result.message ?? 'Could not stop the server'}`));
+    process.exit(1);
+  }
+
+  if (options.status) {
+    const status = await daemonStatus(launch);
+    if (status.responding) {
+      const version = status.version ? ` (v${status.version})` : '';
+      console.log(chalk.green(`✓ Responding at ${status.url}${version}`));
+    } else {
+      console.log(chalk.yellow(`○ Nothing answering at ${status.url}`));
+    }
+    console.log(`  Daemon pid:  ${status.running ? chalk.green(String(status.pid)) : chalk.gray('not running')}`);
+    console.log(chalk.gray(`  Pidfile:     ${status.pidFile}`));
+    console.log(chalk.gray(`  Log:         ${status.logPath}`));
+    if (!status.running && status.responding) {
+      console.log(chalk.gray('  (running, but not started with --daemon: probably a service or a foreground run)'));
+    }
+    return;
+  }
+
+  if (options.daemon) {
+    warnIfUnauthenticatedNetwork(launch);
+    console.log(chalk.cyan('Starting Codeman in the background...'));
+    const result = await startDaemon(launch);
+    if (result.ok) {
+      console.log(chalk.green(`\n✓ Codeman is running at ${result.url} (pid ${result.pid})`));
+      console.log(chalk.gray(`  Logs: ${result.logPath}`));
+      console.log(chalk.gray('  Stop it with: codeman web --stop'));
+      console.log(chalk.gray('  Want it back after a reboot? codeman service install'));
+      return;
+    }
+    console.error(chalk.red(`\n✗ ${result.message ?? 'Failed to start'}`));
+    process.exit(1);
+  }
+
+  const { startWebServer } = await import('./web/server.js');
+  const host = launch.host;
+  const port = launch.port;
+  const https = launch.https;
+  const titleHostname = options.titleHostname;
+  const allowUnauthenticatedNetwork = launch.allowUnauthenticatedNetwork ?? false;
+  const protocol = https ? 'https' : 'http';
+  const displayHost = host === '0.0.0.0' ? 'localhost' : host;
+
+  console.log(chalk.cyan(`Starting Codeman web interface on ${displayHost}:${port}${https ? ' (HTTPS)' : ''}...`));
+
+  try {
+    const server = await startWebServer(port, https, false, host, titleHostname, allowUnauthenticatedNetwork);
+    console.log(chalk.green(`\n✓ Web interface running at ${protocol}://${displayHost}:${port}`));
+    if (https) {
+      console.log(chalk.yellow('  Note: Accept the self-signed certificate in your browser on first visit'));
+    }
+    console.log(chalk.gray('  Press Ctrl+C to stop\n'));
+
+    // Graceful shutdown handler — flush state and clean up on SIGTERM/SIGINT
+    let shuttingDown = false;
+    const shutdown = async (signal: string) => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      console.log(chalk.yellow(`\n${signal} received, shutting down gracefully...`));
+      try {
+        await server.stop();
+      } catch (err) {
+        console.error(chalk.red(`Error during shutdown: ${getErrorMessage(err)}`));
       }
-      console.log(chalk.gray('  Press Ctrl+C to stop\n'));
+      process.exit(0);
+    };
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGHUP', () => shutdown('SIGHUP'));
+  } catch (err) {
+    console.error(chalk.red(`✗ Failed to start web server: ${getErrorMessage(err)}`));
+    process.exit(1);
+  }
+});
 
-      // Graceful shutdown handler — flush state and clean up on SIGTERM/SIGINT
-      let shuttingDown = false;
-      const shutdown = async (signal: string) => {
-        if (shuttingDown) return;
-        shuttingDown = true;
-        console.log(chalk.yellow(`\n${signal} received, shutting down gracefully...`));
-        try {
-          await server.stop();
-        } catch (err) {
-          console.error(chalk.red(`Error during shutdown: ${getErrorMessage(err)}`));
-        }
-        process.exit(0);
-      };
-      process.on('SIGTERM', () => shutdown('SIGTERM'));
-      process.on('SIGINT', () => shutdown('SIGINT'));
-      process.on('SIGHUP', () => shutdown('SIGHUP'));
-    } catch (err) {
-      console.error(chalk.red(`✗ Failed to start web server: ${getErrorMessage(err)}`));
+// Supervised service: the "still there after a reboot" answer, where `web -d` is
+// the "still there after I close this shell" one (issue #231).
+const serviceCmd = program
+  .command('service')
+  .description('Manage the background service (systemd user unit on Linux, LaunchAgent on macOS)');
+
+addWebLaunchOptions(
+  serviceCmd.command('install').description('Install and start the service, then verify it answers')
+).action(async (options) => {
+  const launch = toWebLaunchOptions(options);
+  warnIfUnauthenticatedNetwork(launch);
+  console.log(chalk.cyan('Installing the Codeman service...'));
+
+  const result = await installService(launch);
+  for (const warning of result.warnings ?? []) console.log(chalk.yellow(`⚠ ${warning}`));
+
+  if (!result.ok) {
+    console.error(chalk.red(`✗ ${result.message}`));
+    process.exit(1);
+  }
+  console.log(chalk.green(`✓ ${result.message}`));
+  console.log(chalk.gray(`  Unit: ${result.unitPath}`));
+  if (process.env.CODEMAN_PASSWORD) {
+    console.log(
+      chalk.yellow(
+        '  Note: CODEMAN_PASSWORD was NOT copied into the unit file. Add it there yourself if the service needs auth.'
+      )
+    );
+  }
+});
+
+serviceCmd
+  .command('uninstall')
+  .description('Stop the service and remove its unit file')
+  .action(() => {
+    const result = uninstallService();
+    if (!result.ok) {
+      console.error(chalk.red(`✗ ${result.message}`));
       process.exit(1);
     }
+    console.log(chalk.green(`✓ ${result.message}`));
   });
+
+addWebLaunchOptions(
+  serviceCmd.command('status').description('Show whether the service is installed and running')
+).action(async (options) => {
+  const status = await serviceStatus(toWebLaunchOptions(options));
+  if (!status.kind) {
+    console.log(chalk.yellow(`No supported supervisor on ${process.platform}. Use \`codeman web -d\` instead.`));
+    return;
+  }
+  console.log(`  Supervisor: ${status.kind} (${status.name})`);
+  console.log(`  Unit file:  ${status.installed ? chalk.green(status.unitPath) : chalk.gray('not installed')}`);
+  console.log(`  Loaded:     ${status.loaded ? chalk.green('yes') : chalk.gray('no')}`);
+  const version = status.version ? ` (v${status.version})` : '';
+  console.log(
+    `  Responding: ${status.responding ? chalk.green(`yes at ${status.url}${version}`) : chalk.gray(`no at ${status.url}`)}`
+  );
+});
 
 // ============ Multi-user Commands ============
 //
