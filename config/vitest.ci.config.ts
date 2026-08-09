@@ -25,6 +25,7 @@ export default defineConfig({
       'test/opencode-resize.test.ts', // browser (Playwright)
       'test/webgl-fallback.test.ts', // browser (Playwright)
       'test/terminal-copy-shortcut.test.ts', // browser (Playwright)
+      'test/codex-predictive-echo.test.ts', // browser (Playwright) + real codex binary
     ],
     setupFiles: ['./test/setup.ts'],
     fileParallelism: false,

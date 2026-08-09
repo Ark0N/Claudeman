@@ -612,6 +612,9 @@ const VoiceInput = {
         if (text) app.sendInput(text).catch(() => {});
         setTimeout(() => app.sendInput('\r').catch(() => {}), 80);
       } else {
+        // Predict-mode sessions (codex) take this branch: the send bypasses
+        // onData, so clear outstanding predictions here (composer will reset)
+        app._predictiveEcho?.clearPredictions();
         app.sendInput('\r').catch(() => {});
       }
       // Blink then restore

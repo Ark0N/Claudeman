@@ -91,6 +91,14 @@ jobs:
         # Safe in CI: TmuxManager no-ops all shell commands under VITEST (test/setup.ts).
         run: npm run test:ci
 
+      - name: Run xterm-zerolag-input package tests
+        # Layers 1-3 of the predictive-echo suites (unit laws, fixture replay,
+        # seeded fuzz): deterministic, no browser, no live server. Depends on
+        # the ROOT `npm ci` above — workspaces hoist the package's vitest into
+        # the root node_modules; do not add a separate install here.
+        run: npx vitest run
+        working-directory: packages/xterm-zerolag-input
+
 # Note: The browser-driven mobile suite (test/mobile/**) is excluded from CI —
 # it needs a live server + chromium + environment-specific PNG baselines.
 # Run it locally/manually. All other tests run via the `test` job above.

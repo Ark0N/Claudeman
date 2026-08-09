@@ -304,6 +304,35 @@ if (isGlobalInstall) {
         } catch {
             console.log(colors.yellow('⚠ Failed to bundle xterm-zerolag-input — overlay may not work in dev mode'));
         }
+
+        // Predictive echo (codex): SEPARATE bundle so the zerolag bundle above stays
+        // byte-identical. If this file is missing or broken, codex simply falls back
+        // to plain PTY echo (pre-predictive behavior); nothing else is affected.
+        try {
+            const predSrc = join(import.meta.dirname, '..', 'packages', 'xterm-zerolag-input', 'src', 'predictive-echo-addon.ts');
+            const predOut = join(vendorDir, 'xterm-predictive-echo.js');
+            execSync(
+                `npx esbuild "${predSrc}" --bundle --format=iife --global-name=XtermPredictiveEcho --outfile="${predOut}"`,
+                { stdio: 'pipe' }
+            );
+            const { appendFileSync } = await import('fs');
+            appendFileSync(
+                predOut,
+                '\n// Global aliases for browser usage\n' +
+                'if(typeof window!=="undefined"){' +
+                    'window.PredictiveEchoAddon=XtermPredictiveEcho.PredictiveEchoAddon;' +
+                    'window.PredictiveEchoOverlay=class extends XtermPredictiveEcho.PredictiveEchoAddon{' +
+                        'constructor(terminal){' +
+                            'super({});' +
+                            'this.activate(terminal);' +
+                        '}' +
+                    '};' +
+                '}\n'
+            );
+            console.log(colors.green('✓ xterm-predictive-echo bundled to vendor/'));
+        } catch (e) {
+            console.log(colors.yellow('⚠ predictive-echo bundle failed (codex uses plain echo): ' + e.message));
+        }
     } catch (err) {
         hasWarnings = true;
         console.log(colors.yellow('⚠ Failed to copy xterm vendor files'));

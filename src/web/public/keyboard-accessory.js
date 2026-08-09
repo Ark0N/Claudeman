@@ -601,6 +601,9 @@ const KeyboardAccessoryBar = {
    *  must be written raw to be interpreted as key presses by Ink. */
   sendKey(escapeSequence) {
     if (!app.activeSessionId) return;
+    // Arrows/Esc move the server-side cursor and bypass onData: clear
+    // predictions now instead of waiting out the ~150ms off-row grace.
+    app._predictiveEcho?.clearPredictions();
     fetch(`/api/sessions/${app.activeSessionId}/input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

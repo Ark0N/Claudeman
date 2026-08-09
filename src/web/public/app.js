@@ -699,6 +699,10 @@ class CodemanApp {
     // (not at buffer.cursorY, which reflects Ink's internal cursor position)
     this._localEchoOverlay = null;  // created after terminal.open()
     this._localEchoEnabled = false; // true when setting on + session active
+    // Predictive write-through echo (codex) — created after terminal.open()
+    // from the separate vendor/xterm-predictive-echo.js bundle (may stay null)
+    this._predictiveEcho = null;
+    this._localEchoPolicy = 'off';  // 'buffer' | 'predict' | 'off' (per active session)
     this._restoringFlushedState = false; // true during selectSession buffer load — protects flushed Maps
 
     // Accessibility: Focus trap for modals
@@ -3021,6 +3025,9 @@ class CodemanApp {
     // terminal buffer reloads and prompt is visible again.  _render() re-scans
     // for the ❯ prompt on every call, so rerender() after buffer load repositions it.
     this._localEchoOverlay?.rerender();
+    // Deliberate asymmetry: buffer-mode pending text SURVIVES reconnect (not
+    // yet sent); predictions do not (their keystrokes were already delivered).
+    this._predictiveEcho?.clearPredictions();
     // Clear pending hooks
     this.pendingHooks.clear();
     // Clear parent name cache (prevents stale session name entries accumulating)
@@ -4127,6 +4134,9 @@ class CodemanApp {
       }
     }
     this._localEchoOverlay?.clear();
+    // Predictions are ephemeral + already sent: nothing to save/restore
+    // across a tab switch (unlike the buffer overlay's setFlushed machinery)
+    this._predictiveEcho?.clearPredictions();
     // Prevent _detectBufferText() from picking up Claude's Ink UI text
     // (status bar, model info, etc.) as "user input" on fresh sessions.
     // Only sessions with prior flushed text (from tab-switch-away) need detection.

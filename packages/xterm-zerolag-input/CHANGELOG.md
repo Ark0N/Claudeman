@@ -1,5 +1,17 @@
 # xterm-zerolag-input
 
+## 0.2.0
+
+### Minor Changes
+
+- **New addon: `PredictiveEchoAddon`, mosh-style write-through prediction.** The second echo mode for per-keystroke TUIs (OpenAI Codex's composer, live pickers) that buffer-until-Enter starves. Every keystroke is sent by the consumer immediately and unchanged; the addon paints the predicted glyph at the predicted cell and reconciles against the PARSED terminal buffer: confirmation requires the cell match plus a cursor advance past the record, foreign non-blank content on two consecutive passes cascades a drop, blank cells are neutral, a TTL bounds everything, and scroll/resize/sustained cursor moves clear the run. Visual-only by construction; it cannot gate, delay or rewrite input.
+  - Anchor-hold rule: after an unpredicted wire edit (backspace into echoed text, cleared input, an IME text commit) new predictions hold until the next parsed write, so a stale displayed cursor can never mis-anchor a run (worst case: exactly one unpredicted keystroke).
+  - New exports: `PredictiveEchoAddon`, `PredictiveEchoOptions`, `PredictionState`, plus the long-intended `charCellWidth` / `stringCellWidth` helpers.
+  - `XtermTerminal` type gains OPTIONAL members (`buffer.active.cursorX/cursorY`, `getLine().getCell?`, `onWriteParsed?`, `onResize?`). Additive only: existing consumers and mocks are unaffected.
+  - IIFE build exposes `window.PredictiveEchoAddon` and a self-activating `window.PredictiveEchoOverlay`, alongside the unchanged `ZerolagInputAddon` / `LocalEchoOverlay` globals.
+  - Tests: 52 new (30 addon-law specs, renderer geometry, 6 replay suites driven by fixtures recorded from real codex 0.147 through tmux + the production strip, and a 500-iteration seeded fuzz with per-op invariants). `@xterm/headless` as a devDependency; runtime dependencies remain zero.
+
+
 ## 0.1.8
 
 ### Patch Changes
