@@ -1,5 +1,18 @@
 # aicodeman
 
+## 1.16.1
+
+### Patch Changes
+
+- 161f1da: Read My Mind phase 1: per-case intent profiles (docs/readmymind-plan.md). Codeman can now capture the prompts a user actually submits (from the Claude session transcript, opt-in via the new synced readMyMindEnabled setting, default OFF) into a per-case intent profile alongside user-stated goals, stored in ~/.codeman/intents.json (mode 0600, never searched). New endpoints GET/PUT/DELETE /api/sessions/:id/intent (ownership-scoped, strict schemas), a transcript:user_prompt event on TranscriptWatcher, and agent-skill coverage (SKILL.md recipe + endpoints.md rows) so agents can read and record the user's intent. Groundwork for the phase-2 predictor button: nothing is ever auto-sent.
+- Home screen and phone touch targets.
+
+  The desktop welcome screen now lists your open tabs as a vertical column down its left gutter, which was previously dead space: one row per live session plus any saved web tabs, in tab order so the row badges match Alt+1..9, with case, backend and state on each row. Clicking a row enters that session. The column is width-gated (1180px and up) and never moves the centered welcome content.
+
+  Working state now reads the same everywhere it appears. A busy session shows a pulsing green dot ringed by the same spinner a tab draws while it loads, with a green halo, on the desktop home column, the phone home screen and the tab strip alike. Phone tabs got the bigger 9px glowing dot for the same reason.
+
+  Phone touch targets: the brand "C" that returns you to the home screen was roughly a 12x13px hit area, well under the 44px minimum. It is now a real 44x44 button, and the phone header grew from 36px to 44px to make that possible, which gives every other header control the same 8px. The simple keyboard accessory bar also swaps /clear for Tab (/clear and /compact stay in the extended bar), flushing locally buffered text to the terminal first so completion applies to what you just typed.
+
 ## 1.16.0
 
 ### Minor Changes
