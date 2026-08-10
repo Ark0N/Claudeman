@@ -124,7 +124,7 @@ Agent use cases this unlocks: a lead session records intentions as the user stat
 
 1. **Intent store + capture + intent endpoints + skill docs.** Immediately useful to agents even before any UI exists.
 2. **Context assembler + predictor + predict endpoint + desktop button/modal.** The feature as pitched. The assembler ships with all collectors it can serve from day one (transcript, intent, git, run-summary, siblings); the approvals collector activates when PR #245 lands.
-3. **Phone accessory key, rethink steering, alternates row.**
+3. **Phone accessory key, rethink steering, alternates row.** Part 1 (shipped): the alternates row (tappable, swap into the field without losing edits; Rethink rejects the whole shown set), the phone 🧠 keyboard-accessory key (both bar templates, `rmm-enabled` marker class on the bar), and a phone-sized modal (small dialog, not full-screen). Part 2: rethink steering (the free-text steer note; the API already accepts `steer`).
 4. Explicitly later: proactive predict-on-idle (ghost suggestion chip), auto-compaction of `recentPrompts` into `goals` via a cheap model, codex/gemini capture, cross-case "global" intent.
 
 ## Open questions

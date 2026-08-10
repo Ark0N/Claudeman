@@ -23,11 +23,11 @@ Add `-u user:password` if your install has `CODEMAN_PASSWORD` set, and drop `-k`
 
 ## The 🧠 button
 
-On a Claude session, press the brain button in the header (desktop; the phone surface is a planned keyboard-accessory key). Codeman assembles everything it already knows: your goals, your recent prompts (with your voice: length, tone, shorthand), the tail of the last assistant reply, recent tool activity, git state (branch, dirty files, pending changesets), how long you have been away and what happened meanwhile, sibling sessions in the same case, and any dialog the session is currently waiting on. A one-shot model call (opus by default, `readMyMindModel` to override) turns that into 1-3 suggestions; the top one lands in an editable field with its rationale.
+On a Claude session, press the brain button in the header (desktop) or the 🧠 key on the keyboard accessory bar (phones and tablets; it appears when the setting is on). Codeman assembles everything it already knows: your goals, your recent prompts (with your voice: length, tone, shorthand), the tail of the last assistant reply, recent tool activity, git state (branch, dirty files, pending changesets), how long you have been away and what happened meanwhile, sibling sessions in the same case, and any dialog the session is currently waiting on. A one-shot model call (opus by default, `readMyMindModel` to override) turns that into 1-3 suggestions; the top one lands in an editable field with its rationale, and the others render as tappable alternate rows: tap one to swap it into the field (edits you already made are kept on the row you leave).
 
 - **Send** submits it to the session (with Enter).
 - **Insert** drops it on the CLI composer *without* Enter, so you can edit it in the terminal before sending.
-- **Rethink** re-runs with the shown suggestion recorded as rejected.
+- **Rethink** re-runs with everything shown (the field and the alternates) recorded as rejected.
 - **Dismiss** closes; nothing happens.
 
 A prediction takes 5-90 seconds and costs real tokens; one runs per session at a time. If the session is sitting on a permission/question dialog, the suggestion is usually an answer to that dialog: that is intentional.
@@ -85,15 +85,15 @@ A case with nothing recorded answers an empty profile with `updatedAt: 0`; reads
 
 The `codeman` agent skill documents the same verbs (SKILL.md §3 plus `reference/endpoints.md`), with the ground rules: read the profile to understand what the user wants, record goals the user actually stated, merge instead of blind-writing (PUT replaces), never delete a profile unprompted, and never send a predicted suggestion into a session unless the user asked. It is the user's memory, not the agent's.
 
-## What comes next (phase 3+)
+## What comes next
 
-Phone keyboard-accessory 🧠 key, a steer-note input on Rethink, and tappable alternate suggestions. Explicitly later: proactive predict-on-idle, auto-compaction of the prompt history into goals, non-Claude capture. See the phases section of [`readmymind-plan.md`](readmymind-plan.md).
+A steer-note input on Rethink ("no, I meant the mobile bug"; the API already accepts `steer`). Explicitly later: proactive predict-on-idle, auto-compaction of the prompt history into goals, non-Claude capture. See the phases section of [`readmymind-plan.md`](readmymind-plan.md).
 
 ## Troubleshooting
 
 | Symptom | Cause / fix |
 | ------- | ----------- |
-| No 🧠 button in the header | `readMyMindEnabled` is OFF (App Settings → Panels), you are on a phone (desktop-only in this phase), or the active session is not claude-mode |
+| No 🧠 button in the header | `readMyMindEnabled` is OFF (App Settings → Panels), you are on a phone (there it is a key on the keyboard accessory bar instead, visible while typing), or the active session is not claude-mode |
 | Prediction feels generic | The profile is thin: record goals (PUT or ask your agent to), and let capture accumulate a few real prompts first |
 | "A prediction is already running" (409) | One per session at a time; wait for the current one (up to 90 s) |
 | Prediction fails (502) | The model returned no usable JSON, or the CLI could not start; retry. Check `readMyMindModel` if you overrode it |

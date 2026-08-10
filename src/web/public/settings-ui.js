@@ -2112,11 +2112,16 @@ Object.assign(CodemanApp.prototype, {
     // Read My Mind 🧠 — hidden unless the synced opt-in `readMyMindEnabled` is
     // ON (only an explicit true enables, mirroring the Approvals bell). Marker
     // class (base is display:inline-flex !important); phones hide it in
-    // mobile.css regardless (the phase-3 surface there is an accessory key).
+    // mobile.css regardless (their surface is the keyboard-accessory 🧠 key,
+    // re-synced right below).
     const readMyMindBtn = document.querySelector('.btn-readmymind');
     if (readMyMindBtn) {
       readMyMindBtn.classList.toggle('btn-readmymind--hidden', settings.readMyMindEnabled !== true);
     }
+    // The accessory-bar 🧠 key shares the setting; its marker class lives on
+    // the bar element (keyboard-accessory.js), so a live toggle from a
+    // settings save reveals/hides it without a reload.
+    if (typeof KeyboardAccessoryBar !== 'undefined') KeyboardAccessoryBar.syncReadMyMind?.();
 
     // Plan-usage chip — shown by default on desktop, OFF on handhelds (App
     // Settings → Display → "Plan Usage Limits"). The template always ships it

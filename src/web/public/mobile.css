@@ -530,8 +530,9 @@ html.mobile-init .file-browser-panel {
     display: none !important;
   }
 
-  /* Read My Mind 🧠 button: desktop header only in phase 2; the phone surface
-     is a planned keyboard-accessory key (docs/readmymind-plan.md phase 3). */
+  /* Read My Mind 🧠 header button: never in the phone header; the phone
+     surface is the keyboard-accessory 🧠 key (same `readMyMindEnabled` gate,
+     see keyboard-accessory.js + the rmm-enabled rules in styles.css). */
   .btn-icon-header.btn-readmymind {
     display: none !important;
   }
@@ -1297,6 +1298,33 @@ html.mobile-init .file-browser-panel {
     border-radius: 12px;
     margin: 1rem;
     width: calc(100% - 2rem);
+  }
+
+  /* Read My Mind: a small dialog (mirrors modal-sm), not a full-screen
+     takeover — it opens over the keyboard from the accessory 🧠 key and
+     should read as a quick suggestion sheet. Not modal-sm itself because
+     that caps desktop width at 340px; this modal wants 560px there. */
+  .modal-content.readmymind-modal {
+    height: auto;
+    max-height: 85vh;
+    border-radius: 12px;
+    margin: 1rem;
+    width: calc(100% - 2rem);
+  }
+  /* Four footer buttons on a narrow phone: let them wrap instead of clipping,
+     and give buttons + alternate rows finger-sized targets. */
+  .readmymind-modal .modal-footer {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.5rem;
+  }
+  .readmymind-modal .modal-footer .btn {
+    flex: 1 1 auto;
+    min-height: 38px;
+  }
+  .readmymind-alt {
+    min-height: 38px;
   }
 
   /* Modal safe area padding - all sides for full-screen modals */
