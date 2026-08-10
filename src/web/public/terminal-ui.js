@@ -1956,8 +1956,16 @@ Object.assign(CodemanApp.prototype, {
   /** Number of history items shown before "Show More" */
   _HISTORY_INITIAL_COUNT: 10,
 
-  /** How many past sessions the home screen loads (also the filter/sort corpus). */
-  _HISTORY_FETCH_LIMIT: 60,
+  /**
+   * How many past sessions the home screen loads (also the filter/sort corpus).
+   * 200, not the old 60, so the filter can reach a real backlog — an install with
+   * 35+ conversations would otherwise hit the ceiling before the filter is useful
+   * (raised in @jordan8037310's #263; the endpoint clamps at 500).
+   */
+  _HISTORY_FETCH_LIMIT: 200,
+
+  /** localStorage key for the per-device sort choice (#263). */
+  _HISTORY_SORT_KEY: 'codeman:historySort',
 
   async loadHistorySessions() {
     const container = document.getElementById('historySessions');
@@ -1995,13 +2003,27 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  /** Wire the filter box and sort select once; both re-render from the cached corpus. */
+  /**
+   * Wire the filter box and sort select once; both re-render from the cached
+   * corpus. The sort choice is restored from (and saved to) localStorage — it is
+   * a per-device display preference, so it stays out of the synced settings
+   * schema, same as `codeman:skin`.
+   */
   _wireHistoryControls() {
     if (this._historyControlsWired) return;
     const filter = document.getElementById('historyFilter');
     const sort = document.getElementById('historySort');
     if (!filter && !sort) return;
     this._historyControlsWired = true;
+
+    if (sort) {
+      try {
+        const saved = localStorage.getItem(this._HISTORY_SORT_KEY);
+        if (saved && Array.from(sort.options).some((o) => o.value === saved)) sort.value = saved;
+      } catch {
+        /* private mode — the order just won't persist */
+      }
+    }
 
     if (filter) {
       filter.addEventListener('input', () => this._renderHistoryList());
@@ -2014,7 +2036,16 @@ Object.assign(CodemanApp.prototype, {
         }
       });
     }
-    if (sort) sort.addEventListener('change', () => this._renderHistoryList());
+    if (sort) {
+      sort.addEventListener('change', () => {
+        try {
+          localStorage.setItem(this._HISTORY_SORT_KEY, sort.value);
+        } catch {
+          /* private mode — the order just won't persist */
+        }
+        this._renderHistoryList();
+      });
+    }
   },
 
   /** True when a past-session row matches the filter text (name, folder, case, prompt). */
@@ -2050,7 +2081,14 @@ Object.assign(CodemanApp.prototype, {
     const label = (s) => this._historyRowLabel(s, this._shortenHomePath(s.workingDir)).toLowerCase();
     const folder = (s) => ((s.workingDir || '').split('/').pop() || '').toLowerCase();
     const key = mode === 'name' ? label : folder;
-    const sorted = mode === 'recent' ? rows.slice() : rows.slice().sort((a, b) => key(a).localeCompare(key(b)));
+    // numeric collation so w2-… sorts before w10-…, and base sensitivity so case
+    // does not split a project's rows apart (from @jordan8037310's #263).
+    const sorted =
+      mode === 'recent'
+        ? rows.slice()
+        : rows
+            .slice()
+            .sort((a, b) => key(a).localeCompare(key(b), undefined, { sensitivity: 'base', numeric: true }));
     const pinned = sorted.filter((s) => s.pinned);
     return pinned.length === 0 ? sorted : pinned.concat(sorted.filter((s) => !s.pinned));
   },
