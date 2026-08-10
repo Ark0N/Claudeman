@@ -233,3 +233,61 @@ describe('searchSources — result card shape & path safety', () => {
     expect(searchSources('', data).totalResults).toBe(0);
   });
 });
+
+// Past sessions (issue #261). The corpus used to be the live session map alone,
+// so a folder in the home screen's Resume list matched nothing. History rows now
+// arrive marked, and a card for one has to RESUME the conversation, selecting a
+// tab that no longer exists is a no-op the user reads as a broken result.
+describe('searchSources: past (history) sessions', () => {
+  it('matches a past session by folder name and returns a resume jump target', () => {
+    const data = sources({
+      sessions: [
+        {
+          sessionId: 'cod-1',
+          sessionName: 'w3-invoices',
+          workingDir: '/home/u/projects/invoices',
+          timestamp: 500,
+          history: true,
+          claudeSessionId: 'claude-uuid-1',
+        },
+      ],
+    });
+    const res = searchSources('invoices', data);
+    expect(res.totalResults).toBe(1);
+    expect(res.groups[0].results[0].jumpTo).toEqual({
+      kind: 'resume-session',
+      sessionId: 'cod-1',
+      claudeSessionId: 'claude-uuid-1',
+      workingDir: '/home/u/projects/invoices',
+    });
+  });
+
+  it('keeps a live session on the plain session jump target', () => {
+    const data = sources({
+      sessions: [{ sessionId: 'live-1', sessionName: 'w1-invoices', workingDir: '/home/u/invoices', timestamp: 1 }],
+    });
+    expect(searchSources('invoices', data).groups[0].results[0].jumpTo).toEqual({
+      kind: 'session',
+      sessionId: 'live-1',
+    });
+  });
+
+  it('does not offer a resume for a history row with no working directory', () => {
+    const data = sources({
+      sessions: [{ sessionId: 'cod-2', sessionName: 'needle-run', workingDir: '', timestamp: 1, history: true }],
+    });
+    // Nothing to resume INTO, a resume card here would always fail.
+    expect(searchSources('needle', data).groups[0].results[0].jumpTo.kind).toBe('session');
+  });
+
+  it('falls back to the folder basename when a transcript row has no name', () => {
+    const data = sources({
+      sessions: [
+        { sessionId: 'cod-3', sessionName: '', workingDir: '/home/u/proj/needle-app', timestamp: 1, history: true },
+      ],
+    });
+    const r = searchSources('needle', data).groups[0].results[0];
+    expect(r.sessionName).toBe('needle-app');
+    expect(r.snippet).toContain('/home/u/proj/needle-app');
+  });
+});

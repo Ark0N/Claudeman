@@ -3666,6 +3666,13 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   color: #95e6b3;
 }
 
+/* Past session (issue #261): activating the card resumes the conversation
+   rather than switching to a tab, so the badge says so. */
+.search-badge-past {
+  background: rgba(245, 158, 11, 0.18);
+  color: #f0c073;
+}
+
 .search-result-name {
   flex: 1;
   min-width: 0;
@@ -3715,22 +3722,97 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   .search-select {
     max-width: 7rem;
   }
+  /* Tablet/narrow: let the controls drop under the title instead of squeezing it. */
+  .history-header {
+    flex-wrap: wrap;
+  }
+  .history-controls {
+    width: 100%;
+    margin-left: 0;
+  }
+  .history-filter {
+    flex: 1;
+    width: auto;
+  }
+}
+
+/* Title row for the past-session list: label + count on the left, filter and
+   sort on the right (issue #260, 35 conversations in a 4-row box). */
+.history-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
 }
 
 .history-title {
   font-size: 0.85rem;
   color: var(--text-dim);
-  margin-bottom: 0.5rem;
   font-weight: 500;
   text-align: left;
 }
 
+.history-count {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  white-space: nowrap;
+}
+
+.history-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+
+.history-filter {
+  width: 8.5rem;
+  box-sizing: border-box;
+  padding: 0.28rem 0.5rem;
+  font-size: 0.68rem;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  outline: none;
+  transition: border-color var(--transition-smooth), background var(--transition-smooth);
+}
+
+.history-filter:focus {
+  border-color: rgba(59, 130, 246, 0.5);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.history-filter::placeholder {
+  color: var(--text-dim);
+}
+
+.history-sort {
+  max-width: 7.5rem;
+}
+
+.history-empty {
+  padding: 0.75rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+/* Collapsed height fits the initial page of rows; expanding the LIST has to
+   expand the BOX too, or "Show more" just deepens a scroll well. */
 .history-list {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  max-height: 240px;
+  max-height: min(42vh, 360px);
   overflow-y: auto;
+}
+
+.history-list.expanded {
+  max-height: min(64vh, 660px);
 }
 
 .history-item {

@@ -36,13 +36,21 @@ export const SEARCH_PER_GROUP_CAP = 25;
 /** Maximum characters in a result snippet. */
 export const SEARCH_SNIPPET_MAX = 200;
 
-/** A live-session row harvested for the session/case source. */
+/** A session row harvested for the session/case source (live or past). */
 export interface SessionSearchInput {
   sessionId: string;
   sessionName: string;
   workingDir: string;
   /** Recency timestamp (e.g. lastActivityAt or createdAt). */
   timestamp: number;
+  /**
+   * True for a session that is no longer running (issue #261, past sessions come
+   * from the history index, not the live map). Such a result resumes the
+   * conversation instead of switching to a tab that no longer exists.
+   */
+  history?: boolean;
+  /** Claude conversation UUID to resume, when it differs from the Codeman id. */
+  claudeSessionId?: string;
 }
 
 /** A run-summary timeline event harvested for the event source. */
@@ -121,14 +129,25 @@ export function searchSources(query: string, sources: SearchSources): SearchResp
   const sessionRows: SearchResult[] = [];
   for (const s of sources.sessions) {
     if (contains(s.sessionName) || contains(s.workingDir) || contains(s.sessionId)) {
+      const label = s.sessionName || s.workingDir.split('/').pop() || s.sessionId;
       sessionRows.push({
         type: 'session',
         sessionId: s.sessionId,
-        sessionName: s.sessionName,
+        sessionName: label,
         timestamp: s.timestamp,
-        snippet: truncate(s.workingDir ? `${s.sessionName} — ${s.workingDir}` : s.sessionName),
+        snippet: truncate(s.workingDir ? `${label} — ${s.workingDir}` : label),
         exactMatch: isExact(s.sessionName),
-        jumpTo: { kind: 'session', sessionId: s.sessionId },
+        // A resume needs a directory to run in, so a history row without one
+        // stays a plain session target rather than an action that cannot work.
+        jumpTo:
+          s.history && s.workingDir
+            ? {
+                kind: 'resume-session',
+                sessionId: s.sessionId,
+                claudeSessionId: s.claudeSessionId,
+                workingDir: s.workingDir,
+              }
+            : { kind: 'session', sessionId: s.sessionId },
       });
     }
   }

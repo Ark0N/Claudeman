@@ -1646,7 +1646,7 @@ Object.assign(CodemanApp.prototype, {
       pin.title = 'Pinned';
       titleSpan.appendChild(pin);
     }
-    titleSpan.appendChild(document.createTextNode(s.name || s.firstPrompt || shortDir));
+    titleSpan.appendChild(document.createTextNode(this._historyRowLabel(s, shortDir)));
 
     // Badge row: mode (claude/codex/opencode/gemini/antigravity/shell) + a LIVE pill.
     const badgeRow = document.createElement('div');
@@ -1984,7 +1984,18 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /** Number of history items shown before "Show More" */
-  _HISTORY_INITIAL_COUNT: 4,
+  _HISTORY_INITIAL_COUNT: 10,
+
+  /**
+   * How many past sessions the home screen loads (also the filter/sort corpus).
+   * 200, not the old 60, so the filter can reach a real backlog, an install with
+   * 35+ conversations would otherwise hit the ceiling before the filter is useful
+   * (raised in @jordan8037310's #263; the endpoint clamps at 500).
+   */
+  _HISTORY_FETCH_LIMIT: 200,
+
+  /** localStorage key for the per-device sort choice (#263). */
+  _HISTORY_SORT_KEY: 'codeman:historySort',
 
   async loadHistorySessions() {
     const container = document.getElementById('historySessions');
@@ -1998,7 +2009,7 @@ Object.assign(CodemanApp.prototype, {
         ? Promise.resolve(this.cases)
         : fetch('/api/cases').then((r) => (r.ok ? r.json() : null)).then((d) => d?.data || []).catch(() => []);
       const [allSessions, cases] = await Promise.all([
-        this._fetchUnifiedSessions(60),
+        this._fetchUnifiedSessions(this._HISTORY_FETCH_LIMIT),
         casesPromise,
       ]);
       if (allSessions.length === 0) {
@@ -2006,32 +2017,174 @@ Object.assign(CodemanApp.prototype, {
         return;
       }
 
-      list.replaceChildren();
-      const initialCount = this._HISTORY_INITIAL_COUNT;
-
-      // Render initial items
-      for (let i = 0; i < Math.min(initialCount, allSessions.length); i++) {
-        list.appendChild(this._buildHistoryItem(allSessions[i], cases));
-      }
-
-      // Add "Show More" button if there are more items
-      if (allSessions.length > initialCount) {
-        const moreBtn = document.createElement('button');
-        moreBtn.className = 'history-show-more';
-        moreBtn.textContent = `Show ${allSessions.length - initialCount} more`;
-        moreBtn.addEventListener('click', () => {
-          for (let i = initialCount; i < allSessions.length; i++) {
-            list.insertBefore(this._buildHistoryItem(allSessions[i], cases), moreBtn);
-          }
-          moreBtn.remove();
-        });
-        list.appendChild(moreBtn);
-      }
+      // Keep the corpus around: filtering and sorting (issue #260) work on this
+      // array, so a re-render costs no request. Expansion survives the periodic
+      // refresh in panels-ui.js, collapsing the list under the user's cursor
+      // every few seconds would be worse than the original 4-item cap.
+      this._historyAll = allSessions;
+      this._historyCases = cases;
+      this._wireHistoryControls();
+      this._renderHistoryList();
 
       container.style.display = '';
     } catch (err) {
       console.error('[loadHistorySessions]', err);
       container.style.display = 'none';
+    }
+  },
+
+  /**
+   * Wire the filter box and sort select once; both re-render from the cached
+   * corpus. The sort choice is restored from (and saved to) localStorage, it is
+   * a per-device display preference, so it stays out of the synced settings
+   * schema, same as `codeman:skin`.
+   */
+  _wireHistoryControls() {
+    if (this._historyControlsWired) return;
+    const filter = document.getElementById('historyFilter');
+    const sort = document.getElementById('historySort');
+    if (!filter && !sort) return;
+    this._historyControlsWired = true;
+
+    if (sort) {
+      try {
+        const saved = localStorage.getItem(this._HISTORY_SORT_KEY);
+        if (saved && Array.from(sort.options).some((o) => o.value === saved)) sort.value = saved;
+      } catch {
+        /* private mode, the order just won't persist */
+      }
+    }
+
+    if (filter) {
+      filter.addEventListener('input', () => this._renderHistoryList());
+      filter.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape' && filter.value) {
+          // Swallow it: Escape at the welcome screen otherwise closes overlays.
+          ev.stopPropagation();
+          filter.value = '';
+          this._renderHistoryList();
+        }
+      });
+    }
+    if (sort) {
+      sort.addEventListener('change', () => {
+        try {
+          localStorage.setItem(this._HISTORY_SORT_KEY, sort.value);
+        } catch {
+          /* private mode, the order just won't persist */
+        }
+        this._renderHistoryList();
+      });
+    }
+  },
+
+  /** True when a past-session row matches the filter text (name, folder, case, prompt). */
+  _historyRowMatches(s, needle, cases) {
+    const fields = [
+      s.name,
+      s.workingDir,
+      this._resolveCaseLabel(s.workingDir, cases),
+      s.firstPrompt,
+      s.lastPrompt,
+      s.sessionId,
+    ];
+    return fields.some((f) => typeof f === 'string' && f.toLowerCase().includes(needle));
+  },
+
+  /**
+   * The text a history row shows as its title. Most transcript-backed rows have
+   * no session name at all, so this falls through to the first prompt and then
+   * to the path, and the A–Z sort keys off the SAME string, or "sort by name"
+   * would silently do nothing for exactly the rows the list is mostly made of.
+   */
+  _historyRowLabel(s, fallback) {
+    return s.name || s.firstPrompt || fallback || '';
+  },
+
+  /**
+   * Sort past-session rows. 'recent' keeps the backend order (newest first);
+   * the alphabetical modes sort by the visible title or by folder basename.
+   * Pinned rows stay on top in every mode, pinning is an explicit override and
+   * a sort that buried it would read as the pin having been lost.
+   */
+  _sortHistoryRows(rows, mode) {
+    const label = (s) => this._historyRowLabel(s, this._shortenHomePath(s.workingDir)).toLowerCase();
+    const folder = (s) => ((s.workingDir || '').split('/').pop() || '').toLowerCase();
+    const key = mode === 'name' ? label : folder;
+    // numeric collation so w2-… sorts before w10-…, and base sensitivity so case
+    // does not split a project's rows apart (from @jordan8037310's #263).
+    const sorted =
+      mode === 'recent'
+        ? rows.slice()
+        : rows
+            .slice()
+            .sort((a, b) => key(a).localeCompare(key(b), undefined, { sensitivity: 'base', numeric: true }));
+    const pinned = sorted.filter((s) => s.pinned);
+    return pinned.length === 0 ? sorted : pinned.concat(sorted.filter((s) => !s.pinned));
+  },
+
+  /**
+   * Render the "Resume Conversation" list from the cached corpus, applying the
+   * current filter and sort. Collapsed by default to _HISTORY_INITIAL_COUNT;
+   * "Show more" expands the list AND the box (the CSS cap is class-driven, since
+   * a fixed 240px box made expansion pointless, issue #260).
+   */
+  _renderHistoryList() {
+    const list = document.getElementById('historyList');
+    if (!list) return;
+    const all = this._historyAll || [];
+    const cases = this._historyCases || [];
+    const countEl = document.getElementById('historyCount');
+    const needle = (document.getElementById('historyFilter')?.value || '').trim().toLowerCase();
+    const mode = document.getElementById('historySort')?.value || 'recent';
+
+    const matched = needle ? all.filter((s) => this._historyRowMatches(s, needle, cases)) : all;
+    const rows = this._sortHistoryRows(matched, mode);
+    // Filtering is itself an expansion request: hiding matches behind "Show more"
+    // would defeat the point of typing a filter.
+    const expanded = !!this._historyExpanded || needle.length > 0;
+    const visible = expanded ? rows : rows.slice(0, this._HISTORY_INITIAL_COUNT);
+
+    list.replaceChildren();
+    list.classList.toggle('expanded', expanded);
+
+    if (rows.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'history-empty';
+      empty.textContent = `No conversations match "${needle}"`;
+      list.appendChild(empty);
+    }
+
+    for (const s of visible) list.appendChild(this._buildHistoryItem(s, cases));
+
+    const hidden = rows.length - visible.length;
+    if (hidden > 0) {
+      const moreBtn = document.createElement('button');
+      moreBtn.className = 'history-show-more';
+      moreBtn.textContent = `Show ${hidden} more`;
+      moreBtn.addEventListener('click', () => {
+        this._historyExpanded = true;
+        this._renderHistoryList();
+      });
+      list.appendChild(moreBtn);
+    } else if (expanded && !needle && rows.length > this._HISTORY_INITIAL_COUNT) {
+      const lessBtn = document.createElement('button');
+      lessBtn.className = 'history-show-more';
+      lessBtn.textContent = 'Show less';
+      lessBtn.addEventListener('click', () => {
+        this._historyExpanded = false;
+        this._renderHistoryList();
+        list.scrollTop = 0;
+      });
+      list.appendChild(lessBtn);
+    }
+
+    if (countEl) {
+      countEl.textContent = needle
+        ? `${rows.length} of ${all.length}`
+        : rows.length > visible.length
+          ? `${visible.length} of ${rows.length}`
+          : String(rows.length);
     }
   },
 
@@ -3862,13 +4015,16 @@ Object.assign(CodemanApp.prototype, {
   /** Render the grouped result cards (or empty/loading states). */
   _renderSearch(data) {
     const results = document.getElementById('searchResults');
-    const historyTitle = document.getElementById('historyTitle');
+    // The header carries the title plus the filter/sort controls (issue #260),
+    // hide the whole row, not just the title, or the controls float above the
+    // search results and act on a list that is not on screen.
+    const historyHeader = document.getElementById('historyHeader') || document.getElementById('historyTitle');
     const historyList = document.getElementById('historyList');
     if (!results) return;
 
     const searching = !!data;
     // Hide the plain "Resume Conversation" history list while a search is active.
-    if (historyTitle) historyTitle.style.display = searching ? 'none' : '';
+    if (historyHeader) historyHeader.style.display = searching ? 'none' : '';
     if (historyList) historyList.style.display = searching ? 'none' : '';
 
     results.innerHTML = '';
@@ -3937,9 +4093,11 @@ Object.assign(CodemanApp.prototype, {
     const topRow = document.createElement('div');
     topRow.className = 'search-result-top';
 
+    // A past session resumes rather than switches tabs, so it says so on the badge.
+    const isPast = r.jumpTo && r.jumpTo.kind === 'resume-session';
     const badge = document.createElement('span');
-    badge.className = 'search-result-badge search-badge-' + r.type;
-    badge.textContent = (window.CodemanSearch.SOURCE_LABELS[r.type] || r.type).replace(/s$/, '');
+    badge.className = 'search-result-badge search-badge-' + r.type + (isPast ? ' search-badge-past' : '');
+    badge.textContent = isPast ? 'Resume' : (window.CodemanSearch.SOURCE_LABELS[r.type] || r.type).replace(/s$/, '');
 
     const name = document.createElement('span');
     name.className = 'search-result-name';
@@ -3971,13 +4129,20 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * Navigate to a search result by jumpTo.kind, reusing the existing app methods:
-   *   session     → selectSession(sessionId)        (open/switch to the session)
-   *   run-summary → openRunSummary(sessionId)        (session options → summary tab)
-   *   file-preview→ openFilePreview(path, sessionId, attachmentId)
+   *   session       → selectSession(sessionId)      (open/switch to the session)
+   *   resume-session→ resumeHistorySession(...)     (past session, no tab to switch to)
+   *   run-summary   → openRunSummary(sessionId)     (session options → summary tab)
+   *   file-preview  → openFilePreview(path, sessionId, attachmentId)
    */
   _jumpToSearchResult(r) {
     const jt = r && r.jumpTo;
     if (!jt) return;
+    // A past session has to be replayed, not switched to. Do it BEFORE hiding the
+    // welcome overlay: resumeHistorySession() owns that transition itself.
+    if (jt.kind === 'resume-session') {
+      this.resumeHistorySession(jt.claudeSessionId || jt.sessionId, jt.workingDir || '', r.sessionName);
+      return;
+    }
     // Leaving the welcome overlay so the target surface is visible.
     if (typeof this.hideWelcome === 'function') this.hideWelcome();
 
