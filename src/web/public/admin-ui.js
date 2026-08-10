@@ -110,34 +110,49 @@
   }
 
   // ── Admin Users panel (injected into the App Settings modal) ──────────────
+  // The settings modal is a rail (table of contents) over ONE scrolling
+  // document, so this appends a rail entry plus a real section rather than a
+  // tab button plus a hidden panel.
   function injectUsersTab() {
     const modal = document.getElementById('appSettingsModal');
-    if (!modal || modal.querySelector('[data-tab="settings-users"]')) return;
-    const tabs = modal.querySelector('.modal-tabs');
-    const body = modal.querySelector('.modal-body');
-    if (!tabs || !body) return;
+    if (!modal || modal.querySelector('[data-section="settings-users"]')) return;
+    const rail = modal.querySelector('.set-rail-items');
+    const body = modal.querySelector('.set-doc');
+    if (!rail || !body) return;
     const btn = document.createElement('button');
-    btn.className = 'modal-tab-btn';
-    btn.dataset.tab = 'settings-users';
-    btn.textContent = 'Users';
-    tabs.appendChild(btn);
-    const content = document.createElement('div');
-    content.className = 'modal-tab-content hidden';
+    btn.type = 'button';
+    btn.className = 'set-rail-item';
+    btn.dataset.section = 'settings-users';
+    btn.innerHTML =
+      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg><span>Users</span>';
+    rail.appendChild(btn);
+    const content = document.createElement('section');
+    content.className = 'set-section';
     content.id = 'settings-users';
+    content.dataset.label = 'Users';
     content.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <strong>Users</strong>
-        <span>
-          <button class="btn btn-sm" id="adminOpenPanel">Open Admin Panel</button>
-          <button class="btn btn-sm" id="adminAddUser">+ Add user</button>
-        </span>
+      <div class="set-section-head">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg>
+        <h2>Users</h2>
       </div>
-      <p class="form-hint">Users share the host account; this separates workspaces, it does not sandbox
+      <p class="set-section-blurb">Users share the host account; this separates workspaces, it does not sandbox
         users from each other. Pair with Docker cases for isolation.</p>
-      <div id="adminUsersTable"></div>
-      <p id="adminUsersMsg" style="min-height:1.2em;color:var(--muted,#888)"></p>`;
+      <div class="set-group">
+        <div class="set-group-head"><h4>Accounts</h4></div>
+        <div class="set-group-body">
+          <div class="set-row">
+            <div class="set-row-text"><span class="set-row-label">Manage users</span></div>
+            <div class="set-row-actions">
+              <button class="btn-toolbar btn-sm" id="adminOpenPanel">Open Admin Panel</button>
+              <button class="btn-toolbar btn-sm" id="adminAddUser">+ Add user</button>
+            </div>
+          </div>
+          <div id="adminUsersTable"></div>
+          <p id="adminUsersMsg" style="min-height:1.2em;color:var(--text-muted)"></p>
+        </div>
+      </div>`;
     body.appendChild(content);
-    // Render whenever the tab is shown (the shared switchSettingsTab toggles it).
+    // Render whenever the entry is used (the shared switchSettingsTab scrolls to it).
     btn.addEventListener('click', renderUsers);
     content.querySelector('#adminAddUser').onclick = addUserFlow;
     content.querySelector('#adminOpenPanel').onclick = openAdminPanel;

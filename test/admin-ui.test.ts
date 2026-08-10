@@ -28,7 +28,7 @@ async function bootWith(me: Record<string, unknown>) {
   const dom = new JSDOM(
     `<!doctype html><body>
       <button id="adminPanelBtn" class="btn-admin-panel btn-admin-panel--hidden"></button>
-      <div class="modal" id="appSettingsModal"><div class="modal-tabs"></div><div class="modal-body"></div></div>
+      <div class="modal" id="appSettingsModal"><nav class="set-rail"><div class="set-rail-items"></div></nav><div class="set-doc" id="appSettingsDoc"></div></div>
     </body>`,
     { url: 'http://localhost/', runScripts: 'outside-only' }
   );
@@ -45,22 +45,23 @@ async function bootWith(me: Record<string, unknown>) {
 }
 
 describe('admin-ui boot', () => {
-  it('exposes the identity and injects the Users tab for a multi-user admin', async () => {
+  it('exposes the identity and injects the Users section for a multi-user admin', async () => {
     const { win } = await bootWith({ username: 'root', role: 'admin', multiUser: true, mustChangePassword: false });
     expect(win.__codemanUser).toMatchObject({ username: 'root', role: 'admin', multiUser: true });
-    const btn = win.document.querySelector('[data-tab="settings-users"]');
+    // The settings modal is a rail over one document: a rail entry, not a tab.
+    const btn = win.document.querySelector('[data-section="settings-users"]');
     expect(btn).toBeTruthy();
     expect(win.document.getElementById('settings-users')).toBeTruthy();
   });
 
-  it('does NOT inject the Users tab for a regular user', async () => {
+  it('does NOT inject the Users section for a regular user', async () => {
     const { win } = await bootWith({ username: 'joe', role: 'user', multiUser: true, mustChangePassword: false });
-    expect(win.document.querySelector('[data-tab="settings-users"]')).toBeFalsy();
+    expect(win.document.querySelector('[data-section="settings-users"]')).toBeFalsy();
   });
 
   it('does NOT inject the Users tab in single-user mode', async () => {
     const { win } = await bootWith({ username: 'admin', role: 'admin', multiUser: false, mustChangePassword: false });
-    expect(win.document.querySelector('[data-tab="settings-users"]')).toBeFalsy();
+    expect(win.document.querySelector('[data-section="settings-users"]')).toBeFalsy();
   });
 
   it('shows the change-password modal when mustChangePassword is set', async () => {
