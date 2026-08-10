@@ -1412,9 +1412,9 @@
               <input type="search" id="appSettingsSearch" placeholder="Search settings" autocomplete="off" aria-label="Search settings">
             </div>
             <div class="set-rail-items" id="appSettingsRailItems">
-              <button type="button" class="set-rail-item active" data-section="settings-system">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.26.6.86 1 1.51 1H21a2 2 0 0 1 0 4h-.09c-.65 0-1.25.4-1.51 1z"/></svg>
-                <span>System</span>
+              <button type="button" class="set-rail-item active" data-section="settings-updates">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><polyline points="7 10 12 15 17 10"/><path d="M4 20h16"/></svg>
+                <span>Updates</span>
               </button>
               <button type="button" class="set-rail-item" data-section="settings-terminal">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
@@ -1448,6 +1448,10 @@
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M9 13h6"/></svg>
                 <span>Shortcuts</span>
               </button>
+              <button type="button" class="set-rail-item" data-section="settings-system">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.26.6.86 1 1.51 1H21a2 2 0 0 1 0 4h-.09c-.65 0-1.25.4-1.51 1z"/></svg>
+                <span>System</span>
+              </button>
             </div>
             <p class="set-rail-foot">Settings marked <b>device</b> stay on this browser. The rest sync to every device.</p>
           </nav>
@@ -1464,16 +1468,17 @@
 
             <p class="set-empty" id="appSettingsSearchEmpty" hidden>No settings match that search.</p>
 
-            <!-- ══ System ═══════════════════════════════════════════════════ -->
-            <section class="set-section" id="settings-system" data-label="System">
+            <!-- ══ Updates ══════════════════════════════════════════════════
+                 First in the document on purpose: what this install is running,
+                 and whether a newer release is waiting, before any preference. -->
+            <section class="set-section" id="settings-updates" data-label="Updates">
               <div class="set-section-head">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.26.6.86 1 1.51 1H21a2 2 0 0 1 0 4h-.09c-.65 0-1.25.4-1.51 1z"/></svg>
-                <h2>System</h2>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><polyline points="7 10 12 15 17 10"/><path d="M4 20h16"/></svg>
+                <h2>Updates</h2>
               </div>
-              <p class="set-section-blurb">What this install is running, plus paths, automation and remote access.</p>
+              <p class="set-section-blurb">The version this install is running, and the one-click update.</p>
 
               <div class="set-group">
-                <div class="set-group-head"><h4>Updates</h4></div>
                 <div class="set-group-body">
                   <div class="set-row" data-search="version current release">
                     <div class="set-row-text"><span class="set-row-label">Current version</span></div>
@@ -1495,65 +1500,8 @@
                   <div id="updateProgress" class="set-progress" style="display:none"></div>
                 </div>
               </div>
-
-              <div class="set-group">
-                <div class="set-group-head"><h4>Paths</h4><span class="set-scope">synced</span></div>
-                <div class="set-group-body">
-                  <div class="set-row has-field" data-search="claude.md template path new cases">
-                    <div class="set-row-text">
-                      <span class="set-row-label">CLAUDE.md template</span>
-                      <span class="set-row-desc">Used when creating new cases. Leave empty for the built-in template.</span>
-                    </div>
-                    <input type="text" id="appSettingsClaudeMdPath" class="set-input" placeholder="/path/to/CLAUDE.md template">
-                  </div>
-                  <div class="set-row has-field" data-search="default working directory">
-                    <div class="set-row-text">
-                      <span class="set-row-label">Default working directory</span>
-                      <span class="set-row-desc">Starting directory for new sessions.</span>
-                    </div>
-                    <input type="text" id="appSettingsDefaultDir" class="set-input" placeholder="~/projects">
-                  </div>
-                </div>
-              </div>
-
-              <div class="set-group">
-                <div class="set-group-head"><h4>Automation</h4><span class="set-scope">synced</span></div>
-                <div class="set-group-body">
-                  <div class="set-row" data-search="image watcher popup screenshots">
-                    <div class="set-row-text">
-                      <span class="set-row-label">Image watcher</span>
-                      <span class="set-row-desc">Detect and pop up new images found in session directories.</span>
-                    </div>
-                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsImageWatcherEnabled"><span class="slider"></span></label>
-                  </div>
-                </div>
-              </div>
-
-              <div class="set-group">
-                <div class="set-group-head"><h4>Remote access</h4><span class="set-scope">synced</span></div>
-                <div class="set-group-body">
-                  <div class="set-row" data-search="cloudflare tunnel remote access url">
-                    <div class="set-row-text">
-                      <span class="set-row-label">Cloudflare Tunnel</span>
-                      <span class="set-row-desc">Expose Codeman on a public URL. Set CODEMAN_PASSWORD first.</span>
-                    </div>
-                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsTunnelEnabled"><span class="slider"></span></label>
-                  </div>
-                  <div class="set-row" id="tunnelUrlRow" style="display:none">
-                    <div class="set-row-text"><span class="set-row-label">Tunnel URL</span></div>
-                    <div class="set-row-actions">
-                      <span id="tunnelUrlDisplay" class="set-copy" title="Click to copy"></span>
-                      <button class="btn-icon-sm" id="tunnelQrBtn" onclick="app.showTunnelQR()" title="Show QR code">&#x229E;</button>
-                    </div>
-                  </div>
-                  <div class="set-row" id="tunnelUploadUrlRow" style="display:none">
-                    <div class="set-row-text"><span class="set-row-label">Upload URL</span></div>
-                    <span id="tunnelUploadUrlDisplay" class="set-copy" title="Click to copy"></span>
-                  </div>
-                </div>
-              </div>
-
             </section>
+
             <!-- ══ Terminal &amp; Input ══════════════════════════════════════ -->
             <section class="set-section" id="settings-terminal" data-label="Terminal &amp; Input">
               <div class="set-section-head">
@@ -2262,6 +2210,72 @@
               </div>
             </section>
 
+
+            <!-- ══ System ═══════════════════════════════════════════════════ -->
+            <section class="set-section" id="settings-system" data-label="System">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.26.6.86 1 1.51 1H21a2 2 0 0 1 0 4h-.09c-.65 0-1.25.4-1.51 1z"/></svg>
+                <h2>System</h2>
+              </div>
+              <p class="set-section-blurb">Paths, automation and remote access. Set once, rarely touched.</p>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Paths</h4><span class="set-scope">synced</span></div>
+                <div class="set-group-body">
+                  <div class="set-row has-field" data-search="claude.md template path new cases">
+                    <div class="set-row-text">
+                      <span class="set-row-label">CLAUDE.md template</span>
+                      <span class="set-row-desc">Used when creating new cases. Leave empty for the built-in template.</span>
+                    </div>
+                    <input type="text" id="appSettingsClaudeMdPath" class="set-input" placeholder="/path/to/CLAUDE.md template">
+                  </div>
+                  <div class="set-row has-field" data-search="default working directory">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Default working directory</span>
+                      <span class="set-row-desc">Starting directory for new sessions.</span>
+                    </div>
+                    <input type="text" id="appSettingsDefaultDir" class="set-input" placeholder="~/projects">
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Automation</h4><span class="set-scope">synced</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="image watcher popup screenshots">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Image watcher</span>
+                      <span class="set-row-desc">Detect and pop up new images found in session directories.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsImageWatcherEnabled"><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Remote access</h4><span class="set-scope">synced</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="cloudflare tunnel remote access url">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Cloudflare Tunnel</span>
+                      <span class="set-row-desc">Expose Codeman on a public URL. Set CODEMAN_PASSWORD first.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsTunnelEnabled"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" id="tunnelUrlRow" style="display:none">
+                    <div class="set-row-text"><span class="set-row-label">Tunnel URL</span></div>
+                    <div class="set-row-actions">
+                      <span id="tunnelUrlDisplay" class="set-copy" title="Click to copy"></span>
+                      <button class="btn-icon-sm" id="tunnelQrBtn" onclick="app.showTunnelQR()" title="Show QR code">&#x229E;</button>
+                    </div>
+                  </div>
+                  <div class="set-row" id="tunnelUploadUrlRow" style="display:none">
+                    <div class="set-row-text"><span class="set-row-label">Upload URL</span></div>
+                    <span id="tunnelUploadUrlDisplay" class="set-copy" title="Click to copy"></span>
+                  </div>
+                </div>
+              </div>
+            </section>
           </div>
         </div>
         <div class="form-actions set-foot">

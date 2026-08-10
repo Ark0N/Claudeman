@@ -135,11 +135,16 @@ describe('admin panel modal', () => {
 
 describe('index.html wiring', () => {
   it('loads admin-ui.js after settings-ui.js and before session-ui.js', () => {
-    const settings = INDEX_HTML.indexOf('settings-ui.js');
-    const admin = INDEX_HTML.indexOf('admin-ui.js');
-    const session = INDEX_HTML.indexOf('session-ui.js');
-    expect(admin).toBeGreaterThan(settings);
-    expect(session).toBeGreaterThan(admin);
+    // Match the SCRIPT TAG, not the bare filename: modal markup earlier in the
+    // document cites these modules in comments ("session-ui.js: openSessionOptions"),
+    // and a bare indexOf finds the comment instead of the load order.
+    const at = (file: string) => {
+      const i = INDEX_HTML.indexOf(`src="${file}"`);
+      expect(i, `no <script src="${file}"> in index.html`).toBeGreaterThan(-1);
+      return i;
+    };
+    expect(at('admin-ui.js')).toBeGreaterThan(at('settings-ui.js'));
+    expect(at('session-ui.js')).toBeGreaterThan(at('admin-ui.js'));
   });
 
   it('ships the header Admin Panel button hidden by default', () => {

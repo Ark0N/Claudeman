@@ -59,20 +59,25 @@ describe('App Settings modal structure', () => {
     }
   });
 
-  it('opens on System, with the version and the updater above everything else', () => {
-    expect(settingsUi).toContain("this.switchSettingsTab('settings-system')");
+  it('opens on Updates: the version and the updater above everything else', () => {
+    expect(settingsUi).toContain("this.switchSettingsTab('settings-updates')");
     const modal = settingsModal();
     const order = [...modal.matchAll(/<section class="set-section" id="([a-z-]+)"/g)].map((m) => m[1]);
     // Rail and document must agree, or scroll-spy paints the wrong entry.
     const rail = [...modal.matchAll(/data-section="([a-z-]+)"/g)].map((m) => m[1]);
-    expect(rail.slice(0, 3)).toEqual(['settings-system', 'settings-terminal', 'settings-layout']);
-    expect(order.slice(0, 3)).toEqual(['settings-system', 'settings-terminal', 'settings-layout']);
-    // Updates leads the System section: version first, then the update action.
+    expect(rail.slice(0, 3)).toEqual(['settings-updates', 'settings-terminal', 'settings-layout']);
+    expect(order.slice(0, 3)).toEqual(['settings-updates', 'settings-terminal', 'settings-layout']);
+    // Updates carries ONLY the version and the update action; the rest of the
+    // system settings tail the document under System, out of the way.
+    const updates = modal.match(/id="settings-updates"([\s\S]*?)<\/section>/)?.[1] ?? '';
+    expect(updates).toContain('id="updateCurrentVersion"');
+    expect(updates).toContain('id="updateCheckBtn"');
+    expect(updates).not.toContain('id="appSettingsClaudeMdPath"');
+    expect(rail[rail.length - 1]).toBe('settings-system');
+    expect(order[order.length - 1]).toBe('settings-system');
     const system = modal.match(/id="settings-system"([\s\S]*?)<\/section>/)?.[1] ?? '';
-    const version = system.indexOf('id="updateCurrentVersion"');
-    expect(version).toBeGreaterThan(-1);
-    expect(version).toBeLessThan(system.indexOf('id="appSettingsClaudeMdPath"'));
-    expect(system.indexOf('id="updateCheckBtn"')).toBeLessThan(system.indexOf('id="appSettingsClaudeMdPath"'));
+    expect(system).toContain('id="appSettingsClaudeMdPath"');
+    expect(system).toContain('id="appSettingsTunnelEnabled"');
   });
 
   it('keeps Local Echo the first row of the second section', () => {

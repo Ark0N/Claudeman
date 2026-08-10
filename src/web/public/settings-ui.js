@@ -503,10 +503,11 @@ Object.assign(CodemanApp.prototype, {
     this._syncSettingsChips();
     this._syncModelCards();
     this._syncEffortSegment();
-    // Back to the top of the document (one scroll, not a tab reset). System is
-    // first now: the version this install is running, and whether an update is
-    // waiting, are the two things worth seeing before anything is configured.
-    this.switchSettingsTab('settings-system');
+    // Back to the top of the document (one scroll, not a tab reset). Updates is
+    // first now: the version this install is running, and whether a newer one is
+    // waiting, are the two things worth seeing before any preference. The rest of
+    // the system settings (paths, automation, remote access) tail the document.
+    this.switchSettingsTab('settings-updates');
     const modal = document.getElementById('appSettingsModal');
     modal.classList.add('active');
 
