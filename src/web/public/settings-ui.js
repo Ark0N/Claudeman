@@ -482,17 +482,18 @@ Object.assign(CodemanApp.prototype, {
     const voiceCfg = VoiceInput._getDeepgramConfig();
     document.getElementById('voiceDeepgramKey').value = voiceCfg.apiKey || '';
     document.getElementById('voiceLanguage').value = voiceCfg.language || 'en-US';
-    document.getElementById('voiceKeyterms').value = voiceCfg.keyterms || 'refactor, endpoint, middleware, callback, async, regex, TypeScript, npm, API, deploy, config, linter, env, webhook, schema, CLI, JSON, CSS, DOM, SSE, backend, frontend, localhost, dependencies, repository, merge, rebase, diff, commit, com';
+    document.getElementById('voiceKeyterms').value = voiceCfg.keyterms || DEFAULT_VOICE_KEYTERMS;
     document.getElementById('voiceInsertMode').value = voiceCfg.insertMode || 'direct';
+    document.getElementById('voiceProvider').value = voiceCfg.provider || 'auto';
+    document.getElementById('appSettingsClaudeVoice').checked = settings.claudeVoiceEnabled ?? false;
     // Reset key visibility to hidden
     const keyInput = document.getElementById('voiceDeepgramKey');
     keyInput.type = 'password';
     document.getElementById('voiceKeyToggleBtn').textContent = 'Show';
-    // Update provider status
-    const providerName = VoiceInput.getActiveProviderName();
-    const providerEl = document.getElementById('voiceProviderStatus');
-    providerEl.textContent = providerName;
-    providerEl.className = 'voice-provider-status' + (providerName.startsWith('Deepgram') ? ' active' : '');
+    // Update provider status. The Claude row needs a fresh server probe: the
+    // setting is synced, so another device may have flipped it since page load.
+    this._renderVoiceProviderStatus();
+    VoiceInput.refreshClaudeStatus().then(() => this._renderVoiceProviderStatus());
 
     // Updates section — show current version, reset transient result/progress UI.
     this._initUpdatesSection();
@@ -1915,6 +1916,37 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  /**
+   * Paint both Voice status rows: which provider a mic press would use, and what
+   * the server reports about its Claude login. Called on open and again once the
+   * /api/voice/status probe resolves.
+   */
+  _renderVoiceProviderStatus() {
+    const providerEl = document.getElementById('voiceProviderStatus');
+    if (providerEl) {
+      const providerName = VoiceInput.getActiveProviderName();
+      providerEl.textContent = providerName;
+      const live = providerName.startsWith('Deepgram Nova') || providerName.startsWith('Claude (this');
+      providerEl.className = 'voice-provider-status' + (live ? ' active' : '');
+    }
+    const claudeEl = document.getElementById('voiceClaudeStatus');
+    if (!claudeEl) return;
+    const status = VoiceInput._claudeStatus;
+    const text = !status
+      ? 'Checking...'
+      : status.available
+        ? `Ready${status.subscriptionType ? ` (${status.subscriptionType})` : ''}`
+        : status.reason === 'expired'
+          ? 'Login expired - run a Claude session to refresh'
+          : status.reason === 'no-credentials'
+            ? 'No Claude Code login on the server'
+            : status.reason === 'malformed'
+              ? 'Claude credentials unreadable'
+              : 'Off - enable it above';
+    claudeEl.textContent = text;
+    claudeEl.className = 'voice-provider-status' + (status?.available ? ' active' : '');
+  },
+
   async saveAppSettings() {
     // Gesture overlay is injected at page render (server-side), so a change to it
     // only takes effect on reload — remember the prior value to decide below.
@@ -1977,6 +2009,7 @@ Object.assign(CodemanApp.prototype, {
       // Claude Permissions settings
       agentTeamsEnabled: document.getElementById('appSettingsAgentTeams').checked,
       agentSkillEnabled: document.getElementById('appSettingsAgentSkill').checked,
+      claudeVoiceEnabled: document.getElementById('appSettingsClaudeVoice').checked,
       claudeModel: document.getElementById('appSettingsClaudeModel').value,
       opusContext1mEnabled: document.getElementById('appSettingsOpusContext1m').checked,
       remoteAutoReconnect: document.getElementById('appSettingsRemoteAutoReconnect').checked,
@@ -2016,6 +2049,7 @@ Object.assign(CodemanApp.prototype, {
 
     // Save voice settings to localStorage + include in server payload for cross-device sync
     const voiceSettings = {
+      provider: document.getElementById('voiceProvider').value,
       apiKey: document.getElementById('voiceDeepgramKey').value.trim(),
       language: document.getElementById('voiceLanguage').value,
       keyterms: document.getElementById('voiceKeyterms').value.trim(),
@@ -2194,6 +2228,10 @@ Object.assign(CodemanApp.prototype, {
     }
 
     this.closeAppSettings();
+
+    // Voice availability is a server-side answer, so re-probe after a save:
+    // otherwise the mic keeps using the pre-save provider until the next reload.
+    VoiceInput.refreshClaudeStatus();
 
     // The gesture overlay is injected at page render (server reads
     // gestureControlEnabled from settings.json), so a change only takes effect on

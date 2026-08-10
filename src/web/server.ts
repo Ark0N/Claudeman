@@ -166,6 +166,7 @@ import {
   registerMeRoutes,
   registerAdminRoutes,
   registerWsRoutes,
+  registerVoiceRoutes,
   registerWebviewRoutes,
   tryWebviewRefererFallback,
 } from './routes/index.js';
@@ -635,6 +636,7 @@ export class WebServer extends EventEmitter {
       getClaudeModeConfig: this.getClaudeModeConfig.bind(this),
       getTerminalHistoryConfig: this.getTerminalHistoryConfig.bind(this),
       getAgentSkillEnabled: this.getAgentSkillEnabled.bind(this),
+      getClaudeVoiceEnabled: this.getClaudeVoiceEnabled.bind(this),
       getDefaultClaudeMdPath: this.getDefaultClaudeMdPath.bind(this),
       getLightState: this.getLightState.bind(this),
       getLightSessionsState: this.getLightSessionsState.bind(this),
@@ -982,6 +984,7 @@ export class WebServer extends EventEmitter {
     registerCronRoutes(this.app, { ...ctx, cron: this.cronService });
 
     registerWsRoutes(this.app, ctx, () => this.getHostPolicy());
+    registerVoiceRoutes(this.app, ctx, () => this.getHostPolicy());
   }
 
   /**
@@ -1702,6 +1705,15 @@ export class WebServer extends EventEmitter {
   private async getAgentSkillEnabled(): Promise<boolean> {
     const settings = await this.readSettings();
     return settings.agentSkillEnabled === true;
+  }
+
+  // Whether browser dictation may use this machine's Claude Code credentials
+  // (synced `claudeVoiceEnabled` setting, default OFF; docs/claude-voice-plan.md).
+  // OFF by default because turning it on spends the operator's Claude subscription
+  // on transcription for anyone who can reach the UI.
+  private async getClaudeVoiceEnabled(): Promise<boolean> {
+    const settings = await this.readSettings();
+    return settings.claudeVoiceEnabled === true;
   }
 
   /**

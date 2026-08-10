@@ -858,6 +858,16 @@ export const SettingsUpdateSchema = z
      */
     agentSkillEnabled: z.boolean().optional(),
     /**
+     * Let browser dictation transcribe through this machine's Claude Code login,
+     * the same speech-to-text service the CLI's own `/voice` mode uses
+     * (docs/claude-voice-plan.md). SYNCED, default OFF: enabling it spends the
+     * operator's Claude subscription on transcription for anyone who can reach
+     * the UI, and routes microphone audio to Anthropic rather than to whichever
+     * provider was configured before. The Deepgram and Web Speech paths are
+     * untouched by this flag.
+     */
+    claudeVoiceEnabled: z.boolean().optional(),
+    /**
      * Approvals Inbox (header bell + drawer, phone overview answer buttons,
      * push Approve/Deny action buttons). SYNCED, default OFF (opt-in): even
      * with items pending, no surface renders and push payloads carry no
@@ -970,6 +980,8 @@ export const SettingsUpdateSchema = z
     // Voice settings (cross-device sync)
     voiceSettings: z
       .object({
+        /** 'auto' | 'claude' | 'deepgram' | 'webspeech'. Unknown values fall back to auto client-side. */
+        provider: z.string().max(20).optional(),
         apiKey: z.string().max(200).optional(),
         language: z.string().max(20).optional(),
         keyterms: z.string().max(500).optional(),
