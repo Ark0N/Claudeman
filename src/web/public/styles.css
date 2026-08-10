@@ -14609,15 +14609,15 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Settings surface (#appSettingsModal + #sessionOptionsModal)
+   Settings surface (#appSettingsModal + #sessionOptionsModal + #createCaseModal)
 
    The `set-*` language: a left rail, a document of grouped rows, each row text
-   on the left and its control pinned right. Both modals use it, hence the
+   on the left and its control pinned right. All three modals use it, hence the
    `:is()` scope — which keeps the old id specificity exactly (an `:is()` list
-   takes the specificity of its most specific argument, and both are ids), so
-   nothing downstream of this block shifts in the cascade.
+   takes the specificity of its most specific argument, and all three are ids),
+   so nothing downstream of this block shifts in the cascade.
 
-   The two differ in what the rail DOES, and only there:
+   They differ in what the rail DOES, and only there:
      • #appSettingsModal — a TABLE OF CONTENTS over ONE scrolling document.
        Every section stays mounted, the rail follows the scroll, find-in-page
        reaches all of it.
@@ -14625,9 +14625,14 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
        `.hidden` on the rest (switchOptionsTab in session-ui.js). Summary owns
        its own scroller and Respawn is long, so stacking them into one document
        would bury both.
+     • #createCaseModal: a real switcher too (switchCaseModalTab), over six
+       independent forms that keep their legacy `.form-row` markup; the adapter
+       block near the end of this file maps that markup onto the row language.
 
-   `.modal-tabs`/`.modal-tab-btn`/`.modal-tab-content` still belong to
-   #createCaseModal and must not be restyled from here.
+   The two task modals also take a size-up that App Settings does not (their
+   own blocks further down): they are short panels you act on, not a document
+   you scan. `.modal-tabs`/`.modal-tab-btn`/`.modal-tab-content` are RETIRED:
+   no modal uses them and their rules are deleted from both stylesheets.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /* Deliberately narrower than the other .modal-lg users: the document is a

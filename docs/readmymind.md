@@ -11,7 +11,7 @@ Codeman's per-case memory of what you are trying to accomplish, and the 🧠 but
 
 ## Turning it on
 
-App Settings → Panels → **Read My Mind** (synced setting `readMyMindEnabled`, default **OFF**). It gates everything: capture, the header button, and nothing shows anywhere while it is off. The API equivalent:
+App Settings → Header & Panels → Cross-session features → **Read My Mind** (synced setting `readMyMindEnabled`, default **OFF**). It gates everything: capture, the header button, and nothing shows anywhere while it is off. The API equivalent:
 
 ```bash
 curl -sk -X PUT https://localhost:3000/api/settings \
@@ -93,7 +93,7 @@ A steer-note input on Rethink ("no, I meant the mobile bug"; the API already acc
 
 | Symptom | Cause / fix |
 | ------- | ----------- |
-| No 🧠 button in the header | `readMyMindEnabled` is OFF (App Settings → Panels), you are on a phone (there it is a key on the keyboard accessory bar instead, visible while typing), or the active session is not claude-mode |
+| No 🧠 button in the header | `readMyMindEnabled` is OFF (App Settings → Header & Panels → Cross-session features), you are on a phone (there it is a key on the keyboard accessory bar instead, visible while typing), or the active session is not claude-mode |
 | Prediction feels generic | The profile is thin: record goals (PUT or ask your agent to), and let capture accumulate a few real prompts first |
 | "A prediction is already running" (409) | One per session at a time; wait for the current one (up to 90 s) |
 | Prediction fails (502) | The model returned no usable JSON, or the CLI could not start; retry. Check `readMyMindModel` if you overrode it |
