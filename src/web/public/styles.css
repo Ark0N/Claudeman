@@ -15767,6 +15767,35 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   background: linear-gradient(90deg, var(--border), transparent);
 }
 
+/* `display: flex` above drops the browser's own disclosure triangle, so the
+   chevron is explicit markup. Without it these rows read as plain headings and
+   nobody thinks to click them (reported on Clone options / Container settings). */
+#createCaseModal .set-doc .advanced-options > summary {
+  list-style: none;
+}
+
+#createCaseModal .set-doc .advanced-options > summary::-webkit-details-marker {
+  display: none;
+}
+
+#createCaseModal .set-doc .advanced-options > summary .set-adv-chev {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  transition: transform 0.18s, color 0.15s;
+}
+
+#createCaseModal .set-doc .advanced-options[open] > summary .set-adv-chev {
+  transform: rotate(180deg);
+}
+
+#createCaseModal .set-doc .advanced-options > summary:hover {
+  color: var(--text);
+}
+
+#createCaseModal .set-doc .advanced-options > summary:hover .set-adv-chev {
+  color: var(--accent);
+}
+
 #createCaseModal .set-doc .advanced-options-content {
   padding-top: 4px;
 }
