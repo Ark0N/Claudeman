@@ -22,15 +22,19 @@ export type SearchSourceType = 'session' | 'event' | 'file';
 
 /** Where the frontend should jump when a result card is activated. */
 export interface SearchJumpTarget {
-  /** Kind of navigation target. */
-  kind: 'session' | 'run-summary' | 'file-preview';
+  /**
+   * Kind of navigation target. `resume-session` marks a session that is no longer
+   * running: selecting it has to REPLAY the conversation rather than switch to a
+   * tab that does not exist.
+   */
+  kind: 'session' | 'run-summary' | 'file-preview' | 'resume-session';
   /** Owning Codeman session id (always present — every result is session-scoped). */
   sessionId: string;
   /**
    * Secondary identifier for the target:
    * - kind 'run-summary': the run-summary event id
    * - kind 'file-preview': the attachment history item id
-   * - kind 'session': undefined (the sessionId is sufficient)
+   * - kind 'session' / 'resume-session': undefined (the sessionId is sufficient)
    */
   targetId?: string;
   /**
@@ -38,6 +42,16 @@ export interface SearchJumpTarget {
    * server-private external paths are intentionally omitted to avoid leakage.
    */
   relativePath?: string;
+  /**
+   * `resume-session` only: the Claude conversation UUID to resume, when it differs
+   * from the Codeman session id (resumed and `/clear`-respawned sessions).
+   */
+  claudeSessionId?: string;
+  /**
+   * `resume-session` only: the directory to resume in. Already visible in the
+   * result snippet for session rows, so this exposes nothing new.
+   */
+  workingDir?: string;
 }
 
 /** A single typed search result card. */

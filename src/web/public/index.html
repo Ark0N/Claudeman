@@ -397,7 +397,27 @@
               </div>
               <div class="search-results" id="searchResults" hidden></div>
             </div>
-            <h3 class="history-title" id="historyTitle">Resume Conversation</h3>
+            <div class="history-header" id="historyHeader">
+              <h3 class="history-title" id="historyTitle">Resume Conversation</h3>
+              <span class="history-count" id="historyCount" data-i18n-skip></span>
+              <div class="history-controls">
+                <input
+                  type="search"
+                  id="historyFilter"
+                  class="history-filter"
+                  placeholder="Filter…"
+                  autocomplete="off"
+                  spellcheck="false"
+                  maxlength="100"
+                  aria-label="Filter past conversations"
+                />
+                <select id="historySort" class="search-select history-sort" aria-label="Sort past conversations">
+                  <option value="recent">Recent</option>
+                  <option value="name">Name A–Z</option>
+                  <option value="folder">Folder A–Z</option>
+                </select>
+              </div>
+            </div>
             <div class="history-list" id="historyList"></div>
           </div>
           <p class="welcome-hint">Or click Run to start</p>

@@ -3,7 +3,9 @@
  *
  * Registers `GET /api/search?q=&types=&limit=` — a bounded, in-memory search
  * across three v1 sources, returned in the standard ApiResponse envelope:
- *   1. sessions/cases — name, working directory, session id
+ *   1. sessions/cases — name, working directory, session id, for LIVE sessions
+ *      plus the past-session snapshot in `session-history-index.ts` (issue #261:
+ *      the live map alone made every closed session unfindable by folder name)
  *   2. run-summary events — event title/details (from the live run-summary trackers)
  *   3. file paths — per-session attachment history (workspace-relative paths only)
  *
@@ -34,6 +36,7 @@ import {
 } from '../../search-service.js';
 import type { SearchSourceType } from '../../types/search.js';
 import type { SessionPort, InfraPort } from '../ports/index.js';
+import { ensureHistorySessionIndexFresh, getHistorySessionIndex } from '../session-history-index.js';
 
 /**
  * Per-source harvest caps. These bound how much in-memory data we hand to the
@@ -61,11 +64,17 @@ interface SessionLike {
 /**
  * Harvest the three source arrays from the live in-memory stores. Reads only
  * bounded, already-loaded data — no disk I/O, no terminal buffers.
+ *
+ * Past sessions come from the `session-history-index` snapshot, which is built
+ * outside the request path for exactly that reason. Live rows are harvested
+ * first and win the dedupe, so a session that is both live and in the snapshot
+ * keeps its live jump-to (switch to the tab) instead of a resume.
  */
 function harvestSources(ctx: SessionPort & InfraPort, canSee?: (owner?: string) => boolean): SearchSources {
   const sessions: SessionSearchInput[] = [];
   const events: EventSearchInput[] = [];
   const files: FileSearchInput[] = [];
+  const seenSessionIds = new Set<string>();
 
   for (const raw of ctx.sessions.values()) {
     const s = raw as unknown as SessionLike & { owner?: string };
@@ -73,6 +82,7 @@ function harvestSources(ctx: SessionPort & InfraPort, canSee?: (owner?: string) 
     const sessionName = s.name ?? '';
     const timestamp = s.lastActivityAt ?? s.createdAt ?? 0;
 
+    seenSessionIds.add(s.id);
     sessions.push({
       sessionId: s.id,
       sessionName,
@@ -93,6 +103,24 @@ function harvestSources(ctx: SessionPort & InfraPort, canSee?: (owner?: string) 
         itemId: item.id,
       });
     }
+  }
+
+  // Past sessions: the out-of-band snapshot of the unified list. Unscoped on
+  // disk, so every row goes through the same ownership check as a live one —
+  // host-wide transcript rows carry no owner and are therefore admin-only in
+  // multi-user mode, matching GET /api/sessions/unified.
+  for (const item of getHistorySessionIndex().items) {
+    if (seenSessionIds.has(item.sessionId)) continue;
+    if (canSee && !canSee(item.owner)) continue;
+    seenSessionIds.add(item.sessionId);
+    sessions.push({
+      sessionId: item.sessionId,
+      sessionName: item.name,
+      workingDir: item.workingDir,
+      timestamp: item.timestamp,
+      history: true,
+      claudeSessionId: item.claudeSessionId,
+    });
   }
 
   // Events: from the live run-summary trackers, keyed by session id.
@@ -133,6 +161,11 @@ export function registerSearchRoutes(app: FastifyInstance, ctx: SessionPort & In
             .filter(Boolean) as SearchSourceType[]
         )
       : null;
+
+    // Fire-and-forget: a stale past-session snapshot is rebuilt in the
+    // background. This query still answers from whatever is already in memory,
+    // which is what keeps the request path free of disk I/O.
+    ensureHistorySessionIndexFresh();
 
     const sources = harvestSources(ctx, canSee);
 

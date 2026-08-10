@@ -94,7 +94,13 @@ import {
   type LifecycleInput,
   type HistoryInput,
   type MuxStatInput,
+  type UnifiedSessionItem,
 } from '../../services/unified-session-service.js';
+import {
+  buildHistorySessionIndexItems,
+  setHistoryIndexRefresher,
+  setHistorySessionIndex,
+} from '../session-history-index.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '../ports/index.js';
 import { RunSummaryTracker } from '../../run-summary.js';
 
@@ -3539,16 +3545,20 @@ export function registerSessionRoutes(
     return { sessions: results.slice(0, 50) };
   });
 
-  // Unified, read-only session list: merges live + persisted + lifecycle +
-  // transcript history + mux stats into one de-duplicated, searchable list
-  // (COD-121). Pure merge/filter logic lives in unified-session-service.ts.
-  app.get('/api/sessions/unified', async (req) => {
-    const query = req.query as { q?: string; offset?: string; limit?: string };
-
-    if (ctx.testMode) {
-      return { sessions: [], total: 0 };
-    }
-
+  /**
+   * Gather the four read-only views the unified list is merged from, plus mux
+   * stats. This is the expensive half (the lifecycle log and a scan of every
+   * Claude transcript), factored out of the route handler because the
+   * past-session search index rebuilds itself from the very same inputs — off
+   * the request path, see session-history-index.ts.
+   */
+  async function gatherUnifiedInputs(): Promise<{
+    live: LiveSessionInput[];
+    persisted: PersistedSessionInput[];
+    lifecycle: LifecycleInput[];
+    history: HistoryInput[];
+    mux: MuxStatInput[];
+  }> {
     // Live (in-memory) sessions.
     const live: LiveSessionInput[] = [...ctx.sessions.values()].map((s) => {
       const st = s.toState();
@@ -3649,14 +3659,54 @@ export function registerSessionRoutes(
       // Mux stats are optional.
     }
 
+    return { live, persisted, lifecycle, history, mux };
+  }
+
+  /**
+   * Publish a merged unified list as the past-session search index (issue #261).
+   * The snapshot is stored UNSCOPED with a per-row owner, so it must only ever be
+   * built from an unscoped merge — `harvestSources()` in search-routes re-applies
+   * the ownership check on read.
+   */
+  function publishHistorySessionIndex(merged: UnifiedSessionItem[]): void {
+    const ownerById = new Map<string, string | undefined>();
+    const stored = ctx.store.getState().sessions as Record<string, { id: string; owner?: string }>;
+    for (const p of Object.values(stored)) ownerById.set(p.id, p.owner);
+    // Live wins: a session's owner on disk can lag the running one.
+    for (const s of ctx.sessions.values()) ownerById.set(s.id, s.owner);
+    const liveIds = new Set(ctx.sessions.keys());
+    setHistorySessionIndex(buildHistorySessionIndexItems(merged, ownerById, liveIds));
+  }
+
+  // Rebuild hook for the search route: it kicks this (fire-and-forget) when the
+  // snapshot goes stale, so a search never pays for the scan itself.
+  setHistoryIndexRefresher(async () => {
+    if (ctx.testMode) return;
+    publishHistorySessionIndex(mergeUnifiedSessions(await gatherUnifiedInputs()));
+  });
+
+  // Unified, read-only session list: merges live + persisted + lifecycle +
+  // transcript history + mux stats into one de-duplicated, searchable list
+  // (COD-121). Pure merge/filter logic lives in unified-session-service.ts.
+  app.get('/api/sessions/unified', async (req) => {
+    const query = req.query as { q?: string; offset?: string; limit?: string };
+
+    if (ctx.testMode) {
+      return { sessions: [], total: 0 };
+    }
+
+    const { live, persisted, lifecycle, history, mux } = await gatherUnifiedInputs();
+
     // Multi-user: a non-admin only sees their own sessions; host-wide transcript
     // history (not tied to an owned session) is admin-only.
     let sLive = live;
     let sPersisted = persisted;
     let sLifecycle = lifecycle;
     let sHistory = history;
+    let scoped = false;
     const uUser = getAuthUser(req);
     if (isMultiUserMode() && uUser.role !== 'admin') {
+      scoped = true;
       const ownedLive = new Set(
         [...ctx.sessions.values()].filter((s) => canAccessOwned(uUser, s.owner)).map((s) => s.id)
       );
@@ -3680,6 +3730,14 @@ export function registerSessionRoutes(
       history: sHistory,
       mux,
     });
+
+    // Refresh the search index off the back of this request — the home screen
+    // fetches this endpoint whenever it opens, which is the same screen the
+    // search box lives on, so the snapshot is warm before anyone types. A scoped
+    // merge is a per-user subset and would corrupt the shared snapshot, so that
+    // path re-merges unscoped instead (multi-user is opt-in and rarely hit).
+    publishHistorySessionIndex(scoped ? mergeUnifiedSessions({ live, persisted, lifecycle, history, mux }) : merged);
+
     const offset = query.offset !== undefined ? parseInt(query.offset, 10) : undefined;
     const limit = query.limit !== undefined ? parseInt(query.limit, 10) : undefined;
     return filterAndPaginate(merged, {
