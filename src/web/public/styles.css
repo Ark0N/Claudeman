@@ -3266,10 +3266,28 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   pointer-events: auto;
 }
 
+/* The overlay fills <main> and never scrolls, so the content has to fit INSIDE
+   it rather than run off both ends: on a 1470x840 window the title sat above the
+   top edge and "Or click Run to start" below the bottom one, with no way to
+   reach either. Bounding the column at the overlay height and letting the one
+   genuinely elastic block absorb the difference (the Resume list, which already
+   scrolls internally) keeps the whole screen visible at any window height.
+   `overflow-y: auto` is the backstop for a window too short even for that. */
 .welcome-content {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  max-height: 100%;
+  overflow-y: auto;
   text-align: center;
   max-width: 520px;
   padding: 2rem;
+}
+
+/* Only the history block gives ground; the title, buttons and hint keep their
+   natural height, so nothing above or below the list ever gets squeezed. */
+.welcome-content > * {
+  flex-shrink: 0;
 }
 
 .welcome-title {
@@ -3472,11 +3490,26 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   text-align: center;
 }
 
-/* History sessions panel (welcome overlay) */
+/* History sessions panel (welcome overlay).
+   The one shrinkable child of .welcome-content: a flex column so the list below
+   can give up height on a short window instead of pushing the hint off-screen.
+   It ships `style="display:none"` and loadHistorySessions() clears that to '',
+   which is what lets this `display: flex` take effect. */
 .history-sessions {
+  display: flex;
+  flex-direction: column;
+  /* Beats the blanket `.welcome-content > * { flex-shrink: 0 }` above (same
+     specificity, later in the file): this block is the one that gives ground. */
+  flex-shrink: 1;
+  min-height: 0;
   margin-top: 1.5rem;
   width: 100%;
   max-width: 560px;
+}
+
+.history-sessions > .search-panel,
+.history-sessions > .history-header {
+  flex-shrink: 0;
 }
 
 /* ── COD-9 cross-session search (folded into the welcome history panel) ── */
@@ -3827,6 +3860,11 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
+  /* Shrinks (never grows) inside the bounded welcome column: on a short window
+     it gives up height so the hint below stays on screen, and scrolls the rows
+     it can no longer show. `min-height: 0` is what lets it go below content. */
+  flex: 0 1 auto;
+  min-height: 0;
   max-height: min(42vh, 360px);
   overflow-y: auto;
 }
@@ -4141,6 +4179,31 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
 
 .welcome-ralph-link:hover {
   color: var(--accent);
+}
+
+/* Short window (a 1470x840 laptop is the common case): the column above now
+   fits by construction, but only by taking the space out of the Resume list,
+   which collapses to two rows. Buying ~80px back from the vertical rhythm keeps
+   the list usable without touching how the screen looks on a tall display.
+   Phones are covered by mobile.css, which loads later and compacts harder. */
+@media (max-height: 900px) {
+  .welcome-content {
+    padding: 1.25rem 2rem;
+  }
+
+  .welcome-title {
+    font-size: 2.75rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .welcome-actions {
+    margin-top: 1.25rem;
+    margin-bottom: 1rem;
+  }
+
+  .history-sessions {
+    margin-top: 1rem;
+  }
 }
 
 /* Bottom Toolbar */
@@ -14218,11 +14281,16 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   flex-direction: column;
   gap: 0.9em;
   /* Ramps with the viewport, floored so it still clears the centered content at
-     the 1180px gate and capped so it never becomes the main event. */
-  width: clamp(250px, 19vw, 430px);
+     the 1180px gate and capped so it never becomes the main event. The gutter is
+     (100vw - 560px) / 2, so 25vw is the widest ramp that still fits INSIDE it at
+     the gate (295px of 310px) — and it has to be this wide, because a row now
+     carries the full session name and the created/active stamps beside the
+     status pill, none of which may ellipsize. */
+  width: clamp(250px, 25vw, 430px);
   padding: 1.5em 1.1em;
+  /* Fades out to the right instead of ending on a rule: a hard separator drew a
+     line down the middle of an otherwise open home screen. */
   background: linear-gradient(90deg, color-mix(in srgb, var(--bg-card) 65%, transparent) 0%, transparent 100%);
-  border-right: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
   /* The single scale knob: ~12px at the gate, ~17px on a 2560px display. */
   font-size: clamp(12.2px, calc(8px + 0.35vw), 17px);
   text-align: left;
@@ -14405,29 +14473,34 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 .home-sessions-row-title {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.42em;
   min-width: 0;
   color: var(--text);
   font-weight: 600;
 }
 
+/* The name is the only thing that tells one row from another, so it is shown
+   WHOLE: the status pill moved down to the stamps line to give the body the
+   full width of the rail, and anything still too long wraps onto a second line
+   rather than ellipsizing "w34-claudeman: mindreading" into "w34-claudeman: …". */
 .home-sessions-row-title .session-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .home-sessions-row-sub {
   font-size: 0.87em;
   color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
-/* Age line: when the session was first created and when it last did anything.
-   Both are relative and refreshed in place on a timer (home-sessions.js), never
-   by a re-render — a re-render would restart the row's blink animation. */
+/* Age line: when the session was first created and when it last did anything,
+   plus the status pill parked on its right. Both stamps are relative and
+   refreshed in place on a timer (home-sessions.js), never by a re-render — a
+   re-render would restart the row's blink animation. */
 .home-sessions-row-meta {
   display: flex;
   align-items: center;
@@ -14481,6 +14554,12 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   font-weight: 700;
   font-family: monospace;
   text-transform: uppercase;
+}
+
+/* Lives on the stamps line (see _buildHomeSessionRow): pushed hard right, and
+   never shrinking, so the stamps ellipsize before the status word does. */
+.home-sessions-row-meta .home-sessions-pill {
+  margin-left: auto;
 }
 
 .home-sessions-pill {
