@@ -489,7 +489,11 @@ Object.assign(CodemanApp.prototype, {
         const date = new Date(s.lastModified);
         const timeStr = date.toLocaleDateString('en', { month: 'short', day: 'numeric' })
           + ' ' + date.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false });
-        const shortDir = s.workingDir.replace(/^\/home\/[^/]+\//, '~/');
+        // Shared helper, not a local regex: the copy that used to live here
+        // matched `/home/<user>/` only, so on macOS every row rendered the same
+        // unabbreviated `/Users/<user>/…` prefix and ellipsized away the tail
+        // that identifies it (#273).
+        const shortDir = this._shortenHomePath(s.workingDir);
 
         const btn = document.createElement('button');
         btn.className = 'run-mode-option';
@@ -2705,7 +2709,9 @@ Object.assign(CodemanApp.prototype, {
     cases.forEach((c, idx) => {
       const isFirst = idx === 0;
       const isLast = idx === cases.length - 1;
-      const pathDisplay = c.path ? c.path.replace(/^\/Users\/[^/]+/, '~') : '';
+      // Was `/Users/<user>` only, the mirror image of the Run menu's bug: every
+      // case path on a Linux host rendered in full, unabbreviated.
+      const pathDisplay = c.path ? this._shortenHomePath(c.path) : '';
       html += `
         <div class="case-manage-item" data-case="${escapeHtml(c.name)}">
           <div class="case-manage-info">
