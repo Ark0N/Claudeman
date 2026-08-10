@@ -543,25 +543,6 @@ describe('terminal touch tap mouse guard', () => {
     expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
   });
 
-  it('touch: forwards verified Claude transcript scrolling but keeps Codex touch in local history', () => {
-    const { app } = loadTerminalUiHarness();
-    app.activeSessionId = 'sess-1';
-    app.terminal = {
-      modes: { mouseTrackingMode: 'none' },
-      buffer: { active: { viewportY: 50, baseY: 50 } },
-    };
-
-    app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion: '2.1.220' }]]);
-    expect(app._shouldForwardTouchScrollToApp()).toBe(true);
-
-    app.loadAppSettingsFromStorage = () => ({ terminalWheelLocalScrollback: true });
-    expect(app._shouldForwardTouchScrollToApp()).toBe(false);
-
-    app.loadAppSettingsFromStorage = () => ({ terminalWheelLocalScrollback: false });
-    app.sessions = new Map([['sess-1', { mode: 'codex' }]]);
-    expect(app._shouldForwardTouchScrollToApp()).toBe(false);
-  });
-
   it('wheel: the local-scrollback opt-out pins the plain wheel to local scrollback (issue #154)', () => {
     const { app } = loadTerminalUiHarness();
     app.activeSessionId = 'sess-1';

@@ -653,6 +653,7 @@ Object.assign(CodemanApp.prototype, {
       let didScroll = false; // track whether touchmove fired (tap vs scroll)
       let touchStartY = 0;
       let tapStartedWithTerminalFocus = false;
+      let tapStartIntentCache = null;
       const TAP_THRESHOLD = 8; // px — ignore micro-drift to distinguish tap from scroll
       container.addEventListener(
         'touchstart',
@@ -666,11 +667,24 @@ Object.assign(CodemanApp.prototype, {
             isTouching = true;
             didScroll = false;
             tapStartedWithTerminalFocus = this._isMobileTerminalInputFocused();
+            // Classifying scans the whole viewport with translateToString, and
+            // this runs at the start of EVERY gesture including scroll drags.
+            // Cache the result for the touchend of this same gesture rather than
+            // recomputing it; the cache is keyed on the exact start coordinates
+            // so a finger that moved re-classifies at its real position.
             const touchStartIntent = this._classifyMobileTerminalTap(touchLastX, touchLastY);
-            if (touchStartIntent !== 'input') {
+            tapStartIntentCache = { x: touchLastX, y: touchLastY, intent: touchStartIntent };
+            if (touchStartIntent === 'content') {
               // Cancel xterm/browser focus before the compatibility click can
               // open the OS keyboard. Content taps are re-emitted as SGR on
-              // touchend; history taps deliberately remain inert.
+              // touchend.
+              //
+              // 'history' is deliberately NOT included. A scrolled-up viewport
+              // sends nothing, so there is no compatibility click worth
+              // cancelling — and preventDefault() here, paired with touchend's
+              // early return, closes both routes to focus at once. Since
+              // selectSession() ends with scrollToLastNonEmptyLine(), that made
+              // the keyboard unreachable after every tab switch.
               ev.preventDefault();
               this._blurMobileTerminalInput();
             }
@@ -700,7 +714,6 @@ Object.assign(CodemanApp.prototype, {
             // fling, so a jittery tap would both position the cursor AND scroll.
             if (!didScroll) return;
             ev.preventDefault();
-            touchLastX = ev.touches[0].clientX;
             const delta = touchLastY - touchY; // positive = scroll down
             pixelAccum += delta;
             velocity = delta * 1.2;
@@ -737,7 +750,13 @@ Object.assign(CodemanApp.prototype, {
             const touch = ev.changedTouches && ev.changedTouches[0];
             if (touch) {
               this._suppressTrustedTapMouseEvents();
-              this._handleMobileTerminalTap(touch, tapStartedWithTerminalFocus);
+              const cached =
+                tapStartIntentCache &&
+                tapStartIntentCache.x === touch.clientX &&
+                tapStartIntentCache.y === touch.clientY
+                  ? tapStartIntentCache.intent
+                  : null;
+              this._handleMobileTerminalTap(touch, tapStartedWithTerminalFocus, cached);
             }
           }
           tapStartedWithTerminalFocus = false;
@@ -3371,9 +3390,6 @@ Object.assign(CodemanApp.prototype, {
     const mouseTrackingOn = !!mouseMode && mouseMode !== 'none';
     if (!mouseTrackingOn && !this._sessionUsesServerMouseStrip()) return 'input';
 
-    // Permission/elicitation prompts own the full live terminal until answered.
-    if (document.body?.classList?.contains('terminal-action-pending')) return 'content';
-
     const buffer = this.terminal.buffer?.active;
     if (!buffer?.getLine) return 'input';
 
@@ -3421,10 +3437,13 @@ Object.assign(CodemanApp.prototype, {
     let logicalLineEnd = tappedRow;
     while (logicalLineEnd + 1 < rows && wrappedRows[logicalLineEnd + 1]) logicalLineEnd++;
     const tappedLine = lines.slice(logicalLineStart, logicalLineEnd + 1).join('');
-    if (
-      mode === 'claude' &&
-      /^\s*[•·]\s*Working\b.*(?:background|esc to interrupt)/i.test(tappedLine)
-    ) {
+    // Claude's status row is TUI-owned: tapping it opens the teammate view, so it
+    // must not be treated as a keyboard target. Match the AFFORDANCE, not the
+    // wording — the bullet and verb are both unstable (claude 2.1.226 prints
+    // "✻ Cooked for 2m 6s", "✻ Baked for 9m 47s"; earlier builds printed
+    // "• Working …"), while "esc to interrupt" / "background" are what make the
+    // row actionable in the first place.
+    if (mode === 'claude' && /\b(?:esc to interrupt|background)\b/i.test(tappedLine)) {
       return 'content';
     }
     if (menuSelectionVisible) return 'content';
@@ -3471,8 +3490,6 @@ Object.assign(CodemanApp.prototype, {
    * otherwise focus xterm, so focus has to be restored explicitly.
    */
   _isActionableMobileTerminalTap(clientX, clientY) {
-    if (document.body?.classList?.contains('terminal-action-pending')) return true;
-
     const pos = this._clientPointToCell(clientX, clientY);
     const buffer = this.terminal?.buffer?.active;
     if (!pos || !buffer?.getLine) return false;
@@ -3502,14 +3519,22 @@ Object.assign(CodemanApp.prototype, {
     // The hint sits on its own row, so a readback's TITLE row — the one a
     // finger actually lands on — carries no affordance text itself. Look at the
     // adjacent row too, which is how these blocks are laid out in practice.
+    // Keyed on the ACTION VERB, and deliberately not on prose verbs. A CLI hint
+    // names a key or a gesture ("ctrl+r to expand", "tap to collapse",
+    // "esc to interrupt"); "click here to open the file" is transcript content
+    // and must keep the keyboard, so `click` and bare `here` are excluded.
+    // The hint may sit mid-line — Claude's status row is
+    // "✻ Cooked for 2m 6s · esc to interrupt" — so this is not anchored.
     const affordance =
-      /\b(?:ctrl\+\w+|tap|click|enter|esc)\b[^.]{0,24}\bto\s+(?:expand|collapse|view|open|interrupt|see)\b/i;
+      /\b(?:ctrl\+\w+|shift\+\w+|esc|enter|tab|tap)\s+to\s+(?:expand|collapse|view|open|interrupt|see)\b/i;
     const blockStart = Math.max(0, logicalLineStart - 1);
     const blockEnd = Math.min(rows - 1, logicalLineEnd + 1);
     for (let row = blockStart; row <= blockEnd; row++) {
       if (affordance.test(lines[row])) return true;
     }
-    if (/^\s*[•·]\s*Working\b/i.test(tappedLine)) return true;
+    // A Claude status row ("✻ Cooked for 2m 6s · esc to interrupt") is caught by
+    // the affordance above; there is deliberately no verb literal here, because
+    // the verb is randomised per build.
 
     const hasMenuPrompt = lines.some((line) => /^\s*[❯›]\s+\d+[.)]\s/.test(line));
     const hasMenuChoice = lines.some((line) => /^\s+\d+[.)]\s/.test(line));
@@ -3526,11 +3551,20 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  _handleMobileTerminalTap(touch, startedWithTerminalFocus) {
-    if (!touch || !this.terminal) return 'history';
-    const intent = this._classifyMobileTerminalTap(touch.clientX, touch.clientY);
+  _handleMobileTerminalTap(touch, startedWithTerminalFocus, cachedIntent = null) {
+    // A guard bail-out, not a classification: there is nothing to classify. It is
+    // deliberately NOT 'history', which would claim the viewport was scrolled up.
+    if (!touch || !this.terminal) return null;
+    // touchstart already classified this exact point; reuse it rather than paying
+    // a second full-viewport scan for the same gesture.
+    const intent = cachedIntent ?? this._classifyMobileTerminalTap(touch.clientX, touch.clientY);
     if (intent === 'history') {
-      this._blurMobileTerminalInput();
+      // Scrolled up: send NO mouse report — a tap on old output must not be
+      // delivered to the CLI as a click on whatever row now occupies that cell.
+      // Focus is a separate question, and the answer is yes: the user tapped the
+      // terminal, so let them type. Blurring here stranded activeElement on
+      // <body> with no way back to the keyboard.
+      this._focusMobileTerminalInput();
       return intent;
     }
 
@@ -3738,15 +3772,6 @@ Object.assign(CodemanApp.prototype, {
     // plain wheel's target and its input box fixed in place; local scrollback is
     // still on Shift+wheel and on the "Wheel scrolls local history" opt-out above.
     return true;
-  },
-
-  // Claude keeps most transcript history inside its own TUI rather than xterm
-  // scrollback. On verified versions, route a touch drag through the same SGR
-  // wheel path as desktop. Codex keeps the existing local touch behavior.
-  _shouldForwardTouchScrollToApp() {
-    const session = this.sessions?.get(this.activeSessionId);
-    if (session?.mode !== 'claude') return false;
-    return this._shouldForwardWheelToApp({ shiftKey: false });
   },
 
   // Encode wheel ticks as SGR reports (button 64 = up, 65 = down) at the pointer
