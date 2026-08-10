@@ -5,7 +5,7 @@
  * longer running WITHOUT doing disk I/O per keystroke. Three properties matter
  * and are pinned here: the snapshot stays bounded, the refresh never happens on
  * the caller's timeline (fire-and-forget, single-flight, TTL-guarded), and the
- * stored rows carry the owner needed to re-apply multi-user scoping on read —
+ * stored rows carry the owner needed to re-apply multi-user scoping on read,
  * the snapshot is written unscoped, so losing that field would leak one user's
  * folders into another user's search.
  */
@@ -92,7 +92,7 @@ describe('snapshot storage', () => {
 });
 
 describe('ensureHistorySessionIndexFresh', () => {
-  it('returns synchronously — the rebuild must never be on the request path', async () => {
+  it('returns synchronously, the rebuild must never be on the request path', async () => {
     let resolveRefresh: () => void = () => {};
     const refresher = vi.fn(
       () =>

@@ -44,7 +44,7 @@ export interface SessionSearchInput {
   /** Recency timestamp (e.g. lastActivityAt or createdAt). */
   timestamp: number;
   /**
-   * True for a session that is no longer running (issue #261 — past sessions come
+   * True for a session that is no longer running (issue #261, past sessions come
    * from the history index, not the live map). Such a result resumes the
    * conversation instead of switching to a tab that no longer exists.
    */

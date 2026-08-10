@@ -236,9 +236,9 @@ describe('searchSources — result card shape & path safety', () => {
 
 // Past sessions (issue #261). The corpus used to be the live session map alone,
 // so a folder in the home screen's Resume list matched nothing. History rows now
-// arrive marked, and a card for one has to RESUME the conversation — selecting a
+// arrive marked, and a card for one has to RESUME the conversation, selecting a
 // tab that no longer exists is a no-op the user reads as a broken result.
-describe('searchSources — past (history) sessions', () => {
+describe('searchSources: past (history) sessions', () => {
   it('matches a past session by folder name and returns a resume jump target', () => {
     const data = sources({
       sessions: [
@@ -276,7 +276,7 @@ describe('searchSources — past (history) sessions', () => {
     const data = sources({
       sessions: [{ sessionId: 'cod-2', sessionName: 'needle-run', workingDir: '', timestamp: 1, history: true }],
     });
-    // Nothing to resume INTO — a resume card here would always fail.
+    // Nothing to resume INTO, a resume card here would always fail.
     expect(searchSources('needle', data).groups[0].results[0].jumpTo.kind).toBe('session');
   });
 

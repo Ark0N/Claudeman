@@ -1958,7 +1958,7 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * How many past sessions the home screen loads (also the filter/sort corpus).
-   * 200, not the old 60, so the filter can reach a real backlog — an install with
+   * 200, not the old 60, so the filter can reach a real backlog, an install with
    * 35+ conversations would otherwise hit the ceiling before the filter is useful
    * (raised in @jordan8037310's #263; the endpoint clamps at 500).
    */
@@ -1989,7 +1989,7 @@ Object.assign(CodemanApp.prototype, {
 
       // Keep the corpus around: filtering and sorting (issue #260) work on this
       // array, so a re-render costs no request. Expansion survives the periodic
-      // refresh in panels-ui.js — collapsing the list under the user's cursor
+      // refresh in panels-ui.js, collapsing the list under the user's cursor
       // every few seconds would be worse than the original 4-item cap.
       this._historyAll = allSessions;
       this._historyCases = cases;
@@ -2005,7 +2005,7 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * Wire the filter box and sort select once; both re-render from the cached
-   * corpus. The sort choice is restored from (and saved to) localStorage — it is
+   * corpus. The sort choice is restored from (and saved to) localStorage, it is
    * a per-device display preference, so it stays out of the synced settings
    * schema, same as `codeman:skin`.
    */
@@ -2021,7 +2021,7 @@ Object.assign(CodemanApp.prototype, {
         const saved = localStorage.getItem(this._HISTORY_SORT_KEY);
         if (saved && Array.from(sort.options).some((o) => o.value === saved)) sort.value = saved;
       } catch {
-        /* private mode — the order just won't persist */
+        /* private mode, the order just won't persist */
       }
     }
 
@@ -2041,7 +2041,7 @@ Object.assign(CodemanApp.prototype, {
         try {
           localStorage.setItem(this._HISTORY_SORT_KEY, sort.value);
         } catch {
-          /* private mode — the order just won't persist */
+          /* private mode, the order just won't persist */
         }
         this._renderHistoryList();
       });
@@ -2064,7 +2064,7 @@ Object.assign(CodemanApp.prototype, {
   /**
    * The text a history row shows as its title. Most transcript-backed rows have
    * no session name at all, so this falls through to the first prompt and then
-   * to the path — and the A–Z sort keys off the SAME string, or "sort by name"
+   * to the path, and the A–Z sort keys off the SAME string, or "sort by name"
    * would silently do nothing for exactly the rows the list is mostly made of.
    */
   _historyRowLabel(s, fallback) {
@@ -2074,7 +2074,7 @@ Object.assign(CodemanApp.prototype, {
   /**
    * Sort past-session rows. 'recent' keeps the backend order (newest first);
    * the alphabetical modes sort by the visible title or by folder basename.
-   * Pinned rows stay on top in every mode — pinning is an explicit override and
+   * Pinned rows stay on top in every mode, pinning is an explicit override and
    * a sort that buried it would read as the pin having been lost.
    */
   _sortHistoryRows(rows, mode) {
@@ -2097,7 +2097,7 @@ Object.assign(CodemanApp.prototype, {
    * Render the "Resume Conversation" list from the cached corpus, applying the
    * current filter and sort. Collapsed by default to _HISTORY_INITIAL_COUNT;
    * "Show more" expands the list AND the box (the CSS cap is class-driven, since
-   * a fixed 240px box made expansion pointless — issue #260).
+   * a fixed 240px box made expansion pointless, issue #260).
    */
   _renderHistoryList() {
     const list = document.getElementById('historyList');
@@ -3985,7 +3985,7 @@ Object.assign(CodemanApp.prototype, {
   /** Render the grouped result cards (or empty/loading states). */
   _renderSearch(data) {
     const results = document.getElementById('searchResults');
-    // The header carries the title plus the filter/sort controls (issue #260) —
+    // The header carries the title plus the filter/sort controls (issue #260),
     // hide the whole row, not just the title, or the controls float above the
     // search results and act on a list that is not on screen.
     const historyHeader = document.getElementById('historyHeader') || document.getElementById('historyTitle');
@@ -4100,7 +4100,7 @@ Object.assign(CodemanApp.prototype, {
   /**
    * Navigate to a search result by jumpTo.kind, reusing the existing app methods:
    *   session       → selectSession(sessionId)      (open/switch to the session)
-   *   resume-session→ resumeHistorySession(...)     (past session — no tab to switch to)
+   *   resume-session→ resumeHistorySession(...)     (past session, no tab to switch to)
    *   run-summary   → openRunSummary(sessionId)     (session options → summary tab)
    *   file-preview  → openFilePreview(path, sessionId, attachmentId)
    */

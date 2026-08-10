@@ -1,5 +1,5 @@
 /**
- * @fileoverview Issue #260 — the home screen's "Resume Conversation" list.
+ * @fileoverview Issue #260, the home screen's "Resume Conversation" list.
  *
  * With ~35 past sessions the list showed 4 rows, then a button that dumped every
  * remaining row into a fixed 240px box, with no way to sort or filter. The fix
@@ -7,12 +7,12 @@
  * worth pinning is the model, not the pixels:
  *   1. the collapsed page is _HISTORY_INITIAL_COUNT rows, not 4,
  *   2. "Show more" expands the LIST and marks the box expanded (the CSS cap is
- *      class-driven — without the class, expanding just deepens a scroll well),
+ *      class-driven, without the class, expanding just deepens a scroll well),
  *   3. filtering matches name / folder / case label / prompt, and implies
  *      expansion (hiding matches behind "Show more" defeats typing a filter),
  *   4. sorting is alphabetical by name or folder, with pinned rows still on top.
  *
- * Loaded via `vm` against a stub CodemanApp with a fake DOM — same harness as
+ * Loaded via `vm` against a stub CodemanApp with a fake DOM, same harness as
  * resume-name.test.ts. `_buildHistoryItem` is stubbed: this pins WHICH rows get
  * rendered and in what order, not how one row looks.
  */
@@ -71,7 +71,7 @@ function fakeEl(id: string): FakeEl {
 
 /**
  * The element map the vm's `document.getElementById` resolves against. Swapped
- * per test — the closure is defined in THIS realm, so the shipping code inside
+ * per test, the closure is defined in THIS realm, so the shipping code inside
  * the vm reads whatever the current test installed.
  */
 let currentEls: Record<string, FakeEl> = {};
@@ -162,7 +162,7 @@ function rows(n: number, overrides: Partial<Row> = {}): Row[] {
   }));
 }
 
-describe('issue #260 — collapsed page size', () => {
+describe('issue #260: collapsed page size', () => {
   it('shows more than the old 4 rows before "Show more"', () => {
     expect(proto._HISTORY_INITIAL_COUNT).toBeGreaterThanOrEqual(8);
   });
@@ -181,7 +181,7 @@ describe('issue #260 — collapsed page size', () => {
     app._render();
     expect(app.renderedIds()).toHaveLength(35);
     // Without this class the CSS max-height stays at the collapsed cap and the
-    // extra rows land in a four-row scroll well — the original bug.
+    // extra rows land in a four-row scroll well, the original bug.
     expect(app.els.historyList.classList.contains('expanded')).toBe(true);
     expect(app.button()?.textContent).toBe('Show less');
   });
@@ -194,7 +194,7 @@ describe('issue #260 — collapsed page size', () => {
   });
 });
 
-describe('issue #260 — filter', () => {
+describe('issue #260: filter', () => {
   it('matches on folder name and shows every match without expanding first', () => {
     const app = makeApp([
       ...rows(30),
@@ -240,7 +240,7 @@ describe('issue #260 — filter', () => {
   });
 });
 
-describe('issue #260 — sort', () => {
+describe('issue #260: sort', () => {
   const unsorted: Row[] = [
     { sessionId: 'b', name: 'beta', workingDir: '/home/u/zeta', lastActivityAt: 300 },
     { sessionId: 'a', name: 'alpha', workingDir: '/home/u/yankee', lastActivityAt: 200 },

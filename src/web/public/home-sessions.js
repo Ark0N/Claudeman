@@ -34,7 +34,7 @@
 
 /**
  * Narrowest window that gets the column. The welcome content is 560px wide and
- * centered, so at 1180px each gutter is 310px — enough for the 256px column plus
+ * centered, so at 1180px each gutter is 310px, enough for the 256px column plus
  * its 20px offset and still a visible gap. Anything narrower would overlap the
  * search panel, which is why this is a width gate and not a device-type gate.
  */

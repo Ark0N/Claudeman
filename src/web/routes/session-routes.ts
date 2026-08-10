@@ -3549,7 +3549,7 @@ export function registerSessionRoutes(
    * Gather the four read-only views the unified list is merged from, plus mux
    * stats. This is the expensive half (the lifecycle log and a scan of every
    * Claude transcript), factored out of the route handler because the
-   * past-session search index rebuilds itself from the very same inputs — off
+   * past-session search index rebuilds itself from the very same inputs, off
    * the request path, see session-history-index.ts.
    */
   async function gatherUnifiedInputs(): Promise<{
@@ -3665,7 +3665,7 @@ export function registerSessionRoutes(
   /**
    * Publish a merged unified list as the past-session search index (issue #261).
    * The snapshot is stored UNSCOPED with a per-row owner, so it must only ever be
-   * built from an unscoped merge — `harvestSources()` in search-routes re-applies
+   * built from an unscoped merge, `harvestSources()` in search-routes re-applies
    * the ownership check on read.
    */
   function publishHistorySessionIndex(merged: UnifiedSessionItem[]): void {
@@ -3731,7 +3731,7 @@ export function registerSessionRoutes(
       mux,
     });
 
-    // Refresh the search index off the back of this request — the home screen
+    // Refresh the search index off the back of this request, the home screen
     // fetches this endpoint whenever it opens, which is the same screen the
     // search box lives on, so the snapshot is warm before anyone types. A scoped
     // merge is a per-user subset and would corrupt the shared snapshot, so that

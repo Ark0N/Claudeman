@@ -209,9 +209,9 @@ describe('GET /api/search — caps & filters', () => {
 });
 
 // Issue #261: with 3 live sessions and ~35 past ones, searching a past project's
-// folder name matched nothing — the corpus was the live session map alone. Past
+// folder name matched nothing, the corpus was the live session map alone. Past
 // sessions now arrive from the out-of-band history index snapshot.
-describe('GET /api/search — past sessions (history index)', () => {
+describe('GET /api/search: past sessions (history index)', () => {
   beforeEach(() => {
     resetHistorySessionIndex();
   });
@@ -291,7 +291,7 @@ describe('GET /api/search — past sessions (history index)', () => {
         owner: 'alice',
         live: false,
       },
-      // Host-wide transcript row: no owning session, so admin-only — the same
+      // Host-wide transcript row: no owning session, so admin-only, the same
       // rule GET /api/sessions/unified applies when it drops history for non-admins.
       { sessionId: 'hostwide', name: 'needle-host', workingDir: '/srv/needle-host', timestamp: 1, live: false },
     ]);

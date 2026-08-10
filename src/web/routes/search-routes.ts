@@ -3,7 +3,7 @@
  *
  * Registers `GET /api/search?q=&types=&limit=` — a bounded, in-memory search
  * across three v1 sources, returned in the standard ApiResponse envelope:
- *   1. sessions/cases — name, working directory, session id, for LIVE sessions
+ *   1. sessions/cases, name, working directory, session id, for LIVE sessions
  *      plus the past-session snapshot in `session-history-index.ts` (issue #261:
  *      the live map alone made every closed session unfindable by folder name)
  *   2. run-summary events — event title/details (from the live run-summary trackers)
@@ -106,7 +106,7 @@ function harvestSources(ctx: SessionPort & InfraPort, canSee?: (owner?: string) 
   }
 
   // Past sessions: the out-of-band snapshot of the unified list. Unscoped on
-  // disk, so every row goes through the same ownership check as a live one —
+  // disk, so every row goes through the same ownership check as a live one,
   // host-wide transcript rows carry no owner and are therefore admin-only in
   // multi-user mode, matching GET /api/sessions/unified.
   for (const item of getHistorySessionIndex().items) {

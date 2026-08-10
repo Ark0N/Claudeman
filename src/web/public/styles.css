@@ -3737,7 +3737,7 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
 }
 
 /* Title row for the past-session list: label + count on the left, filter and
-   sort on the right (issue #260 — 35 conversations in a 4-row box). */
+   sort on the right (issue #260, 35 conversations in a 4-row box). */
 .history-header {
   display: flex;
   align-items: center;
