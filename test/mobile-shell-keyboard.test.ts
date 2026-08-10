@@ -108,6 +108,14 @@ function fakeBarElement() {
       add: (name: string) => classes.add(name),
       remove: (name: string) => classes.delete(name),
       contains: (name: string) => classes.has(name),
+      // init() calls syncReadMyMind(), which toggles the 🧠 marker class on the
+      // bar with an explicit force argument.
+      toggle: (name: string, force?: boolean) => {
+        const on = force === undefined ? !classes.has(name) : force;
+        if (on) classes.add(name);
+        else classes.delete(name);
+        return on;
+      },
     },
     get innerHTML() {
       return html;
