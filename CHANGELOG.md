@@ -1,5 +1,23 @@
 # aicodeman
 
+## 1.16.4
+
+### Patch Changes
+
+- **Voice dictation through your Claude Code login (no API key).** The mic button can now transcribe using this machine's existing Claude Code subscription, via the same speech-to-text service the CLI's own `/voice` mode uses. Off by default (`claudeVoiceEnabled`, synced): turning it on spends the server owner's Claude subscription on transcription for anyone who can reach the UI. The OAuth token never leaves the server process, credentials are read-only (Codeman never refreshes them, which would rotate the refresh token out from under the CLI), streams are capped at 5 minutes and 4 concurrent, and the WebSocket carries the same allowed-Host + same-site Origin guard as the terminal socket. A new Speech engine picker (Auto / Claude / Deepgram / Browser) sits alongside the existing Deepgram and Web Speech paths, which are untouched.
+
+  **One settings surface.** Session Options and Add Case now use the same `set-*` chrome as App Settings instead of the old modal-tab chrome, with a left rail, grouped rows, per-group device/synced scope badges and a search box. App Settings leads with version + update; the Session Options rail stays a real switcher (one section at a time) because Summary and Respawn are each long enough to bury the other. Collapsed Add Case blocks gained a disclosure chevron.
+
+  **Read My Mind: rethink steer note (phase 3 part 2).** Rethink now carries an optional free-text note ("no, I meant the mobile bug") sent as `steer`, the highest-authority signal the predictor gets. It stays in the field across re-runs, clears on each open, and the empty-result copy points at it. The modal footer moved to the styled `btn-toolbar` convention; the bare `btn btn-*` classes it shipped with match no CSS in this codebase and rendered as unstyled browser buttons.
+
+  **Mobile terminal taps no longer fight the keyboard.** Taps on TUI-owned rows (expandable readbacks, tool results, decision menus, the working/status row) now act on the CLI without popping the keyboard, while a tap on inert transcript text keeps the keyboard reachable. Rows are told apart by the affordance the CLI prints (`ctrl+r to expand`, `tap to collapse`, `esc to interrupt`) rather than by row titles, which vary per CLI and per version. A tap with the viewport scrolled up sends no mouse report at all but still restores focus, so the keyboard is reachable after every tab switch. Thanks to @Lint111.
+
+  **Path labels abbreviate `$HOME` on both platforms.** The "show `~/project`" rule had three implementations and two were platform-specific in opposite directions: the Run menu's matched `/home/<user>/` only, so on macOS every Recent Sessions row spent its first ~19 characters on an identical `/Users/<user>/` prefix and ellipsized away the tail that identifies it (#273); the case-manage list's matched `/Users/<user>` only, so no Linux case path was ever abbreviated. Both now route through one helper, with a static guard against a fourth copy appearing.
+
+  **Run menu Recent Sessions rows are legible.** Rows now read as folder, worktree pill, dimmed parent path, timestamp, with only the parent path allowed to shrink, so truncation can never hide which project (or which worktree) a row refers to. `<repo>/.claude/worktrees` is dropped from the parent path as noise. Thanks to @jordan8037310. Follow-up fix: the widened menu was not actually usable by its rows, since `.run-mode-history` is a block scroller and its `<button>` rows stayed shrink-to-fit at ~250px inside a full-window-width menu; rows now fill the menu and it is capped at the 760px one full row costs.
+
+  **Desktop home screen** no longer clips, and shows full tab names.
+
 ## 1.16.3
 
 ### Patch Changes
