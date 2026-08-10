@@ -1,6 +1,6 @@
 /**
- * @fileoverview Desktop home screen session list: the open tabs as a vertical
- * column down the left of the welcome overlay.
+ * @fileoverview Desktop home screen session list: the open tabs as a rail docked
+ * down the left edge of the welcome overlay.
  *
  * The welcome screen centers ~560px of content in a window that is usually
  * 1400px+, so the two gutters are dead space. The left one now carries the same
@@ -8,11 +8,19 @@
  * one row per live tab, in TAB ORDER (not sorted by state) so it reads as the
  * tab strip rotated, and so Alt+1..9 still matches what you see.
  *
- * DESKTOP ONLY, and only in a wide enough window: the column is absolutely
+ * DESKTOP ONLY, and only in a wide enough window: the rail is absolutely
  * positioned so the centered welcome content never moves, which means it can
- * only exist where the gutter is genuinely wider than the column. Below
+ * only exist where the gutter is genuinely wider than the rail. Below
  * `HOME_SESSIONS_MIN_WIDTH` nothing renders; on a phone the mobile overview owns
- * the home screen entirely and this surface stays out of its way.
+ * the home screen entirely and this surface stays out of its way. Width and type
+ * both scale with the viewport (see the `.home-sessions` block in styles.css) —
+ * a fixed 256px card looks abandoned on a 2560px display.
+ *
+ * Each row carries when the session was FIRST CREATED and when it was LAST
+ * ACTIVE, both relative. Those two stamps go stale on their own (a sitting
+ * session emits no event), so a slow clock refreshes them IN PLACE from the
+ * epoch-ms values parked on the elements, rather than re-rendering: a re-render
+ * would restart every row's blink animation and its working ring.
  *
  * The working state is deliberately identical to the phone's: a pulsing green
  * dot ringed by the spinner a tab shows while it loads (`tab-load-spin`, reused
@@ -27,18 +35,22 @@
  * @mixin Extends CodemanApp.prototype via Object.assign
  * @dependency app.js (this.sessions, this.cases, this.pendingHooks, selectSession)
  * @dependency mobile-overview.js (_mobileOverviewState, _mobileOverviewCaseFor, shouldUseMobileOverview)
+ * @dependency ralph-panel.js (formatRelativeTime — the app's one relative-time formatter)
  * @dependency webview-tabs.js (this.webviews, this.webviewOrder, openWebview)
  * @dependency mobile-handlers.js (MobileDetection)
  * @loadorder 12.56 of 16, after mobile-overview.js, before entrance-animations.js
  */
 
 /**
- * Narrowest window that gets the column. The welcome content is 560px wide and
- * centered, so at 1180px each gutter is 310px — enough for the 256px column plus
- * its 20px offset and still a visible gap. Anything narrower would overlap the
+ * Narrowest window that gets the rail. The welcome content is 560px wide and
+ * centered, so at 1180px each gutter is 310px — enough for the rail at its
+ * 250px floor and still a visible gap. Anything narrower would overlap the
  * search panel, which is why this is a width gate and not a device-type gate.
  */
 const HOME_SESSIONS_MIN_WIDTH = 1180;
+
+/** How often the relative stamps are rewritten while the home screen is up. */
+const HOME_SESSIONS_CLOCK_MS = 20000;
 
 /** Pill copy per state. Same words as the phone overview, same reasons. */
 const HOME_SESSIONS_PILL_LABEL = {
@@ -87,6 +99,7 @@ Object.assign(CodemanApp.prototype, {
     this._wireHomeSessions(el);
     if (!this.shouldShowHomeSessions()) {
       el.hidden = true;
+      this._stopHomeSessionsClock();
       return;
     }
     el.hidden = false;
@@ -96,6 +109,7 @@ Object.assign(CodemanApp.prototype, {
   hideHomeSessions() {
     const el = document.getElementById('homeSessions');
     if (el) el.hidden = true;
+    this._stopHomeSessionsClock();
   },
 
   /** Re-render only when showing (called from the tab renderer's tail). */
@@ -173,6 +187,10 @@ Object.assign(CodemanApp.prototype, {
         dir: this._shortenHomePath ? this._shortenHomePath(session.workingDir) : session.workingDir || '',
         state,
         pill: HOME_SESSIONS_PILL_LABEL[state] || state,
+        // Epoch ms, straight off the session payload; formatting happens at
+        // render time so the clock below can redo it without a re-render.
+        createdAt: Number(session.createdAt) || 0,
+        lastActivityAt: Number(session.lastActivityAt) || 0,
       };
     });
   },
@@ -193,6 +211,7 @@ Object.assign(CodemanApp.prototype, {
     if (!rows.length && !webviews.length) {
       el.hidden = true;
       el.replaceChildren();
+      this._stopHomeSessionsClock();
       return;
     }
     el.hidden = false;
@@ -205,6 +224,95 @@ Object.assign(CodemanApp.prototype, {
     for (const row of rows) list.appendChild(this._buildHomeSessionRow(row));
     for (const webview of webviews) list.appendChild(this._buildHomeSessionsWebviewRow(webview));
     el.appendChild(list);
+
+    this._startHomeSessionsClock();
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // Age stamps: created / last active
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * The "created 2h ago · active 3m ago" footer line. Both stamps keep their raw
+   * epoch-ms on the element (`data-hs-ts`) so `_tickHomeSessionsTimes()` can
+   * rewrite the text without rebuilding the row.
+   */
+  _buildHomeSessionsMeta(row) {
+    const meta = document.createElement('span');
+    meta.className = 'home-sessions-row-meta';
+    // Relative times are generated text, and "created"/"active" here are the
+    // same generic words that mean something else on other surfaces.
+    meta.setAttribute('data-i18n-skip', '');
+
+    meta.appendChild(this._buildHomeSessionsStamp('created', row.createdAt, 'home-sessions-meta-created'));
+
+    const sep = document.createElement('span');
+    sep.className = 'home-sessions-meta-sep';
+    sep.setAttribute('aria-hidden', 'true');
+    sep.textContent = '·';
+    meta.appendChild(sep);
+
+    meta.appendChild(this._buildHomeSessionsStamp('active', row.lastActivityAt, 'home-sessions-meta-active'));
+
+    return meta;
+  },
+
+  /** One labelled stamp: a dim key, the relative value, full date in the title. */
+  _buildHomeSessionsStamp(key, timestamp, className) {
+    const wrap = document.createElement('span');
+    wrap.className = `home-sessions-meta-item ${className}`;
+
+    const label = document.createElement('span');
+    label.className = 'home-sessions-meta-key';
+    label.textContent = key;
+    wrap.appendChild(label);
+
+    const value = document.createElement('span');
+    value.dataset.hsTs = String(timestamp || 0);
+    value.textContent = this._homeSessionsAgo(timestamp);
+    wrap.appendChild(value);
+
+    if (timestamp)
+      wrap.title = `${key === 'created' ? 'First created' : 'Last active'}: ${new Date(timestamp).toLocaleString()}`;
+    return wrap;
+  },
+
+  /** Relative label for a stamp. `formatRelativeTime` is the app's one formatter. */
+  _homeSessionsAgo(timestamp) {
+    if (!timestamp) return '—';
+    return this.formatRelativeTime(timestamp) || '—';
+  },
+
+  /**
+   * Rewrites the stamps in place every `HOME_SESSIONS_CLOCK_MS`. In place, not a
+   * re-render: replacing the rows would restart the blink animation on every
+   * waiting row and the ring on every working one, twice a minute, for nothing.
+   */
+  _startHomeSessionsClock() {
+    if (this._homeSessionsClock) return;
+    this._homeSessionsClock = setInterval(() => {
+      if (!this.isHomeSessionsVisible()) {
+        this._stopHomeSessionsClock();
+        return;
+      }
+      this._tickHomeSessionsTimes();
+    }, HOME_SESSIONS_CLOCK_MS);
+  },
+
+  _stopHomeSessionsClock() {
+    if (!this._homeSessionsClock) return;
+    clearInterval(this._homeSessionsClock);
+    this._homeSessionsClock = null;
+  },
+
+  _tickHomeSessionsTimes() {
+    const el = document.getElementById('homeSessions');
+    if (!el) return;
+    for (const node of el.querySelectorAll('[data-hs-ts]')) {
+      const ts = Number(node.dataset.hsTs) || 0;
+      const text = this._homeSessionsAgo(ts);
+      if (node.textContent !== text) node.textContent = text;
+    }
   },
 
   _buildHomeSessionsHeader(count) {
@@ -286,6 +394,9 @@ Object.assign(CodemanApp.prototype, {
     pill.setAttribute('data-i18n-skip', '');
     pill.textContent = row.pill;
     item.appendChild(pill);
+
+    // Wraps onto its own line (the row is flex-wrap) so it gets the full width.
+    item.appendChild(this._buildHomeSessionsMeta(row));
 
     return item;
   },
