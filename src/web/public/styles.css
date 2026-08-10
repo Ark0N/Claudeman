@@ -1316,10 +1316,29 @@ html[data-line-anim="packet"] .connection-line.line-enter {
 
 .session-tab .tab-status.idle { background: var(--green); }
 .session-tab .tab-status.busy {
+  position: relative;
   background: var(--green);
   animation: pulse 1.5s infinite;
   /* Performance: GPU acceleration for animation */
   will-change: opacity;
+}
+/* Orbiting ring on a WORKING tab: the same `tab-load-spin` circle the desktop
+   home rail (.home-sessions-dot--working) and the phone overview
+   (.mobile-overview-dot--working) draw, so "working" reads identically on every
+   surface. Pseudo-element on purpose — the skin block below sets
+   `box-shadow: none` on .tab-status.busy to keep tab dots halo-free, and it
+   outranks any plain class rule here; a ring drawn with a border is untouched by
+   that and keeps the tabs quiet while still showing motion. Absolutely
+   positioned, so it never widens the tab or shifts the label. */
+.session-tab .tab-status.busy::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border: 1.5px solid color-mix(in srgb, var(--green) 25%, transparent);
+  border-top-color: var(--green);
+  border-radius: 50%;
+  animation: tab-load-spin 0.7s linear infinite;
+  pointer-events: none;
 }
 
 .session-tab .tab-status.error { background: var(--red); }
@@ -14298,6 +14317,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .session-tab .tab-status.busy::after,
   .home-sessions-row,
   .home-sessions-dot,
   .home-sessions-dot::after {

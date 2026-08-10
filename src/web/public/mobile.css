@@ -680,6 +680,13 @@ html.mobile-init .file-browser-panel {
     box-shadow: 0 0 8px 2px color-mix(in srgb, var(--green) 55%, transparent) !important;
   }
 
+  /* No orbiting ring on phone tabs (styles.css draws one on desktop/tablet):
+     the dot is already enlarged to 9px with a glow here, and a 15px ring in a
+     32px tab would sit on top of the tab name. The glow is the phone's tell. */
+  .session-tab .tab-status.busy::after {
+    display: none;
+  }
+
   /* Truncate tab names more aggressively on mobile */
   .session-tab .tab-name {
     max-width: 50px;
