@@ -32,6 +32,22 @@
   // short window, only the app's synthetic tap-to-position mouse event should
   // reach xterm.
   const TOUCH_COMPAT_MOUSE_SUPPRESS_MS = 450;
+  // Regions where a tap must NOT dismiss the on-screen keyboard
+  // (_installMobileKeyboardDismiss). Two groups: anything that is about to take
+  // focus itself, and the accessory bar, which is built to be used while the
+  // keyboard is open.
+  const MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR = [
+    'input',
+    'textarea',
+    'select',
+    'button',
+    'a[href]',
+    '[contenteditable=""]',
+    '[contenteditable="true"]',
+    '[tabindex]:not([tabindex="-1"])',
+    '.keyboard-accessory-bar',
+    '.path-picker-overlay',
+  ].join(',');
   // Escape sequences occupy no terminal cells, so they must come out before a
   // captured line's WIDTH can be measured (_estimateReplayRows). Covers OSC,
   // CSI, charset designators and the short escapes tmux emits; deliberately
@@ -182,6 +198,7 @@
     PAGE_KEY_SCREEN_FRACTION,
     PAGE_KEY_MAX_PER_BATCH,
     TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM,
+    MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR,
   };
   global.CODEMAN_XTERM_THEMES = CODEMAN_XTERM_THEMES;
   global.codemanCurrentXtermTheme = currentXtermTheme;
@@ -785,6 +802,8 @@ Object.assign(CodemanApp.prototype, {
     // same breakage the mobile touchend tap branch above works around).
     // Hand-encode the SGR report for plain left-clicks on those sessions.
     container.addEventListener('click', (ev) => this._handleDesktopTerminalClick(ev));
+
+    this._installMobileKeyboardDismiss();
 
     // Welcome message
     this.showWelcome();
@@ -3489,6 +3508,43 @@ Object.assign(CodemanApp.prototype, {
     ) {
       active.blur?.();
     }
+  },
+
+  /**
+   * Tapping outside the terminal closes the on-screen keyboard.
+   *
+   * The terminal keeps focus on a hidden textarea, and nothing ever released it:
+   * once the keyboard was up, every tap on the header, the tab strip or empty
+   * page chrome left it up, covering half a phone screen with no way to dismiss
+   * it but the OS back gesture.
+   *
+   * Deliberately narrow, because focus is not ours to steal:
+   *
+   * - only when the terminal input actually holds focus;
+   * - never for a tap inside the terminal — those are classified and routed by
+   *   `_handleMobileTerminalTap`, which owns that decision;
+   * - never for a tap on another control. Anything focusable or clickable is
+   *   about to take focus itself, and the accessory bar in particular exists to
+   *   be used WHILE the keyboard is open, so dismissing there would fight the
+   *   user. `closest()` covers taps landing on a child (an icon inside a button).
+   *
+   * Bound to `touchend` rather than `click`: a tap that dismisses the keyboard
+   * usually is not meant to activate whatever is underneath, and touchend fires
+   * before the synthesized click, so the blur lands first.
+   */
+  _installMobileKeyboardDismiss() {
+    if (this._mobileKeyboardDismissHandler) return;
+    this._mobileKeyboardDismissHandler = (ev) => {
+      if (!this._isMobileTerminalInputFocused()) return;
+      const target = ev.target;
+      if (!target || typeof target.closest !== 'function') return;
+      if (target.closest('#terminalContainer')) return;
+      if (target.closest(window.CodemanTerminalInput.MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR)) return;
+      this._blurMobileTerminalInput();
+    };
+    // Passive: this never calls preventDefault, so it must not make the page
+    // feel less responsive to scrolling.
+    document.addEventListener('touchend', this._mobileKeyboardDismissHandler, { passive: true });
   },
 
   /**
