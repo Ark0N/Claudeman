@@ -3378,6 +3378,15 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
     display: none;
   }
 
+  /* ── live layout preview ───────────────────────────────────────────── */
+  #appSettingsModal .set-preview {
+    margin-bottom: 12px;
+  }
+
+  #appSettingsModal .set-preview-stage {
+    min-height: 62px;
+  }
+
   /* ── inset grouped list ────────────────────────────────────────────── */
   #appSettingsModal .set-group {
     margin-top: 14px;

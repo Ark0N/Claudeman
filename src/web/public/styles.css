@@ -14572,9 +14572,12 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
    introduces its own `set-*` classes rather than restyling those.
    ═══════════════════════════════════════════════════════════════════════════ */
 
+/* Deliberately narrower than the other .modal-lg users: the document is a
+   single column of rows whose control sits at the far right, so extra width
+   buys nothing but a gap between a row's text and its switch. */
 #appSettingsModal .modal-content.modal-lg {
-  max-width: min(960px, 96vw);
-  width: min(960px, 96vw);
+  max-width: min(840px, 96vw);
+  width: min(840px, 96vw);
   height: min(700px, 88vh);
   max-height: 88vh;
 }
@@ -14609,7 +14612,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 
 #appSettingsModal .set-body {
   display: grid;
-  grid-template-columns: 212px minmax(0, 1fr);
+  grid-template-columns: 196px minmax(0, 1fr);
   flex: 1;
   min-height: 0;
 }
@@ -14729,19 +14732,19 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 /* ── document ─────────────────────────────────────────────────────────── */
 #appSettingsModal .set-doc {
   overflow-y: auto;
-  padding: 0 22px 40px;
+  padding: 0 18px 32px;
   min-width: 0;
   min-height: 0;
   position: relative;
 }
 
 #appSettingsModal .set-section {
-  padding-top: 20px;
+  padding-top: 16px;
 }
 
 #appSettingsModal .set-section + .set-section {
   border-top: 1px solid var(--border);
-  margin-top: 26px;
+  margin-top: 20px;
 }
 
 #appSettingsModal .set-section-head {
@@ -14770,7 +14773,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 }
 
 #appSettingsModal .set-section-blurb {
-  margin: 0 0 14px 36px;
+  margin: 0 0 11px 34px;
   font-size: 0.69rem;
   color: var(--text-muted);
 }
@@ -14784,7 +14787,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 
 /* ── groups ───────────────────────────────────────────────────────────── */
 #appSettingsModal .set-group + .set-group {
-  margin-top: 18px;
+  margin-top: 14px;
 }
 
 #appSettingsModal .set-group-head {
@@ -14849,15 +14852,15 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 #appSettingsModal .set-group-body {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
 }
 
 /* ── rows ─────────────────────────────────────────────────────────────── */
 #appSettingsModal .set-row {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 9px 12px;
+  gap: 10px;
+  padding: 7px 11px;
   border-radius: 9px;
   background: rgba(255, 255, 255, 0.028);
   border: 1px solid rgba(255, 255, 255, 0.055);
@@ -14893,11 +14896,13 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   letter-spacing: -0.005em;
 }
 
+/* Wide enough that a description runs most of the way to its switch: the
+   complaint about this panel was the dead gap a 62ch cap left behind. */
 #appSettingsModal .set-row-desc {
   font-size: 0.66rem;
   line-height: 1.45;
   color: var(--text-muted);
-  max-width: 62ch;
+  max-width: 78ch;
 }
 
 #appSettingsModal .set-row-actions {
@@ -14980,6 +14985,14 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   color: var(--text-dim);
 }
 
+/* The version is the first value in the first section now, so it reads as an
+   answer to "what am I running", not as one more right-aligned field. */
+#appSettingsModal .set-static-strong {
+  font-size: 0.82rem;
+  font-weight: 620;
+  color: var(--text);
+}
+
 #appSettingsModal .mono {
   font-family: var(--font-mono);
 }
@@ -15054,6 +15067,24 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   pointer-events: none;
 }
 
+/* The chip carries the icon of the button it switches on, so the list reads as
+   the header rather than as a list of names. It is also the ONLY copy of that
+   icon: the live preview clones it (settings-ui.js: _syncLayoutPreview). */
+#appSettingsModal .set-chip-ico {
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+
+#appSettingsModal .set-chip-emoji {
+  font-size: 0.85em;
+  line-height: 1;
+}
+
+#appSettingsModal .set-chip.is-on .set-chip-ico,
+#appSettingsModal .set-chip:has(input:checked) .set-chip-ico {
+  opacity: 1;
+}
+
 #appSettingsModal .set-chip::before {
   content: '\2713';
   font-size: 0.8em;
@@ -15087,6 +15118,219 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 #appSettingsModal .set-chip:focus-within {
   outline: 2px solid rgba(var(--accent-rgb), 0.5);
   outline-offset: 1px;
+}
+
+/* ── live layout preview ──────────────────────────────────────────────────
+   A scale model of the app at the top of Header & Panels, rebuilt from the
+   chips on every change (settings-ui.js: _syncLayoutPreview). Everything here
+   is decoration around cloned chip icons, so it carries no icon of its own.
+   ─────────────────────────────────────────────────────────────────────────── */
+#appSettingsModal .set-preview {
+  margin: 0 0 14px;
+}
+
+#appSettingsModal .set-preview-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+#appSettingsModal .set-preview-title {
+  font-size: 0.63rem;
+  font-weight: 640;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+#appSettingsModal .set-preview-hint {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  opacity: 0.72;
+}
+
+/* Skin tokens only, no black/white alphas: on the four light skins a
+   hardcoded rgba(0,0,0,…) turned the whole model into a grey slab. */
+#appSettingsModal .set-preview-frame {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-dark);
+}
+
+#appSettingsModal .set-preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+}
+
+#appSettingsModal .set-preview-logo {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  font-size: 0.55rem;
+  font-weight: 700;
+  color: var(--accent-ink);
+  background: linear-gradient(180deg, var(--accent-grad-a), var(--accent-grad-b));
+  flex-shrink: 0;
+}
+
+#appSettingsModal .set-preview-tab {
+  font-size: 0.56rem;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--control-bg);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+#appSettingsModal .set-preview-tab-dim {
+  opacity: 0.5;
+}
+
+#appSettingsModal .set-preview-gap {
+  flex: 1;
+  min-width: 6px;
+}
+
+/* Wraps rather than overflows: every button switched on has to stay visible,
+   and the frame is narrower than the real header it stands in for. */
+#appSettingsModal .set-preview-btns {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+#appSettingsModal .set-preview-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  border-radius: 5px;
+  color: var(--text-dim);
+  background: var(--control-bg);
+}
+
+#appSettingsModal .set-preview-btn-fixed {
+  color: var(--text-muted);
+  background: transparent;
+}
+
+#appSettingsModal .set-preview-chip {
+  font-size: 0.55rem;
+  padding: 3px 6px;
+  border-radius: 5px;
+  color: var(--text-dim);
+  background: var(--control-bg);
+  white-space: nowrap;
+}
+
+#appSettingsModal svg.set-preview-ico {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+}
+
+#appSettingsModal span.set-preview-ico {
+  font-size: 9px;
+  line-height: 1;
+}
+
+#appSettingsModal .set-preview-stage {
+  position: relative;
+  display: flex;
+  min-height: 76px;
+  padding: 9px 10px;
+}
+
+#appSettingsModal .set-preview-term {
+  flex: 1;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.58rem;
+  color: var(--text-muted);
+}
+
+#appSettingsModal .set-preview-caret {
+  color: var(--accent);
+}
+
+/* Right-docked, like every real panel in the app (monitor, subagents, file
+   browser and project insights are all `position: fixed; right: …`). */
+#appSettingsModal .set-preview-panels {
+  position: absolute;
+  right: 9px;
+  top: 9px;
+  bottom: 9px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+#appSettingsModal .set-preview-panel,
+#appSettingsModal .set-preview-float,
+#appSettingsModal .set-preview-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.55rem;
+  padding: 3px 7px;
+  border-radius: 6px;
+  color: var(--text-dim);
+  background: var(--control-bg);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+#appSettingsModal .set-preview-floats {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  display: flex;
+  gap: 5px;
+}
+
+#appSettingsModal .set-preview-float {
+  border-style: dashed;
+  color: var(--text-muted);
+}
+
+#appSettingsModal .set-preview-tray {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-card);
+}
+
+#appSettingsModal .set-preview-run {
+  font-size: 0.55rem;
+  font-weight: 640;
+  padding: 3px 9px;
+  border-radius: 5px;
+  color: var(--accent-ink);
+  background: linear-gradient(180deg, var(--accent-grad-a), var(--accent-grad-b));
+}
+
+#appSettingsModal .set-preview-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#appSettingsModal .set-preview-empty {
+  margin: 6px 0 0;
+  font-size: 0.62rem;
+  color: var(--text-muted);
 }
 
 /* ── model cards ──────────────────────────────────────────────────────── */

@@ -59,13 +59,55 @@ describe('App Settings modal structure', () => {
     }
   });
 
-  it('opens on Terminal & Input, so Local Echo is the first thing in reach', () => {
-    expect(settingsUi).toContain("this.switchSettingsTab('settings-terminal')");
+  it('opens on System, with the version and the updater above everything else', () => {
+    expect(settingsUi).toContain("this.switchSettingsTab('settings-system')");
+    const modal = settingsModal();
+    const order = [...modal.matchAll(/<section class="set-section" id="([a-z-]+)"/g)].map((m) => m[1]);
+    // Rail and document must agree, or scroll-spy paints the wrong entry.
+    const rail = [...modal.matchAll(/data-section="([a-z-]+)"/g)].map((m) => m[1]);
+    expect(rail.slice(0, 3)).toEqual(['settings-system', 'settings-terminal', 'settings-layout']);
+    expect(order.slice(0, 3)).toEqual(['settings-system', 'settings-terminal', 'settings-layout']);
+    // Updates leads the System section: version first, then the update action.
+    const system = modal.match(/id="settings-system"([\s\S]*?)<\/section>/)?.[1] ?? '';
+    const version = system.indexOf('id="updateCurrentVersion"');
+    expect(version).toBeGreaterThan(-1);
+    expect(version).toBeLessThan(system.indexOf('id="appSettingsClaudeMdPath"'));
+    expect(system.indexOf('id="updateCheckBtn"')).toBeLessThan(system.indexOf('id="appSettingsClaudeMdPath"'));
+  });
+
+  it('keeps Local Echo the first row of the second section', () => {
     const terminal = settingsModal().match(/id="settings-terminal"([\s\S]*?)<\/section>/);
     const localEcho = terminal?.[1].indexOf('appSettingsLocalEcho') ?? -1;
     const cjk = terminal?.[1].indexOf('appSettingsCjkInput') ?? -1;
     expect(localEcho).toBeGreaterThan(-1);
     expect(localEcho).toBeLessThan(cjk);
+  });
+
+  it('gives every previewed chip an icon to clone, and a slot that exists', () => {
+    // _syncLayoutPreview clones `.set-chip-ico` out of the chip, so a chip that
+    // opts into the preview without an icon renders as an empty button, and one
+    // pointing at a slot id that does not exist renders as nothing at all.
+    const layout = settingsModal().match(/id="settings-layout"([\s\S]*?)<\/section>/)?.[1] ?? '';
+    const chips = [...layout.matchAll(/<label class="set-chip"([^>]*)>([\s\S]*?)<\/label>/g)];
+    const previewed = chips.filter(([, attrs]) => attrs.includes('data-preview='));
+    expect(previewed.length).toBeGreaterThanOrEqual(15);
+    for (const [, attrs, body] of previewed) {
+      const kind = attrs.match(/data-preview="([a-z]+)"/)?.[1];
+      expect(['header', 'panel', 'toolbar', 'float']).toContain(kind);
+      expect(attrs, `chip ${body} needs a preview order`).toMatch(/data-preview-order="\d+"/);
+      // A text token replaces the icon for readouts (plan usage, CPU, font size).
+      const hasIcon = body.includes('class="set-chip-ico') || attrs.includes('data-preview-text=');
+      expect(hasIcon, `chip ${body} has nothing to render in the preview`).toBe(true);
+    }
+    for (const id of [
+      'appSettingsPreviewHeader',
+      'appSettingsPreviewPanels',
+      'appSettingsPreviewToolbar',
+      'appSettingsPreviewFloats',
+    ]) {
+      expect(layout).toContain(`id="${id}"`);
+      expect(settingsUi).toContain(`'${id}'`);
+    }
   });
 
   it('models: keeps the 1M variants as select options behind the context switch', () => {

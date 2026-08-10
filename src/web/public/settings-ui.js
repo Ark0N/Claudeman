@@ -503,8 +503,10 @@ Object.assign(CodemanApp.prototype, {
     this._syncSettingsChips();
     this._syncModelCards();
     this._syncEffortSegment();
-    // Back to the top of the document (one scroll, not a tab reset).
-    this.switchSettingsTab('settings-terminal');
+    // Back to the top of the document (one scroll, not a tab reset). System is
+    // first now: the version this install is running, and whether an update is
+    // waiting, are the two things worth seeing before anything is configured.
+    this.switchSettingsTab('settings-system');
     const modal = document.getElementById('appSettingsModal');
     modal.classList.add('active');
 
@@ -692,6 +694,79 @@ Object.assign(CodemanApp.prototype, {
     document.querySelectorAll('#appSettingsModal .set-chip').forEach(chip => {
       chip.classList.toggle('is-on', !!chip.querySelector('input')?.checked);
     });
+    this._syncLayoutPreview();
+  },
+
+  /**
+   * Redraw the Header & Panels live preview from the chips above it.
+   *
+   * The preview is a scale model of the app, not a second list of settings, so
+   * every icon is CLONED from the chip that owns it (`.set-chip-ico`): each icon
+   * has exactly ONE copy in index.html and a chip can never drift from the button
+   * it previews. A chip joins the preview purely by carrying `data-preview`
+   * (which slot) and `data-preview-order` (where in that slot); nothing here
+   * needs to know the setting's name.
+   *
+   * `data-preview-text` replaces the icon with a text token for the header
+   * entries that are readouts rather than buttons (plan usage, CPU, font size).
+   */
+  _syncLayoutPreview() {
+    const modal = document.getElementById('appSettingsModal');
+    if (!modal || typeof modal.querySelectorAll !== 'function') return;
+    const slots = {
+      header: document.getElementById('appSettingsPreviewHeader'),
+      panel: document.getElementById('appSettingsPreviewPanels'),
+      toolbar: document.getElementById('appSettingsPreviewToolbar'),
+      float: document.getElementById('appSettingsPreviewFloats'),
+    };
+    if (!slots.header) return;
+    Object.values(slots).forEach(el => {
+      if (el) el.innerHTML = '';
+    });
+
+    const chips = [...modal.querySelectorAll('.set-chip[data-preview]')]
+      .filter(chip => chip.querySelector('input')?.checked)
+      .sort((a, b) => (Number(a.dataset.previewOrder) || 0) - (Number(b.dataset.previewOrder) || 0));
+
+    let shown = 0;
+    for (const chip of chips) {
+      const kind = chip.dataset.preview;
+      const slot = slots[kind];
+      if (!slot) continue;
+      // The label is the chip's own text; the icon span (if any) is skipped by
+      // taking the LAST span, which is always the label.
+      const spans = chip.querySelectorAll('span');
+      const label = (spans[spans.length - 1]?.textContent || '').trim();
+      const el = document.createElement('span');
+      el.title = label;
+      if (kind === 'header') {
+        const text = chip.dataset.previewText;
+        el.className = text ? 'set-preview-chip' : 'set-preview-btn';
+        if (text) el.textContent = text;
+        else this._appendPreviewIcon(el, chip);
+      } else {
+        el.className = `set-preview-${kind}`;
+        this._appendPreviewIcon(el, chip);
+        const name = document.createElement('span');
+        name.textContent = label;
+        el.appendChild(name);
+      }
+      slot.appendChild(el);
+      shown++;
+    }
+
+    const empty = document.getElementById('appSettingsPreviewEmpty');
+    if (empty) empty.hidden = shown > 0;
+  },
+
+  /** Clone a chip's icon into a preview element (see _syncLayoutPreview). */
+  _appendPreviewIcon(target, chip) {
+    const icon = chip.querySelector('.set-chip-ico');
+    if (!icon) return;
+    const clone = icon.cloneNode(true);
+    clone.classList.remove('set-chip-ico');
+    clone.classList.add('set-preview-ico');
+    target.appendChild(clone);
   },
 
   /**
@@ -859,6 +934,10 @@ Object.assign(CodemanApp.prototype, {
       const hasVisible = [...section.querySelectorAll('.set-group')].some(g => !g.classList.contains('set-hit-hidden'));
       section.classList.toggle('set-hit-hidden', !!q && !hasVisible);
     });
+
+    // The live preview sits outside any group, so it survives the sweep above;
+    // a search is asking for one row, not for the scale model around it.
+    doc.querySelectorAll('.set-preview').forEach(pv => pv.classList.toggle('set-hit-hidden', !!q));
 
     const empty = document.getElementById('appSettingsSearchEmpty');
     if (empty) empty.hidden = !q || anyVisible;

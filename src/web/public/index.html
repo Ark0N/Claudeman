@@ -1312,17 +1312,21 @@
               <input type="search" id="appSettingsSearch" placeholder="Search settings" autocomplete="off" aria-label="Search settings">
             </div>
             <div class="set-rail-items" id="appSettingsRailItems">
-              <button type="button" class="set-rail-item active" data-section="settings-terminal">
+              <button type="button" class="set-rail-item active" data-section="settings-system">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.26.6.86 1 1.51 1H21a2 2 0 0 1 0 4h-.09c-.65 0-1.25.4-1.51 1z"/></svg>
+                <span>System</span>
+              </button>
+              <button type="button" class="set-rail-item" data-section="settings-terminal">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
                 <span>Terminal &amp; Input</span>
-              </button>
-              <button type="button" class="set-rail-item" data-section="settings-appearance">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18 4.5 4.5 0 0 0 0-9 4.5 4.5 0 0 1 0-9z"/></svg>
-                <span>Appearance</span>
               </button>
               <button type="button" class="set-rail-item" data-section="settings-layout">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
                 <span>Header &amp; Panels</span>
+              </button>
+              <button type="button" class="set-rail-item" data-section="settings-appearance">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18 4.5 4.5 0 0 0 0-9 4.5 4.5 0 0 1 0-9z"/></svg>
+                <span>Appearance</span>
               </button>
               <button type="button" class="set-rail-item" data-section="settings-models">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>
@@ -1344,10 +1348,6 @@
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M9 13h6"/></svg>
                 <span>Shortcuts</span>
               </button>
-              <button type="button" class="set-rail-item" data-section="settings-system">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.26.6.86 1 1.51 1H21a2 2 0 0 1 0 4h-.09c-.65 0-1.25.4-1.51 1z"/></svg>
-                <span>System</span>
-              </button>
             </div>
             <p class="set-rail-foot">Settings marked <b>device</b> stay on this browser. The rest sync to every device.</p>
           </nav>
@@ -1364,6 +1364,96 @@
 
             <p class="set-empty" id="appSettingsSearchEmpty" hidden>No settings match that search.</p>
 
+            <!-- ══ System ═══════════════════════════════════════════════════ -->
+            <section class="set-section" id="settings-system" data-label="System">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.26.6.86 1 1.51 1H21a2 2 0 0 1 0 4h-.09c-.65 0-1.25.4-1.51 1z"/></svg>
+                <h2>System</h2>
+              </div>
+              <p class="set-section-blurb">What this install is running, plus paths, automation and remote access.</p>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Updates</h4></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="version current release">
+                    <div class="set-row-text"><span class="set-row-label">Current version</span></div>
+                    <span class="set-static set-static-strong mono" id="updateCurrentVersion">&mdash;</span>
+                  </div>
+                  <div class="set-row" id="updateCheckRow" data-search="check for updates github release">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Check for updates</span>
+                      <span class="set-row-desc">Looks at GitHub for a newer Codeman release.</span>
+                    </div>
+                    <button class="btn-toolbar btn-sm" id="updateCheckBtn" onclick="app.checkForUpdate()">Check now</button>
+                  </div>
+                  <div id="updateResult" class="set-note" style="display:none"></div>
+                  <div class="set-row" id="updateActionRow" style="display:none">
+                    <div class="set-row-text"><span class="set-row-label" id="updateActionLabel">Update available</span></div>
+                    <button class="btn-toolbar btn-sm btn-primary" id="updateNowBtn" onclick="app.startSelfUpdate()">Update now</button>
+                  </div>
+                  <div id="updateNotes" class="set-notes" style="display:none"></div>
+                  <div id="updateProgress" class="set-progress" style="display:none"></div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Paths</h4><span class="set-scope">synced</span></div>
+                <div class="set-group-body">
+                  <div class="set-row has-field" data-search="claude.md template path new cases">
+                    <div class="set-row-text">
+                      <span class="set-row-label">CLAUDE.md template</span>
+                      <span class="set-row-desc">Used when creating new cases. Leave empty for the built-in template.</span>
+                    </div>
+                    <input type="text" id="appSettingsClaudeMdPath" class="set-input" placeholder="/path/to/CLAUDE.md template">
+                  </div>
+                  <div class="set-row has-field" data-search="default working directory">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Default working directory</span>
+                      <span class="set-row-desc">Starting directory for new sessions.</span>
+                    </div>
+                    <input type="text" id="appSettingsDefaultDir" class="set-input" placeholder="~/projects">
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Automation</h4><span class="set-scope">synced</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="image watcher popup screenshots">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Image watcher</span>
+                      <span class="set-row-desc">Detect and pop up new images found in session directories.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsImageWatcherEnabled"><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Remote access</h4><span class="set-scope">synced</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="cloudflare tunnel remote access url">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Cloudflare Tunnel</span>
+                      <span class="set-row-desc">Expose Codeman on a public URL. Set CODEMAN_PASSWORD first.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsTunnelEnabled"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" id="tunnelUrlRow" style="display:none">
+                    <div class="set-row-text"><span class="set-row-label">Tunnel URL</span></div>
+                    <div class="set-row-actions">
+                      <span id="tunnelUrlDisplay" class="set-copy" title="Click to copy"></span>
+                      <button class="btn-icon-sm" id="tunnelQrBtn" onclick="app.showTunnelQR()" title="Show QR code">&#x229E;</button>
+                    </div>
+                  </div>
+                  <div class="set-row" id="tunnelUploadUrlRow" style="display:none">
+                    <div class="set-row-text"><span class="set-row-label">Upload URL</span></div>
+                    <span id="tunnelUploadUrlDisplay" class="set-copy" title="Click to copy"></span>
+                  </div>
+                </div>
+              </div>
+
+            </section>
             <!-- ══ Terminal &amp; Input ══════════════════════════════════════ -->
             <section class="set-section" id="settings-terminal" data-label="Terminal &amp; Input">
               <div class="set-section-head">
@@ -1422,6 +1512,121 @@
                       <span class="set-row-desc">Camera hand-tracking overlay. Applied on reload; the instance must run with CODEMAN_GESTURE=1.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsGestureControl"><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- ══ Header &amp; Panels ═══════════════════════════════════════ -->
+            <section class="set-section" id="settings-layout" data-label="Header &amp; Panels">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+                <h2>Header &amp; Panels</h2>
+              </div>
+              <p class="set-section-blurb">Pick the buttons and panels you actually use. Everything else stays out of the way.</p>
+
+              <!-- Live preview: a scale model of the app that redraws from the
+                   chips below on every change, so "what does this add" is answered
+                   in place instead of after a save. Icons are CLONED from the
+                   chips (settings-ui.js: _syncLayoutPreview), so each icon has
+                   exactly one copy in this file and the two can never drift. -->
+              <div class="set-preview" id="appSettingsLayoutPreview">
+                <div class="set-preview-head">
+                  <span class="set-preview-title">Live preview</span>
+                  <span class="set-preview-hint">Updates as you pick, before you save.</span>
+                </div>
+                <div class="set-preview-frame" data-i18n-skip>
+                  <div class="set-preview-bar">
+                    <span class="set-preview-logo">C</span>
+                    <span class="set-preview-tab">w1-codeman</span>
+                    <span class="set-preview-tab set-preview-tab-dim">w2-docs</span>
+                    <span class="set-preview-gap"></span>
+                    <span class="set-preview-btns" id="appSettingsPreviewHeader"></span>
+                    <span class="set-preview-btn set-preview-btn-fixed" title="App Settings"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+                  </div>
+                  <div class="set-preview-stage">
+                    <div class="set-preview-term"><span class="set-preview-caret">&#10095;</span> npm run dev</div>
+                    <div class="set-preview-panels" id="appSettingsPreviewPanels"></div>
+                    <div class="set-preview-floats" id="appSettingsPreviewFloats"></div>
+                  </div>
+                  <div class="set-preview-tray">
+                    <span class="set-preview-run">Run</span>
+                    <span class="set-preview-tools" id="appSettingsPreviewToolbar"></span>
+                  </div>
+                </div>
+                <p class="set-preview-empty" id="appSettingsPreviewEmpty" hidden>Nothing extra switched on: header keeps the gear only.</p>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Header buttons</h4><span class="set-scope">device</span></div>
+                <p class="set-group-hint">Tap to show a control in the header. Multi-monitor is the one entry here that syncs across devices.</p>
+                <div class="set-group-body">
+                  <div class="set-chips" data-search="header buttons plan usage font stats lifecycle response file viewer attachments monitor session away cron redraw">
+                    <label class="set-chip" data-preview="header" data-preview-order="1" data-preview-text="A+"><input type="checkbox" id="appSettingsShowFontControls"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20 10 5l6 15"/><path d="M6.5 15h7"/><path d="M18 12h4M20 10v4"/></svg><span>Font Size</span></label>
+                    <label class="set-chip" data-preview="header" data-preview-order="2" data-preview-text="CPU 12%"><input type="checkbox" id="appSettingsShowSystemStats" checked><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2.5-7 4 14L16 12h5"/></svg><span>System Stats</span></label>
+                    <label class="set-chip" data-preview="header" data-preview-order="3"><input type="checkbox" id="appSettingsShowRedrawButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg><span>Redraw Terminal</span></label>
+                    <label class="set-chip" data-preview="header" data-preview-order="4"><input type="checkbox" id="appSettingsShowResponseViewer"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><span>Response Viewer</span></label>
+                    <label class="set-chip" data-preview="header" data-preview-order="5"><input type="checkbox" id="appSettingsShowAwayDigestButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg><span>Away Digest</span></label>
+                    <label class="set-chip" data-preview="header" data-preview-order="6"><input type="checkbox" id="appSettingsShowSessionButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg><span>Session Manager</span></label>
+                    <label class="set-chip" data-preview="header" data-preview-order="9"><input type="checkbox" id="appSettingsShowAttachmentsButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg><span>Attachments</span></label>
+                    <label class="set-chip" data-preview="header" data-preview-order="10"><input type="checkbox" id="appSettingsShowFileViewerButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>File Viewer</span></label>
+                    <label class="set-chip" data-preview="header" data-preview-order="11"><input type="checkbox" id="appSettingsShowMultiMonitorButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="13" height="9" rx="1.5"/><rect x="11" y="9" width="11" height="8" rx="1.5"/></svg><span>Multi-monitor</span></label>
+                    <label class="set-chip" data-preview="header" data-preview-order="13" data-preview-text="42%"><input type="checkbox" id="appSettingsShowPlanUsageLimits"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4.5-5"/></svg><span>Plan Usage</span></label>
+                    <label class="set-chip" data-preview="header" data-preview-order="14"><input type="checkbox" id="appSettingsShowLifecycleLog"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg><span>Lifecycle Log</span></label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Panels</h4><span class="set-scope">device</span></div>
+                <div class="set-group-body">
+                  <div class="set-chips" data-search="panels monitor project insights file browser subagents">
+                    <label class="set-chip" data-preview="panel" data-preview-order="1"><input type="checkbox" id="appSettingsShowMonitor" checked><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2.5-7 4 14L16 12h5"/></svg><span>Monitor</span></label>
+                    <label class="set-chip" data-preview="panel" data-preview-order="2"><input type="checkbox" id="appSettingsShowProjectInsights"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V9"/><path d="M10 19V5"/><path d="M16 19v-7"/><path d="M22 19H2"/></svg><span>Project Insights</span></label>
+                    <label class="set-chip" data-preview="panel" data-preview-order="3"><input type="checkbox" id="appSettingsShowFileBrowser"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>File Browser</span></label>
+                    <label class="set-chip" data-preview="panel" data-preview-order="4"><input type="checkbox" id="appSettingsShowSubagents"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.2 7.2 15.6 11M8.2 16.8 15.6 13"/></svg><span>Subagents</span></label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Cross-session features</h4><span class="set-scope">synced</span></div>
+                <p class="set-group-hint">Approvals answers prompts from any session in one place. Read My Mind captures your prompts and predicts the next one on demand; both cost tokens and never auto-send.</p>
+                <div class="set-group-body">
+                  <div class="set-chips" data-search="approvals inbox read my mind ultracode agents floating windows workflow">
+                    <label class="set-chip" data-preview="header" data-preview-order="7"><input type="checkbox" id="appSettingsApprovalsInbox"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span>Approvals Inbox</span></label>
+                    <label class="set-chip" data-preview="header" data-preview-order="8"><input type="checkbox" id="appSettingsReadMyMind"><span class="set-chip-ico set-chip-emoji" aria-hidden="true">🧠</span><span>Read My Mind</span></label>
+                    <label class="set-chip" data-preview="header" data-preview-order="12"><input type="checkbox" id="appSettingsShowUltracodeAgents"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.2 7.2 15.6 11M8.2 16.8 15.6 13"/></svg><span>Ultracode Agents</span></label>
+                    <label class="set-chip" data-preview="float" data-preview-order="1"><input type="checkbox" id="appSettingsUltracodeFloatingWindows"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><circle cx="6" cy="6.5" r="0.6"/></svg><span>Ultracode Windows</span></label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Scheduling</h4><span class="set-scope">device</span></div>
+                <div class="set-group-body">
+                  <div class="set-chips" data-search="cron scheduled jobs toolbar">
+                    <label class="set-chip" data-preview="toolbar" data-preview-order="1"><input type="checkbox" id="appSettingsShowCronButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg><span>Cron</span></label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Subagent windows</h4></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="subagent tracking background agents">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Track background agents <span class="set-scope">synced</span></span>
+                      <span class="set-row-desc">Follow Claude Code subagents in real time.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsSubagentTracking" checked><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="subagent active tab only windows">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Active tab only <span class="set-scope">device</span></span>
+                      <span class="set-row-desc">Only show agent windows for the selected session.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsSubagentActiveTabOnly" checked><span class="slider"></span></label>
                   </div>
                 </div>
               </div>
@@ -1520,81 +1725,6 @@
                       <span class="set-row-desc">The C logo opens the session overview instead of the welcome screen.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsMobileOverview" checked><span class="slider"></span></label>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <!-- ══ Header &amp; Panels ═══════════════════════════════════════ -->
-            <section class="set-section" id="settings-layout" data-label="Header &amp; Panels">
-              <div class="set-section-head">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
-                <h2>Header &amp; Panels</h2>
-              </div>
-              <p class="set-section-blurb">Pick the buttons and panels you actually use. Everything else stays out of the way.</p>
-
-              <div class="set-group">
-                <div class="set-group-head"><h4>Header buttons</h4><span class="set-scope">device</span></div>
-                <p class="set-group-hint">Tap to show a control in the header. Multi-monitor is the one entry here that syncs across devices.</p>
-                <div class="set-group-body">
-                  <div class="set-chips" data-search="header buttons plan usage font stats lifecycle response file viewer attachments monitor session away cron redraw">
-                    <label class="set-chip"><input type="checkbox" id="appSettingsShowPlanUsageLimits"><span>Plan Usage</span></label>
-                    <label class="set-chip"><input type="checkbox" id="appSettingsShowFontControls"><span>Font Size</span></label>
-                    <label class="set-chip"><input type="checkbox" id="appSettingsShowSystemStats" checked><span>System Stats</span></label>
-                    <label class="set-chip"><input type="checkbox" id="appSettingsShowLifecycleLog"><span>Lifecycle Log</span></label>
-                    <label class="set-chip"><input type="checkbox" id="appSettingsShowResponseViewer"><span>Response Viewer</span></label>
-                    <label class="set-chip"><input type="checkbox" id="appSettingsShowFileViewerButton"><span>File Viewer</span></label>
-                    <label class="set-chip"><input type="checkbox" id="appSettingsShowAttachmentsButton"><span>Attachments</span></label>
-                    <label class="set-chip"><input type="checkbox" id="appSettingsShowMultiMonitorButton"><span>Multi-monitor</span></label>
-                    <label class="set-chip"><input type="checkbox" id="appSettingsShowSessionButton"><span>Session Manager</span></label>
-                    <label class="set-chip"><input type="checkbox" id="appSettingsShowAwayDigestButton"><span>Away Digest</span></label>
-                    <label class="set-chip"><input type="checkbox" id="appSettingsShowCronButton"><span>Cron</span></label>
-                    <label class="set-chip"><input type="checkbox" id="appSettingsShowRedrawButton"><span>Redraw Terminal</span></label>
-                  </div>
-                </div>
-              </div>
-
-              <div class="set-group">
-                <div class="set-group-head"><h4>Panels</h4><span class="set-scope">device</span></div>
-                <div class="set-group-body">
-                  <div class="set-chips" data-search="panels monitor project insights file browser subagents">
-                    <label class="set-chip"><input type="checkbox" id="appSettingsShowMonitor" checked><span>Monitor</span></label>
-                    <label class="set-chip"><input type="checkbox" id="appSettingsShowProjectInsights"><span>Project Insights</span></label>
-                    <label class="set-chip"><input type="checkbox" id="appSettingsShowFileBrowser"><span>File Browser</span></label>
-                    <label class="set-chip"><input type="checkbox" id="appSettingsShowSubagents"><span>Subagents</span></label>
-                  </div>
-                </div>
-              </div>
-
-              <div class="set-group">
-                <div class="set-group-head"><h4>Cross-session features</h4><span class="set-scope">synced</span></div>
-                <p class="set-group-hint">Approvals answers prompts from any session in one place. Read My Mind captures your prompts and predicts the next one on demand; both cost tokens and never auto-send.</p>
-                <div class="set-group-body">
-                  <div class="set-chips" data-search="approvals inbox read my mind ultracode agents floating windows workflow">
-                    <label class="set-chip"><input type="checkbox" id="appSettingsApprovalsInbox"><span>Approvals Inbox</span></label>
-                    <label class="set-chip"><input type="checkbox" id="appSettingsReadMyMind"><span>Read My Mind</span></label>
-                    <label class="set-chip"><input type="checkbox" id="appSettingsShowUltracodeAgents"><span>Ultracode Agents</span></label>
-                    <label class="set-chip"><input type="checkbox" id="appSettingsUltracodeFloatingWindows"><span>Ultracode Windows</span></label>
-                  </div>
-                </div>
-              </div>
-
-              <div class="set-group">
-                <div class="set-group-head"><h4>Subagent windows</h4></div>
-                <div class="set-group-body">
-                  <div class="set-row" data-search="subagent tracking background agents">
-                    <div class="set-row-text">
-                      <span class="set-row-label">Track background agents <span class="set-scope">synced</span></span>
-                      <span class="set-row-desc">Follow Claude Code subagents in real time.</span>
-                    </div>
-                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsSubagentTracking" checked><span class="slider"></span></label>
-                  </div>
-                  <div class="set-row" data-search="subagent active tab only windows">
-                    <div class="set-row-text">
-                      <span class="set-row-label">Active tab only <span class="set-scope">device</span></span>
-                      <span class="set-row-desc">Only show agent windows for the selected session.</span>
-                    </div>
-                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsSubagentActiveTabOnly" checked><span class="slider"></span></label>
                   </div>
                 </div>
               </div>
@@ -2032,95 +2162,6 @@
               </div>
             </section>
 
-            <!-- ══ System ═══════════════════════════════════════════════════ -->
-            <section class="set-section" id="settings-system" data-label="System">
-              <div class="set-section-head">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.26.6.86 1 1.51 1H21a2 2 0 0 1 0 4h-.09c-.65 0-1.25.4-1.51 1z"/></svg>
-                <h2>System</h2>
-              </div>
-              <p class="set-section-blurb">Paths, automation, remote access and updates.</p>
-
-              <div class="set-group">
-                <div class="set-group-head"><h4>Paths</h4><span class="set-scope">synced</span></div>
-                <div class="set-group-body">
-                  <div class="set-row has-field" data-search="claude.md template path new cases">
-                    <div class="set-row-text">
-                      <span class="set-row-label">CLAUDE.md template</span>
-                      <span class="set-row-desc">Used when creating new cases. Leave empty for the built-in template.</span>
-                    </div>
-                    <input type="text" id="appSettingsClaudeMdPath" class="set-input" placeholder="/path/to/CLAUDE.md template">
-                  </div>
-                  <div class="set-row has-field" data-search="default working directory">
-                    <div class="set-row-text">
-                      <span class="set-row-label">Default working directory</span>
-                      <span class="set-row-desc">Starting directory for new sessions.</span>
-                    </div>
-                    <input type="text" id="appSettingsDefaultDir" class="set-input" placeholder="~/projects">
-                  </div>
-                </div>
-              </div>
-
-              <div class="set-group">
-                <div class="set-group-head"><h4>Automation</h4><span class="set-scope">synced</span></div>
-                <div class="set-group-body">
-                  <div class="set-row" data-search="image watcher popup screenshots">
-                    <div class="set-row-text">
-                      <span class="set-row-label">Image watcher</span>
-                      <span class="set-row-desc">Detect and pop up new images found in session directories.</span>
-                    </div>
-                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsImageWatcherEnabled"><span class="slider"></span></label>
-                  </div>
-                </div>
-              </div>
-
-              <div class="set-group">
-                <div class="set-group-head"><h4>Remote access</h4><span class="set-scope">synced</span></div>
-                <div class="set-group-body">
-                  <div class="set-row" data-search="cloudflare tunnel remote access url">
-                    <div class="set-row-text">
-                      <span class="set-row-label">Cloudflare Tunnel</span>
-                      <span class="set-row-desc">Expose Codeman on a public URL. Set CODEMAN_PASSWORD first.</span>
-                    </div>
-                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsTunnelEnabled"><span class="slider"></span></label>
-                  </div>
-                  <div class="set-row" id="tunnelUrlRow" style="display:none">
-                    <div class="set-row-text"><span class="set-row-label">Tunnel URL</span></div>
-                    <div class="set-row-actions">
-                      <span id="tunnelUrlDisplay" class="set-copy" title="Click to copy"></span>
-                      <button class="btn-icon-sm" id="tunnelQrBtn" onclick="app.showTunnelQR()" title="Show QR code">&#x229E;</button>
-                    </div>
-                  </div>
-                  <div class="set-row" id="tunnelUploadUrlRow" style="display:none">
-                    <div class="set-row-text"><span class="set-row-label">Upload URL</span></div>
-                    <span id="tunnelUploadUrlDisplay" class="set-copy" title="Click to copy"></span>
-                  </div>
-                </div>
-              </div>
-
-              <div class="set-group">
-                <div class="set-group-head"><h4>Updates</h4></div>
-                <div class="set-group-body">
-                  <div class="set-row" data-search="version current release">
-                    <div class="set-row-text"><span class="set-row-label">Current version</span></div>
-                    <span class="set-static mono" id="updateCurrentVersion">&mdash;</span>
-                  </div>
-                  <div class="set-row" id="updateCheckRow" data-search="check for updates github release">
-                    <div class="set-row-text">
-                      <span class="set-row-label">Check for updates</span>
-                      <span class="set-row-desc">Looks at GitHub for a newer Codeman release.</span>
-                    </div>
-                    <button class="btn-toolbar btn-sm" id="updateCheckBtn" onclick="app.checkForUpdate()">Check now</button>
-                  </div>
-                  <div id="updateResult" class="set-note" style="display:none"></div>
-                  <div class="set-row" id="updateActionRow" style="display:none">
-                    <div class="set-row-text"><span class="set-row-label" id="updateActionLabel">Update available</span></div>
-                    <button class="btn-toolbar btn-sm btn-primary" id="updateNowBtn" onclick="app.startSelfUpdate()">Update now</button>
-                  </div>
-                  <div id="updateNotes" class="set-notes" style="display:none"></div>
-                  <div id="updateProgress" class="set-progress" style="display:none"></div>
-                </div>
-              </div>
-            </section>
           </div>
         </div>
         <div class="form-actions set-foot">
