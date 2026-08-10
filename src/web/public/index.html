@@ -1988,6 +1988,28 @@
                       <option value="compose">Compose dialog</option>
                     </select>
                   </div>
+                  <div class="set-row has-field" data-search="voice language">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Language</span>
+                      <span class="set-row-desc">Applies to whichever engine is active.</span>
+                    </div>
+                    <select id="voiceLanguage" class="set-select">
+                      <option value="en-US">English (US)</option>
+                      <option value="en-GB">English (UK)</option>
+                      <option value="es">Spanish</option>
+                      <option value="fr">French</option>
+                      <option value="de">German</option>
+                      <option value="ja">Japanese</option>
+                      <option value="multi">Auto-detect (multi)</option>
+                    </select>
+                  </div>
+                  <div class="set-row has-field" data-search="voice keyterms domain keywords">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Domain keywords</span>
+                      <span class="set-row-desc">Comma-separated terms to boost recognition accuracy. Sent to Claude and Deepgram alike.</span>
+                    </div>
+                    <input type="text" id="voiceKeyterms" class="set-input" placeholder="codeman, tmux, respawn, subagent">
+                  </div>
                 </div>
               </div>
 
@@ -2020,25 +2042,6 @@
                       <input type="password" id="voiceDeepgramKey" class="set-input" placeholder="Enter Deepgram API key" autocomplete="off">
                       <button class="btn-toolbar btn-sm" onclick="app.toggleDeepgramKeyVisibility()" id="voiceKeyToggleBtn" type="button">Show</button>
                     </div>
-                  </div>
-                  <div class="set-row has-field" data-search="voice language">
-                    <div class="set-row-text"><span class="set-row-label">Language</span></div>
-                    <select id="voiceLanguage" class="set-select">
-                      <option value="en-US">English (US)</option>
-                      <option value="en-GB">English (UK)</option>
-                      <option value="es">Spanish</option>
-                      <option value="fr">French</option>
-                      <option value="de">German</option>
-                      <option value="ja">Japanese</option>
-                      <option value="multi">Auto-detect (multi)</option>
-                    </select>
-                  </div>
-                  <div class="set-row has-field" data-search="voice keyterms domain keywords">
-                    <div class="set-row-text">
-                      <span class="set-row-label">Domain keywords</span>
-                      <span class="set-row-desc">Comma-separated terms to boost recognition accuracy.</span>
-                    </div>
-                    <input type="text" id="voiceKeyterms" class="set-input" placeholder="codeman, tmux, respawn, subagent">
                   </div>
                 </div>
               </div>
