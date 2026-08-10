@@ -1610,11 +1610,21 @@ Object.assign(CodemanApp.prototype, {
     return workingDir.split('/').pop() || workingDir;
   },
 
-  /** Normalize home prefixes to "~/" on both Linux and macOS */
+  /**
+   * Normalize a home prefix to "~" on both Linux (`/home/<user>`) and macOS
+   * (`/Users/<user>`). The lookahead lets the home directory ITSELF match, so a
+   * path that is exactly `$HOME` renders "~" instead of being left raw.
+   *
+   * This is the only place that pattern belongs. Two hand-rolled copies had
+   * drifted, each broken on the platform its author was not using: the Run
+   * menu's matched `/home/` only, so on macOS nothing was stripped and every
+   * Recent Sessions row spent its first ~19 characters on an identical
+   * `/Users/<user>/` prefix (#273); the case-manage list's matched `/Users/`
+   * only, so no Linux path was ever abbreviated there. Route new path labels
+   * through here rather than writing a third copy.
+   */
   _shortenHomePath(p) {
-    return (p || '')
-      .replace(/^\/home\/[^/]+\//, '~/')
-      .replace(/^\/Users\/[^/]+\//, '~/');
+    return (p || '').replace(/^\/(?:home|Users)\/[^/]+(?=\/|$)/, '~');
   },
 
   /**
