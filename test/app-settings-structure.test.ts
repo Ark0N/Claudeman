@@ -122,15 +122,15 @@ describe('App Settings modal structure', () => {
     expect(modal).toContain('id="appSettingsOpusContext1m"');
   });
 
-  it('never hides sections behind .modal-tab-content (that class means display:none)', () => {
+  it('has retired the modal-tab chrome everywhere, not just here', () => {
+    // Session Options and Add Case moved onto this same `set-*` surface, so the
+    // old tab classes have no users left. A reappearance means a modal drifted
+    // back off the shared surface (or the dead CSS was resurrected).
     expect(settingsModal()).not.toContain('modal-tab-content');
-  });
-
-  it('leaves the shared modal tab classes to the other modals', () => {
-    // #sessionOptionsModal and #createCaseModal still use .modal-tabs; the
-    // settings rail must not restyle them out from under those.
-    expect(settingsModal()).not.toContain('class="modal-tabs"');
-    expect(html).toContain('<div class="modal-tabs">');
+    expect(html).not.toContain('class="modal-tabs"');
+    expect(html).not.toContain('modal-tab-btn');
+    const css = readFileSync(resolve(publicDir, 'styles.css'), 'utf8');
+    expect(css).not.toContain('.modal-tab-btn {');
   });
 
   it('exposes the rail hooks admin-ui.js injects the Users section into', () => {

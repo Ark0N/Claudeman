@@ -223,24 +223,6 @@ html.mobile-init .file-browser-panel {
     min-height: 56px;
   }
 
-  .modal-tabs {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    flex-wrap: nowrap;
-  }
-
-  .modal-tabs::-webkit-scrollbar {
-    display: none;
-  }
-
-  .modal-tab-btn {
-    padding: 0.4rem 0.75rem;
-    font-size: 0.7rem;
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
-
   /* Settings grid stays 2-col on tablet but tighter */
   .settings-grid {
     gap: 0.4rem 0.75rem;
@@ -2077,45 +2059,8 @@ html.mobile-init .file-browser-panel {
 
   /* ---- Settings Modal: Mobile Optimizations ---- */
 
-  /* Scrollable tabs row - prevent overflow on small screens */
-  .modal-tabs {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    gap: 0.25rem;
-    padding: 0 0.75rem 0.5rem 0.75rem;
-    flex-wrap: nowrap;
-  }
-
-  .modal-tabs::-webkit-scrollbar {
-    display: none;
-  }
-
-  .modal-tab-btn {
-    padding: 0.35rem 0.6rem;
-    font-size: 0.65rem;
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
-
   /* ---- Case Modal: Mobile Touch Optimizations ---- */
 
-  /* Larger tab buttons for case modal - easy to tap */
-  #createCaseModal .modal-tabs {
-    gap: 0.5rem;
-    padding: 0.5rem 1rem 0.75rem;
-  }
-
-  #createCaseModal .modal-tab-btn {
-    flex: 1;
-    min-height: 44px;
-    padding: 0.6rem 1rem;
-    font-size: 0.8rem;
-    font-weight: 500;
-    border-radius: 8px;
-    justify-content: center;
-    text-align: center;
-  }
 
   /* Touch-friendly form inputs in case modal */
   #createCaseModal .form-row {
@@ -3170,21 +3115,21 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
    stack of separate cards: at 390px the per-card borders were most of the pixels.
    ============================================================================ */
 @media (max-width: 860px) {
-  :is(#appSettingsModal, #sessionOptionsModal) .modal-content.modal-lg {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .modal-content.modal-lg {
     width: 100%;
     max-width: 100%;
     height: 100%;
     max-height: 100%;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-body {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-body {
     display: flex;
     flex-direction: column;
     min-height: 0;
   }
 
   /* Rail keeps only its search field, laid out as a bar */
-  :is(#appSettingsModal, #sessionOptionsModal) .set-rail {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-rail {
     flex-direction: row;
     align-items: center;
     border-right: 0;
@@ -3195,37 +3140,37 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
     flex-shrink: 0;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-rail-items,
-  :is(#appSettingsModal, #sessionOptionsModal) .set-rail-foot {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-rail-items,
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-rail-foot {
     display: none;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-search {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-search {
     margin: 0;
     flex: 1;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-search input {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-search input {
     padding: 9px 10px 9px 30px;
     border-radius: 10px;
   }
 
   /* Save moves into the header; the bottom action bar would cost 60px */
-  :is(#appSettingsModal, #sessionOptionsModal) .set-head-save {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-save {
     display: inline-flex;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-foot {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-foot {
     display: none;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-doc {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-doc {
     padding: 0 14px 34px;
     flex: 1;
   }
 
   /* ── jump control ──────────────────────────────────────────────────── */
-  :is(#appSettingsModal, #sessionOptionsModal) .set-jump {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-jump {
     display: flex;
     position: sticky;
     top: 0;
@@ -3246,30 +3191,30 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
     cursor: pointer;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-jump-ico {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-jump-ico {
     color: var(--accent);
     flex-shrink: 0;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-jump-label {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-jump-label {
     font-weight: 580;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-jump-chev {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-jump-chev {
     margin-left: auto;
     color: var(--text-muted);
     flex-shrink: 0;
     transition: transform 0.18s;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-jump[aria-expanded='true'] .set-jump-chev {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-jump[aria-expanded='true'] .set-jump-chev {
     transform: rotate(180deg);
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-jump-veil {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-jump-veil {
     display: none;
     position: fixed;
     inset: 0;
@@ -3277,7 +3222,7 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
     background: rgba(4, 8, 13, 0.62);
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-jump-menu {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-jump-menu {
     display: none;
     position: absolute;
     left: 14px;
@@ -3299,7 +3244,7 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
     display: block;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-jump-row {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-jump-row {
     display: flex;
     align-items: center;
     gap: 11px;
@@ -3314,43 +3259,43 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
     text-align: left;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-jump-row svg {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-jump-row svg {
     color: var(--text-muted);
     flex-shrink: 0;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-jump-row .set-jump-count {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-jump-row .set-jump-count {
     margin-left: auto;
     font-size: 0.62rem;
     color: var(--text-muted);
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-jump-row.active {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-jump-row.active {
     background: rgba(var(--accent-rgb), 0.14);
     color: var(--text);
     font-weight: 570;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-jump-row.active svg {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-jump-row.active svg {
     color: var(--accent);
   }
 
   /* ── sections step down: the jump pill already names the current one ── */
-  :is(#appSettingsModal, #sessionOptionsModal) .set-section {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-section {
     padding-top: 0;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-section + .set-section {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-section + .set-section {
     border-top: 0;
     margin-top: 0;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-section-head {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-section-head {
     gap: 7px;
     margin: 18px 0 2px;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-section-head svg {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-section-head svg {
     padding: 0;
     border: 0;
     background: none;
@@ -3359,7 +3304,7 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
     height: 12px;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-section-head h2 {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-section-head h2 {
     font-size: 0.6rem;
     font-weight: 640;
     letter-spacing: 0.1em;
@@ -3367,45 +3312,45 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
     color: var(--text-muted);
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-section-head::after {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-section-head::after {
     content: '';
     flex: 1;
     height: 1px;
     background: linear-gradient(90deg, var(--border), transparent);
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-section-blurb {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-section-blurb {
     display: none;
   }
 
   /* ── live layout preview ───────────────────────────────────────────── */
-  :is(#appSettingsModal, #sessionOptionsModal) .set-preview {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-preview {
     margin-bottom: 12px;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-preview-stage {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-preview-stage {
     min-height: 62px;
   }
 
   /* ── inset grouped list ────────────────────────────────────────────── */
-  :is(#appSettingsModal, #sessionOptionsModal) .set-group {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-group {
     margin-top: 14px;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-group + .set-group {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-group + .set-group {
     margin-top: 16px;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-group-head {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-group-head {
     margin-bottom: 7px;
     padding: 0 3px;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-group-hint {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-group-hint {
     padding: 0 3px;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-group-body {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-group-body {
     gap: 0;
     background: rgba(255, 255, 255, 0.035);
     border: 1px solid rgba(255, 255, 255, 0.06);
@@ -3413,7 +3358,7 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
     overflow: hidden;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-group-body > .set-row {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-group-body > .set-row {
     background: transparent;
     border: 0;
     border-radius: 0;
@@ -3421,103 +3366,103 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
     gap: 12px;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-group-body > .set-row + .set-row {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-group-body > .set-row + .set-row {
     border-top: 1px solid rgba(255, 255, 255, 0.055);
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-group-body > .set-chips,
-  :is(#appSettingsModal, #sessionOptionsModal) .set-group-body > .set-modelgrid,
-  :is(#appSettingsModal, #sessionOptionsModal) .set-group-body > .set-minigrid,
-  :is(#appSettingsModal, #sessionOptionsModal) .set-group-body > #appSettingsShortcutsList {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-group-body > .set-chips,
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-group-body > .set-modelgrid,
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-group-body > .set-minigrid,
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-group-body > #appSettingsShortcutsList {
     padding: 12px;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-group-body > .event-type-grid {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-group-body > .event-type-grid {
     padding: 12px;
     margin: 0;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-row-label {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-row-label {
     font-size: 0.84rem;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-row-desc {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-row-desc {
     font-size: 0.69rem;
     max-width: none;
   }
 
   /* Fields go full width under their label instead of fighting for the row */
-  :is(#appSettingsModal, #sessionOptionsModal) .set-row.has-field {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-row.has-field {
     flex-direction: column;
     align-items: stretch;
     gap: 9px;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-row.has-field .set-select,
-  :is(#appSettingsModal, #sessionOptionsModal) .set-row.has-field .set-input {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-row.has-field .set-select,
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-row.has-field .set-input {
     width: 100%;
     min-width: 0;
     max-width: none;
     box-sizing: border-box;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-row-actions-wide {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-row-actions-wide {
     width: 100%;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-row-actions-wide .set-input {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-row-actions-wide .set-input {
     flex: 1;
     min-width: 0;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-num {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-num {
     width: 76px;
   }
 
   /* Bigger touch targets for the toggles and chips */
-  :is(#appSettingsModal, #sessionOptionsModal) .switch-sm {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .switch-sm {
     width: 40px;
     height: 24px;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .switch-sm .slider:before {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .switch-sm .slider:before {
     height: 18px;
     width: 18px;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .switch-sm input:checked + .slider:before {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .switch-sm input:checked + .slider:before {
     transform: translateX(16px);
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-chip {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-chip {
     font-size: 0.78rem;
     padding: 9px 14px;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-modelgrid {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-modelgrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-minigrid {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-minigrid {
     grid-template-columns: 1fr;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-mini .set-select {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-mini .set-select {
     width: 148px;
   }
 
   /* One scrollable line beats a ragged two-row wrap for 7 effort levels */
-  :is(#appSettingsModal, #sessionOptionsModal) .set-segment {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-segment {
     overflow-x: auto;
     scrollbar-width: none;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-segment::-webkit-scrollbar {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-segment::-webkit-scrollbar {
     display: none;
   }
 
-  :is(#appSettingsModal, #sessionOptionsModal) .set-segment button {
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-segment button {
     flex: 0 0 auto;
     padding: 8px 12px;
   }
@@ -3532,11 +3477,11 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
    what its tab bar was before the two modals started sharing a surface.
    ============================================================================ */
 @media (max-width: 860px) {
-  #sessionOptionsModal .set-rail {
+  :is(#sessionOptionsModal, #createCaseModal) .set-rail {
     padding: 8px 10px;
   }
 
-  #sessionOptionsModal .set-rail-items {
+  :is(#sessionOptionsModal, #createCaseModal) .set-rail-items {
     display: flex;
     flex-direction: row;
     flex: 1;
@@ -3546,22 +3491,22 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
     scrollbar-width: none;
   }
 
-  #sessionOptionsModal .set-rail-items::-webkit-scrollbar {
+  :is(#sessionOptionsModal, #createCaseModal) .set-rail-items::-webkit-scrollbar {
     display: none;
   }
 
-  #sessionOptionsModal .set-rail-item {
+  :is(#sessionOptionsModal, #createCaseModal) .set-rail-item {
     white-space: nowrap;
     padding: 8px 12px;
   }
 
   /* The active marker is a left bar in the vertical rail; horizontally that
      reads as a stray tick, so the strip uses a filled pill instead. */
-  #sessionOptionsModal .set-rail-item.active::before {
+  :is(#sessionOptionsModal, #createCaseModal) .set-rail-item.active::before {
     display: none;
   }
 
-  #sessionOptionsModal .set-rail-item.active {
+  :is(#sessionOptionsModal, #createCaseModal) .set-rail-item.active {
     background: rgba(var(--accent-rgb), 0.13);
   }
 }

@@ -1808,7 +1808,7 @@ Object.assign(CodemanApp.prototype, {
     this.switchCaseModalTab('case-create');
     // Wire up tab buttons
     const modal = document.getElementById('createCaseModal');
-    modal.querySelectorAll('.modal-tabs .modal-tab-btn').forEach(btn => {
+    modal.querySelectorAll('.set-rail-item').forEach(btn => {
       btn.onclick = () => this.switchCaseModalTab(btn.dataset.tab);
     });
     // Scroll-into-view on focus for mobile keyboard visibility
@@ -1829,14 +1829,17 @@ Object.assign(CodemanApp.prototype, {
   switchCaseModalTab(tabName) {
     this.caseModalTab = tabName;
     const modal = document.getElementById('createCaseModal');
-    // Toggle active class on tab buttons
-    modal.querySelectorAll('.modal-tabs .modal-tab-btn').forEach(btn => {
+    // Toggle active class on rail entries
+    modal.querySelectorAll('.set-rail-item').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.tab === tabName);
     });
-    // Toggle hidden class on tab content
-    modal.querySelectorAll('.modal-tab-content').forEach(content => {
+    // Toggle hidden class on the panels
+    modal.querySelectorAll('.set-section').forEach(content => {
       content.classList.toggle('hidden', content.id !== tabName);
     });
+    // A switched-to panel starts at its own top.
+    const doc = document.getElementById('createCaseDoc');
+    if (doc) doc.scrollTop = 0;
     // Update submit button (hide for manage tab)
     const submitBtn = document.getElementById('caseModalSubmit');
     if (tabName === 'case-manage') {
