@@ -4465,8 +4465,12 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
    menu itself and a viewport-wide drawer there would cover the composer. */
 @media (min-width: 769px) {
   .run-mode-menu {
+    /* Bounded, not viewport-wide. `100vw - 24px` spanned the whole window while
+       every row stayed shrink-to-fit at ~250px (see below), so the menu grew by
+       ~1100px of dead space. 760px is what one full row costs: name + worktree
+       pill + parent path + timestamp. */
     max-width: none;
-    width: calc(100vw - 24px);
+    width: min(760px, calc(100vw - 24px));
   }
   .run-mode-history {
     /* More rows are worth showing once each one is legible. */
@@ -4542,6 +4546,12 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
    simply pinned the menu at its max-width. */
 .run-mode-history .run-mode-option {
   max-width: 100%;
+  /* `.run-mode-history` is a block scroller, not a flex container, so these
+     <button> rows are shrink-to-fit and ignore the menu's width. Without this
+     the `flex: 1` + `text-align: right` on `.hist-dir` below have nothing to
+     expand into: the path never right-aligns and widening the menu only adds
+     empty space to its right. */
+  width: 100%;
 }
 /* Recent-session row: identity first, path last.
    The row reads  <folder>  [⑂ worktree · branch]  <parent path>  <time>
