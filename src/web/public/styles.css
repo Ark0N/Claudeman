@@ -15782,3 +15782,336 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   font-size: 0.645rem;
   color: var(--text-muted);
 }
+
+/* ── Add Case is a task, not a settings list ──────────────────────────────
+   The shared surface is tuned for App Settings: a long, dense document you
+   scan. Add Case is the opposite - six short forms you fill in once - so on
+   the tight surface it read as a few small fields marooned in a large empty
+   frame. It keeps the same language, one size up: a wider rail with entries
+   you can hit without aiming, bigger fields, and a shell that is only as tall
+   as the panel showing, instead of a fixed box the content has to rattle in.
+   ─────────────────────────────────────────────────────────────────────────── */
+#createCaseModal .modal-content.modal-lg {
+  max-width: min(900px, 96vw);
+  width: min(900px, 96vw);
+  height: auto;
+  min-height: min(560px, 80vh);
+  max-height: 88vh;
+}
+
+#createCaseModal .set-body {
+  grid-template-columns: 236px minmax(0, 1fr);
+}
+
+#createCaseModal .set-rail {
+  padding: 14px 12px;
+}
+
+#createCaseModal .set-rail-items {
+  gap: 3px;
+}
+
+#createCaseModal .set-rail-item {
+  gap: 12px;
+  padding: 11px 13px;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  font-weight: 540;
+}
+
+#createCaseModal .set-rail-item svg {
+  width: 19px;
+  height: 19px;
+}
+
+#createCaseModal .set-rail-item.active::before {
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+}
+
+#createCaseModal .set-rail-foot {
+  padding: 12px 8px 2px;
+  font-size: 0.68rem;
+}
+
+#createCaseModal .set-doc {
+  padding: 0 22px 22px;
+}
+
+#createCaseModal .set-section {
+  padding-top: 18px;
+}
+
+#createCaseModal .set-section-head svg {
+  padding: 6px;
+}
+
+#createCaseModal .set-section-head h2 {
+  font-size: 1.08rem;
+}
+
+#createCaseModal .set-section-blurb {
+  margin: 0 0 13px 40px;
+  font-size: 0.75rem;
+}
+
+#createCaseModal .set-doc .form-row {
+  margin: 0 0 7px;
+  padding: 11px 14px;
+  border-radius: 11px;
+}
+
+#createCaseModal .set-doc .form-row > label {
+  margin: 0 0 6px;
+  font-size: 0.88rem;
+  font-weight: 540;
+}
+
+#createCaseModal .set-doc .form-row .form-hint {
+  margin: 6px 0 0;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+#createCaseModal .set-doc .form-row > input[type='text'],
+#createCaseModal .set-doc .form-row > input[type='url'],
+#createCaseModal .set-doc .form-row > input[type='number'],
+#createCaseModal .set-doc .form-row > input[type='password'],
+#createCaseModal .set-doc .form-row > select,
+#createCaseModal .set-doc .form-row > textarea {
+  font-size: 0.84rem;
+  padding: 9px 12px;
+  border-radius: 9px;
+}
+
+#createCaseModal .set-doc .form-row > label.checkbox-row {
+  font-size: 0.88rem;
+  gap: 9px;
+}
+
+#createCaseModal .set-doc .form-row > label.checkbox-row input {
+  width: 16px;
+  height: 16px;
+}
+
+#createCaseModal .set-doc .advanced-options > summary {
+  padding: 8px 2px;
+  font-size: 0.7rem;
+}
+
+#createCaseModal .set-doc .set-section > .form-hint {
+  font-size: 0.72rem;
+}
+
+#createCaseModal .form-actions.set-foot {
+  padding: 12px 22px;
+}
+
+/* ── Session Options is a task too ────────────────────────────────────────
+   Same reasoning as Add Case: four short panels you act on, not a document
+   you scan, so it takes the same size-up. Height follows the panel showing,
+   which is what keeps Summary from opening as a mostly-empty box.
+   ─────────────────────────────────────────────────────────────────────────── */
+#sessionOptionsModal .modal-content.modal-lg {
+  max-width: min(900px, 96vw);
+  width: min(900px, 96vw);
+  height: auto;
+  min-height: min(560px, 80vh);
+  max-height: 88vh;
+}
+
+#sessionOptionsModal .set-body {
+  grid-template-columns: 236px minmax(0, 1fr);
+}
+
+#sessionOptionsModal .set-rail {
+  padding: 14px 12px;
+}
+
+#sessionOptionsModal .set-rail-items {
+  gap: 3px;
+}
+
+#sessionOptionsModal .set-rail-item {
+  gap: 12px;
+  padding: 11px 13px;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  font-weight: 540;
+}
+
+#sessionOptionsModal .set-rail-item svg {
+  width: 19px;
+  height: 19px;
+}
+
+#sessionOptionsModal .set-rail-item.active::before {
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+}
+
+#sessionOptionsModal .set-rail-foot {
+  padding: 12px 8px 2px;
+  font-size: 0.68rem;
+}
+
+#sessionOptionsModal .set-doc {
+  padding: 0 22px 22px;
+}
+
+#sessionOptionsModal .set-section {
+  padding-top: 18px;
+}
+
+#sessionOptionsModal .set-section-head svg {
+  padding: 6px;
+}
+
+#sessionOptionsModal .set-section-head h2 {
+  font-size: 1.08rem;
+}
+
+#sessionOptionsModal .set-section-blurb {
+  margin: 0 0 13px 40px;
+  font-size: 0.75rem;
+}
+
+#sessionOptionsModal .set-group + .set-group {
+  margin-top: 16px;
+}
+
+#sessionOptionsModal .set-group-body {
+  gap: 5px;
+}
+
+#sessionOptionsModal .set-row {
+  padding: 10px 14px;
+  border-radius: 11px;
+}
+
+#sessionOptionsModal .set-row-label {
+  font-size: 0.88rem;
+  font-weight: 540;
+}
+
+#sessionOptionsModal .set-row-desc {
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+#sessionOptionsModal .set-input,
+#sessionOptionsModal .set-select,
+#sessionOptionsModal .set-num,
+#sessionOptionsModal .set-textarea {
+  font-size: 0.82rem;
+  padding: 8px 11px;
+  border-radius: 9px;
+}
+
+#sessionOptionsModal .set-num {
+  width: 76px;
+}
+
+#sessionOptionsModal .set-num-wide {
+  width: 102px;
+}
+
+#sessionOptionsModal .set-check {
+  font-size: 0.82rem;
+}
+
+#sessionOptionsModal .set-check input {
+  width: 15px;
+  height: 15px;
+}
+
+/* ── callout ──────────────────────────────────────────────────────────────
+   For the one setting on a panel that is worth reading before the rest. It is
+   a label wrapping its own switch, so the whole card is the hit target: the
+   complaint about the flat list was that auto-resume no longer looked like
+   something you were meant to turn on.
+   ─────────────────────────────────────────────────────────────────────────── */
+:is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  cursor: pointer;
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.14), rgba(var(--accent-rgb), 0.05));
+  border: 1px solid rgba(var(--accent-rgb), 0.42);
+  transition: border-color 0.15s, background 0.15s;
+}
+
+:is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-callout:hover {
+  border-color: rgba(var(--accent-rgb), 0.68);
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.19), rgba(var(--accent-rgb), 0.08));
+}
+
+:is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-callout-ico {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 9px;
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.16);
+  border: 1px solid rgba(var(--accent-rgb), 0.3);
+}
+
+:is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-callout-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+:is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-callout-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+:is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-callout-desc {
+  font-size: 0.73rem;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+:is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-callout-switch {
+  margin-top: 3px;
+}
+
+/* Armed: the pause is scheduled, so the card states the time it will resume. */
+#sessionOptionsModal .set-callout .auto-resume-status {
+  margin-top: 5px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* Action buttons on this surface follow the rows they sit in; at the small
+   toolbar size they read as an afterthought next to a 0.88rem label. */
+#sessionOptionsModal .set-row-actions .btn-toolbar,
+#createCaseModal .set-doc .btn-toolbar {
+  font-size: 0.8rem;
+  padding: 7px 14px;
+  border-radius: 8px;
+}
+
+#sessionOptionsModal .set-row-actions #modalEnableRespawnBtn,
+#sessionOptionsModal .set-row-actions #modalStopRespawnBtn {
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 8px 20px;
+}
+
+#sessionOptionsModal .session-respawn-status {
+  font-size: 0.8rem;
+  padding: 4px 9px;
+}

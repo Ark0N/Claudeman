@@ -1004,7 +1004,7 @@
               </button>
               <button type="button" class="set-rail-item" data-tab="context" onclick="app.switchOptionsTab('context')">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
-                <span>Context</span>
+                <span>Session</span>
               </button>
               <button type="button" class="set-rail-item" data-tab="ralph" data-claude-only onclick="app.switchOptionsTab('ralph')">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>
@@ -1027,23 +1027,43 @@
               </div>
               <p class="set-section-blurb">One autonomous work cycle, plus what to do when a usage limit pauses the session.</p>
 
-              <div class="set-group">
-                <div class="set-group-head"><h4>Usage limits</h4></div>
-                <div class="set-group-body">
-                  <div class="set-row">
-                    <div class="set-row-text">
-                      <span class="set-row-label">Auto-resume when the limit resets</span>
-                      <span class="set-row-desc">If Claude pauses on a subscription limit ("limit reached &middot; resets 3pm"), Codeman waits for the reset and continues on its own. Independent of the respawn loop below.</span>
-                      <span class="auto-resume-status" id="autoResumeStatus"></span>
-                    </div>
-                    <label class="switch switch-sm"><input type="checkbox" id="modalAutoResumeEnabled" onchange="app.autoSaveAutoResume()"><span class="slider"></span></label>
-                  </div>
-                </div>
-              </div>
+              <!-- The one setting on this tab worth reading before anything
+                   else, so it is a callout rather than the first row of a list:
+                   it is what turns a limit-halted overnight run back on. -->
+              <label class="set-callout">
+                <span class="set-callout-ico" aria-hidden="true">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>
+                </span>
+                <span class="set-callout-text">
+                  <span class="set-callout-title">Auto-resume when the usage limit resets</span>
+                  <span class="set-callout-desc">Claude stops on a subscription limit ("limit reached &middot; resets 3pm") and sits there until you come back. Switch this on and Codeman waits out the reset, then continues the work on its own. Independent of the respawn loop below.</span>
+                  <span class="auto-resume-status" id="autoResumeStatus"></span>
+                </span>
+                <span class="switch switch-sm set-callout-switch"><input type="checkbox" id="modalAutoResumeEnabled" onchange="app.autoSaveAutoResume()"><span class="slider"></span></span>
+              </label>
 
               <!-- Hidden wholesale for non-claude sessions and for a session with
                    no live process (session-ui.js: openSessionOptions). -->
               <div id="sessionRespawnSection">
+                <div class="set-group">
+                  <div class="set-group-head"><h4>Loop control</h4></div>
+                  <div class="set-group-body">
+                    <div class="set-row">
+                      <div class="set-row-text">
+                        <span class="set-row-label">Status</span>
+                        <div class="session-respawn-status" id="sessionRespawnStatus">
+                          <span class="respawn-status-indicator"></span>
+                          <span class="respawn-status-text">Not active</span>
+                        </div>
+                      </div>
+                      <div class="set-row-actions">
+                        <button class="btn-toolbar btn-success btn-sm" onclick="app.enableRespawnFromModal()" id="modalEnableRespawnBtn">Enable</button>
+                        <button class="btn-toolbar btn-danger btn-sm" onclick="app.stopRespawnFromModal()" id="modalStopRespawnBtn" style="display: none;">Stop</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 <div class="set-group">
                   <div class="set-group-head"><h4>Respawn loop</h4></div>
                   <p class="set-group-hint">Whenever Claude goes idle, Codeman sends the update prompt, optionally runs /clear + /init, and kickstarts the next round &mdash; repeating for the chosen duration. Configure it here, then press Enable.</p>
@@ -1122,34 +1142,16 @@
                   </div>
                 </div>
 
-                <div class="set-group">
-                  <div class="set-group-head"><h4>Loop control</h4></div>
-                  <div class="set-group-body">
-                    <div class="set-row">
-                      <div class="set-row-text">
-                        <span class="set-row-label">Status</span>
-                        <div class="session-respawn-status" id="sessionRespawnStatus">
-                          <span class="respawn-status-indicator"></span>
-                          <span class="respawn-status-text">Not active</span>
-                        </div>
-                      </div>
-                      <div class="set-row-actions">
-                        <button class="btn-toolbar btn-success btn-sm" onclick="app.enableRespawnFromModal()" id="modalEnableRespawnBtn">Enable</button>
-                        <button class="btn-toolbar btn-danger btn-sm" onclick="app.stopRespawnFromModal()" id="modalStopRespawnBtn" style="display: none;">Stop</button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
               </div><!-- End sessionRespawnSection -->
             </section>
 
             <!-- ══ Context ══════════════════════════════════════════════════ -->
-            <section class="set-section hidden" id="context-tab" data-label="Context">
+            <section class="set-section hidden" id="context-tab" data-label="Session">
               <div class="set-section-head">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
-                <h2>Context</h2>
+                <h2>Session</h2>
               </div>
-              <p class="set-section-blurb">What this tab is called, and how its context window is kept from filling up.</p>
+              <p class="set-section-blurb">What this tab is called, how its context window is kept from filling up, and what it watches.</p>
 
               <div class="set-group">
                 <div class="set-group-head"><h4>Identity</h4></div>
@@ -1200,7 +1202,7 @@
               </div>
 
               <div class="set-group">
-                <div class="set-group-head"><h4>Token management</h4></div>
+                <div class="set-group-head"><h4>Context window</h4></div>
                 <div class="set-group-body">
                   <div class="set-row">
                     <div class="set-row-text">
@@ -1235,7 +1237,7 @@
               </div>
 
               <div class="set-group">
-                <div class="set-group-head"><h4>This session</h4></div>
+                <div class="set-group-head"><h4>Behavior</h4></div>
                 <div class="set-group-body">
                   <div class="set-row">
                     <div class="set-row-text">
