@@ -1146,6 +1146,30 @@ describe('Virtual Keyboard', () => {
       expect(await typeAndCapture('d')).toEqual(['\x04']);
     });
 
+    it('survives a terminal tap while the pane has mouse reporting on', async () => {
+      // A shell session keeps the narrow scrollback strip, so mouse DECSETs
+      // reach the browser: run vim or htop and xterm starts reporting taps
+      // through onData as \x1b[<0;31;23M. Those arrive on the same channel as
+      // typed characters, so a hook that treats every chunk as "the next
+      // keystroke" spends Ctrl on a tap and the button looks dead. Verified
+      // against a real shell session before this guard existed.
+      await activateSession('shell');
+      await page.evaluate(`app.terminal.write('\\x1b[?1000h\\x1b[?1006h')`);
+      await page.waitForTimeout(150);
+
+      await tapCtrl();
+      expect(await page.evaluate(`KeyboardAccessoryBar.isCtrlArmed()`)).toBe(true);
+
+      const box = await page.locator('.xterm-screen').first().boundingBox();
+      await page.touchscreen.tap(box!.x + box!.width / 2, box!.y + box!.height / 2);
+      await page.waitForTimeout(200);
+
+      expect(await page.evaluate(`KeyboardAccessoryBar.isCtrlArmed()`)).toBe(true);
+      expect(await typeAndCapture('c')).toEqual(['\x03']);
+
+      await page.evaluate(`app.terminal.write('\\x1b[?1000l\\x1b[?1006l')`);
+    });
+
     it('cancels on a second tap of Ctrl', async () => {
       await activateSession('shell');
       await tapCtrl();

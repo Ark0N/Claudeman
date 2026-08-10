@@ -15,6 +15,15 @@
 (function (global) {
   const TERMINAL_QUERY_RESPONSE_PATTERN = /^\x1b\[[\?>=]?[\d;]*[cnR]$/;
   const TERMINAL_OSC_RESPONSE_PATTERN = /^\x1b\][\d;]*[^\x07\x1b]*(?:\x07|\x1b\\)$/;
+  // Pointer and focus reports xterm emits through onData on the terminal's OWN
+  // initiative, with no key pressed: SGR mouse (DECSET 1006, also 1016), legacy
+  // X10 mouse (DECSET 1000 — three raw bytes after CSI M) and focus in/out
+  // (DECSET 1004). They are not query REPLIES, so the query-response filter
+  // above does not match them, and they must keep reaching the PTY. What they
+  // must NOT do is stand in for a keystroke: see isTerminalFocusOrMouseReport.
+  const MOUSE_SGR_REPORT_PATTERN = /^\x1b\[<\d+;\d+;\d+[Mm]$/;
+  const MOUSE_X10_REPORT_PATTERN = /^\x1b\[M[\s\S]{3}$/;
+  const FOCUS_REPORT_PATTERN = /^\x1b\[[IO]$/;
   // Grace window after a manual scroll-up gesture during which sticky-scroll is
   // suppressed, so high-frequency Codex status redraws don't snap the viewport
   // back to the bottom while the user is inspecting earlier output.
@@ -106,6 +115,30 @@
     return isTerminalQueryResponse(data);
   }
 
+  /**
+   * Did the terminal generate this chunk itself, rather than a human pressing a
+   * key? True for mouse and focus reports (issue #262).
+   *
+   * Consumers that treat one onData chunk as "the next keystroke" must skip
+   * these. The one-shot Ctrl modifier is why this exists, and the MOUSE half is
+   * the live one: a shell session keeps the narrow scrollback strip, so mouse
+   * DECSETs reach the browser and anything the user runs that enables tracking
+   * (vim, htop, less) turns a tap into `\x1b[<0;31;23M`. Measured in a real
+   * shell session: with Ctrl armed, one tap on the terminal spent it silently.
+   *
+   * Focus reports are the same class and cost nothing to cover, but they cannot
+   * reach xterm today: `FOCUS_ESCAPE_FILTER` in session.ts strips `\x1b[?1004h`
+   * (and the reports themselves) from every PTY read, so `sendFocusMode` never
+   * turns on. Were that filter to go, the Ctrl button would spend the modifier
+   * on its OWN refocus — the bar refocuses the terminal after every key so the
+   * keyboard stays open, and that refocus emits `\x1b[I`.
+   */
+  function isTerminalFocusOrMouseReport(data) {
+    return (
+      FOCUS_REPORT_PATTERN.test(data) || MOUSE_SGR_REPORT_PATTERN.test(data) || MOUSE_X10_REPORT_PATTERN.test(data)
+    );
+  }
+
   // Per-skin xterm.js palettes. The 'daylight-blue' object equals the legacy hardcoded
   // theme, so default behavior is unchanged. Shared at module scope and exported on the
   // global so both terminal-ui.js (main terminal) and panels-ui.js (teammate terminals,
@@ -134,6 +167,7 @@
   global.CodemanTerminalInput = {
     isTerminalQueryResponse,
     shouldSuppressTerminalQueryResponse,
+    isTerminalFocusOrMouseReport,
     isComposerNavKey,
     classifyPredictInput,
     isCodexComposerRow,
@@ -938,7 +972,17 @@ Object.assign(CodemanApp.prototype, {
         // own DA/CPR replies can never spend the modifier, and BEFORE every
         // send path so the control byte follows the normal control-char route
         // (immediate flush, local-echo state cleared).
-        if (typeof KeyboardAccessoryBar !== 'undefined' && KeyboardAccessoryBar.isCtrlArmed?.()) {
+        //
+        // Mouse and focus reports are skipped rather than suppressed: they are
+        // real bytes the PTY still needs, they just were not typed by anyone.
+        // A shell session passes mouse DECSETs through, so with vim or htop
+        // running, one tap on the terminal used to spend the modifier silently
+        // (measured against a real shell). See isTerminalFocusOrMouseReport.
+        if (
+          typeof KeyboardAccessoryBar !== 'undefined' &&
+          KeyboardAccessoryBar.isCtrlArmed?.() &&
+          !window.CodemanTerminalInput?.isTerminalFocusOrMouseReport(data)
+        ) {
           data = KeyboardAccessoryBar.consumeCtrl(data);
         }
 

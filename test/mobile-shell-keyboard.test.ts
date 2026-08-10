@@ -17,6 +17,39 @@ import { describe, expect, it, vi } from 'vitest';
 const keyboardSource = readFileSync(resolve('src/web/public/keyboard-accessory.js'), 'utf8');
 const terminalSource = readFileSync(resolve('src/web/public/terminal-ui.js'), 'utf8');
 
+type TerminalInput = { isTerminalFocusOrMouseReport(data: string): boolean };
+let terminalInput: TerminalInput | null = null;
+
+/**
+ * `CodemanTerminalInput` out of terminal-ui.js. Its IIFE only needs a window to
+ * hang the export on, but the rest of the file assigns to CodemanApp.prototype
+ * at top level, so constants.js + app.js load first — the same recipe as
+ * test/local-echo-codex-gating.test.ts.
+ */
+function loadTerminalInput(): TerminalInput {
+  if (terminalInput) return terminalInput;
+  const read = (file: string) => readFileSync(resolve(`src/web/public/${file}`), 'utf8');
+  const windowStub: Record<string, unknown> = { addEventListener: vi.fn(), removeEventListener: vi.fn() };
+  const context = vm.createContext({
+    console,
+    setInterval: vi.fn(),
+    clearInterval: vi.fn(),
+    setTimeout,
+    clearTimeout,
+    requestAnimationFrame: vi.fn(),
+    HTMLCanvasElement: class HTMLCanvasElement {},
+    WebSocket: { OPEN: 1 },
+    fetch: vi.fn(),
+    document: { addEventListener: vi.fn(), documentElement: { dataset: {} } },
+    localStorage: { length: 0, key: vi.fn(), getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() },
+    window: windowStub,
+    MobileDetection: { isTouchDevice: () => true, isHandheldDevice: () => false, getDeviceType: () => 'desktop' },
+  });
+  vm.runInContext(`${read('constants.js')}\n${read('app.js')}\n${terminalSource}`, context);
+  terminalInput = (windowStub as { CodemanTerminalInput?: TerminalInput }).CodemanTerminalInput!;
+  return terminalInput;
+}
+
 type FakeButton = {
   dataset: { action: string };
   classList: { has: Set<string>; toggle(name: string, on: boolean): void; contains(name: string): boolean };
@@ -340,5 +373,115 @@ describe('terminal input wiring', () => {
 
   it('guards the hook so a page without the bar (desktop) still types normally', () => {
     expect(terminalSource).toContain("typeof KeyboardAccessoryBar !== 'undefined'");
+  });
+
+  it('skips terminal-generated focus and mouse reports', () => {
+    // Pins the gate itself: without it the modifier is spent by the `\x1b[I`
+    // that the Ctrl button's own refocus emits (see the describe below).
+    expect(terminalSource).toContain('!window.CodemanTerminalInput?.isTerminalFocusOrMouseReport(data)');
+  });
+});
+
+describe('CodemanTerminalInput.isTerminalFocusOrMouseReport', () => {
+  const isReport = loadTerminalInput().isTerminalFocusOrMouseReport;
+
+  it.each([
+    ['\x1b[I', 'focus in (DECSET 1004)'],
+    ['\x1b[O', 'focus out (DECSET 1004)'],
+    ['\x1b[<0;10;5M', 'SGR mouse press'],
+    ['\x1b[<0;10;5m', 'SGR mouse release'],
+    ['\x1b[<64;10;5M', 'SGR wheel up'],
+    ['\x1b[M !!', 'legacy X10 mouse'],
+  ])('classifies %j as terminal-generated (%s)', (data) => {
+    expect(isReport(data)).toBe(true);
+  });
+
+  it.each([
+    ['c', 'a typed character'],
+    ['\x03', 'a control byte'],
+    ['\r', 'Enter'],
+    ['\x1b', 'the Escape key'],
+    ['\x1b[A', 'an arrow key'],
+    ['\x1b[200~hi\x1b[201~', 'a bracketed paste'],
+    ['\x1b[?1;2c', 'a DA reply'],
+    ['I', 'the letter I'],
+  ])('leaves %j alone (%s)', (data) => {
+    expect(isReport(data)).toBe(false);
+  });
+});
+
+describe('one-shot Ctrl vs terminal-generated reports', () => {
+  // The onData gate, as terminal-ui.js writes it. The wiring test above pins
+  // the real source; this proves the behavior the gate buys.
+  function feed(bar: Bar, data: string): string {
+    const isReport = loadTerminalInput().isTerminalFocusOrMouseReport;
+    return bar.isCtrlArmed() && !isReport(data) ? bar.consumeCtrl(data) : data;
+  }
+
+  function shellBar() {
+    const loaded = loadBar('shell');
+    loaded.bar.refreshForActiveSession();
+    return loaded;
+  }
+
+  it('survives a tap once an app in the pane turns mouse reporting on', () => {
+    const { bar } = shellBar();
+    // The live case: a shell session keeps the narrow scrollback strip, so mouse
+    // DECSETs reach the browser. Measured against a real shell with vim-style
+    // tracking on, one tap on the terminal spent the armed modifier silently.
+    bar.handleAction('ctrl');
+    expect(feed(bar, '\x1b[<0;10;5M')).toBe('\x1b[<0;10;5M');
+    expect(feed(bar, '\x1b[<0;10;5m')).toBe('\x1b[<0;10;5m');
+    expect(bar.isCtrlArmed()).toBe(true);
+
+    // ...so the character the user actually types is still the one modified.
+    expect(feed(bar, 'd')).toBe('\x04');
+    expect(bar.isCtrlArmed()).toBe(false);
+  });
+
+  it('survives a focus report, should one ever reach xterm', () => {
+    // Defense in depth: FOCUS_ESCAPE_FILTER (session.ts) strips `\x1b[?1004h`
+    // from every PTY read, so sendFocusMode never turns on today. If it did,
+    // the bar's own post-key refocus would emit `\x1b[I` and eat the modifier
+    // before the user typed a single character.
+    const { bar } = shellBar();
+    bar.handleAction('ctrl');
+    expect(feed(bar, '\x1b[I')).toBe('\x1b[I');
+    expect(bar.isCtrlArmed()).toBe(true);
+    expect(feed(bar, 'c')).toBe('\x03');
+  });
+
+  it('still spends the modifier on a paste, which is real input', () => {
+    const { bar } = shellBar();
+    bar.handleAction('ctrl');
+    expect(feed(bar, 'git status')).toBe('git status');
+    expect(bar.isCtrlArmed()).toBe(false);
+  });
+});
+
+describe('armed styling survives the light-skin overrides', () => {
+  const mobileCss = readFileSync(resolve('src/web/public/mobile.css'), 'utf8');
+
+  it('excludes .armed from the light-skin .accessory-btn repaint', () => {
+    // That selector is (0,3,1): `:is()` takes the specificity of its most
+    // specific argument and the list holds `.btn-toolbar.btn-shell`. It
+    // therefore OUTRANKS the (0,3,0) armed rules in both stylesheets, and a
+    // bare `.accessory-btn` there paints the armed modifier back to a resting
+    // button on all four light skins (measured across every skin at 390px).
+    const lightSkinRule = mobileCss
+      .split('\n')
+      .find((line) => line.includes('[data-skin="paper-gray"]') && line.includes('.btn-voice-mobile,'));
+
+    expect(lightSkinRule).toBeDefined();
+    expect(lightSkinRule).toContain('.accessory-btn:not(.armed)');
+  });
+
+  it('keeps an armed rule in both stylesheets', () => {
+    // mobile.css hardcodes the phone palette, styles.css carries the
+    // skin-aware one for everything wider.
+    expect(mobileCss).toContain('.accessory-btn.accessory-btn-ctrl.armed');
+    expect(readFileSync(resolve('src/web/public/styles.css'), 'utf8')).toContain(
+      '.accessory-btn.accessory-btn-ctrl.armed'
+    );
   });
 });
