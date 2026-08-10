@@ -494,6 +494,7 @@ const KeyboardAccessoryBar = {
           <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
         </svg>
       </button>
+      <button class="accessory-btn accessory-btn-rmm" data-action="readmymind" title="Read My Mind: predict your next prompt">🧠</button>
       <button class="accessory-btn" data-action="esc" title="Escape">Esc</button>
       <button class="accessory-btn accessory-btn-dismiss" data-action="dismiss" title="Dismiss keyboard">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
@@ -570,6 +571,7 @@ const KeyboardAccessoryBar = {
       </button>
       <button class="accessory-btn" data-action="pick-path" title="Insert a file or folder path">&#x1F4C1; Path</button>
       <button class="accessory-btn" data-action="clear-input" title="Clear the current unsent input">&#x232B; All</button>
+      <button class="accessory-btn accessory-btn-rmm" data-action="readmymind" title="Read My Mind: predict your next prompt">🧠</button>
       <button class="accessory-btn" data-action="tab" title="Tab">Tab</button>
       <button class="accessory-btn" data-action="shift-tab" title="Shift+Tab">⇧Tab</button>
       <button class="accessory-btn" data-action="effort-max" title="/effort max">Max</button>
@@ -594,6 +596,9 @@ const KeyboardAccessoryBar = {
     this.element = document.createElement('div');
     this.element.className = 'keyboard-accessory-bar';
     this.element.innerHTML = this._simpleButtons;
+    // The 🧠 key is opt-in (`readMyMindEnabled`, synced): it ships in both
+    // templates but stays display:none until the bar carries the marker class.
+    this.syncReadMyMind();
 
     // Add click handlers — preventDefault stops event from reaching terminal
     this.element.addEventListener('click', (e) => {
@@ -784,6 +789,11 @@ const KeyboardAccessoryBar = {
         }
         break;
       }
+      case 'readmymind':
+        // Opens the shared Read My Mind modal (readmymind-ui.js); the modal
+        // takes focus, so deliberately NOT in the terminal-refocus set.
+        app.openReadMyMind?.();
+        break;
       case 'paste':
         this.pasteFromClipboard();
         break;
@@ -827,6 +837,17 @@ const KeyboardAccessoryBar = {
       if (btn) btn.classList.remove('confirming');
     }
     this._confirmAction = null;
+  },
+
+  /** Reveal/hide the 🧠 key from the synced `readMyMindEnabled` setting.
+   *  The marker class lives on the BAR because setMode() rebuilds the buttons'
+   *  innerHTML on every layout switch (per-key state would be wiped). Called at
+   *  init and re-synced by applyHeaderVisibilitySettings() on every settings
+   *  apply, so a live toggle needs no reload. */
+  syncReadMyMind() {
+    if (!this.element) return;
+    const enabled = typeof app !== 'undefined' && typeof app.readMyMindEnabled === 'function' && app.readMyMindEnabled();
+    this.element.classList.toggle('rmm-enabled', enabled === true);
   },
 
   /** Send a slash command to the active session.

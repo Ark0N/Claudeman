@@ -260,6 +260,7 @@
     Insert: '插入',
     "Put the text on the session's composer without submitting it": '将文本放入会话输入框但不提交',
     'Predicted prompt, editable': '预测的提示，可编辑',
+    'Use this suggestion instead': '改用此建议',
     'Select a session first': '请先选择一个会话',
     'Read My Mind works on Claude sessions only': '读心术仅适用于 Claude 会话',
     'Prompt sent': '提示已发送',

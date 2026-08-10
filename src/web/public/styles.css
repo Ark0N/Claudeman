@@ -10865,6 +10865,56 @@ kbd {
   padding: 12px 4px;
   color: var(--text-dim);
 }
+/* Alternate suggestions (the predictor's verify/redirect kinds): tappable rows
+   that swap into the editable field (readmymind-ui.js _rmmSelect). */
+.readmymind-alternates {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.readmymind-alt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  padding: 7px 10px;
+  background: transparent;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+}
+.readmymind-alt:hover,
+.readmymind-alt:focus-visible {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.readmymind-alt-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono-font, monospace);
+}
+
+/* Keyboard-accessory 🧠 key: the phone surface for the same opt-in setting
+   (the header 🧠 button stays phone-hidden in mobile.css). The key ships in
+   BOTH bar templates (keyboard-accessory.js) but stays hidden until the bar
+   carries the marker class: setMode() rebuilds the bar's innerHTML on every
+   layout switch, so the gate must live on the bar element, not on the key.
+   Lives here rather than mobile.css because large touch tablets (>1023px)
+   never load mobile.css but do render the accessory bar. */
+.keyboard-accessory-bar .accessory-btn-rmm {
+  display: none;
+}
+.keyboard-accessory-bar.rmm-enabled .accessory-btn-rmm {
+  display: inline-flex;
+}
 
 .approvals-badge {
   position: absolute;
@@ -14136,14 +14186,23 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   Home screen: open tabs in the left gutter (home-sessions.js)
+   Home screen: open tabs docked down the left edge (home-sessions.js)
 
-   The welcome content is 560px wide and centered, so this column lives in dead
+   The welcome content is 560px wide and centered, so this rail lives in dead
    space. It is `position: absolute` precisely so that stays true: the centered
-   content does not move by a pixel whether the column renders or not. That in
+   content does not move by a pixel whether the rail renders or not. That in
    turn is why the width gate below has to exist — in a narrow window there is
    no gutter to sit in, and an absolute box would simply overlap the search
    panel. JS gates on the same 1180px so the two can never disagree.
+
+   It is FLUSH to the left edge and FULL HEIGHT on purpose: a floating, vertically
+   centered card in the middle of the gutter reads as debris, a docked rail with
+   an edge to hang off reads as part of the chrome.
+
+   Everything inside scales off ONE knob — the `font-size` below — because every
+   child sizes in `em`. Widen the window and the whole rail grows with it instead
+   of leaving 12px type stranded on a 2560px display. Do not reintroduce `rem`
+   or fixed px sizes for type/spacing here; that is what breaks the scaling.
 
    The working dot is the phone's, exactly: pulsing green ringed by the very
    same `tab-load-spin` a tab shows while it loads (reused from above, never
@@ -14152,14 +14211,20 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 
 .home-sessions {
   position: absolute;
-  left: 20px;
-  top: 50%;
-  transform: translateY(-50%);
+  left: 0;
+  top: 0;
+  bottom: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  width: 256px;
-  max-height: calc(100% - 3rem);
+  gap: 0.9em;
+  /* Ramps with the viewport, floored so it still clears the centered content at
+     the 1180px gate and capped so it never becomes the main event. */
+  width: clamp(250px, 19vw, 430px);
+  padding: 1.5em 1.1em;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--bg-card) 65%, transparent) 0%, transparent 100%);
+  border-right: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  /* The single scale knob: ~12px at the gate, ~17px on a 2560px display. */
+  font-size: clamp(12.2px, calc(8px + 0.35vw), 17px);
   text-align: left;
   z-index: 1;
 }
@@ -14181,12 +14246,13 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 .home-sessions-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 6px;
+  gap: 0.66em;
+  flex-shrink: 0;
+  padding: 0 0.5em;
 }
 
 .home-sessions-title {
-  font-size: 0.66rem;
+  font-size: 0.87em;
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -14197,25 +14263,29 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
-  height: 16px;
-  padding: 0 5px;
+  min-width: 1.5em;
+  height: 1.35em;
+  padding: 0 0.42em;
   border-radius: 999px;
   background: var(--bg-input);
   border: 1px solid var(--border);
   color: var(--text-dim);
-  font-size: 0.6rem;
+  font-size: 0.79em;
   font-weight: 700;
   font-family: monospace;
 }
 
+/* `min-height: 0` is what lets this scroll inside the full-height rail: without
+   it the flex item's auto minimum keeps growing and the overflow never engages. */
 .home-sessions-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 0.35em;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 2px 2px 6px;
+  padding: 0.16em 0.16em 0.5em;
 }
 
 .home-sessions-list::-webkit-scrollbar {
@@ -14230,15 +14300,16 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 .home-sessions-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 0.66em;
   width: 100%;
-  padding: 7px 9px;
-  border-radius: 9px;
+  padding: 0.6em 0.75em;
+  border-radius: 0.75em;
   background: var(--bg-card);
   border: 1px solid var(--border);
   color: var(--text-dim);
   font-family: inherit;
-  font-size: 0.76rem;
+  font-size: 1em;
   text-align: left;
   cursor: pointer;
   transition: background var(--transition-smooth), border-color var(--transition-smooth), color var(--transition-smooth);
@@ -14258,14 +14329,14 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 15px;
-  height: 15px;
+  width: 1.3em;
+  height: 1.3em;
   flex-shrink: 0;
-  border-radius: 3px;
+  border-radius: 0.25em;
   background: var(--bg-input);
   border: 1px solid var(--border);
   color: var(--text-muted);
-  font-size: 0.58rem;
+  font-size: 0.76em;
   font-weight: 700;
   font-family: monospace;
 }
@@ -14273,8 +14344,8 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 .home-sessions-dot {
   position: relative;
   flex-shrink: 0;
-  width: 9px;
-  height: 9px;
+  width: 0.75em;
+  height: 0.75em;
   border-radius: 50%;
   background: var(--text-muted);
 }
@@ -14288,8 +14359,13 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   background: var(--yellow);
 }
 
+/* Idle is green, but a MUTED green: still unmistakably "fine", visibly greyer
+   and darker than the vivid green a working session gets, so a glance down the
+   rail separates "running right now" from "sitting there" without reading a
+   word. Mixed toward --text-muted rather than hardcoded, so every skin keeps
+   its own green. */
 .home-sessions-dot--idle {
-  background: var(--green);
+  background: color-mix(in srgb, var(--green) 42%, var(--text-muted));
 }
 
 .home-sessions-dot--done {
@@ -14311,7 +14387,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 .home-sessions-dot--working::after {
   content: '';
   position: absolute;
-  inset: -4px;
+  inset: -0.34em;
   border: 2px solid color-mix(in srgb, var(--green) 25%, transparent);
   border-top-color: var(--green);
   border-radius: 50%;
@@ -14321,7 +14397,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 .home-sessions-row-body {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 0.12em;
   min-width: 0;
   flex: 1;
 }
@@ -14329,7 +14405,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 .home-sessions-row-title {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 0.42em;
   min-width: 0;
   color: var(--text);
   font-weight: 600;
@@ -14342,21 +14418,66 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 }
 
 .home-sessions-row-sub {
-  font-size: 0.66rem;
+  font-size: 0.87em;
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* Age line: when the session was first created and when it last did anything.
+   Both are relative and refreshed in place on a timer (home-sessions.js), never
+   by a re-render — a re-render would restart the row's blink animation. */
+.home-sessions-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  /* Wraps to its own full-width line under the row (the row is `flex-wrap`),
+     so the stamps get the whole width instead of the sliver left beside the
+     status pill and ellipsize away on the narrow end of the rail. */
+  flex: 0 0 100%;
+  min-width: 0;
+  margin-top: -0.2em;
+  font-size: 0.78em;
+  font-family: monospace;
+  color: var(--text-muted);
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.home-sessions-meta-item {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.home-sessions-meta-key {
+  margin-right: 0.35em;
+  opacity: 0.7;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.home-sessions-meta-sep {
+  opacity: 0.45;
+}
+
+/* The freshest signal on the row: while a session is actually doing something,
+   its "active" stamp is the one the eye should land on. */
+.home-sessions-row--working .home-sessions-meta-active {
+  color: var(--green);
+  opacity: 0.95;
+}
+
 .home-sessions-mode {
   flex-shrink: 0;
-  padding: 0 4px;
-  border-radius: 3px;
+  padding: 0 0.35em;
+  border-radius: 0.25em;
   background: var(--bg-input);
   border: 1px solid var(--border);
   color: var(--text-muted);
-  font-size: 0.55rem;
+  font-size: 0.72em;
   font-weight: 700;
   font-family: monospace;
   text-transform: uppercase;
@@ -14364,12 +14485,12 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 
 .home-sessions-pill {
   flex-shrink: 0;
-  padding: 2px 6px;
+  padding: 0.2em 0.55em;
   border-radius: 999px;
   background: var(--bg-input);
   border: 1px solid var(--border);
   color: var(--text-muted);
-  font-size: 0.58rem;
+  font-size: 0.76em;
   font-weight: 700;
   letter-spacing: 0.02em;
   white-space: nowrap;
@@ -14388,11 +14509,18 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   color: var(--yellow);
 }
 
-.home-sessions-pill--working,
-.home-sessions-pill--idle {
+.home-sessions-pill--working {
   background: color-mix(in srgb, var(--green) 15%, transparent);
   border-color: color-mix(in srgb, var(--green) 40%, transparent);
   color: var(--green);
+}
+
+/* Same muting as the idle dot, one step further: the pill is a block of color,
+   so it reads louder than a 9px dot at the same mix. */
+.home-sessions-pill--idle {
+  background: color-mix(in srgb, var(--green) 7%, transparent);
+  border-color: color-mix(in srgb, var(--green) 18%, var(--border));
+  color: color-mix(in srgb, var(--green) 45%, var(--text-muted));
 }
 
 /* Row accents: same language as the session tabs and the phone overview — red

@@ -323,9 +323,9 @@
 
       <!-- Welcome Overlay (shown when no session active) -->
       <div class="welcome-overlay" id="welcomeOverlay">
-        <!-- Open tabs as a vertical column in the left gutter (home-sessions.js).
+        <!-- Open tabs as a rail docked to the left edge (home-sessions.js).
              Absolutely positioned so the centered content below never moves, and
-             therefore only rendered where the gutter is wider than the column;
+             therefore only rendered where the gutter is wider than the rail;
              ships `hidden` and only that module reveals it. -->
         <aside class="home-sessions" id="homeSessions" hidden></aside>
         <div class="welcome-content">
@@ -2892,6 +2892,7 @@
             <input type="text" id="readMyMindPrompt" class="readmymind-prompt-input" data-i18n-skip aria-label="Predicted prompt, editable" onkeydown="if(event.key==='Enter')app.sendReadMyMind(true)">
           </div>
           <div class="readmymind-why" id="readMyMindWhy" data-i18n-skip></div>
+          <div class="readmymind-alternates" id="readMyMindAlternates" data-i18n-skip style="display:none"></div>
         </div>
         <div class="readmymind-error" style="display:none">No suggestion this time. Rethink to try again.</div>
       </div>
