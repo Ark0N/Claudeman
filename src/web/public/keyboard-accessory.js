@@ -12,6 +12,13 @@
  *   Destructive actions (/clear, /compact, extended bar only) require double-tap confirmation (2s amber state).
  *   Commands are sent as text + Enter separately for Ink compatibility.
  *   Only initializes on touch devices (MobileDetection.isTouchDevice guard).
+ *   SHELL sessions get their own layout automatically (issue #262): Ctrl, Esc, Tab,
+ *   four arrows, paste, dismiss. Ctrl is a ONE-SHOT modifier: arm it, type a
+ *   character on the system keyboard, and terminal-ui.js's onData hook swaps the
+ *   character for its control byte (ctrlByteFor) and disarms. That is what makes
+ *   Ctrl+C/D/Z/R/L/A/E/W/U/K reachable without a button per chord. It resets on
+ *   use, on a second tap, on any other accessory key, on a session switch
+ *   (refreshForActiveSession) and when the keyboard is dismissed (hide).
  * - PathPicker (singleton object) — Lazy server-side file/folder browser shared
  *   by Link Existing and the extended mobile keyboard bar.
  *
@@ -415,11 +422,57 @@ const PathPicker = {
 // ═══════════════════════════════════════════════════════════════
 
 /**
+ * Control byte a terminal sends for Ctrl+<char> (issue #262).
+ *
+ * Returns null for characters with no control equivalent (digits, most
+ * punctuation): the caller then sends the character unchanged, matching a
+ * hardware keyboard where Ctrl+7 just types "7".
+ *
+ * `code & 0x1f` covers both ranges a terminal maps: @A-Z[\]^_ (64-95 → 0-31)
+ * and a-z (97-122 → 1-26). Space and ? are the two conventional extras
+ * (Ctrl+Space = NUL, Ctrl+? = DEL) and can't come from the mask.
+ */
+function ctrlByteFor(char) {
+  if (typeof char !== 'string' || char.length !== 1) return null;
+  const code = char.charCodeAt(0);
+  if (code === 32) return '\x00';
+  if (code === 63) return '\x7f';
+  if ((code >= 64 && code <= 95) || (code >= 97 && code <= 122)) {
+    return String.fromCharCode(code & 0x1f);
+  }
+  return null;
+}
+
+/**
+ * Apply an armed one-shot Ctrl to one chunk of terminal input.
+ * Returns `{ data, consumed }`, where `consumed` tells the bar to disarm.
+ *
+ * Multi-character chunks (pastes, escape sequences, IME commits) have no
+ * single key to modify, but they still spend the modifier: leaving it armed
+ * would silently turn the NEXT innocent keystroke into a control byte.
+ */
+function applyOneShotCtrl(data) {
+  if (typeof data !== 'string' || data.length === 0) return { data, consumed: false };
+  if (data.length === 1) {
+    const byte = ctrlByteFor(data);
+    return { data: byte === null ? data : byte, consumed: true };
+  }
+  return { data, consumed: true };
+}
+
+/**
  * KeyboardAccessoryBar - Quick action buttons shown above keyboard when typing.
  */
 const KeyboardAccessoryBar = {
   element: null,
-  _mode: 'simple', // 'simple' or 'extended'
+  // Layout currently in the DOM: 'simple' | 'extended' | 'shell'.
+  _mode: 'simple',
+  // Layout the user picked for AGENT sessions ('simple' | 'extended', the
+  // extendedKeyboardBar setting). Shell sessions override it with the shell
+  // bar; this is what we come back to when they switch to an agent tab.
+  _baseMode: 'simple',
+  // One-shot Ctrl modifier (shell bar only). See handleAction('ctrl').
+  _ctrlArmed: false,
 
   /** HTML for simple mode: arrows, commands, paste, Esc, dismiss */
   _simpleButtons: `
@@ -442,6 +495,45 @@ const KeyboardAccessoryBar = {
         </svg>
       </button>
       <button class="accessory-btn" data-action="esc" title="Escape">Esc</button>
+      <button class="accessory-btn accessory-btn-dismiss" data-action="dismiss" title="Dismiss keyboard">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+          <path d="M19 9l-7 7-7-7"/>
+        </svg>
+      </button>`,
+
+  /** HTML for shell mode (issue #262): terminal controls instead of agent
+   *  commands. Ctrl is a one-shot modifier rather than one button per chord,
+   *  which is what puts Ctrl+C/D/Z/R/L/A/E/W/U/K on a 9-button bar. */
+  _shellButtons: `
+      <button class="accessory-btn accessory-btn-ctrl" data-action="ctrl" title="Ctrl, then tap a key" aria-pressed="false">Ctrl</button>
+      <button class="accessory-btn" data-action="esc" title="Escape">Esc</button>
+      <button class="accessory-btn" data-action="tab" title="Tab">Tab</button>
+      <button class="accessory-btn accessory-btn-arrow" data-action="scroll-up" title="Arrow up">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M5 15l7-7 7 7"/>
+        </svg>
+      </button>
+      <button class="accessory-btn accessory-btn-arrow" data-action="scroll-down" title="Arrow down">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M19 9l-7 7-7-7"/>
+        </svg>
+      </button>
+      <button class="accessory-btn accessory-btn-arrow" data-action="arrow-left" title="Arrow left">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M15 19l-7-7 7-7"/>
+        </svg>
+      </button>
+      <button class="accessory-btn accessory-btn-arrow" data-action="arrow-right" title="Arrow right">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M9 5l7 7-7 7"/>
+        </svg>
+      </button>
+      <button class="accessory-btn" data-action="paste" title="Paste from clipboard">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+          <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+        </svg>
+      </button>
       <button class="accessory-btn accessory-btn-dismiss" data-action="dismiss" title="Dismiss keyboard">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
           <path d="M19 9l-7 7-7-7"/>
@@ -514,7 +606,7 @@ const KeyboardAccessoryBar = {
       this.handleAction(action, btn);
 
       // Refocus terminal so keyboard stays open (tap blurs terminal → keyboard dismisses → toolbar shifts)
-      const refocusActions = new Set(['scroll-up', 'scroll-down', 'arrow-left', 'arrow-right', 'tab', 'shift-tab', 'ctrl-o', 'opt-enter', 'esc', 'effort-max', 'clear-input']);
+      const refocusActions = new Set(['scroll-up', 'scroll-down', 'arrow-left', 'arrow-right', 'tab', 'shift-tab', 'ctrl', 'ctrl-o', 'opt-enter', 'esc', 'effort-max', 'clear-input']);
       if (refocusActions.has(action) ||
           ((action === 'clear' || action === 'compact') && this._confirmAction)) {
         if (typeof app !== 'undefined' && app.terminal) {
@@ -530,13 +622,90 @@ const KeyboardAccessoryBar = {
     }
   },
 
-  /** Switch between 'simple' and 'extended' button layouts */
+  /** Pick the layout the user wants for AGENT sessions ('simple' | 'extended',
+   *  the extendedKeyboardBar setting). A shell session keeps the shell bar;
+   *  the preference is remembered and applied on the next agent tab. */
   setMode(mode) {
-    if (mode === this._mode || !this.element) return;
+    this._baseMode = mode === 'extended' ? 'extended' : 'simple';
+    this._applyLayout(this._resolveMode());
+  },
+
+  /** Re-resolve the layout after the active session changed (issue #262):
+   *  shell sessions get the terminal bar, everything else the agent bar. Also
+   *  disarms Ctrl, because a modifier armed on one session must never fire on
+   *  the next one. */
+  refreshForActiveSession() {
+    this.clearCtrl();
+    this._applyLayout(this._resolveMode());
+  },
+
+  /** Which layout the current state calls for. */
+  _resolveMode() {
+    return this._isShellSession() ? 'shell' : this._baseMode;
+  },
+
+  _isShellSession() {
+    if (typeof app === 'undefined' || !app.activeSessionId) return false;
+    return app.sessions?.get(app.activeSessionId)?.mode === 'shell';
+  },
+
+  /** Swap the button set in the DOM. */
+  _applyLayout(mode) {
+    if (!this.element || mode === this._mode) return;
     this._mode = mode;
     this.clearConfirm();
-    this.element.innerHTML = mode === 'extended' ? this._extendedButtons : this._simpleButtons;
+    // Reset before the rewrite: _setCtrl() styles the button it can find, and
+    // the one holding the armed class is about to be replaced.
+    this.clearCtrl();
+    this.element.innerHTML =
+      mode === 'shell' ? this._shellButtons : mode === 'extended' ? this._extendedButtons : this._simpleButtons;
   },
+
+  // ── One-shot Ctrl modifier (shell bar) ──────────────────────────────────
+  // Tap Ctrl, then type a character on the system keyboard: the character is
+  // replaced by its control byte and Ctrl disarms. Tapping Ctrl again cancels.
+  // The interception lives in the terminal onData handler (terminal-ui.js),
+  // which is where system-keyboard input arrives on a phone. A keydown hook
+  // would miss it, since virtual keyboards report no usable key events.
+
+  /** Is the one-shot Ctrl waiting for a key? */
+  isCtrlArmed() {
+    return this._ctrlArmed === true;
+  },
+
+  /** Arm/cancel the one-shot Ctrl (the Ctrl button toggles). */
+  toggleCtrl() {
+    this._setCtrl(!this._ctrlArmed);
+  },
+
+  /** Disarm: used by session switch, keyboard dismissal and every other key. */
+  clearCtrl() {
+    if (this._ctrlArmed) this._setCtrl(false);
+  },
+
+  _setCtrl(on) {
+    this._ctrlArmed = !!on;
+    const btn = this.element?.querySelector('[data-action="ctrl"]');
+    if (btn) {
+      btn.classList.toggle('armed', this._ctrlArmed);
+      btn.setAttribute('aria-pressed', this._ctrlArmed ? 'true' : 'false');
+    }
+  },
+
+  /**
+   * Apply an armed Ctrl to a chunk of typed input and disarm.
+   * Returns the data unchanged (and leaves the modifier alone) when Ctrl is
+   * not armed, so the caller can pipe every keystroke through it.
+   */
+  consumeCtrl(data) {
+    if (!this._ctrlArmed) return data;
+    const result = applyOneShotCtrl(data);
+    if (result.consumed) this.clearCtrl();
+    return result.data;
+  },
+
+  /** Exposed for tests: pure char to control byte mapping. */
+  ctrlByteFor,
 
   _confirmTimer: null,
   _confirmAction: null,
@@ -545,7 +714,15 @@ const KeyboardAccessoryBar = {
   handleAction(action, btn) {
     if (typeof app === 'undefined' || !app.activeSessionId) return;
 
+    // Any key other than Ctrl itself spends the modifier. It is a one-shot for
+    // the next TYPED character, so an accessory key tapped in between (Esc, an
+    // arrow, paste) must not leave it armed to bite the keystroke after that.
+    if (action !== 'ctrl') this.clearCtrl();
+
     switch (action) {
+      case 'ctrl':
+        this.toggleCtrl();
+        break;
       case 'scroll-up':
         this.sendKey('\x1b[A');
         break;
@@ -784,6 +961,10 @@ const KeyboardAccessoryBar = {
 
   /** Hide the accessory bar */
   hide() {
+    // The bar goes away with the keyboard, so an armed Ctrl has nothing left
+    // to modify, and a modifier the user can no longer see must not survive
+    // to the next time they open the keyboard.
+    this.clearCtrl();
     if (this.element) {
       this.element.classList.remove('visible');
     }

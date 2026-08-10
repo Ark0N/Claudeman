@@ -848,9 +848,11 @@ class CodemanApp {
     SwipeHandler.init();
     VoiceInput.init();
     KeyboardAccessoryBar.init();
-    // Apply keyboard bar mode from settings
+    // Apply keyboard bar mode from settings. Always set it (not only when the
+    // extended bar is on) so the bar's remembered agent-session layout matches
+    // the setting before the first shell session swaps in the terminal bar.
     const _kbSettings = this.loadAppSettingsFromStorage();
-    if (_kbSettings.extendedKeyboardBar) KeyboardAccessoryBar.setMode('extended');
+    KeyboardAccessoryBar.setMode(_kbSettings.extendedKeyboardBar ? 'extended' : 'simple');
     this.applyHeaderVisibilitySettings();
     this.restorePlanUsageChip();
     this.applySkin();
@@ -4531,6 +4533,10 @@ class CodemanApp {
       this.loadAttachmentHistory?.(sessionId);
     }
     this._updateLocalEchoState();
+    // Shell sessions get the terminal keyboard bar, agent sessions the command
+    // bar (issue #262). Also disarms a one-shot Ctrl left over from the tab we
+    // just left, so it can never fire against the session we just opened.
+    if (typeof KeyboardAccessoryBar !== 'undefined') KeyboardAccessoryBar.refreshForActiveSession();
 
     // Restore flushed offset AND text IMMEDIATELY so backspace/typing work during
     // the async buffer load.  Without this, the offset is 0 during the

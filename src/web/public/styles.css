@@ -12189,6 +12189,20 @@ body.touch-device.cjk-input-visible .main {
   color: var(--yellow);
 }
 
+/* Armed one-shot Ctrl (shell bar, issue #262). Three classes on purpose, to beat
+   the plain .accessory-btn rules. It still cannot outrank the light-skin
+   compatibility rule in mobile.css, which repaints every .accessory-btn at
+   (0,3,1) — `:is()` inherits its most specific argument — so that rule excludes
+   `.armed` by hand. Without the exclusion the modifier looks unarmed on the four
+   light skins, which is worse than having no armed style at all. */
+.accessory-btn.accessory-btn-ctrl.armed {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
 .accessory-btn:active {
   background: var(--control-bg-hover);
 }
