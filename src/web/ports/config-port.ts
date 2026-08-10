@@ -19,6 +19,8 @@ export interface ConfigPort {
   getTerminalHistoryConfig(): Promise<TerminalHistoryConfig>;
   /** Synced `agentSkillEnabled` app setting (default OFF); gates per-case agent-skill injection. */
   getAgentSkillEnabled(): Promise<boolean>;
+  /** Synced `claudeVoiceEnabled` app setting (default OFF); gates the Claude voice dictation relay. */
+  getClaudeVoiceEnabled(): Promise<boolean>;
   getDefaultClaudeMdPath(): Promise<string | undefined>;
   getLightState(identity?: { username: string; role: 'admin' | 'user' }): unknown;
   getLightSessionsState(): unknown[];

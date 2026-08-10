@@ -471,6 +471,28 @@ All four enforce session ownership in multi-user mode; a foreign session id
 answers `404 NOT_FOUND` (no existence leak), and profiles of two owners of the
 same directory are distinct by construction.
 
+## Voice dictation
+
+Browser dictation transcribed through this server's Claude Code login, i.e. the
+same speech-to-text service the CLI's own `/voice` mode uses. Gated on the synced
+`claudeVoiceEnabled` setting (default OFF). Design:
+[`claude-voice-plan.md`](claude-voice-plan.md).
+
+- `GET /api/v1/voice/status` -> `{ available, reason?, subscriptionType?,
+  expiresAt? }`. `reason` is `disabled` (setting off), `no-credentials` (nobody
+  signed in to Claude Code on the server), `expired` (the access token elapsed;
+  running any Claude session refreshes it) or `malformed`. The OAuth token
+  itself is never returned by this or any other endpoint.
+- `GET /ws/voice/stream?language=&keyterms=` (WebSocket, not under `/api`)
+  relays one dictation. Client sends binary frames of signed 16-bit
+  little-endian PCM, 16 kHz mono (<= 64 KB per frame), plus JSON control frames
+  `{"t":"finalize"}` (ask for the final transcript) and `{"t":"stop"}`. Server
+  sends `{"t":"ready"}`, `{"t":"transcript","text","final"}` (each frame is the
+  WHOLE running transcript, not a delta), `{"t":"error","message"}` and
+  `{"t":"closed"}`. Close codes: `4003` disallowed Host/Origin, `4004`
+  unavailable (reason in the close reason), `4008` too many concurrent streams.
+  Streams are capped in count and length (`src/config/voice.ts`).
+
 ## Authentication
 
 Optional HTTP Basic (`CODEMAN_USERNAME`/`CODEMAN_PASSWORD`) → opaque

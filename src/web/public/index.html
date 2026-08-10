@@ -1966,6 +1966,18 @@
                     <div class="set-row-text"><span class="set-row-label">Active provider</span></div>
                     <span class="voice-provider-status" id="voiceProviderStatus">&mdash;</span>
                   </div>
+                  <div class="set-row has-field" data-search="voice provider claude deepgram web speech engine">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Speech engine</span>
+                      <span class="set-row-desc">Auto prefers Claude when this server can transcribe, then Deepgram, then the browser.</span>
+                    </div>
+                    <select id="voiceProvider" class="set-select">
+                      <option value="auto">Auto</option>
+                      <option value="claude">Claude</option>
+                      <option value="deepgram">Deepgram</option>
+                      <option value="webspeech">Browser (Web Speech)</option>
+                    </select>
+                  </div>
                   <div class="set-row has-field" data-search="voice insert mode compose">
                     <div class="set-row-text">
                       <span class="set-row-label">Insert mode</span>
@@ -1975,6 +1987,23 @@
                       <option value="direct">Direct to input</option>
                       <option value="compose">Compose dialog</option>
                     </select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Claude</h4><span class="set-scope">synced</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="claude voice dictation subscription no api key">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Transcribe with this server's Claude login</span>
+                      <span class="set-row-desc">Dictation with no API key, through the same service Claude Code's own /voice mode uses. Microphone audio goes to Anthropic and is billed to this machine's Claude subscription, for everyone who can reach this UI.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsClaudeVoice"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="claude voice status credentials">
+                    <div class="set-row-text"><span class="set-row-label">Server status</span></div>
+                    <span class="voice-provider-status" id="voiceClaudeStatus" data-i18n-skip>&mdash;</span>
                   </div>
                 </div>
               </div>

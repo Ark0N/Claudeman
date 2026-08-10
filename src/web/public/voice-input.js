@@ -1,7 +1,13 @@
 /**
- * @fileoverview Voice input with Deepgram Nova-3 (primary) and Web Speech API (fallback).
+ * @fileoverview Voice input with three providers: Claude (this server's Claude Code
+ * login), Deepgram Nova-3, and the Web Speech API.
  *
- * Defines two singleton objects:
+ * Defines three singleton objects:
+ *
+ * - ClaudeVoiceProvider — Dictation through Codeman's own `/ws/voice/stream`, which
+ *   relays to the speech-to-text service Claude Code's `/voice` mode uses. No API key:
+ *   the server holds the OAuth token, the browser only sends PCM16 @16 kHz (AudioWorklet,
+ *   since MediaRecorder cannot emit raw PCM) and receives text. See docs/claude-voice-plan.md.
  *
  * - DeepgramProvider — Direct browser-to-Deepgram WebSocket connection for speech-to-text.
  *   Captures audio via MediaRecorder, streams chunks every 250ms, handles KeepAlive pings,
@@ -14,6 +20,7 @@
  *   Includes a temporary green Send button that replaces the settings gear icon after voice input.
  *   Web Speech API has auto-retry (up to 2x) for premature onend and iOS Safari stability check.
  *
+ * @globals {object} ClaudeVoiceProvider
  * @globals {object} DeepgramProvider
  * @globals {object} VoiceInput
  *
@@ -22,8 +29,12 @@
  * @loadorder 3 of 15 — loaded after mobile-handlers.js, before notification-manager.js
  */
 
-// Codeman — Voice input with Deepgram Nova-3 and Web Speech API fallback
+// Codeman — Voice input with Claude, Deepgram Nova-3 and Web Speech API
 // Loaded after mobile-handlers.js, before app.js
+
+/** Dev vocabulary sent to the recognizer as a hint. Shared by every provider and the settings form. */
+const DEFAULT_VOICE_KEYTERMS =
+  'refactor, endpoint, middleware, callback, async, regex, TypeScript, npm, API, deploy, config, linter, env, webhook, schema, CLI, JSON, CSS, DOM, SSE, backend, frontend, localhost, dependencies, repository, merge, rebase, diff, commit, com';
 
 // ═══════════════════════════════════════════════════════════════
 // Voice Input (Deepgram Nova-3 + Web Speech API fallback)
@@ -245,7 +256,282 @@ const DeepgramProvider = {
 };
 
 /**
- * VoiceInput - Speech-to-text with Deepgram Nova-3 (primary) and Web Speech API (fallback).
+ * ClaudeVoiceProvider - Speech-to-text through this Codeman server's Claude Code
+ * login, i.e. the same service the CLI's own `/voice` mode uses. No API key.
+ *
+ * Audio goes browser -> Codeman -> Anthropic: the OAuth token never leaves the
+ * server, so the browser only ever sends PCM and receives text
+ * (docs/claude-voice-plan.md).
+ *
+ * ⚠️ The upstream endpoint is opened as linear16 / 16 kHz / mono, so capture MUST
+ * be raw PCM at that rate. MediaRecorder cannot emit raw PCM (container formats
+ * only), which is why this path uses an AudioWorklet rather than reusing
+ * DeepgramProvider's recorder. The AudioContext is constructed at 16000 Hz so the
+ * browser does the resampling.
+ *
+ * ⚠️ Transcript frames carry the WHOLE running transcript, not deltas. Callers
+ * must replace, never concatenate.
+ */
+const ClaudeVoiceProvider = {
+  _ws: null,
+  _stream: null,
+  _audioContext: null,
+  _workletNode: null,
+  _sourceNode: null,
+  _scriptNode: null,
+  _silenceTimeout: null,
+  _onResult: null,
+  _onError: null,
+  _onEnd: null,
+  _finalized: false,
+
+  /** How long without any transcript before the recording gives up on its own. */
+  SILENCE_MS: 6000,
+
+  /**
+   * Start streaming.
+   * @param {object} opts - { language, keyterms[], onResult(text, isFinal), onError(msg), onEnd(), onStream(stream) }
+   */
+  async start(opts) {
+    this._onResult = opts.onResult;
+    this._onError = opts.onError;
+    this._onEnd = opts.onEnd;
+    this._finalized = false;
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      this._onError?.('Microphone requires a secure context (HTTPS). Use --https flag or access via localhost.');
+      this._cleanup();
+      return;
+    }
+    try {
+      this._stream = await navigator.mediaDevices.getUserMedia({
+        audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: true }
+      });
+    } catch (err) {
+      const msg = err.name === 'NotAllowedError'
+        ? 'Microphone access denied. Check browser settings.'
+        : 'Microphone error: ' + err.message;
+      this._onError?.(msg);
+      this._cleanup();
+      return;
+    }
+    opts.onStream?.(this._stream);
+
+    const params = new URLSearchParams();
+    if (opts.language) params.set('language', opts.language);
+    if (opts.keyterms?.length) params.set('keyterms', opts.keyterms.join(','));
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    try {
+      this._ws = new WebSocket(`${proto}//${location.host}/ws/voice/stream?${params}`);
+    } catch (err) {
+      this._onError?.('Failed to open voice stream: ' + err.message);
+      this._cleanup();
+      return;
+    }
+    this._ws.binaryType = 'arraybuffer';
+
+    this._ws.onopen = () => {
+      // Capture starts only once the socket is up: PCM buffered before that would
+      // be the oldest audio, and dropping it keeps the transcript aligned with what
+      // the user hears themselves saying.
+      this._startCapture().catch((err) => {
+        this._onError?.('Microphone capture failed: ' + err.message);
+        this.stop();
+      });
+      this._resetSilenceTimeout();
+    };
+
+    this._ws.onmessage = (event) => {
+      let msg;
+      try {
+        msg = JSON.parse(event.data);
+      } catch (_e) {
+        return;
+      }
+      if (msg.t === 'transcript' && msg.text) {
+        this._resetSilenceTimeout();
+        this._onResult?.(msg.text, msg.final === true);
+      } else if (msg.t === 'error') {
+        this._onError?.(msg.message || 'Voice transcription failed');
+      }
+    };
+
+    this._ws.onerror = () => {
+      // onclose carries the actionable detail (close code); nothing useful here.
+    };
+
+    this._ws.onclose = (event) => {
+      if (event.code === 4004) {
+        this._onError?.(this._unavailableMessage(event.reason));
+      } else if (event.code === 4008) {
+        this._onError?.('Too many voice streams are already running on this server.');
+      } else if (event.code === 4003) {
+        this._onError?.('Voice stream refused (origin not allowed).');
+      } else if (event.code !== 1000 && !this._finalized) {
+        this._onError?.('Voice stream closed: ' + (event.reason || `code ${event.code}`));
+      }
+      this._stopCapture();
+      const onEnd = this._onEnd;
+      this._onEnd = null;
+      onEnd?.();
+    };
+  },
+
+  /** Map the server's close reason onto something a user can act on. */
+  _unavailableMessage(reason) {
+    if (reason === 'expired') return 'Claude login expired. Run a Claude session to refresh it, then try again.';
+    if (reason === 'disabled') return 'Claude voice is off. Enable it in Settings > Voice.';
+    return 'No Claude Code login found on the server. Sign in with `claude` there, or use Deepgram.';
+  },
+
+  /** Wire mic -> 16 kHz PCM16 frames -> WebSocket. */
+  async _startCapture() {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    // Ask for 16 kHz directly so the browser resamples; Safari may hand back its
+    // own rate, which _pcmFromFloat32 then downsamples to match.
+    this._audioContext = new Ctx({ sampleRate: 16000 });
+    if (this._audioContext.state === 'suspended') await this._audioContext.resume();
+    this._sourceNode = this._audioContext.createMediaStreamSource(this._stream);
+
+    if (this._audioContext.audioWorklet) {
+      await this._audioContext.audioWorklet.addModule(this._workletUrl());
+      this._workletNode = new AudioWorkletNode(this._audioContext, 'pcm-frame-processor');
+      this._workletNode.port.onmessage = (event) => this._sendAudio(event.data);
+      this._sourceNode.connect(this._workletNode);
+      // A worklet with no destination is not pulled in some engines; a zero-gain
+      // sink keeps the graph running without echoing the mic to the speakers.
+      const sink = this._audioContext.createGain();
+      sink.gain.value = 0;
+      this._workletNode.connect(sink).connect(this._audioContext.destination);
+      return;
+    }
+
+    // Fallback for engines without AudioWorklet (older Safari): deprecated, but
+    // it is this or no dictation at all there.
+    this._scriptNode = this._audioContext.createScriptProcessor(4096, 1, 1);
+    this._scriptNode.onaudioprocess = (event) => {
+      this._sendAudio(this._pcmFromFloat32(event.inputBuffer.getChannelData(0), this._audioContext.sampleRate));
+    };
+    this._sourceNode.connect(this._scriptNode);
+    this._scriptNode.connect(this._audioContext.destination);
+  },
+
+  /**
+   * Worklet URL carrying this page's cache-bust token.
+   *
+   * ⚠️ Static assets are served `immutable` for a year, and `cacheBustAssets`
+   * only rewrites `.js` refs in `<script>`/`<link>` tags — a URL built here in JS
+   * is invisible to it. So the token is borrowed from voice-input.js's own script
+   * tag, which the server DID rewrite. Consequence: **edit the worklet and this
+   * file together**, or the browser keeps serving the old worklet.
+   */
+  _workletUrl() {
+    const src = document.querySelector('script[src*="voice-input.js"]')?.getAttribute('src') || '';
+    const q = src.indexOf('?');
+    return 'voice-pcm-worklet.js' + (q === -1 ? '' : src.slice(q));
+  },
+
+  /** Float32 [-1,1] at any rate -> Int16 PCM at 16 kHz (nearest-neighbour decimation). */
+  _pcmFromFloat32(input, sampleRate) {
+    const ratio = sampleRate / 16000;
+    const outLength = Math.floor(input.length / ratio);
+    const out = new Int16Array(outLength);
+    for (let i = 0; i < outLength; i++) {
+      const sample = Math.max(-1, Math.min(1, input[Math.floor(i * ratio)]));
+      out[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+    }
+    return out.buffer;
+  },
+
+  _sendAudio(arrayBuffer) {
+    if (this._finalized) return;
+    if (this._ws?.readyState !== WebSocket.OPEN) return;
+    try {
+      this._ws.send(arrayBuffer);
+    } catch (_e) {
+      /* socket died mid-frame */
+    }
+  },
+
+  _resetSilenceTimeout() {
+    clearTimeout(this._silenceTimeout);
+    this._silenceTimeout = setTimeout(() => this.stop(), this.SILENCE_MS);
+  },
+
+  /**
+   * Ask for the final transcript and let the server close the socket. Capture stops
+   * immediately, but the WebSocket stays open: the last (and usually best) transcript
+   * arrives AFTER the audio does, so closing here would throw away the utterance.
+   */
+  stop() {
+    clearTimeout(this._silenceTimeout);
+    this._silenceTimeout = null;
+    if (this._finalized) return;
+    this._finalized = true;
+    this._stopCapture();
+    if (this._ws?.readyState === WebSocket.OPEN) {
+      try {
+        this._ws.send(JSON.stringify({ t: 'finalize' }));
+      } catch (_e) {
+        /* ignore */
+      }
+    } else {
+      const onEnd = this._onEnd;
+      this._onEnd = null;
+      onEnd?.();
+    }
+  },
+
+  /** Tear down the audio graph and release the mic. Idempotent. */
+  _stopCapture() {
+    if (this._workletNode) {
+      this._workletNode.port.onmessage = null;
+      try { this._workletNode.disconnect(); } catch (_e) { /* ignore */ }
+      this._workletNode = null;
+    }
+    if (this._scriptNode) {
+      this._scriptNode.onaudioprocess = null;
+      try { this._scriptNode.disconnect(); } catch (_e) { /* ignore */ }
+      this._scriptNode = null;
+    }
+    if (this._sourceNode) {
+      try { this._sourceNode.disconnect(); } catch (_e) { /* ignore */ }
+      this._sourceNode = null;
+    }
+    if (this._audioContext) {
+      try { this._audioContext.close(); } catch (_e) { /* ignore */ }
+      this._audioContext = null;
+    }
+    if (this._stream) {
+      this._stream.getTracks().forEach(t => t.stop());
+      this._stream = null;
+    }
+  },
+
+  /** Hard stop: drop the socket without waiting for a final transcript. */
+  _cleanup() {
+    this._finalized = true;
+    clearTimeout(this._silenceTimeout);
+    this._silenceTimeout = null;
+    this._stopCapture();
+    if (this._ws) {
+      this._ws.onclose = null;
+      this._ws.onmessage = null;
+      this._ws.onerror = null;
+      if (this._ws.readyState === WebSocket.OPEN) {
+        try { this._ws.close(1000); } catch (_e) { /* ignore */ }
+      }
+      this._ws = null;
+    }
+    this._onResult = null;
+    this._onError = null;
+    this._onEnd = null;
+  }
+};
+
+/**
+ * VoiceInput - Speech-to-text with Claude (this server's Claude Code login),
+ * Deepgram Nova-3, or the Web Speech API.
  * Toggle mode: tap mic to start, tap again to stop. Auto-stops after silence.
  * Shows interim transcription in a floating preview overlay.
  * Inserts final text into the active session (user presses Enter to submit).
@@ -273,6 +559,29 @@ const VoiceInput = {
     this._initRecognition();
     // Always show buttons — if unsupported, toggle() shows a toast
     this._showButtons();
+    // Probe the server's Claude voice availability in the background. `auto`
+    // resolution reads the cached answer, so the first mic press does not wait
+    // on a round trip; a miss just falls through to the next provider.
+    this.refreshClaudeStatus();
+  },
+
+  /** Last /api/voice/status answer, or null before the first probe resolves. */
+  _claudeStatus: null,
+
+  /**
+   * Re-probe whether this server can transcribe with its Claude Code login.
+   * Called at init and whenever App Settings opens (the setting is server-side,
+   * so another device could have flipped it).
+   */
+  async refreshClaudeStatus() {
+    try {
+      const res = await fetch('/api/voice/status');
+      const json = await res.json();
+      this._claudeStatus = json?.success ? json.data : { available: false, reason: 'disabled' };
+    } catch (_e) {
+      this._claudeStatus = { available: false, reason: 'disabled' };
+    }
+    return this._claudeStatus;
   },
 
   // --- Deepgram config (localStorage only, never sent to server) ---
@@ -294,11 +603,37 @@ const VoiceInput = {
     return !!(cfg.apiKey && cfg.apiKey.trim());
   },
 
+  _claudeAvailable() {
+    return this._claudeStatus?.available === true;
+  },
+
+  /**
+   * Which provider a press of the mic would use.
+   *
+   * An explicit pick always wins, even when it cannot run — the resulting error
+   * ("Claude voice is off", "no Deepgram key") is more useful than silently
+   * transcribing somewhere the user did not choose. `auto` prefers Claude because
+   * it needs no key and no per-word billing, then the configured Deepgram key,
+   * then the browser's own engine.
+   */
+  _resolveProvider() {
+    const pinned = this._getDeepgramConfig().provider;
+    if (pinned === 'claude' || pinned === 'deepgram' || pinned === 'webspeech') return pinned;
+    if (this._claudeAvailable()) return 'claude';
+    if (this._shouldUseDeepgram()) return 'deepgram';
+    return 'webspeech';
+  },
+
   /** Get the active provider name for display */
   getActiveProviderName() {
-    if (this._shouldUseDeepgram()) return 'Deepgram Nova-3';
-    if (this.supported) return 'Web Speech API';
-    return 'None';
+    switch (this._resolveProvider()) {
+      case 'claude':
+        return this._claudeAvailable() ? 'Claude (this server’s login)' : 'Claude (unavailable)';
+      case 'deepgram':
+        return this._shouldUseDeepgram() ? 'Deepgram Nova-3' : 'Deepgram (no API key)';
+      default:
+        return this.supported ? 'Web Speech API' : 'None';
+    }
   },
 
   /** Try to create a SpeechRecognition instance */
@@ -334,11 +669,79 @@ const VoiceInput = {
     }
     this._retryCount = 0;
 
-    if (this._shouldUseDeepgram()) {
+    const provider = this._resolveProvider();
+    if (provider === 'claude') {
+      this._startClaude();
+    } else if (provider === 'deepgram') {
       this._startDeepgram();
     } else {
       this._startWebSpeech();
     }
+  },
+
+  _startClaude() {
+    if (!this._claudeAvailable()) {
+      const reason = this._claudeStatus?.reason;
+      app.showToast(
+        reason === 'expired'
+          ? 'Claude login expired on the server. Run a Claude session to refresh it.'
+          : reason === 'no-credentials'
+            ? 'No Claude Code login found on the server. Sign in there with `claude`.'
+            : 'Claude voice is off. Enable it in Settings > Voice.',
+        'warning'
+      );
+      // Re-probe so a setting flipped on another device is picked up by the next press.
+      this.refreshClaudeStatus();
+      return;
+    }
+
+    const cfg = this._getDeepgramConfig();
+    this.isRecording = true;
+    this._activeProvider = 'claude';
+    this._accumulatedFinal = '';
+    this._lastTranscript = '';
+    this._hasReceivedResult = false;
+    this._recordingStartedAt = Date.now();
+    this._updateButtons('recording');
+    this._showPreview('Listening...', 'claude');
+    this._startDurationTimer();
+
+    const keyterms = (cfg.keyterms || DEFAULT_VOICE_KEYTERMS)
+      .split(',').map(t => t.trim()).filter(Boolean);
+
+    ClaudeVoiceProvider.start({
+      // The upstream endpoint wants a bare language tag; the Deepgram picker's
+      // 'en-US' style narrows to its base, and 'multi' means auto-detect.
+      language: (cfg.language || 'en-US').split('-')[0],
+      keyterms,
+      onStream: (stream) => this._startLevelMeter(stream),
+      onResult: (text, isFinal) => {
+        if (!this.isRecording) return;
+        this._hasReceivedResult = true;
+        // Each frame is the WHOLE running transcript, so replace rather than append.
+        this._accumulatedFinal = text;
+        if (isFinal) {
+          this._hidePreview();
+          this._insertText(text);
+          this.stop();
+        } else {
+          this._showPreview(text, 'claude');
+        }
+      },
+      onError: (msg) => {
+        const wasRecording = this.isRecording;
+        this.stop();
+        if (wasRecording) app.showToast(msg, 'error');
+      },
+      onEnd: () => {
+        if (this.isRecording) {
+          if (this._accumulatedFinal) this._insertText(this._accumulatedFinal);
+          this.stop();
+        }
+      }
+    });
+
+    if (navigator.vibrate) navigator.vibrate(50);
   },
 
   _startDeepgram() {
@@ -353,7 +756,7 @@ const VoiceInput = {
     this._showPreview('Listening...', 'deepgram');
     this._startDurationTimer();
 
-    const keyterms = (cfg.keyterms || 'refactor, endpoint, middleware, callback, async, regex, TypeScript, npm, API, deploy, config, linter, env, webhook, schema, CLI, JSON, CSS, DOM, SSE, backend, frontend, localhost, dependencies, repository, merge, rebase, diff, commit, com')
+    const keyterms = (cfg.keyterms || DEFAULT_VOICE_KEYTERMS)
       .split(',').map(t => t.trim()).filter(Boolean);
 
     DeepgramProvider.start({
@@ -452,7 +855,10 @@ const VoiceInput = {
     this._updateButtons('idle');
     this._hidePreview();
 
-    if (this._activeProvider === 'deepgram') {
+    if (this._activeProvider === 'claude') {
+      // Finalize, don't hang up: the last transcript arrives after the audio does.
+      ClaudeVoiceProvider.stop();
+    } else if (this._activeProvider === 'deepgram') {
       DeepgramProvider.stop();
     } else if (this._activeProvider === 'webspeech') {
       try {
@@ -803,11 +1209,12 @@ const VoiceInput = {
       timerEl.textContent = '0:00';
       indicator.appendChild(timerEl);
       this.previewEl.appendChild(indicator);
-      // Provider badge for Deepgram
-      if (provider === 'deepgram') {
+      // Provider badge (Web Speech gets none — it is the fallback, not a choice)
+      const badgeText = provider === 'deepgram' ? 'DG' : provider === 'claude' ? 'CLAUDE' : '';
+      if (badgeText) {
         const badge = document.createElement('span');
         badge.className = 'voice-preview-badge';
-        badge.textContent = 'DG';
+        badge.textContent = badgeText;
         this.previewEl.appendChild(badge);
         this.previewEl.appendChild(document.createTextNode(' '));
       }
@@ -861,6 +1268,7 @@ const VoiceInput = {
     if (this.isRecording) this.stop();
     this._hideVoiceSendBtn();
     DeepgramProvider._cleanup();
+    ClaudeVoiceProvider._cleanup();
     this.recognition = null;
     this._activeProvider = null;
     this._stopDurationTimer();

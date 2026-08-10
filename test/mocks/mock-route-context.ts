@@ -15,7 +15,11 @@ import { resolveTerminalHistoryConfig } from '../../src/config/terminal-history.
  * Creates a mock context that satisfies all port interfaces.
  * Pre-populated with one session for convenience.
  */
-export function createMockRouteContext(options?: { sessionId?: string; agentSkillEnabled?: boolean }) {
+export function createMockRouteContext(options?: {
+  sessionId?: string;
+  agentSkillEnabled?: boolean;
+  claudeVoiceEnabled?: boolean;
+}) {
   const sessionId = options?.sessionId ?? 'test-session-1';
   const session = createMockSession(sessionId);
   const sessions = new Map<string, MockSession>();
@@ -90,6 +94,8 @@ export function createMockRouteContext(options?: { sessionId?: string; agentSkil
     // case's .claude/skills. Overridable per test because the create-time
     // injection call sites are otherwise unreachable from a route test.
     getAgentSkillEnabled: vi.fn(async () => options?.agentSkillEnabled ?? false),
+    // Default OFF mirrors the shipped setting: no test opens a voice relay by accident.
+    getClaudeVoiceEnabled: vi.fn(async () => options?.claudeVoiceEnabled ?? false),
     getDefaultClaudeMdPath: vi.fn(async () => undefined),
     getLightState: vi.fn(() => ({ sessions: [], status: 'ok' })),
     getLightSessionsState: vi.fn(() => {
