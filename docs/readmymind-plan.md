@@ -122,14 +122,15 @@ Agent use cases this unlocks: a lead session records intentions as the user stat
 
 ## Phases
 
-1. **Intent store + capture + intent endpoints + skill docs.** Immediately useful to agents even before any UI exists.
-2. **Context assembler + predictor + predict endpoint + desktop button/modal.** The feature as pitched. The assembler ships with all collectors it can serve from day one (transcript, intent, git, run-summary, siblings); the approvals collector activates when PR #245 lands.
-3. **Phone accessory key, rethink steering, alternates row.**
-4. Explicitly later: proactive predict-on-idle (ghost suggestion chip), auto-compaction of `recentPrompts` into `goals` via a cheap model, codex/gemini capture, cross-case "global" intent.
+1. **Intent store + capture + intent endpoints + skill docs.** Immediately useful to agents even before any UI exists. Shipped 1.16.1 (PR #253).
+2. **Context assembler + predictor + predict endpoint + desktop button/modal.** The feature as pitched. The assembler ships with all collectors it can serve from day one (transcript, intent, git, run-summary, siblings); the approvals collector activates when PR #245 lands. Shipped 1.16.2 (PR #256).
+3. **Phase 3, PR 1: alternates row, rethink steering, phone surfaces.** Alternate suggestions as tappable rows that swap into the field; Rethink records everything displayed as rejected and carries the optional steer note; keyboard-accessory 🧠 key (`refreshReadMyMind()`, re-derived after every innerHTML rebuild, settings apply, and session switch); `🧠 Suggest` strip on the phone overview's YELLOW waiting rows only. Red rows deliberately get no shortcut yet: a dialog is on screen there and text sent via `POST /input` would land in its menu.
+4. **Phase 3, PR 2: the approvals fusion** (the Cloudflare OS learnings tie-in, items 1-2 of `cloudflare-os-learnings-plan.md`). `GET /api/sessions/:id/recap`: a deterministic "what was done, simplified" catch-up (last assistant tail + recent tool one-liners + git state) reusing the phase-2 collectors verbatim; no model call, effectively an observation-ledger v0 whose data source can later swap to a real ledger. Surfaces: collapsible "What happened" on approval cards (lazy-fetched), recap in the modal's loading phase (read while opus thinks), 🧠 on approval cards and red overview rows. Answer-aware Send: the predictor output gains an optional `answer` option number (validated against the pending dialog's parsed options, dropped when invalid) and the modal routes dialog answers through `POST /api/approvals/:id/answer` (option digits / idle text), keeping `POST /input` only for dialog-free sessions.
+5. Explicitly later: proactive predict-on-idle (ghost suggestion chip), auto-compaction of `recentPrompts` into `goals` via a cheap model, codex/gemini capture, cross-case "global" intent, a model-written prose recap (deterministic-only in v1).
 
 ## Open questions
 
-- Should Rethink's rejected-suggestion memory persist across modal closes, or reset each open?
+- ~~Should Rethink's rejected-suggestion memory persist across modal closes, or reset each open?~~ Decided in phase 2 and kept: reset each open (a fresh open is a fresh question); the steer note resets with it.
 - Is a composer-adjacent placement (next to the toolbar Run controls) better than the header for discoverability?
 - Pending-dialog input (source #1) consumes the approvals-inbox store (PR #245, merged): the phase-2 collector reads pending items directly from `src/approval-inbox.ts`.
 

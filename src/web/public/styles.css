@@ -10697,6 +10697,17 @@ kbd {
   font-size: 13px;
   line-height: 1;
 }
+/* Which session the prediction targets: overview rows and the accessory key
+   can open the modal for a session that is not the active tab. */
+.readmymind-session {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-dim);
+}
+.readmymind-session:empty {
+  display: none;
+}
 
 /* Read My Mind modal: top suggestion in an editable single-line field with the
    kind badge beside it and the rationale below. */
@@ -10752,6 +10763,75 @@ kbd {
   margin-top: 8px;
   font-size: 12px;
   color: var(--text-dim);
+}
+/* Alternates: the predictor's other kind-diverse suggestions (verify /
+   redirect) as tappable rows; tapping swaps one into the editable field.
+   Text is set via textContent only (predictor output is observed/injectable
+   content, same rule as the field above). */
+.readmymind-alternates {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.readmymind-alternates:empty {
+  display: none;
+}
+.readmymind-alt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 9px;
+  background: var(--bg-dark);
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+}
+.readmymind-alt:hover {
+  border-color: var(--accent);
+}
+.readmymind-alt-col {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.readmymind-alt-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+/* Rationale as a visible second line: phones have no hover for a title tip,
+   and the why is what separates two plausible-looking prompts. */
+.readmymind-alt-why {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+/* Steer note: optional free-text guidance for Rethink ("no, I meant the
+   mobile bug"); sent as the highest-authority tier of the re-run's context. */
+.readmymind-steer-input {
+  margin-top: 10px;
+  width: 100%;
+  font-size: 12px;
+  padding: 7px 9px;
+  background: transparent;
+  color: var(--text);
+  border: 1px dashed var(--control-border);
+  border-radius: 8px;
+}
+.readmymind-steer-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  border-style: solid;
 }
 .readmymind-error {
   padding: 12px 4px;
@@ -12073,6 +12153,13 @@ body.touch-device.cjk-input-visible .main {
   font-weight: 500;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
+}
+
+/* The 🧠 key ships `hidden` until refreshReadMyMind() reveals it; the
+   inline-flex rules above (and mobile.css's) beat the UA [hidden] rule, so
+   hiding must be re-asserted, same trap as the home-sessions column. */
+.accessory-btn[hidden] {
+  display: none !important;
 }
 
 .accessory-btn.confirming {

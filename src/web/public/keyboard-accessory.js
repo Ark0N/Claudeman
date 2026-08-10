@@ -441,6 +441,7 @@ const KeyboardAccessoryBar = {
           <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
         </svg>
       </button>
+      <button class="accessory-btn accessory-btn-readmymind" data-action="readmymind" title="Read My Mind: predict your next prompt" hidden>&#x1F9E0;</button>
       <button class="accessory-btn" data-action="esc" title="Escape">Esc</button>
       <button class="accessory-btn accessory-btn-dismiss" data-action="dismiss" title="Dismiss keyboard">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
@@ -477,6 +478,7 @@ const KeyboardAccessoryBar = {
         </svg>
       </button>
       <button class="accessory-btn" data-action="pick-path" title="Insert a file or folder path">&#x1F4C1; Path</button>
+      <button class="accessory-btn accessory-btn-readmymind" data-action="readmymind" title="Read My Mind: predict your next prompt" hidden>&#x1F9E0;</button>
       <button class="accessory-btn" data-action="clear-input" title="Clear the current unsent input">&#x232B; All</button>
       <button class="accessory-btn" data-action="tab" title="Tab">Tab</button>
       <button class="accessory-btn" data-action="shift-tab" title="Shift+Tab">⇧Tab</button>
@@ -528,6 +530,8 @@ const KeyboardAccessoryBar = {
     if (toolbar && toolbar.parentNode) {
       toolbar.parentNode.insertBefore(this.element, toolbar);
     }
+
+    this.refreshReadMyMind();
   },
 
   /** Switch between 'simple' and 'extended' button layouts */
@@ -536,6 +540,27 @@ const KeyboardAccessoryBar = {
     this._mode = mode;
     this.clearConfirm();
     this.element.innerHTML = mode === 'extended' ? this._extendedButtons : this._simpleButtons;
+    // innerHTML rebuilds ship the 🧠 key with its default `hidden` attribute;
+    // re-derive its visibility for the fresh element.
+    this.refreshReadMyMind();
+  },
+
+  /**
+   * Show the 🧠 key only when Read My Mind is opted in (`readMyMindEnabled`,
+   * synced) AND the active session is claude mode (the predictor is a 400 on
+   * every other CLI). Called after every innerHTML rebuild, from
+   * applyHeaderVisibilitySettings (settings load/save), and from the tab
+   * renderer tail (session switches funnel through it).
+   */
+  refreshReadMyMind() {
+    if (!this.element) return;
+    const btn = this.element.querySelector('[data-action="readmymind"]');
+    if (!btn) return;
+    const hasApp = typeof app !== 'undefined' && app;
+    const session = hasApp && app.activeSessionId ? app.sessions?.get(app.activeSessionId) : null;
+    const enabled = hasApp && app.readMyMindEnabled?.() === true;
+    const claudeMode = !!session && (!session.mode || session.mode === 'claude');
+    btn.hidden = !(enabled && claudeMode);
   },
 
   _confirmTimer: null,
@@ -612,6 +637,11 @@ const KeyboardAccessoryBar = {
         break;
       case 'pick-path':
         this.pickPath();
+        break;
+      case 'readmymind':
+        // Opens the shared prediction modal (readmymind-ui.js). Deliberately
+        // not in refocusActions: the modal takes over and the keyboard closes.
+        app.openReadMyMind?.();
         break;
       case 'clear-input':
         app.clearTerminalInput?.();

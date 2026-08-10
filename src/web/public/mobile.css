@@ -530,8 +530,9 @@ html.mobile-init .file-browser-panel {
     display: none !important;
   }
 
-  /* Read My Mind 🧠 button: desktop header only in phase 2; the phone surface
-     is a planned keyboard-accessory key (docs/readmymind-plan.md phase 3). */
+  /* Read My Mind 🧠 button: desktop header only. The phone surfaces are the
+     keyboard-accessory 🧠 key and the overview's waiting-row Suggest strip
+     (docs/readmymind-plan.md phase 3), both opening the same modal. */
   .btn-icon-header.btn-readmymind {
     display: none !important;
   }
@@ -1290,13 +1291,26 @@ html.mobile-init .file-browser-panel {
     flex-direction: column;
   }
 
-  /* Small modals (confirmations, dialogs) — auto-height, not full-screen */
-  .modal-content.modal-sm {
+  /* Small modals (confirmations, dialogs) — auto-height, not full-screen.
+     Read My Mind is a decision dialog, not a workspace, so it gets the same
+     compact-sheet treatment instead of the full-screen default. */
+  .modal-content.modal-sm,
+  .modal-content.readmymind-modal {
     height: auto;
     max-height: 85vh;
     border-radius: 12px;
     margin: 1rem;
     width: calc(100% - 2rem);
+  }
+
+  /* Read My Mind phone polish: iOS zooms the page when focusing sub-16px
+     inputs, and alternate rows are tap targets. */
+  .readmymind-prompt-input,
+  .readmymind-steer-input {
+    font-size: 16px;
+  }
+  .readmymind-alt {
+    min-height: 44px;
   }
 
   /* Modal safe area padding - all sides for full-screen modals */
@@ -2599,6 +2613,11 @@ html.mobile-init .file-browser-panel {
   .mobile-overview-approval-btn.danger {
     border-color: var(--error);
     color: var(--error);
+  }
+  /* Read My Mind shortcut on waiting rows (mobile-overview.js). */
+  .mobile-overview-approval-btn.rmm {
+    border-color: var(--accent);
+    color: var(--accent);
   }
 
   /* Attention states mirror the session tabs exactly: red blink when the agent

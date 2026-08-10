@@ -23,11 +23,11 @@ Add `-u user:password` if your install has `CODEMAN_PASSWORD` set, and drop `-k`
 
 ## The 🧠 button
 
-On a Claude session, press the brain button in the header (desktop; the phone surface is a planned keyboard-accessory key). Codeman assembles everything it already knows: your goals, your recent prompts (with your voice: length, tone, shorthand), the tail of the last assistant reply, recent tool activity, git state (branch, dirty files, pending changesets), how long you have been away and what happened meanwhile, sibling sessions in the same case, and any dialog the session is currently waiting on. A one-shot model call (opus by default, `readMyMindModel` to override) turns that into 1-3 suggestions; the top one lands in an editable field with its rationale.
+On a Claude session, press the brain button in the header (desktop). On phones the same modal opens from the 🧠 key on the keyboard accessory bar, or from the `🧠 Suggest` strip under a yellow waiting row on the phone overview home screen (steer a session without opening its tab). Codeman assembles everything it already knows: your goals, your recent prompts (with your voice: length, tone, shorthand), the tail of the last assistant reply, recent tool activity, git state (branch, dirty files, pending changesets), how long you have been away and what happened meanwhile, sibling sessions in the same case, and any dialog the session is currently waiting on. A one-shot model call (opus by default, `readMyMindModel` to override) turns that into 1-3 kind-diverse suggestions (continue / verify / redirect); the top one lands in an editable field with its rationale, and the others render as tappable alternate rows that swap into the field.
 
 - **Send** submits it to the session (with Enter).
 - **Insert** drops it on the CLI composer *without* Enter, so you can edit it in the terminal before sending.
-- **Rethink** re-runs with the shown suggestion recorded as rejected.
+- **Rethink** re-runs with everything currently displayed recorded as rejected. The optional steer field above the buttons ("no, I meant the mobile bug") tells the re-run what you actually meant; it is your own words and outranks everything the predictor observed.
 - **Dismiss** closes; nothing happens.
 
 A prediction takes 5-90 seconds and costs real tokens; one runs per session at a time. If the session is sitting on a permission/question dialog, the suggestion is usually an answer to that dialog: that is intentional.
@@ -87,13 +87,14 @@ The `codeman` agent skill documents the same verbs (SKILL.md §3 plus `reference
 
 ## What comes next (phase 3+)
 
-Phone keyboard-accessory 🧠 key, a steer-note input on Rethink, and tappable alternate suggestions. Explicitly later: proactive predict-on-idle, auto-compaction of the prompt history into goals, non-Claude capture. See the phases section of [`readmymind-plan.md`](readmymind-plan.md).
+The approvals fusion: a per-session catch-up recap ("what was done, simplified", derived from the same collectors the predictor uses), shown on Approvals Inbox cards next to a 🧠 button, plus answer-aware Send that routes dialog answers through the approvals endpoint instead of typing into a menu. Explicitly later: proactive predict-on-idle, auto-compaction of the prompt history into goals, non-Claude capture. See the phases section of [`readmymind-plan.md`](readmymind-plan.md).
 
 ## Troubleshooting
 
 | Symptom | Cause / fix |
 | ------- | ----------- |
-| No 🧠 button in the header | `readMyMindEnabled` is OFF (App Settings → Panels), you are on a phone (desktop-only in this phase), or the active session is not claude-mode |
+| No 🧠 button in the header | `readMyMindEnabled` is OFF (App Settings → Panels), you are on a phone (the header button is desktop-only; phones use the keyboard-accessory 🧠 key and the overview waiting rows), or the active session is not claude-mode |
+| No 🧠 key on the phone keyboard bar | `readMyMindEnabled` is OFF, or the active session is not claude-mode (the key hides itself for codex/gemini/opencode/antigravity/shell sessions) |
 | Prediction feels generic | The profile is thin: record goals (PUT or ask your agent to), and let capture accumulate a few real prompts first |
 | "A prediction is already running" (409) | One per session at a time; wait for the current one (up to 90 s) |
 | Prediction fails (502) | The model returned no usable JSON, or the CLI could not start; retry. Check `readMyMindModel` if you overrode it |

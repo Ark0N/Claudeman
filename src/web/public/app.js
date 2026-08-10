@@ -3688,6 +3688,10 @@ class CodemanApp {
     this._refreshMobileOverviewIfVisible?.();
     // Same deal for the desktop home screen's tab column.
     this._refreshHomeSessionsIfVisible?.();
+    // The keyboard accessory bar's 🧠 key depends on the active session's mode
+    // (claude only) and the readMyMindEnabled setting; session switches and
+    // mode changes all funnel through this render.
+    if (typeof KeyboardAccessoryBar !== 'undefined') KeyboardAccessoryBar.refreshReadMyMind?.();
   }
 
   // Auto-wrap desktop session tabs to a second row when they overflow one row,

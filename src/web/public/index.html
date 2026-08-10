@@ -2802,7 +2802,7 @@
     <div class="modal-backdrop" onclick="app.closeReadMyMind()"></div>
     <div class="modal-content readmymind-modal">
       <div class="modal-header">
-        <h3><span aria-hidden="true">🧠</span> Read My Mind</h3>
+        <h3><span aria-hidden="true">🧠</span> Read My Mind<span class="readmymind-session" id="readMyMindSession" data-i18n-skip></span></h3>
         <button class="modal-close" onclick="app.closeReadMyMind()" aria-label="Close">&times;</button>
       </div>
       <div class="modal-body">
@@ -2813,14 +2813,18 @@
             <input type="text" id="readMyMindPrompt" class="readmymind-prompt-input" data-i18n-skip aria-label="Predicted prompt, editable" onkeydown="if(event.key==='Enter')app.sendReadMyMind(true)">
           </div>
           <div class="readmymind-why" id="readMyMindWhy" data-i18n-skip></div>
+          <div class="readmymind-alternates" id="readMyMindAlternates" data-i18n-skip></div>
         </div>
         <div class="readmymind-error" style="display:none">No suggestion this time. Rethink to try again.</div>
+        <!-- Outside the result div on purpose: steering matters in the error
+             phase too (Rethink retries with the note); hidden only while loading. -->
+        <input type="text" id="readMyMindSteer" class="readmymind-steer-input" style="display:none" placeholder="Steer the rethink (optional): tell it what you actually meant" aria-label="Optional steer note for Rethink" onkeydown="if(event.key==='Enter')app.rethinkReadMyMind()">
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" onclick="app.closeReadMyMind()">Dismiss</button>
         <button class="btn btn-secondary" id="readMyMindRethink" onclick="app.rethinkReadMyMind()">Rethink</button>
-        <button class="btn btn-secondary" onclick="app.sendReadMyMind(false)" title="Put the text on the session's composer without submitting it">Insert</button>
-        <button class="btn btn-primary" onclick="app.sendReadMyMind(true)">Send</button>
+        <button class="btn btn-secondary" id="readMyMindInsert" onclick="app.sendReadMyMind(false)" title="Put the text on the session's composer without submitting it">Insert</button>
+        <button class="btn btn-primary" id="readMyMindSend" onclick="app.sendReadMyMind(true)">Send</button>
       </div>
     </div>
   </div>

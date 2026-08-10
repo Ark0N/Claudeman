@@ -642,12 +642,16 @@ Object.assign(CodemanApp.prototype, {
     // Approvals Inbox: a pending dialog for this session gets an answer strip
     // BELOW the row (the row itself is a <button>, so actions cannot nest
     // inside it). Tapping the row still opens the session, unchanged.
+    // Waiting rows get the Read My Mind shortcut strip the same way.
     const approval = this._pendingApprovalForSession(row.id);
-    if (approval) {
+    const rmmShortcut = !approval && this._readMyMindRowShortcut(row);
+    if (approval || rmmShortcut) {
       const wrap = document.createElement('div');
       wrap.className = 'mobile-overview-row-wrap';
       wrap.appendChild(item);
-      wrap.appendChild(this._buildMobileOverviewApprovalStrip(approval));
+      wrap.appendChild(
+        approval ? this._buildMobileOverviewApprovalStrip(approval) : this._buildMobileOverviewRmmStrip(row.id)
+      );
       return wrap;
     }
 
@@ -688,6 +692,39 @@ Object.assign(CodemanApp.prototype, {
       addBtn('Approve', 'primary', () => this.answerApproval(approval.id, 'approve'));
       addBtn('Deny', 'danger', () => this.answerApproval(approval.id, 'deny'));
     }
+    return strip;
+  },
+
+  /**
+   * Whether a NEEDS YOU row gets the Read My Mind shortcut: opt-in setting,
+   * live claude-mode session, and only the `waiting` state. A yellow row is a
+   * bare composer waiting for a prompt; on red rows a dialog is on screen and
+   * sent text would land in its menu, so those keep the approval strip (or the
+   * open-the-session path) until the predictor can answer dialogs through the
+   * approvals endpoint (phase 3 PR 2, docs/readmymind-plan.md).
+   */
+  _readMyMindRowShortcut(row) {
+    if (row.state !== 'waiting') return false;
+    if (!this.readMyMindEnabled || !this.readMyMindEnabled()) return false;
+    const session = this.sessions.get(row.id);
+    return !!session && (!session.mode || session.mode === 'claude');
+  },
+
+  /** A one-button strip opening the prediction modal for this row's session. */
+  _buildMobileOverviewRmmStrip(sessionId) {
+    const strip = document.createElement('div');
+    strip.className = 'mobile-overview-approval-strip';
+    strip.setAttribute('data-i18n-skip', '');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'mobile-overview-approval-btn rmm';
+    btn.textContent = '🧠 Suggest';
+    btn.setAttribute('aria-label', 'Predict my next prompt');
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      this.openReadMyMind(sessionId);
+    });
+    strip.appendChild(btn);
     return strip;
   },
 

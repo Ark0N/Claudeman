@@ -2117,6 +2117,9 @@ Object.assign(CodemanApp.prototype, {
     if (readMyMindBtn) {
       readMyMindBtn.classList.toggle('btn-readmymind--hidden', settings.readMyMindEnabled !== true);
     }
+    // The phone accessory bar's 🧠 key follows the same setting (plus the
+    // active session's mode); keep it in step on every settings apply.
+    if (typeof KeyboardAccessoryBar !== 'undefined') KeyboardAccessoryBar.refreshReadMyMind?.();
 
     // Plan-usage chip — shown by default on desktop, OFF on handhelds (App
     // Settings → Display → "Plan Usage Limits"). The template always ships it

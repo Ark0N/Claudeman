@@ -257,6 +257,8 @@
     'Reading your mind…': '正在读取您的想法…',
     'No suggestion this time. Rethink to try again.': '这次没有建议。点击「重想」再试一次。',
     Rethink: '重想',
+    'Steer the rethink (optional): tell it what you actually meant': '引导重想（可选）：告诉它您真正的意思',
+    'Optional steer note for Rethink': '重想的可选引导说明',
     Insert: '插入',
     "Put the text on the session's composer without submitting it": '将文本放入会话输入框但不提交',
     'Predicted prompt, editable': '预测的提示，可编辑',
