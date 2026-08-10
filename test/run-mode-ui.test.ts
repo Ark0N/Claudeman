@@ -274,41 +274,41 @@ describe('Run launch synchronization', () => {
 });
 
 describe('Codex quick start settings', () => {
-  it('renders Codex CLI settings in a dedicated app settings tab', () => {
+  it('renders Codex CLI settings in their own group inside Agents & CLIs', () => {
     const html = readFileSync(resolve(import.meta.dirname, '../src/web/public/index.html'), 'utf8');
 
-    expect(html).toContain('data-tab="settings-codex">Codex CLI</button>');
+    // The settings modal is one scrolling document: Codex is a GROUP that can be
+    // hidden wholesale, not a tab (see _applyCodexSettingsVisibility).
+    const clis = html.match(/<section class="set-section" id="settings-clis"([\s\S]*?)<\/section>/);
+    expect(clis?.[1]).toBeTruthy();
 
-    const claudeTab = html.match(
-      /<div class="modal-tab-content hidden" id="settings-claude">([\s\S]*?)<!-- Codex CLI Tab -->/
-    );
-    expect(claudeTab?.[1]).not.toContain('appSettingsCodexDangerouslyBypassApprovals');
-    expect(claudeTab?.[1]).not.toContain('appSettingsCodexAnimations');
+    const codexGroup = clis![1].match(/id="appSettingsCodexGroup"([\s\S]*)$/);
+    expect(codexGroup?.[1]).toContain('appSettingsCodexDangerouslyBypassApprovals');
+    expect(codexGroup?.[1]).toContain('appSettingsCodexAnimations');
+    expect(codexGroup?.[1]).not.toContain('appSettingsCodexRenderMode');
 
-    const codexTab = html.match(
-      /<div class="modal-tab-content hidden" id="settings-codex">([\s\S]*?)<\/div>\s*<!-- Models Tab -->/
-    );
-    expect(codexTab?.[1]).toContain('appSettingsCodexDangerouslyBypassApprovals');
-    expect(codexTab?.[1]).toContain('appSettingsCodexAnimations');
-    expect(codexTab?.[1]).not.toContain('appSettingsCodexRenderMode');
+    // The Claude settings above it must not have absorbed the codex inputs.
+    const beforeCodex = clis![1].slice(0, clis![1].indexOf('id="appSettingsCodexGroup"'));
+    expect(beforeCodex).not.toContain('appSettingsCodexDangerouslyBypassApprovals');
+    expect(beforeCodex).not.toContain('appSettingsCodexAnimations');
   });
 
-  describe('Codex CLI tab visibility', () => {
-    // Both settings on the tab are handed to `codex` at launch, so on an instance
-    // where the binary does not resolve the tab is a promise nothing can keep.
-    // renderIndexHtml injects window.__codemanCliAvailable; this pins the client
-    // half. Coupled test: it drives the REAL settings-ui.js against a stub button,
-    // so deleting the call in openAppSettings() is what it is meant to catch.
+  describe('Codex CLI group visibility', () => {
+    // Both settings in the group are handed to `codex` at launch, so on an
+    // instance where the binary does not resolve the group is a promise nothing
+    // can keep. renderIndexHtml injects window.__codemanCliAvailable; this pins
+    // the client half. Coupled test: it drives the REAL settings-ui.js against a
+    // stub element, so deleting the call in openAppSettings() is what it catches.
     function loadSettingsUi(codexAvailable: boolean | undefined) {
-      const codexTabBtn = { dataset: { tab: 'settings-codex' }, style: { display: 'PRISTINE' } };
+      const codexTabBtn = { id: 'appSettingsCodexGroup', style: { display: 'PRISTINE' } };
       const CodemanApp = function CodemanApp(this: any) {};
       const context: any = vm.createContext({
         CodemanApp,
         MobileDetection: { getDeviceType: () => 'desktop', isTouchDevice: () => false, isHandheldDevice: () => false },
         localStorage: { getItem: () => null, setItem: () => {} },
         document: {
-          getElementById: () => null,
-          querySelector: (sel: string) => (sel.includes('[data-tab="settings-codex"]') ? codexTabBtn : null),
+          getElementById: (id: string) => (id === 'appSettingsCodexGroup' ? codexTabBtn : null),
+          querySelector: () => null,
         },
         console,
       });
@@ -319,19 +319,19 @@ describe('Codex quick start settings', () => {
       return { app: new (CodemanApp as any)(), codexTabBtn };
     }
 
-    it('hides the Codex tab when the codex binary is not available', () => {
+    it('hides the Codex group when the codex binary is not available', () => {
       const { app, codexTabBtn } = loadSettingsUi(false);
       app._applyCodexSettingsVisibility();
       expect(codexTabBtn.style.display).toBe('none');
     });
 
-    it('hides the Codex tab when the availability flag was never injected', () => {
+    it('hides the Codex group when the availability flag was never injected', () => {
       const { app, codexTabBtn } = loadSettingsUi(undefined);
       app._applyCodexSettingsVisibility();
       expect(codexTabBtn.style.display).toBe('none');
     });
 
-    it('shows the Codex tab when codex is available', () => {
+    it('shows the Codex group when codex is available', () => {
       const { app, codexTabBtn } = loadSettingsUi(true);
       app._applyCodexSettingsVisibility();
       expect(codexTabBtn.style.display).toBe('');

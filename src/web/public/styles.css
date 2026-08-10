@@ -1316,11 +1316,31 @@ html[data-line-anim="packet"] .connection-line.line-enter {
 
 .session-tab .tab-status.idle { background: var(--green); }
 .session-tab .tab-status.busy {
+  position: relative;
   background: var(--green);
   animation: pulse 1.5s infinite;
   /* Performance: GPU acceleration for animation */
   will-change: opacity;
 }
+/* Orbiting ring on a WORKING tab: the same `tab-load-spin` circle the desktop
+   home rail (.home-sessions-dot--working) and the phone overview
+   (.mobile-overview-dot--working) draw, so "working" reads identically on every
+   surface. Pseudo-element on purpose — the skin block below sets
+   `box-shadow: none` on .tab-status.busy to keep tab dots halo-free, and it
+   outranks any plain class rule here; a ring drawn with a border is untouched by
+   that and keeps the tabs quiet while still showing motion. Absolutely
+   positioned, so it never widens the tab or shifts the label. */
+.session-tab .tab-status.busy::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border: 1.5px solid color-mix(in srgb, var(--green) 25%, transparent);
+  border-top-color: var(--green);
+  border-radius: 50%;
+  animation: tab-load-spin 0.7s linear infinite;
+  pointer-events: none;
+}
+
 .session-tab .tab-status.error { background: var(--red); }
 .session-tab .tab-status.ended { background: var(--text-muted); opacity: 0.5; }
 
@@ -5858,11 +5878,6 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   min-height: 0;
 }
 
-/* App Settings packs a 2-column toggle grid; give it room so right-column
-   switches aren't cramped against the edge (other modal-lg modals stay 540). */
-#appSettingsModal .modal-content.modal-lg {
-  max-width: 600px;
-}
 
 /* Mobile Case Picker - Base Styles */
 .mobile-case-picker-sheet {
@@ -14395,9 +14410,698 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .session-tab .tab-status.busy::after,
   .home-sessions-row,
   .home-sessions-dot,
   .home-sessions-dot::after {
     animation: none !important;
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   App Settings (#appSettingsModal)
+
+   A left rail that is a TABLE OF CONTENTS over ONE scrolling document, not a
+   tab switcher: every section stays mounted, the rail follows the scroll, and
+   the browser's own find-in-page still works across all of them.
+
+   Scoped under #appSettingsModal on purpose. `.modal-tabs`/`.modal-tab-btn`
+   are shared with #sessionOptionsModal and #createCaseModal, so this file
+   introduces its own `set-*` classes rather than restyling those.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+#appSettingsModal .modal-content.modal-lg {
+  max-width: min(960px, 96vw);
+  width: min(960px, 96vw);
+  height: min(700px, 88vh);
+  max-height: 88vh;
+}
+
+#appSettingsModal .set-shell-head {
+  flex-shrink: 0;
+}
+
+#appSettingsModal .set-head-actions {
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* The phone layout drops the bottom action bar and saves from the header
+   instead; on desktop the footer owns Save, so this stays hidden. */
+#appSettingsModal .set-head-save {
+  display: none;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  padding: 8px 15px;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  background: linear-gradient(180deg, var(--accent-grad-a), var(--accent-grad-b));
+  color: var(--accent-ink);
+}
+
+#appSettingsModal .set-body {
+  display: grid;
+  grid-template-columns: 212px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+#appSettingsModal .set-foot {
+  margin-top: 0;
+  flex-shrink: 0;
+}
+
+/* ── rail ─────────────────────────────────────────────────────────────── */
+#appSettingsModal .set-rail {
+  display: flex;
+  flex-direction: column;
+  padding: 12px 10px;
+  border-right: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.16);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+#appSettingsModal .set-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+
+#appSettingsModal .set-search svg {
+  position: absolute;
+  left: 9px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+#appSettingsModal .set-search input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 9px 7px 28px;
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+#appSettingsModal .set-search input:focus {
+  border-color: var(--accent);
+}
+
+#appSettingsModal .set-rail-items {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+#appSettingsModal .set-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.77rem;
+  cursor: pointer;
+  text-align: left;
+  position: relative;
+  transition: color 0.15s, background 0.15s;
+}
+
+#appSettingsModal .set-rail-item svg {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+#appSettingsModal .set-rail-item:hover {
+  background: var(--control-bg);
+  color: var(--text);
+}
+
+#appSettingsModal .set-rail-item.active {
+  color: var(--accent);
+  font-weight: 580;
+}
+
+#appSettingsModal .set-rail-item.active svg {
+  color: var(--accent);
+}
+
+#appSettingsModal .set-rail-item.active::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+#appSettingsModal .set-rail-foot {
+  margin: auto 0 0;
+  padding: 10px 10px 2px;
+  font-size: 0.62rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+}
+
+/* ── document ─────────────────────────────────────────────────────────── */
+#appSettingsModal .set-doc {
+  overflow-y: auto;
+  padding: 0 22px 40px;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+
+#appSettingsModal .set-section {
+  padding-top: 20px;
+}
+
+#appSettingsModal .set-section + .set-section {
+  border-top: 1px solid var(--border);
+  margin-top: 26px;
+}
+
+#appSettingsModal .set-section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+#appSettingsModal .set-section-head svg {
+  color: var(--accent);
+  flex-shrink: 0;
+  padding: 5px;
+  border-radius: 8px;
+  background: rgba(var(--accent-rgb), 0.13);
+  border: 1px solid rgba(var(--accent-rgb), 0.24);
+  box-sizing: content-box;
+}
+
+#appSettingsModal .set-section-head h2 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 640;
+  letter-spacing: -0.015em;
+  color: var(--text);
+}
+
+#appSettingsModal .set-section-blurb {
+  margin: 0 0 14px 36px;
+  font-size: 0.69rem;
+  color: var(--text-muted);
+}
+
+#appSettingsModal .set-empty {
+  margin: 24px 0 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* ── groups ───────────────────────────────────────────────────────────── */
+#appSettingsModal .set-group + .set-group {
+  margin-top: 18px;
+}
+
+#appSettingsModal .set-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+#appSettingsModal .set-group-head h4 {
+  margin: 0;
+  font-size: 0.63rem;
+  font-weight: 640;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+#appSettingsModal .set-group-head::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--border), transparent);
+  order: 9;
+}
+
+#appSettingsModal .set-group-head-toggle {
+  cursor: pointer;
+}
+
+#appSettingsModal .set-adv {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 2px 8px;
+}
+
+#appSettingsModal .set-adv svg {
+  transition: transform 0.18s;
+}
+
+#appSettingsModal .set-group-advanced.open .set-adv svg {
+  transform: rotate(180deg);
+}
+
+#appSettingsModal .set-group-advanced:not(.open) .set-group-body,
+#appSettingsModal .set-group-advanced:not(.open) .set-group-hint {
+  display: none;
+}
+
+#appSettingsModal .set-group-hint {
+  margin: -2px 0 9px;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+#appSettingsModal .set-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* ── rows ─────────────────────────────────────────────────────────────── */
+#appSettingsModal .set-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 12px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.028);
+  border: 1px solid rgba(255, 255, 255, 0.055);
+  transition: background 0.15s, border-color 0.15s;
+}
+
+#appSettingsModal .set-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.09);
+}
+
+#appSettingsModal .set-row-block {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 9px;
+}
+
+#appSettingsModal .set-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+#appSettingsModal .set-row-label {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.79rem;
+  color: var(--text);
+  letter-spacing: -0.005em;
+}
+
+#appSettingsModal .set-row-desc {
+  font-size: 0.66rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+  max-width: 62ch;
+}
+
+#appSettingsModal .set-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
+
+#appSettingsModal .set-scope,
+#appSettingsModal .set-tag {
+  font-size: 0.52rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-radius: 4px;
+  padding: 1px 4px;
+  white-space: nowrap;
+}
+
+#appSettingsModal .set-scope {
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  opacity: 0.8;
+}
+
+#appSettingsModal .set-tag {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.13);
+  border: 1px solid rgba(var(--accent-rgb), 0.25);
+}
+
+#appSettingsModal .set-tag-beta {
+  color: var(--yellow);
+  background: rgba(240, 194, 90, 0.12);
+  border-color: rgba(240, 194, 90, 0.28);
+}
+
+/* ── controls ─────────────────────────────────────────────────────────── */
+#appSettingsModal .set-select,
+#appSettingsModal .set-input,
+#appSettingsModal .set-num {
+  font: inherit;
+  font-size: 0.74rem;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.24);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 5px 8px;
+  outline: none;
+  flex-shrink: 0;
+}
+
+#appSettingsModal .set-select:focus,
+#appSettingsModal .set-input:focus,
+#appSettingsModal .set-num:focus {
+  border-color: var(--accent);
+}
+
+#appSettingsModal .set-select {
+  min-width: 190px;
+  max-width: 260px;
+}
+
+#appSettingsModal .set-input {
+  width: 220px;
+}
+
+#appSettingsModal .set-num {
+  width: 62px;
+  text-align: right;
+}
+
+#appSettingsModal .set-unit {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+
+#appSettingsModal .set-static {
+  font-size: 0.74rem;
+  color: var(--text-dim);
+}
+
+#appSettingsModal .mono {
+  font-family: var(--font-mono);
+}
+
+#appSettingsModal .set-copy {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  text-decoration: underline;
+  cursor: pointer;
+  word-break: break-all;
+}
+
+/* The cards and the segmented control are the visible UI; the underlying
+   <select> stays in the DOM as the single source of truth that
+   openAppSettings()/saveAppSettings() read and write by id. */
+#appSettingsModal .set-field-hidden {
+  display: none !important;
+}
+
+#appSettingsModal .set-note,
+#appSettingsModal .set-notes,
+#appSettingsModal .set-progress {
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+#appSettingsModal .set-notes {
+  max-height: 160px;
+  overflow: auto;
+  font-size: 0.7rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(127, 127, 127, 0.08);
+  border: 1px solid var(--border);
+}
+
+#appSettingsModal .set-progress {
+  border: 1px solid var(--border);
+}
+
+/* ── chips (header buttons, panels, features, levels) ─────────────────── */
+#appSettingsModal .set-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+#appSettingsModal .set-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  padding: 6px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--control-border);
+  background: rgba(255, 255, 255, 0.028);
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+#appSettingsModal .set-chip input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+#appSettingsModal .set-chip::before {
+  content: '\2713';
+  font-size: 0.8em;
+  line-height: 1;
+  width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: width 0.15s, opacity 0.15s;
+}
+
+#appSettingsModal .set-chip:hover {
+  border-color: var(--control-border-hover);
+  color: var(--text);
+}
+
+/* `.is-on` is written by settings-ui.js on load and on change; `:has()` keeps
+   the state correct for any chip toggled before that listener runs. */
+#appSettingsModal .set-chip.is-on,
+#appSettingsModal .set-chip:has(input:checked) {
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb), 0.45);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+#appSettingsModal .set-chip.is-on::before,
+#appSettingsModal .set-chip:has(input:checked)::before {
+  width: 0.85em;
+  opacity: 1;
+}
+
+#appSettingsModal .set-chip:focus-within {
+  outline: 2px solid rgba(var(--accent-rgb), 0.5);
+  outline-offset: 1px;
+}
+
+/* ── model cards ──────────────────────────────────────────────────────── */
+#appSettingsModal .set-modelgrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+#appSettingsModal .set-modelcard {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  font: inherit;
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--control-border);
+  background: rgba(255, 255, 255, 0.028);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+#appSettingsModal .set-modelcard:hover {
+  border-color: var(--control-border-hover);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+#appSettingsModal .set-modelcard.selected {
+  border-color: rgba(var(--accent-rgb), 0.55);
+  background: rgba(var(--accent-rgb), 0.11);
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.2);
+}
+
+#appSettingsModal .set-mc-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#appSettingsModal .set-mc-name {
+  font-size: 0.78rem;
+  color: var(--text);
+  font-weight: 560;
+}
+
+#appSettingsModal .set-mc-dot {
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(var(--accent-rgb), 0.8);
+  opacity: 0;
+}
+
+#appSettingsModal .set-modelcard.selected .set-mc-dot {
+  opacity: 1;
+}
+
+#appSettingsModal .set-mc-meta {
+  font-size: 0.64rem;
+  color: var(--text-muted);
+}
+
+#appSettingsModal .set-mc-ctx {
+  margin-top: 2px;
+  align-self: flex-start;
+  font-size: 0.53rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+#appSettingsModal .set-row-disabled {
+  opacity: 0.45;
+}
+
+/* ── segmented control (thinking effort) ──────────────────────────────── */
+#appSettingsModal .set-segment {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  background: rgba(0, 0, 0, 0.26);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+#appSettingsModal .set-segment button {
+  flex: 1;
+  font: inherit;
+  font-size: 0.68rem;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#appSettingsModal .set-segment button:hover {
+  color: var(--text);
+  background: var(--control-bg);
+}
+
+#appSettingsModal .set-segment button.selected {
+  background: linear-gradient(180deg, var(--accent-grad-a), var(--accent-grad-b));
+  color: var(--accent-ink);
+  font-weight: 620;
+}
+
+/* ── task-routing 2x2 ─────────────────────────────────────────────────── */
+#appSettingsModal .set-minigrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+#appSettingsModal .set-mini {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.028);
+  border: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+#appSettingsModal .set-mini-label {
+  font-size: 0.74rem;
+  color: var(--text-dim);
+}
+
+#appSettingsModal .set-mini .set-select {
+  min-width: 0;
+  width: 128px;
+}
+
+/* Search hides non-matching units; everything stays mounted underneath. */
+#appSettingsModal .set-hit-hidden {
+  display: none !important;
+}
+
+/* ── phone jump control: desktop hides it entirely ────────────────────── */
+#appSettingsModal .set-jump,
+#appSettingsModal .set-jump-menu,
+#appSettingsModal .set-jump-veil {
+  display: none;
+}
+
+/* ── injected sections (admin Users panel) ────────────────────────────── */
+#appSettingsModal .set-section .form-hint {
+  display: block;
+  margin: 0 0 10px;
 }

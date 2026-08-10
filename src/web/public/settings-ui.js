@@ -354,11 +354,8 @@ Object.assign(CodemanApp.prototype, {
     // Phone overview home screen: only meaningful under 430px, so the row is
     // hidden elsewhere rather than offering a toggle that changes nothing.
     document.getElementById('appSettingsMobileOverview').checked = settings.mobileOverviewEnabled ?? defaults.mobileOverviewEnabled ?? false;
-    const phoneOnly = MobileDetection.getDeviceType() === 'mobile' ? '' : 'none';
     const mobileOverviewItem = document.getElementById('appSettingsMobileOverviewItem');
-    if (mobileOverviewItem) mobileOverviewItem.style.display = phoneOnly;
-    const phoneSection = document.getElementById('appSettingsPhoneSection');
-    if (phoneSection) phoneSection.style.display = phoneOnly;
+    if (mobileOverviewItem) mobileOverviewItem.style.display = MobileDetection.getDeviceType() === 'mobile' ? '' : 'none';
     // Session Manager, Away Digest and Cron buttons all default OFF (opt-in under
     // Display → Header Displays; the Cron button also ships with btn-cron--hidden
     // in the template, so an unchecked box and a hidden button stay consistent).
@@ -500,12 +497,15 @@ Object.assign(CodemanApp.prototype, {
     // Updates section — show current version, reset transient result/progress UI.
     this._initUpdatesSection();
 
-    // Reset to first tab and wire up tab switching
-    this.switchSettingsTab('settings-display');
+    // Model cards + effort segment are views over the hidden <select>s above,
+    // so they must be synced AFTER those have been given their stored values.
+    this._initSettingsNav();
+    this._syncSettingsChips();
+    this._syncModelCards();
+    this._syncEffortSegment();
+    // Back to the top of the document (one scroll, not a tab reset).
+    this.switchSettingsTab('settings-terminal');
     const modal = document.getElementById('appSettingsModal');
-    modal.querySelectorAll('.modal-tabs .modal-tab-btn').forEach(btn => {
-      btn.onclick = () => this.switchSettingsTab(btn.dataset.tab);
-    });
     modal.classList.add('active');
 
     // Activate focus trap
@@ -514,44 +514,359 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Show the App Settings "Codex CLI" tab only on instances where the codex
-   * binary actually resolves. Both settings on it (approval bypass, animated
-   * status effects) are passed to `codex` at launch, so on a box without codex
-   * the tab is a promise nothing can keep.
+   * Show the App Settings "Codex" group only on instances where the codex binary
+   * actually resolves. Both settings in it (approval bypass, animated status
+   * effects) are passed to `codex` at launch, so on a box without codex the
+   * group is a promise nothing can keep.
    *
    * Availability comes from the injected `window.__codemanCliAvailable`, shared
-   * with the welcome buttons and the run-mode dropdown, so the tab never flickers
-   * in and back out. Only the tab BUTTON is toggled: the panel already carries
-   * `.modal-tab-content.hidden` unless it is the selected tab, and
-   * openAppSettings() always reopens on Display, so an unreachable button is
-   * enough to keep the panel unreachable.
+   * with the welcome buttons and the run-mode dropdown, so the group never
+   * flickers in and back out. The inputs stay in the DOM either way, so a user
+   * without codex can never silently wipe the codex prefs of an instance that
+   * has it (openAppSettings/saveAppSettings still read and write them).
    *
    * Note the inverted default versus the run buttons: an UNKNOWN flag hides this
-   * tab. Hiding a settings tab costs a user nothing (the values stay in the DOM
-   * and are still saved), whereas hiding a run button would leave a working
-   * install with nothing to click.
+   * group. Hiding it costs a user nothing, whereas hiding a run button would
+   * leave a working install with nothing to click.
    */
   _applyCodexSettingsVisibility() {
-    const btn = document.querySelector('#appSettingsModal .modal-tab-btn[data-tab="settings-codex"]');
-    if (btn) btn.style.display = window.__codemanCliAvailable?.codex === true ? '' : 'none';
+    const group = document.getElementById('appSettingsCodexGroup');
+    if (group) group.style.display = window.__codemanCliAvailable?.codex === true ? '' : 'none';
   },
 
-  switchSettingsTab(tabName) {
+  /**
+   * Scroll the settings document to a section.
+   *
+   * Kept under the historical `switchSettingsTab` name because it is the shared
+   * entry point: openAppSettings() calls it, and admin-ui.js's injected Users
+   * entry routes through it too. Sections are never hidden any more — the rail
+   * is a table of contents over ONE document, so "switching" is a scroll.
+   */
+  switchSettingsTab(sectionId) {
+    // The Shortcuts list renders lazily so it reflects the CURRENT registry
+    // (defaults + overrides) every time it is reached.
+    if (sectionId === 'settings-shortcuts') this.renderShortcutSettingsList?.();
+    const doc = document.getElementById('appSettingsDoc');
+    const section = document.getElementById(sectionId);
+    if (doc && section && typeof section.offsetTop === 'number') {
+      // On phones the jump pill is sticky at the top of the document, so land
+      // the section head below it instead of underneath it.
+      const jump = document.getElementById('appSettingsJump');
+      const inset = jump && jump.offsetParent ? jump.offsetHeight + 16 : 6;
+      doc.scrollTop = Math.max(0, section.offsetTop - inset);
+    }
+    this._setActiveSettingsSection(sectionId);
+  },
+
+  /** Paint the rail + jump pill for the section currently in view. */
+  _setActiveSettingsSection(sectionId) {
     const modal = document.getElementById('appSettingsModal');
-    // Toggle active class on tab buttons
-    modal.querySelectorAll('.modal-tabs .modal-tab-btn').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.tab === tabName);
+    if (!modal || typeof modal.querySelectorAll !== 'function') return;
+    let active = null;
+    modal.querySelectorAll('.set-rail-item').forEach(item => {
+      const on = item.dataset.section === sectionId;
+      item.classList.toggle('active', on);
+      if (on) active = item;
     });
-    // Toggle hidden class on tab content
-    modal.querySelectorAll('.modal-tab-content').forEach(content => {
-      content.classList.toggle('hidden', content.id !== tabName);
+    modal.querySelectorAll('.set-jump-row').forEach(row => {
+      row.classList.toggle('active', row.dataset.section === sectionId);
     });
-    // The Shortcuts tab renders lazily so the list reflects the CURRENT
-    // registry (defaults + overrides) every time it is opened.
-    if (tabName === 'settings-shortcuts') this.renderShortcutSettingsList?.();
+    const label = document.getElementById('appSettingsJump')?.querySelector('.set-jump-label');
+    if (label && active) label.textContent = active.textContent.trim();
+    const ico = document.getElementById('appSettingsJump')?.querySelector('.set-jump-ico');
+    const src = active?.querySelector('svg');
+    if (ico && src) ico.innerHTML = src.innerHTML;
+  },
+
+  /**
+   * Wire the settings navigation once per page: rail clicks, the phone jump
+   * menu, scroll-spy, live search, chip/card/segment views over the real inputs,
+   * and the collapsible Advanced group. Idempotent — openAppSettings() calls it
+   * on every open, and re-registering listeners on every open would multiply
+   * them across a long-lived tab.
+   */
+  _initSettingsNav() {
+    const modal = document.getElementById('appSettingsModal');
+    const doc = document.getElementById('appSettingsDoc');
+    if (!modal || !doc || typeof modal.querySelectorAll !== 'function') return;
+    this._buildModelCards();
+    this._buildEffortSegment();
+    // Rebuilt on every open: admin-ui.js appends its Users entry to the rail
+    // after the first open, and the menu must not drift from the rail.
+    this._buildSettingsJumpMenu();
+    if (modal.dataset.navReady === '1') return;
+    modal.dataset.navReady = '1';
+
+    // Delegated so rail entries injected later (Users) work without rewiring.
+    modal.querySelector('.set-rail-items')?.addEventListener('click', e => {
+      const item = e.target.closest?.('.set-rail-item');
+      if (item?.dataset.section) this.switchSettingsTab(item.dataset.section);
+    });
+    document.getElementById('appSettingsJumpMenu')?.addEventListener('click', e => {
+      const row = e.target.closest?.('.set-jump-row');
+      if (!row?.dataset.section) return;
+      this._toggleSettingsJump(false);
+      this.switchSettingsTab(row.dataset.section);
+    });
+    document.getElementById('appSettingsJump')?.addEventListener('click', () => this._toggleSettingsJump());
+    document.getElementById('appSettingsJumpVeil')?.addEventListener('click', () => this._toggleSettingsJump(false));
+
+    // Scroll-spy: the rail follows the document rather than driving it.
+    doc.addEventListener('scroll', () => {
+      if (this._settingsSpyQueued) return;
+      this._settingsSpyQueued = true;
+      requestAnimationFrame(() => {
+        this._settingsSpyQueued = false;
+        const sections = [...doc.querySelectorAll('.set-section')].filter(s => s.offsetParent !== null);
+        if (!sections.length) return;
+        let current = sections[0].id;
+        for (const s of sections) {
+          if (s.offsetTop - doc.scrollTop <= 140) current = s.id;
+        }
+        this._setActiveSettingsSection(current);
+      });
+    });
+
+    const search = document.getElementById('appSettingsSearch');
+    search?.addEventListener('input', () => this._filterSettings(search.value));
+
+    // Chips are labels wrapping the real checkbox; mirror the checked state onto
+    // the label so the styling does not depend on :has() support.
+    modal.querySelectorAll('.set-chip input').forEach(input => {
+      input.addEventListener('change', () => this._syncSettingsChips());
+    });
+
+    const advHead = modal.querySelector('.set-group-head-toggle');
+    const advGroup = advHead?.closest('.set-group-advanced');
+    if (advHead && advGroup) {
+      const toggle = () => {
+        const open = advGroup.classList.toggle('open');
+        advHead.setAttribute('aria-expanded', open ? 'true' : 'false');
+      };
+      advHead.addEventListener('click', toggle);
+      advHead.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          toggle();
+        }
+      });
+    }
+
+    document.getElementById('appSettingsOpusContext1m')?.addEventListener('change', () => this._applyModelSelection());
+  },
+
+  /** Phone jump menu, mirrored from the rail so the two can never drift. */
+  _buildSettingsJumpMenu() {
+    const modal = document.getElementById('appSettingsModal');
+    const menu = document.getElementById('appSettingsJumpMenu');
+    if (!modal || !menu) return;
+    menu.innerHTML = '';
+    modal.querySelectorAll('.set-rail-item').forEach(item => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'set-jump-row';
+      row.dataset.section = item.dataset.section;
+      row.innerHTML = item.innerHTML;
+      const section = document.getElementById(item.dataset.section);
+      const count = section ? section.querySelectorAll('input, select').length : 0;
+      if (count) {
+        const n = document.createElement('span');
+        n.className = 'set-jump-count';
+        n.textContent = String(count);
+        row.appendChild(n);
+      }
+      menu.appendChild(row);
+    });
+  },
+
+  _toggleSettingsJump(force) {
+    const modal = document.getElementById('appSettingsModal');
+    if (!modal) return;
+    const open = force === undefined ? !modal.classList.contains('jump-open') : force;
+    modal.classList.toggle('jump-open', open);
+    document.getElementById('appSettingsJump')?.setAttribute('aria-expanded', open ? 'true' : 'false');
+  },
+
+  /** Mirror checkbox state onto the chip labels (see _initSettingsNav). */
+  _syncSettingsChips() {
+    document.querySelectorAll('#appSettingsModal .set-chip').forEach(chip => {
+      chip.classList.toggle('is-on', !!chip.querySelector('input')?.checked);
+    });
+  },
+
+  /**
+   * Build the model picker cards from the hidden <select>'s own options, so the
+   * select stays the single source of truth that openAppSettings/saveAppSettings
+   * read and write by id. The `[1m]` variants are folded away: context width is a
+   * property of the chosen model (the "1M context window" switch), not a rival
+   * setting that silently loses to it.
+   */
+  _buildModelCards() {
+    const select = document.getElementById('appSettingsClaudeModel');
+    const grid = document.getElementById('appSettingsModelCards');
+    if (!select || !grid || grid.dataset.built === '1' || !select.options) return;
+    grid.innerHTML = '';
+    [...select.options]
+      .filter(opt => opt.dataset.variant !== '1m')
+      .forEach(opt => {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'set-modelcard';
+        card.setAttribute('role', 'radio');
+        card.dataset.value = opt.value;
+        if (opt.dataset.ctx === '1') card.dataset.ctx = '1';
+        const top = document.createElement('span');
+        top.className = 'set-mc-top';
+        const name = document.createElement('span');
+        name.className = 'set-mc-name';
+        name.textContent = opt.textContent;
+        top.appendChild(name);
+        const dot = document.createElement('span');
+        dot.className = 'set-mc-dot';
+        top.appendChild(dot);
+        card.appendChild(top);
+        const meta = document.createElement('span');
+        meta.className = 'set-mc-meta';
+        meta.textContent = opt.dataset.meta || '';
+        card.appendChild(meta);
+        if (opt.dataset.ctx === '1') {
+          const ctx = document.createElement('span');
+          ctx.className = 'set-mc-ctx';
+          ctx.textContent = '1M capable';
+          card.appendChild(ctx);
+        }
+        card.addEventListener('click', () => {
+          this._settingsModelBase = opt.value;
+          this._applyModelSelection();
+        });
+        grid.appendChild(card);
+      });
+    grid.dataset.built = '1';
+  },
+
+  /** Derive card + context-switch state from the select's stored value. */
+  _syncModelCards() {
+    const select = document.getElementById('appSettingsClaudeModel');
+    if (!select) return;
+    const value = select.value || '';
+    this._settingsModelBase = value.endsWith('[1m]') ? value.slice(0, -4) : value;
+    if (value.endsWith('[1m]')) {
+      const ctx = document.getElementById('appSettingsOpusContext1m');
+      if (ctx) ctx.checked = true;
+    }
+    this._applyModelSelection();
+  },
+
+  /** Compose card + context switch back into the select's value. */
+  _applyModelSelection() {
+    const select = document.getElementById('appSettingsClaudeModel');
+    const grid = document.getElementById('appSettingsModelCards');
+    if (!select || !grid) return;
+    const base = this._settingsModelBase || '';
+    let capable = false;
+    grid.querySelectorAll('.set-modelcard').forEach(card => {
+      const on = card.dataset.value === base;
+      card.classList.toggle('selected', on);
+      card.setAttribute('aria-checked', on ? 'true' : 'false');
+      if (on) capable = card.dataset.ctx === '1';
+    });
+    const ctxOn = !!document.getElementById('appSettingsOpusContext1m')?.checked;
+    select.value = base && capable && ctxOn ? `${base}[1m]` : base;
+    // A model with no 1M variant makes the switch inert; say so instead of
+    // leaving a toggle that looks like it does something.
+    const row = document.getElementById('appSettingsContextRow');
+    const desc = document.getElementById('appSettingsContextDesc');
+    const inert = !!base && !capable;
+    row?.classList.toggle('set-row-disabled', inert);
+    if (desc) {
+      desc.textContent = inert
+        ? 'The selected model has no 1M variant.'
+        : base
+          ? 'Available for Fable 5, Opus and Opus 4.6.'
+          : 'With no model pinned, this starts new sessions on Opus with a 1M window.';
+    }
+  },
+
+  _buildEffortSegment() {
+    const select = document.getElementById('appSettingsThinkingEffort');
+    const seg = document.getElementById('appSettingsEffortSegment');
+    if (!select || !seg || seg.dataset.built === '1' || !select.options) return;
+    seg.innerHTML = '';
+    [...select.options].forEach(opt => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('role', 'radio');
+      btn.dataset.value = opt.value;
+      btn.textContent = opt.textContent;
+      btn.addEventListener('click', () => {
+        select.value = opt.value;
+        this._syncEffortSegment();
+      });
+      seg.appendChild(btn);
+    });
+    seg.dataset.built = '1';
+  },
+
+  _syncEffortSegment() {
+    const select = document.getElementById('appSettingsThinkingEffort');
+    const seg = document.getElementById('appSettingsEffortSegment');
+    if (!select || !seg) return;
+    seg.querySelectorAll('button').forEach(btn => {
+      const on = btn.dataset.value === (select.value || '');
+      btn.classList.toggle('selected', on);
+      btn.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+  },
+
+  /**
+   * Live filter across every section. Everything stays mounted (that is the
+   * point of the single-document layout), so a search only hides units that do
+   * not match, then collapses groups and sections left with nothing visible.
+   */
+  _filterSettings(query) {
+    const doc = document.getElementById('appSettingsDoc');
+    if (!doc) return;
+    const q = (query || '').trim().toLowerCase();
+    const UNIT = '.set-row, .set-chip, .set-modelgrid, .set-minigrid, .event-type-grid, #appSettingsShortcutsList';
+    const units = [...doc.querySelectorAll(UNIT)];
+    let anyVisible = false;
+
+    units.forEach(unit => {
+      if (!q) {
+        unit.classList.remove('set-hit-hidden');
+        return;
+      }
+      const hay = `${unit.dataset?.search || ''} ${unit.textContent || ''}`.toLowerCase();
+      const hit = hay.includes(q);
+      unit.classList.toggle('set-hit-hidden', !hit);
+      if (hit) anyVisible = true;
+    });
+
+    // A chip wrapper is only empty when every chip inside it is hidden.
+    doc.querySelectorAll('.set-chips').forEach(wrap => {
+      const hasVisible = [...wrap.querySelectorAll('.set-chip')].some(c => !c.classList.contains('set-hit-hidden'));
+      wrap.classList.toggle('set-hit-hidden', !!q && !hasVisible);
+    });
+
+    doc.querySelectorAll('.set-group').forEach(group => {
+      const hasVisible = [...group.querySelectorAll(UNIT)].some(u => !u.classList.contains('set-hit-hidden'));
+      group.classList.toggle('set-hit-hidden', !!q && !hasVisible);
+      // An Advanced group that matches must open, or the hit stays invisible.
+      if (q && hasVisible) group.classList.add('open');
+    });
+
+    doc.querySelectorAll('.set-section').forEach(section => {
+      const hasVisible = [...section.querySelectorAll('.set-group')].some(g => !g.classList.contains('set-hit-hidden'));
+      section.classList.toggle('set-hit-hidden', !!q && !hasVisible);
+    });
+
+    const empty = document.getElementById('appSettingsSearchEmpty');
+    if (empty) empty.hidden = !q || anyVisible;
+    if (!q) doc.querySelectorAll('.set-group-advanced').forEach(g => g.classList.remove('open'));
   },
 
   closeAppSettings() {
+    this._toggleSettingsJump(false);
     document.getElementById('appSettingsModal').classList.remove('active');
 
     // Deactivate focus trap and restore focus

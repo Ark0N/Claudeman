@@ -685,6 +685,13 @@ html.mobile-init .file-browser-panel {
     box-shadow: 0 0 8px 2px color-mix(in srgb, var(--green) 55%, transparent) !important;
   }
 
+  /* No orbiting ring on phone tabs (styles.css draws one on desktop/tablet):
+     the dot is already enlarged to 9px with a glow here, and a 15px ring in a
+     32px tab would sit on top of the tab name. The glow is the phone's tell. */
+  .session-tab .tab-status.busy::after {
+    display: none;
+  }
+
   /* Truncate tab names more aggressively on mobile */
   .session-tab .tab-name {
     max-width: 50px;
@@ -3102,5 +3109,361 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   .offline-overlay-btn {
     width: 100%;
     padding: 0.65rem 1rem;
+  }
+}
+
+/* ============================================================================
+   App Settings, compact layout (<= 860px)
+
+   Same single scrolling document as the desktop rail layout; only the
+   navigation changes. The rail collapses to its search field and #appSettingsJump
+   takes over as the sticky "where am I / jump elsewhere" control, so a phone
+   spends its vertical budget on settings instead of on chrome.
+
+   Groups render as one inset rounded list with hairline dividers rather than a
+   stack of separate cards: at 390px the per-card borders were most of the pixels.
+   ============================================================================ */
+@media (max-width: 860px) {
+  #appSettingsModal .modal-content.modal-lg {
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    max-height: 100%;
+  }
+
+  #appSettingsModal .set-body {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  /* Rail keeps only its search field, laid out as a bar */
+  #appSettingsModal .set-rail {
+    flex-direction: row;
+    align-items: center;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+    padding: 10px 14px;
+    overflow: visible;
+    flex-shrink: 0;
+  }
+
+  #appSettingsModal .set-rail-items,
+  #appSettingsModal .set-rail-foot {
+    display: none;
+  }
+
+  #appSettingsModal .set-search {
+    margin: 0;
+    flex: 1;
+  }
+
+  #appSettingsModal .set-search input {
+    padding: 9px 10px 9px 30px;
+    border-radius: 10px;
+  }
+
+  /* Save moves into the header; the bottom action bar would cost 60px */
+  #appSettingsModal .set-head-save {
+    display: inline-flex;
+  }
+
+  #appSettingsModal .set-foot {
+    display: none;
+  }
+
+  #appSettingsModal .set-doc {
+    padding: 0 14px 34px;
+    flex: 1;
+  }
+
+  /* ── jump control ──────────────────────────────────────────────────── */
+  #appSettingsModal .set-jump {
+    display: flex;
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    margin: 10px 0 2px;
+    padding: 10px 12px;
+    border-radius: 11px;
+    font: inherit;
+    font-size: 0.82rem;
+    color: var(--text);
+    background: rgba(var(--accent-rgb), 0.13);
+    border: 1px solid rgba(var(--accent-rgb), 0.3);
+    -webkit-backdrop-filter: blur(14px);
+    backdrop-filter: blur(14px);
+    cursor: pointer;
+  }
+
+  #appSettingsModal .set-jump-ico {
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+
+  #appSettingsModal .set-jump-label {
+    font-weight: 580;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #appSettingsModal .set-jump-chev {
+    margin-left: auto;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    transition: transform 0.18s;
+  }
+
+  #appSettingsModal .set-jump[aria-expanded='true'] .set-jump-chev {
+    transform: rotate(180deg);
+  }
+
+  #appSettingsModal .set-jump-veil {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 8;
+    background: rgba(4, 8, 13, 0.62);
+  }
+
+  #appSettingsModal .set-jump-menu {
+    display: none;
+    position: absolute;
+    left: 14px;
+    right: 14px;
+    z-index: 9;
+    padding: 7px;
+    border-radius: 16px;
+    /* Opaque on purpose: --floating-bg is translucent and the settings rows
+       behind the menu bleed through it. */
+    background: var(--bg-card);
+    border: 1px solid var(--control-border);
+    box-shadow: var(--elevated-shadow);
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+
+  #appSettingsModal.jump-open .set-jump-veil,
+  #appSettingsModal.jump-open .set-jump-menu {
+    display: block;
+  }
+
+  #appSettingsModal .set-jump-row {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    width: 100%;
+    padding: 11px 12px;
+    border: 0;
+    border-radius: 11px;
+    background: transparent;
+    color: var(--text-dim);
+    font: inherit;
+    font-size: 0.82rem;
+    text-align: left;
+  }
+
+  #appSettingsModal .set-jump-row svg {
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  #appSettingsModal .set-jump-row .set-jump-count {
+    margin-left: auto;
+    font-size: 0.62rem;
+    color: var(--text-muted);
+  }
+
+  #appSettingsModal .set-jump-row.active {
+    background: rgba(var(--accent-rgb), 0.14);
+    color: var(--text);
+    font-weight: 570;
+  }
+
+  #appSettingsModal .set-jump-row.active svg {
+    color: var(--accent);
+  }
+
+  /* ── sections step down: the jump pill already names the current one ── */
+  #appSettingsModal .set-section {
+    padding-top: 0;
+  }
+
+  #appSettingsModal .set-section + .set-section {
+    border-top: 0;
+    margin-top: 0;
+  }
+
+  #appSettingsModal .set-section-head {
+    gap: 7px;
+    margin: 18px 0 2px;
+  }
+
+  #appSettingsModal .set-section-head svg {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+    width: 12px;
+    height: 12px;
+  }
+
+  #appSettingsModal .set-section-head h2 {
+    font-size: 0.6rem;
+    font-weight: 640;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  #appSettingsModal .set-section-head::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, var(--border), transparent);
+  }
+
+  #appSettingsModal .set-section-blurb {
+    display: none;
+  }
+
+  /* ── inset grouped list ────────────────────────────────────────────── */
+  #appSettingsModal .set-group {
+    margin-top: 14px;
+  }
+
+  #appSettingsModal .set-group + .set-group {
+    margin-top: 16px;
+  }
+
+  #appSettingsModal .set-group-head {
+    margin-bottom: 7px;
+    padding: 0 3px;
+  }
+
+  #appSettingsModal .set-group-hint {
+    padding: 0 3px;
+  }
+
+  #appSettingsModal .set-group-body {
+    gap: 0;
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 13px;
+    overflow: hidden;
+  }
+
+  #appSettingsModal .set-group-body > .set-row {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    padding: 12px 13px;
+    gap: 12px;
+  }
+
+  #appSettingsModal .set-group-body > .set-row + .set-row {
+    border-top: 1px solid rgba(255, 255, 255, 0.055);
+  }
+
+  #appSettingsModal .set-group-body > .set-chips,
+  #appSettingsModal .set-group-body > .set-modelgrid,
+  #appSettingsModal .set-group-body > .set-minigrid,
+  #appSettingsModal .set-group-body > #appSettingsShortcutsList {
+    padding: 12px;
+  }
+
+  #appSettingsModal .set-group-body > .event-type-grid {
+    padding: 12px;
+    margin: 0;
+  }
+
+  #appSettingsModal .set-row-label {
+    font-size: 0.84rem;
+  }
+
+  #appSettingsModal .set-row-desc {
+    font-size: 0.69rem;
+    max-width: none;
+  }
+
+  /* Fields go full width under their label instead of fighting for the row */
+  #appSettingsModal .set-row.has-field {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 9px;
+  }
+
+  #appSettingsModal .set-row.has-field .set-select,
+  #appSettingsModal .set-row.has-field .set-input {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    box-sizing: border-box;
+  }
+
+  #appSettingsModal .set-row-actions-wide {
+    width: 100%;
+  }
+
+  #appSettingsModal .set-row-actions-wide .set-input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  #appSettingsModal .set-num {
+    width: 76px;
+  }
+
+  /* Bigger touch targets for the toggles and chips */
+  #appSettingsModal .switch-sm {
+    width: 40px;
+    height: 24px;
+  }
+
+  #appSettingsModal .switch-sm .slider:before {
+    height: 18px;
+    width: 18px;
+  }
+
+  #appSettingsModal .switch-sm input:checked + .slider:before {
+    transform: translateX(16px);
+  }
+
+  #appSettingsModal .set-chip {
+    font-size: 0.78rem;
+    padding: 9px 14px;
+  }
+
+  #appSettingsModal .set-modelgrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  #appSettingsModal .set-minigrid {
+    grid-template-columns: 1fr;
+  }
+
+  #appSettingsModal .set-mini .set-select {
+    width: 148px;
+  }
+
+  /* One scrollable line beats a ragged two-row wrap for 7 effort levels */
+  #appSettingsModal .set-segment {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  #appSettingsModal .set-segment::-webkit-scrollbar {
+    display: none;
+  }
+
+  #appSettingsModal .set-segment button {
+    flex: 0 0 auto;
+    padding: 8px 12px;
   }
 }

@@ -1,0 +1,102 @@
+/**
+ * App Settings structural guard.
+ *
+ * The settings modal is a rail (table of contents) over ONE scrolling document.
+ * Its load/save path is pure `getElementById` by a fixed set of ids
+ * (openAppSettings / saveAppSettings in settings-ui.js), so a restructure of the
+ * markup that drops or renames an element does not fail loudly: the setting just
+ * silently stops loading, or stops being saved and falls back to its default.
+ *
+ * These tests read the REAL settings-ui.js and index.html and pin that contract.
+ */
+import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const publicDir = resolve(import.meta.dirname, '../src/web/public');
+const html = readFileSync(resolve(publicDir, 'index.html'), 'utf8');
+const settingsUi = readFileSync(resolve(publicDir, 'settings-ui.js'), 'utf8');
+
+/** The App Settings modal markup, so assertions can't be satisfied elsewhere. */
+function settingsModal(): string {
+  const start = html.indexOf('<div class="modal" id="appSettingsModal">');
+  expect(start).toBeGreaterThan(-1);
+  const end = html.indexOf('<!-- Shortcut Overlay Modal -->', start);
+  expect(end).toBeGreaterThan(start);
+  return html.slice(start, end);
+}
+
+/**
+ * Every id the load and save paths touch. Scoped to those two functions on
+ * purpose: settings-ui.js also drives elements that live OUTSIDE the modal
+ * (toasts, header chips), and those are not this file's contract.
+ */
+function referencedIds(): string[] {
+  const ids = new Set<string>();
+  for (const fn of ['openAppSettings()', 'async saveAppSettings()']) {
+    const start = settingsUi.indexOf(`\n  ${fn} {`);
+    expect(start, `${fn} not found in settings-ui.js`).toBeGreaterThan(-1);
+    const body = settingsUi.slice(start, settingsUi.indexOf('\n  },', start));
+    for (const m of body.matchAll(/getElementById\('([A-Za-z0-9_-]+)'\)/g)) ids.add(m[1]);
+  }
+  return [...ids];
+}
+
+describe('App Settings modal structure', () => {
+  it('keeps every element settings-ui.js loads or saves by id', () => {
+    const modal = settingsModal();
+    const missing = referencedIds().filter((id) => !modal.includes(`id="${id}"`));
+    expect(missing).toEqual([]);
+  });
+
+  it('carries every section the rail points at, exactly once', () => {
+    const modal = settingsModal();
+    const sections = [...modal.matchAll(/data-section="([a-z-]+)"/g)].map((m) => m[1]);
+    expect(sections.length).toBeGreaterThanOrEqual(9);
+    for (const id of new Set(sections)) {
+      const hits = modal.split(`<section class="set-section" id="${id}"`).length - 1;
+      expect(hits, `section ${id} should exist exactly once`).toBe(1);
+    }
+  });
+
+  it('opens on Terminal & Input, so Local Echo is the first thing in reach', () => {
+    expect(settingsUi).toContain("this.switchSettingsTab('settings-terminal')");
+    const terminal = settingsModal().match(/id="settings-terminal"([\s\S]*?)<\/section>/);
+    const localEcho = terminal?.[1].indexOf('appSettingsLocalEcho') ?? -1;
+    const cjk = terminal?.[1].indexOf('appSettingsCjkInput') ?? -1;
+    expect(localEcho).toBeGreaterThan(-1);
+    expect(localEcho).toBeLessThan(cjk);
+  });
+
+  it('models: keeps the 1M variants as select options behind the context switch', () => {
+    const modal = settingsModal();
+    const select = modal.match(/id="appSettingsClaudeModel"([\s\S]*?)<\/select>/)?.[1] ?? '';
+    // The cards render the base models; the [1m] rows exist so that base + the
+    // context switch can compose back into a real claudeModel value.
+    for (const value of ['opus[1m]', 'claude-fable-5[1m]', 'claude-opus-4-6[1m]']) {
+      expect(select).toContain(`value="${value}"`);
+    }
+    expect(select).toContain('data-ctx="1"');
+    expect(modal).toContain('id="appSettingsOpusContext1m"');
+  });
+
+  it('never hides sections behind .modal-tab-content (that class means display:none)', () => {
+    expect(settingsModal()).not.toContain('modal-tab-content');
+  });
+
+  it('leaves the shared modal tab classes to the other modals', () => {
+    // #sessionOptionsModal and #createCaseModal still use .modal-tabs; the
+    // settings rail must not restyle them out from under those.
+    expect(settingsModal()).not.toContain('class="modal-tabs"');
+    expect(html).toContain('<div class="modal-tabs">');
+  });
+
+  it('exposes the rail hooks admin-ui.js injects the Users section into', () => {
+    const modal = settingsModal();
+    expect(modal).toContain('class="set-rail-items"');
+    expect(modal).toContain('id="appSettingsDoc"');
+    const adminUi = readFileSync(resolve(publicDir, 'admin-ui.js'), 'utf8');
+    expect(adminUi).toContain('.set-rail-items');
+    expect(adminUi).toContain('.set-doc');
+  });
+});
