@@ -2894,7 +2894,7 @@
           <div class="readmymind-why" id="readMyMindWhy" data-i18n-skip></div>
           <div class="readmymind-alternates" id="readMyMindAlternates" data-i18n-skip style="display:none"></div>
         </div>
-        <div class="readmymind-error" style="display:none">No suggestion this time. Rethink to try again.</div>
+        <div class="readmymind-error" style="display:none">No suggestion this time. Add a steer note and Rethink to try again.</div>
         <!-- Rethink steer note: the user's own words about what they actually
              meant, sent as `steer` with the next Rethink. Shown whenever
              Rethink is live (ready AND empty-result phases), hidden while a
@@ -2903,11 +2903,14 @@
           <input type="text" id="readMyMindSteer" class="readmymind-steer-input" maxlength="2000" placeholder="Steer the rethink, e.g. 'no, I meant the mobile bug'" aria-label="Steer note for Rethink" onkeydown="if(event.key==='Enter')app.rethinkReadMyMind()">
         </div>
       </div>
+      <!-- btn-toolbar, not bare "btn btn-*": no .btn/.btn-secondary rule exists
+           in this codebase, so the bare classes render as unstyled UA buttons.
+           btn-toolbar is the convention every other modal footer uses. -->
       <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="app.closeReadMyMind()">Dismiss</button>
-        <button class="btn btn-secondary" id="readMyMindRethink" onclick="app.rethinkReadMyMind()">Rethink</button>
-        <button class="btn btn-secondary" onclick="app.sendReadMyMind(false)" title="Put the text on the session's composer without submitting it">Insert</button>
-        <button class="btn btn-primary" onclick="app.sendReadMyMind(true)">Send</button>
+        <button class="btn-toolbar" onclick="app.closeReadMyMind()">Dismiss</button>
+        <button class="btn-toolbar" id="readMyMindRethink" onclick="app.rethinkReadMyMind()">Rethink</button>
+        <button class="btn-toolbar" onclick="app.sendReadMyMind(false)" title="Put the text on the session's composer without submitting it">Insert</button>
+        <button class="btn-toolbar btn-primary" onclick="app.sendReadMyMind(true)">Send</button>
       </div>
     </div>
   </div>

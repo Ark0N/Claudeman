@@ -255,7 +255,8 @@
     'Read My Mind: predict your next prompt': '读心术：预测您的下一条提示',
     'Predict my next prompt': '预测我的下一条提示',
     'Reading your mind…': '正在读取您的想法…',
-    'No suggestion this time. Rethink to try again.': '这次没有建议。点击「重想」再试一次。',
+    'No suggestion this time. Add a steer note and Rethink to try again.':
+      '这次没有建议。可添加引导备注后点击「重想」再试一次。',
     Rethink: '重想',
     Insert: '插入',
     "Put the text on the session's composer without submitting it": '将文本放入会话输入框但不提交',

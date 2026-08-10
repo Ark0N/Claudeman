@@ -89,4 +89,20 @@ describe('read my mind phone key + alternates (static guards)', () => {
     // A fresh open resets the note along with the rethink memory.
     expect(ui).toMatch(/steer\.value = ''/);
   });
+
+  it('styles the footer with btn-toolbar (bare "btn btn-*" matches no CSS in this codebase)', () => {
+    const modal = html.slice(html.indexOf('id="readMyMindModal"'), html.indexOf('id="approvalsDrawer"'));
+    // The unstyled classes the footer originally shipped with must not return.
+    expect(modal).not.toMatch(/class="btn /);
+    expect(modal.match(/class="btn-toolbar/g)?.length).toBe(4);
+    expect(modal).toMatch(/class="btn-toolbar btn-primary"[^>]*sendReadMyMind\(true\)/);
+    // btn-toolbar is display:flex (block-level): without the desktop footer
+    // row rule the four buttons would stack vertically.
+    expect(styles).toMatch(/\.readmymind-modal \.modal-footer \{[^}]*display: flex/);
+    // The skin block's bare .btn-toolbar (0,2,1) greys out .btn-primary
+    // (0,2,0), so Send's accent must be re-asserted at higher specificity.
+    expect(styles).toMatch(/\.readmymind-modal \.modal-footer \.btn-toolbar\.btn-primary \{[^}]*var\(--accent\)/);
+    // The phone block sizes the same class for finger targets.
+    expect(phoneBlock).toMatch(/\.readmymind-modal \.modal-footer \.btn-toolbar/);
+  });
 });
