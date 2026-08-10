@@ -1318,18 +1318,20 @@ html.mobile-init .file-browser-panel {
     width: calc(100% - 2rem);
   }
   /* Four footer buttons on a narrow phone: let them wrap instead of clipping,
-     and give buttons + alternate rows finger-sized targets. */
+     and give buttons + alternate rows finger-sized targets. The flex row
+     itself comes from the base rule in styles.css. */
   .readmymind-modal .modal-footer {
-    display: flex;
     flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 0.5rem;
   }
-  .readmymind-modal .modal-footer .btn {
+  .readmymind-modal .modal-footer .btn-toolbar {
     flex: 1 1 auto;
+    justify-content: center;
     min-height: 38px;
   }
   .readmymind-alt {
+    min-height: 38px;
+  }
+  .readmymind-steer-input {
     min-height: 38px;
   }
 

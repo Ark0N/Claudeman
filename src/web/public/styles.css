@@ -10933,6 +10933,58 @@ kbd {
   white-space: nowrap;
   font-family: var(--mono-font, monospace);
 }
+/* Rethink steer note: the user's own words about what they actually meant,
+   sent as `steer` on the next re-run (readmymind-ui.js _readMyMindPredict).
+   Dashed border marks it as the optional side channel, distinct from the
+   primary suggestion field above; it solidifies on focus. */
+.readmymind-steer-row {
+  margin-top: 10px;
+}
+.readmymind-steer-input {
+  width: 100%;
+  min-width: 0;
+  font-size: 12px;
+  padding: 7px 10px;
+  background: transparent;
+  color: var(--text);
+  border: 1px dashed var(--control-border);
+  border-radius: 8px;
+}
+.readmymind-steer-input:focus {
+  outline: none;
+  border-style: solid;
+  border-color: var(--accent);
+  background: var(--bg-dark);
+}
+.readmymind-steer-input::placeholder {
+  color: var(--text-dim);
+}
+/* Footer row: the buttons are btn-toolbar (display: flex, block-level), so
+   without this rule the four of them stack vertically. Mirrors the
+   runSummaryModal footer; the ≤430px block in mobile.css adds wrapping. */
+.readmymind-modal .modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+/* Send keeps the primary accent: the skin block's bare .btn-toolbar rule is
+   (0,2,1) under html:not([data-skin="og"]) and outranks the base
+   .btn-toolbar.btn-primary (0,2,0) — the specificity trap CLAUDE.md documents
+   for mobile.css — so the accent is re-asserted here at (0,4,0). Scoped to
+   this modal on purpose; un-greying every btn-primary on the new skins is a
+   design call, not this feature's. */
+.readmymind-modal .modal-footer .btn-toolbar.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.readmymind-modal .modal-footer .btn-toolbar.btn-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: #fff;
+}
 
 /* Keyboard-accessory 🧠 key: the phone surface for the same opt-in setting
    (the header 🧠 button stays phone-hidden in mobile.css). The key ships in
