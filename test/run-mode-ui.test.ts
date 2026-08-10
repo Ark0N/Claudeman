@@ -760,6 +760,11 @@ describe('case selector refresh', () => {
     ];
     app.showToast = vi.fn();
 
+    // deleteCase re-renders the case-manage list, whose path label goes through
+    // _shortenHomePath. That method lives in terminal-ui.js, which this harness
+    // does not load (the real app always has it: load order 7 before 12).
+    app._shortenHomePath = (p: string) => p;
+
     await app.deleteCase('deleted-case');
 
     expect(quickStartCase.blur).toHaveBeenCalled();

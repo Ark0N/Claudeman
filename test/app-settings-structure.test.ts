@@ -59,13 +59,60 @@ describe('App Settings modal structure', () => {
     }
   });
 
-  it('opens on Terminal & Input, so Local Echo is the first thing in reach', () => {
-    expect(settingsUi).toContain("this.switchSettingsTab('settings-terminal')");
+  it('opens on Updates: the version and the updater above everything else', () => {
+    expect(settingsUi).toContain("this.switchSettingsTab('settings-updates')");
+    const modal = settingsModal();
+    const order = [...modal.matchAll(/<section class="set-section" id="([a-z-]+)"/g)].map((m) => m[1]);
+    // Rail and document must agree, or scroll-spy paints the wrong entry.
+    const rail = [...modal.matchAll(/data-section="([a-z-]+)"/g)].map((m) => m[1]);
+    expect(rail.slice(0, 3)).toEqual(['settings-updates', 'settings-terminal', 'settings-layout']);
+    expect(order.slice(0, 3)).toEqual(['settings-updates', 'settings-terminal', 'settings-layout']);
+    // Updates carries ONLY the version and the update action; the rest of the
+    // system settings tail the document under System, out of the way.
+    const updates = modal.match(/id="settings-updates"([\s\S]*?)<\/section>/)?.[1] ?? '';
+    expect(updates).toContain('id="updateCurrentVersion"');
+    expect(updates).toContain('id="updateCheckBtn"');
+    expect(updates).not.toContain('id="appSettingsClaudeMdPath"');
+    expect(rail[rail.length - 1]).toBe('settings-system');
+    expect(order[order.length - 1]).toBe('settings-system');
+    const system = modal.match(/id="settings-system"([\s\S]*?)<\/section>/)?.[1] ?? '';
+    expect(system).toContain('id="appSettingsClaudeMdPath"');
+    expect(system).toContain('id="appSettingsTunnelEnabled"');
+  });
+
+  it('keeps Local Echo the first row of the second section', () => {
     const terminal = settingsModal().match(/id="settings-terminal"([\s\S]*?)<\/section>/);
     const localEcho = terminal?.[1].indexOf('appSettingsLocalEcho') ?? -1;
     const cjk = terminal?.[1].indexOf('appSettingsCjkInput') ?? -1;
     expect(localEcho).toBeGreaterThan(-1);
     expect(localEcho).toBeLessThan(cjk);
+  });
+
+  it('gives every previewed chip an icon to clone, and a slot that exists', () => {
+    // _syncLayoutPreview clones `.set-chip-ico` out of the chip, so a chip that
+    // opts into the preview without an icon renders as an empty button, and one
+    // pointing at a slot id that does not exist renders as nothing at all.
+    const layout = settingsModal().match(/id="settings-layout"([\s\S]*?)<\/section>/)?.[1] ?? '';
+    const chips = [...layout.matchAll(/<label class="set-chip"([^>]*)>([\s\S]*?)<\/label>/g)];
+    const previewed = chips.filter(([, attrs]) => attrs.includes('data-preview='));
+    expect(previewed.length).toBeGreaterThanOrEqual(15);
+    for (const [, attrs, body] of previewed) {
+      const kind = attrs.match(/data-preview="([a-z]+)"/)?.[1];
+      expect(['header', 'panel', 'toolbar', 'float']).toContain(kind);
+      expect(attrs, `chip ${body} needs a preview order`).toMatch(/data-preview-order="\d+"/);
+      // A text token replaces the icon for readouts (plan usage, CPU, font size).
+      const hasIcon = body.includes('class="set-chip-ico') || attrs.includes('data-preview-text=');
+      expect(hasIcon, `chip ${body} has nothing to render in the preview`).toBe(true);
+    }
+    for (const id of [
+      'appSettingsPreviewHeader',
+      'appSettingsPreviewPanels',
+      'appSettingsPreviewToolbar',
+      'appSettingsPreviewFloats',
+    ]) {
+      expect(layout).toContain(`id="${id}"`);
+      expect(settingsUi).toContain(`'${id}'`);
+    }
   });
 
   it('models: keeps the 1M variants as select options behind the context switch', () => {
@@ -80,15 +127,15 @@ describe('App Settings modal structure', () => {
     expect(modal).toContain('id="appSettingsOpusContext1m"');
   });
 
-  it('never hides sections behind .modal-tab-content (that class means display:none)', () => {
+  it('has retired the modal-tab chrome everywhere, not just here', () => {
+    // Session Options and Add Case moved onto this same `set-*` surface, so the
+    // old tab classes have no users left. A reappearance means a modal drifted
+    // back off the shared surface (or the dead CSS was resurrected).
     expect(settingsModal()).not.toContain('modal-tab-content');
-  });
-
-  it('leaves the shared modal tab classes to the other modals', () => {
-    // #sessionOptionsModal and #createCaseModal still use .modal-tabs; the
-    // settings rail must not restyle them out from under those.
-    expect(settingsModal()).not.toContain('class="modal-tabs"');
-    expect(html).toContain('<div class="modal-tabs">');
+    expect(html).not.toContain('class="modal-tabs"');
+    expect(html).not.toContain('modal-tab-btn');
+    const css = readFileSync(resolve(publicDir, 'styles.css'), 'utf8');
+    expect(css).not.toContain('.modal-tab-btn {');
   });
 
   it('exposes the rail hooks admin-ui.js injects the Users section into', () => {

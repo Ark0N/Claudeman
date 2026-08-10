@@ -489,11 +489,12 @@ Object.assign(CodemanApp.prototype, {
         const date = new Date(s.lastModified);
         const timeStr = date.toLocaleDateString('en', { month: 'short', day: 'numeric' })
           + ' ' + date.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false });
-        // Abbreviate the home prefix. This used to match `/home/<user>/` only, so
-        // on macOS (`/Users/<user>/`) nothing was stripped and every row spent its
-        // first ~19 characters on an identical prefix — with the tail ellipsized,
-        // all rows rendered as `/Users/jordanryan/co…` and became indistinguishable.
-        const shortDir = s.workingDir.replace(/^\/(?:home|Users)\/[^/]+\//, '~/');
+        // Shared helper, not a local regex: the copy that used to live here
+        // matched `/home/<user>/` only, so on macOS (`/Users/<user>/`) nothing was
+        // stripped and every row spent its first ~19 characters on an identical
+        // prefix — with the tail ellipsized, all rows rendered as
+        // `/Users/jordanryan/co…` and became indistinguishable (#273).
+        const shortDir = this._shortenHomePath(s.workingDir);
         // Lead with the folder that identifies the row; the parent path trails and
         // is what gets truncated. Truncation must never eat the identity.
         const lastSlash = shortDir.lastIndexOf('/');
@@ -1310,8 +1311,8 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('presetDescriptionHint').textContent = '';
 
     // Hide Ralph/Todo tab and Respawn tab for external CLI sessions (not supported)
-    const ralphTabBtn = document.querySelector('#sessionOptionsModal .modal-tab-btn[data-tab="ralph"]');
-    const respawnTabBtn = document.querySelector('#sessionOptionsModal .modal-tab-btn[data-tab="respawn"]');
+    const ralphTabBtn = document.querySelector('#sessionOptionsModal .set-rail-item[data-tab="ralph"]');
+    const respawnTabBtn = document.querySelector('#sessionOptionsModal .set-rail-item[data-tab="respawn"]');
     if (isExternalCli) {
       if (ralphTabBtn) ralphTabBtn.style.display = 'none';
       if (respawnTabBtn) respawnTabBtn.style.display = 'none';
@@ -1335,6 +1336,18 @@ Object.assign(CodemanApp.prototype, {
     }
 
     const modal = document.getElementById('sessionOptionsModal');
+
+    // Chips mirror their checkbox onto the label, the same way App Settings does
+    // (settings-ui.js: _syncSettingsChips). Registered once per page, never per
+    // open, or a long-lived tab accumulates one listener per visit.
+    if (modal.dataset.chipsReady !== '1') {
+      modal.dataset.chipsReady = '1';
+      modal.addEventListener('change', e => {
+        if (e.target?.closest?.('.set-chip')) this._syncSettingsChips();
+      });
+    }
+    this._syncSettingsChips();
+
     modal.classList.add('active');
 
     // Activate focus trap
@@ -1532,17 +1545,31 @@ Object.assign(CodemanApp.prototype, {
   // Session Options Modal Tabs
   // ═══════════════════════════════════════════════════════════════
 
+  /**
+   * Show one section of the Session Options modal.
+   *
+   * The chrome is the shared `set-*` settings surface, but unlike App Settings
+   * (whose rail is a table of contents over one scrolling document) this rail
+   * is a real switcher: exactly one `.set-section` is visible and the rest
+   * carry `.hidden`. Summary owns its own scroller and Respawn is long, so
+   * stacking them into a single document would bury both.
+   */
   switchOptionsTab(tabName) {
-    // Toggle active class on tab buttons
-    document.querySelectorAll('#sessionOptionsModal .modal-tab-btn').forEach(btn => {
+    // Toggle active class on rail entries
+    document.querySelectorAll('#sessionOptionsModal .set-rail-item').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.tab === tabName);
     });
 
-    // Toggle hidden class on tab content
+    // Toggle hidden class on the sections
     document.getElementById('respawn-tab').classList.toggle('hidden', tabName !== 'respawn');
     document.getElementById('context-tab').classList.toggle('hidden', tabName !== 'context');
     document.getElementById('ralph-tab').classList.toggle('hidden', tabName !== 'ralph');
     document.getElementById('summary-tab').classList.toggle('hidden', tabName !== 'summary');
+
+    // A switched-to section starts at its own top, not at the scroll offset the
+    // previous one was left at.
+    const doc = document.getElementById('sessionOptionsDoc');
+    if (doc) doc.scrollTop = 0;
 
     // Load run summary data when switching to summary tab
     if (tabName === 'summary' && this.editingSessionId) {
@@ -1814,7 +1841,7 @@ Object.assign(CodemanApp.prototype, {
     this.switchCaseModalTab('case-create');
     // Wire up tab buttons
     const modal = document.getElementById('createCaseModal');
-    modal.querySelectorAll('.modal-tabs .modal-tab-btn').forEach(btn => {
+    modal.querySelectorAll('.set-rail-item').forEach(btn => {
       btn.onclick = () => this.switchCaseModalTab(btn.dataset.tab);
     });
     // Scroll-into-view on focus for mobile keyboard visibility
@@ -1835,14 +1862,17 @@ Object.assign(CodemanApp.prototype, {
   switchCaseModalTab(tabName) {
     this.caseModalTab = tabName;
     const modal = document.getElementById('createCaseModal');
-    // Toggle active class on tab buttons
-    modal.querySelectorAll('.modal-tabs .modal-tab-btn').forEach(btn => {
+    // Toggle active class on rail entries
+    modal.querySelectorAll('.set-rail-item').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.tab === tabName);
     });
-    // Toggle hidden class on tab content
-    modal.querySelectorAll('.modal-tab-content').forEach(content => {
+    // Toggle hidden class on the panels
+    modal.querySelectorAll('.set-section').forEach(content => {
       content.classList.toggle('hidden', content.id !== tabName);
     });
+    // A switched-to panel starts at its own top.
+    const doc = document.getElementById('createCaseDoc');
+    if (doc) doc.scrollTop = 0;
     // Update submit button (hide for manage tab)
     const submitBtn = document.getElementById('caseModalSubmit');
     if (tabName === 'case-manage') {
@@ -2708,7 +2738,9 @@ Object.assign(CodemanApp.prototype, {
     cases.forEach((c, idx) => {
       const isFirst = idx === 0;
       const isLast = idx === cases.length - 1;
-      const pathDisplay = c.path ? c.path.replace(/^\/Users\/[^/]+/, '~') : '';
+      // Was `/Users/<user>` only, the mirror image of the Run menu's bug: every
+      // case path on a Linux host rendered in full, unabbreviated.
+      const pathDisplay = c.path ? this._shortenHomePath(c.path) : '';
       html += `
         <div class="case-manage-item" data-case="${escapeHtml(c.name)}">
           <div class="case-manage-info">

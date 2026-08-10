@@ -393,10 +393,14 @@ Object.assign(CodemanApp.prototype, {
     // that collide with state strings on other surfaces.
     pill.setAttribute('data-i18n-skip', '');
     pill.textContent = row.pill;
-    item.appendChild(pill);
 
-    // Wraps onto its own line (the row is flex-wrap) so it gets the full width.
-    item.appendChild(this._buildHomeSessionsMeta(row));
+    // The stamps line wraps onto its own full-width line (the row is flex-wrap)
+    // and the pill rides along at its right end, rather than sitting beside the
+    // name: that hands the whole width of the rail to the session name, which is
+    // what stops it ellipsizing.
+    const meta = this._buildHomeSessionsMeta(row);
+    meta.appendChild(pill);
+    item.appendChild(meta);
 
     return item;
   },
@@ -439,7 +443,14 @@ Object.assign(CodemanApp.prototype, {
     pill.className = 'home-sessions-pill home-sessions-pill--web';
     pill.setAttribute('data-i18n-skip', '');
     pill.textContent = 'web';
-    item.appendChild(pill);
+
+    // Same bottom line as a session row (minus the stamps, a dashboard has
+    // none), so the pill sits in the same place on every row in the rail.
+    const foot = document.createElement('span');
+    foot.className = 'home-sessions-row-meta';
+    foot.setAttribute('data-i18n-skip', '');
+    foot.appendChild(pill);
+    item.appendChild(foot);
 
     return item;
   },

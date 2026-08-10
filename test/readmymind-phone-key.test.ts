@@ -73,4 +73,36 @@ describe('read my mind phone key + alternates (static guards)', () => {
     expect(ui).toContain('readMyMindAlternates');
     expect(ui).toMatch(/\.textContent = suggestion\.prompt/);
   });
+
+  // Phase 3 part 2: the Rethink steer note (docs/readmymind-plan.md phase 3).
+  it('wires the rethink steer note end to end: field, payload, phase visibility, reset', () => {
+    // The field lives in the modal, capped to the schema's 2000-char limit,
+    // and Enter in it triggers a rethink (mirroring the prompt field's
+    // Enter-to-send).
+    expect(html).toMatch(/id="readMyMindSteer"[^>]*maxlength="2000"/);
+    expect(html).toMatch(/id="readMyMindSteer"[^>]*onkeydown="[^"]*rethinkReadMyMind\(\)"/);
+    // Predict sends the trimmed note as `steer`, bounded to the schema cap.
+    expect(ui).toMatch(/body\.steer = steer\.slice\(0, 2000\)/);
+    // The row hides ONLY during loading: Rethink is live in both the ready
+    // and the empty-result phases, so the note must be reachable in both.
+    expect(ui).toMatch(/steerRow\.style\.display = phase === 'loading' \? 'none' : ''/);
+    // A fresh open resets the note along with the rethink memory.
+    expect(ui).toMatch(/steer\.value = ''/);
+  });
+
+  it('styles the footer with btn-toolbar (bare "btn btn-*" matches no CSS in this codebase)', () => {
+    const modal = html.slice(html.indexOf('id="readMyMindModal"'), html.indexOf('id="approvalsDrawer"'));
+    // The unstyled classes the footer originally shipped with must not return.
+    expect(modal).not.toMatch(/class="btn /);
+    expect(modal.match(/class="btn-toolbar/g)?.length).toBe(4);
+    expect(modal).toMatch(/class="btn-toolbar btn-primary"[^>]*sendReadMyMind\(true\)/);
+    // btn-toolbar is display:flex (block-level): without the desktop footer
+    // row rule the four buttons would stack vertically.
+    expect(styles).toMatch(/\.readmymind-modal \.modal-footer \{[^}]*display: flex/);
+    // The skin block's bare .btn-toolbar (0,2,1) greys out .btn-primary
+    // (0,2,0), so Send's accent must be re-asserted at higher specificity.
+    expect(styles).toMatch(/\.readmymind-modal \.modal-footer \.btn-toolbar\.btn-primary \{[^}]*var\(--accent\)/);
+    // The phone block sizes the same class for finger targets.
+    expect(phoneBlock).toMatch(/\.readmymind-modal \.modal-footer \.btn-toolbar/);
+  });
 });
