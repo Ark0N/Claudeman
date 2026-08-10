@@ -6,8 +6,17 @@ import { describe, expect, it, vi } from 'vitest';
 function loadTerminalUiHarness() {
   const CodemanApp = function CodemanApp(this: any) {};
   let now = 1_000;
+  let keyboardVisible = false;
+  let activeElement: unknown = null;
   const context = vm.createContext({
     window: {},
+    document: {
+      body: { classList: { contains: () => false } },
+      get activeElement() {
+        return activeElement;
+      },
+      getElementById: () => null,
+    },
     CodemanApp,
     console: { warn: vi.fn(), log: vi.fn() },
     _crashDiag: { log: vi.fn() },
@@ -25,6 +34,11 @@ function loadTerminalUiHarness() {
     MobileDetection: {
       isTouchDevice: () => true,
     },
+    KeyboardHandler: {
+      get keyboardVisible() {
+        return keyboardVisible;
+      },
+    },
     DEC_SYNC_STRIP_RE: /\x1b\[\?2026[hl]/g,
     TERMINAL_CHUNK_SIZE: 32 * 1024,
   });
@@ -37,6 +51,12 @@ function loadTerminalUiHarness() {
     app,
     setNow: (value: number) => {
       now = value;
+    },
+    setKeyboardVisible: (visible: boolean) => {
+      keyboardVisible = visible;
+    },
+    setActiveElement: (element: unknown) => {
+      activeElement = element;
     },
   };
 }
@@ -55,7 +75,130 @@ function createElementHarness() {
   };
 }
 
+function createTerminalGrid(lines: string[], cursorY: number, wrappedRows = new Set<number>()) {
+  const textarea = {
+    classList: { contains: (name: string) => name === 'xterm-helper-textarea' },
+    blur: vi.fn(),
+  };
+  return {
+    cols: 80,
+    rows: lines.length,
+    modes: { mouseTrackingMode: 'none' },
+    buffer: {
+      active: {
+        viewportY: 0,
+        baseY: 0,
+        cursorY,
+        getLine: (row: number) =>
+          row >= 0 && row < lines.length
+            ? { isWrapped: wrappedRows.has(row), translateToString: () => lines[row] }
+            : undefined,
+      },
+    },
+    element: {
+      querySelector: (selector: string) =>
+        selector === '.xterm-screen' ? { getBoundingClientRect: () => ({ left: 0, top: 0 }) } : null,
+    },
+    _core: { _renderService: { dimensions: { css: { cell: { width: 8, height: 16 } } } } },
+    textarea,
+    focus: vi.fn(),
+  };
+}
+
 describe('terminal touch tap mouse guard', () => {
+  it('recognizes focus only when a terminal input owns the active element', () => {
+    const { app, setActiveElement } = loadTerminalUiHarness();
+    const textarea = { classList: { contains: () => true } };
+    app.terminal = { textarea };
+
+    setActiveElement(null);
+    expect(app._isMobileTerminalInputFocused()).toBe(false);
+
+    setActiveElement(textarea);
+    expect(app._isMobileTerminalInputFocused()).toBe(true);
+  });
+
+  it('routes a readback row to the TUI while keeping the prompt row as keyboard input', () => {
+    const { app } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'codex' }]]);
+    app.terminal = createTerminalGrid(
+      ['Agent readback mentions › inline', '  tap to collapse', '', '', '› ask', 'gpt-5 · Context 80% left'],
+      4
+    );
+
+    expect(app._classifyMobileTerminalTap(9, 1)).toBe('content'); // inline marker is not a prompt
+    expect(app._classifyMobileTerminalTap(9, 17)).toBe('content'); // row 2: readback
+    expect(app._classifyMobileTerminalTap(9, 65)).toBe('input'); // row 5: prompt
+    expect(app._classifyMobileTerminalTap(9, 81)).toBe('content'); // row 6: status
+  });
+
+  it('classifies Claude background-agent status as content rather than keyboard input', () => {
+    const { app } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion: '2.1.220' }]]);
+    app.terminal = createTerminalGrid(
+      ['', '', '', '• Working (1m 50s • esc to ', 'interrupt) · 1 background teammate', ''],
+      4,
+      new Set([4])
+    );
+
+    expect(app._classifyMobileTerminalTap(9, 65)).toBe('content');
+  });
+
+  it('keeps the live cursor focusable when Claude temporarily omits its prompt glyph', () => {
+    const { app } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app.terminal = createTerminalGrid(['Prior response', '', 'ready for input', '', 'status footer', ''], 2);
+
+    expect(app._classifyMobileTerminalTap(9, 33)).toBe('input');
+    expect(app._classifyMobileTerminalTap(9, 1)).toBe('content');
+  });
+
+  it('treats a highlighted numbered choice as TUI content, not an input prompt', () => {
+    const { app } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app.terminal = createTerminalGrid(['Would you like to proceed?', '', '❯ 1. Yes', '  2. No', '', ''], 2);
+
+    expect(app._classifyMobileTerminalTap(9, 33)).toBe('content');
+    expect(app._classifyMobileTerminalTap(9, 49)).toBe('content');
+  });
+
+  it('collapses TUI readback content without opening or retaining the keyboard', () => {
+    const { app, setActiveElement } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'codex' }]]);
+    app.terminal = createTerminalGrid(
+      ['Agent readback', '  tap to collapse', '', '', '› ask', 'gpt-5 · Context 80% left'],
+      4
+    );
+    app._sendInputAsync = vi.fn();
+    setActiveElement(app.terminal.textarea);
+
+    expect(app._handleMobileTerminalTap({ clientX: 9, clientY: 17 }, true)).toBe('content');
+    expect(app._sendInputAsync).toHaveBeenCalledWith('sess-1', '\x1b[<0;2;2M\x1b[<0;2;2m');
+    expect(app.terminal.textarea.blur).toHaveBeenCalledOnce();
+    expect(app.terminal.focus).not.toHaveBeenCalled();
+  });
+
+  it('keeps the first prompt tap focus-only so it cannot activate a CLI row', () => {
+    const { app, setActiveElement } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'codex' }]]);
+    app.terminal = createTerminalGrid(
+      ['Agent readback', '  tap to collapse', '', '', '› ask', 'gpt-5 · Context 80% left'],
+      4
+    );
+    app._sendInputAsync = vi.fn();
+    setActiveElement(null);
+
+    expect(app._handleMobileTerminalTap({ clientX: 9, clientY: 65 }, false)).toBe('input');
+    expect(app._sendInputAsync).not.toHaveBeenCalled();
+    expect(app.terminal.focus).toHaveBeenCalledOnce();
+  });
+
   it('suppresses browser trusted compatibility mouse events during the tap window', () => {
     const { app } = loadTerminalUiHarness();
     const { element, dispatch } = createElementHarness();
