@@ -1048,6 +1048,159 @@ describe('Virtual Keyboard', () => {
     });
   });
 
+  // ── Shell keyboard bar + one-shot Ctrl (issue #262) ───────────────────
+  //
+  // The bar swaps layouts per session mode, and Ctrl is a one-shot modifier
+  // applied to the next character typed on the SYSTEM keyboard, which on a
+  // phone reaches the app as xterm onData text, not a key event. These drive
+  // the real xterm instance with page.keyboard.type() and assert on what would
+  // go out on the wire (_sendInputAsync), not on DOM state alone.
+
+  describe('Shell keyboard bar', () => {
+    let context: BrowserContext;
+    let page: Page;
+
+    beforeAll(async () => {
+      ({ context, page } = await createDevicePage(REPRESENTATIVE_DEVICES['standard-phone'], BASE_URL, 'chromium'));
+      await page.waitForTimeout(WAIT.PAGE_SETTLE);
+    });
+
+    afterAll(async () => {
+      await context.close();
+    });
+
+    /** Point the app at a fake session of `mode` and re-resolve the bar. */
+    async function activateSession(mode: string, id = 'kb-shell-1'): Promise<void> {
+      await page.evaluate(`(function (id, mode) {
+        app.sessions.set(id, { id, name: id, status: 'idle', mode, workingDir: '/tmp' });
+        app.activeSessionId = id;
+        KeyboardAccessoryBar.show();
+        KeyboardAccessoryBar.refreshForActiveSession();
+      })('${id}', '${mode}')`);
+    }
+
+    /** Capture what the terminal would send, while typing on the real keyboard. */
+    async function typeAndCapture(text: string): Promise<string[]> {
+      await page.evaluate(`(function () {
+        window.__sent = [];
+        if (!app.__origSend) app.__origSend = app._sendInputAsync;
+        app._sendInputAsync = function (sessionId, input) { window.__sent.push(input); };
+        app.terminal.focus();
+      })()`);
+      await page.keyboard.type(text);
+      await page.waitForTimeout(200);
+      const sent = (await page.evaluate(`window.__sent`)) as string[];
+      await page.evaluate(`(function () { app._sendInputAsync = app.__origSend; })()`);
+      return sent;
+    }
+
+    async function tapCtrl(): Promise<void> {
+      await page.evaluate(`document.querySelector('.keyboard-accessory-bar [data-action="ctrl"]').click()`);
+    }
+
+    it('shows the terminal bar for shell sessions', async () => {
+      await activateSession('shell');
+      const actions = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('.keyboard-accessory-bar [data-action]')).map(
+          (button) => (button as HTMLElement).dataset.action
+        )
+      );
+      expect(actions).toEqual([
+        'ctrl',
+        'esc',
+        'tab',
+        'scroll-up',
+        'scroll-down',
+        'arrow-left',
+        'arrow-right',
+        'paste',
+        'dismiss',
+      ]);
+    });
+
+    it('keeps the command bar for agent sessions', async () => {
+      await activateSession('claude', 'kb-agent-1');
+      const actions = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('.keyboard-accessory-bar [data-action]')).map(
+          (button) => (button as HTMLElement).dataset.action
+        )
+      );
+      expect(actions).toContain('init');
+      expect(actions).not.toContain('ctrl');
+    });
+
+    it('sends Ctrl+C for the next typed character and disarms', async () => {
+      await activateSession('shell');
+      await tapCtrl();
+      expect(await page.evaluate(`KeyboardAccessoryBar.isCtrlArmed()`)).toBe(true);
+
+      expect(await typeAndCapture('c')).toEqual(['\x03']);
+      expect(await page.evaluate(`KeyboardAccessoryBar.isCtrlArmed()`)).toBe(false);
+      // The very next keystroke is a literal c again.
+      expect(await typeAndCapture('c')).toEqual(['c']);
+    });
+
+    it('sends Ctrl+D for the next typed character', async () => {
+      await activateSession('shell');
+      await tapCtrl();
+      expect(await typeAndCapture('d')).toEqual(['\x04']);
+    });
+
+    it('cancels on a second tap of Ctrl', async () => {
+      await activateSession('shell');
+      await tapCtrl();
+      await tapCtrl();
+      expect(await page.evaluate(`KeyboardAccessoryBar.isCtrlArmed()`)).toBe(false);
+      expect(await typeAndCapture('c')).toEqual(['c']);
+    });
+
+    it('shows the armed state and keeps the terminal focused', async () => {
+      await activateSession('shell');
+      await tapCtrl();
+      const state = await page.evaluate(() => {
+        const button = document.querySelector('.keyboard-accessory-bar [data-action="ctrl"]') as HTMLElement;
+        const style = getComputedStyle(button);
+        return {
+          armed: button.classList.contains('armed'),
+          pressed: button.getAttribute('aria-pressed'),
+          background: style.backgroundColor,
+          focusedTerminal: document.activeElement === (app.terminal as { textarea: Element }).textarea,
+        };
+      });
+      expect(state.armed).toBe(true);
+      expect(state.pressed).toBe('true');
+      // Armed styling must actually land (three-class rule beating the skin
+      // overrides): an invisible modifier is worse than none.
+      expect(state.background).not.toBe('rgba(0, 0, 0, 0)');
+      expect(state.focusedTerminal).toBe(true);
+    });
+
+    it('drops the armed modifier when switching sessions', async () => {
+      await activateSession('shell');
+      await tapCtrl();
+      expect(await page.evaluate(`KeyboardAccessoryBar.isCtrlArmed()`)).toBe(true);
+
+      await activateSession('shell', 'kb-shell-2');
+      expect(await page.evaluate(`KeyboardAccessoryBar.isCtrlArmed()`)).toBe(false);
+      expect(await typeAndCapture('c')).toEqual(['c']);
+    });
+
+    it('drops the armed modifier when the keyboard is dismissed', async () => {
+      await activateSession('shell');
+      await tapCtrl();
+      await page.evaluate(`KeyboardAccessoryBar.hide()`);
+      expect(await page.evaluate(`KeyboardAccessoryBar.isCtrlArmed()`)).toBe(false);
+    });
+
+    it('spends the modifier on another accessory key instead of the next keystroke', async () => {
+      await activateSession('shell');
+      await tapCtrl();
+      await page.evaluate(`document.querySelector('.keyboard-accessory-bar [data-action="esc"]').click()`);
+      expect(await page.evaluate(`KeyboardAccessoryBar.isCtrlArmed()`)).toBe(false);
+      expect(await typeAndCapture('c')).toEqual(['c']);
+    });
+  });
+
   // ── Cross-device keyboard behavior ────────────────────────────────────
 
   describe('Cross-device keyboard behavior', () => {

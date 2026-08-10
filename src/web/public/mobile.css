@@ -1162,6 +1162,17 @@ html.mobile-init .file-browser-panel {
     color: #ffd54f;
   }
 
+  /* Armed one-shot Ctrl (shell bar, issue #262). Phone palette is hardcoded in
+     this block, so the state needs its own entry here; three classes to outrank
+     the light-skin .accessory-btn rule at the bottom of this file. */
+  .accessory-btn.accessory-btn-ctrl.armed {
+    background: #2563eb;
+    border-color: rgba(59, 130, 246, 0.9);
+    color: #fff;
+    font-weight: 700;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.45);
+  }
+
   .accessory-btn:active {
     background: #3a3a3a;
   }

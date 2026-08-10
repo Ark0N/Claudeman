@@ -930,6 +930,18 @@ Object.assign(CodemanApp.prototype, {
         ) {
           return;
         }
+
+        // ── One-shot Ctrl (mobile shell bar, issue #262) ──
+        // A virtual keyboard reports no usable key events, so a keydown hook
+        // would never see the character the modifier applies to: it arrives
+        // here as onData text. Sits AFTER the query-response filter so xterm's
+        // own DA/CPR replies can never spend the modifier, and BEFORE every
+        // send path so the control byte follows the normal control-char route
+        // (immediate flush, local-echo state cleared).
+        if (typeof KeyboardAccessoryBar !== 'undefined' && KeyboardAccessoryBar.isCtrlArmed?.()) {
+          data = KeyboardAccessoryBar.consumeCtrl(data);
+        }
+
         this._lastTerminalData = { data, time: performance.now() };
 
         // ── Local Echo Pass-through ──

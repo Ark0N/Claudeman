@@ -12081,6 +12081,18 @@ body.touch-device.cjk-input-visible .main {
   color: var(--yellow);
 }
 
+/* Armed one-shot Ctrl (shell bar, issue #262). Three classes on purpose: the
+   light-skin compatibility rule in mobile.css repaints every .accessory-btn at
+   specificity (0,2,1), so a two-class rule here would lose and the modifier
+   would look unarmed on the light skins. */
+.accessory-btn.accessory-btn-ctrl.armed {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
 .accessory-btn:active {
   background: var(--control-bg-hover);
 }
