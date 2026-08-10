@@ -300,6 +300,11 @@ For reference when writing browser tests:
 .xterm                   // Terminal container
 #helpModal               // Help modal
 #appSettingsModal        // Settings modal
+#sessionOptionsModal     // Session Options (same set-* surface)
+#createCaseModal         // Add Case (same set-* surface)
+.set-rail-item           // Rail entry: scrolls in App Settings, switches in the other two
+.set-section             // A settings section (`.hidden` on the inactive ones outside App Settings)
+.set-row                 // One setting: label + description left, control right
 .modal-content           // Modal content
 .modal-close             // Modal close button
 .header-brand .logo      // Logo text

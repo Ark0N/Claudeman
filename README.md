@@ -254,7 +254,7 @@ Click **+ New Session** (or **Quick Start**). A session is one AI CLI running in
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | **Working directory / case** | The folder the agent operates in. A "case" is just a named working dir Codeman remembers. **Add Case** creates one from scratch, links an existing folder, or clones a GitHub repo straight into one (**Clone Repo**). |
 | **CLI / run mode**           | `Claude` (default), `OpenCode`, `Codex`, `Antigravity`, `Gemini`, or `Terminal` (plain shell).                       |
-| **Model**                    | Per-session model (App Settings → Claude Model). A soft default — `/model` still works in-session.                  |
+| **Model**                    | Per-session model (App Settings → Models → New Claude sessions). A soft default — `/model` still works in-session.                  |
 | **Effort / Ultracode**       | Reasoning effort (`low`–`max`) or `ultracode` for dynamic multi-agent workflows. Switchable anytime with `/effort`. |
 
 Hit start — Codeman spawns the CLI via a real PTY and streams it to your browser over SSE.
@@ -278,7 +278,7 @@ Hit start — Codeman spawns the CLI via a real PTY and streams it to your brows
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | **Respawn**      | Long unattended runs — auto-restarts the CLI on idle/limit, with adaptive timing. Presets: `solo-work`, `overnight-autonomous`, … | Respawn tab                                                         |
 | **Orchestrator** | Turn one goal into a phased plan and drive it to completion across agents.                                                        | Orchestrator panel                                                  |
-| **Cron**         | Saved, named jobs on a schedule (`once`/`interval`/`daily`/`weekly`) that spawn a session and send a prompt when due.             | ⏰ Cron button _(opt-in: App Settings → Display → Header Displays)_ |
+| **Cron**         | Saved, named jobs on a schedule (`once`/`interval`/`daily`/`weekly`) that spawn a session and send a prompt when due.             | ⏰ Cron button _(opt-in: App Settings → Header & Panels → Scheduling)_ |
 | **Auto-resume**  | Automatically continue after a subscription rate-limit resets.                                                                    | Respawn tab (top)                                                   |
 
 ### 6. Reach it from anywhere
@@ -291,7 +291,7 @@ Hit start — Codeman spawns the CLI via a real PTY and streams it to your brows
 
 - **App Settings** — model, effort, permission startup mode, theme/skin, notifications, display toggles, per-CLI options, a synced custom display name, and per-device English/Simplified Chinese UI language.
 - **Run it in the background** — `codeman web -d` detaches from your shell (`--status`, `--stop`); `codeman service install` makes it a systemd user unit / macOS LaunchAgent that survives reboots. Both verify the server actually answers before reporting success, and both refuse to start a second server on one data dir. See [Keep it running in the background](#quick-start---installation).
-- **Self-update** — git-clone installs update in place from **Settings → Updates**.
+- **Self-update** — git-clone installs update in place from **App Settings → System → Updates**.
 - **Deploy your own changes** — see [Development](#development).
 
 > ⚠️ **Safety:** if you're working _inside_ a Codeman-managed session (`echo $CODEMAN_MUX` → `1`), never run `tmux kill-session` / `pkill claude` directly — use the web UI or `./scripts/tmux-manager.sh`.
@@ -427,7 +427,7 @@ PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xt
 ## More Features
 
 - **Background daemon & service install** — `codeman web -d` runs the server detached with a pidfile, `~/.codeman/web.log`, and verified startup (it polls the server until it answers, so a port clash never reads as success); `codeman service install` writes a systemd user unit (Linux) or LaunchAgent (macOS) with your shell's PATH baked in, so an nvm or Homebrew `node`, `tmux` and `claude` are actually found. Secrets are never written into unit files
-- **Self-update** — git-clone installs under systemd/launchd update in place from **App Settings → Updates**: it detects the latest release, auto-stashes a dirty tree, and streams build progress across the service restart (npm installs report as non-updatable)
+- **Self-update** — git-clone installs under systemd/launchd update in place from **App Settings → System → Updates**: it detects the latest release, auto-stashes a dirty tree, and streams build progress across the service restart (npm installs report as non-updatable)
 - **Clone a GitHub repo as a case** — paste a repository URL into **Add Case → Clone Repo** and Codeman clones it into `~/codeman-cases/<name>` and registers it as a normal case, ready to run an agent in. It preflights the URL while you type (tells you whether it can be cloned anonymously and offers the repo's real branches and tags for the optional branch/tag field), fills the case name in from the URL, and lets you pick which CLI the Run button should use. Public repositories over `https://`; Codeman never collects or stores credentials
 - **Multi-CLI** — run **Claude Code**, **OpenCode**, **Codex**, **Antigravity**, or **Gemini** per session; env-var prefixes auto-gate (`CLAUDE_CODE_*` vs `OPENCODE_*` vs `CODEX_*` vs `ANTIGRAVITY_*` vs `GEMINI_*`/`GOOGLE_*`). See [`docs/opencode-integration.md`](docs/opencode-integration.md)
 - **Docker sessions** — run a case inside an isolated, hardened container. One checkbox on **Create New** spins up a container with sensible defaults and starts the agent inside it; multiple sessions share one per-case container; export a container + its workspace to a portable `.tar.gz` to move it to another machine. See [`docs/docker-cases.md`](docs/docker-cases.md)
@@ -435,9 +435,9 @@ PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xt
 - **Effort & Ultracode** — set a per-session default effort (`low`–`max`) or enable **ultracode** (dynamic multi-agent workflows). Soft defaults only — switchable anytime with `/effort` in-session. Extended-thinking budget is configurable too
 - **Voice input** — dictate prompts with Deepgram Nova-3 (Web Speech API fallback): toggle recording, auto-silence stop, live level meter (`Ctrl+Shift+V`)
 - **Image input** — paste or drag-and-drop images straight into a session
-- **Gesture control** _(opt-in)_ — a MediaPipe hand-tracking overlay to grab/drag session windows and pinch buttons, hands-free. Enable with `CODEMAN_GESTURE=1` + App Settings → Display
+- **Gesture control** _(opt-in)_ — a MediaPipe hand-tracking overlay to grab/drag session windows and pinch buttons, hands-free. Enable with `CODEMAN_GESTURE=1` + App Settings → Terminal & Input
 - **Multi-monitor span** _(macOS)_ — one click opens a browser window maximized across all displays, so floating agent/gesture panels can cross the physical seam
-- **File Viewer button** _(opt-in)_ — a header button that toggles the built-in file browser panel with one tap; enable under App Settings → Display → Header Displays
+- **File Viewer button** _(opt-in)_ — a header button that toggles the built-in file browser panel with one tap; enable under App Settings → Header & Panels → Header buttons
 - **CJK / IME input** — full composition support for Chinese / Japanese / Korean
 - **OS notifications & hostname-aware titles** — desktop alerts and tab titles are prefixed `codeman:<host>` so multi-host setups stay unambiguous
 
@@ -521,7 +521,7 @@ The script auto-installs a systemd user service on first run. The tunnel URL is 
 systemctl --user enable codeman-tunnel
 loginctl enable-linger $USER
 
-# Or via the Codeman web UI: Settings → Tunnel → Toggle On
+# Or via the Codeman web UI: App Settings → System → Remote access → Cloudflare Tunnel
 ```
 
 </details>
@@ -623,7 +623,7 @@ By default Codeman launches sessions with `--dangerously-skip-permissions`, so t
 - **Loopback by default** — the server binary binds `127.0.0.1`, reachable only from the same machine, so the no-password default is safe out of the box (the guided installer asks about network access and configures the binding + password for you). Binding a non-loopback host without `CODEMAN_PASSWORD` _starts but prints a loud warning_ with three concrete fixes (set a password, loopback + an authenticated tunnel, or explicitly acknowledge with `--allow-unauthenticated-network`)
 - **Optional auth, real sessions** — HTTP Basic via `CODEMAN_USERNAME` (default `admin`) / `CODEMAN_PASSWORD`. Success issues an opaque 256-bit `codeman_session` cookie (`randomBytes(32)`) — validated server-side, not client-signed, so it can't be forged offline (24h TTL, auto-extend, device-context audit log)
 - **Per-IP rate limiting** — 10 failed attempts → `429` with `Retry-After` (15-min decay). A valid cookie or correct password recovers _immediately_ even while an attacker hammers the same IP — important because all tunnel traffic shares one loopback IP. QR auth has its own separate limiter
-- **Configurable permission mode** - `--dangerously-skip-permissions` is only the default. **App Settings → Claude CLI → Startup Mode** can switch new sessions to Anthropic's classifier-guarded `auto` mode (low-prompt, needs Claude Code 2.1.207+), `normal` prompting, or an explicit allowed-tools list. In multi-user mode, non-granted users are forced to `auto`, and shell sessions / skip-permissions require an explicit per-user grant
+- **Configurable permission mode** - `--dangerously-skip-permissions` is only the default. **App Settings → Agents & CLIs → Claude → Startup Mode** can switch new sessions to Anthropic's classifier-guarded `auto` mode (low-prompt, needs Claude Code 2.1.207+), `normal` prompting, or an explicit allowed-tools list. In multi-user mode, non-granted users are forced to `auto`, and shell sessions / skip-permissions require an explicit per-user grant
 
 ### Always-on browser hardening (v0.9.5)
 
@@ -696,7 +696,7 @@ For AI agents and automation that control Codeman without a browser: an agent th
 >
 > - `npx skills add Ark0N/Codeman --skill codeman -g`: global, works for any skills-aware agent
 > - `codeman skill install` (global) or `codeman skill install --case <name>`: for npm installs that never cloned the repo; `codeman skill uninstall` reverses it
-> - **App Settings → Agent Skill** (`agentSkillEnabled`, default off): Codeman then injects the skill into each case on Claude session create; a user-authored `skills/codeman` in the case is never overwritten
+> - **App Settings → Agents & CLIs → Claude → Agent Skill** (`agentSkillEnabled`, default off): Codeman then injects the skill into each case on Claude session create; a user-authored `skills/codeman` in the case is never overwritten
 >
 > A global install (`codeman skill install`, or `npx skills add`) is picked up by **every new Claude Code session on the machine**, inside Codeman or not. The skill self-gates: outside a Codeman session (`CODEMAN_MUX` unset) it refuses to act, so a global install costs an idle session nothing.
 >
