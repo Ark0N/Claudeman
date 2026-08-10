@@ -397,7 +397,27 @@
               </div>
               <div class="search-results" id="searchResults" hidden></div>
             </div>
-            <h3 class="history-title" id="historyTitle">Resume Conversation</h3>
+            <div class="history-header" id="historyHeader">
+              <h3 class="history-title" id="historyTitle">Resume Conversation</h3>
+              <span class="history-count" id="historyCount" data-i18n-skip></span>
+              <div class="history-controls">
+                <input
+                  type="search"
+                  id="historyFilter"
+                  class="history-filter"
+                  placeholder="Filter…"
+                  autocomplete="off"
+                  spellcheck="false"
+                  maxlength="100"
+                  aria-label="Filter past conversations"
+                />
+                <select id="historySort" class="search-select history-sort" aria-label="Sort past conversations">
+                  <option value="recent">Recent</option>
+                  <option value="name">Name A–Z</option>
+                  <option value="folder">Folder A–Z</option>
+                </select>
+              </div>
+            </div>
             <div class="history-list" id="historyList"></div>
           </div>
           <p class="welcome-hint">Or click Run to start</p>
@@ -1273,778 +1293,837 @@
     <!-- App Settings Modal -->
     <div class="modal" id="appSettingsModal">
       <div class="modal-backdrop" onclick="app.closeAppSettings()"></div>
-      <div class="modal-content modal-lg">
-        <div class="modal-header">
-          <h3>App Settings</h3>
-          <button class="modal-close" onclick="app.closeAppSettings()" aria-label="Close app settings">&times;</button>
-        </div>
-        <div class="modal-tabs">
-          <button class="modal-tab-btn active" data-tab="settings-display">Display</button>
-          <button class="modal-tab-btn" data-tab="settings-claude">Claude CLI</button>
-          <button class="modal-tab-btn" data-tab="settings-codex">Codex CLI</button>
-          <button class="modal-tab-btn" data-tab="settings-models">Models</button>
-          <button class="modal-tab-btn" data-tab="settings-paths">Paths</button>
-          <button class="modal-tab-btn" data-tab="settings-notifications">Notifications</button>
-          <button class="modal-tab-btn" data-tab="settings-voice">Voice</button>
-          <button class="modal-tab-btn" data-tab="settings-shortcuts">Shortcuts</button>
-        </div>
-        <div class="modal-body">
-          <!-- Display Tab -->
-          <div class="modal-tab-content" id="settings-display">
-            <div class="settings-grid">
-              <!-- Branding & Language Section -->
-              <div class="settings-section-header">Branding &amp; Language</div>
-              <div class="settings-item" title="Name shown in the browser UI and window title. Supports Unicode, including Chinese.">
-                <span class="settings-item-label">Display Name</span>
-                <input type="text" id="appSettingsDisplayName" class="settings-inline-input" maxlength="40" placeholder="Codeman" autocomplete="off">
-              </div>
-              <div class="settings-item" title="Language for this device. Dynamic status messages and dialogs use the same language.">
-                <span class="settings-item-label">Interface Language</span>
-                <select id="appSettingsLanguage" class="form-select settings-inline-select">
-                  <option value="en">English</option>
-                  <option value="zh-CN">简体中文</option>
-                </select>
-              </div>
-
-              <!-- Appearance Section -->
-              <div class="settings-section-header">Appearance</div>
-              <div class="settings-item settings-item-skin" title="Visual theme for this device (not synced)">
-                <span class="settings-item-label">Skin</span>
-                <select id="appSettingsSkin" class="form-select">
-                  <optgroup label="Light">
-                    <option value="paper-gray">Paper Gray</option>
-                    <option value="solarized-light">Solarized Light</option>
-                    <option value="catppuccin-latte">Catppuccin Latte</option>
-                    <option value="rose-pine-dawn">Rosé Pine Dawn</option>
-                  </optgroup>
-                  <optgroup label="Dark">
-                    <option value="daylight-blue">Daylight Blue</option>
-                    <option value="daylight-green">Daylight Green</option>
-                    <option value="og">OG Codeman</option>
-                  </optgroup>
-                </select>
-              </div>
-              <div class="settings-item settings-item-multiline" title="How new session tabs, the terminal pane, agent windows and their connection lines appear. This device only. For per-surface control and a live preview, add ?animlab=1 to the URL.">
-                <div class="settings-item-text">
-                  <span class="settings-item-label">Entrance Animations</span>
-                  <span class="settings-item-desc">How new tabs, panes and agent windows arrive</span>
-                </div>
-                <select id="appSettingsEntranceAnim" class="form-select settings-inline-select">
-                  <option value="legacy">Off (default)</option>
-                  <option value="terminal">Terminal (CRT)</option>
-                  <option value="beamdown">Beam down</option>
-                  <option value="quiet">Quiet</option>
-                  <option value="playful">Playful</option>
-                  <option value="custom">Custom (set in the lab)</option>
-                </select>
-              </div>
-              <div class="settings-item" id="appSettingsWebglRendererItem" title="Use the GPU-accelerated WebGL terminal renderer (desktop only). Turn off to force the DOM renderer if you hit GPU glitches. Codeman also auto-falls-back to the DOM renderer after repeated GPU stalls.">
-                <span class="settings-item-label">WebGL Renderer</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsWebglRenderer">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <!-- Input Section -->
-              <div class="settings-section-header">Input</div>
-              <div class="settings-item settings-item-multiline" title="Scroll the terminal's own local scrollback with a plain mouse wheel / two-finger swipe, instead of forwarding the wheel to the CLI's transcript. Only Claude sessions forward, so this setting only affects them: Claude redraws the screen in place and keeps almost no local scrollback, so with this ON the wheel has little to scroll and Codeman falls back to paging Claude's own transcript. Codex, Gemini, shell and OpenCode sessions always scroll local scrollback. Shift+wheel always reaches local scrollback regardless.">
-                <div class="settings-item-text">
-                  <span class="settings-item-label">Wheel Scrolls Local History</span>
-                  <span class="settings-item-desc">Plain wheel/trackpad pages the terminal scrollback</span>
-                </div>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsTerminalWheelLocal">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item settings-item-multiline" title="Shows typed characters instantly via overlay while forwarding keystrokes to the server in the background. Enables Tab completion, preserves input across tab switches, and protects against session crashes. Recommended for mobile and high-latency connections.">
-                <div class="settings-item-text">
-                  <span class="settings-item-label">Local Echo</span>
-                  <span class="settings-item-desc">Instant typing feedback with local echo</span>
-                </div>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsLocalEcho">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item settings-item-multiline" title="Show a dedicated input field below the terminal for CJK (Chinese/Japanese/Korean) IME composition. Recommended for mobile devices with Chinese input methods where xterm's native input handling may drop characters.">
-                <div class="settings-item-text">
-                  <span class="settings-item-label">CJK Input</span>
-                  <span class="settings-item-desc">Dedicated IME input field for CJK languages</span>
-                </div>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsCjkInput">
-                  <span class="slider"></span>
-                </label>
-              </div>
-
-              <div class="settings-item settings-item-multiline" title="Show additional buttons (Tab, Shift+Tab, Ctrl+O, Esc, Alt+Enter, left/right arrows) in the mobile keyboard accessory bar.">
-                <div class="settings-item-text">
-                  <span class="settings-item-label">Extended Keyboard Bar</span>
-                  <span class="settings-item-desc">Extra keys: Tab, Esc, arrows, Ctrl+O</span>
-                </div>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsExtendedKeyboardBar">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item settings-item-multiline" id="appSettingsGestureControlItem" title="Enable the camera hand-tracking gesture overlay (applied on reload). The instance must run with CODEMAN_GESTURE=1.">
-                <div class="settings-item-text">
-                  <span class="settings-item-label">Gesture Control (beta)</span>
-                  <span class="settings-item-desc">Camera hand-tracking overlay (applied on reload)</span>
-                </div>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsGestureControl">
-                  <span class="slider"></span>
-                </label>
-              </div>
-
-              <!-- Header Displays Section -->
-              <div class="settings-section-header">Header Displays</div>
-              <div class="settings-item" title="Show Claude plan usage limits (5-hour & weekly) in the header. Applies to newly created sessions.">
-                <span class="settings-item-label">Plan Usage Limits</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsShowPlanUsageLimits">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Show A-/A+ font size buttons in header">
-                <span class="settings-item-label">Font Controls</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsShowFontControls">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Show CPU and memory usage in header">
-                <span class="settings-item-label">System Stats</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsShowSystemStats" checked>
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Show session lifecycle log button in header">
-                <span class="settings-item-label">Lifecycle Log</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsShowLifecycleLog">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Show the response viewer (eye) button in header">
-                <span class="settings-item-label">Response Viewer</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsShowResponseViewer">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Show the file viewer button in header (opens the file browser panel for the active session)">
-                <span class="settings-item-label">File Viewer</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsShowFileViewerButton">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Show the attachments button in header (opens the attachment history drawer)">
-                <span class="settings-item-label">Attachments Button</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsShowAttachmentsButton">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Show the multi-monitor button in the header (opens Codeman spanned across all displays)">
-                <span class="settings-item-label">Multi-monitor Button</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsShowMultiMonitorButton">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Show the session manager button in the header (opens the session manager — sessions also stay reachable via the Ctrl+K palette)">
-                <span class="settings-item-label">Session Manager Button</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsShowSessionButton">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Show the away digest button in the header (opens the 'what happened while you were away' summary)">
-                <span class="settings-item-label">Away Digest Button</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsShowAwayDigestButton">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Show the Cron button in the footer toolbar (opens the cron jobs manager)">
-                <span class="settings-item-label">Cron Button</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsShowCronButton">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Show a terminal redraw button in the header — refit the terminal to the current screen size (useful when switching between devices)">
-                <span class="settings-item-label">Redraw Terminal Button</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsShowRedrawButton">
-                  <span class="slider"></span>
-                </label>
-              </div>
-
-              <!-- Phone Section (only meaningful under 430px, hidden elsewhere by settings-ui.js) -->
-              <div class="settings-section-header" id="appSettingsPhoneSection">Phone</div>
-              <div class="settings-item" id="appSettingsMobileOverviewItem" title="On phones, the C logo opens a session overview (needs you / spaces / idle) instead of the welcome screen">
-                <span class="settings-item-label">Overview Home Screen</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsMobileOverview" checked>
-                  <span class="slider"></span>
-                </label>
-              </div>
-
-              <!-- Tab Bar Section -->
-              <div class="settings-section-header">Tab Bar</div>
-              <div class="settings-item" title="Show folder path below tab name and allow tab bar to wrap into multiple rows">
-                <span class="settings-item-label">Tall Tabs (Name + Folder)</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsTabTwoRows">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Show the open-in-new-window (pop-out) button when hovering a session tab">
-                <span class="settings-item-label">Pop-out Button on Tabs</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsShowTabDetachButton">
-                  <span class="slider"></span>
-                </label>
-              </div>
-
-              <!-- Panels Section -->
-              <div class="settings-section-header">Panels</div>
-              <div class="settings-item" title="Show Monitor panel at bottom right">
-                <span class="settings-item-label">Monitor</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsShowMonitor" checked>
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Show active tools and file viewers in a floating panel">
-                <span class="settings-item-label">Project Insights</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsShowProjectInsights">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Show file browser panel on the right side">
-                <span class="settings-item-label">File Browser</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsShowFileBrowser">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Show the Subagents panel (independent from Monitor)">
-                <span class="settings-item-label">Subagents</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsShowSubagents">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Cross-session inbox of prompts waiting on you (permission dialogs, questions, idle prompts) with answer-in-place buttons; the header bell appears only while something is pending">
-                <span class="settings-item-label">Approvals Inbox</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsApprovalsInbox">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Read My Mind: capture your submitted prompts into a per-case intent profile and predict your next prompt on demand (header 🧠 button on Claude sessions). Predictions cost tokens and are never auto-sent">
-                <span class="settings-item-label">Read My Mind</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsReadMyMind">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Show ultracode / Workflow runs as a master-detail tab (tasks on the left, agents with tokens + tool calls on the right)">
-                <span class="settings-item-label">Ultracode Agents</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsShowUltracodeAgents">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Pop a floating window for each active ultracode / Workflow run, connected by a line to its session tab (additional to the Ultracode Agents panel)">
-                <span class="settings-item-label">Ultracode Floating Windows</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsUltracodeFloatingWindows">
-                  <span class="slider"></span>
-                </label>
-              </div>
-
-              <!-- Subagent Options Section -->
-              <div class="settings-section-header">Subagent Options</div>
-              <div class="settings-item" title="Monitor Claude Code background agents in real-time">
-                <span class="settings-item-label">Enable Tracking</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsSubagentTracking" checked>
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Only show subagent windows when their parent tab is selected">
-                <span class="settings-item-label">Active Tab Only</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsSubagentActiveTabOnly" checked>
-                  <span class="slider"></span>
-                </label>
-              </div>
-
-              <!-- Image Watcher Options Section -->
-              <div class="settings-section-header">Image Watcher</div>
-              <div class="settings-item" title="Automatically detect and popup new images in session directories">
-                <span class="settings-item-label">Enable Globally</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsImageWatcherEnabled">
-                  <span class="slider"></span>
-                </label>
-              </div>
-
-              <!-- Remote Access Section -->
-              <div class="settings-section-header">Remote Access</div>
-              <div class="settings-item" title="Expose Codeman via Cloudflare Tunnel for remote access">
-                <span class="settings-item-label">Cloudflare Tunnel</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsTunnelEnabled">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" id="tunnelUrlRow" style="display:none">
-                <span class="settings-item-label">Tunnel URL</span>
-                <div style="display:flex; align-items:center; gap:8px">
-                  <span id="tunnelUrlDisplay" class="settings-item-value" style="cursor:pointer; text-decoration:underline; font-family:monospace; font-size:12px" title="Click to copy"></span>
-                  <button class="btn-icon-sm" id="tunnelQrBtn" onclick="app.showTunnelQR()" title="Show QR code" style="font-size:16px; padding:2px 6px; background:none; border:1px solid var(--border); border-radius:4px; cursor:pointer; color:var(--text-secondary)">⊞</button>
-                </div>
-              </div>
-              <div class="settings-item" id="tunnelUploadUrlRow" style="display:none">
-                <span class="settings-item-label">Upload URL</span>
-                <span id="tunnelUploadUrlDisplay" class="settings-item-value" style="cursor:pointer; text-decoration:underline; font-family:monospace; font-size:12px" title="Click to copy"></span>
-              </div>
-
-              <!-- Updates Section -->
-              <div class="settings-section-header">Updates</div>
-              <div class="settings-item" title="Codeman version currently running">
-                <span class="settings-item-label">Current Version</span>
-                <span class="settings-item-value" id="updateCurrentVersion" style="font-family:monospace">&mdash;</span>
-              </div>
-              <div class="settings-item" id="updateCheckRow" title="Check GitHub for a newer Codeman release">
-                <span class="settings-item-label">Check for Updates</span>
-                <button class="btn-toolbar btn-sm" id="updateCheckBtn" onclick="app.checkForUpdate()">Check now</button>
-              </div>
-              <div id="updateResult" style="display:none; padding:4px 2px 8px; font-size:13px; color:var(--text-secondary)"></div>
-              <div class="settings-item" id="updateActionRow" style="display:none">
-                <span class="settings-item-label" id="updateActionLabel">Update available</span>
-                <button class="btn-toolbar btn-sm btn-primary" id="updateNowBtn" onclick="app.startSelfUpdate()">Update now</button>
-              </div>
-              <div id="updateNotes" style="display:none; max-height:160px; overflow:auto; padding:8px 10px; margin:4px 0 8px; font-size:12px; line-height:1.45; white-space:pre-wrap; word-break:break-word; background:rgba(127,127,127,0.08); border:1px solid var(--border); border-radius:6px"></div>
-              <div id="updateProgress" style="display:none; padding:8px 10px; margin:4px 0 8px; font-size:13px; border:1px solid var(--border); border-radius:6px"></div>
-
-            </div>
-          </div>
-          <!-- Tab-Switch Tab -->
-          <!-- Claude CLI Tab -->
-          <div class="modal-tab-content hidden" id="settings-claude">
-            <div class="form-row">
-              <label>Startup Mode</label>
-              <select id="appSettingsClaudeMode" class="form-select">
-                <option value="dangerously-skip-permissions">Skip Permissions (default)</option>
-                <option value="auto">Auto (classifier-guarded, low prompts)</option>
-                <option value="normal">Normal (with prompts)</option>
-                <option value="allowedTools">Allowed Tools Only</option>
-              </select>
-              <span class="form-hint">How Claude CLI is started in screen sessions. Auto Mode runs without routine prompts behind a background safety classifier (needs Claude Code 2.1.207+ and Opus 4.6+/Sonnet 4.6+/Fable 5)</span>
-            </div>
-            <div class="form-row" id="allowedToolsRow" style="display: none;">
-              <label>Allowed Tools</label>
-              <input type="text" id="appSettingsAllowedTools" placeholder="Read,Glob,Grep,Bash">
-              <span class="form-hint">Comma-separated list of tools to allow</span>
-            </div>
-            <div class="form-row form-row-switch">
-              <label>Enable Ralph / Todo Tracker</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsRalphEnabled">
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Auto-enable for new sessions (otherwise auto-enables on Ralph pattern detection)</span>
-            </div>
-            <!-- Claude Permissions Section -->
-            <div class="form-section-header">Claude Permissions</div>
-            <div class="form-row form-row-switch">
-              <label>Agent Teams</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsAgentTeams">
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Enable experimental Agent Teams for all new Claude sessions (disabled by default)</span>
-            </div>
-            <div class="form-row form-row-switch">
-              <label>Agent Skill</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsAgentSkill">
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Give new Claude sessions the Codeman skill (start workers, send prompts, wait for results via the API)</span>
-            </div>
-            <div class="form-row">
-              <label>Claude Model</label>
-              <select id="appSettingsClaudeModel" class="form-select">
-                <option value="">Default (CLI setting)</option>
-                <option value="claude-fable-5[1m]">Fable 5 (1M context)</option>
-                <option value="claude-fable-5">Fable 5</option>
-                <option value="opus[1m]">Opus (1M context)</option>
-                <option value="opus">Opus</option>
-                <option value="claude-opus-4-6[1m]">Opus 4.6 (1M context)</option>
-                <option value="claude-opus-4-6">Opus 4.6</option>
-                <option value="sonnet">Sonnet</option>
-                <option value="haiku">Haiku</option>
-              </select>
-              <span class="form-hint">Model for new Claude sessions (pinned via the case's .claude/settings.local.json) — takes precedence over the 1M Opus toggle below</span>
-            </div>
-            <div class="form-row form-row-switch">
-              <label>1M Opus Context</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsOpusContext1m">
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Use 1M token context window (model: opus[1m]) for all new sessions — ignored when a Claude Model is selected above</span>
-            </div>
-            <div class="form-row form-row-switch">
-              <label>Remote auto-reconnect</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsRemoteAutoReconnect">
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Automatically re-establish remote (SSH) sessions when the connection drops, reattaching to the durable remote tmux session (on by default; bounded backoff)</span>
-            </div>
-            <div class="form-row">
-              <label>Thinking Effort</label>
-              <select id="appSettingsThinkingEffort" class="form-select">
-                <option value="">Default</option>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-                <option value="xhigh">XHigh</option>
-                <option value="max">Max</option>
-                <option value="ultracode">Ultracode (multi-agent workflows)</option>
-              </select>
-              <span class="form-hint">Default effort for new Claude sessions — soft default, switchable anytime in-session via /effort (e.g. /effort ultracode)</span>
-            </div>
-            <!-- Nice Priority Section -->
-            <div class="form-section-header">Nice Priority</div>
-            <div class="form-row form-row-switch">
-              <label>Enable Nice Priority Reduction</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsNiceEnabled">
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Lower priority of Claude sessions (reduces system impact, only affects new sessions)</span>
-            </div>
-            <div class="form-row" id="niceValueRow">
-              <label>Nice Value</label>
-              <input type="number" id="appSettingsNiceValue" min="-20" max="19" value="10" style="width: 80px;">
-              <span class="form-hint">Process priority (-20 to 19, higher = lower priority, default: 10)</span>
-            </div>
-          </div>
-          <!-- Codex CLI Tab -->
-          <div class="modal-tab-content hidden" id="settings-codex">
-            <div class="form-section-header">Codex CLI</div>
-            <div class="form-row form-row-switch">
-              <label>Bypass Approvals and Sandbox</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsCodexDangerouslyBypassApprovals">
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Start new Codex sessions with --dangerously-bypass-approvals-and-sandbox</span>
-            </div>
-            <div class="form-row form-row-switch">
-              <label>Animated Status Effects</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsCodexAnimations">
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Decorative Codex TUI motion for new local sessions. Leave off to reduce remote and mobile redraws.</span>
-            </div>
-          </div>
-          <!-- Models Tab -->
-          <div class="modal-tab-content hidden" id="settings-models">
-            <div class="form-row">
-              <label>Default Model</label>
-              <select id="appSettingsDefaultModel" class="form-select">
-                <option value="">Default (CLI default)</option>
-                <option value="claude-fable-5">Fable 5 (Most powerful)</option>
-                <option value="opus">Opus (Most capable)</option>
-                <option value="sonnet">Sonnet (Balanced)</option>
-                <option value="haiku">Haiku (Fast & cheap)</option>
-              </select>
-              <span class="form-hint">Model used for execution tasks. Optimizer suggestions are advisory only.</span>
-            </div>
-            <div class="form-row form-row-switch">
-              <label>Show Optimizer Recommendations</label>
-              <label class="switch">
-                <input type="checkbox" id="appSettingsShowModelRecommendations" checked>
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Show what the optimizer recommends (doesn't override your choice)</span>
-            </div>
-            <div class="form-section-header">Agent Type Overrides</div>
-            <p class="form-hint" style="margin: 0 0 12px 0;">Optionally set specific models for each task type. Leave as "Use Default" to use your default model.</p>
-            <div class="form-row">
-              <label>Explore Tasks</label>
-              <select id="appSettingsModelExplore" class="form-select">
-                <option value="">Use Default</option>
-                <option value="haiku">Haiku</option>
-                <option value="sonnet">Sonnet</option>
-                <option value="opus">Opus</option>
-                <option value="claude-fable-5">Fable 5</option>
-              </select>
-              <span class="form-hint">Quick searches, codebase exploration</span>
-            </div>
-            <div class="form-row">
-              <label>Implement Tasks</label>
-              <select id="appSettingsModelImplement" class="form-select">
-                <option value="">Use Default</option>
-                <option value="haiku">Haiku</option>
-                <option value="sonnet">Sonnet</option>
-                <option value="opus">Opus</option>
-                <option value="claude-fable-5">Fable 5</option>
-              </select>
-              <span class="form-hint">Code writing, feature implementation</span>
-            </div>
-            <div class="form-row">
-              <label>Test Tasks</label>
-              <select id="appSettingsModelTest" class="form-select">
-                <option value="">Use Default</option>
-                <option value="haiku">Haiku</option>
-                <option value="sonnet">Sonnet</option>
-                <option value="opus">Opus</option>
-                <option value="claude-fable-5">Fable 5</option>
-              </select>
-              <span class="form-hint">Writing and running tests</span>
-            </div>
-            <div class="form-row">
-              <label>Review Tasks</label>
-              <select id="appSettingsModelReview" class="form-select">
-                <option value="">Use Default</option>
-                <option value="haiku">Haiku</option>
-                <option value="sonnet">Sonnet</option>
-                <option value="opus">Opus</option>
-                <option value="claude-fable-5">Fable 5</option>
-              </select>
-              <span class="form-hint">Code review, quality checks</span>
-            </div>
-          </div>
-          <!-- Paths Tab -->
-          <div class="modal-tab-content hidden" id="settings-paths">
-            <div class="form-row">
-              <label>Default CLAUDE.md Template</label>
-              <input type="text" id="appSettingsClaudeMdPath" placeholder="/path/to/CLAUDE.md template">
-              <span class="form-hint">Used when creating new cases. Leave empty for built-in template.</span>
-            </div>
-            <div class="form-row">
-              <label>Default Working Directory</label>
-              <input type="text" id="appSettingsDefaultDir" placeholder="~/projects">
-              <span class="form-hint">Default directory for new sessions.</span>
-            </div>
-          </div>
-          <!-- Notifications Tab -->
-          <div class="modal-tab-content hidden" id="settings-notifications">
-            <div class="settings-grid">
-              <!-- Master Control Section -->
-              <div class="settings-section-header">Master Control</div>
-              <div class="settings-item" title="Master toggle for all notification layers">
-                <span class="settings-item-label">Enable Notifications</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsNotifEnabled" checked>
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Show OS-level notifications when tab is hidden">
-                <span class="settings-item-label">Browser</span>
-                <div class="settings-item-actions">
-                  <label class="switch switch-sm">
-                    <input type="checkbox" id="appSettingsNotifBrowser">
-                    <span class="slider"></span>
-                  </label>
-                  <button class="btn-toolbar btn-sm" onclick="app.notificationManager?.requestPermission()" title="Request browser notification permission">Ask</button>
-                  <span class="settings-status" id="notifPermissionStatus">?</span>
-                </div>
-              </div>
-              <span class="form-hint" style="grid-column: 1 / -1; margin-top: -8px;">For remote access, HTTPS is required. Start with: <code>codeman web --https</code></span>
-
-              <div class="settings-item" title="OS-level push notifications — works even when tab is closed">
-                <span class="settings-item-label">Push</span>
-                <div class="settings-item-actions">
-                  <label class="switch switch-sm">
-                    <input type="checkbox" id="appSettingsPushEnabled">
-                    <span class="slider"></span>
-                  </label>
-                  <button class="btn-toolbar btn-sm" id="pushSubscribeBtn" onclick="app.togglePushSubscription()" title="Subscribe/unsubscribe to push notifications">Subscribe</button>
-                  <span class="settings-status" id="pushSubscriptionStatus">off</span>
-                </div>
-              </div>
-              <span class="form-hint" style="grid-column: 1 / -1; margin-top: -8px;">Works through Cloudflare tunnel. Requires HTTPS or localhost. iOS requires PWA (Add to Home Screen).</span>
-
-              <!-- Alerts Section -->
-              <div class="settings-section-header">Alerts</div>
-              <div class="settings-item" title="Play a short beep for critical events">
-                <span class="settings-item-label">Audio Alerts</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsNotifAudio">
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Notify when a session is idle longer than this">
-                <span class="settings-item-label">Idle Threshold</span>
-                <div class="settings-item-actions">
-                  <input type="number" id="appSettingsNotifStuckMins" class="settings-item-input" value="10" min="1" max="120">
-                  <span style="font-size: 0.65rem; color: var(--text-muted);">min</span>
-                </div>
-              </div>
-
-              <!-- Notification Levels Section -->
-              <div class="settings-section-header">Notification Levels</div>
-            </div>
-            <div class="settings-grid settings-grid-3col">
-              <div class="settings-item" title="Errors, crashes, agent failures">
-                <span class="settings-item-label">Critical</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsNotifCritical" checked>
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Completions, budget warnings, stuck sessions">
-                <span class="settings-item-label">Warning</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsNotifWarning" checked>
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="settings-item" title="Auto-accepts, auto-clears, agent completions">
-                <span class="settings-item-label">Info</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsNotifInfo" checked>
-                  <span class="slider"></span>
-                </label>
-              </div>
-            </div>
-
-            <!-- Event Type Preferences -->
-            <div class="settings-grid" style="margin-top: 12px;">
-              <div class="settings-section-header">Per-Event Settings</div>
-            </div>
-            <div class="event-type-grid">
-              <div class="event-header">Event</div>
-              <div class="event-header">On</div>
-              <div class="event-header">Browser</div>
-              <div class="event-header">Push</div>
-              <div class="event-header">Sound</div>
-
-              <div class="event-label">Permission prompts</div>
-              <input type="checkbox" id="eventPermissionEnabled" checked>
-              <input type="checkbox" id="eventPermissionBrowser" checked>
-              <input type="checkbox" id="eventPermissionPush" checked>
-              <input type="checkbox" id="eventPermissionAudio" checked>
-
-              <div class="event-label">Questions from Claude</div>
-              <input type="checkbox" id="eventQuestionEnabled" checked>
-              <input type="checkbox" id="eventQuestionBrowser" checked>
-              <input type="checkbox" id="eventQuestionPush" checked>
-              <input type="checkbox" id="eventQuestionAudio" checked>
-
-              <div class="event-label">Session idle</div>
-              <input type="checkbox" id="eventIdleEnabled" checked>
-              <input type="checkbox" id="eventIdleBrowser" checked>
-              <input type="checkbox" id="eventIdlePush">
-              <input type="checkbox" id="eventIdleAudio">
-
-              <div class="event-label">Response complete</div>
-              <input type="checkbox" id="eventStopEnabled">
-              <input type="checkbox" id="eventStopBrowser">
-              <input type="checkbox" id="eventStopPush">
-              <input type="checkbox" id="eventStopAudio">
-
-              <div class="event-label">Respawn cycles</div>
-              <input type="checkbox" id="eventRespawnEnabled" checked>
-              <input type="checkbox" id="eventRespawnBrowser">
-              <input type="checkbox" id="eventRespawnPush">
-              <input type="checkbox" id="eventRespawnAudio">
-
-              <div class="event-label">Task complete</div>
-              <input type="checkbox" id="eventRalphEnabled" checked>
-              <input type="checkbox" id="eventRalphBrowser" checked>
-              <input type="checkbox" id="eventRalphPush">
-              <input type="checkbox" id="eventRalphAudio" checked>
-
-              <div class="event-label">Subagent activity</div>
-              <input type="checkbox" id="eventSubagentEnabled">
-              <input type="checkbox" id="eventSubagentBrowser">
-              <input type="checkbox" id="eventSubagentPush">
-              <input type="checkbox" id="eventSubagentAudio">
-            </div>
-          </div>
-
-          <!-- Voice Tab -->
-          <div class="modal-tab-content hidden" id="settings-voice">
-            <div class="settings-grid">
-              <div class="settings-section-header">Provider</div>
-              <div class="settings-item">
-                <span class="settings-item-label">Active Provider</span>
-                <span class="voice-provider-status" id="voiceProviderStatus">—</span>
-              </div>
-
-              <div class="settings-section-header">Behavior</div>
-              <div class="settings-item" style="grid-column: 1 / -1;">
-                <span class="settings-item-label">Insert mode</span>
-                <select id="voiceInsertMode" class="form-select" style="width: auto;">
-                  <option value="direct">Direct to input</option>
-                  <option value="compose">Compose dialog</option>
-                </select>
-              </div>
-
-              <div class="settings-section-header">Deepgram Nova-3</div>
-              <div class="form-row" style="grid-column: 1 / -1;">
-                <label for="voiceDeepgramKey">API Key</label>
-                <div style="display: flex; gap: 6px; align-items: center;">
-                  <input type="password" id="voiceDeepgramKey" placeholder="Enter Deepgram API key" autocomplete="off" style="flex: 1; width: 100%; padding: 0.5rem 0.75rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 0.8rem; font-family: inherit;">
-                  <button class="btn-toolbar btn-sm" onclick="app.toggleDeepgramKeyVisibility()" id="voiceKeyToggleBtn" type="button">Show</button>
-                </div>
-                <span class="form-hint">Stored locally only, never sent to server. Get a key at <a href="https://console.deepgram.com" target="_blank" rel="noopener" style="color: var(--accent);">console.deepgram.com</a></span>
-              </div>
-
-              <div class="form-row" style="grid-column: 1 / -1;">
-                <label for="voiceLanguage">Language</label>
-                <select id="voiceLanguage" class="form-select">
-                  <option value="en-US">English (US)</option>
-                  <option value="en-GB">English (UK)</option>
-                  <option value="es">Spanish</option>
-                  <option value="fr">French</option>
-                  <option value="de">German</option>
-                  <option value="ja">Japanese</option>
-                  <option value="multi">Auto-detect (multi)</option>
-                </select>
-              </div>
-
-              <div class="form-row" style="grid-column: 1 / -1;">
-                <label for="voiceKeyterms">Domain Keywords</label>
-                <input type="text" id="voiceKeyterms" placeholder="codeman, tmux, respawn, subagent" style="width: 100%; padding: 0.5rem 0.75rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 0.8rem; font-family: inherit;">
-                <span class="form-hint">Comma-separated terms to boost recognition accuracy</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Shortcuts tab -->
-          <div class="modal-tab-content hidden" id="settings-shortcuts">
-            <div class="settings-grid">
-              <div class="settings-section-header" style="grid-column: 1 / -1;">Keyboard Shortcuts</div>
-              <p class="form-hint" style="grid-column: 1 / -1; margin: 0 0 0.5rem;">
-                Customize keyboard shortcuts. Click the binding to capture a new key combination.
-              </p>
-              <div id="appSettingsShortcutsList" style="grid-column: 1 / -1;">
-                <!-- Populated by app.renderShortcutSettingsList() -->
-              </div>
-            </div>
+      <div class="modal-content modal-lg set-shell">
+        <div class="modal-header set-shell-head">
+          <h3>Settings</h3>
+          <!-- Close first in the DOM so the focus trap still lands on it, not on
+               Save; row-reverse keeps Save to the left of it on phones. -->
+          <div class="set-head-actions">
+            <button class="modal-close" onclick="app.closeAppSettings()" aria-label="Close app settings">&times;</button>
+            <button class="set-head-save" onclick="app.saveAppSettings()">Save</button>
           </div>
         </div>
-        <div class="form-actions">
+        <div class="set-body">
+          <!-- Left rail: a table of contents over the single scrolling document on
+               the right. On phones it collapses and #appSettingsJump takes over. -->
+          <nav class="set-rail" id="appSettingsRail" aria-label="Settings sections">
+            <div class="set-search">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+              <input type="search" id="appSettingsSearch" placeholder="Search settings" autocomplete="off" aria-label="Search settings">
+            </div>
+            <div class="set-rail-items" id="appSettingsRailItems">
+              <button type="button" class="set-rail-item active" data-section="settings-terminal">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
+                <span>Terminal &amp; Input</span>
+              </button>
+              <button type="button" class="set-rail-item" data-section="settings-appearance">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18 4.5 4.5 0 0 0 0-9 4.5 4.5 0 0 1 0-9z"/></svg>
+                <span>Appearance</span>
+              </button>
+              <button type="button" class="set-rail-item" data-section="settings-layout">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+                <span>Header &amp; Panels</span>
+              </button>
+              <button type="button" class="set-rail-item" data-section="settings-models">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>
+                <span>Models</span>
+              </button>
+              <button type="button" class="set-rail-item" data-section="settings-clis">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h2"/><path d="M16 3h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-2"/><circle cx="12" cy="12" r="2.5"/></svg>
+                <span>Agents &amp; CLIs</span>
+              </button>
+              <button type="button" class="set-rail-item" data-section="settings-notifications">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+                <span>Notifications</span>
+              </button>
+              <button type="button" class="set-rail-item" data-section="settings-voice">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v4"/></svg>
+                <span>Voice</span>
+              </button>
+              <button type="button" class="set-rail-item" data-section="settings-shortcuts">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M9 13h6"/></svg>
+                <span>Shortcuts</span>
+              </button>
+              <button type="button" class="set-rail-item" data-section="settings-system">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.26.6.86 1 1.51 1H21a2 2 0 0 1 0 4h-.09c-.65 0-1.25.4-1.51 1z"/></svg>
+                <span>System</span>
+              </button>
+            </div>
+            <p class="set-rail-foot">Settings marked <b>device</b> stay on this browser. The rest sync to every device.</p>
+          </nav>
+
+          <div class="set-doc" id="appSettingsDoc">
+            <!-- Phone only: names the section you are in and opens the jump list -->
+            <button type="button" class="set-jump" id="appSettingsJump" aria-haspopup="menu" aria-expanded="false">
+              <svg class="set-jump-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
+              <span class="set-jump-label">Terminal &amp; Input</span>
+              <svg class="set-jump-chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+            <div class="set-jump-veil" id="appSettingsJumpVeil"></div>
+            <div class="set-jump-menu" id="appSettingsJumpMenu" role="menu"></div>
+
+            <p class="set-empty" id="appSettingsSearchEmpty" hidden>No settings match that search.</p>
+
+            <!-- ══ Terminal &amp; Input ══════════════════════════════════════ -->
+            <section class="set-section" id="settings-terminal" data-label="Terminal &amp; Input">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
+                <h2>Terminal &amp; Input</h2>
+              </div>
+              <p class="set-section-blurb">How keystrokes reach the agent, and how the terminal draws.</p>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Typing</h4><span class="set-scope">device</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="local echo typing latency mobile">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Local Echo</span>
+                      <span class="set-row-desc">Paint keystrokes instantly instead of waiting for the round trip. Recommended on phones and high-latency links.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsLocalEcho"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="cjk input ime chinese japanese korean">
+                    <div class="set-row-text">
+                      <span class="set-row-label">CJK Input</span>
+                      <span class="set-row-desc">Dedicated IME field for Chinese, Japanese and Korean composition.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsCjkInput"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="extended keyboard bar tab esc arrows phone">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Extended Keyboard Bar <span class="set-tag">phone</span></span>
+                      <span class="set-row-desc">Extra phone keys: Tab, Shift+Tab, Esc, arrows, Ctrl+O.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsExtendedKeyboardBar"><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Scrolling &amp; rendering</h4></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="wheel scroll local history scrollback transcript">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Wheel Scrolls Local History <span class="set-scope">device</span></span>
+                      <span class="set-row-desc">Plain wheel or two-finger swipe pages the terminal's own scrollback instead of the CLI transcript. Shift+wheel always reaches local scrollback.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsTerminalWheelLocal"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" id="appSettingsWebglRendererItem" data-search="webgl renderer gpu terminal">
+                    <div class="set-row-text">
+                      <span class="set-row-label">WebGL Renderer <span class="set-tag">desktop</span> <span class="set-scope">device</span></span>
+                      <span class="set-row-desc">GPU-accelerated terminal drawing. Codeman falls back to the DOM renderer after repeated GPU stalls.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsWebglRenderer"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" id="appSettingsGestureControlItem" data-search="gesture control camera hand tracking">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Gesture Control <span class="set-tag set-tag-beta">beta</span> <span class="set-scope">synced</span></span>
+                      <span class="set-row-desc">Camera hand-tracking overlay. Applied on reload; the instance must run with CODEMAN_GESTURE=1.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsGestureControl"><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- ══ Appearance ═══════════════════════════════════════════════ -->
+            <section class="set-section" id="settings-appearance" data-label="Appearance">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18 4.5 4.5 0 0 0 0-9 4.5 4.5 0 0 1 0-9z"/></svg>
+                <h2>Appearance</h2>
+              </div>
+              <p class="set-section-blurb">Theme, motion, and what this install calls itself.</p>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Theme</h4><span class="set-scope">device</span></div>
+                <div class="set-group-body">
+                  <div class="set-row has-field" data-search="skin theme palette colors dark light">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Skin</span>
+                      <span class="set-row-desc">Palette for the terminal and the UI.</span>
+                    </div>
+                    <select id="appSettingsSkin" class="set-select">
+                      <optgroup label="Light">
+                        <option value="paper-gray">Paper Gray</option>
+                        <option value="solarized-light">Solarized Light</option>
+                        <option value="catppuccin-latte">Catppuccin Latte</option>
+                        <option value="rose-pine-dawn">Rosé Pine Dawn</option>
+                      </optgroup>
+                      <optgroup label="Dark">
+                        <option value="daylight-blue">Daylight Blue</option>
+                        <option value="daylight-green">Daylight Green</option>
+                        <option value="og">OG Codeman</option>
+                      </optgroup>
+                    </select>
+                  </div>
+                  <div class="set-row has-field" data-search="entrance animations motion tabs windows">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Entrance Animations</span>
+                      <span class="set-row-desc">How new tabs, panes and agent windows arrive. Add ?animlab=1 to the URL for per-surface control.</span>
+                    </div>
+                    <select id="appSettingsEntranceAnim" class="set-select">
+                      <option value="legacy">Off (default)</option>
+                      <option value="terminal">Terminal (CRT)</option>
+                      <option value="beamdown">Beam down</option>
+                      <option value="quiet">Quiet</option>
+                      <option value="playful">Playful</option>
+                      <option value="custom">Custom (set in the lab)</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Identity</h4></div>
+                <div class="set-group-body">
+                  <div class="set-row has-field" data-search="display name branding title">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Display Name <span class="set-scope">synced</span></span>
+                      <span class="set-row-desc">Shown in the browser UI and the window title. Unicode is fine.</span>
+                    </div>
+                    <input type="text" id="appSettingsDisplayName" class="set-input" maxlength="40" placeholder="Codeman" autocomplete="off">
+                  </div>
+                  <div class="set-row has-field" data-search="language interface chinese english">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Interface Language <span class="set-scope">device</span></span>
+                      <span class="set-row-desc">Dialogs and status messages use the same language.</span>
+                    </div>
+                    <select id="appSettingsLanguage" class="set-select">
+                      <option value="en">English</option>
+                      <option value="zh-CN">简体中文</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Tabs</h4><span class="set-scope">device</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="tall tabs folder name two rows">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Tall Tabs</span>
+                      <span class="set-row-desc">Show the folder under the session name and let the tab bar wrap.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsTabTwoRows"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="pop out detach tab window">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Pop-out Button on Tabs</span>
+                      <span class="set-row-desc">Open a session in its own window from the tab.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsShowTabDetachButton"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" id="appSettingsMobileOverviewItem" data-search="overview home screen phone logo">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Overview Home Screen <span class="set-tag">phone</span></span>
+                      <span class="set-row-desc">The C logo opens the session overview instead of the welcome screen.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsMobileOverview" checked><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- ══ Header &amp; Panels ═══════════════════════════════════════ -->
+            <section class="set-section" id="settings-layout" data-label="Header &amp; Panels">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+                <h2>Header &amp; Panels</h2>
+              </div>
+              <p class="set-section-blurb">Pick the buttons and panels you actually use. Everything else stays out of the way.</p>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Header buttons</h4><span class="set-scope">device</span></div>
+                <p class="set-group-hint">Tap to show a control in the header. Multi-monitor is the one entry here that syncs across devices.</p>
+                <div class="set-group-body">
+                  <div class="set-chips" data-search="header buttons plan usage font stats lifecycle response file viewer attachments monitor session away cron redraw">
+                    <label class="set-chip"><input type="checkbox" id="appSettingsShowPlanUsageLimits"><span>Plan Usage</span></label>
+                    <label class="set-chip"><input type="checkbox" id="appSettingsShowFontControls"><span>Font Size</span></label>
+                    <label class="set-chip"><input type="checkbox" id="appSettingsShowSystemStats" checked><span>System Stats</span></label>
+                    <label class="set-chip"><input type="checkbox" id="appSettingsShowLifecycleLog"><span>Lifecycle Log</span></label>
+                    <label class="set-chip"><input type="checkbox" id="appSettingsShowResponseViewer"><span>Response Viewer</span></label>
+                    <label class="set-chip"><input type="checkbox" id="appSettingsShowFileViewerButton"><span>File Viewer</span></label>
+                    <label class="set-chip"><input type="checkbox" id="appSettingsShowAttachmentsButton"><span>Attachments</span></label>
+                    <label class="set-chip"><input type="checkbox" id="appSettingsShowMultiMonitorButton"><span>Multi-monitor</span></label>
+                    <label class="set-chip"><input type="checkbox" id="appSettingsShowSessionButton"><span>Session Manager</span></label>
+                    <label class="set-chip"><input type="checkbox" id="appSettingsShowAwayDigestButton"><span>Away Digest</span></label>
+                    <label class="set-chip"><input type="checkbox" id="appSettingsShowCronButton"><span>Cron</span></label>
+                    <label class="set-chip"><input type="checkbox" id="appSettingsShowRedrawButton"><span>Redraw Terminal</span></label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Panels</h4><span class="set-scope">device</span></div>
+                <div class="set-group-body">
+                  <div class="set-chips" data-search="panels monitor project insights file browser subagents">
+                    <label class="set-chip"><input type="checkbox" id="appSettingsShowMonitor" checked><span>Monitor</span></label>
+                    <label class="set-chip"><input type="checkbox" id="appSettingsShowProjectInsights"><span>Project Insights</span></label>
+                    <label class="set-chip"><input type="checkbox" id="appSettingsShowFileBrowser"><span>File Browser</span></label>
+                    <label class="set-chip"><input type="checkbox" id="appSettingsShowSubagents"><span>Subagents</span></label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Cross-session features</h4><span class="set-scope">synced</span></div>
+                <p class="set-group-hint">Approvals answers prompts from any session in one place. Read My Mind captures your prompts and predicts the next one on demand; both cost tokens and never auto-send.</p>
+                <div class="set-group-body">
+                  <div class="set-chips" data-search="approvals inbox read my mind ultracode agents floating windows workflow">
+                    <label class="set-chip"><input type="checkbox" id="appSettingsApprovalsInbox"><span>Approvals Inbox</span></label>
+                    <label class="set-chip"><input type="checkbox" id="appSettingsReadMyMind"><span>Read My Mind</span></label>
+                    <label class="set-chip"><input type="checkbox" id="appSettingsShowUltracodeAgents"><span>Ultracode Agents</span></label>
+                    <label class="set-chip"><input type="checkbox" id="appSettingsUltracodeFloatingWindows"><span>Ultracode Windows</span></label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Subagent windows</h4></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="subagent tracking background agents">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Track background agents <span class="set-scope">synced</span></span>
+                      <span class="set-row-desc">Follow Claude Code subagents in real time.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsSubagentTracking" checked><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="subagent active tab only windows">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Active tab only <span class="set-scope">device</span></span>
+                      <span class="set-row-desc">Only show agent windows for the selected session.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsSubagentActiveTabOnly" checked><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- ══ Models ═══════════════════════════════════════════════════ -->
+            <section class="set-section" id="settings-models" data-label="Models">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>
+                <h2>Models</h2>
+              </div>
+              <p class="set-section-blurb">One place for what new sessions run on, and what background tasks are routed to.</p>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>New Claude sessions</h4><span class="set-scope">synced</span></div>
+                <p class="set-group-hint">A soft default, pinned via the case's .claude/settings.local.json. /model still switches inside a running session.</p>
+                <div class="set-group-body">
+                  <!-- Cards are built from the select below by settings-ui.js, which keeps
+                       the select as the single source of truth for load/save. -->
+                  <div class="set-modelgrid" id="appSettingsModelCards" role="radiogroup" aria-label="Model for new Claude sessions" data-search="model opus sonnet haiku fable claude"></div>
+                  <select id="appSettingsClaudeModel" class="set-select set-field-hidden" aria-hidden="true" tabindex="-1">
+                    <option value="" data-meta="Whatever the CLI picks">Default (CLI setting)</option>
+                    <option value="claude-fable-5" data-meta="Most powerful" data-base="claude-fable-5" data-ctx="1">Fable 5</option>
+                    <option value="claude-fable-5[1m]" data-variant="1m" data-base="claude-fable-5">Fable 5 (1M context)</option>
+                    <option value="opus" data-meta="Most capable" data-base="opus" data-ctx="1">Opus</option>
+                    <option value="opus[1m]" data-variant="1m" data-base="opus">Opus (1M context)</option>
+                    <option value="claude-opus-4-6" data-meta="Previous generation" data-base="claude-opus-4-6" data-ctx="1">Opus 4.6</option>
+                    <option value="claude-opus-4-6[1m]" data-variant="1m" data-base="claude-opus-4-6">Opus 4.6 (1M context)</option>
+                    <option value="sonnet" data-meta="Balanced" data-base="sonnet">Sonnet</option>
+                    <option value="haiku" data-meta="Fast &amp; cheap" data-base="haiku">Haiku</option>
+                  </select>
+                  <div class="set-row" id="appSettingsContextRow" data-search="1m context window opus long">
+                    <div class="set-row-text">
+                      <span class="set-row-label">1M context window</span>
+                      <span class="set-row-desc" id="appSettingsContextDesc">Available for Fable 5, Opus and Opus 4.6.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsOpusContext1m"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row set-row-block" data-search="thinking effort ultracode xhigh max reasoning">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Thinking effort</span>
+                      <span class="set-row-desc">Switchable in-session with /effort. Ultracode runs multi-agent workflows.</span>
+                    </div>
+                    <div class="set-segment" id="appSettingsEffortSegment" role="radiogroup" aria-label="Thinking effort"></div>
+                    <select id="appSettingsThinkingEffort" class="set-select set-field-hidden" aria-hidden="true" tabindex="-1">
+                      <option value="">Default</option>
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                      <option value="xhigh">XHigh</option>
+                      <option value="max">Max</option>
+                      <option value="ultracode">Ultracode</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group set-group-advanced" id="appSettingsTaskRouting">
+                <div class="set-group-head set-group-head-toggle" role="button" tabindex="0" aria-expanded="false">
+                  <h4>Task routing</h4>
+                  <span class="set-scope">synced</span>
+                  <span class="set-adv">Advanced
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+                  </span>
+                </div>
+                <p class="set-group-hint">Models for orchestrator and background work. Leave on the default unless you are tuning cost.</p>
+                <div class="set-group-body">
+                  <div class="set-row has-field" data-search="default model tasks orchestrator">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Default for tasks</span>
+                      <span class="set-row-desc">Used for execution tasks. Optimizer suggestions stay advisory.</span>
+                    </div>
+                    <select id="appSettingsDefaultModel" class="set-select">
+                      <option value="">Default (CLI default)</option>
+                      <option value="claude-fable-5">Fable 5 (Most powerful)</option>
+                      <option value="opus">Opus (Most capable)</option>
+                      <option value="sonnet">Sonnet (Balanced)</option>
+                      <option value="haiku">Haiku (Fast &amp; cheap)</option>
+                    </select>
+                  </div>
+                  <div class="set-minigrid" data-search="explore implement test review agent type overrides">
+                    <div class="set-mini">
+                      <span class="set-mini-label">Explore</span>
+                      <select id="appSettingsModelExplore" class="set-select">
+                        <option value="">Use default</option>
+                        <option value="haiku">Haiku</option>
+                        <option value="sonnet">Sonnet</option>
+                        <option value="opus">Opus</option>
+                        <option value="claude-fable-5">Fable 5</option>
+                      </select>
+                    </div>
+                    <div class="set-mini">
+                      <span class="set-mini-label">Implement</span>
+                      <select id="appSettingsModelImplement" class="set-select">
+                        <option value="">Use default</option>
+                        <option value="haiku">Haiku</option>
+                        <option value="sonnet">Sonnet</option>
+                        <option value="opus">Opus</option>
+                        <option value="claude-fable-5">Fable 5</option>
+                      </select>
+                    </div>
+                    <div class="set-mini">
+                      <span class="set-mini-label">Test</span>
+                      <select id="appSettingsModelTest" class="set-select">
+                        <option value="">Use default</option>
+                        <option value="haiku">Haiku</option>
+                        <option value="sonnet">Sonnet</option>
+                        <option value="opus">Opus</option>
+                        <option value="claude-fable-5">Fable 5</option>
+                      </select>
+                    </div>
+                    <div class="set-mini">
+                      <span class="set-mini-label">Review</span>
+                      <select id="appSettingsModelReview" class="set-select">
+                        <option value="">Use default</option>
+                        <option value="haiku">Haiku</option>
+                        <option value="sonnet">Sonnet</option>
+                        <option value="opus">Opus</option>
+                        <option value="claude-fable-5">Fable 5</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="set-row" data-search="optimizer recommendations advisory">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Show optimizer recommendations</span>
+                      <span class="set-row-desc">Advisory only. Never overrides your choice.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsShowModelRecommendations" checked><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- ══ Agents &amp; CLIs ═════════════════════════════════════════ -->
+            <section class="set-section" id="settings-clis" data-label="Agents &amp; CLIs">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h2"/><path d="M16 3h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-2"/><circle cx="12" cy="12" r="2.5"/></svg>
+                <h2>Agents &amp; CLIs</h2>
+              </div>
+              <p class="set-section-blurb">Launch flags for the CLIs Codeman spawns.</p>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Claude</h4><span class="set-scope">synced</span></div>
+                <div class="set-group-body">
+                  <div class="set-row has-field" data-search="startup mode permissions auto allowed tools">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Startup Mode</span>
+                      <span class="set-row-desc">How the CLI is launched in new sessions. Auto Mode runs without routine prompts behind a background safety classifier.</span>
+                    </div>
+                    <select id="appSettingsClaudeMode" class="set-select">
+                      <option value="dangerously-skip-permissions">Skip Permissions (default)</option>
+                      <option value="auto">Auto (classifier-guarded, low prompts)</option>
+                      <option value="normal">Normal (with prompts)</option>
+                      <option value="allowedTools">Allowed Tools Only</option>
+                    </select>
+                  </div>
+                  <div class="set-row has-field" id="allowedToolsRow" style="display: none;" data-search="allowed tools list">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Allowed Tools</span>
+                      <span class="set-row-desc">Comma-separated list of tools to allow.</span>
+                    </div>
+                    <input type="text" id="appSettingsAllowedTools" class="set-input" placeholder="Read,Glob,Grep,Bash">
+                  </div>
+                  <div class="set-row" data-search="ralph todo tracker loop">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Ralph / Todo Tracker</span>
+                      <span class="set-row-desc">Auto-enable for new sessions. Otherwise it enables itself on Ralph pattern detection.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsRalphEnabled"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="agent teams experimental">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Agent Teams</span>
+                      <span class="set-row-desc">Experimental multi-agent teams for all new Claude sessions.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsAgentTeams"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="agent skill codeman api workers">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Codeman Agent Skill</span>
+                      <span class="set-row-desc">Let new sessions start workers, send prompts and wait for results over the API.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsAgentSkill"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="remote auto reconnect ssh">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Remote auto-reconnect</span>
+                      <span class="set-row-desc">Reattach remote SSH sessions to their durable tmux after a dropped link.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsRemoteAutoReconnect"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="nice priority cpu">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Nice priority</span>
+                      <span class="set-row-desc">Lower the CPU priority of new sessions to reduce system impact.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsNiceEnabled"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" id="niceValueRow" data-search="nice value priority number">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Nice value</span>
+                      <span class="set-row-desc">-20 to 19. Higher means lower priority. Default 10.</span>
+                    </div>
+                    <input type="number" id="appSettingsNiceValue" class="set-num" min="-20" max="19" value="10">
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group" id="appSettingsCodexGroup">
+                <div class="set-group-head"><h4>Codex</h4><span class="set-scope">synced</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="codex bypass approvals sandbox">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Bypass approvals and sandbox</span>
+                      <span class="set-row-desc">Start new Codex sessions with --dangerously-bypass-approvals-and-sandbox.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsCodexDangerouslyBypassApprovals"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="codex animations status effects">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Animated status effects</span>
+                      <span class="set-row-desc">Decorative Codex TUI motion. Leave off to reduce remote and mobile redraws.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsCodexAnimations"><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- ══ Notifications ════════════════════════════════════════════ -->
+            <section class="set-section" id="settings-notifications" data-label="Notifications">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+                <h2>Notifications</h2>
+              </div>
+              <p class="set-section-blurb">What reaches you, and on which channel.</p>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Channels</h4><span class="set-scope">device</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="enable notifications master">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Notifications</span>
+                      <span class="set-row-desc">Master switch for every layer below.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsNotifEnabled" checked><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="browser notifications os permission">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Browser</span>
+                      <span class="set-row-desc">OS notifications while the tab is hidden. Remote access needs HTTPS: codeman web --https</span>
+                    </div>
+                    <div class="set-row-actions">
+                      <label class="switch switch-sm"><input type="checkbox" id="appSettingsNotifBrowser"><span class="slider"></span></label>
+                      <button class="btn-toolbar btn-sm" onclick="app.notificationManager?.requestPermission()" title="Request browser notification permission">Ask</button>
+                      <span class="settings-status" id="notifPermissionStatus">?</span>
+                    </div>
+                  </div>
+                  <div class="set-row" data-search="push notifications subscribe pwa">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Push</span>
+                      <span class="set-row-desc">Works with the tab closed, and through a Cloudflare tunnel. Requires HTTPS or localhost; iOS requires the PWA.</span>
+                    </div>
+                    <div class="set-row-actions">
+                      <label class="switch switch-sm"><input type="checkbox" id="appSettingsPushEnabled"><span class="slider"></span></label>
+                      <button class="btn-toolbar btn-sm" id="pushSubscribeBtn" onclick="app.togglePushSubscription()" title="Subscribe or unsubscribe to push notifications">Subscribe</button>
+                      <span class="settings-status" id="pushSubscriptionStatus">off</span>
+                    </div>
+                  </div>
+                  <div class="set-row" data-search="audio alerts beep sound">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Audio alerts</span>
+                      <span class="set-row-desc">Short beep on critical events.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsNotifAudio"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="idle threshold stuck minutes">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Idle threshold</span>
+                      <span class="set-row-desc">Notify when a session sits idle longer than this.</span>
+                    </div>
+                    <div class="set-row-actions">
+                      <input type="number" id="appSettingsNotifStuckMins" class="set-num" value="10" min="1" max="120">
+                      <span class="set-unit">min</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Levels</h4><span class="set-scope">device</span></div>
+                <div class="set-group-body">
+                  <div class="set-chips" data-search="critical warning info levels">
+                    <label class="set-chip"><input type="checkbox" id="appSettingsNotifCritical" checked><span>Critical</span></label>
+                    <label class="set-chip"><input type="checkbox" id="appSettingsNotifWarning" checked><span>Warning</span></label>
+                    <label class="set-chip"><input type="checkbox" id="appSettingsNotifInfo" checked><span>Info</span></label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Per event</h4><span class="set-scope">device</span></div>
+                <div class="set-group-body">
+                  <div class="event-type-grid" data-search="per event permission question idle response respawn task subagent">
+                    <div class="event-header">Event</div>
+                    <div class="event-header">On</div>
+                    <div class="event-header">Browser</div>
+                    <div class="event-header">Push</div>
+                    <div class="event-header">Sound</div>
+
+                    <div class="event-label">Permission prompts</div>
+                    <input type="checkbox" id="eventPermissionEnabled" checked>
+                    <input type="checkbox" id="eventPermissionBrowser" checked>
+                    <input type="checkbox" id="eventPermissionPush" checked>
+                    <input type="checkbox" id="eventPermissionAudio" checked>
+
+                    <div class="event-label">Questions from Claude</div>
+                    <input type="checkbox" id="eventQuestionEnabled" checked>
+                    <input type="checkbox" id="eventQuestionBrowser" checked>
+                    <input type="checkbox" id="eventQuestionPush" checked>
+                    <input type="checkbox" id="eventQuestionAudio" checked>
+
+                    <div class="event-label">Session idle</div>
+                    <input type="checkbox" id="eventIdleEnabled" checked>
+                    <input type="checkbox" id="eventIdleBrowser" checked>
+                    <input type="checkbox" id="eventIdlePush">
+                    <input type="checkbox" id="eventIdleAudio">
+
+                    <div class="event-label">Response complete</div>
+                    <input type="checkbox" id="eventStopEnabled">
+                    <input type="checkbox" id="eventStopBrowser">
+                    <input type="checkbox" id="eventStopPush">
+                    <input type="checkbox" id="eventStopAudio">
+
+                    <div class="event-label">Respawn cycles</div>
+                    <input type="checkbox" id="eventRespawnEnabled" checked>
+                    <input type="checkbox" id="eventRespawnBrowser">
+                    <input type="checkbox" id="eventRespawnPush">
+                    <input type="checkbox" id="eventRespawnAudio">
+
+                    <div class="event-label">Task complete</div>
+                    <input type="checkbox" id="eventRalphEnabled" checked>
+                    <input type="checkbox" id="eventRalphBrowser" checked>
+                    <input type="checkbox" id="eventRalphPush">
+                    <input type="checkbox" id="eventRalphAudio" checked>
+
+                    <div class="event-label">Subagent activity</div>
+                    <input type="checkbox" id="eventSubagentEnabled">
+                    <input type="checkbox" id="eventSubagentBrowser">
+                    <input type="checkbox" id="eventSubagentPush">
+                    <input type="checkbox" id="eventSubagentAudio">
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- ══ Voice ════════════════════════════════════════════════════ -->
+            <section class="set-section" id="settings-voice" data-label="Voice">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v4"/></svg>
+                <h2>Voice</h2>
+              </div>
+              <p class="set-section-blurb">Dictation into the composer.</p>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Provider</h4><span class="set-scope">device</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="voice provider active">
+                    <div class="set-row-text"><span class="set-row-label">Active provider</span></div>
+                    <span class="voice-provider-status" id="voiceProviderStatus">&mdash;</span>
+                  </div>
+                  <div class="set-row has-field" data-search="voice insert mode compose">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Insert mode</span>
+                      <span class="set-row-desc">Where dictated text lands.</span>
+                    </div>
+                    <select id="voiceInsertMode" class="set-select">
+                      <option value="direct">Direct to input</option>
+                      <option value="compose">Compose dialog</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Deepgram Nova-3</h4><span class="set-scope">device</span></div>
+                <div class="set-group-body">
+                  <div class="set-row has-field" data-search="deepgram api key">
+                    <div class="set-row-text">
+                      <span class="set-row-label">API key</span>
+                      <span class="set-row-desc">Stored on this device only, never sent to the server. Get a key at console.deepgram.com</span>
+                    </div>
+                    <div class="set-row-actions set-row-actions-wide">
+                      <input type="password" id="voiceDeepgramKey" class="set-input" placeholder="Enter Deepgram API key" autocomplete="off">
+                      <button class="btn-toolbar btn-sm" onclick="app.toggleDeepgramKeyVisibility()" id="voiceKeyToggleBtn" type="button">Show</button>
+                    </div>
+                  </div>
+                  <div class="set-row has-field" data-search="voice language">
+                    <div class="set-row-text"><span class="set-row-label">Language</span></div>
+                    <select id="voiceLanguage" class="set-select">
+                      <option value="en-US">English (US)</option>
+                      <option value="en-GB">English (UK)</option>
+                      <option value="es">Spanish</option>
+                      <option value="fr">French</option>
+                      <option value="de">German</option>
+                      <option value="ja">Japanese</option>
+                      <option value="multi">Auto-detect (multi)</option>
+                    </select>
+                  </div>
+                  <div class="set-row has-field" data-search="voice keyterms domain keywords">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Domain keywords</span>
+                      <span class="set-row-desc">Comma-separated terms to boost recognition accuracy.</span>
+                    </div>
+                    <input type="text" id="voiceKeyterms" class="set-input" placeholder="codeman, tmux, respawn, subagent">
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- ══ Shortcuts ════════════════════════════════════════════════ -->
+            <section class="set-section" id="settings-shortcuts" data-label="Shortcuts">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M9 13h6"/></svg>
+                <h2>Shortcuts</h2>
+              </div>
+              <p class="set-section-blurb">Click a binding to capture a new key combination.</p>
+              <div class="set-group">
+                <div class="set-group-head"><h4>Keyboard</h4><span class="set-scope">device</span></div>
+                <div class="set-group-body">
+                  <div id="appSettingsShortcutsList" data-search="keyboard shortcuts bindings keys">
+                    <!-- Populated by app.renderShortcutSettingsList() -->
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- ══ System ═══════════════════════════════════════════════════ -->
+            <section class="set-section" id="settings-system" data-label="System">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.26.6.86 1 1.51 1H21a2 2 0 0 1 0 4h-.09c-.65 0-1.25.4-1.51 1z"/></svg>
+                <h2>System</h2>
+              </div>
+              <p class="set-section-blurb">Paths, automation, remote access and updates.</p>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Paths</h4><span class="set-scope">synced</span></div>
+                <div class="set-group-body">
+                  <div class="set-row has-field" data-search="claude.md template path new cases">
+                    <div class="set-row-text">
+                      <span class="set-row-label">CLAUDE.md template</span>
+                      <span class="set-row-desc">Used when creating new cases. Leave empty for the built-in template.</span>
+                    </div>
+                    <input type="text" id="appSettingsClaudeMdPath" class="set-input" placeholder="/path/to/CLAUDE.md template">
+                  </div>
+                  <div class="set-row has-field" data-search="default working directory">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Default working directory</span>
+                      <span class="set-row-desc">Starting directory for new sessions.</span>
+                    </div>
+                    <input type="text" id="appSettingsDefaultDir" class="set-input" placeholder="~/projects">
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Automation</h4><span class="set-scope">synced</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="image watcher popup screenshots">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Image watcher</span>
+                      <span class="set-row-desc">Detect and pop up new images found in session directories.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsImageWatcherEnabled"><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Remote access</h4><span class="set-scope">synced</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="cloudflare tunnel remote access url">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Cloudflare Tunnel</span>
+                      <span class="set-row-desc">Expose Codeman on a public URL. Set CODEMAN_PASSWORD first.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsTunnelEnabled"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" id="tunnelUrlRow" style="display:none">
+                    <div class="set-row-text"><span class="set-row-label">Tunnel URL</span></div>
+                    <div class="set-row-actions">
+                      <span id="tunnelUrlDisplay" class="set-copy" title="Click to copy"></span>
+                      <button class="btn-icon-sm" id="tunnelQrBtn" onclick="app.showTunnelQR()" title="Show QR code">&#x229E;</button>
+                    </div>
+                  </div>
+                  <div class="set-row" id="tunnelUploadUrlRow" style="display:none">
+                    <div class="set-row-text"><span class="set-row-label">Upload URL</span></div>
+                    <span id="tunnelUploadUrlDisplay" class="set-copy" title="Click to copy"></span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Updates</h4></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="version current release">
+                    <div class="set-row-text"><span class="set-row-label">Current version</span></div>
+                    <span class="set-static mono" id="updateCurrentVersion">&mdash;</span>
+                  </div>
+                  <div class="set-row" id="updateCheckRow" data-search="check for updates github release">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Check for updates</span>
+                      <span class="set-row-desc">Looks at GitHub for a newer Codeman release.</span>
+                    </div>
+                    <button class="btn-toolbar btn-sm" id="updateCheckBtn" onclick="app.checkForUpdate()">Check now</button>
+                  </div>
+                  <div id="updateResult" class="set-note" style="display:none"></div>
+                  <div class="set-row" id="updateActionRow" style="display:none">
+                    <div class="set-row-text"><span class="set-row-label" id="updateActionLabel">Update available</span></div>
+                    <button class="btn-toolbar btn-sm btn-primary" id="updateNowBtn" onclick="app.startSelfUpdate()">Update now</button>
+                  </div>
+                  <div id="updateNotes" class="set-notes" style="display:none"></div>
+                  <div id="updateProgress" class="set-progress" style="display:none"></div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+        <div class="form-actions set-foot">
           <button class="btn-toolbar" onclick="app.closeAppSettings()">Cancel</button>
           <button class="btn-toolbar btn-primary" onclick="app.saveAppSettings()">Save</button>
         </div>

@@ -32,6 +32,12 @@ export type UnifiedSessionItem = {
   lastPrompt?: string;
   sizeBytes?: number;
   projectKey?: string;
+  /** Git branch recorded in the transcript (#266). */
+  gitBranch?: string;
+  /** Linked-worktree name, when the session ran in one (#266). */
+  worktreeName?: string;
+  /** Main repo root a worktree belongs to (#266). */
+  worktreeRepo?: string;
   remote?: boolean;
   /** Pinned to the top of the session manager list (COD-139). */
   pinned?: boolean;
@@ -90,6 +96,9 @@ export type HistoryInput = {
   /** Most recent user prompt from the transcript (COD-145). */
   lastPrompt?: string;
   projectKey?: string;
+  gitBranch?: string;
+  worktreeName?: string;
+  worktreeRepo?: string;
 };
 
 /** Mux process-stat view. */
@@ -163,6 +172,9 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
     overwrite(item, 'firstPrompt', h.firstPrompt);
     overwrite(item, 'lastPrompt', h.lastPrompt);
     overwrite(item, 'projectKey', h.projectKey);
+    overwrite(item, 'gitBranch', h.gitBranch);
+    overwrite(item, 'worktreeName', h.worktreeName);
+    overwrite(item, 'worktreeRepo', h.worktreeRepo);
     const ms = Date.parse(h.lastModified);
     if (!Number.isNaN(ms) && item.lastActivityAt === undefined) item.lastActivityAt = ms;
   }
@@ -346,7 +358,7 @@ export function filterAndPaginate(
   const q = (opts.q ?? '').trim().toLowerCase();
   const filtered = q
     ? items.filter((it) => {
-        const hay = [it.name, it.firstPrompt, it.lastPrompt, it.workingDir, it.sessionId]
+        const hay = [it.name, it.firstPrompt, it.lastPrompt, it.workingDir, it.sessionId, it.worktreeName, it.gitBranch]
           .filter((v): v is string => typeof v === 'string')
           .join(' ')
           .toLowerCase();

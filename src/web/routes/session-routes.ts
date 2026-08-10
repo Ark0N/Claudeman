@@ -94,7 +94,13 @@ import {
   type LifecycleInput,
   type HistoryInput,
   type MuxStatInput,
+  type UnifiedSessionItem,
 } from '../../services/unified-session-service.js';
+import {
+  buildHistorySessionIndexItems,
+  setHistoryIndexRefresher,
+  setHistorySessionIndex,
+} from '../session-history-index.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '../ports/index.js';
 import { RunSummaryTracker } from '../../run-summary.js';
 
@@ -3116,6 +3122,91 @@ export function registerSessionRoutes(
     return sawNonCli;
   }
 
+  /** Git/worktree facts recovered from a transcript. Every field is optional —
+   *  "unknown" must stay distinguishable from "not a worktree" (#265/#266). */
+  type TranscriptGitInfo = {
+    /** The literal `cwd` Claude Code stamped on its own records. */
+    cwd?: string;
+    gitBranch?: string;
+    worktreeName?: string;
+    /** Main repo root the worktree belongs to. */
+    worktreeRepo?: string;
+  };
+
+  /** `<repo>/.claude/worktrees/<name>` — the layout Claude Code's own worktree feature creates. */
+  const CLAUDE_WORKTREE_PATH = /^(.*)\/\.claude\/worktrees\/([^/]+)\/?$/;
+
+  /**
+   * Recover cwd / branch / worktree from a transcript chunk.
+   *
+   * Claude Code stamps `"cwd"` and `"gitBranch"` on every user/assistant record,
+   * and writes a dedicated `worktree-state` record when the session was started
+   * through its own worktree feature. This reads buffers `scanProjectDir` has
+   * ALREADY loaded, so it costs no extra file I/O.
+   *
+   * Why this matters beyond a label: `decodeProjectKey()` reconstructs a path by
+   * stat-walking the filesystem and falls back to `$HOME` when nothing resolves.
+   * A deleted worktree is the normal end of a worktree's life, so every past
+   * worktree session used to collapse onto `$HOME` (#265). The transcript value
+   * is the literal cwd — non-lossy, and it survives the directory being removed.
+   *
+   * cwd is taken from the FIRST record that carries it (a session's cwd does not
+   * move); gitBranch from the LAST (a branch genuinely changes mid-session, and
+   * the newest value in the scanned chunk is the closest to current).
+   */
+  function extractTranscriptGitInfo(text: string): TranscriptGitInfo {
+    const info: TranscriptGitInfo = {};
+    let start = 0;
+    while (start < text.length) {
+      const end = text.indexOf('\n', start);
+      const line = end === -1 ? text.slice(start) : text.slice(start, end);
+      start = end === -1 ? text.length : end + 1;
+
+      // Highest-confidence source: Claude's own worktree record. Names the
+      // worktree explicitly, so it beats anything inferred from the path.
+      if (line.includes('"worktree-state"')) {
+        try {
+          const rec = JSON.parse(line) as {
+            worktreeSession?: { worktreeName?: unknown; worktreePath?: unknown; originalCwd?: unknown };
+          };
+          const ws = rec.worktreeSession;
+          if (ws) {
+            if (typeof ws.worktreeName === 'string') info.worktreeName ||= ws.worktreeName;
+            if (typeof ws.originalCwd === 'string') info.worktreeRepo ||= ws.originalCwd;
+            if (typeof ws.worktreePath === 'string') info.cwd ||= ws.worktreePath;
+          }
+        } catch {
+          // Malformed/truncated line — skip
+        }
+        continue;
+      }
+
+      if (!line.includes('"cwd"') && !line.includes('"gitBranch"')) continue;
+      if (!line.includes('"type":"user"') && !line.includes('"type":"assistant"')) continue;
+      try {
+        const rec = JSON.parse(line) as { cwd?: unknown; gitBranch?: unknown };
+        if (!info.cwd && typeof rec.cwd === 'string' && rec.cwd) info.cwd = rec.cwd;
+        // Last one wins — closest to the session's current branch.
+        if (typeof rec.gitBranch === 'string' && rec.gitBranch) info.gitBranch = rec.gitBranch;
+      } catch {
+        // Malformed/truncated line — skip
+      }
+    }
+
+    // No explicit worktree record: infer from Claude's own worktree path layout.
+    // A worktree created by hand (`git worktree add` anywhere) has no recoverable
+    // NAME here — it still gets a branch, and the badge degrades to branch-only
+    // rather than guessing.
+    if (!info.worktreeName && info.cwd) {
+      const m = CLAUDE_WORKTREE_PATH.exec(info.cwd);
+      if (m) {
+        info.worktreeName = m[2];
+        info.worktreeRepo ||= m[1];
+      }
+    }
+    return info;
+  }
+
   /**
    * Extract the text of the LAST user message from a JSONL transcript chunk
    * (COD-145). Mirrors `extractFirstUserPrompt` exactly — same user-message
@@ -3367,6 +3458,11 @@ export function registerSessionRoutes(
     lastModified: string;
     firstPrompt?: string;
     lastPrompt?: string;
+    /** True when workingDir came from the transcript rather than decodeProjectKey's guess. */
+    workingDirExact?: boolean;
+    gitBranch?: string;
+    worktreeName?: string;
+    worktreeRepo?: string;
   };
 
   // Scan a single project directory and return all valid history sessions in it.
@@ -3473,14 +3569,34 @@ export function registerSessionRoutes(
         headEntrypoint === 'cli' || tailEntrypoint === 'cli' ? 'cli' : (headEntrypoint ?? tailEntrypoint);
       if (entrypoint && isAutomatedEntrypoint(entrypoint)) continue;
 
+      // Git/worktree facts from the buffers already read above — no extra I/O.
+      // head first (cwd is stamped near the top; median offset ~1KB), tail as the
+      // fallback for transcripts whose head read failed or came up empty.
+      const headGit = head ? extractTranscriptGitInfo(head) : {};
+      const tailGit = tail ? extractTranscriptGitInfo(tail) : {};
+      const git: TranscriptGitInfo = {
+        cwd: headGit.cwd ?? tailGit.cwd,
+        // Last-wins within a chunk; across chunks the tail is the newer one.
+        gitBranch: tailGit.gitBranch ?? headGit.gitBranch,
+        worktreeName: headGit.worktreeName ?? tailGit.worktreeName,
+        worktreeRepo: headGit.worktreeRepo ?? tailGit.worktreeRepo,
+      };
+
       out.push({
         sessionId,
-        workingDir,
+        // The transcript's literal cwd beats decodeProjectKey's stat-walked guess,
+        // which silently collapses to $HOME once the directory is gone (#265).
+        // Absent cwd falls back to the old behaviour rather than inventing a path.
+        workingDir: git.cwd ?? workingDir,
+        workingDirExact: git.cwd !== undefined,
         projectKey: projDir,
         sizeBytes: fileStat.size,
         lastModified: fileStat.mtime.toISOString(),
         firstPrompt,
         lastPrompt,
+        gitBranch: git.gitBranch,
+        worktreeName: git.worktreeName,
+        worktreeRepo: git.worktreeRepo,
       });
     }
     return out;
@@ -3539,16 +3655,20 @@ export function registerSessionRoutes(
     return { sessions: results.slice(0, 50) };
   });
 
-  // Unified, read-only session list: merges live + persisted + lifecycle +
-  // transcript history + mux stats into one de-duplicated, searchable list
-  // (COD-121). Pure merge/filter logic lives in unified-session-service.ts.
-  app.get('/api/sessions/unified', async (req) => {
-    const query = req.query as { q?: string; offset?: string; limit?: string };
-
-    if (ctx.testMode) {
-      return { sessions: [], total: 0 };
-    }
-
+  /**
+   * Gather the four read-only views the unified list is merged from, plus mux
+   * stats. This is the expensive half (the lifecycle log and a scan of every
+   * Claude transcript), factored out of the route handler because the
+   * past-session search index rebuilds itself from the very same inputs, off
+   * the request path, see session-history-index.ts.
+   */
+  async function gatherUnifiedInputs(): Promise<{
+    live: LiveSessionInput[];
+    persisted: PersistedSessionInput[];
+    lifecycle: LifecycleInput[];
+    history: HistoryInput[];
+    mux: MuxStatInput[];
+  }> {
     // Live (in-memory) sessions.
     const live: LiveSessionInput[] = [...ctx.sessions.values()].map((s) => {
       const st = s.toState();
@@ -3618,6 +3738,9 @@ export function registerSessionRoutes(
             firstPrompt: h.firstPrompt,
             lastPrompt: h.lastPrompt,
             projectKey: h.projectKey,
+            gitBranch: h.gitBranch,
+            worktreeName: h.worktreeName,
+            worktreeRepo: h.worktreeRepo,
           });
         }
       }
@@ -3649,14 +3772,54 @@ export function registerSessionRoutes(
       // Mux stats are optional.
     }
 
+    return { live, persisted, lifecycle, history, mux };
+  }
+
+  /**
+   * Publish a merged unified list as the past-session search index (issue #261).
+   * The snapshot is stored UNSCOPED with a per-row owner, so it must only ever be
+   * built from an unscoped merge, `harvestSources()` in search-routes re-applies
+   * the ownership check on read.
+   */
+  function publishHistorySessionIndex(merged: UnifiedSessionItem[]): void {
+    const ownerById = new Map<string, string | undefined>();
+    const stored = ctx.store.getState().sessions as Record<string, { id: string; owner?: string }>;
+    for (const p of Object.values(stored)) ownerById.set(p.id, p.owner);
+    // Live wins: a session's owner on disk can lag the running one.
+    for (const s of ctx.sessions.values()) ownerById.set(s.id, s.owner);
+    const liveIds = new Set(ctx.sessions.keys());
+    setHistorySessionIndex(buildHistorySessionIndexItems(merged, ownerById, liveIds));
+  }
+
+  // Rebuild hook for the search route: it kicks this (fire-and-forget) when the
+  // snapshot goes stale, so a search never pays for the scan itself.
+  setHistoryIndexRefresher(async () => {
+    if (ctx.testMode) return;
+    publishHistorySessionIndex(mergeUnifiedSessions(await gatherUnifiedInputs()));
+  });
+
+  // Unified, read-only session list: merges live + persisted + lifecycle +
+  // transcript history + mux stats into one de-duplicated, searchable list
+  // (COD-121). Pure merge/filter logic lives in unified-session-service.ts.
+  app.get('/api/sessions/unified', async (req) => {
+    const query = req.query as { q?: string; offset?: string; limit?: string };
+
+    if (ctx.testMode) {
+      return { sessions: [], total: 0 };
+    }
+
+    const { live, persisted, lifecycle, history, mux } = await gatherUnifiedInputs();
+
     // Multi-user: a non-admin only sees their own sessions; host-wide transcript
     // history (not tied to an owned session) is admin-only.
     let sLive = live;
     let sPersisted = persisted;
     let sLifecycle = lifecycle;
     let sHistory = history;
+    let scoped = false;
     const uUser = getAuthUser(req);
     if (isMultiUserMode() && uUser.role !== 'admin') {
+      scoped = true;
       const ownedLive = new Set(
         [...ctx.sessions.values()].filter((s) => canAccessOwned(uUser, s.owner)).map((s) => s.id)
       );
@@ -3680,6 +3843,14 @@ export function registerSessionRoutes(
       history: sHistory,
       mux,
     });
+
+    // Refresh the search index off the back of this request, the home screen
+    // fetches this endpoint whenever it opens, which is the same screen the
+    // search box lives on, so the snapshot is warm before anyone types. A scoped
+    // merge is a per-user subset and would corrupt the shared snapshot, so that
+    // path re-merges unscoped instead (multi-user is opt-in and rarely hit).
+    publishHistorySessionIndex(scoped ? mergeUnifiedSessions({ live, persisted, lifecycle, history, mux }) : merged);
+
     const offset = query.offset !== undefined ? parseInt(query.offset, 10) : undefined;
     const limit = query.limit !== undefined ? parseInt(query.limit, 10) : undefined;
     return filterAndPaginate(merged, {

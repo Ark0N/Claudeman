@@ -32,8 +32,8 @@ describe('shortcut registry and overlay', () => {
     expect(appSource).not.toContain("key: '/'");
   });
 
-  it('exposes shortcut overrides in a dedicated App Settings shortcuts tab', () => {
-    expect(htmlSource).toContain('data-tab="settings-shortcuts"');
+  it('exposes shortcut overrides in a dedicated App Settings shortcuts section', () => {
+    expect(htmlSource).toContain('data-section="settings-shortcuts"');
     expect(htmlSource).toContain('id="settings-shortcuts"');
     expect(htmlSource).toContain('id="appSettingsShortcutsList"');
     expect(htmlSource).not.toContain('id="appSettingsShortcutOverrides"');
@@ -192,7 +192,7 @@ describe('shortcut settings persistence and capture', () => {
     expect(app.showToast).toHaveBeenCalledWith('Shortcut must include Ctrl, Cmd, or Alt', 'error');
   });
 
-  it('renders the shortcuts list when the Shortcuts settings tab is opened', () => {
+  it('renders the shortcuts list when the Shortcuts settings section is reached', () => {
     const { app, elements } = loadSettingsHarness();
     elements.appSettingsModal = { querySelectorAll: () => [] };
     app.renderShortcutSettingsList = vi.fn();
@@ -200,7 +200,7 @@ describe('shortcut settings persistence and capture', () => {
     app.switchSettingsTab('settings-shortcuts');
     expect(app.renderShortcutSettingsList).toHaveBeenCalledTimes(1);
 
-    app.switchSettingsTab('settings-display');
+    app.switchSettingsTab('settings-terminal');
     expect(app.renderShortcutSettingsList).toHaveBeenCalledTimes(1);
   });
 

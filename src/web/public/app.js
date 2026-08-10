@@ -3461,6 +3461,54 @@ class CodemanApp {
         tab.classList.remove('active');
       }
     }
+    // #257: selection used to stop at the class toggle. On phones/tablets the
+    // strip scrolls horizontally, so a tab selected from the palette, a swipe,
+    // Alt+N or a push notification could stay parked off-screen.
+    this._scrollActiveTabIntoView(sessionId);
+  }
+
+  /**
+   * Scroll the tab strip so the given (default: active) tab is visible.
+   *
+   * Only phones/tablets scroll the strip (desktop wraps to a second row), and
+   * the pure policy no-ops whenever there is nothing to scroll, so this is a
+   * cheap call on every device.
+   *
+   * Deliberately NOT scrollIntoView(): that also scrolls every scrollable
+   * ANCESTOR, which on a phone is the document itself. With the header fixed
+   * and the keyboard possibly open, a vertical nudge there shifts the whole
+   * app. Rect math + scrollLeft touches exactly one scroller.
+   */
+  _scrollActiveTabIntoView(sessionId, behavior = 'smooth') {
+    const container = this.$('sessionTabs');
+    if (!container) return;
+    const tab =
+      (sessionId && container.querySelector(`.session-tab[data-id="${sessionId}"]`)) ||
+      container.querySelector('.session-tab.active');
+    if (!tab) return;
+
+    const policy = window.CodemanTabOverflow?.computeTabScrollLeft;
+    if (!policy) return;
+    const containerRect = container.getBoundingClientRect();
+    const tabRect = tab.getBoundingClientRect();
+    const target = policy({
+      scrollLeft: container.scrollLeft,
+      clientWidth: container.clientWidth,
+      scrollWidth: container.scrollWidth,
+      // Offsets are relative to the SCROLL CONTENT, not the offsetParent: the
+      // tabs' offsetParent is the positioned header, so offsetLeft would carry
+      // the brand column's width into the math.
+      tabLeft: tabRect.left - containerRect.left + container.scrollLeft,
+      tabWidth: tabRect.width,
+    });
+    if (Math.abs(target - container.scrollLeft) < 1) return;
+
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    if (typeof container.scrollTo === 'function') {
+      container.scrollTo({ left: target, behavior: reduceMotion ? 'auto' : behavior });
+    } else {
+      container.scrollLeft = target;
+    }
   }
 
   _setTerminalLoadState(sessionId, selectGen, phase) {
@@ -3678,6 +3726,11 @@ class CodemanApp {
       this._fullRenderSessionTabs();
     }
 
+    // Keep the reveal-on-change bookkeeping honest when only the incremental
+    // branch ran: _updateActiveTabImmediate has already scrolled the new active
+    // tab into view, so the next full rebuild must not treat it as a change.
+    this._lastRenderedActiveTabId = this.activeSessionId;
+
     this.updateTabOverflowMode();
     // After the wrap measurement: the `unroll` style starts tabs at max-width 0,
     // so measuring mid-animation would decide the wrap on collapsed widths.
@@ -3749,15 +3802,25 @@ class CodemanApp {
     document.querySelectorAll('body > .subagent-dropdown').forEach(d => d.remove());
     this.cancelHideSubagentDropdown();
 
-    // Build tabs HTML using array for better string concatenation performance
-    // Iterate in sessionOrder to respect user's custom tab arrangement
-    // On mobile: put active session first (only one tab visible anyway)
+    // #257: replacing innerHTML below resets scrollLeft to 0. On phones the
+    // strip scrolls, and ambient rebuilds (a task badge appearing, a session
+    // created elsewhere) fire often enough that a user swiping toward the
+    // right-hand tabs kept getting yanked back to the first one. Remember
+    // where the strip was; the browser clamps the restore to the new content.
+    const prevScrollLeft = container.scrollLeft;
+    const prevActiveTabId = this._lastRenderedActiveTabId;
+    const isFirstRender = !container.querySelector('.session-tab');
+
+    // Build tabs HTML using array for better string concatenation performance.
+    // Iterate in sessionOrder to respect the user's custom tab arrangement, on
+    // EVERY device: mobile used to hoist the active session to the front, from
+    // when only one tab fit on screen. With five tabs it made the strip jump
+    // under the user's finger (and renumbered the Alt+N badges) on every full
+    // rebuild, while the incremental path left the order alone, so the order
+    // depended on which render path happened to run. Scrolling the active tab
+    // into view replaces it.
     const parts = [];
-    let tabOrder = this.sessionOrder;
-    if (MobileDetection.getDeviceType() === 'mobile' && this.activeSessionId) {
-      // Reorder to put active tab first
-      tabOrder = [this.activeSessionId, ...this.sessionOrder.filter(id => id !== this.activeSessionId)];
-    }
+    const tabOrder = this.sessionOrder;
     let _tabIdx = 0;
     for (const id of tabOrder) {
       const session = this.sessions.get(id);
@@ -3825,6 +3888,17 @@ class CodemanApp {
     parts.push(this.renderWebviewTabs ? this.renderWebviewTabs(_tabIdx) : '');
 
     container.innerHTML = parts.join('');
+
+    // Put the strip back where the user left it, then reveal the active tab
+    // only when it CHANGED (or on the first paint). Restoring unconditionally
+    // and revealing conditionally is what lets someone browse the far end of
+    // the strip while a background rebuild fires, without the active tab ever
+    // being stranded off-screen after a switch.
+    container.scrollLeft = prevScrollLeft;
+    this._lastRenderedActiveTabId = this.activeSessionId;
+    if (isFirstRender || prevActiveTabId !== this.activeSessionId) {
+      this._scrollActiveTabIntoView(this.activeSessionId, isFirstRender ? 'auto' : 'smooth');
+    }
 
     // Set up drag-and-drop handlers for tab reordering
     this.setupTabDragHandlers();

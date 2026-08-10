@@ -43,7 +43,7 @@
 
 /**
  * Narrowest window that gets the rail. The welcome content is 560px wide and
- * centered, so at 1180px each gutter is 310px — enough for the rail at its
+ * centered, so at 1180px each gutter is 310px, enough for the rail at its
  * 250px floor and still a visible gap. Anything narrower would overlap the
  * search panel, which is why this is a width gate and not a device-type gate.
  */
