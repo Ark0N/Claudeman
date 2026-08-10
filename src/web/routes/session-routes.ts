@@ -3116,6 +3116,91 @@ export function registerSessionRoutes(
     return sawNonCli;
   }
 
+  /** Git/worktree facts recovered from a transcript. Every field is optional —
+   *  "unknown" must stay distinguishable from "not a worktree" (#265/#266). */
+  type TranscriptGitInfo = {
+    /** The literal `cwd` Claude Code stamped on its own records. */
+    cwd?: string;
+    gitBranch?: string;
+    worktreeName?: string;
+    /** Main repo root the worktree belongs to. */
+    worktreeRepo?: string;
+  };
+
+  /** `<repo>/.claude/worktrees/<name>` — the layout Claude Code's own worktree feature creates. */
+  const CLAUDE_WORKTREE_PATH = /^(.*)\/\.claude\/worktrees\/([^/]+)\/?$/;
+
+  /**
+   * Recover cwd / branch / worktree from a transcript chunk.
+   *
+   * Claude Code stamps `"cwd"` and `"gitBranch"` on every user/assistant record,
+   * and writes a dedicated `worktree-state` record when the session was started
+   * through its own worktree feature. This reads buffers `scanProjectDir` has
+   * ALREADY loaded, so it costs no extra file I/O.
+   *
+   * Why this matters beyond a label: `decodeProjectKey()` reconstructs a path by
+   * stat-walking the filesystem and falls back to `$HOME` when nothing resolves.
+   * A deleted worktree is the normal end of a worktree's life, so every past
+   * worktree session used to collapse onto `$HOME` (#265). The transcript value
+   * is the literal cwd — non-lossy, and it survives the directory being removed.
+   *
+   * cwd is taken from the FIRST record that carries it (a session's cwd does not
+   * move); gitBranch from the LAST (a branch genuinely changes mid-session, and
+   * the newest value in the scanned chunk is the closest to current).
+   */
+  function extractTranscriptGitInfo(text: string): TranscriptGitInfo {
+    const info: TranscriptGitInfo = {};
+    let start = 0;
+    while (start < text.length) {
+      const end = text.indexOf('\n', start);
+      const line = end === -1 ? text.slice(start) : text.slice(start, end);
+      start = end === -1 ? text.length : end + 1;
+
+      // Highest-confidence source: Claude's own worktree record. Names the
+      // worktree explicitly, so it beats anything inferred from the path.
+      if (line.includes('"worktree-state"')) {
+        try {
+          const rec = JSON.parse(line) as {
+            worktreeSession?: { worktreeName?: unknown; worktreePath?: unknown; originalCwd?: unknown };
+          };
+          const ws = rec.worktreeSession;
+          if (ws) {
+            if (typeof ws.worktreeName === 'string') info.worktreeName ||= ws.worktreeName;
+            if (typeof ws.originalCwd === 'string') info.worktreeRepo ||= ws.originalCwd;
+            if (typeof ws.worktreePath === 'string') info.cwd ||= ws.worktreePath;
+          }
+        } catch {
+          // Malformed/truncated line — skip
+        }
+        continue;
+      }
+
+      if (!line.includes('"cwd"') && !line.includes('"gitBranch"')) continue;
+      if (!line.includes('"type":"user"') && !line.includes('"type":"assistant"')) continue;
+      try {
+        const rec = JSON.parse(line) as { cwd?: unknown; gitBranch?: unknown };
+        if (!info.cwd && typeof rec.cwd === 'string' && rec.cwd) info.cwd = rec.cwd;
+        // Last one wins — closest to the session's current branch.
+        if (typeof rec.gitBranch === 'string' && rec.gitBranch) info.gitBranch = rec.gitBranch;
+      } catch {
+        // Malformed/truncated line — skip
+      }
+    }
+
+    // No explicit worktree record: infer from Claude's own worktree path layout.
+    // A worktree created by hand (`git worktree add` anywhere) has no recoverable
+    // NAME here — it still gets a branch, and the badge degrades to branch-only
+    // rather than guessing.
+    if (!info.worktreeName && info.cwd) {
+      const m = CLAUDE_WORKTREE_PATH.exec(info.cwd);
+      if (m) {
+        info.worktreeName = m[2];
+        info.worktreeRepo ||= m[1];
+      }
+    }
+    return info;
+  }
+
   /**
    * Extract the text of the LAST user message from a JSONL transcript chunk
    * (COD-145). Mirrors `extractFirstUserPrompt` exactly — same user-message
@@ -3367,6 +3452,11 @@ export function registerSessionRoutes(
     lastModified: string;
     firstPrompt?: string;
     lastPrompt?: string;
+    /** True when workingDir came from the transcript rather than decodeProjectKey's guess. */
+    workingDirExact?: boolean;
+    gitBranch?: string;
+    worktreeName?: string;
+    worktreeRepo?: string;
   };
 
   // Scan a single project directory and return all valid history sessions in it.
@@ -3473,14 +3563,34 @@ export function registerSessionRoutes(
         headEntrypoint === 'cli' || tailEntrypoint === 'cli' ? 'cli' : (headEntrypoint ?? tailEntrypoint);
       if (entrypoint && isAutomatedEntrypoint(entrypoint)) continue;
 
+      // Git/worktree facts from the buffers already read above — no extra I/O.
+      // head first (cwd is stamped near the top; median offset ~1KB), tail as the
+      // fallback for transcripts whose head read failed or came up empty.
+      const headGit = head ? extractTranscriptGitInfo(head) : {};
+      const tailGit = tail ? extractTranscriptGitInfo(tail) : {};
+      const git: TranscriptGitInfo = {
+        cwd: headGit.cwd ?? tailGit.cwd,
+        // Last-wins within a chunk; across chunks the tail is the newer one.
+        gitBranch: tailGit.gitBranch ?? headGit.gitBranch,
+        worktreeName: headGit.worktreeName ?? tailGit.worktreeName,
+        worktreeRepo: headGit.worktreeRepo ?? tailGit.worktreeRepo,
+      };
+
       out.push({
         sessionId,
-        workingDir,
+        // The transcript's literal cwd beats decodeProjectKey's stat-walked guess,
+        // which silently collapses to $HOME once the directory is gone (#265).
+        // Absent cwd falls back to the old behaviour rather than inventing a path.
+        workingDir: git.cwd ?? workingDir,
+        workingDirExact: git.cwd !== undefined,
         projectKey: projDir,
         sizeBytes: fileStat.size,
         lastModified: fileStat.mtime.toISOString(),
         firstPrompt,
         lastPrompt,
+        gitBranch: git.gitBranch,
+        worktreeName: git.worktreeName,
+        worktreeRepo: git.worktreeRepo,
       });
     }
     return out;
@@ -3618,6 +3728,9 @@ export function registerSessionRoutes(
             firstPrompt: h.firstPrompt,
             lastPrompt: h.lastPrompt,
             projectKey: h.projectKey,
+            gitBranch: h.gitBranch,
+            worktreeName: h.worktreeName,
+            worktreeRepo: h.worktreeRepo,
           });
         }
       }

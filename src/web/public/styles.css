@@ -3840,6 +3840,17 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   color: var(--green);
 }
 
+/* Worktree pill (#266). Tinted off the accent so it reads as metadata rather
+   than status — LIVE is the only badge that should look like state. */
+.history-item-badge-worktree {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .history-item-meta {
   font-size: 0.7rem;
   color: var(--text-muted);
