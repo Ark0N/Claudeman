@@ -4455,6 +4455,24 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   max-width: 250px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
 }
+
+/* Above phone width the menu becomes a full-width drawer across the bottom of the
+   window. The 250px cap above was sized for a `~/<dir>/<repo>` row, which assumed
+   the home prefix had been abbreviated — it never was on macOS, so real rows blew
+   straight through it and ellipsized into `/Users/<user>/co…`, identical on every
+   line. Width is what buys room for the worktree + branch, so the cap is lifted
+   rather than nudged. Phones keep the compact popover: mobile.css positions this
+   menu itself and a viewport-wide drawer there would cover the composer. */
+@media (min-width: 769px) {
+  .run-mode-menu {
+    max-width: none;
+    width: calc(100vw - 24px);
+  }
+  .run-mode-history {
+    /* More rows are worth showing once each one is legible. */
+    max-height: 320px;
+  }
+}
 .run-mode-menu.active {
   display: flex;
   flex-direction: column;
@@ -4525,6 +4543,31 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
 .run-mode-history .run-mode-option {
   max-width: 100%;
 }
+/* Recent-session row: identity first, path last.
+   The row reads  <folder>  [⑂ worktree · branch]  <parent path>  <time>
+   with only the parent path allowed to shrink, so truncation can never hide
+   which project (or which worktree) a row refers to. */
+.run-mode-hist-row {
+  align-items: baseline;
+  gap: 8px;
+}
+.run-mode-option .hist-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.run-mode-option .hist-wt {
+  flex: 0 0 auto;
+  font-size: 0.78em;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  white-space: nowrap;
+}
 .run-mode-option .hist-dir {
   flex: 1;
   /* A flex item's default min-width is auto, so without this the path refuses to
@@ -4534,6 +4577,11 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* The parent path is context, not identity — dim it and let it be the part
+     that loses characters first. */
+  color: var(--text-muted);
+  font-size: 0.85em;
+  text-align: right;
 }
 .run-mode-option .hist-meta {
   font-size: 0.85em;

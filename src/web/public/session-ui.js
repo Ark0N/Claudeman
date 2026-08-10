@@ -490,26 +490,55 @@ Object.assign(CodemanApp.prototype, {
         const timeStr = date.toLocaleDateString('en', { month: 'short', day: 'numeric' })
           + ' ' + date.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false });
         // Shared helper, not a local regex: the copy that used to live here
-        // matched `/home/<user>/` only, so on macOS every row rendered the same
-        // unabbreviated `/Users/<user>/…` prefix and ellipsized away the tail
-        // that identifies it (#273).
+        // matched `/home/<user>/` only, so on macOS (`/Users/<user>/`) nothing was
+        // stripped and every row spent its first ~19 characters on an identical
+        // prefix — with the tail ellipsized, all rows rendered as
+        // `/Users/jordanryan/co…` and became indistinguishable (#273).
         const shortDir = this._shortenHomePath(s.workingDir);
+        // Lead with the folder that identifies the row; the parent path trails and
+        // is what gets truncated. Truncation must never eat the identity.
+        const lastSlash = shortDir.lastIndexOf('/');
+        const leafName = lastSlash === -1 ? shortDir : shortDir.slice(lastSlash + 1);
+        // `<repo>/.claude/worktrees` in the parent path is pure noise once the pill
+        // says which worktree it is — drop it so the repo stays visible instead.
+        const parentDir = (lastSlash === -1 ? '' : shortDir.slice(0, lastSlash)).replace(/\/\.claude\/worktrees$/, '');
 
         const btn = document.createElement('button');
-        btn.className = 'run-mode-option';
+        btn.className = 'run-mode-option run-mode-hist-row';
         btn.title = s.workingDir;
         btn.dataset.sessionId = s.sessionId;
         btn.dataset.workingDir = s.workingDir;
 
-        const dirSpan = document.createElement('span');
-        dirSpan.className = 'hist-dir';
-        dirSpan.textContent = shortDir;
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'hist-name';
+        nameSpan.textContent = leafName;
+
+        const parts = [nameSpan];
+
+        // Worktree pill, same data the session rows use (#266). A worktree's
+        // directory basename is often just the worktree name, so without this two
+        // worktrees of one repo still read alike.
+        const wt = this._worktreeLabel ? this._worktreeLabel(s) : '';
+        if (wt) {
+          const wtSpan = document.createElement('span');
+          wtSpan.className = 'hist-wt';
+          wtSpan.textContent = wt;
+          parts.push(wtSpan);
+        }
+
+        if (parentDir) {
+          const dirSpan = document.createElement('span');
+          dirSpan.className = 'hist-dir';
+          dirSpan.textContent = parentDir;
+          parts.push(dirSpan);
+        }
 
         const metaSpan = document.createElement('span');
         metaSpan.className = 'hist-meta';
         metaSpan.textContent = timeStr;
+        parts.push(metaSpan);
 
-        btn.append(dirSpan, metaSpan);
+        btn.append(...parts);
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
           this.resumeHistorySession(s.sessionId, s.workingDir, s.name);
