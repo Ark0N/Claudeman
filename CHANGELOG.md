@@ -1,5 +1,72 @@
 # aicodeman
 
+## 1.16.3
+
+### Patch Changes
+
+- Session rows that name their worktree, a shell keyboard bar for phones, App Settings as one scrolling document, and the Read My Mind modal on phones.
+  - **#265 / #266**: a past session whose directory no longer exists used to report
+    `$HOME` as its working directory, because history rows reconstructed a path by
+    stat-walking the filesystem and fell back to `$HOME` when nothing resolved.
+    Deleting a worktree is the normal end of its life, so every past worktree
+    session collapsed onto the same indistinguishable row. History rows now read
+    the literal `cwd` Claude Code stamps on its own records, out of buffers the
+    scanner had already loaded, so it costs no extra file reads and survives the
+    directory being removed. Sessions that ran in a worktree also carry a
+    `⑂ name · branch` pill in the Resume list and the Cmd+K session manager, and
+    both are searchable by worktree name and branch. Measured on a real install:
+    the cwd was recoverable for 215 of 216 transcripts, 212 of them from the first
+    16KB, and 28 rows that previously read `$HOME` now report their real path.
+    Reported and implemented by @jordan8037310.
+  - **#262**: a shell session now gets its own mobile accessory bar
+    (`Ctrl · Esc · Tab · ↑ · ↓ · ← · → · Paste · ⌄`), with Ctrl as a one-shot
+    modifier: tap it, and the next character goes out as its control byte. That
+    puts Ctrl+C/D/Z/R/L/A/E/W/U/K on a nine-button bar without a button per chord.
+    The modifier is applied on the CJK input path too, where the textarea owns the
+    keyboard and an armed modifier could previously neither fire nor be spent, so
+    it survived until a later keystroke and turned that one into a control byte.
+    Agent sessions keep the existing bar unchanged. Proposed by @DodgyBadger.
+  - **#257**: with several tabs open on a phone, the rightmost ones could not be
+    reached. Selecting a tab never scrolled the strip, and every ambient rebuild
+    reset `scrollLeft` to 0, so a strip the user had just swiped snapped back a
+    moment later. Reported by @DodgyBadger.
+  - **App Settings** is now a left rail acting as a table of contents over one
+    scrolling document instead of 8 tabs that wrapped onto two rows. Nine sections,
+    all mounted at once, so find-in-page works across the whole thing. The model
+    controls stop contradicting each other: the base model lives on cards and "1M
+    context window" is a switch that composes onto it, retiring the old pair of
+    settings that each claimed precedence over the other.
+  - **Read My Mind** suggestions beyond the first are no longer discarded. The
+    alternates render as tappable rows with their kind badge, tapping one swaps it
+    into the editable field without losing an in-progress edit, and Rethink now
+    records the whole shown set as rejected. The modal is sized for phones and
+    reachable from the phone keyboard bar.
+  - The desktop welcome screen carries the open tabs as a rail docked to the left
+    edge, with created and last-active stamps refreshed in place.
+  - The README now documents cloning a GitHub repository straight into a case
+    (**Add Case → Clone Repo**), which shipped in 1.16.2 but was only described in
+    the architecture docs.
+
+- 5d42f64: Home screen: make the past-conversation list usable, and let search find past sessions.
+  - **#260**: "Resume Conversation" showed 4 rows and then dumped every remaining
+    one into a fixed 240px box, with no ordering or filtering. The list now opens
+    with 10 rows, "Show more"/"Show less" grows and shrinks the box itself (the
+    height cap is class-driven instead of fixed), and the header carries a filter
+    box (matches name, folder, `#case` label and the conversation's prompts), a
+    sort control (recent / name A–Z / folder A–Z, pinned rows still first) and a
+    shown-of-total count. Filtering implies expansion, so every match is visible.
+  - **#261**: the search box could not match a past project by folder name: its
+    session corpus was the live in-memory map, while past sessions come from
+    `/api/sessions/unified`. Search now also harvests a bounded snapshot of that
+    unified list, refreshed OUTSIDE the request path (published by
+    `/api/sessions/unified`, plus a fire-and-forget rebuild when stale), so the
+    search path keeps its no-filesystem-reads property. Results for a closed
+    session resume the conversation instead of trying to select a tab that no
+    longer exists, and are badged `RESUME`. In multi-user mode the snapshot is
+    re-scoped per row on read, matching what `/api/sessions/unified` exposes.
+
+  Reported by @jordan8037310.
+
 ## 1.16.2
 
 ### Patch Changes
