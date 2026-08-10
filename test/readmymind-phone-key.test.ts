@@ -73,4 +73,20 @@ describe('read my mind phone key + alternates (static guards)', () => {
     expect(ui).toContain('readMyMindAlternates');
     expect(ui).toMatch(/\.textContent = suggestion\.prompt/);
   });
+
+  // Phase 3 part 2: the Rethink steer note (docs/readmymind-plan.md phase 3).
+  it('wires the rethink steer note end to end: field, payload, phase visibility, reset', () => {
+    // The field lives in the modal, capped to the schema's 2000-char limit,
+    // and Enter in it triggers a rethink (mirroring the prompt field's
+    // Enter-to-send).
+    expect(html).toMatch(/id="readMyMindSteer"[^>]*maxlength="2000"/);
+    expect(html).toMatch(/id="readMyMindSteer"[^>]*onkeydown="[^"]*rethinkReadMyMind\(\)"/);
+    // Predict sends the trimmed note as `steer`, bounded to the schema cap.
+    expect(ui).toMatch(/body\.steer = steer\.slice\(0, 2000\)/);
+    // The row hides ONLY during loading: Rethink is live in both the ready
+    // and the empty-result phases, so the note must be reachable in both.
+    expect(ui).toMatch(/steerRow\.style\.display = phase === 'loading' \? 'none' : ''/);
+    // A fresh open resets the note along with the rethink memory.
+    expect(ui).toMatch(/steer\.value = ''/);
+  });
 });

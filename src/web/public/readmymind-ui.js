@@ -10,7 +10,8 @@
  * suggestions render as tappable alternate rows that swap into the field
  * without losing edits. Buttons are Send (with Enter), Insert (drop on the CLI
  * composer WITHOUT Enter, for editing), Rethink (re-run with the whole shown
- * set, main + alternates, recorded as rejected), Dismiss.
+ * set, main + alternates, recorded as rejected, plus the optional free-text
+ * steer note, e.g. "no, I meant the mobile bug", sent as `steer`), Dismiss.
  *
  * Suggestions are NEVER auto-sent: the explicit click here is the security
  * boundary for observed/injectable predictor inputs, so suggestion text is
@@ -47,8 +48,11 @@ Object.assign(CodemanApp.prototype, {
       this.showToast('Read My Mind works on Claude sessions only', 'warning');
       return;
     }
-    // Rethink memory resets on each open (a fresh open is a fresh question).
+    // Rethink memory resets on each open (a fresh open is a fresh question),
+    // and the steer note resets with it.
     this._rmm = { sessionId, suggestions: [], selected: 0, rejected: [], busy: false };
+    const steer = document.getElementById('readMyMindSteer');
+    if (steer) steer.value = '';
     document.getElementById('readMyMindModal')?.classList.add('active');
     this._readMyMindPredict();
   },
@@ -65,7 +69,13 @@ Object.assign(CodemanApp.prototype, {
     state.busy = true;
     this._rmmSetPhase('loading');
 
-    const body = state.rejected.length > 0 ? { rejected: state.rejected.slice(-10) } : {};
+    const body = {};
+    if (state.rejected.length > 0) body.rejected = state.rejected.slice(-10);
+    // The steer note rides every re-run while it stays in the field: what the
+    // user sees in the box is what the predictor gets. Empty on first open
+    // (openReadMyMind clears it), so a plain predict sends neither key.
+    const steer = document.getElementById('readMyMindSteer')?.value.trim() ?? '';
+    if (steer) body.steer = steer.slice(0, 2000);
     const data = await this._apiJson(`/api/sessions/${state.sessionId}/readmymind`, { method: 'POST', body });
 
     // The modal may have been dismissed (or reopened for another session) while
@@ -176,7 +186,8 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /** Re-run with the whole shown set (main + alternates) recorded as rejected:
-   *  the user saw every row and asked for something else. */
+   *  the user saw every row and asked for something else. The steer note (if
+   *  any) is read from the field by _readMyMindPredict itself. */
   rethinkReadMyMind() {
     const state = this._rmm;
     if (!state || state.busy) return;
@@ -193,6 +204,11 @@ Object.assign(CodemanApp.prototype, {
     modal.querySelector('.readmymind-loading').style.display = phase === 'loading' ? '' : 'none';
     modal.querySelector('.readmymind-result').style.display = phase === 'ready' ? '' : 'none';
     modal.querySelector('.readmymind-error').style.display = phase === 'error' ? '' : 'none';
+    // The steer note belongs to Rethink, so it shows wherever Rethink is live:
+    // the ready phase AND the empty-result phase (typed text survives the
+    // loading round-trip, only the row's visibility toggles).
+    const steerRow = document.getElementById('readMyMindSteerRow');
+    if (steerRow) steerRow.style.display = phase === 'loading' ? 'none' : '';
     const rethinkBtn = document.getElementById('readMyMindRethink');
     if (rethinkBtn) rethinkBtn.disabled = phase === 'loading';
   },

@@ -1350,6 +1350,9 @@ html.mobile-init .file-browser-panel {
   .readmymind-alt {
     min-height: 38px;
   }
+  .readmymind-steer-input {
+    min-height: 38px;
+  }
 
   /* Modal safe area padding - all sides for full-screen modals */
   .ios-device .modal-content {

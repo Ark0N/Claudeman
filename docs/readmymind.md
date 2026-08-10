@@ -27,7 +27,7 @@ On a Claude session, press the brain button in the header (desktop) or the 🧠 
 
 - **Send** submits it to the session (with Enter).
 - **Insert** drops it on the CLI composer *without* Enter, so you can edit it in the terminal before sending.
-- **Rethink** re-runs with everything shown (the field and the alternates) recorded as rejected.
+- **Rethink** re-runs with everything shown (the field and the alternates) recorded as rejected. An optional steer note below the suggestions ("no, I meant the mobile bug") rides along as your own words, the highest-authority signal the predictor gets; it stays in the field across re-runs until you clear it or reopen the modal.
 - **Dismiss** closes; nothing happens.
 
 A prediction takes 5-90 seconds and costs real tokens; one runs per session at a time. If the session is sitting on a permission/question dialog, the suggestion is usually an answer to that dialog: that is intentional.
@@ -87,7 +87,7 @@ The `codeman` agent skill documents the same verbs (SKILL.md §3 plus `reference
 
 ## What comes next
 
-A steer-note input on Rethink ("no, I meant the mobile bug"; the API already accepts `steer`). Explicitly later: proactive predict-on-idle, auto-compaction of the prompt history into goals, non-Claude capture. See the phases section of [`readmymind-plan.md`](readmymind-plan.md).
+Explicitly later: proactive predict-on-idle, auto-compaction of the prompt history into goals, non-Claude capture. See the phases section of [`readmymind-plan.md`](readmymind-plan.md).
 
 ## Troubleshooting
 

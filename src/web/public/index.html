@@ -2895,6 +2895,13 @@
           <div class="readmymind-alternates" id="readMyMindAlternates" data-i18n-skip style="display:none"></div>
         </div>
         <div class="readmymind-error" style="display:none">No suggestion this time. Rethink to try again.</div>
+        <!-- Rethink steer note: the user's own words about what they actually
+             meant, sent as `steer` with the next Rethink. Shown whenever
+             Rethink is live (ready AND empty-result phases), hidden while a
+             prediction runs. -->
+        <div class="readmymind-steer-row" id="readMyMindSteerRow" style="display:none">
+          <input type="text" id="readMyMindSteer" class="readmymind-steer-input" maxlength="2000" placeholder="Steer the rethink, e.g. 'no, I meant the mobile bug'" aria-label="Steer note for Rethink" onkeydown="if(event.key==='Enter')app.rethinkReadMyMind()">
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" onclick="app.closeReadMyMind()">Dismiss</button>
