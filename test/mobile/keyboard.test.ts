@@ -633,24 +633,41 @@ describe('Virtual Keyboard', () => {
       // document, and calling the internal helper would bypass the routing this
       // test exists to check.
       const result = await page.evaluate(async () => {
-        const tap = async (el: Element) => {
+        const tap = async (el: Element, travel = 0) => {
           const rect = el.getBoundingClientRect();
           const x = Math.max(2, rect.left + Math.min(6, rect.width / 2));
           const y = Math.max(2, rect.top + Math.min(6, rect.height / 2));
           const target = document.elementFromPoint(x, y) || el;
-          const touch = new Touch({ identifier: 21, target, clientX: x, clientY: y });
+          const at = (cy: number) => new Touch({ identifier: 21, target, clientX: x, clientY: cy });
           target.dispatchEvent(
             new TouchEvent('touchstart', {
-              touches: [touch],
-              targetTouches: [touch],
-              changedTouches: [touch],
+              touches: [at(y)],
+              targetTouches: [at(y)],
+              changedTouches: [at(y)],
               bubbles: true,
               cancelable: true,
             })
           );
+          for (const step of travel ? [travel / 3, (travel * 2) / 3, travel] : []) {
+            target.dispatchEvent(
+              new TouchEvent('touchmove', {
+                touches: [at(y + step)],
+                targetTouches: [at(y + step)],
+                changedTouches: [at(y + step)],
+                bubbles: true,
+                cancelable: true,
+              })
+            );
+            await new Promise((resolve) => setTimeout(resolve, 15));
+          }
           await new Promise((resolve) => setTimeout(resolve, 25));
           target.dispatchEvent(
-            new TouchEvent('touchend', { touches: [], changedTouches: [touch], bubbles: true, cancelable: true })
+            new TouchEvent('touchend', {
+              touches: [],
+              changedTouches: [at(y + travel)],
+              bubbles: true,
+              cancelable: true,
+            })
           );
           await new Promise((resolve) => setTimeout(resolve, 250));
           return document.activeElement?.className ?? '';
@@ -677,7 +694,12 @@ describe('Virtual Keyboard', () => {
         app._focusMobileTerminalInput();
         const afterTerminal = await tap(document.querySelector('#terminalContainer')!);
 
-        return { focusedBefore, afterOutside, afterButton, afterTerminal };
+        // A SCROLL also ends in touchend. Scrolling to read something while
+        // composing must not close the keyboard and drop the composer.
+        app._focusMobileTerminalInput();
+        const afterScroll = await tap(document.querySelector('.logo, .header-brand, header') ?? document.body, 120);
+
+        return { focusedBefore, afterOutside, afterButton, afterTerminal, afterScroll };
       });
 
       expect(result.focusedBefore).toContain('xterm-helper-textarea');
@@ -685,6 +707,8 @@ describe('Virtual Keyboard', () => {
       expect(result.afterOutside).not.toContain('xterm-helper-textarea');
       expect(result.afterButton).toContain('xterm-helper-textarea');
       expect(result.afterTerminal).toContain('xterm-helper-textarea');
+      // A scroll ends in touchend too, and must NOT close the keyboard.
+      expect(result.afterScroll).toContain('xterm-helper-textarea');
     });
 
     it('routes CJK textarea typing through local echo on Enter', async () => {
