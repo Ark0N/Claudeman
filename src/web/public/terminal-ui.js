@@ -1517,6 +1517,24 @@ Object.assign(CodemanApp.prototype, {
    * - workingDir under a case dir → "#caseName/subdir"
    * - Otherwise → basename (e.g. "Claudeman")
    */
+  /**
+   * Badge text for a session's git worktree, or '' when it isn't on one.
+   * `⑂ <name> · <branch>`, either half alone if that's all we know.
+   * Branch is truncated: the badge row is a single nowrap line.
+   */
+  _worktreeLabel(s) {
+    // Worktree name is REQUIRED. gitBranch alone is not worktree information —
+    // every ordinary repo session has one, and badging all of them with `⑂ master`
+    // is noise that buries the rows this badge exists to distinguish.
+    const name = s && s.worktreeName;
+    if (!name) return '';
+    let branch = s.gitBranch || '';
+    // A worktree's branch often just restates its name; don't print it twice.
+    if (branch === name || branch === `worktree-${name}`) branch = '';
+    if (branch.length > 24) branch = branch.slice(0, 23) + '\u2026';
+    return '⑂ ' + [name, branch].filter(Boolean).join(' · ');
+  },
+
   _resolveCaseLabel(workingDir, cases) {
     if (!workingDir) return '';
     let best = null;
@@ -1638,6 +1656,18 @@ Object.assign(CodemanApp.prototype, {
       modeBadge.className = 'history-item-badge history-item-badge-mode';
       modeBadge.textContent = s.mode;
       badgeRow.appendChild(modeBadge);
+    }
+    // Worktree pill (#266): distinguishes sessions from different worktrees of the
+    // same repo, which are otherwise identical in this list. Name AND branch when
+    // both are known; a hand-made `git worktree add` yields no recoverable name,
+    // so it degrades to branch-only rather than guessing one.
+    const wtLabel = this._worktreeLabel(s);
+    if (wtLabel) {
+      const wtBadge = document.createElement('span');
+      wtBadge.className = 'history-item-badge history-item-badge-worktree';
+      wtBadge.textContent = wtLabel;
+      wtBadge.title = s.worktreeRepo ? `worktree of ${s.worktreeRepo}` : wtLabel;
+      badgeRow.appendChild(wtBadge);
     }
     if (isLive) {
       const liveBadge = document.createElement('span');

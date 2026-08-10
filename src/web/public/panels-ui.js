@@ -649,6 +649,11 @@ Object.assign(CodemanApp.prototype, {
           sizeBytes: s.sizeBytes ?? 0,
           lastModified: new Date(s.lastActivityAt ?? s.createdAt ?? Date.now()).toISOString(),
           firstPrompt: s.firstPrompt || s.name || '',
+          // Must be carried explicitly: this record is a re-projection, so any
+          // field omitted here silently vanishes from the Cmd+K list (#266).
+          gitBranch: s.gitBranch,
+          worktreeName: s.worktreeName,
+          worktreeRepo: s.worktreeRepo,
         };
         const isLive = !!this.sessions?.has?.(s.sessionId);
         const item = this._buildHistoryItem(record, this.cases, {
