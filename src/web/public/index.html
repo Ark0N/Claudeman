@@ -983,282 +983,378 @@
     </div>
 
     <!-- Session Options Modal (includes Respawn Settings) -->
+    <!-- Session Options: same `set-*` surface as App Settings, but the rail is a
+         real switcher (one .set-section at a time) rather than a table of
+         contents — see the settings-surface block in styles.css. -->
     <div class="modal" id="sessionOptionsModal">
       <div class="modal-backdrop" onclick="app.closeSessionOptions()"></div>
-      <div class="modal-content">
-        <div class="modal-header">
+      <div class="modal-content modal-lg set-shell">
+        <div class="modal-header set-shell-head">
           <h3>Session Options</h3>
-          <button class="modal-close" onclick="app.closeSessionOptions()" aria-label="Close session options">&times;</button>
-        </div>
-        <!-- Modal Tabs -->
-        <div class="modal-tabs">
-          <button class="modal-tab-btn active" data-tab="respawn" data-claude-only onclick="app.switchOptionsTab('respawn')">Respawn</button>
-          <button class="modal-tab-btn" data-tab="context" onclick="app.switchOptionsTab('context')">Context</button>
-          <button class="modal-tab-btn" data-tab="ralph" data-claude-only onclick="app.switchOptionsTab('ralph')">Ralph / Todo</button>
-          <button class="modal-tab-btn" data-tab="summary" onclick="app.switchOptionsTab('summary')">Summary</button>
-        </div>
-        <div class="modal-body">
-          <!-- Respawn Tab Content -->
-          <div class="modal-tab-content" id="respawn-tab">
-          <!-- Respawn Settings Section -->
-          <div class="session-respawn-section" id="sessionRespawnSection">
-            <div class="auto-resume-box">
-              <label class="checkbox-inline">
-                <input type="checkbox" id="modalAutoResumeEnabled" onchange="app.autoSaveAutoResume()">
-                <span>Auto-resume when usage limit resets</span>
-              </label>
-              <span class="auto-resume-status" id="autoResumeStatus"></span>
-              <span class="form-hint">If Claude pauses on a usage limit ("limit reached &middot; resets 3pm"), Codeman waits for the reset time and automatically continues the work. Independent of the respawn loop below.</span>
-            </div>
-
-            <div class="respawn-loop-box">
-            <div class="respawn-loop-title">Respawn loop</div>
-            <span class="form-hint respawn-loop-hint">One autonomous work cycle: whenever Claude goes idle, Codeman sends the update prompt, optionally runs /clear + /init, and kickstarts the next round &mdash; repeating for the chosen duration. All settings below belong to this loop; configure them, then press Enable.</span>
-
-            <div class="form-row">
-              <label>Duration</label>
-              <div class="duration-presets">
-                <button type="button" class="duration-preset-btn" data-minutes="30" onclick="app.selectDurationPreset('30')">30m</button>
-                <button type="button" class="duration-preset-btn" data-minutes="60" onclick="app.selectDurationPreset('60')">1h</button>
-                <button type="button" class="duration-preset-btn" data-minutes="120" onclick="app.selectDurationPreset('120')">2h</button>
-                <button type="button" class="duration-preset-btn" data-minutes="240" onclick="app.selectDurationPreset('240')">4h</button>
-                <button type="button" class="duration-preset-btn" data-minutes="480" onclick="app.selectDurationPreset('480')">8h</button>
-                <button type="button" class="duration-preset-btn active" data-minutes="" onclick="app.selectDurationPreset('')">∞</button>
-                <div class="duration-custom">
-                  <button type="button" class="duration-preset-btn" data-minutes="custom" onclick="app.selectDurationPreset('custom')">Custom</button>
-                  <div class="input-suffix input-suffix-sm duration-custom-input">
-                    <input type="number" id="modalRespawnDuration" value="" min="1" placeholder="min">
-                    <span>min</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="form-section-header">Presets</div>
-            <div class="form-row">
-              <label>Load Preset</label>
-              <div class="preset-selector">
-                <select id="respawnPresetSelect" onchange="app.updatePresetDescription()">
-                  <option value="">-- Select preset --</option>
-                  <optgroup label="Built-in" id="builtinPresetsGroup">
-                  </optgroup>
-                  <optgroup label="Custom" id="customPresetsGroup">
-                  </optgroup>
-                </select>
-                <button type="button" class="btn btn-sm" onclick="app.loadRespawnPreset()" title="Apply preset">Apply</button>
-                <button type="button" class="btn btn-sm btn-secondary" onclick="app.saveCurrentAsPreset()" title="Save current config as preset">Save As...</button>
-              </div>
-              <p class="form-hint" id="presetDescriptionHint"></p>
-            </div>
-
-            <div class="form-section-header">Cycle Steps</div>
-            <div class="form-row">
-              <label>1. Update Prompt</label>
-              <textarea id="modalRespawnPrompt" rows="1" placeholder="Prompt to send when idle" onchange="app.autoSaveRespawnConfig()" style="resize: vertical; min-height: 30px;">update all the docs and CLAUDE.md</textarea>
-            </div>
-
-            <div class="respawn-options-row" style="margin: 8px 0;">
-              <label class="checkbox-inline">
-                <input type="checkbox" id="modalRespawnSendClear" checked onchange="app.autoSaveRespawnConfig()">
-                <span>2. Send /clear</span>
-              </label>
-              <label class="checkbox-inline">
-                <input type="checkbox" id="modalRespawnSendInit" checked onchange="app.autoSaveRespawnConfig()">
-                <span>3. Send /init</span>
-              </label>
-              <label class="checkbox-inline" title="Presses Enter for plan approvals and default question options">
-                <input type="checkbox" id="modalRespawnAutoAccept" checked onchange="app.autoSaveRespawnConfig()">
-                <span>Auto-accept prompts</span>
-              </label>
-            </div>
-
-            <div class="form-row">
-              <label>4. Kickstart Prompt</label>
-              <textarea id="modalRespawnKickstart" rows="1" placeholder="Optional: prompt if /init doesn't trigger work" onchange="app.autoSaveRespawnConfig()" style="resize: vertical; min-height: 30px;"></textarea>
-              <span class="form-hint">Sent only when /init completes but Claude stays idle &middot; Auto-accept presses Enter for plan approvals and default options</span>
-            </div>
-
-            <div class="respawn-header">
-              <div class="session-respawn-status" id="sessionRespawnStatus">
-                <span class="respawn-status-indicator"></span>
-                <span class="respawn-status-text">Not active</span>
-              </div>
-              <div class="respawn-actions">
-                <button class="btn-toolbar btn-success btn-sm" onclick="app.enableRespawnFromModal()" id="modalEnableRespawnBtn">Enable</button>
-                <button class="btn-toolbar btn-danger btn-sm" onclick="app.stopRespawnFromModal()" id="modalStopRespawnBtn" style="display: none;">Stop</button>
-              </div>
-            </div>
-            </div><!-- End respawn-loop-box -->
+          <div class="set-head-actions">
+            <button class="modal-close" onclick="app.closeSessionOptions()" aria-label="Close session options">&times;</button>
           </div>
-          </div><!-- End respawn-tab -->
-
-          <!-- Context Management Tab Content -->
-          <div class="modal-tab-content hidden" id="context-tab">
-            <div class="form-section-header">Appearance</div>
-            <div class="form-row">
-              <label>Session Name</label>
-              <div style="display: flex; align-items: center; gap: 4px;">
-                <span id="modalSessionPrefix" style="color: var(--text-muted); white-space: nowrap; display: none;"></span>
-                <input type="text" id="modalSessionName" maxlength="128" placeholder="Auto (directory name)" onblur="app.saveSessionName()" style="flex: 1;">
-              </div>
-              <span class="form-hint">Custom name shown in the tab (right-click tab to rename inline)</span>
+        </div>
+        <div class="set-body">
+          <nav class="set-rail" id="sessionOptionsRail" aria-label="Session option sections">
+            <div class="set-rail-items">
+              <button type="button" class="set-rail-item active" data-tab="respawn" data-claude-only onclick="app.switchOptionsTab('respawn')">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                <span>Respawn</span>
+              </button>
+              <button type="button" class="set-rail-item" data-tab="context" onclick="app.switchOptionsTab('context')">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
+                <span>Context</span>
+              </button>
+              <button type="button" class="set-rail-item" data-tab="ralph" data-claude-only onclick="app.switchOptionsTab('ralph')">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>
+                <span>Ralph / Todo</span>
+              </button>
+              <button type="button" class="set-rail-item" data-tab="summary" onclick="app.switchOptionsTab('summary')">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><polyline points="7 14 11 10 14 13 20 7"/></svg>
+                <span>Summary</span>
+              </button>
             </div>
-            <div class="form-row">
-              <label>Session Color</label>
-              <div class="color-picker" id="sessionColorPicker">
-                <button type="button" class="color-swatch" data-color="default" title="Default">
-                  <span class="swatch-inner" style="background: var(--bg-hover)"></span>
-                </button>
-                <button type="button" class="color-swatch" data-color="red" title="Red">
-                  <span class="swatch-inner" style="background: var(--session-red)"></span>
-                </button>
-                <button type="button" class="color-swatch" data-color="orange" title="Orange">
-                  <span class="swatch-inner" style="background: var(--session-orange)"></span>
-                </button>
-                <button type="button" class="color-swatch" data-color="yellow" title="Yellow">
-                  <span class="swatch-inner" style="background: var(--session-yellow)"></span>
-                </button>
-                <button type="button" class="color-swatch" data-color="green" title="Green">
-                  <span class="swatch-inner" style="background: var(--session-green)"></span>
-                </button>
-                <button type="button" class="color-swatch" data-color="blue" title="Blue">
-                  <span class="swatch-inner" style="background: var(--session-blue)"></span>
-                </button>
-                <button type="button" class="color-swatch" data-color="purple" title="Purple">
-                  <span class="swatch-inner" style="background: var(--session-purple)"></span>
-                </button>
-                <button type="button" class="color-swatch" data-color="pink" title="Pink">
-                  <span class="swatch-inner" style="background: var(--session-pink)"></span>
-                </button>
-              </div>
-            </div>
+            <p class="set-rail-foot">These options belong to the selected session and save as you change them.</p>
+          </nav>
 
-            <div class="form-section-header">Token Management</div>
-            <div class="context-settings-grid">
-              <div class="context-setting">
-                <div class="context-setting-header">
-                  <label class="checkbox-inline">
-                    <input type="checkbox" id="modalAutoCompactEnabled" onchange="app.autoSaveAutoCompact()">
-                    <span>Auto-Compact</span>
-                  </label>
-                  <div class="input-suffix input-suffix-sm">
-                    <input type="number" id="modalAutoCompactThreshold" value="110000" min="10000" max="500000" step="10000" onchange="app.autoSaveAutoCompact()">
-                    <span>tokens</span>
+          <div class="set-doc" id="sessionOptionsDoc">
+            <!-- ══ Respawn ══════════════════════════════════════════════════ -->
+            <section class="set-section" id="respawn-tab" data-label="Respawn">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                <h2>Respawn</h2>
+              </div>
+              <p class="set-section-blurb">One autonomous work cycle, plus what to do when a usage limit pauses the session.</p>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Usage limits</h4></div>
+                <div class="set-group-body">
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Auto-resume when the limit resets</span>
+                      <span class="set-row-desc">If Claude pauses on a subscription limit ("limit reached &middot; resets 3pm"), Codeman waits for the reset and continues on its own. Independent of the respawn loop below.</span>
+                      <span class="auto-resume-status" id="autoResumeStatus"></span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="modalAutoResumeEnabled" onchange="app.autoSaveAutoResume()"><span class="slider"></span></label>
                   </div>
                 </div>
-                <input type="text" id="modalAutoCompactPrompt" value="" placeholder="Focus prompt (optional)" onchange="app.autoSaveAutoCompact()">
-                <span class="form-hint">Summarizes context while preserving key information</span>
               </div>
 
-              <div class="context-setting">
-                <div class="context-setting-header">
-                  <label class="checkbox-inline">
-                    <input type="checkbox" id="modalAutoClearEnabled" onchange="app.autoSaveAutoClear()">
-                    <span>Auto-Clear</span>
-                  </label>
-                  <div class="input-suffix input-suffix-sm">
-                    <input type="number" id="modalAutoClearThreshold" value="140000" min="10000" max="500000" step="10000" onchange="app.autoSaveAutoClear()">
-                    <span>tokens</span>
+              <!-- Hidden wholesale for non-claude sessions and for a session with
+                   no live process (session-ui.js: openSessionOptions). -->
+              <div id="sessionRespawnSection">
+                <div class="set-group">
+                  <div class="set-group-head"><h4>Respawn loop</h4></div>
+                  <p class="set-group-hint">Whenever Claude goes idle, Codeman sends the update prompt, optionally runs /clear + /init, and kickstarts the next round &mdash; repeating for the chosen duration. Configure it here, then press Enable.</p>
+                  <div class="set-group-body">
+                    <div class="set-row set-row-block">
+                      <div class="set-row-text">
+                        <span class="set-row-label">Duration</span>
+                        <span class="set-row-desc">How long the loop keeps cycling before it stops on its own.</span>
+                      </div>
+                      <div class="duration-presets">
+                        <button type="button" class="duration-preset-btn" data-minutes="30" onclick="app.selectDurationPreset('30')">30m</button>
+                        <button type="button" class="duration-preset-btn" data-minutes="60" onclick="app.selectDurationPreset('60')">1h</button>
+                        <button type="button" class="duration-preset-btn" data-minutes="120" onclick="app.selectDurationPreset('120')">2h</button>
+                        <button type="button" class="duration-preset-btn" data-minutes="240" onclick="app.selectDurationPreset('240')">4h</button>
+                        <button type="button" class="duration-preset-btn" data-minutes="480" onclick="app.selectDurationPreset('480')">8h</button>
+                        <button type="button" class="duration-preset-btn active" data-minutes="" onclick="app.selectDurationPreset('')">&#8734;</button>
+                        <div class="duration-custom">
+                          <button type="button" class="duration-preset-btn" data-minutes="custom" onclick="app.selectDurationPreset('custom')">Custom</button>
+                          <div class="input-suffix input-suffix-sm duration-custom-input">
+                            <input type="number" id="modalRespawnDuration" value="" min="1" placeholder="min">
+                            <span>min</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="set-row set-row-block">
+                      <div class="set-row-text">
+                        <span class="set-row-label">Preset</span>
+                        <span class="set-row-desc">Load a saved loop configuration, or store the current one under a name.</span>
+                      </div>
+                      <div class="set-row-actions set-row-actions-wide">
+                        <select id="respawnPresetSelect" class="set-select" onchange="app.updatePresetDescription()">
+                          <option value="">-- Select preset --</option>
+                          <optgroup label="Built-in" id="builtinPresetsGroup">
+                          </optgroup>
+                          <optgroup label="Custom" id="customPresetsGroup">
+                          </optgroup>
+                        </select>
+                        <button type="button" class="btn-toolbar btn-sm" onclick="app.loadRespawnPreset()" title="Apply preset">Apply</button>
+                        <button type="button" class="btn-toolbar btn-sm" onclick="app.saveCurrentAsPreset()" title="Save current config as preset">Save As&hellip;</button>
+                      </div>
+                      <!-- Filled by updatePresetDescription() and CLEARED on every
+                           open, so it can never hold the row's own description. -->
+                      <span class="set-row-desc set-row-note" id="presetDescriptionHint"></span>
+                    </div>
                   </div>
                 </div>
-                <span class="form-hint">Full context reset at threshold (use higher than compact)</span>
+
+                <div class="set-group">
+                  <div class="set-group-head"><h4>Cycle steps</h4></div>
+                  <div class="set-group-body">
+                    <div class="set-row set-row-block">
+                      <div class="set-row-text">
+                        <span class="set-row-label">1. Update prompt</span>
+                        <span class="set-row-desc">Sent as soon as the session goes idle.</span>
+                      </div>
+                      <textarea id="modalRespawnPrompt" class="set-textarea" rows="1" placeholder="Prompt to send when idle" onchange="app.autoSaveRespawnConfig()">update all the docs and CLAUDE.md</textarea>
+                    </div>
+
+                    <div class="set-chips" id="respawnStepChips">
+                      <label class="set-chip"><input type="checkbox" id="modalRespawnSendClear" checked onchange="app.autoSaveRespawnConfig()"><span>2. Send /clear</span></label>
+                      <label class="set-chip"><input type="checkbox" id="modalRespawnSendInit" checked onchange="app.autoSaveRespawnConfig()"><span>3. Send /init</span></label>
+                      <label class="set-chip" title="Presses Enter for plan approvals and default question options"><input type="checkbox" id="modalRespawnAutoAccept" checked onchange="app.autoSaveRespawnConfig()"><span>Auto-accept prompts</span></label>
+                    </div>
+
+                    <div class="set-row set-row-block">
+                      <div class="set-row-text">
+                        <span class="set-row-label">4. Kickstart prompt</span>
+                        <span class="set-row-desc">Sent only when /init finishes but Claude stays idle. Optional.</span>
+                      </div>
+                      <textarea id="modalRespawnKickstart" class="set-textarea" rows="1" placeholder="Optional: prompt if /init doesn't trigger work" onchange="app.autoSaveRespawnConfig()"></textarea>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="set-group">
+                  <div class="set-group-head"><h4>Loop control</h4></div>
+                  <div class="set-group-body">
+                    <div class="set-row">
+                      <div class="set-row-text">
+                        <span class="set-row-label">Status</span>
+                        <div class="session-respawn-status" id="sessionRespawnStatus">
+                          <span class="respawn-status-indicator"></span>
+                          <span class="respawn-status-text">Not active</span>
+                        </div>
+                      </div>
+                      <div class="set-row-actions">
+                        <button class="btn-toolbar btn-success btn-sm" onclick="app.enableRespawnFromModal()" id="modalEnableRespawnBtn">Enable</button>
+                        <button class="btn-toolbar btn-danger btn-sm" onclick="app.stopRespawnFromModal()" id="modalStopRespawnBtn" style="display: none;">Stop</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div><!-- End sessionRespawnSection -->
+            </section>
+
+            <!-- ══ Context ══════════════════════════════════════════════════ -->
+            <section class="set-section hidden" id="context-tab" data-label="Context">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
+                <h2>Context</h2>
               </div>
-            </div>
+              <p class="set-section-blurb">What this tab is called, and how its context window is kept from filling up.</p>
 
-            <div class="form-section-header">File Watching</div>
-            <div class="form-row form-row-switch">
-              <label>Image Watcher</label>
-              <label class="switch">
-                <input type="checkbox" id="modalImageWatcherEnabled" checked onchange="app.toggleSessionImageWatcher()">
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Auto-popup new images (screenshots, generated files) in this session's directory</span>
-            </div>
-
-            <div class="form-section-header">Performance</div>
-            <div class="form-row form-row-switch">
-              <label>Flicker Filter</label>
-              <label class="switch">
-                <input type="checkbox" id="modalFlickerFilterEnabled" onchange="app.toggleFlickerFilter()">
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Buffers output after screen clears to reduce Ink UI flickering (adds ~50ms latency)</span>
-            </div>
-          </div><!-- End context-tab -->
-
-          <!-- Ralph Wiggum Tab Content -->
-          <div class="modal-tab-content hidden" id="ralph-tab">
-            <div class="form-row form-row-switch">
-              <label>Enable Tracker</label>
-              <label class="switch">
-                <input type="checkbox" id="modalRalphEnabled">
-                <span class="slider"></span>
-              </label>
-              <span class="form-hint">Auto-detects loops and todos in Claude output</span>
-            </div>
-
-            <div class="form-row">
-              <label>Completion Phrase</label>
-              <input type="text" id="modalRalphPhrase" placeholder="e.g., COMPLETE, DONE, FINISHED">
-              <span class="form-hint">Phrase Claude outputs when loop is complete (without &lt;promise&gt; tags)</span>
-            </div>
-
-            <div class="form-section-header">Limits</div>
-            <div class="ralph-limits-grid">
-              <div class="form-col">
-                <label>Max Iterations</label>
-                <input type="number" id="modalRalphMaxIterations" value="0" min="0" max="1000">
-                <span class="form-hint">0 = unlimited</span>
-              </div>
-              <div class="form-col">
-                <label>Max Todos</label>
-                <input type="number" id="modalRalphMaxTodos" value="50" min="1" max="500">
-                <span class="form-hint">Per session</span>
-              </div>
-              <div class="form-col">
-                <label>Todo Expiration</label>
-                <div class="input-suffix input-suffix-sm">
-                  <input type="number" id="modalRalphTodoExpiration" value="60" min="1" max="1440">
-                  <span>min</span>
+              <div class="set-group">
+                <div class="set-group-head"><h4>Identity</h4></div>
+                <div class="set-group-body">
+                  <div class="set-row has-field">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Session name</span>
+                      <span class="set-row-desc">Shown in the tab. Right-click a tab to rename it inline.</span>
+                    </div>
+                    <div class="set-row-actions">
+                      <span id="modalSessionPrefix" class="set-static" style="display: none; white-space: nowrap;"></span>
+                      <input type="text" id="modalSessionName" class="set-input" maxlength="128" placeholder="Auto (directory name)" onblur="app.saveSessionName()">
+                    </div>
+                  </div>
+                  <div class="set-row set-row-block">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Session color</span>
+                      <span class="set-row-desc">Tints the tab so a session is findable at a glance.</span>
+                    </div>
+                    <div class="color-picker" id="sessionColorPicker">
+                      <button type="button" class="color-swatch" data-color="default" title="Default">
+                        <span class="swatch-inner" style="background: var(--bg-hover)"></span>
+                      </button>
+                      <button type="button" class="color-swatch" data-color="red" title="Red">
+                        <span class="swatch-inner" style="background: var(--session-red)"></span>
+                      </button>
+                      <button type="button" class="color-swatch" data-color="orange" title="Orange">
+                        <span class="swatch-inner" style="background: var(--session-orange)"></span>
+                      </button>
+                      <button type="button" class="color-swatch" data-color="yellow" title="Yellow">
+                        <span class="swatch-inner" style="background: var(--session-yellow)"></span>
+                      </button>
+                      <button type="button" class="color-swatch" data-color="green" title="Green">
+                        <span class="swatch-inner" style="background: var(--session-green)"></span>
+                      </button>
+                      <button type="button" class="color-swatch" data-color="blue" title="Blue">
+                        <span class="swatch-inner" style="background: var(--session-blue)"></span>
+                      </button>
+                      <button type="button" class="color-swatch" data-color="purple" title="Purple">
+                        <span class="swatch-inner" style="background: var(--session-purple)"></span>
+                      </button>
+                      <button type="button" class="color-swatch" data-color="pink" title="Pink">
+                        <span class="swatch-inner" style="background: var(--session-pink)"></span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <div class="ralph-config-actions">
-              <button class="btn-toolbar btn-primary" onclick="app.saveRalphConfig()">Save Ralph Config</button>
-            </div>
-          </div><!-- End ralph-tab -->
-
-          <!-- Summary Tab Content -->
-          <div class="modal-tab-content hidden" id="summary-tab">
-            <!-- Filter Buttons -->
-            <div class="run-summary-filters">
-              <button class="filter-btn active" data-filter="all" onclick="app.filterRunSummary('all')">All</button>
-              <button class="filter-btn" data-filter="errors" onclick="app.filterRunSummary('errors')">Errors</button>
-              <button class="filter-btn" data-filter="warnings" onclick="app.filterRunSummary('warnings')">Warnings</button>
-              <button class="filter-btn" data-filter="respawn" onclick="app.filterRunSummary('respawn')">Respawn</button>
-              <button class="filter-btn" data-filter="idle" onclick="app.filterRunSummary('idle')">Idle/Working</button>
-            </div>
-
-            <!-- Timeline -->
-            <div class="run-summary-timeline" id="runSummaryTimeline">
-              <p class="empty-message">Select a session to view summary</p>
-            </div>
-
-            <!-- Footer with actions -->
-            <div class="run-summary-footer">
-              <span class="run-summary-session-info" id="runSummarySessionInfo"></span>
-              <div class="run-summary-actions">
-                <label class="auto-refresh-label">
-                  <input type="checkbox" id="runSummaryAutoRefresh" onchange="app.toggleRunSummaryAutoRefresh()">
-                  Auto-refresh
-                </label>
-                <button class="btn-toolbar btn-sm" onclick="app.refreshRunSummary()" title="Refresh summary">&#x21BB; Refresh</button>
-                <button class="btn-toolbar btn-sm" onclick="app.exportRunSummary('json')" title="Export as JSON">Export JSON</button>
-                <button class="btn-toolbar btn-sm" onclick="app.exportRunSummary('md')" title="Export as Markdown">Export MD</button>
+              <div class="set-group">
+                <div class="set-group-head"><h4>Token management</h4></div>
+                <div class="set-group-body">
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Auto-compact</span>
+                      <span class="set-row-desc">Summarizes the context at the threshold while preserving key information.</span>
+                    </div>
+                    <div class="set-row-actions">
+                      <input type="number" id="modalAutoCompactThreshold" class="set-num set-num-wide" value="110000" min="10000" max="500000" step="10000" onchange="app.autoSaveAutoCompact()">
+                      <span class="set-unit">tokens</span>
+                      <label class="switch switch-sm"><input type="checkbox" id="modalAutoCompactEnabled" onchange="app.autoSaveAutoCompact()"><span class="slider"></span></label>
+                    </div>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Compact focus prompt</span>
+                      <span class="set-row-desc">Optional: what the summary should hold on to.</span>
+                    </div>
+                    <input type="text" id="modalAutoCompactPrompt" class="set-input" value="" placeholder="Focus prompt (optional)" onchange="app.autoSaveAutoCompact()">
+                  </div>
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Auto-clear</span>
+                      <span class="set-row-desc">Full context reset at the threshold. Keep it higher than auto-compact.</span>
+                    </div>
+                    <div class="set-row-actions">
+                      <input type="number" id="modalAutoClearThreshold" class="set-num set-num-wide" value="140000" min="10000" max="500000" step="10000" onchange="app.autoSaveAutoClear()">
+                      <span class="set-unit">tokens</span>
+                      <label class="switch switch-sm"><input type="checkbox" id="modalAutoClearEnabled" onchange="app.autoSaveAutoClear()"><span class="slider"></span></label>
+                    </div>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div><!-- End summary-tab -->
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>This session</h4></div>
+                <div class="set-group-body">
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Image watcher</span>
+                      <span class="set-row-desc">Pops up new images (screenshots, generated files) found in this session's directory.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="modalImageWatcherEnabled" checked onchange="app.toggleSessionImageWatcher()"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Flicker filter</span>
+                      <span class="set-row-desc">Buffers output after screen clears to reduce Ink UI flickering. Adds ~50ms latency.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="modalFlickerFilterEnabled" onchange="app.toggleFlickerFilter()"><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- ══ Ralph / Todo ═════════════════════════════════════════════ -->
+            <section class="set-section hidden" id="ralph-tab" data-label="Ralph / Todo">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>
+                <h2>Ralph / Todo</h2>
+              </div>
+              <p class="set-section-blurb">Loop and todo tracking read out of this session's output.</p>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Tracker</h4></div>
+                <div class="set-group-body">
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Enable tracker</span>
+                      <span class="set-row-desc">Auto-detects loops and todos in Claude's output.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="modalRalphEnabled"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Completion phrase</span>
+                      <span class="set-row-desc">What Claude prints when the loop is done, without &lt;promise&gt; tags.</span>
+                    </div>
+                    <input type="text" id="modalRalphPhrase" class="set-input" placeholder="e.g. COMPLETE, DONE, FINISHED">
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Limits</h4></div>
+                <div class="set-group-body">
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Max iterations</span>
+                      <span class="set-row-desc">0 = unlimited.</span>
+                    </div>
+                    <input type="number" id="modalRalphMaxIterations" class="set-num" value="0" min="0" max="1000">
+                  </div>
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Max todos</span>
+                      <span class="set-row-desc">Per session; the oldest are evicted first.</span>
+                    </div>
+                    <input type="number" id="modalRalphMaxTodos" class="set-num" value="50" min="1" max="500">
+                  </div>
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Todo expiration</span>
+                      <span class="set-row-desc">How long an untouched todo survives.</span>
+                    </div>
+                    <div class="set-row-actions">
+                      <input type="number" id="modalRalphTodoExpiration" class="set-num" value="60" min="1" max="1440">
+                      <span class="set-unit">min</span>
+                    </div>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Apply</span>
+                      <span class="set-row-desc">Ralph settings are the one group here that does not save on change.</span>
+                    </div>
+                    <button class="btn-toolbar btn-primary btn-sm" onclick="app.saveRalphConfig()">Save Ralph config</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- ══ Summary ══════════════════════════════════════════════════ -->
+            <section class="set-section hidden" id="summary-tab" data-label="Summary">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><polyline points="7 14 11 10 14 13 20 7"/></svg>
+                <h2>Summary</h2>
+              </div>
+              <p class="set-section-blurb">What this session has done: respawns, errors, idle stretches.</p>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Timeline</h4><span class="set-scope" id="runSummarySessionInfo"></span></div>
+                <div class="set-group-body">
+                  <div class="run-summary-filters">
+                    <button class="filter-btn active" data-filter="all" onclick="app.filterRunSummary('all')">All</button>
+                    <button class="filter-btn" data-filter="errors" onclick="app.filterRunSummary('errors')">Errors</button>
+                    <button class="filter-btn" data-filter="warnings" onclick="app.filterRunSummary('warnings')">Warnings</button>
+                    <button class="filter-btn" data-filter="respawn" onclick="app.filterRunSummary('respawn')">Respawn</button>
+                    <button class="filter-btn" data-filter="idle" onclick="app.filterRunSummary('idle')">Idle/Working</button>
+                  </div>
+                  <div class="run-summary-timeline" id="runSummaryTimeline">
+                    <p class="empty-message">Select a session to view summary</p>
+                  </div>
+                  <div class="run-summary-footer">
+                    <label class="auto-refresh-label">
+                      <input type="checkbox" id="runSummaryAutoRefresh" onchange="app.toggleRunSummaryAutoRefresh()">
+                      Auto-refresh
+                    </label>
+                    <div class="run-summary-actions">
+                      <button class="btn-toolbar btn-sm" onclick="app.refreshRunSummary()" title="Refresh summary">&#x21BB; Refresh</button>
+                      <button class="btn-toolbar btn-sm" onclick="app.exportRunSummary('json')" title="Export as JSON">Export JSON</button>
+                      <button class="btn-toolbar btn-sm" onclick="app.exportRunSummary('md')" title="Export as Markdown">Export MD</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
         </div>
       </div>
     </div>

@@ -14561,32 +14561,42 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   App Settings (#appSettingsModal)
+   Settings surface (#appSettingsModal + #sessionOptionsModal)
 
-   A left rail that is a TABLE OF CONTENTS over ONE scrolling document, not a
-   tab switcher: every section stays mounted, the rail follows the scroll, and
-   the browser's own find-in-page still works across all of them.
+   The `set-*` language: a left rail, a document of grouped rows, each row text
+   on the left and its control pinned right. Both modals use it, hence the
+   `:is()` scope — which keeps the old id specificity exactly (an `:is()` list
+   takes the specificity of its most specific argument, and both are ids), so
+   nothing downstream of this block shifts in the cascade.
 
-   Scoped under #appSettingsModal on purpose. `.modal-tabs`/`.modal-tab-btn`
-   are shared with #sessionOptionsModal and #createCaseModal, so this file
-   introduces its own `set-*` classes rather than restyling those.
+   The two differ in what the rail DOES, and only there:
+     • #appSettingsModal — a TABLE OF CONTENTS over ONE scrolling document.
+       Every section stays mounted, the rail follows the scroll, find-in-page
+       reaches all of it.
+     • #sessionOptionsModal — a real switcher: one `.set-section` at a time,
+       `.hidden` on the rest (switchOptionsTab in session-ui.js). Summary owns
+       its own scroller and Respawn is long, so stacking them into one document
+       would bury both.
+
+   `.modal-tabs`/`.modal-tab-btn`/`.modal-tab-content` still belong to
+   #createCaseModal and must not be restyled from here.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /* Deliberately narrower than the other .modal-lg users: the document is a
    single column of rows whose control sits at the far right, so extra width
    buys nothing but a gap between a row's text and its switch. */
-#appSettingsModal .modal-content.modal-lg {
+:is(#appSettingsModal, #sessionOptionsModal) .modal-content.modal-lg {
   max-width: min(840px, 96vw);
   width: min(840px, 96vw);
   height: min(700px, 88vh);
   max-height: 88vh;
 }
 
-#appSettingsModal .set-shell-head {
+:is(#appSettingsModal, #sessionOptionsModal) .set-shell-head {
   flex-shrink: 0;
 }
 
-#appSettingsModal .set-head-actions {
+:is(#appSettingsModal, #sessionOptionsModal) .set-head-actions {
   display: flex;
   flex-direction: row-reverse;
   align-items: center;
@@ -14596,7 +14606,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 
 /* The phone layout drops the bottom action bar and saves from the header
    instead; on desktop the footer owns Save, so this stays hidden. */
-#appSettingsModal .set-head-save {
+:is(#appSettingsModal, #sessionOptionsModal) .set-head-save {
   display: none;
   font: inherit;
   font-size: 0.82rem;
@@ -14610,20 +14620,20 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   color: var(--accent-ink);
 }
 
-#appSettingsModal .set-body {
+:is(#appSettingsModal, #sessionOptionsModal) .set-body {
   display: grid;
   grid-template-columns: 196px minmax(0, 1fr);
   flex: 1;
   min-height: 0;
 }
 
-#appSettingsModal .set-foot {
+:is(#appSettingsModal, #sessionOptionsModal) .set-foot {
   margin-top: 0;
   flex-shrink: 0;
 }
 
 /* ── rail ─────────────────────────────────────────────────────────────── */
-#appSettingsModal .set-rail {
+:is(#appSettingsModal, #sessionOptionsModal) .set-rail {
   display: flex;
   flex-direction: column;
   padding: 12px 10px;
@@ -14633,7 +14643,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   min-height: 0;
 }
 
-#appSettingsModal .set-search {
+:is(#appSettingsModal, #sessionOptionsModal) .set-search {
   position: relative;
   display: flex;
   align-items: center;
@@ -14641,14 +14651,14 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   flex-shrink: 0;
 }
 
-#appSettingsModal .set-search svg {
+:is(#appSettingsModal, #sessionOptionsModal) .set-search svg {
   position: absolute;
   left: 9px;
   color: var(--text-muted);
   pointer-events: none;
 }
 
-#appSettingsModal .set-search input {
+:is(#appSettingsModal, #sessionOptionsModal) .set-search input {
   width: 100%;
   box-sizing: border-box;
   padding: 7px 9px 7px 28px;
@@ -14663,17 +14673,17 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   appearance: none;
 }
 
-#appSettingsModal .set-search input:focus {
+:is(#appSettingsModal, #sessionOptionsModal) .set-search input:focus {
   border-color: var(--accent);
 }
 
-#appSettingsModal .set-rail-items {
+:is(#appSettingsModal, #sessionOptionsModal) .set-rail-items {
   display: flex;
   flex-direction: column;
   gap: 1px;
 }
 
-#appSettingsModal .set-rail-item {
+:is(#appSettingsModal, #sessionOptionsModal) .set-rail-item {
   display: flex;
   align-items: center;
   gap: 9px;
@@ -14690,26 +14700,26 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   transition: color 0.15s, background 0.15s;
 }
 
-#appSettingsModal .set-rail-item svg {
+:is(#appSettingsModal, #sessionOptionsModal) .set-rail-item svg {
   color: var(--text-muted);
   flex-shrink: 0;
 }
 
-#appSettingsModal .set-rail-item:hover {
+:is(#appSettingsModal, #sessionOptionsModal) .set-rail-item:hover {
   background: var(--control-bg);
   color: var(--text);
 }
 
-#appSettingsModal .set-rail-item.active {
+:is(#appSettingsModal, #sessionOptionsModal) .set-rail-item.active {
   color: var(--accent);
   font-weight: 580;
 }
 
-#appSettingsModal .set-rail-item.active svg {
+:is(#appSettingsModal, #sessionOptionsModal) .set-rail-item.active svg {
   color: var(--accent);
 }
 
-#appSettingsModal .set-rail-item.active::before {
+:is(#appSettingsModal, #sessionOptionsModal) .set-rail-item.active::before {
   content: '';
   position: absolute;
   left: 2px;
@@ -14720,7 +14730,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   background: var(--accent);
 }
 
-#appSettingsModal .set-rail-foot {
+:is(#appSettingsModal, #sessionOptionsModal) .set-rail-foot {
   margin: auto 0 0;
   padding: 10px 10px 2px;
   font-size: 0.62rem;
@@ -14730,7 +14740,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 }
 
 /* ── document ─────────────────────────────────────────────────────────── */
-#appSettingsModal .set-doc {
+:is(#appSettingsModal, #sessionOptionsModal) .set-doc {
   overflow-y: auto;
   padding: 0 18px 32px;
   min-width: 0;
@@ -14738,23 +14748,23 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   position: relative;
 }
 
-#appSettingsModal .set-section {
+:is(#appSettingsModal, #sessionOptionsModal) .set-section {
   padding-top: 16px;
 }
 
-#appSettingsModal .set-section + .set-section {
+:is(#appSettingsModal, #sessionOptionsModal) .set-section + .set-section {
   border-top: 1px solid var(--border);
   margin-top: 20px;
 }
 
-#appSettingsModal .set-section-head {
+:is(#appSettingsModal, #sessionOptionsModal) .set-section-head {
   display: flex;
   align-items: center;
   gap: 10px;
   margin-bottom: 4px;
 }
 
-#appSettingsModal .set-section-head svg {
+:is(#appSettingsModal, #sessionOptionsModal) .set-section-head svg {
   color: var(--accent);
   flex-shrink: 0;
   padding: 5px;
@@ -14764,7 +14774,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   box-sizing: content-box;
 }
 
-#appSettingsModal .set-section-head h2 {
+:is(#appSettingsModal, #sessionOptionsModal) .set-section-head h2 {
   margin: 0;
   font-size: 0.95rem;
   font-weight: 640;
@@ -14772,13 +14782,13 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   color: var(--text);
 }
 
-#appSettingsModal .set-section-blurb {
+:is(#appSettingsModal, #sessionOptionsModal) .set-section-blurb {
   margin: 0 0 11px 34px;
   font-size: 0.69rem;
   color: var(--text-muted);
 }
 
-#appSettingsModal .set-empty {
+:is(#appSettingsModal, #sessionOptionsModal) .set-empty {
   margin: 24px 0 0;
   font-size: 0.78rem;
   color: var(--text-muted);
@@ -14786,18 +14796,18 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 }
 
 /* ── groups ───────────────────────────────────────────────────────────── */
-#appSettingsModal .set-group + .set-group {
+:is(#appSettingsModal, #sessionOptionsModal) .set-group + .set-group {
   margin-top: 14px;
 }
 
-#appSettingsModal .set-group-head {
+:is(#appSettingsModal, #sessionOptionsModal) .set-group-head {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
 }
 
-#appSettingsModal .set-group-head h4 {
+:is(#appSettingsModal, #sessionOptionsModal) .set-group-head h4 {
   margin: 0;
   font-size: 0.63rem;
   font-weight: 640;
@@ -14806,7 +14816,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   color: var(--text-muted);
 }
 
-#appSettingsModal .set-group-head::after {
+:is(#appSettingsModal, #sessionOptionsModal) .set-group-head::after {
   content: '';
   flex: 1;
   height: 1px;
@@ -14814,11 +14824,11 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   order: 9;
 }
 
-#appSettingsModal .set-group-head-toggle {
+:is(#appSettingsModal, #sessionOptionsModal) .set-group-head-toggle {
   cursor: pointer;
 }
 
-#appSettingsModal .set-adv {
+:is(#appSettingsModal, #sessionOptionsModal) .set-adv {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -14829,34 +14839,34 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   padding: 2px 8px;
 }
 
-#appSettingsModal .set-adv svg {
+:is(#appSettingsModal, #sessionOptionsModal) .set-adv svg {
   transition: transform 0.18s;
 }
 
-#appSettingsModal .set-group-advanced.open .set-adv svg {
+:is(#appSettingsModal, #sessionOptionsModal) .set-group-advanced.open .set-adv svg {
   transform: rotate(180deg);
 }
 
-#appSettingsModal .set-group-advanced:not(.open) .set-group-body,
-#appSettingsModal .set-group-advanced:not(.open) .set-group-hint {
+:is(#appSettingsModal, #sessionOptionsModal) .set-group-advanced:not(.open) .set-group-body,
+:is(#appSettingsModal, #sessionOptionsModal) .set-group-advanced:not(.open) .set-group-hint {
   display: none;
 }
 
-#appSettingsModal .set-group-hint {
+:is(#appSettingsModal, #sessionOptionsModal) .set-group-hint {
   margin: -2px 0 9px;
   font-size: 0.68rem;
   line-height: 1.45;
   color: var(--text-muted);
 }
 
-#appSettingsModal .set-group-body {
+:is(#appSettingsModal, #sessionOptionsModal) .set-group-body {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
 /* ── rows ─────────────────────────────────────────────────────────────── */
-#appSettingsModal .set-row {
+:is(#appSettingsModal, #sessionOptionsModal) .set-row {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -14867,18 +14877,18 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   transition: background 0.15s, border-color 0.15s;
 }
 
-#appSettingsModal .set-row:hover {
+:is(#appSettingsModal, #sessionOptionsModal) .set-row:hover {
   background: rgba(255, 255, 255, 0.05);
   border-color: rgba(255, 255, 255, 0.09);
 }
 
-#appSettingsModal .set-row-block {
+:is(#appSettingsModal, #sessionOptionsModal) .set-row-block {
   flex-direction: column;
   align-items: stretch;
   gap: 9px;
 }
 
-#appSettingsModal .set-row-text {
+:is(#appSettingsModal, #sessionOptionsModal) .set-row-text {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -14886,7 +14896,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   flex: 1;
 }
 
-#appSettingsModal .set-row-label {
+:is(#appSettingsModal, #sessionOptionsModal) .set-row-label {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -14898,22 +14908,22 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 
 /* Wide enough that a description runs most of the way to its switch: the
    complaint about this panel was the dead gap a 62ch cap left behind. */
-#appSettingsModal .set-row-desc {
+:is(#appSettingsModal, #sessionOptionsModal) .set-row-desc {
   font-size: 0.66rem;
   line-height: 1.45;
   color: var(--text-muted);
   max-width: 78ch;
 }
 
-#appSettingsModal .set-row-actions {
+:is(#appSettingsModal, #sessionOptionsModal) .set-row-actions {
   display: flex;
   align-items: center;
   gap: 7px;
   flex-shrink: 0;
 }
 
-#appSettingsModal .set-scope,
-#appSettingsModal .set-tag {
+:is(#appSettingsModal, #sessionOptionsModal) .set-scope,
+:is(#appSettingsModal, #sessionOptionsModal) .set-tag {
   font-size: 0.52rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -14922,28 +14932,28 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   white-space: nowrap;
 }
 
-#appSettingsModal .set-scope {
+:is(#appSettingsModal, #sessionOptionsModal) .set-scope {
   color: var(--text-muted);
   border: 1px solid var(--border);
   opacity: 0.8;
 }
 
-#appSettingsModal .set-tag {
+:is(#appSettingsModal, #sessionOptionsModal) .set-tag {
   color: var(--accent);
   background: rgba(var(--accent-rgb), 0.13);
   border: 1px solid rgba(var(--accent-rgb), 0.25);
 }
 
-#appSettingsModal .set-tag-beta {
+:is(#appSettingsModal, #sessionOptionsModal) .set-tag-beta {
   color: var(--yellow);
   background: rgba(240, 194, 90, 0.12);
   border-color: rgba(240, 194, 90, 0.28);
 }
 
 /* ── controls ─────────────────────────────────────────────────────────── */
-#appSettingsModal .set-select,
-#appSettingsModal .set-input,
-#appSettingsModal .set-num {
+:is(#appSettingsModal, #sessionOptionsModal) .set-select,
+:is(#appSettingsModal, #sessionOptionsModal) .set-input,
+:is(#appSettingsModal, #sessionOptionsModal) .set-num {
   font: inherit;
   font-size: 0.74rem;
   color: var(--text);
@@ -14955,49 +14965,49 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   flex-shrink: 0;
 }
 
-#appSettingsModal .set-select:focus,
-#appSettingsModal .set-input:focus,
-#appSettingsModal .set-num:focus {
+:is(#appSettingsModal, #sessionOptionsModal) .set-select:focus,
+:is(#appSettingsModal, #sessionOptionsModal) .set-input:focus,
+:is(#appSettingsModal, #sessionOptionsModal) .set-num:focus {
   border-color: var(--accent);
 }
 
-#appSettingsModal .set-select {
+:is(#appSettingsModal, #sessionOptionsModal) .set-select {
   min-width: 190px;
   max-width: 260px;
 }
 
-#appSettingsModal .set-input {
+:is(#appSettingsModal, #sessionOptionsModal) .set-input {
   width: 220px;
 }
 
-#appSettingsModal .set-num {
+:is(#appSettingsModal, #sessionOptionsModal) .set-num {
   width: 62px;
   text-align: right;
 }
 
-#appSettingsModal .set-unit {
+:is(#appSettingsModal, #sessionOptionsModal) .set-unit {
   font-size: 0.65rem;
   color: var(--text-muted);
 }
 
-#appSettingsModal .set-static {
+:is(#appSettingsModal, #sessionOptionsModal) .set-static {
   font-size: 0.74rem;
   color: var(--text-dim);
 }
 
 /* The version is the first value in the first section now, so it reads as an
    answer to "what am I running", not as one more right-aligned field. */
-#appSettingsModal .set-static-strong {
+:is(#appSettingsModal, #sessionOptionsModal) .set-static-strong {
   font-size: 0.82rem;
   font-weight: 620;
   color: var(--text);
 }
 
-#appSettingsModal .mono {
+:is(#appSettingsModal, #sessionOptionsModal) .mono {
   font-family: var(--font-mono);
 }
 
-#appSettingsModal .set-copy {
+:is(#appSettingsModal, #sessionOptionsModal) .set-copy {
   font-family: var(--font-mono);
   font-size: 0.7rem;
   color: var(--text-dim);
@@ -15009,13 +15019,13 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 /* The cards and the segmented control are the visible UI; the underlying
    <select> stays in the DOM as the single source of truth that
    openAppSettings()/saveAppSettings() read and write by id. */
-#appSettingsModal .set-field-hidden {
+:is(#appSettingsModal, #sessionOptionsModal) .set-field-hidden {
   display: none !important;
 }
 
-#appSettingsModal .set-note,
-#appSettingsModal .set-notes,
-#appSettingsModal .set-progress {
+:is(#appSettingsModal, #sessionOptionsModal) .set-note,
+:is(#appSettingsModal, #sessionOptionsModal) .set-notes,
+:is(#appSettingsModal, #sessionOptionsModal) .set-progress {
   font-size: 0.72rem;
   line-height: 1.5;
   color: var(--text-secondary);
@@ -15023,7 +15033,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   border-radius: 8px;
 }
 
-#appSettingsModal .set-notes {
+:is(#appSettingsModal, #sessionOptionsModal) .set-notes {
   max-height: 160px;
   overflow: auto;
   font-size: 0.7rem;
@@ -15033,18 +15043,18 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   border: 1px solid var(--border);
 }
 
-#appSettingsModal .set-progress {
+:is(#appSettingsModal, #sessionOptionsModal) .set-progress {
   border: 1px solid var(--border);
 }
 
 /* ── chips (header buttons, panels, features, levels) ─────────────────── */
-#appSettingsModal .set-chips {
+:is(#appSettingsModal, #sessionOptionsModal) .set-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-#appSettingsModal .set-chip {
+:is(#appSettingsModal, #sessionOptionsModal) .set-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -15059,7 +15069,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 
-#appSettingsModal .set-chip input {
+:is(#appSettingsModal, #sessionOptionsModal) .set-chip input {
   position: absolute;
   opacity: 0;
   width: 0;
@@ -15070,22 +15080,22 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 /* The chip carries the icon of the button it switches on, so the list reads as
    the header rather than as a list of names. It is also the ONLY copy of that
    icon: the live preview clones it (settings-ui.js: _syncLayoutPreview). */
-#appSettingsModal .set-chip-ico {
+:is(#appSettingsModal, #sessionOptionsModal) .set-chip-ico {
   flex-shrink: 0;
   opacity: 0.75;
 }
 
-#appSettingsModal .set-chip-emoji {
+:is(#appSettingsModal, #sessionOptionsModal) .set-chip-emoji {
   font-size: 0.85em;
   line-height: 1;
 }
 
-#appSettingsModal .set-chip.is-on .set-chip-ico,
-#appSettingsModal .set-chip:has(input:checked) .set-chip-ico {
+:is(#appSettingsModal, #sessionOptionsModal) .set-chip.is-on .set-chip-ico,
+:is(#appSettingsModal, #sessionOptionsModal) .set-chip:has(input:checked) .set-chip-ico {
   opacity: 1;
 }
 
-#appSettingsModal .set-chip::before {
+:is(#appSettingsModal, #sessionOptionsModal) .set-chip::before {
   content: '\2713';
   font-size: 0.8em;
   line-height: 1;
@@ -15095,27 +15105,27 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   transition: width 0.15s, opacity 0.15s;
 }
 
-#appSettingsModal .set-chip:hover {
+:is(#appSettingsModal, #sessionOptionsModal) .set-chip:hover {
   border-color: var(--control-border-hover);
   color: var(--text);
 }
 
 /* `.is-on` is written by settings-ui.js on load and on change; `:has()` keeps
    the state correct for any chip toggled before that listener runs. */
-#appSettingsModal .set-chip.is-on,
-#appSettingsModal .set-chip:has(input:checked) {
+:is(#appSettingsModal, #sessionOptionsModal) .set-chip.is-on,
+:is(#appSettingsModal, #sessionOptionsModal) .set-chip:has(input:checked) {
   color: var(--accent);
   border-color: rgba(var(--accent-rgb), 0.45);
   background: rgba(var(--accent-rgb), 0.12);
 }
 
-#appSettingsModal .set-chip.is-on::before,
-#appSettingsModal .set-chip:has(input:checked)::before {
+:is(#appSettingsModal, #sessionOptionsModal) .set-chip.is-on::before,
+:is(#appSettingsModal, #sessionOptionsModal) .set-chip:has(input:checked)::before {
   width: 0.85em;
   opacity: 1;
 }
 
-#appSettingsModal .set-chip:focus-within {
+:is(#appSettingsModal, #sessionOptionsModal) .set-chip:focus-within {
   outline: 2px solid rgba(var(--accent-rgb), 0.5);
   outline-offset: 1px;
 }
@@ -15125,18 +15135,18 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
    chips on every change (settings-ui.js: _syncLayoutPreview). Everything here
    is decoration around cloned chip icons, so it carries no icon of its own.
    ─────────────────────────────────────────────────────────────────────────── */
-#appSettingsModal .set-preview {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview {
   margin: 0 0 14px;
 }
 
-#appSettingsModal .set-preview-head {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-head {
   display: flex;
   align-items: baseline;
   gap: 8px;
   margin-bottom: 6px;
 }
 
-#appSettingsModal .set-preview-title {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-title {
   font-size: 0.63rem;
   font-weight: 640;
   letter-spacing: 0.09em;
@@ -15144,7 +15154,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   color: var(--text-muted);
 }
 
-#appSettingsModal .set-preview-hint {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-hint {
   font-size: 0.62rem;
   color: var(--text-muted);
   opacity: 0.72;
@@ -15152,14 +15162,14 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 
 /* Skin tokens only, no black/white alphas: on the four light skins a
    hardcoded rgba(0,0,0,…) turned the whole model into a grey slab. */
-#appSettingsModal .set-preview-frame {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-frame {
   border: 1px solid var(--border);
   border-radius: 10px;
   overflow: hidden;
   background: var(--bg-dark);
 }
 
-#appSettingsModal .set-preview-bar {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-bar {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -15168,7 +15178,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   background: var(--bg-card);
 }
 
-#appSettingsModal .set-preview-logo {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-logo {
   display: grid;
   place-items: center;
   width: 16px;
@@ -15181,7 +15191,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   flex-shrink: 0;
 }
 
-#appSettingsModal .set-preview-tab {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-tab {
   font-size: 0.56rem;
   padding: 2px 7px;
   border-radius: 5px;
@@ -15190,18 +15200,18 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   white-space: nowrap;
 }
 
-#appSettingsModal .set-preview-tab-dim {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-tab-dim {
   opacity: 0.5;
 }
 
-#appSettingsModal .set-preview-gap {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-gap {
   flex: 1;
   min-width: 6px;
 }
 
 /* Wraps rather than overflows: every button switched on has to stay visible,
    and the frame is narrower than the real header it stands in for. */
-#appSettingsModal .set-preview-btns {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-btns {
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -15209,7 +15219,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   gap: 3px;
 }
 
-#appSettingsModal .set-preview-btn {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-btn {
   display: inline-grid;
   place-items: center;
   width: 19px;
@@ -15219,12 +15229,12 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   background: var(--control-bg);
 }
 
-#appSettingsModal .set-preview-btn-fixed {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-btn-fixed {
   color: var(--text-muted);
   background: transparent;
 }
 
-#appSettingsModal .set-preview-chip {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-chip {
   font-size: 0.55rem;
   padding: 3px 6px;
   border-radius: 5px;
@@ -15233,38 +15243,38 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   white-space: nowrap;
 }
 
-#appSettingsModal svg.set-preview-ico {
+:is(#appSettingsModal, #sessionOptionsModal) svg.set-preview-ico {
   width: 11px;
   height: 11px;
   flex-shrink: 0;
 }
 
-#appSettingsModal span.set-preview-ico {
+:is(#appSettingsModal, #sessionOptionsModal) span.set-preview-ico {
   font-size: 9px;
   line-height: 1;
 }
 
-#appSettingsModal .set-preview-stage {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-stage {
   position: relative;
   display: flex;
   min-height: 76px;
   padding: 9px 10px;
 }
 
-#appSettingsModal .set-preview-term {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-term {
   flex: 1;
   font-family: var(--font-mono, monospace);
   font-size: 0.58rem;
   color: var(--text-muted);
 }
 
-#appSettingsModal .set-preview-caret {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-caret {
   color: var(--accent);
 }
 
 /* Right-docked, like every real panel in the app (monitor, subagents, file
    browser and project insights are all `position: fixed; right: …`). */
-#appSettingsModal .set-preview-panels {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-panels {
   position: absolute;
   right: 9px;
   top: 9px;
@@ -15275,9 +15285,9 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   gap: 4px;
 }
 
-#appSettingsModal .set-preview-panel,
-#appSettingsModal .set-preview-float,
-#appSettingsModal .set-preview-toolbar {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-panel,
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-float,
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-toolbar {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -15290,7 +15300,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   white-space: nowrap;
 }
 
-#appSettingsModal .set-preview-floats {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-floats {
   position: absolute;
   left: 12px;
   bottom: 10px;
@@ -15298,12 +15308,12 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   gap: 5px;
 }
 
-#appSettingsModal .set-preview-float {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-float {
   border-style: dashed;
   color: var(--text-muted);
 }
 
-#appSettingsModal .set-preview-tray {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-tray {
   display: flex;
   align-items: center;
   gap: 5px;
@@ -15312,7 +15322,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   background: var(--bg-card);
 }
 
-#appSettingsModal .set-preview-run {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-run {
   font-size: 0.55rem;
   font-weight: 640;
   padding: 3px 9px;
@@ -15321,26 +15331,26 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   background: linear-gradient(180deg, var(--accent-grad-a), var(--accent-grad-b));
 }
 
-#appSettingsModal .set-preview-tools {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-tools {
   display: flex;
   align-items: center;
   gap: 4px;
 }
 
-#appSettingsModal .set-preview-empty {
+:is(#appSettingsModal, #sessionOptionsModal) .set-preview-empty {
   margin: 6px 0 0;
   font-size: 0.62rem;
   color: var(--text-muted);
 }
 
 /* ── model cards ──────────────────────────────────────────────────────── */
-#appSettingsModal .set-modelgrid {
+:is(#appSettingsModal, #sessionOptionsModal) .set-modelgrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 7px;
 }
 
-#appSettingsModal .set-modelcard {
+:is(#appSettingsModal, #sessionOptionsModal) .set-modelcard {
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -15354,30 +15364,30 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   transition: background 0.15s, border-color 0.15s;
 }
 
-#appSettingsModal .set-modelcard:hover {
+:is(#appSettingsModal, #sessionOptionsModal) .set-modelcard:hover {
   border-color: var(--control-border-hover);
   background: rgba(255, 255, 255, 0.05);
 }
 
-#appSettingsModal .set-modelcard.selected {
+:is(#appSettingsModal, #sessionOptionsModal) .set-modelcard.selected {
   border-color: rgba(var(--accent-rgb), 0.55);
   background: rgba(var(--accent-rgb), 0.11);
   box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.2);
 }
 
-#appSettingsModal .set-mc-top {
+:is(#appSettingsModal, #sessionOptionsModal) .set-mc-top {
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
-#appSettingsModal .set-mc-name {
+:is(#appSettingsModal, #sessionOptionsModal) .set-mc-name {
   font-size: 0.78rem;
   color: var(--text);
   font-weight: 560;
 }
 
-#appSettingsModal .set-mc-dot {
+:is(#appSettingsModal, #sessionOptionsModal) .set-mc-dot {
   margin-left: auto;
   width: 7px;
   height: 7px;
@@ -15387,16 +15397,16 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   opacity: 0;
 }
 
-#appSettingsModal .set-modelcard.selected .set-mc-dot {
+:is(#appSettingsModal, #sessionOptionsModal) .set-modelcard.selected .set-mc-dot {
   opacity: 1;
 }
 
-#appSettingsModal .set-mc-meta {
+:is(#appSettingsModal, #sessionOptionsModal) .set-mc-meta {
   font-size: 0.64rem;
   color: var(--text-muted);
 }
 
-#appSettingsModal .set-mc-ctx {
+:is(#appSettingsModal, #sessionOptionsModal) .set-mc-ctx {
   margin-top: 2px;
   align-self: flex-start;
   font-size: 0.53rem;
@@ -15408,12 +15418,12 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   padding: 1px 4px;
 }
 
-#appSettingsModal .set-row-disabled {
+:is(#appSettingsModal, #sessionOptionsModal) .set-row-disabled {
   opacity: 0.45;
 }
 
 /* ── segmented control (thinking effort) ──────────────────────────────── */
-#appSettingsModal .set-segment {
+:is(#appSettingsModal, #sessionOptionsModal) .set-segment {
   display: flex;
   gap: 3px;
   padding: 3px;
@@ -15422,7 +15432,7 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   border-radius: 9px;
 }
 
-#appSettingsModal .set-segment button {
+:is(#appSettingsModal, #sessionOptionsModal) .set-segment button {
   flex: 1;
   font: inherit;
   font-size: 0.68rem;
@@ -15435,25 +15445,25 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   white-space: nowrap;
 }
 
-#appSettingsModal .set-segment button:hover {
+:is(#appSettingsModal, #sessionOptionsModal) .set-segment button:hover {
   color: var(--text);
   background: var(--control-bg);
 }
 
-#appSettingsModal .set-segment button.selected {
+:is(#appSettingsModal, #sessionOptionsModal) .set-segment button.selected {
   background: linear-gradient(180deg, var(--accent-grad-a), var(--accent-grad-b));
   color: var(--accent-ink);
   font-weight: 620;
 }
 
 /* ── task-routing 2x2 ─────────────────────────────────────────────────── */
-#appSettingsModal .set-minigrid {
+:is(#appSettingsModal, #sessionOptionsModal) .set-minigrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 5px;
 }
 
-#appSettingsModal .set-mini {
+:is(#appSettingsModal, #sessionOptionsModal) .set-mini {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -15464,30 +15474,109 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   border: 1px solid rgba(255, 255, 255, 0.055);
 }
 
-#appSettingsModal .set-mini-label {
+:is(#appSettingsModal, #sessionOptionsModal) .set-mini-label {
   font-size: 0.74rem;
   color: var(--text-dim);
 }
 
-#appSettingsModal .set-mini .set-select {
+:is(#appSettingsModal, #sessionOptionsModal) .set-mini .set-select {
   min-width: 0;
   width: 128px;
 }
 
 /* Search hides non-matching units; everything stays mounted underneath. */
-#appSettingsModal .set-hit-hidden {
+:is(#appSettingsModal, #sessionOptionsModal) .set-hit-hidden {
   display: none !important;
 }
 
 /* ── phone jump control: desktop hides it entirely ────────────────────── */
-#appSettingsModal .set-jump,
-#appSettingsModal .set-jump-menu,
-#appSettingsModal .set-jump-veil {
+:is(#appSettingsModal, #sessionOptionsModal) .set-jump,
+:is(#appSettingsModal, #sessionOptionsModal) .set-jump-menu,
+:is(#appSettingsModal, #sessionOptionsModal) .set-jump-veil {
   display: none;
 }
 
 /* ── injected sections (admin Users panel) ────────────────────────────── */
-#appSettingsModal .set-section .form-hint {
+:is(#appSettingsModal, #sessionOptionsModal) .set-section .form-hint {
   display: block;
   margin: 0 0 10px;
+}
+
+/* ── session options: the rail SWITCHES sections ──────────────────────────
+   App Settings keeps every section mounted and scrolls; here one section is
+   shown at a time (switchOptionsTab in session-ui.js toggles `.hidden`), so a
+   long Respawn tab and the Summary timeline never stack on top of each other.
+   ─────────────────────────────────────────────────────────────────────────── */
+#sessionOptionsModal .set-section.hidden {
+  display: none;
+}
+
+/* Only ever one section visible, so the separator App Settings draws between
+   consecutive sections renders as a stray line above whichever one is shown.
+   Matches the `.set-section + .set-section` rule's specificity on purpose. */
+#sessionOptionsModal .set-section + .set-section {
+  border-top: 0;
+  margin-top: 0;
+}
+
+/* Token thresholds are six digits; the default 62px field clips them. */
+#sessionOptionsModal .set-num-wide {
+  width: 86px;
+}
+
+/* Full-width controls inside a stacked row (duration presets, color swatches,
+   the preset selector, the prompt textareas). */
+#sessionOptionsModal .set-row-block > .set-row-actions,
+#sessionOptionsModal .set-row-block > .duration-presets,
+#sessionOptionsModal .set-row-block > .color-picker {
+  width: 100%;
+}
+
+#sessionOptionsModal .set-row-block > .set-row-actions > .set-select {
+  flex: 1;
+  min-width: 0;
+}
+
+:is(#appSettingsModal, #sessionOptionsModal) .set-textarea {
+  font: inherit;
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.24);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 7px 9px;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 34px;
+}
+
+:is(#appSettingsModal, #sessionOptionsModal) .set-textarea:focus {
+  border-color: var(--accent);
+}
+
+/* The usage-limit note sits under its description rather than beside the
+   switch, and only appears while a pause is armed (`.active`). */
+#sessionOptionsModal .set-row-text > .auto-resume-status {
+  margin-top: 3px;
+  font-size: 0.66rem;
+}
+
+#sessionOptionsModal .set-row-text > .session-respawn-status {
+  align-self: flex-start;
+  margin-top: 3px;
+}
+
+#sessionOptionsModal .run-summary-filters {
+  margin-bottom: 0;
+}
+
+#sessionOptionsModal .run-summary-footer {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin-top: 0;
 }

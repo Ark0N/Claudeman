@@ -689,9 +689,14 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsJump')?.setAttribute('aria-expanded', open ? 'true' : 'false');
   },
 
-  /** Mirror checkbox state onto the chip labels (see _initSettingsNav). */
+  /**
+   * Mirror checkbox state onto the chip labels (see _initSettingsNav).
+   *
+   * Covers Session Options too: it shares the `set-*` surface, and its cycle-step
+   * chips would otherwise depend on `:has()` alone for their checked styling.
+   */
   _syncSettingsChips() {
-    document.querySelectorAll('#appSettingsModal .set-chip').forEach(chip => {
+    document.querySelectorAll('#appSettingsModal .set-chip, #sessionOptionsModal .set-chip').forEach(chip => {
       chip.classList.toggle('is-on', !!chip.querySelector('input')?.checked);
     });
     this._syncLayoutPreview();
