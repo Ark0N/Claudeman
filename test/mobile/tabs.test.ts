@@ -183,6 +183,171 @@ describe('Tab Navigation', () => {
     });
   });
 
+  // ─── Tab Strip Scrolling (issue #257) ────────────────────────────────────
+
+  describe('Tab Strip Scrolling', () => {
+    /**
+     * Seed `count` real sessions and render the strip through the production
+     * code path (_fullRenderSessionTabs), so the tabs carry the real markup,
+     * widths and CSS rather than hand-built stand-ins.
+     */
+    async function seedTabs(page: Page, count: number, activeIndex = 0): Promise<void> {
+      await page.evaluate(`(function (n, activeIndex) {
+        app.sessions.clear();
+        app.sessionOrder = [];
+        for (let i = 1; i <= n; i++) {
+          const id = 'scroll-sess-' + i;
+          app.sessions.set(id, { id, name: 'w' + i + '-project', status: 'idle', mode: 'claude', workingDir: '/tmp/p' + i });
+          app.sessionOrder.push(id);
+        }
+        app.activeSessionId = app.sessionOrder[activeIndex];
+        app._lastRenderedActiveTabId = null;
+        app._fullRenderSessionTabs();
+      })(${count}, ${activeIndex})`);
+      await page.waitForTimeout(200);
+    }
+
+    async function stripState(page: Page, sessionId: string) {
+      return page.evaluate(`(function (id) {
+        const c = document.getElementById('sessionTabs');
+        const tab = c.querySelector('.session-tab[data-id="' + id + '"]');
+        const cRect = c.getBoundingClientRect();
+        const tRect = tab ? tab.getBoundingClientRect() : null;
+        return {
+          scrollLeft: Math.round(c.scrollLeft),
+          maxScroll: Math.round(c.scrollWidth - c.clientWidth),
+          order: [...c.querySelectorAll('.session-tab[data-id]')].map((t) => t.dataset.id),
+          visible: tRect ? tRect.left >= cRect.left - 1 && tRect.right <= cRect.right + 1 : false,
+        };
+      })('${sessionId}')`) as Promise<{ scrollLeft: number; maxScroll: number; order: string[]; visible: boolean }>;
+    }
+
+    it('reveals a rightmost tab that selection would otherwise leave off-screen', async () => {
+      const { context, page } = await createDevicePage(standardPhone, BASE_URL, 'chromium');
+      try {
+        await page.waitForTimeout(WAIT.PAGE_SETTLE);
+        await seedTabs(page, 5);
+
+        const before = await stripState(page, 'scroll-sess-5');
+        // Precondition: the strip really does overflow and the last tab is hidden.
+        expect(before.maxScroll).toBeGreaterThan(0);
+        expect(before.visible).toBe(false);
+
+        // The selection path selectSession() uses (class toggle, no rebuild).
+        await page.evaluate(`(function () {
+          app.activeSessionId = 'scroll-sess-5';
+          app._updateActiveTabImmediate('scroll-sess-5');
+        })()`);
+        await page.waitForTimeout(600); // smooth scroll
+
+        const after = await stripState(page, 'scroll-sess-5');
+        expect(after.visible).toBe(true);
+        expect(after.scrollLeft).toBeGreaterThan(before.scrollLeft);
+      } finally {
+        await context.close();
+      }
+    });
+
+    it('scrolls back to reveal a leftmost tab', async () => {
+      const { context, page } = await createDevicePage(standardPhone, BASE_URL, 'chromium');
+      try {
+        await page.waitForTimeout(WAIT.PAGE_SETTLE);
+        await seedTabs(page, 5);
+        await page.evaluate(`document.getElementById('sessionTabs').scrollLeft = 9999`);
+
+        await page.evaluate(`(function () {
+          app.activeSessionId = 'scroll-sess-1';
+          app._updateActiveTabImmediate('scroll-sess-1');
+        })()`);
+        await page.waitForTimeout(600);
+
+        const after = await stripState(page, 'scroll-sess-1');
+        expect(after.visible).toBe(true);
+        expect(after.scrollLeft).toBe(0);
+      } finally {
+        await context.close();
+      }
+    });
+
+    it('keeps the scroll position across an ambient full re-render', async () => {
+      const { context, page } = await createDevicePage(standardPhone, BASE_URL, 'chromium');
+      try {
+        await page.waitForTimeout(WAIT.PAGE_SETTLE);
+        await seedTabs(page, 5);
+
+        // User swipes to the end of the strip, then a background rebuild fires
+        // (a task badge appearing forces the full-render path).
+        await page.evaluate(`document.getElementById('sessionTabs').scrollLeft = 9999`);
+        const scrolled = await stripState(page, 'scroll-sess-5');
+        expect(scrolled.scrollLeft).toBeGreaterThan(0);
+
+        await page.evaluate(`(function () {
+          app.sessions.get('scroll-sess-2').taskStats = { running: 2, total: 3 };
+          app._fullRenderSessionTabs();
+        })()`);
+        await page.waitForTimeout(200);
+
+        const after = await stripState(page, 'scroll-sess-5');
+        expect(after.scrollLeft).toBe(scrolled.scrollLeft);
+      } finally {
+        await context.close();
+      }
+    });
+
+    it('renders tabs in sessionOrder on phones instead of hoisting the active one', async () => {
+      const { context, page } = await createDevicePage(standardPhone, BASE_URL, 'chromium');
+      try {
+        await page.waitForTimeout(WAIT.PAGE_SETTLE);
+        await seedTabs(page, 5, 3); // 4th tab active
+
+        const state = await stripState(page, 'scroll-sess-4');
+        expect(state.order).toEqual([
+          'scroll-sess-1',
+          'scroll-sess-2',
+          'scroll-sess-3',
+          'scroll-sess-4',
+          'scroll-sess-5',
+        ]);
+        // ...and the active tab is still brought into view by the render.
+        expect(state.visible).toBe(true);
+      } finally {
+        await context.close();
+      }
+    });
+
+    it('reaches the last tab with a horizontal touch drag', async () => {
+      const { context, page } = await createDevicePage(standardPhone, BASE_URL, 'chromium');
+      try {
+        await page.waitForTimeout(WAIT.PAGE_SETTLE);
+        await seedTabs(page, 5);
+
+        const cdp = await context.newCDPSession(page);
+        const box = await page.locator(SELECTORS.TABS_CONTAINER).boundingBox();
+        if (!box) throw new Error('tab strip not found');
+        const y = box.y + box.height / 2;
+        const startX = box.x + box.width * 0.85;
+        const endX = box.x + box.width * 0.1;
+
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: startX, y }] });
+        for (let i = 1; i <= 10; i++) {
+          await cdp.send('Input.dispatchTouchEvent', {
+            type: 'touchMove',
+            touchPoints: [{ x: startX + ((endX - startX) * i) / 10, y }],
+          });
+          await page.waitForTimeout(16);
+        }
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        await page.waitForTimeout(400);
+
+        const after = await stripState(page, 'scroll-sess-5');
+        expect(after.scrollLeft).toBeGreaterThan(0);
+        expect(after.visible).toBe(true);
+      } finally {
+        await context.close();
+      }
+    });
+  });
+
   // ─── Swipe Navigation (CDP - Chromium) ───────────────────────────────────
 
   describe('Swipe Navigation (CDP - Chromium)', () => {

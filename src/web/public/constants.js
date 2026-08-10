@@ -156,6 +156,47 @@ function shouldAutoWrapTabs(input) {
   return scrollWidth > clientWidth + 1;
 }
 
+// Sliver of the neighbouring tab left visible when the strip scrolls a tab into
+// view. Landing a tab flush against the edge reads as "this is the last one";
+// the gap is what tells the user there is more strip to swipe to.
+const TAB_SCROLL_REVEAL_PX = 16;
+
+// Phone/tablet tab-strip scroll policy (issue #257). Those breakpoints scroll
+// the strip horizontally (desktop wraps to a second row instead and never
+// scrolls), so the active tab can sit entirely outside the visible slice with
+// no way back except a swipe the user may not know is possible.
+//
+// Returns the scrollLeft that puts the tab inside the window, clamped to the
+// scrollable range, and returns the CURRENT scrollLeft when the tab is already
+// visible: callers compare and skip the write, so an already-correct strip is
+// never nudged. Pure: the caller measures, this decides.
+function computeTabScrollLeft(input) {
+  const scrollWidth = Number(input?.scrollWidth) || 0;
+  const clientWidth = Number(input?.clientWidth) || 0;
+  const maxScroll = Math.max(0, scrollWidth - clientWidth);
+  if (maxScroll === 0 || clientWidth <= 0) return 0;
+
+  const pad = input?.padding == null ? TAB_SCROLL_REVEAL_PX : Number(input.padding) || 0;
+  const tabLeft = Number(input?.tabLeft) || 0;
+  const tabWidth = Number(input?.tabWidth) || 0;
+  const tabRight = tabLeft + tabWidth;
+  const viewLeft = Math.min(Math.max(Number(input?.scrollLeft) || 0, 0), maxScroll);
+  const viewRight = viewLeft + clientWidth;
+
+  let target = viewLeft;
+  if (tabWidth + pad >= clientWidth) {
+    // Tab is as wide as the window (long session name on a narrow phone):
+    // there is no position that shows all of it plus padding, so align its
+    // start, since the name matters more than the trailing badges.
+    target = tabLeft;
+  } else if (tabLeft - pad < viewLeft) {
+    target = tabLeft - pad;
+  } else if (tabRight + pad > viewRight) {
+    target = tabRight + pad - clientWidth;
+  }
+  return Math.min(Math.max(Math.round(target), 0), maxScroll);
+}
+
 // COD-134 — Terminal WebSocket reconnect policy.
 //
 // Decide what to do after a terminal WebSocket closes, given the close `code`
@@ -261,6 +302,8 @@ if (typeof window !== 'undefined') {
   window.shouldSkipWebGL = shouldSkipWebGL;
   window.CodemanTabOverflow = {
     shouldAutoWrapTabs,
+    computeTabScrollLeft,
+    TAB_SCROLL_REVEAL_PX,
   };
   window.CodemanWsReconnect = {
     plan: planWsReconnect,
