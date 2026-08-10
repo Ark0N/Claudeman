@@ -2640,6 +2640,20 @@ Object.assign(CodemanApp.prototype, {
       _crashDiag.log(`CJK send DROP no-session len=${text.length}`);
       return;
     }
+    // ── One-shot Ctrl (mobile shell bar, issue #262) ──
+    // While the CJK field is visible it OWNS the keyboard: onData returns early
+    // for everything it swallows, and the focus router even redirects
+    // terminal.focus() into it — which is where the accessory bar sends focus
+    // after every key. So the onData hook never sees these keystrokes, and an
+    // armed modifier could neither fire NOR be spent: it survived until a
+    // session switch and then turned an innocent keystroke into a control byte.
+    // This is the module's single choke point to the PTY, so applying it here
+    // covers typed characters, IME flushes, Enter, backspace and arrows at once.
+    // Same policy as the onData hook: the next single character is modified,
+    // anything longer merely spends the modifier.
+    if (typeof KeyboardAccessoryBar !== 'undefined' && KeyboardAccessoryBar.isCtrlArmed?.()) {
+      text = KeyboardAccessoryBar.consumeCtrl(text);
+    }
     // Bypasses onData (like insertTerminalText): predictions cannot see this
     if (this._localEchoPolicy === 'predict') this._predictiveEcho?.clearPredictions();
     _crashDiag.log(`CJK send→${this.activeSessionId.slice(0, 8)} len=${text.length}`);

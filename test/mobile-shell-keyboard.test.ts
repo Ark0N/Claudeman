@@ -18,16 +18,23 @@ const keyboardSource = readFileSync(resolve('src/web/public/keyboard-accessory.j
 const terminalSource = readFileSync(resolve('src/web/public/terminal-ui.js'), 'utf8');
 
 type TerminalInput = { isTerminalFocusOrMouseReport(data: string): boolean };
-let terminalInput: TerminalInput | null = null;
+type TerminalModule = {
+  terminalInput: TerminalInput;
+  CodemanApp: { prototype: Record<string, (...args: never[]) => unknown> };
+  bar: Bar;
+};
+let terminalModule: TerminalModule | null = null;
 
 /**
- * `CodemanTerminalInput` out of terminal-ui.js. Its IIFE only needs a window to
- * hang the export on, but the rest of the file assigns to CodemanApp.prototype
- * at top level, so constants.js + app.js load first — the same recipe as
- * test/local-echo-codex-gating.test.ts.
+ * terminal-ui.js in a vm, with the REAL accessory bar in the same script scope
+ * (it is a `const` singleton, so only a shared scope makes the bare
+ * `KeyboardAccessoryBar` reference in the CJK path resolve). Its IIFE only
+ * needs a window to hang `CodemanTerminalInput` on, but the rest of the file
+ * assigns to CodemanApp.prototype at top level, so constants.js + app.js load
+ * first — the same recipe as test/local-echo-codex-gating.test.ts.
  */
-function loadTerminalInput(): TerminalInput {
-  if (terminalInput) return terminalInput;
+function loadTerminalModule(): TerminalModule {
+  if (terminalModule) return terminalModule;
   const read = (file: string) => readFileSync(resolve(`src/web/public/${file}`), 'utf8');
   const windowStub: Record<string, unknown> = { addEventListener: vi.fn(), removeEventListener: vi.fn() };
   const context = vm.createContext({
@@ -40,14 +47,28 @@ function loadTerminalInput(): TerminalInput {
     HTMLCanvasElement: class HTMLCanvasElement {},
     WebSocket: { OPEN: 1 },
     fetch: vi.fn(),
-    document: { addEventListener: vi.fn(), documentElement: { dataset: {} } },
+    URLSearchParams,
+    document: { addEventListener: vi.fn(), documentElement: { dataset: {} }, getElementById: () => null },
     localStorage: { length: 0, key: vi.fn(), getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() },
     window: windowStub,
     MobileDetection: { isTouchDevice: () => true, isHandheldDevice: () => false, getDeviceType: () => 'desktop' },
   });
-  vm.runInContext(`${read('constants.js')}\n${read('app.js')}\n${terminalSource}`, context);
-  terminalInput = (windowStub as { CodemanTerminalInput?: TerminalInput }).CodemanTerminalInput!;
-  return terminalInput;
+  vm.runInContext(
+    `${read('constants.js')}\n${keyboardSource}\n${read('app.js')}\n${terminalSource}\n` +
+      `globalThis.__CodemanApp = CodemanApp; globalThis.__bar = KeyboardAccessoryBar;`,
+    context
+  );
+  const exported = context as unknown as { __CodemanApp: TerminalModule['CodemanApp']; __bar: Bar };
+  terminalModule = {
+    terminalInput: (windowStub as { CodemanTerminalInput?: TerminalInput }).CodemanTerminalInput!,
+    CodemanApp: exported.__CodemanApp,
+    bar: exported.__bar,
+  };
+  return terminalModule;
+}
+
+function loadTerminalInput(): TerminalInput {
+  return loadTerminalModule().terminalInput;
 }
 
 type FakeButton = {
@@ -456,6 +477,65 @@ describe('one-shot Ctrl vs terminal-generated reports', () => {
     bar.handleAction('ctrl');
     expect(feed(bar, 'git status')).toBe('git status');
     expect(bar.isCtrlArmed()).toBe(false);
+  });
+});
+
+describe('one-shot Ctrl through the CJK input field', () => {
+  // The CJK textarea swallows keystrokes before onData sees them, so the CJK
+  // send path needs the modifier applied too. These drive the REAL
+  // _handleCjkInput against the REAL bar, both loaded into one vm scope.
+  function cjkApp() {
+    const { CodemanApp, bar } = loadTerminalModule();
+    bar.clearCtrl();
+    const app = Object.create(CodemanApp.prototype) as {
+      activeSessionId: string;
+      _sendInputAsync: ReturnType<typeof vi.fn>;
+      _handleCjkInput(text: string): void;
+    };
+    app.activeSessionId = 'cjk-session';
+    app._sendInputAsync = vi.fn();
+    return { app, bar };
+  }
+
+  it('sends the control byte for a character typed into the CJK field', () => {
+    const { app, bar } = cjkApp();
+    bar.toggleCtrl();
+    app._handleCjkInput('c');
+    expect(app._sendInputAsync).toHaveBeenCalledWith('cjk-session', '\x03');
+    expect(bar.isCtrlArmed()).toBe(false);
+  });
+
+  it('leaves ordinary CJK input untouched when nothing is armed', () => {
+    const { app } = cjkApp();
+    app._handleCjkInput('你好');
+    expect(app._sendInputAsync).toHaveBeenCalledWith('cjk-session', '你好');
+  });
+
+  it('spends the modifier on a committed IME word instead of stranding it', () => {
+    // The gap this closes: with the field focused the modifier could neither
+    // fire nor be spent, so it survived to bite a later innocent keystroke.
+    const { app, bar } = cjkApp();
+    bar.toggleCtrl();
+    app._handleCjkInput('你好');
+    expect(app._sendInputAsync).toHaveBeenCalledWith('cjk-session', '你好');
+    expect(bar.isCtrlArmed()).toBe(false);
+  });
+
+  it('spends the modifier on Enter, like every other non-character key', () => {
+    const { app, bar } = cjkApp();
+    bar.toggleCtrl();
+    app._handleCjkInput('\r');
+    expect(app._sendInputAsync).toHaveBeenCalledWith('cjk-session', '\r');
+    expect(bar.isCtrlArmed()).toBe(false);
+  });
+
+  it('drops the input, and does not spend the modifier, with no active session', () => {
+    const { app, bar } = cjkApp();
+    (app as unknown as { activeSessionId: string | null }).activeSessionId = null;
+    bar.toggleCtrl();
+    app._handleCjkInput('c');
+    expect(app._sendInputAsync).not.toHaveBeenCalled();
+    expect(bar.isCtrlArmed()).toBe(true);
   });
 });
 
