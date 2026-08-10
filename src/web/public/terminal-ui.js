@@ -3595,6 +3595,20 @@ Object.assign(CodemanApp.prototype, {
       // A synthetic xterm click can focus its helper textarea. Blur after the
       // report so collapsing a readback never opens or retains the keyboard.
       this._blurMobileTerminalInput();
+    } else if (intent === 'content' && startedWithTerminalFocus) {
+      // Tapping INERT transcript with the keyboard already up closes it.
+      //
+      // Every terminal tap re-focuses, so once the keyboard is open the only way
+      // to close it is the accessory bar's dismiss chevron. Tapping the
+      // transcript to get the screen back is the obvious gesture, and nothing
+      // else claims it: an inert row has no action to trigger, so by this point
+      // the tap has already done its only other job (the mouse report above).
+      //
+      // Scoped to 'content' ON PURPOSE. The prompt row ('input') keeps
+      // focus-then-position, so a second tap there still places the caret —
+      // pinned by "keeps the first prompt tap focus-only so it cannot activate a
+      // CLI row". Toggling there would trade away real capability.
+      this._blurMobileTerminalInput();
     } else {
       this._focusMobileTerminalInput();
     }
