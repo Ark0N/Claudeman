@@ -199,6 +199,43 @@ describe('terminal touch tap mouse guard', () => {
     expect(app.terminal.focus).toHaveBeenCalledOnce();
   });
 
+  it('closes the keyboard on a second tap of INERT transcript content', () => {
+    const { app, setActiveElement } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app.terminal = createTerminalGrid(['transcript line', '', '', '', '❯ ', ''], 4);
+    app._sendInputAsync = vi.fn();
+
+    // Keyboard DOWN: the tap opens it.
+    setActiveElement(null);
+    expect(app._handleMobileTerminalTap({ clientX: 9, clientY: 1 }, false)).toBe('content');
+    expect(app.terminal.focus).toHaveBeenCalledOnce();
+    expect(app.terminal.textarea.blur).not.toHaveBeenCalled();
+
+    // Keyboard UP on the same inert row: the tap closes it.
+    app.terminal.focus.mockClear();
+    setActiveElement(app.terminal.textarea);
+    expect(app._handleMobileTerminalTap({ clientX: 9, clientY: 1 }, true)).toBe('content');
+    expect(app.terminal.textarea.blur).toHaveBeenCalledOnce();
+    expect(app.terminal.focus).not.toHaveBeenCalled();
+  });
+
+  it('keeps the prompt row focusing rather than toggling, so the caret can still be placed', () => {
+    // The toggle is scoped to 'content' on purpose: a second tap on the PROMPT
+    // must still position the cursor. This is the guarantee that makes the
+    // change safe to make, so it is pinned separately.
+    const { app, setActiveElement } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app.terminal = createTerminalGrid(['transcript line', '', '', '', '❯ ask', ''], 4);
+    app._sendInputAsync = vi.fn();
+
+    setActiveElement(app.terminal.textarea);
+    expect(app._handleMobileTerminalTap({ clientX: 9, clientY: 65 }, true)).toBe('input');
+    expect(app.terminal.textarea.blur).not.toHaveBeenCalled();
+    expect(app.terminal.focus).toHaveBeenCalledOnce();
+  });
+
   it('suppresses browser trusted compatibility mouse events during the tap window', () => {
     const { app } = loadTerminalUiHarness();
     const { element, dispatch } = createElementHarness();

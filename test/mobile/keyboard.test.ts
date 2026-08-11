@@ -977,7 +977,7 @@ describe('Virtual Keyboard', () => {
       expect(state.sentInputs[0]).toMatch(/^\x1b\[<0;\d+;1M\x1b\[<0;\d+;1m$/);
     });
 
-    it('keeps the hidden keyboard input focused after an inert Claude transcript tap', async () => {
+    it('toggles the keyboard shut on a second inert Claude transcript tap', async () => {
       const point = await page.evaluate(async () => {
         window.__sentInputs = [];
         app.activeSessionId = 'mobile-claude-transcript-tap-test';
@@ -1028,8 +1028,12 @@ describe('Virtual Keyboard', () => {
 
       await page.touchscreen.tap(point!.x, point!.y);
 
+      // The setup above leaves the terminal focused, so this tap is the SECOND
+      // one on an inert row — the case that now closes the keyboard. Previously
+      // it re-focused, which left the accessory bar's chevron as the only way to
+      // dismiss. The prompt row is unaffected and still positions the caret.
       const activeClass = await page.evaluate(() => document.activeElement?.className);
-      expect(activeClass).toContain('xterm-helper-textarea');
+      expect(activeClass).not.toContain('xterm-helper-textarea');
     });
 
     it('prevents Claude subagent status taps from opening the hidden keyboard input', async () => {
