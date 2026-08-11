@@ -32,13 +32,16 @@
   // short window, only the app's synthetic tap-to-position mouse event should
   // reach xterm.
   const TOUCH_COMPAT_MOUSE_SUPPRESS_MS = 450;
+  // Finger travel (px) still counted as a tap rather than a scroll. Shared by
+  // the terminal's own touch handling (TAP_THRESHOLD, initTerminal) and the
+  // keyboard-dismiss handler (_installMobileKeyboardDismiss), which MUST agree:
+  // a gesture the terminal treats as a scroll but the dismiss handler treats as
+  // a tap would close the keyboard mid-scroll and drop the composer.
+  const MOBILE_KEYBOARD_DISMISS_TAP_SLOP = 8;
   // Regions where a tap must NOT dismiss the on-screen keyboard
   // (_installMobileKeyboardDismiss). Two groups: anything that is about to take
   // focus itself, and the accessory bar, which is built to be used while the
   // keyboard is open.
-  // Finger travel (px) still counted as a tap for keyboard dismissal. Matches
-  // the terminal's own TAP_THRESHOLD so both agree on tap-vs-scroll.
-  const MOBILE_KEYBOARD_DISMISS_TAP_SLOP = 8;
   const MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR = [
     'input',
     'textarea',
@@ -675,7 +678,9 @@ Object.assign(CodemanApp.prototype, {
       let touchStartY = 0;
       let tapStartedWithTerminalFocus = false;
       let tapStartIntentCache = null;
-      const TAP_THRESHOLD = 8; // px — ignore micro-drift to distinguish tap from scroll
+      // px — ignore micro-drift to distinguish tap from scroll. Shared with the
+      // keyboard-dismiss handler so both classify the same gesture the same way.
+      const TAP_THRESHOLD = window.CodemanTerminalInput.MOBILE_KEYBOARD_DISMISS_TAP_SLOP;
       container.addEventListener(
         'touchstart',
         (ev) => {

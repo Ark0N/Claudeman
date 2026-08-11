@@ -633,10 +633,12 @@ describe('Virtual Keyboard', () => {
       // document, and calling the internal helper would bypass the routing this
       // test exists to check.
       const result = await page.evaluate(async () => {
-        const tap = async (el: Element, travel = 0) => {
+        const sampleX = (rect: DOMRect) => Math.max(2, rect.left + Math.min(6, rect.width / 2));
+        const sampleY = (rect: DOMRect) => Math.max(2, rect.top + Math.min(6, rect.height / 2));
+        const tap = async (el: Element, travel = 0, point?: { x: number; y: number }) => {
           const rect = el.getBoundingClientRect();
-          const x = Math.max(2, rect.left + Math.min(6, rect.width / 2));
-          const y = Math.max(2, rect.top + Math.min(6, rect.height / 2));
+          const x = point ? point.x : sampleX(rect);
+          const y = point ? point.y : sampleY(rect);
           const target = document.elementFromPoint(x, y) || el;
           const at = (cy: number) => new Touch({ identifier: 21, target, clientX: x, clientY: cy });
           target.dispatchEvent(
@@ -686,13 +688,39 @@ describe('Virtual Keyboard', () => {
         app._focusMobileTerminalInput();
         const button = Array.from(document.querySelectorAll('button:not([disabled])')).find((candidate) => {
           const rect = candidate.getBoundingClientRect();
-          return rect.width > 8 && rect.height > 8;
+          if (rect.width <= 8 || rect.height <= 8) return false;
+          // A rect is not enough. The welcome overlay is hidden by hideWelcome()
+          // above but its buttons still MEASURE, so a rect-only pick sampled a
+          // point the terminal actually owns — elementFromPoint returned
+          // .xterm-screen and this case tapped the terminal instead of a
+          // control, passing for the wrong reason. Require the sampled point to
+          // really resolve to this button.
+          const hit = document.elementFromPoint(sampleX(rect), sampleY(rect));
+          return !!hit && candidate.contains(hit);
         });
         const afterButton = button ? await tap(button) : 'no-visible-button';
 
-        // Inside the terminal, tap classification owns the decision.
+        // Inside the terminal, tap classification owns the decision, so this
+        // handler must keep its hands off. Aimed at the PROMPT row: that is the
+        // one in-terminal tap whose outcome belongs to nobody else, since an
+        // inert transcript row is claimed by the in-terminal dismiss toggle
+        // (`toggles the keyboard shut on a second inert Claude transcript tap`)
+        // and asserting focus there would be asserting that toggle's behaviour
+        // rather than this exemption. The guard still bites: the container's own
+        // touchend listener runs first and refocuses, so a missing
+        // #terminalContainer exemption would blur right back over it.
         app._focusMobileTerminalInput();
-        const afterTerminal = await tap(document.querySelector('#terminalContainer')!);
+        const screen = app.terminal.element?.querySelector('.xterm-screen');
+        const cell = app.terminal._core?._renderService?.dimensions?.css?.cell;
+        const screenRect = screen?.getBoundingClientRect();
+        const promptPoint =
+          screenRect && cell?.width && cell?.height
+            ? {
+                x: screenRect.left + cell.width * 2,
+                y: screenRect.top + cell.height * (app.terminal.buffer.active.cursorY + 0.5),
+              }
+            : undefined;
+        const afterTerminal = await tap(document.querySelector('#terminalContainer')!, 0, promptPoint);
 
         // A SCROLL also ends in touchend. Scrolling to read something while
         // composing must not close the keyboard and drop the composer.
@@ -705,6 +733,7 @@ describe('Virtual Keyboard', () => {
       expect(result.focusedBefore).toContain('xterm-helper-textarea');
       // Red on master: the textarea keeps focus and the keyboard stays up.
       expect(result.afterOutside).not.toContain('xterm-helper-textarea');
+      expect(result.afterButton).not.toBe('no-visible-button');
       expect(result.afterButton).toContain('xterm-helper-textarea');
       expect(result.afterTerminal).toContain('xterm-helper-textarea');
       // A scroll ends in touchend too, and must NOT close the keyboard.
