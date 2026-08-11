@@ -1,5 +1,43 @@
 # aicodeman
 
+## 1.16.5
+
+### Patch Changes
+
+- Mobile keyboard dismissal, and a tidier Save/Close pair in the phone settings sheet.
+
+  **The on-screen keyboard can finally be closed from inside the app.** The terminal
+  keeps focus on a hidden textarea and nothing ever released it, so once the keyboard
+  was up it covered roughly half the screen with no way out but the OS back gesture.
+  Two gestures now dismiss it:
+  - **A tap outside the terminal** (header, tab strip, empty page chrome). Deliberately
+    narrow: it only fires while the terminal input actually holds focus, never inside
+    the terminal (tap classification owns that decision), and never on a control, since
+    anything focusable is about to take focus itself and the keyboard accessory bar
+    exists to be used _while_ the keyboard is open. A scroll ends in `touchend` too, so
+    finger travel is tracked from `touchstart` and only a near-stationary gesture counts
+    as a tap, sharing the terminal's own 8px threshold so both agree on tap-vs-scroll.
+    Scrolling to read something mid-compose no longer drops the composer.
+  - **A second tap on inert transcript content.** Every terminal tap used to re-focus,
+    which left the accessory bar's chevron as the only way out. Scoped to inert rows on
+    purpose: the prompt row keeps focus-then-position, so a second tap there still
+    places the caret, and actionable rows (readbacks, `esc to interrupt` status rows,
+    menu selections) still blur as before.
+
+  **Settings sheet header on phones.** Below 860px Save moves into the header, which
+  left the two ways out of the sheet as a fat accent pill beside a bare glyph. Save and
+  Close now share a recessed tray with matching 36px pill geometry, reading as one
+  44px cluster the height of the phone header. Tray colors come from skin tokens, so
+  the light skins keep their look, and the tray stays off the sheets that carry a lone
+  close button.
+
+  Also fixes a test that could never have caught a regression: the case asserting that
+  tapping a control does _not_ dismiss the keyboard was picking a button from the
+  hidden welcome overlay, whose rect still measures while the hit-test lands on the
+  terminal underneath, so it passed for the wrong reason and stayed green even with the
+  exemption deleted. All four guards in the dismiss handler are now individually
+  pinned.
+
 ## 1.16.4
 
 ### Patch Changes
