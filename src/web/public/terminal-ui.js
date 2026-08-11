@@ -32,6 +32,25 @@
   // short window, only the app's synthetic tap-to-position mouse event should
   // reach xterm.
   const TOUCH_COMPAT_MOUSE_SUPPRESS_MS = 450;
+  // Regions where a tap must NOT dismiss the on-screen keyboard
+  // (_installMobileKeyboardDismiss). Two groups: anything that is about to take
+  // focus itself, and the accessory bar, which is built to be used while the
+  // keyboard is open.
+  // Finger travel (px) still counted as a tap for keyboard dismissal. Matches
+  // the terminal's own TAP_THRESHOLD so both agree on tap-vs-scroll.
+  const MOBILE_KEYBOARD_DISMISS_TAP_SLOP = 8;
+  const MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR = [
+    'input',
+    'textarea',
+    'select',
+    'button',
+    'a[href]',
+    '[contenteditable=""]',
+    '[contenteditable="true"]',
+    '[tabindex]:not([tabindex="-1"])',
+    '.keyboard-accessory-bar',
+    '.path-picker-overlay',
+  ].join(',');
   // Escape sequences occupy no terminal cells, so they must come out before a
   // captured line's WIDTH can be measured (_estimateReplayRows). Covers OSC,
   // CSI, charset designators and the short escapes tmux emits; deliberately
@@ -182,6 +201,8 @@
     PAGE_KEY_SCREEN_FRACTION,
     PAGE_KEY_MAX_PER_BATCH,
     TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM,
+    MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR,
+    MOBILE_KEYBOARD_DISMISS_TAP_SLOP,
   };
   global.CODEMAN_XTERM_THEMES = CODEMAN_XTERM_THEMES;
   global.codemanCurrentXtermTheme = currentXtermTheme;
@@ -785,6 +806,8 @@ Object.assign(CodemanApp.prototype, {
     // same breakage the mobile touchend tap branch above works around).
     // Hand-encode the SGR report for plain left-clicks on those sessions.
     container.addEventListener('click', (ev) => this._handleDesktopTerminalClick(ev));
+
+    this._installMobileKeyboardDismiss();
 
     // Welcome message
     this.showWelcome();
@@ -3489,6 +3512,73 @@ Object.assign(CodemanApp.prototype, {
     ) {
       active.blur?.();
     }
+  },
+
+  /**
+   * Tapping outside the terminal closes the on-screen keyboard.
+   *
+   * The terminal keeps focus on a hidden textarea, and nothing ever released it:
+   * once the keyboard was up, every tap on the header, the tab strip or empty
+   * page chrome left it up, covering half a phone screen with no way to dismiss
+   * it but the OS back gesture.
+   *
+   * Deliberately narrow, because focus is not ours to steal:
+   *
+   * - only when the terminal input actually holds focus;
+   * - never for a tap inside the terminal — those are classified and routed by
+   *   `_handleMobileTerminalTap`, which owns that decision;
+   * - never for a tap on another control. Anything focusable or clickable is
+   *   about to take focus itself, and the accessory bar in particular exists to
+   *   be used WHILE the keyboard is open, so dismissing there would fight the
+   *   user. `closest()` covers taps landing on a child (an icon inside a button).
+   *
+   * Bound to `touchend` rather than `click`: a tap that dismisses the keyboard
+   * usually is not meant to activate whatever is underneath, and touchend fires
+   * before the synthesized click, so the blur lands first.
+   */
+  _installMobileKeyboardDismiss() {
+    if (this._mobileKeyboardDismissHandler) return;
+
+    // A SCROLL also ends in touchend, and dismissing there is wrong: scrolling
+    // to read something while composing must not close the keyboard and lose
+    // the composer. Track how far the finger travelled and only treat a
+    // near-stationary gesture as a tap — the same TAP_THRESHOLD the terminal's
+    // own touch handling uses, so both agree on what a tap is.
+    let startX = 0;
+    let startY = 0;
+    let moved = false;
+    this._mobileKeyboardDismissStart = (ev) => {
+      if (ev.touches.length !== 1) {
+        moved = true; // a multi-touch gesture is never a dismissing tap
+        return;
+      }
+      startX = ev.touches[0].clientX;
+      startY = ev.touches[0].clientY;
+      moved = false;
+    };
+    this._mobileKeyboardDismissMove = (ev) => {
+      if (moved || !ev.touches.length) return;
+      const dx = ev.touches[0].clientX - startX;
+      const dy = ev.touches[0].clientY - startY;
+      const slop = window.CodemanTerminalInput.MOBILE_KEYBOARD_DISMISS_TAP_SLOP;
+      if (Math.abs(dx) > slop || Math.abs(dy) > slop) {
+        moved = true;
+      }
+    };
+    this._mobileKeyboardDismissHandler = (ev) => {
+      if (moved) return;
+      if (!this._isMobileTerminalInputFocused()) return;
+      const target = ev.target;
+      if (!target || typeof target.closest !== 'function') return;
+      if (target.closest('#terminalContainer')) return;
+      if (target.closest(window.CodemanTerminalInput.MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR)) return;
+      this._blurMobileTerminalInput();
+    };
+    // Passive throughout: this never calls preventDefault, so it must not make
+    // the page feel less responsive to scrolling.
+    document.addEventListener('touchstart', this._mobileKeyboardDismissStart, { passive: true });
+    document.addEventListener('touchmove', this._mobileKeyboardDismissMove, { passive: true });
+    document.addEventListener('touchend', this._mobileKeyboardDismissHandler, { passive: true });
   },
 
   /**

@@ -624,6 +624,93 @@ describe('Virtual Keyboard', () => {
       expect(Number(styles?.zIndex)).toBeGreaterThanOrEqual(0);
     });
 
+    it('dismisses the on-screen keyboard when a tap lands outside the terminal', async () => {
+      // The terminal holds focus on a hidden textarea and nothing released it,
+      // so once the keyboard was up every tap on the header or page chrome left
+      // it up — covering half a phone screen with no in-app way to close it.
+      //
+      // Driven as a real dispatched gesture: the handler is bound to touchend on
+      // document, and calling the internal helper would bypass the routing this
+      // test exists to check.
+      const result = await page.evaluate(async () => {
+        const tap = async (el: Element, travel = 0) => {
+          const rect = el.getBoundingClientRect();
+          const x = Math.max(2, rect.left + Math.min(6, rect.width / 2));
+          const y = Math.max(2, rect.top + Math.min(6, rect.height / 2));
+          const target = document.elementFromPoint(x, y) || el;
+          const at = (cy: number) => new Touch({ identifier: 21, target, clientX: x, clientY: cy });
+          target.dispatchEvent(
+            new TouchEvent('touchstart', {
+              touches: [at(y)],
+              targetTouches: [at(y)],
+              changedTouches: [at(y)],
+              bubbles: true,
+              cancelable: true,
+            })
+          );
+          for (const step of travel ? [travel / 3, (travel * 2) / 3, travel] : []) {
+            target.dispatchEvent(
+              new TouchEvent('touchmove', {
+                touches: [at(y + step)],
+                targetTouches: [at(y + step)],
+                changedTouches: [at(y + step)],
+                bubbles: true,
+                cancelable: true,
+              })
+            );
+            await new Promise((resolve) => setTimeout(resolve, 15));
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          target.dispatchEvent(
+            new TouchEvent('touchend', {
+              touches: [],
+              changedTouches: [at(y + travel)],
+              bubbles: true,
+              cancelable: true,
+            })
+          );
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          return document.activeElement?.className ?? '';
+        };
+
+        app.hideWelcome();
+        app.terminal.reset();
+        await new Promise<void>((resolve) => app.terminal.write('transcript\r\n\r\n> ', resolve));
+
+        // Inert page chrome: the keyboard must close.
+        app._focusMobileTerminalInput();
+        const focusedBefore = document.activeElement?.className ?? '';
+        const afterOutside = await tap(document.querySelector('.logo, .header-brand, header') ?? document.body);
+
+        // A real control: it takes focus itself, so we must NOT interfere.
+        app._focusMobileTerminalInput();
+        const button = Array.from(document.querySelectorAll('button:not([disabled])')).find((candidate) => {
+          const rect = candidate.getBoundingClientRect();
+          return rect.width > 8 && rect.height > 8;
+        });
+        const afterButton = button ? await tap(button) : 'no-visible-button';
+
+        // Inside the terminal, tap classification owns the decision.
+        app._focusMobileTerminalInput();
+        const afterTerminal = await tap(document.querySelector('#terminalContainer')!);
+
+        // A SCROLL also ends in touchend. Scrolling to read something while
+        // composing must not close the keyboard and drop the composer.
+        app._focusMobileTerminalInput();
+        const afterScroll = await tap(document.querySelector('.logo, .header-brand, header') ?? document.body, 120);
+
+        return { focusedBefore, afterOutside, afterButton, afterTerminal, afterScroll };
+      });
+
+      expect(result.focusedBefore).toContain('xterm-helper-textarea');
+      // Red on master: the textarea keeps focus and the keyboard stays up.
+      expect(result.afterOutside).not.toContain('xterm-helper-textarea');
+      expect(result.afterButton).toContain('xterm-helper-textarea');
+      expect(result.afterTerminal).toContain('xterm-helper-textarea');
+      // A scroll ends in touchend too, and must NOT close the keyboard.
+      expect(result.afterScroll).toContain('xterm-helper-textarea');
+    });
+
     it('routes CJK textarea typing through local echo on Enter', async () => {
       await page.evaluate(() => {
         window.__sentInputs = [];
