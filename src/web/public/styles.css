@@ -14759,11 +14759,14 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   flex-shrink: 0;
 }
 
+/* DOM order stays close-then-save so the focus trap lands on Close;
+   row-reverse paints Save to the left of it. Below 860px, where Save joins the
+   header, the two become ONE control cluster inside a tray (mobile.css). */
 :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-actions {
   display: flex;
   flex-direction: row-reverse;
   align-items: center;
-  gap: 6px;
+  gap: 3px;
   margin-left: auto;
 }
 
@@ -14771,16 +14774,65 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
    instead; on desktop the footer owns Save, so this stays hidden. */
 :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-save {
   display: none;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
   font: inherit;
   font-size: 0.82rem;
   font-weight: 620;
   letter-spacing: -0.01em;
-  padding: 8px 15px;
+  padding: 0 14px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 9px;
   cursor: pointer;
   background: linear-gradient(180deg, var(--accent-grad-a), var(--accent-grad-b));
   color: var(--accent-ink);
+  transition:
+    filter 0.15s ease,
+    transform 0.1s ease;
+}
+
+:is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-save:hover {
+  filter: brightness(1.08);
+}
+
+:is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-save:active {
+  transform: scale(0.97);
+}
+
+/* `.modal-close` ships as a bare 1.5rem glyph with no box — fine in a plain
+   modal header, but inside the tray it needs the same footprint as Save. */
+:is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-actions .modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 9px;
+  font-size: 1.2rem;
+  color: var(--text-dim);
+  background: transparent;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    transform 0.1s ease;
+}
+
+:is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-actions .modal-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+:is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-actions .modal-close:active {
+  transform: scale(0.94);
+}
+
+/* The shared rule offsets the ring OUTWARD, which inside the tray draws it on
+   top of the tray border. Inset it so the focused button is ringed, not the
+   cluster. */
+:is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-actions .modal-close:focus-visible {
+  outline-offset: -2px;
 }
 
 :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-body {

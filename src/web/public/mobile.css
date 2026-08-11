@@ -3157,9 +3157,36 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
     border-radius: 10px;
   }
 
-  /* Save moves into the header; the bottom action bar would cost 60px */
+  /* Save + Close are the two ways out of the sheet (save-and-close vs
+     discard-and-close), hit in the same corner with the same thumb, so here —
+     and only here, since Save is header-only below 860px — they share a
+     recessed tray and matching pill geometry instead of reading as a fat
+     accent pill parked beside a stray × glyph. Tray colors come from skin
+     tokens, never a hardcoded black alpha, or the light skins get a grey slab.
+     `:has()` keeps the tray off the two sheets that carry a lone × (Session
+     Options and Add Case save from inside their own forms). */
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-actions:has(.set-head-save) {
+    padding: 3px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--bg-input);
+  }
+
+  /* Save moves into the header; the bottom action bar would cost 60px. Both
+     buttons grow to a thumb-sized target and keep identical heights so the
+     pair reads as one cluster — 36 + the tray's 3px padding and 1px border on
+     each side is a 44px block, the same height as the phone header. */
   :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-save {
     display: inline-flex;
+    height: 36px;
+    padding: 0 16px;
+    font-size: 0.86rem;
+  }
+
+  :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-actions .modal-close {
+    width: 36px;
+    height: 36px;
+    font-size: 1.35rem;
   }
 
   :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-foot {
