@@ -2720,6 +2720,46 @@ html.mobile-init .file-browser-panel {
     text-overflow: ellipsis;
   }
 
+  /* Third line of the row body: "STARTED 3d ago · IDLE 12m". Monospace so the
+     numbers stay put as the clock rewrites them every 20s, and dimmer than the
+     path above it: it answers a question you only ask on purpose. */
+  .mobile-overview-row-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    min-width: 0;
+    font-family: var(--font-mono, monospace);
+    font-size: 0.63rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .mobile-overview-meta-item {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mobile-overview-meta-key {
+    margin-right: 0.3rem;
+    opacity: 0.6;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .mobile-overview-meta-sep {
+    opacity: 0.45;
+  }
+
+  /* The freshest signal on the row: while a session is actually running, how
+     long the current turn has been going is the number the eye should land on.
+     Same treatment the desktop rail gives its "active" stamp. */
+  .mobile-overview-row--working .mobile-overview-meta-since {
+    color: var(--green);
+    opacity: 0.95;
+  }
+
   .mobile-overview-dot {
     flex-shrink: 0;
     width: 9px;

@@ -2619,6 +2619,12 @@ export class WebServer extends EventEmitter {
               workingDir: muxSession.workingDir,
               mode: muxSession.mode,
               name: sessionName,
+              // When the session FIRST started, not when this server booted.
+              // Without it every recovered session was restamped `Date.now()` on
+              // each restart, so a week-old pane read as "created 2m ago" on the
+              // home screens (and sorted as the newest thing in the unified list).
+              // mux-sessions.json carries the tmux session's own birth time.
+              createdAt: muxSession.createdAt || savedState?.createdAt,
               mux: this.mux,
               useMux: true,
               muxSession: muxSession, // Pass the existing session so startInteractive() can attach to it

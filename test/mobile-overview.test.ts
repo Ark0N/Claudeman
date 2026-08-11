@@ -211,6 +211,60 @@ describe('mobile overview model', () => {
     expect(empty).toMatchObject({ needsYou: [], current: [], past: [], sessionCount: 0 });
   });
 
+  it('anchors the "how long" stamp on last activity, and on the last Enter while working', () => {
+    const app = loadOverviewApp();
+    const now = Date.now();
+    const model = app.buildMobileOverviewModel({
+      sessions: [
+        // A working pane repaints about once a second, so lastActivityAt is
+        // always "now" and would report every running turn as 0m. The turn's
+        // own start is the last Enter.
+        session({
+          id: 'w',
+          status: 'busy',
+          createdAt: now - 7200_000,
+          lastActivityAt: now,
+          lastSubmitAt: now - 300_000,
+        }),
+        // A quiet pane prints nothing, so its last byte IS when it went idle.
+        session({ id: 'i', status: 'idle', createdAt: now - 7200_000, lastActivityAt: now - 900_000 }),
+      ],
+      cases: CASES,
+    });
+
+    const rows = Object.fromEntries(model.current.map((r: any) => [r.id, r]));
+    expect(rows.w.since).toEqual({ key: 'working', at: now - 300_000 });
+    expect(rows.i.since).toEqual({ key: 'idle', at: now - 900_000 });
+    expect(rows.i.createdAt).toBe(now - 7200_000);
+  });
+
+  it('leaves the stamp off rather than inventing an anchor', () => {
+    const app = loadOverviewApp();
+    const model = app.buildMobileOverviewModel({
+      // A session that has never submitted has no turn start to measure from.
+      sessions: [session({ id: 'w', status: 'busy', lastActivityAt: Date.now() })],
+      cases: CASES,
+    });
+    expect(model.current[0].since).toBeNull();
+    expect(model.current[0].createdAt).toBe(0);
+  });
+
+  it('formats a moment as "ago" and a span as a bare duration', () => {
+    const app = loadOverviewApp();
+    app.formatRelativeTime = () => '3d ago';
+    const now = Date.now();
+
+    expect(app._mobileOverviewStampText(now - 86_400_000, 'ago')).toBe('3d ago');
+    expect(app._mobileOverviewStampText(now - 20_000, 'for')).toBe('<1m');
+    expect(app._mobileOverviewStampText(now - 12 * 60_000, 'for')).toBe('12m');
+    expect(app._mobileOverviewStampText(now - 125 * 60_000, 'for')).toBe('2h 5m');
+    expect(app._mobileOverviewStampText(now - 3 * 3600_000, 'for')).toBe('3h');
+    expect(app._mobileOverviewStampText(now - 50 * 3600_000, 'for')).toBe('2d 2h');
+    // No anchor renders as a dash, never as "56 years ago" off epoch 0.
+    expect(app._mobileOverviewStampText(0, 'for')).toBe('—');
+    expect(app._mobileOverviewStampText(0, 'ago')).toBe('—');
+  });
+
   it('no longer builds a spaces section', () => {
     const app = loadOverviewApp();
     const model = app.buildMobileOverviewModel({ sessions: [session({ id: 'a' })], cases: CASES });

@@ -729,16 +729,16 @@ const KeyboardAccessoryBar = {
         this.toggleCtrl();
         break;
       case 'scroll-up':
-        this.sendKey('\x1b[A');
+        this.sendNavKey('\x1b[A');
         break;
       case 'scroll-down':
-        this.sendKey('\x1b[B');
+        this.sendNavKey('\x1b[B');
         break;
       case 'arrow-left':
-        this.sendKey('\x1b[D');
+        this.sendNavKey('\x1b[D');
         break;
       case 'arrow-right':
-        this.sendKey('\x1b[C');
+        this.sendNavKey('\x1b[C');
         break;
       case 'esc':
         this.sendKey('\x1b');
@@ -746,26 +746,12 @@ const KeyboardAccessoryBar = {
       case 'opt-enter':
         this.sendKey('\x1b\r');
         break;
-      case 'tab': {
+      case 'tab':
         // Tab means "complete what I just typed", but with local echo the typed
         // text is still buffered in the overlay and has never reached the PTY —
-        // a bare \t would ask the CLI to complete an empty composer. Flush the
-        // pending text first (same steps as the Shift+Enter branch in
-        // terminal-ui.js), then send \t after the sendCommand settle delay.
-        const overlay = app._localEchoOverlay;
-        const pending = (app._localEchoEnabled && overlay?.pendingText) || '';
-        if (pending) {
-          overlay.clear();
-          overlay.suppressBufferDetection?.();
-          app._flushedOffsets?.delete(app.activeSessionId);
-          app._flushedTexts?.delete(app.activeSessionId);
-          app.sendInput(pending);
-          setTimeout(() => this.sendKey('\t'), 120);
-        } else {
-          this.sendKey('\t');
-        }
+        // a bare \t would ask the CLI to complete an empty composer.
+        this.flushPendingThen(() => this.sendKey('\t'));
         break;
-      }
       case 'shift-tab':
         this.sendKey('\x1b[Z');
         break;
@@ -858,6 +844,51 @@ const KeyboardAccessoryBar = {
     app.sendInput(command);
     // Send Enter separately after a brief delay so Ink has time to process the text.
     setTimeout(() => app.sendInput('\r'), 120);
+  },
+
+  /**
+   * Flush whatever the local-echo overlay is still holding, THEN run `after()`.
+   *
+   * On a phone the characters you type sit in the overlay and have never
+   * reached the PTY, so any key that acts on "what I just typed" has to push
+   * that text out first or the CLI acts on an empty composer. Mirrors the
+   * flush the typed path performs in terminal-ui.js's onData; the 120ms is the
+   * same settle delay sendCommand uses, so the text lands before the key.
+   */
+  flushPendingThen(after) {
+    const overlay = app._localEchoOverlay;
+    const pending = (app._localEchoEnabled && overlay?.pendingText) || '';
+    if (!pending) {
+      after();
+      return;
+    }
+    overlay.clear();
+    overlay.suppressBufferDetection?.();
+    app._flushedOffsets?.delete(app.activeSessionId);
+    app._flushedTexts?.delete(app.activeSessionId);
+    app.sendInput(pending);
+    setTimeout(after, 120);
+  },
+
+  /**
+   * A composer nav key (the four arrows) from the bar, under the SAME contract
+   * as pressing one on a hardware keyboard (the `isComposerNavKey` branch of
+   * terminal-ui.js's onData): flush the unsent draft so the key edits the real
+   * composer, then hand the session to plain PTY echo until Enter or Ctrl+C,
+   * because after a nav key the cursor can sit mid-text where the overlay's
+   * append-only buffering cannot track edits (issue #218).
+   *
+   * Without the flush the arrow reached a composer the CLI still saw as EMPTY:
+   * Up recalled a history entry into it while the overlay went on painting the
+   * draft over the same row and still believed it was pending. The draft was
+   * then submitted on top of the recalled text, and history recall looked
+   * broken because what came back was never what the row showed.
+   */
+  sendNavKey(sequence) {
+    if (!app.activeSessionId) return;
+    if (!app._echoPassthroughSessions) app._echoPassthroughSessions = new Set();
+    app._echoPassthroughSessions.add(app.activeSessionId);
+    this.flushPendingThen(() => this.sendKey(sequence));
   },
 
   /** Send a special key (arrow, escape, etc.) directly to the PTY.

@@ -14,12 +14,19 @@
  * only this module removes it, so desktop (which never loads mobile.css) cannot
  * render an unstyled overview even if a class rule leaked.
  *
+ * Each live row also carries when the session FIRST started and how long it has
+ * been in the state it is in ("started 3d ago · idle 12m"). Both go stale on
+ * their own (a sitting session emits no event), so a slow clock rewrites them
+ * IN PLACE from the epoch ms parked on the elements, never by re-rendering,
+ * which would restart every row's blink and pulse.
+ *
  * Everything renders from state the page already holds (`this.sessions`,
  * `this.cases`, `this.pendingHooks`) — no endpoint, no SSE event, no schema.
  * `buildMobileOverviewModel()` is pure and unit-tested (test/mobile-overview.test.ts).
  *
  * @mixin Extends CodemanApp.prototype via Object.assign
  * @dependency app.js (this.sessions, this.cases, this.pendingHooks, selectSession, run)
+ * @dependency ralph-panel.js (formatRelativeTime, the app's one relative-time formatter)
  * @dependency mobile-handlers.js (MobileDetection)
  * @dependency session-ui.js (selectQuickStartCase for "New session here")
  * @loadorder 12.55 of 16, after webview-tabs.js, before entrance-animations.js
@@ -64,6 +71,23 @@ const MOBILE_OVERVIEW_PILL_LABEL = {
   done: 'done',
 };
 
+/**
+ * Label for the "how long has it been like this" stamp, per state. The pill
+ * already names the state, so this word is there to say what the duration next
+ * to it is measuring.
+ */
+const MOBILE_OVERVIEW_SINCE_LABEL = {
+  needs: 'waiting',
+  waiting: 'waiting',
+  error: 'failed',
+  working: 'working',
+  idle: 'idle',
+  done: 'ended',
+};
+
+/** How often the age stamps are rewritten in place while the home screen is up. */
+const MOBILE_OVERVIEW_CLOCK_MS = 20000;
+
 Object.assign(CodemanApp.prototype, {
   // ═══════════════════════════════════════════════════════════════
   // Model (pure)
@@ -85,6 +109,29 @@ Object.assign(CodemanApp.prototype, {
     if (session.status === 'busy') return 'working';
     if (session.status === 'stopped') return 'done';
     return 'idle';
+  },
+
+  /**
+   * Anchor + label for the row's second stamp: how long the session has been in
+   * the state it is in.
+   *
+   * For everything that is NOT working that anchor is `lastActivityAt`, the last
+   * byte the pane printed: a Claude pane sitting at its composer prints nothing,
+   * so the end of the last turn is exactly when the session went quiet.
+   *
+   * A WORKING pane is the opposite: it repaints about once a second, so its
+   * last-activity stamp is always "now" and would report every running turn as
+   * 0m. The turn's own start is the pane's last Enter (`lastSubmitAt`), which is
+   * persisted server-side and therefore survives a Codeman restart. A session
+   * that has never submitted has no anchor at all, and gets no stamp rather than
+   * a made-up one.
+   *
+   * @returns {{key: string, at: number}|null}
+   */
+  _mobileOverviewSince(state, session) {
+    const at = state === 'working' ? Number(session.lastSubmitAt) || 0 : Number(session.lastActivityAt) || 0;
+    if (!at) return null;
+    return { key: MOBILE_OVERVIEW_SINCE_LABEL[state] || state, at };
   },
 
   /**
@@ -137,6 +184,10 @@ Object.assign(CodemanApp.prototype, {
         dir: this._shortenHomePath ? this._shortenHomePath(session.workingDir) : session.workingDir || '',
         state,
         pill: MOBILE_OVERVIEW_PILL_LABEL[state] || state,
+        // Epoch ms, straight off the session payload; formatting happens at
+        // render time so the clock can redo it without a re-render.
+        createdAt: Number(session.createdAt) || 0,
+        since: this._mobileOverviewSince(state, session),
         orderIndex: orderIndex === -1 ? Number.MAX_SAFE_INTEGER : orderIndex,
       };
     });
@@ -224,6 +275,7 @@ Object.assign(CodemanApp.prototype, {
     const el = document.getElementById('mobileOverview');
     if (!el) return;
     this._closeMobileOverviewRunMenu();
+    this._stopMobileOverviewClock();
     el.classList.remove('visible');
     el.hidden = true;
   },
@@ -380,6 +432,8 @@ Object.assign(CodemanApp.prototype, {
         this._mobileOverviewHistory ? 'No past conversations yet' : 'Loading…'
       )
     );
+
+    this._startMobileOverviewClock();
   },
 
   /**
@@ -623,6 +677,8 @@ Object.assign(CodemanApp.prototype, {
     line2.textContent = row.mode + (row.dir ? ' · ' + row.dir : '');
     body.appendChild(line2);
 
+    body.appendChild(this._buildMobileOverviewMeta(row));
+
     item.appendChild(body);
 
     const pill = document.createElement('span');
@@ -652,6 +708,110 @@ Object.assign(CodemanApp.prototype, {
     }
 
     return item;
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // Age stamps: started / how long in this state
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * The "started 3d ago · idle 12m" line under a session row. Both stamps keep
+   * their raw epoch ms on the element (`data-mo-ts`) so `_tickMobileOverviewTimes()`
+   * can rewrite the text without rebuilding the row (a re-render would restart
+   * the blink on every waiting row and the pulse on every working one).
+   */
+  _buildMobileOverviewMeta(row) {
+    const meta = document.createElement('span');
+    meta.className = 'mobile-overview-row-meta';
+    // Relative times are generated text, and "started"/"idle" here are the same
+    // generic words that mean something else on other surfaces.
+    meta.setAttribute('data-i18n-skip', '');
+
+    meta.appendChild(this._buildMobileOverviewStamp('started', row.createdAt, 'ago', 'mobile-overview-meta-started'));
+
+    if (row.since) {
+      const sep = document.createElement('span');
+      sep.className = 'mobile-overview-meta-sep';
+      sep.setAttribute('aria-hidden', 'true');
+      sep.textContent = '·';
+      meta.appendChild(sep);
+      meta.appendChild(
+        this._buildMobileOverviewStamp(row.since.key, row.since.at, 'for', 'mobile-overview-meta-since')
+      );
+    }
+
+    return meta;
+  },
+
+  /** One labelled stamp: a dim key, the value, the full date in the title. */
+  _buildMobileOverviewStamp(key, timestamp, format, className) {
+    const wrap = document.createElement('span');
+    wrap.className = 'mobile-overview-meta-item ' + className;
+
+    const label = document.createElement('span');
+    label.className = 'mobile-overview-meta-key';
+    label.textContent = key;
+    wrap.appendChild(label);
+
+    const value = document.createElement('span');
+    value.dataset.moTs = String(timestamp || 0);
+    value.dataset.moFmt = format;
+    value.textContent = this._mobileOverviewStampText(timestamp, format);
+    wrap.appendChild(value);
+
+    if (timestamp) wrap.title = `${key}: ${new Date(timestamp).toLocaleString()}`;
+    return wrap;
+  },
+
+  /**
+   * 'ago' points at a moment ("3d ago", the app's one relative formatter);
+   * 'for' measures a span from it to now ("12m"), which is what a duration
+   * beside a state word wants to read as.
+   */
+  _mobileOverviewStampText(timestamp, format) {
+    if (!timestamp) return '—';
+    if (format === 'ago') {
+      return (this.formatRelativeTime && this.formatRelativeTime(timestamp)) || '—';
+    }
+    const ms = Date.now() - timestamp;
+    if (ms < 60000) return '<1m';
+    const mins = Math.floor(ms / 60000);
+    if (mins < 60) return `${mins}m`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return mins % 60 ? `${hours}h ${mins % 60}m` : `${hours}h`;
+    const days = Math.floor(hours / 24);
+    return hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`;
+  },
+
+  /**
+   * Rewrites the stamps in place every `MOBILE_OVERVIEW_CLOCK_MS`. A sitting
+   * session emits nothing, so without this its "idle 2m" would still read 2m an
+   * hour later, the one number on the screen that has to move on its own.
+   */
+  _startMobileOverviewClock() {
+    if (this._mobileOverviewClock) return;
+    this._mobileOverviewClock = setInterval(() => {
+      if (!this.isMobileOverviewVisible()) {
+        this._stopMobileOverviewClock();
+        return;
+      }
+      this._tickMobileOverviewTimes();
+    }, MOBILE_OVERVIEW_CLOCK_MS);
+  },
+
+  _stopMobileOverviewClock() {
+    if (!this._mobileOverviewClock) return;
+    clearInterval(this._mobileOverviewClock);
+    this._mobileOverviewClock = null;
+  },
+
+  _tickMobileOverviewTimes() {
+    const el = document.getElementById('mobileOverview');
+    if (!el) return;
+    for (const node of el.querySelectorAll('[data-mo-ts]')) {
+      const text = this._mobileOverviewStampText(Number(node.dataset.moTs) || 0, node.dataset.moFmt);
+      if (node.textContent !== text) node.textContent = text;
+    }
   },
 
   /** The session's pending approval, when the strip should render (dialogs only). */

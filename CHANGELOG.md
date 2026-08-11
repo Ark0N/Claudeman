@@ -1,5 +1,19 @@
 # aicodeman
 
+## 1.16.6
+
+### Patch Changes
+
+- Phone home screen now shows session ages, plus three mobile input fixes.
+
+  **Phone overview: started / how long stamps.** Every live session row on the "C" home screen carries a third line: when the session first started, and how long it has been in the state it is in ("started 3d ago · idle 12m"). Idle, waiting, error and ended states measure from the pane's last output, which for a Claude pane sitting at its composer is exactly when the turn ended; a WORKING session measures from its last Enter instead, because a running pane repaints about once a second and would otherwise report every turn as 0m. A 20s clock rewrites the values in place rather than re-rendering, so no row's blink or pulse restarts.
+
+  **Fix: a recovered session was restamped as new on every restart.** Boot recovery never passed `createdAt`, so each server start reset it to `Date.now()` and a week-old pane reported "created 2m ago" (and sorted as the newest thing in the unified session list). It now comes from the tmux session's own birth time, which mux-sessions.json already carried. The desktop home rail's "created" stamp is fixed by the same change.
+
+  **Fix: a selection dialog locked the on-screen keyboard out of the terminal (regression in 1.16.5).** The check that decides whether a tap belongs to the TUI scanned the whole viewport for a numbered menu, so while a Claude question or permission dialog was on screen EVERY tap in the terminal counted as actionable and blurred the input. The keyboard could not be opened at all until the dialog was answered, which left tapping an option, the one gesture that commits an answer, as the only interaction a phone had. The menu test is now row-local: the dialog's own rows still report the tap and keep the keyboard down, while the question title, the transcript and blank space summon the keyboard so a digit can be typed at the dialog instead of aimed at it.
+
+  **Fix: the accessory bar's arrow keys bypassed the local-echo overlay.** On a phone the text you type is buffered in the browser and has never reached the PTY, so an arrow tapped on the bar arrived at a composer the CLI still considered empty: Up recalled a history entry into it while the overlay went on painting the draft over the same row and still believed it was pending, and the next Enter submitted the two mixed together. The four arrows now flush the draft first and hand the session to plain PTY echo, the same contract a nav key typed on a hardware keyboard has had since #218. The CLI stashes the flushed draft, so Down brings it back. Tab now shares that one flush helper instead of its own copy.
+
 ## 1.16.5
 
 ### Patch Changes

@@ -3641,9 +3641,20 @@ Object.assign(CodemanApp.prototype, {
     // the affordance above; there is deliberately no verb literal here, because
     // the verb is randomised per build.
 
+    // A visible selection dialog makes its OWN rows actionable, not the whole
+    // screen. Two viewport-wide `some()` tests used to be the entire answer, so
+    // while a Claude question or permission dialog was up EVERY tap in the
+    // terminal (inert transcript, the question title, blank rows) came back
+    // actionable, and the caller blurred on each one. The on-screen keyboard
+    // could then not be opened at all until the dialog was answered, which left
+    // tapping an option row as the only interaction available: the one that
+    // commits an answer. Requiring the TAPPED line to be a numbered row keeps
+    // the dialog's own rows behaving as before (report the tap, keep the
+    // keyboard down) while any other row can still summon the keyboard, which
+    // is how a digit gets typed at a dialog instead of aimed at it.
     const hasMenuPrompt = lines.some((line) => /^\s*[❯›]\s+\d+[.)]\s/.test(line));
     const hasMenuChoice = lines.some((line) => /^\s+\d+[.)]\s/.test(line));
-    return hasMenuPrompt && hasMenuChoice;
+    return hasMenuPrompt && hasMenuChoice && /^\s*(?:[❯›]\s*)?\d+[.)]\s/.test(tappedLine);
   },
 
   _focusMobileTerminalInput() {

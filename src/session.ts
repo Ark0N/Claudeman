@@ -591,7 +591,12 @@ export class Session extends EventEmitter {
     this.mode = config.mode || 'claude';
     this._name = config.name || '';
     this._resumeSessionId = config.resumeSessionId;
-    this._lastActivityAt = this.createdAt;
+    // NOW, not `createdAt`: recovery passes the ORIGINAL creation time of a
+    // days-old tmux session, and seeding last-activity from it would report a
+    // freshly re-attached pane as having been silent for days, which the idle
+    // confirmation reads as "already quiet" and the home screens print as its
+    // idle duration. For a genuinely new session the two are the same instant.
+    this._lastActivityAt = Date.now();
     // Set claudeSessionId — when resuming, the Claude conversation ID is the resumed one.
     this._claudeSessionId = config.resumeSessionId || this.id;
     // Restored from state.json on boot recovery. start() resets _claudeSessionId

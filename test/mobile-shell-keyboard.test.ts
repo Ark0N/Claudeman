@@ -573,3 +573,70 @@ describe('armed styling survives the light-skin overrides', () => {
     );
   });
 });
+
+describe('composer nav keys from the bar', () => {
+  /** loadBar()'s app stub plus the local-echo state the flush path reads. */
+  function barWithDraft(draft: string) {
+    const loaded = loadBar('claude');
+    const overlay = {
+      pendingText: draft,
+      clear: vi.fn(() => {
+        overlay.pendingText = '';
+      }),
+      suppressBufferDetection: vi.fn(),
+    };
+    const app = loaded.app as unknown as Record<string, unknown>;
+    app._localEchoEnabled = true;
+    app._localEchoOverlay = overlay;
+    app.sendInput = vi.fn();
+    app._flushedOffsets = new Map([['session-1', 3]]);
+    app._flushedTexts = new Map([['session-1', 'dra']]);
+    return { ...loaded, app, overlay };
+  }
+
+  const sentKeys = (fetchMock: { mock: { calls: unknown[][] } }) =>
+    fetchMock.mock.calls.map((call) => JSON.parse((call[1] as { body: string }).body).input);
+
+  it('flushes the unsent draft before sending the arrow', () => {
+    // On a phone the typed text lives in the overlay and has NEVER reached the
+    // PTY, so an arrow sent on its own arrives at a composer the CLI still
+    // considers empty: Up recalls a history entry into it while the overlay
+    // goes on painting the draft over the same row and still believes it is
+    // pending. Flushing first is also what makes the draft recoverable: the
+    // CLI stashes the live composer and hands it back on Down.
+    const { bar, app, overlay, fetchMock } = barWithDraft('draft I typed');
+
+    bar.handleAction('scroll-up');
+
+    expect(app.sendInput).toHaveBeenCalledWith('draft I typed');
+    expect(sentKeys(fetchMock)).toEqual(['\x1b[A']);
+    expect(overlay.pendingText).toBe('');
+    expect(overlay.suppressBufferDetection).toHaveBeenCalled();
+    // The overlay's bookkeeping for this session has to go with it.
+    expect((app._flushedOffsets as Map<string, number>).has('session-1')).toBe(false);
+    expect((app._flushedTexts as Map<string, string>).has('session-1')).toBe(false);
+  });
+
+  it('hands the session to plain PTY echo, like a typed nav key does', () => {
+    // After a nav key the real cursor can sit mid-text, where the overlay's
+    // append-only buffering cannot track edits (issue #218). terminal-ui.js's
+    // onData branch does exactly this for a nav key typed on a keyboard.
+    const { bar, app } = barWithDraft('');
+
+    bar.handleAction('arrow-left');
+
+    expect([...(app._echoPassthroughSessions as Set<string>)]).toEqual(['session-1']);
+  });
+
+  it('sends all four arrows and skips the flush when there is no draft', () => {
+    const { bar, app, fetchMock } = barWithDraft('');
+
+    bar.handleAction('scroll-up');
+    bar.handleAction('scroll-down');
+    bar.handleAction('arrow-left');
+    bar.handleAction('arrow-right');
+
+    expect(sentKeys(fetchMock)).toEqual(['\x1b[A', '\x1b[B', '\x1b[D', '\x1b[C']);
+    expect(app.sendInput).not.toHaveBeenCalled();
+  });
+});
