@@ -2652,6 +2652,10 @@ export class WebServer extends EventEmitter {
               // rebuilds the `docker exec` launch instead of a broken local command.
               docker: muxSession.docker ?? savedState?.docker,
               owner: recoveredOwner,
+              // Tab lineage survives a restart. It is only decoration, so a parent
+              // that did NOT come back is harmless: the frontend draws an edge only
+              // when both tabs are on screen.
+              parentSessionId: savedState?.parentSessionId,
             });
 
             // Update session name if it was a "Restored:" placeholder or doesn't match saved name

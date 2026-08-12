@@ -1767,6 +1767,13 @@
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsShowTabDetachButton"><span class="slider"></span></label>
                   </div>
+                  <div class="set-row" id="appSettingsLineageLinesItem" data-search="lineage lines spawned worker parent connection">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Spawn Lineage Lines <span class="set-tag">desktop</span></span>
+                      <span class="set-row-desc">Draw a line under the tab strip from a session to the sessions it spawned.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsLineageLines" checked><span class="slider"></span></label>
+                  </div>
                   <div class="set-row" id="appSettingsMobileOverviewItem" data-search="overview home screen phone logo">
                     <div class="set-row-text">
                       <span class="set-row-label">Overview Home Screen <span class="set-tag">phone</span></span>
@@ -3201,6 +3208,7 @@
   <script defer src="api-client.js"></script>
   <script defer src="subagent-windows.js"></script>
   <script defer src="ultracode-windows.js"></script>
+  <script defer src="session-lineage.js"></script>
   <script defer src="image-input.js"></script>
 </body>
 </html>

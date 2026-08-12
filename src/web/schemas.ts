@@ -269,10 +269,23 @@ const AntigravityConfigSchema = z
   })
   .optional();
 
+/**
+ * The session that spawned the one being created — pure UI decoration, drawn as a
+ * lineage line between the two tabs. Accepted here and, equivalently, as the
+ * `X-Codeman-Parent-Session` header (the agent skill sets that once on its shared
+ * curl invocation so every spawn recipe carries it); the body wins when both are
+ * present. `resolveParentSessionId()` in route-helpers.ts re-checks it against live
+ * sessions and DROPS anything it cannot resolve — a bad value must never fail a
+ * spawn, and this is never an ownership or permission signal.
+ */
+const parentSessionIdSchema = z.string().max(100).optional();
+
 export const CreateSessionSchema = z.object({
   workingDir: safePathSchema.optional(),
   mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity']).optional(),
   name: z.string().max(100).optional(),
+  /** Session that spawned this one — see parentSessionIdSchema. */
+  parentSessionId: parentSessionIdSchema,
   envOverrides: safeEnvOverridesSchema,
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
   effort: effortLevelSchema,
@@ -685,6 +698,8 @@ export const QuickStartSchema = z.object({
   /** Display name for the created session tab (e.g. w1-mycase). Cosmetic; the durable
    *  mux/container names derive from the session id, not this. Defaults server-side. */
   sessionName: z.string().max(128).optional(),
+  /** Session that spawned this one — see parentSessionIdSchema. */
+  parentSessionId: parentSessionIdSchema,
   /** Model override written to <case>/.claude/settings.local.json (e.g. "opus[1m]").
    *  Empty string clears. Applied for local AND docker cases (the docker workspace is
    *  a real host dir, so the settings file crosses the bind mount); rejected for

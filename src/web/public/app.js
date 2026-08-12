@@ -859,6 +859,8 @@ class CodemanApp {
     this.applyLocalization();
     this.applyTabWrapSettings();
     this.applyMonitorVisibility();
+    this.applyLineageLineSettings?.();
+    this._installLineageStripScrollListener?.();
     this._setupTabMiddleClickClose();
     // Must run before the first session:created can arrive: markSessionTabEntering()
     // ignores ids until this sets up its state, which is what keeps the tabs
@@ -924,6 +926,7 @@ class CodemanApp {
       this.applyLocalization();
       this.applyTabWrapSettings();
       this.applyMonitorVisibility();
+      this.applyLineageLineSettings?.();
       // ultracodeFloatingWindows syncs from the server (non-display key), but on a
       // FRESH device the getLightState run snapshot can seed workflowRuns BEFORE this
       // async settings load resolves — so the floating-window gate read false then and
@@ -1637,6 +1640,9 @@ class CodemanApp {
     // The pane is one shared element, so it is only marked here and played when
     // this session is actually selected (see selectSession).
     this.markTerminalEntering?.(data.id);
+    // A spawned session's lineage arc draws in with the tab. Keyed the same way
+    // session-lineage.js tags its paths; a no-op unless a line-entrance theme is on.
+    if (data.parentSessionId) this.markConnectionLineEntering?.('lineage:' + data.id);
     this.renderSessionTabs();
     this.updateCost();
     // Start stats polling when first session appears
@@ -3743,6 +3749,11 @@ class CodemanApp {
     this._refreshMobileOverviewIfVisible?.();
     // Same deal for the desktop home screen's tab column.
     this._refreshHomeSessionsIfVisible?.();
+    // The full-render path already redraws the connection SVG; this incremental
+    // one does not, and a badge appearing widens a tab and shifts every tab after
+    // it, sliding the lineage arcs off their anchors. Only pay for it when there
+    // is an arc to keep anchored.
+    if (this._lineageEdgeCount > 0) this.updateConnectionLines();
   }
 
   // Auto-wrap desktop session tabs to a second row when they overflow one row,

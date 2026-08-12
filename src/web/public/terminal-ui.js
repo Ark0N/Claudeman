@@ -919,7 +919,10 @@ Object.assign(CodemanApp.prototype, {
             }
           }
         }
-        // Update subagent connection lines and local echo at new dimensions
+        // Update subagent connection lines and local echo at new dimensions.
+        // Lineage lines are desktop-only, so a resize across the 1024px boundary
+        // has to re-resolve their gate before the redraw, not just move them.
+        this.applyLineageLineSettings?.();
         this.updateConnectionLines();
         if (this._localEchoOverlay?.hasPending) {
           this._localEchoOverlay.rerender();

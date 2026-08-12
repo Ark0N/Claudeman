@@ -407,6 +407,31 @@ count against the same 16, not 16 of each. An abandoned request no longer holds 
 slot, because the routes release the waiter when the client disconnects, but a
 client that opens many concurrent waits against one session will still hit the cap.
 
+## Session lineage (`parentSessionId`)
+
+A create request may name the session that spawned it, which the web UI draws as a
+line between the two tabs. Accepted on `POST /api/v1/sessions` and
+`POST /api/v1/quick-start`, either way:
+
+```bash
+# as a body field
+-d '{"caseName":"worker-1","mode":"claude","parentSessionId":"'"$CODEMAN_SESSION_ID"'"}'
+
+# or as a header, which is what an agent driving many spawns should use: set it once
+# on the curl invocation and every spawn call carries it
+-H "X-Codeman-Parent-Session: $CODEMAN_SESSION_ID"
+```
+
+The body field wins if both are present. The value is resolved against live sessions
+(exact id, or a unique prefix of at least 8 characters) and must belong to the same
+owner as the session being created.
+
+**It cannot fail your spawn.** An unknown, stale, foreign or malformed value is
+silently dropped and the session is created without lineage — never a `400`. It is
+also pure decoration: it confers no permission, and a child is unaffected by its
+parent exiting. It appears on session state as `parentSessionId` (absent when
+unresolved) and survives a server restart.
+
 ## Approvals Inbox
 
 Cross-session queue of prompts waiting on a human (permission dialogs,

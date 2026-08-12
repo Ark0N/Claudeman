@@ -197,6 +197,89 @@ function computeTabScrollLeft(input) {
   return Math.min(Math.max(Math.round(target), 0), maxScroll);
 }
 
+// Session lineage lines — geometry for the arc drawn between a tab and a tab it
+// spawned (a worker started through the codeman agent skill, which passes its own
+// id as parentSessionId). Pure: the caller measures and appends, this decides.
+//
+// Two shapes, because both endpoints live in ONE horizontal strip and the subagent
+// shape (tab-bottom → window-top) has nothing to aim at:
+//   - same row: a shallow U-bridge HANGING BELOW the strip, so it reads as a
+//     bracket joining two tabs rather than as a line crossing them. The dip grows
+//     with horizontal distance and with `depth` (the child's index among its
+//     siblings), so several children of one parent nest instead of overprinting.
+//   - different rows (desktop `tabs-two-rows` / `tabs-auto-wrap`): the vertical
+//     bezier the subagent lines already use, parent edge → child edge.
+//
+// Returns null when the edge must not be drawn: a missing/degenerate rect, or an
+// endpoint scrolled outside the strip. `.session-tabs` is `overflow-x: auto`, so a
+// scrolled-out tab still HAS a rect — one lying over the logo or the header
+// buttons. Skipping is honest; clamping would point at a tab that isn't there.
+const LINEAGE_DIP_BASE_PX = 14;
+const LINEAGE_DIP_PER_PX = 0.06;
+const LINEAGE_DIP_MIN_PX = 16;
+const LINEAGE_DIP_MAX_PX = 44;
+const LINEAGE_SIBLING_STEP_PX = 6;
+const LINEAGE_STRIP_TOLERANCE_PX = 4;
+
+function computeLineagePath(input) {
+  const parent = input?.parent;
+  const child = input?.child;
+  if (!parent || !child) return null;
+
+  const pw = Number(parent.width) || 0;
+  const ph = Number(parent.height) || 0;
+  const cw = Number(child.width) || 0;
+  const ch = Number(child.height) || 0;
+  if (pw <= 0 || ph <= 0 || cw <= 0 || ch <= 0) return null;
+
+  const px = Number(parent.left) + pw / 2;
+  const cx = Number(child.left) + cw / 2;
+  if (!Number.isFinite(px) || !Number.isFinite(cx)) return null;
+
+  const strip = input?.strip;
+  if (strip && Number(strip.width) > 0) {
+    const min = Number(strip.left) - LINEAGE_STRIP_TOLERANCE_PX;
+    const max = Number(strip.left) + Number(strip.width) + LINEAGE_STRIP_TOLERANCE_PX;
+    if (px < min || px > max || cx < min || cx > max) return null;
+  }
+
+  const depth = Math.max(0, Math.min(6, Number(input?.depth) || 0));
+  const pTop = Number(parent.top);
+  const pBottom = pTop + ph;
+  const cTop = Number(child.top);
+  const cBottom = cTop + ch;
+  const sameRow = Math.abs(pTop + ph / 2 - (cTop + ch / 2)) <= Math.min(ph, ch) / 2;
+
+  let d;
+  let endX;
+  let endY;
+  if (sameRow) {
+    const y0 = Math.max(pBottom, cBottom);
+    const span = Math.abs(cx - px);
+    const dip =
+      Math.min(LINEAGE_DIP_MAX_PX, Math.max(LINEAGE_DIP_MIN_PX, LINEAGE_DIP_BASE_PX + span * LINEAGE_DIP_PER_PX)) +
+      depth * LINEAGE_SIBLING_STEP_PX;
+    const yc = y0 + dip;
+    d = `M ${r1(px)} ${r1(y0)} C ${r1(px)} ${r1(yc)}, ${r1(cx)} ${r1(yc)}, ${r1(cx)} ${r1(y0)}`;
+    endX = cx;
+    endY = y0;
+  } else {
+    const childBelow = cTop + ch / 2 > pTop + ph / 2;
+    const y1 = childBelow ? pBottom : pTop;
+    const y2 = childBelow ? cTop : cBottom;
+    const mid = (y1 + y2) / 2;
+    d = `M ${r1(px)} ${r1(y1)} C ${r1(px)} ${r1(mid)}, ${r1(cx)} ${r1(mid)}, ${r1(cx)} ${r1(y2)}`;
+    endX = cx;
+    endY = y2;
+  }
+  return { d, endX, endY, sameRow };
+}
+
+// One decimal is plenty for a screen-space path and keeps the `d` string short.
+function r1(n) {
+  return Math.round(n * 10) / 10;
+}
+
 // COD-134 — Terminal WebSocket reconnect policy.
 //
 // Decide what to do after a terminal WebSocket closes, given the close `code`
@@ -307,6 +390,12 @@ if (typeof window !== 'undefined') {
   };
   window.CodemanWsReconnect = {
     plan: planWsReconnect,
+  };
+  window.CodemanLineage = {
+    computePath: computeLineagePath,
+    DIP_MIN_PX: LINEAGE_DIP_MIN_PX,
+    DIP_MAX_PX: LINEAGE_DIP_MAX_PX,
+    SIBLING_STEP_PX: LINEAGE_SIBLING_STEP_PX,
   };
   window.CodemanConnectionLoss = {
     compute: computeConnectionLossUi,

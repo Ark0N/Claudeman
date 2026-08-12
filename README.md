@@ -692,17 +692,76 @@ Single-digit selection (1-9), color-coded status, token counts, auto-refresh. De
 
 For AI agents and automation that control Codeman without a browser: an agent that spins up worker sessions, a CI bot, or **Claude Code running _inside_ a Codeman session orchestrating other sessions**. Everything the UI does is HTTP + a CLI, so an agent can do it too.
 
-> **Shortcut: install the packaged agent skill.** Everything below (plus worked multi-worker recipes) ships as a Claude Code skill in [`skills/codeman`](skills/codeman/SKILL.md), so an agent inside a session can drive Codeman without you pasting docs into the prompt. Three ways to get it:
->
-> - `npx skills add Ark0N/Codeman --skill codeman -g`: global, works for any skills-aware agent
-> - `codeman skill install` (global) or `codeman skill install --case <name>`: for npm installs that never cloned the repo; `codeman skill uninstall` reverses it
-> - **App Settings → Agents & CLIs → Claude → Agent Skill** (`agentSkillEnabled`, default off): Codeman then injects the skill into each case on Claude session create; a user-authored `skills/codeman` in the case is never overwritten
->
-> A global install (`codeman skill install`, or `npx skills add`) is picked up by **every new Claude Code session on the machine**, inside Codeman or not. The skill self-gates: outside a Codeman session (`CODEMAN_MUX` unset) it refuses to act, so a global install costs an idle session nothing.
->
-> ⚠️ Turning `agentSkillEnabled` back off **does not remove already-injected copies** (a create-time sweep would yank the skill out from under other live sessions sharing that `.claude/` dir). Remove them per case with `codeman skill uninstall --case <name>`.
+### The agent skill (start here)
 
+Everything in this section also ships as a **Claude Code skill** in [`skills/codeman`](skills/codeman/SKILL.md). Install it once and you never paste API docs into a prompt again. You ask for what you want in plain English, and the agent already sitting inside a Codeman session loads the recipes and drives the API itself.
 
+#### Step 1: install it
+
+| How            | Command                                                    | Scope                                                                                      |
+| -------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Skills CLI     | `npx skills add Ark0N/Codeman --skill codeman -g`          | Global, works for any skills-aware agent                                                   |
+| Bundled CLI    | `codeman skill install`                                    | Global (`~/.claude/skills/codeman`), for npm installs that never cloned the repo            |
+| Bundled CLI    | `codeman skill install --case <name>`                      | One case only                                                                              |
+| Web UI         | App Settings → Agents & CLIs → Claude → **Agent Skill**    | Auto-injects into each case on Claude session create (`agentSkillEnabled`, SYNCED, default off) |
+
+`codeman skill uninstall [--case <name>]` reverses the CLI installs, and never touches a `skills/codeman` you wrote yourself.
+
+#### Step 2: ask for things
+
+That is the entire interface. No curl, no endpoint names, no session ids. These prompts work as written:
+
+| You say                                                                                    | The skill does                                                                                           |
+| ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| _"What sessions are running right now?"_                                                   | Lists them with name, mode and status. Read-only, safe to ask anytime.                                    |
+| _"Start a shell worker on the `myapp` case, run the test suite, tell me if it passes."_    | Spawns, waits on a split completion marker, reads back the exit code, cleans up.                          |
+| _"Spin up 3 workers for lint, typecheck and tests. Run them in parallel, report failures."_ | The fan-out flow: one session per task, all started first, then gathered as each finishes.                |
+| _"Have a claude worker on `refactor-auth` summarize `src/session.ts`, then close it."_     | Spawns, runs the readiness ladder (first-run trust dialog included), send-and-wait, reads the clean transcript answer, deletes. |
+| _"Watch session w4 and tell me if it gets stuck on a permission prompt."_                  | Blocks on the `blocked` signal and surfaces the question to **you**. It never answers another session's prompt itself. |
+
+#### Step 3: nothing
+
+The agent deletes every session it started. Watch the tabs appear and disappear in the dashboard while it works.
+
+#### A real run, start to finish
+
+> **You:** spin up 3 shell workers, run lint / typecheck / the frontend syntax check in parallel, and tell me which failed.
+
+```text
+lint       -> 9f2d8e5f   dispatched
+typecheck  -> aff9c691   dispatched     3 tabs appear in the dashboard
+syntax     -> be9f1f15   dispatched
+
+lint         DONE_lint_17909      rc=0
+typecheck    DONE_typecheck_3409  rc=0   gathered as each one finishes
+syntax       DONE_syntax_18501    rc=0
+
+deleted 9f2d8e5f, aff9c691, be9f1f15    tabs disappear
+```
+
+Those `DONE_<task>_<random>` strings are the skill's **split marker** trick, and they are why the fan-out is reliable on hook-less `shell` sessions: the typed line contains `${M}_17909`, so only the command's real *output* ever contains `DONE_17909`. An unsplit marker would match the echo of your own keystrokes before the command had even run.
+
+#### What's in the box
+
+| File                                                                | Contents                                                                                    |
+| --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| [`SKILL.md`](skills/codeman/SKILL.md)                               | Safety rules, rules of the road, and 9 single-purpose recipes. Always loaded.                |
+| [`reference/recipes.md`](skills/codeman/reference/recipes.md)       | 6 worked multi-worker flows (fan-out, blocked-worker watch, messaging fan-out). On demand.   |
+| [`reference/endpoints.md`](skills/codeman/reference/endpoints.md)   | Full endpoint tables, error codes, per-mode signal table, capacity limits. On demand.        |
+| [`reference/messaging.md`](skills/codeman/reference/messaging.md)   | Talking to claude workers directly via Claude Code cross-session messaging. On demand.       |
+
+Every recipe in there was verified against a live server, and the comments record the failure modes that were measured rather than guessed.
+
+#### Two things worth knowing
+
+- **It self-gates.** Outside a Codeman session (`CODEMAN_MUX` unset) the skill refuses to act and does not guess an API URL, so a global install costs an unrelated Claude Code session nothing.
+- **It is deliberately conservative.** Unprompted, it may only spawn sessions, prompt them, and delete ones **it created in that same conversation, by exact id**, through a fail-closed guard that refuses to delete the agent's own session. Deleting a case (which erases a real directory of your code), bulk kills, respawn/ralph/cron/orchestrator changes and settings writes all require you to ask, naming the target.
+
+⚠️ Turning `agentSkillEnabled` back off **does not remove already-injected copies** (a create-time sweep would yank the skill out from under other live sessions sharing that `.claude/` dir). Remove them per case with `codeman skill uninstall --case <name>`.
+
+---
+
+**The rest of this section is the manual path**: the same operations as raw HTTP, for a CI bot, a shell script, or any agent without skill support.
 
 ### Detect that you're inside Codeman
 

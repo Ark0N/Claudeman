@@ -6,7 +6,9 @@
  * driving Codeman over HTTP. Nothing tied it to the server, so renaming or dropping a
  * route left the skill confidently telling agents to call a 404. This parses the
  * `METHOD /api/...` pairs out of the doc and matches them against the `app.<method>()`
- * registrations in src/web/routes/*.ts.
+ * registrations in src/web/routes/*.ts plus src/web/server.ts (which registers `/api/events`
+ * and `/api/events/subscribe` directly). Fastify generics on the registration call are
+ * tolerated, since approval-routes.ts uses them.
  *
  * Precision over recall on purpose: only a bare uppercase verb followed by an
  * `/api/...` path counts, so prose that merely mentions a path (the `.../sessions/null`
@@ -26,11 +28,19 @@ import { join } from 'node:path';
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const DOC_PATH = join(HERE, '../skills/codeman/reference/endpoints.md');
 const ROUTES_DIR = join(HERE, '../src/web/routes');
+/** `/api/events` and `/api/events/subscribe` are registered here, not in routes/. */
+const SERVER_PATH = join(HERE, '../src/web/server.ts');
 
 /** `METHOD /api/<path>`, stopping before a query string, backtick or prose. */
 const DOC_ENDPOINT = /\b(GET|POST|PUT|PATCH|DELETE)\s+\/(api\/[A-Za-z0-9_:/-]+)/g;
-/** `app.get('/api/…'`, where the path may sit on its own line (case-routes.ts, file-routes.ts). */
-const ROUTE_REGISTRATION = /app\.(get|post|put|patch|delete)\(\s*'([^']+)'/g;
+/**
+ * `app.get('/api/…'`, where the path may sit on its own line (case-routes.ts,
+ * file-routes.ts) and the call may carry a Fastify generic
+ * (`app.post<{ Params: { id: string } }>('/api/approvals/:id/answer'`, approval-routes.ts).
+ * The generic is matched non-greedily up to the `(` so a `<…>` containing braces or
+ * nested generics still lands on the path argument.
+ */
+const ROUTE_REGISTRATION = /app\.(get|post|put|patch|delete)(?:<[\s\S]*?>)?\(\s*'([^']+)'/g;
 
 /**
  * Strip the `/api/v1` alias and replace param names with a placeholder, so
@@ -53,9 +63,14 @@ function documentedEndpoints(): string[] {
 
 function registeredRoutes(): Set<string> {
   const registered = new Set<string>();
-  for (const file of readdirSync(ROUTES_DIR)) {
-    if (!file.endsWith('.ts')) continue;
-    const source = readFileSync(join(ROUTES_DIR, file), 'utf-8');
+  const sources = readdirSync(ROUTES_DIR)
+    .filter((file) => file.endsWith('.ts'))
+    .map((file) => join(ROUTES_DIR, file));
+  // Not every route lives in routes/: the SSE stream and its subscribe companion are
+  // registered directly on the server (`this.app.get('/api/events')`), and the doc
+  // documents them, so scanning only routes/ reported real endpoints as missing.
+  sources.push(SERVER_PATH);
+  for (const source of sources.map((path) => readFileSync(path, 'utf-8'))) {
     for (const match of source.matchAll(ROUTE_REGISTRATION)) {
       if (!match[2].startsWith('/api/')) continue;
       registered.add(normalize(match[1], match[2]));

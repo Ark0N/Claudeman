@@ -273,6 +273,54 @@ export function findSessionOrFail(ctx: SessionPort, sessionId: string, req?: Fas
   return session;
 }
 
+/** Shortest prefix accepted for a parent session id (see resolveParentSessionId). */
+const PARENT_SESSION_ID_MIN_PREFIX = 8;
+
+/**
+ * Resolve the "who spawned me" hint a create request may carry, for the tab lineage
+ * lines in the web UI. Reads the body field first, then the `X-Codeman-Parent-Session`
+ * header (the agent skill sets that once on its shared curl invocation, so every spawn
+ * recipe carries it without a per-recipe edit).
+ *
+ * ⚠️ Decoration, and resolved rather than trusted:
+ * - Returns `undefined` for anything unresolvable and NEVER throws. A stale or bogus
+ *   id must not be able to fail a worker spawn over a cosmetic line.
+ * - The parent must be a live session the caller can already see AND carry the same
+ *   owner as the session being created, so a multi-user caller cannot staple their
+ *   session under someone else's tab.
+ * - Exact id match first, then a UNIQUE prefix of >= 8 chars, because ids appear
+ *   truncated to 8 in mux names and in a Docker export's `$CODEMAN_SESSION_ID`.
+ *   An ambiguous prefix resolves to nothing rather than to a guess.
+ *
+ * Returns the parent's FULL id, which is what the frontend matches tabs on.
+ */
+export function resolveParentSessionId(
+  ctx: SessionPort,
+  req: FastifyRequest,
+  bodyValue: string | undefined,
+  owner: string | undefined
+): string | undefined {
+  const header = req.headers['x-codeman-parent-session'];
+  const raw = bodyValue ?? (Array.isArray(header) ? header[0] : header);
+  const candidate = typeof raw === 'string' ? raw.trim() : '';
+  // The body field is schema-capped; the header is not, so cap it here too.
+  if (!candidate || candidate.length > 100) return undefined;
+
+  let parent = ctx.sessions.get(candidate);
+  if (!parent && candidate.length >= PARENT_SESSION_ID_MIN_PREFIX) {
+    for (const session of ctx.sessions.values()) {
+      if (!session.id.startsWith(candidate)) continue;
+      if (parent) return undefined; // ambiguous prefix — resolve to nothing, never a guess
+      parent = session;
+    }
+  }
+  if (!parent) return undefined;
+
+  if (!canAccessOwned(getAuthUser(req), parent.owner)) return undefined;
+  if ((parent.owner ?? undefined) !== (owner ?? undefined)) return undefined;
+  return parent.id;
+}
+
 /**
  * Parse and validate a request body against a Zod schema, or throw a structured 400 error.
  * Replaces the repeated pattern: `const r = Schema.safeParse(body); if (!r.success) return createErrorResponse(...)`.

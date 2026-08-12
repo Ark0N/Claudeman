@@ -465,6 +465,11 @@ Object.assign(CodemanApp.prototype, {
     if (typeof this._appendUltracodeAgentConnectionLines === 'function') {
       this._appendUltracodeAgentConnectionLines(svg, rects);
     }
+    // Tab → tab it spawned (session-lineage.js). Same shared read/write pass and the
+    // same tab-rect cache; desktop-only and gated on its own setting inside.
+    if (typeof this._appendLineageConnectionLines === 'function') {
+      this._appendLineageConnectionLines(svg, rects);
+    }
 
     // Every path above was just created from scratch, so any line entrance in
     // flight has to be re-attached here (resumed via a negative animation-delay).

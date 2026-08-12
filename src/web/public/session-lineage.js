@@ -1,0 +1,174 @@
+/**
+ * @fileoverview Session lineage lines — the arcs joining a tab to the tabs it spawned.
+ *
+ * A session that starts another session (the `codeman` agent skill spawning a worker,
+ * which passes its own `$CODEMAN_SESSION_ID`) gets `parentSessionId` stamped on its
+ * state server-side. This module turns that field into the same kind of glowing
+ * connection line the subagent windows use, but tab → tab, so the strip shows at a
+ * glance which tab spawned which.
+ *
+ * It is an ADDITIONAL LAYER on the existing SVG pass, not a second pass: the core
+ * `_updateConnectionLinesImmediate()` (subagent-windows.js) calls
+ * `_appendLineageConnectionLines(svg, rects)` at its tail, exactly like ultracode does,
+ * so every layer shares ONE batched read → write reflow and one tab-rect cache.
+ *
+ * Two constraints that are not obvious from the code:
+ * - DESKTOP ONLY. The overlay is `z-index: 999`; the desktop header is 100 (arcs paint
+ *   over it, which is what lets them touch tab bottoms), but under 1024px mobile.css
+ *   makes the header `position: fixed; z-index: 1200` and would bury them. The phone
+ *   strip is also a scroller where both endpoints are rarely on screen at once.
+ * - Paths carry `data-agent-id="lineage:<childId>"` because that is the attribute
+ *   `_applyLineEntrances()` queries, so the draw-in animation and its
+ *   negative-`animation-delay` resume across `svg.innerHTML = ''` come for free.
+ *
+ * @mixin Extends CodemanApp.prototype via Object.assign
+ * @dependency subagent-windows.js (_updateConnectionLinesImmediate, #connectionLines)
+ * @dependency constants.js (window.CodemanLineage.computePath)
+ * @dependency settings-ui.js (loadAppSettingsFromStorage, getDefaultSettings)
+ * @loadorder 15.6 (after ultracode-windows.js — appended to the same SVG pass)
+ */
+/* global CodemanApp, MobileDetection */
+
+Object.assign(CodemanApp.prototype, {
+  /**
+   * Per-device opt-out (App Settings → Appearance), cached because the draw path runs
+   * on every tab render, scroll and resize. `applyLineageLineSettings()` refreshes it.
+   *
+   * Desktop-only for the z-index reason in the file header, and gated on device type
+   * rather than on the settings namespace: this is a layout decision, like the phone
+   * overview's `shouldUseMobileOverview()`.
+   */
+  _lineageLinesEnabled() {
+    if (this._lineageLinesOn === undefined) this._syncLineageLinesEnabled();
+    return this._lineageLinesOn;
+  },
+
+  _syncLineageLinesEnabled() {
+    let on = false;
+    try {
+      if (MobileDetection.getDeviceType() === 'desktop') {
+        const settings = this.loadAppSettingsFromStorage ? this.loadAppSettingsFromStorage() : {};
+        const defaults = this.getDefaultSettings ? this.getDefaultSettings() : {};
+        on = settings.sessionLineageLines ?? defaults.sessionLineageLines ?? true;
+      }
+    } catch (_e) {
+      on = false;
+    }
+    this._lineageLinesOn = !!on;
+    return this._lineageLinesOn;
+  },
+
+  /** Re-read the setting and redraw. Called from the settings apply pass and on resize. */
+  applyLineageLineSettings() {
+    const prev = this._lineageLinesOn;
+    const next = this._syncLineageLinesEnabled();
+    if (prev !== next) this.updateConnectionLines();
+  },
+
+  /**
+   * Every parent → child pair worth drawing, with the child's index among its siblings
+   * (that index is what nests sibling arcs instead of overprinting them).
+   *
+   * Walks `sessionOrder` rather than the sessions Map so sibling depth follows the
+   * strip's own left-to-right order, which is what the user sees.
+   */
+  _collectLineageEdges() {
+    const edges = [];
+    if (!this.sessions || this.sessions.size < 2) return edges;
+    const order = this.sessionOrder && this.sessionOrder.length ? this.sessionOrder : [...this.sessions.keys()];
+    const seenPerParent = new Map();
+    for (const id of order) {
+      const session = this.sessions.get(id);
+      const parentId = session && session.parentSessionId;
+      // A parent that is gone (closed, or never came back after a restart) draws
+      // nothing: the field is decoration, so a dangling one is simply not rendered.
+      if (!parentId || parentId === id || !this.sessions.has(parentId)) continue;
+      const depth = seenPerParent.get(parentId) || 0;
+      seenPerParent.set(parentId, depth + 1);
+      edges.push({ parentId, childId: id, depth, status: session.status || 'idle' });
+    }
+    return edges;
+  },
+
+  /**
+   * Append the lineage layer to the shared SVG pass.
+   *
+   * Contract with the caller: `rects` is the batched read cache keyed `tab:<id>`, and
+   * everything read here goes through it so a tab another layer already measured is
+   * never measured twice. All reads happen before any append, keeping the caller's
+   * read → write split intact.
+   */
+  _appendLineageConnectionLines(svg, rects) {
+    this._lineageEdgeCount = 0;
+    if (!svg || !this._lineageLinesEnabled()) return;
+    const compute = window.CodemanLineage && window.CodemanLineage.computePath;
+    if (!compute) return;
+
+    const edges = this._collectLineageEdges();
+    if (edges.length === 0) return;
+    this._lineageEdgeCount = edges.length;
+    if (!rects) rects = new Map();
+
+    // PHASE 1 — reads.
+    const strip = document.getElementById('sessionTabs');
+    if (!strip) return;
+    const stripRect = strip.getBoundingClientRect();
+    for (const edge of edges) {
+      for (const id of [edge.parentId, edge.childId]) {
+        const key = 'tab:' + id;
+        if (rects.has(key)) continue;
+        const tab = strip.querySelector(`.session-tab[data-id="${CSS.escape(id)}"]`);
+        rects.set(key, tab ? tab.getBoundingClientRect() : null);
+      }
+    }
+
+    // PHASE 2 — writes, from the cache only.
+    for (const edge of edges) {
+      const parentRect = rects.get('tab:' + edge.parentId);
+      const childRect = rects.get('tab:' + edge.childId);
+      if (!parentRect || !childRect) continue;
+
+      const geom = compute({ parent: parentRect, child: childRect, strip: stripRect, depth: edge.depth });
+      if (!geom) continue; // scrolled out of the strip, or a degenerate rect
+
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      line.setAttribute('d', geom.d);
+      // The working class marches the dashes, so an active worker is visible along
+      // the line itself. `status` is the CHILD's, which is the interesting end.
+      const working = edge.status === 'working' ? ' lineage-line--working' : '';
+      line.setAttribute('class', 'connection-line lineage-line' + working);
+      // `data-agent-id` is what _applyLineEntrances() queries — see the file header.
+      line.setAttribute('data-agent-id', 'lineage:' + edge.childId);
+      line.setAttribute('data-parent-tab', edge.parentId);
+      line.setAttribute('data-child-tab', edge.childId);
+      svg.appendChild(line);
+
+      // Direction marker at the CHILD end. A circle rather than an SVG <marker>:
+      // markers need a <defs> block and fight the dash pattern.
+      const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      dot.setAttribute('cx', String(geom.endX));
+      dot.setAttribute('cy', String(geom.endY));
+      dot.setAttribute('r', '3');
+      dot.setAttribute('class', 'lineage-line-dot' + working);
+      dot.setAttribute('data-child-tab', edge.childId);
+      svg.appendChild(dot);
+    }
+  },
+
+  /**
+   * The strip scrolls (desktop `overflow-x: auto` and every wrapped layout), and a
+   * scroll moves both endpoints without firing any render, so the arcs would slide off
+   * their tabs. Passive listener, and the redraw is the normal coalesced one.
+   *
+   * Installed once; the guard also keeps a re-init from stacking listeners.
+   */
+  _installLineageStripScrollListener() {
+    if (this._lineageScrollHandler) return;
+    const strip = document.getElementById('sessionTabs');
+    if (!strip) return;
+    this._lineageScrollHandler = () => {
+      if (this._lineageEdgeCount > 0) this.updateConnectionLines();
+    };
+    strip.addEventListener('scroll', this._lineageScrollHandler, { passive: true });
+  },
+});

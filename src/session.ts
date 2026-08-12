@@ -493,6 +493,11 @@ export class Session extends EventEmitter {
   // from req.authUser and round-tripped through recovery like _remote/_docker.
   private _owner?: string;
 
+  // The session that spawned this one (tab lineage lines). Resolved by the create
+  // route before it reaches here, so this is always either an id that existed at
+  // create time or undefined. Decoration only — see SessionState.parentSessionId.
+  private readonly _parentSessionId?: string;
+
   // Session color for visual differentiation
   private _color: import('./types.js').SessionColor = 'default';
 
@@ -574,6 +579,8 @@ export class Session extends EventEmitter {
       docker?: SessionDocker;
       /** Owning username (multi-user mode); undefined in single-user. */
       owner?: string;
+      /** Session that spawned this one — tab lineage decoration, resolved by the caller. */
+      parentSessionId?: string;
     }
   ) {
     super();
@@ -665,6 +672,10 @@ export class Session extends EventEmitter {
     this._remote = config.remote;
     this._docker = config.docker;
     this._owner = config.owner;
+    // Never self-parent: a session pointing at itself would draw a zero-length
+    // lineage arc under its own tab. Only reachable via the recovery path, where
+    // both the id and the saved parent come from disk.
+    this._parentSessionId = config.parentSessionId === this.id ? undefined : config.parentSessionId;
     if (config.attachmentHistory && config.attachmentHistory.length > 0) {
       this.restoreAttachmentHistory(config.attachmentHistory);
     }
@@ -779,6 +790,11 @@ export class Session extends EventEmitter {
   /** Owning username in multi-user mode, else undefined. */
   get owner(): string | undefined {
     return this._owner;
+  }
+
+  /** The session that spawned this one (tab lineage decoration), else undefined. */
+  get parentSessionId(): string | undefined {
+    return this._parentSessionId;
   }
 
   /** Set the owning username (used by recovery to restore ownership). */
@@ -1176,6 +1192,7 @@ export class Session extends EventEmitter {
       remote: this._remote,
       docker: this._docker,
       owner: this._owner,
+      parentSessionId: this._parentSessionId,
       currentTaskId: this._currentTaskId,
       createdAt: this.createdAt,
       lastActivityAt: this._lastActivityAt,

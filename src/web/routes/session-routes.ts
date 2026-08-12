@@ -67,6 +67,7 @@ import {
   parseBody,
   persistAndBroadcastSession,
   resolveCasesDir,
+  resolveParentSessionId,
   sessionCapacityMessage,
   SETTINGS_PATH,
   validatePathWithinBase,
@@ -863,6 +864,7 @@ export function registerSessionRoutes(
       tmuxHistoryLimit: terminalHistoryConfig.tmuxHistoryLimit,
       remote,
       owner,
+      parentSessionId: resolveParentSessionId(ctx, req, body.parentSessionId, owner),
     });
 
     ctx.addSession(session);
@@ -2570,6 +2572,7 @@ export function registerSessionRoutes(
       antigravityConfig,
       envOverrides,
       effort,
+      parentSessionId,
     } = parseBody(QuickStartSchema, req.body);
 
     // Multi-user: shell mode is arbitrary host-account execution, gated by the grant.
@@ -2914,6 +2917,7 @@ export function registerSessionRoutes(
       docker,
       resumeSessionId: dockerResumeId,
       tmuxHistoryLimit: qsTerminalHistoryConfig.tmuxHistoryLimit,
+      parentSessionId: resolveParentSessionId(ctx, req, parentSessionId, owner),
     });
 
     // Auto-detect completion phrase from CLAUDE.md BEFORE broadcasting

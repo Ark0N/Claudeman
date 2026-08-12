@@ -1,5 +1,25 @@
 # aicodeman
 
+## 1.17.0
+
+### Minor Changes
+
+- Agent skill rework, session lineage lines, and a sharper endpoint drift guard.
+
+  **The packaged agent skill is rewritten around learning it, not just being correct** (`skills/codeman/`, ~2000 lines changed across four files). It previously opened with about fifty lines of credential archaeology before a single working call, and interleaved every recipe with the rationale for its own warnings.
+  - `SKILL.md` is restructured into: a 12-line "Hello, worker" that runs as written, a verb table an agent can act correctly from without reading anything else, a ten-line rules digest, the safety rules, the recipes, and setup/credentials last.
+  - **The preamble is no longer re-pasted.** A bootstrap writes it once to a `$HOME`-derived 0600 file and later calls source it and check a version stamp. Shell state does not survive between tool calls, but the filesystem does. The stamp is the last line written, so a truncated file leaves it unset and the guard aborts instead of running a half-written preamble.
+  - **New: where to spawn.** The only documented spawn used to create a scratch case, so "spin up workers on this repo" led an agent to do correct-looking work in the wrong directory. The rule is now explicit: hooks (and therefore `stop`/`blocked`) exist only where Codeman created the directory, so a linked case or a raw `workingDir` must synchronize on output markers. `wait:true` is still accepted there and silently degrades to a heuristic `idle`, which is documented as its own trap.
+  - **New verbs**: interrupt a runaway worker with ESC instead of deleting it, `active-tools` and `run-summary` as structured liveness signals, `auto-resume` for usage limits, the workspace as a high-bandwidth channel, and `GET /api/events` as a fleet watcher.
+  - `reference/messaging.md` gains a fleet protocol for Claude Code cross-session messaging: peer refs are injected and never discovered (a worker calling `ListAgents` sees the user's real sessions), every message costs a billed turn in both sessions, plus review pairs, mid-task questions, relay chains, mixed fleets, and their failure modes.
+  - `reference/recipes.md` is renumbered to a flat Flow 1-7 and gains Flow 7, one whole job start to finish: worktree fleet, tasks, gather, a review pass, report, cleanup.
+  - `reference/endpoints.md` gains an auth section, a symptom gallery keyed on what you actually see in the JSON, and a consolidated limits table.
+  - **Corrections found by auditing the old text against source**: the input cap is 65536 characters and not 100000 (65537-100000 passes Zod then 400s at the route); `wait.ended` is returned by a _live_ session whose write did not land, so "the session is gone" was wrong recovery advice and `delivered:false` is the discriminator; `DELETE /api/subagents` clears the map rather than killing anything; the trust-dialog auto-accept reads the rendered pane, not the output stream; `claudeMode` is readable globally though not per session; `run-summary` is envelope-wrapped (`.data.summary`); `active-tools` is not empty for `shell` mode; and a session does inherit the server's `CODEMAN_PASSWORD`.
+
+  **Session lineage lines** (`sessionLineageLines`, per-device, desktop default on). A create request may name the session that spawned it, as a `parentSessionId` body field on `POST /api/sessions` and `POST /api/quick-start`, or as an `X-Codeman-Parent-Session` header, and the web UI draws an arc from the parent's tab to each child's. The skill's preamble sets the header once, so every spawn recipe carries it. The value is **resolved rather than trusted**: exact id or a unique prefix of at least eight characters (ids reach agents truncated), it must be a live session the caller can see with the same owner, and anything unresolvable is dropped rather than returning a 400, so a cosmetic field can never fail a worker spawn. It confers no permission and no lifecycle meaning. Rendering is an additional layer on the existing connection-line pass, sharing one batched reflow; desktop only, because the mobile header would bury the overlay.
+
+  **The endpoint drift guard now covers routes it silently could not see.** `test/agent-skill-endpoints-doc.test.ts` matched only bare `app.<method>('path')` registrations under `src/web/routes/`, so routes registered on the server itself (`/api/events`, `/api/events/subscribe`) and any registered with Fastify generics (the approvals routes) were unverifiable. It now scans `server.ts` too and tolerates generics, taking it from about 200 to 216 recognized routes.
+
 ## 1.16.6
 
 ### Patch Changes

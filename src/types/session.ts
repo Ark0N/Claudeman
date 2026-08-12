@@ -400,6 +400,16 @@ export interface SessionState {
   docker?: SessionDocker;
   /** Owning username in multi-user mode; undefined in single-user (ignored when the flag is off) */
   owner?: string;
+  /**
+   * The Codeman session that spawned this one, supplied by the caller at create time
+   * (`parentSessionId` body field or the `X-Codeman-Parent-Session` header) and resolved
+   * against live sessions before being stored.
+   *
+   * ⚠️ UI DECORATION ONLY — it draws the lineage lines between tabs. It is never an
+   * ownership, permission, or lifecycle signal: a child outlives its parent, and an
+   * unresolvable value is dropped rather than failing the spawn.
+   */
+  parentSessionId?: string;
   /** ID of currently assigned task, null if none */
   currentTaskId: string | null;
   /** Timestamp when session was created */
