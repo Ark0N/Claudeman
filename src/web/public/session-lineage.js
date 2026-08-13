@@ -148,7 +148,9 @@ Object.assign(CodemanApp.prototype, {
       const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
       dot.setAttribute('cx', String(geom.endX));
       dot.setAttribute('cy', String(geom.endY));
-      dot.setAttribute('r', '3');
+      // Resting radius; `lineage-dot-pulse` breathes it 3.5 → 4.5 while the child
+      // works, so the two have to be changed together.
+      dot.setAttribute('r', '3.5');
       dot.setAttribute('class', 'lineage-line-dot' + working);
       dot.setAttribute('data-child-tab', edge.childId);
       svg.appendChild(dot);
