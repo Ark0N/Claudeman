@@ -534,6 +534,29 @@ the stable contract — event names are not renamed without a major bump. An
 optional `?sessions=<id,...>` filter suppresses only the high-volume terminal
 stream; lifecycle/metadata events are delivered to all clients regardless.
 
+### `sse:heartbeat` (liveness)
+
+Every 15s the server writes a `sse:heartbeat` frame to every connected client:
+
+```
+event: sse:heartbeat
+data: {"t":1755100000000}
+```
+
+`t` is the server's epoch-ms timestamp at write time. The frame carries no
+application state and can be ignored for correctness. It exists so a client can
+tell a live stream from a dead one: an `EventSource` whose connection has been
+idle-closed by a proxy (or that resumed from sleep on a stale socket) keeps
+delivering nothing without ever firing `onerror`. Clients that care should treat
+silence longer than about three intervals as a dead stream and reconnect, which
+is what the bundled frontend does.
+
+This replaced a `:keepalive` SSE **comment**, which served the same
+proxy-flushing purpose but is invisible to `EventSource` by spec and so could
+never be observed by a client. Consumers written against the old behavior are
+unaffected: `EventSource` dispatches only events that have a registered
+listener, so an unknown event name is dropped.
+
 ## Consuming from JavaScript
 
 The bundled frontend reads responses through `_apiJson()`

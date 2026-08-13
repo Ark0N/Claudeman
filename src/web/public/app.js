@@ -684,6 +684,17 @@ class CodemanApp {
     this.maxReconnectAttempts = 10;
     this.isOnline = navigator.onLine;
 
+    // SSE staleness watchdog. An EventSource that stops delivering does not
+    // always error (a proxy that idle-closed it, a resumed laptop), so
+    // `onerror` never fires and every SSE-driven surface freezes silently.
+    // The server heartbeats every 15s; going quiet for three of them means the
+    // stream is a zombie and has to be rebuilt. The decision is pure
+    // (computeSseStale in constants.js); these are its inputs. The threshold
+    // is an instance field so a browser test can shrink it.
+    this._sseLastMessageAt = 0;
+    this._sseStaleTimeoutMs = window.CodemanSseStale?.TIMEOUT_MS ?? 45000;
+    this._sseStaleWatchdog = null;
+
     // Connection-loss UI (banner + full-screen overlay). The decision itself is
     // pure and lives in constants.js (computeConnectionLossUi); these are just
     // its inputs. `_connDownSince` is the timestamp the transport LEFT the
@@ -719,6 +730,11 @@ class CodemanApp {
     window.addEventListener('pagehide', () => this._persistReliableNow());
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') this._persistReliableNow();
+      // A background tab's timers are throttled, so the 5s watchdog may not
+      // have run for minutes, and a wake/unlock is exactly when a stream
+      // comes back zombie. Checking here is what makes recovery feel instant
+      // instead of up to a full timeout late.
+      else this._checkSseStale();
     });
 
     // Local echo overlay — DOM overlay positioned at the visible ❯ prompt
@@ -1421,6 +1437,14 @@ class CodemanApp {
     // Clear any pending reconnect timeout to prevent duplicate connections
     this._clearTimer('sseReconnectTimeout');
 
+    // Same discipline for the staleness watchdog: connectSSE() runs on every
+    // reconnect and is the only teardown path this page-lifetime interval has,
+    // so clearing it anywhere else (or not at all) stacks intervals.
+    if (this._sseStaleWatchdog) {
+      clearInterval(this._sseStaleWatchdog);
+      this._sseStaleWatchdog = null;
+    }
+
     // Clean up existing SSE listeners before creating new connection (prevents listener accumulation)
     if (this._sseListenerCleanup) {
       this._sseListenerCleanup();
@@ -1448,11 +1472,20 @@ class CodemanApp {
     if (this.activeSessionId) _sseParams.set('sessions', this.activeSessionId);
     this.eventSource = new EventSource(`/api/events?${_sseParams.toString()}`);
 
-    // Store all event listeners for cleanup on reconnect
+    // Store all event listeners for cleanup on reconnect.
+    //
+    // Every handler is wrapped so ANY frame that arrives stamps the liveness
+    // clock the staleness watchdog reads. Doing it here (rather than at the
+    // three separate registration sites below) is what keeps a future
+    // addListener() call from silently opting out of it.
     const listeners = [];
     const addListener = (event, handler) => {
-      this.eventSource.addEventListener(event, handler);
-      listeners.push({ event, handler });
+      const stamped = (e) => {
+        this._sseLastMessageAt = Date.now();
+        handler(e);
+      };
+      this.eventSource.addEventListener(event, stamped);
+      listeners.push({ event, handler: stamped });
     };
 
     // Create cleanup function to remove all listeners
@@ -1467,6 +1500,10 @@ class CodemanApp {
 
     this.eventSource.onopen = () => {
       this.reconnectAttempts = 0;
+      // Start the liveness clock here, not at the first frame: the watchdog
+      // only ever fires while the status is 'connected', and this is the
+      // moment that becomes true.
+      this._sseLastMessageAt = Date.now();
       this.setConnectionStatus('connected');
     };
     this.eventSource.onerror = () => {
@@ -1614,6 +1651,52 @@ class CodemanApp {
       }
       this._onSessionListMaybeChanged();
     });
+
+    // Liveness heartbeat. The handler is deliberately empty: the whole point
+    // is the stamp inherited from addListener's wrapper. It still has to be
+    // REGISTERED: EventSource only dispatches named events that have a
+    // listener, so without this the frame arrives on the wire and is dropped
+    // before it can prove the stream is alive.
+    addListener(SSE_EVENTS.HEARTBEAT, () => {});
+
+    // Watchdog: a stream that goes quiet without erroring is invisible to
+    // onerror, so poll the pure staleness policy and rebuild the connection
+    // ourselves. 5s granularity against a 45s threshold: cheap, and it keeps
+    // the worst-case detection lag well under a heartbeat interval.
+    this._sseStaleWatchdog = setInterval(() => this._checkSseStale(), 5000);
+  }
+
+  /**
+   * Force a reconnect if the SSE stream has gone quiet while still claiming to
+   * be connected. Called by the 5s watchdog and on tab-visible.
+   *
+   * Recovery needs no new sync path: the reconnect re-runs `handleInit`, which
+   * already calls `_resetAllAppState()` and rebuilds everything from the
+   * server. The connection-loss UI needs nothing either: `connectSSE()` sets
+   * status 'connecting' (reconnectAttempts was zeroed by onopen), and the 2.5s
+   * grace in computeConnectionLossUi means a stream that heals in 200ms shows
+   * nothing at all.
+   */
+  _checkSseStale() {
+    const policy = window.CodemanSseStale;
+    if (!policy) return;
+    const now = Date.now();
+    const stale = policy.compute({
+      lastMessageAt: this._sseLastMessageAt,
+      now,
+      status: this._connectionStatus,
+      isOnline: this.isOnline,
+      timeoutMs: this._sseStaleTimeoutMs,
+    });
+    if (!stale) return;
+    // If a middlebox ever strips or delays heartbeats, the failure mode is
+    // "silently reconnects every 45s", and a field report of that would be
+    // undebuggable without this line.
+    console.log(
+      `[SSE] stream stale: no frame for ${now - this._sseLastMessageAt}ms ` +
+      `(threshold ${this._sseStaleTimeoutMs}ms), forcing reconnect`
+    );
+    this.connectSSE();
   }
 
   // ═══════════════════════════════════════════════════════════════
