@@ -77,25 +77,47 @@ describe('lineage line geometry', () => {
     expect(first.d).not.toBe(second.d);
   });
 
-  it('switches to a vertical bezier when the strip has wrapped to two rows', () => {
+  it('keeps bending at strip-wide spans instead of flattening into a straight line', () => {
     const helper = loadLineageHelper();
+    // A worker the agent skill starts is appended to the END of the strip, so this
+    // is the span the feature is actually used at. The first shipped clamp (44px)
+    // turned it into a flat thread across the terminal.
+    const wide = helper.computePath({ parent: tab(0), child: tab(1300), strip: { ...STRIP, width: 1500 } })!;
+    const near = helper.computePath({ parent: tab(0), child: tab(140), strip: STRIP })!;
+
+    const wideDip = controlYs(wide.d)[0] - 34;
+    const nearDip = controlYs(near.d)[0] - 34;
+    expect(wideDip).toBeGreaterThan(nearDip * 2);
+    expect(wideDip).toBeGreaterThanOrEqual(80);
+  });
+
+  it('brackets a wrapped pair BELOW the lower row rather than inside the row gap', () => {
+    const helper = loadLineageHelper();
+    // The reported bug: with the desktop strip wrapped, a parent on row 1 (bottom 34)
+    // and its child on row 2 (top 48) are 14px apart, and a parent-bottom → child-TOP
+    // bezier had 14px to bend in, so it drew a flat line hidden in the gap, three
+    // siblings overprinting each other. Both ends now anchor on the tab BOTTOM and the
+    // curve hangs below the LOWER row, the same bracket the flat strip gets.
     const strip: Rect = { left: 0, top: 0, width: 1200, height: 90 };
     const geom = helper.computePath({ parent: tab(0, 4), child: tab(200, 48), strip })!;
 
     expect(geom.sameRow).toBe(false);
-    // Parent bottom (34) → child top (48): the arc travels between rows.
-    expect(geom.d.startsWith('M 60 34')).toBe(true);
-    expect(geom.endY).toBe(48);
+    expect(geom.d.startsWith('M 60 34')).toBe(true); // parent BOTTOM
+    expect(geom.endY).toBe(78); // child BOTTOM, not its top
+    // Every control point clears the lower row by at least the minimum dip.
+    for (const y of controlYs(geom.d)) expect(y).toBeGreaterThanOrEqual(78 + helper.DIP_MIN_PX);
   });
 
-  it('draws upward when the child sits on the row ABOVE its parent', () => {
+  it('draws the same bracket when the child sits on the row ABOVE its parent', () => {
     const helper = loadLineageHelper();
     const strip: Rect = { left: 0, top: 0, width: 1200, height: 90 };
     const geom = helper.computePath({ parent: tab(0, 48), child: tab(200, 4), strip })!;
 
     expect(geom.sameRow).toBe(false);
-    expect(geom.d.startsWith('M 60 48')).toBe(true); // parent TOP edge
-    expect(geom.endY).toBe(34); // child bottom edge
+    expect(geom.d.startsWith('M 60 78')).toBe(true); // parent BOTTOM
+    expect(geom.endY).toBe(34); // child BOTTOM
+    // The parent's row is the lower one here, so that is what the curve clears.
+    for (const y of controlYs(geom.d)) expect(y).toBeGreaterThanOrEqual(78 + helper.DIP_MIN_PX);
   });
 
   it('skips an edge whose tab is scrolled out of the strip', () => {

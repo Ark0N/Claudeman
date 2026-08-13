@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { Readable } from 'node:stream';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
 import { registerFileRoutes } from '../../src/web/routes/file-routes.js';
 import { ApiErrorCode } from '../../src/types.js';
@@ -19,12 +20,15 @@ vi.mock('node:fs/promises', () => ({
   },
 }));
 
-// Mock realpathSync for symlink resolution
+// Mock realpathSync for symlink resolution, plus createReadStream: file-raw
+// STREAMS its body (range support), so an unmocked read would hit the real
+// filesystem and fail with ENOENT rather than serving the fixture bytes.
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   return {
     ...actual,
     realpathSync: vi.fn((p: string) => p),
+    createReadStream: vi.fn(() => Readable.from([Buffer.from('fake file bytes')])),
   };
 });
 
@@ -37,13 +41,14 @@ vi.mock('../../src/file-stream-manager.js', () => ({
 }));
 
 import fs from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
+import { createReadStream, realpathSync } from 'node:fs';
 import { fileStreamManager } from '../../src/file-stream-manager.js';
 
 const mockedReaddir = vi.mocked(fs.readdir);
 const mockedReadFile = vi.mocked(fs.readFile);
 const mockedStat = vi.mocked(fs.stat);
 const mockedRealpathSync = vi.mocked(realpathSync);
+const mockedCreateReadStream = vi.mocked(createReadStream);
 const mockedFileStreamManager = vi.mocked(fileStreamManager);
 
 describe('file-routes', () => {
@@ -55,6 +60,7 @@ describe('file-routes', () => {
 
     // Default: realpathSync returns the path unchanged
     mockedRealpathSync.mockImplementation((p: string) => p as never);
+    mockedCreateReadStream.mockImplementation(() => Readable.from([Buffer.from('fake file bytes')]) as never);
     // Default stat
     mockedStat.mockResolvedValue({ size: 100, isFile: () => true, isDirectory: () => true } as never);
     mockedReadFile.mockImplementation(async (path) =>
@@ -739,7 +745,7 @@ describe('file-routes', () => {
 
     it('serves raw file with correct content type', async () => {
       const content = Buffer.from('fake png data');
-      mockedReadFile.mockResolvedValue(content as never);
+      mockedCreateReadStream.mockReturnValue(Readable.from([content]) as never);
       mockedStat.mockResolvedValue({ size: content.length } as never);
 
       const res = await harness.app.inject({
@@ -752,7 +758,7 @@ describe('file-routes', () => {
 
     it('serves workspace SVG as an untrusted attachment instead of inline image/svg+xml', async () => {
       const content = Buffer.from('<svg><script>alert("xss")</script></svg>');
-      mockedReadFile.mockResolvedValue(content as never);
+      mockedCreateReadStream.mockReturnValue(Readable.from([content]) as never);
       mockedStat.mockResolvedValue({ size: content.length } as never);
 
       const res = await harness.app.inject({

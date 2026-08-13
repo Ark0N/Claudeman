@@ -9334,31 +9334,46 @@ kbd {
    light skins included). Do not add a per-skin `.lineage-line` override inside the
    html:not([data-skin="og"]) block: a bare class rule in there resolves to (0,2,1)
    and would outrank this one from a surprising place. */
+/* ⚠ QUIETER THAN THE SUBAGENT LINES, NOT INVISIBLE. The first cut ran 2px at 0.55
+   with a single 5px glow, which reads on a design mock and disappears on a real
+   1080p desktop: a faint thread over terminal text, exactly what it is drawn on
+   top of. The weight stays UNDER the subagent lines' 3px so the two layers still
+   separate, and the second, wider glow is what buys the contrast instead: it lifts
+   the line off the terminal without thickening it. Dashes scale with the stroke
+   (4 4 on a 2.5px line reads as a dotted smudge), and `lineage-flow` marches by
+   exactly two dash cycles, so it has to move with them. */
 .connection-line.lineage-line {
   stroke: var(--session-purple, #a98fe0);
-  stroke-width: 2;
-  stroke-dasharray: 4 4;
+  stroke-width: 2.5;
+  stroke-dasharray: 5 5;
   stroke-linecap: round;
-  opacity: 0.55;
-  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.55)) drop-shadow(0 0 5px var(--session-purple, #a98fe0));
+  opacity: 0.72;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.7)) drop-shadow(0 0 5px var(--session-purple, #a98fe0))
+    drop-shadow(0 0 11px var(--session-purple, #a98fe0));
+}
+
+/* ⚠ OUTSIDE the reduced-motion block below on purpose. A working child is the case
+   the line exists to signal, and pairing the brightness with the marching dashes
+   left every worker's arc at the resting 0.72 for anyone who turns motion off. */
+.connection-line.lineage-line--working {
+  opacity: 0.95;
 }
 
 .connection-line.lineage-line:hover {
-  opacity: 0.9;
-  stroke-width: 2.5;
+  opacity: 1;
+  stroke-width: 3;
 }
 
 .lineage-line-dot {
   fill: var(--session-purple, #a98fe0);
-  opacity: 0.7;
-  filter: drop-shadow(0 0 4px var(--session-purple, #a98fe0));
+  opacity: 0.85;
+  filter: drop-shadow(0 0 4px var(--session-purple, #a98fe0)) drop-shadow(0 0 9px var(--session-purple, #a98fe0));
 }
 
 /* The child end marches while that worker is actually working, so the line
    itself carries the signal. Motion is opt-out-able at the OS level. */
 @media (prefers-reduced-motion: no-preference) {
   .connection-line.lineage-line--working {
-    opacity: 0.85;
     animation: lineage-flow 1.1s linear infinite;
   }
 
@@ -9368,20 +9383,24 @@ kbd {
   }
 }
 
+/* Two full dash cycles, so the march loops seamlessly. Tied to `stroke-dasharray`
+   above: at `5 5` the cycle is 10px, so this is -20 rather than the -16 that
+   matched the old `4 4`. Leaving them out of step makes the dashes jump once per
+   iteration. */
 @keyframes lineage-flow {
   to {
-    stroke-dashoffset: -16;
+    stroke-dashoffset: -20;
   }
 }
 
 @keyframes lineage-dot-pulse {
   0%, 100% {
-    opacity: 0.6;
-    r: 3;
+    opacity: 0.75;
+    r: 3.5;
   }
   50% {
     opacity: 1;
-    r: 4;
+    r: 4.5;
   }
 }
 
