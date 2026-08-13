@@ -108,7 +108,9 @@ describe('full-history re-pull downgrade guard (issue #205 round 2)', () => {
 
   it('is wired into _maybeRefetchFullHistory BEFORE the destructive reset', () => {
     const source = readFileSync(resolve(import.meta.dirname, '../src/web/public/app.js'), 'utf8');
-    const start = source.indexOf('async _maybeRefetchFullHistory()');
+    // Anchor on the open paren, not the full empty signature: the method takes
+    // options since #258 ({ force }) and this guard is about ORDER, not arity.
+    const start = source.indexOf('async _maybeRefetchFullHistory(');
     const guard = source.indexOf('this._replayWouldShrinkBuffer(buffer)', start);
     const reset = source.indexOf('this._resetTerminalForReplay()', start);
 

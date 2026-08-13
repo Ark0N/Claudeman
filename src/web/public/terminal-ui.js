@@ -2910,10 +2910,17 @@ Object.assign(CodemanApp.prototype, {
     const activeSession = this.activeSessionId && this.sessions ? this.sessions.get(this.activeSessionId) : null;
     const MAX_FRAME_BYTES = activeSession?.mode === 'codex' ? 32768 : 65536;
     let deferred = false;
-    // If the user recently scrolled up, remember the viewport so we can restore
-    // it after the write — Codex status redraws would otherwise jump it.
+    // If the user is reading history, remember the viewport so we can restore it
+    // after the write — Codex status redraws would otherwise jump it.
+    //
+    // Position, not recency (#259). This was gated on _hasRecentUserScrollUp(),
+    // a 1500ms decay window, so a user who scrolled up and then actually READ
+    // for longer than that lost the protection mid-read and got dragged along by
+    // the next repaint. Being scrolled up IS the intent, however long ago it was
+    // expressed; the recency window remains as an extra guard on the sticky
+    // scroll-to-bottom below, where it protects against a mid-flush race.
     const preserveViewportY =
-      this._hasRecentUserScrollUp() && this.terminal.buffer?.active ? this.terminal.buffer.active.viewportY : null;
+      this.terminal.buffer?.active && !this.isTerminalAtBottom() ? this.terminal.buffer.active.viewportY : null;
 
     if (_joinedLen <= MAX_FRAME_BYTES) {
       this.terminal.write(joined);

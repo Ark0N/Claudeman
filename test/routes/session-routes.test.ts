@@ -55,6 +55,7 @@ vi.mock('../../src/remote-hosts.js', async (orig) => {
 });
 
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
+import { resolveTerminalHistoryConfig } from '../../src/config/terminal-history.js';
 
 interface LocalHarness {
   app: FastifyInstance;
@@ -630,6 +631,77 @@ describe('session-routes', () => {
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       expect(body.data.terminalBuffer).toBeDefined();
+    });
+
+    // ── #258: a single `truncated` boolean could not distinguish "we tailed for
+    // speed, the rest is still there" from "the oldest bytes are gone". The UI
+    // needs that difference to know whether offering "Load full history" is a
+    // promise it can keep.
+    describe('truncation reason (#258)', () => {
+      const lines = (n: number) => Array.from({ length: n }, (_, i) => `history line ${i}`).join('\n');
+
+      beforeEach(() => {
+        (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(() => null);
+        harness.ctx._session.mode = 'shell';
+      });
+
+      it('reports no reason when nothing was cut', async () => {
+        harness.ctx._session.terminalBuffer = 'short buffer';
+        const res = await harness.app.inject({
+          method: 'GET',
+          url: `/api/sessions/${harness.ctx._sessionId}/terminal`,
+        });
+        const body = JSON.parse(res.body);
+        expect(body.data.truncated).toBe(false);
+        expect(body.data.truncationReason).toBeNull();
+        expect(body.data.retainedBytes).toBe(body.data.terminalBuffer.length);
+      });
+
+      it("reports 'tail' for an intentional partial replay", async () => {
+        harness.ctx._session.terminalBuffer = lines(4000);
+        const res = await harness.app.inject({
+          method: 'GET',
+          url: `/api/sessions/${harness.ctx._sessionId}/terminal?tail=500`,
+        });
+        const body = JSON.parse(res.body);
+        expect(body.data.truncated).toBe(true);
+        expect(body.data.truncationReason).toBe('tail');
+        // fullSize describes what existed, retainedBytes what was sent.
+        expect(body.data.retainedBytes).toBeLessThan(body.data.fullSize);
+      });
+
+      it("reports 'capped' when the byte ceiling dropped the oldest output", async () => {
+        harness.ctx.getTerminalHistoryConfig = vi.fn(async () => ({
+          ...resolveTerminalHistoryConfig({}),
+          terminalBufferMaxBytes: 2000,
+        }));
+        harness.ctx._session.terminalBuffer = lines(4000);
+
+        const res = await harness.app.inject({
+          method: 'GET',
+          url: `/api/sessions/${harness.ctx._sessionId}/terminal`,
+        });
+        const body = JSON.parse(res.body);
+        expect(body.data.truncated).toBe(true);
+        expect(body.data.truncationReason).toBe('capped');
+      });
+
+      it("keeps 'capped' when a tail cut lands on top of it", async () => {
+        // Both sites fire. 'capped' is the stronger statement (bytes are gone),
+        // so a subsequent tail must not downgrade it to the recoverable reason.
+        harness.ctx.getTerminalHistoryConfig = vi.fn(async () => ({
+          ...resolveTerminalHistoryConfig({}),
+          terminalBufferMaxBytes: 2000,
+        }));
+        harness.ctx._session.terminalBuffer = lines(4000);
+
+        const res = await harness.app.inject({
+          method: 'GET',
+          url: `/api/sessions/${harness.ctx._sessionId}/terminal?tail=500`,
+        });
+        const body = JSON.parse(res.body);
+        expect(body.data.truncationReason).toBe('capped');
+      });
     });
 
     it('does not strip VPA-like shell scrollback as Ink redraw bloat', async () => {

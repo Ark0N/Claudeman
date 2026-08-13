@@ -795,3 +795,90 @@ function escapeHtml(text) {
   if (typeof text !== 'string') return '';
   return text.replace(_htmlEscapePattern, (ch) => _htmlEscapeMap[ch]);
 }
+
+/**
+ * Human-readable byte size for the partial-history banner (#258).
+ *
+ * Deliberately coarse: the banner is telling the user roughly how much of a
+ * transcript they are looking at, not accounting for bytes. Sub-KB amounts read
+ * as "less than 1 KB" rather than an exact count nobody can act on.
+ *
+ * @param {number} bytes
+ * @returns {string}
+ */
+function formatHistoryBytes(bytes) {
+  const n = typeof bytes === 'number' && isFinite(bytes) && bytes > 0 ? bytes : 0;
+  if (n < 1024) return 'less than 1 KB';
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * Decide what the partial-history banner should say (#258).
+ *
+ * PURE so the three states can be tested without a DOM. They exist because one
+ * `truncated` boolean could not distinguish messages the user acts on very
+ * differently:
+ *   - recoverable: we tailed for speed and the rest is still retained
+ *   - atCeiling:   the FULL capture itself hit the byte ceiling
+ *   - exhausted:   a full pull was refused as a downgrade, so this is all there is
+ *
+ * @param {{truncated?: boolean, reason?: string|null, source?: string|null,
+ *          fullSize?: number, retainedBytes?: number, exhausted?: boolean}} state
+ * @returns {{visible: boolean, message: string, canLoadMore: boolean}}
+ */
+function computeHistoryTruncationNotice(state = {}) {
+  if (!state.truncated) return { visible: false, message: '', canLoadMore: false };
+
+  const retained = Math.max(0, state.retainedBytes || 0);
+  const dropped = Math.max(0, (state.fullSize || 0) - retained);
+  const shown = formatHistoryBytes(retained);
+  // A full-history capture that was STILL capped is already everything tmux
+  // holds, so the remainder is out of reach rather than one request away.
+  const atCeiling = state.source === 'mux-full-history' && state.reason === 'capped';
+
+  if (state.exhausted) {
+    return {
+      visible: true,
+      message: `Showing all ${shown} of retained history. Earlier output is no longer kept for this session.`,
+      canLoadMore: false,
+    };
+  }
+  if (atCeiling) {
+    return {
+      visible: true,
+      message: `Showing the most recent ${shown}. Earlier output exceeds the retained history limit and cannot be recovered.`,
+      canLoadMore: false,
+    };
+  }
+  return {
+    visible: true,
+    message: `Showing the most recent ${shown} of this session. ${formatHistoryBytes(dropped)} more may still be retained.`,
+    canLoadMore: true,
+  };
+}
+
+/**
+ * Where to land after a rewrite that REPLACES the whole buffer (#259).
+ *
+ * The backpressure refresh clears the terminal and reloads it from a freshly
+ * fetched capture, so an absolute viewportY captured beforehand means nothing
+ * afterwards: the line it pointed at may not even exist. Distance from the
+ * BOTTOM is the anchor that survives a rewrite, so a reader stays roughly
+ * where they were reading.
+ *
+ * Returns null when the user was following live output, which the caller reads
+ * as "scroll to bottom" — the historical behavior, kept for that case.
+ *
+ * @param {{linesFromBottom?: number, baseY?: number}} input
+ * @returns {number|null}
+ */
+function computeRewriteScrollLine(input) {
+  const linesFromBottom = input?.linesFromBottom || 0;
+  if (!(linesFromBottom > 0)) return null;
+  return Math.max(0, (input?.baseY || 0) - linesFromBottom);
+}
+
+if (typeof window !== 'undefined') {
+  window.CodemanHistoryFormat = { formatHistoryBytes, computeHistoryTruncationNotice, computeRewriteScrollLine };
+}
