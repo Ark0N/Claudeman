@@ -851,10 +851,11 @@ function computeHistoryTruncationNotice(state = {}) {
 /**
  * Where to land after a rewrite that REPLACES the whole buffer (#259).
  *
- * The backpressure refresh clears and reloads the terminal from a fresh tail,
- * so an absolute viewportY captured beforehand means nothing afterwards: the
- * line it pointed at may not even exist. Distance from the BOTTOM is the anchor
- * that survives a rewrite, so a reader stays roughly where they were reading.
+ * The backpressure refresh clears the terminal and reloads it from a freshly
+ * fetched capture, so an absolute viewportY captured beforehand means nothing
+ * afterwards: the line it pointed at may not even exist. Distance from the
+ * BOTTOM is the anchor that survives a rewrite, so a reader stays roughly
+ * where they were reading.
  *
  * Returns null when the user was following live output, which the caller reads
  * as "scroll to bottom" — the historical behavior, kept for that case.
