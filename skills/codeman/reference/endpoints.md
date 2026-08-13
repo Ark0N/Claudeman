@@ -237,7 +237,7 @@ minutes, never retry the credential.
 flushed slightly *after* the `stop` hook fires, so a read taken the instant the wait
 returns is too early (verified live: empty on the first call, full prose seconds later).
 It is also `""` before the worker's first completed turn, and permanently `""` for
-`shell`, `opencode`, `gemini` and `antigravity`, which write no transcript.
+`shell`, `opencode`, `gemini`, `antigravity` and `pi`, which write no Claude transcript.
 
 **Fix** Poll it, bounded (10 tries, 1 s apart). If it is still empty on a hook-less mode,
 that is expected, not a failure: read `terminal?tail=` and strip ANSI instead.
@@ -334,7 +334,7 @@ ESC=$(printf '\033')
 
 `POST /api/v1/quick-start` body (all optional):
 `{"caseName":"worker-1","mode":"claude","sessionName":"w9-worker","effort":"high"}`
-,  `mode` ∈ `claude|shell|opencode|codex|gemini|antigravity`; response is
+,  `mode` ∈ `claude|shell|opencode|codex|gemini|antigravity|pi`; response is
 `.data.{sessionId, caseName, casePath}`. Creates the case directory (a real directory
 on the user's disk) if missing, do not retry it in a loop, and remember the name.
 
@@ -450,9 +450,9 @@ Quirks that will bite you:
   session answers with an empty timeline rather than a 404.
 - ⚠️ **`active-tools` proves presence, never absence.** It is fed by the BashToolParser,
   which reads Claude's rendered `● Bash(…)` lines, and `_processExpensiveParsers`
-  returns early for every external CLI mode (`session.ts:2086`), so it is permanently
-  `[]` on `opencode`/`codex`/`gemini`/`antigravity`. ⚠️ **`shell` is NOT one of those**
-  (`isExternalCliMode`, `session.ts:164-166`, lists only those four), so the parser does
+  returns early for every external CLI mode (`session.ts:2136`), so it is permanently
+  `[]` on `opencode`/`codex`/`gemini`/`antigravity`/`pi`. ⚠️ **`shell` is NOT one of those**
+  (`isExternalCliMode`, `session.ts:165-167`, lists only those five), so the parser does
   run on a shell worker, and `TEXT_COMMAND_PATTERN` (`bash-tool-parser.ts:88`) matches
   bare `tail|cat|head|less|grep|watch|multitail <path>` lines with no `● Bash(` wrapper:
   a shell worker running `cat build.log` really does populate this. In practice it stays

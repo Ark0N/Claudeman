@@ -30,8 +30,20 @@ const PI_SEARCH_DIRS = [
   join(homedir(), 'bin'),
 ];
 
-/** A real `pi --version` prints a semver-shaped string (e.g. `0.84.1`). */
-const PI_VERSION_PATTERN = /^\d+\.\d+\.\d+/;
+/**
+ * A real `pi --version` prints a semver-shaped string (e.g. `0.84.1`).
+ *
+ * Exported and SHARED with the `pi` entry in `config/dependency-registry.ts`, so
+ * `codeman doctor` and the run mode cannot disagree about what counts as an installed
+ * pi: two copies of this rule would let the Dependencies panel report "Pi CLI ✓" on a
+ * box where `resolvePiDir()` rejects the same binary and Run Pi stays hidden.
+ *
+ * Shape is dictated by the doctor's `extractVersion()`, which returns the first CAPTURE
+ * GROUP and scans the whole output: hence a capturing group, and a leading boundary
+ * instead of `^` so `pi 0.84.1` matches while `v0.84.1` (some other program) does not.
+ * No `g` flag, so there is no shared `lastIndex` to reset.
+ */
+export const PI_VERSION_REGEX = /(?:^|\s)(\d+\.\d+\.\d+)/;
 
 /** Cached directory containing the pi binary (empty string = searched but not found) */
 let _piDir: string | null = null;
@@ -56,7 +68,7 @@ function probePiVersion(binPath: string): string | null {
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
     // Upstream prints a bare version today; tolerate a `pi 0.84.1` style prefix too.
-    const candidate = out.split(/\s+/).find((token) => PI_VERSION_PATTERN.test(token));
+    const candidate = PI_VERSION_REGEX.exec(out)?.[1];
     if (candidate) return candidate;
     console.warn(`[PiResolver] Ignoring ${binPath}: "pi --version" printed ${JSON.stringify(out.slice(0, 80))}`);
   } catch (err) {

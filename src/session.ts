@@ -194,11 +194,20 @@ function getModeLabel(mode: SessionMode): string {
  * repaint via cursor positioning, so dropping the alt-screen switch is safe —
  * content stays in the normal buffer. Excluded: `shell` (arbitrary programs like
  * vim/less/htop legitimately need the alt screen), `opencode` (renders its own
- * TUI that may rely on it) and `pi` (its default TUI already renders into the
- * MAIN screen with terminal-owned scrollback, so there is nothing to strip — and
- * since pi 0.84.0 the user can switch to a fullscreen TUI at runtime via
- * `/settings`, where the alt screen is load-bearing). Keep parity with the
- * replay-side strip in session-routes.ts.
+ * TUI that may rely on it) and `pi` (below). Keep parity with the replay-side
+ * strip in session-routes.ts.
+ *
+ * ⚠️ Being excluded here does NOT preserve the alt screen. Every excluded mode
+ * falls through to isMuxAltScreenOnlyStripMode(), which strips the alt-screen
+ * toggles too whenever the session is tmux-backed, and pi/opencode ALWAYS are
+ * (both refuse the direct-PTY fallback). What exclusion actually buys is the rest
+ * of the full strip: `\x1b[3J` and the mouse-tracking DECSETs survive. That is the
+ * real reason pi is out: its default TUI renders into the MAIN screen with
+ * terminal-owned scrollback and is mouse-aware, so it is a `3J`/mouse consumer in
+ * a way an Ink TUI repainting in place is not. Consequence to know before
+ * debugging it: pi's runtime-switchable fullscreen TUI (`/settings`, 0.84.0+)
+ * still gets its `?1049h` stripped and paints into the main buffer, exactly like
+ * vim inside a tmux `shell` session.
  */
 export function isAltScreenStripMode(mode: SessionMode): boolean {
   return mode === 'codex' || mode === 'claude' || mode === 'gemini';
