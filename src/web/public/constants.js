@@ -201,24 +201,43 @@ function computeTabScrollLeft(input) {
 // spawned (a worker started through the codeman agent skill, which passes its own
 // id as parentSessionId). Pure: the caller measures and appends, this decides.
 //
-// Two shapes, because both endpoints live in ONE horizontal strip and the subagent
-// shape (tab-bottom → window-top) has nothing to aim at:
-//   - same row: a shallow U-bridge HANGING BELOW the strip, so it reads as a
-//     bracket joining two tabs rather than as a line crossing them. The dip grows
-//     with horizontal distance and with `depth` (the child's index among its
-//     siblings), so several children of one parent nest instead of overprinting.
-//   - different rows (desktop `tabs-two-rows` / `tabs-auto-wrap`): the vertical
-//     bezier the subagent lines already use, parent edge → child edge.
+// ONE shape, because both endpoints live in the same horizontal strip and the subagent
+// shape (tab-bottom → window-top) has nothing to aim at: a U-bridge HANGING BELOW the
+// strip, from the parent's bottom edge to the child's bottom edge, so it reads as a
+// bracket joining two tabs rather than as a line crossing them. The dip grows with
+// horizontal distance and with `depth` (the child's index among its siblings), so
+// several children of one parent nest instead of overprinting.
+//
+// ⚠ A WRAPPED STRIP USED TO GET ITS OWN SHAPE, AND THAT SHAPE WAS THE BUG. When the
+// desktop strip wraps (`tabs-two-rows` / `tabs-auto-wrap`) a parent on row 1 and its
+// child on row 2 are ~4px apart vertically, so the old parent-bottom → child-TOP bezier
+// had a 4px span to work with and drew a flat horizontal line inside the row gap
+// (reported as "they connect already, but the lines are straight and not easy visible"),
+// and three siblings drew three of them on top of each other. Aiming BOTH ends at the
+// tab BOTTOMS and putting the control points below the LOWER row gives the wrapped case
+// the same bracket as the flat case: it leaves the parent downward, crosses the lower
+// row once, and comes back up under the child. Same formula, no branch.
 //
 // Returns null when the edge must not be drawn: a missing/degenerate rect, or an
 // endpoint scrolled outside the strip. `.session-tabs` is `overflow-x: auto`, so a
 // scrolled-out tab still HAS a rect — one lying over the logo or the header
 // buttons. Skipping is honest; clamping would point at a tab that isn't there.
+// ⚠ THE DIP IS WHAT MAKES THE ARC AN ARC, and the first shipped numbers were tuned
+// against two tabs sitting side by side. A worker the agent skill starts is appended
+// to the END of the strip, so the real span between a lead and its worker is 800-1500px,
+// not 200, and a 44px cap over 1300px of span is a 33px sag, i.e. a line that reads as
+// STRAIGHT and crosses the terminal instead of bracketing under the strip. The dip now
+// keeps growing with the span (0.085/px, ~3x steeper against the old cap) so the bracket
+// survives the distance the feature is actually used at. The ceiling is what keeps a
+// full-width pair out of the terminal's fourth line: 104 + the sibling step lands the
+// deepest sag around y=140 on a 1080 screen, the same proportion two adjacent tabs get.
 const LINEAGE_DIP_BASE_PX = 14;
-const LINEAGE_DIP_PER_PX = 0.06;
-const LINEAGE_DIP_MIN_PX = 16;
-const LINEAGE_DIP_MAX_PX = 44;
-const LINEAGE_SIBLING_STEP_PX = 6;
+const LINEAGE_DIP_PER_PX = 0.085;
+const LINEAGE_DIP_MIN_PX = 22;
+const LINEAGE_DIP_MAX_PX = 104;
+// Siblings nest by this much. Widened with the stroke: at 2.5px plus its glow, arcs 6px
+// apart bled into one thick band instead of reading as three separate lines.
+const LINEAGE_SIBLING_STEP_PX = 8;
 const LINEAGE_STRIP_TOLERANCE_PX = 4;
 
 function computeLineagePath(input) {
@@ -250,29 +269,20 @@ function computeLineagePath(input) {
   const cBottom = cTop + ch;
   const sameRow = Math.abs(pTop + ph / 2 - (cTop + ch / 2)) <= Math.min(ph, ch) / 2;
 
-  let d;
-  let endX;
-  let endY;
-  if (sameRow) {
-    const y0 = Math.max(pBottom, cBottom);
-    const span = Math.abs(cx - px);
-    const dip =
-      Math.min(LINEAGE_DIP_MAX_PX, Math.max(LINEAGE_DIP_MIN_PX, LINEAGE_DIP_BASE_PX + span * LINEAGE_DIP_PER_PX)) +
-      depth * LINEAGE_SIBLING_STEP_PX;
-    const yc = y0 + dip;
-    d = `M ${r1(px)} ${r1(y0)} C ${r1(px)} ${r1(yc)}, ${r1(cx)} ${r1(yc)}, ${r1(cx)} ${r1(y0)}`;
-    endX = cx;
-    endY = y0;
-  } else {
-    const childBelow = cTop + ch / 2 > pTop + ph / 2;
-    const y1 = childBelow ? pBottom : pTop;
-    const y2 = childBelow ? cTop : cBottom;
-    const mid = (y1 + y2) / 2;
-    d = `M ${r1(px)} ${r1(y1)} C ${r1(px)} ${r1(mid)}, ${r1(cx)} ${r1(mid)}, ${r1(cx)} ${r1(y2)}`;
-    endX = cx;
-    endY = y2;
-  }
-  return { d, endX, endY, sameRow };
+  // Both ends anchor on the tab BOTTOM, and the control points hang below whichever
+  // row is lower, so one formula covers a flat strip and a wrapped one.
+  const span = Math.abs(cx - px);
+  const rowDrop = Math.abs(cBottom - pBottom);
+  // ⚠ A wrapped pair needs the dip measured from the LOWER row, or the bracket would
+  // only reach the row gap again. Adding the row offset also keeps the curve clear of
+  // the row it crosses instead of grazing its bottom edge.
+  const dip =
+    Math.min(LINEAGE_DIP_MAX_PX, Math.max(LINEAGE_DIP_MIN_PX, LINEAGE_DIP_BASE_PX + span * LINEAGE_DIP_PER_PX)) +
+    depth * LINEAGE_SIBLING_STEP_PX +
+    rowDrop;
+  const yc = Math.max(pBottom, cBottom) + dip;
+  const d = `M ${r1(px)} ${r1(pBottom)} C ${r1(px)} ${r1(yc)}, ${r1(cx)} ${r1(yc)}, ${r1(cx)} ${r1(cBottom)}`;
+  return { d, endX: cx, endY: cBottom, sameRow };
 }
 
 // One decimal is plenty for a screen-space path and keeps the `d` string short.
