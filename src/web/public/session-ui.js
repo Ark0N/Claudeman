@@ -1415,9 +1415,54 @@ Object.assign(CodemanApp.prototype, {
     this.activeFocusTrap.activate();
   },
 
+  /**
+   * Write a name the server has just confirmed into the local session map.
+   *
+   * Both rename surfaces re-render the tab strip from `this.sessions` right
+   * after their PUT, so without this they depended on the `session:updated` SSE
+   * frame to carry their own write back. On a page whose SSE stream has gone
+   * quiet without erroring (a proxy that idle-closed it, a laptop resumed from
+   * sleep) that frame never lands: the PUT stores the new name, the re-render
+   * repaints the stale one, and the rename looks like it did nothing until a
+   * full page reload. The response body is authoritative, so apply it directly.
+   * The SSE frame, when it does arrive, replaces the object with the same name.
+   */
+  _applyLocalSessionName(sessionId, name) {
+    if (typeof name !== 'string') return;
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.name = name;
+    this.sessions.set(sessionId, session);
+    // Mirrors _onSessionUpdated: subagent windows cache their parent's name.
+    this.updateSubagentParentNames?.(sessionId);
+  },
+
+  /**
+   * PUT a session name and return the name the server stored, or null if the
+   * request failed. `_apiPut` swallows network errors into a null Response and
+   * an API-level failure arrives as a non-ok status or `{success:false}`, so a
+   * rename that silently did nothing has to be detected here, not thrown.
+   */
+  async _putSessionName(sessionId, name) {
+    const res = await this._apiPut(`/api/sessions/${sessionId}/name`, { name });
+    if (!res || !res.ok) return null;
+    let payload = null;
+    try {
+      payload = await res.json();
+    } catch {
+      return null;
+    }
+    if (payload && payload.success === false) return null;
+    const confirmed = payload?.data?.name;
+    return typeof confirmed === 'string' ? confirmed : name;
+  },
+
   async saveSessionName() {
     if (!this.editingSessionId) return;
-    const session = this.sessions.get(this.editingSessionId);
+    // Captured: the modal can be closed (or switched to another session) while
+    // the PUT is in flight, and the name belongs to the session that was open.
+    const sessionId = this.editingSessionId;
+    const session = this.sessions.get(sessionId);
     const parsed = session ? parseSessionPrefix(session.name) : null;
     const inputVal = document.getElementById('modalSessionName').value.trim();
     let name;
@@ -1426,11 +1471,13 @@ Object.assign(CodemanApp.prototype, {
     } else {
       name = inputVal;
     }
-    try {
-      await this._apiPut(`/api/sessions/${this.editingSessionId}/name`, { name });
-    } catch (err) {
-      this.showToast('Failed to save session name: ' + err.message, 'error');
+    const confirmed = await this._putSessionName(sessionId, name);
+    if (confirmed === null) {
+      this.showToast('Failed to save session name', 'error');
+      return;
     }
+    this._applyLocalSessionName(sessionId, confirmed);
+    this.renderSessionTabs();
   },
 
   async autoSaveAutoCompact() {
@@ -1740,15 +1787,14 @@ Object.assign(CodemanApp.prototype, {
       // Skip the API call if the session vanished between focus and blur.
       const stillExists = this.sessions.has(sessionId);
       if (stillExists && fullName !== session.name) {
-        try {
-          await fetch(`/api/sessions/${sessionId}/name`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: fullName })
-          });
-        } catch (err) {
+        const confirmed = await this._putSessionName(sessionId, fullName);
+        if (confirmed === null) {
           tabName.textContent = originalContent;
           this.showToast('Failed to rename', 'error');
+        } else {
+          // The re-render below repaints from this.sessions, so the new name has
+          // to be in the map before it runs (see _applyLocalSessionName()).
+          this._applyLocalSessionName(sessionId, confirmed);
         }
       }
       // Re-render tabs to restore full tab structure

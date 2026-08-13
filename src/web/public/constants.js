@@ -379,6 +379,41 @@ function computeConnectionLossUi(input) {
   };
 }
 
+// SSE staleness policy: is this stream a zombie?
+//
+// An EventSource that stops delivering does not always error. A proxy that
+// idle-closed the connection, a laptop resumed from sleep, a tailnet
+// reconnect: `onerror` never fires, the header dot stays green, and every
+// SSE-driven surface (tab status dots, sessions created on another device,
+// renames) freezes until the user reloads. The server writes a
+// `sse:heartbeat` frame every 15s, so silence longer than three of them means
+// the stream is dead even though the transport still claims otherwise.
+//
+// Stale ONLY when the transport believes it is 'connected': the other states
+// already have the reconnect/backoff machinery running, and re-firing on top
+// of them would stack reconnects. That guard is also the loop breaker: a
+// forced reconnect leaves 'connected' immediately, so the watchdog cannot
+// fire again while one is in flight. `navigator.onLine === false` is not
+// staleness either; there is nothing to reconnect to yet.
+//
+// Pure: no DOM, no timers, no side effects. `now` is passed in.
+const SSE_STALE_TIMEOUT_MS = 45000; // three missed 15s heartbeats
+
+function computeSseStale(input) {
+  const {
+    lastMessageAt = null,
+    now = 0,
+    status = 'connected',
+    isOnline = true,
+    timeoutMs = SSE_STALE_TIMEOUT_MS,
+  } = input || {};
+  if (!isOnline || status !== 'connected') return false;
+  // No frame has ever arrived: `init` lands on connect, so this is a stream
+  // that has not opened yet rather than one that went quiet.
+  if (typeof lastMessageAt !== 'number' || !(lastMessageAt > 0)) return false;
+  return now - lastMessageAt >= timeoutMs;
+}
+
 if (typeof window !== 'undefined') {
   window.WEBGL_FALLBACK = WEBGL_FALLBACK;
   window.evaluateWebGLLongTaskTrip = evaluateWebGLLongTaskTrip;
@@ -400,6 +435,10 @@ if (typeof window !== 'undefined') {
   window.CodemanConnectionLoss = {
     compute: computeConnectionLossUi,
     GRACE_MS: CONNECTION_LOSS_GRACE_MS,
+  };
+  window.CodemanSseStale = {
+    compute: computeSseStale,
+    TIMEOUT_MS: SSE_STALE_TIMEOUT_MS,
   };
 }
 
@@ -513,6 +552,9 @@ const BUILTIN_RESPAWN_PRESETS = [
 const SSE_EVENTS = {
   // Core
   INIT: 'init',
+
+  // Transport
+  HEARTBEAT: 'sse:heartbeat',
 
   // Session lifecycle
   SESSION_CREATED: 'session:created',

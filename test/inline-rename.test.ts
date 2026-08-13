@@ -358,6 +358,83 @@ describe('Inline rename input', () => {
     expect(result.editingAfter).toBe(null);
   });
 
+  it('Commit writes the confirmed name into app.sessions WITHOUT any session:updated frame', async () => {
+    await resetState();
+    expect(await startRename('no-sse', 'w9-case')).toBe(true);
+
+    // finishRename() re-renders the tab strip from app.sessions, so the rename
+    // used to depend on the session:updated SSE frame to carry its own write
+    // back. On a page whose stream has gone quiet without erroring, the PUT
+    // stored the new name, the re-render repainted the stale one, and the tab
+    // only showed it after a full reload. No SSE is dispatched here at all.
+    const result = await page.evaluate(async () => {
+      const app = (
+        window as unknown as {
+          app: { sessions: Map<string, { id: string; name: string }> };
+        }
+      ).app;
+      const origFetch = window.fetch;
+      window.fetch = (async () =>
+        new Response('{"success":true,"data":{"name":"w9-case: fresh"}}', {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })) as typeof window.fetch;
+
+      const inputEl = document.querySelector('input.tab-rename-input') as HTMLInputElement;
+      inputEl.value = 'fresh';
+      inputEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await new Promise((r) => setTimeout(r, 60));
+
+      window.fetch = origFetch;
+      return { mapName: app.sessions.get('no-sse')?.name ?? null };
+    });
+
+    expect(result.mapName).toBe('w9-case: fresh');
+  });
+
+  it('A rejected rename restores the old label and leaves app.sessions untouched', async () => {
+    await resetState();
+    expect(await startRename('rename-500', 'w9-case')).toBe(true);
+
+    // _apiPut turns a network error into a null Response and an API-level
+    // failure arrives as a non-ok status, neither of which throws, so a
+    // rejected rename has to be detected from the response, or it reports
+    // success and silently discards the user's edit.
+    const result = await page.evaluate(async () => {
+      const app = (
+        window as unknown as {
+          app: { sessions: Map<string, { id: string; name: string }>; showToast: (m: string, k: string) => void };
+        }
+      ).app;
+      const toasts: string[] = [];
+      const origToast = app.showToast;
+      app.showToast = (msg: string) => void toasts.push(msg);
+      const origFetch = window.fetch;
+      window.fetch = (async () =>
+        new Response('{"success":false,"error":"boom","errorCode":"INTERNAL"}', {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        })) as typeof window.fetch;
+
+      const inputEl = document.querySelector('input.tab-rename-input') as HTMLInputElement;
+      inputEl.value = 'never-stored';
+      inputEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await new Promise((r) => setTimeout(r, 60));
+
+      window.fetch = origFetch;
+      app.showToast = origToast;
+      return {
+        mapName: app.sessions.get('rename-500')?.name ?? null,
+        label: document.querySelector('.tab-name[data-session-id="rename-500"]')?.textContent ?? null,
+        toasts,
+      };
+    });
+
+    expect(result.mapName).toBe('w9-case');
+    expect(result.label).toBe('w9-case');
+    expect(result.toasts).toContain('Failed to rename');
+  });
+
   it('Re-entry: starting rename while one is active aborts the previous one', async () => {
     await resetState();
     expect(await startRename('first-id', 'First')).toBe(true);

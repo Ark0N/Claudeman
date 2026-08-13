@@ -470,12 +470,20 @@ export class SseStreamManager {
   // ========== Client Health ==========
 
   /**
-   * Clean up dead SSE clients and send keep-alive comments.
+   * Clean up dead SSE clients and send the liveness heartbeat.
    * Keep-alive prevents proxy/load-balancer timeouts on idle connections.
    * Dead client cleanup prevents memory leaks from abruptly terminated connections.
+   *
+   * The heartbeat is a NAMED event, not the `:keepalive` comment it used to be:
+   * comments are invisible to `EventSource` by spec, so a stream that stopped
+   * delivering without erroring was undetectable to the client (see
+   * `SseEvent.Heartbeat`). Written per-client rather than through `broadcast()`
+   * deliberately: the frame carries no session data, so it needs no owner
+   * routing, and this loop is already walking every client to check its socket.
    */
   cleanupDeadClients(): void {
     const deadClients: FastifyReply[] = [];
+    const heartbeat = `event: ${SseEvent.Heartbeat}\ndata: ${JSON.stringify({ t: Date.now() })}\n\n`;
 
     for (const [client] of this.sseClients) {
       try {
@@ -484,11 +492,9 @@ export class SseStreamManager {
         if (!socket || socket.destroyed || !socket.writable) {
           deadClients.push(client);
         } else {
-          // Send SSE comment as keep-alive. Only add padding when tunnel is
-          // active — it flushes Cloudflare proxy buffers but wastes bandwidth
-          // for direct/Tailscale connections.
-          const ka = this._isTunnelActive ? ':keepalive\n' + SSE_PADDING : ':keepalive\n\n';
-          client.raw.write(ka);
+          // Only add padding when tunnel is active: it flushes Cloudflare
+          // proxy buffers but wastes bandwidth for direct/Tailscale connections.
+          client.raw.write(this._isTunnelActive ? heartbeat + SSE_PADDING : heartbeat);
         }
       } catch {
         // Error accessing socket means client is dead
