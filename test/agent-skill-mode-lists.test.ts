@@ -11,7 +11,17 @@
  * Two rules, both derived from the RUNTIME source of truth (the Zod enum in schemas.ts,
  * not a copy):
  *
- *  1. The `mode ∈ a|b|c` enumeration in endpoints.md is the mode list, exactly.
+ *  1. The `mode ∈ a|b|c` enumeration in endpoints.md is the mode list, exactly, and the
+ *     per-CLI availability probe (`GET /api/<mode>/status`) is documented for every
+ *     agent mode. That second half is the narrow, family-scoped answer to "should the
+ *     endpoint scanner also check registered-to-documented?". In general it should not:
+ *     the skill documents 34 of 217 registered endpoints on purpose (it is an agent
+ *     guide, not an API reference), so a blanket reverse check needs a 183-entry
+ *     allowlist that fails CI on unrelated routes and gets appended to mechanically.
+ *     Grouping by path shape does not rescue it either: the families that produces are
+ *     things like `DELETE /api/<any>/:id`, which lumps cases, webviews and docker hosts
+ *     together. A family the SCHEMA can enumerate is the exception, since it needs no
+ *     allowlist at all.
  *  2. Any prose enumeration of 3+ distinct modes must be COMPLETE with respect to the
  *     external CLIs: those lists exist to describe what `isExternalCliMode()` gates
  *     (no Claude transcript, no hooks, no Claude-format parsers), so naming some but
@@ -70,6 +80,18 @@ describe('agent skill run-mode lists', () => {
     expect(MODES).toContain('pi');
     expect(new Set(schemaModes(QuickStartSchema))).toEqual(new Set(MODES));
     expect(EXTERNAL_MODES.length).toBeGreaterThan(1);
+  });
+
+  it('documents the CLI availability probe for every agent mode', () => {
+    // The gap this closes: /api/pi/status shipped undocumented and only a human reading
+    // the doc noticed, because the sibling scanner (agent-skill-endpoints-doc.test.ts)
+    // only checks documented -> registered. Derived from the schema, so a seventh
+    // backend fails here until its probe is documented; the sibling test still proves
+    // the reverse, that nothing documented here is a 404.
+    const doc = readFileSync(join(SKILL_DIR, 'reference/endpoints.md'), 'utf-8');
+    const documented = new Set([...doc.matchAll(/\bGET\s+\/api(?:\/v1)?\/([a-z-]+)\/status\b/g)].map((m) => m[1]));
+    const probeable = MODES.filter((m) => m !== 'shell'); // shell has no CLI to probe
+    expect([...probeable].filter((m) => !documented.has(m))).toEqual([]);
   });
 
   it("documents exactly the accepted modes in endpoints.md's `mode ∈ …` enumeration", () => {

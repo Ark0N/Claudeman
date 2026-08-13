@@ -338,6 +338,16 @@ ESC=$(printf '\033')
 `.data.{sessionId, caseName, casePath}`. Creates the case directory (a real directory
 on the user's disk) if missing, do not retry it in a loop, and remember the name.
 
+⚠️ A `mode` whose CLI is **not installed on the server** fails the spawn with
+`OPERATION_FAILED`; it never falls back to claude. Probe first whenever you did not pick
+the mode yourself: `GET /api/v1/claude/status`, `GET /api/v1/opencode/status`,
+`GET /api/v1/codex/status`, `GET /api/v1/gemini/status`, `GET /api/v1/antigravity/status`
+and `GET /api/v1/pi/status` each return `.data.{available, path}` (no session needed).
+Pi's also carries `.data.version`, because `pi` is a short generic name that an unrelated
+binary on `$PATH` can shadow: the resolver rejects one whose `--version` is not
+semver-shaped, so `available:false` there can mean "a different `pi` is in front" rather
+than "nothing is installed". `shell` has no CLI to probe.
+
 ⚠️ **Branch on `.success` before reading `.data.sessionId`.** On any failure the field
 is absent, `jq -r` prints the literal string `null`, and every later call then targets
 `/api/v1/sessions/null`, burning the full readiness budget and reporting jq noise
