@@ -666,7 +666,7 @@ whose turn already ended just times out, with or without `fresh`, verified live)
 Register the waiter before the event can happen: send-and-wait does exactly that,
 and `wait-output` markers with `from=buffer` are latched by construction. Never
 fire-and-forget N prompts and then gather signal-waits worker by worker; every
-worker that finishes before its gather is unobservable (see recipes.md Flow 3b).
+worker that finishes before its gather is unobservable (see recipes.md Flow 4).
 
 #### `GET /api/v1/sessions/:id/wait`
 

@@ -342,7 +342,10 @@ instead of the real cause.
 ⚠️ `POST /api/v1/sessions/:id/run` looks like the obvious "just run this prompt" call
 and is a trap: it 409s on a busy session, is fire-and-forget with no wait
 integration, and belongs to the legacy JSON-stream path whose `GET .../output` is
-always empty for interactive sessions. Use `/input`.
+always empty for interactive sessions. Against an interactive session it is worse than
+useless: it answers **200 with an empty body** and does nothing, because the reply goes
+out before the spawn is attempted and the spawn then fails ("Session already has a
+running process") into the SSE stream you are not reading. Use `/input`.
 
 **Fan-out means worktrees.** N workers on one repo means N `git worktree add`
 directories, one worker each. See the safety rule in §4 for what sharing a checkout
@@ -373,9 +376,11 @@ It is **decoration, and resolved rather than trusted**, so treat it accordingly:
   responsible for a child, deleting a parent does not touch its children, and it grants
   no rights over them. Never branch on it and never use it to decide what you may touch.
   Your `CREATED` list, not this field, is what authorizes a delete ([§4](#4-safety-rules)).
-- `POST /api/v1/sessions/:id/run` is deliberately not wired for it: that call deletes its
-  session as soon as the one-shot prompt returns, so the line would point at a tab that
-  no longer exists.
+- `POST /api/v1/run` is deliberately not wired for it: that call creates a throwaway
+  session and deletes it as soon as the one-shot prompt returns (on the error path too),
+  so the line would point at a tab that no longer exists. `POST /api/v1/sessions/:id/run`
+  carries no lineage either, for a duller reason: it creates nothing, it runs a prompt in
+  a session that already exists.
 
 ### 5.2 Readiness
 
@@ -786,8 +791,8 @@ send-and-wait (which registers before typing) or with `wait-output` markers, whi
 `from=buffer` re-finds no matter when they appeared.
 
 The worked shapes are in [recipes.md](reference/recipes.md): Flow 3 (fan out N shell
-workers and gather as each finishes), Flow 3b (the same for claude workers, where the
-send *is* the wait), and Flow 4 (a worker that blocks on a permission prompt).
+workers and gather as each finishes), Flow 4 (the same for claude workers, where the
+send *is* the wait), and Flow 5 (a worker that blocks on a permission prompt).
 
 ### 5.11 List and find yourself
 
