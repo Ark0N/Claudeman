@@ -2213,6 +2213,10 @@ class CodemanApp {
         res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
         data = (await res.json())?.data ?? {};
       }
+      // Bail on a tab switch mid-fetch: writing here would paint this session's
+      // history into the terminal the user is now looking at. The window is two
+      // fetches wide in the fallback case, so this guard is not optional.
+      if (this.activeSessionId !== sessionId) return;
       if (data.terminalBuffer) {
         // This refresh is SERVER-triggered, so a user quietly reading scrollback
         // did not ask for it and must not be dragged to the bottom by it (#259).
@@ -2225,7 +2229,7 @@ class CodemanApp {
         await this.chunkedTerminalWrite(data.terminalBuffer);
         // A tail fetch can be partial, and the banner would otherwise keep
         // describing the pre-refresh buffer (#258).
-        if (this.activeSessionId === sessionId) this._setHistoryTruncation(sessionId, data);
+        this._setHistoryTruncation(sessionId, data);
         const target = computeRewriteScrollLine({
           linesFromBottom,
           baseY: this.terminal.buffer?.active?.baseY ?? 0,
