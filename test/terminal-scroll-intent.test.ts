@@ -155,3 +155,62 @@ describe('keyboard show/hide route through the intent-preserving path (static gu
     expect(SOURCE).not.toContain('scrollToBottom: true');
   });
 });
+
+describe('backpressure refresh keeps a reader in place (issue #259)', () => {
+  // _onSessionNeedsRefresh is SERVER-triggered: it fires after SSE backpressure
+  // clears and rewrites the whole buffer. A user quietly reading scrollback did
+  // not ask for it, so being dropped to the bottom by it is the same bug as the
+  // keyboard yank, with no gesture to blame it on.
+  const loadConstants = () => {
+    const context = vm.createContext({ console, window: {}, document: {}, navigator: { userAgent: 'test' } });
+    vm.runInContext(
+      `${readFileSync(resolve(PUBLIC, 'constants.js'), 'utf8')}\n;globalThis.__fn = computeRewriteScrollLine;`,
+      context,
+      { filename: 'constants.js' }
+    );
+    return (context as any).__fn as (i: { linesFromBottom?: number; baseY?: number }) => number | null;
+  };
+
+  it('returns null (scroll to bottom) for someone following live output', () => {
+    const computeRewriteScrollLine = loadConstants();
+    expect(computeRewriteScrollLine({ linesFromBottom: 0, baseY: 900 })).toBeNull();
+  });
+
+  it('holds the reader the same distance from the bottom of the NEW buffer', () => {
+    const computeRewriteScrollLine = loadConstants();
+    // The rewrite replaces the buffer, so the old absolute line is meaningless;
+    // 50 lines up stays 50 lines up even though baseY changed.
+    expect(computeRewriteScrollLine({ linesFromBottom: 50, baseY: 900 })).toBe(850);
+    expect(computeRewriteScrollLine({ linesFromBottom: 50, baseY: 400 })).toBe(350);
+  });
+
+  it('clamps when the refreshed buffer is shorter than the old offset', () => {
+    const computeRewriteScrollLine = loadConstants();
+    expect(computeRewriteScrollLine({ linesFromBottom: 900, baseY: 100 })).toBe(0);
+  });
+
+  it('is wired into the refresh path instead of an unconditional scrollToBottom', () => {
+    const app = readFileSync(resolve(PUBLIC, 'app.js'), 'utf8');
+    const start = app.indexOf('async _onSessionNeedsRefresh()');
+    expect(start).toBeGreaterThan(-1);
+    const body = app.slice(start, app.indexOf('\n  async _onSessionClearTerminal', start));
+    expect(body).toContain('computeRewriteScrollLine');
+    // The bottom is now one branch of a decision, never the whole story.
+    expect(body).toContain('this.terminal.scrollToLine(target)');
+  });
+
+  it('recovers FULL history, guarded against a repaint-pane downgrade', () => {
+    // Measured before the fix: this path rewrote an 869-row buffer from a 1MB
+    // tail and left 158 rows, so the refresh meant to REPAIR the terminal was
+    // destroying most of its scrollback. It asks for full history now, and
+    // falls back to the tail only when the full capture would shrink the buffer
+    // (a repaint-mode pane keeps roughly one frame in tmux).
+    const app = readFileSync(resolve(PUBLIC, 'app.js'), 'utf8');
+    const start = app.indexOf('async _onSessionNeedsRefresh()');
+    const body = app.slice(start, app.indexOf('\n  async _onSessionClearTerminal', start));
+    expect(body).toContain('terminal?full=1');
+    expect(body).toContain('this._replayWouldShrinkBuffer(data.terminalBuffer)');
+    // The tail must survive as the fallback, not vanish.
+    expect(body).toContain('tail=${TERMINAL_TAIL_SIZE}');
+  });
+});

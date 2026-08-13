@@ -2196,14 +2196,42 @@ class CodemanApp {
     if (!this.activeSessionId || !this.terminal) return;
     // Skip if buffer load already in progress — avoids competing clear+rewrite cycles
     if (this._isLoadingBuffer) return;
+    const sessionId = this.activeSessionId;
     try {
-      const res = await fetch(`/api/sessions/${this.activeSessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
-      const data = (await res.json())?.data ?? {};
+      // Recovery should restore the WHOLE picture, so ask for full history
+      // rather than a tail. Measured on a 900-line shell pane: the tail rewrite
+      // replaced an 869-row buffer with 158 rows, so every backpressure refresh
+      // silently destroyed most of the scrollback it was meant to repair.
+      //
+      // A repaint-mode pane is the opposite case (tmux keeps ~one frame for it),
+      // so the full capture can be SMALLER than what xterm already holds. Reuse
+      // the same downgrade guard as the scroll-to-top re-pull and fall back to
+      // the historical tail there, leaving that case exactly as it was.
+      let res = await fetch(`/api/sessions/${sessionId}/terminal?full=1`);
+      let data = (await res.json())?.data ?? {};
+      if (data.terminalBuffer && this._replayWouldShrinkBuffer(data.terminalBuffer)) {
+        res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
+        data = (await res.json())?.data ?? {};
+      }
       if (data.terminalBuffer) {
+        // This refresh is SERVER-triggered, so a user quietly reading scrollback
+        // did not ask for it and must not be dragged to the bottom by it (#259).
+        // The rewrite replaces the buffer, so an absolute viewportY is
+        // meaningless across it — distance from the bottom is what survives.
+        const before = this.terminal.buffer?.active;
+        const linesFromBottom = before ? Math.max(0, (before.baseY || 0) - (before.viewportY || 0)) : 0;
         this.terminal.clear();
         this.terminal.reset();
         await this.chunkedTerminalWrite(data.terminalBuffer);
-        this.terminal.scrollToBottom();
+        // A tail fetch can be partial, and the banner would otherwise keep
+        // describing the pre-refresh buffer (#258).
+        if (this.activeSessionId === sessionId) this._setHistoryTruncation(sessionId, data);
+        const target = computeRewriteScrollLine({
+          linesFromBottom,
+          baseY: this.terminal.buffer?.active?.baseY ?? 0,
+        });
+        if (target === null || typeof this.terminal.scrollToLine !== 'function') this.terminal.scrollToBottom();
+        else this.terminal.scrollToLine(target);
         // Re-position local echo overlay at new prompt location
         this._localEchoOverlay?.rerender();
         // Resize PTY to match actual browser dimensions (critical for OpenCode
