@@ -372,7 +372,7 @@ describe('mobile overview run picker (CLI availability gating)', () => {
       isCliAvailable: () => true,
     });
     const menu = app._buildMobileOverviewRunMenu();
-    expect(modeButtons(menu)).toEqual(['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'shell']);
+    expect(modeButtons(menu)).toEqual(['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'shell']);
   });
 
   it('gates every mode the picker actually offers', () => {

@@ -1,7 +1,7 @@
 # Remote Sessions (SSH)
 
 Codeman can run a session's agent on a **remote host over SSH** instead of the
-local machine. The agent (Claude, OpenCode, Codex, Antigravity, Gemini, or a plain shell)
+local machine. The agent (Claude, OpenCode, Codex, Antigravity, Gemini, Pi, or a plain shell)
 runs inside a `tmux` server **on the remote host**, so it survives the SSH
 connection dropping; Codeman attaches to it the same way it attaches to a local
 managed session.
@@ -30,7 +30,7 @@ Types live in `src/types/session.ts`; persistence in `src/remote-hosts.ts`.
 | `RemoteHost` (extends `RemoteSshOptions`) | A saved host: `id`, `label`, `host`, `username`, `port?`, `commands?` (per-mode launch command override). |
 | `RemoteCase` | A working directory on a host: `name`, `type: 'remote'`, `hostId`, `remotePath`. |
 | `SessionRemote` (extends `RemoteSshOptions`) | The resolved bundle stamped onto a live session: host coordinates + `remotePath` + `commands`, plus **`owned?`** and **`remoteSessionName?`** (COD-105 — see [Ownership](#ownership-launched-vs-discovered-and-attached-cod-105)). Built by `toSessionRemote(host, case)` (sets `owned: true`) for the launch path, or `toAttachedSessionRemote(host, name, path)` (sets `owned: false`) for the attach path. Both copy the advanced SSH options through so every connection is identical. |
-| `RemoteCommandMode` | `Extract<SessionMode, 'shell' \| 'claude' \| 'opencode' \| 'codex' \| 'gemini' \| 'antigravity'>` — the modes that can run remotely. |
+| `RemoteCommandMode` | `Extract<SessionMode, 'shell' \| 'claude' \| 'opencode' \| 'codex' \| 'gemini' \| 'antigravity' \| 'pi'>` — the modes that can run remotely. |
 | `RemoteSessionInfo` (COD-105) | One discovered remote tmux session: `name` (always `codeman-*`), `attached` (a client is connected), `created` (epoch s), `windows`. Returned by `listRemoteCodemanSessions()`. |
 
 Persistence is two flat JSON arrays in the instance data dir:

@@ -17,6 +17,7 @@ import { isOpenCodeAvailable } from '../src/utils/opencode-cli-resolver.js';
 import { isCodexAvailable } from '../src/utils/codex-cli-resolver.js';
 import { isGeminiAvailable } from '../src/utils/gemini-cli-resolver.js';
 import { isAntigravityAvailable } from '../src/utils/antigravity-cli-resolver.js';
+import { isPiAvailable } from '../src/utils/pi-cli-resolver.js';
 import { isCloudflaredAvailable } from '../src/utils/cloudflared-resolver.js';
 import { isGitAvailable } from '../src/git-clone.js';
 
@@ -42,6 +43,11 @@ vi.mock('../src/utils/gemini-cli-resolver.js', () => ({
 vi.mock('../src/utils/antigravity-cli-resolver.js', () => ({
   isAntigravityAvailable: vi.fn(() => false),
   resolveAntigravityDir: vi.fn(() => null),
+}));
+vi.mock('../src/utils/pi-cli-resolver.js', () => ({
+  isPiAvailable: vi.fn(() => false),
+  resolvePiDir: vi.fn(() => null),
+  getPiCliVersion: vi.fn(() => null),
 }));
 vi.mock('../src/utils/cloudflared-resolver.js', () => ({
   isCloudflaredAvailable: vi.fn(() => false),
@@ -131,6 +137,7 @@ describe('WebServer.renderIndexHtml', () => {
     vi.mocked(isCodexAvailable).mockReturnValue(true);
     vi.mocked(isGeminiAvailable).mockReturnValue(false);
     vi.mocked(isAntigravityAvailable).mockReturnValue(false);
+    vi.mocked(isPiAvailable).mockReturnValue(true);
     vi.mocked(isCloudflaredAvailable).mockReturnValue(true);
     vi.mocked(isGitAvailable).mockReturnValue(true);
     const { server } = makeServer({});
@@ -144,6 +151,7 @@ describe('WebServer.renderIndexHtml', () => {
       codex: true,
       gemini: false,
       antigravity: false,
+      pi: true,
       cloudflared: true,
       git: true,
     });
@@ -158,6 +166,7 @@ describe('WebServer.renderIndexHtml', () => {
       isCodexAvailable,
       isGeminiAvailable,
       isAntigravityAvailable,
+      isPiAvailable,
       isCloudflaredAvailable,
       isGitAvailable,
     ]) {

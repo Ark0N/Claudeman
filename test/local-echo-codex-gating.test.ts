@@ -190,7 +190,7 @@ describe('_updateLocalEchoState mode gating', () => {
     expect(app._localEchoEnabled).toBe(false);
   });
 
-  it.each(['claude', 'gemini', 'opencode'])('keeps the overlay enabled for %s sessions', (mode) => {
+  it.each(['claude', 'gemini', 'opencode', 'pi'])('keeps the overlay enabled for %s sessions', (mode) => {
     const overlay = makeOverlay();
     const app = makeApp(mode, overlay);
     app._updateLocalEchoState();
@@ -373,16 +373,19 @@ describe('_updateLocalEchoState echo policy', () => {
     expect(app._predictiveEcho.clearPredictions).toHaveBeenCalled();
   });
 
-  it.each(['claude', 'gemini', 'opencode'])("%s -> policy 'buffer' + overlay enabled (existing behavior)", (mode) => {
-    const overlay = makeOverlay();
-    const app = makeApp(mode, overlay) as PredictiveApp;
-    app._predictiveEcho = makePredictor();
-    app._updateLocalEchoState();
-    expect(app._localEchoPolicy).toBe('buffer');
-    expect(app._localEchoEnabled).toBe(true);
-    expect(overlay.prompts.length).toBeGreaterThan(0); // setPrompt still called
-    expect(app._predictiveEcho.clearPredictions).toHaveBeenCalled(); // not predict -> stray spans cleared
-  });
+  it.each(['claude', 'gemini', 'opencode', 'pi'])(
+    "%s -> policy 'buffer' + overlay enabled (existing behavior)",
+    (mode) => {
+      const overlay = makeOverlay();
+      const app = makeApp(mode, overlay) as PredictiveApp;
+      app._predictiveEcho = makePredictor();
+      app._updateLocalEchoState();
+      expect(app._localEchoPolicy).toBe('buffer');
+      expect(app._localEchoEnabled).toBe(true);
+      expect(overlay.prompts.length).toBeGreaterThan(0); // setPrompt still called
+      expect(app._predictiveEcho.clearPredictions).toHaveBeenCalled(); // not predict -> stray spans cleared
+    }
+  );
 
   it('no active session -> policy off, no crash without a predictor instance', () => {
     const app = makeApp('codex') as PredictiveApp;

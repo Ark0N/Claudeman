@@ -168,7 +168,15 @@ describe('Run launch synchronization', () => {
     // Fail loudly if the scan matched nothing: a silently empty scan would make
     // every assertion below vacuously true.
     expect([...bodies.keys()]).toEqual(
-      expect.arrayContaining(['runClaude', 'runShell', 'runOpenCode', 'runCodex', 'runGemini', 'runAntigravity'])
+      expect.arrayContaining([
+        'runClaude',
+        'runShell',
+        'runOpenCode',
+        'runCodex',
+        'runGemini',
+        'runAntigravity',
+        'runPi',
+      ])
     );
 
     for (const [name, body] of bodies) {
@@ -356,12 +364,13 @@ describe('Codex quick start settings', () => {
         'welcomeOpencodeBtn',
         'welcomeAntigravityBtn',
         'welcomeGeminiBtn',
+        'welcomePiBtn',
         'welcomeTunnelBtn',
       ]) {
         welcomeBtns[id] = { style: { display: 'PRISTINE' } };
       }
       const modeBtns: Record<string, { style: { display: string } }> = {};
-      for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'shell']) {
+      for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'shell']) {
         modeBtns[mode] = { style: { display: 'PRISTINE' } };
       }
       const menu = {
@@ -392,6 +401,7 @@ describe('Codex quick start settings', () => {
       codex: false,
       gemini: false,
       antigravity: false,
+      pi: false,
       cloudflared: false,
     };
 
@@ -409,6 +419,13 @@ describe('Codex quick start settings', () => {
       const withTunnel = loadUi({ ...ALL_OFF, cloudflared: true });
       withTunnel.app.applyWelcomeCliVisibility();
       expect(withTunnel.welcomeBtns.welcomeTunnelBtn.style.display).toBe('flex');
+
+      // Pi is gated on `pi` like the rest; the resolver additionally version-probes
+      // the binary, so a stray `pi` on PATH reports unavailable rather than broken.
+      const withPi = loadUi({ ...ALL_OFF, pi: true });
+      withPi.app.applyWelcomeCliVisibility();
+      expect(withPi.welcomeBtns.welcomePiBtn.style.display).toBe('flex');
+      expect(withPi.welcomeBtns.welcomeClaudeBtn.style.display).toBe('none');
 
       // Antigravity is a first-class welcome action, gated on `agy` like the rest.
       const withAgy = loadUi({ ...ALL_OFF, antigravity: true });
@@ -439,6 +456,7 @@ describe('Codex quick start settings', () => {
         (m) => m[1]
       );
       expect(offered).toContain('antigravity');
+      expect(offered).toContain('pi');
       const src = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
       // Anchor on the DEFINITION, not the earlier call site in toggleRunModeMenu.
       const fn = src.slice(src.indexOf('_refreshRunModeAvailability(menu) {'));
@@ -887,5 +905,91 @@ describe('Antigravity quick start', () => {
       antigravityConfig: { dangerouslySkipPermissions: true },
     });
     expect(selected).toEqual(['sess-ag']);
+  });
+});
+
+describe('Pi quick start', () => {
+  // Same envelope-unwrap regression guard as the blocks above, for runPi(), plus the
+  // rule that makes pi different: it must send NO piConfig. Pi has no permission
+  // prompts, and `approveProjectTrust` would opt the session into EXECUTING
+  // repo-supplied TypeScript — never something a Run button decides silently.
+  it('drives runPi() through the {success,data} envelope and sends no piConfig', async () => {
+    const elements: Record<string, any> = {
+      quickStartCase: { value: 'pi-case' },
+    };
+    const requests: Array<{ url: string; body?: any }> = [];
+    const CodemanApp = function CodemanApp(this: any) {};
+
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: (id: string) => elements[id] ?? null },
+      fetch: async (url: string, init?: { body?: string }) => {
+        requests.push({ url, body: init?.body ? JSON.parse(init.body) : undefined });
+        if (url === '/api/pi/status')
+          return {
+            json: async () => ({ success: true, data: { available: true, path: '/usr/local/bin', version: '0.84.1' } }),
+          };
+        if (url === '/api/quick-start')
+          return { json: async () => ({ success: true, data: { sessionId: 'sess-pi' } }) };
+        if (url === '/api/sessions/sess-pi')
+          return { json: async () => ({ success: true, data: { id: 'sess-pi', name: 'w1-pi-case' } }) };
+        throw new Error(`unexpected fetch: ${url}`);
+      },
+      console,
+    });
+
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+
+    const app = new (CodemanApp as any)();
+    app.terminal = { clear: () => {}, writeln: () => {}, focus: () => {} };
+    app.loadAppSettingsFromStorage = () => ({});
+    app.getCaseSettings = () => ({});
+    app.buildEnvOverrides = () => ({});
+    app.sessions = new Map();
+    app._onSessionCreated = (session: any) => app.sessions.set(session.id, session);
+    app._renderSessionTabsImmediate = vi.fn();
+    const selected: string[] = [];
+    app.selectSession = async (id: string) => {
+      selected.push(id);
+    };
+
+    await app.runPi();
+
+    const body = requests.find((req) => req.url === '/api/quick-start')?.body;
+    expect(body).toMatchObject({ caseName: 'pi-case', mode: 'pi' });
+    expect(body).not.toHaveProperty('piConfig');
+    expect(selected).toEqual(['sess-pi']);
+  });
+
+  it('reports the install hint when the CLI is missing and starts nothing', async () => {
+    const elements: Record<string, any> = { quickStartCase: { value: 'pi-case' } };
+    const requests: string[] = [];
+    const CodemanApp = function CodemanApp(this: any) {};
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: (id: string) => elements[id] ?? null },
+      fetch: async (url: string) => {
+        requests.push(url);
+        if (url === '/api/pi/status')
+          return { json: async () => ({ success: true, data: { available: false, path: null, version: null } }) };
+        throw new Error(`unexpected fetch: ${url}`);
+      },
+      console,
+    });
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+
+    const app = new (CodemanApp as any)();
+    app.terminal = { clear: () => {}, writeln: () => {}, focus: () => {} };
+    const errors: string[] = [];
+    app._reportSessionLaunchError = (_owns: boolean, msg: string) => errors.push(msg);
+
+    await app.runPi();
+
+    expect(requests).toEqual(['/api/pi/status']);
+    expect(errors[0]).toContain('@earendil-works/pi-coding-agent');
   });
 });

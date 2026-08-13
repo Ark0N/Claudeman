@@ -2003,9 +2003,11 @@ class CodemanApp {
         ? 'Gemini'
         : mode === 'antigravity'
           ? 'Antigravity'
-          : mode === 'opencode'
-            ? 'OpenCode'
-            : 'Claude';
+          : mode === 'pi'
+            ? 'Pi'
+            : mode === 'opencode'
+              ? 'OpenCode'
+              : 'Claude';
   }
 
   async toggleResponseViewer() {
@@ -3881,7 +3883,7 @@ class CodemanApp {
           <span class="tab-status ${status}" aria-hidden="true"></span>
           <span class="tab-info">
             <span class="tab-name-row">
-              ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : mode === 'opencode' ? '<span class="tab-mode opencode" aria-hidden="true">oc</span>' : mode === 'codex' ? '<span class="tab-mode codex" aria-hidden="true">cx</span>' : mode === 'gemini' ? '<span class="tab-mode gemini" aria-hidden="true">gm</span>' : mode === 'antigravity' ? '<span class="tab-mode antigravity" aria-hidden="true">ag</span>' : ''}
+              ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : mode === 'opencode' ? '<span class="tab-mode opencode" aria-hidden="true">oc</span>' : mode === 'codex' ? '<span class="tab-mode codex" aria-hidden="true">cx</span>' : mode === 'gemini' ? '<span class="tab-mode gemini" aria-hidden="true">gm</span>' : mode === 'antigravity' ? '<span class="tab-mode antigravity" aria-hidden="true">ag</span>' : mode === 'pi' ? '<span class="tab-mode pi" aria-hidden="true">pi</span>' : ''}
               <span class="tab-name" data-session-id="${id}">${escapeHtml(tabLabel)}</span>
               <span class="tab-detached-badge" aria-hidden="true">detached</span>
             </span>
@@ -5053,7 +5055,9 @@ class CodemanApp {
             ? 'Kill Tmux & Gemini'
             : session.mode === 'antigravity'
               ? 'Kill Tmux & Antigravity'
-              : 'Kill Tmux & Claude Code';
+              : session.mode === 'pi'
+                ? 'Kill Tmux & Pi'
+                : 'Kill Tmux & Claude Code';
     }
 
     document.getElementById('closeConfirmModal').classList.add('active');

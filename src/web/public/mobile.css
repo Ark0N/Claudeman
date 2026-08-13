@@ -911,6 +911,25 @@ html.mobile-init .file-browser-panel {
     border-color: rgba(34, 211, 238, 0.5);
   }
 
+  /* Pi mode colors on mobile.
+     `!important` is load-bearing here, not noise: styles.css nests its skin rules
+     inside `html:not([data-skin="og"])`, so a bare `.btn-toolbar.btn-run` in there
+     resolves to (0,2,1) and outranks this (0,2,0) `.mode-pi` pair regardless of
+     load order. The antigravity block right above omits it and is consequently
+     dead on every non-og skin (i.e. on the default) — do not copy that. */
+  .btn-toolbar.btn-run.mode-pi,
+  .btn-toolbar.btn-run-gear.mode-pi {
+    background: #33121f !important;
+    border-color: rgba(244, 114, 182, 0.3) !important;
+    color: #fce7f3 !important;
+  }
+
+  .btn-toolbar.btn-run.mode-pi:active,
+  .btn-toolbar.btn-run-gear.mode-pi:active {
+    background: #9d174d !important;
+    border-color: rgba(244, 114, 182, 0.5) !important;
+  }
+
   /* Run mode dropdown menu — positioned above toolbar on mobile */
   .run-mode-menu {
     bottom: 100%;
@@ -2985,6 +3004,12 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-toolbar.btn-run.mode-antigravity, .btn-toolbar.btn-run-gear.mode-antigravity) {
   background: linear-gradient(135deg, #0e7490, #0891b2);
   border-color: #155e75;
+  color: #ffffff;
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-toolbar.btn-run.mode-pi, .btn-toolbar.btn-run-gear.mode-pi) {
+  background: linear-gradient(135deg, #be185d, #db2777);
+  border-color: #9d174d;
   color: #ffffff;
 }
 

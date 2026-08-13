@@ -107,6 +107,14 @@ export const DEPENDENCY_REGISTRY: ToolDependency[] = [
     resolvers: [{ match: ALL, resolver: { kind: 'path', bins: ['agy'], versionArg: '--version' } }],
   },
   {
+    id: 'pi',
+    label: 'Pi CLI',
+    category: 'core',
+    required: false,
+    usedBy: ['Pi sessions'],
+    resolvers: [{ match: ALL, resolver: { kind: 'path', bins: ['pi'], versionArg: '--version' } }],
+  },
+  {
     id: 'libreoffice',
     label: 'LibreOffice',
     category: 'office',

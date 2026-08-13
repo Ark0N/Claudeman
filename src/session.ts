@@ -50,6 +50,7 @@ import {
   type EffortLevel,
   type GeminiConfig,
   type AntigravityConfig,
+  type PiConfig,
   type SessionRemote,
   type SessionDocker,
 } from './types.js';
@@ -162,7 +163,7 @@ const NEWLINE_SPLIT_PATTERN = /\r?\n/;
 
 /** True for external-CLI run modes (non-Claude) that use their own TUI and output format. */
 export function isExternalCliMode(mode: SessionMode): boolean {
-  return mode === 'opencode' || mode === 'codex' || mode === 'gemini' || mode === 'antigravity';
+  return mode === 'opencode' || mode === 'codex' || mode === 'gemini' || mode === 'antigravity' || mode === 'pi';
 }
 
 function getModeLabel(mode: SessionMode): string {
@@ -175,6 +176,8 @@ function getModeLabel(mode: SessionMode): string {
       return 'Gemini';
     case 'antigravity':
       return 'Antigravity';
+    case 'pi':
+      return 'Pi';
     case 'shell':
       return 'Shell';
     case 'claude':
@@ -190,9 +193,12 @@ function getModeLabel(mode: SessionMode): string {
  * Codex, Claude Code, and Gemini are known, controlled (Ink/React) TUIs that
  * repaint via cursor positioning, so dropping the alt-screen switch is safe —
  * content stays in the normal buffer. Excluded: `shell` (arbitrary programs like
- * vim/less/htop legitimately need the alt screen) and `opencode` (renders its own
- * TUI that may rely on it). Keep parity with the replay-side strip in
- * session-routes.ts.
+ * vim/less/htop legitimately need the alt screen), `opencode` (renders its own
+ * TUI that may rely on it) and `pi` (its default TUI already renders into the
+ * MAIN screen with terminal-owned scrollback, so there is nothing to strip — and
+ * since pi 0.84.0 the user can switch to a fullscreen TUI at runtime via
+ * `/settings`, where the alt screen is load-bearing). Keep parity with the
+ * replay-side strip in session-routes.ts.
  */
 export function isAltScreenStripMode(mode: SessionMode): boolean {
   return mode === 'codex' || mode === 'claude' || mode === 'gemini';
@@ -468,6 +474,8 @@ export class Session extends EventEmitter {
   private _geminiConfig: GeminiConfig | undefined;
   // Antigravity configuration (only for mode === 'antigravity')
   private _antigravityConfig: AntigravityConfig | undefined;
+  // Pi configuration (only for mode === 'pi')
+  private _piConfig: PiConfig | undefined;
   private _resumeSessionId: string | undefined;
 
   // Ephemeral env overrides (e.g., CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS). Exported by tmux
@@ -561,6 +569,8 @@ export class Session extends EventEmitter {
       geminiConfig?: GeminiConfig;
       /** Antigravity configuration (only for mode === 'antigravity') */
       antigravityConfig?: AntigravityConfig;
+      /** Pi configuration (only for mode === 'pi') */
+      piConfig?: PiConfig;
       /** Resume a previous Claude conversation (used after server reboot) */
       resumeSessionId?: string;
       /** Extra env vars exported to the CLI at spawn time (no disk persistence) */
@@ -652,6 +662,11 @@ export class Session extends EventEmitter {
     // Apply Antigravity configuration
     if (config.antigravityConfig) {
       this._antigravityConfig = config.antigravityConfig;
+    }
+
+    // Apply Pi configuration
+    if (config.piConfig) {
+      this._piConfig = config.piConfig;
     }
 
     // Apply env overrides (exported at spawn, not persisted to disk).
@@ -1228,6 +1243,7 @@ export class Session extends EventEmitter {
       codexConfig: this._codexConfig,
       geminiConfig: this._geminiConfig,
       antigravityConfig: this._antigravityConfig,
+      piConfig: this._piConfig,
       resumeSessionId: this._resumeSessionId,
       effort: this._effort,
       // COD-118: runtime-only — surfaced so the frontend can require explicit user
@@ -1397,9 +1413,11 @@ export class Session extends EventEmitter {
           cols: ptyCols,
           rows: ptyRows,
           cwd: resolveMuxAttachCwd(this.workingDir, this._remote, this._docker),
-          // COD-75: codex/gemini/antigravity get COLORTERM=truecolor — mirrors buildEnvExports()
+          // COD-75: codex/gemini/antigravity/pi get COLORTERM=truecolor — mirrors buildEnvExports()
           // in tmux-manager.ts so the attach client and the tmux session agree.
-          env: buildMuxAttachEnv(this.mode === 'codex' || this.mode === 'gemini' || this.mode === 'antigravity'),
+          env: buildMuxAttachEnv(
+            this.mode === 'codex' || this.mode === 'gemini' || this.mode === 'antigravity' || this.mode === 'pi'
+          ),
         })
       );
     } catch (spawnErr) {
@@ -1467,6 +1485,7 @@ export class Session extends EventEmitter {
       codexConfig: this._codexConfig,
       geminiConfig: this._geminiConfig,
       antigravityConfig: this._antigravityConfig,
+      piConfig: this._piConfig,
       resumeSessionId: this._resumeSessionId,
       envOverrides: this._envOverrides,
       effort: this._effort,
@@ -1681,6 +1700,7 @@ export class Session extends EventEmitter {
             codexConfig: this._codexConfig,
             geminiConfig: this._geminiConfig,
             antigravityConfig: this._antigravityConfig,
+            piConfig: this._piConfig,
             resumeSessionId: this._resumeSessionId,
             envOverrides: this._envOverrides,
             effort: this._effort,
@@ -1765,6 +1785,10 @@ export class Session extends EventEmitter {
       // Antigravity sessions require tmux for env override injection via setenv
       if (this.mode === 'antigravity') {
         throw new Error('Antigravity sessions require tmux. Direct PTY fallback is not supported.');
+      }
+      // Pi sessions require tmux for env override injection via setenv
+      if (this.mode === 'pi') {
+        throw new Error('Pi sessions require tmux. Direct PTY fallback is not supported.');
       }
       try {
         // Pass --session-id to use the SAME ID as the Codeman session

@@ -329,7 +329,8 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   .search-badge-session,
   .history-view-all-btn,
   .session-tab .tab-mode.gemini,
-  .session-tab .tab-mode.antigravity
+  .session-tab .tab-mode.antigravity,
+  .session-tab .tab-mode.pi
 ) {
   color: var(--accent-d);
 }
@@ -2159,6 +2160,11 @@ body.solo-mode .btn-lifecycle-log {
   color: #22d3ee;
 }
 
+.session-tab .tab-mode.pi {
+  background: rgba(244, 114, 182, 0.2);
+  color: #f472b6;
+}
+
 /* Timer Banner - Compact */
 .timer-banner {
   display: flex;
@@ -3378,6 +3384,23 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   transform: translateY(-1px);
 }
 
+/* Pi (pi.dev): rose identity, matching .btn-toolbar.btn-run.mode-pi and
+   .run-mode-dot.pi so the welcome action reads as the same backend. */
+.welcome-btn-pi {
+  background: linear-gradient(135deg, #33121f 0%, #9d174d 55%, #be185d 100%);
+  border-color: rgba(244, 114, 182, 0.4);
+  color: #fce7f3;
+  box-shadow: 0 2px 8px rgba(244, 114, 182, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.welcome-btn-pi:hover {
+  background: linear-gradient(135deg, #4a1a2c 0%, #be185d 55%, #db2777 100%);
+  box-shadow: 0 4px 20px rgba(244, 114, 182, 0.3), 0 0 40px rgba(190, 24, 93, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border-color: rgba(249, 168, 212, 0.5);
+  color: #fff1f7;
+  transform: translateY(-1px);
+}
+
 .welcome-btn-gemini {
   background: linear-gradient(135deg, #10243f 0%, #174ea6 55%, #4f46e5 100%);
   border-color: rgba(96, 165, 250, 0.4);
@@ -4432,6 +4455,26 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   color: #ecfeff;
 }
 
+/* Pi mode colors. NOTE: this base-sheet pair only renders on the `og` skin — the
+   nested `html:not([data-skin="og"])` block further down re-declares
+   `.btn-toolbar.btn-run` at a HIGHER specificity, which is why gemini's and
+   antigravity's gradients are dead on the default skin. Pi therefore also carries
+   a rule inside that block (search `.btn-toolbar.btn-run.mode-pi`). */
+.btn-toolbar.btn-run.mode-pi,
+.btn-toolbar.btn-run-gear.mode-pi {
+  background: linear-gradient(135deg, #33121f 0%, #9d174d 55%, #be185d 100%);
+  border-color: rgba(244, 114, 182, 0.5);
+  color: #fce7f3;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.btn-toolbar.btn-run.mode-pi:hover,
+.btn-toolbar.btn-run-gear.mode-pi:hover {
+  background: linear-gradient(135deg, #4a1a2c 0%, #be185d 55%, #db2777 100%);
+  box-shadow: 0 0 12px rgba(244, 114, 182, 0.35), 0 2px 8px rgba(190, 24, 93, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border-color: rgba(249, 168, 212, 0.6);
+  color: #fff1f7;
+}
+
 /* Dropdown menu */
 .run-mode-menu {
   display: none;
@@ -4514,6 +4557,7 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
 .run-mode-dot.codex { background: #a855f7; }
 .run-mode-dot.gemini { background: #8ab4f8; }
 .run-mode-dot.antigravity { background: #22d3ee; }
+.run-mode-dot.pi { background: #f472b6; }
 .run-mode-dot.shell { background: #94a3b8; }
 
 /* Phone-only Enter button (see index.html). Hidden by default at every width;
@@ -13790,6 +13834,17 @@ html:not([data-skin="og"]) {
   color: #061c20;
 }
 .btn-toolbar.btn-run.mode-codex:hover { box-shadow: 0 0 14px -2px rgba(43, 203, 187, 0.45); }
+/* Pi keeps its rose identity on the non-og skins. This rule has to live INSIDE
+   this nested block: the generic `.btn-toolbar.btn-run` above resolves to (0,3,1)
+   here and would otherwise beat the base sheet's (0,3,0) `.mode-pi` pair, which
+   is exactly why gemini's and antigravity's gradients render as generic claude
+   blue on the default skin. */
+.btn-toolbar.btn-run.mode-pi {
+  background: linear-gradient(135deg, #be185d, #f472b6);
+  border-color: #be185d;
+  color: #fff1f7;
+}
+.btn-toolbar.btn-run.mode-pi:hover { box-shadow: 0 0 14px -2px rgba(244, 114, 182, 0.45); }
 .btn-toolbar.btn-run-gear {
   background: var(--accent-d);
   border-color: var(--accent);
