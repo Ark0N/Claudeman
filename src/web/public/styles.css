@@ -3195,6 +3195,83 @@ body.solo-mode .btn-lifecycle-log {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* Anchor for the partial-history banner, which overlays rather than stacks. */
+  position: relative;
+}
+
+/* Partial-history banner (#258).
+   OVERLAY, not a flex child, on purpose: FitAddon derives rows/cols from the
+   terminal parent's computed height, so a banner that occupied real layout
+   space would SIGWINCH the CLI every time truncation state changed and make
+   Ink repaint the world. Floating it costs a few covered rows at the top,
+   which the dismiss button releases. */
+.history-trunc-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 6; /* under the local-echo overlay (7), over terminal content */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-dim);
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 22%);
+}
+
+/* `.history-trunc-bar` sets display:flex, which outranks the hidden attribute's
+   UA display:none — without this the banner can never be hidden. */
+.history-trunc-bar[hidden] {
+  display: none;
+}
+
+.history-trunc-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.history-trunc-load {
+  flex: none;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.history-trunc-load:hover:not(:disabled) {
+  background: var(--border-light);
+}
+
+.history-trunc-load:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.history-trunc-dismiss {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.history-trunc-dismiss:hover {
+  color: var(--text);
+  background: var(--bg-hover);
 }
 
 .terminal-container {

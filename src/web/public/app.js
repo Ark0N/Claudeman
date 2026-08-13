@@ -4509,28 +4509,36 @@ class CodemanApp {
    * gets a much longer cooldown so a hollow pane stops re-fetching megabytes on
    * every scroll-up (issue #205, round 2).
    */
-  async _maybeRefetchFullHistory() {
+  async _maybeRefetchFullHistory({ force = false } = {}) {
     const sessionId = this.activeSessionId;
     if (!sessionId || this._fullHistoryRepullInFlight || this._isLoadingBuffer) return;
     if (this.detachedSessions?.has(sessionId)) return;
     const now = Date.now();
     // Momentum scrolling fires this dozens of times per flick, and a burst of new
     // output is the normal reason to want a re-pull, so cooldown rather than latch.
+    // `force` is the user pressing "Load full history" (#258): they asked once,
+    // explicitly, so the scroll-gesture cooldown does not apply. The downgrade
+    // guard below still does — a forced pull must not destroy history either.
     const cooldown = this._fullHistoryRepullUseless?.has(sessionId) ? 60000 : 4000;
-    if (now - (this._fullHistoryRepullAt.get(sessionId) || 0) < cooldown) return;
+    if (!force && now - (this._fullHistoryRepullAt.get(sessionId) || 0) < cooldown) return;
     this._fullHistoryRepullAt.set(sessionId, now);
     this._fullHistoryRepullInFlight = true;
     try {
       const res = await fetch(`/api/sessions/${sessionId}/terminal?full=1`);
-      const buffer = (await res.json())?.data?.terminalBuffer;
+      const payload = (await res.json())?.data ?? {};
+      const buffer = payload.terminalBuffer;
       // Bail on a tab switch mid-fetch: writing here would paint another session's
       // history into the terminal the user is now looking at.
       if (!buffer || this.activeSessionId !== sessionId) return;
       if (this._replayWouldShrinkBuffer(buffer)) {
         (this._fullHistoryRepullUseless ||= new Set()).add(sessionId);
         this._logScrollRouting?.('repull-refused-downgrade');
+        // The browser already holds more than tmux can give back, so there is
+        // nothing further to offer and the indicator must stop promising it.
+        this._setHistoryTruncation(sessionId, { ...payload, exhausted: true });
         return;
       }
+      this._setHistoryTruncation(sessionId, payload);
       this._fullHistoryRepullUseless?.delete(sessionId);
       const rowsBefore = this.terminal.buffer.active.length;
       this._resetTerminalForReplay();
@@ -4549,6 +4557,89 @@ class CodemanApp {
     } finally {
       this._fullHistoryRepullInFlight = false;
     }
+  }
+
+  /**
+   * Record how much history a replay actually carried, and refresh the banner.
+   *
+   * Called from every path that writes a fetched buffer into xterm. Keyed by
+   * session because the banner describes the ACTIVE tab and a background fetch
+   * must not relabel it.
+   */
+  _setHistoryTruncation(sessionId, payload = {}) {
+    if (!sessionId) return;
+    (this._historyTruncation ||= new Map()).set(sessionId, {
+      truncated: !!payload.truncated,
+      reason: payload.truncationReason ?? null,
+      source: payload.source ?? null,
+      fullSize: payload.fullSize ?? 0,
+      retainedBytes: payload.retainedBytes ?? 0,
+      // Set once a full-history pull has been refused as a downgrade: the
+      // browser holds more than the server can return, so there is no more.
+      exhausted: !!payload.exhausted,
+    });
+    if (sessionId === this.activeSessionId) this._renderHistoryTruncationBanner();
+  }
+
+  /** Drop banner state for a session that is going away. */
+  _clearHistoryTruncation(sessionId) {
+    this._historyTruncation?.delete(sessionId);
+    if (sessionId === this.activeSessionId) this._renderHistoryTruncationBanner();
+  }
+
+  /**
+   * Paint the partial-history banner for the active session.
+   *
+   * Three distinct states, because "we tailed for speed" and "the oldest output
+   * is gone forever" are not the same message and the old single boolean could
+   * not tell them apart:
+   *   - recoverable  → offer to load the rest
+   *   - exhausted    → say so plainly, offer nothing
+   *   - at the limit → the full capture ITSELF hit the byte ceiling
+   */
+  _renderHistoryTruncationBanner() {
+    const bar = document.getElementById('historyTruncationBar');
+    if (!bar) return;
+    const state = this.activeSessionId ? this._historyTruncation?.get(this.activeSessionId) : null;
+    const notice = computeHistoryTruncationNotice(state || {});
+    if (!notice.visible) {
+      bar.hidden = true;
+      return;
+    }
+
+    bar.textContent = '';
+    const label = document.createElement('span');
+    label.className = 'history-trunc-text';
+    label.textContent = notice.message;
+    bar.appendChild(label);
+
+    if (notice.canLoadMore) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'history-trunc-load';
+      btn.textContent = 'Load full history';
+      btn.onclick = () => {
+        btn.disabled = true;
+        btn.textContent = 'Loading…';
+        // Forced: the cooldown exists to throttle scroll gestures, not choices.
+        this._maybeRefetchFullHistory({ force: true }).finally(() => {
+          this._renderHistoryTruncationBanner();
+        });
+      };
+      bar.appendChild(btn);
+    }
+
+    const dismiss = document.createElement('button');
+    dismiss.type = 'button';
+    dismiss.className = 'history-trunc-dismiss';
+    dismiss.setAttribute('aria-label', 'Dismiss history notice');
+    dismiss.textContent = '×';
+    dismiss.onclick = () => {
+      bar.hidden = true;
+    };
+    bar.appendChild(dismiss);
+
+    bar.hidden = false;
   }
 
   _shouldFocusTerminalForTabSwitch() {
@@ -4607,6 +4698,10 @@ class CodemanApp {
 
     this._cleanupPreviousSession(sessionId);
     this.activeSessionId = sessionId;
+    // Repaint the partial-history banner for the tab being switched TO. The
+    // replay paths refresh it when their fetch lands; without this the previous
+    // session's notice stays on screen until then (#258).
+    this._renderHistoryTruncationBanner();
     try { localStorage.setItem('codeman-active-session', sessionId); } catch {}
     // Narrow SSE filter to the active session — server stops streaming
     // session:terminal events for other sessions to this client. Cuts
@@ -4858,10 +4953,11 @@ class CodemanApp {
           _crashDiag.log(`REWRITE: ${(data.terminalBuffer.length/1024).toFixed(0)}KB`);
           this._setTerminalLoadState(sessionId, selectGen, 'replaying');
           this._resetTerminalForReplay();
-          // Show truncation indicator if buffer was cut
-          if (data.truncated) {
-            this.terminal.write('\x1b[90m... (earlier output truncated for performance) ...\x1b[0m\r\n\r\n');
-          }
+          // Truncation is reported OUT OF BAND (#258). This used to write a grey
+          // "... earlier output truncated ..." line into the
+          // terminal itself, which scrolls away with the output it describes,
+          // cannot be actioned, and is indistinguishable from real CLI output.
+          this._setHistoryTruncation(sessionId, data);
           // Use chunked write for large buffers to avoid UI jank
           await this.chunkedTerminalWrite(data.terminalBuffer, TERMINAL_CHUNK_SIZE, bufferLoadOwner);
           if (this._isStaleSelect(selectGen)) {
@@ -5043,6 +5139,7 @@ class CodemanApp {
     }
     this.terminalBuffers.delete(sessionId);
     this.terminalBufferCache.delete(sessionId);
+    this._clearHistoryTruncation(sessionId);
     this._xtermSnapshots?.delete(sessionId);
     try { localStorage.removeItem(`codeman-xs-${sessionId}`); } catch {}
 

@@ -351,7 +351,7 @@ describe('Virtual Keyboard', () => {
           bottomRestores++;
         };
 
-        KeyboardHandler._scheduleViewportSettle({ scrollToBottom: true });
+        KeyboardHandler._scheduleViewportSettle({ restoreScroll: true });
         await new Promise((resolve) => setTimeout(resolve, 30));
         KeyboardHandler._scheduleViewportSettle();
         await new Promise((resolve) => setTimeout(resolve, 30));
@@ -446,7 +446,7 @@ describe('Virtual Keyboard', () => {
 
         // A real transition arms the work; a following wiggle defers it but the
         // settle still fires exactly once.
-        KeyboardHandler._scheduleViewportSettle({ scrollToBottom: true });
+        KeyboardHandler._scheduleViewportSettle({ restoreScroll: true });
         await new Promise((resolve) => setTimeout(resolve, 30));
         KeyboardHandler._deferViewportSettle();
         await new Promise((resolve) => setTimeout(resolve, KeyboardHandler.VIEWPORT_SETTLE_MS + 80));
