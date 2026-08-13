@@ -46,6 +46,7 @@ import {
 } from '../route-helpers.js';
 import type { FastifyRequest } from 'fastify';
 import type { SessionAttachmentHistoryItem, SessionState } from '../../types/session.js';
+import { parseByteRange } from '../http-range.js';
 import { isSensitivePath } from '../sensitive-path.js';
 import { SseEvent } from '../sse-events.js';
 import type { ConfigPort, EventPort, SessionPort } from '../ports/index.js';
@@ -86,7 +87,13 @@ function buildContentDisposition(disposition: 'inline' | 'attachment', fileName:
 
 function sendRawStream(reply: FastifyReply, content: ReadStream): void {
   const headers = reply.getHeaders();
+  // hijack() answers on reply.raw, which keeps Fastify's own status handling out
+  // of the picture — so a 206 set with reply.code() has to be carried across by
+  // hand or a partial body would go out labelled 200 and the browser would treat
+  // it as the whole file.
+  const statusCode = reply.statusCode;
   reply.hijack();
+  reply.raw.statusCode = statusCode;
 
   for (const [name, value] of Object.entries(headers)) {
     if (value !== undefined) {
@@ -106,12 +113,54 @@ function sendRawStream(reply: FastifyReply, content: ReadStream): void {
   content.pipe(reply.raw);
 }
 
+/**
+ * Stream a file body, honoring a `Range` request header.
+ *
+ * Callers set Content-Type/Content-Disposition first; this adds the
+ * range-related headers and the body. Range support is what makes the file
+ * viewer's `<video>`/`<audio>` seekable: with a plain 200 and no
+ * `Accept-Ranges`, Chrome reports `video.seekable` as `[0, 0]`, the scrub bar
+ * does nothing and `currentTime = x` is silently reverted (measured against an
+ * 18MB mp4 before this existed). It also stops each seek from re-reading the
+ * whole file into memory.
+ */
+function sendFileBody(
+  reply: FastifyReply,
+  resolvedPath: string,
+  size: number,
+  rangeHeader: string | string[] | undefined
+): void {
+  reply.header('Accept-Ranges', 'bytes');
+  const range = parseByteRange(rangeHeader, size);
+
+  if (range.kind === 'unsatisfiable') {
+    reply
+      .code(416)
+      .header('Content-Range', `bytes */${size}`)
+      .type('application/json; charset=utf-8')
+      .send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Requested range not satisfiable'));
+    return;
+  }
+
+  if (range.kind === 'partial') {
+    reply.code(206);
+    reply.header('Content-Range', `bytes ${range.start}-${range.end}/${size}`);
+    reply.header('Content-Length', range.end - range.start + 1);
+    sendRawStream(reply, createReadStream(resolvedPath, { start: range.start, end: range.end }));
+    return;
+  }
+
+  reply.header('Content-Length', size);
+  sendRawStream(reply, createReadStream(resolvedPath));
+}
+
 async function serveRawFile(
   reply: FastifyReply,
   resolvedPath: string,
   fileName: string,
   extension: string,
-  download?: boolean
+  download?: boolean,
+  rangeHeader?: string | string[]
 ): Promise<void> {
   const stat = await fs.stat(resolvedPath);
   const MAX_RAW_ATTACHMENT_SIZE = 50 * 1024 * 1024; // 50MB, matching file-raw / download
@@ -126,24 +175,21 @@ async function serveRawFile(
       );
     return;
   }
-  const content = createReadStream(resolvedPath);
   if (download || extension === 'svg') {
     reply.header(
       'Content-Type',
       extension === 'svg' ? 'application/octet-stream' : MIME_TYPES[extension] || 'application/octet-stream'
     );
     reply.header('Content-Disposition', buildContentDisposition('attachment', fileName));
-    reply.header('Content-Length', stat.size);
     reply.header('X-Content-Type-Options', 'nosniff');
-    sendRawStream(reply, content);
+    sendFileBody(reply, resolvedPath, stat.size, rangeHeader);
     return;
   }
 
   reply.header('Content-Type', MIME_TYPES[extension] || 'application/octet-stream');
   reply.header('Content-Disposition', buildContentDisposition('inline', fileName));
-  reply.header('Content-Length', stat.size);
   reply.header('X-Content-Type-Options', 'nosniff');
-  sendRawStream(reply, content);
+  sendFileBody(reply, resolvedPath, stat.size, rangeHeader);
 }
 
 function getAttachmentOr404(
@@ -849,7 +895,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       await serveConvertedPreview(reply, resolvedPath, fileName, extension);
       return;
     }
-    await serveRawFile(reply, resolvedPath, fileName, extension);
+    await serveRawFile(reply, resolvedPath, fileName, extension, false, req.headers.range);
   });
 
   // File tree listing
@@ -1369,24 +1415,24 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         json: 'application/json',
       };
 
-      const content = await fs.readFile(resolvedPath);
       const rawBasename = filePath!.split('/').pop() || 'download';
       // Sanitize filename for Content-Disposition header (prevent header injection)
       const basename = rawBasename.replace(/["\\\r\n]/g, '_');
       if (download === 'true' || ext === 'svg') {
-        reply.raw.writeHead(200, {
-          ...inheritedHeaders(reply),
-          'Content-Type': ext === 'svg' ? 'application/octet-stream' : mimeTypes[ext] || 'application/octet-stream',
-          'Content-Disposition': `attachment; filename="${basename}"`,
-          'Content-Length': content.length,
-          'X-Content-Type-Options': 'nosniff',
-        });
-        reply.raw.end(content);
+        reply.header(
+          'Content-Type',
+          ext === 'svg' ? 'application/octet-stream' : mimeTypes[ext] || 'application/octet-stream'
+        );
+        reply.header('Content-Disposition', `attachment; filename="${basename}"`);
+        reply.header('X-Content-Type-Options', 'nosniff');
+        sendFileBody(reply, resolvedPath, stat.size, req.headers.range);
         return;
       }
       reply.header('Content-Type', mimeTypes[ext] || 'application/octet-stream');
       reply.header('X-Content-Type-Options', 'nosniff');
-      reply.send(content);
+      // Streamed, range-aware: this is the <video>/<audio> source the file
+      // viewer points at, and a 200-only response makes the media unseekable.
+      sendFileBody(reply, resolvedPath, stat.size, req.headers.range);
     } catch (err) {
       reply
         .code(500)
@@ -1503,7 +1549,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     if (!servePath) return;
 
     try {
-      await serveRawFile(reply, servePath, record.fileName, record.extension, download === 'true');
+      await serveRawFile(reply, servePath, record.fileName, record.extension, download === 'true', req.headers.range);
     } catch (err) {
       reply
         .code(500)
