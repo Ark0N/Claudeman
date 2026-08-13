@@ -7,6 +7,8 @@
  * @module config/dependency-registry
  */
 
+import { PI_VERSION_REGEX } from '../utils/pi-cli-resolver.js';
+
 export type ProbeEnvironment = 'linux' | 'darwin' | 'win32' | 'wsl';
 
 /** The valid `--category` filter values; single source of truth for the type, the CLI
@@ -20,6 +22,13 @@ export interface PathResolver {
   bins: string[];
   versionArg?: string; // default '--version'
   versionRegex?: RegExp; // default matches first \d+.\d+(.\d+)?
+  /**
+   * Treat a binary whose version output does not match as NOT INSTALLED, instead of
+   * reporting it with an unknown version. Only for tools with a short, generic binary
+   * name (`pi`), where a `which` hit is not by itself evidence the right program is
+   * there and a false "installed" contradicts the run mode's own resolver.
+   */
+  requireVersionMatch?: boolean;
 }
 
 /** Resolve a Windows-installed app reachable from win32 or WSL. */
@@ -105,6 +114,30 @@ export const DEPENDENCY_REGISTRY: ToolDependency[] = [
     required: false,
     usedBy: ['Antigravity sessions'],
     resolvers: [{ match: ALL, resolver: { kind: 'path', bins: ['agy'], versionArg: '--version' } }],
+  },
+  {
+    id: 'pi',
+    label: 'Pi CLI',
+    category: 'core',
+    required: false,
+    usedBy: ['Pi sessions'],
+    // The only entry that requires a version match, for the same reason
+    // pi-cli-resolver.ts probes: `pi` is a short generic name (Raspberry Pi tooling,
+    // personal scripts), so a `which pi` hit alone is not the coding agent. Both sides
+    // share PI_VERSION_REGEX, so the doctor and the run mode cannot drift into telling
+    // the user opposite things about the same binary.
+    resolvers: [
+      {
+        match: ALL,
+        resolver: {
+          kind: 'path',
+          bins: ['pi'],
+          versionArg: '--version',
+          versionRegex: PI_VERSION_REGEX,
+          requireVersionMatch: true,
+        },
+      },
+    ],
   },
   {
     id: 'libreoffice',

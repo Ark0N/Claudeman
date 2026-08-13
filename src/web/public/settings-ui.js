@@ -1179,6 +1179,7 @@ Object.assign(CodemanApp.prototype, {
       ['welcomeOpencodeBtn', 'opencode'],
       ['welcomeAntigravityBtn', 'antigravity'],
       ['welcomeGeminiBtn', 'gemini'],
+      ['welcomePiBtn', 'pi'],
       // Not a run mode, same reasoning: offering a Cloudflare Tunnel on a box
       // without cloudflared can only ever produce "cloudflared not found".
       ['welcomeTunnelBtn', 'cloudflared'],

@@ -113,6 +113,7 @@ export function defaultRemoteCommandForMode(mode: SessionMode): string {
     codex: remoteLoginShellCommand('codex'),
     gemini: remoteLoginShellCommand('gemini'),
     antigravity: remoteLoginShellCommand('agy'),
+    pi: remoteLoginShellCommand('pi'),
   };
   return commands[mode as RemoteCommandMode] || commands.shell;
 }
@@ -267,6 +268,7 @@ const REMOTE_CLI_BIN: Partial<Record<SessionMode, string>> = {
   codex: 'codex',
   gemini: 'gemini',
   antigravity: 'agy',
+  pi: 'pi',
 };
 
 /**

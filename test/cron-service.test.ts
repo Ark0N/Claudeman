@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CronService, type CronDeps } from '../src/cron/cron-service.js';
+import { CronService, clampCronExternalCliConfigs, type CronDeps } from '../src/cron/cron-service.js';
 import { CronJobSchema } from '../src/web/schemas.js';
 import { MAX_CRON_JOBS } from '../src/config/map-limits.js';
 import type { CronJob, CronJobRun } from '../src/types/cron.js';
@@ -630,5 +630,38 @@ describe('CronService', () => {
       for (let i = 0; i < MAX_CRON_JOBS; i++) svc.service.createJob(mkInput({ name: `j${i}` }));
       expect(() => svc.service.createJob(mkInput({ name: 'overflow' }))).toThrow(/Maximum number of cron jobs/);
     });
+  });
+});
+
+/**
+ * The §6.3 clamp cron applies at FIRE time. Cron sends no per-CLI config, so a
+ * missing clamp here is not "the default applies" but "the CLI's own unsafe default
+ * applies", which is the whole reason gemini and pi are materialized rather than
+ * left absent like codex/antigravity.
+ */
+describe('clampCronExternalCliConfigs', () => {
+  it('leaves everything undefined for a granted owner (upstream defaults)', () => {
+    expect(clampCronExternalCliConfigs('gemini', true)).toEqual({ geminiConfig: undefined, piConfig: undefined });
+    expect(clampCronExternalCliConfigs('pi', true)).toEqual({ geminiConfig: undefined, piConfig: undefined });
+  });
+
+  it('materializes gemini auto_edit for a non-granted owner (its default is yolo)', () => {
+    expect(clampCronExternalCliConfigs('gemini', false)).toEqual({
+      geminiConfig: { approvalMode: 'auto_edit' },
+      piConfig: undefined,
+    });
+  });
+
+  it('materializes pi --no-approve for a non-granted owner (its default is an answerable prompt)', () => {
+    expect(clampCronExternalCliConfigs('pi', false)).toEqual({
+      geminiConfig: undefined,
+      piConfig: { approveProjectTrust: false },
+    });
+  });
+
+  it('clamps nothing for modes whose absent config already spawns safe', () => {
+    for (const mode of ['claude', 'shell', 'opencode', 'codex', 'antigravity'] as const) {
+      expect(clampCronExternalCliConfigs(mode, false)).toEqual({ geminiConfig: undefined, piConfig: undefined });
+    }
   });
 });

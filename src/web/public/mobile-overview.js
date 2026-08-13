@@ -58,6 +58,7 @@ const MOBILE_OVERVIEW_RUN_MODES = [
   { mode: 'codex', label: 'Codex', short: 'Codex' },
   { mode: 'gemini', label: 'Gemini', short: 'Gemini' },
   { mode: 'antigravity', label: 'Antigravity', short: 'Antigravity' },
+  { mode: 'pi', label: 'Pi', short: 'Pi' },
   { mode: 'shell', label: 'Terminal / Shell', short: 'Shell' },
 ];
 

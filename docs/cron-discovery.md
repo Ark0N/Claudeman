@@ -44,9 +44,9 @@ records), kept distinct from the existing `ScheduledRun`.
 
 ## 2. Where agent/session types are defined
 
-- `type SessionMode = 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity'`
+- `type SessionMode = 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi'`
   (`src/types/session.ts:43-44`). `shell` covers the brief's "Terminal/custom".
-- CLI availability resolvers in `src/utils/{claude,codex,gemini,antigravity,opencode}-cli-resolver.ts`.
+- CLI availability resolvers in `src/utils/{claude,codex,gemini,antigravity,opencode,pi}-cli-resolver.ts`.
 - **Integration point:** the job's `agentType` reuses `SessionMode` verbatim.
 
 ## 3. Where input is sent into a session

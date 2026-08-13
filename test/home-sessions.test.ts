@@ -143,6 +143,26 @@ describe('home sessions column: model', () => {
     });
     expect(plain.buildHomeSessionRows()[0].modeBadge).toBe('');
   });
+
+  it('badges every non-claude backend, so a new run mode cannot read as claude here', () => {
+    // The badge map is a per-mode lookup with a '' fallback, so a mode missing from it
+    // is indistinguishable from claude in this rail while the tab strip badges it fine.
+    for (const [mode, badge] of [
+      ['shell', 'sh'],
+      ['opencode', 'oc'],
+      ['codex', 'cx'],
+      ['gemini', 'gm'],
+      ['antigravity', 'ag'],
+      ['pi', 'pi'],
+    ] as const) {
+      const app = loadHomeSessionsApp({
+        sessions: sessionMap([{ id: 'a', mode }]),
+        sessionOrder: ['a'],
+        cases: CASES,
+      });
+      expect(app.buildHomeSessionRows()[0].modeBadge).toBe(badge);
+    }
+  });
 });
 
 describe('home sessions column: gate', () => {

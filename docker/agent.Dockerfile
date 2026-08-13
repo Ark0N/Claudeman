@@ -44,6 +44,13 @@ RUN curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr
  && chmod 755 /usr/local/bin/agy \
  && agy --version
 
+# Pi (pi.dev). Upstream documents --ignore-scripts (pi needs no lifecycle scripts);
+# kept out of the shared npm block above so the flag cannot silently change how the
+# other four CLIs install.
+RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent \
+ && npm cache clean --force \
+ && pi --version
+
 # `agent` user (gid 0) with an arbitrary-uid-writable HOME. The uid is
 # auto-assigned (node:22-slim already occupies uid 1000 with its `node` user); at
 # runtime Codeman overrides with `--user <hostUid>:0` on Linux, so the baked uid
@@ -61,9 +68,11 @@ ENV HOME=/home/agent
 # transcript/rollout dirs (`.claude/projects`, `.codex/sessions`) are bind-mounted from
 # the host. (gemini/gcloud/opencode are whole seed-copies and need no pre-created dir;
 # Antigravity nests its state inside `.gemini/antigravity-cli`, so it rides that seed.)
+# `.pi/agent` IS pre-created: pi is seeded per-FILE (auth/settings/trust/models), and a
+# per-file seed copy, unlike a whole-dir one, does not create its parent directory.
 RUN useradd -g 0 -m -d /home/agent -s /bin/bash agent \
  && mkdir -p /home/agent/.npm /home/agent/.cache /home/agent/.config /home/agent/.codeman \
-      /home/agent/.claude/projects /home/agent/.codex/sessions \
+      /home/agent/.claude/projects /home/agent/.codex/sessions /home/agent/.pi/agent \
  && chgrp -R 0 /home/agent \
  && chmod -R g=u /home/agent
 

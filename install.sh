@@ -116,6 +116,15 @@ GEMINI_SEARCH_PATHS=(
     "$HOME/bin/gemini"
 )
 
+# Pi CLI search paths (from src/utils/pi-cli-resolver.ts)
+PI_SEARCH_PATHS=(
+    "$HOME/.local/bin/pi"
+    "/usr/local/bin/pi"
+    "$HOME/.bun/bin/pi"
+    "$HOME/.npm-global/bin/pi"
+    "$HOME/bin/pi"
+)
+
 # Antigravity CLI search paths (from src/utils/antigravity-cli-resolver.ts)
 ANTIGRAVITY_SEARCH_PATHS=(
     "$HOME/.local/bin/agy"
@@ -522,6 +531,37 @@ get_antigravity_path() {
     fi
 
     for path in "${ANTIGRAVITY_SEARCH_PATHS[@]}"; do
+        if [[ -x "$path" ]]; then
+            echo "$path"
+            return
+        fi
+    done
+}
+
+# `pi` is a short, generic name (Raspberry Pi tooling, personal scripts), so the
+# server-side resolver additionally probes `pi --version`. Detection here only feeds
+# the "you have no AI CLI" hint, so a plain executable test is enough.
+check_pi() {
+    if command -v pi &>/dev/null; then
+        return 0
+    fi
+
+    for path in "${PI_SEARCH_PATHS[@]}"; do
+        if [[ -x "$path" ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+get_pi_path() {
+    if command -v pi &>/dev/null; then
+        command -v pi
+        return
+    fi
+
+    for path in "${PI_SEARCH_PATHS[@]}"; do
         if [[ -x "$path" ]]; then
             echo "$path"
             return
@@ -2029,12 +2069,13 @@ main() {
         fi
     fi
 
-    # AI CLI (Codeman drives one of: Claude Code, OpenCode, Codex, Gemini, Antigravity)
+    # AI CLI (Codeman drives one of: Claude Code, OpenCode, Codex, Gemini, Antigravity, Pi)
     local has_claude=false
     local has_opencode=false
     local has_codex=false
     local has_gemini=false
     local has_antigravity=false
+    local has_pi=false
 
     info "Checking AI CLI tools..."
     if check_claude; then
@@ -2057,17 +2098,21 @@ main() {
         has_antigravity=true
         success "Antigravity CLI found at $(get_antigravity_path)"
     fi
+    if check_pi; then
+        has_pi=true
+        success "Pi CLI found at $(get_pi_path)"
+    fi
 
-    if [[ "$has_claude" == "false" && "$has_opencode" == "false" && "$has_codex" == "false" && "$has_gemini" == "false" && "$has_antigravity" == "false" ]]; then
+    if [[ "$has_claude" == "false" && "$has_opencode" == "false" && "$has_codex" == "false" && "$has_gemini" == "false" && "$has_antigravity" == "false" && "$has_pi" == "false" ]]; then
         echo ""
-        warn "No AI CLI found. Codeman needs at least one: Claude Code, OpenCode, Codex, Antigravity, or Gemini."
+        warn "No AI CLI found. Codeman needs at least one: Claude Code, OpenCode, Codex, Antigravity, Gemini, or Pi."
         headless_guard "install an AI CLI (curl | bash from its vendor)"
         echo ""
         echo -e "  ${BOLD}Which AI CLI would you like to install?${NC}"
         echo -e "    ${CYAN}1)${NC} Claude Code  (Anthropic)"
         echo -e "    ${CYAN}2)${NC} OpenCode     (open-source)"
         echo -e "    ${CYAN}3)${NC} Both"
-        echo -e "    ${CYAN}4)${NC} Skip         (I'll install one myself, e.g. Codex or Antigravity)"
+        echo -e "    ${CYAN}4)${NC} Skip         (I'll install one myself, e.g. Codex, Antigravity or Pi)"
         echo ""
 
         local cli_choice=""
@@ -2114,6 +2159,7 @@ main() {
             warn "Skipping AI CLI install. Codeman will run, but sessions need a CLI to drive."
             info "Install one later, e.g.: npm install -g @openai/codex                          (Codex)"
             info "                    or: curl -fsSL https://antigravity.google/cli/install.sh | bash  (Antigravity)"
+            info "                    or: npm install -g --ignore-scripts @earendil-works/pi-coding-agent   (Pi)"
         elif [[ "$has_claude" == "false" ]] && [[ "$has_opencode" == "false" ]]; then
             die "The selected AI CLI failed to install. Install one manually and re-run the installer."
         fi
@@ -2413,12 +2459,13 @@ main() {
     echo -e "    https://github.com/Ark0N/Codeman"
     echo ""
 
-    if ! check_claude && ! check_opencode && ! check_codex && ! check_gemini && ! check_antigravity; then
+    if ! check_claude && ! check_opencode && ! check_codex && ! check_gemini && ! check_antigravity && ! check_pi; then
         echo -e "  ${YELLOW}${BOLD}Reminder:${NC} Install at least one AI CLI to start using Codeman:"
         echo -e "    ${CYAN}curl -fsSL https://claude.ai/install.sh | bash${NC}                # Claude Code"
         echo -e "    ${CYAN}curl -fsSL https://opencode.ai/install | bash${NC}                 # OpenCode"
         echo -e "    ${CYAN}npm install -g @openai/codex${NC}                                  # Codex"
         echo -e "    ${CYAN}curl -fsSL https://antigravity.google/cli/install.sh | bash${NC}   # Antigravity"
+        echo -e "    ${CYAN}npm install -g --ignore-scripts @earendil-works/pi-coding-agent${NC}  # Pi"
         echo ""
     fi
 

@@ -69,6 +69,7 @@ const HOME_SESSIONS_MODE_BADGE = {
   codex: 'cx',
   gemini: 'gm',
   antigravity: 'ag',
+  pi: 'pi',
 };
 
 Object.assign(CodemanApp.prototype, {

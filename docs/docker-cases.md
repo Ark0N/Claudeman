@@ -2,7 +2,7 @@
 
 Run a case inside an **isolated Docker container** instead of directly on the host. Any number of Codeman sessions can share one container (it is scoped to the case, not the session), so a whole project lives in a sandbox with its own network, resource caps, and filesystem, and you can **export the container to move it to another machine**.
 
-Docker mode is a **location overlay on cases**, the direct analog of [remote SSH cases](./remote-hosts.md): where a remote case runs a local tmux pane doing `ssh host` into a durable remote tmux server, a docker case runs a local tmux pane doing `docker exec -it` into a durable **in-container** tmux server. It is not a separate `SessionMode`, so `claude` / `shell` / `opencode` / `codex` / `gemini` / `antigravity` all work inside the container.
+Docker mode is a **location overlay on cases**, the direct analog of [remote SSH cases](./remote-hosts.md): where a remote case runs a local tmux pane doing `ssh host` into a durable remote tmux server, a docker case runs a local tmux pane doing `docker exec -it` into a durable **in-container** tmux server. It is not a separate `SessionMode`, so `claude` / `shell` / `opencode` / `codex` / `gemini` / `antigravity` / `pi` all work inside the container.
 
 ## One-time setup: build the base image
 
@@ -25,10 +25,12 @@ A zero exit code only proves the layers ran, not that the toolchain works. Verif
 
 ```bash
 docker run --rm codeman/agent:base bash -lc \
-  'for c in claude codex gemini opencode agy; do printf "%-9s " $c; $c --version 2>&1 | head -1; done'
+  'for c in claude codex gemini opencode agy pi; do printf "%-9s " $c; $c --version 2>&1 | head -1; done'
 ```
 
-Antigravity (`agy`) is the one CLI not installed from npm (Google ships a standalone binary), so it has its own Dockerfile step and adds roughly 190MB; a full image lands near 1.6GB.
+Antigravity (`agy`) is the one CLI not installed from npm (Google ships a standalone binary), so it has its own Dockerfile step and adds roughly 190MB; a full image lands near 1.6GB. Pi also gets its own step, because upstream documents installing it with `--ignore-scripts` and that flag must not silently change how the other four npm CLIs install.
+
+Pi's credentials are seeded per-FILE rather than as a whole directory (`auth.json`, `settings.json`, `trust.json`, `models.json`, `models-store.json` out of `~/.pi/agent`), because that directory also holds `sessions/`, `extensions/`, `skills/` and the installed package trees — gigabytes on an active host. Consequence: in-container pi sessions are invisible host-side, so `pi -c` inside a Docker case only sees that container's own history. See [`pi-integration.md`](./pi-integration.md).
 
 ## Quickest path: one-click "Run in Docker"
 

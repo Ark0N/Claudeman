@@ -86,6 +86,12 @@ vi.mock('../../src/utils/antigravity-cli-resolver.js', () => ({
   resolveAntigravityDir: vi.fn(() => null),
 }));
 
+vi.mock('../../src/utils/pi-cli-resolver.js', () => ({
+  isPiAvailable: vi.fn(() => false),
+  resolvePiDir: vi.fn(() => null),
+  getPiCliVersion: vi.fn(() => null),
+}));
+
 import fs from 'node:fs/promises';
 import { existsSync, readdirSync } from 'node:fs';
 import { subagentWatcher } from '../../src/subagent-watcher.js';
@@ -93,6 +99,7 @@ import { getLifecycleLog } from '../../src/session-lifecycle-log.js';
 import { isOpenCodeAvailable, resolveOpenCodeDir } from '../../src/utils/opencode-cli-resolver.js';
 import { isGeminiAvailable, resolveGeminiDir } from '../../src/utils/gemini-cli-resolver.js';
 import { isAntigravityAvailable, resolveAntigravityDir } from '../../src/utils/antigravity-cli-resolver.js';
+import { isPiAvailable, resolvePiDir, getPiCliVersion } from '../../src/utils/pi-cli-resolver.js';
 
 const mockedReadFile = vi.mocked(fs.readFile);
 const mockedWriteFile = vi.mocked(fs.writeFile);
@@ -106,6 +113,9 @@ const mockedIsGeminiAvailable = vi.mocked(isGeminiAvailable);
 const mockedResolveGeminiDir = vi.mocked(resolveGeminiDir);
 const mockedIsAntigravityAvailable = vi.mocked(isAntigravityAvailable);
 const mockedResolveAntigravityDir = vi.mocked(resolveAntigravityDir);
+const mockedIsPiAvailable = vi.mocked(isPiAvailable);
+const mockedResolvePiDir = vi.mocked(resolvePiDir);
+const mockedGetPiCliVersion = vi.mocked(getPiCliVersion);
 
 describe('system-routes', () => {
   let harness: RouteTestHarness;
@@ -836,6 +846,38 @@ describe('system-routes', () => {
       const body = JSON.parse(res.body);
       expect(body.available).toBe(true);
       expect(body.path).toBe('/home/user/.local/bin');
+    });
+  });
+
+  // ========== GET /api/pi/status ==========
+
+  describe('GET /api/pi/status', () => {
+    it('returns unavailable when pi is not installed', async () => {
+      mockedIsPiAvailable.mockReturnValue(false);
+      mockedResolvePiDir.mockReturnValue(null);
+      mockedGetPiCliVersion.mockReturnValue(null);
+
+      const res = await harness.app.inject({ method: 'GET', url: '/api/pi/status' });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.available).toBe(false);
+      expect(body.path).toBeNull();
+      expect(body.version).toBeNull();
+    });
+
+    it('returns available with path AND version when pi is installed', async () => {
+      // `version` is pi-specific: `pi` is a generic binary name, so the resolver
+      // version-probes it and this endpoint is where a misresolution shows up.
+      mockedIsPiAvailable.mockReturnValue(true);
+      mockedResolvePiDir.mockReturnValue('/home/user/.local/bin');
+      mockedGetPiCliVersion.mockReturnValue('0.84.1');
+
+      const res = await harness.app.inject({ method: 'GET', url: '/api/pi/status' });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.available).toBe(true);
+      expect(body.path).toBe('/home/user/.local/bin');
+      expect(body.version).toBe('0.84.1');
     });
   });
 

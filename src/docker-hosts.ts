@@ -144,6 +144,7 @@ export function defaultDockerCommandForMode(mode: SessionMode): string {
     codex: 'exec codex',
     gemini: 'exec gemini',
     antigravity: 'exec agy',
+    pi: 'exec pi',
   };
   return commands[mode as DockerCommandMode] || commands.shell;
 }
@@ -600,6 +601,19 @@ const CRED_STORES: CredStorePolicy[] = [
   // `conversations/`, `knowledge/`) under `~/.gemini/antigravity-cli/`, so it needs no
   // entry of its own. There is no `~/.antigravity` credential dir to add.
   { rel: '.gemini', seedWhole: true },
+  // Pi (pi.dev) keeps auth + config in `~/.pi/agent`, but that dir ALSO holds
+  // `sessions/`, `extensions/`, `skills/` and the installed package trees
+  // (`npm/`, `git/`) — easily gigabytes on an active host, so seedWhole would
+  // `cp -a` all of it into every container start. Seed only what pi needs to
+  // authenticate and behave consistently; `models.json` is in the list because it
+  // holds user-defined custom providers. Consequence to document: in-container pi
+  // sessions are invisible host-side, so `pi -c` inside a Docker case only sees
+  // that container's own history (unlike codex, whose `sessions/` is shared RW
+  // precisely because Codeman reads it host-side).
+  {
+    rel: '.pi/agent',
+    seedFiles: ['auth.json', 'settings.json', 'trust.json', 'models.json', 'models-store.json'],
+  },
   { rel: '.config/gcloud', seedWhole: true },
   { rel: '.config/opencode', seedWhole: true },
 ];

@@ -94,12 +94,17 @@ export function checkTool(tool: ToolDependency, host: ProbeHost): ToolResult {
   if (!spec) return { ...base, status: 'skipped', reason: `not applicable on ${host.environment}` };
 
   if (spec.resolver.kind === 'path') {
-    const { bins, versionArg, versionRegex } = spec.resolver;
+    const { bins, versionArg, versionRegex, requireVersionMatch } = spec.resolver;
     for (const bin of bins) {
       const resolved = host.which(bin);
       if (resolved) {
         const out = host.runVersion(bin, [versionArg ?? '--version']);
         const version = out ? extractVersion(out, versionRegex) : undefined;
+        // A generic binary name that prints the wrong thing is some OTHER program (see
+        // PathResolver.requireVersionMatch). Keep looking, then report MISSING; the
+        // alternative is claiming a tool is installed that the feature's own resolver
+        // rejects, which reads as "the mode is broken" rather than "install it".
+        if (requireVersionMatch && !version) continue;
         return finalize(base, tool, resolved, version);
       }
     }
