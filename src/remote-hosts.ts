@@ -268,6 +268,7 @@ const REMOTE_CLI_BIN: Partial<Record<SessionMode, string>> = {
   codex: 'codex',
   gemini: 'gemini',
   antigravity: 'agy',
+  pi: 'pi',
 };
 
 /**

@@ -27,13 +27,39 @@ import { validateSessionFilePath } from '../web/route-helpers.js';
 import { computeNextRunAt, dueKeyFor } from './cron-time.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../web/ports/index.js';
 import type { CronJob, CronJobRun, CronJobRunStatus, TriggerType } from '../types/cron.js';
-import type { GeminiConfig } from '../types/session.js';
+import type { GeminiConfig, PiConfig, SessionMode } from '../types/session.js';
 import type { CronJobInput } from './cron-input.js';
 
 /** The subset of the route context the cron depends on. */
 export type CronDeps = SessionPort & EventPort & ConfigPort & InfraPort;
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Section 6.3 clamp for a cron-launched external CLI, mirroring
+ * `clampExternalCliBypassForOwner()` in session-routes.ts.
+ *
+ * A cron job carries NO per-CLI config, so what a non-granted owner actually gets is
+ * each CLI's SPAWN DEFAULT, and for two of them that default is itself unsafe:
+ *  - gemini: `buildGeminiCommand(undefined)` emits `--approval-mode yolo` (classifier-free),
+ *    so `auto_edit` is materialized.
+ *  - pi: pi's own `defaultProjectTrust` is an interactive prompt the session user can simply
+ *    answer "yes" to, which then loads and EXECUTES repo-local `.pi/extensions` TypeScript,
+ *    so `approveProjectTrust: false` (`--no-approve`) is materialized. Omitting `--approve`
+ *    is NOT a clamp.
+ * Codex and antigravity need nothing here: their absent config already spawns safe.
+ * Granted/admin/single-user get undefined for both, i.e. upstream defaults untouched.
+ */
+export function clampCronExternalCliConfigs(
+  mode: SessionMode,
+  ownerGranted: boolean
+): { geminiConfig: GeminiConfig | undefined; piConfig: PiConfig | undefined } {
+  if (ownerGranted) return { geminiConfig: undefined, piConfig: undefined };
+  return {
+    geminiConfig: mode === 'gemini' ? { approvalMode: 'auto_edit' } : undefined,
+    piConfig: mode === 'pi' ? { approveProjectTrust: false } : undefined,
+  };
+}
 
 /** Hard ceiling on a prompt-file read (defends against unbounded-read DoS). */
 const MAX_PROMPT_FILE_BYTES = 1024 * 1024;
@@ -371,13 +397,10 @@ export class CronService {
       const claudeModeConfig = await this.deps.getClaudeModeConfig();
       const effectiveClaudeMode = await resolveClaudeModeForUsername(claudeModeConfig.claudeMode, job.owner);
       const model = mode !== 'shell' ? modelConfig?.defaultModel || undefined : undefined;
-      // Section 6.3: cron carries no per-CLI config, so buildGeminiCommand(undefined)
-      // would default a non-granted owner to `--approval-mode yolo` (classifier-free) —
-      // materialize auto_edit for a non-granted gemini owner, mirroring the route clamp
-      // (#15). Granted/admin/single-user leave it undefined → yolo parity. Codex's absent
-      // config already defaults to the safe sandbox, so no clamp is needed there.
-      const geminiConfig: GeminiConfig | undefined =
-        mode === 'gemini' && !ownerGranted ? { approvalMode: 'auto_edit' } : undefined;
+      // Section 6.3: materialize the safe default for a non-granted owner (see
+      // clampCronExternalCliConfigs — cron sends no per-CLI config, so the CLI's own
+      // spawn default is what would otherwise apply).
+      const { geminiConfig, piConfig } = clampCronExternalCliConfigs(mode, ownerGranted);
       session = new Session({
         workingDir: job.workingDir,
         mode,
@@ -389,6 +412,7 @@ export class CronService {
         claudeMode: effectiveClaudeMode,
         allowedTools: claudeModeConfig.allowedTools,
         geminiConfig,
+        piConfig,
         owner: job.owner,
       });
       this.deps.addSession(session);

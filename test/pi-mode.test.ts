@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CreateSessionSchema, QuickStartSchema } from '../src/web/schemas.js';
 import { buildSpawnCommand } from '../src/tmux-manager.js';
 import { defaultDockerCommandForMode } from '../src/docker-hosts.js';
-import { defaultRemoteCommandForMode } from '../src/remote-hosts.js';
+import { defaultRemoteCommandForMode, buildRemoteCliVersionProbeCommand } from '../src/remote-hosts.js';
 import { isExternalCliMode, isAltScreenStripMode } from '../src/session.js';
 
 describe('Pi mode schemas', () => {
@@ -187,5 +187,14 @@ describe('Pi mode gates', () => {
     // Routed through an interactive login shell so npm's global bin resolves —
     // same fix as the other remote agent CLIs (see defaultRemoteCommandForMode).
     expect(defaultRemoteCommandForMode('pi')).toBe('exec "${SHELL:-/bin/sh}" -i -l -c \'pi\'');
+  });
+
+  it('probes the CLI version on a remote host (REMOTE_CLI_BIN carries pi)', () => {
+    // Without the REMOTE_CLI_BIN entry this returns null and Session.cliVersion stays
+    // blank for every remote pi session, which is invisible until someone asks why the
+    // version column is empty on that host only.
+    const cmd = buildRemoteCliVersionProbeCommand({ username: 'dev', host: 'box.example', port: 22 }, 'pi');
+    expect(cmd).not.toBeNull();
+    expect(cmd).toContain('pi --version');
   });
 });

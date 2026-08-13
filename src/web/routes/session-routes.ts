@@ -1114,12 +1114,16 @@ export function registerSessionRoutes(
 
     try {
       // Auto-detect completion phrase from CLAUDE.md BEFORE starting (only if globally enabled and not explicitly disabled by user)
-      // Ralph tracker is not supported for opencode / codex / gemini / antigravity sessions
+      // Ralph tracker is not supported for opencode / codex / gemini / antigravity / pi sessions.
+      // Keep this list in step with isExternalCliMode(): _processExpensiveParsers() returns early
+      // for those modes, so a tracker enabled here would never be fed, and the session would
+      // still report ralphEnabled + Ralph UI state that no other external CLI shows.
       if (
         session.mode !== 'opencode' &&
         session.mode !== 'codex' &&
         session.mode !== 'gemini' &&
         session.mode !== 'antigravity' &&
+        session.mode !== 'pi' &&
         ctx.store.getConfig().ralphEnabled &&
         !session.ralphTracker.autoEnableDisabled
       ) {
