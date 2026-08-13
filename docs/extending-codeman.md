@@ -377,8 +377,8 @@ Every one of these has cost somebody real time.
   a multi-word match is unreliable there. Match one short space-free token, ideally
   one you printed yourself, and keep it out of the typed line (your own keystrokes
   echo into the stream).
-- **`stop` and `blocked` never fire for `shell`, `opencode`, `codex`, `gemini` or
-  `antigravity` sessions.** They come from Claude Code hooks, which no other mode
+- **`stop` and `blocked` never fire for `shell`, `opencode`, `codex`, `gemini`,
+  `antigravity` or `pi` sessions.** They come from Claude Code hooks, which no other mode
   installs, so only `idle`, `working` and `exit` exist there. Asking for them
   explicitly is a `400`; omitting `until` is safe, since the server drops them from
   the default set and echoes what it actually waited on as `wait.until`. Even in

@@ -637,7 +637,7 @@ These run for **every** request — before auth, even on the default no-password
 
 ### Input, files & headers
 
-- **Schema-validated inputs** — every API body is checked with Zod v4 schemas; a `CLAUDE_CODE_*` / `OPENCODE_*` / `CODEX_*` / `ANTIGRAVITY_*` / `GEMINI_*` / `GOOGLE_*` env-prefix allowlist gates which settings each CLI can receive
+- **Schema-validated inputs** — every API body is checked with Zod v4 schemas; a `CLAUDE_CODE_*` / `OPENCODE_*` / `CODEX_*` / `ANTIGRAVITY_*` / `GEMINI_*` / `GOOGLE_*` / `PI_*` env-prefix allowlist gates which settings each CLI can receive
 - **Path containment** — file routes `realpath` before boundary checks (no TOCTOU); `..`, absolute paths, and symlinks resolving outside the working dir are rejected. Caps: 10 MB text preview / 50 MB raw & download; `/api/download` blocklists sensitive paths (`.env`, `*credentials*`, `~/.ssh/`, `.aws/credentials`). SVG/HTML is served `octet-stream` + `nosniff` + attachment so it downloads rather than executes
 - **Security headers** — `Content-Security-Policy` (`default-src 'self'`, every exception enumerated), `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, HSTS over HTTPS, and CORS reflected **only** for `localhost` / `127.0.0.1` / `::1`
 
@@ -782,7 +782,7 @@ When a CLI runs in a Codeman-managed session, these environment variables are se
 4. **Response envelope.** Most endpoints return `{ "success": true, "data": … }` (errors: `{ "success": false, "error", "errorCode" }`). A few legacy GETs return bare bodies — **handle both** (`body.data ?? body`).
 5. **`/api/v1/*`** is a stable alias of `/api/*`.
 6. **Wait instead of polling, and don't treat a timeout as an error.** The wait endpoints answer with HTTP `200` and `wait.timedOut: true` when nothing happened in time, so loop over short waits (60s is the default) rather than issuing one long call, because tunnels cut idle connections. `wait.timeoutMs` tells you the timeout the server actually applied after clamping (600s ceiling).
-7. **Only `claude` sessions emit `stop` and `blocked`.** Those two come from Claude Code hooks; `shell` and the external CLIs (opencode/codex/gemini/antigravity) accept only `idle`, `working` and `exit`. Asking for `stop` explicitly on those is a `400`; omitting `until` is always safe. ⚠️ On a `shell` session `idle` fires **once**, at startup, and never again, so send-and-wait there can only time out; synchronize hook-less sessions with a `wait-output` marker.
+7. **Only `claude` sessions emit `stop` and `blocked`.** Those two come from Claude Code hooks; `shell` and the external CLIs (opencode/codex/gemini/antigravity/pi) accept only `idle`, `working` and `exit`. Asking for `stop` explicitly on those is a `400`; omitting `until` is always safe. ⚠️ On a `shell` session `idle` fires **once**, at startup, and never again, so send-and-wait there can only time out; synchronize hook-less sessions with a `wait-output` marker.
 8. **Nothing reports "ready", so wait for it explicitly.** A new session answers `{"signal":"exit","immediate":true}` (that means *not started*, not *crashed*) until its PID exists, and a `claude` worker in a fresh case then sits on the CLI's trust dialog. Prompt it there and the wait resolves on `idle` in ~2s looking exactly like a finished turn, while the text sits stuck in the dialog. Recipe 2b below is the sequence that avoids it.
 
 ### Recipes

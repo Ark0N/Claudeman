@@ -602,7 +602,7 @@ Codeman 默认用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 
 
 ### 输入、文件与响应头
 
-- **模式校验的输入** —— 每个 API 请求体都用 Zod v4 模式检查；一个 `CLAUDE_CODE_*` / `OPENCODE_*` / `CODEX_*` / `ANTIGRAVITY_*` / `GEMINI_*` / `GOOGLE_*` 环境变量前缀允许列表把控每个 CLI 能接收哪些设置
+- **模式校验的输入** —— 每个 API 请求体都用 Zod v4 模式检查；一个 `CLAUDE_CODE_*` / `OPENCODE_*` / `CODEX_*` / `ANTIGRAVITY_*` / `GEMINI_*` / `GOOGLE_*` / `PI_*` 环境变量前缀允许列表把控每个 CLI 能接收哪些设置
 - **路径限定** —— 文件路由在边界检查前先 `realpath`（无 TOCTOU）；`..`、绝对路径、以及解析到工作目录之外的符号链接都会被拒绝。上限：10 MB 文本预览 / 50 MB 原始与下载；`/api/download` 对敏感路径（`.env`、`*credentials*`、`~/.ssh/`、`.aws/credentials`）做黑名单。SVG/HTML 以 `octet-stream` + `nosniff` + attachment 提供，因此会被下载而非执行
 - **安全响应头** —— `Content-Security-Policy`（`default-src 'self'`，每个例外都逐条列举）、`X-Content-Type-Options: nosniff`、`X-Frame-Options: SAMEORIGIN`、HTTPS 下的 HSTS，以及**仅**对 `localhost` / `127.0.0.1` / `::1` 反射的 CORS
 
@@ -686,7 +686,7 @@ sc -l           # 列出会话
 4. **响应信封。** 多数端点返回 `{ "success": true, "data": … }`（错误：`{ "success": false, "error", "errorCode" }`）。少数遗留 GET 返回裸响应体 —— **两种都要处理**（`body.data ?? body`）。
 5. **`/api/v1/*`** 是 `/api/*` 的稳定别名。
 6. **用等待代替轮询，别把超时当成错误。** 等待类端点在没等到事情发生时也以 HTTP `200` 加 `wait.timedOut: true` 应答，所以要循环调用短等待（默认 60 秒），而不是发一个超长的调用：隧道会掐断空闲连接。`wait.timeoutMs` 告诉你服务端钳制之后真正采用的超时（上限 600 秒）。
-7. **只有 `claude` 会话会发出 `stop` 与 `blocked`。** 这两个来自 Claude Code hook；`shell` 与外部 CLI（opencode/codex/gemini/antigravity）只接受 `idle`、`working` 与 `exit`。在这些模式上显式索要 `stop` 会得到 `400`；不传 `until` 则永远安全。⚠️ `shell` 会话的 `idle` 只在启动时触发**一次**，此后再也不会，所以在那里用「发送并等待」只能等到超时：没有 hook 的会话请用 `wait-output` 标记来同步。
+7. **只有 `claude` 会话会发出 `stop` 与 `blocked`。** 这两个来自 Claude Code hook；`shell` 与外部 CLI（opencode/codex/gemini/antigravity/pi）只接受 `idle`、`working` 与 `exit`。在这些模式上显式索要 `stop` 会得到 `400`；不传 `until` 则永远安全。⚠️ `shell` 会话的 `idle` 只在启动时触发**一次**，此后再也不会，所以在那里用「发送并等待」只能等到超时：没有 hook 的会话请用 `wait-output` 标记来同步。
 8. **没有任何东西会报告「就绪」，得自己显式等。** 新会话在 PID 出现之前一律回答 `{"signal":"exit","immediate":true}`（意思是*还没启动*，不是*崩了*），而全新 case 里的 `claude` 工作会话接着会停在 CLI 的信任对话框上。此时给它发提示，等待会在约 2 秒后因 `idle` 解除，看上去和一个跑完的回合一模一样，而文本其实卡在对话框里。下面的配方 2b 就是避开它的顺序。
 
 ### 常用配方
@@ -760,7 +760,7 @@ for _ in $(seq 1 10); do
 done
 printf '%s\n' "$TXT"
 
-# 5b. 其他模式（shell/opencode/gemini/antigravity）没有 transcript，读终端。
+# 5b. 其他模式（shell/opencode/gemini/antigravity/pi）没有 transcript，读终端。
 #     ⚠️ 用 terminal?tail=，不要用 /output：后者的 textOutput 对每个由 tmux 承载的
 #     （也就是每个交互式）会话都是空的。tail 按字节计，返回的是含 ANSI 的终端数据。
 curl -s "$API/api/sessions/$SID/terminal?tail=8000" | jq -r '.data.terminalBuffer'

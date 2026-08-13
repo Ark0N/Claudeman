@@ -1,7 +1,7 @@
 # Cron Jobs — User & Operator Guide
 
 Codeman's **Cron** feature lets you save named, recurring jobs that automatically
-spin up a Claude (or shell / OpenCode / Codex / Antigravity / Gemini) session on a schedule and
+spin up a Claude (or shell / OpenCode / Codex / Antigravity / Gemini / Pi) session on a schedule and
 feed it a prompt. Think "cron for agent sessions": _"every weekday at 3am, open a
 Claude session in `~/proj` and tell it to update dependencies and open a PR."_
 

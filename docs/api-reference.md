@@ -112,7 +112,7 @@ a genuine tunnel failure looks like, and `204` cannot carry `waitedMs` / `status
 
 **2. `stop` and `blocked` fire only for `claude` sessions.** Both come from Claude
 Code hooks, and no other mode installs them: `shell` runs no agent, and the external
-CLIs (`opencode`, `codex`, `gemini`, `antigravity`) render their own TUIs and post
+CLIs (`opencode`, `codex`, `gemini`, `antigravity`, `pi`) render their own TUIs and post
 no hooks. For every non-`claude` mode only `idle`, `working` and `exit` are
 accepted, and of those only `exit` is dependable: see the caveats under
 [Signals](#signals) before building on `idle`. Requesting `stop` or `blocked`

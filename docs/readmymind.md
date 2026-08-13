@@ -38,7 +38,7 @@ A prediction takes 5-90 seconds and costs real tokens; one runs per session at a
 
 Capture reads the Claude session transcript, not your keystrokes: when a user turn lands in the transcript, its text is folded into the case's profile. Filters applied on the way in:
 
-- **Claude-mode sessions only.** Shell, OpenCode, Codex, Gemini, and Antigravity sessions are never captured (they have no transcript watcher).
+- **Claude-mode sessions only.** Shell, OpenCode, Codex, Gemini, Antigravity, and Pi sessions are never captured (they have no transcript watcher).
 - Tool results, local slash-command echo (`/model` and friends), system wrappers, and interrupt markers are skipped.
 - Entries shorter than 3 characters are skipped (menu digits, Esc artifacts).
 - Consecutive duplicates collapse (auto-resume's "continue" spam counts once per run).
