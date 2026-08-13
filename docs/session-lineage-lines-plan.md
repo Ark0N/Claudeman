@@ -93,17 +93,37 @@ The path math itself lives in `constants.js` as a pure
 ### 4.2 Geometry
 
 Both endpoints are tabs in one horizontal strip, so the subagent shape (tab-bottom →
-window-top) does not apply. Two cases:
+window-top) does not apply. **One case**, a **U-bridge hanging below the strip** that
+touches both tabs on their bottom edge:
 
-- **Same row** (the normal case): a shallow **U-bridge hanging below the strip**.
-  `y0 = max(parent.bottom, child.bottom)`, dip
-  `d = clamp(14 + |x2 - x1| * 0.06, 16, 44) + depth * 6`, path
-  `M x1 y0 C x1 y0+d, x2 y0+d, x2 y0`. `depth` is the child's index among its
-  siblings, so several children of one parent **nest** instead of overprinting.
-- **Different rows** (`tabs-two-rows` / `tabs-auto-wrap` on desktop): the existing
-  vertical bezier from parent-bottom-center to child-top-center.
+```
+y0 = max(parent.bottom, child.bottom)
+d  = clamp(14 + |x2 - x1| * 0.085, 22, 104) + depth * 8 + |child.bottom - parent.bottom|
+path: M x1 parent.bottom  C x1 y0+d, x2 y0+d, x2 child.bottom
+```
 
-A small `<circle r="3">` at the child end marks direction (an SVG `marker` would need a
+`depth` is the child's index among its siblings, so several children of one parent
+**nest** instead of overprinting.
+
+> **Superseded (2026-08-14): the two shapes this section used to specify.** The dip was
+> `clamp(14 + span * 0.06, 16, 44) + depth * 6`, and a wrapped strip
+> (`tabs-two-rows` / `tabs-auto-wrap`) got its own parent-bottom → child-**top** bezier.
+> Both were tuned against two tabs side by side and failed at the distances the feature
+> is used at:
+>
+> - a skill worker is appended to the **end** of the strip, so the real span is
+>   800-1500px, where a 44px cap is a 33px sag, i.e. a line that reads as straight and
+>   crosses the terminal instead of bracketing under the strip;
+> - and when the strip wraps, parent-bottom (34) to child-top (48) leaves **14px** to
+>   bend in, so the arc was a flat line hidden in the row gap, with siblings drawn on
+>   top of each other. Reported as *"they connect already, but the lines are straight
+>   and not easy visible"*.
+>
+> Anchoring both ends at the tab bottoms and hanging the control points below the
+> **lower** row gives the wrapped case the same bracket as the flat one, and removes the
+> branch. Pinned by `test/session-lineage-lines.test.ts`.
+
+A small `<circle r="3.5">` at the child end marks direction (it breathes to 4.5 while that worker is busy) (an SVG `marker` would need a
 `<defs>` block and fights `stroke-dasharray`).
 
 Each path gets `class="connection-line lineage-line"`, `data-parent-tab`,
@@ -139,8 +159,12 @@ callers are cheap. Needed:
 ### 4.5 Styling
 
 `.connection-line.lineage-line`: violet stroke from a `--lineage-line` token,
-`stroke-width: 2`, `dasharray 4 4`, `opacity: .55`, softer glow than the subagent lines
-so the two layers read as different things. Trap to respect: the skin block nests under
+`stroke-width: 2.5`, `dasharray 5 5`, `opacity: .72` (`.95` while the child works),
+softer than the subagent lines so the two layers read as different things, but the
+contrast comes from a **second, wider glow** rather than more weight, because the first
+cut (2px / `4 4` / `.55` / one 5px glow) disappeared into terminal text on a real 1080p
+desktop. `lineage-flow` marches by two dash cycles, so it moves with the dash array
+(`5 5` → `-20`). Trap to respect: the skin block nests under
 `html:not([data-skin="og"])`, so a bare `.lineage-line` rule inside it would outrank the
 base rule at higher specificity. **Define the color as a token per skin, keep exactly
 one `.lineage-line` rule.** Light skins get a darker stroke.

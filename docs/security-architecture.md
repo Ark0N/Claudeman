@@ -312,7 +312,7 @@ TOCTOU window.
 | Route | Cap | Notes |
 |-------|-----|-------|
 | `file-content` | 10 MB | text preview |
-| `file-raw` | 50 MB | inline MIME map; **`X-Content-Type-Options: nosniff` on all responses** |
+| `file-raw` | 50 MB | inline MIME map; **`X-Content-Type-Options: nosniff` on all responses**; streamed, `Range`-aware (206 slices come from the same validated path, and the cap is checked before the range) |
 | `POST /api/download` | 50 MB | forced `attachment`; sensitive‑path blocklist |
 
 ### SVG / content‑type XSS

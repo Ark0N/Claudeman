@@ -2292,6 +2292,14 @@ export function registerSessionRoutes(
     }
     const fullSize = rawBuffer.length;
     let truncated = false;
+    // WHY the reason and not just the boolean (#258): `truncated` is set at two
+    // sites that mean opposite things to a user. 'tail' is an intentional
+    // partial replay and the rest is still retained, so a `full=1` pull recovers
+    // it. 'capped' means we hit the byte ceiling — and on a full-history capture
+    // that is already everything tmux holds, so the oldest output is genuinely
+    // out of reach rather than one click away. Collapsing both into one flag is
+    // why the UI could only ever say "truncated for performance".
+    let truncationReason: 'capped' | 'tail' | null = null;
     let cleanBuffer: string;
 
     // Cap the payload EARLY — before the regex normalization passes below run
@@ -2302,6 +2310,7 @@ export function registerSessionRoutes(
     if (terminalBufferMaxBytes > 0 && rawBuffer.length > terminalBufferMaxBytes) {
       rawBuffer = rawBuffer.slice(-terminalBufferMaxBytes);
       truncated = true;
+      truncationReason = 'capped';
       const capNewline = rawBuffer.indexOf('\n');
       if (capNewline > 0 && capNewline < 4096) {
         rawBuffer = rawBuffer.slice(capNewline + 1);
@@ -2335,6 +2344,9 @@ export function registerSessionRoutes(
       // Banner is near the top and gets discarded by tail anyway.
       cleanBuffer = strippedBuffer.slice(-tailBytes);
       truncated = true;
+      // 'capped' already means the oldest bytes are gone for good; a tail cut on
+      // top of it does not soften that, so the stronger reason wins.
+      truncationReason ??= 'tail';
       // Avoid starting mid-ANSI-escape: find first newline within the first 4KB
       // and start from there. This prevents xterm.js from parsing a partial escape
       // sequence which corrupts cursor position for all subsequent Ink redraws.
@@ -2365,6 +2377,10 @@ export function registerSessionRoutes(
       status: session.status,
       fullSize,
       truncated,
+      truncationReason,
+      // `retainedBytes` is what this response actually carries; `fullSize` is
+      // what existed before the cut. The gap is what the indicator reports.
+      retainedBytes: cleanBuffer.length,
       source,
     };
   });

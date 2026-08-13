@@ -310,6 +310,11 @@
     <!-- Main Terminal Area -->
     <main class="main">
       <div class="terminal-wrap">
+        <!-- Partial-history notice (#258). Lives OUTSIDE the terminal on purpose:
+             the old notice was a grey line written into the scrollback, so it
+             scrolled away with the output it described and could not be acted
+             on. Populated by app.js _renderHistoryTruncationBanner(). -->
+        <div class="history-trunc-bar" id="historyTruncationBar" role="status" aria-live="polite" hidden></div>
         <div class="terminal-container" id="terminalContainer"></div>
         <textarea id="cjkInput" rows="1" placeholder="CJK input (Enter = send, Esc = clear)"
           maxlength="65536" aria-label="CJK IME input field"

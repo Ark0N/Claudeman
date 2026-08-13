@@ -1,5 +1,23 @@
 # aicodeman
 
+## 1.18.1
+
+### Patch Changes
+
+- Terminal history and scroll position fixes, a seekable file-viewer video player, and clearer session lineage lines.
+
+  **Terminal scroll position (#259).** Three paths dragged the terminal to the bottom while the user was reading scrollback. Opening or closing the mobile keyboard forced it unconditionally; scroll intent is now captured before the keyboard reflow and restored afterwards. Live writes preserved the viewport only inside a 1500ms window, so a user who scrolled up and then actually read for longer was dragged along by the next repaint; that is now based on position rather than recency. The backpressure refresh, which is server-triggered and so has no gesture to blame, now holds the reader's place too.
+
+  **Terminal history loss (#259 follow-on).** The backpressure refresh rebuilt the terminal from a 1MB tail, which measured as an 869-row buffer coming back with 158 rows: the routine meant to repair the display was discarding most of the scrollback every time SSE backpressure cleared. It now restores full history, falling back to the tail only when the capture would shrink the buffer, so repaint-mode panes are unaffected. It also bails if the user switches tabs mid-fetch, which would otherwise paint one session's history into another's terminal.
+
+  **History truncation is now visible and recoverable (#258).** Truncation was reported by a grey line written into the terminal, which scrolled away with the output it described and read the same whether the rest was one click away or gone forever. `GET /api/sessions/:id/terminal` now reports `truncationReason` (`tail` for an intentional partial replay whose remainder is still retained, `capped` for the byte ceiling) plus `retainedBytes`, and the browser shows a dismissible banner outside terminal output with three honest states: recoverable, which offers a Load full history button, at-ceiling, and exhausted. The button bypasses the scroll cooldown but not the downgrade guard, so it cannot destroy history on a repaint-mode pane.
+
+  **File viewer video (#284).** Closing the preview left the video playing with audible audio and no visible player, since hiding the overlay does not stop a media element and detaching one does not either. Media is now paused, unsourced and reloaded on close and on re-open, which also aborts the in-flight download. The scrub bar was inert because raw file bodies were served as a single `200` with no `Accept-Ranges`, so Chrome reported `video.seekable` as `[0, 0]` and Safari refused to start the media at all. Raw bodies are now streamed and range-aware (`Accept-Ranges` on every response, `206` with `Content-Range` for a range request, `416` past EOF, malformed specs ignored per RFC 9110), with pure, unit-tested parsing in `src/web/http-range.ts`. The attachments raw route gets the same treatment.
+
+  **Session lineage lines (#285).** The arcs joining a tab to the workers it spawned were tuned for two adjacent tabs and flattened into a straight thread across the terminal at the 800-1500px spans they are actually used at, drew a flat overprinted line inside the row gap on a wrapped strip, and were too faint to see at 1:1. Every pair now uses one U-bridge shape anchored on both tabs' bottom edges, with a deeper span-scaled dip and heavier, higher-contrast strokes.
+
+  **Docs.** The pi run mode is now listed in the mode lists that the sixth-backend sweep missed.
+
 ## 1.18.0
 
 ### Minor Changes
