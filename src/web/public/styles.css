@@ -9329,11 +9329,20 @@ kbd {
    Deliberately quieter and thinner than the subagent lines above so the two
    layers read as different things in the same SVG.
 
-   Colour comes from --session-purple, which EVERY skin block already defines and
+   Colour comes from --session-blue, which EVERY skin block already defines and
    already tunes for its own background, so one rule covers all seven (the four
    light skins included). Do not add a per-skin `.lineage-line` override inside the
    html:not([data-skin="og"]) block: a bare class rule in there resolves to (0,2,1)
-   and would outrank this one from a surprising place. */
+   and would outrank this one from a surprising place.
+
+   ⚠ BLUE, NOT THE VIOLET THIS SHIPPED WITH (owner call, 2026-08-14: "make these
+   lines in blue that they are better visible"). Violet sits close to the terminal's
+   own dim foreground and lost contrast the moment it crossed text. Hue therefore no
+   longer separates this layer from the subagent lines, so the separation rests
+   entirely on SHAPE (this one hangs under the strip and never reaches a window),
+   weight and dash: keep those differences intact. Per skin the two are not even the
+   same blue, since --session-blue is tuned per palette while the subagent rule
+   hardcodes #3b82f6. */
 /* ⚠ QUIETER THAN THE SUBAGENT LINES, NOT INVISIBLE. The first cut ran 2px at 0.55
    with a single 5px glow, which reads on a design mock and disappears on a real
    1080p desktop: a faint thread over terminal text, exactly what it is drawn on
@@ -9343,13 +9352,13 @@ kbd {
    (4 4 on a 2.5px line reads as a dotted smudge), and `lineage-flow` marches by
    exactly two dash cycles, so it has to move with them. */
 .connection-line.lineage-line {
-  stroke: var(--session-purple, #a98fe0);
+  stroke: var(--session-blue, #2b8fd9);
   stroke-width: 2.5;
   stroke-dasharray: 5 5;
   stroke-linecap: round;
   opacity: 0.72;
-  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.7)) drop-shadow(0 0 5px var(--session-purple, #a98fe0))
-    drop-shadow(0 0 11px var(--session-purple, #a98fe0));
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.7)) drop-shadow(0 0 5px var(--session-blue, #2b8fd9))
+    drop-shadow(0 0 11px var(--session-blue, #2b8fd9));
 }
 
 /* ⚠ OUTSIDE the reduced-motion block below on purpose. A working child is the case
@@ -9365,9 +9374,9 @@ kbd {
 }
 
 .lineage-line-dot {
-  fill: var(--session-purple, #a98fe0);
+  fill: var(--session-blue, #2b8fd9);
   opacity: 0.85;
-  filter: drop-shadow(0 0 4px var(--session-purple, #a98fe0)) drop-shadow(0 0 9px var(--session-purple, #a98fe0));
+  filter: drop-shadow(0 0 4px var(--session-blue, #2b8fd9)) drop-shadow(0 0 9px var(--session-blue, #2b8fd9));
 }
 
 /* The child end marches while that worker is actually working, so the line
