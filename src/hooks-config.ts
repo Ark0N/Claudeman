@@ -31,6 +31,7 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readFile, writeFile, mkdir, lstat, readdir, realpath, rename, unlink, rmdir } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -946,6 +947,49 @@ export async function installAgentSkillInto(skillDir: string): Promise<AgentSkil
     if (!changed) return 'unchanged';
     return existing === null ? 'installed' : 'refreshed';
   });
+}
+
+/**
+ * Seed a claude session's agent preamble file (`$XDG_CACHE_HOME/codeman-agent-<id>.sh`,
+ * default `~/.cache/`) from the packaged `skills/codeman/preamble.sh`, so the agent
+ * skill's §0 bootstrap collapses to a two-line loader instead of a ~150-line block the
+ * model has to type out (measured live: that paste alone cost a spawn run ~47 s of
+ * generation time). The path formula must match the skill's
+ * `${XDG_CACHE_HOME:-$HOME/.cache}` exactly; sessions inherit the server's env, so
+ * reading the server's own XDG_CACHE_HOME keeps the two in agreement (`||` mirrors the
+ * shell's `:-`, treating empty as unset). Callers gate to LOCAL claude sessions (a
+ * remote or in-container HOME is not this filesystem) and treat it as best-effort: the
+ * skill's §0 fallback block self-heals a missing or stale file.
+ */
+export async function seedAgentSessionPreamble(sessionId: string): Promise<void> {
+  const content = await readFile(join(agentSkillSourceDir(), 'preamble.sh'), 'utf-8');
+  const cacheDir = process.env.XDG_CACHE_HOME || join(homedir(), '.cache');
+  await mkdir(cacheDir, { recursive: true });
+  await writeFile(join(cacheDir, `codeman-agent-${sessionId}.sh`), content, { mode: 0o600 });
+}
+
+/**
+ * Refresh the USER-LEVEL skill copy (`~/.claude/skills/codeman`) IF one exists and is
+ * Codeman-managed. `codeman skill install` (no `--case`) writes that copy once, and
+ * unlike per-case copies (re-installed on every session create) nothing ever refreshed
+ * it, so it stayed at whatever version installed it. That matters because Claude Code
+ * loads the USER-LEVEL copy over a case's fresh one when both carry the name `codeman`:
+ * observed live 2026-08-14, an Aug 9 user copy (pre fast-path, pre lineage header)
+ * shadowed the current per-case injections, so every agent-driven spawn ran the old
+ * recipes, spawned workers serially, and lost their lineage arcs.
+ *
+ * Refresh-ONLY: an absent copy is not installed (the user never asked for a global
+ * copy), and foreign/symlink copies are refused by installAgentSkillInto itself.
+ */
+export async function refreshUserAgentSkill(): Promise<AgentSkillApplyResult | 'absent'> {
+  const skillDir = join(homedir(), '.claude', 'skills', 'codeman');
+  try {
+    const existing = await readFile(join(skillDir, 'SKILL.md'), 'utf-8');
+    if (!existing.includes(AGENT_SKILL_MARKER_PREFIX)) return 'foreign';
+  } catch {
+    return 'absent';
+  }
+  return installAgentSkillInto(skillDir);
 }
 
 /**

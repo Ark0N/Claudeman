@@ -11,11 +11,17 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readFile, symlink, readdir } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, symlink, readdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { applyAgentSkill, installAgentSkillInto, removeAgentSkillFrom } from '../src/hooks-config.js';
+import { tmpdir, homedir } from 'node:os';
+import {
+  applyAgentSkill,
+  installAgentSkillInto,
+  removeAgentSkillFrom,
+  refreshUserAgentSkill,
+  seedAgentSessionPreamble,
+} from '../src/hooks-config.js';
 
 const MARKER_PREFIX = '<!-- codeman-managed-agent-skill';
 
@@ -118,5 +124,88 @@ describe('removeAgentSkillFrom / applyAgentSkill(disabled)', () => {
     expect(existsSync(join(skillDir(), 'reference', 'endpoints.md'))).toBe(false);
     // The user's file and the directories holding it survive.
     expect(await readFile(join(skillDir(), 'reference', 'my-notes.md'), 'utf-8')).toBe('mine\n');
+  });
+});
+
+describe('preamble single-source (seed + §0 heredoc parity)', () => {
+  const packagedDir = join(process.cwd(), 'skills', 'codeman');
+
+  it("SKILL.md's §0 heredoc is byte-identical to the packaged preamble.sh", async () => {
+    const skillMd = await readFile(join(packagedDir, 'SKILL.md'), 'utf-8');
+    const openTag = "<<'PREAMBLE'\n";
+    const open = skillMd.indexOf(openTag);
+    expect(open).toBeGreaterThan(-1);
+    const start = open + openTag.length;
+    const end = skillMd.indexOf('\nPREAMBLE\n', start);
+    expect(end).toBeGreaterThan(start);
+    // slice(.., end + 1) keeps the final line's own newline.
+    const heredoc = skillMd.slice(start, end + 1);
+
+    // The server seeds preamble.sh while agents that paste §0 write the heredoc; any
+    // byte of drift between the two would make the §0 grep rewrite a seeded file (or
+    // worse, ship different behavior depending on which path wrote it).
+    const preamble = await readFile(join(packagedDir, 'preamble.sh'), 'utf-8');
+    expect(preamble).toBe(heredoc);
+  });
+
+  it('seedAgentSessionPreamble writes the stamped preamble to the XDG cache path, 0600', async () => {
+    const prevXdg = process.env.XDG_CACHE_HOME;
+    const cacheDir = join(casePath, 'xdg-cache');
+    process.env.XDG_CACHE_HOME = cacheDir;
+    try {
+      await seedAgentSessionPreamble('seed-test-session');
+      const target = join(cacheDir, 'codeman-agent-seed-test-session.sh');
+      const content = await readFile(target, 'utf-8');
+      expect(content.startsWith('# ---- Codeman agent preamble')).toBe(true);
+      expect(content).toMatch(/\nCODEMAN_PREAMBLE=\d+\.\d+\.\d+\n$/);
+      expect((await stat(target)).mode & 0o777).toBe(0o600);
+    } finally {
+      if (prevXdg === undefined) delete process.env.XDG_CACHE_HOME;
+      else process.env.XDG_CACHE_HOME = prevXdg;
+    }
+  });
+
+  it('seedAgentSessionPreamble falls back to ~/.cache when XDG_CACHE_HOME is unset', async () => {
+    const prevXdg = process.env.XDG_CACHE_HOME;
+    delete process.env.XDG_CACHE_HOME;
+    try {
+      await seedAgentSessionPreamble('seed-home-session');
+      // setup.ts points HOME at a per-file fixture, so this never touches the real ~.
+      const target = join(homedir(), '.cache', 'codeman-agent-seed-home-session.sh');
+      expect(existsSync(target)).toBe(true);
+    } finally {
+      if (prevXdg !== undefined) process.env.XDG_CACHE_HOME = prevXdg;
+    }
+  });
+});
+
+describe('refreshUserAgentSkill (the user-level copy must not rot)', () => {
+  const userSkillDir = () => join(homedir(), '.claude', 'skills', 'codeman');
+
+  it('reports absent and installs nothing when there is no user-level copy', async () => {
+    expect(await refreshUserAgentSkill()).toBe('absent');
+    expect(existsSync(userSkillDir())).toBe(false);
+  });
+
+  it('refreshes a stale Codeman-managed user copy back to the packaged content', async () => {
+    await mkdir(userSkillDir(), { recursive: true });
+    // An old injected version: different content, marker intact. This is the exact
+    // shape that shadowed every fresh per-case injection on 2026-08-14.
+    await writeFile(join(userSkillDir(), 'SKILL.md'), `old skill body\n\n${MARKER_PREFIX}: installed by Codeman -->\n`);
+
+    expect(await refreshUserAgentSkill()).toBe('refreshed');
+    const refreshed = await readFile(join(userSkillDir(), 'SKILL.md'), 'utf-8');
+    expect(refreshed.startsWith('---\nname: codeman')).toBe(true);
+    expect(existsSync(join(userSkillDir(), 'reference', 'endpoints.md'))).toBe(true);
+
+    // And a second run settles to unchanged.
+    expect(await refreshUserAgentSkill()).toBe('unchanged');
+  });
+
+  it("leaves a user's own (unmarked) skill alone", async () => {
+    await mkdir(userSkillDir(), { recursive: true });
+    await writeFile(join(userSkillDir(), 'SKILL.md'), 'my own codeman skill\n');
+    expect(await refreshUserAgentSkill()).toBe('foreign');
+    expect(await readFile(join(userSkillDir(), 'SKILL.md'), 'utf-8')).toBe('my own codeman skill\n');
   });
 });

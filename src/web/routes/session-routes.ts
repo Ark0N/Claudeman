@@ -82,6 +82,8 @@ import {
   stripCaseEnvKeys,
   applyStatusLineConfig,
   applyAgentSkill,
+  refreshUserAgentSkill,
+  seedAgentSessionPreamble,
   refreshStaleCodemanHooks,
 } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
@@ -601,6 +603,13 @@ function abortOnClientHangUp(reply: FastifyReply): AbortController {
 async function injectAgentSkill(casePath: string): Promise<void> {
   const skillDir = join(casePath, '.claude', 'skills', 'codeman');
   try {
+    // Claude Code loads a same-named USER-LEVEL skill (`~/.claude/skills/codeman`,
+    // written once by `codeman skill install`) over the case copy injected below, so a
+    // stale user copy silently replaces every fresh injection (observed 2026-08-14: an
+    // old copy cost every spawned worker its lineage arc and the fast path). Keep it
+    // current on the same trigger. Refresh-only + marker-guarded; quiet on refusal,
+    // since a foreign user copy is the user's own authored skill, not a config error.
+    await refreshUserAgentSkill();
     const result = await applyAgentSkill(casePath, true);
     if (result === 'foreign') {
       console.warn(
@@ -913,6 +922,13 @@ export function registerSessionRoutes(
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
+    // Pre-seed the agent skill's preamble cache so its §0 bootstrap is a two-line
+    // loader (see seedAgentSessionPreamble). Local claude sessions only; best-effort.
+    if (mode === 'claude' && !remote && (await ctx.getAgentSkillEnabled())) {
+      await seedAgentSessionPreamble(session.id).catch((err: unknown) =>
+        console.warn(`[agent-skill] preamble seed failed for ${session.id}: ${getErrorMessage(err)}`)
+      );
+    }
     getLifecycleLog().log({ event: 'created', sessionId: session.id, name: session.name });
 
     // Use light state for broadcast + response — buffers are fetched on-demand via /terminal.
@@ -3016,6 +3032,13 @@ export function registerSessionRoutes(
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
+    // Pre-seed the agent skill's preamble cache so its §0 bootstrap is a two-line
+    // loader (see seedAgentSessionPreamble). Local claude sessions only; best-effort.
+    if (mode === 'claude' && !remote && !docker && (await ctx.getAgentSkillEnabled())) {
+      await seedAgentSessionPreamble(session.id).catch((err: unknown) =>
+        console.warn(`[agent-skill] preamble seed failed for ${session.id}: ${getErrorMessage(err)}`)
+      );
+    }
     getLifecycleLog().log({
       event: 'created',
       sessionId: session.id,

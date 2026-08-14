@@ -41,7 +41,28 @@ the preamble to a file once and source it afterwards, rather than re-pasting a
 hundred-odd lines at the top of every call (a half-re-pasted preamble used to be the
 single most likely way to break a run).
 
-Run this block once per Codeman session:
+**Codeman seeds the preamble file for you** when it spawns a claude session (server
+1.18.3+), so the bootstrap is usually just loading it — the same two lines every later
+call starts with:
+
+```bash
+. "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null
+[ "${CODEMAN_PREAMBLE:-}" = 1.18.3 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
+```
+
+If that passed, §0 is done: go straight to your job (§1's block opens with this same
+loader, so when §1 is the job you can simply start there). Only when it reports
+missing or stale, run the full block below once — and run it **verbatim**: paste it
+as-is, never re-type it, trim it, or "extract the parts you need". A hand-assembled
+preamble is the documented failure mode of this skill: one live run rebuilt it
+"minimally" and lost the `X-Codeman-Parent-Session` header (every worker spawned with
+no lineage arc in the web UI) and the fast-path functions (the spawn fell back to a
+serial quick-start loop plus pid polls), turning a ten-second job into a fifty-second
+one. If your harness directs temporary files into a scratchpad directory, that
+directive covers task scratch, not this file: it is a per-session cache that every
+later call re-sources by this exact path, so keep the path below. If you must relocate
+it anyway, copy the block's content byte-for-byte unchanged and source your path in
+every later call instead.
 
 ```bash
 test "${CODEMAN_MUX:-}" = 1 || { echo "Not inside a Codeman-managed session; refusing to act."; exit 1; }
@@ -50,8 +71,8 @@ PRE="${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh"
 mkdir -p "$(dirname "$PRE")"
 # Rewrite unless the file already ends with THIS version's stamp, so a stale or a
 # half-written file self-heals here instead of costing you a round trip to rm it.
-grep -qs '^CODEMAN_PREAMBLE=1.18.2$' "$PRE" || (umask 077; cat > "$PRE" <<'PREAMBLE'
-# ---- Codeman agent preamble 1.18.2 (written by the SKILL.md §0 bootstrap) ----
+grep -qs '^CODEMAN_PREAMBLE=1.18.3$' "$PRE" || (umask 077; cat > "$PRE" <<'PREAMBLE'
+# ---- Codeman agent preamble 1.18.3 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
 API="${CODEMAN_API_URL:?CODEMAN_API_URL not set; refusing to guess}"
 SELF="${CODEMAN_SESSION_ID:?CODEMAN_SESSION_ID not set}"
 # Credentials, cheapest first. Your session has usually INHERITED the server's
@@ -105,8 +126,10 @@ _composer_up() {   # <sid> <timeoutMs> -> "true"/"false". `shift+tab` is the one
 # composer draws, and pid!=null proved startup, never readiness.
 spawn_worker() {
   local name="${1:?spawn_worker needs a case name}" mode="${2:-claude}" q sid cp r
+  # parentSessionId doubles the CURL header, so a spawn_worker copied off the shared
+  # curl (or a body someone rebuilt from this recipe) still carries its lineage.
   q=$("${CURL[@]}" -X POST "$API/api/v1/quick-start" -H 'Content-Type: application/json' \
-      -d "$(jq -nc --arg n "$name" --arg m "$mode" '{caseName:$n,mode:$m}')")
+      -d "$(jq -nc --arg n "$name" --arg m "$mode" --arg p "$SELF" '{caseName:$n,mode:$m,parentSessionId:$p}')")
   sid=$(jq -r 'if .success then .data.sessionId else empty end' <<<"$q")
   # NOT retryable in a loop: every quick-start failure code is terminal (§5.1).
   [ -n "$sid" ] || { jq -c '{error,errorCode}' <<<"$q" >&2; return 1; }
@@ -206,18 +229,14 @@ last_text() {
 # The stamp is the LAST line on purpose (a truncated write leaves it unset) and is kept
 # bare on purpose: the write condition above anchors on it with $, so an inline comment
 # here would fail that match and rewrite this file on every single bootstrap.
-CODEMAN_PREAMBLE=1.18.2
+CODEMAN_PREAMBLE=1.18.3
 PREAMBLE
 )
-. "$PRE"; [ "${CODEMAN_PREAMBLE:-}" = 1.18.2 ] || { echo "preamble at $PRE is stale or truncated: rm it and re-run this block"; exit 1; }
+. "$PRE"; [ "${CODEMAN_PREAMBLE:-}" = 1.18.3 ] || { echo "preamble at $PRE is stale or truncated: rm it and re-run this block"; exit 1; }
 ```
 
-Every later Bash call that touches the API starts with these two lines instead:
-
-```bash
-. "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null
-[ "${CODEMAN_PREAMBLE:-}" = 1.18.2 ] || { echo "preamble missing or stale; re-run the §0 bootstrap"; exit 1; }
-```
+Every later Bash call that touches the API starts with the same two loader lines from
+the top of this section.
 
 Why it is built this way, all of it load-bearing:
 
@@ -259,7 +278,8 @@ Fill in the case names and the prompts. Everything below is `spawn_workers` /
 to assemble and no per-call body to hand-build.
 
 ```bash
-. "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh"   # §0
+. "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null   # §0 loader
+[ "${CODEMAN_PREAMBLE:-}" = 1.18.3 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
 N=(alpha beta)                                        # one FRESH case name per worker
 T=('reply with one line: the absolute path of your working directory'
    'reply with one line: your model name')            # tasks, same order as N
@@ -292,7 +312,11 @@ the time went into deliberation, not the API. The three things that actually cos
 - **Spawning serially.** One worker per Bash call is one model turn per worker. `&` plus
   `wait`, as above, makes N workers cost about what one costs.
 - **Re-deriving the happy path** from §5.1 + §5.2 + §5.3 + §5.10. That is what the
-  preamble functions exist to end. Compose them; do not rebuild them.
+  preamble functions exist to end. Compose them; do not rebuild them. The tells that
+  you are rebuilding anyway: a `for` loop around `quick-start`, a poll on `.data.pid`,
+  a bespoke `ready()` or `spawn()` of your own. Each is a worse copy of a function
+  already sitting in your preamble; the live run that wrote them spawned serially,
+  polled pid for nothing, and shipped its workers without lineage.
 - **Verifying what is already checked for you.** Two verifications specifically are not
   worth a call here, because `spawn_worker` carries them: the hooks check (it refuses a
   name that resolved to a hook-less directory with one local grep, so a worker it hands
