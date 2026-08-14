@@ -1,5 +1,11 @@
 # aicodeman
 
+## 1.18.3
+
+### Patch Changes
+
+- Fix skill-spawned workers losing their lineage arcs and spawning slowly: a stale user-level agent skill copy (`~/.claude/skills/codeman`, written once by `codeman skill install`) shadowed the fresh per-case injections, so agents ran old recipes (serial spawns with pid polls, no `X-Codeman-Parent-Session` header). Session create now refreshes a marker-owned user-level copy (refresh-only, never installs, foreign/symlink copies untouched) and pre-seeds the skill's preamble into `${XDG_CACHE_HOME:-~/.cache}/codeman-agent-<id>.sh` (0600, local claude sessions only), single-sourced from the new `skills/codeman/preamble.sh` and pinned byte-identical to the SKILL.md heredoc by test. The skill's bootstrap is now a two-line loader with the full block as fallback, cutting measured prompt-to-workers-spawned time from 35s to 10.6s; `spawn_worker` also sends `parentSessionId` in the request body as defense in depth, and the preamble stamp is bumped to 1.18.3 so pre-fix cached preambles self-heal.
+
 ## 1.18.2
 
 ### Patch Changes
