@@ -1,5 +1,5 @@
 ---
-'aicodeman': minor
+'aicodeman': patch
 ---
 
 Make the `codeman` agent skill spawn workers fast instead of deliberating first.

@@ -50,8 +50,8 @@ PRE="${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh"
 mkdir -p "$(dirname "$PRE")"
 # Rewrite unless the file already ends with THIS version's stamp, so a stale or a
 # half-written file self-heals here instead of costing you a round trip to rm it.
-grep -qs '^CODEMAN_PREAMBLE=1.19.0$' "$PRE" || (umask 077; cat > "$PRE" <<'PREAMBLE'
-# ---- Codeman agent preamble 1.19.0 (written by the SKILL.md §0 bootstrap) ----
+grep -qs '^CODEMAN_PREAMBLE=1.18.2$' "$PRE" || (umask 077; cat > "$PRE" <<'PREAMBLE'
+# ---- Codeman agent preamble 1.18.2 (written by the SKILL.md §0 bootstrap) ----
 API="${CODEMAN_API_URL:?CODEMAN_API_URL not set; refusing to guess}"
 SELF="${CODEMAN_SESSION_ID:?CODEMAN_SESSION_ID not set}"
 # Credentials, cheapest first. Your session has usually INHERITED the server's
@@ -206,17 +206,17 @@ last_text() {
 # The stamp is the LAST line on purpose (a truncated write leaves it unset) and is kept
 # bare on purpose: the write condition above anchors on it with $, so an inline comment
 # here would fail that match and rewrite this file on every single bootstrap.
-CODEMAN_PREAMBLE=1.19.0
+CODEMAN_PREAMBLE=1.18.2
 PREAMBLE
 )
-. "$PRE"; [ "${CODEMAN_PREAMBLE:-}" = 1.19.0 ] || { echo "preamble at $PRE is stale or truncated: rm it and re-run this block"; exit 1; }
+. "$PRE"; [ "${CODEMAN_PREAMBLE:-}" = 1.18.2 ] || { echo "preamble at $PRE is stale or truncated: rm it and re-run this block"; exit 1; }
 ```
 
 Every later Bash call that touches the API starts with these two lines instead:
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null
-[ "${CODEMAN_PREAMBLE:-}" = 1.19.0 ] || { echo "preamble missing or stale; re-run the §0 bootstrap"; exit 1; }
+[ "${CODEMAN_PREAMBLE:-}" = 1.18.2 ] || { echo "preamble missing or stale; re-run the §0 bootstrap"; exit 1; }
 ```
 
 Why it is built this way, all of it load-bearing:
