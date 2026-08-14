@@ -158,10 +158,14 @@ callers are cheap. Needed:
 
 ### 4.5 Styling
 
-`.connection-line.lineage-line`: violet stroke from a `--lineage-line` token,
+`.connection-line.lineage-line`: blue stroke from the per-skin `--session-blue` token
+(violet until 2026-08-14, changed because it lost contrast against the terminal's own
+dim foreground the moment the arc crossed text),
 `stroke-width: 2.5`, `dasharray 5 5`, `opacity: .72` (`.95` while the child works),
-softer than the subagent lines so the two layers read as different things, but the
-contrast comes from a **second, wider glow** rather than more weight, because the first
+softer than the subagent lines so the two layers still read as different things now that
+hue no longer separates them (shape does most of that work: a lineage arc hangs under the
+strip and never reaches a window), but the contrast against the terminal comes from a
+**second, wider glow** rather than more weight, because the first
 cut (2px / `4 4` / `.55` / one 5px glow) disappeared into terminal text on a real 1080p
 desktop. `lineage-flow` marches by two dash cycles, so it moves with the dash array
 (`5 5` → `-20`). Trap to respect: the skin block nests under
