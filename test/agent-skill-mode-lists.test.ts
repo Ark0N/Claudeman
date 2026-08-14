@@ -45,7 +45,13 @@ import type { SessionMode } from '../src/types/session.js';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const SKILL_DIR = join(HERE, '../skills/codeman');
-const SKILL_FILES = ['SKILL.md', 'reference/endpoints.md', 'reference/messaging.md', 'reference/recipes.md'];
+const SKILL_FILES = [
+  'SKILL.md',
+  'reference/endpoints.md',
+  'reference/messaging.md',
+  'reference/recipes.md',
+  'reference/verbs.md',
+];
 
 /** Modes the API actually accepts, read off the schema rather than restated here. */
 function schemaModes(schema: typeof CreateSessionSchema | typeof QuickStartSchema): SessionMode[] {

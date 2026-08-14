@@ -1,16 +1,27 @@
 # Worked orchestration flows
 
 Loaded on demand from the `codeman` skill. Every flow assumes the SKILL.md preamble is
-in scope (`$API`, `$SELF`, `$CID`, `"${CURL[@]}"`, `delete_session`); see
+in scope (`$API`, `$SELF`, `$CID`, `"${CURL[@]}"`, `delete_session`, plus the fast-path
+verbs `spawn_worker` / `spawn_workers` / `sendwait` / `last_text`); see
 [SKILL.md §0](../SKILL.md#0-guard-and-bootstrap) for it and
 [the safety rules](../SKILL.md#4-safety-rules) for what you may call unprompted.
+
+⚠️ **These flows are the long way round, and most jobs do not need them.** If the job is
+"spawn N claude workers, task them, collect the answers", [SKILL.md
+§1](../SKILL.md#1-the-fast-path-n-workers-one-bash-call) already is that job in one Bash
+call, measured at about 10 s for two cold workers end to end. Come here when you need a
+mechanism §1 does not cover: shell or otherwise hook-less workers (Flows 2, 3), a worker
+stuck on a permission dialog (Flow 5), messaging (Flow 6), or real work in git worktrees
+(Flow 7). The flows below spell each step out because they are teaching the mechanism;
+spelling them out again when §1 would have done is the most common way an agent turns a
+ten-second run into a multi-minute one.
 
 ⚠️ **Shell state does not survive between tool calls**, so every Bash call below opens
 by sourcing the preamble file the §0 bootstrap wrote, and checking its version stamp:
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null
-[ "${CODEMAN_PREAMBLE:-}" = 1.17.0 ] || { echo "preamble missing or stale; re-run the §0 bootstrap"; exit 1; }
+[ "${CODEMAN_PREAMBLE:-}" = 1.18.2 ] || { echo "preamble missing or stale; re-run the §0 bootstrap"; exit 1; }
 ```
 
 Do **not** re-paste the preamble body into each call. Sourcing it is what retires the
@@ -272,16 +283,18 @@ live (and one anti-pattern, measured failing, replaced by B):
 **A. Background the send-and-waits** (simplest; each resolved on `stop` while the
 other was still running). Each send costs its worker one billed turn:
 
+`sendwait <sid> <prompt> [seq]` is a preamble function ([SKILL.md
+§0](../SKILL.md#0-guard-and-bootstrap)); it applies the `\r` and a per-worker `clientId`,
+and picks a fresh `seq` (the current epoch second) per call, so do not redefine it here
+and pass `seq` yourself only to resend an identical frame as a deliberate duplicate.
+Background one call per worker and `wait`:
+
 ```bash
-sendwait() {  # $1=sid $2=prompt $3=seq, assumes the worker passed Flow 1's readiness
-  local body; body=$(jq -n --arg p "$2" --argjson s "$3" --arg c "codeman-fan-$1" \
-    '{input:($p+"\r"),useMux:true,clientId:$c,seq:$s,wait:true,waitTimeout:600000}')
-  "${CURL[@]}" -X POST "$API/api/v1/sessions/$1/input" \
-    -H 'Content-Type: application/json' --data-binary "$body" > "/tmp/fan-$1.json"
-}
-( sendwait "$SID1" 'refactor module A and reply DONE' 2 & \
-  sendwait "$SID2" 'write tests for module B and reply DONE' 2 & wait )
-jq -c '.data.wait | {signal, waitedMs}' /tmp/fan-"$SID1".json /tmp/fan-"$SID2".json
+D=$(mktemp -d)   # a function's stdout is per-worker, so collect it in files, not a var
+sendwait "$SID1" 'refactor module A and reply DONE' > "$D/1" &
+sendwait "$SID2" 'write tests for module B and reply DONE' > "$D/2" &
+wait
+jq -c '.data.wait | {signal, waitedMs}' "$D/1" "$D/2"; rm -rf "$D"
 ```
 
 One in-flight wait per worker keeps you far from the 16-per-session waiter cap.
