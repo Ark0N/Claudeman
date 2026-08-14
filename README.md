@@ -745,7 +745,8 @@ Those `DONE_<task>_<random>` strings are the skill's **split marker** trick, and
 
 | File                                                                | Contents                                                                                    |
 | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| [`SKILL.md`](skills/codeman/SKILL.md)                               | Safety rules, rules of the road, and 9 single-purpose recipes. Always loaded.                |
+| [`SKILL.md`](skills/codeman/SKILL.md)                               | Safety rules, the ready-made fast path (spawn N workers, task them, collect), and the verb index. Always loaded. |
+| [`reference/verbs.md`](skills/codeman/reference/verbs.md)           | The 14 verbs in detail: readiness, send-and-wait, markers, interrupts, cleanup. On demand.   |
 | [`reference/recipes.md`](skills/codeman/reference/recipes.md)       | 6 worked multi-worker flows (fan-out, blocked-worker watch, messaging fan-out). On demand.   |
 | [`reference/endpoints.md`](skills/codeman/reference/endpoints.md)   | Full endpoint tables, error codes, per-mode signal table, capacity limits. On demand.        |
 | [`reference/messaging.md`](skills/codeman/reference/messaging.md)   | Talking to claude workers directly via Claude Code cross-session messaging. On demand.       |

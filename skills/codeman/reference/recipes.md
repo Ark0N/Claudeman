@@ -285,7 +285,9 @@ other was still running). Each send costs its worker one billed turn:
 
 `sendwait <sid> <prompt> [seq]` is a preamble function ([SKILL.md
 §0](../SKILL.md#0-guard-and-bootstrap)); it applies the `\r` and a per-worker `clientId`,
-so do not redefine it here. Background one call per worker and `wait`:
+and picks a fresh `seq` (the current epoch second) per call, so do not redefine it here
+and pass `seq` yourself only to resend an identical frame as a deliberate duplicate.
+Background one call per worker and `wait`:
 
 ```bash
 D=$(mktemp -d)   # a function's stdout is per-worker, so collect it in files, not a var
