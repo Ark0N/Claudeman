@@ -406,6 +406,14 @@ The title is templated into the served HTML on first byte, so it's correct from 
 | **110k tokens** | Auto `/compact` | Context summarized, work continues |
 | **140k tokens** | Auto `/clear`   | Fresh start with `/init`           |
 
+### Tab Alerts
+
+<p align="center">
+  <img src="docs/images/tab-alerts-glow-20260815.gif" alt="Session tabs: a regular active tab beside a yellow waiting-for-input tab and a red needs-decision tab, both with a breathing glow" width="900">
+</p>
+
+Every tab tells you its state at a glance. A running session keeps its green status dot. When a session stops and waits for input, its tab turns **yellow**: steady ring, tinted background, yellow dot, with a slow breathing glow on top. When a permission prompt or question is **blocking** the agent, the tab turns **red** with a faster pulse. The base tint never blinks off, so even a split-second glance (or a screenshot) reads the true state; the ring stays visible while the tab is selected, and a page reload re-arms pending alerts from the server, so a blocked session can never hide behind a fresh-looking tab.
+
 ### Notifications
 
 Real-time desktop alerts when sessions need attention — `permission_prompt` and `elicitation_dialog` trigger critical red tab blinks, `idle_prompt` triggers yellow blinks. Click any notification to jump directly to the affected session. Hooks auto-configured per case directory.
