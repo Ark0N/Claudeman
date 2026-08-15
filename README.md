@@ -1043,6 +1043,12 @@ See [CLAUDE.md](./CLAUDE.md) for full documentation.
 
 ---
 
+## Community
+
+Questions, setup help, and ideas live in [GitHub Discussions](https://github.com/Ark0N/Codeman/discussions): the [Q&A section](https://github.com/Ark0N/Codeman/discussions/categories/q-a) answers the most common ones (phone access, overnight runs, updating), and the roadmap gets decided in [Ideas](https://github.com/Ark0N/Codeman/discussions/categories/ideas). Bugs go to [issues](https://github.com/Ark0N/Codeman/issues); reports usually get a response within a day, and every release credits its reporters and contributors by name. Want to contribute? [CONTRIBUTING.md](.github/CONTRIBUTING.md) has the map: skins, translations, and docs make great first PRs, and bigger features start life as a Discussion. And if you're proud of your rig, post it in [Show and tell](https://github.com/Ark0N/Codeman/discussions/300).
+
+---
+
 ## Codebase Quality
 
 The codebase went through a comprehensive 7-phase refactoring that eliminated god objects, centralized configuration, and established modular architecture:
