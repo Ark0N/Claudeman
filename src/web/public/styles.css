@@ -1459,23 +1459,80 @@ html[data-line-anim="packet"] .connection-line.line-enter {
   color: var(--green);
 }
 
-/* Tab alert animations */
-.session-tab.tab-alert-action {
+/* Tab alerts: a STEADY red/yellow base with a pulse breathing on top.
+   ⚠ The original animation swung background AND border to transparent at its
+   0%/100% keyframes, so for roughly half of every cycle an alerted tab was
+   indistinguishable from a normal one: a glance (or a screenshot, owner report
+   2026-08-15) read "no alert" while the home rail showed a steady NEEDS YOU.
+   A pending permission is BLOCKING the agent, so the tab must look blocked at
+   every instant; only the intensity is allowed to move. The status dot joins
+   in (red/yellow, (0,4,0) so it outranks the skin block's (0,3,1) dot rules),
+   mirroring the phone overview's red-row language. */
+/* The alert paints on ::before, NEVER on the tab element: .session-tab.active
+   forces background/border/box-shadow with !important, and !important beats
+   even a running animation, so an element-level alert vanished the moment the
+   tab was selected. The permission is still blocking while you look at it, so
+   the red ring must survive selection and clear only on resolution (owner call
+   2026-08-15). Same convention as the entrance styles (see the tab-enter block).
+   (0,3,x) via the strip parent on purpose: the non-OG skin block quiets
+   decorative glows (`.tab-glow { box-shadow: none }` lands at (0,2,1)), and an
+   alert halo is signal, not decor, so it must outrank that on every skin.
+   The overlay paints above the tab's inline content (positioned vs flow), which
+   is fine at these alphas and is exactly what keeps it visible over the active
+   tab's opaque-ish background. */
+.session-tabs .session-tab.tab-alert-action::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  pointer-events: none;
+  /* Explicit: .tab-enter::before (entrance animations) parks ::before at
+     opacity 0 with fill-mode both, and an alerted tab that is also entering
+     would otherwise inherit that and render an invisible alert. Our animation
+     shorthand already displaces theirs at this specificity; the opacity must
+     be pinned the same way. */
+  opacity: 1;
+  border: 2px solid var(--red);
+  background: rgba(239, 68, 68, 0.12);
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.4);
   animation: tab-blink-red 2.5s ease-in-out infinite;
 }
 
-.session-tab.tab-alert-idle {
+.session-tab.tab-alert-action .tab-status.idle,
+.session-tab.tab-alert-action .tab-status.busy,
+.session-tab.tab-alert-action .tab-status {
+  background: var(--red);
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.7);
+}
+
+.session-tabs .session-tab.tab-alert-idle::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 1; /* see the action variant above */
+  border: 2px solid var(--yellow);
+  background: rgba(234, 179, 8, 0.1);
+  box-shadow: 0 0 8px rgba(234, 179, 8, 0.35);
   animation: tab-blink-yellow 3.5s ease-in-out infinite;
 }
 
+.session-tab.tab-alert-idle .tab-status.idle,
+.session-tab.tab-alert-idle .tab-status.busy,
+.session-tab.tab-alert-idle .tab-status {
+  background: var(--yellow);
+  box-shadow: 0 0 6px rgba(234, 179, 8, 0.6);
+}
+
 @keyframes tab-blink-red {
-  0%, 100% { background: transparent; border-color: transparent; }
-  50% { background: rgba(239, 68, 68, 0.12); border-color: var(--red); }
+  0%, 100% { background: rgba(239, 68, 68, 0.12); box-shadow: 0 0 8px rgba(239, 68, 68, 0.4); }
+  50% { background: rgba(239, 68, 68, 0.3); box-shadow: 0 0 16px rgba(239, 68, 68, 0.75); }
 }
 
 @keyframes tab-blink-yellow {
-  0%, 100% { background: transparent; border-color: transparent; }
-  50% { background: rgba(234, 179, 8, 0.1); border-color: var(--yellow); }
+  0%, 100% { background: rgba(234, 179, 8, 0.1); box-shadow: 0 0 8px rgba(234, 179, 8, 0.35); }
+  50% { background: rgba(234, 179, 8, 0.24); box-shadow: 0 0 14px rgba(234, 179, 8, 0.65); }
 }
 
 @keyframes pulse {
@@ -2081,8 +2138,12 @@ html[data-line-anim="packet"] .connection-line.line-enter {
 /* Pop-out button is opt-in (App Settings → Tab Bar, default off; per-device).
    settings-ui.js mirrors the setting as the tabs-show-detach class on <html>.
    A tab that is ALREADY detached keeps its icon regardless: it is the
-   re-focus affordance for the popped-out window. */
-html:not(.tabs-show-detach) .session-tab:not(.detached) .tab-detach {
+   re-focus affordance for the popped-out window. A SINGLE tab can also opt in
+   via Session Options → Session (`tab-show-detach` on the tab, per-device map
+   in session-ui.js) while the general toggle stays off; the active-tab reveal
+   rules above are shared, so the overridden tab behaves identically. Phones are
+   unaffected either way: mobile.css hides .tab-detach with !important. */
+html:not(.tabs-show-detach) .session-tab:not(.detached):not(.tab-show-detach) .tab-detach {
   display: none;
 }
 
@@ -9329,11 +9390,15 @@ kbd {
    Deliberately quieter and thinner than the subagent lines above so the two
    layers read as different things in the same SVG.
 
-   Colour comes from --session-blue, which EVERY skin block already defines and
-   already tunes for its own background, so one rule covers all seven (the four
-   light skins included). Do not add a per-skin `.lineage-line` override inside the
-   html:not([data-skin="og"]) block: a bare class rule in there resolves to (0,2,1)
-   and would outrank this one from a surprising place.
+   Colour: every rule reads --lineage-color, which session-lineage.js sets INLINE
+   per line from the CodemanLineage.COLORS palette (per child, first-seen order,
+   owner call 2026-08-15: several connected tabs must get several colours). The
+   FIRST line gets no override, so it falls through to --session-blue, which EVERY
+   skin block already defines and tunes for its own background; a lone arc therefore
+   still renders the skin-aware blue that shipped in 1.18.2. Do not add a per-skin
+   `.lineage-line` override inside the html:not([data-skin="og"]) block: a bare
+   class rule in there resolves to (0,2,1) and would outrank this one from a
+   surprising place.
 
    ⚠ BLUE, NOT THE VIOLET THIS SHIPPED WITH (owner call, 2026-08-14: "make these
    lines in blue that they are better visible"). Violet sits close to the terminal's
@@ -9352,13 +9417,13 @@ kbd {
    (4 4 on a 2.5px line reads as a dotted smudge), and `lineage-flow` marches by
    exactly two dash cycles, so it has to move with them. */
 .connection-line.lineage-line {
-  stroke: var(--session-blue, #2b8fd9);
+  stroke: var(--lineage-color, var(--session-blue, #2b8fd9));
   stroke-width: 2.5;
   stroke-dasharray: 5 5;
   stroke-linecap: round;
   opacity: 0.72;
-  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.7)) drop-shadow(0 0 5px var(--session-blue, #2b8fd9))
-    drop-shadow(0 0 11px var(--session-blue, #2b8fd9));
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.7)) drop-shadow(0 0 5px var(--lineage-color, var(--session-blue, #2b8fd9)))
+    drop-shadow(0 0 11px var(--lineage-color, var(--session-blue, #2b8fd9)));
 }
 
 /* ⚠ OUTSIDE the reduced-motion block below on purpose. A working child is the case
@@ -9374,9 +9439,10 @@ kbd {
 }
 
 .lineage-line-dot {
-  fill: var(--session-blue, #2b8fd9);
+  fill: var(--lineage-color, var(--session-blue, #2b8fd9));
   opacity: 0.85;
-  filter: drop-shadow(0 0 4px var(--session-blue, #2b8fd9)) drop-shadow(0 0 9px var(--session-blue, #2b8fd9));
+  filter: drop-shadow(0 0 4px var(--lineage-color, var(--session-blue, #2b8fd9)))
+    drop-shadow(0 0 9px var(--lineage-color, var(--session-blue, #2b8fd9)));
 }
 
 /* The child end marches while that worker is actually working, so the line

@@ -23,7 +23,7 @@
  *
  * @mixin Extends CodemanApp.prototype via Object.assign
  * @dependency subagent-windows.js (_updateConnectionLinesImmediate, #connectionLines)
- * @dependency constants.js (window.CodemanLineage.computePath)
+ * @dependency constants.js (window.CodemanLineage.computePath + .COLORS)
  * @dependency settings-ui.js (loadAppSettingsFromStorage, getDefaultSettings)
  * @loadorder 15.6 (after ultracode-windows.js — appended to the same SVG pass)
  */
@@ -91,6 +91,35 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
+   * Colour for one child's arc, from CodemanLineage.COLORS, assigned in FIRST-SEEN
+   * order and remembered per child id. First-seen rather than draw-index keeps a
+   * line's colour stable across re-renders, tab reorders and sibling closes (the
+   * SVG is wiped and rebuilt constantly, so an index-based colour would flicker).
+   * An empty string means "no override": the CSS falls back to --session-blue.
+   */
+  _lineageColorFor(childId) {
+    const palette = (window.CodemanLineage && window.CodemanLineage.COLORS) || [];
+    if (palette.length === 0) return '';
+    if (!this._lineageColorByChild) {
+      this._lineageColorByChild = new Map();
+      this._lineageColorNext = 0;
+    }
+    let idx = this._lineageColorByChild.get(childId);
+    if (idx === undefined) {
+      idx = this._lineageColorNext++ % palette.length;
+      this._lineageColorByChild.set(childId, idx);
+      // Bounded: entries for long-gone sessions are pruned once the map is clearly
+      // stale, so a day-long dashboard cannot grow it without limit.
+      if (this._lineageColorByChild.size > 200 && this.sessions) {
+        for (const key of this._lineageColorByChild.keys()) {
+          if (!this.sessions.has(key)) this._lineageColorByChild.delete(key);
+        }
+      }
+    }
+    return palette[idx] || '';
+  },
+
+  /**
    * Append the lineage layer to the shared SVG pass.
    *
    * Contract with the caller: `rects` is the batched read cache keyed `tab:<id>`, and
@@ -137,6 +166,10 @@ Object.assign(CodemanApp.prototype, {
       // the line itself. `status` is the CHILD's, which is the interesting end.
       const working = edge.status === 'working' ? ' lineage-line--working' : '';
       line.setAttribute('class', 'connection-line lineage-line' + working);
+      // Per-child colour rides a CSS custom property so the stylesheet keeps owning
+      // opacity, glow and dash; an empty colour leaves the --session-blue fallback.
+      const color = this._lineageColorFor(edge.childId);
+      if (color) line.style.setProperty('--lineage-color', color);
       // `data-agent-id` is what _applyLineEntrances() queries — see the file header.
       line.setAttribute('data-agent-id', 'lineage:' + edge.childId);
       line.setAttribute('data-parent-tab', edge.parentId);
@@ -153,6 +186,7 @@ Object.assign(CodemanApp.prototype, {
       dot.setAttribute('r', '3.5');
       dot.setAttribute('class', 'lineage-line-dot' + working);
       dot.setAttribute('data-child-tab', edge.childId);
+      if (color) dot.style.setProperty('--lineage-color', color);
       svg.appendChild(dot);
     }
   },

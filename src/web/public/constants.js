@@ -222,23 +222,35 @@ function computeTabScrollLeft(input) {
 // endpoint scrolled outside the strip. `.session-tabs` is `overflow-x: auto`, so a
 // scrolled-out tab still HAS a rect — one lying over the logo or the header
 // buttons. Skipping is honest; clamping would point at a tab that isn't there.
-// ⚠ THE DIP IS WHAT MAKES THE ARC AN ARC, and the first shipped numbers were tuned
-// against two tabs sitting side by side. A worker the agent skill starts is appended
-// to the END of the strip, so the real span between a lead and its worker is 800-1500px,
-// not 200, and a 44px cap over 1300px of span is a 33px sag, i.e. a line that reads as
-// STRAIGHT and crosses the terminal instead of bracketing under the strip. The dip now
-// keeps growing with the span (0.085/px, ~3x steeper against the old cap) so the bracket
-// survives the distance the feature is actually used at. The ceiling is what keeps a
-// full-width pair out of the terminal's fourth line: 104 + the sibling step lands the
-// deepest sag around y=140 on a 1080 screen, the same proportion two adjacent tabs get.
+// ⚠ THE DIP IS WHAT MAKES THE ARC AN ARC, and it has now been mis-tuned in BOTH
+// directions, so treat these numbers as a corridor rather than a dial to crank:
+// - Too shallow (the first ship, 44px cap): a skill worker is appended to the END of
+//   the strip, so a lead-to-worker span is 800-1500px, and a 44px cap over 1300px is
+//   a 33px sag, a line that reads as STRAIGHT across the terminal (#285).
+// - Too deep (the 104px cap that replaced it): in the wrapped-strip case the cap and
+//   the FULL row offset stacked, bowing the bracket ~106px into the terminal text
+//   (owner screenshot 2026-08-15, "die Linien machen einen grossen Bogen nach unten").
+// The dip is measured from the STRIP'S BOTTOM EDGE (falling back to the lower tab
+// bottom when the strip rect is missing or shorter than its tabs), which buys two
+// things at once: the bow needs no per-row offsets stacked on top, and a same-row
+// arc between ROW-1 tabs of a wrapped strip clears row 2's labels instead of being
+// drawn through them (the retune's own first draft had exactly that regression).
 const LINEAGE_DIP_BASE_PX = 14;
-const LINEAGE_DIP_PER_PX = 0.085;
+const LINEAGE_DIP_PER_PX = 0.06;
 const LINEAGE_DIP_MIN_PX = 22;
-const LINEAGE_DIP_MAX_PX = 104;
+const LINEAGE_DIP_MAX_PX = 64;
 // Siblings nest by this much. Widened with the stroke: at 2.5px plus its glow, arcs 6px
 // apart bled into one thick band instead of reading as three separate lines.
 const LINEAGE_SIBLING_STEP_PX = 8;
 const LINEAGE_STRIP_TOLERANCE_PX = 4;
+// Lineage palette, assigned per CHILD in first-seen order and cycled (session-lineage.js).
+// The empty FIRST entry means "no override": the CSS then falls back to --session-blue,
+// which every skin block tunes for its own background, so a lone arc keeps the
+// skin-aware blue that shipped in 1.18.2. The fixed entries are deliberately vivid
+// (owner call 2026-08-15: matrix green, pinkish, violet, red, turquoise "and so on");
+// they ride the same double glow as the blue, which is what keeps them legible over
+// terminal text on every skin.
+const LINEAGE_COLORS = ['', '#00ff66', '#ff5ea8', '#a78bfa', '#ff5252', '#2dd4bf', '#ffa940'];
 
 function computeLineagePath(input) {
   const parent = input?.parent;
@@ -269,18 +281,19 @@ function computeLineagePath(input) {
   const cBottom = cTop + ch;
   const sameRow = Math.abs(pTop + ph / 2 - (cTop + ch / 2)) <= Math.min(ph, ch) / 2;
 
-  // Both ends anchor on the tab BOTTOM, and the control points hang below whichever
-  // row is lower, so one formula covers a flat strip and a wrapped one.
+  // Both ends anchor on the tab BOTTOM, and the control points hang below the WHOLE
+  // strip, so one formula covers a flat strip, a wrapped pair, and a same-row pair
+  // sitting above further rows (see the corridor note above the constants).
   const span = Math.abs(cx - px);
-  const rowDrop = Math.abs(cBottom - pBottom);
-  // ⚠ A wrapped pair needs the dip measured from the LOWER row, or the bracket would
-  // only reach the row gap again. Adding the row offset also keeps the curve clear of
-  // the row it crosses instead of grazing its bottom edge.
+  const stripBottom =
+    strip && Number(strip.height) > 0 && Number.isFinite(Number(strip.top))
+      ? Number(strip.top) + Number(strip.height)
+      : Number.NEGATIVE_INFINITY;
+  const baseline = Math.max(pBottom, cBottom, stripBottom);
   const dip =
     Math.min(LINEAGE_DIP_MAX_PX, Math.max(LINEAGE_DIP_MIN_PX, LINEAGE_DIP_BASE_PX + span * LINEAGE_DIP_PER_PX)) +
-    depth * LINEAGE_SIBLING_STEP_PX +
-    rowDrop;
-  const yc = Math.max(pBottom, cBottom) + dip;
+    depth * LINEAGE_SIBLING_STEP_PX;
+  const yc = baseline + dip;
   const d = `M ${r1(px)} ${r1(pBottom)} C ${r1(px)} ${r1(yc)}, ${r1(cx)} ${r1(yc)}, ${r1(cx)} ${r1(cBottom)}`;
   return { d, endX: cx, endY: cBottom, sameRow };
 }
@@ -441,6 +454,7 @@ if (typeof window !== 'undefined') {
     DIP_MIN_PX: LINEAGE_DIP_MIN_PX,
     DIP_MAX_PX: LINEAGE_DIP_MAX_PX,
     SIBLING_STEP_PX: LINEAGE_SIBLING_STEP_PX,
+    COLORS: LINEAGE_COLORS,
   };
   window.CodemanConnectionLoss = {
     compute: computeConnectionLossUi,
