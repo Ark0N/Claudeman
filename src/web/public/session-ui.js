@@ -1283,11 +1283,64 @@ Object.assign(CodemanApp.prototype, {
   // Session Options Modal
   // ═══════════════════════════════════════════════════════════════
 
+  /**
+   * Per-TAB pop-out button override (Session Options → Session → Identity). The
+   * general `showTabDetachButton` App Setting stays the per-device default for ALL
+   * tabs; this map whitelists single sessions on top of it, so one tab can carry
+   * the ⧉ button while the general toggle stays off. Per-device on purpose, like
+   * the general setting: it is a display choice, so it lives in localStorage and
+   * never touches the server schema. Rendered as the `tab-show-detach` class on
+   * the tab (see _fullRenderSessionTabs), which styles.css exempts from the
+   * global `display: none` gate; the active-tab reveal rules stay shared, so an
+   * overridden tab behaves exactly like a tab under the general toggle.
+   */
+  _tabDetachOverrides() {
+    if (this._tabDetachOverrideMap === undefined) {
+      try {
+        this._tabDetachOverrideMap = JSON.parse(localStorage.getItem('codeman:tab-detach-overrides') || '{}') || {};
+      } catch (_e) {
+        this._tabDetachOverrideMap = {};
+      }
+    }
+    return this._tabDetachOverrideMap;
+  },
+
+  hasTabDetachOverride(sessionId) {
+    return !!this._tabDetachOverrides()[sessionId];
+  },
+
+  onSessionTabDetachToggle(on) {
+    const id = this.editingSessionId;
+    if (!id) return;
+    const map = this._tabDetachOverrides();
+    if (on) map[id] = 1;
+    else delete map[id];
+    // Prune ids whose sessions are gone, so closed sessions cannot grow the map.
+    for (const key of Object.keys(map)) {
+      if (key !== id && this.sessions && !this.sessions.has(key)) delete map[key];
+    }
+    try {
+      localStorage.setItem('codeman:tab-detach-overrides', JSON.stringify(map));
+    } catch (_e) {
+      /* storage full/blocked: the in-memory map still applies this page load */
+    }
+    // Apply to the LIVE tab directly: the debounced render may take the
+    // incremental path (same session set), which patches rather than rebuilds,
+    // so the template's class would only land on the next full render. Future
+    // full renders re-emit it from _fullRenderSessionTabs.
+    const tab = document.querySelector(`.session-tab[data-id="${CSS.escape(id)}"]`);
+    if (tab) tab.classList.toggle('tab-show-detach', !!on);
+  },
+
   openSessionOptions(sessionId) {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
     this.editingSessionId = sessionId;
+
+    // Per-tab pop-out override state (see _tabDetachOverrides above).
+    const detachToggle = document.getElementById('sessionOptShowTabDetach');
+    if (detachToggle) detachToggle.checked = this.hasTabDetachOverride(sessionId);
 
     // Reset to an appropriate tab — Summary for external CLIs (Respawn/Ralph are Claude-only)
     const isAltMode = session.mode === 'opencode' || session.mode === 'codex' || session.mode === 'gemini' || session.mode === 'antigravity' || session.mode === 'pi';

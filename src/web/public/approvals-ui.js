@@ -37,13 +37,21 @@ Object.assign(CodemanApp.prototype, {
   async seedApprovals() {
     if (!this.approvals) this.approvals = new Map();
     this.approvals.clear();
-    if (this.approvalsInboxEnabled()) {
-      const data = await this._apiJson('/api/approvals');
-      for (const item of (data && data.approvals) || []) {
-        this.approvals.set(item.id, item);
-        // Re-arm the tab alert state machine (idempotent set-add).
-        this.setPendingHook(item.sessionId, approvalKindToHook(item.kind));
-      }
+    // ⚠ Fetch and re-arm the tab-alert state machine REGARDLESS of the inbox
+    // setting. The server-side approval store runs unconditionally (only the
+    // inbox SURFACES are opt-in), and the red/yellow tab alert predates the
+    // inbox: gating the seed on the setting meant that with the inbox off, a
+    // reload landed with every alert store empty while a permission dialog sat
+    // blocking a session (owner report 2026-08-15: rail said NEEDS YOU from
+    // the live SSE event, the reloaded-elsewhere tab showed a plain green
+    // dot). Only populating `this.approvals` (bell/drawer/answer strips) stays
+    // behind the setting.
+    const data = await this._apiJson('/api/approvals');
+    const inboxOn = this.approvalsInboxEnabled();
+    for (const item of (data && data.approvals) || []) {
+      if (inboxOn) this.approvals.set(item.id, item);
+      // Re-arm the tab alert state machine (idempotent set-add).
+      this.setPendingHook(item.sessionId, approvalKindToHook(item.kind));
     }
     this.renderApprovals();
   },
@@ -68,14 +76,15 @@ Object.assign(CodemanApp.prototype, {
   },
 
   _onApprovalResolved(info) {
-    if (!info || !info.id || !this.approvals) return;
-    if (this.approvals.delete(info.id)) {
-      // Clear the matching tab alert: the inbox resolves on more signals than
-      // the hook handlers do (superseded, expired, answered from another
-      // device), and clearPendingHooks is a no-op when nothing is set.
-      this.clearPendingHooks(info.sessionId, approvalKindToHook(info.kind));
-      this.renderApprovals();
-    }
+    if (!info || !info.id) return;
+    // Clear the matching tab alert UNCONDITIONALLY: the inbox resolves on more
+    // signals than the hook handlers do (superseded, expired, answered from
+    // another device), clearPendingHooks is a no-op when nothing is set, and
+    // with the inbox setting OFF the item was never stored in `this.approvals`
+    // even though seedApprovals armed the alert — gating the clear on a map hit
+    // would strand that alert forever.
+    this.clearPendingHooks(info.sessionId, approvalKindToHook(info.kind));
+    if (this.approvals?.delete(info.id)) this.renderApprovals();
   },
 
   // ─── Actions ─────────────────────────────────────────────────

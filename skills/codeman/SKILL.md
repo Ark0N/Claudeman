@@ -42,18 +42,22 @@ hundred-odd lines at the top of every call (a half-re-pasted preamble used to be
 single most likely way to break a run).
 
 **Codeman seeds the preamble file for you** when it spawns a claude session (server
-1.18.3+), so the bootstrap is usually just loading it — the same two lines every later
-call starts with:
+1.18.3+), so the bootstrap is usually nothing at all: these are the two lines every
+later call opens with, and your first REAL call performs them anyway:
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null
 [ "${CODEMAN_PREAMBLE:-}" = 1.18.3 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
 ```
 
-If that passed, §0 is done: go straight to your job (§1's block opens with this same
-loader, so when §1 is the job you can simply start there). Only when it reports
-missing or stale, run the full block below once — and run it **verbatim**: paste it
-as-is, never re-type it, trim it, or "extract the parts you need". A hand-assembled
+⚠️ **Never spend a Bash call on this check alone.** §1's block opens with this same
+loader, so when §1 is the job, start there: the check rides the spawn call for free,
+and a standalone "preamble OK" call buys nothing while costing a full model turn
+(measured live: a lone check plus the deliberation around it added ~6 s to a 28 s
+two-worker run). §0 is done the moment any job call passes its opening check. Only
+when a call reports missing or stale, run the full block below once — and run it
+**verbatim**: paste it as-is, never re-type it, trim it, or "extract the parts you
+need". A hand-assembled
 preamble is the documented failure mode of this skill: one live run rebuilt it
 "minimally" and lost the `X-Codeman-Parent-Session` header (every worker spawned with
 no lineage arc in the web UI) and the fast-path functions (the spawn fell back to a
@@ -273,14 +277,18 @@ plain-text 401: see §6 and [the symptom gallery](reference/endpoints.md#symptom
 block is the whole thing. Run it, report, and stop reading. §2 onward is for jobs this
 does not cover; you are not being careless by not reading them.**
 
-Fill in the case names and the prompts. Everything below is `spawn_workers` /
-`sendwait` / `last_text` / `delete_session` from the §0 preamble, so there is nothing
-to assemble and no per-call body to hand-build.
+Fill in the case names and the prompts, then run it as your FIRST Bash call: no
+standalone preamble check before it (line one below IS that check), and no
+reconnaissance. `ls ~/codeman-cases` answers nothing this block needs: invented
+fresh names need no lookup, and `spawn_worker` refuses a name that already exists
+rather than silently reusing it. Everything below is `spawn_workers` / `sendwait` /
+`last_text` / `delete_session` from the §0 preamble, so there is nothing to assemble
+and no per-call body to hand-build.
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null   # §0 loader
 [ "${CODEMAN_PREAMBLE:-}" = 1.18.3 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
-N=(alpha beta)                                        # one FRESH case name per worker
+N=(alpha beta)                    # INVENT one fresh case name per worker; never list cases first
 T=('reply with one line: the absolute path of your working directory'
    'reply with one line: your model name')            # tasks, same order as N
 
@@ -307,10 +315,16 @@ done; rm -rf "$D"
 
 Measured against a live 1.18.0 server: two cold workers spawned and ready in **6.3 s**,
 both turns dispatched and both answers read in **4.0 s** more. If your run takes minutes,
-the time went into deliberation, not the API. The three things that actually cost time:
+the time went into deliberation, not the API. The four things that actually cost time:
 
 - **Spawning serially.** One worker per Bash call is one model turn per worker. `&` plus
   `wait`, as above, makes N workers cost about what one costs.
+- **Reconnaissance turns before the spawn.** A standalone preamble check, an
+  `ls ~/codeman-cases`, a `list_sessions` "to see what is there": each is a whole
+  model turn spent learning something this block already handles (line one performs
+  the preamble check, invented names need no listing, and `spawn_worker` refuses
+  collisions). A live two-worker run spent ~12 s of its 28 s total on exactly two
+  such turns; the API work in between was under 10 s.
 - **Re-deriving the happy path** from §5.1 + §5.2 + §5.3 + §5.10. That is what the
   preamble functions exist to end. Compose them; do not rebuild them. The tells that
   you are rebuilding anyway: a `for` loop around `quick-start`, a poll on `.data.pid`,
