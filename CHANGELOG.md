@@ -1,5 +1,17 @@
 # aicodeman
 
+## 1.18.4
+
+### Patch Changes
+
+- Faster agent-skill workers, retuned multi-color lineage arcs, a per-tab pop-out option, reliable tab alerts, and the community launch.
+  - Agent skill: SKILL.md now forbids the standalone preamble check and the pre-spawn reconnaissance turns that were costing whole model turns; the same two-worker spawn measured at 28.6s end to end now runs 20.2s cold and 12.8s warm, with the spawn machinery itself unchanged.
+  - Session lineage lines: arcs now hang from the tab strip's bottom edge (dip cap 104px to 64px, no stacked row offsets), fixing the deep bow on wrapped tab strips and keeping same-row arcs off the second row's tab labels; each spawned worker's arc gets its own color (skin blue first, then matrix green, pink, violet, red, turquoise, orange), assigned per child and stable across re-renders.
+  - Session Options > Session: new "Pop-out button on this tab" per-tab override on top of the general App Settings toggle (per-device).
+  - Tab alerts: pending permission/question alerts now survive page reloads regardless of the Approvals Inbox setting (the alert state machine seeds from the server-side approval store on every load), stay visible on the selected tab until the prompt is actually resolved (the alert paints on a ::before overlay the active tab's styling cannot bury), and render as a steady red/yellow ring with glow and a colored status dot instead of a blink that spent half of every cycle looking like a normal tab. The README carries a live capture of the new alerts.
+  - Community launch: README Community section, .github/CONTRIBUTING.md (dev setup, test safety, great first contributions, PR expectations), and GitHub Discussions.
+  - docs: worker warm-pool design sketch with the measured baselines.
+
 ## 1.18.3
 
 ### Patch Changes
