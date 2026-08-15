@@ -286,7 +286,9 @@ function computeLineagePath(input) {
   // sitting above further rows (see the corridor note above the constants).
   const span = Math.abs(cx - px);
   const stripBottom =
-    strip && Number(strip.height) > 0 ? Number(strip.top) + Number(strip.height) : Number.NEGATIVE_INFINITY;
+    strip && Number(strip.height) > 0 && Number.isFinite(Number(strip.top))
+      ? Number(strip.top) + Number(strip.height)
+      : Number.NEGATIVE_INFINITY;
   const baseline = Math.max(pBottom, cBottom, stripBottom);
   const dip =
     Math.min(LINEAGE_DIP_MAX_PX, Math.max(LINEAGE_DIP_MIN_PX, LINEAGE_DIP_BASE_PX + span * LINEAGE_DIP_PER_PX)) +

@@ -1486,6 +1486,12 @@ html[data-line-anim="packet"] .connection-line.line-enter {
   inset: -2px;
   border-radius: inherit;
   pointer-events: none;
+  /* Explicit: .tab-enter::before (entrance animations) parks ::before at
+     opacity 0 with fill-mode both, and an alerted tab that is also entering
+     would otherwise inherit that and render an invisible alert. Our animation
+     shorthand already displaces theirs at this specificity; the opacity must
+     be pinned the same way. */
+  opacity: 1;
   border: 2px solid var(--red);
   background: rgba(239, 68, 68, 0.12);
   box-shadow: 0 0 8px rgba(239, 68, 68, 0.4);
@@ -1505,6 +1511,7 @@ html[data-line-anim="packet"] .connection-line.line-enter {
   inset: -2px;
   border-radius: inherit;
   pointer-events: none;
+  opacity: 1; /* see the action variant above */
   border: 2px solid var(--yellow);
   background: rgba(234, 179, 8, 0.1);
   box-shadow: 0 0 8px rgba(234, 179, 8, 0.35);
