@@ -84,6 +84,7 @@ import {
   applyAgentSkill,
   refreshUserAgentSkill,
   seedAgentSessionPreamble,
+  ensureCodemanHooks,
   refreshStaleCodemanHooks,
 } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
@@ -765,11 +766,21 @@ export function registerSessionRoutes(
       await applyStatusLineConfig(workingDir, true);
     }
 
-    // COD-91 self-heal: refresh a pre-secret hooks block in an existing case so the now
-    // unconditional hook-secret gate keeps accepting its hook events. No-op for fresh
-    // cases (writeHooksConfig already wrote the secret) and for non-Codeman/absent hooks.
+    // Hooks for the workspace this session runs in. ADD-ONLY and merge-based:
+    // Codeman's own handlers are (re)written, a user's own hook entries are kept.
+    //
+    // This used to be `refreshStaleCodemanHooks`, which deliberately never ADDS —
+    // and `writeHooksConfig` only runs when Codeman CREATES a case directory. So a
+    // session in a LINKED case or any pre-existing repo (where most sessions live)
+    // got no hooks block at all, and every hook-driven surface was silently dead
+    // there: no permission/question tab alert, no Approvals Inbox item, no push,
+    // no definitive `stop`/`idle_prompt` for respawn, and no `stop`/`blocked` for
+    // the agent wait endpoints. Measured 2026-08-15 on a linked case: an
+    // AskUserQuestion dialog sat on screen with the tab showing plain `idle`.
+    // Claude Code re-reads the file, so a session already running in that
+    // workspace starts firing hooks too (verified live, same day).
     if ((body.mode ?? 'claude') === 'claude') {
-      await refreshStaleCodemanHooks(workingDir).catch(() => {});
+      await ensureCodemanHooks(workingDir).catch(() => {});
       // Agent skill (docs/agent-control-plan.md §2): ADD-ONLY on create, same shared-
       // .claude rationale as the statusLine above: a create must never remove the
       // skill from under other live sessions in the repo. Marker-guarded, so a
@@ -2899,11 +2910,19 @@ export function registerSessionRoutes(
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create case: ${getErrorMessage(err)}`);
       }
     } else if (!remote && !docker && mode !== 'opencode') {
-      // COD-91 self-heal for an EXISTING case: refresh a pre-secret hooks block so the
-      // now-unconditional hook-secret gate keeps accepting its hook events. No-op when
-      // the hooks aren't ours or already carry the secret. Skipped for remote cases —
-      // resolvedCasePath is a REMOTE path that doesn't exist on the local filesystem.
-      await refreshStaleCodemanHooks(resolvedCasePath).catch(() => {});
+      // EXISTING case directory (a linked case, a cloned repo, anything Codeman did
+      // not scaffold). Claude mode INSTALLS the hooks block when it is missing and
+      // refreshes ours when it is stale — a linked case never got one otherwise, which
+      // left every hook-driven surface dead there (see POST /api/sessions above).
+      // Other modes keep the narrower COD-91 self-heal: only claude reads `.claude`
+      // hooks, so a shell/codex quick-start should not author a block of its own.
+      // Skipped for remote cases — resolvedCasePath is a REMOTE path that doesn't
+      // exist on the local filesystem.
+      if (mode === 'claude') {
+        await ensureCodemanHooks(resolvedCasePath).catch(() => {});
+      } else {
+        await refreshStaleCodemanHooks(resolvedCasePath).catch(() => {});
+      }
     }
 
     // Agent skill injection (docs/agent-control-plan.md §2): ADD-ONLY on create,
@@ -2936,7 +2955,10 @@ export function registerSessionRoutes(
         if (!existsSync(join(resolvedCasePath, '.claude', 'settings.local.json'))) {
           await writeHooksConfig(resolvedCasePath);
         } else {
-          await refreshStaleCodemanHooks(resolvedCasePath).catch(() => {});
+          // A settings file with no hooks in it is the same dead-surface case as a
+          // linked case: this branch is already gated on `docker.hooksEnabled`, so
+          // install ours rather than only refreshing an existing block.
+          await ensureCodemanHooks(resolvedCasePath).catch(() => {});
         }
       } catch {
         /* non-fatal — the session still runs, hooks may be degraded */

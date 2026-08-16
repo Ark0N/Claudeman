@@ -646,22 +646,28 @@ export async function writeHooksConfig(casePath: string): Promise<void> {
 }
 
 /**
- * Ensures an explicitly managed case has the current Codeman hooks.
+ * Ensures a workspace Codeman is about to run Claude in has the current Codeman hooks.
  *
- * Unlike `refreshStaleCodemanHooks`, this may add Codeman handlers to a valid
- * user-owned settings file. It is therefore reserved for case quick-starts,
- * where the user has explicitly asked Codeman to manage that workspace. A
- * malformed existing file is left untouched rather than replaced.
+ * Unlike `refreshStaleCodemanHooks`, this may ADD Codeman handlers to a settings
+ * file that has none (a linked case, a cloned repo, any directory Codeman did not
+ * scaffold). It merges rather than replaces, so a user's own hook entries survive,
+ * and a malformed existing file is left untouched rather than replaced.
  *
- * ⚠️ It has NO production call site: PR #233 landed it with the hook scripts and never
- * wired it up, and knip can't flag it (`test/**` are entry points, so its tests count as
- * a use). Kept anyway, because it is redundant with neither sibling: `writeHooksConfig`
- * REPLACES a malformed settings file and rewrites unconditionally, and
- * `refreshStaleCodemanHooks` deliberately never adds hooks to a case that has none. The
- * one place it fits is quick-start's existing-case branch in session-routes.ts, and
- * moving that branch onto this function is a POLICY change (hooks would come back for a
- * user who deleted them from their case, and linked cases would start getting a hooks
- * block they have never had), so that call is left to the owner rather than made here.
+ * ⚠️ That "may add" is a deliberate POLICY, adopted 2026-08-15 after the symptom it
+ * causes was reported: hooks were only ever written when Codeman CREATED a case
+ * directory, so every session in a linked case ran with no hooks at all and each
+ * hook-driven surface was silently dead there — an AskUserQuestion dialog blocking
+ * the pane while the tab and the phone overview both read a calm `idle`, no
+ * Approvals Inbox item, no push, no definitive `stop`/`idle_prompt` for respawn, and
+ * no `stop`/`blocked` for the agent wait endpoints. The cost of the policy is the
+ * other direction: a user who DELETES Codeman's hooks from a workspace gets them
+ * back on the next session create there, because nothing on disk distinguishes
+ * "removed on purpose" from "never had any".
+ *
+ * Called from both session-create paths (`POST /api/sessions`, `POST /api/quick-start`)
+ * for claude mode, and from `restoreMuxSessions()` so sessions that predate this heal
+ * on the next server start. Claude Code re-reads the file, so a session ALREADY running
+ * in the workspace picks the hooks up without a restart (verified live, 2026-08-15).
  */
 export async function ensureCodemanHooks(casePath: string): Promise<void> {
   await withSafeSettingsWrite(casePath, 'hooks (ensure)', async (claudeDir, settingsPath) => {
