@@ -60,14 +60,14 @@ spawn_worker() {
   # NOT retryable in a loop: every quick-start failure code is terminal (§5.1).
   [ -n "$sid" ] || { jq -c '{error,errorCode}' <<<"$q" >&2; return 1; }
   [ "$mode" = claude ] || { printf '%s\n' "$sid"; return 0; }   # only claude draws a composer
-  # quick-start RESOLVES the name before creating: a linked case or an existing dir
-  # wins over a fresh scratch case, so "created => hooks" is only true after this one
-  # local grep (the same marker the server itself checks for). No marker means sendwait
-  # would false-resolve on flapping idle, possibly inside the user's REAL repo: refuse
-  # rather than run the job there.
+  # The server installs hooks into every claude workspace now, so this grep normally
+  # passes; it stays because the install is gated on a setting the operator can turn
+  # off, remote sessions never get hooks, and a session created by an older server
+  # still has none. No marker means sendwait would false-resolve on flapping idle,
+  # possibly inside the user's REAL repo: refuse rather than run the job there.
   cp=$(jq -r '.data.casePath // empty' <<<"$q")
   grep -qs '/api/hook-event' "$cp/.claude/settings.local.json" || {
-    echo "case '$name' resolved to '$cp', which has no Codeman hooks (linked or pre-existing?): pick an unused name, or work §5.1+§5.5 by hand" >&2
+    echo "case '$name' resolved to '$cp', which has no Codeman hooks (workspaceHooksEnabled off, remote, or an older server?): turn the setting on, or work §5.1+§5.5 by hand with markers" >&2
     delete_session "$sid" >/dev/null; return 1; }
   # Short composer wait FIRST, then the trust-dialog probe: a case still showing the
   # dialog can never pass the composer wait, so probing early keeps a cold case from

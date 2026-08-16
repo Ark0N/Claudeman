@@ -138,14 +138,14 @@ spawn_worker() {
   # NOT retryable in a loop: every quick-start failure code is terminal (§5.1).
   [ -n "$sid" ] || { jq -c '{error,errorCode}' <<<"$q" >&2; return 1; }
   [ "$mode" = claude ] || { printf '%s\n' "$sid"; return 0; }   # only claude draws a composer
-  # quick-start RESOLVES the name before creating: a linked case or an existing dir
-  # wins over a fresh scratch case, so "created => hooks" is only true after this one
-  # local grep (the same marker the server itself checks for). No marker means sendwait
-  # would false-resolve on flapping idle, possibly inside the user's REAL repo: refuse
-  # rather than run the job there.
+  # The server installs hooks into every claude workspace now, so this grep normally
+  # passes; it stays because the install is gated on a setting the operator can turn
+  # off, remote sessions never get hooks, and a session created by an older server
+  # still has none. No marker means sendwait would false-resolve on flapping idle,
+  # possibly inside the user's REAL repo: refuse rather than run the job there.
   cp=$(jq -r '.data.casePath // empty' <<<"$q")
   grep -qs '/api/hook-event' "$cp/.claude/settings.local.json" || {
-    echo "case '$name' resolved to '$cp', which has no Codeman hooks (linked or pre-existing?): pick an unused name, or work §5.1+§5.5 by hand" >&2
+    echo "case '$name' resolved to '$cp', which has no Codeman hooks (workspaceHooksEnabled off, remote, or an older server?): turn the setting on, or work §5.1+§5.5 by hand with markers" >&2
     delete_session "$sid" >/dev/null; return 1; }
   # Short composer wait FIRST, then the trust-dialog probe: a case still showing the
   # dialog can never pass the composer wait, so probing early keeps a cold case from
@@ -343,7 +343,8 @@ Four things this block leans on, each one link away, no detour needed to run it:
   `~/codeman-cases/<name>`, not your repo. A name that already means something (a
   linked case, a pre-existing directory) is refused by `spawn_worker` rather than
   silently reused. Spawning where the work actually is (a linked case, a git worktree)
-  is a different call with **no hooks**, and the costliest mistake in this skill: §5.1.
+  is a different call, and picking the wrong one is the costliest mistake in this
+  skill: §5.1. Those workspaces do get hooks now, unless the operator disabled it.
 - `sendwait` supplies the `\r`, picks a fresh `seq`, and self-heals a stranded Enter.
   A prompt without the `\r` is never submitted (§3), a reused `seq` is silently
   swallowed as an already-applied duplicate, and an Enter eaten by an Ink repaint
@@ -358,9 +359,9 @@ One row per job. Acting on this table alone is correct; the §5 links are the de
 
 | I want to | Call | Detail |
 |-----------|------|--------|
-| start a worker **where the work is** | `POST /api/v1/quick-start {"caseName":…}`, which **creates** `~/codeman-cases/<name>` unless the name is already a case: full signals there. Any other path (a git worktree): `POST /api/v1/sessions {"workingDir":…}` then `POST /api/v1/sessions/:id/interactive`, and expect **no hooks**. N workers means N worktrees | [§5.1](reference/verbs.md#51-where-to-spawn) |
+| start a worker **where the work is** | `POST /api/v1/quick-start {"caseName":…}`, which **creates** `~/codeman-cases/<name>` unless the name is already a case. Any other path (a git worktree): `POST /api/v1/sessions {"workingDir":…}` then `POST /api/v1/sessions/:id/interactive`. Both install hooks by default, so expect full signals in either, and **verify** rather than assume. N workers means N worktrees | [§5.1](reference/verbs.md#51-where-to-spawn) |
 | know a new worker can accept a prompt | `GET .../wait-output?match=shift+tab&from=buffer` (urlencode the `+`) | [§5.2](reference/verbs.md#52-readiness) |
-| deliver a task **and** know when it finished | `POST .../input` with `"input":"…\r"`, `clientId`, `seq`, `"wait":true`. Resolves on `stop`, so it is only trustworthy in a **case Codeman created** (claude mode + hooks present). Costs the worker one billed turn | [§5.3](reference/verbs.md#53-send-a-task-and-wait) |
+| deliver a task **and** know when it finished | `POST .../input` with `"input":"…\r"`, `clientId`, `seq`, `"wait":true`. Resolves on `stop`, so it is trustworthy only where the workspace **has hooks** (claude mode; installed by default, but the operator can disable it and remote sessions never get them). Costs the worker one billed turn | [§5.3](reference/verbs.md#53-send-a-task-and-wait) |
 | know a hook-less worker finished | it has no `stop`, and `wait:true` there resolves on flapping `idle` **without erroring**: make it print a split, unique marker and `wait-output` on that instead | [§5.5](reference/verbs.md#55-markers-for-hook-less-workers) |
 | read the answer | `GET .../last-response`, **polled** (claude/codex only; empty for the other modes) | [§5.4](reference/verbs.md#54-read-the-answer) |
 | know if it is alive | `GET .../wait?until=exit&timeout=1000`: an immediate `signal:"exit"` means dead. `status` and `pid` both lie | [§5.6](reference/verbs.md#56-alive-and-stuck) |
