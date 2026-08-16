@@ -668,7 +668,7 @@ sc 2            # Quick attach to session 2
 sc -l           # List sessions
 ```
 
-Single-digit selection (1-9), color-coded status, token counts, auto-refresh. Detach with `Ctrl+A D`.
+Single-digit selection (1-9), color-coded status, token counts, auto-refresh. Detach with `Ctrl+B D` (tmux's default prefix, which Codeman does not change for local sessions).
 
 ---
 
@@ -893,7 +893,7 @@ codeman session start -d /path/to/repo   # (s)  start a session
 codeman session list                     #      list sessions
 codeman session logs <id>                #      tail output
 codeman task add "fix the failing test"  # (t)  queue a task
-codeman attach <path>                     #      attach a Claude hook context
+codeman attach <path>                    #      show an attachment card for a local file
 ```
 
 ### Hooks (events flowing _back_ to Codeman)
