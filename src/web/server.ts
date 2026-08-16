@@ -2657,6 +2657,11 @@ export class WebServer extends EventEmitter {
               // the launch conversation until the user types again, even though
               // the re-attached CLI is on a post-`/clear` one.
               lastSubmitAt: savedState?.lastSubmitAt,
+              // The pane's last output, previous run's value. Without it every
+              // restart restamped all sessions "now" (constructor + the attach
+              // repaint within the same second), flattening the home screens'
+              // most-recently-quiet ordering to tab order after each deploy.
+              lastActivityAt: savedState?.lastActivityAt,
               // Remote SSH metadata must round-trip on recovery: without it the
               // attach cwd falls back to the (nonexistent-locally) remote path and
               // respawn rebuilds a LOCAL command, breaking the pane and silently

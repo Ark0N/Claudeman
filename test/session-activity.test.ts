@@ -246,3 +246,45 @@ describe('Session interactive idle detection', () => {
     expect(events).toEqual([]);
   });
 });
+
+describe('wire activity stamp across recovery', () => {
+  // The stamp both home screens sort the quiet group on. Recovery restores the
+  // previous run's value, and the settle window keeps the boot attach repaint
+  // (ordinary PTY output, arriving within seconds of construction) from
+  // restamping every session "now": measured live, a restart left 17 of 17
+  // sessions with an identical lastActivityAt, which flattens the ordering to
+  // tab order after every deploy.
+  const OLD = 1_700_000_000_000;
+  const restored = () =>
+    new Session({ workingDir: '/tmp', mode: 'claude', lastActivityAt: OLD } as ConstructorParameters<
+      typeof Session
+    >[0]);
+
+  it('restores the previous-run stamp and holds it through attach-repaint output', () => {
+    const session = restored();
+    expect(session.lastActivityAt).toBe(OLD);
+    (session as unknown as SessionInternals)._handleTerminalOutput('attach repaint bytes');
+    expect(session.lastActivityAt).toBe(OLD);
+    expect(session.toState().lastActivityAt).toBe(OLD);
+  });
+
+  it('a real action writes through the settle window', () => {
+    const session = restored();
+    session.assignTask('t1');
+    expect(session.lastActivityAt).toBeGreaterThan(OLD);
+  });
+
+  it('output after the window moves the stamp normally', () => {
+    const session = restored();
+    (session as unknown as { _wireActivitySettleUntil: number })._wireActivitySettleUntil = Date.now() - 1;
+    (session as unknown as SessionInternals)._handleTerminalOutput('real output');
+    expect(session.lastActivityAt).toBeGreaterThan(OLD);
+  });
+
+  it('a fresh session has no window: first output stamps immediately', () => {
+    const before = Date.now();
+    const session = new Session({ workingDir: '/tmp', mode: 'claude' });
+    (session as unknown as SessionInternals)._handleTerminalOutput('x');
+    expect(session.lastActivityAt).toBeGreaterThanOrEqual(before);
+  });
+});
