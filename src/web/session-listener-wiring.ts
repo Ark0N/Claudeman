@@ -224,6 +224,11 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
       // re-capture instead).
       approvalInbox.resolveForSession(session.id, 'resolved_in_terminal', ['idle']);
       deps.broadcast(SseEvent.SessionWorking, { id: session.id });
+      // Full state ride-along: the home screens sort the running group on
+      // lastSubmitAt, and without this the browser keeps the stamp it loaded
+      // with (a turn started after page load ranks by the PREVIOUS turn's
+      // Enter). Debounced, so working-signal flaps cost one broadcast.
+      deps.broadcastSessionStateDebounced(session.id);
       const tracker = deps.getRunSummaryTracker(session.id);
       if (tracker) {
         tracker.recordWorking();

@@ -195,7 +195,12 @@ Object.assign(CodemanApp.prototype, {
     // Order is `CodemanSessionOrder` (constants.js), shared with the desktop
     // rail: blocked first (longest-blocked at the top), then running
     // longest-first, then quiet most-recent-first.
-    const inSection = (states) => window.CodemanSessionOrder.sort(rows.filter((r) => states.includes(r.state)));
+    // Guarded: a stale cached constants.js (iOS Safari after a deploy) must
+    // degrade to tab order, not TypeError the overview away.
+    const inSection = (states) => {
+      const filtered = rows.filter((r) => states.includes(r.state));
+      return window.CodemanSessionOrder ? window.CodemanSessionOrder.sort(filtered) : filtered;
+    };
 
     // Past = conversations from the unified list that are not currently live.
     // The endpoint already folds a transcript into its owning session (via the

@@ -216,7 +216,10 @@ Object.assign(CodemanApp.prototype, {
       };
     });
 
-    return window.CodemanSessionOrder.sort(rows);
+    // Guarded like every other constants.js consumer: a stale cached
+    // constants.js (iOS Safari serves old JS after a deploy) must degrade to
+    // tab order, not TypeError the whole home screen away.
+    return window.CodemanSessionOrder ? window.CodemanSessionOrder.sort(rows) : rows;
   },
 
   // ═══════════════════════════════════════════════════════════════
