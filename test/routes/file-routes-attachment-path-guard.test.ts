@@ -56,6 +56,7 @@ import {
   registerExternalAttachment,
   type AttachmentRecord,
 } from '../../src/attachment-registry.js';
+import { SseEvent } from '../../src/web/sse-events.js';
 
 const mockedStat = vi.mocked(fs.stat);
 const mockedRealpathSync = vi.mocked(realpathSync);
@@ -353,6 +354,53 @@ describe('file-routes attachment path guard (COD-53)', () => {
       });
       expect(event.fileName).toBe('report.pdf');
       attachmentRegistry.clearSession('test-session-mlc');
+    });
+  });
+
+  // ===== Quiet registration (click-to-preview) =====
+  // The file-preview overlay registers a clicked out-of-workspace path to mint
+  // an id it can render by. It is already putting the file on screen, so the
+  // usual attachment card + unread badge would announce what the user is
+  // looking at. `notify: false` suppresses ONLY the broadcast — the guard, the
+  // registry entry and the by-id routes are identical either way.
+  describe('quiet registration', () => {
+    const outside = '/tmp/claude-1000/scratchpad/probe-run-native.png';
+
+    it('broadcasts by default, so the CLI and publish paths keep their card', async () => {
+      mockedStat.mockResolvedValue({ size: 128, isFile: () => true, mtimeMs: 5 } as never);
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments`,
+        payload: { path: outside },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(harness.ctx.broadcast).toHaveBeenCalledWith(SseEvent.AttachmentDetected, expect.anything());
+    });
+
+    it('registers and serves a clicked path without broadcasting when notify is false', async () => {
+      const content = Buffer.from('PNGDATA');
+      mockedStat.mockResolvedValue({ size: content.length, isFile: () => true, mtimeMs: 5 } as never);
+      mockedCreateReadStream.mockReturnValue(Readable.from([content]) as never);
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments`,
+        payload: { path: outside, notify: false },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.fileName).toBe('probe-run-native.png');
+      expect(harness.ctx.broadcast).not.toHaveBeenCalled();
+
+      // The preview renders from this route, so the id has to be live.
+      const rawRes = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments/${body.data.attachmentId}/raw`,
+      });
+      expect(rawRes.statusCode).toBe(200);
+      expect(rawRes.headers['content-type']).toBe('image/png');
     });
   });
 });

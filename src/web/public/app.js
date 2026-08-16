@@ -2004,6 +2004,17 @@ class CodemanApp {
     if (!body || body.dataset.rvBound === '1') return;
     body.dataset.rvBound = '1';
     body.addEventListener('click', async (ev) => {
+      // File path (_linkifyFilePaths): open it in the preview overlay, which
+      // resolves workspace and out-of-workspace paths alike.
+      const pathLink = ev.target.closest('a.rv-path');
+      if (pathLink) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const filePath = pathLink.dataset.path;
+        if (filePath) this.openFilePreview(filePath, this.activeSessionId);
+        return;
+      }
+
       // One-click copy: lift the raw source from the sibling <pre><code>.
       const copyBtn = ev.target.closest('.rv-copy-btn');
       if (copyBtn) {
@@ -2074,8 +2085,64 @@ class CodemanApp {
     const renderedText = document.createElement('div');
     renderedText.className = 'rv-text';
     renderedText.innerHTML = this._renderMarkdown(text);
+    this._linkifyFilePaths(renderedText);
     div.appendChild(renderedText);
     return div;
+  }
+
+  /**
+   * Make absolute file paths in a rendered message clickable.
+   *
+   * The terminal's link provider never sees these: the response viewer is
+   * markdown, and a path the agent wrote as prose or inline code renders as
+   * inert text — so the file it just produced (a screenshot, a report) was one
+   * copy-paste away from being viewable instead of one click. Same pattern the
+   * terminal uses (constants.js), same destination (the file-preview overlay).
+   *
+   * Walks TEXT NODES and builds anchors with DOM APIs — never innerHTML, and
+   * never a string rebuild of already-sanitized markup: the source is model
+   * output. Subtrees already inside an `<a>` are skipped so an autolinked URL
+   * is never re-cut, and the anchor's textContent is the path verbatim, so
+   * "copy code" still yields exactly what the agent printed.
+   */
+  _linkifyFilePaths(root) {
+    if (!root || typeof document === 'undefined') return;
+    // Guarded: a stale cached constants.js must degrade to plain text, not throw
+    // out of the middle of rendering a message.
+    if (typeof absoluteFilePathPattern !== 'function') return;
+    const pattern = absoluteFilePathPattern();
+
+    // Collect first: replacing a node while the walker is positioned on it
+    // invalidates the traversal.
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const targets = [];
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (node.parentElement?.closest('a')) continue;
+      pattern.lastIndex = 0;
+      if (pattern.test(node.nodeValue || '')) targets.push(node);
+    }
+
+    for (const node of targets) {
+      const value = node.nodeValue;
+      const frag = document.createDocumentFragment();
+      let cursor = 0;
+      let match;
+      pattern.lastIndex = 0;
+      while ((match = pattern.exec(value)) !== null) {
+        const path = match[1];
+        if (match.index > cursor) frag.appendChild(document.createTextNode(value.slice(cursor, match.index)));
+        const link = document.createElement('a');
+        link.className = 'rv-path';
+        link.href = '#';
+        link.dataset.path = path;
+        link.title = path;
+        link.textContent = path;
+        frag.appendChild(link);
+        cursor = match.index + path.length;
+      }
+      if (cursor < value.length) frag.appendChild(document.createTextNode(value.slice(cursor)));
+      node.parentNode?.replaceChild(frag, node);
+    }
   }
 
   _getResponseViewerAgentLabel() {

@@ -3234,6 +3234,65 @@ Object.assign(CodemanApp.prototype, {
     if (headerBtn) headerBtn.setAttribute('aria-expanded', 'false');
   },
 
+  /**
+   * Whether a path is absolute and provably OUTSIDE this session's workspace.
+   *
+   * `file-content` / `file-raw` resolve every path against `workingDir` and
+   * refuse anything that escapes it, so an absolute path elsewhere on the host
+   * (an agent's `/tmp` scratchpad capture, a screenshot, another checkout) can
+   * only ever 404 there — it has to go through the attachment routes instead.
+   *
+   * A string compare is enough for ROUTING; the real containment decision stays
+   * server-side (realpath + guard) on whichever route the request lands on. An
+   * unknown workingDir answers false, leaving the historical path untouched.
+   */
+  _isExternalPreviewPath(filePath, sessionId) {
+    if (typeof filePath !== 'string' || !filePath.startsWith('/')) return false;
+    const workingDir = this.sessions.get(sessionId)?.workingDir;
+    if (!workingDir) return false;
+    const root = workingDir.endsWith('/') ? workingDir : `${workingDir}/`;
+    return filePath !== workingDir && !filePath.startsWith(root);
+  },
+
+  /**
+   * Register an out-of-workspace path as a live external attachment and return
+   * its id, so the preview can render it through the by-id attachment routes.
+   *
+   * `notify: false` keeps this quiet: the caller is already opening the file in
+   * the overlay, so the usual attachment card + unread badge would be noise on
+   * top of the thing the user just asked to see. The server still enforces the
+   * full attachment guard (blocked secret trees, extension allowlist, symlinks
+   * resolved), so a refusal here is a policy answer worth showing verbatim.
+   *
+   * @returns {Promise<{attachmentId?: string, size?: number, error?: string}>}
+   */
+  async _registerExternalPreview(filePath, sessionId) {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/attachments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath, notify: false }),
+      });
+      const result = await res.json().catch(() => null);
+      if (res.ok && result?.success && result.data?.attachmentId) {
+        return { attachmentId: result.data.attachmentId, size: result.data.size || 0 };
+      }
+      const reason = result?.error || `Cannot open this file (HTTP ${res.status})`;
+      // The registry's type answer is a policy term, not an explanation, and the
+      // user just clicked a file they can see on disk. Say what IS previewable
+      // from outside the workspace instead.
+      if (/unsupported/i.test(reason)) {
+        const ext = (filePath.split('.').pop() || '').toLowerCase();
+        return {
+          error: `Cannot preview .${ext} from outside the session workspace (images, PDF, Office documents, Markdown and text only).`,
+        };
+      }
+      return { error: reason };
+    } catch (err) {
+      return { error: err.message || 'Cannot open this file' };
+    }
+  },
+
   async openFilePreview(filePath, sessionId = this.activeSessionId, attachmentId = null) {
     if (!sessionId || !filePath) return;
 
@@ -3258,13 +3317,34 @@ Object.assign(CodemanApp.prototype, {
 
     const ext = (filePath.split('.').pop() || '').toLowerCase();
 
+    // Out-of-workspace path: mint an attachment id up front. Every branch below
+    // talks to a workspace-confined route, so without this the image/PDF ones
+    // render a broken frame and the text one reports a bare "File not found"
+    // for a file that is sitting right there on disk.
+    let externalError = '';
+    let externalSize = 0;
+    if (!attachmentId && this._isExternalPreviewPath(filePath, sessionId)) {
+      const external = await this._registerExternalPreview(filePath, sessionId);
+      attachmentId = external.attachmentId || null;
+      externalError = external.error || '';
+      externalSize = external.size || 0;
+    }
+    if (!attachmentId && externalError) {
+      footerEl.textContent = '';
+      bodyEl.innerHTML = `<div class="binary-message">${escapeHtml(externalError)}</div>`;
+      return;
+    }
+
     // Registered attachment: render straight from its by-id routes — images and
     // PDFs inline, Office docs via the server-converted PDF preview, text fetched
     // raw. (Workspace-path previews fall through to the file-content endpoint.)
     if (attachmentId) {
       const base = `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}`;
       const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
-      footerEl.textContent = ext.toUpperCase();
+      // Size when we just registered the file ourselves, so a path opened from a
+      // link reads like a workspace preview instead of a bare "PNG". History
+      // cards arrive with an id and no size and keep the short form.
+      footerEl.textContent = externalSize ? `${this.formatFileSize(externalSize)} • ${ext}` : ext.toUpperCase();
       if (IMAGE_EXTS.has(ext)) {
         bodyEl.innerHTML = `<img src="${escapeHtml(`${base}/raw`)}" alt="${escapeHtml(filePath)}">`;
       } else if (ext === 'pdf') {

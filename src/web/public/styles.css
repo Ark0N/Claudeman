@@ -9855,13 +9855,18 @@ kbd {
 
 /* ========== File Preview Overlay ========== */
 
+/* Above the response viewer (5000) and its backdrop (4999): a file path in the
+   chat opens this overlay, and at the old 2000 it rendered BEHIND the panel it
+   was launched from — the click looked dead. Same relationship the path picker
+   and its preview already have (10020 / 10030). Still below the toast and
+   picker band (10000+), so a "Saved" toast keeps landing on top. */
 .file-preview-overlay {
   position: fixed;
   inset: 0;
   background: var(--modal-backdrop);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  z-index: 2000;
+  z-index: 5100;
   display: none;
   align-items: center;
   justify-content: center;
@@ -12411,6 +12416,16 @@ kbd {
 .rv-text a:hover,
 .response-viewer-body a:hover {
   border-bottom-color: var(--accent);
+}
+
+/* File paths linkified out of the message text. Monospace so a path still reads
+   as a path in prose, and break-all because these are long and the viewer is
+   narrow on a phone. Colour/underline come from the .rv-text a rule above. */
+.rv-text a.rv-path {
+  font-family: 'Fira Code', 'JetBrains Mono', 'SF Mono', Menlo, Monaco, monospace;
+  font-size: 0.92em;
+  word-break: break-all;
+  cursor: pointer;
 }
 
 /* Tables — scroll wrapper keeps table proper while allowing horizontal overflow */

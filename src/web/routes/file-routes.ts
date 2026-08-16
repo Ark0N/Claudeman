@@ -1449,7 +1449,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   app.post('/api/sessions/:id/attachments', async (req, reply) => {
     const { id } = req.params as { id: string };
     const session = findSessionOrFail(ctx, id, req);
-    const body = (req.body || {}) as { path?: string };
+    const body = (req.body || {}) as { path?: string; notify?: boolean };
 
     if (!body.path || typeof body.path !== 'string') {
       reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing attachment path'));
@@ -1458,7 +1458,15 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
 
     try {
       const event = await registerExternalAttachment(id, body.path, { sessionWorkingDir: session.workingDir });
-      ctx.broadcast(SseEvent.AttachmentDetected, event);
+      // `notify: false` registers QUIETLY. The file-preview overlay uses it to
+      // mint an id for a path the user just clicked (a terminal or response-viewer
+      // link pointing outside the workspace): it is already opening the file, so
+      // the attachment card + unread badge would be noise announcing what is
+      // filling the screen. Default stays true — every other caller (the
+      // `codeman attach` CLI, codeman-publish) wants the card.
+      if (body.notify !== false) {
+        ctx.broadcast(SseEvent.AttachmentDetected, event);
+      }
       return { success: true, data: event };
     } catch (err) {
       if (err instanceof AttachmentRegistrationError) {

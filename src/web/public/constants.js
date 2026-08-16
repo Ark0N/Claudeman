@@ -893,6 +893,45 @@ function computeRewriteScrollLine(input) {
   return Math.max(0, (input?.baseY || 0) - linesFromBottom);
 }
 
+/**
+ * Absolute file paths in agent output, as ONE pattern with two consumers: the
+ * xterm link provider (terminal-ui.js) and the response viewer's markdown
+ * linkifier (app.js). They used to be able to drift, and a path that is
+ * clickable in the terminal but inert in the chat reads as a bug, not a policy.
+ *
+ * Anchored on a known absolute root (so an ordinary fraction or a date can
+ * never match) and terminated by a known extension (so the end of the path is
+ * unambiguous — a trailing `)` or `.` after the extension stays out). Longer
+ * extensions come first in each family (`tsx|ts`), so the trailing `\b` cannot
+ * be satisfied by the shorter branch mid-word.
+ *
+ * ⚠ Consumers must never share one instance: `lastIndex` is per-object state on
+ * a `/g` regex, so {@link absoluteFilePathPattern} mints a fresh one per call.
+ */
+const FILE_PATH_LINK_PATTERN =
+  /(\/(?:home|Users|tmp|var|private|etc|opt|mnt|srv|media|data|workspace)\/[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|ya?ml|csv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html|toml|ini|sql|png|jpe?g|gif|webp|bmp|svg|pdf|docx|pptx|mp4|webm|mov|mp3|wav))\b/g;
+
+/** A fresh, zero-state instance of {@link FILE_PATH_LINK_PATTERN}. */
+function absoluteFilePathPattern() {
+  return new RegExp(FILE_PATH_LINK_PATTERN.source, 'g');
+}
+
+/**
+ * Extensions the file-preview overlay renders itself. Everything else a link
+ * points at goes to the tail/log viewer, which is the right home for a growing
+ * text file and the wrong one for bytes (tailing a PNG shows binary noise).
+ */
+const FILE_PREVIEW_EXTENSIONS = new Set(
+  ('png jpg jpeg gif webp bmp svg pdf docx pptx mp4 webm mov mp3 wav').split(' ')
+);
+
+/** Whether a path's extension is one {@link FILE_PREVIEW_EXTENSIONS} covers. */
+function previewsInFileViewer(filePath) {
+  const ext = String(filePath || '').split('.').pop().toLowerCase();
+  return FILE_PREVIEW_EXTENSIONS.has(ext);
+}
+
 if (typeof window !== 'undefined') {
   window.CodemanHistoryFormat = { formatHistoryBytes, computeHistoryTruncationNotice, computeRewriteScrollLine };
+  window.CodemanFilePaths = { absoluteFilePathPattern, previewsInFileViewer, FILE_PREVIEW_EXTENSIONS };
 }

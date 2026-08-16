@@ -18,18 +18,25 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-const SOURCE = readFileSync(join(__dirname, '..', 'src', 'web', 'public', 'terminal-ui.js'), 'utf-8');
+const publicFile = (name: string) => readFileSync(join(__dirname, '..', 'src', 'web', 'public', name), 'utf-8');
 
-/** Extract `const <name> = /.../g;` from the shipped source and build the RegExp. */
+const SOURCE = publicFile('terminal-ui.js');
+// The file-path pattern lives in constants.js: the response viewer linkifies the
+// same paths out of markdown, and one definition is what keeps a path that is
+// clickable in the terminal from being inert in the chat.
+const CONSTANTS_SOURCE = publicFile('constants.js');
+
+/** Extract `const <name> = /.../g;` from the shipped sources and build the RegExp. */
 function shippedPattern(name: string): RegExp {
-  const m = SOURCE.match(new RegExp(`const ${name} =\\s*\\n?\\s*(/(?:[^/\\\\\\n]|\\\\.)+/[a-z]*)`));
-  if (!m) throw new Error(`pattern ${name} not found in terminal-ui.js`);
+  const literal = new RegExp(`const ${name} =\\s*\\n?\\s*(/(?:[^/\\\\\\n]|\\\\.)+/[a-z]*)`);
+  const m = SOURCE.match(literal) ?? CONSTANTS_SOURCE.match(literal);
+  if (!m) throw new Error(`pattern ${name} not found in terminal-ui.js or constants.js`);
   const lit = m[1];
   const lastSlash = lit.lastIndexOf('/');
   return new RegExp(lit.slice(1, lastSlash), lit.slice(lastSlash + 1));
 }
 
-const PATTERN_NAMES = ['urlPattern', 'cmdPattern', 'extPattern', 'bashPattern'];
+const PATTERN_NAMES = ['urlPattern', 'cmdPattern', 'FILE_PATH_LINK_PATTERN', 'bashPattern'];
 
 /** Lines that made 0.9.10's cmdPattern backtrack exponentially (>2s each). */
 const KILLER_LINES = [
@@ -116,15 +123,24 @@ describe('terminal link-provider regexes (shipped source)', () => {
     }
   });
 
-  it('extPattern links pasted image/PDF attachment paths', () => {
+  it('the file-path pattern links pasted image/PDF/media attachment paths', () => {
     // `.claude-images/paste-*.png` is what Codeman writes for a pasted screenshot;
     // without image extensions the path rendered as plain, unclickable text.
-    const ext = shippedPattern('extPattern');
+    const ext = shippedPattern('FILE_PATH_LINK_PATTERN');
     const cases = [
       '/home/arkon/default/claudeman/.claude-images/paste-1785164958410-d11eb7d0.png',
       '/tmp/shot.jpeg',
       '/opt/app/report.pdf',
       '/home/a/diagram.svg',
+      // An agent's own scratchpad capture — the path shape this whole feature
+      // exists for, and the one that used to open a "File not found" preview.
+      '/tmp/claude-1000/-home-arkon-default-claudeman/7b3fefd2/scratchpad/probe-run-native.png',
+      // macOS and WSL roots: unmatched before, so Mac users had no clickable
+      // paths at all outside /var and /tmp.
+      '/Users/arbbot/codeman-cases/report.docx',
+      '/mnt/d/captures/demo.mp4',
+      // Longer extension of a family must win over its prefix (tsx over ts).
+      '/home/a/src/App.tsx',
     ];
     for (const path of cases) {
       ext.lastIndex = 0;
@@ -132,6 +148,13 @@ describe('terminal link-provider regexes (shipped source)', () => {
       expect(m, path).not.toBeNull();
       expect(m![1], path).toBe(path);
     }
+  });
+
+  it('terminal-ui builds its path pattern from the shared factory', () => {
+    // Structural guard: a local literal here would drift from the response
+    // viewer's linkifier, which is the divergence the move exists to prevent.
+    expect(SOURCE).toContain('absoluteFilePathPattern()');
+    expect(SOURCE).not.toMatch(/const extPattern =\s*\n?\s*\//);
   });
 
   it('cmdPattern arg group cannot match empty tokens (the exponential trigger)', () => {
