@@ -332,7 +332,7 @@ describe('search results', () => {
           sessionId: 'live-1',
           sessionName: 'w1-alpha',
           timestamp: NOW,
-          snippet: '/tmp/alpha',
+          snippet: 'w1-alpha — /tmp/alpha',
           exactMatch: true,
           jumpTo: { kind: 'session', sessionId: 'live-1' },
         },
@@ -368,6 +368,8 @@ describe('search results', () => {
     expect(entries.map((entry) => entry.kind)).toEqual(['header', 'result', 'result', 'header', 'result']);
     expect(entries[0].text).toBe('SESSIONS');
     expect(entries[1]).toMatchObject({ text: 'w1-alpha', sessionId: 'live-1', live: true });
+    // The snippet opens with the session name, which the row already shows.
+    expect(entries[1].detail).toBe('/tmp/alpha');
     // A session that is not on the list cannot be selected into.
     expect(entries[2]).toMatchObject({ text: 'w9-old', live: false });
     expect(entries[4]).toMatchObject({ text: 'docs/notes.md', live: false });

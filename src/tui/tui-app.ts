@@ -50,7 +50,7 @@ import chalk from 'chalk';
 import { palette, table, tint, type Tone } from '../cli-style.js';
 import { CODEMAN_INSTANCE, resolveTmuxSocketName } from '../config/instance.js';
 import { getErrorMessage } from '../types/api.js';
-import { toDisplayLines } from './tui-ansi.js';
+import { dropSeveredEscape, toDisplayLines } from './tui-ansi.js';
 import { approvalAnswerForKey, newApprovalIds } from './tui-approvals.js';
 import { composerScroll, composerStep, composerText, createComposer, type TuiComposerState } from './tui-composer.js';
 import { formatAwayDigest } from './tui-digest.js';
@@ -895,7 +895,8 @@ class TuiApp {
     try {
       const raw = await this.client.fetchTerminalTail(sessionId, PREVIEW_TAIL_BYTES);
       if (this.previewSessionId !== sessionId) return;
-      this.applyPreview({ sessionId, lines: toDisplayLines(raw).slice(-PREVIEW_MAX_LINES) });
+      const lines = toDisplayLines(dropSeveredEscape(raw)).slice(-PREVIEW_MAX_LINES);
+      this.applyPreview({ sessionId, lines });
     } catch {
       // A tail that cannot be read is a pane-level fact, not a connection one:
       // the list stays exactly as it is and only this pane says so.

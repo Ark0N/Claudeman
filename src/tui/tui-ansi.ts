@@ -8,10 +8,20 @@
  * cursor is dropped, and a `\r` is honored as "back to column 0" so a spinner
  * that repaints its line 200 times contributes one line instead of 200.
  *
+ * CURSOR ADDRESSING (`ESC [ r ; c H`) is honored too, and it has to be: an Ink
+ * TUI like Claude Code repaints by ROW and emits almost no newlines, so
+ * dropping those sequences collapses a whole screen into one unreadable line
+ * (measured against a live pane, 2026-08-16). A jump to column 1 starts a new
+ * display line, a jump within a row moves the write position, which is the same
+ * reading `normalizeCapturedFrame` in `web/approval-inbox.ts` takes of the same
+ * kind of frame.
+ *
  * Two approximations are deliberate, because the alternative is an emulator:
  * a carriage-return overwrite counts CODE POINTS, not display columns (so a
  * repaint over CJK text can land one cell off), and tab stops are counted the
  * same way. Neither can corrupt output, they only shift a repaint's alignment.
+ * Absolute ROW numbers are ignored as well: rows arrive in the order they are
+ * painted, which for a tail is the order worth reading.
  *
  * @module tui/tui-ansi
  */
@@ -27,6 +37,8 @@ export const SGR_RESET = '\x1b[0m';
 const TAB_WIDTH = 8;
 /** Cap on remembered SGR sequences per cell, so a pathological stream cannot grow one unboundedly. */
 const MAX_ACTIVE_SGR = 32;
+/** Ceiling on a display line's cells: a stream may address column 99999, a terminal has none. */
+const MAX_LINE_CELLS = 1000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Escape-sequence scanning
@@ -37,6 +49,15 @@ interface EscapeScan {
   next: number;
   /** The sequence itself, only when it is SGR (`CSI ... m`) and therefore kept. */
   sgr?: string;
+  /** 1-based column of a cursor-position sequence (`CSI r ; c H` or `f`). */
+  column?: number;
+}
+
+/** The column a `CSI r ; c H` addresses. Both parameters default to 1. */
+function cursorColumn(params: string): number {
+  const parts = params.split(';');
+  const column = Number.parseInt(parts[1] ?? '', 10);
+  return Number.isSafeInteger(column) && column > 0 ? column : 1;
 }
 
 /** Scan a CSI body starting at `from` (params, then intermediates, then a final byte). */
@@ -47,6 +68,9 @@ function readCsi(text: string, start: number, from: number, keepSgr: boolean): E
   if (j >= text.length) return { next: text.length };
   const next = j + 1;
   if (keepSgr && text[j] === 'm') return { next, sgr: text.slice(start, next) };
+  if (keepSgr && (text[j] === 'H' || text[j] === 'f')) {
+    return { next, column: cursorColumn(text.slice(from, j)) };
+  }
   return { next };
 }
 
@@ -320,6 +344,17 @@ export function toDisplayLines(raw: string): string[] {
     col = 0;
   };
 
+  /**
+   * Park the write position at a column, padding the gap so the cell array
+   * never grows a hole (a hole would crash the replay, and a stream can address
+   * any column it likes).
+   */
+  const moveTo = (column: number): void => {
+    const target = Math.min(column, MAX_LINE_CELLS);
+    while (cells.length < target) cells.push({ text: ' ', sgr: '' });
+    col = target;
+  };
+
   const write = (text: string, width: number): void => {
     if (width === 0) {
       // A combining mark belongs to the character it follows, never to a cell
@@ -340,6 +375,11 @@ export function toDisplayLines(raw: string): string[] {
       if (scan.sgr !== undefined) {
         active = applySgr(active, scan.sgr);
         sgr = active.join('');
+      } else if (scan.column !== undefined) {
+        // Column 1 is a fresh row, which is the only thing a repainting TUI
+        // gives us to split lines on.
+        if (scan.column <= 1) endLine();
+        else moveTo(scan.column - 1);
       }
       i = scan.next;
       continue;
@@ -375,6 +415,26 @@ export function toDisplayLines(raw: string): string[] {
   }
   endLine();
   return lines;
+}
+
+/**
+ * The parameter bytes plus final byte of a CSI sequence whose `ESC [` was cut
+ * off. Requires at least one parameter byte, so ordinary text starting with a
+ * letter is never mistaken for one.
+ */
+const SEVERED_CSI = /^[0-9;?:<>=]+[A-Za-z]/;
+
+/**
+ * Drop the remains of an escape sequence a byte-sliced tail begins in the
+ * middle of.
+ *
+ * `GET /api/sessions/:id/terminal?tail=N` cuts the buffer at a byte offset, so
+ * a tail can start inside `ESC [ 12 ; 1 H` and hand the parser `;1H` as text,
+ * which is exactly what it then prints (observed against a live Claude pane).
+ * Only the severed head is dropped, never a whole line.
+ */
+export function dropSeveredEscape(raw: string): string {
+  return raw.replace(SEVERED_CSI, '');
 }
 
 /**

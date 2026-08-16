@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   clipStyledLine,
+  dropSeveredEscape,
   padDisplay,
   stripStyles,
   toDisplayLines,
@@ -42,12 +43,29 @@ describe('toDisplayLines', () => {
     expect(toDisplayLines('\x1b]0;window title\x1b\\text')).toEqual(['text']);
   });
 
-  it('strips DECSET/DECRST, cursor movement and charset selection', () => {
+  it('strips DECSET/DECRST, relative cursor movement and charset selection', () => {
     expect(toDisplayLines('\x1b[?25lvisible\x1b[?25h')).toEqual(['visible']);
     expect(toDisplayLines('a\x1b[5Cb')).toEqual(['ab']);
-    expect(toDisplayLines('\x1b[2J\x1b[H\x1b[1;1Hhome')).toEqual(['home']);
     expect(toDisplayLines('\x1b(0lqk\x1b(B')).toEqual(['lqk']);
     expect(toDisplayLines('\x1b=app\x1b>')).toEqual(['app']);
+  });
+
+  it('splits a row-addressed repaint into lines, which is how an Ink TUI paints', () => {
+    // Claude Code emits almost no newlines: without this the whole screen is
+    // one line and nothing in the preview is readable.
+    expect(toDisplayLines('\x1b[1;1Hfirst\x1b[2;1Hsecond\x1b[3;1Hthird')).toEqual(['', 'first', 'second', 'third']);
+    // A jump inside a row is a write position, not a new line.
+    expect(toDisplayLines('\x1b[1;1Hab\x1b[1;5Hcd')).toEqual(['', 'ab  cd']);
+    expect(toDisplayLines('\x1b[1;1Habcdef\x1b[1;2HXY')).toEqual(['', 'aXYdef']);
+    // Both parameters default to 1, so a bare CUP is a fresh row.
+    expect(toDisplayLines('a\x1b[Hb')).toEqual(['a', 'b']);
+    expect(toDisplayLines('a\x1b[3;1fb')).toEqual(['a', 'b']);
+  });
+
+  it('refuses to allocate a line for a column no terminal has', () => {
+    const lines = toDisplayLines('\x1b[1;99999Hx');
+    expect(lines).toHaveLength(1);
+    expect(visibleWidth(lines[0])).toBeLessThanOrEqual(1001);
   });
 
   it('strips C1 controls and their sequences', () => {
@@ -86,6 +104,20 @@ describe('toDisplayLines', () => {
     expect(toDisplayLines('abc\x1b[31')).toEqual(['abc']);
     expect(toDisplayLines('\x1b]0;no terminator')).toEqual(['']);
     expect(() => toDisplayLines('\x1b\x1b\x1b[[[m')).not.toThrow();
+  });
+});
+
+describe('dropSeveredEscape', () => {
+  it('drops the remains of a sequence a byte-sliced tail starts inside', () => {
+    expect(dropSeveredEscape(';1Hstill here')).toBe('still here');
+    expect(dropSeveredEscape('12;3Htext')).toBe('text');
+    expect(dropSeveredEscape('31mred')).toBe('red');
+  });
+
+  it('leaves ordinary text alone', () => {
+    expect(dropSeveredEscape('hello world')).toBe('hello world');
+    expect(dropSeveredEscape('\x1b[31mred')).toBe('\x1b[31mred');
+    expect(dropSeveredEscape('')).toBe('');
   });
 });
 
