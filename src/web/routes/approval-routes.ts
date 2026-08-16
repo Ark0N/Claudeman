@@ -7,6 +7,8 @@
  * - `POST /api/approvals/:id/answer`: answer in place by sending the
  *   corresponding keystrokes to the session (digit / Esc / idle-prompt text)
  * - `POST /api/approvals/:id/dismiss`: drop the item without keystrokes
+ * - `POST /api/approvals/session/:sessionId/viewed`: mark the session's pending
+ *   IDLE prompt as seen (tab alert spent, item still pending)
  *
  * Normal authed API surface (NOT the localhost hook-secret bypass). Answering
  * is take-then-write: the item is removed BEFORE keystrokes go out so a
@@ -111,6 +113,24 @@ export function registerApprovalRoutes(app: FastifyInstance, ctx: SessionPort): 
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Session is not accepting input');
     }
     return { success: true, data: { id: item.id, sessionId: item.sessionId, action: answer.action } };
+  });
+
+  /**
+   * "A human is looking at this session": acknowledge its pending IDLE prompt.
+   * The yellow tab alert used to be cleared in the browser's memory only, so
+   * `GET /api/approvals` re-armed it on the next reload (a tab you had already
+   * checked went yellow again) and the user's other devices never heard about
+   * it at all. The item is NOT resolved, only marked seen; the
+   * `approval:updated` broadcast is what clears the alert everywhere else.
+   *
+   * ⚠️ Idle only, by construction (`acknowledge()` defaults to `['idle']`):
+   * viewing a permission/question dialog does not answer it, so the red alert
+   * must survive being viewed.
+   */
+  app.post<{ Params: { sessionId: string } }>('/api/approvals/session/:sessionId/viewed', async (req) => {
+    const session = findSessionOrFail(ctx, req.params.sessionId, req);
+    const item = approvalInbox.acknowledge(session.id);
+    return { success: true, data: { sessionId: session.id, acknowledged: item?.id ?? null } };
   });
 
   app.post<{ Params: { id: string } }>('/api/approvals/:id/dismiss', async (req) => {

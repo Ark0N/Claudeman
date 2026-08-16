@@ -845,6 +845,24 @@ class CodemanApp {
     this.updateTabAlertFromHooks(sessionId);
   }
 
+  /**
+   * "I looked at this session": spend its pending IDLE tab alert (the yellow
+   * one), locally AND server-side. The clear used to live only in this tab's
+   * memory, so `seedApprovals()` re-armed it from `GET /api/approvals` on the
+   * next reload (a tab you had already checked went yellow again), and the
+   * user's other devices never heard about it. The server marks the approval
+   * item acknowledged (it stays pending and answerable) and broadcasts
+   * `approval:updated`, which is what clears the alert everywhere else.
+   *
+   * ⚠️ Idle only: action alerts (permission/question) mean an unanswered dialog
+   * is on screen, and looking at one does not answer it.
+   */
+  markIdleAlertSeen(sessionId) {
+    if (!this.pendingHooks.get(sessionId)?.has('idle_prompt')) return;
+    this.clearPendingHooks(sessionId, 'idle_prompt');
+    this.acknowledgeIdleApprovalOnView?.(sessionId);
+  }
+
   updateTabAlertFromHooks(sessionId) {
     const hooks = this.pendingHooks.get(sessionId);
     if (!hooks || hooks.size === 0) {
@@ -5144,7 +5162,15 @@ class CodemanApp {
       if (this._raiseDetached(sessionId)) return;
     }
     const forceReload = options?.forceReload === true;
-    if (this.activeSessionId === sessionId && !forceReload) return;
+    if (this.activeSessionId === sessionId && !forceReload) {
+      // Clicking the tab you are already on is still "I checked it". The alert
+      // can be armed on the ACTIVE tab (a live idle_prompt fires regardless of
+      // which tab is showing, and so does the reload seed), and every other
+      // clear path runs on the switch this early return skips, leaving a
+      // yellow tab that no click could clear.
+      this.markIdleAlertSeen(sessionId);
+      return;
+    }
     if (this.activeSessionId === sessionId && forceReload) {
       this.terminalBufferCache?.delete(sessionId);
       this._xtermSnapshots?.delete(sessionId);
@@ -5200,8 +5226,10 @@ class CodemanApp {
     // switch when that option is on. Transform/opacity/clip-path only, xterm's
     // FitAddon reads the untransformed layout box, so this cannot reach the PTY.
     this.playTerminalEntrance?.(sessionId);
-    // Clear idle hooks on view, but keep action hooks until user interacts
-    this.clearPendingHooks(sessionId, 'idle_prompt');
+    // Clear idle hooks on view, but keep action hooks until user interacts.
+    // Also acknowledged server-side, so the yellow does not come back on the
+    // next reload and the user's other devices clear it too.
+    this.markIdleAlertSeen(sessionId);
     // Instant active-class toggle (no 100ms debounce), then schedule full render for badges/status
     this._updateActiveTabImmediate(sessionId);
     // Handheld: the session drawer overlays the terminal, so slide it away now

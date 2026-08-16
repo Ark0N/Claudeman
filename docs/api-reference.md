@@ -442,9 +442,11 @@ Design: [`approvals-inbox-plan.md`](approvals-inbox-plan.md).
 - `GET /api/v1/approvals` → `{ approvals: ApprovalItem[] }`, oldest first,
   ownership-scoped in multi-user mode. `ApprovalItem`: `{ id, sessionId,
   sessionName, kind: 'permission'|'question'|'idle', createdAt, toolName?,
-  toolSummary?, message?, cwd?, context?, options?: {n, label}[] }`. `context`
-  is the ANSI-stripped visible pane frame; `options` is present only when the
-  dialog's numbered choices parsed confidently.
+  toolSummary?, message?, cwd?, context?, options?: {n, label}[],
+  acknowledgedAt? }`. `context` is the ANSI-stripped visible pane frame;
+  `options` is present only when the dialog's numbered choices parsed
+  confidently; `acknowledgedAt` marks an item a human has already looked at
+  (see `/viewed` below) and tells clients not to re-arm its tab alert.
 - `POST /api/v1/approvals/:id/answer` with `{ action: 'approve' }` (sends the
   digit `1`), `{ action: 'deny' }` (sends Esc), `{ action: 'option', option: n }`
   (sends the digit; accepted only when `n` is among the item's parsed
@@ -453,9 +455,17 @@ Design: [`approvals-inbox-plan.md`](approvals-inbox-plan.md).
   `409 CONFLICT` when the dialog left the screen or another actor answered
   first, `422 OPERATION_FAILED` when the session refused input.
 - `POST /api/v1/approvals/:id/dismiss` removes the item without keystrokes.
+- `POST /api/v1/approvals/session/:sessionId/viewed` → `{ sessionId,
+  acknowledged: itemId | null }`. Marks the session's pending **idle** item as
+  seen by a human (the web UI calls it when you open the session's tab): the
+  item stays pending and answerable, but stops arming the yellow tab alert on
+  every client, including after a reload. Permission/question items are never
+  acknowledged this way, since looking at a dialog does not answer it. `404`
+  for an unknown or inaccessible session; acknowledging twice is a no-op
+  (`acknowledged: null`).
 
 SSE events: `approval:pending` (full item), `approval:updated` (context/options
-re-captured), `approval:resolved` (`{ id, sessionId, kind, resolution }` with
+re-captured, or the item acknowledged), `approval:resolved` (`{ id, sessionId, kind, resolution }` with
 `resolution` one of `answered | resolved_in_terminal | superseded |
 session_ended | dismissed | expired`).
 

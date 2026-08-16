@@ -216,6 +216,44 @@ describe('ApprovalInbox', () => {
     expect(inbox.getForSession('s1')?.id).toBe(newer.id);
   });
 
+  it('acknowledge marks an idle item seen without resolving it, and emits onUpdated once', () => {
+    const { updated, resolved } = collect(inbox);
+    const item = inbox.notePrompt({ sessionId: 's1', sessionName: 'w1', kind: 'idle' });
+    const acked = inbox.acknowledge('s1');
+    expect(acked?.id).toBe(item.id);
+    expect(acked?.acknowledgedAt).toBeGreaterThan(0);
+    // Still pending and still answerable: the human looked, they did not answer.
+    expect(inbox.getById(item.id)?.acknowledgedAt).toBeGreaterThan(0);
+    expect(inbox.listPending()).toHaveLength(1);
+    expect(resolved).toHaveLength(0);
+    expect(updated).toEqual([expect.objectContaining({ id: item.id })]);
+    // Idempotent: a second view does not re-broadcast.
+    expect(inbox.acknowledge('s1')).toBeUndefined();
+    expect(updated).toHaveLength(1);
+  });
+
+  it('acknowledge never touches a permission/question item (viewing is not answering)', () => {
+    const { updated } = collect(inbox);
+    const permission = inbox.notePrompt({ sessionId: 's1', sessionName: 'w1', kind: 'permission' });
+    expect(inbox.acknowledge('s1')).toBeUndefined();
+    expect(inbox.getById(permission.id)?.acknowledgedAt).toBeUndefined();
+
+    const question = inbox.notePrompt({ sessionId: 's2', sessionName: 'w2', kind: 'question' });
+    expect(inbox.acknowledge('s2')).toBeUndefined();
+    expect(inbox.getById(question.id)?.acknowledgedAt).toBeUndefined();
+    expect(updated).toHaveLength(0);
+
+    expect(inbox.acknowledge('nope')).toBeUndefined();
+  });
+
+  it('a new prompt after an acknowledgement arms the alert again', () => {
+    inbox.notePrompt({ sessionId: 's1', sessionName: 'w1', kind: 'idle' });
+    inbox.acknowledge('s1');
+    const next = inbox.notePrompt({ sessionId: 's1', sessionName: 'w1', kind: 'idle' });
+    expect(next.acknowledgedAt).toBeUndefined();
+    expect(inbox.getForSession('s1')?.acknowledgedAt).toBeUndefined();
+  });
+
   it('dismiss removes without answering', () => {
     const { resolved } = collect(inbox);
     const item = inbox.notePrompt({ sessionId: 's1', sessionName: 'w1', kind: 'question' });

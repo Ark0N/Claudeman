@@ -19,6 +19,8 @@
  * - Answer flow is take-then-write: `take()` removes the item BEFORE keystrokes
  *   are sent so a double-tap cannot double-send; `restore()` re-inserts on a
  *   failed write unless a newer prompt arrived meanwhile.
+ * - Acknowledgement (`acknowledge()`, idle items only) is NOT resolution: the
+ *   item stays pending, it just stops arming the tab alert on every client.
  *
  * @dependencies utils (stripAnsi)
  * @consumedby web/routes/hook-event-routes (notePrompt/resolve), web/routes/approval-routes,
@@ -61,6 +63,14 @@ export interface ApprovalItem {
   cwd?: string;
   /** ANSI-stripped tail of the visible pane frame at capture time. */
   context?: string;
+  /**
+   * Set when a human looked at the session (the web UI selecting its tab). The
+   * item stays PENDING and answerable, only its tab alert is spent: clients
+   * skip re-arming the alert for an acknowledged item when they seed from
+   * `GET /api/approvals`, which is what makes "I checked it" survive a reload
+   * and reach the user's other devices. See `acknowledge()`.
+   */
+  acknowledgedAt?: number;
   /**
    * Present only when the frame parsed confidently. Gates which digits the
    * answer endpoint accepts; absent → only approve('1')/deny(Esc) are allowed.
@@ -304,6 +314,25 @@ export class ApprovalInbox {
     if (this.stopped || this.items.has(item.sessionId)) return;
     this.items.set(item.sessionId, item);
     this.onPending?.(item);
+  }
+
+  /**
+   * Mark a session's pending item as SEEN by a human, and return it (undefined
+   * when there is nothing to acknowledge or it is already acknowledged). The
+   * item is NOT resolved: an idle prompt a human glanced at is still unanswered,
+   * so it stays in the inbox, stays answerable, and stays available as Read My
+   * Mind context. Only the tab alert it armed is spent.
+   *
+   * ⚠️ `kinds` defaults to `['idle']` and callers must keep it that narrow:
+   * looking at a permission/question dialog does not answer it, so the red
+   * "needs you" alert has to survive being viewed.
+   */
+  acknowledge(sessionId: string, kinds: ApprovalKind[] = ['idle']): ApprovalItem | undefined {
+    const item = this.getForSession(sessionId);
+    if (!item || !kinds.includes(item.kind) || item.acknowledgedAt) return undefined;
+    item.acknowledgedAt = Date.now();
+    if (!this.stopped) this.onUpdated?.(item);
+    return item;
   }
 
   /** Remove an item without keystrokes (user chose Dismiss). */

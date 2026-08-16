@@ -283,6 +283,59 @@ describe('approval routes', () => {
     expect(await listApprovals(harness)).toHaveLength(0);
   });
 
+  it('viewing a session acknowledges its idle prompt (item stays pending) and broadcasts it', async () => {
+    session.terminalBuffer = 'claude> waiting at the composer';
+    await postHook(harness, 'idle_prompt', {});
+    const [before] = await listApprovals(harness);
+    expect(before.acknowledgedAt).toBeUndefined();
+
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: `/api/approvals/session/${SESSION_ID}/viewed`,
+      payload: {},
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toMatchObject({ sessionId: SESSION_ID, acknowledged: before.id });
+
+    // Seen, not answered: still listed (so it stays answerable), no keystrokes,
+    // and clients skip re-arming the tab alert because of acknowledgedAt.
+    const [after] = await listApprovals(harness);
+    expect(after.id).toBe(before.id);
+    expect(after.acknowledgedAt).toBeGreaterThan(0);
+    expect(session.writeBuffer).toEqual([]);
+
+    // Second view is a no-op (nothing new to tell the other devices).
+    const again = await harness.app.inject({
+      method: 'POST',
+      url: `/api/approvals/session/${SESSION_ID}/viewed`,
+      payload: {},
+    });
+    expect(again.json().data.acknowledged).toBeNull();
+  });
+
+  it('viewing a session leaves a permission dialog alerting (looking is not answering)', async () => {
+    await postHook(harness, 'permission_prompt', {});
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: `/api/approvals/session/${SESSION_ID}/viewed`,
+      payload: {},
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.acknowledged).toBeNull();
+    const [item] = await listApprovals(harness);
+    expect(item.kind).toBe('permission');
+    expect(item.acknowledgedAt).toBeUndefined();
+  });
+
+  it('viewing an unknown session 404s', async () => {
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/approvals/session/not-a-session/viewed',
+      payload: {},
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
   it('non-claude sessions never get inbox items', async () => {
     session.mode = 'codex';
     await postHook(harness, 'permission_prompt', {});

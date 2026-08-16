@@ -1,5 +1,15 @@
 # aicodeman
 
+## 1.19.2
+
+### Patch Changes
+
+- Yellow "waiting for input" tab alerts now stay cleared once you have checked them, on every device.
+
+  Viewing a session used to clear its idle alert in that browser's memory only. The server-side approval store still held the prompt, so the next page load seeded the alert straight back and a tab you had already checked went yellow again, while your other devices never heard about the click at all. Opening a session now acknowledges its pending idle prompt server-side (`POST /api/approvals/session/:sessionId/viewed`, a new `acknowledgedAt` field on approval items, broadcast as `approval:updated`), so the clear survives reloads and reaches every connected client.
+
+  Acknowledgement is deliberately not resolution: the prompt is still unanswered, so the item stays in the Approvals Inbox, stays answerable, and stays available as Read My Mind context, it just stops arming the tab alert. Permission and question dialogs are never acknowledged this way, since looking at a dialog does not answer it, so the red "needs you" alert survives being viewed. Clicking the tab you are already on now clears the alert as well; that path returned early before, so an alert armed on the active tab could not be cleared by clicking at all.
+
 ## 1.19.1
 
 ### Patch Changes
