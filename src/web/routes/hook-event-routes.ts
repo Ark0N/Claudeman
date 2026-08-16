@@ -148,6 +148,11 @@ export function registerHookEventRoutes(
       ...safeData,
       ...(approvalId && { approvalId }),
     });
+    // Full state ride-along, same shape as the working/idle handlers: the home
+    // screens rank the blocked group on lastActivityAt, and without this a
+    // permission prompt raised after page load kept ranking by whatever stamp
+    // the browser loaded with. Debounced, so a hook burst costs one broadcast.
+    ctx.broadcastSessionStateDebounced(sessionId);
 
     // Send push notifications for hook events
     ctx.sendPushNotifications(`hook:${event}`, {

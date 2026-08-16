@@ -118,14 +118,16 @@ Object.assign(CodemanApp.prototype, {
    * A WORKING pane is the opposite: it repaints about once a second, so its
    * last-activity stamp is always "now" and would report every running turn as
    * 0m. The turn's own start is the pane's last Enter (`lastSubmitAt`), which is
-   * persisted server-side and therefore survives a Codeman restart. A session
-   * that has never submitted has no anchor at all, and gets no stamp rather than
-   * a made-up one.
+   * persisted server-side and therefore survives a Codeman restart. A working
+   * session with NO submit stamp falls back to `lastActivityAt`, because that is
+   * exactly what `sessionActivityAnchor` (constants.js) sorts it by: a row must
+   * never be ranked by a number it does not show.
    *
    * @returns {{key: string, at: number}|null}
    */
   _mobileOverviewSince(state, session) {
-    const at = state === 'working' ? Number(session.lastSubmitAt) || 0 : Number(session.lastActivityAt) || 0;
+    const activeAt = Number(session.lastActivityAt) || 0;
+    const at = state === 'working' ? Number(session.lastSubmitAt) || activeAt : activeAt;
     if (!at) return null;
     return { key: MOBILE_OVERVIEW_SINCE_LABEL[state] || state, at };
   },

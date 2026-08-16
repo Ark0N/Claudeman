@@ -277,15 +277,28 @@ describe('mobile overview model', () => {
     expect(rows.i.createdAt).toBe(now - 7200_000);
   });
 
-  it('leaves the stamp off rather than inventing an anchor', () => {
+  it('falls back to the sort anchor for a working row with no submit stamp', () => {
+    // A session that has never submitted has no turn start to measure from, but
+    // `sessionActivityAnchor` still RANKS it by lastActivityAt. The stamp must
+    // show that same number rather than nothing: a row sorted by a value it
+    // does not display reads as randomly placed.
+    const now = Date.now();
     const app = loadOverviewApp();
     const model = app.buildMobileOverviewModel({
-      // A session that has never submitted has no turn start to measure from.
-      sessions: [session({ id: 'w', status: 'busy', lastActivityAt: Date.now() })],
+      sessions: [session({ id: 'w', status: 'busy', lastActivityAt: now })],
+      cases: CASES,
+    });
+    expect(model.current[0].since).toEqual({ key: 'working', at: now });
+    expect(model.current[0].createdAt).toBe(0);
+  });
+
+  it('still leaves the stamp off when there is no anchor at all', () => {
+    const app = loadOverviewApp();
+    const model = app.buildMobileOverviewModel({
+      sessions: [session({ id: 'w', status: 'busy' })],
       cases: CASES,
     });
     expect(model.current[0].since).toBeNull();
-    expect(model.current[0].createdAt).toBe(0);
   });
 
   it('formats a moment as "ago" and a span as a bare duration', () => {
