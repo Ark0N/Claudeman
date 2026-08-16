@@ -3284,7 +3284,7 @@ Object.assign(CodemanApp.prototype, {
       if (/unsupported/i.test(reason)) {
         const ext = (filePath.split('.').pop() || '').toLowerCase();
         return {
-          error: `Cannot preview .${ext} from outside the session workspace (images, PDF, Office documents, Markdown and text only).`,
+          error: `Cannot preview .${ext} from outside the session workspace (images, video, audio, PDF, Office documents, Markdown and text only).`,
         };
       }
       return { error: reason };
@@ -3341,12 +3341,22 @@ Object.assign(CodemanApp.prototype, {
     if (attachmentId) {
       const base = `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}`;
       const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
+      const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv']);
+      const AUDIO_EXTS = new Set(['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'opus']);
       // Size when we just registered the file ourselves, so a path opened from a
       // link reads like a workspace preview instead of a bare "PNG". History
       // cards arrive with an id and no size and keep the short form.
       footerEl.textContent = externalSize ? `${this.formatFileSize(externalSize)} • ${ext}` : ext.toUpperCase();
       if (IMAGE_EXTS.has(ext)) {
         bodyEl.innerHTML = `<img src="${escapeHtml(`${base}/raw`)}" alt="${escapeHtml(filePath)}">`;
+      } else if (VIDEO_EXTS.has(ext)) {
+        // Same markup as the workspace branch below, including playsinline: iOS
+        // otherwise hijacks playback into its own fullscreen player, which
+        // leaves this overlay behind it with no way back but its close button.
+        // The attachment raw route is range-aware, so the scrub bar works.
+        bodyEl.innerHTML = `<video src="${escapeHtml(`${base}/raw`)}" controls autoplay playsinline preload="metadata"></video>`;
+      } else if (AUDIO_EXTS.has(ext)) {
+        bodyEl.innerHTML = `<audio src="${escapeHtml(`${base}/raw`)}" controls autoplay preload="metadata"></audio>`;
       } else if (ext === 'pdf') {
         bodyEl.innerHTML = `<iframe src="${escapeHtml(`${base}/raw`)}" title="${escapeHtml(filePath)}"></iframe>`;
       } else if (ext === 'docx' || ext === 'pptx') {

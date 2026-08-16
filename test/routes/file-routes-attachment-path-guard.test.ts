@@ -357,6 +357,87 @@ describe('file-routes attachment path guard (COD-53)', () => {
     });
   });
 
+  // ===== Media (click-to-preview parity with the workspace preview) =====
+  // A video an agent writes inside the workspace plays with a working scrub
+  // bar; the same file in /tmp used to be refused as an unsupported type. Both
+  // now go through the same extension sets, and the raw route has to answer
+  // with a real media Content-Type and a range, or the player renders and then
+  // does nothing.
+  describe('media attachments', () => {
+    it('registers a video and serves it as seekable video/mp4', async () => {
+      const content = Buffer.from('MP4DATA-0123456789');
+      mockedStat.mockResolvedValue({ size: content.length, isFile: () => true, mtimeMs: 5 } as never);
+      mockedCreateReadStream.mockReturnValue(Readable.from([content.subarray(4, 10)]) as never);
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments`,
+        payload: { path: '/tmp/captures/demo.mp4', notify: false },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.attachmentType).toBe('video');
+
+      const rawRes = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments/${body.data.attachmentId}/raw`,
+        headers: { range: 'bytes=4-9' },
+      });
+      expect(rawRes.statusCode).toBe(206);
+      expect(rawRes.headers['content-type']).toBe('video/mp4');
+      expect(rawRes.headers['content-range']).toBe(`bytes 4-9/${content.length}`);
+      expect(rawRes.headers['accept-ranges']).toBe('bytes');
+    });
+
+    it('registers audio with an audio type and its real MIME', async () => {
+      const content = Buffer.from('ID3AUDIO');
+      mockedStat.mockResolvedValue({ size: content.length, isFile: () => true, mtimeMs: 5 } as never);
+      mockedCreateReadStream.mockReturnValue(Readable.from([content]) as never);
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments`,
+        payload: { path: '/tmp/captures/take.mp3', notify: false },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.attachmentType).toBe('audio');
+
+      const rawRes = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments/${body.data.attachmentId}/raw`,
+      });
+      expect(rawRes.statusCode).toBe(200);
+      expect(rawRes.headers['content-type']).toBe('audio/mpeg');
+    });
+
+    it('answers no thumbnail for media instead of spawning a converter', async () => {
+      // generateFirstPageThumbnail has no media branch; the card falls back to
+      // its type label. This pins that the route reports that cleanly.
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments`,
+        payload: { path: '/tmp/captures/clip.webm', notify: false },
+      });
+      const { attachmentId } = JSON.parse(res.body).data;
+
+      const thumbRes = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments/${attachmentId}/thumbnail`,
+      });
+      expect(thumbRes.statusCode).toBe(204);
+    });
+
+    it('still refuses media in a blocked tree', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments`,
+        payload: { path: '/root/private/recording.mp4', notify: false },
+      });
+      expect(res.statusCode).toBe(403);
+    });
+  });
+
   // ===== Quiet registration (click-to-preview) =====
   // The file-preview overlay registers a clicked out-of-workspace path to mint
   // an id it can render by. It is already putting the file on screen, so the

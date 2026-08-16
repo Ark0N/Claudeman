@@ -23,12 +23,14 @@ import type {
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import { fileStreamManager } from '../../file-stream-manager.js';
 import {
+  AUDIO_ATTACHMENT_EXTENSIONS,
   AttachmentRegistrationError,
   attachmentRecordToEvent,
   attachmentRegistry,
   buildFileThumbnailRoute,
   isSupportedAttachmentExtension,
   registerExternalAttachment,
+  VIDEO_ATTACHMENT_EXTENSIONS,
   type AttachmentRecord,
 } from '../../attachment-registry.js';
 import { generateFirstPageThumbnail } from '../../document-thumbnailer.js';
@@ -67,6 +69,22 @@ const MIME_TYPES: Record<string, string> = {
   webp: 'image/webp',
   ico: 'image/x-icon',
   bmp: 'image/bmp',
+  // Media needs a real type, not the octet-stream fallback: a <video>/<audio>
+  // element refuses to decode an unknown type, so a missing entry here presents
+  // as a player that renders and then does nothing.
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  mov: 'video/quicktime',
+  m4v: 'video/x-m4v',
+  ogv: 'video/ogg',
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  oga: 'audio/ogg',
+  m4a: 'audio/mp4',
+  aac: 'audio/aac',
+  flac: 'audio/flac',
+  opus: 'audio/opus',
   pdf: 'application/pdf',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
@@ -1099,8 +1117,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       // so the file viewer can open the same files.
       const ext = filePath.split('.').pop()?.toLowerCase() || '';
       const imageExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico']);
-      const videoExts = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv']);
-      const audioExts = new Set(['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'opus']);
+      // Shared with the attachment registry so a video plays the same whether it
+      // sits in the workspace or is reached by id from outside it.
+      const videoExts = VIDEO_ATTACHMENT_EXTENSIONS;
+      const audioExts = AUDIO_ATTACHMENT_EXTENSIONS;
       const otherBinaryExts = new Set([
         'pdf',
         'zip',
