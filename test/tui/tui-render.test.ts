@@ -1,0 +1,403 @@
+/**
+ * @fileoverview Unit tests for the frame renderer.
+ *
+ * The structural expectations below are full frames with the escapes stripped,
+ * which is what makes a layout regression readable in a diff; the escape
+ * sequences themselves are asserted separately, including the promise that
+ * NO_COLOR leaves nothing but cursor addressing behind.
+ */
+import { describe, it, expect } from 'vitest';
+import { stripStyles, toDisplayLines, visibleWidth } from '../../src/tui/tui-ansi.js';
+import { computeLayout, needsBanner } from '../../src/tui/tui-layout.js';
+import { createTuiModel, type TuiModelStore } from '../../src/tui/tui-model.js';
+import {
+  detectGlyphTier,
+  formatElapsed,
+  formatTokens,
+  renderFrame,
+  rowLabel,
+  type TuiRenderOptions,
+} from '../../src/tui/tui-render.js';
+
+const NOW = 1_700_000_000_000;
+
+const PLAIN: TuiRenderOptions = { color: false, glyphs: 'unicode', tick: 4, now: NOW };
+
+function fixture(): TuiModelStore {
+  const model = createTuiModel();
+  model.setHeader({ hostname: 'tnode', version: '1.19.0', planUsage: '5h 32% wk 61%' });
+  model.replaceSessions([
+    {
+      sessionId: 'aaa1',
+      name: 'w4-api-refactor',
+      mode: 'claude',
+      status: 'busy',
+      isWorking: true,
+      workingDir: '/home/dev/api',
+      createdAt: NOW - 9_000_000,
+      lastActivityAt: NOW - 1_000,
+      lastSubmitAt: NOW - 134_000,
+      inputTokens: 9_000,
+      outputTokens: 3_300,
+      sources: ['live', 'persisted'],
+    },
+    {
+      sessionId: 'bbb2',
+      name: 'w6-docs',
+      mode: 'claude',
+      status: 'idle',
+      workingDir: '/home/dev/docs',
+      createdAt: NOW - 8_000_000,
+      lastActivityAt: NOW - 660_000,
+      sources: ['live'],
+    },
+    {
+      sessionId: 'ccc3',
+      name: 'w1-codeman',
+      mode: 'claude',
+      status: 'busy',
+      isWorking: true,
+      workingDir: '/home/dev/codeman',
+      createdAt: NOW - 10_000_000,
+      lastActivityAt: NOW,
+      lastSubmitAt: NOW - 1_020_000,
+      inputTokens: 40_000,
+      outputTokens: 5_200,
+      sources: ['live'],
+    },
+    {
+      sessionId: 'ddd4',
+      name: 'w2-gallery',
+      mode: 'codex',
+      status: 'idle',
+      workingDir: '/home/dev/gallery',
+      createdAt: NOW - 6_000_000,
+      lastActivityAt: NOW - 7_200_000,
+      sources: ['live'],
+    },
+    {
+      sessionId: 'eee5',
+      firstPrompt: 'fix the release script',
+      workingDir: '/home/dev/api',
+      lastActivityAt: NOW - 3 * 86_400_000,
+      sources: ['history'],
+    },
+  ]);
+  model.setApprovals([
+    { id: 'bbb2:1', sessionId: 'bbb2', sessionName: 'w6-docs', kind: 'idle', createdAt: NOW - 680_000 },
+    {
+      id: 'aaa1:2',
+      sessionId: 'aaa1',
+      sessionName: 'w4-api-refactor',
+      kind: 'permission',
+      createdAt: NOW - 120_000,
+      toolName: 'Bash',
+    },
+  ]);
+  model.select('aaa1');
+  model.setPreview({
+    sessionId: 'aaa1',
+    lines: toDisplayLines('\x1b[32mActualizing...\x1b[0m (2m 14s)\nrunning tests\n\x1b[31mwarning\x1b[0m here\n'),
+  });
+  return model;
+}
+
+function render(model: TuiModelStore, cols: number, rows: number, opts: Partial<TuiRenderOptions> = {}): string {
+  const layout = computeLayout(cols, rows, { banner: needsBanner(model.connection) });
+  return renderFrame(model, layout, { ...PLAIN, ...opts });
+}
+
+/** The frame as visible lines: escapes stripped, trailing padding trimmed. */
+function frameLines(frame: string): string[] {
+  return frame
+    .split(/\x1b\[\d+;1H/)
+    .slice(1)
+    .map((part) => stripStyles(part).trimEnd());
+}
+
+describe('renderFrame structure', () => {
+  it('paints the wide layout at 100x30', () => {
+    expect(frameLines(render(fixture(), 100, 30))).toEqual([
+      ' codeman  tnode · v1.19.0 · 4 sessions · 5h 32% wk 61%                               ? help  q quit',
+      ' NEEDS YOU ─────────────────────────│ w4-api-refactor · claude · /home/dev/api',
+      '  1 w6-docs                   ✋ 11m│ Actualizing... (2m 14s)',
+      '▶ 2 w4-api-refactor       ⚠ 2m 12.3k│ running tests',
+      ' WORKING ───────────────────────────│ warning here',
+      '  3 w1-codeman           ✻ 17m 45.2k│',
+      ' IDLE ──────────────────────────────│',
+      '  4 w2-gallery codex            ○ 2h│',
+      ' RECENT ────────────────────────────│',
+      '  5 fix the release script      ✔ 3d│',
+      '                                    │',
+      '                                    │',
+      '                                    │',
+      '                                    │',
+      '                                    │',
+      '                                    │',
+      '                                    │',
+      '                                    │',
+      '                                    │',
+      '                                    │',
+      '                                    │',
+      '                                    │',
+      '                                    │',
+      '                                    │',
+      '                                    │',
+      '                                    │',
+      '                                    │',
+      '                                    │',
+      '                                    │',
+      ' ↑↓ select · ⏎ attach · 1-9 jump · y/n answer · p prompt · n new · x kill · / search · g digest · ?',
+    ]);
+  });
+
+  it('paints the narrow two-line layout at 44x20', () => {
+    expect(frameLines(render(fixture(), 44, 20))).toEqual([
+      ' codeman  tnode · v1.19.0 · 4 sessions · 5h',
+      ' NEEDS YOU ─────────────────────────────────',
+      '  1 w6-docs                           ✋ 11m',
+      '    /home/dev/docs',
+      '▶ 2 w4-api-refactor                     ⚠ 2m',
+      '    /home/dev/api · 12.3k',
+      ' WORKING ───────────────────────────────────',
+      '  3 w1-codeman                         ✻ 17m',
+      '    /home/dev/codeman · 45.2k',
+      ' IDLE ──────────────────────────────────────',
+      '  4 w2-gallery codex                    ○ 2h',
+      '    /home/dev/gallery · codex',
+      ' RECENT ────────────────────────────────────',
+      '  5 fix the release script              ✔ 3d',
+      '    /home/dev/api',
+      '',
+      '',
+      '',
+      '',
+      ' ↑↓ select · ⏎ attach · 1-9 jump · y/n answe',
+    ]);
+  });
+
+  it('addresses every line absolutely and erases its tail', () => {
+    const frame = render(fixture(), 100, 30);
+    const addresses = [...frame.matchAll(/\x1b\[(\d+);1H/g)].map((match) => Number(match[1]));
+    expect(addresses).toEqual(Array.from({ length: 30 }, (_, i) => i + 1));
+    expect(frame.split('\x1b[K')).toHaveLength(31);
+    expect(frame).not.toContain('\n');
+  });
+
+  it('never lets a line exceed the terminal width', () => {
+    for (const [cols, rows] of [
+      [100, 30],
+      [44, 20],
+      [72, 8],
+      [30, 6],
+    ] as const) {
+      for (const line of frameLines(render(fixture(), cols, rows))) {
+        expect(visibleWidth(line)).toBeLessThanOrEqual(cols);
+      }
+    }
+  });
+
+  it('is deterministic for identical inputs', () => {
+    expect(render(fixture(), 100, 30)).toBe(render(fixture(), 100, 30));
+  });
+
+  it('degrades to a header-only frame on a 5x5 terminal without throwing', () => {
+    expect(() => render(fixture(), 5, 5)).not.toThrow();
+    expect(frameLines(render(fixture(), 5, 5))).toHaveLength(5);
+  });
+});
+
+describe('color', () => {
+  it('paints states and chrome when color is on', () => {
+    const model = fixture();
+    model.select('eee5');
+    const frame = render(model, 100, 30, { color: true });
+    expect(frame).toContain('\x1b[32m✻');
+    expect(frame).toContain('\x1b[31m⚠');
+    expect(frame).toContain('\x1b[33m✋');
+    expect(frame).toContain('\x1b[1mcodeman');
+  });
+
+  it('paints the selected row as one inverse block with no styling inside it', () => {
+    // An inner reset would punch a hole in the highlight, so the selected row
+    // is built unpainted and wrapped instead.
+    const frame = render(fixture(), 100, 30, { color: true });
+    const highlighted = frame.split('\x1b[7m')[1]?.split('\x1b[0m')[0] ?? '';
+    expect(highlighted).toContain('w4-api-refactor');
+    expect(highlighted).toContain('⚠');
+    expect(frame).not.toContain('\x1b[31m⚠');
+  });
+
+  it('emits nothing but cursor addressing when color is off', () => {
+    const frame = render(fixture(), 100, 30, { color: false });
+    const withoutAddressing = frame.replace(/\x1b\[\d+;1H/g, '').replace(/\x1b\[K/g, '');
+    expect(withoutAddressing).not.toContain('\x1b');
+  });
+
+  it('strips the session own colors out of the preview under NO_COLOR', () => {
+    const model = fixture();
+    model.setPreview({ sessionId: 'aaa1', lines: toDisplayLines('\x1b[31mred tail\x1b[0m') });
+    expect(render(model, 100, 30, { color: false })).not.toContain('\x1b[31m');
+    expect(render(model, 100, 30, { color: true })).toContain('\x1b[31m');
+  });
+});
+
+describe('glyph tiers', () => {
+  it('falls back to bracketed ASCII tokens', () => {
+    const lines = frameLines(render(fixture(), 100, 30, { glyphs: 'ascii' }));
+    const list = lines.map((line) => line.split('|')[0]);
+    expect(list[2]).toContain('[w]');
+    expect(list[3]).toContain('[!]');
+    expect(list[5]).toContain('[*]');
+    expect(list[7]).toContain('[-]');
+    expect(list[9]).toContain('[v]');
+    expect(list[3].startsWith('>')).toBe(true);
+    expect(lines.join('')).not.toContain('✻');
+    expect(lines.join('')).not.toContain('─');
+  });
+
+  it('animates the working glyph with the tick', () => {
+    const model = fixture();
+    const frames = [0, 1, 2, 3, 4, 5].map((tick) => frameLines(render(model, 100, 30, { tick }))[5]);
+    expect(frames[0]).toContain('·');
+    expect(frames[1]).toContain('✢');
+    expect(frames[2]).toContain('✳');
+    expect(frames[3]).toContain('∗');
+    expect(frames[4]).toContain('✻');
+    expect(frames[5]).toContain('✽');
+    expect(new Set(frames).size).toBe(6);
+  });
+
+  it('detects a tier from the environment', () => {
+    expect(detectGlyphTier({ TERM: 'xterm-256color', LANG: 'en_US.UTF-8' })).toBe('unicode');
+    expect(detectGlyphTier({ TERM: 'xterm-kitty', LANG: 'en_US.UTF-8' })).toBe('nerd');
+    expect(detectGlyphTier({ TERM: 'xterm-256color', TERM_PROGRAM: 'iTerm.app', LANG: 'en_US.UTF-8' })).toBe('nerd');
+    expect(detectGlyphTier({ TERM: 'xterm-256color', LANG: 'C' })).toBe('ascii');
+    expect(detectGlyphTier({ TERM: 'dumb' })).toBe('ascii');
+    expect(detectGlyphTier({})).toBe('ascii');
+    expect(detectGlyphTier({ TERM: 'xterm-kitty', LANG: 'en_US.UTF-8', CODEMAN_TUI_GLYPHS: 'ascii' })).toBe('ascii');
+  });
+});
+
+describe('overlays', () => {
+  it('draws the help box over the body', () => {
+    const model = fixture();
+    model.setMode('help');
+    const lines = frameLines(render(model, 100, 30));
+    expect(lines.join('\n')).toContain('┌ Keys ');
+    expect(lines.some((line) => line.includes('attach'))).toBe(true);
+    expect(lines[lines.length - 1]).toContain('close');
+  });
+
+  it('draws the typed confirmation for a kill', () => {
+    const model = fixture();
+    model.beginConfirmKill(model.rows()[0]);
+    model.setConfirmInput('w6-d');
+    const text = frameLines(render(model, 100, 30)).join('\n');
+    expect(text).toContain('Kill w6-docs?');
+    expect(text).toContain('Type the name to confirm:');
+    expect(text).toContain('w6-d_');
+    expect(text).toContain('esc cancel');
+  });
+
+  it('draws a message box', () => {
+    const model = fixture();
+    model.setMessage({ text: 'session refused to start: tmux is not installed', tone: 'err' });
+    const text = frameLines(render(model, 100, 30)).join('\n');
+    expect(text).toContain('Error');
+    expect(text).toContain('tmux is not installed');
+  });
+
+  it('skips the overlay when the body is too small to hold a box', () => {
+    const model = fixture();
+    model.setMode('help');
+    expect(frameLines(render(model, 100, 4)).join('\n')).not.toContain('Keys');
+  });
+});
+
+describe('connection states', () => {
+  it('banners a degraded server and says the preview is gone', () => {
+    const model = fixture();
+    model.setConnection('degraded');
+    const lines = frameLines(render(model, 100, 30));
+    expect(lines[1]).toContain('server not running: attach only');
+    expect(lines.join('\n')).toContain('preview unavailable while the server is down');
+  });
+
+  it('banners reconnecting and down differently', () => {
+    const model = fixture();
+    model.setConnection('reconnecting');
+    expect(frameLines(render(model, 100, 30))[1]).toContain('reconnecting');
+    model.setConnection('down');
+    expect(frameLines(render(model, 100, 30))[1]).toContain('server unreachable');
+  });
+});
+
+describe('empty and partial states', () => {
+  it('shows the empty hint when there are no sessions', () => {
+    const model = createTuiModel();
+    const lines = frameLines(render(model, 100, 30));
+    expect(lines.join('\n')).toContain('No sessions. n to start one, q to quit.');
+    expect(lines[1]).not.toContain('NEEDS YOU');
+  });
+
+  it('says the preview is still loading when it belongs to another session', () => {
+    const model = fixture();
+    model.setPreview({ sessionId: 'bbb2', lines: ['other session'] });
+    const text = frameLines(render(model, 100, 30)).join('\n');
+    expect(text).toContain('loading preview…');
+    expect(text).not.toContain('other session');
+  });
+
+  it('surfaces a preview error instead of a stale tail', () => {
+    const model = fixture();
+    model.setPreview({ sessionId: 'aaa1', lines: [], error: 'terminal capture failed' });
+    expect(frameLines(render(model, 100, 30)).join('\n')).toContain('terminal capture failed');
+  });
+
+  it('scrolls the list so the selected row stays visible', () => {
+    const model = createTuiModel();
+    model.replaceSessions(
+      Array.from({ length: 30 }, (_, i) => ({
+        sessionId: `s${String(i).padStart(2, '0')}`,
+        name: `session-${String(i).padStart(2, '0')}`,
+        sources: ['live'],
+        status: 'idle',
+        lastActivityAt: NOW - i * 1000,
+      }))
+    );
+    model.select('s29');
+    const text = frameLines(render(model, 100, 12)).join('\n');
+    expect(text).toContain('session-29');
+    expect(text).not.toContain('session-00');
+  });
+});
+
+describe('formatting helpers', () => {
+  it('formats elapsed time compactly', () => {
+    expect(formatElapsed(0)).toBe('0s');
+    expect(formatElapsed(45_000)).toBe('45s');
+    expect(formatElapsed(11 * 60_000)).toBe('11m');
+    expect(formatElapsed(2 * 3_600_000)).toBe('2h');
+    expect(formatElapsed(3 * 86_400_000)).toBe('3d');
+    expect(formatElapsed(-1)).toBe('');
+    expect(formatElapsed(Number.NaN)).toBe('');
+  });
+
+  it('formats token counts compactly', () => {
+    expect(formatTokens(0)).toBe('');
+    expect(formatTokens(842)).toBe('842');
+    expect(formatTokens(45_200)).toBe('45.2k');
+    expect(formatTokens(45_000)).toBe('45k');
+    expect(formatTokens(1_200_000)).toBe('1.2M');
+  });
+
+  it('names a row the way the web history list does', () => {
+    expect(rowLabel({ sessionId: 'abcdef12', name: 'w1', sources: [] })).toBe('w1');
+    expect(rowLabel({ sessionId: 'abcdef12', firstPrompt: 'do the thing', sources: [] })).toBe('do the thing');
+    expect(rowLabel({ sessionId: 'abcdef12', firstPrompt: '(no content)', workingDir: '/a/b/case', sources: [] })).toBe(
+      'case'
+    );
+    expect(rowLabel({ sessionId: 'abcdef1234', sources: [] })).toBe('abcdef12');
+  });
+});
