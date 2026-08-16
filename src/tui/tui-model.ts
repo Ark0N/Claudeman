@@ -26,6 +26,7 @@ import type {
   TuiGroupKey,
   TuiHeaderInfo,
   TuiMessage,
+  TuiPickerState,
   TuiPreview,
   TuiRenderModel,
   TuiRow,
@@ -200,6 +201,7 @@ export function mergeSessionRow(existing: TuiSessionRow, incoming: TuiSessionRow
 export class TuiModelStore implements TuiRenderModel {
   private sessionsById = new Map<string, TuiSessionRow>();
   private approvalsBySession = new Map<string, ApprovalItem>();
+  private _revision = 0;
 
   selectedId: string | null = null;
   connection: TuiConnectionStatus = 'connected';
@@ -208,10 +210,25 @@ export class TuiModelStore implements TuiRenderModel {
   preview: TuiPreview | null = null;
   message: TuiMessage | null = null;
   confirm: TuiConfirmState | null = null;
+  picker: TuiPickerState | null = null;
   recentLimit: number;
 
   constructor(options: GroupOptions = {}) {
     this.recentLimit = Math.max(0, Math.floor(options.recentLimit ?? DEFAULT_RECENT_LIMIT));
+  }
+
+  /**
+   * Bumped by every mutating method. The app layer repaints when this changed
+   * (plus on resize and on the animation tick), which is what keeps an idle
+   * dashboard from redrawing itself. Writing a public field directly bypasses
+   * it, so state changes go through the methods below.
+   */
+  get revision(): number {
+    return this._revision;
+  }
+
+  private touch(): void {
+    this._revision++;
   }
 
   // ── Data ───────────────────────────────────────────────────────────────────
@@ -258,24 +275,38 @@ export class TuiModelStore implements TuiRenderModel {
   // ── Chrome ─────────────────────────────────────────────────────────────────
 
   setConnection(status: TuiConnectionStatus): void {
+    if (this.connection === status) return;
     this.connection = status;
+    this.touch();
   }
 
   setHeader(header: TuiHeaderInfo): void {
     this.header = { ...this.header, ...header };
+    this.touch();
   }
 
   setPreview(preview: TuiPreview | null): void {
     this.preview = preview;
+    this.touch();
   }
 
   setMode(mode: TuiUiMode): void {
+    if (this.mode === mode) return;
     this.mode = mode;
+    this.touch();
   }
 
   setMessage(message: TuiMessage | null): void {
     this.message = message;
     this.mode = message ? 'message' : 'list';
+    this.touch();
+  }
+
+  /** Show (or clear) the overlay chooser. Setting one takes the keyboard. */
+  setPicker(picker: TuiPickerState | null): void {
+    this.picker = picker;
+    this.mode = picker ? 'new-session' : 'list';
+    this.touch();
   }
 
   /** Arm the typed-name confirmation for `x` (kill). */
@@ -286,10 +317,13 @@ export class TuiModelStore implements TuiRenderModel {
       typed: '',
     };
     this.mode = 'confirm-kill';
+    this.touch();
   }
 
   setConfirmInput(typed: string): void {
-    if (this.confirm) this.confirm = { ...this.confirm, typed };
+    if (!this.confirm) return;
+    this.confirm = { ...this.confirm, typed };
+    this.touch();
   }
 
   /** Does the typed text authorize the kill? Exact match on the name shown. */
@@ -301,7 +335,9 @@ export class TuiModelStore implements TuiRenderModel {
   closeOverlay(): void {
     this.confirm = null;
     this.message = null;
+    this.picker = null;
     this.mode = 'list';
+    this.touch();
   }
 
   // ── Derived views ──────────────────────────────────────────────────────────
@@ -330,7 +366,7 @@ export class TuiModelStore implements TuiRenderModel {
   /** Select a session by id. Returns false when it is not on screen. */
   select(sessionId: string): boolean {
     if (!this.rows().some((row) => row.session.sessionId === sessionId)) return false;
-    this.selectedId = sessionId;
+    this.moveTo(sessionId);
     return true;
   }
 
@@ -338,17 +374,17 @@ export class TuiModelStore implements TuiRenderModel {
   moveCursor(delta: number): void {
     const rows = this.rows();
     if (rows.length === 0) {
-      this.selectedId = null;
+      this.moveTo(null);
       return;
     }
     const current = this.indexOfSelected(rows);
     if (current < 0) {
-      this.selectedId = rows[delta >= 0 ? 0 : rows.length - 1].session.sessionId;
+      this.moveTo(rows[delta >= 0 ? 0 : rows.length - 1].session.sessionId);
       return;
     }
     const step = Math.trunc(delta);
     const next = (((current + step) % rows.length) + rows.length) % rows.length;
-    this.selectedId = rows[next].session.sessionId;
+    this.moveTo(rows[next].session.sessionId);
   }
 
   /** The 1-9 jump: `n` is the 1-based position in the flattened list. */
@@ -356,8 +392,14 @@ export class TuiModelStore implements TuiRenderModel {
     const rows = this.rows();
     const index = Math.trunc(n) - 1;
     if (index < 0 || index >= rows.length) return false;
-    this.selectedId = rows[index].session.sessionId;
+    this.moveTo(rows[index].session.sessionId);
     return true;
+  }
+
+  private moveTo(sessionId: string | null): void {
+    if (this.selectedId === sessionId) return;
+    this.selectedId = sessionId;
+    this.touch();
   }
 
   private indexOfSelected(rows: readonly TuiRow[] = this.rows()): number {
@@ -373,14 +415,15 @@ export class TuiModelStore implements TuiRenderModel {
   private mutate(apply: () => void): void {
     const previousIndex = this.indexOfSelected();
     apply();
+    this.touch();
     const rows = this.rows();
     if (rows.length === 0) {
-      this.selectedId = null;
+      this.moveTo(null);
       return;
     }
     if (this.selectedId !== null && rows.some((row) => row.session.sessionId === this.selectedId)) return;
     const index = Math.min(Math.max(previousIndex, 0), rows.length - 1);
-    this.selectedId = rows[index].session.sessionId;
+    this.moveTo(rows[index].session.sessionId);
   }
 }
 

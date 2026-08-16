@@ -33,6 +33,15 @@ export interface TuiSessionRow extends UnifiedSessionItem {
   lastSubmitAt?: number;
   inputTokens?: number;
   outputTokens?: number;
+  /**
+   * tmux session name to attach to (`codeman-<first 8 of the id>`).
+   *
+   * The unified list does not carry it (no server view merges the mux name into
+   * a row), so the app layer fills it in from the local tmux enumeration, which
+   * is also the only thing that proves the pane really exists. A row without one
+   * cannot be attached: it is either history or a direct-PTY session.
+   */
+  muxName?: string;
 }
 
 /**
@@ -68,7 +77,7 @@ export interface TuiGroup {
 export type TuiConnectionStatus = 'connected' | 'reconnecting' | 'degraded' | 'down';
 
 /** Which overlay (if any) owns the keyboard. */
-export type TuiUiMode = 'list' | 'help' | 'confirm-kill' | 'prompt' | 'search' | 'message';
+export type TuiUiMode = 'list' | 'help' | 'confirm-kill' | 'prompt' | 'search' | 'message' | 'new-session';
 
 /**
  * Glyph capability tier. Detection is env-driven and therefore lives in a tiny
@@ -107,6 +116,30 @@ export interface TuiConfirmState {
   typed: string;
 }
 
+export interface TuiPickerItem {
+  /** What choosing this item means to the caller; never shown. */
+  id: string;
+  label: string;
+  /** Second column, dimmed (a case path, a mode description). */
+  detail?: string;
+}
+
+/**
+ * A one-column chooser drawn as an overlay (the case and mode pickers behind
+ * `n`). Items are already filtered: the app owns the unfiltered list, the
+ * renderer only paints what it is given.
+ */
+export interface TuiPickerState {
+  title: string;
+  items: TuiPickerItem[];
+  /** Index into `items`; -1 when the list is empty. */
+  index: number;
+  /** Current filter text, when the picker filters as you type. */
+  filter?: string;
+  /** One line above the list: what is being chosen, or why the list is empty. */
+  hint?: string;
+}
+
 /**
  * What `renderFrame()` reads. The store implements it; a test can hand-build
  * one, which is what keeps the renderer testable without the model.
@@ -120,6 +153,8 @@ export interface TuiRenderModel {
   readonly preview: TuiPreview | null;
   readonly message: TuiMessage | null;
   readonly confirm: TuiConfirmState | null;
+  /** Optional so a test can hand-build a model without one. */
+  readonly picker?: TuiPickerState | null;
   /** Live sessions only (RECENT rows are history, not sessions you have open). */
   readonly sessionCount: number;
 }
