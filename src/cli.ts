@@ -800,6 +800,38 @@ program
   .description('List active sessions (shorthand; `codeman session list` also shows stopped ones)')
   .action(() => printSessionList({ includeStored: false }));
 
+// ============ TUI ============
+
+program
+  .command('tui')
+  .argument('[n]', 'attach straight to the nth session of `codeman tui --list`')
+  .description('Terminal dashboard for your sessions (the web UI remains the primary surface)')
+  .option('-l, --list', 'Print the numbered session list and exit, instead of opening the dashboard')
+  .action(async (position: string | undefined, options: { list?: boolean }) => {
+    // Imported here, not at the top: the dashboard pulls in the whole TUI core,
+    // and every other command would pay for it at startup.
+    const { runTui, runTuiAttach, runTuiList } = await import('./tui/tui-app.js');
+
+    if (options.list) {
+      process.exitCode = await runTuiList();
+      return;
+    }
+    if (position !== undefined) {
+      const n = Number.parseInt(position, 10);
+      if (!Number.isSafeInteger(n) || n < 1) {
+        console.error(palette.err(`"${position}" is not a session number.`));
+        console.error(`Run ${palette.info('codeman tui --list')} to see them.`);
+        process.exitCode = 1;
+        return;
+      }
+      process.exitCode = await runTuiAttach(n);
+      return;
+    }
+    // The dashboard owns the terminal until it quits; exiting explicitly keeps a
+    // stray handle (a socket mid-close) from stranding the user's shell.
+    process.exit(await runTui());
+  });
+
 // ============ Web / daemon / service Commands ============
 
 /** Shared option set for the commands that can launch a web server. */
