@@ -20,13 +20,20 @@
  */
 
 import { clipStyledLine, padDisplay, stripStyles, visibleWidth } from './tui-ansi.js';
+import { approvalCard } from './tui-approvals.js';
+import { composerText, composerWindow } from './tui-composer.js';
 import type { TuiLayout, TuiRect } from './tui-layout.js';
+import type { ApprovalItem } from '../web/approval-inbox.js';
+import type { StatusTelemetry } from '../usage-telemetry.js';
 import type {
+  TuiDigestState,
   TuiGlyphTier,
   TuiGroup,
   TuiPickerState,
+  TuiPromptState,
   TuiRenderModel,
   TuiRow,
+  TuiSearchState,
   TuiSessionRow,
   TuiSessionState,
 } from './tui-types.js';
@@ -70,6 +77,19 @@ const SGR = {
   cyan: '\x1b[36m',
   gray: '\x1b[90m',
 } as const;
+
+/**
+ * One word per state, shared by the preview title and the `--list` output so
+ * both surfaces call a session the same thing.
+ */
+export const STATE_WORDS: Record<TuiSessionState, string> = {
+  'blocked-permission': 'blocked',
+  'blocked-question': 'blocked',
+  waiting: 'waiting',
+  working: 'working',
+  idle: 'idle',
+  recent: 'done',
+};
 
 const STATE_COLOR: Record<TuiSessionState, string> = {
   'blocked-permission': SGR.red,
@@ -207,6 +227,24 @@ export function formatTokens(total: number): string {
   if (total < 1000) return String(Math.floor(total));
   if (total < 1_000_000) return `${trimTrailingZero((total / 1000).toFixed(1))}k`;
   return `${trimTrailingZero((total / 1_000_000).toFixed(1))}M`;
+}
+
+/**
+ * The header's plan-usage chip: `5h 32% · wk 61%`, the same two windows the web
+ * chip shows (the statusline telemetry carries no others). Empty when the
+ * account reports neither, so the header shows no placeholder for a fact that
+ * does not exist.
+ */
+export function formatPlanUsage(usage: StatusTelemetry | null | undefined): string {
+  if (!usage) return '';
+  const parts: string[] = [];
+  if (typeof usage.fiveHour?.usedPercentage === 'number') {
+    parts.push(`5h ${Math.round(usage.fiveHour.usedPercentage)}%`);
+  }
+  if (typeof usage.sevenDay?.usedPercentage === 'number') {
+    parts.push(`wk ${Math.round(usage.sevenDay.usedPercentage)}%`);
+  }
+  return parts.join(' · ');
 }
 
 /**
@@ -382,6 +420,54 @@ export function computeListWindow(
 // Preview
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * The pending dialog, drawn above the tail: the question, the parsed options
+ * with their digits, and the keys that answer them. Red for a permission or
+ * question prompt, yellow for an idle one, the same severity vocabulary the web
+ * inbox uses.
+ */
+export function renderApprovalCard(
+  item: ApprovalItem,
+  width: number,
+  glyphs: TuiGlyphSet,
+  opts: TuiRenderOptions
+): string[] {
+  const paint = painterFor(opts.color);
+  const card = approvalCard(item);
+  const color = card.tone === 'err' ? SGR.red : SGR.yellow;
+  const glyph = card.tone === 'err' ? glyphs.blockedPermission : glyphs.waiting;
+  const lines: string[] = [];
+  const push = (text: string, style: string): void => {
+    lines.push(padDisplay(paint(clipStyledLine(text, width), style), width));
+  };
+
+  push(` ${glyph} ${card.title}`, color);
+  for (const detail of card.detail) push(`   ${detail}`, SGR.gray);
+  for (const option of card.options) push(`   ${option.n}. ${option.label}`, '');
+  push(` ${card.hint}`, SGR.gray);
+  return lines;
+}
+
+/** The card may take half the pane at most: the tail is why the pane exists. */
+function cardCapacity(height: number): number {
+  return Math.max(0, Math.floor((height - 1) / 2));
+}
+
+/**
+ * `name · mode · dir · state`, with the DIRECTORY absorbing the squeeze: the
+ * state word is the one fact the pane exists to confirm, so it must survive a
+ * narrow preview that a full path would push off the end.
+ */
+function previewTitle(row: TuiRow, width: number, glyphs: TuiGlyphSet): string {
+  const { session } = row;
+  const sep = ` ${glyphs.separator} `;
+  const head = ` ${rowLabel(session)}${sep}${session.mode ?? 'claude'}`;
+  const tail = `${sep}${STATE_WORDS[row.state]}`;
+  const dirBudget = width - visibleWidth(head) - visibleWidth(tail) - visibleWidth(sep);
+  const dir = session.workingDir ? truncatePathLeft(session.workingDir, Math.max(0, dirBudget), glyphs.ellipsis) : '';
+  return clipStyledLine(dir ? `${head}${sep}${dir}${tail}` : `${head}${tail}`, width);
+}
+
 function buildPreviewLines(model: TuiRenderModel, rect: TuiRect, opts: TuiRenderOptions): string[] {
   const paint = painterFor(opts.color);
   const glyphs = glyphsFor(opts.glyphs);
@@ -396,22 +482,32 @@ function buildPreviewLines(model: TuiRenderModel, rect: TuiRect, opts: TuiRender
   if (!selected) {
     lines.push(padDisplay(paint(' no session selected', SGR.gray), rect.width));
   } else {
-    const { session } = selected;
-    const parts = [session.mode ?? 'claude', session.workingDir ?? ''].filter((part) => part !== '');
-    const title = ` ${rowLabel(session)} ${glyphs.separator} ${parts.join(` ${glyphs.separator} `)}`;
-    lines.push(padDisplay(paint(clipStyledLine(title, rect.width), SGR.bold), rect.width));
+    lines.push(padDisplay(paint(previewTitle(selected, rect.width, glyphs), SGR.bold), rect.width));
   }
 
-  const body = previewBody(model, selected, rect, opts);
+  const budget = cardCapacity(rect.height);
+  if (selected?.approval && budget > 0) {
+    for (const line of renderApprovalCard(selected.approval, rect.width, glyphs, opts).slice(0, budget)) {
+      lines.push(line);
+    }
+    if (lines.length < rect.height) lines.push(' '.repeat(rect.width));
+  }
+
+  const body = previewBody(model, selected, rect, opts, rect.height - lines.length);
   for (const line of body) lines.push(line);
   while (lines.length < rect.height) lines.push(' '.repeat(rect.width));
   return lines.slice(0, Math.max(0, rect.height));
 }
 
-function previewBody(model: TuiRenderModel, selected: TuiRow | null, rect: TuiRect, opts: TuiRenderOptions): string[] {
+function previewBody(
+  model: TuiRenderModel,
+  selected: TuiRow | null,
+  rect: TuiRect,
+  opts: TuiRenderOptions,
+  capacity: number
+): string[] {
   const paint = painterFor(opts.color);
-  const capacity = Math.max(0, rect.height - 1);
-  if (capacity === 0) return [];
+  if (capacity <= 0) return [];
   const hint = (text: string): string[] => [padDisplay(paint(` ${text}`, SGR.gray), rect.width)];
 
   if (!selected) return [];
@@ -420,6 +516,7 @@ function previewBody(model: TuiRenderModel, selected: TuiRow | null, rect: TuiRe
   }
   const preview = model.preview;
   if (!preview || preview.sessionId !== selected.session.sessionId) return hint('loading preview…');
+  if (preview.note) return hint(preview.note);
   if (preview.error) return hint(preview.error);
 
   const trimmed = [...preview.lines];
@@ -436,6 +533,13 @@ function previewBody(model: TuiRenderModel, selected: TuiRow | null, rect: TuiRe
 // Chrome
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Sessions with a prompt waiting on a human, which is what the badge counts. */
+export function pendingApprovalCount(model: TuiRenderModel): number {
+  let count = 0;
+  for (const group of model.groups()) for (const row of group.rows) if (row.approval) count++;
+  return count;
+}
+
 function renderHeaderLine(model: TuiRenderModel, layout: TuiLayout, opts: TuiRenderOptions): string {
   const paint = painterFor(opts.color);
   const glyphs = glyphsFor(opts.glyphs);
@@ -447,7 +551,9 @@ function renderHeaderLine(model: TuiRenderModel, layout: TuiLayout, opts: TuiRen
     planUsage ?? '',
   ].filter((part) => part !== '');
 
-  const left = ` ${paint('codeman', SGR.bold)}  ${paint(facts.join(` ${glyphs.separator} `), SGR.gray)}`;
+  const pending = pendingApprovalCount(model);
+  const badge = pending > 0 ? `${paint(`${glyphs.blockedPermission} ${pending}`, SGR.red)}  ` : '';
+  const left = ` ${paint('codeman', SGR.bold)}  ${badge}${paint(facts.join(` ${glyphs.separator} `), SGR.gray)}`;
   const right = paint('? help  q quit ', SGR.gray);
   const gap = layout.cols - visibleWidth(left) - visibleWidth(right);
   if (gap < 1) return padDisplay(left, layout.cols);
@@ -485,13 +591,40 @@ const FOOTER_KEYS: Record<string, (glyphs: TuiGlyphSet) => string> = {
   'confirm-kill': (g) => `type the name ${g.separator} ${g.enter} confirm ${g.separator} esc cancel`,
   message: () => 'esc dismiss',
   prompt: (g) => `${g.enter} send ${g.separator} esc cancel`,
-  search: (g) => `${g.enter} open ${g.separator} esc cancel`,
+  search: (g) => `${g.updown} results ${g.separator} ${g.enter} open ${g.separator} esc close`,
+  digest: (g) => `j/k ${g.separator} ${g.updown} scroll ${g.separator} esc close`,
   'new-session': (g) => `${g.updown} select ${g.separator} ${g.enter} choose ${g.separator} esc cancel`,
 };
+
+/**
+ * The composer's prefix. Fixed width on purpose: the terminal cursor is placed
+ * by column arithmetic (`composerCursorCell`), and a prefix that changed with
+ * the session name would move the cursor with it.
+ */
+export const COMPOSER_PREFIX = ' > ';
+
+function renderComposerLine(prompt: TuiPromptState, layout: TuiLayout, opts: TuiRenderOptions): string {
+  const paint = painterFor(opts.color);
+  const window = composerWindow(prompt.composer, Math.max(1, layout.cols - visibleWidth(COMPOSER_PREFIX)));
+  return padDisplay(`${paint(COMPOSER_PREFIX, SGR.cyan)}${window.text}`, layout.cols);
+}
+
+/**
+ * Where the terminal's own cursor belongs, or null when nothing is being typed
+ * into a single-line editor. The app shows the cursor there and hides it
+ * otherwise, because a blinking cursor parked in a dashboard reads as a bug.
+ */
+export function composerCursorCell(model: TuiRenderModel, layout: TuiLayout): { row: number; col: number } | null {
+  if (model.mode !== 'prompt' || !model.prompt || layout.footer.height <= 0) return null;
+  const prefix = visibleWidth(COMPOSER_PREFIX);
+  const window = composerWindow(model.prompt.composer, Math.max(1, layout.cols - prefix));
+  return { row: layout.footer.row, col: Math.min(layout.cols, prefix + 1 + window.cursorColumn) };
+}
 
 function renderFooterLine(model: TuiRenderModel, layout: TuiLayout, opts: TuiRenderOptions): string {
   const paint = painterFor(opts.color);
   const glyphs = glyphsFor(opts.glyphs);
+  if (model.mode === 'prompt' && model.prompt) return renderComposerLine(model.prompt, layout, opts);
   const text = opts.footerKeys
     ? opts.footerKeys.join(` ${glyphs.separator} `)
     : (FOOTER_KEYS[model.mode] ?? FOOTER_KEYS.list)(glyphs);
@@ -505,6 +638,12 @@ function renderFooterLine(model: TuiRenderModel, layout: TuiLayout, opts: TuiRen
 interface OverlayContent {
   title: string;
   lines: string[];
+  /**
+   * Floor for the box's inner width. The search and digest panels are lists
+   * people scan, so they keep a stable width instead of snapping around their
+   * longest current line.
+   */
+  minWidth?: number;
 }
 
 function wrapText(text: string, width: number): string[] {
@@ -565,6 +704,49 @@ function pickerLines(picker: TuiPickerState, glyphs: TuiGlyphSet, capacity: numb
   return [...head, ...rows, ...tail];
 }
 
+/**
+ * The `/` overlay: the query with a caret, one status line, then the results.
+ *
+ * The caret is a trailing `_` rather than the terminal's own cursor, and that is
+ * why the search keymap leaves left/right to the result list: a caret that
+ * cannot move is honest, an invisible one that can is not.
+ */
+function searchLines(state: TuiSearchState, glyphs: TuiGlyphSet, capacity: number): string[] {
+  const head = [`${composerText(state.composer)}_`];
+  if (state.note) head.push(state.note);
+  head.push('');
+
+  const budget = Math.max(1, capacity - head.length);
+  if (state.entries.length === 0) {
+    return [...head, state.status === 'searching' ? 'searching…' : '(type to search sessions, events and files)'];
+  }
+  const first = Math.max(0, Math.min(state.index - Math.floor(budget / 2), state.entries.length - budget));
+  const rows = state.entries.slice(first, first + budget).map((entry, i) => {
+    if (entry.kind === 'header') return entry.text;
+    const marker = first + i === state.index ? glyphs.cursor : ' '.repeat(visibleWidth(glyphs.cursor));
+    return `${marker} ${entry.text}${entry.detail ? `  ${entry.detail}` : ''}`;
+  });
+  return [...head, ...rows];
+}
+
+/** Lines an overlay box can show inside its border, given the body's height. */
+function overlayCapacity(height: number): number {
+  return Math.max(1, height - 2);
+}
+
+/**
+ * How many digest lines fit. Exported because the app scrolls by pages and must
+ * not scroll the last page into empty space, which needs this exact number.
+ */
+export function digestCapacity(layout: TuiLayout): number {
+  return overlayCapacity(layout.body.height);
+}
+
+function digestLines(state: TuiDigestState, capacity: number): string[] {
+  const offset = Math.min(Math.max(0, state.offset), Math.max(0, state.lines.length - 1));
+  return state.lines.slice(offset, offset + capacity);
+}
+
 function overlayContent(
   model: TuiRenderModel,
   opts: TuiRenderOptions,
@@ -572,9 +754,26 @@ function overlayContent(
   height: number
 ): OverlayContent | null {
   const glyphs = glyphsFor(opts.glyphs);
+  const panelWidth = Math.max(20, Math.min(width - 8, 72));
   switch (model.mode) {
     case 'help':
       return { title: 'Keys', lines: helpLines(glyphs, opts.helpKeys) };
+    case 'search': {
+      if (!model.search) return null;
+      return {
+        title: 'Search',
+        lines: searchLines(model.search, glyphs, overlayCapacity(height)),
+        minWidth: panelWidth,
+      };
+    }
+    case 'digest': {
+      if (!model.digest) return null;
+      return {
+        title: model.digest.title,
+        lines: digestLines(model.digest, overlayCapacity(height)),
+        minWidth: panelWidth,
+      };
+    }
     case 'new-session': {
       if (!model.picker) return null;
       return { title: model.picker.title, lines: pickerLines(model.picker, glyphs, Math.max(1, height - 2)) };
@@ -611,7 +810,7 @@ function applyOverlay(lines: string[], model: TuiRenderModel, layout: TuiLayout,
   const visible = content.lines.slice(0, Math.max(1, body.height - 2));
   const inner = Math.min(
     maxInner,
-    Math.max(visibleWidth(content.title) + 2, ...visible.map((line) => visibleWidth(line)))
+    Math.max(content.minWidth ?? 0, visibleWidth(content.title) + 2, ...visible.map((line) => visibleWidth(line)))
   );
   const boxWidth = inner + 4;
   const boxHeight = visible.length + 2;

@@ -8,11 +8,15 @@
  */
 import { describe, it, expect } from 'vitest';
 import { stripStyles, toDisplayLines, visibleWidth } from '../../src/tui/tui-ansi.js';
+import { composerMove, createComposer } from '../../src/tui/tui-composer.js';
 import { computeLayout, needsBanner } from '../../src/tui/tui-layout.js';
 import { createTuiModel, type TuiModelStore } from '../../src/tui/tui-model.js';
 import {
+  composerCursorCell,
   detectGlyphTier,
+  digestCapacity,
   formatElapsed,
+  formatPlanUsage,
   formatTokens,
   renderFrame,
   rowLabel,
@@ -92,6 +96,12 @@ function fixture(): TuiModelStore {
       kind: 'permission',
       createdAt: NOW - 120_000,
       toolName: 'Bash',
+      toolSummary: 'Bash(git push origin main)',
+      options: [
+        { n: 1, label: 'Yes' },
+        { n: 2, label: "Yes, don't ask again" },
+        { n: 3, label: 'No, tell Claude what to do' },
+      ],
     },
   ]);
   model.select('aaa1');
@@ -118,17 +128,17 @@ function frameLines(frame: string): string[] {
 describe('renderFrame structure', () => {
   it('paints the wide layout at 100x30', () => {
     expect(frameLines(render(fixture(), 100, 30))).toEqual([
-      ' codeman  tnode · v1.19.0 · 4 sessions · 5h 32% wk 61%                               ? help  q quit',
-      ' NEEDS YOU ─────────────────────────│ w4-api-refactor · claude · /home/dev/api',
-      '  1 w6-docs                   ✋ 11m│ Actualizing... (2m 14s)',
-      '▶ 2 w4-api-refactor       ⚠ 2m 12.3k│ running tests',
-      ' WORKING ───────────────────────────│ warning here',
-      '  3 w1-codeman           ✻ 17m 45.2k│',
-      ' IDLE ──────────────────────────────│',
+      ' codeman  ⚠ 2  tnode · v1.19.0 · 4 sessions · 5h 32% wk 61%                          ? help  q quit',
+      ' NEEDS YOU ─────────────────────────│ w4-api-refactor · claude · /home/dev/api · blocked',
+      '  1 w6-docs                   ✋ 11m│ ⚠ requests: Bash(git push origin main)',
+      '▶ 2 w4-api-refactor       ⚠ 2m 12.3k│   1. Yes',
+      " WORKING ───────────────────────────│   2. Yes, don't ask again",
+      '  3 w1-codeman           ✻ 17m 45.2k│   3. No, tell Claude what to do',
+      ' IDLE ──────────────────────────────│ y approve · n deny · digit chooses',
       '  4 w2-gallery codex            ○ 2h│',
-      ' RECENT ────────────────────────────│',
-      '  5 fix the release script      ✔ 3d│',
-      '                                    │',
+      ' RECENT ────────────────────────────│ Actualizing... (2m 14s)',
+      '  5 fix the release script      ✔ 3d│ running tests',
+      '                                    │ warning here',
       '                                    │',
       '                                    │',
       '                                    │',
@@ -153,7 +163,7 @@ describe('renderFrame structure', () => {
 
   it('paints the narrow two-line layout at 44x20', () => {
     expect(frameLines(render(fixture(), 44, 20))).toEqual([
-      ' codeman  tnode · v1.19.0 · 4 sessions · 5h',
+      ' codeman  ⚠ 2  tnode · v1.19.0 · 4 sessions',
       ' NEEDS YOU ─────────────────────────────────',
       '  1 w6-docs                           ✋ 11m',
       '    /home/dev/docs',
@@ -225,7 +235,7 @@ describe('color', () => {
     const highlighted = frame.split('\x1b[7m')[1]?.split('\x1b[0m')[0] ?? '';
     expect(highlighted).toContain('w4-api-refactor');
     expect(highlighted).toContain('⚠');
-    expect(frame).not.toContain('\x1b[31m⚠');
+    expect(highlighted).not.toContain('\x1b[');
   });
 
   it('emits nothing but cursor addressing when color is off', () => {
@@ -399,5 +409,164 @@ describe('formatting helpers', () => {
       'case'
     );
     expect(rowLabel({ sessionId: 'abcdef1234', sources: [] })).toBe('abcdef12');
+  });
+});
+
+describe('the approval card', () => {
+  it('draws the dialog above the tail, with its digits', () => {
+    const text = frameLines(render(fixture(), 100, 30)).join('\n');
+    expect(text).toContain('⚠ requests: Bash(git push origin main)');
+    expect(text).toContain('1. Yes');
+    expect(text).toContain('3. No, tell Claude what to do');
+    expect(text).toContain('y approve · n deny · digit chooses');
+    // The tail is still there, below the card.
+    expect(text).toContain('Actualizing...');
+  });
+
+  it('paints a dialog red and a waiting prompt yellow', () => {
+    const model = fixture();
+    const frame = render(model, 100, 30, { color: true });
+    expect(frame).toContain('\x1b[31m ⚠ requests');
+
+    model.select('bbb2');
+    const idle = render(model, 100, 30, { color: true });
+    expect(idle).toContain('\x1b[33m ✋');
+    expect(idle).toContain('p to reply');
+  });
+
+  it('never lets the card push the tail off the pane', () => {
+    const model = fixture();
+    const lines = frameLines(render(model, 100, 10));
+    // 8 body lines: the card gets at most half, so some tail survives.
+    expect(lines.join('\n')).toContain('warning here');
+  });
+
+  it('counts pending prompts in the header badge', () => {
+    expect(frameLines(render(fixture(), 100, 30))[0]).toContain('⚠ 2');
+    const model = createTuiModel();
+    model.replaceSessions([{ sessionId: 'aaa1', name: 'w1', sources: ['live'], status: 'idle' }]);
+    expect(frameLines(render(model, 100, 30))[0]).not.toContain('⚠');
+  });
+});
+
+describe('the preview title', () => {
+  it('names the session, its CLI, its directory and its state', () => {
+    expect(frameLines(render(fixture(), 100, 30))[1]).toContain('w4-api-refactor · claude · /home/dev/api · blocked');
+  });
+
+  it('sacrifices the path rather than the state word when the pane is narrow', () => {
+    const model = fixture();
+    model.setApprovals([]);
+    model.select('ccc3');
+    const title = frameLines(render(model, 80, 30))[1];
+    expect(title).toContain('w1-codeman');
+    expect(title).toContain('working');
+  });
+
+  it('says a history row has nothing to show rather than claiming to load it', () => {
+    const model = fixture();
+    model.select('eee5');
+    model.setPreview({ sessionId: 'eee5', lines: [], note: 'this session is not running: no live output to show' });
+    expect(frameLines(render(model, 100, 30)).join('\n')).toContain('no live output to show');
+  });
+});
+
+describe('the prompt composer', () => {
+  function composing(text: string, cursorAt?: number): TuiModelStore {
+    const model = fixture();
+    let composer = createComposer(text);
+    if (cursorAt !== undefined) composer = composerMove(composer, cursorAt - text.length);
+    model.setPrompt({ sessionId: 'aaa1', label: 'w4-api-refactor', composer });
+    return model;
+  }
+
+  it('replaces the footer keys with the line being typed', () => {
+    const lines = frameLines(render(composing('deploy the thing'), 100, 30));
+    expect(lines[lines.length - 1]).toBe(' > deploy the thing');
+  });
+
+  it('puts the terminal cursor where the caret is', () => {
+    const layout = computeLayout(100, 30);
+    expect(composerCursorCell(composing('abc'), layout)).toEqual({ row: 30, col: 7 });
+    expect(composerCursorCell(composing('abc', 1), layout)).toEqual({ row: 30, col: 5 });
+    // No composer, no cursor: a blinking cursor in a dashboard reads as a bug.
+    expect(composerCursorCell(fixture(), layout)).toBeNull();
+  });
+
+  it('scrolls a long line so the caret stays on screen', () => {
+    const long = 'x'.repeat(200);
+    const lines = frameLines(render(composing(long), 100, 30));
+    const footer = lines[lines.length - 1];
+    expect(visibleWidth(footer)).toBeLessThanOrEqual(100);
+    const cursor = composerCursorCell(composing(long), computeLayout(100, 30));
+    expect(cursor?.col).toBeLessThanOrEqual(100);
+  });
+});
+
+describe('the search overlay', () => {
+  function searching(): TuiModelStore {
+    const model = fixture();
+    model.setSearch({
+      composer: createComposer('alpha'),
+      query: 'alpha',
+      status: 'done',
+      note: '2 results',
+      index: 1,
+      entries: [
+        { kind: 'header', text: 'SESSIONS' },
+        { kind: 'result', text: 'w1-alpha', detail: '/tmp/alpha', sessionId: 'aaa1', live: true },
+        { kind: 'result', text: 'w9-old', detail: '/tmp/old', sessionId: 'zzz9', live: false },
+      ],
+    });
+    return model;
+  }
+
+  it('shows the query with a caret, the count and the rows', () => {
+    const text = frameLines(render(searching(), 100, 30)).join('\n');
+    expect(text).toContain('┌ Search ');
+    expect(text).toContain('alpha_');
+    expect(text).toContain('2 results');
+    expect(text).toContain('SESSIONS');
+    expect(text).toContain('▶ w1-alpha  /tmp/alpha');
+    expect(text).toContain('w9-old');
+  });
+
+  it('invites a query before anything has been typed', () => {
+    const model = fixture();
+    model.setSearch({ composer: createComposer(), query: '', entries: [], index: -1, status: 'idle' });
+    expect(frameLines(render(model, 100, 30)).join('\n')).toContain('type to search');
+  });
+});
+
+describe('the digest overlay', () => {
+  it('windows the lines it was given and scrolls with the offset', () => {
+    const model = fixture();
+    const lines = Array.from({ length: 40 }, (_, i) => `digest line ${i}`);
+    model.setDigest({ title: 'Away digest', lines, offset: 0 });
+    const top = frameLines(render(model, 100, 12)).join('\n');
+    expect(top).toContain('┌ Away digest ');
+    expect(top).toContain('digest line 0');
+    expect(top).not.toContain('digest line 30');
+
+    model.scrollDigest(30, digestCapacity(computeLayout(100, 12)));
+    const scrolled = frameLines(render(model, 100, 12)).join('\n');
+    expect(scrolled).toContain('digest line 30');
+    expect(scrolled).not.toContain('digest line 0\n');
+  });
+});
+
+describe('formatPlanUsage', () => {
+  it('mirrors the web chip, both windows and either alone', () => {
+    expect(
+      formatPlanUsage({ fiveHour: { usedPercentage: 32.4, resetAt: 1 }, sevenDay: { usedPercentage: 61, resetAt: 2 } })
+    ).toBe('5h 32% · wk 61%');
+    expect(formatPlanUsage({ fiveHour: { usedPercentage: 5, resetAt: 1 } })).toBe('5h 5%');
+    expect(formatPlanUsage({ sevenDay: { usedPercentage: 90, resetAt: 1 } })).toBe('wk 90%');
+  });
+
+  it('is empty when there is nothing to report, so the header shows no placeholder', () => {
+    expect(formatPlanUsage(null)).toBe('');
+    expect(formatPlanUsage(undefined)).toBe('');
+    expect(formatPlanUsage({})).toBe('');
   });
 });
