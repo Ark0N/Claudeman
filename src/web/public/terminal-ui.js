@@ -1457,7 +1457,16 @@ Object.assign(CodemanApp.prototype, {
               // already renders images, PDFs, documents and media inline — and it
               // now reaches files outside the workspace too, which is where an
               // agent's screenshots and scratchpad captures actually land.
-              if (previewsInFileViewer(text)) {
+              //
+              // Text goes to the log viewer, which follows a file that is still
+              // being written — but ONLY where it can actually read: it spawns
+              // `tail -f` and allows the workspace, /var/log and ~/logs, so an
+              // out-of-workspace path there answered "Path must be within
+              // working directory or allowed log directories" while the SAME
+              // path clicked in the response viewer previewed fine. The preview
+              // reads those through the guarded attachment routes, so external
+              // paths route there and the two surfaces agree.
+              if (previewsInFileViewer(text) || self._isExternalPreviewPath(text, self.activeSessionId)) {
                 self.openFilePreview(text, self.activeSessionId);
                 return;
               }

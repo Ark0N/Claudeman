@@ -80,6 +80,12 @@ const SENSITIVE_PATTERNS: RegExp[] = [
   /\/\.claude\/\.credentials\.json$/,
   /\/\.codeman[^/]*\/hook-secret$/,
   /\/\.codeman[^/]*\/users\.json$/,
+  // Codeman's own state file. Named once `.json` became previewable outside the
+  // workspace: `SessionState.envOverrides` persists whatever the user set for a
+  // session, and the env allowlist admits key-shaped names (`GEMINI_API_KEY`,
+  // `CLAUDE_CODE_*`), so this file can hold a live credential. Same reasoning
+  // as the two entries above, and it leaves the rest of ~/.codeman attachable.
+  /\/\.codeman[^/]*\/state\.json$/,
 ];
 
 /**

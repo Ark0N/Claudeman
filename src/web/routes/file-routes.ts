@@ -30,6 +30,7 @@ import {
   buildFileThumbnailRoute,
   isSupportedAttachmentExtension,
   registerExternalAttachment,
+  TEXT_ATTACHMENT_EXTENSIONS,
   VIDEO_ATTACHMENT_EXTENSIONS,
   type AttachmentRecord,
 } from '../../attachment-registry.js';
@@ -193,12 +194,29 @@ async function serveRawFile(
       );
     return;
   }
-  if (download || extension === 'svg') {
+  // Markup is download-only: served with a renderable type on our own origin it
+  // would be stored XSS. SVG was always here; HTML/HTM join it now that the text
+  // family is servable, so widening what can be READ never widened what can RUN.
+  // The preview overlay reads these through `fetch()`, which ignores the
+  // disposition, so a clicked .html still shows its source.
+  const markupOnly = extension === 'svg' || extension === 'html' || extension === 'htm';
+  if (download || markupOnly) {
     reply.header(
       'Content-Type',
-      extension === 'svg' ? 'application/octet-stream' : MIME_TYPES[extension] || 'application/octet-stream'
+      markupOnly ? 'application/octet-stream' : MIME_TYPES[extension] || 'application/octet-stream'
     );
     reply.header('Content-Disposition', buildContentDisposition('attachment', fileName));
+    reply.header('X-Content-Type-Options', 'nosniff');
+    sendFileBody(reply, resolvedPath, stat.size, rangeHeader);
+    return;
+  }
+
+  // Plain text with no dedicated MIME entry (code, config, logs, csv, xml) goes
+  // out as inert text/plain rather than the octet-stream fallback, matching what
+  // the path picker already does. Never a type the browser would execute.
+  if (!MIME_TYPES[extension] && TEXT_ATTACHMENT_EXTENSIONS.has(extension)) {
+    reply.header('Content-Type', 'text/plain; charset=utf-8');
+    reply.header('Content-Disposition', buildContentDisposition('inline', fileName));
     reply.header('X-Content-Type-Options', 'nosniff');
     sendFileBody(reply, resolvedPath, stat.size, rangeHeader);
     return;

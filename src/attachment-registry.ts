@@ -11,6 +11,7 @@ import { realpathSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { basename, extname, isAbsolute } from 'node:path';
 import { isBlockedAttachmentPath, loadAttachmentGuardConfig } from './config/attachment-guard.js';
+import { EDITABLE_EXTENSIONS } from './config/file-editing.js';
 import { validateSessionFilePath } from './web/route-helpers.js';
 import type { AttachmentDetectedEvent, AttachmentDetectedType } from './types.js';
 
@@ -34,6 +35,22 @@ export const AUDIO_ATTACHMENT_EXTENSIONS: ReadonlySet<string> = new Set([
   'opus',
 ]);
 
+/**
+ * Plain-text extensions, REUSING the File Viewer's edit-mode allowlist rather
+ * than curating a second list that would drift from it. The rule reads: if the
+ * viewer would open that file for editing inside the workspace, the same file
+ * outside it can be read here. `svg` and `env` are absent from that list by
+ * design and stay absent here.
+ *
+ * Why widen at all: the agent in the session can already `cat` any of these,
+ * and every path-shaped surface (the picker, the workspace viewer) can already
+ * show them. Refusing a `.log` an agent just wrote to `/tmp` bought no
+ * confidentiality, it only made the click fail. The confidentiality gate is the
+ * path guard that still runs on every registration (sensitive-file blocklist,
+ * `/root` and `/etc` trees, realpath before the check), not the file's suffix.
+ */
+export const TEXT_ATTACHMENT_EXTENSIONS: ReadonlySet<string> = EDITABLE_EXTENSIONS;
+
 const SUPPORTED_ATTACHMENT_EXTENSIONS = new Set([
   'png',
   'jpg',
@@ -47,6 +64,7 @@ const SUPPORTED_ATTACHMENT_EXTENSIONS = new Set([
   'txt',
   ...VIDEO_ATTACHMENT_EXTENSIONS,
   ...AUDIO_ATTACHMENT_EXTENSIONS,
+  ...TEXT_ATTACHMENT_EXTENSIONS,
 ]);
 
 export type AttachmentSource = 'detected' | 'external';
@@ -135,7 +153,9 @@ export function getAttachmentType(extension: string): AttachmentDetectedType {
   if (normalized === 'pdf') return 'pdf';
   if (normalized === 'pptx') return 'presentation';
   if (normalized === 'md') return 'markdown';
-  if (normalized === 'txt') return 'text';
+  // Everything else in the text family reads as text, including code and
+  // config: the card and the preview both treat it as a plain-text file.
+  if (normalized === 'txt' || TEXT_ATTACHMENT_EXTENSIONS.has(normalized)) return 'text';
   return 'document';
 }
 

@@ -73,6 +73,12 @@ describe('isSensitivePath', () => {
       ['codeman hook secret', `${HOME}/.codeman/hook-secret`],
       ['codeman user table', `${HOME}/.codeman/users.json`],
       ['codeman hook secret on a named instance', `${HOME}/.codeman-beta/hook-secret`],
+      // state.json persists SessionState.envOverrides, and the env allowlist
+      // admits key-shaped names (GEMINI_API_KEY, CLAUDE_CODE_*), so it can hold
+      // a live credential. Named once .json became previewable from outside the
+      // workspace.
+      ['codeman state file', `${HOME}/.codeman/state.json`],
+      ['codeman state file on a named instance', `${HOME}/.codeman-beta/state.json`],
     ];
 
     it.each(blocked)('blocks the %s', (_label, path) => {
@@ -88,6 +94,7 @@ describe('isSensitivePath', () => {
       // The publish skill and the review-card loop attach from these trees, so
       // only their named secret members are blocked, never the whole tree.
       ['a codeman screenshot', `${HOME}/.codeman/screenshots/shot.png`],
+      ['a codeman lifecycle log', `${HOME}/.codeman/session-lifecycle.jsonl`],
       ['a claude transcript', `${HOME}/.claude/projects/proj/session.jsonl`],
       ['a claude team inbox', `${HOME}/.claude/teams/alpha/inboxes/bob.json`],
       // isUnderTree-style separator awareness: a sibling name that merely starts

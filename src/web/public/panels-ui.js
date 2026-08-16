@@ -15,6 +15,11 @@
 
 const AWAY_DIGEST_LAST_VIEWED_KEY = 'codeman-away-digest-last-viewed';
 const FILE_BROWSER_SHOW_HIDDEN_KEY = 'codeman:fileBrowserShowHidden';
+// Bounds for the by-id text preview, mirroring what the workspace text preview
+// already does server-side (500 lines). The byte cap rides a Range request, so
+// a huge log is a partial read rather than a download the viewer throws away.
+const TEXT_PREVIEW_MAX_BYTES = 512 * 1024;
+const TEXT_PREVIEW_MAX_LINES = 500;
 const AWAY_DIGEST_SECTIONS = [
   ['needsAttention', 'Needs Attention'],
   ['completed', 'Completed'],
@@ -3284,7 +3289,7 @@ Object.assign(CodemanApp.prototype, {
       if (/unsupported/i.test(reason)) {
         const ext = (filePath.split('.').pop() || '').toLowerCase();
         return {
-          error: `Cannot preview .${ext} from outside the session workspace (images, video, audio, PDF, Office documents, Markdown and text only).`,
+          error: `Cannot preview .${ext} from outside the session workspace (images, video, audio, PDF, Office documents and text files only).`,
         };
       }
       return { error: reason };
@@ -3363,10 +3368,24 @@ Object.assign(CodemanApp.prototype, {
         bodyEl.innerHTML = `<iframe src="${escapeHtml(`${base}/preview`)}" title="${escapeHtml(filePath)}"></iframe>`;
       } else {
         try {
-          const res = await fetch(`${base}/raw`);
+          // Bounded like the workspace text preview: a Range for the first
+          // chunk (the route is range-aware, so this is a real partial read,
+          // not a 50MB download thrown away) and a line cap on top. An agent's
+          // log can be enormous, and rendering all of it into one <pre> is how
+          // you lock up the tab on the file you wanted to glance at.
+          const res = await fetch(`${base}/raw`, { headers: { Range: `bytes=0-${TEXT_PREVIEW_MAX_BYTES - 1}` } });
           if (!res.ok) throw new Error('Failed to load attachment');
           const text = await res.text();
-          bodyEl.innerHTML = `<pre><code>${escapeHtml(text)}</code></pre>`;
+          const clippedByBytes = res.status === 206 && text.length >= TEXT_PREVIEW_MAX_BYTES;
+          const lines = text.split('\n');
+          const clippedByLines = lines.length > TEXT_PREVIEW_MAX_LINES;
+          const shown = clippedByLines ? lines.slice(0, TEXT_PREVIEW_MAX_LINES).join('\n') : text;
+          bodyEl.innerHTML = `<pre><code>${escapeHtml(shown)}</code></pre>`;
+          this.filePreviewContent = shown;
+          if (clippedByLines || clippedByBytes) {
+            const note = clippedByLines ? `showing first ${TEXT_PREVIEW_MAX_LINES} lines` : 'showing the start of the file';
+            footerEl.textContent = `${footerEl.textContent} (${note})`;
+          }
         } catch (err) {
           bodyEl.innerHTML = `<div class="binary-message">Error: ${escapeHtml(err.message)}</div>`;
         }

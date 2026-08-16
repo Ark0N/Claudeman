@@ -438,6 +438,124 @@ describe('file-routes attachment path guard (COD-53)', () => {
     });
   });
 
+  // ===== Text family (code, config and logs outside the workspace) =====
+  // The agent in the session can already `cat` these, so refusing the click
+  // bought no confidentiality. The gate that matters is the path guard, which
+  // still runs, and markup must not become executable just because it is now
+  // readable.
+  describe('text attachments', () => {
+    it.each([
+      ['/tmp/run.log', 'log'],
+      ['/tmp/data.json', 'json'],
+      ['/tmp/conf/app.yaml', 'yaml'],
+      ['/tmp/src/index.ts', 'ts'],
+      ['/tmp/export.csv', 'csv'],
+    ])('registers %s as a text attachment', async (path, extension) => {
+      mockedStat.mockResolvedValue({ size: 40, isFile: () => true, mtimeMs: 5 } as never);
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments`,
+        payload: { path, notify: false },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.extension).toBe(extension);
+      expect(body.data.attachmentType).toBe('text');
+    });
+
+    it('serves a text file with no dedicated MIME as inert text/plain', async () => {
+      const content = Buffer.from('boot ok\nstarted\n');
+      mockedStat.mockResolvedValue({ size: content.length, isFile: () => true, mtimeMs: 5 } as never);
+      mockedCreateReadStream.mockReturnValue(Readable.from([content]) as never);
+
+      const reg = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments`,
+        payload: { path: '/tmp/run.log', notify: false },
+      });
+      const rawRes = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments/${JSON.parse(reg.body).data.attachmentId}/raw`,
+      });
+
+      expect(rawRes.statusCode).toBe(200);
+      expect(rawRes.headers['content-type']).toBe('text/plain; charset=utf-8');
+      expect(rawRes.headers['x-content-type-options']).toBe('nosniff');
+    });
+
+    it('keeps HTML download-only so readable never means executable', async () => {
+      // Serving markup with a renderable type on our own origin is stored XSS.
+      // The preview reads it through fetch(), which ignores the disposition, so
+      // a clicked .html still shows its source.
+      const content = Buffer.from('<script>alert(1)</script>');
+      mockedStat.mockResolvedValue({ size: content.length, isFile: () => true, mtimeMs: 5 } as never);
+      mockedCreateReadStream.mockReturnValue(Readable.from([content]) as never);
+
+      const reg = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments`,
+        payload: { path: '/tmp/report.html', notify: false },
+      });
+      const rawRes = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments/${JSON.parse(reg.body).data.attachmentId}/raw`,
+      });
+
+      expect(rawRes.headers['content-type']).toBe('application/octet-stream');
+      expect(String(rawRes.headers['content-disposition'])).toContain('attachment');
+    });
+
+    it('answers a byte range for text so a huge log is a partial read', async () => {
+      const content = Buffer.from('0123456789abcdef');
+      mockedStat.mockResolvedValue({ size: content.length, isFile: () => true, mtimeMs: 5 } as never);
+      mockedCreateReadStream.mockReturnValue(Readable.from([content.subarray(0, 8)]) as never);
+
+      const reg = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments`,
+        payload: { path: '/tmp/big.log', notify: false },
+      });
+      const rawRes = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments/${JSON.parse(reg.body).data.attachmentId}/raw`,
+        headers: { range: 'bytes=0-7' },
+      });
+
+      expect(rawRes.statusCode).toBe(206);
+      expect(rawRes.headers['content-range']).toBe(`bytes 0-7/${content.length}`);
+    });
+
+    it.each([
+      ['/home/someone/.config/gh/hosts.yml', 'forge token'],
+      ['/home/someone/project/.env.json', 'dotenv'],
+      ['/home/someone/.codeman/state.json', 'codeman state (can hold envOverrides secrets)'],
+      ['/home/someone/deploy/credentials.yaml', 'generic credentials'],
+      ['/etc/codeman/dump.log', 'blocked tree'],
+    ])('still refuses %s (%s) now that text is servable', async (path) => {
+      mockedStat.mockResolvedValue({ size: 40, isFile: () => true, mtimeMs: 5 } as never);
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments`,
+        payload: { path, notify: false },
+      });
+
+      expect(res.statusCode).toBe(403);
+    });
+
+    it('still refuses a type outside the family', async () => {
+      mockedStat.mockResolvedValue({ size: 40, isFile: () => true, mtimeMs: 5 } as never);
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments`,
+        payload: { path: '/tmp/drawing.svg', notify: false },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).error).toMatch(/unsupported/i);
+    });
+  });
+
   // ===== Quiet registration (click-to-preview) =====
   // The file-preview overlay registers a clicked out-of-workspace path to mint
   // an id it can render by. It is already putting the file on screen, so the
