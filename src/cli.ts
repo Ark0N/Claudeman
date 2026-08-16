@@ -8,7 +8,6 @@
  */
 
 import { Command } from 'commander';
-import chalk from 'chalk';
 import { createRequire } from 'module';
 import http from 'node:http';
 import https from 'node:https';
@@ -26,6 +25,9 @@ import { isSupportedAttachmentExtension } from './attachment-registry.js';
 import { daemonStatus, startDaemon, stopDaemon, type WebLaunchOptions } from './daemon-control.js';
 import { installService, serviceStatus, uninstallService } from './service-installer.js';
 import { isLoopbackBindHost, isUnauthenticatedNetworkAcknowledged } from './web/network-auth-policy.js';
+import { confirm, heading, isInteractive, kv, palette, rule, tint, withSpinner, type Tone } from './cli-style.js';
+import type { ToolResult } from './utils/dependency-checker.js';
+import type { ReportStyle } from './utils/dependency-report.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
@@ -107,14 +109,14 @@ program
   .action(async (filePath, options) => {
     const extension = String(filePath).split('.').pop()?.toLowerCase() || '';
     if (!isAbsolute(filePath) || !isSupportedAttachmentExtension(extension)) {
-      console.error(chalk.red('✗ attach requires an absolute path to a png, pdf, docx, pptx, md, or txt file'));
+      console.error(palette.err('✗ attach requires an absolute path to a png, pdf, docx, pptx, md, or txt file'));
       process.exit(1);
     }
 
     const sessionId = options.session || process.env.CODEMAN_SESSION_ID;
     const apiUrl = options.url || process.env.CODEMAN_API_URL || 'https://127.0.0.1:3000';
     if (sessionId && (await postAttachment(apiUrl, sessionId, filePath))) {
-      console.log(chalk.green('✓ Attachment card requested'));
+      console.log(palette.ok('✓ Attachment card requested'));
       return;
     }
 
@@ -174,7 +176,7 @@ export function resolveSkillTargetPath(options: {
 function resolveSkillTarget(options: { case?: string }): string {
   const resolved = resolveSkillTargetPath(options);
   if (resolved.missingCase !== undefined) {
-    console.error(chalk.red(`✗ Case not found: ${resolved.missingCase}`));
+    console.error(palette.err(`✗ Case not found: ${resolved.missingCase}`));
     process.exit(1);
   }
   return resolved.target;
@@ -199,9 +201,9 @@ function reportSkillResult(result: AgentSkillApplyResult, target: string): void 
   };
   const message = messages[result];
   if (message.ok) {
-    console.log(chalk.green(`✓ ${message.text}`));
+    console.log(palette.ok(`✓ ${message.text}`));
   } else {
-    console.error(chalk.red(`✗ ${message.text}`));
+    console.error(palette.err(`✗ ${message.text}`));
     process.exit(1);
   }
 }
@@ -220,7 +222,7 @@ skillCmd
       const target = resolveSkillTarget(options);
       reportSkillResult(await installAgentSkillInto(target), target);
     } catch (err) {
-      console.error(chalk.red(`✗ Failed to install agent skill: ${getErrorMessage(err)}`));
+      console.error(palette.err(`✗ Failed to install agent skill: ${getErrorMessage(err)}`));
       process.exit(1);
     }
   });
@@ -235,7 +237,7 @@ skillCmd
       const target = resolveSkillTarget(options);
       reportSkillResult(await removeAgentSkillFrom(target), target);
     } catch (err) {
-      console.error(chalk.red(`✗ Failed to remove agent skill: ${getErrorMessage(err)}`));
+      console.error(palette.err(`✗ Failed to remove agent skill: ${getErrorMessage(err)}`));
       process.exit(1);
     }
   });
@@ -252,11 +254,11 @@ sessionCmd
     try {
       const manager = getSessionManager();
       const session = await manager.createSession(options.dir);
-      console.log(chalk.green(`✓ Session started: ${session.id}`));
+      console.log(palette.ok(`✓ Session started: ${session.id}`));
       console.log(`  Working directory: ${session.workingDir}`);
       console.log(`  PID: ${session.pid}`);
     } catch (err) {
-      console.error(chalk.red(`✗ Failed to start session: ${getErrorMessage(err)}`));
+      console.error(palette.err(`✗ Failed to start session: ${getErrorMessage(err)}`));
       process.exit(1);
     }
   });
@@ -268,70 +270,81 @@ sessionCmd
     try {
       const manager = getSessionManager();
       await manager.stopSession(id);
-      console.log(chalk.green(`✓ Session stopped: ${id}`));
+      console.log(palette.ok(`✓ Session stopped: ${id}`));
     } catch (err) {
-      console.error(chalk.red(`✗ Failed to stop session: ${getErrorMessage(err)}`));
+      console.error(palette.err(`✗ Failed to stop session: ${getErrorMessage(err)}`));
       process.exit(1);
     }
   });
+
+/** Session status in the shared vocabulary: idle is fine, busy is working, anything else is a problem. */
+function sessionStatusLabel(status: string): string {
+  if (status === 'idle') return palette.ok('idle');
+  if (status === 'busy') return palette.warn('busy');
+  return palette.err(status);
+}
+
+/**
+ * The one session listing. `codeman list` used to be a copy of this that had
+ * drifted (it lost the stopped and web-server sections), so it now calls the
+ * same renderer and only opts out of those two sections.
+ */
+function printSessionList(options: { includeStored: boolean }): void {
+  const manager = getSessionManager();
+  const sessions = manager.getAllSessions();
+  const stored = manager.getStoredSessions();
+
+  if (sessions.length === 0 && Object.keys(stored).length === 0) {
+    console.log(palette.warn('No sessions found'));
+    return;
+  }
+
+  console.log(heading('Active Sessions:'));
+  if (sessions.length === 0) {
+    console.log('  (none)');
+  } else {
+    for (const session of sessions) {
+      console.log(
+        `  ${palette.info(session.id.slice(0, 8))} ${sessionStatusLabel(session.status)} ${session.workingDir}`
+      );
+    }
+  }
+
+  if (options.includeStored) {
+    const stoppedSessions = Object.values(stored).filter((s) => s.status === 'stopped');
+    if (stoppedSessions.length > 0) {
+      console.log(heading('Stopped Sessions:'));
+      for (const session of stoppedSessions) {
+        const name = session.name ? ` (${session.name})` : '';
+        console.log(
+          `  ${palette.muted(session.id.slice(0, 8))} ${palette.muted('stopped')}${name} ${session.workingDir}`
+        );
+      }
+    }
+
+    // Sessions the web server owns: this process has no PTY for them, so they
+    // only exist in the shared state file.
+    const activeSessions = Object.values(stored).filter((s) => s.status !== 'stopped');
+    if (sessions.length === 0 && activeSessions.length > 0) {
+      console.log(heading('Active Sessions (from web server):'));
+      for (const session of activeSessions) {
+        const name = session.name ? ` (${session.name})` : '';
+        const mode = session.mode === 'shell' ? palette.muted(' [shell]') : '';
+        const cost = session.totalCost ? palette.muted(` $${session.totalCost.toFixed(4)}`) : '';
+        console.log(
+          `  ${palette.info(session.id.slice(0, 8))} ${sessionStatusLabel(session.status)}${name}${mode}${cost} ${session.workingDir}`
+        );
+      }
+    }
+  }
+  console.log('');
+}
 
 sessionCmd
   .command('list')
   .alias('ls')
   .description('List all sessions')
-  .action(() => {
-    const manager = getSessionManager();
-    const sessions = manager.getAllSessions();
-    const stored = manager.getStoredSessions();
-
-    if (sessions.length === 0 && Object.keys(stored).length === 0) {
-      console.log(chalk.yellow('No sessions found'));
-      return;
-    }
-
-    console.log(chalk.bold('\nActive Sessions:'));
-    if (sessions.length === 0) {
-      console.log('  (none)');
-    } else {
-      for (const session of sessions) {
-        const status =
-          session.status === 'idle'
-            ? chalk.green('idle')
-            : session.status === 'busy'
-              ? chalk.yellow('busy')
-              : chalk.red(session.status);
-        console.log(`  ${chalk.cyan(session.id.slice(0, 8))} ${status} ${session.workingDir}`);
-      }
-    }
-
-    const stoppedSessions = Object.values(stored).filter((s) => s.status === 'stopped');
-    if (stoppedSessions.length > 0) {
-      console.log(chalk.bold('\nStopped Sessions:'));
-      for (const session of stoppedSessions) {
-        const name = session.name ? ` (${session.name})` : '';
-        console.log(`  ${chalk.gray(session.id.slice(0, 8))} ${chalk.gray('stopped')}${name} ${session.workingDir}`);
-      }
-    }
-
-    // Show active sessions from state (when web server manages them)
-    const activeSessions = Object.values(stored).filter((s) => s.status !== 'stopped');
-    if (sessions.length === 0 && activeSessions.length > 0) {
-      console.log(chalk.bold('\nActive Sessions (from web server):'));
-      for (const session of activeSessions) {
-        const status =
-          session.status === 'idle'
-            ? chalk.green('idle')
-            : session.status === 'busy'
-              ? chalk.yellow('busy')
-              : chalk.red(session.status);
-        const name = session.name ? ` (${session.name})` : '';
-        const mode = session.mode === 'shell' ? chalk.gray(' [shell]') : '';
-        const cost = session.totalCost ? chalk.gray(` $${session.totalCost.toFixed(4)}`) : '';
-        console.log(`  ${chalk.cyan(session.id.slice(0, 8))} ${status}${name}${mode}${cost} ${session.workingDir}`);
-      }
-    }
-    console.log('');
-  });
+  .action(() => printSessionList({ includeStored: true }));
 
 sessionCmd
   .command('logs <id>')
@@ -342,12 +355,12 @@ sessionCmd
     const output = options.errors ? manager.getSessionError(id) : manager.getSessionOutput(id);
 
     if (output === null) {
-      console.log(chalk.yellow(`Session ${id} not found or not active`));
+      console.log(palette.warn(`Session ${id} not found or not active`));
       return;
     }
 
     if (output === '') {
-      console.log(chalk.gray('(no output)'));
+      console.log(palette.muted('(no output)'));
       return;
     }
 
@@ -374,7 +387,7 @@ taskCmd
       completionPhrase: options.completion,
       timeoutMs: options.timeout ? parseInt(options.timeout, 10) : undefined,
     });
-    console.log(chalk.green(`✓ Task added: ${task.id}`));
+    console.log(palette.ok(`✓ Task added: ${task.id}`));
     console.log(`  Prompt: ${prompt.slice(0, 50)}${prompt.length > 50 ? '...' : ''}`);
     console.log(`  Priority: ${task.priority}`);
   });
@@ -393,26 +406,28 @@ taskCmd
     }
 
     if (tasks.length === 0) {
-      console.log(chalk.yellow('No tasks found'));
+      console.log(palette.warn('No tasks found'));
       return;
     }
 
     const statusColors = {
-      pending: chalk.gray,
-      running: chalk.yellow,
-      completed: chalk.green,
-      failed: chalk.red,
+      pending: palette.muted,
+      running: palette.warn,
+      completed: palette.ok,
+      failed: palette.err,
     };
 
-    console.log(chalk.bold('\nTasks:'));
+    console.log(palette.emph('\nTasks:'));
     for (const task of tasks) {
       const color = statusColors[task.status];
       const prompt = task.prompt.slice(0, 40) + (task.prompt.length > 40 ? '...' : '');
-      console.log(`  ${chalk.cyan(task.id.slice(0, 8))} ${color(task.status.padEnd(10))} [${task.priority}] ${prompt}`);
+      console.log(
+        `  ${palette.info(task.id.slice(0, 8))} ${color(task.status.padEnd(10))} [${task.priority}] ${prompt}`
+      );
     }
 
     const counts = queue.getCount();
-    console.log(chalk.bold('\nSummary:'));
+    console.log(palette.emph('\nSummary:'));
     console.log(
       `  Pending: ${counts.pending}, Running: ${counts.running}, Completed: ${counts.completed}, Failed: ${counts.failed}`
     );
@@ -427,11 +442,11 @@ taskCmd
     const task = queue.getTask(id);
 
     if (!task) {
-      console.log(chalk.red(`Task ${id} not found`));
+      console.log(palette.err(`Task ${id} not found`));
       return;
     }
 
-    console.log(chalk.bold('\nTask Details:'));
+    console.log(palette.emph('\nTask Details:'));
     console.log(`  ID: ${task.id}`);
     console.log(`  Status: ${task.status}`);
     console.log(`  Priority: ${task.priority}`);
@@ -441,10 +456,10 @@ taskCmd
       console.log(`  Session: ${task.assignedSessionId}`);
     }
     if (task.error) {
-      console.log(`  Error: ${chalk.red(task.error)}`);
+      console.log(`  Error: ${palette.err(task.error)}`);
     }
     if (task.output) {
-      console.log(chalk.bold('\nOutput:'));
+      console.log(palette.emph('\nOutput:'));
       console.log(task.output.slice(0, 500) + (task.output.length > 500 ? '...' : ''));
     }
     console.log('');
@@ -457,9 +472,9 @@ taskCmd
   .action((id) => {
     const queue = getTaskQueue();
     if (queue.removeTask(id)) {
-      console.log(chalk.green(`✓ Task removed: ${id}`));
+      console.log(palette.ok(`✓ Task removed: ${id}`));
     } else {
-      console.log(chalk.red(`Task ${id} not found`));
+      console.log(palette.err(`Task ${id} not found`));
     }
   });
 
@@ -474,13 +489,13 @@ taskCmd
 
     if (options.all) {
       count = queue.clearAll();
-      console.log(chalk.green(`✓ Cleared ${count} tasks`));
+      console.log(palette.ok(`✓ Cleared ${count} tasks`));
     } else if (options.failed) {
       count = queue.clearFailed();
-      console.log(chalk.green(`✓ Cleared ${count} failed tasks`));
+      console.log(palette.ok(`✓ Cleared ${count} failed tasks`));
     } else {
       count = queue.clearCompleted();
-      console.log(chalk.green(`✓ Cleared ${count} completed tasks`));
+      console.log(palette.ok(`✓ Cleared ${count} completed tasks`));
     }
   });
 
@@ -503,38 +518,38 @@ ralphCmd
     }
 
     if (loop.isRunning()) {
-      console.log(chalk.yellow('Ralph loop is already running'));
+      console.log(palette.warn('Ralph loop is already running'));
       return;
     }
 
     loop.on('taskAssigned', (taskId, sessionId) => {
-      console.log(chalk.cyan(`→ Task ${taskId.slice(0, 8)} assigned to session ${sessionId.slice(0, 8)}`));
+      console.log(palette.info(`→ Task ${taskId.slice(0, 8)} assigned to session ${sessionId.slice(0, 8)}`));
     });
 
     loop.on('taskCompleted', (taskId) => {
-      console.log(chalk.green(`✓ Task ${taskId.slice(0, 8)} completed`));
+      console.log(palette.ok(`✓ Task ${taskId.slice(0, 8)} completed`));
     });
 
     loop.on('taskFailed', (taskId, error) => {
-      console.log(chalk.red(`✗ Task ${taskId.slice(0, 8)} failed: ${error}`));
+      console.log(palette.err(`✗ Task ${taskId.slice(0, 8)} failed: ${error}`));
     });
 
     loop.on('stopped', () => {
-      console.log(chalk.yellow('\nRalph loop stopped'));
+      console.log(palette.warn('\nRalph loop stopped'));
       printStats(loop.getStats());
       process.exit(0);
     });
 
     await loop.start();
-    console.log(chalk.green('✓ Ralph loop started'));
+    console.log(palette.ok('✓ Ralph loop started'));
     if (options.minHours) {
       console.log(`  Minimum duration: ${options.minHours} hours`);
     }
-    console.log(chalk.gray('  Press Ctrl+C to stop\n'));
+    console.log(palette.muted('  Press Ctrl+C to stop\n'));
 
     // Keep process running
     process.on('SIGINT', () => {
-      console.log(chalk.yellow('\nStopping Ralph loop...'));
+      console.log(palette.warn('\nStopping Ralph loop...'));
       loop.stop();
     });
   });
@@ -545,11 +560,11 @@ ralphCmd
   .action(() => {
     const loop = getRalphLoop();
     if (!loop.isRunning()) {
-      console.log(chalk.yellow('Ralph loop is not running'));
+      console.log(palette.warn('Ralph loop is not running'));
       return;
     }
     loop.stop();
-    console.log(chalk.green('✓ Ralph loop stopped'));
+    console.log(palette.ok('✓ Ralph loop stopped'));
   });
 
 ralphCmd
@@ -562,9 +577,10 @@ ralphCmd
   });
 
 function printStats(stats: ReturnType<ReturnType<typeof getRalphLoop>['getStats']>) {
-  const statusColor = stats.status === 'running' ? chalk.green : stats.status === 'paused' ? chalk.yellow : chalk.gray;
+  const statusColor =
+    stats.status === 'running' ? palette.ok : stats.status === 'paused' ? palette.warn : palette.muted;
 
-  console.log(chalk.bold('\nRalph Loop Status:'));
+  console.log(palette.emph('\nRalph Loop Status:'));
   console.log(`  Status: ${statusColor(stats.status)}`);
   console.log(`  Elapsed: ${stats.elapsedHours.toFixed(2)} hours`);
   if (stats.minDurationMs) {
@@ -574,14 +590,14 @@ function printStats(stats: ReturnType<ReturnType<typeof getRalphLoop>['getStats'
     );
   }
 
-  console.log(chalk.bold('\nTasks:'));
+  console.log(palette.emph('\nTasks:'));
   console.log(`  Pending: ${stats.pending}`);
   console.log(`  Running: ${stats.running}`);
   console.log(`  Completed: ${stats.completed} (${stats.tasksCompleted} this session)`);
   console.log(`  Failed: ${stats.failed}`);
   console.log(`  Generated: ${stats.tasksGenerated}`);
 
-  console.log(chalk.bold('\nSessions:'));
+  console.log(palette.emph('\nSessions:'));
   console.log(`  Active: ${stats.activeSessions}`);
   console.log(`  Idle: ${stats.idleSessions}`);
   console.log(`  Busy: ${stats.busySessions}`);
@@ -695,20 +711,20 @@ program
       }
     }
 
-    console.log(chalk.bold('\nCodeman Status'));
-    console.log('─'.repeat(40));
+    console.log(heading('Codeman Status'));
+    console.log(rule(40));
 
-    console.log(chalk.bold('\nWeb Server:'));
+    console.log(heading('Web Server:'));
     if (probe.reachable) {
       const version = probe.version ? ` (v${probe.version})` : '';
-      console.log(`  Status: ${chalk.green('running')}${version} at ${probe.url}`);
+      console.log(kv('Status', `${palette.ok('running')}${version} at ${probe.url}`));
       if (probe.authRequired) {
-        console.log(chalk.gray('  (answers 401: set CODEMAN_PASSWORD/CODEMAN_USERNAME to see session details)'));
+        console.log(palette.muted('  (answers 401: set CODEMAN_PASSWORD/CODEMAN_USERNAME to see session details)'));
       }
     } else {
-      console.log(`  Status: ${chalk.red('not reachable')} at ${candidates.join(' or ')}`);
+      console.log(kv('Status', `${palette.err('not reachable')} at ${candidates.join(' or ')}`));
       console.log(
-        chalk.gray('  (start it with `codeman web`, or check your service: systemctl --user status codeman-web)')
+        palette.muted('  (start it with `codeman web`, or check your service: systemctl --user status codeman-web)')
       );
     }
 
@@ -716,26 +732,26 @@ program
     // as such, so the numbers are never silently a different thing.
     if (probe.sessions) {
       const live = probe.sessions;
-      console.log(chalk.bold('\nSessions (live, from the server):'));
-      console.log(`  Total: ${live.length}`);
-      console.log(`  Idle: ${live.filter((s) => s.status === 'idle').length}`);
-      console.log(`  Busy: ${live.filter((s) => s.status === 'busy').length}`);
+      console.log(heading('Sessions (live, from the server):'));
+      console.log(kv('Total', String(live.length)));
+      console.log(kv('Idle', String(live.filter((s) => s.status === 'idle').length)));
+      console.log(kv('Busy', String(live.filter((s) => s.status === 'busy').length)));
     } else {
       const manager = getSessionManager();
       const storedValues = Object.values(manager.getStoredSessions());
-      console.log(chalk.bold('\nSessions (from saved state):'));
-      console.log(`  Active: ${storedValues.filter((s) => s.status !== 'stopped').length}`);
-      console.log(`  Idle: ${storedValues.filter((s) => s.status === 'idle').length}`);
-      console.log(`  Busy: ${storedValues.filter((s) => s.status === 'busy').length}`);
+      console.log(heading('Sessions (from saved state):'));
+      console.log(kv('Active', String(storedValues.filter((s) => s.status !== 'stopped').length)));
+      console.log(kv('Idle', String(storedValues.filter((s) => s.status === 'idle').length)));
+      console.log(kv('Busy', String(storedValues.filter((s) => s.status === 'busy').length)));
     }
 
     const taskCounts = getTaskQueue().getCount();
-    console.log(chalk.bold('\nTasks:'));
-    console.log(`  Total: ${taskCounts.total}`);
-    console.log(`  Pending: ${taskCounts.pending}`);
-    console.log(`  Running: ${taskCounts.running}`);
-    console.log(`  Completed: ${taskCounts.completed}`);
-    console.log(`  Failed: ${taskCounts.failed}`);
+    console.log(heading('Tasks:'));
+    console.log(kv('Total', String(taskCounts.total)));
+    console.log(kv('Pending', String(taskCounts.pending)));
+    console.log(kv('Running', String(taskCounts.running)));
+    console.log(kv('Completed', String(taskCounts.completed)));
+    console.log(kv('Failed', String(taskCounts.failed)));
     console.log('');
   });
 
@@ -745,9 +761,17 @@ program
   .option('-f, --force', 'Skip confirmation')
   .action(async (options) => {
     if (!options.force) {
-      console.log(chalk.yellow('This will stop all sessions and clear all state.'));
-      console.log(chalk.yellow('Use --force to confirm.'));
-      return;
+      console.log(palette.warn('This will stop all sessions and clear all state.'));
+      // Non-interactive callers keep the old refusal: a script piping into the
+      // CLI must never be able to reset state by hanging on an unseen question.
+      if (!isInteractive()) {
+        console.log(palette.warn('Use --force to confirm.'));
+        return;
+      }
+      if (!(await confirm('Reset all Codeman state?'))) {
+        console.log(palette.muted('○ Cancelled, nothing was changed'));
+        return;
+      }
     }
 
     const manager = getSessionManager();
@@ -756,7 +780,7 @@ program
     await manager.stopAllSessions();
     store.reset();
 
-    console.log(chalk.green('✓ All state reset'));
+    console.log(palette.ok('✓ All state reset'));
   });
 
 // Shorthand commands at root level
@@ -767,39 +791,14 @@ program
   .action(async (options) => {
     const manager = getSessionManager();
     const session = await manager.createSession(options.dir);
-    console.log(chalk.green(`✓ Session started: ${session.id}`));
+    console.log(palette.ok(`✓ Session started: ${session.id}`));
   });
 
 program
   .command('list')
   .alias('ls')
-  .description('List all sessions (shorthand)')
-  .action(() => {
-    const manager = getSessionManager();
-    const sessions = manager.getAllSessions();
-    const stored = manager.getStoredSessions();
-
-    if (sessions.length === 0 && Object.keys(stored).length === 0) {
-      console.log(chalk.yellow('No sessions found'));
-      return;
-    }
-
-    console.log(chalk.bold('\nActive Sessions:'));
-    if (sessions.length === 0) {
-      console.log('  (none)');
-    } else {
-      for (const session of sessions) {
-        const status =
-          session.status === 'idle'
-            ? chalk.green('idle')
-            : session.status === 'busy'
-              ? chalk.yellow('busy')
-              : chalk.red(session.status);
-        console.log(`  ${chalk.cyan(session.id.slice(0, 8))} ${status} ${session.workingDir}`);
-      }
-    }
-    console.log('');
-  });
+  .description('List active sessions (shorthand; `codeman session list` also shows stopped ones)')
+  .action(() => printSessionList({ includeStored: false }));
 
 // ============ Web / daemon / service Commands ============
 
@@ -831,7 +830,7 @@ function toWebLaunchOptions(options: {
 }): WebLaunchOptions {
   const port = parseInt(options.port, 10);
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    console.error(chalk.red(`✗ Invalid port: ${options.port}`));
+    console.error(palette.err(`✗ Invalid port: ${options.port}`));
     process.exit(1);
   }
   return {
@@ -852,11 +851,11 @@ function warnIfUnauthenticatedNetwork(launch: WebLaunchOptions): void {
   if (isLoopbackBindHost(launch.host)) return;
   if (isUnauthenticatedNetworkAcknowledged(launch.allowUnauthenticatedNetwork)) return;
   console.log(
-    chalk.yellow(
+    palette.warn(
       `⚠ Binding ${launch.host} without CODEMAN_PASSWORD: anyone who can reach this port gets terminal control.`
     )
   );
-  console.log(chalk.yellow('  Set CODEMAN_PASSWORD, or bind 127.0.0.1 and front it with tailscale serve.'));
+  console.log(palette.warn('  Set CODEMAN_PASSWORD, or bind 127.0.0.1 and front it with tailscale serve.'));
 }
 
 // Web interface command
@@ -872,17 +871,18 @@ webCmd.action(async (options) => {
   const launch = toWebLaunchOptions(options);
 
   if (options.stop) {
-    const result = await stopDaemon(launch);
+    // stopDaemon waits for the process to actually exit (up to 15s).
+    const result = await withSpinner('Stopping Codeman...', () => stopDaemon(launch));
     if (result.ok && result.reason === 'not-running') {
-      console.log(chalk.gray(`○ ${result.message}`));
+      console.log(palette.muted(`○ ${result.message}`));
       return;
     }
     if (result.ok) {
-      console.log(chalk.green(`✓ ${result.message ?? `Stopped Codeman (pid ${result.pid})`}`));
-      console.log(chalk.gray('  Your agents keep running in tmux.'));
+      console.log(palette.ok(`✓ ${result.message ?? `Stopped Codeman (pid ${result.pid})`}`));
+      console.log(palette.muted('  Your agents keep running in tmux.'));
       return;
     }
-    console.error(chalk.red(`✗ ${result.message ?? 'Could not stop the server'}`));
+    console.error(palette.err(`✗ ${result.message ?? 'Could not stop the server'}`));
     process.exit(1);
   }
 
@@ -890,31 +890,33 @@ webCmd.action(async (options) => {
     const status = await daemonStatus(launch);
     if (status.responding) {
       const version = status.version ? ` (v${status.version})` : '';
-      console.log(chalk.green(`✓ Responding at ${status.url}${version}`));
+      console.log(palette.ok(`✓ Responding at ${status.url}${version}`));
     } else {
-      console.log(chalk.yellow(`○ Nothing answering at ${status.url}`));
+      console.log(palette.warn(`○ Nothing answering at ${status.url}`));
     }
-    console.log(`  Daemon pid:  ${status.running ? chalk.green(String(status.pid)) : chalk.gray('not running')}`);
-    console.log(chalk.gray(`  Pidfile:     ${status.pidFile}`));
-    console.log(chalk.gray(`  Log:         ${status.logPath}`));
+    console.log(kv('Daemon pid', status.running ? palette.ok(String(status.pid)) : palette.muted('not running'), 11));
+    console.log(palette.muted(kv('Pidfile', status.pidFile, 11)));
+    console.log(palette.muted(kv('Log', status.logPath, 11)));
     if (!status.running && status.responding) {
-      console.log(chalk.gray('  (running, but not started with --daemon: probably a service or a foreground run)'));
+      console.log(palette.muted('  (running, but not started with --daemon: probably a service or a foreground run)'));
     }
     return;
   }
 
   if (options.daemon) {
     warnIfUnauthenticatedNetwork(launch);
-    console.log(chalk.cyan('Starting Codeman in the background...'));
-    const result = await startDaemon(launch);
+    // The start polls /api/status for up to 30s; without this the shell just sits there.
+    const result = await withSpinner('Starting Codeman in the background, waiting for it to answer...', () =>
+      startDaemon(launch)
+    );
     if (result.ok) {
-      console.log(chalk.green(`\n✓ Codeman is running at ${result.url} (pid ${result.pid})`));
-      console.log(chalk.gray(`  Logs: ${result.logPath}`));
-      console.log(chalk.gray('  Stop it with: codeman web --stop'));
-      console.log(chalk.gray('  Want it back after a reboot? codeman service install'));
+      console.log(palette.ok(`\n✓ Codeman is running at ${result.url} (pid ${result.pid})`));
+      console.log(palette.muted(`  Logs: ${result.logPath}`));
+      console.log(palette.muted('  Stop it with: codeman web --stop'));
+      console.log(palette.muted('  Want it back after a reboot? codeman service install'));
       return;
     }
-    console.error(chalk.red(`\n✗ ${result.message ?? 'Failed to start'}`));
+    console.error(palette.err(`\n✗ ${result.message ?? 'Failed to start'}`));
     process.exit(1);
   }
 
@@ -924,29 +926,29 @@ webCmd.action(async (options) => {
   const https = launch.https;
   const titleHostname = options.titleHostname;
   const allowUnauthenticatedNetwork = launch.allowUnauthenticatedNetwork ?? false;
-  const protocol = https ? 'https' : 'http';
   const displayHost = host === '0.0.0.0' ? 'localhost' : host;
 
-  console.log(chalk.cyan(`Starting Codeman web interface on ${displayHost}:${port}${https ? ' (HTTPS)' : ''}...`));
+  console.log(palette.info(`Starting Codeman web interface on ${displayHost}:${port}${https ? ' (HTTPS)' : ''}...`));
 
   try {
+    // The server prints its own "running at" line (it also covers the daemon and
+    // service launch paths), so this one used to be a duplicate of it.
     const server = await startWebServer(port, https, false, host, titleHostname, allowUnauthenticatedNetwork);
-    console.log(chalk.green(`\n✓ Web interface running at ${protocol}://${displayHost}:${port}`));
     if (https) {
-      console.log(chalk.yellow('  Note: Accept the self-signed certificate in your browser on first visit'));
+      console.log(palette.warn('  Note: Accept the self-signed certificate in your browser on first visit'));
     }
-    console.log(chalk.gray('  Press Ctrl+C to stop\n'));
+    console.log(palette.muted('  Press Ctrl+C to stop\n'));
 
     // Graceful shutdown handler — flush state and clean up on SIGTERM/SIGINT
     let shuttingDown = false;
     const shutdown = async (signal: string) => {
       if (shuttingDown) return;
       shuttingDown = true;
-      console.log(chalk.yellow(`\n${signal} received, shutting down gracefully...`));
+      console.log(palette.warn(`\n${signal} received, shutting down gracefully...`));
       try {
         await server.stop();
       } catch (err) {
-        console.error(chalk.red(`Error during shutdown: ${getErrorMessage(err)}`));
+        console.error(palette.err(`Error during shutdown: ${getErrorMessage(err)}`));
       }
       process.exit(0);
     };
@@ -954,7 +956,7 @@ webCmd.action(async (options) => {
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGHUP', () => shutdown('SIGHUP'));
   } catch (err) {
-    console.error(chalk.red(`✗ Failed to start web server: ${getErrorMessage(err)}`));
+    console.error(palette.err(`✗ Failed to start web server: ${getErrorMessage(err)}`));
     process.exit(1);
   }
 });
@@ -970,20 +972,23 @@ addWebLaunchOptions(
 ).action(async (options) => {
   const launch = toWebLaunchOptions(options);
   warnIfUnauthenticatedNetwork(launch);
-  console.log(chalk.cyan('Installing the Codeman service...'));
 
-  const result = await installService(launch);
-  for (const warning of result.warnings ?? []) console.log(chalk.yellow(`⚠ ${warning}`));
+  // Install polls the new unit's /api/status for up to 30s before it can honestly
+  // report success, so the wait needs a visible heartbeat.
+  const result = await withSpinner('Installing the Codeman service, waiting for it to answer...', () =>
+    installService(launch)
+  );
+  for (const warning of result.warnings ?? []) console.log(palette.warn(`⚠ ${warning}`));
 
   if (!result.ok) {
-    console.error(chalk.red(`✗ ${result.message}`));
+    console.error(palette.err(`✗ ${result.message}`));
     process.exit(1);
   }
-  console.log(chalk.green(`✓ ${result.message}`));
-  console.log(chalk.gray(`  Unit: ${result.unitPath}`));
+  console.log(palette.ok(`✓ ${result.message}`));
+  console.log(palette.muted(`  Unit: ${result.unitPath}`));
   if (process.env.CODEMAN_PASSWORD) {
     console.log(
-      chalk.yellow(
+      palette.warn(
         '  Note: CODEMAN_PASSWORD was NOT copied into the unit file. Add it there yourself if the service needs auth.'
       )
     );
@@ -996,10 +1001,10 @@ serviceCmd
   .action(() => {
     const result = uninstallService();
     if (!result.ok) {
-      console.error(chalk.red(`✗ ${result.message}`));
+      console.error(palette.err(`✗ ${result.message}`));
       process.exit(1);
     }
-    console.log(chalk.green(`✓ ${result.message}`));
+    console.log(palette.ok(`✓ ${result.message}`));
   });
 
 addWebLaunchOptions(
@@ -1007,15 +1012,15 @@ addWebLaunchOptions(
 ).action(async (options) => {
   const status = await serviceStatus(toWebLaunchOptions(options));
   if (!status.kind) {
-    console.log(chalk.yellow(`No supported supervisor on ${process.platform}. Use \`codeman web -d\` instead.`));
+    console.log(palette.warn(`No supported supervisor on ${process.platform}. Use \`codeman web -d\` instead.`));
     return;
   }
   console.log(`  Supervisor: ${status.kind} (${status.name})`);
-  console.log(`  Unit file:  ${status.installed ? chalk.green(status.unitPath) : chalk.gray('not installed')}`);
-  console.log(`  Loaded:     ${status.loaded ? chalk.green('yes') : chalk.gray('no')}`);
+  console.log(`  Unit file:  ${status.installed ? palette.ok(status.unitPath) : palette.muted('not installed')}`);
+  console.log(`  Loaded:     ${status.loaded ? palette.ok('yes') : palette.muted('no')}`);
   const version = status.version ? ` (v${status.version})` : '';
   console.log(
-    `  Responding: ${status.responding ? chalk.green(`yes at ${status.url}${version}`) : chalk.gray(`no at ${status.url}`)}`
+    `  Responding: ${status.responding ? palette.ok(`yes at ${status.url}${version}`) : palette.muted(`no at ${status.url}`)}`
   );
 });
 
@@ -1085,7 +1090,7 @@ usersCmd
   .action(async (name, options) => {
     const { createUser, isValidUsername } = await import('./user-store.js');
     if (!isValidUsername(name)) {
-      console.error(chalk.red('✗ Username must be lowercase, start alphanumeric, 2-32 chars ([a-z0-9_-])'));
+      console.error(palette.err('✗ Username must be lowercase, start alphanumeric, 2-32 chars ([a-z0-9_-])'));
       process.exit(1);
     }
     try {
@@ -1096,18 +1101,18 @@ usersCmd
         password = await promptHiddenPassword('New password: ');
         const confirm = await promptHiddenPassword('Confirm password: ');
         if (password !== confirm) {
-          console.error(chalk.red('✗ Passwords do not match'));
+          console.error(palette.err('✗ Passwords do not match'));
           process.exit(1);
         }
       }
       if (!password || password.length < 8) {
-        console.error(chalk.red('✗ Password must be at least 8 characters'));
+        console.error(palette.err('✗ Password must be at least 8 characters'));
         process.exit(1);
       }
       const user = await createUser({ username: name, role: options.admin ? 'admin' : 'user', password });
-      console.log(chalk.green(`✓ Created ${user.role} "${user.username}"`));
+      console.log(palette.ok(`✓ Created ${user.role} "${user.username}"`));
     } catch (err) {
-      console.error(chalk.red(`✗ ${getErrorMessage(err)}`));
+      console.error(palette.err(`✗ ${getErrorMessage(err)}`));
       process.exit(1);
     }
   });
@@ -1126,14 +1131,14 @@ usersCmd
         password = await promptHiddenPassword('New password: ');
         const confirm = await promptHiddenPassword('Confirm password: ');
         if (password !== confirm) {
-          console.error(chalk.red('✗ Passwords do not match'));
+          console.error(palette.err('✗ Passwords do not match'));
           process.exit(1);
         }
       }
       await setPassword(name, password, { mustChangePassword: false });
-      console.log(chalk.green(`✓ Password updated for "${name}"`));
+      console.log(palette.ok(`✓ Password updated for "${name}"`));
     } catch (err) {
-      console.error(chalk.red(`✗ ${getErrorMessage(err)}`));
+      console.error(palette.err(`✗ ${getErrorMessage(err)}`));
       process.exit(1);
     }
   });
@@ -1146,17 +1151,17 @@ usersCmd
     const { readUsers } = await import('./user-store.js');
     const users = await readUsers(true);
     if (users.length === 0) {
-      console.log(chalk.yellow('No users defined (run: codeman users add <name> --admin)'));
+      console.log(palette.warn('No users defined (run: codeman users add <name> --admin)'));
       return;
     }
-    console.log(chalk.bold('\nUsers:'));
+    console.log(palette.emph('\nUsers:'));
     for (const u of users) {
-      const role = u.role === 'admin' ? chalk.magenta('admin') : chalk.cyan('user ');
-      const state = u.disabled ? chalk.red('disabled') : chalk.green('enabled ');
+      const role = u.role === 'admin' ? palette.accent('admin') : palette.info('user ');
+      const state = u.disabled ? palette.err('disabled') : palette.ok('enabled ');
       const flags = [u.mustChangePassword ? 'must-change-pw' : '', u.canBypassPermissions ? 'can-bypass' : '']
         .filter(Boolean)
         .join(' ');
-      console.log(`  ${role} ${state} ${u.username}${flags ? chalk.gray(`  [${flags}]`) : ''}`);
+      console.log(`  ${role} ${state} ${u.username}${flags ? palette.muted(`  [${flags}]`) : ''}`);
     }
     console.log('');
   });
@@ -1171,15 +1176,42 @@ usersCmd
       await deleteUser(name);
       if (options.deleteSpace) {
         await deleteUserSpace(name);
-        console.log(chalk.green(`✓ Deleted user "${name}" and their space`));
+        console.log(palette.ok(`✓ Deleted user "${name}" and their space`));
       } else {
-        console.log(chalk.green(`✓ Deleted user "${name}" (space left on disk)`));
+        console.log(palette.ok(`✓ Deleted user "${name}" (space left on disk)`));
       }
     } catch (err) {
-      console.error(chalk.red(`✗ ${getErrorMessage(err)}`));
+      console.error(palette.err(`✗ ${getErrorMessage(err)}`));
       process.exit(1);
     }
   });
+
+/**
+ * Missing REQUIRED tools are failures; a missing optional one or a skipped check
+ * is just absence, so it stays muted rather than shouting red at everyone
+ * without LibreOffice installed.
+ */
+function dependencyTone(result: ToolResult): Tone {
+  if (result.status === 'ok') return 'ok';
+  if (result.status === 'skipped') return 'idle';
+  return result.required ? 'err' : 'idle';
+}
+
+/**
+ * The colorize hook `dependency-report.ts` was written for. Versions stay in the
+ * default color (they are data, not a verdict); everything that IS a verdict is
+ * painted, and the supporting detail is muted so the glyph column reads first.
+ */
+const DOCTOR_STYLE: ReportStyle = {
+  title: (text) => palette.emph(text),
+  heading: (text) => palette.emph(palette.info(text)),
+  glyph: (result, glyph) => tint(dependencyTone(result), glyph),
+  label: (text) => text,
+  status: (result, text) => (result.status === 'ok' ? text : tint(dependencyTone(result), text)),
+  path: (text) => palette.muted(text),
+  meta: (text) => palette.muted(text),
+  summary: (text) => palette.emph(text),
+};
 
 program
   .command('doctor')
@@ -1204,9 +1236,10 @@ program
     const results = checkAll(registry, host);
 
     if (options.json) {
+      // Raw JSON, never styled: this output is parsed, not read.
       console.log(JSON.stringify(renderJson(results, host.environment), null, 2));
     } else {
-      console.log(renderTable(results, host.environment));
+      console.log(renderTable(results, host.environment, DOCTOR_STYLE));
     }
     process.exit(computeExitCode(results));
   });
