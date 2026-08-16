@@ -79,6 +79,14 @@ describe('isSensitivePath', () => {
       // workspace.
       ['codeman state file', `${HOME}/.codeman/state.json`],
       ['codeman state file on a named instance', `${HOME}/.codeman-beta/state.json`],
+      ['codeman state sibling (same payload)', `${HOME}/.codeman/state-inner.json`],
+      // settings.json holds voiceSettings.apiKey by schema; push-keys.json holds
+      // the VAPID PRIVATE key; intents.json is 0600 because captured prompts can
+      // contain secrets and is deliberately kept out of /api/search.
+      ['codeman settings (Deepgram key)', `${HOME}/.codeman/settings.json`],
+      ['codeman push keys (VAPID private)', `${HOME}/.codeman/push-keys.json`],
+      ['codeman intent profiles', `${HOME}/.codeman/intents.json`],
+      ['codeman intents on a named instance', `${HOME}/.codeman-beta/intents.json`],
     ];
 
     it.each(blocked)('blocks the %s', (_label, path) => {

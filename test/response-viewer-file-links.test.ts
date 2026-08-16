@@ -100,11 +100,14 @@ describe('response viewer file-path linkifier', () => {
   it('never re-cuts text already inside an anchor', () => {
     // marked autolinks URLs; a path-looking tail inside one must stay whole, and
     // a nested <a> is invalid markup that would swallow the outer link's click.
-    const root = linkify('<p><a href="https://example.com/x/y.png">https://example.com/x/y.png</a></p>');
+    // ⚠️ The URL's tail MUST be a string the pattern matches on its own
+    // (`/tmp/...` here): with an unmatchable tail this test passes with the
+    // inside-anchor guard deleted, i.e. it pins nothing.
+    const root = linkify('<p><a href="https://example.com/tmp/shot.png">https://example.com/tmp/shot.png</a></p>');
 
     expect(paths(root)).toHaveLength(0);
     expect(root.querySelectorAll('a')).toHaveLength(1);
-    expect(root.querySelector('a')!.getAttribute('href')).toBe('https://example.com/x/y.png');
+    expect(root.querySelector('a')!.getAttribute('href')).toBe('https://example.com/tmp/shot.png');
   });
 
   it('leaves text with no path untouched', () => {
