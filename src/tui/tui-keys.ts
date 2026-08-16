@@ -162,6 +162,8 @@ export function createKeyParser(): TuiKeyParser {
   /** Parse one non-escape byte (or one UTF-8 character) off the front. */
   const parseByte = (): ParseStep => {
     const b = buf[0];
+    // LF counts as Enter because some terminals send it for Return; the cost is
+    // that Ctrl+J is not bindable, which no key in the plan's keymap wants.
     if (b === 0x0d || b === 0x0a) return { consumed: 1, events: [{ type: 'enter' }] };
     if (b === 0x09) return { consumed: 1, events: [{ type: 'tab' }] };
     if (b === 0x7f || b === 0x08) return { consumed: 1, events: [{ type: 'backspace' }] };
