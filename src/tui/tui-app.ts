@@ -1399,7 +1399,7 @@ class TuiApp {
     }
     // Nothing to switch to (a history or file hit), so the row's own facts are
     // the answer; resuming one is phase 3.
-    this.model.updateSearch({ note: [entry.text, entry.detail].filter((part) => part).join(' — ') });
+    this.model.updateSearch({ note: [entry.text, entry.detail].filter((part) => part).join(' · ') });
   }
 
   private async openDigest(): Promise<void> {

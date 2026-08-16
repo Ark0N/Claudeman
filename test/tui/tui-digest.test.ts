@@ -75,7 +75,7 @@ describe('formatAwayDigest', () => {
       { now: NOW }
     );
     expect(lines).toContain('NEEDS ATTENTION (1)');
-    expect(lines).toContain('  2m   w4-api  permission prompt — Bash(git push)');
+    expect(lines).toContain('  2m   w4-api  permission prompt · Bash(git push)');
   });
 
   it('caps a long section instead of burying the next one', () => {

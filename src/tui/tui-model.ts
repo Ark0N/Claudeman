@@ -209,6 +209,17 @@ const SEARCH_GROUP_LABELS: Record<SearchSourceType, string> = {
 };
 
 /**
+ * A session snippet opens with the session's own name, which the row already
+ * shows in its first column (`search-service.ts` builds it as
+ * `w1-alpha <em dash> /tmp/alpha`, hence the separator in the pattern).
+ * Dropping the repeat is what keeps a result row from reading as a stutter.
+ */
+function withoutLabelPrefix(snippet: string, label: string): string {
+  const rest = snippet.startsWith(label) ? snippet.slice(label.length) : snippet;
+  return rest === snippet ? snippet : rest.replace(/^\s*(?:[—:-]\s*)?/, '');
+}
+
+/**
  * Flatten `GET /api/search`'s typed groups into the overlay's lines: a header
  * per group, then its results. Only a result row carries a session id, which is
  * what the cursor uses to skip headers.
@@ -217,16 +228,6 @@ const SEARCH_GROUP_LABELS: Record<SearchSourceType, string> = {
  * has a session id too, but selecting it would move the cursor to a row that is
  * not on the list.
  */
-/**
- * A session snippet opens with the session's own name (`w1-alpha — /tmp/alpha`),
- * which the row already shows in its first column. Dropping the repeat is what
- * keeps a result row from reading as a stutter.
- */
-function withoutLabelPrefix(snippet: string, label: string): string {
-  const rest = snippet.startsWith(label) ? snippet.slice(label.length) : snippet;
-  return rest === snippet ? snippet : rest.replace(/^\s*(?:[—:-]\s*)?/, '');
-}
-
 export function buildSearchEntries(
   groups: readonly SearchResultGroup[],
   isLive: (sessionId: string) => boolean

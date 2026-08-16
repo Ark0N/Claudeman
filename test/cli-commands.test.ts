@@ -40,6 +40,7 @@ const TOP_LEVEL: Record<string, string[]> = {
   reset: [],
   start: [],
   list: ['ls'],
+  tui: [],
   web: [],
   service: [],
   users: [],
@@ -137,6 +138,10 @@ describe('registered options', () => {
     expect(flagsOf(find(program, 'doctor')!)).toEqual(expect.arrayContaining(['--json', '--category']));
   });
 
+  it('keeps the two `tui` fast paths, which stand in for `sc -l` and `sc 2`', () => {
+    expect(flagsOf(find(program, 'tui')!)).toEqual(expect.arrayContaining(['-l', '--list']));
+  });
+
   it('keeps the escape hatches that scripts depend on', () => {
     expect(flagsOf(find(program, 'reset')!)).toEqual(expect.arrayContaining(['-f', '--force']));
     expect(flagsOf(find(program, 'status')!)).toEqual(expect.arrayContaining(['--url']));
@@ -164,6 +169,8 @@ describe('registered arguments', () => {
   it.each([
     ['attach', ['path']],
     ['start', []],
+    // Optional: bare `codeman tui` opens the dashboard.
+    ['tui', ['n']],
   ])('declares the operands of `%s`', (name, expected) => {
     const args = find(program, name)!.registeredArguments.map((arg) => arg.name());
     expect(args).toEqual(expected);

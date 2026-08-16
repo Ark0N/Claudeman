@@ -6,7 +6,7 @@
  * API the web UI uses, so the two surfaces can never disagree. This module is
  * the only place in `src/tui/` that does IO. It covers four jobs:
  *
- * 1. **Discovery + auth** — find the instance's server (`CODEMAN_API_URL`, else
+ * 1. **Discovery + auth**: find the instance's server (`CODEMAN_API_URL`, else
  *    loopback on `CODEMAN_PORT`), accepting the self-signed cert `--https`
  *    generates, and read credentials the way `codeman attach` already does
  *    (env, then the data dir's `.env`).
@@ -15,7 +15,7 @@
  * 3. **Live updates** over SSE, decoded by `tui-sse.ts`, with a staleness
  *    watchdog and capped backoff. The TUI does not patch rows from payloads: an
  *    interesting event means "resync", and the app layer debounces the refetch.
- * 4. **Degraded mode** — when nothing answers, sessions are enumerated straight
+ * 4. **Degraded mode**: when nothing answers, sessions are enumerated straight
  *    from tmux plus a read-only peek at `state.json`, which keeps the "the
  *    server died, get me to my sessions" path that `sc` has today.
  *

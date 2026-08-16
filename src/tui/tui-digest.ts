@@ -47,7 +47,7 @@ function ageColumn(item: AwayDigestItem, now: number): string {
 
 function itemLine(item: AwayDigestItem, now: number): string {
   const who = item.sessionName ?? item.sessionId?.slice(0, 8) ?? '';
-  const what = [item.title, item.detail].filter((part) => part && part.trim() !== '').join(' — ');
+  const what = [item.title, item.detail].filter((part) => part && part.trim() !== '').join(' · ');
   return `  ${ageColumn(item, now)} ${[who, what].filter((part) => part !== '').join('  ')}`.replace(/\s+$/, '');
 }
 
