@@ -842,6 +842,7 @@ class TuiApp {
       ...(server.hostname ? { hostname: server.hostname } : {}),
       ...(server.instance ? { instance: server.instance } : {}),
       ...(server.version ? { version: server.version } : {}),
+      ...(server.planUsage ? { planUsage: this.planUsageChip(server.planUsage) } : {}),
     });
     await this.refresh();
     this.subscribe();
@@ -910,7 +911,7 @@ class TuiApp {
       // A tail that cannot be read is a pane-level fact, not a connection one:
       // the list stays exactly as it is and only this pane says so.
       if (this.previewSessionId !== sessionId) return;
-      this.applyPreview({ sessionId, lines: [], error: 'could not read this session’s terminal' });
+      this.applyPreview({ sessionId, lines: [], error: "could not read that session's terminal" });
     } finally {
       this.previewFetching = false;
     }
