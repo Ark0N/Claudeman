@@ -85,6 +85,10 @@ Object.assign(CodemanApp.prototype, {
   shouldShowHomeSessions() {
     if (this.isSoloWindow) return false;
     if (this.shouldUseMobileOverview?.()) return false;
+    // The sidebar layout already docks the full session list flush left at full
+    // height — the rail would render the same list right next to it (and z-wise
+    // UNDER it: sidebar 11, welcome overlay 10, rail inside the overlay).
+    if (this.isSessionSidebarActive?.()) return false;
     return window.innerWidth >= HOME_SESSIONS_MIN_WIDTH;
   },
 

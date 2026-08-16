@@ -51,6 +51,18 @@
        layer loads below; setting lang/dir here prevents an English accessibility
        tree from flashing while the deferred scripts start. -->
   <script>try{var m=window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024);var k=m?'codeman-app-settings-mobile':'codeman-app-settings';var l=JSON.parse(localStorage.getItem(k)||'{}').language;l=l==='zh-CN'?'zh-CN':'en';document.documentElement.lang=l;window.__codemanLanguage=l;}catch(e){document.documentElement.lang='en';window.__codemanLanguage='en';}</script>
+  <!-- Apply the saved session-list layout (header strip vs. left sidebar) and the
+       sidebar collapse state before first paint, so the loading skeleton and the
+       first frame already match. Same per-device settings key as the language
+       script above. Solo windows (/session/:id) never get a sidebar — mirrors
+       _detectSoloSessionId() in app.js. With no stored collapse choice the
+       docked desktop sidebar starts open and the off-canvas overlay drawer
+       starts closed — the overlay test is `innerWidth < 1024`, matching
+       mobile.css's media attribute below and _isSessionSidebarOverlay() in
+       app.js, NOT the handheld storage-key test `m`. Use a different predicate
+       here and boot will contradict this value, animating the drawer open by
+       itself on every load between 768 and 1023px. -->
+  <script>try{var m=window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024);var k=m?'codeman-app-settings-mobile':'codeman-app-settings';var L=JSON.parse(localStorage.getItem(k)||'{}').sessionListLayout;var solo=/^\/session\//.test(location.pathname);var C=localStorage.getItem('codeman-sidebar-collapsed');document.documentElement.dataset.sessionList=(L==='sidebar'&&!solo)?'sidebar':'header';document.documentElement.dataset.sidebar=(C===null?window.innerWidth<1024:C==='1')?'collapsed':'expanded';}catch(e){document.documentElement.dataset.sessionList='header';document.documentElement.dataset.sidebar='expanded';}</script>
   <!-- Inline critical CSS for instant skeleton paint (before styles.css loads) -->
   <style>
     .loading-skeleton{display:flex;flex-direction:column;height:100vh;height:100dvh;background:var(--bg-dark,#11151c)}
@@ -58,8 +70,22 @@
     .skeleton-brand{color:var(--accent,#38b6f0);font-size:14px;font-weight:700;font-family:'Manrope',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;opacity:.85}
     .skeleton-tabs{display:flex;gap:4px;margin-left:16px}
     .skeleton-tab{width:80px;height:24px;background:var(--control-bg,rgba(255,255,255,0.04));border-radius:6px}
+    .skeleton-body{flex:1;display:flex;min-height:0}
+    .skeleton-sidebar{display:none;width:44px;flex:0 0 44px;background:var(--glass-bg,rgba(31,38,48,0.85));border-right:1px solid var(--glass-border,rgba(255,255,255,0.08))}
     .skeleton-terminal{flex:1;background:var(--term-bg,#161b23)}
     .skeleton-toolbar{height:42px;background:var(--glass-bg,rgba(31,38,48,0.85));border-top:1px solid var(--glass-border,rgba(255,255,255,0.08))}
+    /* Sidebar layout: the strip skeleton would flash a grey pill where no strip
+       will be, so swap it for a rail matching --sidebar-width-collapsed. */
+    html[data-session-list="sidebar"] .skeleton-tabs{display:none}
+    /* Only >=1024px docks the sidebar and reserves layout width; below that it is
+       an off-canvas overlay, so a rail in the skeleton would be a strip that
+       vanishes. The pre-paint script has already resolved the collapse state, so
+       match the real width and spare the terminal a 216px sideways jump once
+       styles.css lands. */
+    @media (min-width: 1024px) {
+      html[data-session-list="sidebar"] .skeleton-sidebar{display:block}
+      html[data-session-list="sidebar"][data-sidebar="expanded"] .skeleton-sidebar{width:260px;flex:0 0 260px}
+    }
     .app-loaded .loading-skeleton{display:none}
   </style>
 </head>
@@ -70,7 +96,10 @@
       <span class="skeleton-brand">Codeman</span>
       <div class="skeleton-tabs"><div class="skeleton-tab"></div></div>
     </div>
-    <div class="skeleton-terminal"></div>
+    <div class="skeleton-body">
+      <div class="skeleton-sidebar"></div>
+      <div class="skeleton-terminal"></div>
+    </div>
     <div class="skeleton-toolbar"></div>
   </div>
   <!-- Skip link for keyboard users -->
@@ -84,10 +113,27 @@
         <span class="logo" onclick="app.goHome()" title="Go to main page"
           ><span class="logo-text">Codeman</span><span class="logo-compact" aria-hidden="true">C</span></span
         >
+        <!-- Collapse/expand the session sidebar. Lives in .header-brand, NOT in
+             #headerRight: test/mobile-header-buttons-policy.test.ts only enumerates
+             buttons inside .header-right, and on a phone this button is the only
+             way to open the off-canvas session drawer, so it must never be hidden
+             by the phone header policy. Shown only in sidebar layout — visibility
+             via marker class, never inline style. -->
+        <button class="btn-icon-header btn-sidebar-toggle btn-sidebar-toggle--hidden"
+          id="sidebarToggleBtn" onclick="app.toggleSessionSidebar()"
+          title="Collapse session sidebar" aria-label="Collapse session sidebar"
+          aria-expanded="true" aria-controls="sessionSidebar">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>
+        </button>
       </div>
 
-      <!-- Session Tabs -->
-      <div class="session-tabs" id="sessionTabs" role="tablist" aria-label="Session tabs">
+      <!-- Session Tabs. In sidebar layout THIS VERY #sessionTabs element is
+           re-parented into #sessionSidebarList by applySessionListLayout() and
+           this host is hidden — it is never cloned or rebuilt, because
+           app.$('sessionTabs') caches it by object identity and never invalidates. -->
+      <div class="session-tabs-host" id="sessionTabsHost">
+        <div class="session-tabs" id="sessionTabs" role="tablist" aria-label="Session tabs" aria-orientation="horizontal">
+        </div>
       </div>
 
       <!-- Detached single-session window title (shown only in solo mode) -->
@@ -309,6 +355,26 @@
 
     <!-- Main Terminal Area -->
     <main class="main">
+      <!-- Collapsible session sidebar (opt-in layout). Deliberately EMPTY in
+           markup: applySessionListLayout() moves #sessionTabs in here, so the
+           vertical list is the exact same DOM node as the header strip and every
+           renderer, drag handler and webview-tabs.js consumer keeps working.
+           Must stay a SIBLING of .terminal-wrap — .main.webview-active hides
+           .terminal-wrap, and the sidebar has to survive that. -->
+      <aside class="session-sidebar" id="sessionSidebar" aria-label="Sessions">
+        <div class="session-sidebar-head">
+          <span class="session-sidebar-title">Sessions</span>
+          <span class="session-sidebar-count" id="sessionSidebarCount" aria-hidden="true"></span>
+        </div>
+        <div class="session-sidebar-filter">
+          <input type="search" id="sessionSidebarFilter" class="session-sidebar-filter-input"
+            placeholder="Filter sessions" aria-label="Filter sessions"
+            autocomplete="off" spellcheck="false"
+            oninput="app.applySidebarFilter(this.value)">
+        </div>
+        <div class="session-sidebar-list" id="sessionSidebarList"></div>
+      </aside>
+
       <div class="terminal-wrap">
         <!-- Partial-history notice (#258). Lives OUTSIDE the terminal on purpose:
              the old notice was a grey line written into the scrollback, so it
@@ -687,6 +753,7 @@
               <div><kbd>Ctrl</kbd>+<kbd>Tab</kbd></div><div>Next Session</div>
               <div><kbd>Alt/Option</kbd>+<kbd>[</kbd> / <kbd>Alt/Option</kbd>+<kbd>]</kbd></div><div>Previous / Next Session</div>
               <div><kbd>Alt/Option</kbd>+<kbd>1-9</kbd></div><div>Switch to Tab N</div>
+              <div><kbd>Alt/Option</kbd>+<kbd>B</kbd></div><div>Toggle Session Sidebar</div>
             </div>
           </section>
           <section class="shortcut-section">
@@ -694,8 +761,8 @@
             <div class="shortcuts-grid">
               <div><kbd>Ctrl</kbd>+<kbd>{</kbd></div><div>Move Active Tab Left</div>
               <div><kbd>Ctrl</kbd>+<kbd>}</kbd></div><div>Move Active Tab Right</div>
-              <div><kbd>ArrowLeft</kbd></div><div>Focus Previous Tab</div>
-              <div><kbd>ArrowRight</kbd></div><div>Focus Next Tab</div>
+              <div><kbd>ArrowLeft</kbd> / <kbd>ArrowUp</kbd></div><div>Focus Previous Tab</div>
+              <div><kbd>ArrowRight</kbd> / <kbd>ArrowDown</kbd></div><div>Focus Next Tab</div>
               <div><kbd>Home</kbd></div><div>Focus First Tab</div>
               <div><kbd>End</kbd></div><div>Focus Last Tab</div>
               <div><kbd>Enter</kbd> / <kbd>Space</kbd></div><div>Activate Focused Tab</div>
@@ -1773,6 +1840,16 @@
               <div class="set-group">
                 <div class="set-group-head"><h4>Tabs</h4><span class="set-scope">device</span></div>
                 <div class="set-group-body">
+                  <div class="set-row has-field" data-search="session list layout sidebar tab strip vertical">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Session List Layout</span>
+                      <span class="set-row-desc">Horizontal strip in the header, or a collapsible left sidebar (Alt+B).</span>
+                    </div>
+                    <select id="appSettingsSessionListLayout" class="set-select">
+                      <option value="header">Header tab strip</option>
+                      <option value="sidebar">Left sidebar</option>
+                    </select>
+                  </div>
                   <div class="set-row" data-search="tall tabs folder name two rows">
                     <div class="set-row-text">
                       <span class="set-row-label">Tall Tabs</span>

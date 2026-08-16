@@ -48,6 +48,10 @@
     'Skip to terminal': '跳转到终端',
     'Go to main page': '返回主页',
     'Session tabs': '会话标签页',
+    /* 'Sessions' (the sidebar heading) is already mapped further down. */
+    'Collapse session sidebar': '收起会话侧边栏',
+    'Expand session sidebar': '展开会话侧边栏',
+    'Filter sessions': '筛选会话',
     'Admin Panel': '管理面板',
     'Open admin panel': '打开管理面板',
     'Re-dock to dashboard (close window)': '重新停靠到主界面（关闭窗口）',
@@ -227,6 +231,11 @@
     'Cron Button': '定时任务按钮',
     'Redraw Terminal Button': '重绘终端按钮',
     'Tab Bar': '标签栏',
+    'Session List Layout': '会话列表布局',
+    'Header tab strip': '顶栏标签条',
+    'Left sidebar': '左侧边栏',
+    'Horizontal strip in the header, or a collapsible left sidebar (Alt+B).':
+      '会话列表显示为顶栏横向标签条，或左侧可折叠侧边栏（Alt+B）。',
     'Tall Tabs (Name + Folder)': '双行标签（名称 + 文件夹）',
     'Pop-out Button on Tabs': '标签页弹出窗口按钮',
     Panels: '面板',
