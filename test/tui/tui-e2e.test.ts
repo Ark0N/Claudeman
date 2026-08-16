@@ -8,9 +8,19 @@
  * newline-separated, so the assertions parse the LAST frame out of the captured
  * bytes and read its list column.
  *
+ * Every verb that leaves the process is asserted on the REQUEST the fake server
+ * received, not on the frame: a prompt has to arrive as one line ending in a
+ * carriage return, and an approval as the exact action and option digit, both
+ * of which a rendered frame would happily lie about.
+ *
  * The child gets its own data dir and a tmux socket name nothing runs on, which
  * keeps the enumeration that degraded mode and the attach path use from seeing
  * the machine's real sessions. Nothing here attaches, kills or writes anything.
+ *
+ * TIMING: the tests share one long-lived dashboard, so each one leaves the list
+ * in focus for the next. Where a notice can still be up (it clears itself after
+ * ~1.5s), the wait is on the FOOTER showing the keys that must be live, because
+ * an overlay would swallow the next keystroke as a dismissal.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn } from 'node:child_process';
@@ -21,6 +31,9 @@ import { join, resolve } from 'node:path';
 import * as pty from 'node-pty';
 import { computeLayout } from '../../src/tui/tui-layout.js';
 import type { UnifiedSessionItem } from '../../src/services/unified-session-service.js';
+import type { SearchResponseData } from '../../src/types/search.js';
+import type { ApprovalItem } from '../../src/web/approval-inbox.js';
+import type { AwayDigestResponse } from '../../src/web/away-digest.js';
 
 const PORT = 3244;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
@@ -31,13 +44,120 @@ const LIST_WIDTH = computeLayout(COLS, ROWS).list.width;
 
 const NOW = Date.now();
 
+const ALPHA = 'aaaa1111-0000-0000-0000-000000000000';
+const BETA = 'bbbb2222-0000-0000-0000-000000000000';
+
 /** Mutable so a test can add a session and announce it over SSE. */
 let sessions: UnifiedSessionItem[] = [];
+/** What the dashboard can answer: pending items, keyed the way the inbox keys them. */
+let approvals: ApprovalItem[] = [];
+/** Terminal buffers the preview pane polls, by session id. */
+const terminals = new Map<string, string>();
+/** Everything the TUI posted, so a test can assert on the exact body. */
+const answered: Array<{ id: string; body: Record<string, unknown> }> = [];
+const inputs: Array<{ sessionId: string; body: Record<string, unknown> }> = [];
+
+const PLAN_USAGE = {
+  fiveHour: { usedPercentage: 32, resetAt: NOW + 3_600_000 },
+  sevenDay: { usedPercentage: 61, resetAt: NOW + 86_400_000 },
+};
+
+const SEARCH_RESULTS: SearchResponseData = {
+  query: 'alpha',
+  groups: [
+    {
+      type: 'session',
+      results: [
+        {
+          type: 'session',
+          sessionId: ALPHA,
+          sessionName: 'w1-alpha',
+          timestamp: NOW,
+          snippet: '/tmp/alpha',
+          exactMatch: true,
+          jumpTo: { kind: 'session', sessionId: ALPHA },
+        },
+      ],
+    },
+    {
+      type: 'file',
+      results: [
+        {
+          type: 'file',
+          sessionId: ALPHA,
+          sessionName: 'w1-alpha',
+          timestamp: NOW,
+          snippet: 'alpha notes',
+          exactMatch: false,
+          jumpTo: { kind: 'file-preview', sessionId: ALPHA, relativePath: 'docs/alpha.md' },
+        },
+      ],
+    },
+  ],
+  totalResults: 2,
+  truncated: false,
+};
+
+const DIGEST: AwayDigestResponse = {
+  range: { range: '24h', since: NOW - 86_400_000, until: NOW },
+  generatedAt: NOW,
+  dataFreshness: {
+    lifecyclePersisted: true,
+    tokenStatsPersisted: true,
+    runSummariesLiveOnly: true,
+    subagentsLiveOnly: true,
+  },
+  totals: {
+    sessionsCreated: 4,
+    sessionsExited: 1,
+    activeSessions: 3,
+    needsAttention: 1,
+    completed: 1,
+    errors: 0,
+    warnings: 1,
+    tokenWindowPrecision: 'day',
+  },
+  sections: {
+    needsAttention: [
+      {
+        id: 'd1',
+        sessionId: BETA,
+        sessionName: 'w2-beta',
+        timestamp: NOW - 300_000,
+        category: 'needs_attention',
+        severity: 'warning',
+        title: 'waited for approval',
+        source: 'lifecycle',
+      },
+    ],
+    completed: [],
+    stillRunning: [],
+    idle: [],
+    informational: [],
+  },
+};
+
+function permissionApproval(id: string): ApprovalItem {
+  return {
+    id,
+    sessionId: BETA,
+    sessionName: 'w2-beta',
+    kind: 'permission',
+    createdAt: Date.now(),
+    toolName: 'Bash',
+    toolSummary: 'Bash(git push origin main)',
+    options: [
+      { n: 1, label: 'Yes' },
+      { n: 2, label: 'Yes, and do not ask again' },
+      { n: 3, label: 'No, tell Claude what to do' },
+    ],
+  };
+}
 
 function resetSessions(): void {
   sessions = [
     {
-      sessionId: 'bbbb2222-0000-0000-0000-000000000000',
+      sessionId: BETA,
       name: 'w2-beta',
       mode: 'claude',
       sources: ['live'],
@@ -47,7 +167,7 @@ function resetSessions(): void {
       lastActivityAt: NOW,
     },
     {
-      sessionId: 'aaaa1111-0000-0000-0000-000000000000',
+      sessionId: ALPHA,
       name: 'w1-alpha',
       mode: 'claude',
       sources: ['live'],
@@ -101,6 +221,29 @@ function childEnv(): Record<string, string> {
   };
 }
 
+/** The session id in `/api/sessions/<id>/<what>`, or null. */
+function sessionRoute(url: string, what: string): string | null {
+  const match = url.match(new RegExp(`^/api/sessions/([^/?]+)/${what}`));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+  return new Promise((done) => {
+    let raw = '';
+    req.setEncoding('utf-8');
+    req.on('data', (chunk: string) => {
+      raw += chunk;
+    });
+    req.on('end', () => {
+      try {
+        done(JSON.parse(raw || '{}') as Record<string, unknown>);
+      } catch {
+        done({});
+      }
+    });
+  });
+}
+
 beforeAll(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'codeman-tui-e2e-'));
   resetSessions();
@@ -112,14 +255,55 @@ beforeAll(async () => {
         'Cache-Control': 'no-cache',
         Connection: 'keep-alive',
       });
-      res.write(`event: init\ndata: ${JSON.stringify({ version: '9.9.9', planUsage: null })}\n\n`);
+      res.write(`event: init\ndata: ${JSON.stringify({ version: '9.9.9', planUsage: PLAN_USAGE })}\n\n`);
       sseClients.add(res);
       req.on('close', () => sseClients.delete(res));
       return;
     }
-    if (url.startsWith('/api/status')) return sendJson(res, { success: true, data: { version: '9.9.9' } });
+    if (url.startsWith('/api/status')) {
+      return sendJson(res, { success: true, data: { version: '9.9.9', planUsage: PLAN_USAGE } });
+    }
     if (url.startsWith('/api/sessions/unified')) return sendJson(res, { success: true, data: { sessions } });
-    if (url.startsWith('/api/approvals')) return sendJson(res, { success: true, data: { approvals: [] } });
+
+    const previewFor = sessionRoute(url, 'terminal');
+    if (previewFor) {
+      return sendJson(res, { success: true, data: { terminalBuffer: terminals.get(previewFor) ?? '' } });
+    }
+
+    const inputFor = sessionRoute(url, 'input');
+    if (inputFor) {
+      void readBody(req).then((body) => {
+        inputs.push({ sessionId: inputFor, body });
+        sendJson(res, { success: true, data: { delivered: true } });
+      });
+      return;
+    }
+
+    const answerMatch = url.match(/^\/api\/approvals\/([^/?]+)\/answer/);
+    if (answerMatch) {
+      const id = decodeURIComponent(answerMatch[1]);
+      void readBody(req).then((body) => {
+        const item = approvals.find((entry) => entry.id === id);
+        if (!item) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({ success: false, error: 'The dialog is no longer on screen', errorCode: 'CONFLICT' })
+          );
+          return;
+        }
+        answered.push({ id, body });
+        approvals = approvals.filter((entry) => entry.id !== id);
+        sendJson(res, { success: true, data: { id, sessionId: item.sessionId, action: body.action } });
+        pushEvent('approval:resolved', { id, sessionId: item.sessionId, kind: item.kind, resolution: 'answered' });
+      });
+      return;
+    }
+
+    if (url.startsWith('/api/approvals')) return sendJson(res, { success: true, data: { approvals } });
+    if (url.startsWith('/api/search')) return sendJson(res, { success: true, data: SEARCH_RESULTS });
+    // The away digest predates the envelope: its payload sits at the top level.
+    if (url.startsWith('/api/away-digest')) return sendJson(res, { success: true, digest: DIGEST });
+
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ success: false, error: 'no route', errorCode: 'NOT_FOUND' }));
   });
@@ -160,6 +344,13 @@ function listLines(raw: string): string[] {
   return frameLines(raw).map((line) => line.slice(0, LIST_WIDTH).replace(/\s+$/, ''));
 }
 
+/** Just the preview column, for the same reason in reverse. */
+function previewText(raw: string): string {
+  return frameLines(raw)
+    .map((line) => line.slice(LIST_WIDTH + 1).replace(/\s+$/, ''))
+    .join('\n');
+}
+
 function rowFor(raw: string, name: string): string {
   return listLines(raw).find((line) => line.includes(name)) ?? '';
 }
@@ -183,6 +374,8 @@ describe('codeman tui (under a pty)', () => {
   let exitCode: number | null = null;
 
   beforeAll(async () => {
+    terminals.set(BETA, '\x1b[32mready\x1b[0m\nbeta is thinking\n');
+    terminals.set(ALPHA, 'alpha has been quiet\n');
     term = pty.spawn('npx', ['tsx', 'src/index.ts', 'tui'], {
       name: 'xterm-256color',
       cols: COLS,
@@ -202,6 +395,18 @@ describe('codeman tui (under a pty)', () => {
   afterAll(() => {
     if (exitCode === null) term.kill();
   });
+
+  /**
+   * Walk the cursor onto a row by name. Rows re-sort when an approval lands, so
+   * a test can never assume a position; `j` wraps, so this always terminates.
+   */
+  async function selectRow(name: string): Promise<void> {
+    for (let i = 0; i < 12 && !rowFor(output, name).startsWith('>'); i++) {
+      term.write('j');
+      await new Promise((done) => setTimeout(done, 120));
+    }
+    await waitFor(() => rowFor(output, name).startsWith('>'), `${name} to be selected`);
+  }
 
   it('enters the alternate screen and hides the cursor', () => {
     expect(output).toContain('\u001b[?1049h');
@@ -225,14 +430,23 @@ describe('codeman tui (under a pty)', () => {
     expect(lines[0]).toContain('v9.9.9');
     // Two live rows; the history row is not a session you have open.
     expect(lines[0]).toContain('2 sessions');
+    // The plan-usage chip, punctuated with this tier's separator.
+    expect(lines[0]).toContain('5h 32%');
+    expect(lines[0]).toContain('wk 61%');
     const footer = lines[ROWS - 1];
     expect(footer).toContain('attach');
     expect(footer).toContain('x kill');
-    expect(footer).not.toContain('search');
+    expect(footer).toContain('p prompt');
+    expect(footer).toContain('/ search');
   });
 
-  it('holds the preview seam open instead of pretending to load one', () => {
-    expect(frameLines(output).join('\n')).toContain('live preview is not wired up yet');
+  it('shows the selected session tail and follows it as it changes', async () => {
+    await waitFor(() => previewText(output).includes('beta is thinking'), 'the preview tail');
+    expect(previewText(output)).toContain('w2-beta');
+    expect(previewText(output)).toContain('/tmp/beta');
+
+    terminals.set(BETA, '\x1b[32mready\x1b[0m\nbeta is thinking\nbeta finished the job\n');
+    await waitFor(() => previewText(output).includes('beta finished the job'), 'the tail to refresh');
   });
 
   it('starts with the first row selected and moves the cursor with j / k', async () => {
@@ -290,6 +504,114 @@ describe('codeman tui (under a pty)', () => {
 
     term.write('\u001b');
     await waitFor(() => !frameLines(output).some((line) => line.includes('Kill session')), 'escape to cancel the kill');
+  });
+
+  it('sends a one-line prompt with p', async () => {
+    term.write('p');
+    await waitFor(() => frameLines(output)[ROWS - 1].startsWith(' >'), 'the composer to open');
+
+    term.write('deploy the thing');
+    await waitFor(() => frameLines(output)[ROWS - 1].includes('deploy the thing'), 'the typed line');
+    // Backspace edits the line rather than moving the list cursor.
+    term.write('\u007f'.repeat(5));
+    await waitFor(() => !frameLines(output)[ROWS - 1].includes('thing'), 'backspace to edit the line');
+
+    term.write('\r');
+    await waitFor(() => inputs.length > 0, 'the input POST');
+    expect(inputs[0].sessionId).toBe(BETA);
+    // Single line, ended with a carriage return, or the server never presses Enter.
+    expect(inputs[0].body.input).toBe('deploy the\r');
+    expect(String(inputs[0].body.input)).not.toContain('\n');
+    expect(inputs[0].body.clientId).toBeTruthy();
+
+    await waitFor(() => frameLines(output).join('\n').includes('sent'), 'the sent notice');
+    await waitFor(() => !frameLines(output).join('\n').includes('Notice'), 'the notice to clear itself', 5_000);
+  });
+
+  it('searches with / and selects a live result', async () => {
+    term.write('/');
+    await waitFor(() => frameLines(output).join('\n').includes('Search'), 'the search overlay');
+
+    term.write('alpha');
+    await waitFor(() => frameLines(output).join('\n').includes('2 results'), 'the debounced search to answer');
+    const overlay = frameLines(output).join('\n');
+    expect(overlay).toContain('alpha_');
+    expect(overlay).toContain('SESSIONS');
+    expect(overlay).toContain('w1-alpha');
+    expect(overlay).toContain('docs/alpha.md');
+
+    term.write('\r');
+    await waitFor(() => !frameLines(output).join('\n').includes('Search'), 'the overlay to close');
+    await waitFor(() => rowFor(output, 'w1-alpha').startsWith('>'), 'the searched session to be selected');
+  });
+
+  it('shows the away digest with g', async () => {
+    term.write('g');
+    await waitFor(() => frameLines(output).join('\n').includes('Away digest'), 'the digest overlay');
+    const panel = frameLines(output).join('\n');
+    expect(panel).toContain('the last 24 hours');
+    expect(panel).toContain('4 started');
+    expect(panel).toContain('NEEDS ATTENTION (1)');
+    expect(panel).toContain('waited for approval');
+
+    term.write('\u001b');
+    await waitFor(() => !frameLines(output).join('\n').includes('Away digest'), 'escape to close the digest');
+  });
+
+  it('renders the pending dialog as a card and rings the bell once for it', async () => {
+    await selectRow('w2-beta');
+    const before = output.length;
+
+    approvals = [permissionApproval(`${BETA}:1`)];
+    pushEvent('approval:pending', approvals[0]);
+    await waitFor(() => previewText(output).includes('requests: Bash(git push origin main)'), 'the approval card');
+    const card = previewText(output);
+    expect(card).toContain('1. Yes');
+    expect(card).toContain('3. No, tell Claude what to do');
+    expect(card).toContain('y approve');
+    expect(frameLines(output)[0]).toContain('[!] 1');
+
+    // The same item announced twice is one prompt, so it must not ring twice.
+    pushEvent('approval:pending', approvals[0]);
+    await new Promise((done) => setTimeout(done, 1_200));
+    expect(output.slice(before).split('\u0007')).toHaveLength(2);
+  });
+
+  it('answers the dialog with the option digit and clears the card', async () => {
+    // The footer is the honest signal that the list has the keyboard: a notice
+    // still on screen would swallow the digit as a dismissal.
+    await waitFor(() => frameLines(output)[ROWS - 1].includes('y approve'), 'the answer keys in the footer');
+    expect(frameLines(output)[ROWS - 1]).toContain('1-9 option');
+
+    term.write('1');
+    await waitFor(() => answered.length > 0, 'the answer POST');
+    expect(answered[0]).toEqual({ id: `${BETA}:1`, body: { action: 'option', option: 1 } });
+    await waitFor(() => !previewText(output).includes('requests: Bash'), 'the card to clear');
+  });
+
+  it('approves with y', async () => {
+    approvals = [permissionApproval(`${BETA}:2`)];
+    pushEvent('approval:pending', approvals[0]);
+    await waitFor(() => previewText(output).includes('requests: Bash(git push origin main)'), 'the second card');
+    await waitFor(() => frameLines(output)[ROWS - 1].includes('y approve'), 'the answer keys in the footer');
+
+    term.write('y');
+    await waitFor(() => answered.length > 1, 'the approve POST');
+    expect(answered[1]).toEqual({ id: `${BETA}:2`, body: { action: 'approve' } });
+  });
+
+  it('says so when the dialog has already left the screen', async () => {
+    approvals = [permissionApproval(`${BETA}:3`)];
+    pushEvent('approval:pending', approvals[0]);
+    await waitFor(() => previewText(output).includes('requests: Bash(git push origin main)'), 'the third card');
+
+    await waitFor(() => frameLines(output)[ROWS - 1].includes('y approve'), 'the answer keys in the footer');
+    // Answered in tmux a moment ago: the server 409s and the TUI explains.
+    approvals = [];
+    term.write('y');
+    await waitFor(() => frameLines(output).join('\n').includes('no longer on screen'), 'the gone-dialog message');
+    term.write('\u001b');
+    await waitFor(() => !frameLines(output).join('\n').includes('no longer on screen'), 'escape to dismiss it');
   });
 
   it('quits on q and restores the screen it took over', async () => {

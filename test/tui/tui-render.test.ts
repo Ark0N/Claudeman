@@ -564,6 +564,11 @@ describe('formatPlanUsage', () => {
     expect(formatPlanUsage({ sevenDay: { usedPercentage: 90, resetAt: 1 } })).toBe('wk 90%');
   });
 
+  it('punctuates with the separator it is given, so an ASCII terminal gets none', () => {
+    const usage = { fiveHour: { usedPercentage: 32, resetAt: 1 }, sevenDay: { usedPercentage: 61, resetAt: 2 } };
+    expect(formatPlanUsage(usage, ' - ')).toBe('5h 32% - wk 61%');
+  });
+
   it('is empty when there is nothing to report, so the header shows no placeholder', () => {
     expect(formatPlanUsage(null)).toBe('');
     expect(formatPlanUsage(undefined)).toBe('');

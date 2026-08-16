@@ -58,6 +58,7 @@ import {
   TuiClient,
   type TuiApprovalAnswer,
   type TuiEventStream,
+  type TuiPlanUsage,
   type TuiQuickStartOptions,
   type TuiTmuxSession,
 } from './tui-client.js';
@@ -664,7 +665,7 @@ class TuiApp {
         ...(server.hostname ? { hostname: server.hostname } : {}),
         ...(server.instance ? { instance: server.instance } : {}),
         ...(server.version ? { version: server.version } : {}),
-        ...(server.planUsage ? { planUsage: formatPlanUsage(server.planUsage) } : {}),
+        ...(server.planUsage ? { planUsage: this.planUsageChip(server.planUsage) } : {}),
       });
     } else {
       this.model.setConnection('degraded');
@@ -689,13 +690,18 @@ class TuiApp {
     });
   }
 
+  /** The chip, punctuated with the glyph tier's own separator. */
+  private planUsageChip(usage: TuiPlanUsage): string {
+    return formatPlanUsage(usage, ` ${this.glyphs.separator} `);
+  }
+
   // ── Data ───────────────────────────────────────────────────────────────────
 
   private subscribe(): void {
     this.stream = this.client.subscribeEvents({
       onInit: (state) => {
         if (state.version) this.model.setHeader({ version: state.version });
-        if (state.planUsage) this.model.setHeader({ planUsage: formatPlanUsage(state.planUsage) });
+        if (state.planUsage) this.model.setHeader({ planUsage: this.planUsageChip(state.planUsage) });
         this.paint();
       },
       onResync: () => this.scheduleRefresh(),
@@ -704,7 +710,7 @@ class TuiApp {
       // changes which group its row is in), and one code path cannot double-ring.
       onApproval: () => this.scheduleRefresh(),
       onPlanUsage: (usage) => {
-        this.model.setHeader({ planUsage: formatPlanUsage(usage) });
+        this.model.setHeader({ planUsage: this.planUsageChip(usage) });
         this.paint();
       },
       onStatus: (status, detail) => {

@@ -233,9 +233,10 @@ export function formatTokens(total: number): string {
  * The header's plan-usage chip: `5h 32% · wk 61%`, the same two windows the web
  * chip shows (the statusline telemetry carries no others). Empty when the
  * account reports neither, so the header shows no placeholder for a fact that
- * does not exist.
+ * does not exist. The separator is passed in because the header's own comes
+ * from the glyph tier, and an ASCII terminal must not get a stray `·`.
  */
-export function formatPlanUsage(usage: StatusTelemetry | null | undefined): string {
+export function formatPlanUsage(usage: StatusTelemetry | null | undefined, separator = ' · '): string {
   if (!usage) return '';
   const parts: string[] = [];
   if (typeof usage.fiveHour?.usedPercentage === 'number') {
@@ -244,7 +245,7 @@ export function formatPlanUsage(usage: StatusTelemetry | null | undefined): stri
   if (typeof usage.sevenDay?.usedPercentage === 'number') {
     parts.push(`wk ${Math.round(usage.sevenDay.usedPercentage)}%`);
   }
-  return parts.join(' · ');
+  return parts.join(separator);
 }
 
 /**
