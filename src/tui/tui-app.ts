@@ -27,12 +27,19 @@
  *
  * REPAINT POLICY: on state change (the model's revision), on resize, and on a
  * 500ms tick that runs only while a WORKING row is on screen (the glyph
- * animates). An idle dashboard writes nothing at all.
+ * animates). An idle dashboard writes nothing at all. The preview's own 1s poll
+ * obeys the same rule: an unchanged tail never reaches the model, so it cannot
+ * bump the revision and cannot repaint.
  *
- * NOT HERE YET (phase 2 of docs/tui-plan.md): the preview pane's live tail,
- * answering approvals, the prompt composer, search and the away digest. The
- * seams are in place (the preview region renders a placeholder, the client
- * already carries the calls) and the footer advertises only what works.
+ * ANSWERING A DIALOG goes through `POST /api/approvals/:id/answer` and nothing
+ * else. That route re-captures the pane before it sends a keystroke and refuses
+ * with 409 when the dialog has moved on, which is the only reason it is safe to
+ * bind a single digit to it; a blind `send-keys` from here would type into
+ * whatever now has focus.
+ *
+ * NOT HERE YET (phase 3 of docs/tui-plan.md): mouse support, the `--pick` popup
+ * switcher, the opt-in attach status line, OSC 9 notifications, and resuming a
+ * RECENT row.
  *
  * @module tui/tui-app
  */
@@ -43,16 +50,46 @@ import chalk from 'chalk';
 import { palette, table, tint, type Tone } from '../cli-style.js';
 import { CODEMAN_INSTANCE, resolveTmuxSocketName } from '../config/instance.js';
 import { getErrorMessage } from '../types/api.js';
-import { TuiClient, type TuiEventStream, type TuiQuickStartOptions, type TuiTmuxSession } from './tui-client.js';
+import { toDisplayLines } from './tui-ansi.js';
+import { approvalAnswerForKey, newApprovalIds } from './tui-approvals.js';
+import { composerScroll, composerStep, composerText, createComposer, type TuiComposerState } from './tui-composer.js';
+import { formatAwayDigest } from './tui-digest.js';
+import {
+  TuiClient,
+  type TuiApprovalAnswer,
+  type TuiEventStream,
+  type TuiQuickStartOptions,
+  type TuiTmuxSession,
+} from './tui-client.js';
 import { createKeyParser, type TuiInputEvent, type TuiKeyParser } from './tui-keys.js';
-import { computeLayout, needsBanner } from './tui-layout.js';
-import { createTuiModel, type TuiModelStore } from './tui-model.js';
-import { detectGlyphTier, glyphsFor, renderFrame, rowLabel, type TuiGlyphSet } from './tui-render.js';
+import { computeLayout, needsBanner, type TuiLayout } from './tui-layout.js';
+import {
+  buildSearchEntries,
+  createTuiModel,
+  firstSearchIndex,
+  moveSearchIndex,
+  type TuiModelStore,
+} from './tui-model.js';
+import {
+  COMPOSER_PREFIX,
+  composerCursorCell,
+  detectGlyphTier,
+  digestCapacity,
+  formatPlanUsage,
+  glyphsFor,
+  renderFrame,
+  rowLabel,
+  STATE_WORDS,
+  type TuiGlyphSet,
+} from './tui-render.js';
 import type { TuiRenderOptions } from './tui-render.js';
+import type { ApprovalItem } from '../web/approval-inbox.js';
 import type {
   TuiConfirmState,
+  TuiConnectionStatus,
   TuiGlyphTier,
   TuiPickerItem,
+  TuiPreview,
   TuiRow,
   TuiSessionRow,
   TuiSessionState,
@@ -75,6 +112,19 @@ const POLL_INTERVAL_MS = 2_000;
 const REPROBE_INTERVAL_MS = 10_000;
 /** Unified-list page size. RECENT is capped far lower by the model. */
 const UNIFIED_LIMIT = 60;
+/** How often the selected session's tail is re-read while the list has focus. */
+const PREVIEW_INTERVAL_MS = 1_000;
+/** Tail size. Enough for a tall pane's last screens, small enough to poll every second. */
+const PREVIEW_TAIL_BYTES = 12 * 1024;
+/** Lines kept from a tail. The pane shows a fraction of these; the rest is headroom. */
+const PREVIEW_MAX_LINES = 200;
+/** Quiet time after the last keystroke before the search query goes to the server. */
+const SEARCH_DEBOUNCE_MS = 250;
+const SEARCH_LIMIT = 40;
+/** How long a "sent" style notice stays up before it clears itself. */
+const NOTICE_MS = 1_500;
+/** Approval ids remembered for the bell before the set is rebuilt from what is pending. */
+const SEEN_APPROVAL_CAP = 500;
 
 const ALT_SCREEN_ON = '\x1b[?1049h';
 const ALT_SCREEN_OFF = '\x1b[?1049l';
@@ -83,6 +133,8 @@ const CURSOR_SHOW = '\x1b[?25h';
 /** DECSET 2026: terminals that know it show the frame atomically, the rest ignore it. */
 const SYNC_BEGIN = '\x1b[?2026h';
 const SYNC_END = '\x1b[?2026l';
+/** One BEL when a prompt starts waiting on a human, and never for a repaint. */
+const BELL = '\x07';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Attach planning (pure)
@@ -210,15 +262,24 @@ export function confirmKillStep(state: TuiConfirmState, event: TuiInputEvent): T
 // Footer (pure)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Which approval keys the selected row makes live. `menu` is a dialog on
+ * screen (y/n/digits answer it); `idle` is a prompt with no dialog, where the
+ * only reply path is the composer.
+ */
+export type TuiApprovalKeys = 'menu' | 'idle' | null;
+
 export interface TuiKeymapContext {
   /** False in degraded mode, where the only verb that works is attach. */
   server: boolean;
+  approval?: TuiApprovalKeys;
 }
 
 /**
- * The footer keys for a mode. This is the honest inventory of what the build
- * actually does, not the plan's full keymap: a footer advertising `p prompt`
- * before the composer exists teaches users that the TUI ignores keys.
+ * The footer keys for a mode. This is the honest inventory of what works RIGHT
+ * NOW, not a fixed list: `n` starts a session normally and denies a dialog when
+ * one is on the selected row, and a footer that advertised both at once would
+ * be wrong half the time.
  */
 export function footerKeysFor(mode: TuiUiMode, glyphs: TuiGlyphSet, context: TuiKeymapContext): string[] {
   switch (mode) {
@@ -231,12 +292,23 @@ export function footerKeysFor(mode: TuiUiMode, glyphs: TuiGlyphSet, context: Tui
     case 'new-session':
       return [`${glyphs.updown} select`, `${glyphs.enter} choose`, 'type to filter', 'esc cancel'];
     case 'prompt':
+      return [`${glyphs.enter} send`, 'esc cancel'];
     case 'search':
-      return ['esc cancel'];
-    case 'list':
-      return context.server
-        ? [`${glyphs.updown} select`, `${glyphs.enter} attach`, '1-9 jump', 'n new', 'x kill', '? help', 'q quit']
-        : [`${glyphs.updown} select`, `${glyphs.enter} attach`, '1-9 jump', '? help', 'q quit'];
+      return [`${glyphs.updown} results`, `${glyphs.enter} open`, 'type to search', 'esc close'];
+    case 'digest':
+      return ['j/k scroll', 'esc close'];
+    case 'list': {
+      if (!context.server) {
+        return [`${glyphs.updown} select`, `${glyphs.enter} attach`, '1-9 jump', '? help', 'q quit'];
+      }
+      const keys = [`${glyphs.updown} select`, `${glyphs.enter} attach`];
+      if (context.approval === 'menu') keys.push('y approve', 'n deny', '1-9 option');
+      else keys.push('1-9 jump');
+      keys.push(context.approval === 'idle' ? 'p reply' : 'p prompt');
+      if (context.approval !== 'menu') keys.push('n new');
+      keys.push('x kill', '/ search', 'g digest', '? help', 'q quit');
+      return keys;
+    }
   }
 }
 
@@ -250,9 +322,68 @@ export function helpKeysFor(glyphs: TuiGlyphSet, context: TuiKeymapContext): Arr
     [glyphs.enter, 'attach'],
     ['1-9', 'jump and attach'],
   ];
-  if (context.server) keys.push(['n', 'new session'], ['x', 'kill (typed confirmation)']);
+  if (context.server) {
+    keys.push(
+      ['y / n', 'approve or deny the selected dialog'],
+      ['1-9', 'answer with that option, when a dialog is on screen'],
+      ['p', 'send one line to the selected session'],
+      ['/', 'search sessions, events and files'],
+      ['g', 'away digest'],
+      ['n', 'new session'],
+      ['x', 'kill (typed confirmation)']
+    );
+  }
   keys.push(['?', 'this help'], ['esc', 'close an overlay'], ['q', 'quit']);
   return keys;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Preview policy (pure)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface TuiPreviewContext {
+  mode: TuiUiMode;
+  /** Narrow layouts have no preview pane at all, so a poll would be wasted. */
+  narrow: boolean;
+  connection: TuiConnectionStatus;
+  row: TuiRow | null;
+}
+
+/**
+ * Is the selected row worth polling for a tail? Only a live session that is on
+ * screen with the list in focus qualifies: a history row has no buffer to read,
+ * and an overlay hides the pane it would repaint.
+ */
+export function shouldFetchPreview(context: TuiPreviewContext): boolean {
+  if (context.mode !== 'list' || context.narrow) return false;
+  if (context.connection === 'degraded' || context.connection === 'down') return false;
+  const row = context.row;
+  return row !== null && row.group !== 'recent';
+}
+
+/**
+ * The static line a pane shows instead of a tail, or null when a tail is on its
+ * way. Says what is true rather than "loading", which would never resolve.
+ */
+export function previewNoteFor(row: TuiRow | null, connection: TuiConnectionStatus): string | null {
+  if (!row) return null;
+  if (connection === 'degraded' || connection === 'down') return null;
+  if (row.group === 'recent') return 'this session is not running: no live output to show';
+  return null;
+}
+
+/**
+ * Would painting `next` change anything? The preview polls once a second, and a
+ * quiet session returns the same bytes every time; comparing here is what keeps
+ * that poll from bumping the model's revision and repainting the frame.
+ */
+export function samePreview(previous: TuiPreview | null, next: TuiPreview | null): boolean {
+  if (previous === next) return true;
+  if (!previous || !next) return false;
+  if (previous.sessionId !== next.sessionId) return false;
+  if (previous.error !== next.error || previous.note !== next.note) return false;
+  if (previous.lines.length !== next.lines.length) return false;
+  return previous.lines.every((line, i) => line === next.lines[i]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -322,15 +453,6 @@ export function applyMuxNames(sessions: readonly TuiSessionRow[], tmux: readonly
     return match ? { ...session, muxName: match.muxName } : { ...session };
   });
 }
-
-const STATE_WORD: Record<TuiSessionState, string> = {
-  'blocked-permission': 'blocked',
-  'blocked-question': 'blocked',
-  waiting: 'waiting',
-  working: 'working',
-  idle: 'idle',
-  recent: 'done',
-};
 
 const STATE_TONE: Record<TuiSessionState, Tone> = {
   'blocked-permission': 'err',
@@ -485,10 +607,20 @@ class TuiApp {
   private resyncTimer: NodeJS.Timeout | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
   private probeTimer: NodeJS.Timeout | null = null;
+  private previewTimer: NodeJS.Timeout | null = null;
+  private searchTimer: NodeJS.Timeout | null = null;
+  private noticeTimer: NodeJS.Timeout | null = null;
   private refreshing = false;
   private refreshQueued = false;
   private picker: PickerRuntime | null = null;
   private pendingSelectId: string | null = null;
+  /** Whose tail the preview is currently following; null when nothing is polled. */
+  private previewSessionId: string | null = null;
+  private previewFetching = false;
+  /** Bumped per search so a slow response cannot overwrite a newer query's results. */
+  private searchSeq = 0;
+  /** Approval ids the bell has already rung for. See `newApprovalIds`. */
+  private readonly seenApprovals = new Set<string>();
   private exiting = false;
   private resolveExit: ((code: number) => void) | null = null;
 
@@ -532,6 +664,7 @@ class TuiApp {
         ...(server.hostname ? { hostname: server.hostname } : {}),
         ...(server.instance ? { instance: server.instance } : {}),
         ...(server.version ? { version: server.version } : {}),
+        ...(server.planUsage ? { planUsage: formatPlanUsage(server.planUsage) } : {}),
       });
     } else {
       this.model.setConnection('degraded');
@@ -562,10 +695,18 @@ class TuiApp {
     this.stream = this.client.subscribeEvents({
       onInit: (state) => {
         if (state.version) this.model.setHeader({ version: state.version });
+        if (state.planUsage) this.model.setHeader({ planUsage: formatPlanUsage(state.planUsage) });
         this.paint();
       },
       onResync: () => this.scheduleRefresh(),
+      // The bell and the card both ride the refetch this schedules: the event
+      // carries the item, but the list has to be re-read anyway (an approval
+      // changes which group its row is in), and one code path cannot double-ring.
       onApproval: () => this.scheduleRefresh(),
+      onPlanUsage: (usage) => {
+        this.model.setHeader({ planUsage: formatPlanUsage(usage) });
+        this.paint();
+      },
       onStatus: (status, detail) => {
         this.model.setConnection(status === 'connected' ? 'connected' : 'reconnecting');
         if (detail.recommendPolling) this.startPolling();
@@ -617,8 +758,9 @@ class TuiApp {
       ]);
       this.model.replaceSessions(applyMuxNames(sessions, tmux));
       this.model.setApprovals(approvals);
+      this.noteApprovals(approvals);
       if (this.pendingSelectId && this.model.select(this.pendingSelectId)) this.pendingSelectId = null;
-      this.syncPreviewPlaceholder();
+      this.updatePreview();
       this.paint();
     } catch (error) {
       // A failed refresh is a connection symptom, not a reason to lose the list:
@@ -632,8 +774,24 @@ class TuiApp {
   private async refreshDegraded(): Promise<void> {
     const tmux = await this.client.enumerateTmuxSessions().catch(() => [] as TuiTmuxSession[]);
     this.model.replaceSessions(tmuxRowsToSessions(tmux));
-    this.syncPreviewPlaceholder();
+    this.updatePreview();
     this.paint();
+  }
+
+  /**
+   * Ring once for prompts that were not pending a moment ago. Answered ids stay
+   * in the set on purpose (the inbox restores a failed write under the SAME id),
+   * so the bell cannot stutter on one dialog.
+   */
+  private noteApprovals(items: readonly ApprovalItem[]): void {
+    const fresh = newApprovalIds(this.seenApprovals, items);
+    if (fresh.length === 0) return;
+    for (const id of fresh) this.seenApprovals.add(id);
+    if (this.seenApprovals.size > SEEN_APPROVAL_CAP) {
+      this.seenApprovals.clear();
+      for (const item of items) this.seenApprovals.add(item.id);
+    }
+    this.stdout.write(BELL);
   }
 
   private startPolling(): void {
@@ -674,33 +832,104 @@ class TuiApp {
     this.subscribe();
   }
 
+  // ── Preview ────────────────────────────────────────────────────────────────
+
   /**
-   * The preview pane is phase 2. Until then the selected row still gets a
-   * preview object, so the pane says what it is instead of claiming to load
-   * something forever.
+   * Keep the preview pointed at the selected session: start polling when the
+   * selection is a live row with the list in focus, stop when it is not, and
+   * say why when there is nothing to poll.
    */
-  private syncPreviewPlaceholder(): void {
-    const selected = this.model.selectedId;
-    if (!selected) {
-      if (this.model.preview) this.model.setPreview(null);
+  private updatePreview(): void {
+    const row = this.model.selectedSession();
+    const sessionId = row?.session.sessionId ?? null;
+    const changed = sessionId !== this.previewSessionId;
+    this.previewSessionId = sessionId;
+
+    const wanted = shouldFetchPreview({
+      mode: this.model.mode,
+      narrow: this.currentLayout().narrow,
+      connection: this.model.connection,
+      row,
+    });
+
+    if (!wanted) {
+      this.stopPreview();
+      const note = previewNoteFor(row, this.model.connection);
+      if (row && note) this.applyPreview({ sessionId: row.session.sessionId, lines: [], note });
+      else if (changed) this.applyPreview(null);
       return;
     }
-    if (this.model.preview?.sessionId === selected) return;
-    this.model.setPreview({ sessionId: selected, lines: [], error: 'live preview is not wired up yet' });
+
+    if (changed) {
+      // Null rather than an empty tail: the renderer reads that as "loading",
+      // while empty lines would claim the session has printed nothing.
+      this.applyPreview(null);
+      void this.fetchPreview();
+    }
+    if (!this.previewTimer) {
+      this.previewTimer = setInterval(() => void this.fetchPreview(), PREVIEW_INTERVAL_MS);
+    }
+  }
+
+  private stopPreview(): void {
+    if (!this.previewTimer) return;
+    clearInterval(this.previewTimer);
+    this.previewTimer = null;
+  }
+
+  private applyPreview(preview: TuiPreview | null): void {
+    if (samePreview(this.model.preview, preview)) return;
+    this.model.setPreview(preview);
+  }
+
+  private async fetchPreview(): Promise<void> {
+    const sessionId = this.previewSessionId;
+    if (!sessionId || this.previewFetching || this.exiting) return;
+    this.previewFetching = true;
+    try {
+      const raw = await this.client.fetchTerminalTail(sessionId, PREVIEW_TAIL_BYTES);
+      if (this.previewSessionId !== sessionId) return;
+      this.applyPreview({ sessionId, lines: toDisplayLines(raw).slice(-PREVIEW_MAX_LINES) });
+    } catch {
+      // A tail that cannot be read is a pane-level fact, not a connection one:
+      // the list stays exactly as it is and only this pane says so.
+      if (this.previewSessionId !== sessionId) return;
+      this.applyPreview({ sessionId, lines: [], error: 'could not read this session’s terminal' });
+    } finally {
+      this.previewFetching = false;
+    }
+    this.paint();
   }
 
   // ── Painting ───────────────────────────────────────────────────────────────
 
+  private currentLayout(): TuiLayout {
+    return computeLayout(this.stdout.columns ?? 80, this.stdout.rows ?? 24, {
+      banner: needsBanner(this.model.connection),
+    });
+  }
+
+  private keymapContext(): TuiKeymapContext {
+    const approval = this.model.selectedSession()?.approval;
+    return {
+      server: this.model.connection !== 'degraded',
+      approval: approval ? (approval.kind === 'idle' ? 'idle' : 'menu') : null,
+    };
+  }
+
   private paint(force = false): void {
     if (this.exiting || !this.screen.active) return;
-    const cols = this.stdout.columns ?? 80;
-    const rows = this.stdout.rows ?? 24;
-    const key: TuiFrameKey = { revision: this.model.revision, cols, rows, tick: this.tick };
+    const layout = this.currentLayout();
+    const key: TuiFrameKey = {
+      revision: this.model.revision,
+      cols: layout.cols,
+      rows: layout.rows,
+      tick: this.tick,
+    };
     if (!force && sameFrame(this.lastFrame, key)) return;
     this.lastFrame = key;
 
-    const layout = computeLayout(cols, rows, { banner: needsBanner(this.model.connection) });
-    const keymap: TuiKeymapContext = { server: this.model.connection !== 'degraded' };
+    const keymap = this.keymapContext();
     const options: TuiRenderOptions = {
       color: this.color,
       glyphs: this.glyphTier,
@@ -709,7 +938,11 @@ class TuiApp {
       footerKeys: footerKeysFor(this.model.mode, this.glyphs, keymap),
       helpKeys: helpKeysFor(this.glyphs, keymap),
     };
-    this.stdout.write(`${SYNC_BEGIN}${renderFrame(this.model, layout, options)}${SYNC_END}`);
+    // The cursor belongs in the composer while one is open and nowhere else: a
+    // blinking cursor parked in a dashboard reads as a stuck program.
+    const cursor = composerCursorCell(this.model, layout);
+    const place = cursor ? `\x1b[${cursor.row};${cursor.col}H${CURSOR_SHOW}` : CURSOR_HIDE;
+    this.stdout.write(`${SYNC_BEGIN}${renderFrame(this.model, layout, options)}${place}${SYNC_END}`);
     this.syncAnimation();
   }
 
@@ -742,9 +975,16 @@ class TuiApp {
       this.escTimer = setTimeout(() => {
         this.escTimer = null;
         for (const event of this.parser.flush()) this.handle(event);
-        this.paint();
+        this.afterInput();
       }, ESC_FLUSH_MS);
     }
+    this.afterInput();
+  }
+
+  /** Every key can change the selection or the mode, and both steer the preview. */
+  private afterInput(): void {
+    if (this.exiting) return;
+    this.updatePreview();
     this.paint();
   }
 
@@ -756,6 +996,15 @@ class TuiApp {
         return;
       case 'new-session':
         this.handlePicker(event);
+        return;
+      case 'prompt':
+        this.handlePrompt(event);
+        return;
+      case 'search':
+        this.handleSearch(event);
+        return;
+      case 'digest':
+        this.handleDigest(event);
         return;
       case 'help':
       case 'message':
@@ -775,8 +1024,6 @@ class TuiApp {
         else if (event.name === 'down') this.model.moveCursor(1);
         else if (event.name === 'pageup') this.model.moveCursor(-5);
         else if (event.name === 'pagedown') this.model.moveCursor(5);
-        else return;
-        this.syncPreviewPlaceholder();
         return;
       case 'enter':
         void this.attachSelected();
@@ -793,21 +1040,28 @@ class TuiApp {
   }
 
   private handleListChar(value: string): void {
-    if (value >= '1' && value <= '9') {
-      if (this.model.cursorToIndex(Number.parseInt(value, 10))) {
-        this.syncPreviewPlaceholder();
-        void this.attachSelected();
+    // A pending dialog takes the keys it can answer, and only those: the mapping
+    // returns null for a digit the dialog has no option for (and for every key
+    // on an idle prompt), which leaves the list's own bindings intact.
+    const approval = this.model.selectedSession()?.approval;
+    if (approval) {
+      const answer = approvalAnswerForKey(approval, value);
+      if (answer) {
+        void this.answerApproval(approval, answer);
+        return;
       }
+    }
+
+    if (value >= '1' && value <= '9') {
+      if (this.model.cursorToIndex(Number.parseInt(value, 10))) void this.attachSelected();
       return;
     }
     switch (value) {
       case 'j':
         this.model.moveCursor(1);
-        this.syncPreviewPlaceholder();
         return;
       case 'k':
         this.model.moveCursor(-1);
-        this.syncPreviewPlaceholder();
         return;
       case 'q':
         this.quit(0);
@@ -820,6 +1074,15 @@ class TuiApp {
         return;
       case 'n':
         void this.openNewSession();
+        return;
+      case 'p':
+        this.openPrompt();
+        return;
+      case '/':
+        this.openSearch();
+        return;
+      case 'g':
+        void this.openDigest();
         return;
       default:
         return;
@@ -851,10 +1114,297 @@ class TuiApp {
     }
   }
 
+  // ── Composer, search and digest input ──────────────────────────────────────
+
+  /** Columns the composer's text gets, once its fixed prefix is paid for. */
+  private composerWidth(): number {
+    return Math.max(1, (this.stdout.columns ?? 80) - COMPOSER_PREFIX.length);
+  }
+
+  private handlePrompt(event: TuiInputEvent): void {
+    const state = this.model.prompt;
+    if (!state) {
+      this.model.closeOverlay();
+      return;
+    }
+    const step = composerStep(state.composer, event);
+    switch (step.kind) {
+      case 'edit':
+        this.model.updatePrompt(this.scrolled(step.state));
+        return;
+      case 'cancel':
+        this.model.closeOverlay();
+        return;
+      case 'submit':
+        void this.sendPrompt(state.sessionId, step.text);
+        return;
+      case 'ignore':
+        return;
+    }
+  }
+
+  private scrolled(state: TuiComposerState): TuiComposerState {
+    return composerScroll(state, this.composerWidth());
+  }
+
+  private handleSearch(event: TuiInputEvent): void {
+    const state = this.model.search;
+    if (!state) {
+      this.model.closeOverlay();
+      return;
+    }
+    // The arrows drive the RESULT list, not the query caret: the query renders
+    // its caret as a trailing underscore, so a caret that could move would move
+    // invisibly.
+    if (event.type === 'key') {
+      if (event.name === 'up') this.moveSearch(-1);
+      else if (event.name === 'down') this.moveSearch(1);
+      else if (event.name === 'pageup') this.moveSearch(-5);
+      else if (event.name === 'pagedown') this.moveSearch(5);
+      return;
+    }
+    if (event.type === 'enter') {
+      this.openSearchResult();
+      return;
+    }
+    const step = composerStep(state.composer, event);
+    switch (step.kind) {
+      case 'edit':
+        this.model.updateSearch({ composer: step.state });
+        this.scheduleSearch(composerText(step.state));
+        return;
+      case 'cancel':
+        this.closeSearch();
+        return;
+      default:
+        return;
+    }
+  }
+
+  private moveSearch(delta: number): void {
+    const state = this.model.search;
+    if (!state || state.entries.length === 0) return;
+    this.model.updateSearch({ index: moveSearchIndex(state.entries, state.index, delta) });
+  }
+
+  private handleDigest(event: TuiInputEvent): void {
+    const capacity = digestCapacity(this.currentLayout());
+    const page = Math.max(1, capacity - 1);
+    switch (event.type) {
+      case 'escape':
+        this.closeOverlayAndResume();
+        return;
+      case 'ctrl':
+        if (event.key === 'c') this.closeOverlayAndResume();
+        return;
+      case 'key':
+        if (event.name === 'up') this.model.scrollDigest(-1, capacity);
+        else if (event.name === 'down') this.model.scrollDigest(1, capacity);
+        else if (event.name === 'pageup') this.model.scrollDigest(-page, capacity);
+        else if (event.name === 'pagedown') this.model.scrollDigest(page, capacity);
+        else if (event.name === 'home') this.model.scrollDigest(-Number.MAX_SAFE_INTEGER, capacity);
+        else if (event.name === 'end') this.model.scrollDigest(Number.MAX_SAFE_INTEGER, capacity);
+        return;
+      case 'char':
+        if (event.value === 'j') this.model.scrollDigest(1, capacity);
+        else if (event.value === 'k') this.model.scrollDigest(-1, capacity);
+        else if (event.value === 'q' || event.value === 'g') this.closeOverlayAndResume();
+        return;
+      default:
+        return;
+    }
+  }
+
   // ── Actions ────────────────────────────────────────────────────────────────
 
   private message(tone: 'info' | 'warn' | 'err', text: string): void {
     this.model.setMessage({ tone, text });
+  }
+
+  /**
+   * A message that clears itself. Used for outcomes the user already expects
+   * ("sent"), where a box waiting to be dismissed is one keystroke of ceremony
+   * for no information.
+   */
+  private notice(text: string): void {
+    this.model.setMessage({ tone: 'info', text });
+    const shown = this.model.message;
+    if (this.noticeTimer) clearTimeout(this.noticeTimer);
+    this.noticeTimer = setTimeout(() => {
+      this.noticeTimer = null;
+      // Only clear the notice this timer armed: anything the user opened in the
+      // meantime owns the screen now.
+      if (this.model.message !== shown) return;
+      this.closeOverlayAndResume();
+    }, NOTICE_MS);
+  }
+
+  /** Drop the overlay and let the preview start following the list again. */
+  private closeOverlayAndResume(): void {
+    this.model.closeOverlay();
+    this.updatePreview();
+    this.paint();
+  }
+
+  private async answerApproval(item: ApprovalItem, answer: TuiApprovalAnswer): Promise<void> {
+    let result;
+    try {
+      result = await this.client.answerApproval(item.id, answer);
+    } catch (error) {
+      this.message('err', `could not answer that prompt: ${getErrorMessage(error)}`);
+      this.paint();
+      return;
+    }
+    await this.refresh();
+    if (result.ok) this.notice(`answered ${item.sessionName || item.sessionId.slice(0, 8)}`);
+    // The server re-captures the pane before it types, so this is the normal
+    // outcome when the dialog was answered in tmux a moment ago.
+    else if (result.reason === 'gone') this.message('warn', 'that dialog is no longer on screen');
+    else this.message('err', result.message);
+    this.paint();
+  }
+
+  private openPrompt(): void {
+    const row = this.model.selectedSession();
+    if (!row) return;
+    if (this.model.connection === 'degraded') {
+      this.message('warn', 'sending a prompt needs the server; only attach works while it is down');
+      return;
+    }
+    if (row.group === 'recent') {
+      this.message('warn', 'that session is not running: there is nothing to type at');
+      return;
+    }
+    this.model.setPrompt({
+      sessionId: row.session.sessionId,
+      label: rowLabel(row.session),
+      composer: createComposer(),
+    });
+  }
+
+  private async sendPrompt(sessionId: string, text: string): Promise<void> {
+    const line = text.trim();
+    this.model.closeOverlay();
+    if (line === '') {
+      this.updatePreview();
+      this.paint();
+      return;
+    }
+    try {
+      await this.client.sendInput(sessionId, line);
+      await this.refresh();
+      this.notice('sent');
+    } catch (error) {
+      this.message('err', `could not send that prompt: ${getErrorMessage(error)}`);
+    }
+    this.updatePreview();
+    this.paint();
+  }
+
+  private openSearch(): void {
+    if (this.model.connection === 'degraded') {
+      this.message('warn', 'search needs the server; only attach works while it is down');
+      return;
+    }
+    this.model.setSearch({ composer: createComposer(), query: '', entries: [], index: -1, status: 'idle' });
+  }
+
+  private closeSearch(): void {
+    if (this.searchTimer) {
+      clearTimeout(this.searchTimer);
+      this.searchTimer = null;
+    }
+    this.closeOverlayAndResume();
+  }
+
+  private scheduleSearch(query: string): void {
+    if (this.searchTimer) clearTimeout(this.searchTimer);
+    this.searchTimer = setTimeout(() => {
+      this.searchTimer = null;
+      void this.runSearch(query);
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
+  private async runSearch(query: string): Promise<void> {
+    if (this.model.mode !== 'search' || !this.model.search) return;
+    const needle = query.trim();
+    const seq = ++this.searchSeq;
+    if (needle === '') {
+      this.model.updateSearch({ query: '', entries: [], index: -1, status: 'idle', note: undefined });
+      this.paint();
+      return;
+    }
+
+    this.model.updateSearch({ status: 'searching', note: 'searching…' });
+    this.paint();
+    try {
+      const data = await this.client.search(needle, SEARCH_LIMIT);
+      if (seq !== this.searchSeq || this.model.mode !== 'search') return;
+      // Only a session that is on the list can be selected; a history hit has a
+      // session id but no row to move the cursor to.
+      const live = new Set(
+        this.model
+          .rows()
+          .filter((row) => row.group !== 'recent')
+          .map((row) => row.session.sessionId)
+      );
+      const entries = buildSearchEntries(data.groups, (id) => live.has(id));
+      this.model.updateSearch({
+        query: needle,
+        entries,
+        index: firstSearchIndex(entries),
+        status: 'done',
+        note:
+          entries.length === 0
+            ? 'no matches'
+            : `${data.totalResults} result${data.totalResults === 1 ? '' : 's'}${data.truncated ? ' (capped)' : ''}`,
+      });
+    } catch (error) {
+      if (seq !== this.searchSeq || this.model.mode !== 'search') return;
+      this.model.updateSearch({
+        status: 'error',
+        entries: [],
+        index: -1,
+        note: `search failed: ${getErrorMessage(error)}`,
+      });
+    }
+    this.paint();
+  }
+
+  private openSearchResult(): void {
+    const state = this.model.search;
+    if (!state) return;
+    const entry = state.entries[state.index];
+    if (!entry || entry.kind !== 'result') return;
+    if (entry.live && entry.sessionId && this.model.select(entry.sessionId)) {
+      this.closeSearch();
+      return;
+    }
+    // Nothing to switch to (a history or file hit), so the row's own facts are
+    // the answer; resuming one is phase 3.
+    this.model.updateSearch({ note: [entry.text, entry.detail].filter((part) => part).join(' — ') });
+  }
+
+  private async openDigest(): Promise<void> {
+    if (this.model.connection === 'degraded') {
+      this.message('warn', 'the digest needs the server; only attach works while it is down');
+      return;
+    }
+    this.model.setDigest({ title: 'Away digest', lines: ['loading…'], offset: 0 });
+    this.updatePreview();
+    this.paint();
+    let lines: string[];
+    try {
+      const digest = await this.client.fetchAwayDigest();
+      lines = formatAwayDigest(digest, { now: Date.now() });
+    } catch (error) {
+      lines = [`could not load the digest: ${getErrorMessage(error)}`];
+    }
+    // Esc works throughout the round trip, and a digest that lands afterwards
+    // must not reopen the overlay the user just closed.
+    if (this.model.mode !== 'digest') return;
+    this.model.setDigest({ title: 'Away digest', lines, offset: 0 });
+    this.paint();
   }
 
   private async attachSelected(): Promise<void> {
@@ -1074,13 +1624,20 @@ class TuiApp {
   private quit(code: number): void {
     if (this.exiting) return;
     this.exiting = true;
-    for (const timer of [this.escTimer, this.resyncTimer]) if (timer) clearTimeout(timer);
-    for (const timer of [this.tickTimer, this.pollTimer, this.probeTimer]) if (timer) clearInterval(timer);
+    for (const timer of [this.escTimer, this.resyncTimer, this.searchTimer, this.noticeTimer]) {
+      if (timer) clearTimeout(timer);
+    }
+    for (const timer of [this.tickTimer, this.pollTimer, this.probeTimer, this.previewTimer]) {
+      if (timer) clearInterval(timer);
+    }
     this.escTimer = null;
     this.resyncTimer = null;
+    this.searchTimer = null;
+    this.noticeTimer = null;
     this.tickTimer = null;
     this.pollTimer = null;
     this.probeTimer = null;
+    this.previewTimer = null;
     this.stream?.close();
     this.client.close();
     this.stdin.off('data', this.onData);
@@ -1169,7 +1726,7 @@ export async function runTuiList(options: TuiRunOptions = {}): Promise<number> {
     }
     const rows = lines.map((line) => [
       palette.muted(String(line.index)),
-      tint(STATE_TONE[line.state], STATE_WORD[line.state]),
+      tint(STATE_TONE[line.state], STATE_WORDS[line.state]),
       line.label,
       palette.muted(line.workingDir),
     ]);

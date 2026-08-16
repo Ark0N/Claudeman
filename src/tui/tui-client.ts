@@ -89,6 +89,12 @@ export interface TuiServerInfo {
   instance: string;
   /** A server answered but rejected our credentials. */
   authRequired?: boolean;
+  /**
+   * Last-known plan usage, which rides `GET /api/status` rather than having a
+   * route of its own. Null when the account reports none (no subscription
+   * windows, or no statusline render yet this server process).
+   */
+  planUsage?: TuiPlanUsage | null;
 }
 
 export interface TuiClientOptions {
@@ -482,6 +488,7 @@ export class TuiClient {
         '/api/status'
       );
       if (status?.version) info.version = status.version;
+      if (status?.planUsage) info.planUsage = status.planUsage;
     } catch (err) {
       if (err instanceof TuiApiError && (err.status === 401 || err.status === 403)) {
         info.authRequired = true;

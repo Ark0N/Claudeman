@@ -19,8 +19,11 @@ import {
   helpKeysFor,
   isSelfSession,
   planAttach,
+  previewNoteFor,
   sameFrame,
+  samePreview,
   shouldAnimate,
+  shouldFetchPreview,
   tmuxRowsToSessions,
   tmuxSocketFromEnv,
 } from '../../src/tui/tui-app.js';
@@ -163,11 +166,30 @@ describe('footerKeysFor', () => {
     expect(keys).toContain('attach');
     expect(keys).toContain('1-9 jump');
     expect(keys).toContain('n new');
+    expect(keys).toContain('p prompt');
+    expect(keys).toContain('/ search');
+    expect(keys).toContain('g digest');
     expect(keys).toContain('x kill');
     expect(keys).toContain('q quit');
-    for (const missing of ['prompt', 'search', 'digest', 'answer', 'resume']) {
-      expect(keys).not.toContain(missing);
-    }
+    // Resuming a RECENT row is still phase 3.
+    expect(keys).not.toContain('resume');
+  });
+
+  it('swaps in the answer keys while a dialog is on the selected row', () => {
+    const keys = footerKeysFor('list', GLYPHS, { server: true, approval: 'menu' }).join(' ');
+    expect(keys).toContain('y approve');
+    expect(keys).toContain('n deny');
+    expect(keys).toContain('1-9 option');
+    // `n` cannot mean two things at once, and denying is what it does here.
+    expect(keys).not.toContain('n new');
+    expect(keys).not.toContain('1-9 jump');
+  });
+
+  it('sends an idle prompt to the composer instead of offering approve/deny', () => {
+    const keys = footerKeysFor('list', GLYPHS, { server: true, approval: 'idle' }).join(' ');
+    expect(keys).toContain('p reply');
+    expect(keys).toContain('n new');
+    expect(keys).not.toContain('y approve');
   });
 
   it('drops the server-only verbs in degraded mode', () => {
@@ -175,6 +197,7 @@ describe('footerKeysFor', () => {
     expect(keys).toContain('attach');
     expect(keys).not.toContain('kill');
     expect(keys).not.toContain('new');
+    expect(keys).not.toContain('search');
   });
 
   it('keeps the help overlay to the same inventory', () => {
@@ -182,8 +205,10 @@ describe('footerKeysFor', () => {
     expect(help.map(([, description]) => description)).toEqual(
       expect.arrayContaining(['attach', 'new session', 'kill (typed confirmation)', 'quit'])
     );
-    expect(help.flat().join(' ')).not.toContain('search');
-    expect(helpKeysFor(GLYPHS, { server: false }).flat().join(' ')).not.toContain('kill');
+    expect(help.flat().join(' ')).toContain('search');
+    const degraded = helpKeysFor(GLYPHS, { server: false }).flat().join(' ');
+    expect(degraded).not.toContain('kill');
+    expect(degraded).not.toContain('search');
   });
 
   it('follows the overlay that owns the keyboard', () => {
@@ -191,6 +216,45 @@ describe('footerKeysFor', () => {
     expect(footerKeysFor('confirm-kill', GLYPHS, { server: true }).join(' ')).toContain('type the name');
     expect(footerKeysFor('message', GLYPHS, { server: true })).toEqual(['esc dismiss']);
     expect(footerKeysFor('new-session', GLYPHS, { server: true }).join(' ')).toContain('type to filter');
+    expect(footerKeysFor('prompt', GLYPHS, { server: true }).join(' ')).toContain('send');
+    expect(footerKeysFor('search', GLYPHS, { server: true }).join(' ')).toContain('open');
+    expect(footerKeysFor('digest', GLYPHS, { server: true }).join(' ')).toContain('scroll');
+  });
+});
+
+describe('the preview policy', () => {
+  const live: TuiRow = { ...row('idle', 'aaaaaaaa11'), group: 'idle' };
+  const history: TuiRow = { ...row('recent', 'bbbbbbbb22'), group: 'recent' };
+
+  it('polls a live row only while the plain list is on screen and wide', () => {
+    const base = { mode: 'list' as const, narrow: false, connection: 'connected' as const, row: live };
+    expect(shouldFetchPreview(base)).toBe(true);
+    expect(shouldFetchPreview({ ...base, mode: 'prompt' })).toBe(false);
+    expect(shouldFetchPreview({ ...base, mode: 'search' })).toBe(false);
+    expect(shouldFetchPreview({ ...base, narrow: true })).toBe(false);
+    expect(shouldFetchPreview({ ...base, connection: 'degraded' })).toBe(false);
+    expect(shouldFetchPreview({ ...base, row: history })).toBe(false);
+    expect(shouldFetchPreview({ ...base, row: null })).toBe(false);
+  });
+
+  it('explains a history row instead of polling one', () => {
+    expect(previewNoteFor(history, 'connected')).toContain('not running');
+    expect(previewNoteFor(live, 'connected')).toBeNull();
+    // The renderer already says why a degraded server has no preview.
+    expect(previewNoteFor(history, 'degraded')).toBeNull();
+    expect(previewNoteFor(null, 'connected')).toBeNull();
+  });
+
+  it('treats an unchanged tail as nothing to repaint', () => {
+    const preview = { sessionId: 'a', lines: ['one', 'two'] };
+    expect(samePreview(preview, { sessionId: 'a', lines: ['one', 'two'] })).toBe(true);
+    expect(samePreview(preview, { sessionId: 'a', lines: ['one', 'three'] })).toBe(false);
+    expect(samePreview(preview, { sessionId: 'a', lines: ['one'] })).toBe(false);
+    expect(samePreview(preview, { sessionId: 'b', lines: ['one', 'two'] })).toBe(false);
+    expect(samePreview(preview, { sessionId: 'a', lines: ['one', 'two'], error: 'boom' })).toBe(false);
+    expect(samePreview(preview, { sessionId: 'a', lines: ['one', 'two'], note: 'history' })).toBe(false);
+    expect(samePreview(null, null)).toBe(true);
+    expect(samePreview(null, preview)).toBe(false);
   });
 });
 
