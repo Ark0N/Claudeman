@@ -1116,12 +1116,17 @@ class CodemanApp {
         if (digitMatch) {
           const idx = parseInt(digitMatch[1], 10) - 1;
           // Sessions occupy 1..N and web tabs continue from N+1, matching the
-          // numbers actually painted on the tabs.
-          if (idx < this.sessionOrder.length) {
+          // numbers actually painted on the tabs. Resolve through the same
+          // live-session projection the render paints: sessionOrder can
+          // transiently hold a dead id (delete raced against the order sync),
+          // and raw indexing then names the wrong tab for every key to its
+          // right, web tabs included.
+          const live = this.sessionOrder.filter((id) => this.sessions.has(id));
+          if (idx < live.length) {
             e.preventDefault();
-            this.selectSession(this.sessionOrder[idx]);
+            this.selectSession(live[idx]);
           } else {
-            const webIdx = idx - this.sessionOrder.length;
+            const webIdx = idx - live.length;
             const webId = (this.webviewOrder || [])[webIdx];
             if (webId) {
               e.preventDefault();

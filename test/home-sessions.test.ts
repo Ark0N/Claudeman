@@ -270,3 +270,75 @@ describe('home sessions column: wiring', () => {
     expect(html.indexOf('src="mobile-overview.js"')).toBeGreaterThan(html.indexOf('src="constants.js"'));
   });
 });
+
+describe('home screens: one order, one numbering', () => {
+  it('produces the same order on the rail and the phone overview for one input', () => {
+    // Both surfaces claim to share CodemanSessionOrder. Nothing used to assert
+    // they actually produce one order for one input, so a future local sort in
+    // either builder would silently split them. The rail is one list; the phone
+    // splits NEEDS YOU / CURRENT, so rail order must equal the concatenation.
+    const fixture = [
+      { id: 'blocked-new', lastActivityAt: 5_000 },
+      { id: 'idle-old', lastActivityAt: 3_000 },
+      { id: 'run-new', status: 'busy', lastSubmitAt: 8_000, lastActivityAt: 9_500 },
+      { id: 'blocked-old', lastActivityAt: 1_000 },
+      { id: 'run-old', status: 'busy', lastSubmitAt: 2_000, lastActivityAt: 9_600 },
+      { id: 'idle-new', lastActivityAt: 9_000 },
+    ];
+    const pendingHooks = new Map([
+      ['blocked-new', new Set(['permission_prompt'])],
+      ['blocked-old', new Set(['permission_prompt'])],
+    ]);
+    const sessionOrder = fixture.map((s) => s.id);
+    const app = loadHomeSessionsApp({
+      sessions: sessionMap(fixture),
+      sessionOrder,
+      cases: CASES,
+      pendingHooks,
+    });
+
+    const railIds = app.buildHomeSessionRows().map((r: any) => r.id);
+    const model = app.buildMobileOverviewModel({
+      sessions: app.sessions,
+      cases: CASES,
+      sessionOrder,
+      pendingHooks,
+    });
+    const phoneIds = [...model.needsYou, ...model.current].map((r: any) => r.id);
+
+    expect(railIds).toEqual(phoneIds);
+    // And the shared order is the documented one: blocked longest-first, then
+    // running longest-first, then quiet newest-first.
+    expect(railIds).toEqual(['blocked-old', 'blocked-new', 'run-old', 'run-new', 'idle-new', 'idle-old']);
+  });
+
+  it('numbers rows over the LIVE projection when sessionOrder holds a dead id', () => {
+    // sessionOrder can transiently contain a deleted session (delete raced the
+    // order sync). The strip paints numbers over live sessions only, and the
+    // Alt+digit handler resolves through the same projection, so the rail must
+    // number alpha=1, beta=2 with no hole where the ghost sits.
+    const app = loadHomeSessionsApp({
+      sessions: sessionMap([{ id: 'alpha' }, { id: 'beta' }]),
+      sessionOrder: ['ghost', 'alpha', 'beta'],
+      cases: CASES,
+    });
+    expect(app.buildHomeSessionRows().map((r: any) => [r.id, r.orderIndex])).toEqual([
+      ['alpha', 0],
+      ['beta', 1],
+    ]);
+  });
+
+  it('Alt+digit resolves through the live-session projection in app.js', () => {
+    // Static guard for the handler half of the invariant above: the digit
+    // branch must filter sessionOrder against live sessions before indexing,
+    // for sessions AND for the web-tab continuation.
+    const appJs = readFileSync(resolve(PUBLIC, 'app.js'), 'utf8');
+    const start = appJs.indexOf('^Digit([1-9])$');
+    expect(start).toBeGreaterThan(-1);
+    const branch = appJs.slice(start, start + 1200);
+    expect(branch).toContain('this.sessionOrder.filter((id) => this.sessions.has(id))');
+    expect(branch).toContain('idx < live.length');
+    expect(branch).toContain('idx - live.length');
+    expect(branch).not.toContain('this.sessionOrder[idx]');
+  });
+});
