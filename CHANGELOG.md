@@ -1,5 +1,26 @@
 # aicodeman
 
+## 1.19.0
+
+### Minor Changes
+
+- c01edcb: Add an optional collapsible left session sidebar as an alternative to the header tab strip.
+
+  With many concurrent sessions the horizontal strip wraps into several rows and stops being scannable. The new layout puts the session list in a vertical `<aside>` with a filter box and a live session count, collapsible to a 44px rail that keeps the status dots and task badges visible.
+
+  Opt-in via Settings → Layout → Tabs → Session List Layout; the default stays the header strip, so nothing changes unless you switch. Both layouts share one `#sessionTabs` element that is re-parented between mount points, so every existing affordance (status, mode badge, alerts, drag-reorder, keyboard navigation, web tabs, subagent windows) behaves identically in both. Below 1024px the sidebar is an off-canvas drawer that overlays the terminal instead of shrinking it. Collapse state persists per device; `Alt+B` toggles it.
+
+- Codeman hooks now install into every claude workspace at session create, not just cases Codeman created (#304). Linked cases and cloned repos previously ran hook-blind: tab alerts, the Approvals Inbox, and the agent skill's stop/blocked wait signals were silently dead there. The install is an add-only merge that preserves user-authored hooks and leaves malformed files untouched, and a boot sweep heals sessions recovered from a restart. Opt out with the new synced `workspaceHooksEnabled` setting. Note: a `.claude/settings.local.json` can now appear in repos you link as cases; it contains no secrets. Remote SSH attaches and creates without a `workingDir` never write hooks.
+
+  File paths an agent prints are now clickable in both the terminal and the response viewer, opening the file preview overlay, including paths outside the session workspace (#306). Out-of-workspace paths are served through the attachment routes' extension allowlist, realpath confinement, and sensitive-path blocklist; Codeman's own credential-bearing files (`settings.json`, `push-keys.json`, `intents.json`, `state*.json`) are blocked from serving.
+
+  Both home screens (the desktop home tab rail and the phone overview) sort sessions by activity instead of tab order (#303): blocked sessions first with the longest-blocked on top, then running sessions longest-running first, then quiet sessions most recently active first. A turn starting now pushes a session state broadcast so the ordering stays live after page load.
+
+  The codeman agent skill docs teach hook presence as a setting to check rather than a consequence of who created the workspace, and the §0 preamble stamp is bumped to 1.19.0 (#305).
+
+  ### Thanks
+  - @christianhaberl designed and built the collapsible left session sidebar (#307)
+
 ## 1.18.4
 
 ### Patch Changes
