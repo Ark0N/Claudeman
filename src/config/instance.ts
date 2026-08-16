@@ -40,6 +40,21 @@ const INSTANCE_SUFFIX = CODEMAN_INSTANCE ? `-${CODEMAN_INSTANCE}` : '';
 /** Default tmux socket for this instance. `CODEMAN_TMUX_SOCKET` still overrides. */
 export const DEFAULT_TMUX_SOCKET = `codeman${INSTANCE_SUFFIX}`;
 
+/** Characters tmux accepts in a `-L` socket name. */
+export const SAFE_TMUX_SOCKET_PATTERN = /^[a-zA-Z0-9_.-]+$/;
+
+/**
+ * This instance's tmux socket: the `CODEMAN_TMUX_SOCKET` override when it is a
+ * safe name, else the instance default. Every process that runs `tmux -L` has
+ * to resolve it through here (the server via TmuxManager, the TUI for its
+ * degraded-mode listing), or a beta instance ends up driving prod's sessions.
+ */
+export function resolveTmuxSocketName(): string {
+  const raw = process.env.CODEMAN_TMUX_SOCKET;
+  if (raw !== undefined && SAFE_TMUX_SOCKET_PATTERN.test(raw)) return raw;
+  return DEFAULT_TMUX_SOCKET;
+}
+
 let _ensured = false;
 
 /**
