@@ -1,5 +1,15 @@
 # aicodeman
 
+## 1.19.3
+
+### Patch Changes
+
+- Red "needs you" tab alerts now follow the dialog instead of the keyboard.
+
+  Typing in the terminal no longer clears a red alert. It used to clear every pending alert on the device you typed on, but a permission or question dialog ignores keystrokes that are not one of its options, so the dialog was still open and still blocking: the other devices stayed red and a reload brought the red back on the first one. Input now spends the yellow idle alert only, and it does that through the server-side acknowledgement added in 1.19.2, so the clear is durable and reaches every device.
+
+  A dialog answered in the terminal now clears by itself. Claude Code fires no "permission answered" hook, so the item stayed pending until the whole turn ended, and any page load in between re-armed a red alert for a dialog that was long gone. Listing approvals now re-captures the pane and resolves items whose dialog is no longer on screen, using the same conservative check the answer path already uses: only an item whose original frame parsed numbered options can be dropped this way, so an unreadable capture keeps the alert rather than losing a live one. Measured against a real AskUserQuestion dialog: the stale item cleared 5 seconds ahead of the stop hook that used to be the only signal, while a dialog still on screen survived 11 consecutive listings over 55 seconds untouched.
+
 ## 1.19.2
 
 ### Patch Changes

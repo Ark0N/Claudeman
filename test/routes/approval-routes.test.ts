@@ -283,6 +283,48 @@ describe('approval routes', () => {
     expect(await listApprovals(harness)).toHaveLength(0);
   });
 
+  describe('staleness sweep on GET /api/approvals', () => {
+    it('resolves an item whose dialog left the pane, and tells the other clients', async () => {
+      const resolved: Array<Record<string, unknown>> = [];
+      await postHook(harness, 'permission_prompt', { tool_name: 'Bash' });
+      expect((await listApprovals(harness))[0].options).toHaveLength(3);
+
+      // Answered in the terminal: Claude Code fires no hook for that, so only
+      // the pane knows. The dialog is gone from the frame the next capture sees.
+      approvalInbox.onResolved = (info) => resolved.push({ ...info });
+      session.terminalBuffer = 'claude> back at the composer';
+
+      expect(await listApprovals(harness)).toHaveLength(0);
+      expect(resolved).toEqual([expect.objectContaining({ resolution: 'resolved_in_terminal' })]);
+    });
+
+    it('keeps an item whose dialog is still on screen', async () => {
+      await postHook(harness, 'permission_prompt', { tool_name: 'Bash' });
+      // Pane unchanged (PERMISSION_DIALOG): the human has not answered yet.
+      expect(await listApprovals(harness)).toHaveLength(1);
+      expect(await listApprovals(harness)).toHaveLength(1);
+    });
+
+    it('never drops an item that could not be read in the first place', async () => {
+      // No parseable dialog at capture time, so a later "it does not parse" says
+      // nothing new. Conservative by design: an unreadable pane keeps the alert.
+      session.terminalBuffer = 'some output with no dialog in it';
+      await postHook(harness, 'permission_prompt', { tool_name: 'Bash' });
+      const [item] = await listApprovals(harness);
+      expect(item.options).toBeUndefined();
+      session.terminalBuffer = 'still nothing that parses';
+      expect(await listApprovals(harness)).toHaveLength(1);
+    });
+
+    it('leaves idle prompts alone (they are not dialogs)', async () => {
+      session.terminalBuffer = 'claude> waiting at the composer';
+      await postHook(harness, 'idle_prompt', {});
+      session.terminalBuffer = 'claude> still waiting, different frame';
+      const [item] = await listApprovals(harness);
+      expect(item.kind).toBe('idle');
+    });
+  });
+
   it('viewing a session acknowledges its idle prompt (item stays pending) and broadcasts it', async () => {
     session.terminalBuffer = 'claude> waiting at the composer';
     await postHook(harness, 'idle_prompt', {});

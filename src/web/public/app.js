@@ -858,7 +858,9 @@ class CodemanApp {
    * is on screen, and looking at one does not answer it.
    */
   markIdleAlertSeen(sessionId) {
-    if (!this.pendingHooks.get(sessionId)?.has('idle_prompt')) return;
+    // `pendingHooks?` because _ackDelivery calls this from the input hot path,
+    // which partial app instances (the vm-loaded delivery tests) also drive.
+    if (!this.pendingHooks?.get(sessionId)?.has('idle_prompt')) return;
     this.clearPendingHooks(sessionId, 'idle_prompt');
     this.acknowledgeIdleApprovalOnView?.(sessionId);
   }
@@ -2957,7 +2959,14 @@ class CodemanApp {
         this._updateConnectionIndicator();
       }
     }
-    this.clearPendingHooks?.(sessionId);
+    // ⚠️ IDLE ONLY, and acknowledged server-side rather than cleared in memory.
+    // Delivering input answers "Claude is waiting for a prompt" by definition,
+    // so this is the same "I am on it" signal as opening the tab. It does NOT
+    // answer a permission/question dialog: those ignore any keystroke that is
+    // not one of their options, so the dialog is still up and still needs you.
+    // Clearing action alerts here hid a LIVE alert on this device alone (the
+    // other devices stayed red and a reload re-seeded it straight back).
+    this.markIdleAlertSeen?.(sessionId);
   }
 
   /** Server input-ACK frame ({t:'ia',seq}) over the WebSocket. */

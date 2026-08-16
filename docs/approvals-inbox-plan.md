@@ -60,7 +60,7 @@ Module-level singleton in the style of `session-wait-registry.ts` (pure, no `Ses
 
 Normal authed API (NOT the hook-secret bypass), `ApiResponse` envelope, Zod schemas in `schemas.ts`:
 
-- `GET /api/approvals` → pending items, multi-user filtered by `canAccessOwned` (same policy as session lists).
+- `GET /api/approvals` → pending items, multi-user filtered by `canAccessOwned` (same policy as session lists). Also sweeps the caller's own items for staleness through `verifyStillAnswerable()`: Claude Code fires no "permission answered" hook, so a dialog answered in the terminal used to sit pending until `stop` and re-arm a red tab alert on the next page load. Only items whose original frame parsed options can be dropped this way, so an unreadable capture keeps the alert.
 - `POST /api/approvals/:id/answer` body `{ action: 'approve' | 'deny' | 'option' | 'text', option?, text? }`:
   - `approve` → `writeViaMux('1')` (option 1 is always plain Yes; no Enter, menus react to the digit).
   - `deny` → `writeViaMux('\x1b')` (Esc is the official No/cancel; precedent: auto-resume sends Esc the same way).

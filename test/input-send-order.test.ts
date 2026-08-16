@@ -78,6 +78,9 @@ function makeApp(): App {
   app._persistReliableNow = vi.fn();
   app._updateConnectionIndicator = vi.fn();
   app.clearPendingHooks = vi.fn();
+  // _ackDelivery spends a pending IDLE alert through markIdleAlertSeen, which
+  // reads this map; without it the real prototype method throws on every ACK.
+  app.pendingHooks = new Map();
   app.activeSessionId = 'session-1';
   app.isOnline = true;
   app._connectionStatus = 'connected';

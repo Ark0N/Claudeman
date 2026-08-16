@@ -3,7 +3,9 @@
  *
  * The cross-session queue of prompts waiting on a human (see
  * web/approval-inbox.ts, docs/approvals-inbox-plan.md):
- * - `GET  /api/approvals`: pending items, ownership-scoped in multi-user mode
+ * - `GET  /api/approvals`: pending items, ownership-scoped in multi-user mode,
+ *   with a pane-capture staleness sweep (a dialog answered in the terminal is
+ *   resolved here rather than re-arming a tab alert on the next page load)
  * - `POST /api/approvals/:id/answer`: answer in place by sending the
  *   corresponding keystrokes to the session (digit / Esc / idle-prompt text)
  * - `POST /api/approvals/:id/dismiss`: drop the item without keystrokes
@@ -72,7 +74,17 @@ export function registerApprovalRoutes(app: FastifyInstance, ctx: SessionPort): 
         approvalInbox.resolveForSession(item.sessionId, 'session_ended');
         return false;
       }
-      return canAccessOwned(user, session.owner);
+      if (!canAccessOwned(user, session.owner)) return false;
+      // Staleness sweep, on the caller's own items only. Claude Code fires no
+      // "permission answered" hook, so a dialog answered IN the terminal leaves
+      // its item pending until `stop`, and this list is what re-arms tab alerts
+      // on every page load: a red "needs you" would come back for a dialog that
+      // is long gone. The pane is the truth, so ask it, using the SAME
+      // conservative rule the answer path uses (`verifyStillAnswerable`): only
+      // an item whose original frame parsed options can be resolved this way, so
+      // an unreadable capture keeps the alert rather than dropping it. Resolving
+      // here broadcasts `approval:resolved`, so the other devices clear too.
+      return approvalInbox.verifyStillAnswerable(item.id);
     });
     return { success: true, data: { approvals } };
   });

@@ -446,7 +446,12 @@ Design: [`approvals-inbox-plan.md`](approvals-inbox-plan.md).
   acknowledgedAt? }`. `context` is the ANSI-stripped visible pane frame;
   `options` is present only when the dialog's numbered choices parsed
   confidently; `acknowledgedAt` marks an item a human has already looked at
-  (see `/viewed` below) and tells clients not to re-arm its tab alert.
+  (see `/viewed` below) and tells clients not to re-arm its tab alert. Listing
+  also runs a staleness sweep over the caller's own items: the pane is
+  re-captured, and an item whose dialog no longer parses is resolved as
+  `resolved_in_terminal` instead of being returned (only items whose original
+  frame parsed `options` can be dropped this way, so an unreadable capture
+  keeps the item).
 - `POST /api/v1/approvals/:id/answer` with `{ action: 'approve' }` (sends the
   digit `1`), `{ action: 'deny' }` (sends Esc), `{ action: 'option', option: n }`
   (sends the digit; accepted only when `n` is among the item's parsed
