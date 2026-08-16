@@ -437,6 +437,94 @@ function computeSseStale(input) {
   return now - lastMessageAt >= timeoutMs;
 }
 
+// Home-screen session order: one comparator for both overviews.
+//
+// The phone overview (mobile-overview.js) and the desktop tab rail
+// (home-sessions.js) list the same sessions, so they answer the same question
+// and must answer it the same way: "which of these wants me next?".
+//
+//   1. Anything blocked on a human first (red question, then error, then a
+//      yellow idle prompt), longest-blocked at the top: a session that has been
+//      sitting on a permission dialog for 20 minutes is starving, one that
+//      raised it 5 seconds ago is not.
+//   2. Then whatever is running, LONGEST-RUNNING first, since that is the turn most
+//      likely to be finished, or stuck, by the time you look.
+//   3. Then everything quiet, MOST RECENTLY quiet first: when nothing is
+//      running, the session that just finished is the one you came back for,
+//      and the one you abandoned yesterday sinks.
+//
+// So the tiebreak flips direction halfway down the list, and that is the point:
+// for a state something is still doing, longer = more urgent; for a state
+// something has stopped in, more recent = more relevant.
+//
+// Pure: no DOM, no clock (every input is an epoch-ms stamp already on the
+// session payload), no `this`. Unit-tested in test/session-overview-order.test.ts.
+const SESSION_ACTIVITY_RANK = {
+  needs: 0,
+  error: 1,
+  waiting: 2,
+  working: 3,
+  idle: 4,
+  done: 5,
+};
+
+/** States still in progress, where the OLDEST stamp sorts first. */
+const SESSION_ACTIVITY_OLDEST_FIRST = ['needs', 'error', 'waiting', 'working'];
+
+/**
+ * When the row entered the state it is in.
+ *
+ * For everything quiet that is `lastActivityAt`, the last byte the pane printed:
+ * a Claude pane sitting at its composer prints nothing, so the end of the last
+ * turn is exactly when it went quiet.
+ *
+ * A WORKING pane is the opposite: it repaints about once a second, so its
+ * last-activity stamp is always "now" and would rank every running turn as
+ * freshly started. Its real start is the pane's last Enter (`lastSubmitAt`),
+ * persisted server-side and therefore stable across a Codeman restart. A
+ * working pane that has never submitted (spawned with its prompt on the command
+ * line, or an external CLI) falls back to last activity, which puts it at the
+ * short end of the running group rather than falsely at the head of it.
+ */
+function sessionActivityAnchor(row) {
+  const activeAt = Number(row && row.lastActivityAt) || 0;
+  if (row && row.state === 'working') return Number(row.lastSubmitAt) || activeAt;
+  return activeAt;
+}
+
+/**
+ * Sort comparator for one overview row against another.
+ * @param {{state: string, lastActivityAt?: number, lastSubmitAt?: number, orderIndex?: number}} a
+ * @param {{state: string, lastActivityAt?: number, lastSubmitAt?: number, orderIndex?: number}} b
+ */
+function compareSessionActivity(a, b) {
+  const rankA = SESSION_ACTIVITY_RANK[a.state];
+  const rankB = SESSION_ACTIVITY_RANK[b.state];
+  const rank = (rankA === undefined ? 99 : rankA) - (rankB === undefined ? 99 : rankB);
+  if (rank !== 0) return rank;
+
+  const atA = sessionActivityAnchor(a);
+  const atB = sessionActivityAnchor(b);
+  if (atA !== atB) {
+    // A row with no stamp at all gets no opinion: it sorts last either way
+    // rather than claiming to be the oldest (0) thing on the screen.
+    if (!atA) return 1;
+    if (!atB) return -1;
+    return SESSION_ACTIVITY_OLDEST_FIRST.includes(a.state) ? atA - atB : atB - atA;
+  }
+
+  // Equal stamps (or two unstamped rows): fall back to the user's tab order so
+  // the list is deterministic and cannot shuffle between renders.
+  const orderA = Number.isFinite(a.orderIndex) ? a.orderIndex : Number.MAX_SAFE_INTEGER;
+  const orderB = Number.isFinite(b.orderIndex) ? b.orderIndex : Number.MAX_SAFE_INTEGER;
+  return orderA - orderB;
+}
+
+/** Copy of `rows`, in overview order. Never sorts in place, so callers keep their array. */
+function sortSessionsByActivity(rows) {
+  return (Array.isArray(rows) ? rows.slice() : []).sort(compareSessionActivity);
+}
+
 if (typeof window !== 'undefined') {
   window.WEBGL_FALLBACK = WEBGL_FALLBACK;
   window.evaluateWebGLLongTaskTrip = evaluateWebGLLongTaskTrip;
@@ -463,6 +551,12 @@ if (typeof window !== 'undefined') {
   window.CodemanSseStale = {
     compute: computeSseStale,
     TIMEOUT_MS: SSE_STALE_TIMEOUT_MS,
+  };
+  window.CodemanSessionOrder = {
+    RANK: SESSION_ACTIVITY_RANK,
+    anchor: sessionActivityAnchor,
+    compare: compareSessionActivity,
+    sort: sortSessionsByActivity,
   };
 }
 

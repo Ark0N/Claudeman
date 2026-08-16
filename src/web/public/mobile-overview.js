@@ -8,6 +8,10 @@
  * errored sessions), then SPACES (cases, expandable to their sessions), then
  * WORKING and IDLE / DONE.
  *
+ * Rows inside a section are ordered by `CodemanSessionOrder` (constants.js),
+ * the SAME comparator the desktop rail uses: blocked longest-first, then
+ * running longest-first, then quiet most-recently-quiet first.
+ *
  * PHONE ONLY. The gate is `shouldUseMobileOverview()` (viewport < 430px, not a
  * popped-out solo window, per-device setting on). Tablet and desktop keep the
  * welcome overlay untouched. The container ships with the `hidden` attribute and
@@ -25,6 +29,7 @@
  * `buildMobileOverviewModel()` is pure and unit-tested (test/mobile-overview.test.ts).
  *
  * @mixin Extends CodemanApp.prototype via Object.assign
+ * @dependency constants.js (CodemanSessionOrder, the shared row comparator)
  * @dependency app.js (this.sessions, this.cases, this.pendingHooks, selectSession, run)
  * @dependency ralph-panel.js (formatRelativeTime, the app's one relative-time formatter)
  * @dependency mobile-handlers.js (MobileDetection)
@@ -34,16 +39,6 @@
 
 /** Viewport width that counts as a phone. Matches the mobile.css phone block. */
 const MOBILE_OVERVIEW_PHONE_QUERY = '(max-width: 430px)';
-
-/** Sort rank per state: the most demanding thing sorts first inside a section. */
-const MOBILE_OVERVIEW_STATE_RANK = {
-  needs: 0,
-  error: 1,
-  waiting: 2,
-  working: 3,
-  idle: 4,
-  done: 5,
-};
 
 /** How many past conversations show before the "Show all" toggle. */
 const MOBILE_OVERVIEW_PAST_LIMIT = 8;
@@ -188,17 +183,24 @@ Object.assign(CodemanApp.prototype, {
         // Epoch ms, straight off the session payload; formatting happens at
         // render time so the clock can redo it without a re-render.
         createdAt: Number(session.createdAt) || 0,
+        // Raw stamps for the shared order comparator; `since` above is the same
+        // pair resolved for DISPLAY, and the two must not drift apart.
+        lastActivityAt: Number(session.lastActivityAt) || 0,
+        lastSubmitAt: Number(session.lastSubmitAt) || 0,
         since: this._mobileOverviewSince(state, session),
         orderIndex: orderIndex === -1 ? Number.MAX_SAFE_INTEGER : orderIndex,
       };
     });
 
-    const bySeverityThenOrder = (a, b) => {
-      const rank = MOBILE_OVERVIEW_STATE_RANK[a.state] - MOBILE_OVERVIEW_STATE_RANK[b.state];
-      return rank !== 0 ? rank : a.orderIndex - b.orderIndex;
+    // Order is `CodemanSessionOrder` (constants.js), shared with the desktop
+    // rail: blocked first (longest-blocked at the top), then running
+    // longest-first, then quiet most-recent-first.
+    // Guarded: a stale cached constants.js (iOS Safari after a deploy) must
+    // degrade to tab order, not TypeError the overview away.
+    const inSection = (states) => {
+      const filtered = rows.filter((r) => states.includes(r.state));
+      return window.CodemanSessionOrder ? window.CodemanSessionOrder.sort(filtered) : filtered;
     };
-
-    const inSection = (states) => rows.filter((r) => states.includes(r.state)).sort(bySeverityThenOrder);
 
     // Past = conversations from the unified list that are not currently live.
     // The endpoint already folds a transcript into its owning session (via the
