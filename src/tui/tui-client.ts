@@ -1,0 +1,997 @@
+/**
+ * @fileoverview Everything `codeman tui` needs from the outside world.
+ *
+ * The TUI is a CLIENT of the running server, never a second brain (see
+ * docs/tui-plan.md §4): states, approvals and history all come from the same
+ * API the web UI uses, so the two surfaces can never disagree. This module is
+ * the only place in `src/tui/` that does IO. It covers four jobs:
+ *
+ * 1. **Discovery + auth** — find the instance's server (`CODEMAN_API_URL`, else
+ *    loopback on `CODEMAN_PORT`), accepting the self-signed cert `--https`
+ *    generates, and read credentials the way `codeman attach` already does
+ *    (env, then the data dir's `.env`).
+ * 2. **Typed API calls** that unwrap the `{success,data}` envelope and throw a
+ *    `TuiApiError` carrying the status and `errorCode` on failure.
+ * 3. **Live updates** over SSE, decoded by `tui-sse.ts`, with a staleness
+ *    watchdog and capped backoff. The TUI does not patch rows from payloads: an
+ *    interesting event means "resync", and the app layer debounces the refetch.
+ * 4. **Degraded mode** — when nothing answers, sessions are enumerated straight
+ *    from tmux plus a read-only peek at `state.json`, which keeps the "the
+ *    server died, get me to my sessions" path that `sc` has today.
+ *
+ * IMPORT-SAFE: no probing, no timers and no tmux at import time. Everything a
+ * `TuiClient` starts is owned by it and released by `close()`; a leaked SSE
+ * socket or watchdog interval would keep the process alive after the TUI exits.
+ *
+ * LIMITATIONS (server surfaces that do not exist, worked around here rather
+ * than by touching `src/web/`):
+ * - There is no endpoint that reports the server's hostname, so the header's
+ *   hostname is this machine's (`os.hostname()`) unless `CODEMAN_API_URL`
+ *   points somewhere non-loopback, in which case that host is used.
+ * - Plan usage has no route of its own: the last-known snapshot rides
+ *   `GET /api/status` as `planUsage` (`web/plan-usage-latest.ts`) and updates
+ *   arrive as `session:statusTelemetry` SSE frames.
+ * - The unified list carries no token counters or turn-start stamp
+ *   (`TuiSessionRow.lastSubmitAt`), so those stay unset here; the app layer
+ *   merges them from live session state when it wants them.
+ *
+ * @module tui/tui-client
+ */
+
+import { execFile as execFileCb } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import http from 'node:http';
+import https from 'node:https';
+import { hostname as osHostname } from 'node:os';
+import { promisify } from 'node:util';
+import { CODEMAN_INSTANCE, dataPath, resolveTmuxSocketName } from '../config/instance.js';
+import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
+import { probeServer } from '../daemon-control.js';
+import { getErrorMessage } from '../types/api.js';
+import {
+  SseFrameParser,
+  SSE_BASE_BACKOFF_MS,
+  SSE_MAX_BACKOFF_MS,
+  SSE_STALE_TIMEOUT_MS,
+  approvalEventKind,
+  classifySseEvent,
+  sseBackoffDelay,
+} from './tui-sse.js';
+import type { UnifiedSessionItem } from '../services/unified-session-service.js';
+import type { CaseInfo } from '../types/api.js';
+import type { SearchResponseData } from '../types/search.js';
+import type { StatusTelemetry } from '../usage-telemetry.js';
+import type { ApprovalItem, ApprovalResolvedInfo } from '../web/approval-inbox.js';
+import type { AwayDigestResponse } from '../web/away-digest.js';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A non-2xx answer, or a `success:false` envelope. */
+export class TuiApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly errorCode?: string
+  ) {
+    super(message);
+    this.name = 'TuiApiError';
+  }
+}
+
+export interface TuiServerInfo {
+  /** Origin only, no trailing slash: `https://127.0.0.1:3000`. */
+  baseUrl: string;
+  version?: string;
+  hostname?: string;
+  /** `CODEMAN_INSTANCE`, empty string for the production layout. */
+  instance: string;
+  /** A server answered but rejected our credentials. */
+  authRequired?: boolean;
+}
+
+export interface TuiClientOptions {
+  /** Skip discovery and talk to this origin. */
+  baseUrl?: string;
+  /** Loopback port to probe. Outranks `CODEMAN_API_URL`, so a caller that names a port cannot be redirected by the ambient environment. */
+  port?: number | string;
+  username?: string;
+  password?: string;
+  /** Where credentials come from when none are passed. Defaults to the instance's `.env`. */
+  envFilePath?: string;
+  /** Per-request timeout. Discovery probes use `probeTimeoutMs`. */
+  timeoutMs?: number;
+  probeTimeoutMs?: number;
+  /** Injected for tests; the default shells out to `tmux` via execFile. */
+  exec?: TuiExecFile;
+  /** Read-only source of names/dirs in degraded mode. Defaults to the instance's. */
+  statePath?: string;
+}
+
+/** Plan-usage snapshot as the server broadcasts it (telemetry plus its source). */
+export type TuiPlanUsage = StatusTelemetry & { sessionId?: string };
+
+export type TuiApprovalAnswer =
+  | { action: 'approve' }
+  | { action: 'deny' }
+  | { action: 'option'; option: number }
+  | { action: 'text'; text: string };
+
+/**
+ * Answering is a conversation with a live terminal, so refusal is a normal
+ * outcome, not an exception: the server re-captures the pane first and 409s
+ * when the dialog is gone (someone answered it in tmux a second ago).
+ */
+export type TuiAnswerResult =
+  | { ok: true; id: string; sessionId: string; action: string }
+  | { ok: false; reason: 'gone' | 'not-found' | 'rejected' | 'failed'; message: string };
+
+export interface TuiQuickStartOptions {
+  caseName: string;
+  mode?: 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi';
+  sessionName?: string;
+  /** The tab this spawn came from, for the lineage lines (cosmetic, dropped if unresolvable). */
+  parentSessionId?: string;
+}
+
+export interface TuiQuickStartResult {
+  sessionId: string;
+  casePath?: string;
+  caseName?: string;
+}
+
+/** Init snapshot, narrowed to the two facts the dashboard header shows. */
+export interface TuiInitState {
+  version?: string;
+  planUsage?: TuiPlanUsage | null;
+}
+
+export type TuiApprovalEvent =
+  | { kind: 'pending'; item: ApprovalItem }
+  | { kind: 'updated'; item: ApprovalItem }
+  | { kind: 'resolved'; info: ApprovalResolvedInfo };
+
+export type TuiSseStatus = 'connected' | 'reconnecting';
+
+export interface TuiSseStatusDetail {
+  /** Consecutive failed connects; 0 while connected. */
+  attempt: number;
+  /**
+   * SSE has failed often enough that the app should poll
+   * `fetchUnifiedSessions()` instead of waiting for events.
+   */
+  recommendPolling: boolean;
+  message?: string;
+}
+
+export interface TuiEventHandlers {
+  onInit?(state: TuiInitState): void;
+  /** Something session-shaped changed; the argument is the event name. */
+  onResync?(event: string): void;
+  onApproval?(event: TuiApprovalEvent): void;
+  onPlanUsage?(usage: TuiPlanUsage): void;
+  onStatus?(status: TuiSseStatus, detail: TuiSseStatusDetail): void;
+}
+
+export interface TuiSubscribeOptions {
+  /**
+   * Sessions whose `session:terminal` frames this stream wants. The default is
+   * a sentinel that matches no session id, which suppresses the terminal
+   * stream (by far the bulk of the wire) without suppressing anything else:
+   * the `?sessions=` filter applies to terminal frames ONLY, lifecycle and
+   * hook events still reach every client. The preview pane pulls its own tail
+   * over HTTP, so the TUI never needs those bytes.
+   */
+  sessionIds?: readonly string[];
+  staleTimeoutMs?: number;
+  /** How often the staleness watchdog fires. Defaults to a third of the timeout. */
+  checkIntervalMs?: number;
+  baseBackoffMs?: number;
+  maxBackoffMs?: number;
+  /** Consecutive failed connects before `recommendPolling` flips on. */
+  pollingAfterFailures?: number;
+}
+
+export interface TuiEventStream {
+  close(): void;
+  readonly status: TuiSseStatus;
+  readonly recommendPolling: boolean;
+}
+
+export type TuiExecFile = (file: string, args: readonly string[]) => Promise<{ stdout: string; stderr: string }>;
+
+/** One tmux session as degraded mode sees it. */
+export interface TuiTmuxSession {
+  muxName: string;
+  /** The `codeman-<prefix>` fragment; mux names carry only the first 8 chars of the id. */
+  sessionIdPrefix: string;
+  /** Full id, when `state.json` had exactly one session starting with the prefix. */
+  sessionId?: string;
+  name?: string;
+  workingDir?: string;
+  mode?: string;
+  attached: boolean;
+  /** Epoch ms from tmux's `session_created` (which reports seconds). */
+  createdAt?: number;
+  windows?: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Discovery + credentials (pure halves, exported for tests)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DEFAULT_PORT = 3000;
+const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_PROBE_TIMEOUT_MS = 1_500;
+/** Ceiling on a single response body. A tail request asks for far less. */
+const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+
+/** Trim a trailing slash so `new URL(path, base)` never doubles it. */
+function normalizeOrigin(url: string): string {
+  return url.trim().replace(/\/+$/, '');
+}
+
+/**
+ * Origins to probe, in preference order. `CODEMAN_API_URL` (the variable hooks
+ * already get) wins outright; otherwise both schemes on loopback, https first
+ * because a production install is HTTPS-only and a plain-http server rejects a
+ * TLS handshake immediately rather than hanging.
+ */
+export function tuiServerCandidates(env: { apiUrl?: string; port?: string | number } = {}): string[] {
+  if (env.apiUrl && env.apiUrl.trim()) return [normalizeOrigin(env.apiUrl)];
+  const parsed = typeof env.port === 'number' ? env.port : Number.parseInt(String(env.port ?? ''), 10);
+  const port = Number.isSafeInteger(parsed) && parsed > 0 && parsed < 65536 ? parsed : DEFAULT_PORT;
+  return [`https://127.0.0.1:${port}`, `http://127.0.0.1:${port}`];
+}
+
+/**
+ * Parse a `KEY=value` env file. Mirrors `readCodemanEnv()` in `cli.ts`: blank
+ * lines and `#` comments skipped, one layer of matching quotes stripped.
+ */
+export function parseEnvFile(text: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (!match) continue;
+    let value = match[2].trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    result[match[1]] = value;
+  }
+  return result;
+}
+
+export interface TuiCredentials {
+  username: string;
+  password?: string;
+}
+
+/**
+ * Credentials for the API, env first and the data dir's `.env` as the fallback,
+ * exactly like the `codeman attach` path. No password means no auth is
+ * configured (or the user has it only in the server's environment, in which
+ * case the API answers 401 and `connect()` reports `authRequired`).
+ */
+export function readCodemanCredentials(envFilePath = dataPath('.env')): TuiCredentials {
+  let fileEnv: Record<string, string> = {};
+  try {
+    fileEnv = parseEnvFile(readFileSync(envFilePath, 'utf-8'));
+  } catch {
+    /* absent or unreadable: env-only */
+  }
+  const username = process.env.CODEMAN_USERNAME || fileEnv.CODEMAN_USERNAME || 'admin';
+  const password = process.env.CODEMAN_PASSWORD || fileEnv.CODEMAN_PASSWORD;
+  return password ? { username, password } : { username };
+}
+
+export function basicAuthHeader(credentials: TuiCredentials): string | undefined {
+  if (!credentials.password) return undefined;
+  return `Basic ${Buffer.from(`${credentials.username}:${credentials.password}`).toString('base64')}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Degraded mode
+// ─────────────────────────────────────────────────────────────────────────────
+
+const execFileAsync = promisify(execFileCb);
+
+const defaultExecFile: TuiExecFile = async (file, args) => {
+  const { stdout, stderr } = await execFileAsync(file, [...args], {
+    timeout: EXEC_TIMEOUT_MS,
+    encoding: 'utf-8',
+    maxBuffer: 1024 * 1024,
+  });
+  return { stdout, stderr };
+};
+
+/**
+ * Session names Codeman owns on this socket. Remote (`codeman-ssh-…`) and
+ * docker (`codeman-dkr-…`) names deliberately fail this pattern (they live on
+ * their own sockets and must never be adopted), and the letters they use are
+ * outside `[a-f0-9-]`, so this is the same fence `tmux-manager.ts` draws.
+ */
+const MUX_NAME_PATTERN = /^(?:codeman|claudeman)-([a-f0-9-]+)$/;
+
+/** Field separator for `list-sessions -F`. Session names cannot contain a tab. */
+const TMUX_FIELD_SEPARATOR = '\t';
+
+const TMUX_LIST_FORMAT = ['#{session_name}', '#{session_attached}', '#{session_created}', '#{session_windows}'].join(
+  TMUX_FIELD_SEPARATOR
+);
+
+/** Names/dirs from `state.json`, keyed by full session id. Read-only, tolerant. */
+function readStateSessions(statePath: string): Map<string, { name?: string; workingDir?: string; mode?: string }> {
+  const sessions = new Map<string, { name?: string; workingDir?: string; mode?: string }>();
+  try {
+    const parsed = JSON.parse(readFileSync(statePath, 'utf-8')) as {
+      sessions?: Record<string, { name?: string; workingDir?: string; mode?: string }>;
+    };
+    for (const [id, value] of Object.entries(parsed.sessions ?? {})) {
+      if (value && typeof value === 'object') sessions.set(id, value);
+    }
+  } catch {
+    /* no state file, or mid-write garbage: degraded mode is best-effort */
+  }
+  return sessions;
+}
+
+/** Parse `list-sessions -F` output. Pure, so the format string is unit-testable. */
+export function parseTmuxSessionList(stdout: string): TuiTmuxSession[] {
+  const rows: TuiTmuxSession[] = [];
+  for (const line of stdout.split('\n')) {
+    if (!line.trim()) continue;
+    const [muxName = '', attached = '', created = '', windows = ''] = line.split(TMUX_FIELD_SEPARATOR);
+    const match = MUX_NAME_PATTERN.exec(muxName);
+    if (!match) continue;
+    const createdSeconds = Number.parseInt(created, 10);
+    const windowCount = Number.parseInt(windows, 10);
+    rows.push({
+      muxName,
+      sessionIdPrefix: match[1],
+      attached: attached.trim() !== '' && attached.trim() !== '0',
+      ...(Number.isSafeInteger(createdSeconds) && createdSeconds > 0 ? { createdAt: createdSeconds * 1000 } : {}),
+      ...(Number.isSafeInteger(windowCount) && windowCount > 0 ? { windows: windowCount } : {}),
+    });
+  }
+  return rows;
+}
+
+/**
+ * List Codeman's tmux sessions without a server, decorating them with whatever
+ * `state.json` remembers. Attach is all this supports: there are no states, no
+ * approvals and no previews when nothing is running the classification.
+ *
+ * The tmux call is `execFile` with an argv array (never a shell string), and
+ * the socket comes from the instance config, so a beta TUI sees only the beta
+ * instance's sessions.
+ */
+export async function enumerateTmuxSessions(
+  options: { exec?: TuiExecFile; socket?: string; statePath?: string } = {}
+): Promise<TuiTmuxSession[]> {
+  const exec = options.exec ?? defaultExecFile;
+  const socket = options.socket ?? resolveTmuxSocketName();
+  let stdout = '';
+  try {
+    ({ stdout } = await exec('tmux', ['-L', socket, 'list-sessions', '-F', TMUX_LIST_FORMAT]));
+  } catch {
+    // "no server running on ..." exits non-zero, which is simply an empty list.
+    return [];
+  }
+
+  const rows = parseTmuxSessionList(stdout);
+  if (rows.length === 0) return rows;
+
+  const state = readStateSessions(options.statePath ?? dataPath('state.json'));
+  for (const row of rows) {
+    const matches = [...state.entries()].filter(([id]) => id.startsWith(row.sessionIdPrefix));
+    // Ambiguity is meaningless here: two ids sharing an 8-char prefix cannot both
+    // own one mux name, and guessing would put the wrong name on a row.
+    if (matches.length !== 1) continue;
+    const [id, entry] = matches[0];
+    row.sessionId = id;
+    if (entry.name) row.name = entry.name;
+    if (entry.workingDir) row.workingDir = entry.workingDir;
+    if (entry.mode) row.mode = entry.mode;
+  }
+  return rows;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The client
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface RawResponse {
+  status: number;
+  body: string;
+}
+
+export class TuiClient {
+  private base: string | null;
+  private readonly credentials: TuiCredentials;
+  private readonly timeoutMs: number;
+  private readonly probeTimeoutMs: number;
+  private readonly exec: TuiExecFile;
+  private readonly statePath: string;
+  private readonly streams = new Set<SseStream>();
+  private readonly clientId = `codeman-tui-${process.pid}`;
+  private seq = 0;
+  private server: TuiServerInfo | null = null;
+
+  constructor(private readonly options: TuiClientOptions = {}) {
+    this.base = options.baseUrl ? normalizeOrigin(options.baseUrl) : null;
+    const credentials = readCodemanCredentials(options.envFilePath ?? dataPath('.env'));
+    this.credentials = {
+      username: options.username ?? credentials.username,
+      ...((options.password ?? credentials.password) ? { password: options.password ?? credentials.password } : {}),
+    };
+    this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.probeTimeoutMs = options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
+    this.exec = options.exec ?? defaultExecFile;
+    this.statePath = options.statePath ?? dataPath('state.json');
+  }
+
+  /** The origin in use, or null before a successful `connect()`. */
+  get baseUrl(): string | null {
+    return this.base;
+  }
+
+  get serverInfo(): TuiServerInfo | null {
+    return this.server;
+  }
+
+  /**
+   * Find the server and read its identity. Returns null when nothing answers,
+   * which is the app's cue to fall back to `enumerateTmuxSessions()`.
+   */
+  async connect(): Promise<TuiServerInfo | null> {
+    // An explicit port outranks the ambient `CODEMAN_API_URL` (which every
+    // Codeman-managed session exports): a caller that named a port must not be
+    // silently redirected at whatever server happens to own this shell.
+    const candidates = this.base
+      ? [this.base]
+      : this.options.port !== undefined
+        ? tuiServerCandidates({ port: this.options.port })
+        : tuiServerCandidates({ apiUrl: process.env.CODEMAN_API_URL, port: process.env.CODEMAN_PORT });
+
+    const probes = await Promise.all(
+      candidates.map((origin) => probeServer(`${origin}/api/status`, this.probeTimeoutMs))
+    );
+    const index = probes.findIndex((probe) => probe.up);
+    if (index === -1) {
+      this.server = null;
+      return null;
+    }
+
+    this.base = candidates[index];
+    const info: TuiServerInfo = {
+      baseUrl: this.base,
+      instance: CODEMAN_INSTANCE,
+      hostname: this.resolveHostname(this.base),
+    };
+    if (probes[index].version) info.version = probes[index].version;
+
+    // The probe is unauthenticated, so behind a password it learns nothing but
+    // "something is there". Ask again with credentials for the version.
+    try {
+      const status = await this.requestData<{ version?: string; planUsage?: TuiPlanUsage | null }>(
+        'GET',
+        '/api/status'
+      );
+      if (status?.version) info.version = status.version;
+    } catch (err) {
+      if (err instanceof TuiApiError && (err.status === 401 || err.status === 403)) {
+        info.authRequired = true;
+      }
+    }
+
+    this.server = info;
+    return info;
+  }
+
+  // ── API ────────────────────────────────────────────────────────────────────
+
+  async fetchUnifiedSessions(limit?: number): Promise<UnifiedSessionItem[]> {
+    const query = limit !== undefined ? `?limit=${encodeURIComponent(String(Math.max(1, Math.trunc(limit))))}` : '';
+    const data = await this.requestData<{ sessions?: UnifiedSessionItem[] }>('GET', `/api/sessions/unified${query}`);
+    return data?.sessions ?? [];
+  }
+
+  async fetchApprovals(): Promise<ApprovalItem[]> {
+    const data = await this.requestData<{ approvals?: ApprovalItem[] }>('GET', '/api/approvals');
+    return data?.approvals ?? [];
+  }
+
+  /**
+   * Answer a pending prompt. Every refusal the server can reasonably give
+   * (dialog gone, item already resolved, digit not among the parsed options)
+   * comes back as a typed result: a human answering a dialog that just closed
+   * is normal operation, not an error condition.
+   */
+  async answerApproval(id: string, answer: TuiApprovalAnswer): Promise<TuiAnswerResult> {
+    try {
+      const data = await this.requestData<{ id: string; sessionId: string; action: string }>(
+        'POST',
+        `/api/approvals/${encodeURIComponent(id)}/answer`,
+        answer
+      );
+      return { ok: true, id: data?.id ?? id, sessionId: data?.sessionId ?? '', action: data?.action ?? answer.action };
+    } catch (err) {
+      if (!(err instanceof TuiApiError)) throw err;
+      return { ok: false, reason: answerFailureReason(err), message: err.message };
+    }
+  }
+
+  /** Raw terminal bytes (ANSI intact) for the preview pane. */
+  async fetchTerminalTail(sessionId: string, bytes: number): Promise<string> {
+    const tail = Math.max(1, Math.trunc(bytes));
+    const data = await this.requestData<{ terminalBuffer?: string }>(
+      'GET',
+      `/api/sessions/${encodeURIComponent(sessionId)}/terminal?tail=${tail}`
+    );
+    return data?.terminalBuffer ?? '';
+  }
+
+  /**
+   * Type one line at a session's composer.
+   *
+   * Two hard rules from CLAUDE.md, both enforced here so no caller can get them
+   * wrong: the payload must END with `\r` or the server never issues Enter and
+   * the text sits unsubmitted, and embedded newlines are stripped rather than
+   * sent (multi-line input breaks Ink, and the server would join the lines).
+   * The `clientId`/`seq` pair makes delivery exactly-once, so a retry after a
+   * dropped connection cannot type the prompt twice.
+   */
+  async sendInput(sessionId: string, text: string): Promise<void> {
+    const line = text.replace(/[\r\n]+/g, ' ').trim();
+    this.seq += 1;
+    await this.requestData('POST', `/api/sessions/${encodeURIComponent(sessionId)}/input`, {
+      input: `${line}\r`,
+      useMux: true,
+      clientId: this.clientId,
+      seq: this.seq,
+    });
+  }
+
+  /** Last `seq` sent. Monotonic per process; exposed for tests and diagnostics. */
+  get lastInputSeq(): number {
+    return this.seq;
+  }
+
+  /**
+   * Start a session. Always `quick-start`, never `POST /api/sessions`: only
+   * this route resolves a case NAME, and it is what routes remote/docker cases
+   * to the right host instead of stat-ing the path locally.
+   */
+  async quickStart(options: TuiQuickStartOptions): Promise<TuiQuickStartResult> {
+    const data = await this.requestData<TuiQuickStartResult>('POST', '/api/quick-start', {
+      caseName: options.caseName,
+      ...(options.mode ? { mode: options.mode } : {}),
+      ...(options.sessionName ? { sessionName: options.sessionName } : {}),
+      ...(options.parentSessionId ? { parentSessionId: options.parentSessionId } : {}),
+    });
+    if (!data?.sessionId) throw new TuiApiError('quick-start returned no session id', 502);
+    return data;
+  }
+
+  async fetchCases(): Promise<CaseInfo[]> {
+    const data = await this.requestData<CaseInfo[]>('GET', '/api/cases');
+    return Array.isArray(data) ? data : [];
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.requestData('DELETE', `/api/sessions/${encodeURIComponent(sessionId)}`);
+  }
+
+  async search(query: string, limit?: number): Promise<SearchResponseData> {
+    const params = new URLSearchParams({ q: query });
+    if (limit !== undefined) params.set('limit', String(Math.max(1, Math.trunc(limit))));
+    const data = await this.requestData<SearchResponseData>('GET', `/api/search?${params.toString()}`);
+    return data ?? { query, groups: [], totalResults: 0, truncated: false };
+  }
+
+  /**
+   * The away digest. This route predates the envelope and answers
+   * `{success:true, digest}` with the payload at the TOP level, so it reads the
+   * raw body rather than `data` (see CLAUDE.md, away-digest).
+   */
+  async fetchAwayDigest(range?: string): Promise<AwayDigestResponse> {
+    const query = range ? `?range=${encodeURIComponent(range)}` : '';
+    const body = await this.requestJson<{ digest?: AwayDigestResponse }>('GET', `/api/away-digest${query}`);
+    const digest = body?.digest;
+    if (!digest) throw new TuiApiError('away-digest returned no digest', 502);
+    return digest;
+  }
+
+  /** Last-known plan-usage snapshot, or null when the account reports none. */
+  async fetchPlanUsage(): Promise<TuiPlanUsage | null> {
+    const data = await this.requestData<{ planUsage?: TuiPlanUsage | null }>('GET', '/api/status');
+    return data?.planUsage ?? null;
+  }
+
+  // ── Degraded mode ──────────────────────────────────────────────────────────
+
+  /** Sessions straight from tmux, for when no server answered. */
+  enumerateTmuxSessions(): Promise<TuiTmuxSession[]> {
+    return enumerateTmuxSessions({ exec: this.exec, statePath: this.statePath });
+  }
+
+  // ── Live updates ───────────────────────────────────────────────────────────
+
+  /**
+   * Subscribe to `/api/events`. The returned stream owns its socket, its
+   * watchdog and its backoff timer; `close()` (or the client's) releases all
+   * three. Handlers are called synchronously as frames decode.
+   */
+  subscribeEvents(handlers: TuiEventHandlers, options: TuiSubscribeOptions = {}): TuiEventStream {
+    if (!this.base) throw new Error('subscribeEvents() needs a connected client: call connect() first');
+    const stream = new SseStream(this.base, this.authHeader(), handlers, options, () => this.streams.delete(stream));
+    this.streams.add(stream);
+    stream.start();
+    return stream;
+  }
+
+  /** Tear down every stream this client opened. Safe to call twice. */
+  close(): void {
+    for (const stream of [...this.streams]) stream.close();
+    this.streams.clear();
+  }
+
+  // ── Internals ──────────────────────────────────────────────────────────────
+
+  private authHeader(): string | undefined {
+    return basicAuthHeader(this.credentials);
+  }
+
+  /**
+   * The header's hostname. No endpoint reports the server's own, so a loopback
+   * origin means "this machine" and anything else is named by its URL.
+   */
+  private resolveHostname(origin: string): string {
+    try {
+      const host = new URL(origin).hostname;
+      if (host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]') return osHostname();
+      return host;
+    } catch {
+      return osHostname();
+    }
+  }
+
+  /** Unwrap `{success:true,data}`; throw `TuiApiError` on `success:false`. */
+  private async requestData<T>(method: string, path: string, body?: unknown): Promise<T | undefined> {
+    const payload = await this.requestJson<{ success?: boolean; data?: T }>(method, path, body);
+    if (payload && typeof payload === 'object' && payload.success === true) return payload.data;
+    return payload as unknown as T;
+  }
+
+  /** The parsed response body, envelope and all. */
+  private async requestJson<T>(method: string, path: string, body?: unknown): Promise<T | undefined> {
+    const response = await this.raw(method, path, body);
+    let parsed: unknown;
+    if (response.body.trim()) {
+      try {
+        parsed = JSON.parse(response.body);
+      } catch {
+        if (response.status >= 400) {
+          throw new TuiApiError(httpErrorMessage(response), response.status);
+        }
+        throw new TuiApiError(`${method} ${path} returned a non-JSON body`, response.status);
+      }
+    }
+
+    const envelope = parsed as { success?: boolean; error?: string; errorCode?: string } | undefined;
+    if (envelope && typeof envelope === 'object' && envelope.success === false) {
+      throw new TuiApiError(envelope.error || 'request failed', response.status, envelope.errorCode);
+    }
+    if (response.status >= 400) {
+      throw new TuiApiError(httpErrorMessage(response), response.status);
+    }
+    return parsed as T | undefined;
+  }
+
+  private raw(method: string, path: string, body?: unknown): Promise<RawResponse> {
+    if (!this.base) throw new Error('the TUI client is not connected to a server');
+    const url = new URL(path, `${this.base}/`);
+    const payload = body === undefined ? undefined : JSON.stringify(body);
+    const transport = url.protocol === 'https:' ? https : http;
+    const auth = this.authHeader();
+
+    return new Promise<RawResponse>((resolve, reject) => {
+      const headers: Record<string, string | number> = { Accept: 'application/json' };
+      if (payload !== undefined) {
+        headers['Content-Type'] = 'application/json';
+        headers['Content-Length'] = Buffer.byteLength(payload);
+      }
+      if (auth) headers.Authorization = auth;
+
+      const req = transport.request(
+        {
+          protocol: url.protocol,
+          hostname: url.hostname,
+          port: url.port,
+          method,
+          path: `${url.pathname}${url.search}`,
+          // Loopback with the self-signed cert `--https` generates: verifying it
+          // would fail every local request. Same call the CLI already makes.
+          rejectUnauthorized: false,
+          timeout: this.timeoutMs,
+          headers,
+        },
+        (res) => {
+          let text = '';
+          let overflowed = false;
+          res.setEncoding('utf-8');
+          res.on('data', (chunk: string) => {
+            if (overflowed) return;
+            if (text.length + chunk.length > MAX_RESPONSE_BYTES) {
+              overflowed = true;
+              res.destroy();
+              reject(new TuiApiError(`${method} ${path} response exceeded ${MAX_RESPONSE_BYTES} bytes`, 507));
+              return;
+            }
+            text += chunk;
+          });
+          res.on('end', () => {
+            if (!overflowed) resolve({ status: res.statusCode ?? 0, body: text });
+          });
+          res.on('error', (err) => reject(new TuiApiError(getErrorMessage(err), 0)));
+        }
+      );
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new TuiApiError(`${method} ${path} timed out after ${this.timeoutMs}ms`, 0));
+      });
+      req.on('error', (err) => reject(new TuiApiError(getErrorMessage(err), 0)));
+      if (payload !== undefined) req.write(payload);
+      req.end();
+    });
+  }
+}
+
+function httpErrorMessage(response: RawResponse): string {
+  const detail = response.body.trim().slice(0, 200);
+  return detail ? `HTTP ${response.status}: ${detail}` : `HTTP ${response.status}`;
+}
+
+/** Map an answer failure onto the outcomes the dashboard renders differently. */
+function answerFailureReason(err: TuiApiError): 'gone' | 'not-found' | 'rejected' | 'failed' {
+  if (err.errorCode === 'CONFLICT' || err.status === 409) return 'gone';
+  if (err.errorCode === 'NOT_FOUND' || err.status === 404) return 'not-found';
+  if (err.errorCode === 'INVALID_INPUT' || err.status === 400) return 'rejected';
+  return 'failed';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SSE connection
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A session id can never look like this, so passing it as the `?sessions=`
+ * filter drops every `session:terminal` frame while leaving lifecycle, hook and
+ * approval events untouched.
+ */
+const NO_TERMINAL_FILTER = 'tui-no-terminal';
+
+const DEFAULT_POLLING_AFTER_FAILURES = 2;
+
+class SseStream implements TuiEventStream {
+  private req: http.ClientRequest | null = null;
+  private res: http.IncomingMessage | null = null;
+  private parser = new SseFrameParser();
+  private watchdog: NodeJS.Timeout | null = null;
+  private retryTimer: NodeJS.Timeout | null = null;
+  private lastTraffic = 0;
+  private attempt = 0;
+  private closed = false;
+  /** Bumped per connection so a late `error`/`close` cannot fail a newer socket. */
+  private generation = 0;
+  private _status: TuiSseStatus = 'reconnecting';
+  private _recommendPolling = false;
+
+  private readonly staleTimeoutMs: number;
+  private readonly checkIntervalMs: number;
+  private readonly baseBackoffMs: number;
+  private readonly maxBackoffMs: number;
+  private readonly pollingAfterFailures: number;
+  private readonly sessionsParam: string;
+
+  constructor(
+    private readonly baseUrl: string,
+    private readonly auth: string | undefined,
+    private readonly handlers: TuiEventHandlers,
+    options: TuiSubscribeOptions,
+    private readonly onClosed: () => void
+  ) {
+    this.staleTimeoutMs = options.staleTimeoutMs ?? SSE_STALE_TIMEOUT_MS;
+    this.checkIntervalMs = options.checkIntervalMs ?? Math.max(250, Math.floor(this.staleTimeoutMs / 3));
+    this.baseBackoffMs = options.baseBackoffMs ?? SSE_BASE_BACKOFF_MS;
+    this.maxBackoffMs = options.maxBackoffMs ?? SSE_MAX_BACKOFF_MS;
+    this.pollingAfterFailures = options.pollingAfterFailures ?? DEFAULT_POLLING_AFTER_FAILURES;
+    this.sessionsParam = options.sessionIds?.length ? options.sessionIds.join(',') : NO_TERMINAL_FILTER;
+  }
+
+  get status(): TuiSseStatus {
+    return this._status;
+  }
+
+  get recommendPolling(): boolean {
+    return this._recommendPolling;
+  }
+
+  start(): void {
+    this.open();
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.teardown();
+    this.onClosed();
+  }
+
+  private open(): void {
+    if (this.closed) return;
+    const generation = ++this.generation;
+    const url = new URL('/api/events', `${this.baseUrl}/`);
+    url.searchParams.set('sessions', this.sessionsParam);
+    const transport = url.protocol === 'https:' ? https : http;
+
+    const headers: Record<string, string> = { Accept: 'text/event-stream', 'Cache-Control': 'no-cache' };
+    if (this.auth) headers.Authorization = this.auth;
+
+    const req = transport.request(
+      {
+        protocol: url.protocol,
+        hostname: url.hostname,
+        port: url.port,
+        method: 'GET',
+        path: `${url.pathname}${url.search}`,
+        rejectUnauthorized: false,
+        headers,
+      },
+      (res) => {
+        if (generation !== this.generation || this.closed) {
+          res.destroy();
+          return;
+        }
+        if (res.statusCode !== 200) {
+          res.resume();
+          this.fail(generation, `event stream refused with HTTP ${res.statusCode ?? 0}`);
+          return;
+        }
+        this.res = res;
+        this.attempt = 0;
+        this._recommendPolling = false;
+        this._status = 'connected';
+        this.touch();
+        this.armWatchdog();
+        this.handlers.onStatus?.('connected', { attempt: 0, recommendPolling: false });
+
+        res.setEncoding('utf-8');
+        res.on('data', (chunk: string) => {
+          if (generation !== this.generation) return;
+          // Any inbound bytes are liveness, comments and padding included.
+          this.touch();
+          for (const frame of this.parser.feed(chunk)) this.dispatch(frame.event, frame.data);
+        });
+        res.on('end', () => this.fail(generation, 'event stream ended'));
+        res.on('close', () => this.fail(generation, 'event stream closed'));
+        res.on('error', (err) => this.fail(generation, getErrorMessage(err)));
+      }
+    );
+    req.on('error', (err) => this.fail(generation, getErrorMessage(err)));
+    this.req = req;
+    req.end();
+  }
+
+  private dispatch(event: string, data: string): void {
+    switch (classifySseEvent(event)) {
+      case 'heartbeat':
+        return;
+      case 'init': {
+        const state = parseJson<{ version?: string; planUsage?: TuiPlanUsage | null }>(data);
+        if (state) this.handlers.onInit?.({ version: state.version, planUsage: state.planUsage ?? null });
+        return;
+      }
+      case 'approval': {
+        const payload = parseJson<ApprovalItem & ApprovalResolvedInfo>(data);
+        const kind = approvalEventKind(event);
+        if (!payload || !kind) return;
+        if (kind === 'resolved') {
+          this.handlers.onApproval?.({ kind, info: payload as ApprovalResolvedInfo });
+        } else {
+          this.handlers.onApproval?.({ kind, item: payload as ApprovalItem });
+        }
+        // An approval landing or clearing also changes how its row is grouped.
+        this.handlers.onResync?.(event);
+        return;
+      }
+      case 'plan-usage': {
+        const usage = parseJson<TuiPlanUsage>(data);
+        if (usage) this.handlers.onPlanUsage?.(usage);
+        return;
+      }
+      case 'resync':
+        this.handlers.onResync?.(event);
+        return;
+      case 'ignore':
+        return;
+    }
+  }
+
+  private touch(): void {
+    this.lastTraffic = Date.now();
+  }
+
+  private armWatchdog(): void {
+    if (this.watchdog) return;
+    this.watchdog = setInterval(() => {
+      if (this.closed) return;
+      if (Date.now() - this.lastTraffic <= this.staleTimeoutMs) return;
+      // The socket never errored, it just went quiet: the server heartbeats
+      // every 15s, so this is a dead stream that would otherwise freeze every
+      // SSE-driven surface until the user restarted the TUI.
+      this.fail(this.generation, `no traffic for ${this.staleTimeoutMs}ms`);
+    }, this.checkIntervalMs);
+  }
+
+  private fail(generation: number, message: string): void {
+    if (this.closed || generation !== this.generation) return;
+    this.generation++;
+    this.teardown();
+
+    this.attempt++;
+    this._status = 'reconnecting';
+    this._recommendPolling = this.attempt >= this.pollingAfterFailures;
+    this.handlers.onStatus?.('reconnecting', {
+      attempt: this.attempt,
+      recommendPolling: this._recommendPolling,
+      message,
+    });
+
+    const delay = sseBackoffDelay(this.attempt, this.baseBackoffMs, this.maxBackoffMs);
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      this.open();
+    }, delay);
+  }
+
+  /** Drop the socket and both timers. Never touches `closed`, so `fail()` can reuse it. */
+  private teardown(): void {
+    if (this.watchdog) {
+      clearInterval(this.watchdog);
+      this.watchdog = null;
+    }
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    // The no-op error listeners are not decoration: destroying a socket can
+    // emit ECONNRESET, and an `error` event with no listener is an uncaught
+    // exception that would take the TUI down on a routine reconnect.
+    if (this.res) {
+      this.res.removeAllListeners();
+      this.res.on('error', () => {});
+      this.res.destroy();
+      this.res = null;
+    }
+    if (this.req) {
+      this.req.removeAllListeners();
+      this.req.on('error', () => {});
+      this.req.destroy();
+      this.req = null;
+    }
+    this.parser.reset();
+  }
+}
+
+function parseJson<T>(text: string): T | null {
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
