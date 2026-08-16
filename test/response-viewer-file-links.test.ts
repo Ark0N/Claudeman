@@ -117,6 +117,16 @@ describe('response viewer file-path linkifier', () => {
     expect(root.textContent).toBe('Ratio 3/4 on 2026/08/16, see src/app.ts');
   });
 
+  it('never linkifies /etc paths — the server blocks the whole tree, so the link could only 403', () => {
+    // /etc sits in DEFAULT_BLOCKED_TREES (config/attachment-guard.ts); it used
+    // to be a root in the shared pattern, which made every /etc link a
+    // guaranteed-dead click on both surfaces.
+    const root = linkify('<p>Check /etc/hosts and /etc/app/config.json for the mapping.</p>');
+
+    expect(paths(root)).toHaveLength(0);
+    expect(root.textContent).toBe('Check /etc/hosts and /etc/app/config.json for the mapping.');
+  });
+
   it('cannot turn model text into markup', () => {
     // The anchor is built with createElement + textContent, so even a
     // path-shaped payload stays text. (`<` also ends a match, so the linkifier

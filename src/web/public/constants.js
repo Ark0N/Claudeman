@@ -997,13 +997,16 @@ function computeRewriteScrollLine(input) {
  * never match) and terminated by a known extension (so the end of the path is
  * unambiguous — a trailing `)` or `.` after the extension stays out). Longer
  * extensions come first in each family (`tsx|ts`), so the trailing `\b` cannot
- * be satisfied by the shorter branch mid-word.
+ * be satisfied by the shorter branch mid-word. `/etc` is deliberately NOT a
+ * root: DEFAULT_BLOCKED_TREES (config/attachment-guard.ts) refuses the whole
+ * tree server-side, so every `/etc/...` link was a guaranteed 403 — a link
+ * that renders clickable and then dies is worse than plain text.
  *
  * ⚠ Consumers must never share one instance: `lastIndex` is per-object state on
  * a `/g` regex, so {@link absoluteFilePathPattern} mints a fresh one per call.
  */
 const FILE_PATH_LINK_PATTERN =
-  /(\/(?:home|Users|tmp|var|private|etc|opt|mnt|srv|media|data|workspace)\/[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|ya?ml|csv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html|toml|ini|sql|png|jpe?g|gif|webp|bmp|svg|pdf|docx|pptx|mp4|webm|mov|mp3|wav))\b/g;
+  /(\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|ya?ml|csv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html|toml|ini|sql|png|jpe?g|gif|webp|bmp|svg|pdf|docx|pptx|mp4|webm|mov|mp3|wav))\b/g;
 
 /** A fresh, zero-state instance of {@link FILE_PATH_LINK_PATTERN}. */
 function absoluteFilePathPattern() {
@@ -1014,9 +1017,14 @@ function absoluteFilePathPattern() {
  * Extensions the file-preview overlay renders itself. Everything else a link
  * points at goes to the tail/log viewer, which is the right home for a growing
  * text file and the wrong one for bytes (tailing a PNG shows binary noise).
+ *
+ * The media entries mirror VIDEO_ATTACHMENT_EXTENSIONS/AUDIO_ATTACHMENT_EXTENSIONS
+ * (src/attachment-registry.ts, the single source) — they diverged once and an
+ * in-workspace `.m4a` opened as binary noise in the log viewer while the same
+ * file in /tmp played fine. test/media-extension-parity.test.ts pins the sync.
  */
 const FILE_PREVIEW_EXTENSIONS = new Set(
-  ('png jpg jpeg gif webp bmp svg pdf docx pptx mp4 webm mov mp3 wav').split(' ')
+  ('png jpg jpeg gif webp bmp svg pdf docx pptx mp4 webm mov m4v ogv mp3 wav ogg oga m4a aac flac opus').split(' ')
 );
 
 /** Whether a path's extension is one {@link FILE_PREVIEW_EXTENSIONS} covers. */

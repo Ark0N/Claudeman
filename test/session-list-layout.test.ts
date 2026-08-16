@@ -394,15 +394,32 @@ describe('session list layout', () => {
     expect((drawer.win.document.activeElement as HTMLElement).className).toContain('session-tab');
   });
 
-  it('shows the live session count in the sidebar header', () => {
+  it('counts the rows actually on the list: web tabs included, filtered rows excluded', () => {
+    // this.sessions.size was the original source and disagreed with the screen
+    // twice over: web tabs render in the same list but are not sessions (3
+    // sessions + 2 dashboards read "3" above 5 rows), and the filter hides
+    // rows without touching the map.
     const { win, app } = boot({ stored: { sessionListLayout: 'sidebar' } });
     app.sessions = new Map([
       ['a', {}],
       ['b', {}],
-      ['c', {}],
     ]);
     app.applySessionListLayout();
-    expect(win.document.getElementById('sessionSidebarCount')?.textContent).toBe('3');
+    tabsEl(win).innerHTML = `
+      <div class="session-tab" data-id="a" aria-label="api server" title="/srv/api"></div>
+      <div class="session-tab" data-id="b" aria-label="docs" title="/home/docs"></div>
+      <div class="session-tab session-tab--web" data-webview-id="w" aria-label="Grafana web tab" title="http://x/g"></div>
+    `;
+    app.updateSidebarCount();
+    const count = () => win.document.getElementById('sessionSidebarCount')?.textContent;
+    expect(count()).toBe('3');
+
+    // The count follows the filter — applySidebarFilter is what the filter box
+    // calls per keystroke, so it must move without waiting for a re-render.
+    app.applySidebarFilter('api');
+    expect(count()).toBe('1');
+    app.applySidebarFilter('');
+    expect(count()).toBe('3');
   });
 
   it('forces tall rows and no wrapping in the sidebar, and leaves the strip rules alone', () => {

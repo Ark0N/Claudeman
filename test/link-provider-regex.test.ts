@@ -150,6 +150,23 @@ describe('terminal link-provider regexes (shipped source)', () => {
     }
   });
 
+  it('the file-path pattern refuses /etc roots (blocked server-side, so the link could only 403)', () => {
+    // `/etc` sits in DEFAULT_BLOCKED_TREES (config/attachment-guard.ts), so an
+    // /etc link is guaranteed dead: it renders clickable, then the preview 403s.
+    // It used to be in the root alternation, which linked exactly those paths.
+    const ext = shippedPattern('FILE_PATH_LINK_PATTERN');
+    const cases = [
+      'see /etc/hosts here',
+      // Extension-bearing, so only the root removal keeps it out.
+      'see /etc/app/config.json here',
+      'cat /etc/nginx/nginx.conf.txt',
+    ];
+    for (const line of cases) {
+      ext.lastIndex = 0;
+      expect(ext.exec(line), line).toBeNull();
+    }
+  });
+
   it('terminal-ui builds its path pattern from the shared factory', () => {
     // Structural guard: a local literal here would drift from the response
     // viewer's linkifier, which is the divergence the move exists to prevent.
