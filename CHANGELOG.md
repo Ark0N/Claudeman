@@ -1,5 +1,17 @@
 # aicodeman
 
+## 1.19.1
+
+### Patch Changes
+
+- Follow-up hardening from the 1.19.0 reviews, across all three of that release's areas (#309, #310, #311).
+
+  Home screens: the activity ordering introduced in 1.19.0 now stays truthful. Hook events push a session state broadcast, so a blocked session ranks by a fresh stamp instead of whatever the page loaded with; a working row with no recorded submit shows the same stamp it sorts by; Alt+1..9 resolves through the live sessions the tabs actually paint, so a stale id in the saved order can no longer shift every number off its target; and the "most recently quiet" ordering survives restarts, since recovery now restores each session's previous activity stamp from state.json instead of restamping everything at boot (previously every deploy flattened the ordering to tab order).
+
+  Files and sidebar: playable media extensions are pinned to the attachment registry by a parity test, so an in-workspace .m4a/.flac/.opus opens the preview player instead of the log viewer; /etc paths no longer render as links that can only 403; the sidebar session count counts the rows actually on screen (web tabs included, filtered rows excluded) and follows the filter box; connectors re-anchor on incremental renders in sidebar layout; and ~/.claude.json plus ~/.claude/settings(.local).json are blocked from file serving, home-anchored only, so case-level .claude files stay viewable.
+
+  Workspace hooks: the install-vs-refresh decision is one shared core that every claude create path routes through, so the workspaceHooksEnabled setting now also applies to cron jobs, legacy scheduled runs, and plan-orchestrator one-shots; a shell session in a docker case no longer authors a hooks block; the boot sweep no longer resurrects a deleted workspace as an empty directory; and the statusLine exporter got the same remote-attach and cwd-fallback guards as the hooks install.
+
 ## 1.19.0
 
 ### Minor Changes
