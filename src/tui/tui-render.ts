@@ -675,7 +675,6 @@ function helpLines(glyphs: TuiGlyphSet, custom?: ReadonlyArray<readonly [string,
     ['x', 'kill (typed confirmation)'],
     ['/', 'search'],
     ['g', 'away digest'],
-    ['r', 'resume a recent session'],
     ['?', 'this help'],
     ['q', 'quit'],
   ];

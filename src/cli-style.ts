@@ -77,11 +77,6 @@ export function tint(tone: Tone, text: string): string {
   return TONE_STYLE[tone](text);
 }
 
-/** Colored glyph for a tone, the `✓ ` / `✗ ` prefix most command output opens with. */
-export function mark(tone: Tone): string {
-  return tint(tone, glyphFor(tone));
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Blocks
 // ─────────────────────────────────────────────────────────────────────────────
