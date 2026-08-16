@@ -196,12 +196,14 @@ idle:
 The contract an orchestrator follows for any fleet of two or more messaging workers.
 Every topology in the next section is this protocol plus a wiring diagram.
 
-1. **Spawn with a name, and with hooks.** Use `quick-start` with `sessionName` (the
-   `--name` gate above), and let it **CREATE** the case. ⚠️ Linking does NOT install
-   hooks (`POST /api/cases/link` writes only the name-to-path entry), and neither does a
-   bare `POST /api/sessions`; a worker in a directory Codeman did not create has no
-   `stop`/`blocked` signals at all and every synchronization below degrades to output
-   markers. The discriminator is who created the directory, not whether it exists now.
+1. **Spawn with a name, and confirm hooks.** Use `quick-start` with `sessionName` (the
+   `--name` gate above). Session create installs the hooks block into the workspace
+   whatever kind it is, so a linked case and a raw `POST /api/sessions` path both get
+   `stop`/`blocked` by default. ⚠️ Not unconditionally: the operator can turn
+   `workspaceHooksEnabled` off, remote SSH sessions never get hooks, and a session from
+   an older server may have none, and without them every synchronization below degrades
+   to output markers. Grep `<casePath>/.claude/settings.local.json` for
+   `/api/hook-event` at spawn rather than inferring it from how the directory got there.
 2. **Readiness before addressing.** Flow 1's ladder per worker, then the availability
    probe. A worker that fails the probe is an HTTP worker for the rest of the run; that
    is a routing decision, not an error.
