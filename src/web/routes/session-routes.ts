@@ -793,8 +793,12 @@ export function registerSessionRoutes(
     }
 
     // Hooks for the workspace this session runs in (install vs refresh-only is the
-    // `workspaceHooksEnabled` setting; see applyWorkspaceHooks).
-    if ((body.mode ?? 'claude') === 'claude') {
+    // `workspaceHooksEnabled` setting; see applyWorkspaceHooks). Never for a remote
+    // attach (workingDir is a user@host:session pseudo-path — mkdir would create it
+    // as a junk local dir), and only when the caller named a workingDir: the
+    // process-cwd fallback is $HOME under installer-created services, and hooks
+    // materializing in ~/.claude/settings.local.json was never asked for.
+    if (!remote && body.workingDir && (body.mode ?? 'claude') === 'claude') {
       await applyWorkspaceHooks(ctx, workingDir);
       // Agent skill (docs/agent-control-plan.md §2): ADD-ONLY on create, same shared-
       // .claude rationale as the statusLine above: a create must never remove the

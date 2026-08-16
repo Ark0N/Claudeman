@@ -23,6 +23,7 @@ import { createMockRouteContext } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
 import { generateHooksConfig } from '../../src/hooks-config.js';
+import { getDataDir } from '../../src/config/instance.js';
 
 interface HooksFile {
   hooks?: Record<string, Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>>;
@@ -136,6 +137,37 @@ describe('POST /api/sessions workspace hooks', () => {
   it('leaves a non-claude session alone (only claude reads .claude hooks)', async () => {
     expect((await createSession({ name: 'hooks-shell', mode: 'shell', workingDir })).statusCode).toBe(200);
     expect(existsSync(settingsPath())).toBe(false);
+  });
+
+  it('leaves the server cwd alone when workingDir is omitted', async () => {
+    // workingDir falls back to process.cwd(), which is $HOME under installer-created
+    // services — hooks must not materialize in ~/.claude/settings.local.json.
+    const cwdSettings = join(process.cwd(), '.claude', 'settings.local.json');
+    const before = existsSync(cwdSettings) ? await readFile(cwdSettings, 'utf-8') : null;
+
+    expect((await createSession({ name: 'hooks-no-dir', mode: 'claude' })).statusCode).toBe(200);
+
+    const after = existsSync(cwdSettings) ? await readFile(cwdSettings, 'utf-8') : null;
+    expect(after).toBe(before);
+  });
+
+  it('never writes hooks for a remote attach (workingDir is a user@host pseudo-path)', async () => {
+    // A claude-mode attachRemoteSession create overwrites workingDir with
+    // `user@host:session` — locally a RELATIVE path, so a mkdir would create it
+    // as a junk directory under the server cwd.
+    await mkdir(getDataDir(), { recursive: true });
+    await writeFile(
+      join(getDataDir(), 'remote-hosts.json'),
+      JSON.stringify([{ id: 'h1', label: 'box', host: '10.0.0.5', username: 'dev' }])
+    );
+
+    const res = await createSession({
+      name: 'hooks-remote',
+      mode: 'claude',
+      attachRemoteSession: { hostId: 'h1', remoteSessionName: 'codeman-ssh-abc123' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(existsSync(join(process.cwd(), 'dev@10.0.0.5:codeman-ssh-abc123'))).toBe(false);
   });
 
   it('leaves a malformed settings file untouched rather than replacing it', async () => {
