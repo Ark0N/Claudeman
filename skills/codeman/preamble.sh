@@ -1,4 +1,4 @@
-# ---- Codeman agent preamble 1.18.3 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
+# ---- Codeman agent preamble 1.19.0 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
 API="${CODEMAN_API_URL:?CODEMAN_API_URL not set; refusing to guess}"
 SELF="${CODEMAN_SESSION_ID:?CODEMAN_SESSION_ID not set}"
 # Credentials, cheapest first. Your session has usually INHERITED the server's
@@ -155,4 +155,4 @@ last_text() {
 # The stamp is the LAST line on purpose (a truncated write leaves it unset) and is kept
 # bare on purpose: the write condition above anchors on it with $, so an inline comment
 # here would fail that match and rewrite this file on every single bootstrap.
-CODEMAN_PREAMBLE=1.18.3
+CODEMAN_PREAMBLE=1.19.0

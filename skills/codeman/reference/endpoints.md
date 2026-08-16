@@ -624,7 +624,7 @@ is now installed by default rather than depending on who created the directory:
 | any claude workspace, with `workspaceHooksEnabled` ON (the default) | installed at session create, add-only merge | fire | send-and-wait on `stop` |
 | the same, with the setting OFF and no block already on disk | none added | never fire | `wait-output` markers only |
 | a remote SSH session, a docker case that opted out, a workspace Codeman cannot write | none | never fire | `wait-output` markers only |
-| a session created by a pre-1.18.x server and never restarted since | whatever it had | only if present | check, then choose |
+| a session created by a pre-1.19.0 server and never restarted since | whatever it had | only if present | check, then choose |
 
 The install is an add-only merge, so a user's own hook entries survive and a malformed
 settings file is left untouched. Sessions recovered at server boot get the same sweep,
@@ -632,7 +632,7 @@ which is what heals sessions created before this behavior existed. When in doubt
 it rather than reason about it: grep for `/api/hook-event` in
 `<casePath>/.claude/settings.local.json`.
 
-Before 1.18.x, `writeHooksConfig()` ran only on the create paths and `quick-start`
+Before 1.19.0, `writeHooksConfig()` ran only on the create paths and `quick-start`
 against an existing directory called `refreshStaleCodemanHooks()`, which never *adds* a
 block, so a linked case or a raw `workingDir` had no hooks at all. `POST
 /api/cases/link` still only records a name-to-path entry; what changed is that the
