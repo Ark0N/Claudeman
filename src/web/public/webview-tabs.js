@@ -156,6 +156,9 @@ Object.assign(CodemanApp.prototype, {
     document.querySelector('.main')?.classList.add('webview-active');
     this.renderSessionTabs();
     this._updateActiveWebviewTab();
+    // Web tabs live in the same list as sessions, so picking one from the
+    // handheld session drawer has to dismiss it too (no-op elsewhere).
+    this.closeSessionSidebarOnHandheld?.();
   },
 
   /** Create the frame if absent, then reveal it and hide its siblings. */

@@ -401,15 +401,12 @@ Object.assign(CodemanApp.prototype, {
           continue;
         }
 
-        // Draw curved line from TAB bottom-center to window top-center
-        const x1 = tabRect.left + tabRect.width / 2;
-        const y1 = tabRect.bottom;
-        const x2 = winRect.left + winRect.width / 2;
-        const y2 = winRect.top;
-
-        // Bezier curve control points for smooth curve
-        const midY = (y1 + y2) / 2;
-        const path = `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+        // Draw a curved line from the tab to the window. Header strip: tab
+        // bottom-center → window top-center (vertical). Sidebar: tab right-edge →
+        // window left-edge (horizontal), otherwise the curve loops backwards
+        // underneath the sidebar. _tabAnchor/_tabConnectorPath live in app.js.
+        const anchor = this._tabAnchor(tabRect);
+        const path = this._tabConnectorPath(anchor, winRect);
 
         const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         line.setAttribute('d', path);
@@ -749,9 +746,11 @@ Object.assign(CodemanApp.prototype, {
       win.style.top = `${finalY}px`;
       win.style.bottom = 'auto';
     } else if (flyFromTab) {
-      const tabRect = parentTab.getBoundingClientRect();
-      win.style.left = `${tabRect.left}px`;
-      win.style.top = `${tabRect.bottom}px`;
+      // Spawn at the tab: below it in header layout, to its RIGHT in sidebar
+      // layout — spawning at tabRect.left there would land on top of the sidebar.
+      const anchor = this._tabAnchor(parentTab.getBoundingClientRect());
+      win.style.left = `${anchor.spawnLeft}px`;
+      win.style.top = `${anchor.spawnTop}px`;
       win.style.transform = 'scale(0.3)';
       win.style.opacity = '0';
       win.classList.add('spawning');
@@ -1226,6 +1225,19 @@ Object.assign(CodemanApp.prototype, {
     dropdown.style.left = `${rect.left + rect.width / 2}px`;
     dropdown.style.transform = 'translateX(-50%)';
     dropdown.classList.add('open');
+
+    // Keep it on screen. A badge in the left sidebar — and above all one in the
+    // 44px collapsed rail — sits so far left that a centre-anchored dropdown
+    // hangs off the viewport. Measured after .open so it has a box; a no-op
+    // whenever the centred position already fits, so header layout is unchanged.
+    const dropRect = dropdown.getBoundingClientRect();
+    const overflowLeft = 8 - dropRect.left;
+    const overflowRight = dropRect.right - (window.innerWidth - 8);
+    if (overflowLeft > 0) {
+      dropdown.style.transform = `translateX(calc(-50% + ${Math.round(overflowLeft)}px))`;
+    } else if (overflowRight > 0) {
+      dropdown.style.transform = `translateX(calc(-50% - ${Math.round(overflowRight)}px))`;
+    }
   },
 
   // Schedule hide after delay (allows moving mouse to dropdown)

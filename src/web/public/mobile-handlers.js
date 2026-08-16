@@ -168,6 +168,11 @@ const MobileDetection = {
       resizeTimeout = setTimeout(() => {
         this.updateBodyClass();
         this.updateAppHeight();
+        // Whether the session sidebar is a docked column or a modal overlay is
+        // decided at 1024px, so crossing that width has to re-sync the drawer
+        // state — otherwise the `inert`/aria-hidden set on a closed overlay
+        // drawer survives into the docked rail and makes it unclickable.
+        if (typeof app !== 'undefined') app.applySessionListLayout?.();
         // Tab auto-wrap is width-driven, so it must re-evaluate on resize — the only
         // other trigger is a tab content render. No-op on mobile/tablet (method bails).
         if (typeof app !== 'undefined') app.updateTabOverflowMode?.();
@@ -652,6 +657,7 @@ const SwipeHandler = {
   _touchStartHandler: null,
   _touchEndHandler: null,
   _element: null,
+  _ignoreGesture: false,
 
   /** Initialize swipe handling */
   init() {
@@ -680,6 +686,12 @@ const SwipeHandler = {
   },
 
   onTouchStart(e) {
+    // The session sidebar is an overlay child of .main, so its touches bubble in
+    // here. Swiping across the open session drawer — the natural "dismiss it"
+    // gesture — would otherwise fire nextSession() and drop the user into a
+    // session they never tapped.
+    this._ignoreGesture = !!e.target?.closest?.('.session-sidebar');
+    if (this._ignoreGesture) return;
     if (!e.touches || e.touches.length !== 1) return;
     this.startX = e.touches[0].clientX;
     this.startY = e.touches[0].clientY;
@@ -687,6 +699,10 @@ const SwipeHandler = {
   },
 
   onTouchEnd(e) {
+    if (this._ignoreGesture) {
+      this._ignoreGesture = false;
+      return;
+    }
     if (!e.changedTouches || e.changedTouches.length !== 1) return;
 
     const endX = e.changedTouches[0].clientX;

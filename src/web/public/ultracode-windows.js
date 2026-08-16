@@ -197,10 +197,13 @@ Object.assign(CodemanApp.prototype, {
     // Position: spawn from the parent tab if we can find it, else cascade.
     const parentTab = parentSessionId ? document.querySelector(`.session-tab[data-id="${parentSessionId}"]`) : null;
     if (parentTab) {
-      const r = parentTab.getBoundingClientRect();
-      const left = Math.max(8, Math.min(r.left, window.innerWidth - 392));
+      // _tabAnchor() puts the spawn point below the tab in header layout and to
+      // the RIGHT of it in sidebar layout, so the window never lands on the
+      // sidebar. The viewport clamp is unchanged.
+      const anchor = this._tabAnchor(parentTab.getBoundingClientRect());
+      const left = Math.max(8, Math.min(anchor.spawnLeft, window.innerWidth - 392));
       win.style.left = `${left}px`;
-      win.style.top = `${r.bottom + 14}px`;
+      win.style.top = `${anchor.spawnTop + (anchor.vertical ? 14 : 0)}px`;
     } else {
       const n = this.ultracodeWindows.size;
       win.style.left = `${24 + n * 26}px`;
@@ -784,16 +787,12 @@ Object.assign(CodemanApp.prototype, {
       winList.push({ runId, parentSessionId, winRect: data.element.getBoundingClientRect() });
     }
 
-    // PHASE 2: writes (curve from tab bottom-center to window top-center).
+    // PHASE 2: writes (curve from the tab anchor to the window — bottom-center to
+    // top-center in header layout, right-edge to left-edge in sidebar layout).
     for (const { runId, parentSessionId, winRect } of winList) {
       const tabRect = rects.get('tab:' + parentSessionId);
       if (!tabRect) continue;
-      const x1 = tabRect.left + tabRect.width / 2;
-      const y1 = tabRect.bottom;
-      const x2 = winRect.left + winRect.width / 2;
-      const y2 = winRect.top;
-      const midY = (y1 + y2) / 2;
-      const path = `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+      const path = this._tabConnectorPath(this._tabAnchor(tabRect), winRect);
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       line.setAttribute('d', path);
       line.setAttribute('class', 'connection-line ultracode-connection');
@@ -818,12 +817,13 @@ Object.assign(CodemanApp.prototype, {
       if (!info.element) continue;
       const winRect = info.element.getBoundingClientRect();
       // Anchor: parent run window bottom-center if open, else the run's tab.
-      let px, py;
+      // A window anchor is always vertical; a tab anchor follows the session-list
+      // layout (_tabAnchor), so the curve leaves a sidebar row sideways.
+      let anchor;
       const runWin = info.runId ? this.ultracodeWindows.get(info.runId) : null;
       if (runWin && runWin.element) {
         const pr = runWin.element.getBoundingClientRect();
-        px = pr.left + pr.width / 2;
-        py = pr.bottom;
+        anchor = { x: pr.left + pr.width / 2, y: pr.bottom, vertical: true };
       } else {
         const summary = info.runId && this.workflowRuns ? this.workflowRuns.get(info.runId) : null;
         const parentSessionId = summary ? this._resolveUltracodeParentSession(summary) : null;
@@ -835,13 +835,9 @@ Object.assign(CodemanApp.prototype, {
         }
         const tabRect = rects.get(tabKey);
         if (!tabRect) continue;
-        px = tabRect.left + tabRect.width / 2;
-        py = tabRect.bottom;
+        anchor = this._tabAnchor(tabRect);
       }
-      const x2 = winRect.left + winRect.width / 2;
-      const y2 = winRect.top;
-      const midY = (py + y2) / 2;
-      const path = `M ${px} ${py} C ${px} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+      const path = this._tabConnectorPath(anchor, winRect);
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       line.setAttribute('d', path);
       line.setAttribute('class', 'connection-line ultracode-connection ultracode-agent-connection');

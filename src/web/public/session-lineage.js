@@ -130,6 +130,14 @@ Object.assign(CodemanApp.prototype, {
   _appendLineageConnectionLines(svg, rects) {
     this._lineageEdgeCount = 0;
     if (!svg || !this._lineageLinesEnabled()) return;
+    // Sidebar layout: computeLineagePath()'s whole geometry — the U-bridge hung
+    // from the STRIP's bottom edge, the 64px dip corridor — assumes a horizontal
+    // tab row. Against a vertical list the "strip bottom" is the bottom of the
+    // sidebar, so every arc would draw a giant loop to the foot of the list.
+    // Parent/child adjacency reads fine in a vertical list without arcs; a
+    // sideways lineage shape is a follow-up with its own visual tuning, not a
+    // by-product of a layout port.
+    if (this.isSessionSidebarActive?.()) return;
     const compute = window.CodemanLineage && window.CodemanLineage.computePath;
     if (!compute) return;
 
@@ -203,7 +211,10 @@ Object.assign(CodemanApp.prototype, {
     const strip = document.getElementById('sessionTabs');
     if (!strip) return;
     this._lineageScrollHandler = () => {
-      if (this._lineageEdgeCount > 0) this.updateConnectionLines();
+      // Sidebar layout scrolls the SAME element vertically, and there the
+      // subagent/ultracode connectors anchor to tab rects too (lineage arcs are
+      // skipped, so _lineageEdgeCount alone would never redraw them).
+      if (this._lineageEdgeCount > 0 || this.isSessionSidebarActive?.()) this.updateConnectionLines();
     };
     strip.addEventListener('scroll', this._lineageScrollHandler, { passive: true });
   },
