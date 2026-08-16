@@ -5,8 +5,13 @@
  * The welcome screen centers ~560px of content in a window that is usually
  * 1400px+, so the two gutters are dead space. The left one now carries the same
  * list a phone gets on its home screen (mobile-overview.js), turned vertical:
- * one row per live tab, in TAB ORDER (not sorted by state) so it reads as the
- * tab strip rotated, and so Alt+1..9 still matches what you see.
+ * one row per live tab.
+ *
+ * Rows are ordered by `CodemanSessionOrder` (constants.js), the same comparator
+ * the phone overview uses: blocked on you first, then running longest-first,
+ * then quiet most-recently-quiet first. The number badge stays the tab-strip
+ * index (Alt+1..9), so it is deliberately NOT sequential down a sorted rail:
+ * it names a shortcut, not a row position.
  *
  * DESKTOP ONLY, and only in a wide enough window: the rail is absolutely
  * positioned so the centered welcome content never moves, which means it can
@@ -16,11 +21,13 @@
  * both scale with the viewport (see the `.home-sessions` block in styles.css) —
  * a fixed 256px card looks abandoned on a 2560px display.
  *
- * Each row carries when the session was FIRST CREATED and when it was LAST
- * ACTIVE, both relative. Those two stamps go stale on their own (a sitting
- * session emits no event), so a slow clock refreshes them IN PLACE from the
- * epoch-ms values parked on the elements, rather than re-rendering: a re-render
- * would restart every row's blink animation and its working ring.
+ * Each row carries when the session was FIRST CREATED and how long it has been
+ * in the state it is in ("created 3d ago · working 12m"), and that second stamp is
+ * the value the order above is computed from, so the rail explains itself
+ * rather than looking arbitrarily shuffled. Both stamps go stale on their own
+ * (a sitting session emits no event), so a slow clock refreshes them IN PLACE
+ * from the epoch-ms values parked on the elements, rather than re-rendering: a
+ * re-render would restart every row's blink animation and its working ring.
  *
  * The working state is deliberately identical to the phone's: a pulsing green
  * dot ringed by the spinner a tab shows while it loads (`tab-load-spin`, reused
@@ -34,6 +41,7 @@
  *
  * @mixin Extends CodemanApp.prototype via Object.assign
  * @dependency app.js (this.sessions, this.cases, this.pendingHooks, selectSession)
+ * @dependency constants.js (CodemanSessionOrder, the shared row comparator)
  * @dependency mobile-overview.js (_mobileOverviewState, _mobileOverviewCaseFor, shouldUseMobileOverview)
  * @dependency ralph-panel.js (formatRelativeTime — the app's one relative-time formatter)
  * @dependency webview-tabs.js (this.webviews, this.webviewOrder, openWebview)
@@ -158,11 +166,18 @@ Object.assign(CodemanApp.prototype, {
   // ═══════════════════════════════════════════════════════════════
 
   /**
-   * One row per live session, in the user's tab order. State classification is
-   * `_mobileOverviewState()` (mobile-overview.js) so both home screens agree on
-   * what counts as needing you; the ORDER differs on purpose — the phone sorts
-   * by urgency because it shows one screenful at a time, this column mirrors the
-   * tab strip so the number badges line up with Alt+1..9.
+   * One row per live session, in overview order: whatever is blocked on you
+   * first, then whatever is running (longest turn first), then the quiet ones
+   * most-recently-quiet first. The comparator is `CodemanSessionOrder`
+   * (constants.js), shared with the phone overview, and state classification is
+   * `_mobileOverviewState()` (mobile-overview.js), so the two home screens can
+   * neither disagree about what "working" means nor about what sorts first.
+   *
+   * `orderIndex` stays the position in the TAB STRIP, because that is what the
+   * number badge means (Alt+1..9). Once the rows are sorted those badges no
+   * longer run 1,2,3 down the rail: the badge answers "which key selects this",
+   * not "how far down the list is it".
+   *
    * @returns {Array<object>} row descriptors, ready to render
    */
   buildHomeSessionRows() {
@@ -173,14 +188,14 @@ Object.assign(CodemanApp.prototype, {
     // invisible here while its tab already exists.
     for (const id of this.sessions?.keys() || []) if (!ids.includes(id)) ids.push(id);
 
-    return ids.map((id, index) => {
+    const rows = ids.map((id, orderIndex) => {
       const session = this.sessions.get(id);
       const matched = this._mobileOverviewCaseFor(session.workingDir, cases);
       const state = this._mobileOverviewState(session, this.pendingHooks?.get(id));
       const mode = session.mode || 'claude';
       return {
         id,
-        index,
+        orderIndex,
         name: this.getSessionName ? this.getSessionName(session) : session.name || id.slice(0, 8),
         mode,
         modeBadge: HOME_SESSIONS_MODE_BADGE[mode] || '',
@@ -192,8 +207,16 @@ Object.assign(CodemanApp.prototype, {
         // render time so the clock below can redo it without a re-render.
         createdAt: Number(session.createdAt) || 0,
         lastActivityAt: Number(session.lastActivityAt) || 0,
+        // The running group is ordered by the pane's last Enter, since a
+        // working pane's last-activity stamp is always "now".
+        lastSubmitAt: Number(session.lastSubmitAt) || 0,
+        // "how long has it been like this", resolved by the phone overview's
+        // helper so both home screens label the same stamp with the same word.
+        since: this._mobileOverviewSince(state, session),
       };
     });
+
+    return window.CodemanSessionOrder.sort(rows);
   },
 
   // ═══════════════════════════════════════════════════════════════
@@ -234,32 +257,40 @@ Object.assign(CodemanApp.prototype, {
   // ═══════════════════════════════════════════════════════════════
 
   /**
-   * The "created 2h ago · active 3m ago" footer line. Both stamps keep their raw
+   * The "created 2h ago · working 12m" footer line. Both stamps keep their raw
    * epoch-ms on the element (`data-hs-ts`) so `_tickHomeSessionsTimes()` can
    * rewrite the text without rebuilding the row.
+   *
+   * The second stamp is the row's state duration, NOT a plain last-active
+   * stamp: it is the number the rail is sorted by, and a working row that reads
+   * "active just now" (every working pane repaints about once a second) hides
+   * exactly the value that decided its position. `_mobileOverviewSince()` owns
+   * both the word and the anchor, so the phone says the same thing.
    */
   _buildHomeSessionsMeta(row) {
     const meta = document.createElement('span');
     meta.className = 'home-sessions-row-meta';
-    // Relative times are generated text, and "created"/"active" here are the
+    // Relative times are generated text, and "created"/"idle" here are the
     // same generic words that mean something else on other surfaces.
     meta.setAttribute('data-i18n-skip', '');
 
-    meta.appendChild(this._buildHomeSessionsStamp('created', row.createdAt, 'home-sessions-meta-created'));
+    meta.appendChild(this._buildHomeSessionsStamp('created', row.createdAt, 'ago', 'home-sessions-meta-created'));
 
-    const sep = document.createElement('span');
-    sep.className = 'home-sessions-meta-sep';
-    sep.setAttribute('aria-hidden', 'true');
-    sep.textContent = '·';
-    meta.appendChild(sep);
+    if (row.since) {
+      const sep = document.createElement('span');
+      sep.className = 'home-sessions-meta-sep';
+      sep.setAttribute('aria-hidden', 'true');
+      sep.textContent = '·';
+      meta.appendChild(sep);
 
-    meta.appendChild(this._buildHomeSessionsStamp('active', row.lastActivityAt, 'home-sessions-meta-active'));
+      meta.appendChild(this._buildHomeSessionsStamp(row.since.key, row.since.at, 'for', 'home-sessions-meta-since'));
+    }
 
     return meta;
   },
 
-  /** One labelled stamp: a dim key, the relative value, full date in the title. */
-  _buildHomeSessionsStamp(key, timestamp, className) {
+  /** One labelled stamp: a dim key, the value, full date in the title. */
+  _buildHomeSessionsStamp(key, timestamp, format, className) {
     const wrap = document.createElement('span');
     wrap.className = `home-sessions-meta-item ${className}`;
 
@@ -270,18 +301,21 @@ Object.assign(CodemanApp.prototype, {
 
     const value = document.createElement('span');
     value.dataset.hsTs = String(timestamp || 0);
-    value.textContent = this._homeSessionsAgo(timestamp);
+    value.dataset.hsFmt = format;
+    value.textContent = this._homeSessionsStampText(timestamp, format);
     wrap.appendChild(value);
 
-    if (timestamp)
-      wrap.title = `${key === 'created' ? 'First created' : 'Last active'}: ${new Date(timestamp).toLocaleString()}`;
+    if (timestamp) wrap.title = `${key === 'created' ? 'First created' : key}: ${new Date(timestamp).toLocaleString()}`;
     return wrap;
   },
 
-  /** Relative label for a stamp. `formatRelativeTime` is the app's one formatter. */
-  _homeSessionsAgo(timestamp) {
-    if (!timestamp) return '—';
-    return this.formatRelativeTime(timestamp) || '—';
+  /**
+   * 'ago' points at a moment ("3d ago"), 'for' measures a span to now ("12m").
+   * Both come from the phone overview's formatter, so a duration is written the
+   * same way on both home screens.
+   */
+  _homeSessionsStampText(timestamp, format) {
+    return this._mobileOverviewStampText(timestamp, format);
   },
 
   /**
@@ -311,7 +345,7 @@ Object.assign(CodemanApp.prototype, {
     if (!el) return;
     for (const node of el.querySelectorAll('[data-hs-ts]')) {
       const ts = Number(node.dataset.hsTs) || 0;
-      const text = this._homeSessionsAgo(ts);
+      const text = this._homeSessionsStampText(ts, node.dataset.hsFmt);
       if (node.textContent !== text) node.textContent = text;
     }
   },
@@ -348,11 +382,14 @@ Object.assign(CodemanApp.prototype, {
     item.dataset.hsSession = row.id;
     item.title = row.dir ? `${row.name} (${row.dir})` : row.name;
 
-    if (row.index < 9) {
+    // The badge is the Alt+N key for this tab, so it keeps the tab-strip index
+    // even though the rows are sorted by activity: it will not read 1,2,3 down
+    // the rail, and must not, or the shortcut it names would be wrong.
+    if (row.orderIndex < 9) {
       const number = document.createElement('span');
       number.className = 'home-sessions-number';
       number.setAttribute('data-i18n-skip', '');
-      number.textContent = String(row.index + 1);
+      number.textContent = String(row.orderIndex + 1);
       item.appendChild(number);
     }
 

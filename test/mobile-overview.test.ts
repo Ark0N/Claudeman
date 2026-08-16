@@ -42,9 +42,12 @@ function loadOverviewApp(overrides: Record<string, any> = {}) {
     },
     MobileDetection: { getDeviceType: () => 'mobile' },
   });
-  vm.runInContext(readFileSync(resolve(PUBLIC, 'mobile-overview.js'), 'utf8'), context, {
-    filename: 'mobile-overview.js',
-  });
+  // constants.js first: it installs the row comparator (window.CodemanSessionOrder)
+  // that buildMobileOverviewModel() sorts every section with, shared with the
+  // desktop rail so the two home screens cannot order the same list differently.
+  for (const file of ['constants.js', 'mobile-overview.js']) {
+    vm.runInContext(readFileSync(resolve(PUBLIC, file), 'utf8'), context, { filename: file });
+  }
 
   const app = new (CodemanApp as any)();
   app.getSessionName = (session: any) => session.name || session.workingDir?.split('/').pop() || session.id.slice(0, 8);
@@ -123,7 +126,7 @@ describe('mobile overview model', () => {
     expect(model.sessionCount).toBe(4);
   });
 
-  it('keeps the user tab order as the tiebreak inside a section', () => {
+  it('keeps the user tab order as the tiebreak when nothing is stamped', () => {
     const app = loadOverviewApp();
     const model = app.buildMobileOverviewModel({
       sessions: [session({ id: 'first' }), session({ id: 'second' }), session({ id: 'third' })],
@@ -132,6 +135,42 @@ describe('mobile overview model', () => {
     });
 
     expect(model.current.map((r: any) => r.id)).toEqual(['third', 'first', 'second']);
+  });
+
+  it('sorts running sessions longest-turn-first and quiet ones most-recent-first', () => {
+    // A working pane repaints about once a second, so its last-activity stamp
+    // is always "now": the running group has to key off the pane's last Enter
+    // instead, or every turn ranks as freshly started.
+    const app = loadOverviewApp();
+    const model = app.buildMobileOverviewModel({
+      sessions: [
+        session({ id: 'quiet-old', status: 'idle', lastActivityAt: 2_000 }),
+        session({ id: 'turn-young', status: 'busy', lastSubmitAt: 9_000, lastActivityAt: 10_000 }),
+        session({ id: 'quiet-new', status: 'idle', lastActivityAt: 8_000 }),
+        session({ id: 'turn-old', status: 'busy', lastSubmitAt: 1_000, lastActivityAt: 10_000 }),
+      ],
+      cases: CASES,
+      sessionOrder: ['quiet-old', 'turn-young', 'quiet-new', 'turn-old'],
+    });
+
+    expect(model.current.map((r: any) => r.id)).toEqual(['turn-old', 'turn-young', 'quiet-new', 'quiet-old']);
+  });
+
+  it('puts the longest-blocked session at the top of NEEDS YOU', () => {
+    const app = loadOverviewApp();
+    const model = app.buildMobileOverviewModel({
+      sessions: [
+        session({ id: 'just-asked', lastActivityAt: 9_000 }),
+        session({ id: 'starving', lastActivityAt: 1_000 }),
+      ],
+      cases: CASES,
+      pendingHooks: new Map([
+        ['just-asked', new Set(['permission_prompt'])],
+        ['starving', new Set(['permission_prompt'])],
+      ]),
+    });
+
+    expect(model.needsYou.map((r: any) => r.id)).toEqual(['starving', 'just-asked']);
   });
 
   it('matches a session started in a subdirectory to its case (longest prefix)', () => {

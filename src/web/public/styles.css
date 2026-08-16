@@ -14902,8 +14902,9 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 }
 
 /* The freshest signal on the row: while a session is actually doing something,
-   its "active" stamp is the one the eye should land on. */
-.home-sessions-row--working .home-sessions-meta-active {
+   how long it has been doing it is what the eye should land on (and it is what
+   the rail is sorted by). */
+.home-sessions-row--working .home-sessions-meta-since {
   color: var(--green);
   opacity: 0.95;
 }
