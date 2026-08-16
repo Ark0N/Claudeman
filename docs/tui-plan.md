@@ -1,6 +1,11 @@
 # Codeman TUI Rework Plan
 
-Status: PROPOSED (research done, nothing implemented). Owner review needed on the open questions at the bottom.
+Status: **phases 0-2 implemented** on `feat/tui`; phases 3-4 remain follow-ups. The user guide is [`docs/tui.md`](tui.md); this document stays the design record.
+
+- Phase 0: `src/cli-style.ts` (palette, glyphs, `heading`/`kv`/`table`/`spinner`/`confirm`) plus the mechanical fixes of §5, and `test/cli-commands.test.ts` now derives its inventory from the real commander `program` instead of parsing a fixture.
+- Phases 1-2: `src/tui/`. `tui-app.ts` (main loop, attach handoff, verbs) and `tui-client.ts` (API, SSE, degraded enumeration) are the only IO; `tui-model`, `tui-layout`, `tui-render`, `tui-keys`, `tui-ansi`, `tui-composer`, `tui-approvals`, `tui-digest`, `tui-sse` and `tui-types` are pure and unit-tested, with an E2E suite driving the real binary under node-pty.
+- Deferred with the rest of phase 3: `r` (resume a RECENT row) is not wired up, so the help overlay does not advertise it.
+- Not started: phase 3 (mouse, `--pick` popup switcher, opt-in attach status line, OSC 9) and phase 4 (retiring the bash choosers).
 
 The goal: replace Codeman's scattered terminal surfaces with one first-class TUI, `codeman tui`, that gives SSH/terminal users the same at-a-glance awareness the web UI gives browsers. The reference point is herdr (herdr.dev), the trending Rust "agent multiplexer" whose defining feature is a live agent-state sidebar. Codeman can match and beat that sidebar in the terminal because the states herdr infers from screen-scraping heuristics are states our server already computes from hooks, pane probing, and the approvals inbox.
 

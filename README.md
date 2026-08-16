@@ -658,6 +658,22 @@ These run for **every** request — before auth, even on the default no-password
 
 ---
 
+## Terminal UI (`codeman tui`)
+
+A full-screen dashboard for your sessions, in the terminal. Same states as the web UI, because it is a client of the same server:
+
+```bash
+codeman tui              # the dashboard
+codeman tui --list       # numbered session list, then exit (scriptable)
+codeman tui 2            # attach straight to session 2 of that list
+```
+
+Sessions are grouped **NEEDS YOU → WORKING → IDLE → RECENT**, longest-waiting first. `↑↓`/`j`/`k` select, `Enter` attaches into the tmux pane (`Ctrl+B D` to come back), `1`-`9` jump-attach. `y`/`n`/digit answer a pending permission dialog right from the list, `p` sends a one-line prompt, `n` starts a session, `x` kills one after a typed confirmation, `/` searches, `g` shows the away digest, `?` is help, `q` quits. Below 72 columns it drops the preview pane and becomes a single-column list, so it stays usable in Termius on a phone. With no server running it still starts in attach-only degraded mode.
+
+The web UI remains the primary surface; see **[docs/tui.md](docs/tui.md)** for the full guide.
+
+---
+
 ## SSH Alternative (`sc`)
 
 If you prefer SSH (Termius, Blink, etc.), the `sc` command is a thumb-friendly session chooser:
@@ -894,6 +910,8 @@ codeman session list                     #      list sessions
 codeman session logs <id>                #      tail output
 codeman task add "fix the failing test"  # (t)  queue a task
 codeman attach <path>                    #      show an attachment card for a local file
+codeman tui --list                       #      numbered session list (plain text when piped)
+codeman tui 3                            #      attach to session 3 of that list
 ```
 
 ### Hooks (events flowing _back_ to Codeman)
