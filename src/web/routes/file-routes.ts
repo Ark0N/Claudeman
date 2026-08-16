@@ -23,12 +23,15 @@ import type {
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import { fileStreamManager } from '../../file-stream-manager.js';
 import {
+  AUDIO_ATTACHMENT_EXTENSIONS,
   AttachmentRegistrationError,
   attachmentRecordToEvent,
   attachmentRegistry,
   buildFileThumbnailRoute,
   isSupportedAttachmentExtension,
   registerExternalAttachment,
+  TEXT_ATTACHMENT_EXTENSIONS,
+  VIDEO_ATTACHMENT_EXTENSIONS,
   type AttachmentRecord,
 } from '../../attachment-registry.js';
 import { generateFirstPageThumbnail } from '../../document-thumbnailer.js';
@@ -67,6 +70,22 @@ const MIME_TYPES: Record<string, string> = {
   webp: 'image/webp',
   ico: 'image/x-icon',
   bmp: 'image/bmp',
+  // Media needs a real type, not the octet-stream fallback: a <video>/<audio>
+  // element refuses to decode an unknown type, so a missing entry here presents
+  // as a player that renders and then does nothing.
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  mov: 'video/quicktime',
+  m4v: 'video/x-m4v',
+  ogv: 'video/ogg',
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  oga: 'audio/ogg',
+  m4a: 'audio/mp4',
+  aac: 'audio/aac',
+  flac: 'audio/flac',
+  opus: 'audio/opus',
   pdf: 'application/pdf',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
@@ -175,12 +194,29 @@ async function serveRawFile(
       );
     return;
   }
-  if (download || extension === 'svg') {
+  // Markup is download-only: served with a renderable type on our own origin it
+  // would be stored XSS. SVG was always here; HTML/HTM join it now that the text
+  // family is servable, so widening what can be READ never widened what can RUN.
+  // The preview overlay reads these through `fetch()`, which ignores the
+  // disposition, so a clicked .html still shows its source.
+  const markupOnly = extension === 'svg' || extension === 'html' || extension === 'htm';
+  if (download || markupOnly) {
     reply.header(
       'Content-Type',
-      extension === 'svg' ? 'application/octet-stream' : MIME_TYPES[extension] || 'application/octet-stream'
+      markupOnly ? 'application/octet-stream' : MIME_TYPES[extension] || 'application/octet-stream'
     );
     reply.header('Content-Disposition', buildContentDisposition('attachment', fileName));
+    reply.header('X-Content-Type-Options', 'nosniff');
+    sendFileBody(reply, resolvedPath, stat.size, rangeHeader);
+    return;
+  }
+
+  // Plain text with no dedicated MIME entry (code, config, logs, csv, xml) goes
+  // out as inert text/plain rather than the octet-stream fallback, matching what
+  // the path picker already does. Never a type the browser would execute.
+  if (!MIME_TYPES[extension] && TEXT_ATTACHMENT_EXTENSIONS.has(extension)) {
+    reply.header('Content-Type', 'text/plain; charset=utf-8');
+    reply.header('Content-Disposition', buildContentDisposition('inline', fileName));
     reply.header('X-Content-Type-Options', 'nosniff');
     sendFileBody(reply, resolvedPath, stat.size, rangeHeader);
     return;
@@ -1099,8 +1135,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       // so the file viewer can open the same files.
       const ext = filePath.split('.').pop()?.toLowerCase() || '';
       const imageExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico']);
-      const videoExts = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv']);
-      const audioExts = new Set(['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'opus']);
+      // Shared with the attachment registry so a video plays the same whether it
+      // sits in the workspace or is reached by id from outside it.
+      const videoExts = VIDEO_ATTACHMENT_EXTENSIONS;
+      const audioExts = AUDIO_ATTACHMENT_EXTENSIONS;
       const otherBinaryExts = new Set([
         'pdf',
         'zip',
@@ -1449,7 +1487,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   app.post('/api/sessions/:id/attachments', async (req, reply) => {
     const { id } = req.params as { id: string };
     const session = findSessionOrFail(ctx, id, req);
-    const body = (req.body || {}) as { path?: string };
+    const body = (req.body || {}) as { path?: string; notify?: boolean };
 
     if (!body.path || typeof body.path !== 'string') {
       reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing attachment path'));
@@ -1458,7 +1496,15 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
 
     try {
       const event = await registerExternalAttachment(id, body.path, { sessionWorkingDir: session.workingDir });
-      ctx.broadcast(SseEvent.AttachmentDetected, event);
+      // `notify: false` registers QUIETLY. The file-preview overlay uses it to
+      // mint an id for a path the user just clicked (a terminal or response-viewer
+      // link pointing outside the workspace): it is already opening the file, so
+      // the attachment card + unread badge would be noise announcing what is
+      // filling the screen. Default stays true — every other caller (the
+      // `codeman attach` CLI, codeman-publish) wants the card.
+      if (body.notify !== false) {
+        ctx.broadcast(SseEvent.AttachmentDetected, event);
+      }
       return { success: true, data: event };
     } catch (err) {
       if (err instanceof AttachmentRegistrationError) {

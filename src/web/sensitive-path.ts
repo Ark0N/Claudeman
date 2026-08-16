@@ -80,6 +80,23 @@ const SENSITIVE_PATTERNS: RegExp[] = [
   /\/\.claude\/\.credentials\.json$/,
   /\/\.codeman[^/]*\/hook-secret$/,
   /\/\.codeman[^/]*\/users\.json$/,
+  // Codeman's own state files. Named once `.json` became previewable outside
+  // the workspace: `SessionState.envOverrides` persists whatever the user set
+  // for a session, and the env allowlist admits key-shaped names
+  // (`GEMINI_API_KEY`, `CLAUDE_CODE_*`), so state can hold a live credential.
+  // `state[^/]*` rather than `state`: siblings like state-inner.json carry the
+  // same payload. Same reasoning as the two entries above, and it leaves the
+  // rest of ~/.codeman attachable.
+  /\/\.codeman[^/]*\/state[^/]*\.json$/,
+  // settings.json holds a credential BY SCHEMA (`voiceSettings.apiKey`, the
+  // Deepgram key); push-keys.json holds the VAPID PRIVATE key (enough to forge
+  // push notifications to every subscribed device); intents.json is written
+  // 0600 precisely because captured prompts can contain secrets, and is
+  // deliberately kept out of /api/search — it must not be readable through a
+  // different route instead.
+  /\/\.codeman[^/]*\/settings\.json$/,
+  /\/\.codeman[^/]*\/push-keys\.json$/,
+  /\/\.codeman[^/]*\/intents\.json$/,
 ];
 
 /**

@@ -15,6 +15,11 @@
 
 const AWAY_DIGEST_LAST_VIEWED_KEY = 'codeman-away-digest-last-viewed';
 const FILE_BROWSER_SHOW_HIDDEN_KEY = 'codeman:fileBrowserShowHidden';
+// Bounds for the by-id text preview, mirroring what the workspace text preview
+// already does server-side (500 lines). The byte cap rides a Range request, so
+// a huge log is a partial read rather than a download the viewer throws away.
+const TEXT_PREVIEW_MAX_BYTES = 512 * 1024;
+const TEXT_PREVIEW_MAX_LINES = 500;
 const AWAY_DIGEST_SECTIONS = [
   ['needsAttention', 'Needs Attention'],
   ['completed', 'Completed'],
@@ -3234,6 +3239,65 @@ Object.assign(CodemanApp.prototype, {
     if (headerBtn) headerBtn.setAttribute('aria-expanded', 'false');
   },
 
+  /**
+   * Whether a path is absolute and provably OUTSIDE this session's workspace.
+   *
+   * `file-content` / `file-raw` resolve every path against `workingDir` and
+   * refuse anything that escapes it, so an absolute path elsewhere on the host
+   * (an agent's `/tmp` scratchpad capture, a screenshot, another checkout) can
+   * only ever 404 there — it has to go through the attachment routes instead.
+   *
+   * A string compare is enough for ROUTING; the real containment decision stays
+   * server-side (realpath + guard) on whichever route the request lands on. An
+   * unknown workingDir answers false, leaving the historical path untouched.
+   */
+  _isExternalPreviewPath(filePath, sessionId) {
+    if (typeof filePath !== 'string' || !filePath.startsWith('/')) return false;
+    const workingDir = this.sessions.get(sessionId)?.workingDir;
+    if (!workingDir) return false;
+    const root = workingDir.endsWith('/') ? workingDir : `${workingDir}/`;
+    return filePath !== workingDir && !filePath.startsWith(root);
+  },
+
+  /**
+   * Register an out-of-workspace path as a live external attachment and return
+   * its id, so the preview can render it through the by-id attachment routes.
+   *
+   * `notify: false` keeps this quiet: the caller is already opening the file in
+   * the overlay, so the usual attachment card + unread badge would be noise on
+   * top of the thing the user just asked to see. The server still enforces the
+   * full attachment guard (blocked secret trees, extension allowlist, symlinks
+   * resolved), so a refusal here is a policy answer worth showing verbatim.
+   *
+   * @returns {Promise<{attachmentId?: string, size?: number, error?: string}>}
+   */
+  async _registerExternalPreview(filePath, sessionId) {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/attachments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath, notify: false }),
+      });
+      const result = await res.json().catch(() => null);
+      if (res.ok && result?.success && result.data?.attachmentId) {
+        return { attachmentId: result.data.attachmentId, size: result.data.size || 0 };
+      }
+      const reason = result?.error || `Cannot open this file (HTTP ${res.status})`;
+      // The registry's type answer is a policy term, not an explanation, and the
+      // user just clicked a file they can see on disk. Say what IS previewable
+      // from outside the workspace instead.
+      if (/unsupported/i.test(reason)) {
+        const ext = (filePath.split('.').pop() || '').toLowerCase();
+        return {
+          error: `Cannot preview .${ext} from outside the session workspace (images, video, audio, PDF, Office documents and text files only).`,
+        };
+      }
+      return { error: reason };
+    } catch (err) {
+      return { error: err.message || 'Cannot open this file' };
+    }
+  },
+
   async openFilePreview(filePath, sessionId = this.activeSessionId, attachmentId = null) {
     if (!sessionId || !filePath) return;
 
@@ -3258,25 +3322,70 @@ Object.assign(CodemanApp.prototype, {
 
     const ext = (filePath.split('.').pop() || '').toLowerCase();
 
+    // Out-of-workspace path: mint an attachment id up front. Every branch below
+    // talks to a workspace-confined route, so without this the image/PDF ones
+    // render a broken frame and the text one reports a bare "File not found"
+    // for a file that is sitting right there on disk.
+    let externalError = '';
+    let externalSize = 0;
+    if (!attachmentId && this._isExternalPreviewPath(filePath, sessionId)) {
+      const external = await this._registerExternalPreview(filePath, sessionId);
+      attachmentId = external.attachmentId || null;
+      externalError = external.error || '';
+      externalSize = external.size || 0;
+    }
+    if (!attachmentId && externalError) {
+      footerEl.textContent = '';
+      bodyEl.innerHTML = `<div class="binary-message">${escapeHtml(externalError)}</div>`;
+      return;
+    }
+
     // Registered attachment: render straight from its by-id routes — images and
     // PDFs inline, Office docs via the server-converted PDF preview, text fetched
     // raw. (Workspace-path previews fall through to the file-content endpoint.)
     if (attachmentId) {
       const base = `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}`;
       const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
-      footerEl.textContent = ext.toUpperCase();
+      const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv']);
+      const AUDIO_EXTS = new Set(['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'opus']);
+      // Size when we just registered the file ourselves, so a path opened from a
+      // link reads like a workspace preview instead of a bare "PNG". History
+      // cards arrive with an id and no size and keep the short form.
+      footerEl.textContent = externalSize ? `${this.formatFileSize(externalSize)} • ${ext}` : ext.toUpperCase();
       if (IMAGE_EXTS.has(ext)) {
         bodyEl.innerHTML = `<img src="${escapeHtml(`${base}/raw`)}" alt="${escapeHtml(filePath)}">`;
+      } else if (VIDEO_EXTS.has(ext)) {
+        // Same markup as the workspace branch below, including playsinline: iOS
+        // otherwise hijacks playback into its own fullscreen player, which
+        // leaves this overlay behind it with no way back but its close button.
+        // The attachment raw route is range-aware, so the scrub bar works.
+        bodyEl.innerHTML = `<video src="${escapeHtml(`${base}/raw`)}" controls autoplay playsinline preload="metadata"></video>`;
+      } else if (AUDIO_EXTS.has(ext)) {
+        bodyEl.innerHTML = `<audio src="${escapeHtml(`${base}/raw`)}" controls autoplay preload="metadata"></audio>`;
       } else if (ext === 'pdf') {
         bodyEl.innerHTML = `<iframe src="${escapeHtml(`${base}/raw`)}" title="${escapeHtml(filePath)}"></iframe>`;
       } else if (ext === 'docx' || ext === 'pptx') {
         bodyEl.innerHTML = `<iframe src="${escapeHtml(`${base}/preview`)}" title="${escapeHtml(filePath)}"></iframe>`;
       } else {
         try {
-          const res = await fetch(`${base}/raw`);
+          // Bounded like the workspace text preview: a Range for the first
+          // chunk (the route is range-aware, so this is a real partial read,
+          // not a 50MB download thrown away) and a line cap on top. An agent's
+          // log can be enormous, and rendering all of it into one <pre> is how
+          // you lock up the tab on the file you wanted to glance at.
+          const res = await fetch(`${base}/raw`, { headers: { Range: `bytes=0-${TEXT_PREVIEW_MAX_BYTES - 1}` } });
           if (!res.ok) throw new Error('Failed to load attachment');
           const text = await res.text();
-          bodyEl.innerHTML = `<pre><code>${escapeHtml(text)}</code></pre>`;
+          const clippedByBytes = res.status === 206 && text.length >= TEXT_PREVIEW_MAX_BYTES;
+          const lines = text.split('\n');
+          const clippedByLines = lines.length > TEXT_PREVIEW_MAX_LINES;
+          const shown = clippedByLines ? lines.slice(0, TEXT_PREVIEW_MAX_LINES).join('\n') : text;
+          bodyEl.innerHTML = `<pre><code>${escapeHtml(shown)}</code></pre>`;
+          this.filePreviewContent = shown;
+          if (clippedByLines || clippedByBytes) {
+            const note = clippedByLines ? `showing first ${TEXT_PREVIEW_MAX_LINES} lines` : 'showing the start of the file';
+            footerEl.textContent = `${footerEl.textContent} (${note})`;
+          }
         } catch (err) {
           bodyEl.innerHTML = `<div class="binary-message">Error: ${escapeHtml(err.message)}</div>`;
         }

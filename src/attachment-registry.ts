@@ -11,8 +11,45 @@ import { realpathSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { basename, extname, isAbsolute } from 'node:path';
 import { isBlockedAttachmentPath, loadAttachmentGuardConfig } from './config/attachment-guard.js';
+import { EDITABLE_EXTENSIONS } from './config/file-editing.js';
 import { validateSessionFilePath } from './web/route-helpers.js';
 import type { AttachmentDetectedEvent, AttachmentDetectedType } from './types.js';
+
+/**
+ * Playable media extensions, single-sourced here because the WORKSPACE preview
+ * (`file-content`'s media classification) and the out-of-workspace attachment
+ * path must agree on what plays. They diverged once: a video an agent wrote
+ * inside the workspace played with a working scrub bar, while the same file in
+ * `/tmp` was refused as an unsupported type, which reads as a bug rather than a
+ * boundary. Serving is range-aware in both, which is what makes seeking work.
+ */
+export const VIDEO_ATTACHMENT_EXTENSIONS: ReadonlySet<string> = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv']);
+export const AUDIO_ATTACHMENT_EXTENSIONS: ReadonlySet<string> = new Set([
+  'mp3',
+  'wav',
+  'ogg',
+  'oga',
+  'm4a',
+  'aac',
+  'flac',
+  'opus',
+]);
+
+/**
+ * Plain-text extensions, REUSING the File Viewer's edit-mode allowlist rather
+ * than curating a second list that would drift from it. The rule reads: if the
+ * viewer would open that file for editing inside the workspace, the same file
+ * outside it can be read here. `svg` and `env` are absent from that list by
+ * design and stay absent here.
+ *
+ * Why widen at all: the agent in the session can already `cat` any of these,
+ * and every path-shaped surface (the picker, the workspace viewer) can already
+ * show them. Refusing a `.log` an agent just wrote to `/tmp` bought no
+ * confidentiality, it only made the click fail. The confidentiality gate is the
+ * path guard that still runs on every registration (sensitive-file blocklist,
+ * `/root` and `/etc` trees, realpath before the check), not the file's suffix.
+ */
+export const TEXT_ATTACHMENT_EXTENSIONS: ReadonlySet<string> = EDITABLE_EXTENSIONS;
 
 const SUPPORTED_ATTACHMENT_EXTENSIONS = new Set([
   'png',
@@ -25,6 +62,9 @@ const SUPPORTED_ATTACHMENT_EXTENSIONS = new Set([
   'pptx',
   'md',
   'txt',
+  ...VIDEO_ATTACHMENT_EXTENSIONS,
+  ...AUDIO_ATTACHMENT_EXTENSIONS,
+  ...TEXT_ATTACHMENT_EXTENSIONS,
 ]);
 
 export type AttachmentSource = 'detected' | 'external';
@@ -108,10 +148,14 @@ export function isSupportedAttachmentExtension(extension: string): boolean {
 export function getAttachmentType(extension: string): AttachmentDetectedType {
   const normalized = extension.toLowerCase().replace(/^\./, '');
   if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(normalized)) return 'image';
+  if (VIDEO_ATTACHMENT_EXTENSIONS.has(normalized)) return 'video';
+  if (AUDIO_ATTACHMENT_EXTENSIONS.has(normalized)) return 'audio';
   if (normalized === 'pdf') return 'pdf';
   if (normalized === 'pptx') return 'presentation';
   if (normalized === 'md') return 'markdown';
-  if (normalized === 'txt') return 'text';
+  // Everything else in the text family reads as text, including code and
+  // config: the card and the preview both treat it as a plain-text file.
+  if (normalized === 'txt' || TEXT_ATTACHMENT_EXTENSIONS.has(normalized)) return 'text';
   return 'document';
 }
 

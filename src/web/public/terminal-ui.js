@@ -1434,18 +1434,18 @@ Object.assign(CodemanApp.prototype, {
         // the whole tab on hover. Non-empty token + bounded reps is O(n).
         const cmdPattern = /\b(tail|cat|head|less|grep|watch|vim|nano)\s+(?:[^\s\/]+\s+){0,4}(\/[^\s"'<>|;&\n\x00-\x1f]+)/g;
 
-        // Pattern 2: Paths with common extensions.
-        // Image/PDF extensions are included so pasted-attachment paths
-        // (`.claude-images/paste-*.png`) are clickable; they open the file preview
-        // rather than the log viewer (see addLink).
-        const extPattern =
-          /(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|yaml|yml|csv|xml|sh|py|ts|js|png|jpe?g|gif|webp|bmp|svg|pdf))\b/g;
+        // Pattern 2: Paths with common extensions. Image/PDF/media extensions are
+        // included so pasted-attachment paths (`.claude-images/paste-*.png`) and
+        // screenshots an agent just wrote are clickable; those open the file
+        // preview rather than the log viewer (see addLink).
+        //
+        // The literal lives in constants.js because the response viewer linkifies
+        // the SAME paths out of markdown — one definition, two consumers. A fresh
+        // instance per call: `lastIndex` is per-object state.
+        const extPattern = absoluteFilePathPattern();
 
         // Pattern 3: Bash() tool output
         const bashPattern = /Bash\([^)]*?(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\)\n\x00-\x1f]+)/g;
-
-        /** Extensions that should open the image/document preview, not the log viewer. */
-        const PREVIEW_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'pdf']);
 
         const addLink = (filePath, matchIndex) => {
           const startCol = lineText.indexOf(filePath, matchIndex);
@@ -1465,9 +1465,19 @@ Object.assign(CodemanApp.prototype, {
             },
             activate(event, text) {
               // Tailing a PNG in the log viewer shows binary noise; the file preview
-              // already renders images and PDFs inline.
-              const ext = (text.split('.').pop() || '').toLowerCase();
-              if (PREVIEW_EXTS.has(ext)) {
+              // already renders images, PDFs, documents and media inline — and it
+              // now reaches files outside the workspace too, which is where an
+              // agent's screenshots and scratchpad captures actually land.
+              //
+              // Text goes to the log viewer, which follows a file that is still
+              // being written — but ONLY where it can actually read: it spawns
+              // `tail -f` and allows the workspace, /var/log and ~/logs, so an
+              // out-of-workspace path there answered "Path must be within
+              // working directory or allowed log directories" while the SAME
+              // path clicked in the response viewer previewed fine. The preview
+              // reads those through the guarded attachment routes, so external
+              // paths route there and the two surfaces agree.
+              if (previewsInFileViewer(text) || self._isExternalPreviewPath(text, self.activeSessionId)) {
                 self.openFilePreview(text, self.activeSessionId);
                 return;
               }
