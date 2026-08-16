@@ -21,7 +21,15 @@
 
 import { clipStyledLine, padDisplay, stripStyles, visibleWidth } from './tui-ansi.js';
 import type { TuiLayout, TuiRect } from './tui-layout.js';
-import type { TuiGlyphTier, TuiGroup, TuiRenderModel, TuiRow, TuiSessionRow, TuiSessionState } from './tui-types.js';
+import type {
+  TuiGlyphTier,
+  TuiGroup,
+  TuiPickerState,
+  TuiRenderModel,
+  TuiRow,
+  TuiSessionRow,
+  TuiSessionState,
+} from './tui-types.js';
 
 export interface TuiRenderOptions {
   /** Emit SGR color. False is NO_COLOR: cursor addressing and nothing else. */
@@ -31,6 +39,19 @@ export interface TuiRenderOptions {
   tick: number;
   /** Wall clock for elapsed times, passed in so a frame is reproducible. */
   now: number;
+  /**
+   * Footer entries, already labelled, joined here with the separator glyph.
+   * The app layer passes the keys that actually do something right now (which
+   * verbs are wired up, whether a server is answering); omitting it falls back
+   * to the full keymap below.
+   */
+  footerKeys?: readonly string[];
+  /**
+   * `[key, what it does]` pairs for the help overlay, same reasoning as
+   * `footerKeys`: the app layer knows which verbs are wired up. Omitting it
+   * falls back to the full keymap.
+   */
+  helpKeys?: ReadonlyArray<readonly [string, string]>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -465,13 +486,16 @@ const FOOTER_KEYS: Record<string, (glyphs: TuiGlyphSet) => string> = {
   message: () => 'esc dismiss',
   prompt: (g) => `${g.enter} send ${g.separator} esc cancel`,
   search: (g) => `${g.enter} open ${g.separator} esc cancel`,
+  'new-session': (g) => `${g.updown} select ${g.separator} ${g.enter} choose ${g.separator} esc cancel`,
 };
 
 function renderFooterLine(model: TuiRenderModel, layout: TuiLayout, opts: TuiRenderOptions): string {
   const paint = painterFor(opts.color);
   const glyphs = glyphsFor(opts.glyphs);
-  const build = FOOTER_KEYS[model.mode] ?? FOOTER_KEYS.list;
-  return padDisplay(paint(clipStyledLine(` ${build(glyphs)}`, layout.cols), SGR.gray), layout.cols);
+  const text = opts.footerKeys
+    ? opts.footerKeys.join(` ${glyphs.separator} `)
+    : (FOOTER_KEYS[model.mode] ?? FOOTER_KEYS.list)(glyphs);
+  return padDisplay(paint(clipStyledLine(` ${text}`, layout.cols), SGR.gray), layout.cols);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -500,8 +524,8 @@ function wrapText(text: string, width: number): string[] {
   return out.length > 0 ? out : [''];
 }
 
-function helpLines(glyphs: TuiGlyphSet): string[] {
-  const pairs: Array<[string, string]> = [
+function helpLines(glyphs: TuiGlyphSet, custom?: ReadonlyArray<readonly [string, string]>): string[] {
+  const pairs: ReadonlyArray<readonly [string, string]> = custom ?? [
     [`${glyphs.updown} / j k`, 'select'],
     [glyphs.enter, 'attach'],
     ['1-9', 'jump'],
@@ -519,11 +543,42 @@ function helpLines(glyphs: TuiGlyphSet): string[] {
   return pairs.map(([key, description]) => `${padDisplay(key, keyWidth)}  ${description}`);
 }
 
-function overlayContent(model: TuiRenderModel, opts: TuiRenderOptions, width: number): OverlayContent | null {
+/** Longest item list a picker overlay shows, however tall the terminal is. */
+const PICKER_MAX_ROWS = 10;
+
+/**
+ * A picker's lines: hint, a window of items around the cursor, then the filter
+ * echo. Windowed rather than clipped, so the selected item is always visible in
+ * a long case list.
+ */
+function pickerLines(picker: TuiPickerState, glyphs: TuiGlyphSet, capacity: number): string[] {
+  const head: string[] = picker.hint ? [picker.hint, ''] : [];
+  const tail: string[] = picker.filter === undefined ? [] : ['', `filter: ${picker.filter}_`];
+  if (picker.items.length === 0) return [...head, '(nothing to choose)', ...tail];
+
+  const budget = Math.max(1, Math.min(PICKER_MAX_ROWS, capacity - head.length - tail.length));
+  const first = Math.max(0, Math.min(picker.index - Math.floor(budget / 2), picker.items.length - budget));
+  const rows = picker.items.slice(first, first + budget).map((item, i) => {
+    const marker = first + i === picker.index ? glyphs.cursor : ' '.repeat(visibleWidth(glyphs.cursor));
+    return `${marker} ${item.label}${item.detail ? `  ${item.detail}` : ''}`;
+  });
+  return [...head, ...rows, ...tail];
+}
+
+function overlayContent(
+  model: TuiRenderModel,
+  opts: TuiRenderOptions,
+  width: number,
+  height: number
+): OverlayContent | null {
   const glyphs = glyphsFor(opts.glyphs);
   switch (model.mode) {
     case 'help':
-      return { title: 'Keys', lines: helpLines(glyphs) };
+      return { title: 'Keys', lines: helpLines(glyphs, opts.helpKeys) };
+    case 'new-session': {
+      if (!model.picker) return null;
+      return { title: model.picker.title, lines: pickerLines(model.picker, glyphs, Math.max(1, height - 2)) };
+    }
     case 'confirm-kill': {
       if (!model.confirm) return null;
       const { name, typed } = model.confirm;
@@ -547,7 +602,7 @@ function overlayContent(model: TuiRenderModel, opts: TuiRenderOptions, width: nu
 function applyOverlay(lines: string[], model: TuiRenderModel, layout: TuiLayout, opts: TuiRenderOptions): void {
   const body = layout.body;
   if (body.height < 3 || body.width < 12) return;
-  const content = overlayContent(model, opts, body.width);
+  const content = overlayContent(model, opts, body.width, body.height);
   if (!content) return;
 
   const paint = painterFor(opts.color);
