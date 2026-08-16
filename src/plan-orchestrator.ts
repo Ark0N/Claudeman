@@ -20,6 +20,7 @@ import type { TerminalMultiplexer } from './mux-interface.js';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { RESEARCH_AGENT_PROMPT, PLANNER_PROMPT } from './prompts/index.js';
+import { applyWorkspaceHooks } from './hooks-config.js';
 import { getErrorMessage, type PlanItem, type ClaudeMode } from './types.js';
 
 // Re-export for backward compatibility
@@ -429,6 +430,11 @@ export class PlanOrchestrator {
       detail: 'Researching...',
     });
 
+    // Workspace hooks for the case this plan targets (see applyWorkspaceHooks in
+    // hooks-config): claude-mode, local workingDir, and the helper itself skips a
+    // vanished dir + swallows failures — the plan run must never fail on hooks.
+    await applyWorkspaceHooks(this.workingDir);
+
     const session = new Session({
       workingDir: this.workingDir,
       mux: this.mux,
@@ -590,6 +596,10 @@ export class PlanOrchestrator {
       status: 'running',
       detail: 'Generating plan...',
     });
+
+    // Workspace hooks: same rationale as the research one-shot above (idempotent —
+    // the helper short-circuits when the hooks block is already current).
+    await applyWorkspaceHooks(this.workingDir);
 
     const session = new Session({
       workingDir: this.workingDir,

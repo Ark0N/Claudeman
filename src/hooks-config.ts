@@ -10,8 +10,9 @@
  * Key exports:
  * - `generateHooksConfig()` — returns hooks object for settings.local.json
  * - `writeHooksConfig(casePath)` — writes hooks + env config to disk
+ * - `applyWorkspaceHooks(workspace, install?)` — the ONE install-vs-refresh decision
+ *   point every claude-session create path routes through (see its doc comment)
  * - `ensureCodemanHooks(casePath)` — safely installs/updates hooks for a managed case
- *   (no production call site yet; see its doc comment before wiring one)
  * - `updateCaseEnvVars(casePath, envVars)` — merges env vars into settings
  *
  * Hook events generated: `idle_prompt`, `permission_prompt`, `elicitation_dialog`,
@@ -37,6 +38,7 @@ import { fileURLToPath } from 'node:url';
 
 import type { HookEventType } from './types.js';
 import { HOOK_TIMEOUT_SECONDS } from './config/auth-config.js';
+import { dataPath } from './config/instance.js';
 
 /**
  * Serializes read-modify-write access to a `settings.local.json` path. Every
@@ -745,6 +747,64 @@ export async function refreshStaleCodemanHooks(casePath: string): Promise<void> 
     };
     await writeFile(settingsPath, JSON.stringify(merged, null, 2) + '\n');
   });
+}
+
+/**
+ * Hooks for the workspace a Claude session is about to run in. ONE decision point,
+ * shared by every claude-session create path — the interactive routes, quick-start,
+ * cron fires, legacy scheduled runs, the plan-orchestrator one-shots, and the boot
+ * recovery sweep — so the `workspaceHooksEnabled` setting cannot apply to some of
+ * them only.
+ *
+ * ON (the default): INSTALL Codeman's hooks block (`ensureCodemanHooks`), merging so
+ * a user's own hook entries and every other settings key survive. Hooks used to be
+ * written only when Codeman CREATED the case DIRECTORY, so a linked case or any
+ * pre-existing repo — where most sessions actually run — had none, and every
+ * hook-driven surface was silently dead there (full history on `ensureCodemanHooks`).
+ *
+ * OFF: the older, narrower behavior. A Codeman block that is already there is still
+ * refreshed when stale (COD-91: a pre-secret block 401s once the hook-secret gate
+ * went unconditional), but one is never added, so Codeman leaves the repo alone.
+ *
+ * `install` overrides the setting read: route handlers resolve it through their
+ * ConfigPort (`ctx.getWorkspaceHooksEnabled()`, which tests stub), and the boot sweep
+ * passes `true` after checking the setting once for its whole batch. Every other
+ * caller omits it and the synced setting is read from settings.json here — default ON
+ * when the key is absent or the file unreadable, matching the server's resolver.
+ *
+ * Callers gate on their own context (claude mode only; local — never a remote
+ * workingDir, which is a path on ANOTHER host, and never a docker case that opted
+ * out of hooks). The guards EVERY caller needs live here instead:
+ *  - a workspace that does not exist is skipped — `ensureCodemanHooks` mkdir -p's,
+ *    so a deleted repo whose tmux session survived would otherwise be resurrected
+ *    as an empty directory tree holding only `.claude/settings.local.json`;
+ *  - errors are swallowed — a session create must never fail on hooks.
+ */
+export async function applyWorkspaceHooks(workspace: string, install?: boolean): Promise<void> {
+  try {
+    if (!existsSync(workspace)) return;
+    const shouldInstall = install ?? (await readWorkspaceHooksEnabled());
+    await (shouldInstall ? ensureCodemanHooks(workspace) : refreshStaleCodemanHooks(workspace));
+  } catch {
+    // Best-effort by contract (see doc comment): hooks degrade to output-based
+    // idle detection; the create goes ahead.
+  }
+}
+
+/**
+ * The synced `workspaceHooksEnabled` app setting, read straight from settings.json
+ * for callers that live outside the web layer (cron, scheduled runs, the plan
+ * orchestrator). Default ON: an absent key means a user who has never seen the
+ * setting, and OFF for them would mean no tab alerts, no Approvals Inbox and no
+ * respawn idle signals in every workspace Codeman did not scaffold itself.
+ */
+async function readWorkspaceHooksEnabled(): Promise<boolean> {
+  try {
+    const parsed = JSON.parse(await readFile(dataPath('settings.json'), 'utf-8')) as Record<string, unknown>;
+    return parsed.workspaceHooksEnabled !== false;
+  } catch {
+    return true;
+  }
 }
 
 /** Unique marker identifying Codeman's own statusLine command (vs a user's). */

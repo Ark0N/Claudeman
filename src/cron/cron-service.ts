@@ -11,6 +11,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { readFile } from 'node:fs/promises';
 import { statSync, realpathSync } from 'node:fs';
 import { Session } from '../session.js';
+import { applyWorkspaceHooks } from '../hooks-config.js';
 import { SseEvent } from '../web/sse-events.js';
 import { CronJobSchema } from '../web/schemas.js';
 import { getErrorMessage, createErrorResponse, ApiErrorCode } from '../types/api.js';
@@ -401,6 +402,15 @@ export class CronService {
       // clampCronExternalCliConfigs — cron sends no per-CLI config, so the CLI's own
       // spawn default is what would otherwise apply).
       const { geminiConfig, piConfig } = clampCronExternalCliConfigs(mode, ownerGranted);
+      // Workspace hooks (see applyWorkspaceHooks in hooks-config): cron jobs are
+      // always local (workingDir was stat-validated above) but used to bypass the
+      // shared install-vs-refresh decision, so a job firing in a linked case that
+      // never had an interactive session ran hook-blind — no `stop` for the
+      // completion detection, no tab alert on a blocking dialog. Claude mode only
+      // (nothing else reads `.claude` hooks); best-effort inside the helper.
+      if (mode === 'claude') {
+        await applyWorkspaceHooks(job.workingDir);
+      }
       session = new Session({
         workingDir: job.workingDir,
         mode,

@@ -84,7 +84,7 @@ import {
   applyAgentSkill,
   refreshUserAgentSkill,
   seedAgentSessionPreamble,
-  ensureCodemanHooks,
+  applyWorkspaceHooks,
   refreshStaleCodemanHooks,
 } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
@@ -626,31 +626,12 @@ async function injectAgentSkill(casePath: string): Promise<void> {
   }
 }
 
-/**
- * Hooks for the workspace a Claude session is about to run in. ONE decision point,
- * shared by every create path, so the setting cannot apply to some of them only.
- *
- * ON (`workspaceHooksEnabled`, the default): INSTALL Codeman's hooks block, merging
- * so a user's own hook entries and every other settings key survive. Hooks were
- * previously written only when Codeman CREATED the case DIRECTORY, so a linked case
- * or any pre-existing repo — where most sessions actually run — had none, and every
- * hook-driven surface was silently dead there: no tab alert or phone-overview row
- * when a dialog blocks the pane, no Approvals Inbox item, no push, no definitive
- * `stop`/`idle_prompt` for respawn, and no `stop`/`blocked` for the wait endpoints.
- * Measured 2026-08-15 in a linked case: an AskUserQuestion dialog on screen with the
- * tab reporting a calm `idle`. Claude Code re-reads the file, so a session already
- * running in that workspace starts firing hooks without a restart (verified live).
- *
- * OFF: the older, narrower behavior. A Codeman block that is already there is still
- * refreshed when stale (COD-91: a pre-secret block 401s once the hook-secret gate
- * went unconditional), but one is never added, so Codeman leaves the repo alone.
- *
- * Best-effort either way: a refusal or a thrown error must never fail the create.
- */
-async function applyWorkspaceHooks(ctx: ConfigPort, workspace: string): Promise<void> {
-  const install = await ctx.getWorkspaceHooksEnabled();
-  await (install ? ensureCodemanHooks(workspace) : refreshStaleCodemanHooks(workspace)).catch(() => {});
-}
+// Workspace hooks: the install-vs-refresh decision core moved to
+// `applyWorkspaceHooks` in hooks-config.ts (imported above) so the non-route
+// claude create paths — cron fires, legacy scheduled runs, the plan-orchestrator
+// one-shots, the boot recovery sweep — share the SAME decision instead of
+// bypassing the `workspaceHooksEnabled` setting. Route handlers here resolve the
+// setting through the ConfigPort (tests stub it) and pass it as the second arg.
 
 export function registerSessionRoutes(
   app: FastifyInstance,
@@ -788,7 +769,14 @@ export function registerSessionRoutes(
     // chip's data feed for everyone. The exporter is benign when the chip is off
     // (the footer just shows session status). isOurs-guarded so a user's own
     // statusLine is never touched.
-    if ((body.mode ?? 'claude') === 'claude' && body.statusLineTelemetry === true) {
+    //
+    // Same guard as the hooks call below (499d355): never for a remote attach
+    // (workingDir is a user@host:session pseudo-path — the mkdir inside
+    // applyStatusLineConfig would create it as a junk local dir), and only when
+    // the caller named a workingDir — the process-cwd fallback is $HOME under
+    // installer-created services, and a statusLine materializing in
+    // ~/.claude/settings.local.json was never asked for.
+    if (!remote && body.workingDir && (body.mode ?? 'claude') === 'claude' && body.statusLineTelemetry === true) {
       await applyStatusLineConfig(workingDir, true);
     }
 
@@ -799,7 +787,7 @@ export function registerSessionRoutes(
     // process-cwd fallback is $HOME under installer-created services, and hooks
     // materializing in ~/.claude/settings.local.json was never asked for.
     if (!remote && body.workingDir && (body.mode ?? 'claude') === 'claude') {
-      await applyWorkspaceHooks(ctx, workingDir);
+      await applyWorkspaceHooks(workingDir, await ctx.getWorkspaceHooksEnabled());
       // Agent skill (docs/agent-control-plan.md §2): ADD-ONLY on create, same shared-
       // .claude rationale as the statusLine above: a create must never remove the
       // skill from under other live sessions in the repo. Marker-guarded, so a
@@ -2936,7 +2924,7 @@ export function registerSessionRoutes(
       // of its own. Skipped for remote cases — resolvedCasePath is a REMOTE path that
       // doesn't exist on the local filesystem.
       if (mode === 'claude') {
-        await applyWorkspaceHooks(ctx, resolvedCasePath);
+        await applyWorkspaceHooks(resolvedCasePath, await ctx.getWorkspaceHooksEnabled());
       } else {
         await refreshStaleCodemanHooks(resolvedCasePath).catch(() => {});
       }
@@ -2954,16 +2942,11 @@ export function registerSessionRoutes(
     // Docker cases: the workspace is a REAL host dir bind-mounted into the container.
     // Scaffold hooks (+ a CLAUDE.md) if MISSING so in-container permission prompts and
     // hook-idle detection fire (decision: wire hooks now). Never clobbers an existing
-    // configured project. Skipped for external CLIs (they use their own systems).
-    if (
-      docker &&
-      docker.hooksEnabled &&
-      mode !== 'opencode' &&
-      mode !== 'codex' &&
-      mode !== 'gemini' &&
-      mode !== 'antigravity' &&
-      mode !== 'pi'
-    ) {
+    // configured project. Claude mode ONLY — only claude reads `.claude` hooks, so a
+    // shell or external-CLI quick-start must not author a block of its own (the same
+    // rule the existing-case branch above states; this branch used to exclude just
+    // the five external CLIs and let `shell` through).
+    if (docker && docker.hooksEnabled && mode === 'claude') {
       try {
         if (!existsSync(join(resolvedCasePath, 'CLAUDE.md'))) {
           const templatePath = await ctx.getDefaultClaudeMdPath();
@@ -2975,7 +2958,7 @@ export function registerSessionRoutes(
           // A settings file with no hooks in it is the same dead-surface case as a
           // linked case. This branch is already gated on `docker.hooksEnabled`, and
           // applyWorkspaceHooks adds the user-level gate on top.
-          await applyWorkspaceHooks(ctx, resolvedCasePath);
+          await applyWorkspaceHooks(resolvedCasePath, await ctx.getWorkspaceHooksEnabled());
         }
       } catch {
         /* non-fatal — the session still runs, hooks may be degraded */
