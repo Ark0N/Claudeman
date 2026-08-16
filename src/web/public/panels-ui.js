@@ -3346,6 +3346,9 @@ Object.assign(CodemanApp.prototype, {
     if (attachmentId) {
       const base = `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}`;
       const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
+      // VIDEO/AUDIO mirror VIDEO_ATTACHMENT_EXTENSIONS/AUDIO_ATTACHMENT_EXTENSIONS
+      // (src/attachment-registry.ts, the single source); the frontend cannot import
+      // it, so test/media-extension-parity.test.ts pins the copies equal.
       const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv']);
       const AUDIO_EXTS = new Set(['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'opus']);
       // Size when we just registered the file ourselves, so a path opened from a

@@ -3831,7 +3831,6 @@ class CodemanApp {
     // Collapse/expand changes whether the filter is reachable, so re-evaluate it
     // here too — not only at the render tails.
     this.applySidebarFilter(this._sidebarFilter);
-    this.updateSidebarCount();
     this.updateConnectionLines();
     // The desktop home rail defers to the sidebar (both dock the session list
     // flush left), so a layout flip while the welcome screen is up has to
@@ -3876,9 +3875,22 @@ class CodemanApp {
     this.toggleSessionSidebar();
   }
 
+  /**
+   * The count is what is actually ON the list: session rows plus web-tab rows,
+   * minus whatever the sidebar filter is hiding. `this.sessions.size` was the
+   * original source and disagreed with the screen twice over — web tabs render
+   * in the same list but are not sessions (3 sessions + 2 dashboards read "3"
+   * above 5 rows), and a filter hides rows without touching the map. Counting
+   * the rendered rows keeps one source of truth: the list itself.
+   */
   updateSidebarCount() {
     const el = document.getElementById('sessionSidebarCount');
-    if (el) el.textContent = String(this.sessions?.size ?? 0);
+    if (!el) return;
+    const container = this.$('sessionTabs');
+    const count = container
+      ? container.querySelectorAll('.session-tab:not(.tab-filtered-out)').length
+      : (this.sessions?.size ?? 0);
+    el.textContent = String(count);
   }
 
   /**
@@ -3911,6 +3923,9 @@ class CodemanApp {
       const haystack = `${tab.getAttribute('aria-label') || ''} ${tab.getAttribute('title') || ''}`.toLowerCase();
       tab.classList.toggle('tab-filtered-out', !haystack.includes(needle));
     }
+    // The count shows visible rows, so it moves with every filter change —
+    // including keystrokes in the filter box, which call this directly.
+    this.updateSidebarCount();
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -4267,11 +4282,13 @@ class CodemanApp {
     // The full-render path already redraws the connection SVG; this incremental
     // one does not, and a badge appearing widens a tab and shifts every tab after
     // it, sliding the lineage arcs off their anchors. Only pay for it when there
-    // is an arc to keep anchored.
-    if (this._lineageEdgeCount > 0) this.updateConnectionLines();
+    // is something anchored to tab rects: lineage arcs, or — in sidebar layout,
+    // where lineage is skipped and the edge count stays 0 — the subagent/
+    // ultracode connectors, whose rows a badge changes the HEIGHT of. Same
+    // widening as the strip-scroll listener in session-lineage.js.
+    if (this._lineageEdgeCount > 0 || this.isSessionSidebarActive()) this.updateConnectionLines();
 
     this.applySidebarFilter(this._sidebarFilter);
-    this.updateSidebarCount();
   }
 
   // Auto-wrap desktop session tabs to a second row when they overflow one row,
@@ -4472,7 +4489,6 @@ class CodemanApp {
     // innerHTML was rebuilt wholesale, so the sidebar filter classes are gone —
     // re-apply them or filtered-out sessions flicker back on every SSE tick.
     this.applySidebarFilter(this._sidebarFilter);
-    this.updateSidebarCount();
   }
 
   // Set up arrow key navigation for session tabs (accessibility)

@@ -16,6 +16,7 @@
  * feature), so the "stays attachable" cases matter just as much: over-blocking
  * breaks the publish skill and the review-card loop.
  */
+import { homedir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { isSensitivePath } from '../src/web/sensitive-path.js';
 
@@ -121,5 +122,35 @@ describe('isSensitivePath', () => {
     // docblock states, which every caller depends on.
     expect(isSensitivePath('/srv/app/looks-innocent')).toBe(false);
     expect(isSensitivePath(`${HOME}/.ssh/looks-innocent`)).toBe(true);
+  });
+
+  describe('home-anchored Claude config (credential-bearing by schema)', () => {
+    // ~/.claude/settings.json can hold `env: {ANTHROPIC_API_KEY}` and
+    // `apiKeyHelper` by schema (settings.local.json shares it), and
+    // ~/.claude.json holds account/OAuth-adjacent state. These are anchored to
+    // the REAL homedir, read at CHECK time — test/setup.ts points HOME at a
+    // per-file fixture, so a homedir() captured at module load would be a
+    // different directory than the one this suite resolves.
+    const home = homedir();
+
+    it.each([
+      ['claude account state', `${home}/.claude.json`],
+      ['claude user settings', `${home}/.claude/settings.json`],
+      ['claude user local settings', `${home}/.claude/settings.local.json`],
+    ])('blocks the %s', (_label, path) => {
+      expect(isSensitivePath(path)).toBe(true);
+    });
+
+    // A blanket `/\.claude\/settings\.json$/` would also catch every CASE-level
+    // settings file, which users legitimately view and edit in the File Viewer
+    // (model override, hooks) — the home anchor is what keeps those servable.
+    it.each([
+      ['a case-level .claude/settings.json', '/srv/app/.claude/settings.json'],
+      ['a case-level .claude/settings.local.json', '/srv/app/.claude/settings.local.json'],
+      ['a .claude/settings.json under some OTHER home', `${HOME}/.claude/settings.json`],
+      ['a .claude.json under some OTHER home', `${HOME}/.claude.json`],
+    ])('keeps %s servable', (_label, path) => {
+      expect(isSensitivePath(path)).toBe(false);
+    });
   });
 });
