@@ -626,7 +626,12 @@ class TuiApp {
   private resolveExit: ((code: number) => void) | null = null;
 
   private readonly onData = (chunk: Buffer): void => this.feed(chunk);
-  private readonly onResize = (): void => this.paint(true);
+  // A resize can cross the narrow breakpoint, where there is no preview pane to
+  // poll for.
+  private readonly onResize = (): void => {
+    this.updatePreview();
+    this.paint(true);
+  };
   private readonly onProcessExit = (): void => this.screen.leave();
   private readonly onSignal = (): void => this.quit(0);
   private readonly onFatal = (error: unknown): void => {
@@ -780,6 +785,10 @@ class TuiApp {
   private async refreshDegraded(): Promise<void> {
     const tmux = await this.client.enumerateTmuxSessions().catch(() => [] as TuiTmuxSession[]);
     this.model.replaceSessions(tmuxRowsToSessions(tmux));
+    // Nothing classifies states without a server, so a prompt that was pending
+    // when it went down is no longer a fact we can stand behind, and a card
+    // whose answer route is unreachable is worse than no card.
+    this.model.setApprovals([]);
     this.updatePreview();
     this.paint();
   }
