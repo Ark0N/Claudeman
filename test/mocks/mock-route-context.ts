@@ -19,6 +19,7 @@ export function createMockRouteContext(options?: {
   sessionId?: string;
   agentSkillEnabled?: boolean;
   claudeVoiceEnabled?: boolean;
+  workspaceHooksEnabled?: boolean;
 }) {
   const sessionId = options?.sessionId ?? 'test-session-1';
   const session = createMockSession(sessionId);
@@ -96,6 +97,9 @@ export function createMockRouteContext(options?: {
     getAgentSkillEnabled: vi.fn(async () => options?.agentSkillEnabled ?? false),
     // Default OFF mirrors the shipped setting: no test opens a voice relay by accident.
     getClaudeVoiceEnabled: vi.fn(async () => options?.claudeVoiceEnabled ?? false),
+    // Default ON mirrors the shipped setting, so a route test sees what a user sees.
+    // Writes land in the test's temp working dir, never in a real repo.
+    getWorkspaceHooksEnabled: vi.fn(async () => options?.workspaceHooksEnabled ?? true),
     getDefaultClaudeMdPath: vi.fn(async () => undefined),
     getLightState: vi.fn(() => ({ sessions: [], status: 'ok' })),
     getLightSessionsState: vi.fn(() => {

@@ -22,11 +22,38 @@ import { tmpdir } from 'node:os';
 import { createMockRouteContext } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
+import { generateHooksConfig } from '../../src/hooks-config.js';
 
 interface HooksFile {
   hooks?: Record<string, Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>>;
   permissions?: unknown;
   model?: unknown;
+}
+
+/**
+ * A faithful PRE-SECRET Codeman hooks block (what a case created before COD-54
+ * contains): it targets /api/hook-event, so it is recognisably ours, but carries
+ * no X-Codeman-Hook-Secret header and no -k. Used to prove the self-heal still
+ * runs with the setting OFF.
+ */
+function staleCodemanHooks() {
+  return {
+    Stop: [
+      {
+        matcher: '',
+        hooks: [
+          {
+            type: 'command',
+            command:
+              "HOOK_DATA=$(cat 2>/dev/null || echo '{}'); " +
+              'printf \'{"event":"stop","sessionId":"%s","data":%s}\' "$CODEMAN_SESSION_ID" "$HOOK_DATA" | ' +
+              'curl -s -X POST "$CODEMAN_API_URL/api/hook-event" -H \'Content-Type: application/json\' --data @- 2>/dev/null || true',
+            timeout: 5,
+          },
+        ],
+      },
+    ],
+  };
 }
 
 describe('POST /api/sessions workspace hooks', () => {
@@ -38,6 +65,16 @@ describe('POST /api/sessions workspace hooks', () => {
 
   const createSession = (payload: Record<string, unknown>) =>
     app.inject({ method: 'POST', url: '/api/sessions', payload });
+
+  /** Rebuild the app with the `workspaceHooksEnabled` gate in a given position. */
+  const useApp = async (workspaceHooksEnabled: boolean) => {
+    await app?.close();
+    app = Fastify({ logger: false });
+    await app.register(fastifyCookie);
+    registerSessionRoutes(app, createMockRouteContext({ workspaceHooksEnabled }));
+    installRouteErrorHandler(app);
+    await app.ready();
+  };
 
   beforeEach(async () => {
     workingDir = await mkdtemp(join(tmpdir(), 'codeman-workspace-hooks-'));
@@ -107,5 +144,34 @@ describe('POST /api/sessions workspace hooks', () => {
 
     expect((await createSession({ name: 'hooks-malformed', mode: 'claude', workingDir })).statusCode).toBe(200);
     expect(await readFile(settingsPath(), 'utf-8')).toBe('{ not json');
+  });
+
+  it('adds nothing when workspaceHooksEnabled is OFF', async () => {
+    await useApp(false);
+
+    expect((await createSession({ name: 'hooks-off', mode: 'claude', workingDir })).statusCode).toBe(200);
+    expect(existsSync(settingsPath())).toBe(false);
+  });
+
+  it('still heals a stale Codeman block when workspaceHooksEnabled is OFF', async () => {
+    // The setting turns off ADDING hooks, not the COD-91 self-heal: a pre-secret
+    // block 401s against the now-unconditional hook-secret gate, so a workspace that
+    // already opted in must not be left with hooks that silently fail.
+    await useApp(false);
+    await mkdir(join(workingDir, '.claude'), { recursive: true });
+    await writeFile(settingsPath(), JSON.stringify({ model: 'opus', hooks: staleCodemanHooks() }));
+
+    expect((await createSession({ name: 'hooks-off-stale', mode: 'claude', workingDir })).statusCode).toBe(200);
+
+    const settings = await readSettings();
+    expect(settings.model).toBe('opus');
+    expect(JSON.stringify(settings.hooks)).toContain('X-Codeman-Hook-Secret');
+  });
+
+  it('writes the hooks the generator produces, so the two cannot drift', async () => {
+    expect((await createSession({ name: 'hooks-parity', mode: 'claude', workingDir })).statusCode).toBe(200);
+
+    const written = (await readSettings()).hooks ?? {};
+    expect(Object.keys(written).sort()).toEqual(Object.keys(generateHooksConfig().hooks).sort());
   });
 });

@@ -409,6 +409,9 @@ Object.assign(CodemanApp.prototype, {
     // Claude Permissions settings
     document.getElementById('appSettingsAgentTeams').checked = settings.agentTeamsEnabled ?? false;
     document.getElementById('appSettingsAgentSkill').checked = settings.agentSkillEnabled ?? false;
+    // Default ON: an absent key is a user who has never seen this setting, and OFF
+    // for them means no tab alerts in any workspace Codeman did not scaffold.
+    document.getElementById('appSettingsWorkspaceHooks').checked = settings.workspaceHooksEnabled !== false;
     document.getElementById('appSettingsClaudeModel').value = settings.claudeModel ?? '';
     document.getElementById('appSettingsOpusContext1m').checked = settings.opusContext1mEnabled ?? false;
     document.getElementById('appSettingsRemoteAutoReconnect').checked = settings.remoteAutoReconnect ?? true;
@@ -2017,6 +2020,7 @@ Object.assign(CodemanApp.prototype, {
       // Claude Permissions settings
       agentTeamsEnabled: document.getElementById('appSettingsAgentTeams').checked,
       agentSkillEnabled: document.getElementById('appSettingsAgentSkill').checked,
+      workspaceHooksEnabled: document.getElementById('appSettingsWorkspaceHooks').checked,
       claudeVoiceEnabled: document.getElementById('appSettingsClaudeVoice').checked,
       claudeModel: document.getElementById('appSettingsClaudeModel').value,
       opusContext1mEnabled: document.getElementById('appSettingsOpusContext1m').checked,

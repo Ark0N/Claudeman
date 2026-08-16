@@ -637,6 +637,7 @@ export class WebServer extends EventEmitter {
       getClaudeModeConfig: this.getClaudeModeConfig.bind(this),
       getTerminalHistoryConfig: this.getTerminalHistoryConfig.bind(this),
       getAgentSkillEnabled: this.getAgentSkillEnabled.bind(this),
+      getWorkspaceHooksEnabled: this.getWorkspaceHooksEnabled.bind(this),
       getClaudeVoiceEnabled: this.getClaudeVoiceEnabled.bind(this),
       getDefaultClaudeMdPath: this.getDefaultClaudeMdPath.bind(this),
       getLightState: this.getLightState.bind(this),
@@ -1709,6 +1710,16 @@ export class WebServer extends EventEmitter {
   private async getAgentSkillEnabled(): Promise<boolean> {
     const settings = await this.readSettings();
     return settings.agentSkillEnabled === true;
+  }
+
+  // Whether a Claude session installs Codeman's hooks block into its workspace
+  // (synced `workspaceHooksEnabled` setting). Default ON — an absent key means a
+  // user who has never seen this setting, and OFF for them would mean no tab
+  // alerts, no Approvals Inbox and no respawn idle signals in every workspace
+  // Codeman did not scaffold itself.
+  private async getWorkspaceHooksEnabled(): Promise<boolean> {
+    const settings = await this.readSettings();
+    return settings.workspaceHooksEnabled !== false;
   }
 
   // Whether browser dictation may use this machine's Claude Code credentials
@@ -2866,8 +2877,13 @@ export class WebServer extends EventEmitter {
    * Failures are swallowed per workspace: `ensureCodemanHooks` already refuses
    * unsafe targets with a warning, and a workspace we cannot write to must not
    * stop the rest of recovery.
+   *
+   * Skipped entirely when `workspaceHooksEnabled` is OFF: that setting exists so a
+   * user can keep Codeman out of their repos, and a boot-time sweep is the last
+   * place that should ignore it.
    */
   private async ensureHooksForRecoveredWorkspaces(): Promise<void> {
+    if (!(await this.getWorkspaceHooksEnabled())) return;
     const workspaces = new Set<string>();
     for (const session of this.sessions.values()) {
       if (session.mode !== 'claude' || session.remote) continue;
