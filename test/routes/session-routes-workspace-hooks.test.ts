@@ -10,6 +10,13 @@
  *
  * Asserts bytes on disk (the real `ensureCodemanHooks`), not a spy call.
  * Uses app.inject(), so no real HTTP port is needed.
+ *
+ * Also covers the post-#304 follow-ups: the quick-start existing-case branch, the
+ * docker branch's claude-only gate (a shell quick-start used to author a hooks
+ * block of its own), and the shared decision core `applyWorkspaceHooks` in
+ * hooks-config.ts — the function the non-route create paths (cron, scheduled runs,
+ * plan one-shots, the boot recovery sweep) go through, tested directly here
+ * including the sweep's deleted-workspace guard.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -22,8 +29,9 @@ import { tmpdir } from 'node:os';
 import { createMockRouteContext } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
-import { generateHooksConfig } from '../../src/hooks-config.js';
+import { generateHooksConfig, applyWorkspaceHooks } from '../../src/hooks-config.js';
 import { getDataDir } from '../../src/config/instance.js';
+import { CASES_DIR } from '../../src/web/route-helpers.js';
 
 interface HooksFile {
   hooks?: Record<string, Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>>;
@@ -141,11 +149,14 @@ describe('POST /api/sessions workspace hooks', () => {
 
   it('leaves the server cwd alone when workingDir is omitted', async () => {
     // workingDir falls back to process.cwd(), which is $HOME under installer-created
-    // services — hooks must not materialize in ~/.claude/settings.local.json.
+    // services — neither hooks NOR the statusLine exporter (same mkdir-into-cwd
+    // exposure, closed in the #304 follow-ups) may materialize in
+    // ~/.claude/settings.local.json.
     const cwdSettings = join(process.cwd(), '.claude', 'settings.local.json');
     const before = existsSync(cwdSettings) ? await readFile(cwdSettings, 'utf-8') : null;
 
-    expect((await createSession({ name: 'hooks-no-dir', mode: 'claude' })).statusCode).toBe(200);
+    const res = await createSession({ name: 'hooks-no-dir', mode: 'claude', statusLineTelemetry: true });
+    expect(res.statusCode).toBe(200);
 
     const after = existsSync(cwdSettings) ? await readFile(cwdSettings, 'utf-8') : null;
     expect(after).toBe(before);
@@ -154,7 +165,8 @@ describe('POST /api/sessions workspace hooks', () => {
   it('never writes hooks for a remote attach (workingDir is a user@host pseudo-path)', async () => {
     // A claude-mode attachRemoteSession create overwrites workingDir with
     // `user@host:session` — locally a RELATIVE path, so a mkdir would create it
-    // as a junk directory under the server cwd.
+    // as a junk directory under the server cwd. statusLineTelemetry rides along:
+    // applyStatusLineConfig mkdirs the same way and used to run for remote attaches.
     await mkdir(getDataDir(), { recursive: true });
     await writeFile(
       join(getDataDir(), 'remote-hosts.json'),
@@ -164,6 +176,7 @@ describe('POST /api/sessions workspace hooks', () => {
     const res = await createSession({
       name: 'hooks-remote',
       mode: 'claude',
+      statusLineTelemetry: true,
       attachRemoteSession: { hostId: 'h1', remoteSessionName: 'codeman-ssh-abc123' },
     });
     expect(res.statusCode).toBe(200);
@@ -205,5 +218,159 @@ describe('POST /api/sessions workspace hooks', () => {
 
     const written = (await readSettings()).hooks ?? {};
     expect(Object.keys(written).sort()).toEqual(Object.keys(generateHooksConfig().hooks).sort());
+  });
+});
+
+describe('POST /api/quick-start workspace hooks', () => {
+  let app: FastifyInstance;
+
+  const quickStart = (payload: Record<string, unknown>) =>
+    app.inject({ method: 'POST', url: '/api/quick-start', payload });
+
+  const hooksFileIn = (dir: string) => join(dir, '.claude', 'settings.local.json');
+
+  beforeEach(async () => {
+    app = Fastify({ logger: false });
+    await app.register(fastifyCookie);
+    registerSessionRoutes(app, createMockRouteContext());
+    installRouteErrorHandler(app);
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    await app.close();
+    // Docker fixtures + case dirs must not leak into the next test.
+    await rm(join(getDataDir(), 'docker-hosts.json'), { force: true });
+    await rm(join(getDataDir(), 'docker-cases.json'), { force: true });
+    await rm(CASES_DIR, { recursive: true, force: true });
+  });
+
+  it('installs hooks into an EXISTING case directory (a linked case / cloned repo)', async () => {
+    // The scaffold branch (writeHooksConfig) only runs when quick-start CREATES the
+    // directory; a pre-existing case takes the applyWorkspaceHooks branch instead.
+    const casePath = join(CASES_DIR, 'existingcase');
+    await mkdir(casePath, { recursive: true });
+
+    const res = await quickStart({ caseName: 'existingcase', mode: 'claude' });
+    expect(res.statusCode).toBe(200);
+
+    const raw = await readFile(hooksFileIn(casePath), 'utf-8');
+    expect(raw).toContain('X-Codeman-Hook-Secret');
+    expect(raw).toContain('/api/hook-event');
+  });
+
+  /** Minimal docker host + case fixtures (docker IO is no-op'd under vitest). */
+  const writeDockerFixtures = async (caseName: string, hostWorkspacePath: string) => {
+    await mkdir(getDataDir(), { recursive: true });
+    await writeFile(
+      join(getDataDir(), 'docker-hosts.json'),
+      JSON.stringify([{ id: 'd1', label: 'box', image: 'codeman/agent:base' }])
+    );
+    await writeFile(
+      join(getDataDir(), 'docker-cases.json'),
+      JSON.stringify([{ name: caseName, type: 'docker', hostId: 'd1', hostWorkspacePath }])
+    );
+  };
+
+  it('docker branch scaffolds hooks for a claude session', async () => {
+    // Companion to the shell test below: proves the docker fixture path is live,
+    // so the shell assertion cannot pass vacuously.
+    const ws = await mkdtemp(join(tmpdir(), 'codeman-docker-claude-'));
+    try {
+      await writeDockerFixtures('dockclaude', ws);
+
+      expect((await quickStart({ caseName: 'dockclaude', mode: 'claude' })).statusCode).toBe(200);
+      expect(await readFile(hooksFileIn(ws), 'utf-8')).toContain('X-Codeman-Hook-Secret');
+    } finally {
+      await rm(ws, { recursive: true, force: true });
+    }
+  });
+
+  it('docker branch authors NO hooks block for a shell session', async () => {
+    // The branch used to exclude only the five external CLIs, so a shell
+    // quick-start into a docker case wrote a `.claude` block of its own —
+    // contradicting the existing-case branch's rule that only claude reads it.
+    const ws = await mkdtemp(join(tmpdir(), 'codeman-docker-shell-'));
+    try {
+      await writeDockerFixtures('dockshell', ws);
+
+      expect((await quickStart({ caseName: 'dockshell', mode: 'shell' })).statusCode).toBe(200);
+      expect(existsSync(join(ws, '.claude'))).toBe(false);
+    } finally {
+      await rm(ws, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('applyWorkspaceHooks (the shared decision core in hooks-config)', () => {
+  // The non-route claude create paths — cron fires, legacy scheduled runs, the
+  // plan-orchestrator one-shots, the boot recovery sweep — call this function
+  // directly, so its contract is tested here rather than by spinning those up.
+  let workspace: string;
+
+  const appSettingsPath = () => join(getDataDir(), 'settings.json');
+  const wsSettingsPath = () => join(workspace, '.claude', 'settings.local.json');
+
+  const setWorkspaceHooksSetting = async (enabled: boolean) => {
+    await mkdir(getDataDir(), { recursive: true });
+    await writeFile(appSettingsPath(), JSON.stringify({ workspaceHooksEnabled: enabled }));
+  };
+
+  beforeEach(async () => {
+    workspace = await mkdtemp(join(tmpdir(), 'codeman-hooks-core-'));
+  });
+
+  afterEach(async () => {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(appSettingsPath(), { force: true });
+  });
+
+  it('installs hooks with no settings.json at all (absent key = default ON)', async () => {
+    await applyWorkspaceHooks(workspace);
+
+    const raw = await readFile(wsSettingsPath(), 'utf-8');
+    expect(raw).toContain('X-Codeman-Hook-Secret');
+    expect(raw).toContain('curl -sk -X POST');
+  });
+
+  it('never ADDS a hooks block when workspaceHooksEnabled is OFF', async () => {
+    await setWorkspaceHooksSetting(false);
+
+    await applyWorkspaceHooks(workspace);
+    expect(existsSync(wsSettingsPath())).toBe(false);
+  });
+
+  it('still heals a stale Codeman block when the setting is OFF (COD-91 self-heal)', async () => {
+    await setWorkspaceHooksSetting(false);
+    await mkdir(join(workspace, '.claude'), { recursive: true });
+    await writeFile(wsSettingsPath(), JSON.stringify({ model: 'opus', hooks: staleCodemanHooks() }));
+
+    await applyWorkspaceHooks(workspace);
+
+    const settings: HooksFile = JSON.parse(await readFile(wsSettingsPath(), 'utf-8'));
+    expect(settings.model).toBe('opus');
+    expect(JSON.stringify(settings.hooks)).toContain('X-Codeman-Hook-Secret');
+  });
+
+  it('leaves a malformed settings file untouched rather than replacing it', async () => {
+    await mkdir(join(workspace, '.claude'), { recursive: true });
+    await writeFile(wsSettingsPath(), '{ not json');
+
+    await applyWorkspaceHooks(workspace);
+    expect(await readFile(wsSettingsPath(), 'utf-8')).toBe('{ not json');
+  });
+
+  it('skips a workspace that no longer exists (the boot-sweep resurrection bug)', async () => {
+    // ensureCodemanHooks mkdir -p's, so the sweep used to recreate a DELETED repo
+    // as an empty directory tree holding only .claude/settings.local.json.
+    const gone = join(workspace, 'deleted-repo');
+
+    // install=true mirrors the boot sweep's call shape (setting pre-resolved ON).
+    await applyWorkspaceHooks(gone, true);
+    expect(existsSync(gone)).toBe(false);
+
+    // The setting-driven shape must skip it too.
+    await applyWorkspaceHooks(gone);
+    expect(existsSync(gone)).toBe(false);
   });
 });

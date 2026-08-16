@@ -76,7 +76,7 @@ import { RunSummaryTracker } from '../run-summary.js';
 import { PlanOrchestrator } from '../plan-orchestrator.js';
 import { OrchestratorLoop } from '../orchestrator-loop.js';
 import { getLifecycleLog } from '../session-lifecycle-log.js';
-import { ensureCodemanHooks } from '../hooks-config.js';
+import { applyWorkspaceHooks } from '../hooks-config.js';
 import { PushSubscriptionStore } from '../push-store.js';
 import webpush from 'web-push';
 import { SseStreamManager } from './sse-stream-manager.js';
@@ -1819,6 +1819,14 @@ export class WebServer extends EventEmitter {
 
       let session: Session | null = null;
       try {
+        // Workspace hooks for this iteration's session — legacy scheduled runs are
+        // always claude-mode and always local, and used to bypass the shared decision
+        // entirely: a scheduled run firing in a linked case that never had an
+        // interactive session ran hook-blind (see applyWorkspaceHooks in hooks-config;
+        // it reads the `workspaceHooksEnabled` setting itself, skips a vanished
+        // workingDir, and swallows failures — a run must never fail on hooks).
+        await applyWorkspaceHooks(run.workingDir);
+
         // Create a session for this iteration.
         if (isMultiUserMode()) {
           // §6.3: resolve the permission mode with the RUN OWNER (a non-granted user
@@ -2886,6 +2894,11 @@ export class WebServer extends EventEmitter {
    * Skipped entirely when `workspaceHooksEnabled` is OFF: that setting exists so a
    * user can keep Codeman out of their repos, and a boot-time sweep is the last
    * place that should ignore it.
+   *
+   * A workspace that no longer EXISTS is skipped by applyWorkspaceHooks: a tmux
+   * session can outlive its deleted repo, and `ensureCodemanHooks` mkdir -p's, so
+   * the sweep used to resurrect the directory as an empty tree holding only
+   * `.claude/settings.local.json`.
    */
   private async ensureHooksForRecoveredWorkspaces(): Promise<void> {
     if (!(await this.getWorkspaceHooksEnabled())) return;
@@ -2896,7 +2909,9 @@ export class WebServer extends EventEmitter {
       if (session.workingDir) workspaces.add(session.workingDir);
     }
     for (const workspace of workspaces) {
-      await ensureCodemanHooks(workspace).catch(() => {});
+      // install=true: the setting was already resolved ON above for the whole batch
+      // (OFF skips the sweep wholesale, keeping its documented semantics).
+      await applyWorkspaceHooks(workspace, true);
     }
   }
 
