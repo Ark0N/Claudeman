@@ -1,5 +1,15 @@
 # aicodeman
 
+## 1.19.0
+
+### Minor Changes
+
+- c01edcb: Add an optional collapsible left session sidebar as an alternative to the header tab strip.
+
+  With many concurrent sessions the horizontal strip wraps into several rows and stops being scannable. The new layout puts the session list in a vertical `<aside>` with a filter box and a live session count, collapsible to a 44px rail that keeps the status dots and task badges visible.
+
+  Opt-in via Settings → Layout → Tabs → Session List Layout; the default stays the header strip, so nothing changes unless you switch. Both layouts share one `#sessionTabs` element that is re-parented between mount points, so every existing affordance (status, mode badge, alerts, drag-reorder, keyboard navigation, web tabs, subagent windows) behaves identically in both. Below 1024px the sidebar is an off-canvas drawer that overlays the terminal instead of shrinking it. Collapse state persists per device; `Alt+B` toggles it.
+
 ## 1.18.4
 
 ### Patch Changes
