@@ -15,6 +15,7 @@
 
 import type { UnifiedSessionItem } from '../services/unified-session-service.js';
 import type { ApprovalItem } from '../web/approval-inbox.js';
+import type { TuiComposerState } from './tui-composer.js';
 
 /**
  * A unified-list row plus the few live-only extras the dashboard shows.
@@ -77,7 +78,7 @@ export interface TuiGroup {
 export type TuiConnectionStatus = 'connected' | 'reconnecting' | 'degraded' | 'down';
 
 /** Which overlay (if any) owns the keyboard. */
-export type TuiUiMode = 'list' | 'help' | 'confirm-kill' | 'prompt' | 'search' | 'message' | 'new-session';
+export type TuiUiMode = 'list' | 'help' | 'confirm-kill' | 'prompt' | 'search' | 'digest' | 'message' | 'new-session';
 
 /**
  * Glyph capability tier. Detection is env-driven and therefore lives in a tiny
@@ -102,6 +103,12 @@ export interface TuiPreview {
   lines: string[];
   /** Set instead of lines when the tail could not be fetched. */
   error?: string;
+  /**
+   * Set instead of lines when there is nothing to fetch (a history row has no
+   * live buffer). Distinct from `error`: nothing failed, so it must not read
+   * like something did.
+   */
+  note?: string;
 }
 
 export interface TuiMessage {
@@ -140,6 +147,46 @@ export interface TuiPickerState {
   hint?: string;
 }
 
+/** The `p` composer: one line aimed at one session. */
+export interface TuiPromptState {
+  sessionId: string;
+  /** What the session is called on screen, for the footer prefix. */
+  label: string;
+  composer: TuiComposerState;
+}
+
+/**
+ * One line of the `/` overlay. Group headers are chrome (the API returns typed
+ * groups), so only `result` rows are selectable.
+ */
+export interface TuiSearchEntry {
+  kind: 'header' | 'result';
+  text: string;
+  detail?: string;
+  sessionId?: string;
+  /** The row can hand the dashboard a session that is open right now. */
+  live?: boolean;
+}
+
+export interface TuiSearchState {
+  composer: TuiComposerState;
+  /** The query `entries` answer. Lags the composer while a search is in flight. */
+  query: string;
+  entries: TuiSearchEntry[];
+  /** Index into `entries`, always a `result` row; -1 when none is selectable. */
+  index: number;
+  status: 'idle' | 'searching' | 'done' | 'error';
+  /** One line under the query: what happened, or why there is nothing. */
+  note?: string;
+}
+
+/** The `g` overlay: pre-formatted lines plus where the window starts. */
+export interface TuiDigestState {
+  title: string;
+  lines: string[];
+  offset: number;
+}
+
 /**
  * What `renderFrame()` reads. The store implements it; a test can hand-build
  * one, which is what keeps the renderer testable without the model.
@@ -155,6 +202,9 @@ export interface TuiRenderModel {
   readonly confirm: TuiConfirmState | null;
   /** Optional so a test can hand-build a model without one. */
   readonly picker?: TuiPickerState | null;
+  readonly prompt?: TuiPromptState | null;
+  readonly search?: TuiSearchState | null;
+  readonly digest?: TuiDigestState | null;
   /** Live sessions only (RECENT rows are history, not sessions you have open). */
   readonly sessionCount: number;
 }

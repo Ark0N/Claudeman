@@ -18,18 +18,23 @@
  * @module tui/tui-model
  */
 
+import type { SearchResultGroup, SearchSourceType } from '../types/search.js';
 import type { ApprovalItem } from '../web/approval-inbox.js';
 import type {
   TuiConfirmState,
   TuiConnectionStatus,
+  TuiDigestState,
   TuiGroup,
   TuiGroupKey,
   TuiHeaderInfo,
   TuiMessage,
   TuiPickerState,
   TuiPreview,
+  TuiPromptState,
   TuiRenderModel,
   TuiRow,
+  TuiSearchEntry,
+  TuiSearchState,
   TuiSessionRow,
   TuiSessionState,
   TuiUiMode,
@@ -193,6 +198,71 @@ export function mergeSessionRow(existing: TuiSessionRow, incoming: TuiSessionRow
   return merged;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Search results (pure)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SEARCH_GROUP_LABELS: Record<SearchSourceType, string> = {
+  session: 'SESSIONS',
+  event: 'EVENTS',
+  file: 'FILES',
+};
+
+/**
+ * Flatten `GET /api/search`'s typed groups into the overlay's lines: a header
+ * per group, then its results. Only a result row carries a session id, which is
+ * what the cursor uses to skip headers.
+ *
+ * `isLive` decides which rows can hand the dashboard a session: a history hit
+ * has a session id too, but selecting it would move the cursor to a row that is
+ * not on the list.
+ */
+export function buildSearchEntries(
+  groups: readonly SearchResultGroup[],
+  isLive: (sessionId: string) => boolean
+): TuiSearchEntry[] {
+  const entries: TuiSearchEntry[] = [];
+  for (const group of groups) {
+    if (group.results.length === 0) continue;
+    entries.push({ kind: 'header', text: SEARCH_GROUP_LABELS[group.type] ?? group.type.toUpperCase() });
+    for (const result of group.results) {
+      const live = result.jumpTo.kind === 'session' && isLive(result.sessionId);
+      entries.push({
+        kind: 'result',
+        text: result.jumpTo.relativePath ?? result.sessionName ?? result.sessionId.slice(0, 8),
+        detail: result.snippet,
+        sessionId: result.sessionId,
+        live,
+      });
+    }
+  }
+  return entries;
+}
+
+/** First selectable row, or -1 when the list is all headers (or empty). */
+export function firstSearchIndex(entries: readonly TuiSearchEntry[]): number {
+  return entries.findIndex((entry) => entry.kind === 'result');
+}
+
+/**
+ * Move the search cursor by `delta` result rows, skipping headers and stopping
+ * at both ends (wrapping a search result list scrolls past the answer the user
+ * was reading).
+ */
+export function moveSearchIndex(entries: readonly TuiSearchEntry[], index: number, delta: number): number {
+  const step = Math.trunc(delta);
+  if (step === 0) return index;
+  const direction = step > 0 ? 1 : -1;
+  let current = index;
+  for (let remaining = Math.abs(step); remaining > 0; remaining--) {
+    let next = current + direction;
+    while (next >= 0 && next < entries.length && entries[next].kind !== 'result') next += direction;
+    if (next < 0 || next >= entries.length) break;
+    current = next;
+  }
+  return current;
+}
+
 /**
  * The dashboard's state. Update methods mutate in place (one store per TUI
  * process, no subscribers) and every derived view is recomputed from scratch,
@@ -211,6 +281,9 @@ export class TuiModelStore implements TuiRenderModel {
   message: TuiMessage | null = null;
   confirm: TuiConfirmState | null = null;
   picker: TuiPickerState | null = null;
+  prompt: TuiPromptState | null = null;
+  search: TuiSearchState | null = null;
+  digest: TuiDigestState | null = null;
   recentLimit: number;
 
   constructor(options: GroupOptions = {}) {
@@ -309,6 +382,52 @@ export class TuiModelStore implements TuiRenderModel {
     this.touch();
   }
 
+  /** Open (or close) the one-line prompt composer. Setting one takes the keyboard. */
+  setPrompt(prompt: TuiPromptState | null): void {
+    this.prompt = prompt;
+    this.mode = prompt ? 'prompt' : 'list';
+    this.touch();
+  }
+
+  /** Replace the composer's editor state, keeping the target session. */
+  updatePrompt(composer: TuiPromptState['composer']): void {
+    if (!this.prompt || this.prompt.composer === composer) return;
+    this.prompt = { ...this.prompt, composer };
+    this.touch();
+  }
+
+  setSearch(search: TuiSearchState | null): void {
+    this.search = search;
+    this.mode = search ? 'search' : 'list';
+    this.touch();
+  }
+
+  /** Fold a partial update into the open search overlay. No-op when it is closed. */
+  updateSearch(patch: Partial<TuiSearchState>): void {
+    if (!this.search) return;
+    this.search = { ...this.search, ...patch };
+    this.touch();
+  }
+
+  setDigest(digest: TuiDigestState | null): void {
+    this.digest = digest;
+    this.mode = digest ? 'digest' : 'list';
+    this.touch();
+  }
+
+  /**
+   * Scroll the digest by `delta` lines. `capacity` is how many lines the box
+   * shows, so the last page cannot scroll into empty space.
+   */
+  scrollDigest(delta: number, capacity: number): void {
+    if (!this.digest) return;
+    const room = Math.max(0, this.digest.lines.length - Math.max(1, Math.trunc(capacity)));
+    const offset = Math.min(Math.max(0, this.digest.offset + Math.trunc(delta)), room);
+    if (offset === this.digest.offset) return;
+    this.digest = { ...this.digest, offset };
+    this.touch();
+  }
+
   /** Arm the typed-name confirmation for `x` (kill). */
   beginConfirmKill(row: TuiRow): void {
     this.confirm = {
@@ -336,6 +455,9 @@ export class TuiModelStore implements TuiRenderModel {
     this.confirm = null;
     this.message = null;
     this.picker = null;
+    this.prompt = null;
+    this.search = null;
+    this.digest = null;
     this.mode = 'list';
     this.touch();
   }

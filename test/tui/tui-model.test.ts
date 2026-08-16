@@ -8,13 +8,18 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { ApprovalItem } from '../../src/web/approval-inbox.js';
+import type { SearchResultGroup } from '../../src/types/search.js';
+import { createComposer } from '../../src/tui/tui-composer.js';
 import {
   buildRows,
+  buildSearchEntries,
   classifySession,
   createTuiModel,
+  firstSearchIndex,
   flattenRows,
   groupSessions,
   mergeSessionRow,
+  moveSearchIndex,
 } from '../../src/tui/tui-model.js';
 import type { TuiSessionRow } from '../../src/tui/tui-types.js';
 
@@ -279,5 +284,107 @@ describe('the store', () => {
     expect(model.approvalFor('a')).toBeDefined();
     model.removeSession('a');
     expect(model.approvalFor('a')).toBeUndefined();
+  });
+});
+
+describe('the phase-2 overlays', () => {
+  it('gives one overlay the keyboard at a time and clears them together', () => {
+    const model = createTuiModel();
+    model.setPrompt({ sessionId: 'a', label: 'w4-api', composer: createComposer('hi') });
+    expect(model.mode).toBe('prompt');
+    model.setSearch({ composer: createComposer(), query: '', entries: [], index: -1, status: 'idle' });
+    expect(model.mode).toBe('search');
+    model.setDigest({ title: 'Away digest', lines: ['a', 'b'], offset: 0 });
+    expect(model.mode).toBe('digest');
+    model.closeOverlay();
+    expect(model.mode).toBe('list');
+    expect([model.prompt, model.search, model.digest]).toEqual([null, null, null]);
+  });
+
+  it('keeps the composer pointed at its session while the text changes', () => {
+    const model = createTuiModel();
+    model.setPrompt({ sessionId: 'a', label: 'w4-api', composer: createComposer() });
+    const revision = model.revision;
+    model.updatePrompt(createComposer('deploy'));
+    expect(model.prompt?.sessionId).toBe('a');
+    expect(model.revision).toBeGreaterThan(revision);
+  });
+
+  it('scrolls the digest without running off either end', () => {
+    const model = createTuiModel();
+    model.setDigest({ title: 'Away digest', lines: Array.from({ length: 10 }, (_, i) => `line ${i}`), offset: 0 });
+    model.scrollDigest(3, 4);
+    expect(model.digest?.offset).toBe(3);
+    model.scrollDigest(100, 4);
+    expect(model.digest?.offset).toBe(6);
+    model.scrollDigest(-100, 4);
+    expect(model.digest?.offset).toBe(0);
+  });
+});
+
+describe('search results', () => {
+  const groups: SearchResultGroup[] = [
+    {
+      type: 'session',
+      results: [
+        {
+          type: 'session',
+          sessionId: 'live-1',
+          sessionName: 'w1-alpha',
+          timestamp: NOW,
+          snippet: '/tmp/alpha',
+          exactMatch: true,
+          jumpTo: { kind: 'session', sessionId: 'live-1' },
+        },
+        {
+          type: 'session',
+          sessionId: 'past-1',
+          sessionName: 'w9-old',
+          timestamp: NOW - 1000,
+          snippet: '/tmp/old',
+          exactMatch: false,
+          jumpTo: { kind: 'resume-session', sessionId: 'past-1' },
+        },
+      ],
+    },
+    {
+      type: 'file',
+      results: [
+        {
+          type: 'file',
+          sessionId: 'live-1',
+          sessionName: 'w1-alpha',
+          timestamp: NOW,
+          snippet: 'notes.md',
+          exactMatch: false,
+          jumpTo: { kind: 'file-preview', sessionId: 'live-1', relativePath: 'docs/notes.md' },
+        },
+      ],
+    },
+  ];
+
+  it('flattens the typed groups into headers and rows', () => {
+    const entries = buildSearchEntries(groups, (id) => id === 'live-1');
+    expect(entries.map((entry) => entry.kind)).toEqual(['header', 'result', 'result', 'header', 'result']);
+    expect(entries[0].text).toBe('SESSIONS');
+    expect(entries[1]).toMatchObject({ text: 'w1-alpha', sessionId: 'live-1', live: true });
+    // A session that is not on the list cannot be selected into.
+    expect(entries[2]).toMatchObject({ text: 'w9-old', live: false });
+    expect(entries[4]).toMatchObject({ text: 'docs/notes.md', live: false });
+  });
+
+  it('drops an empty group instead of printing a header with nothing under it', () => {
+    expect(buildSearchEntries([{ type: 'event', results: [] }], () => false)).toEqual([]);
+  });
+
+  it('starts on the first result and never lands on a header', () => {
+    const entries = buildSearchEntries(groups, () => true);
+    expect(firstSearchIndex(entries)).toBe(1);
+    expect(moveSearchIndex(entries, 1, 1)).toBe(2);
+    expect(moveSearchIndex(entries, 2, 1)).toBe(4);
+    // Both ends stop rather than wrap: a result list is read, not cycled.
+    expect(moveSearchIndex(entries, 4, 1)).toBe(4);
+    expect(moveSearchIndex(entries, 1, -1)).toBe(1);
+    expect(firstSearchIndex([])).toBe(-1);
   });
 });
