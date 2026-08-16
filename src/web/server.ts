@@ -76,6 +76,7 @@ import { RunSummaryTracker } from '../run-summary.js';
 import { PlanOrchestrator } from '../plan-orchestrator.js';
 import { OrchestratorLoop } from '../orchestrator-loop.js';
 import { getLifecycleLog } from '../session-lifecycle-log.js';
+import { ensureCodemanHooks } from '../hooks-config.js';
 import { PushSubscriptionStore } from '../push-store.js';
 import webpush from 'web-push';
 import { SseStreamManager } from './sse-stream-manager.js';
@@ -636,6 +637,7 @@ export class WebServer extends EventEmitter {
       getClaudeModeConfig: this.getClaudeModeConfig.bind(this),
       getTerminalHistoryConfig: this.getTerminalHistoryConfig.bind(this),
       getAgentSkillEnabled: this.getAgentSkillEnabled.bind(this),
+      getWorkspaceHooksEnabled: this.getWorkspaceHooksEnabled.bind(this),
       getClaudeVoiceEnabled: this.getClaudeVoiceEnabled.bind(this),
       getDefaultClaudeMdPath: this.getDefaultClaudeMdPath.bind(this),
       getLightState: this.getLightState.bind(this),
@@ -1708,6 +1710,16 @@ export class WebServer extends EventEmitter {
   private async getAgentSkillEnabled(): Promise<boolean> {
     const settings = await this.readSettings();
     return settings.agentSkillEnabled === true;
+  }
+
+  // Whether a Claude session installs Codeman's hooks block into its workspace
+  // (synced `workspaceHooksEnabled` setting). Default ON — an absent key means a
+  // user who has never seen this setting, and OFF for them would mean no tab
+  // alerts, no Approvals Inbox and no respawn idle signals in every workspace
+  // Codeman did not scaffold itself.
+  private async getWorkspaceHooksEnabled(): Promise<boolean> {
+    const settings = await this.readSettings();
+    return settings.workspaceHooksEnabled !== false;
   }
 
   // Whether browser dictation may use this machine's Claude Code credentials
@@ -2819,6 +2831,13 @@ export class WebServer extends EventEmitter {
           }
         }
 
+        // Sessions recovered from a previous run predate the create-path hook
+        // install, and these are long-lived: by the time a server restart comes
+        // round a session may be days old and has been running hook-blind the
+        // whole time. Claude Code re-reads settings.local.json, so writing the
+        // block now arms the RUNNING CLI, no session restart needed.
+        await this.ensureHooksForRecoveredWorkspaces();
+
         // Start stats collection for mux sessions
         this.mux.startStatsCollection(STATS_COLLECTION_INTERVAL_MS);
       }
@@ -2842,6 +2861,37 @@ export class WebServer extends EventEmitter {
       }
     } catch (err) {
       console.error('[Server] Failed to restore mux sessions:', err);
+    }
+  }
+
+  /**
+   * Install Codeman's hooks into the workspaces of the sessions just recovered.
+   *
+   * Deduped by workspace, because sessions in one repo share a single
+   * `.claude/settings.local.json` and the write is otherwise repeated per tab.
+   * Claude mode only (nothing else reads `.claude` hooks), never for remote
+   * sessions (their `workingDir` is a path on ANOTHER host, so writing it here
+   * would scaffold a stray directory locally), and never for a docker case that
+   * opted out of hooks.
+   *
+   * Failures are swallowed per workspace: `ensureCodemanHooks` already refuses
+   * unsafe targets with a warning, and a workspace we cannot write to must not
+   * stop the rest of recovery.
+   *
+   * Skipped entirely when `workspaceHooksEnabled` is OFF: that setting exists so a
+   * user can keep Codeman out of their repos, and a boot-time sweep is the last
+   * place that should ignore it.
+   */
+  private async ensureHooksForRecoveredWorkspaces(): Promise<void> {
+    if (!(await this.getWorkspaceHooksEnabled())) return;
+    const workspaces = new Set<string>();
+    for (const session of this.sessions.values()) {
+      if (session.mode !== 'claude' || session.remote) continue;
+      if (session.docker && !session.docker.hooksEnabled) continue;
+      if (session.workingDir) workspaces.add(session.workingDir);
+    }
+    for (const workspace of workspaces) {
+      await ensureCodemanHooks(workspace).catch(() => {});
     }
   }
 

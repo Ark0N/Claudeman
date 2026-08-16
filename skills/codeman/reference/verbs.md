@@ -30,28 +30,40 @@ wrong directory.** `quick-start` with a new `caseName` does not find your repo: 
 | Where the work is | Call | Hooks, and therefore signals |
 |-------------------|------|------------------------------|
 | a fresh scratch dir (throwaway experiments) | `POST /api/v1/quick-start {"caseName":"scratch-1","mode":"claude"}` with a **new** case name | Codeman creates the directory and **writes hooks**: `stop` and `blocked` fire, send-and-wait is trustworthy |
-| a linked case (a real repo in the linked-cases registry) | same call with the linked name | **no hooks**, unless that repo already carries a Codeman hooks block from some earlier path. Check before relying on `stop` |
-| any other absolute path, e.g. a git worktree you made | `POST /api/v1/sessions {"workingDir":"/abs/path","mode":"claude"}` then `POST /api/v1/sessions/:id/interactive` | **no hooks**: no `stop`, no `blocked`, synchronize with markers ([§5.5](#55-markers-for-hook-less-workers)) |
+| a linked case (a real repo in the linked-cases registry) | same call with the linked name | **hooks installed at session create**, so `stop` fires here too. Not guaranteed: the operator can turn it off. Check |
+| any other absolute path, e.g. a git worktree you made | `POST /api/v1/sessions {"workingDir":"/abs/path","mode":"claude"}` then `POST /api/v1/sessions/:id/interactive` | same: **hooks installed at session create**, subject to the same setting. Check |
 
 Read `.data.casePath` back from the `quick-start` response and check it is where you
 meant. `caseName` accepts letters, digits, `-` and `_` only, and it resolves through
 the linked-cases registry **first**, so a name that collides with something the user
 linked in lands in that real repo rather than a scratch dir.
 
-**The rule is who created the directory.** Codeman writes hooks only where it created
-the workspace itself: `quick-start` on a NEW case name, `POST /api/cases`, the repo
-clone, the docker quick-create. Those hooks persist, so a scratch case created last
-week still has them today. A directory that already existed when Codeman first pointed
-at it never gets them: `POST /api/cases/link` writes only the name-to-path entry in
-`linked-cases.json`, and quick-start into an existing path runs
-`refreshStaleCodemanHooks()`, which by design returns immediately when there is no
-Codeman hooks block to refresh. Source-verified by exhaustive call-site grep, and
-measured: a worker in a linked case never resolved a parked `wait?until=stop,exit`
-across twelve consecutive 60 s rounds, although it had finished its turn.
+**The rule is a setting, not who created the directory.** Every claude create path
+(`POST /api/sessions`, `POST /api/quick-start`, and quick-start's docker branch) now
+installs the hooks block into the workspace, and the server sweeps the workspaces of
+sessions it recovers at boot. So a linked case, a cloned repo and a hand-made git
+worktree all get `stop`/`blocked`, not just a scratch case Codeman scaffolded. The
+install is an **add-only merge**: a user's own hook entries and every other settings
+key survive, and a malformed settings file is left alone.
 
-**Check, do not assume.** Read `<casePath>/.claude/settings.local.json` with your own
-file tools and look for `/api/hook-event`. Present means `stop`/`blocked` will fire;
-absent means they never will.
+The gate is the synced **`workspaceHooksEnabled`** setting, **default ON** (an absent
+key counts as ON). Turned OFF, the old behavior returns exactly: an existing Codeman
+block is still refreshed when stale, but one is never added, and the boot sweep is
+skipped. Three cases stay hook-less regardless: **remote SSH sessions** (their
+`workingDir` is a path on another host), **docker cases that opted out**, and any
+workspace Codeman cannot write to.
+
+Until this landed, hooks existed only where Codeman created the directory, and the
+gap was invisible: a worker in a linked case never resolved a parked
+`wait?until=stop,exit` across twelve consecutive 60 s rounds, although it had finished
+its turn. If you are driving an older server, assume that older rule.
+
+**Check, do not assume.** This is now the load-bearing habit, because you cannot tell
+from the call which way the setting is set, and an old session created before the fix
+on a server that has not restarted still has nothing. Read
+`<casePath>/.claude/settings.local.json` with your own file tools and look for
+`/api/hook-event`. Present means `stop`/`blocked` will fire; absent means they never
+will, whatever kind of workspace it is.
 
 ⚠️ **The hook-less failure is silent, and it is the worst one in this skill.**
 `"wait":true` is still **accepted** on a hook-less claude session: the 400 you may be
@@ -59,9 +71,10 @@ expecting is about session *mode*, not about hooks. With no `stop` to resolve on
 default signal set falls back to the heuristic `idle`, which flaps mid-turn, so
 send-and-wait returns "finished" while the worker is still working, and the
 `last-response` you read next hands you the **previous** turn's text. No error is
-raised anywhere. In any workspace Codeman did not create, use markers
-([§5.5](#55-markers-for-hook-less-workers)) and treat send-and-wait's answer as
-unreliable.
+raised anywhere. Hooks are installed by default now, so this is rarer than it was, but
+the failure is unchanged when it happens: in any workspace whose settings file has no
+`/api/hook-event`, use markers ([§5.5](#55-markers-for-hook-less-workers)) and treat
+send-and-wait's answer as unreliable.
 
 Spawning at a raw path:
 
@@ -238,11 +251,13 @@ fi
 
 ### 5.3 Send a task and wait
 
-⚠️ **Precondition: this is the call to prefer only for a claude worker in a workspace
-Codeman created**, because it is trustworthy only when the `stop` hook exists. On a
-linked case or a raw path it is accepted, resolves on flapping `idle`, and reports a
-turn as finished while it is still running, with no error anywhere. Check hooks first
-([§5.1](#51-where-to-spawn)); where they are absent, use markers
+⚠️ **Precondition: a claude worker whose workspace has the hooks block**, because
+this is trustworthy only when the `stop` hook exists. Every claude create path installs
+it by default now, so that is the normal case, but where it is absent (the setting off,
+a remote session, an older server) the call is still accepted, resolves on flapping
+`idle`, and reports a turn as finished while it is still running, with no error
+anywhere. Check hooks first ([§5.1](#51-where-to-spawn)); where they are absent, use
+markers
 ([§5.5](#55-markers-for-hook-less-workers)).
 
 It registers the waiter *before* typing,

@@ -47,7 +47,7 @@ later call opens with, and your first REAL call performs them anyway:
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null
-[ "${CODEMAN_PREAMBLE:-}" = 1.18.3 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
+[ "${CODEMAN_PREAMBLE:-}" = 1.19.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
 ```
 
 ⚠️ **Never spend a Bash call on this check alone.** §1's block opens with this same
@@ -75,8 +75,8 @@ PRE="${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh"
 mkdir -p "$(dirname "$PRE")"
 # Rewrite unless the file already ends with THIS version's stamp, so a stale or a
 # half-written file self-heals here instead of costing you a round trip to rm it.
-grep -qs '^CODEMAN_PREAMBLE=1.18.3$' "$PRE" || (umask 077; cat > "$PRE" <<'PREAMBLE'
-# ---- Codeman agent preamble 1.18.3 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
+grep -qs '^CODEMAN_PREAMBLE=1.19.0$' "$PRE" || (umask 077; cat > "$PRE" <<'PREAMBLE'
+# ---- Codeman agent preamble 1.19.0 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
 API="${CODEMAN_API_URL:?CODEMAN_API_URL not set; refusing to guess}"
 SELF="${CODEMAN_SESSION_ID:?CODEMAN_SESSION_ID not set}"
 # Credentials, cheapest first. Your session has usually INHERITED the server's
@@ -138,14 +138,14 @@ spawn_worker() {
   # NOT retryable in a loop: every quick-start failure code is terminal (§5.1).
   [ -n "$sid" ] || { jq -c '{error,errorCode}' <<<"$q" >&2; return 1; }
   [ "$mode" = claude ] || { printf '%s\n' "$sid"; return 0; }   # only claude draws a composer
-  # quick-start RESOLVES the name before creating: a linked case or an existing dir
-  # wins over a fresh scratch case, so "created => hooks" is only true after this one
-  # local grep (the same marker the server itself checks for). No marker means sendwait
-  # would false-resolve on flapping idle, possibly inside the user's REAL repo: refuse
-  # rather than run the job there.
+  # The server installs hooks into every claude workspace now, so this grep normally
+  # passes; it stays because the install is gated on a setting the operator can turn
+  # off, remote sessions never get hooks, and a session created by an older server
+  # still has none. No marker means sendwait would false-resolve on flapping idle,
+  # possibly inside the user's REAL repo: refuse rather than run the job there.
   cp=$(jq -r '.data.casePath // empty' <<<"$q")
   grep -qs '/api/hook-event' "$cp/.claude/settings.local.json" || {
-    echo "case '$name' resolved to '$cp', which has no Codeman hooks (linked or pre-existing?): pick an unused name, or work §5.1+§5.5 by hand" >&2
+    echo "case '$name' resolved to '$cp', which has no Codeman hooks (workspaceHooksEnabled off, remote, or an older server?): turn the setting on, or work §5.1+§5.5 by hand with markers" >&2
     delete_session "$sid" >/dev/null; return 1; }
   # Short composer wait FIRST, then the trust-dialog probe: a case still showing the
   # dialog can never pass the composer wait, so probing early keeps a cold case from
@@ -233,10 +233,10 @@ last_text() {
 # The stamp is the LAST line on purpose (a truncated write leaves it unset) and is kept
 # bare on purpose: the write condition above anchors on it with $, so an inline comment
 # here would fail that match and rewrite this file on every single bootstrap.
-CODEMAN_PREAMBLE=1.18.3
+CODEMAN_PREAMBLE=1.19.0
 PREAMBLE
 )
-. "$PRE"; [ "${CODEMAN_PREAMBLE:-}" = 1.18.3 ] || { echo "preamble at $PRE is stale or truncated: rm it and re-run this block"; exit 1; }
+. "$PRE"; [ "${CODEMAN_PREAMBLE:-}" = 1.19.0 ] || { echo "preamble at $PRE is stale or truncated: rm it and re-run this block"; exit 1; }
 ```
 
 Every later Bash call that touches the API starts with the same two loader lines from
@@ -287,7 +287,7 @@ and no per-call body to hand-build.
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null   # §0 loader
-[ "${CODEMAN_PREAMBLE:-}" = 1.18.3 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
+[ "${CODEMAN_PREAMBLE:-}" = 1.19.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
 N=(alpha beta)                    # INVENT one fresh case name per worker; never list cases first
 T=('reply with one line: the absolute path of your working directory'
    'reply with one line: your model name')            # tasks, same order as N
@@ -343,7 +343,8 @@ Four things this block leans on, each one link away, no detour needed to run it:
   `~/codeman-cases/<name>`, not your repo. A name that already means something (a
   linked case, a pre-existing directory) is refused by `spawn_worker` rather than
   silently reused. Spawning where the work actually is (a linked case, a git worktree)
-  is a different call with **no hooks**, and the costliest mistake in this skill: §5.1.
+  is a different call, and picking the wrong one is the costliest mistake in this
+  skill: §5.1. Those workspaces do get hooks now, unless the operator disabled it.
 - `sendwait` supplies the `\r`, picks a fresh `seq`, and self-heals a stranded Enter.
   A prompt without the `\r` is never submitted (§3), a reused `seq` is silently
   swallowed as an already-applied duplicate, and an Enter eaten by an Ink repaint
@@ -358,9 +359,9 @@ One row per job. Acting on this table alone is correct; the §5 links are the de
 
 | I want to | Call | Detail |
 |-----------|------|--------|
-| start a worker **where the work is** | `POST /api/v1/quick-start {"caseName":…}`, which **creates** `~/codeman-cases/<name>` unless the name is already a case: full signals there. Any other path (a git worktree): `POST /api/v1/sessions {"workingDir":…}` then `POST /api/v1/sessions/:id/interactive`, and expect **no hooks**. N workers means N worktrees | [§5.1](reference/verbs.md#51-where-to-spawn) |
+| start a worker **where the work is** | `POST /api/v1/quick-start {"caseName":…}`, which **creates** `~/codeman-cases/<name>` unless the name is already a case. Any other path (a git worktree): `POST /api/v1/sessions {"workingDir":…}` then `POST /api/v1/sessions/:id/interactive`. Both install hooks by default, so expect full signals in either, and **verify** rather than assume. N workers means N worktrees | [§5.1](reference/verbs.md#51-where-to-spawn) |
 | know a new worker can accept a prompt | `GET .../wait-output?match=shift+tab&from=buffer` (urlencode the `+`) | [§5.2](reference/verbs.md#52-readiness) |
-| deliver a task **and** know when it finished | `POST .../input` with `"input":"…\r"`, `clientId`, `seq`, `"wait":true`. Resolves on `stop`, so it is only trustworthy in a **case Codeman created** (claude mode + hooks present). Costs the worker one billed turn | [§5.3](reference/verbs.md#53-send-a-task-and-wait) |
+| deliver a task **and** know when it finished | `POST .../input` with `"input":"…\r"`, `clientId`, `seq`, `"wait":true`. Resolves on `stop`, so it is trustworthy only where the workspace **has hooks** (claude mode; installed by default, but the operator can disable it and remote sessions never get them). Costs the worker one billed turn | [§5.3](reference/verbs.md#53-send-a-task-and-wait) |
 | know a hook-less worker finished | it has no `stop`, and `wait:true` there resolves on flapping `idle` **without erroring**: make it print a split, unique marker and `wait-output` on that instead | [§5.5](reference/verbs.md#55-markers-for-hook-less-workers) |
 | read the answer | `GET .../last-response`, **polled** (claude/codex only; empty for the other modes) | [§5.4](reference/verbs.md#54-read-the-answer) |
 | know if it is alive | `GET .../wait?until=exit&timeout=1000`: an immediate `signal:"exit"` means dead. `status` and `pid` both lie | [§5.6](reference/verbs.md#56-alive-and-stuck) |

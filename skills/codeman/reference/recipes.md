@@ -492,9 +492,9 @@ What breaks if you use send-and-wait anyway: `wait:true` is accepted (the 400 is
 *mode*, not about hooks, and these are claude-mode sessions), so the call falls back to
 the default set's `idle`, which is a heuristic that flaps mid-turn. You get a "finished"
 answer for a turn still running, and `last-response` then hands you the *previous*
-turn's text. The contrast is the lesson: a worker in a case Codeman created (Flow 1) has
-the hooks, so `stop` there is definitive and free. In a worktree you pay one marker per
-worker instead.
+turn's text. The contrast is the lesson: a worker whose workspace carries the hooks
+block (Flow 1, and by default any other workspace too) has a `stop` that is definitive
+and free. Where the block is absent you pay one marker per worker instead.
 
 ```bash
 declare -A TOK

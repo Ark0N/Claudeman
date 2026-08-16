@@ -84,6 +84,7 @@ import {
   applyAgentSkill,
   refreshUserAgentSkill,
   seedAgentSessionPreamble,
+  ensureCodemanHooks,
   refreshStaleCodemanHooks,
 } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
@@ -625,6 +626,32 @@ async function injectAgentSkill(casePath: string): Promise<void> {
   }
 }
 
+/**
+ * Hooks for the workspace a Claude session is about to run in. ONE decision point,
+ * shared by every create path, so the setting cannot apply to some of them only.
+ *
+ * ON (`workspaceHooksEnabled`, the default): INSTALL Codeman's hooks block, merging
+ * so a user's own hook entries and every other settings key survive. Hooks were
+ * previously written only when Codeman CREATED the case DIRECTORY, so a linked case
+ * or any pre-existing repo — where most sessions actually run — had none, and every
+ * hook-driven surface was silently dead there: no tab alert or phone-overview row
+ * when a dialog blocks the pane, no Approvals Inbox item, no push, no definitive
+ * `stop`/`idle_prompt` for respawn, and no `stop`/`blocked` for the wait endpoints.
+ * Measured 2026-08-15 in a linked case: an AskUserQuestion dialog on screen with the
+ * tab reporting a calm `idle`. Claude Code re-reads the file, so a session already
+ * running in that workspace starts firing hooks without a restart (verified live).
+ *
+ * OFF: the older, narrower behavior. A Codeman block that is already there is still
+ * refreshed when stale (COD-91: a pre-secret block 401s once the hook-secret gate
+ * went unconditional), but one is never added, so Codeman leaves the repo alone.
+ *
+ * Best-effort either way: a refusal or a thrown error must never fail the create.
+ */
+async function applyWorkspaceHooks(ctx: ConfigPort, workspace: string): Promise<void> {
+  const install = await ctx.getWorkspaceHooksEnabled();
+  await (install ? ensureCodemanHooks(workspace) : refreshStaleCodemanHooks(workspace)).catch(() => {});
+}
+
 export function registerSessionRoutes(
   app: FastifyInstance,
   ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort
@@ -765,11 +792,14 @@ export function registerSessionRoutes(
       await applyStatusLineConfig(workingDir, true);
     }
 
-    // COD-91 self-heal: refresh a pre-secret hooks block in an existing case so the now
-    // unconditional hook-secret gate keeps accepting its hook events. No-op for fresh
-    // cases (writeHooksConfig already wrote the secret) and for non-Codeman/absent hooks.
-    if ((body.mode ?? 'claude') === 'claude') {
-      await refreshStaleCodemanHooks(workingDir).catch(() => {});
+    // Hooks for the workspace this session runs in (install vs refresh-only is the
+    // `workspaceHooksEnabled` setting; see applyWorkspaceHooks). Never for a remote
+    // attach (workingDir is a user@host:session pseudo-path — mkdir would create it
+    // as a junk local dir), and only when the caller named a workingDir: the
+    // process-cwd fallback is $HOME under installer-created services, and hooks
+    // materializing in ~/.claude/settings.local.json was never asked for.
+    if (!remote && body.workingDir && (body.mode ?? 'claude') === 'claude') {
+      await applyWorkspaceHooks(ctx, workingDir);
       // Agent skill (docs/agent-control-plan.md §2): ADD-ONLY on create, same shared-
       // .claude rationale as the statusLine above: a create must never remove the
       // skill from under other live sessions in the repo. Marker-guarded, so a
@@ -2899,11 +2929,17 @@ export function registerSessionRoutes(
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create case: ${getErrorMessage(err)}`);
       }
     } else if (!remote && !docker && mode !== 'opencode') {
-      // COD-91 self-heal for an EXISTING case: refresh a pre-secret hooks block so the
-      // now-unconditional hook-secret gate keeps accepting its hook events. No-op when
-      // the hooks aren't ours or already carry the secret. Skipped for remote cases —
-      // resolvedCasePath is a REMOTE path that doesn't exist on the local filesystem.
-      await refreshStaleCodemanHooks(resolvedCasePath).catch(() => {});
+      // EXISTING case directory (a linked case, a cloned repo, anything Codeman did
+      // not scaffold): install-or-refresh per the setting (see applyWorkspaceHooks).
+      // Other modes keep the narrower COD-91 self-heal unconditionally: only claude
+      // reads `.claude` hooks, so a shell/codex quick-start should not author a block
+      // of its own. Skipped for remote cases — resolvedCasePath is a REMOTE path that
+      // doesn't exist on the local filesystem.
+      if (mode === 'claude') {
+        await applyWorkspaceHooks(ctx, resolvedCasePath);
+      } else {
+        await refreshStaleCodemanHooks(resolvedCasePath).catch(() => {});
+      }
     }
 
     // Agent skill injection (docs/agent-control-plan.md §2): ADD-ONLY on create,
@@ -2936,7 +2972,10 @@ export function registerSessionRoutes(
         if (!existsSync(join(resolvedCasePath, '.claude', 'settings.local.json'))) {
           await writeHooksConfig(resolvedCasePath);
         } else {
-          await refreshStaleCodemanHooks(resolvedCasePath).catch(() => {});
+          // A settings file with no hooks in it is the same dead-surface case as a
+          // linked case. This branch is already gated on `docker.hooksEnabled`, and
+          // applyWorkspaceHooks adds the user-level gate on top.
+          await applyWorkspaceHooks(ctx, resolvedCasePath);
         }
       } catch {
         /* non-fatal — the session still runs, hooks may be degraded */
