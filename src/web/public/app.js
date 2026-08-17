@@ -652,6 +652,11 @@ class CodemanApp {
     // Tracks pending hook events that need resolution (permission_prompt, elicitation_dialog, idle_prompt)
     this.pendingHooks = new Map();
 
+    // Sessions THIS tab is closing right now. closeSession() owns the follow-up
+    // selection, so _onSessionDeleted must not race its own delete's SSE
+    // broadcast to the welcome screen. Set<sessionId>, cleared in a finally.
+    this._closingSessions = new Set();
+
     // Approvals Inbox: Map<approvalId, ApprovalItem> (methods in approvals-ui.js)
     this.approvals = new Map();
 
@@ -1813,7 +1818,13 @@ class CodemanApp {
     // Dashboard: a detached session ended → clear its detached state/timers.
     if (this.detachedSessions.has(data.id)) this._redock(data.id);
     this._cleanupSessionData(data.id);
-    if (this.activeSessionId === data.id) {
+    // ⚠️ Skip the whole active-session handoff while THIS tab is closing that
+    // session: closeSession() owns the follow-up selection and moves you to the
+    // next tab, so acting here would race it and flash the welcome screen (or
+    // strand you on it) for a close the user initiated right here. A delete from
+    // anywhere else still lands on the home screen, which is the honest answer
+    // when the thing you were looking at was taken away.
+    if (this.activeSessionId === data.id && !this._closingSessions.has(data.id)) {
       this.activeSessionId = null;
       try { localStorage.removeItem('codeman-active-session'); } catch {}
       this.terminal.clear();
@@ -5721,18 +5732,31 @@ class CodemanApp {
   }
 
   async closeSession(sessionId, killMux = true) {
+    // ⚠️ Captured BEFORE the await, and the delete is announced to
+    // _onSessionDeleted through _closingSessions. The `session_deleted` SSE
+    // broadcast for THIS delete routinely lands while the request is still in
+    // flight, and that handler nulls activeSessionId and shows the welcome
+    // screen. Re-reading the field after the await therefore made the fallback
+    // below a coin flip: closing the tab you were on either moved you to the
+    // next session or dumped you on the home screen, depending on which path
+    // won the race (both outcomes measured on one build, 2026-08-17).
+    const wasActive = this.activeSessionId === sessionId;
+    this._closingSessions.add(sessionId);
     try {
       await this._apiDelete(`/api/sessions/${sessionId}?killMux=${killMux}`);
       this._cleanupSessionData(sessionId);
 
-      if (this.activeSessionId === sessionId) {
+      if (wasActive) {
         this.activeSessionId = null;
         try { localStorage.removeItem('codeman-active-session'); } catch {}
-        // Select another session or show welcome (use sessionOrder for consistent ordering)
-        if (this.sessionOrder.length > 0 && this.sessions.size > 0) {
+        // Next tab in the user's own order, skipping ids the cleanup has not
+        // caught up with yet: sessionOrder can transiently hold a dead id
+        // (delete racing the order sync), which is the same reason Alt+N
+        // indexes a live-filtered list rather than sessionOrder directly.
+        const nextSessionId = this.sessionOrder.find((id) => id !== sessionId && this.sessions.has(id));
+        if (nextSessionId) {
           // `auto`: this tab was chosen by the app because the previous one
           // went away, so it must not spend that session's idle alert.
-          const nextSessionId = this.sessionOrder[0];
           this.selectSession(nextSessionId, { auto: true });
         } else {
           this.terminal.clear();
@@ -5750,6 +5774,8 @@ class CodemanApp {
       }
     } catch (err) {
       this.showToast('Failed to close session', 'error');
+    } finally {
+      this._closingSessions.delete(sessionId);
     }
   }
 

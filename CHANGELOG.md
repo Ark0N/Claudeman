@@ -1,5 +1,15 @@
 # aicodeman
 
+## 1.19.5
+
+### Patch Changes
+
+- Closing the session you are looking at now always moves you to the next tab.
+
+  The delete request and its own `session_deleted` broadcast raced each other: the close path selected the next tab, while the broadcast handler cleared the active session and showed the home screen, and whichever ran first decided what you saw. On one build, closing a tab either switched sessions or dumped you on the welcome screen depending on timing. The close now owns that handoff from beginning to end, and the broadcast handler stays out of the way for a close started in that tab. A session deleted from somewhere else still returns you to the home screen, which is the honest answer when what you were looking at was taken away.
+
+  The next tab is also picked from sessions that still exist, so a stale entry in the tab order can no longer name a tab that is already gone.
+
 ## 1.19.4
 
 ### Patch Changes
