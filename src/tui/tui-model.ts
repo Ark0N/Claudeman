@@ -349,10 +349,6 @@ export class TuiModelStore implements TuiRenderModel {
     });
   }
 
-  approvalFor(sessionId: string): ApprovalItem | undefined {
-    return this.approvalsBySession.get(sessionId);
-  }
-
   sessions(): TuiSessionRow[] {
     return [...this.sessionsById.values()];
   }
@@ -440,7 +436,12 @@ export class TuiModelStore implements TuiRenderModel {
     this.touch();
   }
 
-  /** Arm the typed-name confirmation for `x` (kill). */
+  /**
+   * Arm the typed-name confirmation for `x` (kill). Whether what the user typed
+   * AUTHORIZES the kill is `confirmAccepts()` in tui-app, which owns that rule
+   * for every caller: a second copy here answered the same question differently
+   * (it refused the id prefix a mux name carries) and nothing consulted it.
+   */
   beginConfirmKill(row: TuiRow): void {
     this.confirm = {
       sessionId: row.session.sessionId,
@@ -455,11 +456,6 @@ export class TuiModelStore implements TuiRenderModel {
     if (!this.confirm) return;
     this.confirm = { ...this.confirm, typed };
     this.touch();
-  }
-
-  /** Does the typed text authorize the kill? Exact match on the name shown. */
-  confirmSatisfied(): boolean {
-    return this.confirm !== null && this.confirm.typed.trim() === this.confirm.name;
   }
 
   /** Drop whatever overlay owns the keyboard and go back to the list. */

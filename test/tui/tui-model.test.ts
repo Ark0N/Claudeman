@@ -262,28 +262,32 @@ describe('the store', () => {
     expect(flattenRows(model.groups())).toHaveLength(3);
   });
 
-  it('tracks the confirm-kill overlay and only accepts the exact name', () => {
+  // Whether the typed text AUTHORIZES the kill is `confirmAccepts()` in
+  // tui-app, tested there; the store only carries what was typed.
+  it('tracks the confirm-kill overlay, keyed to the name it showed', () => {
     const model = createTuiModel();
     model.replaceSessions([session({ sessionId: 'a', name: 'w4-api' })]);
     model.beginConfirmKill(model.rows()[0]);
     expect(model.mode).toBe('confirm-kill');
-    expect(model.confirmSatisfied()).toBe(false);
+    expect(model.confirm).toEqual({ sessionId: 'a', name: 'w4-api', typed: '' });
     model.setConfirmInput('w4-ap');
-    expect(model.confirmSatisfied()).toBe(false);
-    model.setConfirmInput('w4-api');
-    expect(model.confirmSatisfied()).toBe(true);
+    expect(model.confirm?.typed).toBe('w4-ap');
     model.closeOverlay();
     expect(model.mode).toBe('list');
     expect(model.confirm).toBeNull();
   });
 
-  it('drops a session approval along with the session', () => {
+  it('drops a session approval along with the session, and never resurrects it', () => {
     const model = createTuiModel();
     model.replaceSessions([session({ sessionId: 'a' })]);
     model.setApprovals([approval({ sessionId: 'a' })]);
-    expect(model.approvalFor('a')).toBeDefined();
+    expect(model.rows()[0].approval).toBeDefined();
     model.removeSession('a');
-    expect(model.approvalFor('a')).toBeUndefined();
+    expect(model.rows()).toHaveLength(0);
+    // The same id coming back must not inherit the dead session's dialog.
+    model.upsertSession(session({ sessionId: 'a' }));
+    expect(model.rows()[0].approval).toBeUndefined();
+    expect(model.rows()[0].state).toBe('idle');
   });
 });
 
