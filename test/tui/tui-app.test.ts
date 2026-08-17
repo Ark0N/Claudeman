@@ -20,7 +20,9 @@ import {
   helpKeysFor,
   isSelfSession,
   planAttach,
+  previewIntervalMs,
   previewNoteFor,
+  resyncDelayMs,
   sameFrame,
   samePreview,
   shouldAnimate,
@@ -256,6 +258,29 @@ describe('the preview policy', () => {
     expect(samePreview(preview, { sessionId: 'a', lines: ['one', 'two'], note: 'history' })).toBe(false);
     expect(samePreview(null, null)).toBe(true);
     expect(samePreview(null, preview)).toBe(false);
+  });
+});
+
+describe('the refetch and tail-read cadence', () => {
+  it('debounces a burst but paces a stream, measured from the last start', () => {
+    // Nothing has been refetched yet: pay the debounce and nothing more.
+    expect(resyncDelayMs(10_000, 0, 250, 3_000)).toBe(250);
+    // A refetch that started 2.9s ago: wait out the rest of the floor.
+    expect(resyncDelayMs(10_000, 9_900, 250, 3_000)).toBe(2_900);
+    // Past the floor: back to the debounce, never below it.
+    expect(resyncDelayMs(10_000, 6_000, 250, 3_000)).toBe(250);
+    expect(resyncDelayMs(10_000, 1_000, 250, 3_000)).toBe(250);
+  });
+
+  it('reads a printing pane every second and a quiet one every five', () => {
+    expect(previewIntervalMs(0, 1_000, 5_000)).toBe(1_000);
+    expect(previewIntervalMs(1, 1_000, 5_000)).toBe(2_000);
+    expect(previewIntervalMs(2, 1_000, 5_000)).toBe(4_000);
+    // The ceiling holds however long the pane stays quiet, and a silly counter
+    // cannot overflow the doubling into Infinity.
+    expect(previewIntervalMs(3, 1_000, 5_000)).toBe(5_000);
+    expect(previewIntervalMs(50, 1_000, 5_000)).toBe(5_000);
+    expect(previewIntervalMs(-5, 1_000, 5_000)).toBe(1_000);
   });
 });
 

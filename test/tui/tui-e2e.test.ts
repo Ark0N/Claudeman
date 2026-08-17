@@ -60,6 +60,12 @@ const terminals = new Map<string, string>();
  * ago. A row dated by the wrong one of those reads `10m` instead of `1m`.
  */
 let liveState: Array<Record<string, unknown>> = [];
+/**
+ * Tail reads the preview pane has asked for. On the real server that route runs
+ * two synchronous tmux calls and normalizes the whole byte buffer, so how often
+ * a quiet pane is re-read is a property worth pinning.
+ */
+let terminalReads = 0;
 /** Everything the TUI posted, so a test can assert on the exact body. */
 const answered: Array<{ id: string; body: Record<string, unknown> }> = [];
 const inputs: Array<{ sessionId: string; body: Record<string, unknown> }> = [];
@@ -281,6 +287,7 @@ beforeAll(async () => {
 
     const previewFor = sessionRoute(url, 'terminal');
     if (previewFor) {
+      terminalReads++;
       return sendJson(res, { success: true, data: { terminalBuffer: terminals.get(previewFor) ?? '' } });
     }
 
@@ -491,6 +498,22 @@ describe('codeman tui (under a pty)', () => {
     term.write('\u001b[A');
     await waitFor(() => rowFor(output, 'w2-beta').startsWith('>'), 'the up arrow to move the cursor');
   });
+
+  it('keeps re-reading the tail, but backs off while the pane stays quiet', async () => {
+    await selectRow('w2-beta');
+    // Let the selection's own immediate read land, then measure a window in
+    // which nothing writes to the pane.
+    await new Promise((done) => setTimeout(done, 400));
+    const before = terminalReads;
+    await new Promise((done) => setTimeout(done, 6_000));
+    const reads = terminalReads - before;
+    // Still following: a chain that forgot to re-arm would freeze the pane at
+    // whatever it last showed, which no frame assertion would notice.
+    expect(reads).toBeGreaterThan(0);
+    // A fixed one-second poll would be six. The ladder (1s, 2s, 4s, then the
+    // 5s ceiling) cannot exceed four in this window.
+    expect(reads).toBeLessThanOrEqual(4);
+  }, 20_000);
 
   it('picks up a session announced over SSE', async () => {
     sessions = [

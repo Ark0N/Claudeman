@@ -108,14 +108,40 @@ const ESC_FLUSH_MS = 30;
 const TICK_MS = 500;
 /** A burst of SSE events (one session change fans out to several) becomes one refetch. */
 const RESYNC_DEBOUNCE_MS = 250;
+/**
+ * Floor between two AMBIENT refetches, i.e. the ones an SSE event asks for.
+ *
+ * `GET /api/sessions/unified` is the expensive read in the app (~550ms measured
+ * against 11 live sessions: it scans every Claude transcript plus the lifecycle
+ * log, uncached, and republishes the search index), and the server broadcasts
+ * `session:updated` per session per 500ms while anything is working. A trailing
+ * debounce collapses a BURST but does not rate-limit a stream, so without a
+ * floor the dashboard runs those scans back to back for as long as sessions are
+ * busy, and the stall lands on every other client of the same server.
+ *
+ * A user's OWN actions bypass this (they call `refresh()` directly), so what it
+ * paces is only "notice what changed elsewhere", where three seconds of
+ * staleness on a status dot is invisible.
+ */
+const RESYNC_MIN_INTERVAL_MS = 3_000;
 /** Poll period once the client reports SSE is not carrying events. */
 const POLL_INTERVAL_MS = 2_000;
 /** Degraded mode re-probes this often, so a server that starts upgrades the TUI live. */
 const REPROBE_INTERVAL_MS = 10_000;
 /** Unified-list page size. RECENT is capped far lower by the model. */
 const UNIFIED_LIMIT = 60;
-/** How often the selected session's tail is re-read while the list has focus. */
+/** How often the selected session's tail is re-read while it is producing output. */
 const PREVIEW_INTERVAL_MS = 1_000;
+/**
+ * Ceiling the tail poll backs off to once the pane stops changing.
+ *
+ * `GET /api/sessions/:id/terminal` is not a cheap read either (~80-100ms
+ * measured): it runs two `execSync` tmux calls and normalizes the whole byte
+ * buffer before it takes the tail, all of it blocking the server's event loop.
+ * A pane at its composer prints nothing, so polling it every second buys
+ * nothing; anything landing in the tail resets the cadence to fast again.
+ */
+const PREVIEW_MAX_INTERVAL_MS = 5_000;
 /** Tail size. Enough for a tall pane's last screens, small enough to poll every second. */
 const PREVIEW_TAIL_BYTES = 12 * 1024;
 /** Lines kept from a tail. The pane shows a fraction of these; the rest is headroom. */
@@ -375,9 +401,47 @@ export function previewNoteFor(row: TuiRow | null, connection: TuiConnectionStat
 }
 
 /**
- * Would painting `next` change anything? The preview polls once a second, and a
+ * Delay before the next AMBIENT refetch: the debounce, unless that would land
+ * inside the floor since the last one started, in which case it waits out the
+ * rest of the floor. Measured start-to-start, so a slow scan cannot be followed
+ * immediately by another one.
+ *
+ * `lastRefreshAt` of 0 means "never refreshed", which the arithmetic handles on
+ * its own: the gap is enormous, so the first refetch pays the debounce only.
+ */
+export function resyncDelayMs(
+  now: number,
+  lastRefreshAt: number,
+  debounceMs = RESYNC_DEBOUNCE_MS,
+  minIntervalMs = RESYNC_MIN_INTERVAL_MS
+): number {
+  return Math.max(debounceMs, minIntervalMs - (now - lastRefreshAt));
+}
+
+/**
+ * How long to wait before re-reading the selected session's tail, given how
+ * many consecutive reads came back identical.
+ *
+ * Doubling from one second to a five-second ceiling, and ANY change resets the
+ * count, so a pane that is printing is read every second while a pane sitting
+ * at its composer costs one read every five. The counter is also reset when the
+ * selection moves and when this dashboard sends input, so the read that should
+ * show a reply is never the backed-off one.
+ */
+export function previewIntervalMs(
+  unchangedReads: number,
+  baseMs = PREVIEW_INTERVAL_MS,
+  maxMs = PREVIEW_MAX_INTERVAL_MS
+): number {
+  const steps = Math.min(Math.max(0, Math.trunc(unchangedReads)), 10);
+  return Math.min(baseMs * 2 ** steps, maxMs);
+}
+
+/**
+ * Would painting `next` change anything? The preview polls on a timer, and a
  * quiet session returns the same bytes every time; comparing here is what keeps
- * that poll from bumping the model's revision and repainting the frame.
+ * that poll from bumping the model's revision and repainting the frame, and it
+ * is also what drives the poll's own backoff.
  */
 export function samePreview(previous: TuiPreview | null, next: TuiPreview | null): boolean {
   if (previous === next) return true;
@@ -643,11 +707,17 @@ class TuiApp {
   private noticeTimer: NodeJS.Timeout | null = null;
   private refreshing = false;
   private refreshQueued = false;
+  /** When the last refresh STARTED, which is what `resyncDelayMs()` paces off. */
+  private lastRefreshAt = 0;
   private picker: PickerRuntime | null = null;
   private pendingSelectId: string | null = null;
   /** Whose tail the preview is currently following; null when nothing is polled. */
   private previewSessionId: string | null = null;
   private previewFetching = false;
+  /** Is the tail still worth re-reading? The chained timeout stops when it is not. */
+  private previewFollowing = false;
+  /** Consecutive tail reads that changed nothing; the poll's backoff counter. */
+  private previewQuiet = 0;
   /** Bumped per search so a slow response cannot overwrite a newer query's results. */
   private searchSeq = 0;
   /** Approval ids the bell has already rung for. See `newApprovalIds`. */
@@ -760,16 +830,25 @@ class TuiApp {
 
   private scheduleRefresh(): void {
     if (this.resyncTimer) return;
-    this.resyncTimer = setTimeout(() => {
-      this.resyncTimer = null;
-      void this.refresh();
-    }, RESYNC_DEBOUNCE_MS);
+    this.resyncTimer = setTimeout(
+      () => {
+        this.resyncTimer = null;
+        void this.refresh();
+      },
+      resyncDelayMs(Date.now(), this.lastRefreshAt)
+    );
   }
 
   /**
    * Re-read everything the dashboard shows. Overlapping calls collapse: a burst
    * of events must not queue a burst of round trips, and the last one has to
    * still run or the list would sit one change behind.
+   *
+   * A call that arrived while this one was in flight is handed back to
+   * `scheduleRefresh()` rather than run on the spot. Recursing there instead
+   * (which is what this did) paced the refetches at the endpoint's own latency
+   * and chained one pending promise per iteration, so a busy machine kept the
+   * server scanning transcripts continuously.
    */
   private async refresh(): Promise<void> {
     if (this.exiting) return;
@@ -778,6 +857,9 @@ class TuiApp {
       return;
     }
     this.refreshing = true;
+    // Stamped at the START, so the floor is start-to-start and a direct call
+    // (an action of the user's own) also pushes the next ambient one out.
+    this.lastRefreshAt = Date.now();
     try {
       if (this.model.connection === 'degraded') await this.refreshDegraded();
       else await this.refreshConnected();
@@ -786,7 +868,7 @@ class TuiApp {
     }
     if (this.refreshQueued && !this.exiting) {
       this.refreshQueued = false;
-      await this.refresh();
+      this.scheduleRefresh();
     }
   }
 
@@ -909,26 +991,44 @@ class TuiApp {
       return;
     }
 
+    this.previewFollowing = true;
     if (changed) {
+      // A different pane, so what the last one printed says nothing about how
+      // fast this one needs reading.
+      this.previewQuiet = 0;
       // Null rather than an empty tail: the renderer reads that as "loading",
       // while empty lines would claim the session has printed nothing.
       this.applyPreview(null);
       void this.fetchPreview();
     }
-    if (!this.previewTimer) {
-      this.previewTimer = setInterval(() => void this.fetchPreview(), PREVIEW_INTERVAL_MS);
-    }
+    this.armPreview();
+  }
+
+  /**
+   * Arm the next tail read. A chained timeout rather than an interval, because
+   * the delay depends on how long the pane has been quiet, and re-arming is the
+   * LAST thing each read does so a slow response can never stack two in flight.
+   */
+  private armPreview(): void {
+    if (this.previewTimer || !this.previewFollowing || this.exiting) return;
+    this.previewTimer = setTimeout(() => {
+      this.previewTimer = null;
+      void this.fetchPreview().finally(() => this.armPreview());
+    }, previewIntervalMs(this.previewQuiet));
   }
 
   private stopPreview(): void {
+    this.previewFollowing = false;
     if (!this.previewTimer) return;
-    clearInterval(this.previewTimer);
+    clearTimeout(this.previewTimer);
     this.previewTimer = null;
   }
 
-  private applyPreview(preview: TuiPreview | null): void {
-    if (samePreview(this.model.preview, preview)) return;
+  /** Paint a preview, reporting whether it actually differed from what is up. */
+  private applyPreview(preview: TuiPreview | null): boolean {
+    if (samePreview(this.model.preview, preview)) return false;
     this.model.setPreview(preview);
+    return true;
   }
 
   private async fetchPreview(): Promise<void> {
@@ -939,12 +1039,17 @@ class TuiApp {
       const raw = await this.client.fetchTerminalTail(sessionId, PREVIEW_TAIL_BYTES);
       if (this.previewSessionId !== sessionId) return;
       const lines = toDisplayLines(dropSeveredEscape(raw)).slice(-PREVIEW_MAX_LINES);
-      this.applyPreview({ sessionId, lines });
+      // An identical tail is what the backoff counts; anything new resets it, so
+      // a pane that starts printing again is back to one read a second.
+      if (this.applyPreview({ sessionId, lines })) this.previewQuiet = 0;
+      else this.previewQuiet++;
     } catch {
       // A tail that cannot be read is a pane-level fact, not a connection one:
-      // the list stays exactly as it is and only this pane says so.
+      // the list stays exactly as it is and only this pane says so. It counts as
+      // quiet either way, so a pane that cannot be read is not retried hard.
       if (this.previewSessionId !== sessionId) return;
       this.applyPreview({ sessionId, lines: [], error: "could not read that session's terminal" });
+      this.previewQuiet++;
     } finally {
       this.previewFetching = false;
     }
@@ -1269,6 +1374,10 @@ class TuiApp {
 
   private message(tone: 'info' | 'warn' | 'err', text: string): void {
     this.model.setMessage({ tone, text });
+    // An overlay hides the preview pane, so stop re-reading the tail behind it.
+    // Keystroke-driven overlays get this from `afterInput()`; the ones an async
+    // action opens (answered, killed, started) would otherwise keep polling.
+    this.updatePreview();
   }
 
   /**
@@ -1278,6 +1387,7 @@ class TuiApp {
    */
   private notice(text: string): void {
     this.model.setMessage({ tone: 'info', text });
+    this.updatePreview();
     const shown = this.model.message;
     if (this.noticeTimer) clearTimeout(this.noticeTimer);
     this.noticeTimer = setTimeout(() => {
@@ -1305,6 +1415,8 @@ class TuiApp {
       this.paint();
       return;
     }
+    // Answering a dialog unblocks the agent, so the pane starts printing again.
+    if (result.ok) this.previewQuiet = 0;
     await this.refresh();
     if (result.ok) this.notice(`answered ${item.sessionName || item.sessionId.slice(0, 8)}`);
     // The server re-captures the pane before it types, so this is the normal
@@ -1342,6 +1454,9 @@ class TuiApp {
     }
     try {
       await this.client.sendInput(sessionId, line);
+      // The pane is about to print the reply, so read it at the fast cadence
+      // however long it had been sitting quiet before this.
+      this.previewQuiet = 0;
       await this.refresh();
       this.notice('sent');
     } catch (error) {
@@ -1473,6 +1588,12 @@ class TuiApp {
       return;
     }
 
+    // tmux is about to own this terminal. The dashboard is not on screen, and
+    // the pane the preview would keep re-reading is the one the user is now
+    // looking at directly, so the poll stops for the whole handoff (an attach
+    // can last hours).
+    this.stopPreview();
+
     if (plan.kind === 'switch') {
       // The client this TUI draws on is about to show another session, so the
       // dashboard has nothing left to draw and no reason to keep polling.
@@ -1491,6 +1612,10 @@ class TuiApp {
     this.stdout.write(`${plan.hint}\n`);
     const result = spawnSync(plan.file, plan.args, { stdio: 'inherit' });
     this.screen.enter();
+    // Whatever happened in the pane happened while nobody was reading it, so the
+    // first tail after a detach must not be a backed-off one.
+    this.previewQuiet = 0;
+    this.updatePreview();
     this.paint(true);
     if (result.error) {
       this.message('err', `tmux attach failed: ${getErrorMessage(result.error)}`);
@@ -1674,12 +1799,14 @@ class TuiApp {
   private quit(code: number): void {
     if (this.exiting) return;
     this.exiting = true;
-    for (const timer of [this.escTimer, this.resyncTimer, this.searchTimer, this.noticeTimer]) {
+    for (const timer of [this.escTimer, this.resyncTimer, this.searchTimer, this.noticeTimer, this.previewTimer]) {
       if (timer) clearTimeout(timer);
     }
-    for (const timer of [this.tickTimer, this.pollTimer, this.probeTimer, this.previewTimer]) {
+    for (const timer of [this.tickTimer, this.pollTimer, this.probeTimer]) {
       if (timer) clearInterval(timer);
     }
+    // Not only the timer: the chain re-arms itself, so the flag has to go too.
+    this.previewFollowing = false;
     this.escTimer = null;
     this.resyncTimer = null;
     this.searchTimer = null;
