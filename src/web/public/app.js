@@ -1443,9 +1443,10 @@ class CodemanApp {
     document.body.classList.add('solo-mode');
     const session = this.sessions.get(this.soloSessionId);
     if (!session) { this._showSoloSessionGone(); return; }
-    // Force re-select (handleInit cleared terminal state above).
+    // Force re-select (handleInit cleared terminal state above). `auto`: the
+    // window is opening its own target, which is not a human checking on it.
     this.activeSessionId = null;
-    this.selectSession(this.soloSessionId);
+    this.selectSession(this.soloSessionId, { auto: true });
     const name = this.getSessionName(session) || 'Session';
     const titleEl = document.getElementById('soloSessionTitle');
     if (titleEl) { titleEl.textContent = name; titleEl.style.display = ''; }
@@ -3651,10 +3652,13 @@ class CodemanApp {
       if (!restoreId || !this.sessions.has(restoreId)) {
         try { restoreId = localStorage.getItem('codeman-active-session'); } catch {}
       }
+      // `auto`: the app is restoring a session on load, not a human opening
+      // one, so a pending idle alert on that tab stays armed until it is
+      // actually tapped (see the userInitiated note in selectSession).
       if (restoreId && this.sessions.has(restoreId)) {
-        this.selectSession(restoreId);
+        this.selectSession(restoreId, { auto: true });
       } else {
-        this.selectSession(this.sessionOrder[0]);
+        this.selectSession(this.sessionOrder[0], { auto: true });
       }
     }
   }
@@ -5171,13 +5175,21 @@ class CodemanApp {
       if (this._raiseDetached(sessionId)) return;
     }
     const forceReload = options?.forceReload === true;
+    // ⚠️ `auto: true` marks a selection the APP made rather than the human:
+    // the boot restore, a solo window opening its target, the fallback after
+    // the active session is deleted. Those must NOT spend a pending idle alert
+    // (the yellow survives until a real tap), because "the app put this on
+    // screen" is not "I checked it". The DEFAULT is user-initiated, so a call
+    // site nobody tagged fails toward acknowledging rather than toward an
+    // alert that can never be cleared.
+    const userInitiated = options?.auto !== true;
     if (this.activeSessionId === sessionId && !forceReload) {
-      // Clicking the tab you are already on is still "I checked it". The alert
+      // Tapping the tab you are already on is still "I checked it". The alert
       // can be armed on the ACTIVE tab (a live idle_prompt fires regardless of
       // which tab is showing, and so does the reload seed), and every other
       // clear path runs on the switch this early return skips, leaving a
-      // yellow tab that no click could clear.
-      this.markIdleAlertSeen(sessionId);
+      // yellow tab that no tap could clear.
+      if (userInitiated) this.markIdleAlertSeen(sessionId);
       return;
     }
     if (this.activeSessionId === sessionId && forceReload) {
@@ -5237,8 +5249,9 @@ class CodemanApp {
     this.playTerminalEntrance?.(sessionId);
     // Clear idle hooks on view, but keep action hooks until user interacts.
     // Also acknowledged server-side, so the yellow does not come back on the
-    // next reload and the user's other devices clear it too.
-    this.markIdleAlertSeen(sessionId);
+    // next reload and the user's other devices clear it too. Skipped for an
+    // `auto` selection (see userInitiated above).
+    if (userInitiated) this.markIdleAlertSeen(sessionId);
     // Instant active-class toggle (no 100ms debounce), then schedule full render for badges/status
     this._updateActiveTabImmediate(sessionId);
     // Handheld: the session drawer overlays the terminal, so slide it away now
@@ -5717,8 +5730,10 @@ class CodemanApp {
         try { localStorage.removeItem('codeman-active-session'); } catch {}
         // Select another session or show welcome (use sessionOrder for consistent ordering)
         if (this.sessionOrder.length > 0 && this.sessions.size > 0) {
+          // `auto`: this tab was chosen by the app because the previous one
+          // went away, so it must not spend that session's idle alert.
           const nextSessionId = this.sessionOrder[0];
-          this.selectSession(nextSessionId);
+          this.selectSession(nextSessionId, { auto: true });
         } else {
           this.terminal.clear();
           this.showWelcome();

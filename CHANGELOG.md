@@ -1,5 +1,15 @@
 # aicodeman
 
+## 1.19.4
+
+### Patch Changes
+
+- Only a human opening a session clears its yellow "waiting for input" tab alert.
+
+  1.19.2 made that clear durable and cross-device, which also meant the app itself could spend it: restoring your last session on page load, a popped-out window opening its target, and the fallback to another tab after you close the active one all counted as "I checked it", so a yellow tab could clear itself before you ever saw it. Those three app-driven selections are now marked and skip the acknowledgement, so the alert survives until you actually open the session.
+
+  Everything a human does still clears it, on every surface: tapping a tab, tapping a row on the phone home screen, the keyboard tab shortcuts, and submitting a prompt into the session. The flag defaults to user-initiated, so a selection path nobody marked keeps acknowledging rather than leaving an alert nothing can clear.
+
 ## 1.19.3
 
 ### Patch Changes
