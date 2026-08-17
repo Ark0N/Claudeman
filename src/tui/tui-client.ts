@@ -31,9 +31,12 @@
  * - Plan usage has no route of its own: the last-known snapshot rides
  *   `GET /api/status` as `planUsage` (`web/plan-usage-latest.ts`) and updates
  *   arrive as `session:statusTelemetry` SSE frames.
- * - The unified list carries no token counters or turn-start stamp
- *   (`TuiSessionRow.lastSubmitAt`), so those stay unset here; the app layer
- *   merges them from live session state when it wants them.
+ * - The unified list carries no token counters and no turn-start stamp
+ *   (`TuiSessionRow.lastSubmitAt`), which the WORKING group is ordered by, so
+ *   `fetchLiveSessionMetrics()` reads them from `GET /api/sessions` and
+ *   `applyLiveMetrics()` (tui-app) folds them onto the rows. That route answers
+ *   from the server's cached LIGHT state (no terminal buffers, ~10ms), which is
+ *   what makes it cheap enough to ride every refresh.
  *
  * @module tui/tui-client
  */
@@ -145,6 +148,22 @@ export interface TuiQuickStartResult {
   sessionId: string;
   casePath?: string;
   caseName?: string;
+}
+
+/**
+ * The live-only fields the unified list does not carry, per session id.
+ *
+ * `lastSubmitAt` is the one the dashboard cannot do without: it is the pane's
+ * last Enter, which is what a WORKING row's elapsed column shows and what the
+ * WORKING group is sorted by. Without it a running turn is dated by the
+ * SESSION's creation instead, so a day-old session that started a turn a minute
+ * ago outranks one that has been working for an hour.
+ */
+export interface TuiLiveSessionMetrics {
+  sessionId: string;
+  lastSubmitAt?: number;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 /** Init snapshot, narrowed to the two facts the dashboard header shows. */
@@ -505,6 +524,33 @@ export class TuiClient {
     const query = limit !== undefined ? `?limit=${encodeURIComponent(String(Math.max(1, Math.trunc(limit))))}` : '';
     const data = await this.requestData<{ sessions?: UnifiedSessionItem[] }>('GET', `/api/sessions/unified${query}`);
     return data?.sessions ?? [];
+  }
+
+  /**
+   * The turn-start stamp and token counters for every LIVE session.
+   *
+   * `GET /api/sessions` is the light state (`getLightSessionsState()`, itself
+   * cached server-side): no terminal buffers, so this is a ~10ms read next to
+   * the unified list's transcript scan. Rows are narrowed to the three fields
+   * the dashboard actually merges, and a row with no usable id is dropped
+   * rather than folded in under an empty key.
+   */
+  async fetchLiveSessionMetrics(): Promise<TuiLiveSessionMetrics[]> {
+    const data = await this.requestData<
+      Array<{ id?: unknown; lastSubmitAt?: unknown; inputTokens?: unknown; outputTokens?: unknown }>
+    >('GET', '/api/sessions');
+    if (!Array.isArray(data)) return [];
+    const rows: TuiLiveSessionMetrics[] = [];
+    for (const entry of data) {
+      if (!entry || typeof entry.id !== 'string' || entry.id === '') continue;
+      rows.push({
+        sessionId: entry.id,
+        ...(typeof entry.lastSubmitAt === 'number' ? { lastSubmitAt: entry.lastSubmitAt } : {}),
+        ...(typeof entry.inputTokens === 'number' ? { inputTokens: entry.inputTokens } : {}),
+        ...(typeof entry.outputTokens === 'number' ? { outputTokens: entry.outputTokens } : {}),
+      });
+    }
+    return rows;
   }
 
   async fetchApprovals(): Promise<ApprovalItem[]> {

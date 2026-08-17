@@ -11,6 +11,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
+  applyLiveMetrics,
   applyMuxNames,
   buildListLines,
   confirmAccepts,
@@ -27,9 +28,9 @@ import {
   tmuxRowsToSessions,
   tmuxSocketFromEnv,
 } from '../../src/tui/tui-app.js';
-import { createTuiModel } from '../../src/tui/tui-model.js';
+import { createTuiModel, stateSince } from '../../src/tui/tui-model.js';
 import { glyphsFor } from '../../src/tui/tui-render.js';
-import type { TuiTmuxSession } from '../../src/tui/tui-client.js';
+import type { TuiLiveSessionMetrics, TuiTmuxSession } from '../../src/tui/tui-client.js';
 import type { TuiConfirmState, TuiRow, TuiSessionRow } from '../../src/tui/tui-types.js';
 
 const GLYPHS = glyphsFor('unicode');
@@ -336,6 +337,66 @@ describe('applyMuxNames', () => {
     expect(rows[0]).not.toBe(input[0]);
     expect(rows[0].muxName).toBeUndefined();
     expect(input[0].muxName).toBeUndefined();
+  });
+});
+
+describe('applyLiveMetrics', () => {
+  const metrics: TuiLiveSessionMetrics[] = [
+    { sessionId: 'aaaa1111', lastSubmitAt: 5_000, inputTokens: 900, outputTokens: 100 },
+    { sessionId: 'bbbb2222', lastSubmitAt: 0, inputTokens: 0, outputTokens: 0 },
+  ];
+
+  it('folds the turn stamp and the token totals onto the matching row', () => {
+    const rows = applyLiveMetrics(
+      [
+        { sessionId: 'aaaa1111', sources: ['live'] },
+        { sessionId: 'cccc3333', sources: ['live'] },
+      ],
+      metrics
+    );
+    expect(rows[0]).toMatchObject({ lastSubmitAt: 5_000, inputTokens: 900, outputTokens: 100 });
+    // No live counterpart (a history row): nothing to fold, nothing invented.
+    expect(rows[1].lastSubmitAt).toBeUndefined();
+    expect(rows[1].inputTokens).toBeUndefined();
+  });
+
+  it('treats a zero as unknown, so a never-submitted session is not dated to the epoch', () => {
+    const [merged] = applyLiveMetrics([{ sessionId: 'bbbb2222', sources: ['live'], createdAt: 1_000 }], metrics);
+    expect(merged.lastSubmitAt).toBeUndefined();
+    expect(merged.inputTokens).toBeUndefined();
+    expect(stateSince('working', merged)).toBe(1_000);
+  });
+
+  it('copies rather than mutating its input, and survives an empty metrics list', () => {
+    const input: TuiSessionRow[] = [{ sessionId: 'aaaa1111', sources: ['live'] }];
+    const rows = applyLiveMetrics(input, []);
+    expect(rows[0]).not.toBe(input[0]);
+    expect(rows[0].lastSubmitAt).toBeUndefined();
+    expect(input[0].lastSubmitAt).toBeUndefined();
+  });
+
+  it('orders the WORKING group by when the turn started, not by session age', () => {
+    // The regression this merge exists for: `old` was created a day before
+    // `fresh` but started its turn a minute AFTER it, so `fresh` has been
+    // working longer and has to lead. Without the merge both fall back to
+    // createdAt and `old` wins.
+    const unified: TuiSessionRow[] = [
+      { sessionId: 'old00000', name: 'old', sources: ['live'], isWorking: true, createdAt: 1_000 },
+      { sessionId: 'fresh000', name: 'fresh', sources: ['live'], isWorking: true, createdAt: 500_000 },
+    ];
+    const turns: TuiLiveSessionMetrics[] = [
+      { sessionId: 'old00000', lastSubmitAt: 900_000 },
+      { sessionId: 'fresh000', lastSubmitAt: 600_000 },
+    ];
+
+    const before = createTuiModel();
+    before.replaceSessions(unified);
+    expect(before.rows().map((r) => r.session.name)).toEqual(['old', 'fresh']);
+
+    const after = createTuiModel();
+    after.replaceSessions(applyLiveMetrics(unified, turns));
+    expect(after.rows().map((r) => r.session.name)).toEqual(['fresh', 'old']);
+    expect(after.rows()[0].since).toBe(600_000);
   });
 });
 

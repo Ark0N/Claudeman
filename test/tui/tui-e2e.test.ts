@@ -53,6 +53,13 @@ let sessions: UnifiedSessionItem[] = [];
 let approvals: ApprovalItem[] = [];
 /** Terminal buffers the preview pane polls, by session id. */
 const terminals = new Map<string, string>();
+/**
+ * The LIGHT session state (`GET /api/sessions`), which is where the turn stamp
+ * and the token counters come from: the unified list carries neither, so w2-beta
+ * is deliberately a session created 10 minutes ago whose turn started one minute
+ * ago. A row dated by the wrong one of those reads `10m` instead of `1m`.
+ */
+let liveState: Array<Record<string, unknown>> = [];
 /** Everything the TUI posted, so a test can assert on the exact body. */
 const answered: Array<{ id: string; body: Record<string, unknown> }> = [];
 const inputs: Array<{ sessionId: string; body: Record<string, unknown> }> = [];
@@ -184,6 +191,10 @@ function resetSessions(): void {
       lastActivityAt: NOW - 3_600_000,
     },
   ];
+  liveState = [
+    { id: BETA, status: 'busy', lastSubmitAt: NOW - 60_000, inputTokens: 42_000, outputTokens: 3_200 },
+    { id: ALPHA, status: 'idle', lastSubmitAt: NOW - 60_000 },
+  ];
 }
 
 let server: http.Server;
@@ -264,6 +275,9 @@ beforeAll(async () => {
       return sendJson(res, { success: true, data: { version: '9.9.9', planUsage: PLAN_USAGE } });
     }
     if (url.startsWith('/api/sessions/unified')) return sendJson(res, { success: true, data: { sessions } });
+    if (url === '/api/sessions' || url.startsWith('/api/sessions?')) {
+      return sendJson(res, { success: true, data: liveState });
+    }
 
     const previewFor = sessionRoute(url, 'terminal');
     if (previewFor) {
@@ -422,6 +436,17 @@ describe('codeman tui (under a pty)', () => {
     expect(index('IDLE')).toBeLessThan(index('w1-alpha'));
     expect(index('w1-alpha')).toBeLessThan(index('RECENT'));
     expect(index('RECENT')).toBeLessThan(index('w3-gamma'));
+  });
+
+  it('dates a working row by its turn, not by the session age', () => {
+    // w2-beta was created 10 minutes ago and pressed Enter one minute ago, and
+    // only `GET /api/sessions` knows the second number. `1m` proves the merge
+    // ran end to end; `10m` would mean the row fell back to createdAt.
+    const beta = rowFor(output, 'w2-beta');
+    expect(beta).toMatch(/\b1m\b/);
+    expect(beta).not.toMatch(/\b10m\b/);
+    // The token column rides the same read.
+    expect(beta).toContain('45.2k');
   });
 
   it('shows the header facts and only the keys that work', () => {

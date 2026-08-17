@@ -58,6 +58,7 @@ import {
   TuiClient,
   type TuiApprovalAnswer,
   type TuiEventStream,
+  type TuiLiveSessionMetrics,
   type TuiPlanUsage,
   type TuiQuickStartOptions,
   type TuiTmuxSession,
@@ -455,6 +456,35 @@ export function applyMuxNames(sessions: readonly TuiSessionRow[], tmux: readonly
   });
 }
 
+/**
+ * Fold the live-only counters onto the rows the unified list produced: the
+ * pane's last Enter (which dates a running turn and orders the WORKING group)
+ * and the token totals the wide layout shows.
+ *
+ * A ZERO is treated as "unknown" rather than merged, and that is the whole
+ * reason this is not a spread: `stateSince()` reads `lastSubmitAt ?? createdAt`,
+ * and 0 is not nullish, so merging a 0 would date every never-submitted session
+ * to the epoch and sort it as the oldest turn on the list. The join is on the
+ * FULL id, since both sides come from the same server.
+ */
+export function applyLiveMetrics(
+  sessions: readonly TuiSessionRow[],
+  metrics: readonly TuiLiveSessionMetrics[]
+): TuiSessionRow[] {
+  if (metrics.length === 0) return sessions.map((session) => ({ ...session }));
+  const byId = new Map(metrics.map((entry) => [entry.sessionId, entry]));
+  return sessions.map((session) => {
+    const live = byId.get(session.sessionId);
+    if (!live) return { ...session };
+    return {
+      ...session,
+      ...(live.lastSubmitAt ? { lastSubmitAt: live.lastSubmitAt } : {}),
+      ...(live.inputTokens ? { inputTokens: live.inputTokens } : {}),
+      ...(live.outputTokens ? { outputTokens: live.outputTokens } : {}),
+    };
+  });
+}
+
 const STATE_TONE: Record<TuiSessionState, Tone> = {
   'blocked-permission': 'err',
   'blocked-question': 'err',
@@ -762,12 +792,15 @@ class TuiApp {
 
   private async refreshConnected(): Promise<void> {
     try {
-      const [sessions, approvals, tmux] = await Promise.all([
+      const [sessions, approvals, tmux, metrics] = await Promise.all([
         this.client.fetchUnifiedSessions(UNIFIED_LIMIT),
         this.client.fetchApprovals().catch(() => []),
         this.client.enumerateTmuxSessions().catch(() => [] as TuiTmuxSession[]),
+        // Best-effort like the other two: without it a running turn is dated by
+        // its session's creation, which is worse than the list going stale.
+        this.client.fetchLiveSessionMetrics().catch(() => [] as TuiLiveSessionMetrics[]),
       ]);
-      this.model.replaceSessions(applyMuxNames(sessions, tmux));
+      this.model.replaceSessions(applyLiveMetrics(applyMuxNames(sessions, tmux), metrics));
       this.model.setApprovals(approvals);
       this.noteApprovals(approvals);
       if (this.pendingSelectId && this.model.select(this.pendingSelectId)) this.pendingSelectId = null;
@@ -1684,12 +1717,15 @@ async function snapshot(client: TuiClient): Promise<Snapshot> {
     model.replaceSessions(tmuxRowsToSessions(await client.enumerateTmuxSessions()));
     return { kind: 'ok', rows: model.rows(), degraded: true };
   }
-  const [sessions, approvals, tmux] = await Promise.all([
+  const [sessions, approvals, tmux, metrics] = await Promise.all([
     client.fetchUnifiedSessions(UNIFIED_LIMIT),
     client.fetchApprovals().catch(() => []),
     client.enumerateTmuxSessions().catch(() => [] as TuiTmuxSession[]),
+    client.fetchLiveSessionMetrics().catch(() => [] as TuiLiveSessionMetrics[]),
   ]);
-  model.replaceSessions(applyMuxNames(sessions, tmux));
+  // Same merge as the dashboard, so `--list`'s numbers stay the numbers
+  // `codeman tui <n>` takes: the WORKING group's order depends on it.
+  model.replaceSessions(applyLiveMetrics(applyMuxNames(sessions, tmux), metrics));
   model.setApprovals(approvals);
   return { kind: 'ok', rows: model.rows(), degraded: false };
 }

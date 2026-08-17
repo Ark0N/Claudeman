@@ -63,6 +63,17 @@ const defaultResponder: Responder = (req, res) => {
       data: { sessions: [{ sessionId: 'abc', name: 'w1-codeman', sources: ['live'] }], total: 1 },
     });
   }
+  if (url === '/api/sessions' || url.startsWith('/api/sessions?')) {
+    // The light state, plus the two rows the narrowing has to discard.
+    return sendJson(res, 200, {
+      success: true,
+      data: [
+        { id: 'abc', lastSubmitAt: 4000, inputTokens: 900, outputTokens: 100, status: 'busy' },
+        { id: '', lastSubmitAt: 7000 },
+        { id: 'zzz', lastSubmitAt: '5', inputTokens: null },
+      ],
+    });
+  }
   if (url.startsWith('/api/approvals')) {
     return sendJson(res, 200, {
       success: true,
@@ -316,6 +327,23 @@ describe('TuiClient remaining API surface', () => {
   it('fetches a terminal tail by byte count', async () => {
     await expect(client().fetchTerminalTail('abc', 4096)).resolves.toBe('tail bytes');
     expect(recorded[0].url).toBe('/api/sessions/abc/terminal?tail=4096');
+  });
+
+  it('reads the turn stamp and token counters off the light session state', async () => {
+    const metrics = await client().fetchLiveSessionMetrics();
+    expect(recorded[0].url).toBe('/api/sessions');
+    // Narrowed to the three fields, keyed by id: a row with no usable id is
+    // dropped rather than folded in under an empty key, and a field of the
+    // wrong type is left absent rather than merged as a string.
+    expect(metrics).toEqual([
+      { sessionId: 'abc', lastSubmitAt: 4000, inputTokens: 900, outputTokens: 100 },
+      { sessionId: 'zzz' },
+    ]);
+  });
+
+  it('reports an unreadable session list as empty rather than throwing', async () => {
+    responder = (_req, res) => sendJson(res, 200, { success: true, data: { sessions: 'not an array' } });
+    await expect(client().fetchLiveSessionMetrics()).resolves.toEqual([]);
   });
 
   it('starts sessions through quick-start', async () => {
