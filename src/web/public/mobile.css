@@ -696,6 +696,34 @@ html.mobile-init .file-browser-panel {
     text-overflow: ellipsis;
   }
 
+  /* ⚠️ Reserve a tappable label on the ACTIVE tab, which is the only one that
+     grows action icons. With a short session name the icons were eating the
+     tab: "w1" rendered a 13px label while gear + close took 50px of a 116px
+     tab, so the tab's geometric CENTRE landed on the gear and a thumb aiming
+     at the tab opened Session Options instead of switching sessions (measured
+     at 360, 393 and 430px; only long names cleared it). The tab widens by the
+     difference instead, which costs a little strip space on exactly one tab
+     and keeps tap-to-switch the majority of it.
+
+     ⚠️ The floor is set by the 10th tab onward, NOT by the numbered tabs you
+     are looking at. `.tab-number` is rendered only for `_tabIdx < 9` (app.js),
+     so tab 10 loses 16px + a 4px gap off its left and its centre sits 10px
+     further right. The centre clears the icons when
+
+         reserved > icons + rightEdge - leftRunUp - gap
+                  =    50 +         9 -        17 -   4  = 38px
+
+     with icons = gear 32 + close 20 - close's -2px margin, leftRunUp = border 1
+     + padding 8 + status dot 4 + gap 4, and rightEdge = padding 8 + border 1.
+     Hit testing snaps to whole pixels, so 39px still lands on the gear: the
+     practical floor is 40px and 44px keeps 4px of headroom. A NUMBERED tab
+     clears it at 20px, so reasoning from the tabs on screen is exactly what
+     would put the centre back on the gear. Pinned by
+     test/mobile-tab-tap-zones.test.ts. */
+  .session-tab.active .tab-name {
+    min-width: 44px;
+  }
+
   /* Hide close/gear buttons on non-active tabs on mobile */
   .session-tab .tab-close,
   .session-tab .tab-gear {
