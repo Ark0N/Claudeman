@@ -37,11 +37,20 @@ npm run check:frontend-syntax  # syntax-checks the plain-JS frontend modules
 ### Tests
 
 ```bash
-npm test -- test/<file>.test.ts   # one file (the normal way)
-npm run test:ci                    # the full CI sweep
+npm test                          # the gate — exactly what CI runs
+npm test -- test/<file>.test.ts   # one file
 ```
 
-**Never run bare `npm test`.** The default config includes browser-driven Playwright suites that need a live server, Chromium, and environment-specific baselines; they will hang or fail on a normal machine. `test:ci` is the honest "run everything" command, it is exactly what CI runs.
+`npm test` is the same suite CI runs, so a green run locally means a green run there. It leaves out three suites that cannot pass on an arbitrary machine, each with its own command:
+
+```bash
+npm run test:browser   # Playwright + chromium (+ a live server; codex-predictive-echo needs a real codex binary)
+npm run test:mobile    # the above plus environment-specific PNG baselines
+npm run test:perf      # wall-clock benchmarks — run on an otherwise idle machine
+npm run test:all       # literally everything, environmental failures included
+```
+
+Expect `test:browser`/`test:mobile`/`test:perf` to fail where the machine cannot provide what they need; read that as "not runnable here", not as a regression. `config/test-suites.ts` holds the globs, and both configs derive from it, so the exclusions and those runners cannot drift apart.
 
 If you add a test that binds a port, pick a unique one at 3150 or above (search the repo for `const PORT =` first). Never 3000.
 

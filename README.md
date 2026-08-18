@@ -1037,7 +1037,7 @@ flowchart TB
 npm install
 npx tsx src/index.ts web    # Dev mode
 npm run build               # Production build
-npm run test:ci             # Run tests (the CI suite; browser suites need extra setup)
+npm test                    # Run tests (same suite CI runs; browser/mobile/perf suites have their own commands)
 ```
 
 See [CLAUDE.md](./CLAUDE.md) for full documentation.

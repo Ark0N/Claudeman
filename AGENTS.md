@@ -10,7 +10,7 @@ sections here.
 Quick pointers:
 
 - Type check: `tsc --noEmit` · Lint: `npm run lint` · Format: `npm run format:check`
-- Targeted tests only: `npm test -- test/<file>.test.ts` (bare `npm test` is unsafe in managed sessions)
+- Tests: `npm test` (the CI gate, safe to run bare) or `npm test -- test/<file>.test.ts` for one file
 - Route tests use `app.inject()`; new tests needing ports must pick a unique `const PORT =`
 - Branch off `master` for all work; Conventional Commit-style messages (`fix(mobile): ...`)
 - Never commit secrets or local state from `~/.codeman/`
