@@ -937,7 +937,7 @@ flowchart TB
 npm install
 npx tsx src/index.ts web    # 开发模式
 npm run build               # 生产构建
-npm run test:ci             # 运行测试（CI 套件；浏览器套件需要额外环境）
+npm test                    # 运行测试（与 CI 相同；浏览器/移动端/性能套件另有独立命令）
 ```
 
 完整文档见 [CLAUDE.md](./CLAUDE.md)。

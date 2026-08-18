@@ -87,7 +87,9 @@ jobs:
           fi
 
       - name: Run unit & integration tests
-        # Excludes the browser-driven mobile suite (test/mobile/**); see config/vitest.ci.config.ts.
+        # Excludes the suites that need chromium, per-machine PNG baselines or a
+        # quiet machine — see config/test-suites.ts for the list and the reason
+        # behind each entry. Identical to what `npm test` runs locally.
         # Safe in CI: TmuxManager no-ops all shell commands under VITEST (test/setup.ts).
         run: npm run test:ci
 
@@ -99,6 +101,11 @@ jobs:
         run: npx vitest run
         working-directory: packages/xterm-zerolag-input
 
-# Note: The browser-driven mobile suite (test/mobile/**) is excluded from CI —
-# it needs a live server + chromium + environment-specific PNG baselines.
-# Run it locally/manually. All other tests run via the `test` job above.
+# Note: three suites are excluded from CI, each with its own local runner:
+#   npm run test:browser  Playwright + chromium (+ a live server, and a real
+#                         codex binary for codex-predictive-echo)
+#   npm run test:mobile   the above plus environment-specific PNG baselines
+#   npm run test:perf     wall-clock benchmarks; need an otherwise idle machine
+# config/test-suites.ts holds the globs; the configs derive from it so the
+# exclusions here and those runners cannot drift apart. Everything else runs in
+# the `test` job above, which is the same thing `npm test` runs.
