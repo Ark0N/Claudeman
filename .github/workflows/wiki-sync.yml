@@ -1,0 +1,109 @@
+name: Sync Wiki
+
+# Publishes docs/wiki/ to the repository's GitHub wiki.
+#
+# The wiki is a separate git repo with no CI and no review, so the source of truth
+# lives in docs/wiki/ and this workflow mirrors it. Browser edits to the wiki are
+# overwritten by the next sync; fix pages with a PR against docs/wiki/ instead.
+#
+# One-time setup: GitHub only creates <repo>.wiki.git once the first page has been
+# saved in the browser. Save a stub page at /wiki/_new before the first run.
+#
+# Token: GITHUB_TOKEN can push to the wiki on most repos but not all. If a run fails
+# with 403, add a fine-grained PAT with wiki write access as the WIKI_TOKEN secret;
+# it is preferred automatically when present. Note the 403 usually surfaces on the
+# PUSH, not the clone: this repo is public, so a read-only token still clones the
+# wiki fine. Both steps carry the hint.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'docs/wiki/**'
+      - '.github/workflows/wiki-sync.yml'
+  workflow_dispatch:
+
+concurrency: ${{ github.workflow }}
+
+jobs:
+  sync:
+    name: Push docs/wiki to the wiki
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Clone wiki
+        env:
+          WIKI_TOKEN: ${{ secrets.WIKI_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! git clone "https://x-access-token:${WIKI_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" wiki 2>"${RUNNER_TEMP}/clone-err.txt"; then
+            cat "${RUNNER_TEMP}/clone-err.txt"
+            echo "::error::Could not clone ${GITHUB_REPOSITORY}.wiki.git. If this says 'Repository not found', the wiki has never had a page: save one at https://github.com/${GITHUB_REPOSITORY}/wiki/_new and re-run. If it says 403, add a WIKI_TOKEN secret."
+            exit 1
+          fi
+
+      - name: Mirror pages
+        run: |
+          set -euo pipefail
+
+          # The mirror deletes before it copies, so an empty source would wipe
+          # every published page and the commit step would happily push that. A
+          # MISSING directory already fails safely (cp aborts under set -e); an
+          # empty one does not, so check explicitly. This is the one failure mode
+          # here that destroys something a browser edit cannot get back.
+          if [ ! -d docs/wiki ]; then
+            echo "::error::docs/wiki does not exist. Refusing to mirror, which would delete the entire published wiki."
+            exit 1
+          fi
+          pages=$(find docs/wiki -maxdepth 1 -name '*.md' | wc -l)
+          if [ "$pages" -eq 0 ]; then
+            echo "::error::docs/wiki contains no .md pages. Refusing to mirror, which would delete the entire published wiki."
+            exit 1
+          fi
+          echo "Mirroring ${pages} pages."
+
+          find wiki -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+          cp -R docs/wiki/. wiki/
+
+      - name: Stamp the documented version
+        run: |
+          set -euo pipefail
+          # _Footer.md renders on every page and used to carry a hand-written
+          # version, which went stale on every release because nothing refreshed
+          # it. It carries {{VERSION}} instead and the series is stamped here.
+          series="$(node -p "require('./package.json').version.split('.').slice(0,2).join('.') + '.x'")"
+          # grep exits 1 when it matches nothing, which under `set -o pipefail`
+          # would fail the step instead of warning, so test before substituting.
+          if grep -rlq '{{VERSION}}' wiki/; then
+            grep -rlZ '{{VERSION}}' wiki/ | xargs -0 -r sed -i "s/{{VERSION}}/${series}/g"
+          else
+            echo "::warning::No {{VERSION}} placeholder found in docs/wiki. The published version line can no longer be refreshed automatically."
+          fi
+          if grep -rq '{{VERSION}}' wiki/; then
+            echo "::error::A {{VERSION}} placeholder survived substitution and would be published verbatim."
+            exit 1
+          fi
+          echo "Stamped version ${series}."
+
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+          cd wiki
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --quiet --cached; then
+            echo "Wiki already up to date."
+            exit 0
+          fi
+          git commit -m "docs: sync wiki from docs/wiki @ ${GITHUB_SHA:0:7}"
+          if ! git push 2>"${RUNNER_TEMP}/push-err.txt"; then
+            cat "${RUNNER_TEMP}/push-err.txt"
+            echo "::error::Could not push to ${GITHUB_REPOSITORY}.wiki.git. A 403 here means the token can read the wiki but not write it, which is the usual GITHUB_TOKEN case: add a fine-grained PAT with wiki write access as the WIKI_TOKEN secret."
+            exit 1
+          fi
