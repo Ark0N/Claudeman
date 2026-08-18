@@ -668,7 +668,9 @@ describe('file-routes', () => {
 
     it('rejects path traversal attempts', async () => {
       // realpathSync resolves the symlink to a path outside workingDir
-      mockedRealpathSync.mockReturnValue('/etc/passwd' as never);
+      mockedRealpathSync.mockImplementation(
+        (p: string) => (p === harness.ctx._session.workingDir ? p : '/etc/passwd') as never
+      );
 
       const res = await harness.app.inject({
         method: 'GET',
@@ -773,7 +775,9 @@ describe('file-routes', () => {
     });
 
     it('rejects path traversal in raw file serving', async () => {
-      mockedRealpathSync.mockReturnValue('/etc/shadow' as never);
+      mockedRealpathSync.mockImplementation(
+        (p: string) => (p === harness.ctx._session.workingDir ? p : '/etc/shadow') as never
+      );
 
       const res = await harness.app.inject({
         method: 'GET',
@@ -868,7 +872,9 @@ describe('file-routes', () => {
     });
 
     it('rejects symlink targets that escape the session working directory', async () => {
-      mockedRealpathSync.mockReturnValue('/tmp/outside-workdir/link.log' as never);
+      mockedRealpathSync.mockImplementation(
+        (p: string) => (p === harness.ctx._session.workingDir ? p : '/tmp/outside-workdir/link.log') as never
+      );
 
       const res = await harness.app.inject({
         method: 'GET',
