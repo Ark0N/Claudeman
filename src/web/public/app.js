@@ -2053,6 +2053,28 @@ class CodemanApp {
           wrap.appendChild(actions);
           wrap.appendChild(pre);
         });
+        // Links open in a NEW tab.
+        //
+        // marked emits a bare `<a href>` and the sanitizer's allowlist has no
+        // `target`, so a tap in the chat NAVIGATED THE APP AWAY: on a phone that
+        // unloads the whole dashboard — SSE, terminal buffers, unsent composer
+        // text — and the OS back gesture reloads it from scratch, which is what
+        // "links don't open" reads as on mobile, with no middle-click or
+        // open-in-new-tab affordance to work around it.
+        //
+        // This pass runs AFTER sanitizing, so it is the only source of these two
+        // attributes: whatever an agent wrote is already gone, and `rel` is set on
+        // the same element in the same breath, so no page Codeman opens ever gets
+        // a `window.opener` handle back (reverse tabnabbing).
+        //
+        // A fragment link stays in-page, and mailto:/tel: are handed to the OS —
+        // giving those a target just strands an empty tab.
+        tmpl.content.querySelectorAll('a[href]').forEach((a) => {
+          const href = a.getAttribute('href') || '';
+          if (!href || href.startsWith('#') || /^(?:mailto|tel):/i.test(href)) return;
+          a.setAttribute('target', '_blank');
+          a.setAttribute('rel', 'noopener noreferrer');
+        });
         return tmpl.innerHTML;
       } catch { /* fall through */ }
     }

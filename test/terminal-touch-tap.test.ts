@@ -8,8 +8,11 @@ function loadTerminalUiHarness() {
   let now = 1_000;
   let keyboardVisible = false;
   let activeElement: unknown = null;
+  // The module hangs its constants off window (CodemanTerminalInput) and the URL branch of
+  // the link provider opens through window.open, so tests need a handle on the same object.
+  const windowRef: Record<string, any> = {};
   const context = vm.createContext({
-    window: {},
+    window: windowRef,
     document: {
       body: { classList: { contains: () => false } },
       get activeElement() {
@@ -18,7 +21,7 @@ function loadTerminalUiHarness() {
       getElementById: () => null,
     },
     CodemanApp,
-    console: { warn: vi.fn(), log: vi.fn() },
+    console: { warn: vi.fn(), log: vi.fn(), debug: vi.fn() },
     _crashDiag: { log: vi.fn() },
     performance: { now: () => now },
     requestAnimationFrame: (_fn: () => void) => 1,
@@ -43,12 +46,18 @@ function loadTerminalUiHarness() {
     TERMINAL_CHUNK_SIZE: 32 * 1024,
   });
 
+  // constants.js first: the link provider calls absoluteFilePathPattern() and
+  // previewsInFileViewer() at scan time, and the SHIPPED definitions are what keep a tap and
+  // a hover resolving the same links.
+  const constants = readFileSync(resolve(import.meta.dirname, '../src/web/public/constants.js'), 'utf8');
   const code = readFileSync(resolve(import.meta.dirname, '../src/web/public/terminal-ui.js'), 'utf8');
+  vm.runInContext(constants, context, { filename: 'constants.js' });
   vm.runInContext(code, context, { filename: 'terminal-ui.js' });
 
   const app = new (CodemanApp as any)();
   return {
     app,
+    windowRef,
     setNow: (value: number) => {
       now = value;
     },
@@ -730,5 +739,163 @@ describe('terminal touch tap mouse guard', () => {
 
     expect(event.preventDefault).not.toHaveBeenCalled();
     expect(event.stopImmediatePropagation).not.toHaveBeenCalled();
+  });
+});
+
+describe('terminal link tap', () => {
+  // xterm resolves a link from mousemove and activates it on mouseup over its SCREEN element.
+  // A touch tap produces none of those (touch-action:none and touchstart's preventDefault
+  // suppress the compatibility mouse events, the post-tap guard drops the rest, and the
+  // synthetic pair this app dispatches for mouse REPORTING lands on the .xterm root, an
+  // ancestor of the node the linkifier listens on). So the tap path activates the link
+  // itself, through the same provider, or every URL and path in the terminal stays inert on
+  // a phone.
+  //
+  // Grid geometry from createTerminalGrid: 8×16 cells, screen rect at (0,0), viewportY 0 —
+  // so 0-based character index i on 0-based row r sits at (i * 8 + 4, r * 16 + 8).
+  const at = (index: number, row = 0) => ({ clientX: index * 8 + 4, clientY: row * 16 + 8 });
+
+  /** A claude-mode app with the shipped link provider registered over `lines`. */
+  function linkHarness(lines: string[], cursorY = lines.length - 1) {
+    const harness = loadTerminalUiHarness();
+    const { app, windowRef } = harness;
+    const sent: string[] = [];
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app._sendInputAsync = (_id: string, data: string) => sent.push(data);
+    app.terminal = createTerminalGrid(lines, cursorY);
+    app.terminal.registerLinkProvider = vi.fn();
+    app.openFilePreview = vi.fn();
+    app.openLogViewerWindow = vi.fn();
+    app._isExternalPreviewPath = () => false;
+    windowRef.open = vi.fn();
+    app.registerFilePathLinkProvider();
+    return { app, windowRef, sent };
+  }
+
+  it('opens a URL under the finger in a new tab', () => {
+    const line = 'Login at https://claude.ai/oauth/authorize?code=true&client_id=abc to finish';
+    const { app, windowRef } = linkHarness([line, '', '❯ ']);
+
+    expect(app._handleMobileTerminalTap(at(line.indexOf('https')), false, 'content')).toBe('link');
+    expect(windowRef.open).toHaveBeenCalledWith(
+      'https://claude.ai/oauth/authorize?code=true&client_id=abc',
+      '_blank',
+      'noopener,noreferrer'
+    );
+  });
+
+  it('sends no mouse report for the tap it just spent on a link', () => {
+    // The CLI must not also see a click there: that is how a tap on a URL printed inside a
+    // permission dialog would answer the dialog. Desktop already skips the SGR tap for a
+    // hovered link (_handleDesktopTerminalClick).
+    const line = 'see https://example.com/x for more';
+    const { app, sent } = linkHarness([line, '', '❯ ']);
+
+    expect(app._sessionUsesServerMouseStrip()).toBe(true);
+    app._handleMobileTerminalTap(at(line.indexOf('https')), false, 'content');
+
+    expect(sent).toEqual([]);
+  });
+
+  it('leaves a tap beside the link as an ordinary tap', () => {
+    // Containment is xterm's own rule (flattened cell index), so tap and click agree on
+    // where a link ends; a tap on the prose around it keeps its mouse report.
+    const line = 'see https://example.com/x for more';
+    const { app, windowRef, sent } = linkHarness([line, '', '❯ ']);
+
+    expect(app._handleMobileTerminalTap(at(line.indexOf('for more') + 3), false, 'content')).toBe('content');
+    expect(windowRef.open).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(1);
+  });
+
+  it('opens a tapped file path in the preview overlay', () => {
+    const line = 'wrote the chart to /tmp/out/chart.png just now';
+    const { app } = linkHarness([line, '', '❯ ']);
+
+    expect(app._handleMobileTerminalTap(at(line.indexOf('/tmp')), false, 'content')).toBe('link');
+    expect(app.openFilePreview).toHaveBeenCalledWith('/tmp/out/chart.png', 'sess-1');
+    expect(app.openLogViewerWindow).not.toHaveBeenCalled();
+  });
+
+  it('sends a tapped log path to the log viewer', () => {
+    const line = 'tail -f /var/log/app.log';
+    const { app } = linkHarness([line, '', '❯ ']);
+
+    expect(app._handleMobileTerminalTap(at(line.indexOf('/var')), false, 'content')).toBe('link');
+    expect(app.openLogViewerWindow).toHaveBeenCalledWith('/var/log/app.log', 'sess-1');
+  });
+
+  it('activates a link in scrollback, where the tap sends no report at all', () => {
+    // A scrolled-up tap deliberately reports nothing (it would land on whatever row now
+    // occupies the cell), but reading old output and tapping a URL in it is the common case.
+    const line = 'docs at https://example.com/guide';
+    const { app, windowRef, sent } = linkHarness([line, '', '']);
+
+    expect(app._handleMobileTerminalTap(at(line.indexOf('https')), false, 'history')).toBe('link');
+    expect(windowRef.open).toHaveBeenCalledOnce();
+    expect(sent).toEqual([]);
+  });
+
+  it('never hijacks a TUI-owned choice row that happens to carry a path', () => {
+    // On a phone the dialog is the only interaction that matters, and its rows routinely
+    // name the very file a link would open — answering it must keep winning.
+    // ⚠️ The caret is parked on the QUESTION row, not the choice: with the caret on the
+    // tapped row this would pass through _tapIsOnCaretLine and pin nothing.
+    const line = '❯ 1. Yes, edit /home/user/src/app.ts';
+    const { app, windowRef, sent } = linkHarness(['Do you want to make this edit?', line, '  2. No, keep it as is'], 0);
+
+    expect(app._handleMobileTerminalTap(at(line.indexOf('/home'), 1), false, 'content')).toBe('content');
+    expect(windowRef.open).not.toHaveBeenCalled();
+    expect(app.openFilePreview).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(1); // the choice still reaches the CLI
+  });
+
+  it('leaves a URL the user typed in the composer editable', () => {
+    // Tapping your own prompt text means "put the caret here". Opening it instead would
+    // punish the phone gesture for fixing a typo in a pasted link.
+    const composer = '❯ summarize https://example.com/guide for me';
+    const { app, windowRef, sent } = linkHarness(['earlier output', '', composer], 2);
+
+    expect(app._handleMobileTerminalTap(at(composer.indexOf('https'), 2), true, 'input')).toBe('input');
+    expect(windowRef.open).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(1); // the tap still positions the caret via the mouse report
+  });
+
+  it('activates a link in a plain shell session, where every tap classifies as input', () => {
+    // A shell has no TUI to own taps, so _classifyMobileTerminalTap short-circuits to
+    // 'input' for the whole screen — gating link taps on the intent would leave every URL
+    // in shell output (curl, npm, git remote) inert. The caret line is the real boundary.
+    const line = 'remote: https://github.com/Ark0N/Codeman.git';
+    const harness = loadTerminalUiHarness();
+    const { app, windowRef } = harness;
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'shell' }]]);
+    app._sendInputAsync = vi.fn();
+    app.terminal = createTerminalGrid([line, '', 'bash-5.3$ '], 2);
+    app.terminal.registerLinkProvider = vi.fn();
+    windowRef.open = vi.fn();
+    app.registerFilePathLinkProvider();
+
+    // No cachedIntent below: real classification runs, and for a shell it answers 'input'.
+    const point = at(line.indexOf('https'));
+    expect(app._classifyMobileTerminalTap(point.clientX, point.clientY)).toBe('input');
+    expect(app._handleMobileTerminalTap(point, false)).toBe('link');
+    expect(windowRef.open).toHaveBeenCalledWith(
+      'https://github.com/Ark0N/Codeman.git',
+      '_blank',
+      'noopener,noreferrer'
+    );
+  });
+
+  it('keeps taps working when no provider was ever registered', () => {
+    const harness = loadTerminalUiHarness();
+    const { app } = harness;
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app.terminal = createTerminalGrid(['plain output', '', '❯ '], 2);
+
+    expect(app._terminalLinkAtPoint(4, 8)).toBeNull();
+    expect(app._activateTerminalLinkAtPoint(4, 8)).toBe(false);
   });
 });

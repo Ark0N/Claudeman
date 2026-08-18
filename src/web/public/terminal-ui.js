@@ -1306,7 +1306,7 @@ Object.assign(CodemanApp.prototype, {
     // Debug: Track if provider is being invoked
     let lastInvokedLine = -1;
 
-    this.terminal.registerLinkProvider({
+    const provider = {
       provideLinks(bufferLineNumber, callback) {
         // Debug logging - only log if line changed to avoid spam
         if (bufferLineNumber !== lastInvokedLine) {
@@ -1523,9 +1523,122 @@ Object.assign(CodemanApp.prototype, {
         }
         callback(links.length > 0 ? links : undefined);
       },
-    });
+    };
+
+    // Keep the provider reachable: on touch devices xterm's linkifier never
+    // resolves a link (it is driven by mousemove/mouseup, which a tap does not
+    // produce), so the tap path asks this SAME provider what is under the finger
+    // rather than growing a second, driftable copy of the patterns.
+    // See _terminalLinkAtPoint.
+    this._terminalLinkProvider = provider;
+    this.terminal.registerLinkProvider(provider);
 
     console.log('[LinkProvider] File path link provider registered');
+  },
+
+  /**
+   * The terminal link under a viewport point, or null.
+   *
+   * Resolved through the provider registered above, so a tap and a desktop click
+   * can never disagree about what is a link or where it ends. Containment
+   * mirrors xterm's own `_linkAtPosition` — flattened `y * cols + x`, inclusive
+   * at both ends — for the same reason.
+   *
+   * ⚠️ The provider answers its callback SYNCHRONOUSLY (every path in
+   * `registerFilePathLinkProvider` does, including the empty ones). xterm's
+   * ILinkProvider contract permits an async reply, so this reads whatever
+   * arrived by the time the call returns and answers null otherwise: a tap then
+   * keeps its normal meaning instead of opening a link late, after the gesture
+   * that made `window.open` permissible is gone.
+   */
+  _terminalLinkAtPoint(clientX, clientY) {
+    const provider = this._terminalLinkProvider;
+    const buffer = this.terminal?.buffer?.active;
+    if (!provider || !buffer) return null;
+    const pos = this._clientPointToCell(clientX, clientY);
+    if (!pos) return null;
+    // Link ranges are 1-based ABSOLUTE buffer lines (xterm adds ydisp to the
+    // viewport row before asking), which is what the provider's coordAt() emits.
+    const y = (buffer.viewportY || 0) + pos.row;
+    let links = null;
+    try {
+      provider.provideLinks(y, (result) => {
+        links = result || [];
+      });
+    } catch {
+      return null;
+    }
+    if (!links || links.length === 0) return null;
+    const cols = Math.max(1, this.terminal.cols || 1);
+    const current = y * cols + pos.col;
+    return (
+      links.find((link) => {
+        const start = link?.range?.start;
+        const end = link?.range?.end;
+        if (!start || !end) return false;
+        return start.y * cols + start.x <= current && current <= end.y * cols + end.x;
+      }) || null
+    );
+  },
+
+  /**
+   * Is this point on the caret's logical line — the editable composer?
+   *
+   * There a tap means "put the cursor here", so a URL the USER typed or pasted
+   * into a prompt must stay editable rather than opening itself. The caret is the
+   * signal that works for every CLI: claude's composer row carries it, and in a
+   * plain shell it sits on the prompt line while output scrolls above, so the
+   * same test covers both without asking what mode is running (tap
+   * classification cannot answer this — a shell session classifies EVERY tap as
+   * 'input', which would leave every URL in shell output inert).
+   *
+   * The caret's line is walked out through soft wraps, since a long prompt spans
+   * rows.
+   */
+  _tapIsOnCaretLine(clientX, clientY) {
+    const buffer = this.terminal?.buffer?.active;
+    if (!buffer?.getLine) return false;
+    const pos = this._clientPointToCell(clientX, clientY);
+    if (!pos) return false;
+    const rows = Math.max(1, this.terminal.rows || 1);
+    const cursorRow = Math.max(0, Math.min(rows - 1, buffer.cursorY || 0));
+    const tappedRow = pos.row - 1;
+    if (tappedRow === cursorRow) return true;
+    let start = cursorRow;
+    while (start > 0 && buffer.getLine(buffer.viewportY + start)?.isWrapped) start--;
+    let end = cursorRow;
+    while (end + 1 < rows && buffer.getLine(buffer.viewportY + end + 1)?.isWrapped) end++;
+    return tappedRow >= start && tappedRow <= end;
+  },
+
+  /**
+   * Activate the terminal link under a touch point. Returns true when one was.
+   *
+   * xterm activates a link from a `mousemove` that resolves what is under the
+   * pointer, followed by a `mouseup` on its SCREEN element — and on a touch
+   * device it receives neither: `touch-action: none` plus touchstart's
+   * preventDefault suppress the browser's compatibility mouse events,
+   * _installMobileTapMouseGuard drops the ones that still arrive, and the
+   * synthetic pair dispatched for mouse REPORTING goes to the `.xterm` root,
+   * an ANCESTOR of the node the linkifier listens on (so it cannot reach it) and
+   * carries no mousemove either way. Every URL and file path in the terminal was
+   * therefore inert on phones and tablets — Claude Code's own `/login` URL
+   * included, which is unfinishable from a phone without this.
+   *
+   * Activating here, synchronously inside the touchend handler, is what keeps
+   * the user gesture that lets the URL branch's `window.open` through the popup
+   * blocker; a later activation (a timer, a promise) is silently swallowed.
+   */
+  _activateTerminalLinkAtPoint(clientX, clientY) {
+    const link = this._terminalLinkAtPoint(clientX, clientY);
+    if (!link || typeof link.activate !== 'function') return false;
+    try {
+      link.activate(null, link.text);
+    } catch (err) {
+      console.warn('[LinkProvider] tap activation failed:', err);
+      return false;
+    }
+    return true;
   },
 
   showWelcome() {
@@ -3705,6 +3818,32 @@ Object.assign(CodemanApp.prototype, {
     // touchstart already classified this exact point; reuse it rather than paying
     // a second full-viewport scan for the same gesture.
     const intent = cachedIntent ?? this._classifyMobileTerminalTap(touch.clientX, touch.clientY);
+    // Computed once and reused by the keyboard decision at the tail of this
+    // method: both ask the same question, and the pane cannot change in between
+    // (a mouse report only reaches the PTY; its output lands on a later turn).
+    const actionable = this._isActionableMobileTerminalTap(touch.clientX, touch.clientY);
+
+    // A tap that lands ON a link activates it, at any scroll position and before
+    // any mouse report — exactly what a desktop click does, where the provider's
+    // activate() runs and _handleDesktopTerminalClick deliberately skips the SGR
+    // tap for a hovered link so the CLI never also sees a click there.
+    //
+    // Two kinds of row keep their existing meaning instead: the composer, where a
+    // tap places the caret in text the USER typed (_tapIsOnCaretLine), and
+    // TUI-owned rows, where a numbered choice or an expandable readback is
+    // answering a dialog and routinely carries the very path the tap would
+    // otherwise open — on a phone the dialog is the only interaction that
+    // matters, so it wins.
+    if (
+      !actionable &&
+      !this._tapIsOnCaretLine(touch.clientX, touch.clientY) &&
+      this._activateTerminalLinkAtPoint(touch.clientX, touch.clientY)
+    ) {
+      // No focus change: a 'content' tap was already blurred by touchstart, and
+      // popping the keyboard behind a tab that is about to take over is noise.
+      return 'link';
+    }
+
     if (intent === 'history') {
       // Scrolled up: send NO mouse report — a tap on old output must not be
       // delivered to the CLI as a click on whatever row now occupies that cell.
@@ -3728,7 +3867,7 @@ Object.assign(CodemanApp.prototype, {
       this._sendSyntheticSgrTap(touch.clientX, touch.clientY);
     }
 
-    if (intent === 'content' && this._isActionableMobileTerminalTap(touch.clientX, touch.clientY)) {
+    if (intent === 'content' && actionable) {
       // A synthetic xterm click can focus its helper textarea. Blur after the
       // report so collapsing a readback never opens or retains the keyboard.
       this._blurMobileTerminalInput();
