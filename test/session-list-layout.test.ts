@@ -51,6 +51,25 @@ interface LayoutApp {
   applySidebarFilter(query?: string): void;
   _fullRenderSessionTabs(): void;
   updateConnectionLines(): void;
+  isSessionSidebarRich(): boolean;
+  _sidebarRichRow(id: string, session: Record<string, unknown>): RichRow | null;
+  _sidebarRichMetaHTML(row: RichRow | null): string;
+  _updateSidebarRichRow(tab: Element, id: string, session: Record<string, unknown>): void;
+  _startSidebarRichClock(): void;
+  _stopSidebarRichClock(): void;
+  _tickSidebarRichTimes(): void;
+  _sidebarRichClock: ReturnType<typeof setInterval> | null;
+  pendingHooks?: Map<string, Set<string>>;
+  _mobileOverviewState?: (session: Record<string, unknown>, hooks?: Set<string>) => string;
+  _mobileOverviewSince?: (state: string, session: Record<string, unknown>) => { key: string; at: number } | null;
+  _mobileOverviewStampText?: (ts: number, fmt: string) => string;
+}
+
+interface RichRow {
+  state: string;
+  pill: string;
+  createdAt: number;
+  since: { key: string; at: number } | null;
 }
 
 /** The parts of index.html this feature touches, minus everything it does not. */
@@ -438,7 +457,7 @@ describe('session list layout wiring', () => {
     // SettingsUpdateSchema is .strict() and this key is NOT in the PUT strip-list,
     // so without the schema entry the server 400s the ENTIRE settings PUT and every
     // unrelated setting silently stops persisting.
-    expect(SCHEMAS).toContain("sessionListLayout: z.enum(['header', 'sidebar']).optional()");
+    expect(SCHEMAS).toContain("sessionListLayout: z.enum(['header', 'sidebar', 'sidebar-rich']).optional()");
   });
 
   it('plumbs the setting through populate, collect, defaults and the display-key set', () => {
@@ -516,5 +535,236 @@ describe('session list layout wiring', () => {
     // The <aside> is a child of .main, which is where SwipeHandler binds, so a
     // swipe across the open drawer would otherwise fire nextSession().
     expect(MOBILE_HANDLERS).toContain("e.target?.closest?.('.session-sidebar')");
+  });
+});
+
+/**
+ * The rich variant is the SAME sidebar with more on each row, and that is the
+ * whole reason it does not get its own `data-session-list` value: every one of
+ * the ~25 `isSessionSidebarActive()` call sites and every
+ * `html[data-session-list="sidebar"]` rule in styles.css and mobile.css has to
+ * keep matching it untouched. `data-session-list stays "sidebar"` below is the
+ * assertion that guards that, and it is the one to read first.
+ */
+describe('rich session sidebar', () => {
+  /**
+   * The row model is built from mobile-overview.js helpers, which the harness
+   * does not eval (it would drag the whole phone overview in for three
+   * functions). Stubbing them is also the sharper test: it pins exactly which
+   * shared helper each field comes from.
+   */
+  function stubOverview(app: LayoutApp, state = 'working') {
+    app.pendingHooks = new Map();
+    app._mobileOverviewState = () => state;
+    app._mobileOverviewSince = (s, session) =>
+      s === 'working'
+        ? { key: 'working', at: Number(session.lastSubmitAt) || 0 }
+        : { key: 'idle', at: Number(session.lastActivityAt) || 0 };
+    app._mobileOverviewStampText = (ts, fmt) => (ts ? `${fmt}:${ts}` : '—');
+  }
+
+  const SESSION = { createdAt: 1000, lastActivityAt: 5000, lastSubmitAt: 4000 };
+
+  it('data-session-list stays "sidebar" so every existing sidebar rule and call site still matches', () => {
+    const { win, app } = boot({ stored: { sessionListLayout: 'sidebar-rich' } });
+    expect(app.getSessionListLayout()).toBe('sidebar-rich');
+
+    app.applySessionListLayout();
+
+    // The load-bearing assertion: the layout attribute is NOT 'sidebar-rich'.
+    expect(win.document.documentElement.dataset.sessionList).toBe('sidebar');
+    expect(win.document.documentElement.dataset.sidebarDetail).toBe('rich');
+    expect(app.isSessionSidebarActive()).toBe(true);
+    expect(app.isSessionSidebarRich()).toBe(true);
+    // …and everything the simple sidebar does, it still does.
+    expect(tabsEl(win).parentElement?.id).toBe('sessionSidebarList');
+    expect(tabsEl(win).getAttribute('aria-orientation')).toBe('vertical');
+    expect(toggleBtn(win).classList.contains('btn-sidebar-toggle--hidden')).toBe(false);
+    expect(app._tallTabsEnabled).toBe(true);
+  });
+
+  it('marks the simple sidebar and the header strip as not rich', () => {
+    for (const layout of ['sidebar', 'header']) {
+      const { win, app } = boot({ stored: { sessionListLayout: layout } });
+      app.applySessionListLayout();
+      expect(win.document.documentElement.dataset.sidebarDetail).toBe('simple');
+      expect(app.isSessionSidebarRich()).toBe(false);
+    }
+  });
+
+  it('forces a solo window back to the header strip, detail and all', () => {
+    // A detached window shows exactly one session: a list of it is noise, and
+    // #sessionTabs must never be parked inside the display:none <aside>.
+    const { win, app } = boot({ stored: { sessionListLayout: 'sidebar-rich' }, solo: 'sess-1' });
+    expect(app.getSessionListLayout()).toBe('header');
+    app.applySessionListLayout();
+    expect(win.document.documentElement.dataset.sessionList).toBe('header');
+    expect(win.document.documentElement.dataset.sidebarDetail).toBe('simple');
+    expect(app.isSessionSidebarRich()).toBe(false);
+  });
+
+  it('re-renders when only the DETAIL changes, which the old layout-only test could not see', () => {
+    // simple ⟷ rich leaves data-session-list on 'sidebar' both times. The meta
+    // line is emitted by the row template, not toggled by CSS, so a missed
+    // re-render here means flipping the setting repaints nothing until the next
+    // SSE tick.
+    const { win, app } = boot({ stored: { sessionListLayout: 'sidebar' } });
+    app.applySessionListLayout();
+    (app._fullRenderSessionTabs as unknown as { mockClear(): void }).mockClear();
+
+    win.localStorage.setItem('codeman-app-settings', JSON.stringify({ sessionListLayout: 'sidebar-rich' }));
+    delete (app as unknown as { _cachedAppSettings?: unknown })._cachedAppSettings;
+    app.applySessionListLayout();
+
+    expect(win.document.documentElement.dataset.sidebarDetail).toBe('rich');
+    expect(app._fullRenderSessionTabs).toHaveBeenCalled();
+  });
+
+  it('builds the row model from the shared overview helpers, not its own copy', () => {
+    const { app } = boot({ stored: { sessionListLayout: 'sidebar-rich' } });
+    stubOverview(app);
+    const row = app._sidebarRichRow('s1', SESSION)!;
+    expect(row.state).toBe('working');
+    expect(row.pill).toBe('working');
+    expect(row.createdAt).toBe(1000);
+    // A working pane repaints ~1/s, so its duration is anchored on the turn's
+    // last Enter (lastSubmitAt), never on lastActivityAt.
+    expect(row.since).toEqual({ key: 'working', at: 4000 });
+  });
+
+  it('degrades to no meta line when mobile-overview.js is missing or stale', () => {
+    // iOS Safari serves old JS after a deploy. A missing helper must cost the
+    // stamps line, not the whole tab strip.
+    const { app } = boot({ stored: { sessionListLayout: 'sidebar-rich' } });
+    expect(app._sidebarRichRow('s1', SESSION)).toBeNull();
+    expect(app._sidebarRichMetaHTML(null)).toBe('');
+  });
+
+  it('renders both stamps and the pill, and parks raw epochs for the clock', () => {
+    const { app } = boot({ stored: { sessionListLayout: 'sidebar-rich' } });
+    stubOverview(app);
+    const html = app._sidebarRichMetaHTML(app._sidebarRichRow('s1', SESSION));
+
+    expect(html).toContain('class="tab-meta"');
+    expect(html).toContain('>created<');
+    expect(html).toContain('>working<');
+    expect(html).toContain('tab-pill--working');
+    // Raw epoch-ms on the element is what lets the clock rewrite the text
+    // without a re-render — a re-render would restart every load spinner and
+    // alert animation in the list, twice a minute.
+    expect(html).toContain('data-tab-ts="1000" data-tab-fmt="ago"');
+    expect(html).toContain('data-tab-ts="4000" data-tab-fmt="for"');
+    // Generated relative times must not be handed to the translator.
+    expect(html).toContain('data-i18n-skip');
+  });
+
+  it('drops the second stamp when the session has never been active', () => {
+    const { app } = boot({ stored: { sessionListLayout: 'sidebar-rich' } });
+    stubOverview(app);
+    app._mobileOverviewSince = () => null;
+    const html = app._sidebarRichMetaHTML(app._sidebarRichRow('s1', { createdAt: 1000 }));
+    expect(html).toContain('data-tab-fmt="ago"');
+    expect(html).not.toContain('data-tab-fmt="for"');
+    // The pill is not optional: it is the row's status word.
+    expect(html).toContain('tab-pill--working');
+  });
+
+  it('rewrites the stamps in place instead of re-rendering the row', () => {
+    const { win, app } = boot({ stored: { sessionListLayout: 'sidebar-rich' } });
+    stubOverview(app);
+    app.applySessionListLayout();
+    tabsEl(win).innerHTML = `<div class="session-tab" data-id="s1"><span class="tab-info">${app._sidebarRichMetaHTML(
+      app._sidebarRichRow('s1', SESSION)
+    )}</span></div>`;
+    const metaBefore = tabsEl(win).querySelector('.tab-meta');
+
+    app._mobileOverviewStampText = (ts, fmt) => (ts ? `${fmt}:${ts}:later` : '—');
+    app._tickSidebarRichTimes();
+
+    expect(tabsEl(win).querySelector('.tab-meta')).toBe(metaBefore);
+    expect(metaBefore!.textContent).toContain('ago:1000:later');
+  });
+
+  it('updates the pill and the row accent when the state changes between renders', () => {
+    // The clock cannot see this: a state flip changes the pill, the accent class
+    // and which stamp the second slot is even measuring.
+    const { win, app } = boot({ stored: { sessionListLayout: 'sidebar-rich' } });
+    stubOverview(app);
+    app.applySessionListLayout();
+    tabsEl(win).innerHTML = '<div class="session-tab" data-id="s1"><span class="tab-info"></span></div>';
+    const tab = tabsEl(win).querySelector('.session-tab')!;
+
+    app._updateSidebarRichRow(tab, 's1', SESSION);
+    expect(tab.classList.contains('tab-state-working')).toBe(true);
+    expect(tab.querySelector('.tab-pill')!.textContent).toBe('working');
+
+    stubOverview(app, 'idle');
+    app._updateSidebarRichRow(tab, 's1', SESSION);
+    expect(tab.classList.contains('tab-state-working')).toBe(false);
+    expect(tab.classList.contains('tab-state-idle')).toBe(true);
+    expect(tab.querySelector('.tab-pill')!.textContent).toBe('idle');
+    // Idle is measured from the last byte the pane printed, not from a submit.
+    expect(tab.querySelector('[data-tab-fmt="for"]')!.getAttribute('data-tab-ts')).toBe('5000');
+  });
+
+  it('skips the DOM write when nothing the row displays has changed', () => {
+    // This runs for every session on every SSE tick.
+    const { win, app } = boot({ stored: { sessionListLayout: 'sidebar-rich' } });
+    stubOverview(app);
+    app.applySessionListLayout();
+    tabsEl(win).innerHTML = '<div class="session-tab" data-id="s1"><span class="tab-info"></span></div>';
+    const tab = tabsEl(win).querySelector('.session-tab')!;
+
+    app._updateSidebarRichRow(tab, 's1', SESSION);
+    const meta = tab.querySelector('.tab-meta');
+    app._updateSidebarRichRow(tab, 's1', SESSION);
+    expect(tab.querySelector('.tab-meta')).toBe(meta);
+
+    // …but a new turn re-stamps lastSubmitAt without changing the state, and
+    // that MUST still repaint: the duration is anchored on it.
+    app._updateSidebarRichRow(tab, 's1', { ...SESSION, lastSubmitAt: 9000 });
+    expect(tab.querySelector('.tab-meta')).not.toBe(meta);
+    expect(tab.querySelector('[data-tab-fmt="for"]')!.getAttribute('data-tab-ts')).toBe('9000');
+  });
+
+  it('runs the clock only while rich rows are on screen', () => {
+    const { win, app } = boot({ stored: { sessionListLayout: 'sidebar-rich' } });
+    app.applySessionListLayout();
+    expect(app._sidebarRichClock).toBeTruthy();
+
+    win.localStorage.setItem('codeman-app-settings', JSON.stringify({ sessionListLayout: 'sidebar' }));
+    delete (app as unknown as { _cachedAppSettings?: unknown })._cachedAppSettings;
+    app.applySessionListLayout();
+    // A leaked interval would keep rewriting stamps in a list that no longer
+    // has any, forever, on every open tab.
+    expect(app._sidebarRichClock).toBeNull();
+  });
+
+  it('emits the meta line only in the rich row template, and only inside .tab-info', () => {
+    // .tab-info is already a flex column, so the line needs no row-level
+    // wrapping — and the collapsed 44px rail hides .tab-info wholesale, which is
+    // what keeps the stamps out of it for free.
+    expect(APP).toContain('const richRows = this.isSessionSidebarRich();');
+    expect(APP).toContain('const richMeta = this._sidebarRichMetaHTML(richRow);');
+    expect(APP).toContain('${richMeta}\n          </span>');
+  });
+
+  it('plumbs the third option through the settings UI and the pre-paint script', () => {
+    expect(INDEX_HTML).toContain('<option value="sidebar">Left sidebar simple</option>');
+    expect(INDEX_HTML).toContain('<option value="sidebar-rich">Left sidebar</option>');
+    // Pre-paint must resolve BOTH sidebar values to the same layout attribute,
+    // or the first frame paints a header strip and then jumps.
+    expect(INDEX_HTML).toContain("(L==='sidebar'||L==='sidebar-rich')&&!solo");
+    expect(INDEX_HTML).toContain("dataset.sidebarDetail=(S&&L==='sidebar-rich')?'rich':'simple'");
+    for (const key of ['Left sidebar simple']) expect(I18N).toContain(`'${key}'`);
+  });
+
+  it('keeps the desktop rich width out of the handheld drawer', () => {
+    // styles.css scopes the 300px column with (0,3,1) — one attribute MORE than
+    // mobile.css's (0,2,1) drawer base — so without a matching override in
+    // mobile.css it wins there too and pins a 320px phone's drawer to 300px.
+    expect(STYLES_CSS).toContain('--sidebar-width-rich');
+    expect(STYLES_CSS).toContain('html[data-session-list="sidebar"][data-sidebar-detail="rich"] .session-sidebar {');
+    expect(MOBILE_CSS).toContain('html[data-session-list="sidebar"][data-sidebar-detail="rich"] .session-sidebar {');
   });
 });

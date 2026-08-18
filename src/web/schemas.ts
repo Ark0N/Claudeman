@@ -956,8 +956,17 @@ export const SettingsUpdateSchema = z
     // CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK env var. Stripped before persisting.
     acknowledgeUnauthTunnel: z.boolean().optional(),
     tabTwoRows: z.boolean().optional(),
-    /** Session list layout: 'header' = horizontal tab strip, 'sidebar' = collapsible left sidebar. Display key (per-device). */
-    sessionListLayout: z.enum(['header', 'sidebar']).optional(),
+    /**
+     * Session list layout. Display key (per-device).
+     * 'header'       = horizontal tab strip
+     * 'sidebar'      = collapsible left sidebar, one compact row per session
+     * 'sidebar-rich' = same sidebar, each row carrying the home screen's detail
+     *                  (created/idle/working stamps + status pill)
+     * Both sidebar values render the SAME docked column and set
+     * data-session-list="sidebar"; they differ only in row detail, which rides
+     * on data-sidebar-detail. See applySessionListLayout() in app.js.
+     */
+    sessionListLayout: z.enum(['header', 'sidebar', 'sidebar-rich']).optional(),
     agentTeamsEnabled: z.boolean().optional(),
     /** Model for new Claude sessions (e.g. "claude-fable-5[1m]", "opus[1m]"); takes precedence over opusContext1mEnabled */
     claudeModel: z.string().max(50).optional(),

@@ -2649,6 +2649,10 @@ Object.assign(CodemanApp.prototype, {
     // rules unchanged. Kept here rather than only in applySessionListLayout() so
     // that a stray applyTabWrapSettings() call (this one is invoked from
     // saveAppSettings and from the resize path) cannot leave the sidebar wrapped.
+    // Matches BOTH sidebar variants: isSessionSidebarActive() reads
+    // data-session-list, which applySessionListLayout() sets to 'sidebar' for
+    // 'sidebar' and 'sidebar-rich' alike. Row detail rides on a separate
+    // attribute and has no bearing on wrapping.
     const sidebar = this.isSessionSidebarActive?.() === true;
     // Two-row tabs disabled on mobile/tablet — not enough screen space
     const twoRows = !sidebar && deviceType === 'desktop'

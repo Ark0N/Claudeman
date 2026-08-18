@@ -481,6 +481,14 @@ const DEFAULT_SHORTCUTS = [
 // CodemanApp Class — constructor and global state
 // ═══════════════════════════════════════════════════════════════
 
+/**
+ * How often the rich sidebar rewrites its relative stamps in place. Matches the
+ * two home screens (mobile-overview.js, home-sessions.js). Deliberately a local
+ * const and not a constants.js export: an undefined interval would make
+ * setInterval fire on every frame, and constants.js is cached independently.
+ */
+const SIDEBAR_RICH_CLOCK_MS = 20000;
+
 class CodemanApp {
   constructor() {
     this.sessions = new Map();
@@ -3704,18 +3712,26 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   /**
-   * 'header' | 'sidebar'. Solo (detached single-session) windows are ALWAYS
-   * 'header': they show exactly one session, so a session list is noise — and
-   * #sessionTabs must never be parked inside the display:none <aside>, where
-   * updateTabOverflowMode() would measure 0/0 and the inline rename input would
-   * get zero geometry.
+   * 'header' | 'sidebar' | 'sidebar-rich'. Solo (detached single-session) windows
+   * are ALWAYS 'header': they show exactly one session, so a session list is
+   * noise — and #sessionTabs must never be parked inside the display:none
+   * <aside>, where updateTabOverflowMode() would measure 0/0 and the inline
+   * rename input would get zero geometry.
+   *
+   * The two sidebar values are the SAME layout — same docked column, same
+   * re-parented #sessionTabs, same filter box, same Alt+B toggle. They differ
+   * only in how much each row says, which is why the split rides on a separate
+   * attribute (see applySessionListLayout) instead of a third data-session-list
+   * value: every one of the ~25 isSessionSidebarActive() call sites, and every
+   * html[data-session-list="sidebar"] rule in styles.css and mobile.css, must
+   * keep matching both without being touched.
    */
   getSessionListLayout() {
     if (this.soloSessionId) return 'header';
     const settings = this.loadAppSettingsFromStorage();
     const defaults = this.getDefaultSettings();
     const layout = settings.sessionListLayout ?? defaults.sessionListLayout ?? 'header';
-    return layout === 'sidebar' ? 'sidebar' : 'header';
+    return layout === 'sidebar' || layout === 'sidebar-rich' ? layout : 'header';
   }
 
   /**
@@ -3727,6 +3743,21 @@ class CodemanApp {
    */
   isSessionSidebarActive() {
     return document.documentElement.dataset.sessionList === 'sidebar';
+  }
+
+  /**
+   * True when the sidebar is showing the DETAILED rows: the home screen's
+   * per-session line ("created 3d ago · working 12m") plus a status pill.
+   *
+   * Read off <html> for the same reason as isSessionSidebarActive() — it is
+   * called once per tab in the render loop, and getSessionListLayout()
+   * re-parses localStorage on every call. Implies isSessionSidebarActive():
+   * data-sidebar-detail is only ever 'rich' while data-session-list is
+   * 'sidebar', both in applySessionListLayout() and in the pre-paint script.
+   */
+  isSessionSidebarRich() {
+    const root = document.documentElement;
+    return root.dataset.sessionList === 'sidebar' && root.dataset.sidebarDetail === 'rich';
   }
 
   /**
@@ -3806,23 +3837,30 @@ class CodemanApp {
    */
   applySessionListLayout() {
     const mode = this.getSessionListLayout();
+    // 'sidebar' and 'sidebar-rich' are the same column; only row detail differs.
+    const sidebar = mode === 'sidebar' || mode === 'sidebar-rich';
     const collapsed = this.isSessionSidebarCollapsed();
     const prevMode = document.documentElement.dataset.sessionList;
+    const prevDetail = document.documentElement.dataset.sidebarDetail;
     const tabsEl = document.getElementById('sessionTabs');
     const headerHost = document.getElementById('sessionTabsHost');
     const sidebarList = document.getElementById('sessionSidebarList');
     if (!tabsEl || !headerHost || !sidebarList) return;
 
-    const host = mode === 'sidebar' ? sidebarList : headerHost;
+    const host = sidebar ? sidebarList : headerHost;
     if (tabsEl.parentElement !== host) host.appendChild(tabsEl);
 
-    document.documentElement.dataset.sessionList = mode;
+    document.documentElement.dataset.sessionList = sidebar ? 'sidebar' : 'header';
+    // Detail is meaningless outside the sidebar, and must not linger as 'rich'
+    // there: the rows carry no meta line in the header strip, and a stale 'rich'
+    // would let the sidebar CSS style a strip that has nothing to style.
+    document.documentElement.dataset.sidebarDetail = mode === 'sidebar-rich' ? 'rich' : 'simple';
     document.documentElement.dataset.sidebar = collapsed ? 'collapsed' : 'expanded';
-    tabsEl.setAttribute('aria-orientation', mode === 'sidebar' ? 'vertical' : 'horizontal');
+    tabsEl.setAttribute('aria-orientation', sidebar ? 'vertical' : 'horizontal');
 
     const btn = document.getElementById('sidebarToggleBtn');
     if (btn) {
-      btn.classList.toggle('btn-sidebar-toggle--hidden', mode !== 'sidebar');
+      btn.classList.toggle('btn-sidebar-toggle--hidden', !sidebar);
       const label = collapsed ? 'Expand session sidebar' : 'Collapse session sidebar';
       btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
       btn.setAttribute('aria-label', label);
@@ -3833,12 +3871,12 @@ class CodemanApp {
     // "collapsed" means the drawer is closed.
     const aside = document.getElementById('sessionSidebar');
     if (aside) {
-      aside.classList.toggle('open', mode === 'sidebar' && !collapsed);
+      aside.classList.toggle('open', sidebar && !collapsed);
       // A closed overlay drawer is only moved off screen by translateX(-100%);
       // it keeps display:flex, so without this its filter box and ~4 tab stops
       // per session stay in the Tab order and in the accessibility tree.
       // NOT applied to the docked desktop rail — its rows are still clickable.
-      const hiddenDrawer = mode === 'sidebar' && collapsed && this._isSessionSidebarOverlay();
+      const hiddenDrawer = sidebar && collapsed && this._isSessionSidebarOverlay();
       aside.toggleAttribute('inert', hiddenDrawer);
       if (hiddenDrawer) aside.setAttribute('aria-hidden', 'true');
       else aside.removeAttribute('aria-hidden');
@@ -3847,7 +3885,7 @@ class CodemanApp {
     // The filter box only exists inside the sidebar; leaving a stale filter
     // applied when the layout goes back to the header strip would hide sessions
     // from the tab bar with no reachable control to clear it.
-    if (mode !== 'sidebar') {
+    if (!sidebar) {
       this._sidebarFilter = '';
       const filterInput = document.getElementById('sessionSidebarFilter');
       if (filterInput) filterInput.value = '';
@@ -3863,13 +3901,21 @@ class CodemanApp {
     // A layout flip alone still needs one render: the rows are rebuilt into the
     // new host with the drag/keyboard handlers re-bound. Skipped when
     // applyTabWrapSettings() already rendered for the folder-row change.
-    if (prevMode !== mode && prevTall === this._tallTabsEnabled) {
+    //
+    // The detail half of the test is not redundant: simple ⟷ rich leaves
+    // data-session-list on 'sidebar' both times, so comparing only that would
+    // flip the setting and repaint nothing until the next SSE tick — and the
+    // meta line is emitted by the row template, not toggled by CSS.
+    const layoutChanged =
+      prevMode !== document.documentElement.dataset.sessionList ||
+      prevDetail !== document.documentElement.dataset.sidebarDetail;
+    if (layoutChanged && prevTall === this._tallTabsEnabled) {
       this._fullRenderSessionTabs();
     }
     // tabs-auto-wrap is measured, not derived from settings — updateTabOverflowMode()
     // drops it in sidebar mode, but drop it here too so nothing paints wrapped
     // for a frame before the next measure.
-    if (mode === 'sidebar') tabsEl.classList.remove('tabs-auto-wrap');
+    if (sidebar) tabsEl.classList.remove('tabs-auto-wrap');
     // Collapse/expand changes whether the filter is reachable, so re-evaluate it
     // here too — not only at the render tails.
     this.applySidebarFilter(this._sidebarFilter);
@@ -3880,6 +3926,9 @@ class CodemanApp {
     if (document.getElementById('welcomeOverlay')?.classList.contains('visible')) {
       this.showHomeSessions?.();
     }
+    // Only the rich rows carry stamps that go stale with no event behind them.
+    if (this.isSessionSidebarRich()) this._startSidebarRichClock();
+    else this._stopSidebarRichClock();
   }
 
   toggleSessionSidebar() {
@@ -3968,6 +4017,152 @@ class CodemanApp {
     // The count shows visible rows, so it moves with every filter change —
     // including keystrokes in the filter box, which call this directly.
     this.updateSidebarCount();
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Rich sidebar rows (sessionListLayout === 'sidebar-rich')
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Pill copy per state, matching the desktop home rail and the phone overview
+   * word for word. Duplicated rather than imported for the same reason those two
+   * duplicate it from each other: it is six words, and constants.js is served
+   * from cache independently of app.js — a shared map there could arrive stale
+   * or missing while this file is new. What is NOT duplicated is the part that
+   * can actually disagree: which state a session is IN, and which stamp measures
+   * it, both of which come from mobile-overview.js below.
+   */
+  _sidebarRichPillLabel(state) {
+    return {
+      needs: 'needs you',
+      error: 'error',
+      waiting: 'waiting',
+      working: 'working',
+      idle: 'idle',
+      done: 'done',
+    }[state] || state;
+  }
+
+  /**
+   * The per-row model for a rich sidebar row: which state the session is in,
+   * when it was first created, and how long it has been in that state.
+   *
+   * Classification is `_mobileOverviewState()` and the state duration is
+   * `_mobileOverviewSince()` (both mobile-overview.js), NOT re-derived here —
+   * the sidebar, the desktop home rail and the phone overview must never
+   * disagree about what "working" means or about which stamp measures it.
+   *
+   * Guarded like every other cross-file consumer in this app: a stale cached
+   * mobile-overview.js must degrade to a row with no meta line, not throw and
+   * take the whole tab strip down with it.
+   */
+  _sidebarRichRow(id, session) {
+    if (typeof this._mobileOverviewState !== 'function') return null;
+    const state = this._mobileOverviewState(session, this.pendingHooks?.get(id));
+    return {
+      state,
+      pill: this._sidebarRichPillLabel(state),
+      createdAt: Number(session.createdAt) || 0,
+      since: this._mobileOverviewSince ? this._mobileOverviewSince(state, session) : null,
+    };
+  }
+
+  /**
+   * The "created 3d ago · working 12m" line plus the status pill, as the third
+   * child of `.tab-info` (already a flex column, so no row-level wrapping is
+   * needed — unlike the home rail, whose pill rides a wrapped full-width line).
+   *
+   * Both stamps keep their raw epoch-ms in `data-tab-ts` so
+   * `_tickSidebarRichTimes()` can rewrite the text without rebuilding the row:
+   * a rebuild would restart the load spinner and every alert animation in the
+   * list, twice a minute, for nothing.
+   *
+   * Returns '' when there is no model, which is what keeps the header strip and
+   * the simple sidebar byte-identical to before.
+   */
+  _sidebarRichMetaHTML(row) {
+    if (!row) return '';
+    const stamp = (key, ts, fmt, cls) => {
+      const text = this._sidebarRichStampText(ts, fmt);
+      const title = ts
+        ? ` title="${escapeHtml(`${key === 'created' ? 'First created' : key}: ${new Date(ts).toLocaleString()}`)}"`
+        : '';
+      return `<span class="tab-meta-item ${cls}"${title}><span class="tab-meta-key">${escapeHtml(key)}</span><span data-tab-ts="${ts || 0}" data-tab-fmt="${fmt}">${escapeHtml(text)}</span></span>`;
+    };
+    // data-i18n-skip: relative times are generated text, and "created"/"idle"
+    // are the same generic words that mean something else on other surfaces.
+    const parts = [stamp('created', row.createdAt, 'ago', 'tab-meta-created')];
+    if (row.since) {
+      parts.push('<span class="tab-meta-sep" aria-hidden="true">\u00B7</span>');
+      parts.push(stamp(row.since.key, row.since.at, 'for', 'tab-meta-since'));
+    }
+    parts.push(`<span class="tab-pill tab-pill--${escapeHtml(row.state)}">${escapeHtml(row.pill)}</span>`);
+    return `<span class="tab-meta" data-i18n-skip>${parts.join('')}</span>`;
+  }
+
+  /** Same formatter as both home screens, so a duration is written the same way everywhere. */
+  _sidebarRichStampText(timestamp, format) {
+    return this._mobileOverviewStampText ? this._mobileOverviewStampText(timestamp, format) : '\u2014';
+  }
+
+  /**
+   * Incremental-render counterpart of `_sidebarRichMetaHTML()`. The stamps move
+   * on the clock, but the STATE can change between renders (a session starts
+   * working, a permission prompt lands), and that flips the pill, the accent
+   * class and which stamp the second slot is even showing.
+   *
+   * Rebuilds the meta line only when something it displays actually changed,
+   * because this runs for every session on every SSE tick.
+   */
+  _updateSidebarRichRow(tab, id, session) {
+    const row = this._sidebarRichRow(id, session);
+    if (!row) return;
+    const prev = tab.dataset.tabState;
+    // The since ANCHOR moves without the state changing (each new turn re-stamps
+    // lastSubmitAt), so key the compare on both.
+    const sig = `${row.state}:${row.since ? row.since.at : 0}:${row.createdAt}`;
+    if (tab.dataset.tabMetaSig === sig) return;
+    tab.dataset.tabMetaSig = sig;
+    tab.dataset.tabState = row.state;
+    if (prev) tab.classList.remove(`tab-state-${prev}`);
+    tab.classList.add(`tab-state-${row.state}`);
+    const info = tab.querySelector('.tab-info');
+    if (!info) return;
+    const html = this._sidebarRichMetaHTML(row);
+    const existing = info.querySelector('.tab-meta');
+    if (existing) existing.outerHTML = html;
+    else info.insertAdjacentHTML('beforeend', html);
+  }
+
+  /**
+   * Rewrites the relative stamps in place. A session that is just sitting there
+   * emits no event at all, so without this its "idle 2m" would still read 2m an
+   * hour later — the one number in the list that has to move on its own.
+   */
+  _startSidebarRichClock() {
+    if (this._sidebarRichClock) return;
+    this._sidebarRichClock = setInterval(() => {
+      if (!this.isSessionSidebarRich()) {
+        this._stopSidebarRichClock();
+        return;
+      }
+      this._tickSidebarRichTimes();
+    }, SIDEBAR_RICH_CLOCK_MS);
+  }
+
+  _stopSidebarRichClock() {
+    if (!this._sidebarRichClock) return;
+    clearInterval(this._sidebarRichClock);
+    this._sidebarRichClock = null;
+  }
+
+  _tickSidebarRichTimes() {
+    const container = this.$('sessionTabs');
+    if (!container) return;
+    for (const node of container.querySelectorAll('[data-tab-ts]')) {
+      const text = this._sidebarRichStampText(Number(node.dataset.tabTs) || 0, node.dataset.tabFmt);
+      if (node.textContent !== text) node.textContent = text;
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -4160,6 +4355,9 @@ class CodemanApp {
       webTabsUnchanged;
 
     if (canIncremental) {
+      // Read once for the whole pass, like the full-rebuild path: this touches
+      // the DOM and the loop below runs for every session on every SSE tick.
+      const richRows = this.isSessionSidebarRich();
       // Incremental update - only modify changed properties
       for (const [id, session] of this.sessions) {
         const tab = container.querySelector(`.session-tab[data-id="${id}"]`);
@@ -4230,6 +4428,21 @@ class CodemanApp {
         const statusEl = tab.querySelector('.tab-status');
         if (statusEl && !statusEl.classList.contains(status)) {
           statusEl.className = `tab-status ${status}`;
+        }
+
+        // Rich sidebar meta ("created 3d ago · working 12m" + pill). The stamps
+        // themselves move on _tickSidebarRichTimes(); this is here for the parts
+        // a tick cannot see — the state flipping, and with it the pill, the row
+        // accent and which stamp the second slot is measuring at all.
+        if (richRows) {
+          this._updateSidebarRichRow(tab, id, session);
+        } else if (tab.dataset.tabState) {
+          // Layout flipped away from rich without a full rebuild reaching this
+          // row yet: strip the line rather than leave a frozen stamp behind.
+          tab.querySelector('.tab-meta')?.remove();
+          tab.classList.remove(`tab-state-${tab.dataset.tabState}`);
+          delete tab.dataset.tabState;
+          delete tab.dataset.tabMetaSig;
         }
 
         // Update name if changed. #232: a description (the `: suffix` part of the
@@ -4430,6 +4643,9 @@ class CodemanApp {
     // into view replaces it.
     const parts = [];
     const tabOrder = this.sessionOrder;
+    // Read once, not per session: isSessionSidebarRich() touches the DOM and
+    // this loop runs for every tab on every full rebuild.
+    const richRows = this.isSessionSidebarRich();
     let _tabIdx = 0;
     for (const id of tabOrder) {
       const session = this.sessions.get(id);
@@ -4471,7 +4687,17 @@ class CodemanApp {
         ? (session.workingDir ? `${parsedName.prefix} (${session.workingDir})` : parsedName.prefix)
         : (session.workingDir || '');
 
-      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${loadState ? ' tab-loading' : ''}${this.hasTabDetachOverride(id) ? ' tab-show-detach' : ''}" data-id="${id}" data-color="${color}" ${loadState ? `data-load-phase="${escapeHtml(loadState.phase)}"` : ''} onclick="app.handleSessionTabClick(event, ${escapeHtml(JSON.stringify(id))})" oncontextmenu="event.preventDefault(); app.startInlineRename(${escapeHtml(JSON.stringify(id))})" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-busy="${loadState ? 'true' : 'false'}" aria-label="${escapeHtml(name)} session" ${tabTooltip ? `title="${escapeHtml(tabTooltip)}"` : ''}>
+      // Rich sidebar rows only: the home screen's created/state stamps and a
+      // status pill. richRow is null in every other layout, and both helpers
+      // below collapse to '' — the header strip's markup is unchanged.
+      const richRow = richRows ? this._sidebarRichRow(id, session) : null;
+      const richMeta = this._sidebarRichMetaHTML(richRow);
+      const richClass = richRow ? ` tab-state-${richRow.state}` : '';
+      const richData = richRow
+        ? ` data-tab-state="${richRow.state}" data-tab-meta-sig="${richRow.state}:${richRow.since ? richRow.since.at : 0}:${richRow.createdAt}"`
+        : '';
+
+      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${richClass}${loadState ? ' tab-loading' : ''}${this.hasTabDetachOverride(id) ? ' tab-show-detach' : ''}"${richData} data-id="${id}" data-color="${color}" ${loadState ? `data-load-phase="${escapeHtml(loadState.phase)}"` : ''} onclick="app.handleSessionTabClick(event, ${escapeHtml(JSON.stringify(id))})" oncontextmenu="event.preventDefault(); app.startInlineRename(${escapeHtml(JSON.stringify(id))})" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-busy="${loadState ? 'true' : 'false'}" aria-label="${escapeHtml(name)} session" ${tabTooltip ? `title="${escapeHtml(tabTooltip)}"` : ''}>
           ${_tabIdx < 9 ? '<span class="tab-number">' + (_tabIdx + 1) + '</span>' : ''}
           ${loadState ? '<span class="tab-load-spinner" aria-hidden="true"></span>' : ''}
           <span class="tab-status ${status}" aria-hidden="true"></span>
@@ -4482,6 +4708,7 @@ class CodemanApp {
               <span class="tab-detached-badge" aria-hidden="true">detached</span>
             </span>
             ${showFolder ? `<span class="tab-folder">\u{1F4C1} ${escapeHtml(folderName)}</span>` : ''}
+            ${richMeta}
           </span>
           ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()" aria-label="${taskStats.running} running tasks">${taskStats.running}</span>` : ''}
           ${subagentBadge}
@@ -4531,6 +4758,12 @@ class CodemanApp {
     // innerHTML was rebuilt wholesale, so the sidebar filter classes are gone —
     // re-apply them or filtered-out sessions flicker back on every SSE tick.
     this.applySidebarFilter(this._sidebarFilter);
+
+    // Rows that carry self-staling stamps need the clock; rows that don't must
+    // not leave it running. Both directions matter — the layout can flip
+    // underneath a render, and a solo window forces 'header' regardless.
+    if (richRows) this._startSidebarRichClock();
+    else this._stopSidebarRichClock();
   }
 
   // Set up arrow key navigation for session tabs (accessibility)
