@@ -3687,6 +3687,19 @@ html[data-session-list="sidebar"] .session-sidebar {
   padding-left: var(--safe-area-left);
 }
 
+/* The rich variant's desktop column is 300px (--sidebar-width-rich, styles.css)
+   and its selector carries one attribute MORE than the drawer base above —
+   (0,3,1) vs (0,2,1) — so without this it would win here and pin the drawer of
+   a 320px phone to 300px, leaving 20px of terminal behind it. How wide a drawer
+   may be is a viewport decision, never a row-detail one: match the specificity
+   and hand the width back. Row detail itself is kept — the stamps are as useful
+   on a phone as anywhere, and the drawer is wider than the rail they were
+   designed against. */
+html[data-session-list="sidebar"][data-sidebar-detail="rich"] .session-sidebar {
+  width: min(280px, 80vw);
+  flex: 0 0 auto;
+}
+
 html[data-session-list="sidebar"] .session-sidebar.open {
   transform: translateX(0);
   visibility: visible;
