@@ -30,6 +30,88 @@ function loadLineageHelper() {
   ).CodemanLineage;
 }
 
+/** The vm sandbox session-lineage.js was evaluated in, plus an app instance from it. */
+type LineageApp = Record<string, Function> & {
+  sessions: Map<string, { parentSessionId: string | null; status: string }>;
+  sessionOrder: string[];
+};
+type LineageSandbox = { document: Record<string, Function>; CSS?: { escape: (v: string) => string } };
+
+/**
+ * Load session-lineage.js for real, with the globals it declares. The colour memo is
+ * plain state on the app instance, so nothing here needs a browser.
+ */
+function loadLineageApp(): { app: LineageApp; sandbox: LineageSandbox } {
+  function CodemanApp(this: unknown) {}
+  const sandbox: Record<string, unknown> = {
+    window: {},
+    globalThis: {},
+    CodemanApp,
+    MobileDetection: { getDeviceType: () => 'desktop' },
+    document: { getElementById: () => null, createElementNS: () => null },
+  };
+  const context = vm.createContext(sandbox);
+  for (const file of ['constants.js', 'session-lineage.js']) {
+    const source = readFileSync(resolve(import.meta.dirname, `../src/web/public/${file}`), 'utf8');
+    vm.runInContext(source, context, { filename: file });
+  }
+  const app = new (CodemanApp as unknown as new () => LineageApp)();
+  app.sessions = new Map();
+  app.sessionOrder = [];
+  return { app, sandbox: sandbox as unknown as LineageSandbox };
+}
+
+/**
+ * Drive the real `_appendLineageConnectionLines()` and report the inline
+ * `--lineage-color` each arc ended up with, keyed by child.
+ *
+ * The colour function alone cannot prove this: passing the CHILD id there would still
+ * return a stable colour per child and every direct test would pass, which is exactly
+ * the regression these tests exist to catch.
+ */
+function renderLineageColors(sessions: Record<string, string | null>): Record<string, string> {
+  const { app, sandbox } = loadLineageApp();
+  app.sessions = new Map(
+    Object.entries(sessions).map(([id, parentSessionId]) => [id, { parentSessionId, status: 'idle' }])
+  );
+  app.sessionOrder = Object.keys(sessions);
+  app._lineageLinesEnabled = () => true;
+  app.isSessionSidebarActive = () => false;
+
+  type Node = { attrs: Record<string, string>; style: Record<string, string> & { setProperty: Function } };
+  const made: Node[] = [];
+  const ids = Object.keys(sessions);
+  const rect = (left: number) => ({ left, top: 4, width: 120, height: 30, right: left + 120, bottom: 34 });
+  const strip = {
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 2000, height: 40, right: 2000, bottom: 40 }),
+    querySelector: (sel: string) => {
+      const id = /data-id="([^"]+)"/.exec(sel)?.[1];
+      const i = id ? ids.indexOf(id) : -1;
+      return i < 0 ? null : { getBoundingClientRect: () => rect(i * 140) };
+    },
+  };
+  sandbox.document.getElementById = (id: string) => (id === 'sessionTabs' ? strip : null);
+  sandbox.document.createElementNS = () => {
+    const style = {} as Record<string, string> & { setProperty: Function };
+    style.setProperty = (k: string, v: string) => void (style[k] = v);
+    const node: Node = { attrs: {}, style };
+    (node as unknown as { setAttribute: Function }).setAttribute = (k: string, v: string) => void (node.attrs[k] = v);
+    made.push(node);
+    return node;
+  };
+  sandbox.CSS = { escape: (v: string) => v };
+
+  app._appendLineageConnectionLines({ appendChild: () => {} }, new Map());
+
+  const out: Record<string, string> = {};
+  for (const node of made) {
+    // Both the path and its end dot carry the child id; they must agree on the colour.
+    const child = node.attrs['data-child-tab'];
+    if (child) out[child] = node.style['--lineage-color'] ?? '';
+  }
+  return out;
+}
+
 // A strip wide enough that nothing is clipped unless a test says so.
 const STRIP: Rect = { left: 0, top: 0, width: 1200, height: 40 };
 const tab = (left: number, top = 4): Rect => ({ left, top, width: 120, height: 30 });
@@ -182,5 +264,72 @@ describe('lineage line geometry', () => {
 
     expect(geom).not.toBeNull();
     expect(geom!.d).not.toContain('NaN');
+  });
+});
+
+describe('lineage line colours', () => {
+  it('gives every arc out of one tab the same colour, however many it spawns', () => {
+    const { app } = loadLineageApp();
+    // The renderer calls this with the edge's PARENT id, so ten children of w1 all
+    // resolve through the same key.
+    const forW1 = Array.from({ length: 10 }, () => app._lineageColorFor('w1'));
+    expect(new Set(forW1).size).toBe(1);
+  });
+
+  it('gives a different spawning tab a different colour', () => {
+    const { app } = loadLineageApp();
+    expect(app._lineageColorFor('w1')).not.toBe(app._lineageColorFor('w2'));
+    expect(app._lineageColorFor('w2')).not.toBe(app._lineageColorFor('w3'));
+  });
+
+  it('lets the first spawning tab keep the skin-aware blue', () => {
+    // '' = no inline override, so styles.css falls back to --session-blue.
+    expect(loadLineageApp().app._lineageColorFor('w1')).toBe('');
+  });
+
+  it('changes colour down a chain, since each generation spawns in its own right', () => {
+    // w1 -> w2 -> w3: the arc w1->w2 is w1's colour, the arc w2->w3 is w2's.
+    const { app } = loadLineageApp();
+    expect(app._lineageColorFor('w1')).not.toBe(app._lineageColorFor('w2'));
+  });
+
+  it('keeps a tab on its colour across re-renders and interleaved siblings', () => {
+    // The SVG is wiped and rebuilt constantly, so the colour must come from a memo
+    // rather than draw order.
+    const { app } = loadLineageApp();
+    const first = app._lineageColorFor('w1');
+    app._lineageColorFor('w2');
+    app._lineageColorFor('w3');
+    expect(app._lineageColorFor('w1')).toBe(first);
+  });
+
+  it('cycles the palette once every tab in it has spawned', () => {
+    const { app } = loadLineageApp();
+    const palette = loadLineageHelper().COLORS;
+    const seen = Array.from({ length: palette.length }, (_, i) => app._lineageColorFor(`p${i}`));
+    expect(new Set(seen).size).toBe(palette.length);
+    expect(app._lineageColorFor(`p${palette.length}`)).toBe(seen[0]);
+  });
+});
+
+describe('lineage colours, as actually rendered', () => {
+  it('paints every arc out of one tab the same colour', () => {
+    // w1 spawns three workers; all three arcs must match.
+    const colors = renderLineageColors({ w1: null, a: 'w1', b: 'w1', c: 'w1' });
+    expect(Object.keys(colors).sort()).toEqual(['a', 'b', 'c']);
+    expect(new Set(Object.values(colors)).size).toBe(1);
+  });
+
+  it('paints two spawning tabs in different colours', () => {
+    const colors = renderLineageColors({ w1: null, w2: null, a: 'w1', b: 'w1', c: 'w2', d: 'w2' });
+    expect(colors.a).toBe(colors.b);
+    expect(colors.c).toBe(colors.d);
+    expect(colors.a).not.toBe(colors.c);
+  });
+
+  it('changes colour at each generation of a chain', () => {
+    // w1 -> w2 -> w3. Each arc takes the colour of the tab it leaves.
+    const colors = renderLineageColors({ w1: null, w2: 'w1', w3: 'w2' });
+    expect(colors.w2).not.toBe(colors.w3);
   });
 });

@@ -243,7 +243,9 @@ const LINEAGE_DIP_MAX_PX = 64;
 // apart bled into one thick band instead of reading as three separate lines.
 const LINEAGE_SIBLING_STEP_PX = 8;
 const LINEAGE_STRIP_TOLERANCE_PX = 4;
-// Lineage palette, assigned per CHILD in first-seen order and cycled (session-lineage.js).
+// Lineage palette, assigned per SPAWNING TAB in first-seen order and cycled
+// (session-lineage.js). Every arc leaving one tab shares its colour however many
+// workers it spawns; a child that spawns in turn gets its own for the arcs below it.
 // The empty FIRST entry means "no override": the CSS then falls back to --session-blue,
 // which every skin block tunes for its own background, so a lone arc keeps the
 // skin-aware blue that shipped in 1.18.2. The fixed entries are deliberately vivid

@@ -91,28 +91,38 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Colour for one child's arc, from CodemanLineage.COLORS, assigned in FIRST-SEEN
-   * order and remembered per child id. First-seen rather than draw-index keeps a
-   * line's colour stable across re-renders, tab reorders and sibling closes (the
-   * SVG is wiped and rebuilt constantly, so an index-based colour would flicker).
-   * An empty string means "no override": the CSS falls back to --session-blue.
+   * Colour for one arc, from CodemanLineage.COLORS, keyed on the SPAWNING tab.
+   *
+   * ⚠️ Per PARENT, not per child: every arc leaving one tab is the same colour, no
+   * matter how many workers it spawns, so the strip reads as "these five came from
+   * w1, those two came from w2". Keying it per child instead gave one tab's own
+   * children a different colour each, which is the thing the colours exist to tell
+   * apart. A child that goes on to spawn its own workers is a parent in its turn and
+   * gets its own colour for the arcs BELOW it, so a chain changes colour at each
+   * generation while each generation's fan-out stays uniform.
+   *
+   * Assigned in FIRST-SEEN order and remembered per parent id. First-seen rather than
+   * draw-index keeps a colour stable across re-renders, tab reorders and sibling
+   * closes (the SVG is wiped and rebuilt constantly, so an index-based colour would
+   * flicker). An empty string means "no override": the CSS falls back to
+   * --session-blue, so the first spawning tab keeps the skin-aware blue.
    */
-  _lineageColorFor(childId) {
+  _lineageColorFor(parentId) {
     const palette = (window.CodemanLineage && window.CodemanLineage.COLORS) || [];
     if (palette.length === 0) return '';
-    if (!this._lineageColorByChild) {
-      this._lineageColorByChild = new Map();
+    if (!this._lineageColorByParent) {
+      this._lineageColorByParent = new Map();
       this._lineageColorNext = 0;
     }
-    let idx = this._lineageColorByChild.get(childId);
+    let idx = this._lineageColorByParent.get(parentId);
     if (idx === undefined) {
       idx = this._lineageColorNext++ % palette.length;
-      this._lineageColorByChild.set(childId, idx);
+      this._lineageColorByParent.set(parentId, idx);
       // Bounded: entries for long-gone sessions are pruned once the map is clearly
       // stale, so a day-long dashboard cannot grow it without limit.
-      if (this._lineageColorByChild.size > 200 && this.sessions) {
-        for (const key of this._lineageColorByChild.keys()) {
-          if (!this.sessions.has(key)) this._lineageColorByChild.delete(key);
+      if (this._lineageColorByParent.size > 200 && this.sessions) {
+        for (const key of this._lineageColorByParent.keys()) {
+          if (!this.sessions.has(key)) this._lineageColorByParent.delete(key);
         }
       }
     }
@@ -174,9 +184,10 @@ Object.assign(CodemanApp.prototype, {
       // the line itself. `status` is the CHILD's, which is the interesting end.
       const working = edge.status === 'working' ? ' lineage-line--working' : '';
       line.setAttribute('class', 'connection-line lineage-line' + working);
-      // Per-child colour rides a CSS custom property so the stylesheet keeps owning
+      // The PARENT's colour rides a CSS custom property so the stylesheet keeps owning
       // opacity, glow and dash; an empty colour leaves the --session-blue fallback.
-      const color = this._lineageColorFor(edge.childId);
+      // Every arc out of one tab shares it — see _lineageColorFor().
+      const color = this._lineageColorFor(edge.parentId);
       if (color) line.style.setProperty('--lineage-color', color);
       // `data-agent-id` is what _applyLineEntrances() queries — see the file header.
       line.setAttribute('data-agent-id', 'lineage:' + edge.childId);
