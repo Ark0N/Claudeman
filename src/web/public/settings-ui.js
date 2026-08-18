@@ -381,6 +381,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsTunnelEnabled').checked = settings.tunnelEnabled ?? false;
     this.loadTunnelStatus();
     document.getElementById('appSettingsLocalEcho').checked = settings.localEchoEnabled ?? MobileDetection.isTouchDevice();
+    document.getElementById('appSettingsTerminalFont').value = settings.terminalFontFamily || '';
     document.getElementById('appSettingsTerminalWheelLocal').checked =
       settings.terminalWheelLocalScrollback ?? defaults.terminalWheelLocalScrollback ?? false;
     document.getElementById('appSettingsCjkInput').checked = settings.cjkInputEnabled ?? defaults.cjkInputEnabled ?? false;
@@ -2006,6 +2007,7 @@ Object.assign(CodemanApp.prototype, {
       imageWatcherEnabled: document.getElementById('appSettingsImageWatcherEnabled').checked,
       tunnelEnabled: document.getElementById('appSettingsTunnelEnabled').checked,
       localEchoEnabled: document.getElementById('appSettingsLocalEcho').checked,
+      terminalFontFamily: document.getElementById('appSettingsTerminalFont').value.trim(),
       terminalWheelLocalScrollback: document.getElementById('appSettingsTerminalWheelLocal').checked,
       cjkInputEnabled: document.getElementById('appSettingsCjkInput').checked,
       webglRendererEnabled: document.getElementById('appSettingsWebglRenderer').checked,
@@ -2052,6 +2054,7 @@ Object.assign(CodemanApp.prototype, {
     // Save to localStorage
     this.saveAppSettingsToStorage(settings);
     this._updateLocalEchoState();
+    this.applyTerminalFontFamily?.(settings.terminalFontFamily);
 
     // A real OFF→ON flip of the WebGL toggle retires the GPU-stall auto-fallback
     // marker so the next reload actually re-tries WebGL. Only the transition
@@ -2200,6 +2203,9 @@ Object.assign(CodemanApp.prototype, {
       showFileViewerButton: _fvb,
       webglRendererEnabled: _wgl,
       terminalWheelLocalScrollback: _twls,
+      // Per-device by nature (the font must exist on the device) and absent
+      // from SettingsUpdateSchema (.strict()) — sending it would 400 the PUT.
+      terminalFontFamily: _tff,
       // Per-device header/toolbar button toggles — client-only, and absent from
       // SettingsUpdateSchema (.strict()), so sending them would 400 the PUT.
       showSessionButton: _ssb,
@@ -2874,6 +2880,7 @@ Object.assign(CodemanApp.prototype, {
           'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
           'subagentActiveTabOnly', 'tabTwoRows', 'sessionListLayout', 'localEchoEnabled', 'cjkInputEnabled', 'extendedKeyboardBar',
           'skin', 'showPlanUsageLimits', 'showAttachmentsButton', 'showFileViewerButton', 'webglRendererEnabled',
+          'terminalFontFamily',
           'language',
           'terminalWheelLocalScrollback',
           'showSessionButton', 'showAwayDigestButton', 'showCronButton',
