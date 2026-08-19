@@ -354,6 +354,16 @@ const PREVIEW_GLYPH_FOLD: ReadonlyMap<string, string> = new Map([
   ['\u23F7', 'v'], // ⏷
   ['\u2771', '>'], // ❱
   ['\u2770', '<'], // ❰
+  // claude's own working/done spinner cycles through these, and they are the
+  // same sparse-Dingbats class as `❯`: the animated line is exactly where a
+  // reader looks, so tofu there is the most visible kind.
+  ['\u2722', '*'], // ✢
+  ['\u2733', '*'], // ✳
+  ['\u2217', '*'], // ∗
+  ['\u273B', '*'], // ✻
+  ['\u273D', '*'], // ✽
+  ['\u2734', '*'], // ✴
+  ['\u26A0', '!'], // ⚠ Misc Symbols, and emoji-presentation on many terminals
 ]);
 
 /**

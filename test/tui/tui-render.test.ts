@@ -129,12 +129,12 @@ function frameLines(frame: string): string[] {
 describe('renderFrame structure', () => {
   it('paints the wide layout at 100x30', () => {
     expect(frameLines(render(fixture(), 100, 30))).toEqual([
-      ' codeman  ⚠ 2  tnode · v1.19.0 · 4 sessions · 5h 32% wk 61%                          ? help  q quit',
+      ' codeman  ▲ 2  tnode · v1.19.0 · 4 sessions · 5h 32% wk 61%                          ? help  q quit',
       ' NEEDS YOU ─────────────────────────│ w4-api-refactor · claude · /home/dev/api · blocked',
-      '  1 w6-docs                    ! 11m│ ⚠ requests: Bash(git push origin main)',
-      '▶ 2 w4-api-refactor       ⚠ 2m 12.3k│   1. Yes',
+      '  1 w6-docs                    ! 11m│ ▲ requests: Bash(git push origin main)',
+      '▶ 2 w4-api-refactor       ▲ 2m 12.3k│   1. Yes',
       " WORKING ───────────────────────────│   2. Yes, don't ask again",
-      '  3 w1-codeman           ✻ 17m 45.2k│   3. No, tell Claude what to do',
+      '  3 w1-codeman           ▖ 17m 45.2k│   3. No, tell Claude what to do',
       ' IDLE ──────────────────────────────│ y approve · n deny · digit chooses',
       '  4 w2-gallery codex            ○ 2h│',
       ' RECENT ────────────────────────────│ Actualizing... (2m 14s)',
@@ -164,14 +164,14 @@ describe('renderFrame structure', () => {
 
   it('paints the narrow two-line layout at 44x20', () => {
     expect(frameLines(render(fixture(), 44, 20))).toEqual([
-      ' codeman  ⚠ 2  tnode · v1.19.0 · 4 sessions',
+      ' codeman  ▲ 2  tnode · v1.19.0 · 4 sessions',
       ' NEEDS YOU ─────────────────────────────────',
       '  1 w6-docs                            ! 11m',
       '    /home/dev/docs',
-      '▶ 2 w4-api-refactor                     ⚠ 2m',
+      '▶ 2 w4-api-refactor                     ▲ 2m',
       '    /home/dev/api · 12.3k',
       ' WORKING ───────────────────────────────────',
-      '  3 w1-codeman                         ✻ 17m',
+      '  3 w1-codeman                         ▖ 17m',
       '    /home/dev/codeman · 45.2k',
       ' IDLE ──────────────────────────────────────',
       '  4 w2-gallery codex                    ○ 2h',
@@ -223,8 +223,8 @@ describe('color', () => {
     const model = fixture();
     model.select('eee5');
     const frame = render(model, 100, 30, { color: true });
-    expect(frame).toContain('\x1b[32m✻');
-    expect(frame).toContain('\x1b[31m⚠');
+    expect(frame).toContain('\x1b[32m▖');
+    expect(frame).toContain('\x1b[31m▲');
     expect(frame).toContain('\x1b[33m!');
     expect(frame).toContain('\x1b[1mcodeman');
   });
@@ -235,7 +235,7 @@ describe('color', () => {
     const frame = render(fixture(), 100, 30, { color: true });
     const highlighted = frame.split('\x1b[7m')[1]?.split('\x1b[0m')[0] ?? '';
     expect(highlighted).toContain('w4-api-refactor');
-    expect(highlighted).toContain('⚠');
+    expect(highlighted).toContain('▲');
     expect(highlighted).not.toContain('\x1b[');
   });
 
@@ -263,20 +263,22 @@ describe('glyph tiers', () => {
     expect(list[7]).toContain('[-]');
     expect(list[9]).toContain('[v]');
     expect(list[3].startsWith('>')).toBe(true);
-    expect(lines.join('')).not.toContain('✻');
+    expect(lines.join('')).not.toContain('▝');
     expect(lines.join('')).not.toContain('─');
   });
 
-  it('animates the working glyph with the tick', () => {
+  it('animates the working glyph with the tick, and cycles', () => {
     const model = fixture();
     const frames = [0, 1, 2, 3, 4, 5].map((tick) => frameLines(render(model, 100, 30, { tick }))[5]);
-    expect(frames[0]).toContain('·');
-    expect(frames[1]).toContain('✢');
-    expect(frames[2]).toContain('✳');
-    expect(frames[3]).toContain('∗');
-    expect(frames[4]).toContain('✻');
-    expect(frames[5]).toContain('✽');
-    expect(new Set(frames).size).toBe(6);
+    // Quadrant blocks, rotating. Four of them, so the tick wraps every four
+    // frames rather than every six.
+    expect(frames[0]).toContain('▖');
+    expect(frames[1]).toContain('▘');
+    expect(frames[2]).toContain('▝');
+    expect(frames[3]).toContain('▗');
+    expect(frames[4]).toBe(frames[0]);
+    expect(frames[5]).toBe(frames[1]);
+    expect(new Set(frames).size).toBe(4);
   });
 
   it('detects a tier from the environment', () => {
@@ -449,7 +451,7 @@ describe('formatting helpers', () => {
 describe('the approval card', () => {
   it('draws the dialog above the tail, with its digits', () => {
     const text = frameLines(render(fixture(), 100, 30)).join('\n');
-    expect(text).toContain('⚠ requests: Bash(git push origin main)');
+    expect(text).toContain('▲ requests: Bash(git push origin main)');
     expect(text).toContain('1. Yes');
     expect(text).toContain('3. No, tell Claude what to do');
     expect(text).toContain('y approve · n deny · digit chooses');
@@ -460,7 +462,7 @@ describe('the approval card', () => {
   it('paints a dialog red and a waiting prompt yellow', () => {
     const model = fixture();
     const frame = render(model, 100, 30, { color: true });
-    expect(frame).toContain('\x1b[31m ⚠ requests');
+    expect(frame).toContain('\x1b[31m ▲ requests');
 
     model.select('bbb2');
     const idle = render(model, 100, 30, { color: true });
@@ -476,10 +478,10 @@ describe('the approval card', () => {
   });
 
   it('counts pending prompts in the header badge', () => {
-    expect(frameLines(render(fixture(), 100, 30))[0]).toContain('⚠ 2');
+    expect(frameLines(render(fixture(), 100, 30))[0]).toContain('▲ 2');
     const model = createTuiModel();
     model.replaceSessions([{ sessionId: 'aaa1', name: 'w1', sources: ['live'], status: 'idle' }]);
-    expect(frameLines(render(model, 100, 30))[0]).not.toContain('⚠');
+    expect(frameLines(render(model, 100, 30))[0]).not.toContain('▲');
   });
 });
 
@@ -632,6 +634,7 @@ describe('the unicode glyph set is safe to render', () => {
     UNICODE.boxHorizontal,
     UNICODE.boxVertical,
     UNICODE.enter,
+    UNICODE.updown,
     UNICODE.separator,
     UNICODE.ellipsis,
   ];
@@ -648,6 +651,30 @@ describe('the unicode glyph set is safe to render', () => {
     // U+23CE rendered as an empty box on a font that drew everything else here.
     expect(UNICODE.enter).toBe('\u21B5');
     expect(UNICODE.enter).not.toBe('\u23CE');
+  });
+
+  it('draws only from blocks a plain terminal font actually carries', () => {
+    // The rule, as a CLASS rather than one glyph at a time. Three separate
+    // "why are there boxes" reports came from this list, each fixed alone:
+    // ❯ (U+276F, sparse Dingbats), ⏵ (U+23F5) and ⏎ (U+23CE, both Misc
+    // Technical). The same font drew Box Drawing, Block Elements, Geometric
+    // Shapes and Latin-1 perfectly, so those are what the set may use.
+    const BANNED: Array<[number, number, string]> = [
+      [0x2300, 0x23ff, 'Miscellaneous Technical'],
+      [0x2600, 0x26ff, 'Miscellaneous Symbols'],
+      [0x2700, 0x27bf, 'Dingbats'],
+    ];
+    // U+2714 is the one Dingbat kept: it was observed rendering on the very
+    // font that failed the others, and it is the list's "done" mark.
+    const ALLOWED = new Set([0x2714]);
+    for (const glyph of every) {
+      for (const char of glyph) {
+        const cp = char.codePointAt(0) ?? 0;
+        if (ALLOWED.has(cp)) continue;
+        const banned = BANNED.find(([lo, hi]) => cp >= lo && cp <= hi);
+        expect({ glyph, block: banned?.[2] ?? null }).toEqual({ glyph, block: null });
+      }
+    }
   });
 
   it('has no emoji where a text glyph belongs', () => {

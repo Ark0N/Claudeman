@@ -134,17 +134,29 @@ export interface TuiGlyphSet {
  *
  * COVERAGE: a plain terminal font carries far less than the unicode TIER
  * implies. The tier answers "is the locale UTF-8", which says nothing about
- * whether a given codepoint has a glyph. A beta tester's font drew `·`, `─`,
- * `│`, `○`, `▶` and `✔` perfectly while drawing `⏎` (U+23CE) as an empty box.
- * Prefer Latin-1, Arrows (U+2190–21FF), Box Drawing, Block Elements and
- * Geometric Shapes, which every monospace font ships; treat Dingbats,
- * Miscellaneous Symbols and anything with emoji presentation as suspect.
+ * whether a given codepoint has a glyph.
+ *
+ * One beta tester's font mapped the blocks like this, and it is the profile to
+ * design against because it is an ordinary terminal font, not a broken one:
+ *
+ *   RENDERS   Latin-1 (·), Box Drawing (─ │), Block Elements (█ ▛ ▐),
+ *             Geometric Shapes (○ ▶), General Punctuation (…), Arrows
+ *   TOFU      Misc Technical (⏎ U+23CE, ⏵ U+23F5), the sparse end of
+ *             Dingbats (❯ U+276F)
+ *
+ * So: draw from the blocks on the first line. Dingbats, Miscellaneous
+ * Technical, Miscellaneous Symbols and anything with emoji presentation are
+ * out — that class produced three separate "why are there boxes" reports, one
+ * per glyph, because each was fixed on its own instead of as a class.
  */
 const UNICODE_GLYPHS: TuiGlyphSet = {
-  blockedPermission: '⚠',
-  blockedQuestion: '⚠',
+  blockedPermission: '▲',
+  blockedQuestion: '▲',
   waiting: '!',
-  working: ['·', '✢', '✳', '∗', '✻', '✽'],
+  // Quadrant blocks, which rotate as a spinner and live in the same block as
+  // the `▛█▐` art claude itself draws — proven to render on the font that
+  // failed the dingbats this used to use.
+  working: ['▖', '▘', '▝', '▗'],
   idle: '○',
   recent: '✔',
   cursor: '▶',
