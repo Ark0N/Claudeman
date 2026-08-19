@@ -97,13 +97,23 @@ function createTerminalGrid(lines: string[], cursorY: number, wrappedRows = new 
       active: {
         viewportY: 0,
         baseY: 0,
+        length: lines.length,
         cursorY,
         getLine: (row: number) =>
           row >= 0 && row < lines.length
-            ? { isWrapped: wrappedRows.has(row), translateToString: () => lines[row] }
+            ? {
+                isWrapped: wrappedRows.has(row),
+                // xterm pads an UNTRIMMED row to the full width; the selection offset
+                // math is linear over joined rows and would shift without it.
+                translateToString: (trim?: boolean) => (trim === false ? lines[row].padEnd(80) : lines[row]),
+              }
             : undefined,
       },
     },
+    select: vi.fn(),
+    clearSelection: vi.fn(),
+    hasSelection: () => false,
+    getSelectionPosition: () => undefined,
     element: {
       querySelector: (selector: string) =>
         selector === '.xterm-screen' ? { getBoundingClientRect: () => ({ left: 0, top: 0 }) } : null,
@@ -897,5 +907,190 @@ describe('terminal link tap', () => {
 
     expect(app._terminalLinkAtPoint(4, 8)).toBeNull();
     expect(app._activateTerminalLinkAtPoint(4, 8)).toBe(false);
+  });
+});
+
+describe('terminal touch selection', () => {
+  // Copying from a phone was impossible in three layers at once: `user-select: none`
+  // on the whole terminal subtree, a WebGL renderer that draws glyphs as pixels with
+  // only the accessibility tree behind them, and xterm's selection being a mouse DRAG
+  // while the tap path dispatches a zero-movement mousedown/mouseup pair. The gesture
+  // therefore drives xterm's own `select()`, which is renderer-independent.
+  //
+  // Grid geometry (createTerminalGrid): 80 cols, 8×16 cells, screen rect at (0,0),
+  // viewportY 0 — 0-based index i on 0-based row r sits at (i * 8 + 4, r * 16 + 8).
+  const at = (index: number, row = 0) => ({ clientX: index * 8 + 4, clientY: row * 16 + 8 });
+  const press = (app: any, index: number, row = 0) =>
+    app._beginTouchSelection(at(index, row).clientX, at(index, row).clientY);
+  const dragTo = (app: any, index: number, row = 0) =>
+    app._extendTouchSelection(at(index, row).clientX, at(index, row).clientY);
+  const COLS = 80;
+  const LINE = 'wrote the chart to /tmp/out/chart.png just now';
+  const PATH_AT = LINE.indexOf('/tmp');
+
+  function selectionHarness(lines = [LINE, '', '❯ '], cursorY = 2, wrapped = new Set<number>()) {
+    const { app, setNow } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app._sendInputAsync = vi.fn();
+    app.terminal = createTerminalGrid(lines, cursorY, wrapped);
+    return { app, setNow, select: app.terminal.select as ReturnType<typeof vi.fn> };
+  }
+
+  it('selects the whitespace-delimited token under a long press', () => {
+    // Whitespace is the only delimiter on purpose: a punctuation-aware word rule
+    // cuts a path, a URL or a hash in half, which is exactly what you came to copy.
+    const { app, select } = selectionHarness();
+
+    expect(press(app, PATH_AT + 4)).toBe(true);
+    expect(select).toHaveBeenCalledWith(PATH_AT, 0, '/tmp/out/chart.png'.length);
+  });
+
+  it('selects nothing when the press lands on blank space', () => {
+    const { app, select } = selectionHarness();
+
+    expect(press(app, LINE.length + 10)).toBe(false);
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it('grows the selection as the finger drags past the anchor word', () => {
+    const { app, select } = selectionHarness();
+    press(app, PATH_AT + 4);
+    select.mockClear();
+
+    dragTo(app, LINE.length - 1);
+
+    // From the word's start through the cell under the finger, inclusive.
+    expect(select).toHaveBeenCalledWith(PATH_AT, 0, LINE.length - PATH_AT);
+  });
+
+  it('keeps the anchor word inside the selection when the drag goes backwards', () => {
+    const { app, select } = selectionHarness();
+    press(app, PATH_AT + 4);
+    select.mockClear();
+
+    dragTo(app, 6);
+
+    const wordEnd = PATH_AT + '/tmp/out/chart.png'.length;
+    expect(select).toHaveBeenCalledWith(6, 0, wordEnd - 6);
+  });
+
+  it('extends across rows, where a linear length is what xterm wants', () => {
+    const { app, select } = selectionHarness(['first row text', 'second row text', '❯ '], 2);
+    press(app, 0);
+    select.mockClear();
+
+    dragTo(app, 5, 1);
+
+    // Row 1 cell 5 is absolute cell 85; the selection runs from 0 through it.
+    expect(select).toHaveBeenCalledWith(0, 0, COLS + 6);
+  });
+
+  it('Line takes the whole logical line, wraps included, without the padding', () => {
+    const wrappedTail = 'tail';
+    const { app, select } = selectionHarness(['x'.repeat(COLS), wrappedTail, '❯ '], 2, new Set([1]));
+    press(app, 2, 1);
+    select.mockClear();
+
+    app._selectTouchSelectionLine();
+
+    expect(select).toHaveBeenCalledWith(0, 0, COLS + wrappedTail.length);
+  });
+
+  it('a tap while a selection is up extends it instead of moving the cursor', () => {
+    const { app, select } = selectionHarness();
+    press(app, PATH_AT + 4);
+    select.mockClear();
+
+    expect(app._handleMobileTerminalTap(at(LINE.length - 1), false, 'content')).toBe('select');
+    expect(select).toHaveBeenCalledWith(PATH_AT, 0, LINE.length - PATH_AT);
+    // and the CLI never sees a click it would act on
+    expect(app._sendInputAsync).not.toHaveBeenCalled();
+  });
+
+  it('copies through the shared clipboard path and drops the selection', () => {
+    // copyTerminalSelection is the one that falls back to execCommand, which is the
+    // only route that works on the plain-HTTP LAN install the installer offers.
+    const { app } = selectionHarness();
+    app.copyTerminalSelection = vi.fn().mockResolvedValue(true);
+    press(app, PATH_AT + 4);
+
+    return app._copyTouchSelection().then(() => {
+      expect(app.copyTerminalSelection).toHaveBeenCalledOnce();
+      expect(app._touchSelectionActive).toBe(false);
+      expect(app._touchSelectionAnchor).toBeNull();
+      expect(app.terminal.clearSelection).toHaveBeenCalled();
+    });
+  });
+
+  it('lifting the finger cannot let a compat mousedown steal focus and drop the selection', () => {
+    // The bug this pins: on lift the browser synthesizes a trusted mousedown, xterm
+    // focuses on it (keyboard up) and SelectionService resets the model (bar gone).
+    // Ending the gesture arms the same guard the tap path uses.
+    const { app } = selectionHarness();
+    const { element, dispatch } = createElementHarness();
+    app.terminal.element = { ...app.terminal.element, addEventListener: element.addEventListener };
+    app._installMobileTapMouseGuard();
+
+    press(app, PATH_AT + 4);
+    app._endTouchSelectionGesture();
+
+    const ev = { isTrusted: true, preventDefault: vi.fn(), stopImmediatePropagation: vi.fn() };
+    dispatch('mousedown', ev);
+
+    expect(ev.preventDefault).toHaveBeenCalledOnce();
+    expect(ev.stopImmediatePropagation).toHaveBeenCalledOnce();
+    expect(app._touchSelecting).toBe(false);
+    expect(app._touchSelectionActive).toBe(true); // the selection outlives the gesture
+  });
+
+  it('copying does not pop the on-screen keyboard back over the text', () => {
+    // copyTerminalSelection hands focus to the terminal, which on a phone means the
+    // keyboard covers what you just copied with nothing waiting to be typed.
+    const { app } = selectionHarness();
+    app.copyTerminalSelection = vi.fn().mockResolvedValue(true);
+    press(app, PATH_AT + 4);
+    app._blurMobileTerminalInput = vi.fn(); // stubbed AFTER the press, which blurs too
+
+    return app._copyTouchSelection().then(() => {
+      expect(app._blurMobileTerminalInput).toHaveBeenCalledOnce();
+    });
+  });
+
+  it('blurs the terminal input if anything focuses it during the gesture', () => {
+    // The one that matters on Android: Chrome runs its own long-press handling at
+    // ~500ms and focuses the helper textarea directly — no mouse event to guard, so
+    // the keyboard shot up over the selection the instant it appeared.
+    const { app, setNow } = selectionHarness();
+    const listeners = new Map<string, () => void>();
+    app.terminal.textarea = {
+      addEventListener: (type: string, fn: () => void) => listeners.set(type, fn),
+      classList: { contains: (n: string) => n === 'xterm-helper-textarea' },
+      blur: vi.fn(),
+    };
+    app._installTouchSelectionFocusGuard();
+    press(app, PATH_AT + 4);
+    app._endTouchSelectionGesture();
+
+    // Whatever focused it, the guard takes the focus straight back off.
+    app._blurMobileTerminalInput = vi.fn();
+    listeners.get('focus')?.();
+    expect(app._blurMobileTerminalInput).toHaveBeenCalledOnce();
+
+    // …and the guard expires on its own, so a stuck flag can never make the
+    // keyboard permanently unreachable.
+    setNow(1_000 + 5_000);
+    app._blurMobileTerminalInput = vi.fn();
+    listeners.get('focus')?.();
+    expect(app._blurMobileTerminalInput).not.toHaveBeenCalled();
+  });
+
+  it('survives a missing bar container instead of throwing mid-gesture', () => {
+    // index.html is read once at server start, so the bar is built in JS — and a
+    // solo popup or an early gesture can run before the container exists.
+    const { app } = selectionHarness();
+
+    expect(() => app._showTouchSelectionBar()).not.toThrow();
+    expect(app._ensureTouchSelectionBar()).toBeNull();
   });
 });

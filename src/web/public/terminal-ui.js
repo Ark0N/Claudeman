@@ -38,6 +38,19 @@
   // a gesture the terminal treats as a scroll but the dismiss handler treats as
   // a tap would close the keyboard mid-scroll and drop the composer.
   const MOBILE_KEYBOARD_DISMISS_TAP_SLOP = 8;
+  // Hold this long, finger still, before a press becomes a text selection.
+  //
+  // ⚠️ It must fire well BEFORE the platform's own long-press threshold (~500ms on
+  // Android), not just under it: the guards this gesture installs are armed when it
+  // fires, and at 450ms they were still being armed as Chrome ran its own handling
+  // — which focuses the nearest editable element, so the keyboard shot up over the
+  // selection the moment it appeared. 350ms is still far above a tap (~100-150ms).
+  const TOUCH_SELECT_LONG_PRESS_MS = 350;
+  // How long after a selection gesture the terminal input stays un-focusable. Long
+  // enough to cover the platform's long-press handling and the compatibility events
+  // that trail a touchend; short and self-expiring, so a stuck flag can never leave
+  // the keyboard unreachable.
+  const TOUCH_SELECT_FOCUS_GUARD_MS = 800;
   // Regions where a tap must NOT dismiss the on-screen keyboard
   // (_installMobileKeyboardDismiss). Two groups: anything that is about to take
   // focus itself, and the accessory bar, which is built to be used while the
@@ -206,6 +219,8 @@
     TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM,
     MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR,
     MOBILE_KEYBOARD_DISMISS_TAP_SLOP,
+    TOUCH_SELECT_LONG_PRESS_MS,
+    TOUCH_SELECT_FOCUS_GUARD_MS,
   };
   global.CODEMAN_XTERM_THEMES = CODEMAN_XTERM_THEMES;
   global.codemanCurrentXtermTheme = currentXtermTheme;
@@ -270,6 +285,7 @@ Object.assign(CodemanApp.prototype, {
     const container = document.getElementById('terminalContainer');
     this.terminal.open(container);
     this._installMobileTapMouseGuard();
+    this._installTouchSelectionFocusGuard();
 
     // Suppress xterm key handling during CJK IME composition.
     // Without this, xterm processes raw keyDown events (e.g., "Process" key)
@@ -567,6 +583,18 @@ Object.assign(CodemanApp.prototype, {
     // Register link provider for clickable file paths in Bash tool output
     this.registerFilePathLinkProvider();
 
+    // Bar visible ⟺ a selection exists. xterm drops the selection on any keypress,
+    // on reset and on a tab switch, and a Copy button floating over nothing is a
+    // trap — one that would copy the PREVIOUS session's text if it still worked.
+    this.terminal.onSelectionChange?.(() => {
+      if (!this.terminal?.hasSelection?.()) {
+        this._touchSelecting = false;
+        this._touchSelectionActive = false;
+        this._touchSelectionAnchor = null;
+        this._hideTouchSelectionBar();
+      }
+    });
+
     // Mouse wheel: forward to the TUI only for sessions verified to handle SGR
     // wheel reports (claude 2.1.187+ — see _shouldForwardWheelToApp), local
     // scrollback otherwise. Claude Code 2.1.187+ scrolls its own
@@ -686,6 +714,9 @@ Object.assign(CodemanApp.prototype, {
       let pixelAccum = 0;
 
       let didScroll = false; // track whether touchmove fired (tap vs scroll)
+      let longPressTimer = null; // armed on touchstart, becomes a text selection
+      let longPressStartX = 0;
+      let longPressStartY = 0;
       let touchStartY = 0;
       let tapStartedWithTerminalFocus = false;
       let tapStartIntentCache = null;
@@ -695,6 +726,13 @@ Object.assign(CodemanApp.prototype, {
       container.addEventListener(
         'touchstart',
         (ev) => {
+          // The selection bar is a child of this container: its buttons own their
+          // own taps and must not arm a gesture on the terminal underneath.
+          if (ev.target?.closest?.('.term-select-bar')) return;
+          if (ev.touches.length !== 1) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+          }
           if (ev.touches.length === 1) {
             touchLastX = ev.touches[0].clientX;
             touchLastY = ev.touches[0].clientY;
@@ -725,6 +763,15 @@ Object.assign(CodemanApp.prototype, {
               ev.preventDefault();
               this._blurMobileTerminalInput();
             }
+            // Hold still and this press becomes a text selection. Cancelled by any
+            // travel past the shared tap slop below, so a scroll can never become one.
+            longPressStartX = touchLastX;
+            longPressStartY = touchLastY;
+            clearTimeout(longPressTimer);
+            longPressTimer = setTimeout(() => {
+              longPressTimer = null;
+              this._beginTouchSelection(longPressStartX, longPressStartY);
+            }, window.CodemanTerminalInput.TOUCH_SELECT_LONG_PRESS_MS);
             lastTime = 0;
             if (scrollFrame) {
               cancelAnimationFrame(scrollFrame);
@@ -738,6 +785,24 @@ Object.assign(CodemanApp.prototype, {
       container.addEventListener(
         'touchmove',
         (ev) => {
+          // A drag that follows the long press grows the selection instead of
+          // scrolling; preventDefault keeps the page from taking the gesture back.
+          if (this._touchSelecting) {
+            ev.preventDefault();
+            const selTouch = ev.touches[0];
+            if (selTouch) this._extendTouchSelection(selTouch.clientX, selTouch.clientY);
+            return;
+          }
+          if (longPressTimer && ev.touches.length === 1) {
+            const t = ev.touches[0];
+            if (
+              Math.abs(t.clientX - longPressStartX) > TAP_THRESHOLD ||
+              Math.abs(t.clientY - longPressStartY) > TAP_THRESHOLD
+            ) {
+              clearTimeout(longPressTimer);
+              longPressTimer = null;
+            }
+          }
           if (ev.touches.length === 1 && isTouching) {
             const touchY = ev.touches[0].clientY;
             if (!didScroll && Math.abs(touchY - touchStartY) >= TAP_THRESHOLD) {
@@ -779,7 +844,21 @@ Object.assign(CodemanApp.prototype, {
       container.addEventListener(
         'touchend',
         (ev) => {
+          if (ev.target?.closest?.('.term-select-bar')) return;
+          clearTimeout(longPressTimer);
+          longPressTimer = null;
           isTouching = false;
+          if (this._touchSelecting) {
+            // Lifting ends the DRAG, not the selection: the bar stays up so the
+            // range can still be extended by tapping, or copied. preventDefault
+            // cancels the compatibility mouse events this touchend would otherwise
+            // synthesize — see _endTouchSelectionGesture.
+            ev.preventDefault();
+            velocity = 0;
+            this._endTouchSelectionGesture();
+            tapStartedWithTerminalFocus = false;
+            return;
+          }
           if (!scrollFrame && Math.abs(velocity) > 0.3) {
             scrollFrame = requestAnimationFrame(scrollLoop);
           }
@@ -798,13 +877,28 @@ Object.assign(CodemanApp.prototype, {
           }
           tapStartedWithTerminalFocus = false;
         },
-        { passive: true }
+        // NOT passive: the selection branch above must be able to preventDefault
+        // the compatibility mouse events. Every other path leaves the event alone.
+        { passive: false }
       );
+
+      // Android Chrome fires `contextmenu` at its long-press threshold and then runs
+      // its default long-press behaviour. Suppressed ONLY while a selection gesture
+      // is in flight — a desktop right-click keeps its menu, since the timer is null
+      // and no gesture is active there.
+      container.addEventListener('contextmenu', (ev) => {
+        if (longPressTimer !== null || this._touchSelecting || this._touchSelectionActive) {
+          ev.preventDefault();
+        }
+      });
 
       container.addEventListener(
         'touchcancel',
         () => {
+          clearTimeout(longPressTimer);
+          longPressTimer = null;
           isTouching = false;
+          this._touchSelecting = false;
           velocity = 0;
           pixelAccum = 0;
           tapStartedWithTerminalFocus = false;
@@ -1639,6 +1733,294 @@ Object.assign(CodemanApp.prototype, {
       return false;
     }
     return true;
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // Touch text selection — long-press to select, tap to extend, Copy
+  // ═══════════════════════════════════════════════════════════════
+  //
+  // There was no way to copy terminal text from a phone at all. Three layers
+  // ruled it out at once: `user-select: none` on the whole terminal subtree
+  // (taps are cursor gestures there, so the OS callout had to go), the WebGL
+  // renderer drawing glyphs as pixels with only the accessibility tree behind
+  // them, and xterm's own selection being a mouse DRAG — while the tap path
+  // dispatches a zero-movement mousedown/mouseup pair, i.e. a click.
+  //
+  // So the gesture drives xterm's selection API directly (`select`, public and
+  // renderer-independent, and the highlight is drawn by xterm itself). Long-press
+  // is free real estate: tap and swipe are taken, long-press and double-tap are
+  // used by nothing.
+
+  /**
+   * While a selection gesture is in flight, the terminal input must not hold focus.
+   *
+   * ⚠️ This is the guard that actually fixes "the keyboard pops up the moment the
+   * selection appears". The mouse-event guard cannot: the focus does not arrive
+   * through a mouse event at all. Android Chrome runs its own long-press handling
+   * at ~500ms and focuses the nearest editable element — xterm's helper textarea,
+   * a real <textarea> parked at the cursor — and nothing in the touch path can
+   * preventDefault an event it never sees. Blurring on focus is the one move that
+   * works regardless of which path did the focusing.
+   *
+   * Bounded by a self-expiring deadline rather than by the bar's visibility, so a
+   * flag left set can never make the keyboard permanently unreachable.
+   */
+  _installTouchSelectionFocusGuard() {
+    const textarea = this.terminal?.textarea;
+    if (!textarea || textarea._codemanSelectionFocusGuard) return;
+    textarea._codemanSelectionFocusGuard = true;
+    textarea.addEventListener('focus', () => {
+      if (!this._touchSelectionFocusGuarded()) return;
+      // Same task as the focus: a keyboard that opens and closes still shoves the
+      // viewport, and the selection with it.
+      this._blurMobileTerminalInput();
+    });
+  },
+
+  _touchSelectionFocusGuarded() {
+    if (this._touchSelecting) return true;
+    return performance.now() < (this._touchSelectionFocusGuardUntil || 0);
+  },
+
+  /** Re-arm the focus guard; called at every step of the gesture. */
+  _armTouchSelectionFocusGuard() {
+    this._touchSelectionFocusGuardUntil =
+      performance.now() + (window.CodemanTerminalInput?.TOUCH_SELECT_FOCUS_GUARD_MS || 800);
+  },
+
+  /** The absolute 0-based buffer cell under a viewport point, or null. */
+  _touchSelectionCellAt(clientX, clientY) {
+    const pos = this._clientPointToCell(clientX, clientY);
+    const buffer = this.terminal?.buffer?.active;
+    if (!pos || !buffer) return null;
+    return { col: pos.col - 1, row: (buffer.viewportY || 0) + pos.row - 1 };
+  },
+
+  /**
+   * The logical line a buffer row belongs to, as one string plus its start row.
+   *
+   * ⚠️ Rows are read UNTRIMMED (`translateToString(false)`) so every row
+   * contributes exactly `cols` characters: the offset math below is linear over
+   * the joined text, and a trimmed row would silently shift every offset after it.
+   */
+  _touchSelectionLogicalLine(row) {
+    const buffer = this.terminal?.buffer?.active;
+    if (!buffer?.getLine) return null;
+    let start = row;
+    while (start > 0 && buffer.getLine(start)?.isWrapped) start--;
+    let end = row;
+    while (end + 1 < buffer.length && buffer.getLine(end + 1)?.isWrapped) end++;
+    let text = '';
+    for (let r = start; r <= end; r++) text += buffer.getLine(r)?.translateToString(false) ?? '';
+    return { startRow: start, text };
+  },
+
+  /**
+   * The run of NON-WHITESPACE around a cell, as {index, length} in absolute cells.
+   *
+   * Whitespace is the only delimiter on purpose: in a terminal the thing worth
+   * grabbing is a path, a URL, a container id or a hash, and every punctuation-
+   * aware word rule cuts those in half.
+   */
+  _touchSelectionWordAt(cell) {
+    const cols = Math.max(1, this.terminal?.cols || 1);
+    const line = this._touchSelectionLogicalLine(cell.row);
+    if (!line) return null;
+    const offset = (cell.row - line.startRow) * cols + cell.col;
+    const ch = line.text[offset];
+    if (!ch || !ch.trim()) return null; // pressed on blank space: nothing to select
+    let from = offset;
+    while (from > 0 && line.text[from - 1] && line.text[from - 1].trim()) from--;
+    let to = offset;
+    while (to + 1 < line.text.length && line.text[to + 1] && line.text[to + 1].trim()) to++;
+    return { index: line.startRow * cols + from, length: to - from + 1 };
+  },
+
+  /** Apply a selection given absolute cell indices; `select()` wraps a length across rows. */
+  _applyTouchSelection(index, length) {
+    const cols = Math.max(1, this.terminal?.cols || 1);
+    if (length <= 0) return;
+    this.terminal?.select?.(index % cols, Math.floor(index / cols), length);
+  },
+
+  /** Long-press fired: select the word under the finger and arm drag-to-extend. */
+  _beginTouchSelection(clientX, clientY) {
+    const cell = this._touchSelectionCellAt(clientX, clientY);
+    if (!cell) return false;
+    const word = this._touchSelectionWordAt(cell);
+    if (!word) return false;
+    // The keyboard must not sit on top of the thing being selected, and the
+    // composer would eat the selection on its next keystroke anyway.
+    this._blurMobileTerminalInput();
+    this._touchSelectionAnchor = word;
+    this._touchSelecting = true;
+    this._touchSelectionActive = true;
+    // From here until the gesture ends, no trusted mouse event may reach xterm —
+    // see _endTouchSelectionGesture for why — and the terminal input may not take
+    // focus. Both are re-armed as the gesture continues, since their windows are
+    // short and a press can be held for much longer.
+    this._suppressTrustedTapMouseEvents();
+    this._armTouchSelectionFocusGuard();
+    this._applyTouchSelection(word.index, word.length);
+    // Android answers; iOS ignores it silently. Both are fine.
+    try {
+      navigator.vibrate?.(15);
+    } catch {
+      /* vibration is a nicety, never a requirement */
+    }
+    this._showTouchSelectionBar();
+    return true;
+  },
+
+  /**
+   * Extend the selection to a point, from the anchor word.
+   *
+   * Used by BOTH the drag that follows the long-press and a tap while the bar is
+   * up. The tap form is the one that makes this usable on a phone: picking up a
+   * 4px handle with a fingertip is a coin flip, tapping the other end is not.
+   */
+  _extendTouchSelection(clientX, clientY) {
+    const anchor = this._touchSelectionAnchor;
+    const cell = this._touchSelectionCellAt(clientX, clientY);
+    if (!anchor || !cell) return;
+    const cols = Math.max(1, this.terminal?.cols || 1);
+    const point = cell.row * cols + cell.col;
+    // Grow from whichever END of the anchor word is further away, so the word the
+    // press landed on always stays inside the selection.
+    const from = Math.min(anchor.index, point);
+    const to = Math.max(anchor.index + anchor.length, point + 1);
+    this._applyTouchSelection(from, to - from);
+    this._armTouchSelectionFocusGuard();
+    this._positionTouchSelectionBar();
+  },
+
+  /**
+   * Finger up: end the DRAG, keep the selection and the bar.
+   *
+   * ⚠️ The browser synthesizes a trusted `mousedown`/`mouseup` pair after this
+   * touchend, and xterm acts on BOTH: `CoreBrowserTerminal` calls `focus()` from
+   * its screen-element mousedown — so the on-screen keyboard springs up over the
+   * text you just selected — and `SelectionService` resets the model there, so the
+   * selection, and with it the Copy bar (hidden when `hasSelection()` goes false),
+   * vanishes the instant you lift your finger. That is exactly what long-press-to-
+   * copy did before this: keyboard up, selection gone, nothing to copy.
+   *
+   * The tap path already owns a guard for those events; it simply never armed it
+   * here. Arming it is the fix, and the caller additionally `preventDefault()`s the
+   * touchend so the synthesis is stopped at the source rather than swatted after.
+   */
+  _endTouchSelectionGesture() {
+    this._touchSelecting = false;
+    this._suppressTrustedTapMouseEvents();
+    this._armTouchSelectionFocusGuard();
+    this._positionTouchSelectionBar();
+  },
+
+  /** Whole logical line under the anchor — the common case a word selection just missed. */
+  _selectTouchSelectionLine() {
+    const anchor = this._touchSelectionAnchor;
+    const cols = Math.max(1, this.terminal?.cols || 1);
+    if (!anchor) return;
+    const line = this._touchSelectionLogicalLine(Math.floor(anchor.index / cols));
+    if (!line) return;
+    // Trailing blanks are padding, not content: rows are read untrimmed so the
+    // offsets line up, and copying the pad would put a wall of spaces on the
+    // clipboard.
+    const length = line.text.replace(/\s+$/, '').length;
+    if (length === 0) return;
+    this._touchSelectionAnchor = { index: line.startRow * cols, length };
+    this._applyTouchSelection(line.startRow * cols, length);
+    this._positionTouchSelectionBar();
+  },
+
+  /** Copy through the shared path: Clipboard API, else execCommand (plain-HTTP installs). */
+  async _copyTouchSelection() {
+    const ok = await this.copyTerminalSelection();
+    this._clearTouchSelection();
+    // copyTerminalSelection hands focus back to the terminal, which is right on a
+    // desktop and wrong on a phone: it opens the on-screen keyboard over whatever
+    // was just copied, with nothing waiting to be typed. The execCommand fallback
+    // focuses its own temp textarea on the way through, so this runs after both.
+    if (typeof MobileDetection !== 'undefined' && MobileDetection.isTouchDevice?.()) {
+      this._blurMobileTerminalInput();
+    }
+    return ok;
+  },
+
+  _clearTouchSelection() {
+    this._touchSelecting = false;
+    this._touchSelectionActive = false;
+    this._touchSelectionAnchor = null;
+    this.terminal?.clearSelection?.();
+    this._hideTouchSelectionBar();
+  },
+
+  /** The Copy/Line/dismiss bar. Built in JS — index.html is read once at server start. */
+  _ensureTouchSelectionBar() {
+    if (this._touchSelectionBar?.isConnected) return this._touchSelectionBar;
+    const container = document.getElementById('terminalContainer');
+    if (!container) return null;
+    const bar = document.createElement('div');
+    bar.className = 'term-select-bar';
+    bar.setAttribute('role', 'toolbar');
+    bar.innerHTML =
+      '<button type="button" class="term-select-btn" data-act="copy">Copy</button>' +
+      '<button type="button" class="term-select-btn" data-act="line">Line</button>' +
+      '<button type="button" class="term-select-btn term-select-btn--close" data-act="close" aria-label="Clear selection">✕</button>';
+    // Pointer events only: the container's touch handlers are what own gestures in
+    // this subtree, and they skip anything inside the bar (see initTerminal).
+    bar.addEventListener('click', (ev) => {
+      const act = ev.target?.closest?.('[data-act]')?.dataset?.act;
+      if (!act) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (act === 'copy') void this._copyTouchSelection();
+      else if (act === 'line') this._selectTouchSelectionLine();
+      else this._clearTouchSelection();
+    });
+    container.appendChild(bar);
+    this._touchSelectionBar = bar;
+    return bar;
+  },
+
+  _showTouchSelectionBar() {
+    const bar = this._ensureTouchSelectionBar();
+    if (!bar) return;
+    bar.classList.add('visible');
+    this._positionTouchSelectionBar();
+  },
+
+  _hideTouchSelectionBar() {
+    this._touchSelectionBar?.classList.remove('visible');
+  },
+
+  /**
+   * Park the bar just above the selection, or below it when the selection starts
+   * at the top of the screen. Clamped to the container so it can never sit
+   * off-screen with the only Copy button on it.
+   */
+  _positionTouchSelectionBar() {
+    const bar = this._touchSelectionBar;
+    const container = document.getElementById('terminalContainer');
+    const screen = this.terminal?.element?.querySelector('.xterm-screen');
+    const cell = this.terminal?._core?._renderService?.dimensions?.css?.cell;
+    const range = this.terminal?.getSelectionPosition?.();
+    const buffer = this.terminal?.buffer?.active;
+    if (!bar || !container || !screen || !cell?.height || !range || !buffer) return;
+    const screenRect = screen.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    const viewportRow = (row) => row - (buffer.viewportY || 0);
+    const topPx = screenRect.top - containerRect.top + viewportRow(range.start.y) * cell.height;
+    const bottomPx = screenRect.top - containerRect.top + (viewportRow(range.end.y) + 1) * cell.height;
+    const barHeight = bar.offsetHeight || 36;
+    const gap = 6;
+    let top = topPx - barHeight - gap;
+    if (top < 0) top = bottomPx + gap;
+    top = Math.max(0, Math.min(top, containerRect.height - barHeight));
+    const left = screenRect.left - containerRect.left + range.start.x * (cell.width || 8);
+    const barWidth = bar.offsetWidth || 150;
+    bar.style.top = `${Math.round(top)}px`;
+    bar.style.left = `${Math.round(Math.max(0, Math.min(left, containerRect.width - barWidth)))}px`;
   },
 
   showWelcome() {
@@ -3817,6 +4199,15 @@ Object.assign(CodemanApp.prototype, {
     if (!touch || !this.terminal) return null;
     // touchstart already classified this exact point; reuse it rather than paying
     // a second full-viewport scan for the same gesture.
+    // While a selection is up, a tap EXTENDS it instead of doing its usual job —
+    // picking up a 4px handle with a fingertip is a coin flip, tapping the other
+    // end is not. Dismissal stays explicit (the bar's ✕, or Copy), so no tap is
+    // ever spent on getting out of a mode the user is still using.
+    if (this._touchSelectionActive) {
+      this._extendTouchSelection(touch.clientX, touch.clientY);
+      return 'select';
+    }
+
     const intent = cachedIntent ?? this._classifyMobileTerminalTap(touch.clientX, touch.clientY);
     // Computed once and reused by the keyboard decision at the tail of this
     // method: both ask the same question, and the pane cannot change in between
