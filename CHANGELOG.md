@@ -1,5 +1,27 @@
 # aicodeman
 
+## 1.19.7
+
+### Patch Changes
+
+- 8a54b33: Clear every production-reachable npm advisory, and fix a service-worker caching regression the upgrade exposed.
+
+  `npm audit` reported 20 advisories, but 16 were devDependencies-only (Remotion, Puppeteer, postcss, the eslint/tsx toolchain) and never reached anyone installing the package. Four reached production and are now resolved:
+  - **`@fastify/static` 9.1.3 to 10.1.3** — GHSA-8pvw-jcv7-9cmj, authorization bypass via non-canonical URL paths. The advisory covers `<=10.1.1`, so the entire 9.x line is affected and the fix only exists on 10.x.
+  - **`find-my-way` 9.6.0 to 9.8.0** — GHSA-c96f-x56v-gq3h (HTTP/2 DDoS). Not exploitable here since Codeman does not enable HTTP/2, fixed anyway.
+  - **`fast-uri` 3.1.2 to 3.1.5** — GHSA-v2hh-gcrm-f6hx, host confusion via a literal backslash authority delimiter.
+  - **`brace-expansion` to 5.0.9 / 1.1.18** — GHSA-3jxr-9vmj-r5cp, exponential-time expansion DoS.
+
+  The last three were transitive and only needed a lockfile re-resolve; no `overrides` were added.
+
+  The `@fastify/static` major changes the `setHeaders` callback's first argument from a Node `ServerResponse` to a `FastifyReply`, which required two fixes:
+  - `res.setHeader()` became `reply.header()`. A v9-style body throws `TypeError: res.setHeader is not a function` from inside the plugin on every static request.
+  - **That change also flips precedence, silently.** The callback used to write to the raw response and be overwritten by the route's staged reply headers; it now writes to the reply and wins instead. That handed `/sw.js` a year of `immutable` in place of the `no-cache, no-store` its route sets, which would pin a service worker on every client with no server-side way to recover. A route that already set `Cache-Control` now keeps it.
+
+  `ws` also appears in `npm audit` but production is already on 8.21.0, outside the vulnerable range; the only affected copy is bundled under `@remotion/renderer` and is dev-only.
+
+  Adds `test/static-cache-headers.test.ts`, which drives a real server and covers the caching contract that had no test at all, and moves the floors in `test/dependency-security.test.ts` up to the patched versions.
+
 ## 1.19.6
 
 ### Patch Changes
