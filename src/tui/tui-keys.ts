@@ -38,6 +38,7 @@ export type TuiInputEvent =
   | { type: 'backspace' }
   | { type: 'escape' }
   | { type: 'ctrl'; key: string }
+  | { type: 'alt'; value: string }
   | { type: 'key'; name: TuiNamedKey }
   | { type: 'mouse'; kind: TuiMouseKind; x: number; y: number; button: number };
 
@@ -107,9 +108,24 @@ export function createKeyParser(): TuiKeyParser {
       return { consumed: 3, events: name ? [{ type: 'key', name }] : NOTHING };
     }
 
-    // Anything that is not a CSI is a lone ESC as far as we are concerned; the
-    // next byte then parses on its own (so Alt+x reads as Escape then `x`).
-    if (second !== 0x5b) return { consumed: 1, events: [{ type: 'escape' }] };
+    // ESC followed by a printable character IN THE SAME READ is Alt+that key:
+    // that is how every terminal sends a meta chord. A lone Esc cannot look
+    // like this, because a buffer holding only ESC returns 'incomplete' above
+    // and is flushed as `escape` when the read ends, which is the standard way
+    // to tell the two apart without a timer.
+    //
+    // ⚠️ Three characters are deliberately NOT treated as Alt chords, because
+    // the terminal uses them to introduce sequences and a chord is
+    // indistinguishable from one: `[` (CSI) and `O` (SS3) would swallow every
+    // arrow key, and `]` (OSC) would swallow a terminal's colour-query reply.
+    // Alt+[ and Alt+] therefore cannot exist in a terminal at all, which is why
+    // the list binds bare `[` and `]` for the same job.
+    if (second !== 0x5b) {
+      if (second >= 0x20 && second <= 0x7e && second !== 0x4f && second !== 0x5d) {
+        return { consumed: 2, events: [{ type: 'alt', value: String.fromCharCode(second) }] };
+      }
+      return { consumed: 1, events: [{ type: 'escape' }] };
+    }
 
     let j = 2;
     while (j < buf.length && buf[j] >= 0x30 && buf[j] <= 0x3f) j++;

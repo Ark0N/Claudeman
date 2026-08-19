@@ -121,8 +121,11 @@ describe('escape sequences', () => {
     expect(decode('\x1b[M !!x')).toEqual([{ type: 'char', value: 'x' }]);
   });
 
-  it('reads ESC followed by a letter as Escape then that letter', () => {
-    expect(decode('\x1bx')).toEqual([{ type: 'escape' }, { type: 'char', value: 'x' }]);
+  it('reads ESC followed by a letter as the Alt chord it is', () => {
+    // Changed deliberately: this used to decode as Escape + `x`, which made
+    // Alt+N unreachable. A lone Esc is still separable because it is HELD until
+    // the caller's timer flushes it (see the 'lone escape' suite).
+    expect(decode('\x1bx')).toEqual([{ type: 'alt', value: 'x' }]);
   });
 });
 
@@ -206,5 +209,37 @@ describe('torn reads', () => {
     expect(parser.feed(`\x1b[${'1'.repeat(200)}`)).toEqual([]);
     expect(parser.pending()).toBe(0);
     expect(parser.feed('\x1b[A')).toEqual([{ type: 'key', name: 'up' }]);
+  });
+});
+
+describe('Alt chords', () => {
+  it('reads ESC + a printable character in one read as Alt+that key', () => {
+    expect(decode('\x1b1')).toEqual([{ type: 'alt', value: '1' }]);
+    expect(decode('\x1bk')).toEqual([{ type: 'alt', value: 'k' }]);
+  });
+
+  it('never steals the sequence introducers, or every arrow key would break', () => {
+    // ESC [ is CSI and ESC O is SS3: both are Up, not Alt+[ / Alt+O.
+    expect(decode('\x1b[A')).toEqual([{ type: 'key', name: 'up' }]);
+    expect(decode('\x1bOA')).toEqual([{ type: 'key', name: 'up' }]);
+  });
+
+  it('leaves ESC ] alone, so a terminal colour reply is never read as a chord', () => {
+    // OSC introducer: decoded as Escape then `]`, exactly as before.
+    expect(decode('\x1b]')).toEqual([{ type: 'escape' }, { type: 'char', value: ']' }]);
+  });
+
+  it('keeps a lone ESC held, which is what separates it from a chord', () => {
+    const parser = createKeyParser();
+    expect(parser.feed('\x1b')).toEqual([]);
+    expect(parser.flush()).toEqual([{ type: 'escape' }]);
+  });
+
+  it('decodes a chord torn across two reads as Escape then the character', () => {
+    // The unavoidable ambiguity, resolved the standard way: same read = chord.
+    const parser = createKeyParser();
+    expect(parser.feed('\x1b')).toEqual([]);
+    expect(parser.flush()).toEqual([{ type: 'escape' }]);
+    expect(parser.feed('1')).toEqual([{ type: 'char', value: '1' }]);
   });
 });

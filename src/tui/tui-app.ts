@@ -611,6 +611,12 @@ export function helpKeysFor(glyphs: TuiGlyphSet, context: TuiKeymapContext): Arr
     [`${glyphs.updown} / j k`, 'select'],
     [glyphs.enter, 'attach — on a RECENT row, resume that conversation'],
     ['1-9', 'jump and attach'],
+    // The web UI's tab switching, as close as a terminal can carry it: Alt+N
+    // matches exactly, while Alt+[ / Alt+] cannot be transmitted (ESC+[ IS the
+    // CSI introducer) so the brackets do that job unmodified.
+    ['alt+1-9', 'switch to that session, without attaching'],
+    ['[ / ]', 'previous / next session'],
+    ['tab', 'next session'],
     // The one key that is not the TUI's: an attach hands the terminal to tmux,
     // and leaving it is the question every first attach asks.
     [context.detach ?? detachChord(), 'detach from an attached session, back to here'],
@@ -1431,6 +1437,31 @@ class TuiApp {
     this.afterInput();
   }
 
+  /**
+   * An Alt chord: `Alt+1`..`Alt+9` switch session, everything else is replayed.
+   *
+   * Alt+N SELECTS rather than attaches. In the web UI Alt+N switches which tab
+   * you are looking at, which is cheap and reversible; the terminal equivalent
+   * is moving the selection and its preview, not handing the whole terminal to
+   * a pane. Bare 1-9 keeps its documented jump-and-attach meaning.
+   *
+   * ⚠️ Every OTHER chord is replayed as `escape` then the character, and that
+   * fallback is load-bearing rather than tidiness. A terminal encodes Alt+x as
+   * ESC then x, so a real Esc that lands in the same read as the next keystroke
+   * is byte-identical to a chord. Without the replay, "Esc then q" typed
+   * quickly decoded as Alt+Q, matched nothing, and was swallowed — the e2e test
+   * caught it as the dashboard refusing to quit. Replaying keeps every overlay
+   * dismissal and every existing key working exactly as before.
+   */
+  private handleAlt(value: string): void {
+    if (this.model.mode === 'list' && value >= '1' && value <= '9') {
+      this.model.cursorToIndex(Number.parseInt(value, 10));
+      return;
+    }
+    this.handle({ type: 'escape' });
+    this.handle({ type: 'char', value });
+  }
+
   /** Every key can change the selection or the mode, and both steer the preview. */
   private afterInput(): void {
     if (this.exiting) return;
@@ -1440,6 +1471,10 @@ class TuiApp {
 
   private handle(event: TuiInputEvent): void {
     if (this.exiting) return;
+    if (event.type === 'alt') {
+      this.handleAlt(event.value);
+      return;
+    }
     switch (this.model.mode) {
       case 'confirm-kill':
         this.handleConfirm(event);
@@ -1494,6 +1529,11 @@ class TuiApp {
       case 'char':
         this.handleListChar(event.value);
         return;
+      case 'tab':
+        // Ctrl+Tab in the web UI. A terminal cannot report the Ctrl, so plain
+        // Tab carries it: nothing else in the list wants the key.
+        this.model.moveCursor(1);
+        return;
       default:
         return;
     }
@@ -1522,6 +1562,15 @@ class TuiApp {
         return;
       case 'k':
         this.model.moveCursor(-1);
+        return;
+      // The web UI's Alt+[ / Alt+] for previous/next tab. WITHOUT the Alt,
+      // because ESC+[ is byte-identical to the CSI introducer every arrow key
+      // arrives on, so the chord cannot be transmitted by a terminal at all.
+      case '[':
+        this.model.moveCursor(-1);
+        return;
+      case ']':
+        this.model.moveCursor(1);
         return;
       case 'q':
         this.quit(0);
