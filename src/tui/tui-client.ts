@@ -468,6 +468,21 @@ export function parseSessionOptions(stdout: string, keys: readonly string[]): Tu
 }
 
 /**
+ * What `list-keys -T prefix` says a single key is bound to, or null when the
+ * key appears nowhere in the table. The command is returned verbatim, so a
+ * caller can insist on an exact match rather than a prefix of one.
+ */
+export function parsePrefixBinding(stdout: string, key: string): string | null {
+  for (const line of stdout.split('\n')) {
+    const match = /^bind-key\s+(?:-\S+\s+)*?-T\s+prefix\s+(\S+)\s+(.+)$/.exec(line.trim());
+    if (!match) continue;
+    if (unquoteTmuxValue(match[1] ?? '') !== key) continue;
+    return (match[2] ?? '').trim();
+  }
+  return null;
+}
+
+/**
  * The phrase the attach status bar carries. It doubles as the marker that tells
  * OUR bar apart from a user's own when sweeping one that leaked, so
  * `buildAttachBanner()` composes its text from this constant rather than
@@ -898,6 +913,44 @@ export class TuiClient {
   }
 
   /**
+   * The command bound to a key in tmux's prefix table, or null when the key is
+   * free. Used to check a key is unbound BEFORE claiming it, so the attach can
+   * never shadow a binding the user relies on.
+   */
+  async readPrefixBinding(key: string): Promise<string | null> {
+    try {
+      const { stdout } = await this.exec('tmux', ['-L', this.socket, 'list-keys', '-T', 'prefix']);
+      return parsePrefixBinding(stdout, key);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Claim a prefix key for `detach-client`. Best effort; a failure is not fatal to an attach. */
+  async bindDetachKey(key: string): Promise<boolean> {
+    try {
+      await this.exec('tmux', ['-L', this.socket, 'bind-key', '-T', 'prefix', key, 'detach-client']);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Give a prefix key back, but ONLY while it still means `detach-client`.
+   * Anything else there is the user's, arrived after we bound ours, and must
+   * not be removed.
+   */
+  async unbindDetachKey(key: string): Promise<void> {
+    if ((await this.readPrefixBinding(key)) !== 'detach-client') return;
+    try {
+      await this.exec('tmux', ['-L', this.socket, 'unbind-key', '-T', 'prefix', key]);
+    } catch {
+      /* a key we cannot give back is a stray convenience binding, not a failure */
+    }
+  }
+
+  /**
    * Is this session's active pane DEAD — the process it ran has exited and tmux
    * is holding the corpse on screen?
    *
@@ -997,6 +1050,11 @@ export class TuiClient {
    * Only a bar carrying our own marker is touched, and it is put back the way
    * Codeman creates its panes (`status off`), which is the only state this bar
    * is ever applied over.
+   *
+   * The held-Ctrl detach alias is deliberately NOT swept here. It is invisible,
+   * harmless and arguably useful if it leaks, while sweeping it would rip the
+   * key out from under a SECOND TUI that is mid-attach right now — key tables
+   * are server-global, so this method cannot tell a leak from a live claim.
    */
   async clearLeakedAttachBanners(): Promise<number> {
     let names: string[];

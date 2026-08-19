@@ -18,6 +18,7 @@ import {
   confirmAccepts,
   confirmKillStep,
   detachChord,
+  heldCtrlAlias,
   nextSessionName,
   footerKeysFor,
   formatPrefixKey,
@@ -455,6 +456,34 @@ describe('buildListLines', () => {
     const [line] = buildListLines(model.rows(), 20);
     expect(line.label).toHaveLength(20);
     expect(line.label.endsWith('…')).toBe(true);
+  });
+});
+
+describe('the held-Ctrl detach alias', () => {
+  it('names the key a user produces when they never let go of Ctrl', () => {
+    // The failure this exists for: "Ctrl+B then d" typed as one held chord
+    // sends 0x02 then 0x04, and tmux leaves C-d unbound, so nothing happens.
+    expect(heldCtrlAlias('d')).toBe('C-d');
+  });
+
+  it('lowercases, so a rebound uppercase key still yields the chord it produces', () => {
+    expect(heldCtrlAlias('Q')).toBe('C-q');
+  });
+
+  it('has no alias for a key with no held-Ctrl form', () => {
+    expect(heldCtrlAlias('F1')).toBeNull();
+    expect(heldCtrlAlias('C-d')).toBeNull();
+    expect(heldCtrlAlias('')).toBeNull();
+    expect(heldCtrlAlias('1')).toBeNull();
+  });
+
+  it('advertises the alias on the bar only once it has been claimed', () => {
+    const withAlias = buildAttachBanner({ prefix: 'C-b', detachKey: 'd', heldAlias: 'C-d' });
+    expect(withAlias['status-format[0]']).toContain('Ctrl+B then d');
+    expect(withAlias['status-format[0]']).toContain('(or Ctrl+D)');
+    // Not claimed (the key was already bound to something of the user's) means
+    // not advertised: a bar naming a key that does nothing is the original bug.
+    expect(buildAttachBanner({ prefix: 'C-b', detachKey: 'd' })['status-format[0]']).not.toContain('or Ctrl');
   });
 });
 

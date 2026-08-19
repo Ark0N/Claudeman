@@ -265,6 +265,24 @@ export function formatPrefixKey(prefix: string | undefined): string {
 export const DEFAULT_DETACH_KEY = 'd';
 
 /**
+ * The key a user produces when they DON'T let go of Ctrl: `d` becomes `C-d`.
+ *
+ * ⚠️ This is the single most reported way the way-out fails. "Ctrl+B then d"
+ * gets typed as one held chord, the terminal sends 0x02 then 0x04, and tmux
+ * leaves `C-d` unbound in the prefix table, so absolutely nothing happens and
+ * the user concludes the app is frozen (measured on the beta: three separate
+ * reports, and both variants verified inert against a live pane).
+ *
+ * Null when there is no sensible alias: a key that is already a chord, or not a
+ * single letter, has no "held Ctrl" form worth claiming.
+ */
+export function heldCtrlAlias(key: string): string | null {
+  const trimmed = (key ?? '').trim();
+  if (!/^[A-Za-z]$/.test(trimmed)) return null;
+  return `C-${trimmed.toLowerCase()}`;
+}
+
+/**
  * The chord that ends an attach: the prefix, then the key bound to
  * `detach-client`.
  *
@@ -306,8 +324,14 @@ export function buildAttachBanner(options: {
   prefix?: string;
   label?: string;
   detachKey?: string;
+  /** The held-Ctrl form, when the attach managed to claim it. */
+  heldAlias?: string;
 }): Record<string, string> {
   const chord = escapeTmuxFormat(detachChord(options.prefix, options.detachKey));
+  // Named on the bar because it is what people actually type: keeping Ctrl held
+  // is the common way to press this, and the bar has to say that it works.
+  const held = options.heldAlias ? escapeTmuxFormat(formatPrefixKey(options.heldAlias)) : '';
+  const alias = held ? ` (or ${held})` : '';
   const label = escapeTmuxFormat(truncateLabel((options.label ?? '').trim(), ATTACH_BANNER_LABEL_MAX));
   // ONE option, not `status-left`/`status-right`/`status-style`: `status-format[0]`
   // owns the whole line, which is what removes tmux's window list (`0:bash*`)
@@ -317,7 +341,7 @@ export function buildAttachBanner(options: {
   return {
     status: 'on',
     'status-style': 'bg=default,fg=default',
-    'status-format[0]': `#[align=left] press #[bold]${chord}#[nobold] to detach, ${ATTACH_BANNER_MARKER}${right}#[default]`,
+    'status-format[0]': `#[align=left] press #[bold]${chord}#[nobold]${alias} to detach, ${ATTACH_BANNER_MARKER}${right}#[default]`,
   };
 }
 
@@ -412,9 +436,14 @@ export async function beginAttachHandoff(client: TuiClient, muxName: string, lab
   // and the caller is blocked in `spawnSync`.
   const sizing = await client.readWindowSizing(muxName);
   await client.followAttachingClient(muxName);
+  // Claimed only when tmux has nothing there: an attach must never shadow a
+  // binding the user put in their own config.
+  const alias = heldCtrlAlias(detachKey ?? DEFAULT_DETACH_KEY);
+  const claimed = alias && (await client.readPrefixBinding(alias)) === null ? await client.bindDetachKey(alias) : false;
   const banner = buildAttachBanner({
     ...(prefix ? { prefix } : {}),
     ...(detachKey ? { detachKey } : {}),
+    ...(claimed && alias ? { heldAlias: alias } : {}),
     label,
   });
   const options = await client.readSessionOptions(muxName, Object.keys(banner));
@@ -422,6 +451,7 @@ export async function beginAttachHandoff(client: TuiClient, muxName: string, lab
   return {
     chord: detachChord(prefix, detachKey),
     async restore(): Promise<void> {
+      if (claimed && alias) await client.unbindDetachKey(alias);
       // Options first, then the size: dropping the status bar gives its row
       // back to the pane, and the resize is what re-pins the browser's
       // authority over the window.

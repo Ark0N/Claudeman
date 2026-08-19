@@ -23,6 +23,7 @@ import {
   arrayOptionBase,
   parseSessionOptions,
   parseDetachKey,
+  parsePrefixBinding,
   ATTACH_BANNER_MARKER,
   parseTmuxSessionList,
   parseWindowSizing,
@@ -598,6 +599,27 @@ describe('attach window sizing', () => {
     await expect(
       client.restoreWindowSizing('codeman-1a2b3c4d', { cols: 120, rows: 40, mode: 'manual' })
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('parsePrefixBinding', () => {
+  const REAL = [
+    'bind-key    -T prefix d       detach-client',
+    'bind-key    -T prefix D       choose-client -Z',
+    'bind-key    -T prefix C-b     send-prefix',
+  ].join('\n');
+
+  it('reports what a key is bound to, verbatim', () => {
+    expect(parsePrefixBinding(REAL, 'd')).toBe('detach-client');
+    expect(parsePrefixBinding(REAL, 'D')).toBe('choose-client -Z');
+  });
+
+  it('is null for a key nothing claims, which is what makes it safe to claim', () => {
+    expect(parsePrefixBinding(REAL, 'C-d')).toBeNull();
+  });
+
+  it('is case-sensitive, like tmux itself', () => {
+    expect(parsePrefixBinding('bind-key -T prefix D choose-client', 'd')).toBeNull();
   });
 });
 
