@@ -16,6 +16,7 @@ import {
   toDisplayLines,
   visibleWidth,
   charWidth,
+  foldPreviewGlyphs,
 } from '../../src/tui/tui-ansi.js';
 
 const RED = '\x1b[31m';
@@ -202,5 +203,33 @@ describe('stripStyles', () => {
     expect(stripStyles(`${RED}red${RESET}`)).toBe('red');
     expect(stripStyles('\x1b]0;t\x07a\x1b[?25lb')).toBe('ab');
     expect(stripStyles('a\u{1f600}中')).toBe('a\u{1f600}中');
+  });
+});
+
+describe('foldPreviewGlyphs', () => {
+  it("turns claude's prompt and mode markers into the arrows they look like", () => {
+    // Exactly what a beta tester photographed as empty boxes.
+    expect(foldPreviewGlyphs('\u276F Try "how does report_agent.py work?"')).toBe(
+      '> Try "how does report_agent.py work?"'
+    );
+    expect(foldPreviewGlyphs('  \u23F5\u23F5 bypass permissions on')).toBe('  >> bypass permissions on');
+  });
+
+  it('leaves the glyphs that plain fonts DO render', () => {
+    // The same terminal drew all of these correctly, so folding them would be a
+    // downgrade for everyone to fix a problem nobody has.
+    const kept = '\u00B7 \u2500 \u2502 \u25B6 \u25CB \u2714 \u2192';
+    expect(foldPreviewGlyphs(kept)).toBe(kept);
+  });
+
+  it('leaves ordinary text and box drawing exactly alone', () => {
+    const line = '  1 tui-demo-shell shell   \u25CB 4m\u2502';
+    expect(foldPreviewGlyphs(line)).toBe(line);
+    expect(foldPreviewGlyphs('')).toBe('');
+  });
+
+  it('preserves length, so preview column arithmetic is unaffected', () => {
+    const line = '\u276F hello \u23F5\u23F5 world';
+    expect(foldPreviewGlyphs(line)).toHaveLength([...line].length);
   });
 });

@@ -331,6 +331,44 @@ function renderCells(cells: Cell[]): string {
  * Splitting matches `String.split('\n')`, so `''` yields `['']` and a trailing
  * newline yields a trailing empty line.
  */
+/**
+ * Glyphs a CLI draws as chrome that a plain terminal font very often has no
+ * coverage for, and the ASCII that means the same thing.
+ *
+ * ⚠️ This is NOT a substitute for the glyph TIER. The tier answers "can this
+ * terminal do Unicode at all", which is a locale question, and it says yes for
+ * exactly the terminals this table exists for: a beta tester's font rendered
+ * `·`, `─`, `│` and `▶` perfectly while drawing claude's `❯` prompt and its
+ * `⏵⏵` mode marker as empty boxes. Coverage is per-glyph and undetectable from
+ * here, so the rare ones are folded and the common ones are left alone.
+ *
+ * Kept deliberately SHORT. Every entry is a glyph seen rendering as tofu in a
+ * real terminal, not a guess, and each maps to the arrow it already looks like.
+ */
+const PREVIEW_GLYPH_FOLD: ReadonlyMap<string, string> = new Map([
+  ['\u276F', '>'], // ❯ heavy right-pointing angle quotation mark (claude, starship, zsh prompts)
+  ['\u276E', '<'], // ❮
+  ['\u23F5', '>'], // ⏵ black medium right-pointing triangle (claude's bypass-permissions marker)
+  ['\u23F4', '<'], // ⏴
+  ['\u23F6', '^'], // ⏶
+  ['\u23F7', 'v'], // ⏷
+  ['\u2771', '>'], // ❱
+  ['\u2770', '<'], // ❰
+]);
+
+/**
+ * Replace preview glyphs a plain font is likely to draw as an empty box.
+ *
+ * Applied to ANOTHER program's output on its way into the preview pane, never
+ * to the TUI's own chrome, and skipped at the `nerd` tier where the user has
+ * declared a font that can draw anything.
+ */
+export function foldPreviewGlyphs(line: string): string {
+  let out = '';
+  for (const char of line) out += PREVIEW_GLYPH_FOLD.get(char) ?? char;
+  return out;
+}
+
 export function toDisplayLines(raw: string): string[] {
   const lines: string[] = [];
   let cells: Cell[] = [];
