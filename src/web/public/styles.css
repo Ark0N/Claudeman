@@ -3877,6 +3877,8 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   box-shadow: 0 4px 20px rgba(244, 114, 182, 0.3), 0 0 40px rgba(190, 24, 93, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   border-color: rgba(249, 168, 212, 0.5);
   color: #fff1f7;
+  transform: translateY(-1px);
+}
 /* OMP: indigo identity, matching .btn-toolbar.btn-run.mode-omp and
    .run-mode-dot.omp so the welcome action reads as the same backend. */
 .welcome-btn-omp {
@@ -5000,6 +5002,7 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   box-shadow: 0 0 12px rgba(244, 114, 182, 0.35), 0 2px 8px rgba(190, 24, 93, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   border-color: rgba(249, 168, 212, 0.6);
   color: #fff1f7;
+}
 /* OMP mode colors */
 .btn-toolbar.btn-run.mode-omp,
 .btn-toolbar.btn-run-gear.mode-omp {
