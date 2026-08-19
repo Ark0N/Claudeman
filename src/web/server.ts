@@ -781,19 +781,31 @@ export class WebServer extends EventEmitter {
 
     // Serve static files — content-hashed assets (e.g. app.a3f8c2e1.js) are immutable, cache aggressively.
     // HTML must revalidate every time so browsers pick up new hashed filenames after deploys.
-    // cacheControl disabled so setHeaders has full control (fastify-static's reply.headers() overwrites setHeaders otherwise).
+    // cacheControl disabled so setHeaders owns Cache-Control for plain static assets.
     // preCompressed: serve pre-built .br/.gz files (from build step) to avoid per-request CPU compression
     await this.app.register(fastifyStatic, {
       root: join(__dirname, 'public'),
       prefix: '/',
       cacheControl: false,
       preCompressed: true,
-      setHeaders: (res, path) => {
+      // ⚠️ @fastify/static v10 changed this callback's first argument from a Node
+      // `ServerResponse` to a `FastifyReply`, so it is `reply.header()` here and
+      // NOT `res.setHeader()`. A v9-style body throws TypeError on every static
+      // request, which is every page load. See the v10.0.0 release notes.
+      setHeaders: (reply, path) => {
+        // ⚠️ That same change ALSO flipped precedence, and silently. Under v9 this
+        // callback wrote to the raw response and Fastify's staged reply headers then
+        // overwrote it, so a route that set its own Cache-Control before .sendFile()
+        // won. Under v10 the callback writes to the reply itself and now wins instead,
+        // which handed `/sw.js` a year of `immutable` in place of the `no-cache,
+        // no-store` its route asks for — a service worker that can never update.
+        // So: a route that already decided keeps its answer.
+        if (reply.getHeader('Cache-Control') !== undefined) return;
         // Use .includes() not .endsWith() — preCompressed serves .html.br/.html.gz
         if (path.includes('.html')) {
-          res.setHeader('Cache-Control', 'no-cache');
+          reply.header('Cache-Control', 'no-cache');
         } else {
-          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          reply.header('Cache-Control', 'public, max-age=31536000, immutable');
         }
       },
     });
